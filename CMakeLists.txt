@@ -4,7 +4,17 @@ project(rasm VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 
 
-set(RASM_SRC "src/core/rasm.cpp")
+set(RASM_SRC 
+            "src/core/camera.cpp"
+            "src/core/engine.cpp" 
+            "src/core/entity.cpp" 
+            "src/core/light.cpp"
+            "src/core/material.cpp"
+            "src/core/math.cpp"
+            "src/core/mesh.cpp"
+            "src/core/rasm.cpp" 
+            "src/core/scene.cpp"
+    )
 
 
 # required external libs
