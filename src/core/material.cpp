@@ -14,13 +14,13 @@ namespace rasm
 
     void Material::setTexture(PbrSlot slot, TextureHandle texture) {
         const std::size_t index = toIndex(slot);
-        assert(index < textures.size(), "PbrSlot enum value exceeds textures array size.");
+        assert(index < textures.size() && "PbrSlot enum value exceeds textures array size.");
 
         textures[index] = texture;
     }
     void Material::setFloat(PbrParam param, float value) {
         const std::size_t index = toIndex(param);
-        assert(index < scalarParams.size(), "PbrParam enum value exceeds scalarParams array size.");
+        assert(index < scalarParams.size() && "PbrParam enum value exceeds scalarParams array size.");
 
         scalarParams[index] = value;
     }

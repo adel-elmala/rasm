@@ -16,7 +16,7 @@ namespace rasm {
 
     public:
         Scene();
-        Scene(Engine* owner, SceneHandle Scene);
+        Scene(Engine* owner, SceneHandle sceneHandle);
         ~Scene();
 
         [[nodiscard]] bool isValid() const;

@@ -5,8 +5,8 @@ namespace rasm
 {
 
     Scene::Scene() {}
-    Scene::Scene(Engine* owner, SceneHandle Scene)
-        : engine(owner), handle(Scene) {}
+    Scene::Scene(Engine* owner, SceneHandle sceneHandle)
+        : engine(owner), handle(sceneHandle) {}
     Scene::~Scene() {}
 
     bool Scene::isValid() const {

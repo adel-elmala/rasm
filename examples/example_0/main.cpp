@@ -68,6 +68,5 @@ int main() {
         engine.endFrame();
     }
 
-    printf("Hello, Rasm!\n");
     return 0;
 }
