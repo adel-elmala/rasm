@@ -19,7 +19,7 @@ int main() {
     rasm::Engine engine(config);
 
     // 2. Create a scene
-    rasm::SceneHandle scene = engine.createScene();
+    rasm::Scene scene = engine.createScene();
 
     // 3. Load resources
     rasm::MeshHandle cubeMesh = engine.loadMesh("assets/cube.obj");
@@ -54,7 +54,7 @@ int main() {
     rasm::Light& sun = light.addComponent<rasm::Light>(rasm::LightType::Directional);
     sun.setColor(glm::vec3(1.0f, 1.0f, 1.0f));
     sun.setIntensity(1.0f);
-    light.addComponent<rasm::Transform>().setRotation(glm::vec3(-45.0f, 45.0f, 0.0f));
+    light.addComponent<rasm::Transform>().setRotation(glm::angleAxis(glm::radians(-45.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
 
     // 8. Main loop
     while (engine.running()) {
@@ -68,5 +68,6 @@ int main() {
         engine.endFrame();
     }
 
+    printf("Hello, Rasm!\n");
     return 0;
 }

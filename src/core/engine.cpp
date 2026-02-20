@@ -8,10 +8,10 @@ namespace rasm
     }
     Engine::~Engine() {}
 
-    SceneHandle Engine::createScene()
+    Scene Engine::createScene()
     {
-        const SceneId id{nextSceneIndex++, 1};
-        return SceneHandle(this, id);
+        const SceneHandle id{nextSceneIndex++, 1};
+        return Scene(this, id);
     }
 
     MeshHandle Engine::loadMesh(const std::string &path)
@@ -43,7 +43,7 @@ namespace rasm
         }
     }
 
-    void Engine::render(const SceneHandle& scene, const Entity& camera) {
+    void Engine::render(const Scene& scene, const Entity& camera) {
         (void)scene;
         (void)camera;
     }
@@ -52,7 +52,7 @@ namespace rasm
         return isRunning;
     }
 
-    Entity Engine::createEntity(const SceneHandle& scene, const std::string& name) {
+    Entity Engine::createEntity(const Scene& scene, const std::string& name) {
         if (!scene.isValid()) {
             return Entity();
         }

@@ -6,17 +6,9 @@ namespace rasm
     Camera::~Camera() {}
 
     void Camera::setPerspective(float fovY, float aspect, float nearZ, float farZ) {
-        (void)fovY;
-        (void)aspect;
-        (void)nearZ;
-        (void)farZ;
+        // TODO: Store these parameters and use them to compute the projection matrix during rendering.
     }
     void Camera::setOrthographic(float left, float right, float bottom, float top, float nearZ, float farZ) {
-        (void)left;
-        (void)right;
-        (void)bottom;
-        (void)top;
-        (void)nearZ;
-        (void)farZ;
+        // TODO: Store these parameters and use them to compute the projection matrix during rendering.
     }
 }

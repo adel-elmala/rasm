@@ -4,20 +4,20 @@
 namespace rasm
 {
 
-    SceneHandle::SceneHandle() {}
-    SceneHandle::SceneHandle(Engine* owner, SceneId sceneHandle)
-        : engine(owner), handle(sceneHandle) {}
-    SceneHandle::~SceneHandle() {}
+    Scene::Scene() {}
+    Scene::Scene(Engine* owner, SceneHandle Scene)
+        : engine(owner), handle(Scene) {}
+    Scene::~Scene() {}
 
-    bool SceneHandle::isValid() const {
+    bool Scene::isValid() const {
         return handle.isValid();
     }
 
-    SceneId SceneHandle::id() const {
+    SceneHandle Scene::id() const {
         return handle;
     }
 
-    Entity SceneHandle::createEntity(const std::string &name)
+    Entity Scene::createEntity(const std::string &name)
     {
         if (engine == nullptr) {
             return Entity();

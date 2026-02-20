@@ -8,8 +8,8 @@ namespace rasm
     template <typename Tag>
     struct Handle
     {
-        uint32_t index = 0;
-        uint32_t generation = 0;
+        uint64_t index = 0;
+        uint64_t generation = 0;
 
         [[nodiscard]] bool isValid() const { return generation != 0; }
     };
@@ -23,15 +23,15 @@ namespace rasm
     using MeshHandle = Handle<MeshTag>;
     using TextureHandle = Handle<TextureTag>;
     using MaterialHandle = Handle<MaterialTag>;
-    using SceneId = Handle<SceneTag>;
+    using SceneHandle = Handle<SceneTag>;
     using EntityHandle = Handle<EntityTag>;
 
     struct EngineConfig
     {
-        std::string appName;
-        int windowWidth;
-        int windowHeight;
-        bool enableValidation;
+        std::string appName{};
+        int windowWidth = 0;
+        int windowHeight = 0;
+        bool enableValidation = false;
     };
 
     std::string rasm_hello();

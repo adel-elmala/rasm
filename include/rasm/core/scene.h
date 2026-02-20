@@ -8,19 +8,19 @@
 namespace rasm {
     class Engine;
 
-    class SceneHandle
+    class Scene
     {
     private:
         Engine* engine = nullptr;
-        SceneId handle{};
+        SceneHandle handle{};
 
     public:
-        SceneHandle();
-        SceneHandle(Engine* owner, SceneId sceneHandle);
-        ~SceneHandle();
+        Scene();
+        Scene(Engine* owner, SceneHandle Scene);
+        ~Scene();
 
         [[nodiscard]] bool isValid() const;
-        [[nodiscard]] SceneId id() const;
+        [[nodiscard]] SceneHandle id() const;
         Entity createEntity(const std::string& name);
     };
 

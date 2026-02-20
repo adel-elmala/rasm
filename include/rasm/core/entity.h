@@ -11,7 +11,8 @@
 
 #include "rasm/core/rasm.h"
 
-namespace rasm {
+namespace rasm
+{
 
     class Entity
     {
@@ -22,6 +23,12 @@ namespace rasm {
         };
 
         EntityHandle handle{};
+        // Note:
+        // `storage` is a std::shared_ptr<ComponentStorage>. This means that copying an
+        // Entity instance will cause the original and the copy to share the same
+        // underlying ComponentStorage (and thus the same components). This shared
+        // ownership is intentional: Entity is a lightweight handle to component
+        // storage, not a deep-value object.
         std::shared_ptr<ComponentStorage> storage;
 
     public:
@@ -32,39 +39,46 @@ namespace rasm {
         [[nodiscard]] EntityHandle id() const;
         [[nodiscard]] bool isValid() const;
 
-        template<typename T, typename... Args>
-        T& addComponent(Args&&... args) {
+        template <typename T, typename... Args>
+        T &addComponent(Args &&...args)
+        {
             static_assert(!std::is_pointer_v<T>, "Components must be value types, not raw pointers.");
             static_assert(!std::is_reference_v<T>, "Components must be value types, not references.");
-            if (!storage) {
+            if (!storage)
+            {
                 storage = std::make_shared<ComponentStorage>();
             }
 
             const std::type_index key(typeid(T));
             storage->components[key] = T(std::forward<Args>(args)...);
-            return std::any_cast<T&>(storage->components[key]);
+            return std::any_cast<T &>(storage->components[key]);
         }
 
-        template<typename T>
-        [[nodiscard]] bool hasComponent() const {
-            if (!storage) {
+        template <typename T>
+        [[nodiscard]] bool hasComponent() const
+        {
+            if (!storage)
+            {
                 return false;
             }
             const std::type_index key(typeid(T));
             return storage->components.find(key) != storage->components.end();
         }
 
-        template<typename T>
-        T& getComponent() {
-            if (!storage) {
+        template <typename T>
+        T &getComponent()
+        {
+            if (!storage)
+            {
                 throw std::runtime_error("Entity has no component storage.");
             }
             const std::type_index key(typeid(T));
             auto it = storage->components.find(key);
-            if (it == storage->components.end()) {
+            if (it == storage->components.end())
+            {
                 throw std::runtime_error("Requested component is not attached to this entity.");
             }
-            return std::any_cast<T&>(it->second);
+            return std::any_cast<T &>(it->second);
         }
     };
 

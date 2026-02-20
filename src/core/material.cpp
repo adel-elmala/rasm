@@ -1,5 +1,5 @@
 #include "rasm/core/material.h"
-
+#include <assert.h>
 namespace rasm
 {
 
@@ -13,10 +13,16 @@ namespace rasm
     }
 
     void Material::setTexture(PbrSlot slot, TextureHandle texture) {
-        textures[toIndex(slot)] = texture;
+        const std::size_t index = toIndex(slot);
+        assert(index < textures.size(), "PbrSlot enum value exceeds textures array size.");
+
+        textures[index] = texture;
     }
     void Material::setFloat(PbrParam param, float value) {
-        scalarParams[toIndex(param)] = value;
+        const std::size_t index = toIndex(param);
+        assert(index < scalarParams.size(), "PbrParam enum value exceeds scalarParams array size.");
+
+        scalarParams[index] = value;
     }
 
 }

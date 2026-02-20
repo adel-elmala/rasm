@@ -16,26 +16,26 @@ namespace rasm {
         Engine(const EngineConfig& config);
         ~Engine();
 
-        SceneHandle createScene();
+        Scene createScene();
         MeshHandle loadMesh(const std::string& path);
         TextureHandle loadTexture(const std::string& path);
         Material createMaterial(MaterialTemplate type);
 
         void beginFrame();
         void endFrame();
-        void render(const SceneHandle& scene, const Entity& camera);
+        void render(const Scene& scene, const Entity& camera);
         bool running() const;
 
-        Entity createEntity(const SceneHandle& scene, const std::string& name);
+        Entity createEntity(const Scene& scene, const std::string& name);
 
     private:
         EngineConfig config;
-        uint32_t nextSceneIndex = 1;
-        uint32_t nextEntityIndex = 1;
-        uint32_t nextMeshIndex = 1;
-        uint32_t nextTextureIndex = 1;
-        uint32_t nextMaterialIndex = 1;
-        uint32_t frameCount = 0;
+        uint64_t nextSceneIndex = 1;
+        uint64_t nextEntityIndex = 1;
+        uint64_t nextMeshIndex = 1;
+        uint64_t nextTextureIndex = 1;
+        uint64_t nextMaterialIndex = 1;
+        uint64_t frameCount = 0;
         bool isRunning = true;
     };
 

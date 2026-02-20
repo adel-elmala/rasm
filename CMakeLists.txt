@@ -31,7 +31,7 @@ target_link_libraries(rasm_lib PUBLIC glm::glm Vulkan::Vulkan Tracy::TracyClient
 target_include_directories(rasm_lib PRIVATE ${Stb_INCLUDE_DIR} PUBLIC include)
 
 
-# exmaple executable
+# example executable
 add_executable(Example_0 "examples/example_0/main.cpp")
 add_executable(Example_1 "examples/example_1/main.cpp")
 
@@ -48,4 +48,6 @@ rasm_lib
 )
 
 
-add_definitions(/arch:AVX2)
+if (MSVC)
+    add_compile_options(/arch:AVX2)
+endif()

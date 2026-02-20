@@ -55,7 +55,7 @@ int main() {
     config.enableValidation = true;
 
     rasm::Engine engine(config);
-    rasm::SceneHandle scene = engine.createScene();
+    rasm::Scene scene = engine.createScene();
     rasm::Entity camera = scene.createEntity("MainCamera");
 
     rasm::MaterialHandle bloomMaterial = engine.createMaterialFromGLSL(
