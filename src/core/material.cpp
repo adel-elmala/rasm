@@ -4,9 +4,19 @@ namespace rasm
 {
 
     Material::Material() {}
+    Material::Material(MaterialHandle materialHandle)
+        : handle(materialHandle) {}
     Material::~Material() {}
 
-    void Material::setTexture(PbrSlot slot, TextureHandle texture) {}
-    void Material::setFloat(PbrParam param, float value) {}
+    MaterialHandle Material::id() const {
+        return handle;
+    }
+
+    void Material::setTexture(PbrSlot slot, TextureHandle texture) {
+        textures[toIndex(slot)] = texture;
+    }
+    void Material::setFloat(PbrParam param, float value) {
+        scalarParams[toIndex(param)] = value;
+    }
 
 }

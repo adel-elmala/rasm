@@ -2,7 +2,5 @@
 
 namespace rasm
 {
-
-    Mesh::Mesh() {}
-    Mesh::~Mesh() {}
+    // Mesh is a lightweight component wrapper around MeshHandle.
 }

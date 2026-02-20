@@ -1,3 +1,7 @@
+int main() { return 0; }
+
+// Future API sketch (not implemented yet):
+#if 0
 #include "rasm/core/rasm.h"
 
 // User-defined pass with explicit typed settings and material handle ownership.
@@ -87,3 +91,4 @@ int main() {
 
     return 0;
 }
+#endif

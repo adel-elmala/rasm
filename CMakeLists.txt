@@ -33,8 +33,15 @@ target_include_directories(rasm_lib PRIVATE ${Stb_INCLUDE_DIR} PUBLIC include)
 
 # exmaple executable
 add_executable(Example_0 "examples/example_0/main.cpp")
+add_executable(Example_1 "examples/example_1/main.cpp")
 
 target_link_libraries(Example_0 PUBLIC
+$<TARGET_NAME_IF_EXISTS:SDL3::SDL3main> # SDL3
+$<IF:$<TARGET_EXISTS:SDL3::SDL3>,SDL3::SDL3,SDL3::SDL3-static>
+rasm_lib
+)
+
+target_link_libraries(Example_1 PUBLIC
 $<TARGET_NAME_IF_EXISTS:SDL3::SDL3main> # SDL3
 $<IF:$<TARGET_EXISTS:SDL3::SDL3>,SDL3::SDL3,SDL3::SDL3-static>
 rasm_lib

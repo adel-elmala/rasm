@@ -1,14 +1,28 @@
 #include "rasm/core/scene.h"
+#include "rasm/core/engine.h"
 
 namespace rasm
 {
 
-    Scene::Scene() {}
-    Scene::~Scene() {}
+    SceneHandle::SceneHandle() {}
+    SceneHandle::SceneHandle(Engine* owner, SceneId sceneHandle)
+        : engine(owner), handle(sceneHandle) {}
+    SceneHandle::~SceneHandle() {}
 
-    Entity Scene::createEntity(const std::string &name)
+    bool SceneHandle::isValid() const {
+        return handle.isValid();
+    }
+
+    SceneId SceneHandle::id() const {
+        return handle;
+    }
+
+    Entity SceneHandle::createEntity(const std::string &name)
     {
-        return Entity();
+        if (engine == nullptr) {
+            return Entity();
+        }
+        return engine->createEntity(*this, name);
     }
 
 }

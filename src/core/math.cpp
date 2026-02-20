@@ -7,10 +7,13 @@ namespace rasm
         : position(position), rotation(rotation), scale(scale) {}
     Transform::~Transform() {}
 
-    void Transform::setPosition(const glm::vec3 &position) {}
-    void Transform::setRotation(const glm::quat &rotation) {}
-    void Transform::setScale(const glm::vec3 &scale) {}
+    void Transform::setPosition(const glm::vec3 &value) { position = value; }
+    void Transform::setRotation(const glm::quat &value) { rotation = value; }
+    void Transform::setScale(const glm::vec3 &value) { scale = value; }
 
-    void Transform::rotate(const glm::vec3 &axis, float angle) {}
+    void Transform::rotate(const glm::vec3 &axis, float angle) {
+        const glm::quat delta = glm::angleAxis(angle, glm::normalize(axis));
+        rotation = delta * rotation;
+    }
 
 }

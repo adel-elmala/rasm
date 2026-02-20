@@ -1,7 +1,6 @@
 #include "glm/glm.hpp"
 #include "glm/gtc/quaternion.hpp"
 
-#include "rasm/core/rasm.h"
 #include "rasm/core/engine.h"
 #include "rasm/core/material.h"
 #include "rasm/core/mesh.h"
@@ -10,9 +9,6 @@
 #include "rasm/core/light.h"
 
 int main() {
-    // Proposed API shape:
-
-
     // 1. Create engine instance
     rasm::EngineConfig config;
     config.appName = "My Game";
@@ -39,7 +35,7 @@ int main() {
 
     // 5. Create entities in the scene
     rasm::Entity cube = scene.createEntity("Cube");
-    cube.addComponent<rasm::MeshHandle>(cubeMesh);
+    cube.addComponent<rasm::Mesh>(cubeMesh);
     cube.addComponent<rasm::Material>(material);
     cube.addComponent<rasm::Transform>(
         glm::vec3(0.0f, 0.0f, 0.0f),  // position
@@ -64,10 +60,8 @@ int main() {
     while (engine.running()) {
         engine.beginFrame();
 
-        // float dt = engine.stats().deltaTime(); for time-based updates
-
         // Update transforms, animations, etc.
-        // cube.get<rasm::Transform>().rotate(glm::vec3(0.0f, 1.0f, 0.0f), 0.01f); // use dt for frame-rate independent rotation
+        cube.getComponent<rasm::Transform>().rotate(glm::vec3(0.0f, 1.0f, 0.0f), 0.01f);
 
         // Render the scene
         engine.render(scene, camera);

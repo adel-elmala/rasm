@@ -1,16 +1,15 @@
 #pragma once
 
-#include <stdint.h>
+#include "rasm/core/rasm.h"
 
 namespace rasm {
 
-    class Mesh
+    struct Mesh
     {
-    private:
-        uint32_t handle;
-    public:
-        Mesh();
-        ~Mesh();
+        MeshHandle handle{};
+
+        Mesh() = default;
+        explicit Mesh(MeshHandle meshHandle) : handle(meshHandle) {}
     };
 
 }

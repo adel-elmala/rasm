@@ -1,12 +1,30 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
-
-#include "rasm/core/material.h"
-#include "rasm/core/scene.h"
 
 namespace rasm
 {
+    template <typename Tag>
+    struct Handle
+    {
+        uint32_t index = 0;
+        uint32_t generation = 0;
+
+        [[nodiscard]] bool isValid() const { return generation != 0; }
+    };
+
+    struct MeshTag;
+    struct TextureTag;
+    struct MaterialTag;
+    struct SceneTag;
+    struct EntityTag;
+
+    using MeshHandle = Handle<MeshTag>;
+    using TextureHandle = Handle<TextureTag>;
+    using MaterialHandle = Handle<MaterialTag>;
+    using SceneId = Handle<SceneTag>;
+    using EntityHandle = Handle<EntityTag>;
 
     struct EngineConfig
     {
@@ -15,10 +33,6 @@ namespace rasm
         int windowHeight;
         bool enableValidation;
     };
-
-    typedef uint32_t MeshHandle;
-    // typedef Material MaterialHandle;
-    typedef Scene SceneHandle;
 
     std::string rasm_hello();
 

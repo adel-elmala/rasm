@@ -1,7 +1,5 @@
 #pragma once
 
-#include <stdint.h>
-
 #include "glm/glm.hpp"
 
 namespace rasm {
@@ -16,8 +14,8 @@ namespace rasm {
     class Light
     {
     private:
-        uint32_t handle;
         LightType type;
+
     public:
         Light(LightType type = LightType::Point);
         ~Light();

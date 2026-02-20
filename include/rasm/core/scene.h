@@ -2,19 +2,26 @@
 
 #include <string>
 
+#include "rasm/core/rasm.h"
 #include "rasm/core/entity.h"
 
 namespace rasm {
+    class Engine;
 
-    class Scene
+    class SceneHandle
     {
     private:
+        Engine* engine = nullptr;
+        SceneId handle{};
+
     public:
-        Scene();
-        ~Scene();
+        SceneHandle();
+        SceneHandle(Engine* owner, SceneId sceneHandle);
+        ~SceneHandle();
 
+        [[nodiscard]] bool isValid() const;
+        [[nodiscard]] SceneId id() const;
         Entity createEntity(const std::string& name);
-
     };
 
 }

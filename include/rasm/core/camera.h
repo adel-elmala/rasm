@@ -1,7 +1,5 @@
 #pragma once
 
-#include <stdint.h>
-
 namespace rasm {
     
     enum class CameraType
@@ -13,8 +11,8 @@ namespace rasm {
     class Camera
     {
     private:
-        uint32_t handle;
         CameraType type;
+
     public:
         Camera(CameraType type = CameraType::Perspective);
         ~Camera();
