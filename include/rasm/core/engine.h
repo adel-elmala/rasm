@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 
+#include "rasm/core/types.h"
 #include "rasm/core/rasm.h"
 #include "rasm/core/entity.h"
 #include "rasm/core/scene.h"
@@ -30,12 +31,16 @@ namespace rasm {
 
     private:
         EngineConfig config;
-        uint64_t nextSceneIndex = 1;
-        uint64_t nextEntityIndex = 1;
-        uint64_t nextMeshIndex = 1;
-        uint64_t nextTextureIndex = 1;
-        uint64_t nextMaterialIndex = 1;
+
+        std::unordered_map<std::string, MeshHandle> loadedMeshes;
+        std::unordered_map<std::string, TextureHandle> loadedTextures;
+
+        std::vector<TextureRaw> textureData;
+        std::vector<MeshRaw> meshData;
+
+        HandleCounters nextHandle{};
         uint64_t frameCount = 0;
+
         bool isRunning = true;
     };
 
