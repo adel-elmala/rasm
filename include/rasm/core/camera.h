@@ -8,17 +8,19 @@ namespace rasm {
         Orthographic
     };
 
+    class Engine;
+
     class Camera
     {
-    private:
-        CameraType type;
-
+    friend class Engine;
     public:
-        Camera(CameraType type = CameraType::Perspective);
-        ~Camera();
-
+             Camera(CameraType type = CameraType::Perspective);
+             ~Camera();
         void setPerspective(float fovY, float aspect, float nearZ, float farZ);
         void setOrthographic(float left, float right, float bottom, float top, float nearZ, float farZ);
+
+    protected:
+        CameraType type;
     };
 
 }

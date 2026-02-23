@@ -1,15 +1,22 @@
 #include "rasm/core/engine.h"
+#include "rasm/core/mesh.h"
+#include "rasm/core/material.h"
+#include "rasm/core/light.h"
+#include "rasm/core/math.h"
+#include "rasm/core/entity.h"
+#include "rasm/core/camera.h"
 
 #include "spdlog/spdlog.h"
-
 
 #define TINYGLTF_IMPLEMENTATION
 #include "tiny_gltf.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
+
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
+
 
 namespace rasm
 {
@@ -99,7 +106,9 @@ namespace rasm
             mesh.type = MeshRaw::MeshType::GLTF;
             mesh.data = std::move(model);
             meshData.push_back(mesh);
-        } else {
+        }
+        else
+        {
             // TODO: Implement OBJ loading
             spdlog::error("OBJ loading not implemented yet: {}", path);
         }
@@ -140,7 +149,7 @@ namespace rasm
         tex.height = height;
         tex.channels = nChannels;
         tex.data = data;
-        
+
         textureData.push_back(tex);
 
         auto handle = TextureHandle{nextHandle.texture++, 1};
@@ -151,7 +160,6 @@ namespace rasm
 
     Material Engine::createMaterial(MaterialTemplate type)
     {
-        (void)type;
         const MaterialHandle id{nextHandle.material++, 1};
         return Material(id);
     }
@@ -168,10 +176,32 @@ namespace rasm
         }
     }
 
-    void Engine::render(const Scene &scene, const Entity &camera)
+    void Engine::render(Scene &scene, Entity &camera)
     {
-        (void)scene;
-        (void)camera;
+        for (Entity &entity : scene.entities)
+        {
+            if (entity.hasComponent<Mesh>() && entity.hasComponent<Material>() && entity.hasComponent<Transform>())
+            {
+                // In a real implementation, this is where we'd issue draw calls to the GPU.
+                // For this example, we'll just log the entity ID and its mesh/material.
+                auto &meshComp = entity.getComponent<Mesh>();
+                auto &matComp = entity.getComponent<Material>();
+                spdlog::info("Rendering Entity {} with Mesh {} and Material {}",
+                             entity.id().index, meshComp.id().index, matComp.id().index);
+            }
+            else if (entity.hasComponent<Light>())
+            {
+                auto &lightComp = entity.getComponent<Light>();
+                spdlog::info("Light Entity {}, Color: ({}, {}, {}), Intensity: {}",
+                             entity.id().index, lightComp.color.r, lightComp.color.g, lightComp.color.b, lightComp.intensity);
+            }
+        }
+
+        auto& cameraComp = camera.getComponent<Camera>();
+        spdlog::info("Camera Entity {}, Type: {}",
+                     camera.id().index,
+                     cameraComp.type == CameraType::Perspective ? "Perspective" : "Orthographic");
+
     }
 
     bool Engine::running() const
@@ -185,9 +215,8 @@ namespace rasm
         {
             return Entity();
         }
-        (void)name;
         const EntityHandle id{nextHandle.entity++, 1};
-        return Entity(id);
+        return Entity(id, name);
     }
 
 }

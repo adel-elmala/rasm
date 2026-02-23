@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "rasm/core/rasm.h"
 #include "rasm/core/entity.h"
@@ -10,18 +11,19 @@ namespace rasm {
 
     class Scene
     {
-    private:
-        Engine* engine = nullptr;
-        SceneHandle handle{};
-
+    friend class Engine;
     public:
-        Scene();
-        Scene(Engine* owner, SceneHandle sceneHandle);
-        ~Scene();
+                                    Scene();
+                                    Scene(Engine* owner, SceneHandle sceneHandle);
+                                    ~Scene();
+        Entity                      createEntity(const std::string& name);
+        [[nodiscard]] bool          isValid() const;
+        [[nodiscard]] SceneHandle   id() const;
 
-        [[nodiscard]] bool isValid() const;
-        [[nodiscard]] SceneHandle id() const;
-        Entity createEntity(const std::string& name);
+    protected:
+        SceneHandle         handle{};
+        std::vector<Entity> entities;
+        Engine*             engine = nullptr;
     };
 
 }

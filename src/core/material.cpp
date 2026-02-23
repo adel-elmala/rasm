@@ -1,5 +1,6 @@
 #include "rasm/core/material.h"
-#include <assert.h>
+#include "spdlog/spdlog.h"
+
 namespace rasm
 {
 
@@ -14,13 +15,19 @@ namespace rasm
 
     void Material::setTexture(PbrSlot slot, TextureHandle texture) {
         const std::size_t index = toIndex(slot);
-        assert(index < textures.size() && "PbrSlot enum value exceeds textures array size.");
+        if (index >= textures.size()) {
+            spdlog::error("PbrSlot enum value exceeds textures array size.");
+            return;
+        }
 
         textures[index] = texture;
     }
     void Material::setFloat(PbrParam param, float value) {
         const std::size_t index = toIndex(param);
-        assert(index < scalarParams.size() && "PbrParam enum value exceeds scalarParams array size.");
+        if (index >= scalarParams.size()) {
+            spdlog::error("PbrParam enum value exceeds scalarParams array size.");
+            return;
+        }
 
         scalarParams[index] = value;
     }
