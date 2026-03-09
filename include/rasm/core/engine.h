@@ -8,6 +8,7 @@
 #include "rasm/core/entity.h"
 #include "rasm/core/scene.h"
 #include "rasm/core/material.h"
+#include "rasm/core/renderGraph.h"
 
 
 namespace rasm {
@@ -20,6 +21,7 @@ namespace rasm {
         MeshHandle      loadMesh(const std::string& path);
         TextureHandle   loadTexture(const std::string& path);
         Material        createMaterial(MaterialTemplate type);
+        RenderGraph     createRenderGraph();
         Entity          createEntity(const Scene& scene, const std::string& name);
         void            beginFrame();
         void            endFrame();

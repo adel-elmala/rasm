@@ -5,6 +5,7 @@
 #include "rasm/core/math.h"
 #include "rasm/core/entity.h"
 #include "rasm/core/camera.h"
+#include "rasm/core/renderGraph.h"
 
 #include "spdlog/spdlog.h"
 
@@ -163,6 +164,12 @@ namespace rasm
         const MaterialHandle id{nextHandle.material++, 1};
         return Material(id);
     }
+
+    RenderGraph Engine::createRenderGraph()
+    {
+        return RenderGraph();
+    }
+
 
     void Engine::beginFrame() {}
 
