@@ -32,6 +32,9 @@ namespace rasm {
         Window&         getWindow() const;
         WindowHandle    getMainWindow() const;
         RenderContext&  getRenderContext() const;
+        BufferHandle    getNextBufferHandle();
+        TextureHandle   getNextTextureHandle();
+        ShaderHandle    getNextShaderHandle();
 
     private:
         EngineConfig                                    config;

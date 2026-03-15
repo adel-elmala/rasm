@@ -13,36 +13,6 @@ namespace rasm
     class Engine;
     class RenderContext;
 
-    struct ResourceDesc
-    {
-        std::string name;
-        enum class Type
-        {
-            Texture,
-            Buffer,
-            // Add more types as needed
-        } type;
-
-        union {
-            // Texture-specific data
-            struct
-            {
-                uint32_t width;
-                uint32_t height;
-                uint32_t format; // e.g., RGBA8, RGBA16F
-            } texture;
-
-            // Buffer-specific data
-            struct
-            {
-                uint64_t size;
-                uint64_t stride;
-            } buffer;
-        };
-    };
-
-    using ResourceHandle = Handle<ResourceDesc>;
-
     struct Pass
     {
         std::string                         name;
@@ -60,6 +30,7 @@ namespace rasm
     };
 
     class RenderGraph;
+    
     class PassBuilder {
     public:
              PassBuilder(RenderGraph& g, uint32_t passIdx) : graph(g), currentPass(passIdx) {}

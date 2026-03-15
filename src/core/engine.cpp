@@ -226,7 +226,7 @@ namespace rasm
         auto& cameraComp = camera.getComponent<Camera>();
         spdlog::info("Camera Entity {}, Type: {}",
                      camera.id().index,
-                     cameraComp.type == CameraType::Perspective ? "Perspective" : "Orthographic");
+                     cameraComp.type == CameraType::PERSPECTIVE ? "Perspective" : "Orthographic");
 
     }
 
@@ -263,5 +263,20 @@ namespace rasm
     RenderContext& Engine::getRenderContext() const
     {
         return const_cast<RenderContext&>(ctx);
+    }
+
+    BufferHandle Engine::getNextBufferHandle()
+    {
+        return BufferHandle{nextHandle.buffer++, 1};
+    }
+
+    TextureHandle Engine::getNextTextureHandle()
+    {
+        return TextureHandle{nextHandle.texture++, 1};
+    }
+
+    ShaderHandle Engine::getNextShaderHandle()
+    {
+        return ShaderHandle{nextHandle.shader++, 1};
     }
 }

@@ -1,33 +1,32 @@
 #pragma once
-namespace rasm
+
+#include "VkBootstrap.h"
+#include "vk_mem_alloc.h"
+
+#include "rasm/core/types.h"
+namespace rasm::gfx
 {
-    enum class Backend
+    struct BufferVKHandle
     {
-        Vulkan,
-        DX12,
-        Metal
+        ResourceDesc desc;
+        BufferHandle handle;
+        VkBuffer buffer;
+        VmaAllocation allocation;
     };
 
-    enum class BufferUsage
+    struct TextureVKHandle
     {
-        Vertex,
-        Index,
-        Uniform,
-        Storage
+        ResourceDesc desc;
+        TextureHandle handle;
+        VkImage image;
+        VkImageView view;
+        VmaAllocation allocation;
     };
 
-    enum class TextureFormat
+    struct ShaderVKHandle
     {
-        RGBA8,
-        RGBA16F,
-        Depth24Stencil8
+        ResourceDesc desc;
+        ShaderHandle handle;
+        VkShaderModule module;
     };
-
-    enum class ShaderType
-    {
-        Vertex,
-        Fragment,
-        Compute
-    };
-
 }

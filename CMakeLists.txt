@@ -22,9 +22,9 @@ set(RASM_SRC
 # required external libs
 find_package(Vulkan REQUIRED)
 find_package(vk-bootstrap CONFIG REQUIRED)
+find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
-
 find_package(Tracy CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
@@ -32,7 +32,8 @@ find_path(TINYGLTF_INCLUDE_DIRS "tiny_gltf.h")
 
 
 add_library(rasm_lib STATIC ${RASM_SRC})
-target_link_libraries(rasm_lib PRIVATE glm::glm Vulkan::Vulkan Tracy::TracyClient SDL3::SDL3) 
+target_link_libraries(rasm_lib PRIVATE glm::glm Tracy::TracyClient SDL3::SDL3) 
+target_link_libraries(rasm_lib PUBLIC Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator)
 target_link_libraries(rasm_lib PRIVATE vk-bootstrap::vk-bootstrap vk-bootstrap::vk-bootstrap-compiler-warnings)
 target_link_libraries(rasm_lib PUBLIC  spdlog::spdlog) # make it private later, keep for debugging now
 target_include_directories(rasm_lib PUBLIC ${Stb_INCLUDE_DIR} ${TINYGLTF_INCLUDE_DIRS} ${Vulkan_INCLUDE_DIRS}  PUBLIC include)

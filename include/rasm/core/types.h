@@ -7,10 +7,48 @@
 
 #include "tiny_gltf.h"
 
-#include "rasm/gfx/types.h"
-
 namespace rasm
 {
+    enum class Backend
+    {
+        VULKAN,
+        DX12,
+        METAL
+    };
+
+    enum class BufferUsage
+    {
+        VERTEX,
+        INDEX,
+        UNIFORM,
+        STORAGE
+    };
+
+    enum class TextureUsage
+    {
+        TRANSFER_SRC,
+        TRANSFER_DST,
+        SAMPLED,
+        STORAGE,
+        COLOR_ATTACHMENT,
+        DEPTH_STENCIL_ATTACHMENT,
+        TRANSIENT_ATTACHMENT,
+        INPUT_ATTACHMENT,
+    };
+
+    enum class TextureFormat
+    {
+        RGBA8,
+        RGBA16F,
+        DEPTH24STENCIL8
+    };
+
+    enum class ShaderType
+    {
+        VERTEX,
+        FRAGMENT,
+        COMPUTE
+    };
 
     const static std::unordered_set<std::string> supportedMeshExtensions = {"obj", "gltf", "glb"};
     const static std::unordered_set<std::string> supportedTextureExtensions = {"png", "jpg", "jpeg"};
@@ -22,6 +60,16 @@ namespace rasm
         uint64_t generation = 0;
 
         [[nodiscard]] bool isValid() const { return generation != 0; }
+        bool operator==(const Handle& other) const { return index == other.index && generation == other.generation; }
+    };
+
+    struct HandleHash
+    {
+        template <typename Tag>
+        std::size_t operator()(const Handle<Tag>& handle) const
+        {
+            return std::hash<uint64_t>()(handle.index) ^ (std::hash<uint64_t>()(handle.generation) << 1);
+        }
     };
 
     struct MeshTag;
@@ -33,6 +81,7 @@ namespace rasm
     struct SceneTag;
     struct EntityTag;
     struct WindowTag;
+    struct ResourceTag;
 
     using MeshHandle = Handle<MeshTag>;
     using BufferHandle = Handle<BufferTag>;
@@ -43,6 +92,7 @@ namespace rasm
     using SceneHandle = Handle<SceneTag>;
     using EntityHandle = Handle<EntityTag>;
     using WindowHandle = Handle<WindowTag>;
+    using ResourceHandle = Handle<ResourceTag>;
 
     struct EngineConfig
     {
@@ -50,7 +100,7 @@ namespace rasm
         int windowWidth = 0;
         int windowHeight = 0;
         bool enableValidation = false;
-        Backend preferredBackend = Backend::Vulkan;
+        Backend preferredBackend = Backend::VULKAN;
     };
 
     struct HandleCounters
@@ -83,6 +133,44 @@ namespace rasm
         };
         MeshType type;
         std::variant<tinygltf::Model, std::string> data;
+    };
+
+    struct ResourceDesc
+    {
+        std::string name;
+        enum class Type
+        {
+            TEXTURE,
+            BUFFER,
+            SHADER,
+            // Add more types as needed
+        } type;
+
+        union {
+            // Texture-specific data
+            struct
+            {
+                uint32_t width;
+                uint32_t height;
+                TextureFormat format;
+                TextureUsage usage;
+            } texture;
+
+            // Buffer-specific data
+            struct
+            {
+                uint64_t size;
+                uint64_t stride;
+                BufferUsage usage;
+            } buffer;
+
+            // Shader-specific data
+            struct
+            {
+                ShaderType shaderType;
+                const char *source;
+            } shader;
+        };
     };
 
 }
