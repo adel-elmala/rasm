@@ -7,9 +7,9 @@ namespace rasm
 
     enum class LightType
     {
-        Directional,
-        Point,
-        Spot
+        DIRECTIONAL,
+        POINT,
+        SPOT
     };
     
     class Engine;
@@ -18,7 +18,7 @@ namespace rasm
     {
     friend class Engine;
     public:
-             Light(LightType type = LightType::Point);
+             Light(LightType type = LightType::POINT);
              ~Light();
         void setColor(const glm::vec3 &color);
         void setIntensity(float intensity);

@@ -3,6 +3,10 @@
 
 #include "spdlog/spdlog.h"
 
+#define VMA_VULKAN_VERSION 1004000 // Vulkan 1.4
+#define VMA_IMPLEMENTATION
+#include "vk_mem_alloc.h"
+
 namespace rasm::gfx
 {
     // Forward declarations of private helper functions for Vulkan setup and management.
@@ -11,13 +15,17 @@ namespace rasm::gfx
     vkb::Result<vkb::Device> _init_logical_device(const vkb::PhysicalDevice &physical_device);
     vkb::Result<VkSurfaceKHR> _init_surface(const vkb::Instance &instance, const Window &window, WindowHandle handle);
     vkb::Result<vkb::Swapchain> _init_swapchain(const vkb::Device &device);
+    VkBufferUsageFlagBits _to_vk_buffer_usage_flags(BufferUsage usage);
+    VkImageUsageFlags _to_vk_image_usage_flags(TextureUsage usage);
+    VkFormat _to_vk_format(TextureFormat format);
+    const char *_to_vk_result_string(VkResult result);
 }
 
 namespace rasm::gfx
 {
     VulkanContext::VulkanContext(Engine *owner) : engine(owner) {}
 
-    VulkanContext::~VulkanContext() { cleanup(); }
+    VulkanContext::~VulkanContext() {}
 
     bool VulkanContext::initialize()
     {
@@ -62,15 +70,116 @@ namespace rasm::gfx
 
         this->swapchain = vkb_swapchain.value();
 
+        // create VMA allocator
+        VmaAllocatorCreateInfo allocatorCreateInfo = {};
+        allocatorCreateInfo.flags = VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
+        allocatorCreateInfo.vulkanApiVersion = VK_API_VERSION_1_4;
+        allocatorCreateInfo.physicalDevice = physical_device.physical_device;
+        allocatorCreateInfo.device = device.device;
+        allocatorCreateInfo.instance = instance.instance;
+
+        if (vmaCreateAllocator(&allocatorCreateInfo, &this->allocator) != VK_SUCCESS)
+        {
+            spdlog::error("Failed to create VMA allocator.");
+            return false;
+        }
+
         return true;
     }
 
     void VulkanContext::cleanup()
     {
+        vmaDestroyAllocator(allocator);
         vkb::destroy_swapchain(swapchain);
         vkb::destroy_device(device);
         vkb::destroy_surface(instance, surface);
         vkb::destroy_instance(instance);
+    }
+
+    std::optional<BufferVKHandle> VulkanContext::createBuffer(ResourceDesc desc)
+    {
+        assert(desc.type == ResourceDesc::Type::BUFFER);
+
+        VkBufferCreateInfo bufferInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        bufferInfo.size = desc.buffer.size;
+        bufferInfo.usage = _to_vk_buffer_usage_flags(desc.buffer.usage);
+
+        VmaAllocationCreateInfo allocInfo = {};
+        allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+
+        VkBuffer buffer;
+        VmaAllocation allocation;
+        auto result = vmaCreateBuffer(this->allocator, &bufferInfo, &allocInfo, &buffer, &allocation, nullptr);
+
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to create buffer. Error: {}", _to_vk_result_string(result));
+            return {};
+        }
+
+        BufferVKHandle rawHandle = {desc, {}, buffer, allocation};
+        return rawHandle;
+    }
+
+    std::optional<TextureVKHandle> VulkanContext::createTexture(ResourceDesc desc)
+    {
+        assert(desc.type == ResourceDesc::Type::TEXTURE);
+
+        VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.extent.width = desc.texture.width;
+        imageInfo.extent.height = desc.texture.height;
+        imageInfo.extent.depth = 1;
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.format = _to_vk_format(desc.texture.format);
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageInfo.usage = _to_vk_image_usage_flags(desc.texture.usage);
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        VmaAllocationCreateInfo allocInfo = {};
+        allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+
+        VkImage image;
+        VmaAllocation allocation;
+        auto result = vmaCreateImage(this->allocator, &imageInfo, &allocInfo, &image, &allocation, nullptr);
+
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to create image. Error: {}", _to_vk_result_string(result));
+            return {};
+        }
+
+        TextureVKHandle rawHandle = {desc, {}, image, VK_NULL_HANDLE, allocation};
+        return rawHandle;
+    }
+
+    std::optional<ShaderHandle> VulkanContext::createShader(ResourceDesc desc)
+    {
+        return {};
+    }
+
+    std::optional<PipelineHandle> VulkanContext::createPipeline(const ShaderHandle &vertexShader, const ShaderHandle &fragmentShader)
+    {
+        return {};
+    }
+
+    void VulkanContext::bindPipeline(const PipelineHandle &pipeline)
+    {
+    }
+
+    void VulkanContext::bindTexture(const std::string &name, const TextureVKHandle &texture)
+    {
+    }
+
+    void VulkanContext::setUniform(const std::string &name, const void *data, size_t size)
+    {
+    }
+
+    void VulkanContext::draw(uint32_t vertexCount, uint32_t instanceCount)
+    {
     }
 
     // ----------------------------------------------------------
@@ -206,4 +315,105 @@ namespace rasm::gfx
         return swap_ret;
     }
 
+    VkBufferUsageFlagBits _to_vk_buffer_usage_flags(BufferUsage usage)
+    {
+        switch (usage)
+        {
+        case BufferUsage::VERTEX:
+            return VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        case BufferUsage::INDEX:
+            return VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+        case BufferUsage::UNIFORM:
+            return VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        case BufferUsage::STORAGE:
+            return VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        default:
+            return static_cast<VkBufferUsageFlagBits>(0);
+        }
+    }
+
+    VkFormat _to_vk_format(TextureFormat format)
+    {
+        switch (format)
+        {
+        case TextureFormat::RGBA8:
+            return VK_FORMAT_R8G8B8A8_UNORM;
+        case TextureFormat::RGBA16F:
+            return VK_FORMAT_R16G16B16A16_SFLOAT;
+        case TextureFormat::DEPTH24STENCIL8:
+            return VK_FORMAT_D24_UNORM_S8_UINT;
+        default:
+            return VK_FORMAT_UNDEFINED;
+        }
+    }
+
+    VkImageUsageFlags _to_vk_image_usage_flags(TextureUsage usage)
+    {
+        switch (usage)
+        {
+        case TextureUsage::TRANSFER_SRC:
+            return VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        case TextureUsage::TRANSFER_DST:
+            return VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        case TextureUsage::SAMPLED:
+            return VK_IMAGE_USAGE_SAMPLED_BIT;
+        case TextureUsage::STORAGE:
+            return VK_IMAGE_USAGE_STORAGE_BIT;
+        case TextureUsage::COLOR_ATTACHMENT:
+            return VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
+            return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        case TextureUsage::TRANSIENT_ATTACHMENT:
+            return VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+        case TextureUsage::INPUT_ATTACHMENT:
+            return VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+        default:
+            return 0;
+        }
+    }
+
+    const char* _to_vk_result_string(VkResult result)
+    {
+        switch (result)
+        {
+        case VK_SUCCESS:
+            return "Success";
+        case VK_NOT_READY:
+            return "Not Ready";
+        case VK_TIMEOUT:
+            return "Timeout";
+        case VK_EVENT_SET:
+            return "Event Set";
+        case VK_EVENT_RESET:
+            return "Event Reset";
+        case VK_INCOMPLETE:
+            return "Incomplete";
+        case VK_ERROR_OUT_OF_HOST_MEMORY:
+            return "Out of Host Memory";
+        case VK_ERROR_OUT_OF_DEVICE_MEMORY:
+            return "Out of Device Memory";
+        case VK_ERROR_INITIALIZATION_FAILED:
+            return "Initialization Failed";
+        case VK_ERROR_DEVICE_LOST:
+            return "Device Lost";
+        case VK_ERROR_MEMORY_MAP_FAILED:
+            return "Memory Map Failed";
+        case VK_ERROR_LAYER_NOT_PRESENT:
+            return "Layer Not Present";
+        case VK_ERROR_EXTENSION_NOT_PRESENT:
+            return "Extension Not Present";
+        case VK_ERROR_FEATURE_NOT_PRESENT:
+            return "Feature Not Present";
+        case VK_ERROR_INCOMPATIBLE_DRIVER:
+            return "Incompatible Driver";
+        case VK_ERROR_TOO_MANY_OBJECTS:
+            return "Too Many Objects";
+        case VK_ERROR_FORMAT_NOT_SUPPORTED:
+            return "Format Not Supported";
+        case VK_ERROR_FRAGMENTED_POOL:
+            return "Fragmented Pool";
+        default:
+            return "Unknown Error";
+        }
+    }
 }

@@ -9,31 +9,31 @@ namespace rasm
 {
     enum class MaterialTemplate
     {
-        Basic,
+        BASIC,
         PBR,
-        Unlit,
+        UNLIT,
 
-        Count,
+        COUNT,
     };
 
     enum class PbrSlot
     {
-        Albedo,
-        Normal,
-        Roughness,
-        Metallic,
-        Emissive,
+        ALBEDO,
+        NORMAL,
+        ROUGHNESS,
+        METALLIC,
+        EMISSIVE,
 
-        Count,
+        COUNT,
     };
 
     enum class PbrParam
     {
-        Roughness,
-        Metallic,
-        EmissiveIntensity,
+        ROUGHNESS,
+        METALLIC,
+        EMISSIVEINTENSITY,
 
-        Count,
+        COUNT,
     };
 
     class Material
@@ -48,8 +48,8 @@ namespace rasm
         void            setFloat(PbrParam param, float value);
 
     private:
-        std::array<TextureHandle, static_cast<std::size_t>(PbrSlot::Count)> textures{};
-        std::array<float, static_cast<std::size_t>(PbrParam::Count)>        scalarParams{};
+        std::array<TextureHandle, static_cast<std::size_t>(PbrSlot::COUNT)> textures{};
+        std::array<float, static_cast<std::size_t>(PbrParam::COUNT)>        scalarParams{};
         MaterialHandle                                                      handle{};
 
         static constexpr std::size_t toIndex(PbrSlot slot)

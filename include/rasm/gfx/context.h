@@ -16,9 +16,9 @@ namespace rasm
                         ~RenderContext() = default;
         bool            initialize(Backend backend);
         void            cleanup();
-        BufferHandle    createBuffer(size_t size, BufferUsage usage);
-        TextureHandle   createTexture(uint32_t width, uint32_t height, TextureFormat format);
-        ShaderHandle    createShader(const std::string& source, ShaderType type);
+        BufferHandle    createBuffer(ResourceDesc desc);
+        TextureHandle   createTexture(ResourceDesc desc);
+        ShaderHandle    createShader(ResourceDesc desc);
         PipelineHandle  createPipeline(const ShaderHandle& vertexShader, const ShaderHandle& fragmentShader);
         void            bindPipeline(const PipelineHandle& pipeline);
         void            bindTexture(const std::string& name, const TextureHandle& texture);
@@ -26,9 +26,12 @@ namespace rasm
         void            draw(uint32_t vertexCount, uint32_t instanceCount = 1);
 
     protected:
-        Engine*                 engine        = nullptr;
-        gfx::VulkanContext      vulkanContext = {};
-        Backend                 backend       = Backend::Vulkan;
+        Engine*                                                              engine        = nullptr;
+        gfx::VulkanContext                                                   vulkanContext = {};
+        Backend                                                              backend       = Backend::VULKAN;
+        std::unordered_map<BufferHandle, gfx::BufferVKHandle, HandleHash>    bufferCache;
+        std::unordered_map<TextureHandle, gfx::TextureVKHandle, HandleHash>  textureCache;
+        std::unordered_map<ShaderHandle, gfx::ShaderVKHandle, HandleHash>    shaderCache;
 
     };
 }

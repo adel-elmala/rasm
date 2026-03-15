@@ -58,7 +58,7 @@ int main()
         .windowWidth = 1920,
         .windowHeight = 1080,
         .enableValidation = true,
-        .preferredBackend = rasm::Backend::Vulkan};
+        .preferredBackend = rasm::Backend::VULKAN};
 
     rasm::Engine engine(config);
     rasm::Scene scene = engine.createScene();
