@@ -6,6 +6,8 @@
 #include "rasm/core/entity.h"
 #include "rasm/core/camera.h"
 #include "rasm/core/renderGraph.h"
+#include "rasm/gfx/context.h"
+
 
 #include "spdlog/spdlog.h"
 
@@ -27,7 +29,14 @@ namespace rasm
         // In a real implementation, this is where we'd initialize the window, graphics context, etc.
         spdlog::info("Engine initialized with config: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
                      config.appName, config.windowWidth, config.windowHeight, config.enableValidation);
+    
+        this->window = Window(this, config.windowWidth, config.windowHeight);
+        this->mainWindow = this->window.createWindow();
+
+        ctx = RenderContext(this);
+        ctx.initialize(config.preferredBackend);
     }
+
     Engine::~Engine()
     {
         // Clean up resources, free memory, etc.
@@ -48,6 +57,8 @@ namespace rasm
                 // If we had implemented OBJ loading, we would clean up any allocated resources here.
             }
         }
+        
+        this->window.destroyWindow(this->mainWindow);
         spdlog::info("Engine shutdown, cleaned up resources.");
     }
 
@@ -167,7 +178,8 @@ namespace rasm
 
     RenderGraph Engine::createRenderGraph()
     {
-        return RenderGraph();
+        RenderGraph graph(this);
+        return graph;
     }
 
 
@@ -185,6 +197,8 @@ namespace rasm
 
     void Engine::render(Scene &scene, Entity &camera)
     {
+        this->window.pollEvents();
+
         for (Entity &entity : scene.entities)
         {
             if (entity.hasComponent<Mesh>() && entity.hasComponent<Material>() && entity.hasComponent<Transform>())
@@ -226,4 +240,23 @@ namespace rasm
         return Entity(id, name);
     }
 
+    EngineConfig Engine::getConfig() const
+    {
+        return config;
+    }
+
+    Window& Engine::getWindow() const
+    {
+        return const_cast<Window&>(window);
+    }
+
+    WindowHandle Engine::getMainWindow() const
+    {
+        return mainWindow;
+    }
+
+    RenderContext& Engine::getRenderContext() const
+    {
+        return const_cast<RenderContext&>(ctx);
+    }
 }

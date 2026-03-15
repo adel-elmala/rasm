@@ -2,7 +2,8 @@
 #include <unordered_map>
 #include <queue>
 
-#include "../include/rasm/core/renderGraph.h"
+#include "rasm/core/renderGraph.h"
+#include "rasm/core/engine.h"
 
 namespace rasm
 {
@@ -92,7 +93,7 @@ namespace rasm
     {
         if (!compiled) compile();
 
-        auto ctx = RenderContext{};
+        auto ctx = owner->getRenderContext();
         for (const auto &passIdx : executionOrder)
         {
             passes[passIdx].execute(ctx);

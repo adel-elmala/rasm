@@ -12,8 +12,8 @@ int main() {
     // 1. Create engine instance
     rasm::EngineConfig config;
     config.appName = "My Game";
-    config.windowWidth = 1920;
-    config.windowHeight = 1080;
+    config.windowWidth = 720;
+    config.windowHeight = 480;
     config.enableValidation = true;
 
     rasm::Engine engine(config);
