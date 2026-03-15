@@ -4,7 +4,6 @@
 #include "VkBootstrap.h"
 #include "spdlog/spdlog.h"
 
-
 namespace rasm::gfx
 {
     // Forward declarations of private helper functions for Vulkan setup and management.
@@ -37,7 +36,7 @@ namespace rasm::gfx
         auto vkb_surface = _init_surface(vkb_instance.value(), engine->getWindow(), engine->getMainWindow());
         if (!vkb_surface)
             return false;
-            
+
         this->surface = vkb_surface.value();
 
         // select physical device
@@ -149,6 +148,24 @@ namespace rasm::gfx
             }
         }
 
+        auto physical_device = physical_device_selector_return.value();
+        spdlog::info(
+            "Selected GPU information:\n"
+            "\t\t\t\t\tname: {} -- type: {} --  memory: {} MB\n"
+            "\t\t\t\t\tdriver version: {}.{}.{} --  API version: {}.{}.{}",
+            physical_device.properties.deviceName,
+            physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? "Discrete" : physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? "Integrated"
+                                                                                                     : physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU      ? "Virtual"
+                                                                                                     : physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU              ? "CPU"
+                                                                                                                                                                                         : "Other",
+            physical_device.memory_properties.memoryHeaps[0].size / (1024 * 1024),
+            VK_VERSION_MAJOR(physical_device.properties.driverVersion),
+            VK_VERSION_MINOR(physical_device.properties.driverVersion),
+            VK_VERSION_PATCH(physical_device.properties.driverVersion),
+            VK_VERSION_MAJOR(physical_device.properties.apiVersion),
+            VK_VERSION_MINOR(physical_device.properties.apiVersion),
+            VK_VERSION_PATCH(physical_device.properties.apiVersion));
+
         return physical_device_selector_return;
     }
 
@@ -172,7 +189,7 @@ namespace rasm::gfx
 
         if (!surface_ret)
         {
-           return vkb::Result<VkSurfaceKHR>{vkb::Error{}};
+            return vkb::Result<VkSurfaceKHR>{vkb::Error{}};
         }
 
         return vkb::Result<VkSurfaceKHR>{surface_ret};
