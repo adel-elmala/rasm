@@ -1,7 +1,6 @@
 #include "rasm/core/engine.h"
 #include "rasm/gfx/vulkan.h"
 
-#include "VkBootstrap.h"
 #include "spdlog/spdlog.h"
 
 namespace rasm::gfx
@@ -113,7 +112,8 @@ namespace rasm::gfx
         auto instance_ret = instance_builder
                                 .set_app_name(app_name ? app_name : "rasm_app")
                                 .set_engine_name("rasm")
-                                .require_api_version(1, 3, 0)
+                                .require_api_version(1, 4, 0)
+                                .set_minimum_instance_version(1, 3, 0)
                                 .build();
 
         if (!instance_ret)

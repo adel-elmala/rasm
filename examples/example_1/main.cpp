@@ -5,9 +5,11 @@
 #include "rasm/core/types.h"
 
 // User-defined pass with explicit typed settings and material handle ownership.
-class CustomBloomPass {
+class CustomBloomPass
+{
 public:
-    struct Settings {
+    struct Settings
+    {
         float threshold = 1.0f;
         float intensity = 0.5f;
     };
@@ -15,7 +17,8 @@ public:
     CustomBloomPass(rasm::Material material, Settings settings)
         : material_(material), settings_(settings) {}
 
-    void setup(rasm::PassBuilder& builder) {
+    void setup(rasm::PassBuilder &builder)
+    {
         // Slot names are the graph-level contract for this pass.
         // input_ = builder.read("scene_color");
 
@@ -29,7 +32,8 @@ public:
         // builder.write(output_);
     }
 
-    void execute(rasm::RenderContext& ctx) {
+    void execute(rasm::RenderContext &ctx)
+    {
         // ctx.setRenderTarget(output_);
         // ctx.clear(glm::vec4(0.0f));
 
@@ -47,12 +51,14 @@ private:
     Settings settings_;
 };
 
-int main() {
-    rasm::EngineConfig config;
-    config.appName = "My Game";
-    config.windowWidth = 1920;
-    config.windowHeight = 1080;
-    config.enableValidation = true;
+int main()
+{
+    rasm::EngineConfig config = {
+        .appName = "example_1",
+        .windowWidth = 1920,
+        .windowHeight = 1080,
+        .enableValidation = true,
+        .preferredBackend = rasm::Backend::Vulkan};
 
     rasm::Engine engine(config);
     rasm::Scene scene = engine.createScene();
@@ -66,32 +72,35 @@ int main() {
     rasm::RenderGraph graph = engine.createRenderGraph();
 
     // Standard forward rendering pass.
-     graph.addPass("Forward",
-        [] (rasm::PassBuilder& builder) {
-            // In a real implementation, this would set up render targets, bind the scene, etc.
-        },
-        [] (rasm::RenderContext& ctx) {
-            // This is where the actual draw calls for the forward pass would go.
-        });
+    graph.addPass("Forward", [](rasm::PassBuilder &builder)
+                  {
+                      // In a real implementation, this would set up render targets, bind the scene, etc.
+                  },
+                  [](rasm::RenderContext &ctx)
+                  {
+                      // This is where the actual draw calls for the forward pass would go.
+                  });
 
-    
     auto bloomPass = CustomBloomPass(rasm::Material{} /*bloomMaterial*/, CustomBloomPass::Settings{1.0f, 0.5f});
 
     // Graph owns pass lifetime; no raw new/delete.
     graph.addPass(
         "Bloom",
-        [&bloomPass] (rasm::PassBuilder& builder) {
+        [&bloomPass](rasm::PassBuilder &builder)
+        {
             // In a real implementation, this would set up render targets, bind the scene, etc.
             bloomPass.setup(builder);
         },
-        [&bloomPass] (rasm::RenderContext& ctx) {
+        [&bloomPass](rasm::RenderContext &ctx)
+        {
             // This is where the actual draw calls for the forward pass would go.
             bloomPass.execute(ctx);
         });
 
     graph.compile();
-    
-    while (engine.running()) {
+
+    while (engine.running())
+    {
         engine.beginFrame();
         graph.execute();
         engine.endFrame();

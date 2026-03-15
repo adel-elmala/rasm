@@ -6,29 +6,46 @@
 namespace rasm
 {
     RenderContext::RenderContext(Engine *owner) : engine(owner) {}
-   
-    void RenderContext::initialize(Backend _backend)
+
+    bool RenderContext::initialize(Backend _backend)
     {
         this->backend = _backend;
-        // In a real implementation, this is where we'd set up the graphics API context (e.g., create Vulkan instance, device, swapchain, etc.)
 
         switch (backend)
         {
         case Backend::Vulkan:
-            // Initialize Vulkan context
-            vulkanContext = new gfx::VulkanContext(engine);
-            if (!vulkanContext->initialize())
+            vulkanContext = gfx::VulkanContext(engine);
+            if (!vulkanContext.initialize())
             {
                 spdlog::error("Failed to initialize Vulkan context.");
+                return false;
             }
+            return true;
+        case Backend::DX12:
+            spdlog::error("DirectX 12 backend is not implemented yet.");
+            return false;
+        case Backend::Metal:
+            spdlog::error("Metal backend is not implemented yet.");
+            return false;
+        default:
+            spdlog::error("Unsupported backend.");
+            return false;
+        }
+    }
+
+    void RenderContext::cleanup()
+    {
+        switch (backend)
+        {
+        case Backend::Vulkan:
+            vulkanContext.cleanup();
             break;
         case Backend::DX12:
-            // Initialize DirectX 12 context
             break;
         case Backend::Metal:
-            // Initialize Metal context
             break;
         default:
+            spdlog::error("Unsupported backend during cleanup.");
             break;
         }
     }

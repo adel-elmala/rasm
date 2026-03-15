@@ -2,11 +2,11 @@
 
 #include "rasm/core/types.h"
 #include "rasm/gfx/types.h"
+#include "rasm/gfx/vulkan.h"
 
 namespace rasm
 {
     class Engine;
-    namespace gfx { class VulkanContext; }
 
     class RenderContext
     {
@@ -14,7 +14,8 @@ namespace rasm
                         RenderContext() = default;
                         RenderContext(Engine *owner);
                         ~RenderContext() = default;
-        void            initialize(Backend backend);
+        bool            initialize(Backend backend);
+        void            cleanup();
         BufferHandle    createBuffer(size_t size, BufferUsage usage);
         TextureHandle   createTexture(uint32_t width, uint32_t height, TextureFormat format);
         ShaderHandle    createShader(const std::string& source, ShaderType type);
@@ -26,7 +27,7 @@ namespace rasm
 
     protected:
         Engine*                 engine        = nullptr;
-        gfx::VulkanContext*     vulkanContext = nullptr;
+        gfx::VulkanContext      vulkanContext = {};
         Backend                 backend       = Backend::Vulkan;
 
     };

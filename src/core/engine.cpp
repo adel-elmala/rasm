@@ -34,7 +34,10 @@ namespace rasm
         this->mainWindow = this->window.createWindow();
 
         ctx = RenderContext(this);
-        ctx.initialize(config.preferredBackend);
+        if(!ctx.initialize(config.preferredBackend))
+        {
+            spdlog::error("Failed to initialize render context.");
+        }
     }
 
     Engine::~Engine()
@@ -57,6 +60,8 @@ namespace rasm
                 // If we had implemented OBJ loading, we would clean up any allocated resources here.
             }
         }
+
+        ctx.cleanup();
         
         this->window.destroyWindow(this->mainWindow);
         spdlog::info("Engine shutdown, cleaned up resources.");

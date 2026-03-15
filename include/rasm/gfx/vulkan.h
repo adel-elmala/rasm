@@ -13,6 +13,7 @@ namespace rasm
         {
         public:
                  VulkanContext(Engine *owner);
+                 VulkanContext() = default;
                  ~VulkanContext();
             bool initialize();
             void cleanup();

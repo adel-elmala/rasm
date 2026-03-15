@@ -3,7 +3,6 @@
 #include "SDL3/SDL.h"
 #include "SDL3/SDL_vulkan.h"
 #include "spdlog/spdlog.h"
-#include "vulkan/vulkan.h"
 
 namespace rasm
 {
