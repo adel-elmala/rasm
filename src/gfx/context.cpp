@@ -121,7 +121,6 @@ namespace rasm
             }
             TextureHandle handle = engine->getNextTextureHandle();
             texture->handle = handle;
-
             textureCache[handle] = texture.value();
 
             return handle;
