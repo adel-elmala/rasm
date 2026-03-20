@@ -36,6 +36,8 @@ namespace rasm {
         BufferHandle    getNextBufferHandle();
         TextureHandle   getNextTextureHandle();
         ShaderHandle    getNextShaderHandle();
+        PipelineHandle  getNextPipelineHandle();
+        
 
     private:
         EngineConfig                                    config;

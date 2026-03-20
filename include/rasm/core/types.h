@@ -51,13 +51,13 @@ namespace rasm
         COMPUTE
     };
 
-    const static std::unordered_set<std::string> supportedMeshExtensions = {"obj", "gltf", "glb"};
+    const static std::unordered_set<std::string> supportedMeshExtensions    = {"obj", "gltf", "glb"};
     const static std::unordered_set<std::string> supportedTextureExtensions = {"png", "jpg", "jpeg"};
 
     template <typename Tag>
     struct Handle
     {
-        uint64_t index = 0;
+        uint64_t index      = 0;
         uint64_t generation = 0;
 
         [[nodiscard]] bool isValid() const { return generation != 0; }
@@ -84,44 +84,44 @@ namespace rasm
     struct WindowTag;
     struct ResourceTag;
 
-    using MeshHandle = Handle<MeshTag>;
-    using BufferHandle = Handle<BufferTag>;
-    using TextureHandle = Handle<TextureTag>;
-    using MaterialHandle = Handle<MaterialTag>;
-    using PipelineHandle = Handle<PipelineTag>;
-    using ShaderHandle = Handle<ShaderTag>;
-    using SceneHandle = Handle<SceneTag>;
-    using EntityHandle = Handle<EntityTag>;
-    using WindowHandle = Handle<WindowTag>;
-    using ResourceHandle = Handle<ResourceTag>;
+    using MeshHandle        = Handle<MeshTag>;
+    using BufferHandle      = Handle<BufferTag>;
+    using TextureHandle     = Handle<TextureTag>;
+    using MaterialHandle    = Handle<MaterialTag>;
+    using PipelineHandle    = Handle<PipelineTag>;
+    using ShaderHandle      = Handle<ShaderTag>;
+    using SceneHandle       = Handle<SceneTag>;
+    using EntityHandle      = Handle<EntityTag>;
+    using WindowHandle      = Handle<WindowTag>;
+    using ResourceHandle    = Handle<ResourceTag>;
 
     struct EngineConfig
     {
-        std::string appName{};
-        int windowWidth = 0;
-        int windowHeight = 0;
-        bool enableValidation = false;
-        Backend preferredBackend = Backend::VULKAN;
+        std::string appName             = {};
+        int         windowWidth         = 0;
+        int         windowHeight        = 0;
+        bool        enableValidation    = false;
+        Backend     preferredBackend    = Backend::VULKAN;
     };
 
     struct HandleCounters
     {
-        uint64_t scene = 1;
-        uint64_t entity = 1;
-        uint64_t mesh = 1;
-        uint64_t texture = 1;
-        uint64_t material = 1;
-        uint64_t buffer = 1;
-        uint64_t pipeline = 1;
-        uint64_t shader = 1;
+        uint64_t scene      = 1;
+        uint64_t entity     = 1;
+        uint64_t mesh       = 1;
+        uint64_t texture    = 1;
+        uint64_t material   = 1;
+        uint64_t buffer     = 1;
+        uint64_t pipeline   = 1;
+        uint64_t shader     = 1;
     };
 
     struct TextureRaw
     {
-        uint32_t width;
-        uint32_t height;
-        uint32_t channels;
-        unsigned char *data;
+        uint32_t        width;
+        uint32_t        height;
+        uint32_t        channels;
+        unsigned char*  data;
     };
 
     
@@ -151,25 +151,26 @@ namespace rasm
             // Texture-specific data
             struct
             {
-                uint32_t width;
-                uint32_t height;
-                TextureFormat format;
-                TextureUsage usage;
+                uint32_t        width;
+                uint32_t        height;
+                TextureFormat   format;
+                TextureUsage    usage;
             } texture;
 
             // Buffer-specific data
             struct
             {
-                uint64_t size;
-                uint64_t stride;
-                BufferUsage usage;
+                uint64_t        size;
+                uint64_t        stride;
+                BufferUsage     usage;
             } buffer;
 
             // Shader-specific data
             struct
             {
-                ShaderType shaderType;
-                const char *source;
+                ShaderType      shaderType;
+                uint64_t        sourceSize;
+                const char *    source;
             } shader;
         };
     };

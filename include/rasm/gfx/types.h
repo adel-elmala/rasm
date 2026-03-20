@@ -30,5 +30,13 @@ namespace rasm::gfx
         ShaderHandle handle;
         VkShaderModule module;
     };
+
+    struct PipelineVKHandle
+    {
+        ResourceDesc desc;
+        PipelineHandle handle;
+        VkPipeline pipeline;
+        VkPipelineLayout layout;
+    };
 }
 // clang-format on

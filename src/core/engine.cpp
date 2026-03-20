@@ -279,4 +279,10 @@ namespace rasm
     {
         return ShaderHandle{nextHandle.shader++, 1};
     }
+
+    PipelineHandle Engine::getNextPipelineHandle()
+    {
+        return PipelineHandle{nextHandle.pipeline++, 1};
+    }
+
 }

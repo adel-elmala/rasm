@@ -6,10 +6,12 @@
 
 namespace rasm
 {
-    RenderContext::RenderContext(Engine *owner) : engine(owner) {
-        bufferCache.reserve(25); // Pre-allocate for 25 buffers
-        textureCache.reserve(25); // Pre-allocate for 25 textures
-        shaderCache.reserve(25); // Pre-allocate for 25 shaders
+    RenderContext::RenderContext(Engine *owner) : engine(owner)
+    {
+        bufferCache.reserve(25);   // Pre-allocate for 25 buffers
+        textureCache.reserve(25);  // Pre-allocate for 25 textures
+        shaderCache.reserve(25);   // Pre-allocate for 25 shaders
+        pipelineCache.reserve(25); // Pre-allocate for 25 pipelines
     }
 
     bool RenderContext::initialize(Backend _backend)
@@ -43,8 +45,29 @@ namespace rasm
         switch (backend)
         {
         case Backend::VULKAN:
+        {
+            for (const auto &[handle, buffer] : bufferCache)
+            {
+                vulkanContext.removeBuffer(buffer);
+            }
+
+            for (const auto &[handle, texture] : textureCache)
+            {
+                vulkanContext.removeTexture(texture);
+            }
+
+            for (const auto &[handle, shader] : shaderCache)
+            {
+                vulkanContext.removeShader(shader);
+            }
+
+            for (const auto &[handle, pipeline] : pipelineCache)
+            {
+                vulkanContext.removePipeline(pipeline);
+            }
             vulkanContext.cleanup();
             break;
+        }
         case Backend::DX12:
             break;
         case Backend::METAL:
@@ -69,11 +92,10 @@ namespace rasm
             }
             BufferHandle handle = engine->getNextBufferHandle();
             buffer->handle = handle;
-            
+
             bufferCache[handle] = buffer.value();
 
             return handle;
-            
         }
         case Backend::DX12:
             return {}; // Placeholder
@@ -99,7 +121,7 @@ namespace rasm
             }
             TextureHandle handle = engine->getNextTextureHandle();
             texture->handle = handle;
-            
+
             textureCache[handle] = texture.value();
 
             return handle;
@@ -119,7 +141,20 @@ namespace rasm
         switch (backend)
         {
         case Backend::VULKAN:
-            return {};
+        {
+            auto shader = vulkanContext.createShader(desc);
+            if (!shader)
+            {
+                spdlog::error("Failed to create Vulkan shader.");
+                return {};
+            }
+            ShaderHandle handle = engine->getNextShaderHandle();
+            shader->handle = handle;
+
+            shaderCache[handle] = shader.value();
+
+            return handle;
+        }
         case Backend::DX12:
             return {};
         case Backend::METAL:
@@ -130,12 +165,33 @@ namespace rasm
         }
     }
 
-    PipelineHandle RenderContext::createPipeline(const ShaderHandle &vertexShader, const ShaderHandle &fragmentShader)
+    PipelineHandle RenderContext::createPipeline(ResourceDesc desc, const ShaderHandle &vertexShader, const ShaderHandle &fragmentShader)
     {
         switch (backend)
         {
         case Backend::VULKAN:
-            return {};
+        {
+            auto vertexIt = shaderCache.find(vertexShader);
+            auto fragmentIt = shaderCache.find(fragmentShader);
+            if (vertexIt == shaderCache.end() || fragmentIt == shaderCache.end())
+            {
+                spdlog::error("Shader handle not found in cache during pipeline creation.");
+                return {};
+            }
+
+            auto pipeline = vulkanContext.createGraphicsPipeline(desc, vertexIt->second, fragmentIt->second);
+            if (!pipeline)
+            {
+                spdlog::error("Failed to create Vulkan pipeline.");
+                return {};
+            }
+            PipelineHandle handle = engine->getNextPipelineHandle();
+            pipeline->handle = handle;
+
+            pipelineCache[handle] = pipeline.value();
+
+            return handle;
+        }
         case Backend::DX12:
             return {};
         case Backend::METAL:
@@ -151,8 +207,16 @@ namespace rasm
         switch (backend)
         {
         case Backend::VULKAN:
-            vulkanContext.bindPipeline(pipeline);
+        {
+            auto it = pipelineCache.find(pipeline);
+            if (it == pipelineCache.end())
+            {
+                spdlog::error("Pipeline handle not found in cache during binding.");
+                return;
+            }
+            vulkanContext.bindPipeline(it->second);
             break;
+        }
         case Backend::DX12:
             break;
         case Backend::METAL:

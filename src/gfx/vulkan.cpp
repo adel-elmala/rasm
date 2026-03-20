@@ -9,6 +9,8 @@
 
 namespace rasm::gfx
 {
+    // clang-format off
+
     // Forward declarations of private helper functions for Vulkan setup and management.
     vkb::Result<vkb::Instance>          _init_instance(const char *app_name, bool enable_validation_layers);
     vkb::Result<vkb::PhysicalDevice>    _init_physical_device(const vkb::Instance &vkb_instance, VkSurfaceKHR surface);
@@ -19,6 +21,8 @@ namespace rasm::gfx
     VkImageUsageFlags                   _to_vk_image_usage_flags(TextureUsage usage);
     VkFormat                            _to_vk_format(TextureFormat format);
     const char *                        _to_vk_result_string(VkResult result);
+
+    // clang-format on
 }
 
 namespace rasm::gfx
@@ -156,17 +160,193 @@ namespace rasm::gfx
         return rawHandle;
     }
 
-    std::optional<ShaderHandle> VulkanContext::createShader(ResourceDesc desc)
+    std::optional<ShaderVKHandle> VulkanContext::createShader(ResourceDesc desc)
     {
-        return {};
+        assert(desc.type == ResourceDesc::Type::SHADER);
+
+        VkShaderModuleCreateInfo shaderModuleInfo = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        shaderModuleInfo.codeSize = desc.shader.sourceSize;
+        shaderModuleInfo.pCode = reinterpret_cast<const uint32_t *>(desc.shader.source);
+
+        VkShaderModule shaderModule;
+        auto result = vkCreateShaderModule(this->device.device, &shaderModuleInfo, nullptr, &shaderModule);
+
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to create shader module. Error: {}", _to_vk_result_string(result));
+            return {};
+        }
+
+        ShaderVKHandle rawHandle = {desc, {}, shaderModule};
+        return rawHandle;
     }
 
-    std::optional<PipelineHandle> VulkanContext::createPipeline(const ShaderHandle &vertexShader, const ShaderHandle &fragmentShader)
+    VkViewport createViewPort(float width, float height, float minDepth, float maxDepth)
     {
-        return {};
+        VkViewport viewport = {
+            .x = -1.0f,
+            .y = -1.0f,
+            .width = width,
+            .height = height,
+            .minDepth = minDepth,
+            .maxDepth = maxDepth,
+        };
+
+        return viewport;
     }
 
-    void VulkanContext::bindPipeline(const PipelineHandle &pipeline)
+    VkRect2D createScissor(int32_t x, int32_t y, uint32_t width, uint32_t height)
+    {
+        VkRect2D scissor = {
+            .offset = {x, y},
+            .extent = {width, height}};
+
+        return scissor;
+    }
+
+    VkPipelineRasterizationStateCreateInfo createRasterizer(VkPolygonMode polygonMode, VkCullModeFlags cullMode, VkFrontFace frontFace)
+    {
+        VkPipelineRasterizationStateCreateInfo rasterizer{.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                                                          .depthClampEnable = VK_FALSE,
+                                                          .rasterizerDiscardEnable = VK_FALSE,
+                                                          .polygonMode = polygonMode,
+                                                          .cullMode = cullMode,
+                                                          .frontFace = frontFace,
+                                                          .depthBiasEnable = VK_FALSE,
+                                                          .lineWidth = 1.0f};
+        return rasterizer;
+    }
+
+    std::optional<PipelineVKHandle> VulkanContext::createGraphicsPipeline(ResourceDesc desc, const ShaderVKHandle &vertexShader, const ShaderVKHandle &fragmentShader)
+    {
+        VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+
+        VkPipelineDynamicStateCreateInfo dynamicStateInfo = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+        dynamicStateInfo.pDynamicStates = dynamic_states;
+        dynamicStateInfo.dynamicStateCount = 2;
+
+        // skip for now
+        VkPipelineVertexInputStateCreateInfo vertexInputInfo = {VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+
+        // skip for now
+        VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo = {VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+        inputAssemblyInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        VkViewport viewport = createViewPort(static_cast<float>(swapchain.extent.width), static_cast<float>(swapchain.extent.height), 0.0f, 1.0f);
+
+        viewport.maxDepth = 1.0f;
+
+        VkRect2D scissor = createScissor(0, 0, swapchain.extent.width, swapchain.extent.height);
+
+        VkPipelineRasterizationStateCreateInfo rasterizerInfo = createRasterizer(VK_POLYGON_MODE_FILL, VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_CLOCKWISE);
+
+        VkPipelineMultisampleStateCreateInfo multisampleInfo = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+                                                                .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+                                                                .sampleShadingEnable = VK_FALSE};
+
+        VkPipelineDepthStencilStateCreateInfo depthStencilInfo = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+                                                                  .depthTestEnable = VK_TRUE,
+                                                                  .depthWriteEnable = VK_TRUE,
+                                                                  .depthCompareOp = VK_COMPARE_OP_LESS,
+                                                                  .depthBoundsTestEnable = VK_FALSE,
+                                                                  .stencilTestEnable = VK_FALSE};
+
+        VkPipelineColorBlendAttachmentState colorBlendAttachment = {
+            .blendEnable = VK_FALSE,
+            .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+            .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .colorBlendOp = VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+            .alphaBlendOp = VK_BLEND_OP_ADD,
+            .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+        };
+
+        VkPipelineColorBlendStateCreateInfo colorBlendInfo = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+                                                              .logicOpEnable = VK_FALSE,
+                                                              .attachmentCount = 1,
+                                                              .pAttachments = &colorBlendAttachment};
+
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+                                                          .setLayoutCount = 0,
+                                                          .pSetLayouts = nullptr,
+                                                          .pushConstantRangeCount = 0,
+                                                          .pPushConstantRanges = nullptr};
+
+        VkPipelineLayout pipelineLayout;
+        auto result = vkCreatePipelineLayout(this->device.device, &pipelineLayoutInfo, nullptr, &pipelineLayout);
+
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to create pipeline layout. Error: {}", _to_vk_result_string(result));
+            return {};
+        }
+
+
+        VkPipelineShaderStageCreateInfo shaderStages[] = {
+            {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .stage = VK_SHADER_STAGE_VERTEX_BIT,
+                .module = vertexShader.module,
+                .pName = "main",
+            },
+            {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+                .module = fragmentShader.module,
+                .pName = "main",
+            }};
+
+        VkGraphicsPipelineCreateInfo pipelineInfo = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                                                      .stageCount = 2,
+                                                      .pStages = shaderStages,
+                                                      .pVertexInputState = &vertexInputInfo,
+                                                      .pInputAssemblyState = &inputAssemblyInfo,
+                                                      .pViewportState = nullptr, // dynamic
+                                                      .pRasterizationState = &rasterizerInfo,
+                                                      .pMultisampleState = &multisampleInfo,
+                                                      .pDepthStencilState = &depthStencilInfo,
+                                                      .pColorBlendState = &colorBlendInfo,
+                                                      .layout = pipelineLayout,
+                                                      .renderPass = VK_NULL_HANDLE, // dynamic rendering, will be set later
+                                                      .subpass = 0};
+
+        VkPipeline pipeline;
+        result = vkCreateGraphicsPipelines(this->device.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
+
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to create graphics pipeline. Error: {}", _to_vk_result_string(result));
+            vkDestroyPipelineLayout(this->device.device, pipelineLayout, nullptr);
+            return {};
+        }
+
+        PipelineVKHandle rawHandle = {desc, {}, pipeline, pipelineLayout};
+        return rawHandle;
+    }
+
+    void VulkanContext::removeBuffer(const BufferVKHandle &buffer)
+    {
+        vmaDestroyBuffer(this->allocator, buffer.buffer, buffer.allocation);
+    }
+
+    void VulkanContext::removeTexture(const TextureVKHandle &texture)
+    {
+        vmaDestroyImage(this->allocator, texture.image, texture.allocation);
+    }
+
+    void VulkanContext::removeShader(const ShaderVKHandle &shader)
+    {
+        vkDestroyShaderModule(this->device.device, shader.module, nullptr);
+    }
+
+    void VulkanContext::removePipeline(const PipelineVKHandle &pipeline)
+    {
+        vkDestroyPipeline(this->device.device, pipeline.pipeline, nullptr);
+        vkDestroyPipelineLayout(this->device.device, pipeline.layout, nullptr);
+    }
+
+    void VulkanContext::bindPipeline(const PipelineVKHandle &pipeline)
     {
     }
 
@@ -372,7 +552,7 @@ namespace rasm::gfx
         }
     }
 
-    const char* _to_vk_result_string(VkResult result)
+    const char *_to_vk_result_string(VkResult result)
     {
         switch (result)
         {
