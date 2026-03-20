@@ -1,3 +1,4 @@
+// clang-format off
 #pragma once
 
 #include <cstdint>
@@ -11,3 +12,4 @@ namespace rasm
     std::string rasm_hello();
 
 }
+// clang-format on

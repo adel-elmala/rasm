@@ -1,3 +1,4 @@
+// clang-format off
 #pragma once
 
 #include "VkBootstrap.h"
@@ -30,3 +31,4 @@ namespace rasm::gfx
         VkShaderModule module;
     };
 }
+// clang-format on

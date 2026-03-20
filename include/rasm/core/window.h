@@ -1,3 +1,4 @@
+// clang-format off
 #pragma once
 
 #include <cstdint>
@@ -32,3 +33,4 @@ namespace rasm
         Extent extent{1080, 720};
     };
 }
+// clang-format on

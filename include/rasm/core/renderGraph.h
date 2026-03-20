@@ -1,3 +1,4 @@
+// clang-format off
 #pragma once
 
 #include <string>
@@ -67,4 +68,5 @@ namespace rasm
         Engine*                     owner    = nullptr;
         bool                        compiled = false;
     };
-}   
+}
+// clang-format on

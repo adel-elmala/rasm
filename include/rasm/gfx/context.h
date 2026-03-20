@@ -1,3 +1,4 @@
+// clang-format off
 #pragma once
 
 #include "rasm/core/types.h"
@@ -35,3 +36,4 @@ namespace rasm
 
     };
 }
+// clang-format on

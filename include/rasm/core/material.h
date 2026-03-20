@@ -1,3 +1,4 @@
+// clang-format off
 #pragma once
 
 #include <array>
@@ -63,3 +64,4 @@ namespace rasm
     };
 
 }
+// clang-format on

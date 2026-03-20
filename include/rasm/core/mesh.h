@@ -1,3 +1,4 @@
+// clang-format off
 #pragma once
 
 #include "rasm/core/rasm.h"
@@ -18,3 +19,4 @@ namespace rasm
     };
 
 }
+// clang-format on

@@ -1,3 +1,4 @@
+// clang-format off
 #pragma once
 
 #include "VkBootstrap.h"
@@ -43,3 +44,4 @@ namespace rasm
         };
     }
 }
+// clang-format on

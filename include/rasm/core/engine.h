@@ -1,3 +1,4 @@
+// clang-format off
 #pragma once
 
 #include <cstdint>
@@ -51,3 +52,4 @@ namespace rasm {
     };
 
 }
+// clang-format on

@@ -1,3 +1,4 @@
+// clang-format off
 #pragma once
 
 namespace rasm {
@@ -24,3 +25,4 @@ namespace rasm {
     };
 
 }
+// clang-format on

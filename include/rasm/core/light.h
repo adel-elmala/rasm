@@ -1,3 +1,4 @@
+// clang-format off
 #pragma once
 
 #include "glm/glm.hpp"
@@ -30,3 +31,4 @@ namespace rasm
     };
 
 }
+// clang-format on
