@@ -15,6 +15,8 @@ namespace rasm::gfx
     vkb::Result<vkb::Instance>          _init_instance(const char *app_name, bool enable_validation_layers);
     vkb::Result<vkb::PhysicalDevice>    _init_physical_device(const vkb::Instance &vkb_instance, VkSurfaceKHR surface);
     vkb::Result<vkb::Device>            _init_logical_device(const vkb::PhysicalDevice &physical_device);
+    vkb::Result<VkQueue>                _init_queue(const vkb::Device &device, vkb::QueueType type);
+    vkb::Result<uint32_t>               _get_queue_index(const vkb::Device &device, vkb::QueueType type);
     vkb::Result<VkSurfaceKHR>           _init_surface(const vkb::Instance &instance, const Window &window, WindowHandle handle);
     vkb::Result<vkb::Swapchain>         _init_swapchain(const vkb::Device &device);
     VkBufferUsageFlagBits               _to_vk_buffer_usage_flags(BufferUsage usage);
@@ -65,6 +67,13 @@ namespace rasm::gfx
             return false;
 
         this->device = vkb_device.value();
+
+        // get graphics queue
+        auto vkb_queue = _init_queue(vkb_device.value(), vkb::QueueType::graphics);
+
+        if (!vkb_queue)
+            return false;
+        this->graphics_queue = vkb_queue.value();
 
         // create swapchain
         auto vkb_swapchain = _init_swapchain(vkb_device.value());
@@ -268,10 +277,10 @@ namespace rasm::gfx
                                                               .pAttachments = &colorBlendAttachment};
 
         VkPipelineLayoutCreateInfo pipelineLayoutInfo = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-                                                          .setLayoutCount = 0,
-                                                          .pSetLayouts = nullptr,
-                                                          .pushConstantRangeCount = 0,
-                                                          .pPushConstantRanges = nullptr};
+                                                         .setLayoutCount = 0,
+                                                         .pSetLayouts = nullptr,
+                                                         .pushConstantRangeCount = 0,
+                                                         .pPushConstantRanges = nullptr};
 
         VkPipelineLayout pipelineLayout;
         auto result = vkCreatePipelineLayout(this->device.device, &pipelineLayoutInfo, nullptr, &pipelineLayout);
@@ -281,7 +290,6 @@ namespace rasm::gfx
             spdlog::error("Failed to create pipeline layout. Error: {}", _to_vk_result_string(result));
             return {};
         }
-
 
         VkPipelineShaderStageCreateInfo shaderStages[] = {
             {
@@ -298,18 +306,18 @@ namespace rasm::gfx
             }};
 
         VkGraphicsPipelineCreateInfo pipelineInfo = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-                                                      .stageCount = 2,
-                                                      .pStages = shaderStages,
-                                                      .pVertexInputState = &vertexInputInfo,
-                                                      .pInputAssemblyState = &inputAssemblyInfo,
-                                                      .pViewportState = nullptr, // dynamic
-                                                      .pRasterizationState = &rasterizerInfo,
-                                                      .pMultisampleState = &multisampleInfo,
-                                                      .pDepthStencilState = &depthStencilInfo,
-                                                      .pColorBlendState = &colorBlendInfo,
-                                                      .layout = pipelineLayout,
-                                                      .renderPass = VK_NULL_HANDLE, // dynamic rendering, will be set later
-                                                      .subpass = 0};
+                                                     .stageCount = 2,
+                                                     .pStages = shaderStages,
+                                                     .pVertexInputState = &vertexInputInfo,
+                                                     .pInputAssemblyState = &inputAssemblyInfo,
+                                                     .pViewportState = nullptr, // dynamic
+                                                     .pRasterizationState = &rasterizerInfo,
+                                                     .pMultisampleState = &multisampleInfo,
+                                                     .pDepthStencilState = &depthStencilInfo,
+                                                     .pColorBlendState = &colorBlendInfo,
+                                                     .layout = pipelineLayout,
+                                                     .renderPass = VK_NULL_HANDLE, // dynamic rendering, will be set later
+                                                     .subpass = 0};
 
         VkPipeline pipeline;
         result = vkCreateGraphicsPipelines(this->device.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
@@ -323,6 +331,204 @@ namespace rasm::gfx
 
         PipelineVKHandle rawHandle = {desc, {}, pipeline, pipelineLayout};
         return rawHandle;
+    }
+
+    std::optional<CommandPoolVKHandle> VulkanContext::createCommandPool(vkb::QueueType type)
+    {
+        VkCommandPoolCreateInfo poolInfo = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+        poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        poolInfo.queueFamilyIndex = _get_queue_index(this->device, type).value();
+
+        VkCommandPool commandPool;
+        auto result = vkCreateCommandPool(this->device.device, &poolInfo, nullptr, &commandPool);
+
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to create command pool. Error: {}", _to_vk_result_string(result));
+            return {};
+        }
+
+        CommandPoolVKHandle rawHandle = {{}, commandPool};
+        return rawHandle;
+    }
+
+    std::optional<CommandBufferVKHandle> VulkanContext::createCommandBuffer(const CommandPoolVKHandle &commandPool)
+    {
+        VkCommandBufferAllocateInfo allocInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        allocInfo.commandPool = commandPool.commandPool;
+        allocInfo.commandBufferCount = 1;
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+
+        VkCommandBuffer commandBuffer;
+        auto result = vkAllocateCommandBuffers(this->device.device, &allocInfo, &commandBuffer);
+
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to allocate command buffer. Error: {}", _to_vk_result_string(result));
+            return {};
+        }
+
+        CommandBufferVKHandle rawHandle = {{}, commandBuffer};
+        return rawHandle;
+    }
+
+    std::optional<SemaphoreVKHandle> VulkanContext::createSemaphore(bool timeline, uint64_t initialValue)
+    {
+        VkSemaphoreTypeCreateInfo typeInfo = {
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+            .semaphoreType = timeline ? VK_SEMAPHORE_TYPE_TIMELINE : VK_SEMAPHORE_TYPE_BINARY,
+            .initialValue = initialValue, // Initial value is relevant for timeline semaphore type
+        };
+
+        VkSemaphoreCreateInfo semaphoreInfo = {
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = &typeInfo};
+
+        VkSemaphore semaphore;
+        auto result = vkCreateSemaphore(this->device.device, &semaphoreInfo, nullptr, &semaphore);
+
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to create semaphore. Error: {}", _to_vk_result_string(result));
+            return {};
+        }
+
+        SemaphoreVKHandle rawHandle = {timeline ? SemaphoreVKHandle::Type::TIMELINE : SemaphoreVKHandle::Type::BINARY, {}, semaphore};
+        return rawHandle;
+    }
+
+    std::optional<FenceVKHandle> VulkanContext::createFence(bool signaled)
+    {
+        VkFenceCreateInfo fenceInfo = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        fenceInfo.flags = signaled ? VK_FENCE_CREATE_SIGNALED_BIT : 0;
+
+        VkFence fence;
+        auto result = vkCreateFence(this->device.device, &fenceInfo, nullptr, &fence);
+
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to create fence. Error: {}", _to_vk_result_string(result));
+            return {};
+        }
+
+        FenceVKHandle rawHandle = {{}, fence};
+        return rawHandle;
+    }
+
+    std::optional<SwapchainVKHandle> VulkanContext::recreateSwapchain()
+    {
+        auto vkb_swapchain = _init_swapchain(this->device);
+
+        if (!vkb_swapchain)
+        {
+            spdlog::error("Failed to recreate swapchain.");
+            return {};
+        }
+
+        this->swapchain = vkb_swapchain.value();
+        SwapchainVKHandle rawHandle = {{}, swapchain};
+        return rawHandle;
+    }
+
+    void VulkanContext::transitionImageLayout(const CommandBufferVKHandle &commandBuffer, VkImage image, VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask, VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask, VkImageLayout oldLayout, VkImageLayout newLayout)
+    {
+        VkImageMemoryBarrier2 barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                         .srcStageMask = srcStageMask,
+                                         .srcAccessMask = srcAccessMask,
+                                         .dstStageMask = dstStageMask,
+                                         .dstAccessMask = dstAccessMask,
+                                         .oldLayout = oldLayout,
+                                         .newLayout = newLayout,
+                                         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                         .image = image,
+                                         .subresourceRange = {
+                                             .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                             .baseMipLevel = 0,
+                                             .levelCount = 1,
+                                             .baseArrayLayer = 0,
+                                             .layerCount = 1,
+                                         }};
+
+        VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                           .imageMemoryBarrierCount = 1,
+                                           .pImageMemoryBarriers = &barrier};
+
+        vkCmdPipelineBarrier2(commandBuffer.commandBuffer, &dependencyInfo);
+    }
+
+    void VulkanContext::beginCommandBuffer(const CommandBufferVKHandle &commandBuffer)
+    {
+        VkCommandBufferBeginInfo beginInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        beginInfo.flags = 0;
+
+        auto result = vkBeginCommandBuffer(commandBuffer.commandBuffer, &beginInfo);
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to begin command buffer. Error: {}", _to_vk_result_string(result));
+        }
+    }
+
+    void VulkanContext::endCommandBuffer(const CommandBufferVKHandle &commandBuffer)
+    {
+        auto result = vkEndCommandBuffer(commandBuffer.commandBuffer);
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to end command buffer. Error: {}", _to_vk_result_string(result));
+        }
+    }
+
+    void VulkanContext::beginRendering(const CommandBufferVKHandle &commandBuffer)
+    {
+        // transition swapchain image to color attachment optimal layout before rendering
+        auto swapchainImagesResult = swapchain.get_images();
+        auto swapchainImageViewsResult = swapchain.get_image_views();
+        if (!swapchainImagesResult || !swapchainImageViewsResult)
+        {
+            spdlog::error("Failed to get swapchain images or image views. Error: {} {}", swapchainImagesResult.error().message(), swapchainImageViewsResult.error().message());
+            return;
+        }
+        auto swapchainImage = swapchainImagesResult.value()[this->current_swapchain_image];
+        auto swapchainImageView = swapchainImageViewsResult.value()[this->current_swapchain_image];
+
+        transitionImageLayout(commandBuffer, swapchainImage,
+                              0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                              VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+        VkRenderingAttachmentInfo colorAttachment = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                                                     .imageView = swapchainImageView,
+                                                     .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                                     .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                                                     .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                                                     .clearValue = {.color = {{0.0f, 0.0f, 0.0f, 1.0f}}}};
+
+        VkRenderingInfo renderingInfo = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                                         .renderArea = {.offset = {0, 0}, .extent = swapchain.extent},
+                                         .layerCount = 1,
+                                         .colorAttachmentCount = 1,
+                                         .pColorAttachments = &colorAttachment};
+
+        vkCmdBeginRendering(commandBuffer.commandBuffer, &renderingInfo);
+    }
+
+    void VulkanContext::endRendering(const CommandBufferVKHandle &commandBuffer)
+    {
+        // transition swapchain image back to present src layout after rendering
+        auto swapchainImagesResult = swapchain.get_images();
+        if (!swapchainImagesResult)
+        {
+            spdlog::error("Failed to get swapchain images. Error: {}", swapchainImagesResult.error().message());
+            return;
+        }
+        auto swapchainImage = swapchainImagesResult.value()[this->current_swapchain_image];
+
+        transitionImageLayout(commandBuffer, swapchainImage,
+                              VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0,
+                              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+        vkCmdEndRendering(commandBuffer.commandBuffer);
     }
 
     void VulkanContext::removeBuffer(const BufferVKHandle &buffer)
@@ -346,20 +552,37 @@ namespace rasm::gfx
         vkDestroyPipelineLayout(this->device.device, pipeline.layout, nullptr);
     }
 
-    void VulkanContext::bindPipeline(const PipelineVKHandle &pipeline)
+    void VulkanContext::removeCommandPool(const CommandPoolVKHandle &commandPool)
     {
+        vkDestroyCommandPool(this->device.device, commandPool.commandPool, nullptr);
     }
 
-    void VulkanContext::bindTexture(const std::string &name, const TextureVKHandle &texture)
+    void VulkanContext::removeSemaphore(const SemaphoreVKHandle &semaphore)
     {
+        vkDestroySemaphore(this->device.device, semaphore.semaphore, nullptr);
     }
 
-    void VulkanContext::setUniform(const std::string &name, const void *data, size_t size)
+    void VulkanContext::removeFence(const FenceVKHandle &fence)
     {
+        vkDestroyFence(this->device.device, fence.fence, nullptr);
     }
 
-    void VulkanContext::draw(uint32_t vertexCount, uint32_t instanceCount)
+    void VulkanContext::bindPipeline(const CommandBufferVKHandle &commandBuffer, const PipelineVKHandle &pipeline)
     {
+        vkCmdBindPipeline(commandBuffer.commandBuffer, pipeline.desc.type == ResourceDesc::Type::GRAPHICS_PIPELINE ? VK_PIPELINE_BIND_POINT_GRAPHICS : VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+    }
+
+    void VulkanContext::setUniform(const CommandBufferVKHandle &commandBuffer, const std::string &name, const void *data, size_t size)
+    {
+        commandBuffer;
+        name;
+        data;
+        size;
+    }
+
+    void VulkanContext::draw(const CommandBufferVKHandle &commandBuffer, uint32_t vertexCount, uint32_t instanceCount)
+    {
+        vkCmdDraw(commandBuffer.commandBuffer, vertexCount, instanceCount, 0, 0);
     }
 
     // ----------------------------------------------------------
@@ -472,6 +695,26 @@ namespace rasm::gfx
         return dev_ret;
     }
 
+    vkb::Result<VkQueue> _init_queue(const vkb::Device &device, vkb::QueueType type)
+    {
+        auto queue_ret = device.get_queue(type);
+        if (!queue_ret)
+        {
+            spdlog::error("Failed to get queue. Error: {}", queue_ret.error().message());
+        }
+        return queue_ret.value();
+    }
+
+    vkb::Result<uint32_t> _get_queue_index(const vkb::Device &device, vkb::QueueType type)
+    {
+        auto queue_index_ret = device.get_queue_index(type);
+        if (!queue_index_ret)
+        {
+            spdlog::error("Failed to get queue index. Error: {}", queue_index_ret.error().message());
+        }
+        return queue_index_ret.value();
+    }
+
     vkb::Result<VkSurfaceKHR> _init_surface(const vkb::Instance &instance, const Window &window, WindowHandle handle)
     {
         auto surface_ret = window.createSurfaceVk(handle, instance);
@@ -493,6 +736,23 @@ namespace rasm::gfx
             spdlog::error("Failed to create swapchain. Error: {}", swap_ret.error().message());
         }
         return swap_ret;
+    }
+
+    vkb::Result<vkb::Swapchain> _recreate_swapchain(const vkb::Device &device, vkb::Swapchain &old_swapchain)
+    {
+        vkb::SwapchainBuilder swapchain_builder{device};
+        auto swap_ret = swapchain_builder.set_old_swapchain(old_swapchain).build();
+        if (!swap_ret)
+        {
+            spdlog::error("Failed to recreate swapchain. Error: {}", swap_ret.error().message());
+            // If it failed to create a swapchain, the old swapchain handle is invalid.
+            old_swapchain.swapchain = VK_NULL_HANDLE;
+        }
+        // Even though we recycled the previous swapchain, we need to free its resources.
+        vkb::destroy_swapchain(old_swapchain);
+
+        // Get the new swapchain and place it in our variable
+         return swap_ret;
     }
 
     VkBufferUsageFlagBits _to_vk_buffer_usage_flags(BufferUsage usage)

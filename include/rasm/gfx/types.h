@@ -38,5 +38,40 @@ namespace rasm::gfx
         VkPipeline pipeline;
         VkPipelineLayout layout;
     };
+
+    struct CommandPoolVKHandle
+    {
+        CommandPoolHandle handle;
+        VkCommandPool commandPool;
+    };
+
+    struct CommandBufferVKHandle
+    {
+        CommandBufferHandle handle;
+        VkCommandBuffer commandBuffer;
+    };
+
+    struct SemaphoreVKHandle
+    {
+        enum class Type
+        {
+            BINARY,
+            TIMELINE
+        } type;
+        SemaphoreHandle handle;
+        VkSemaphore semaphore;
+    };
+
+    struct FenceVKHandle
+    {
+        FenceHandle handle;
+        VkFence fence;
+    };
+
+    struct SwapchainVKHandle
+    {
+        SwapchainHandle handle;
+        vkb::Swapchain swapchain;
+    };
 }
 // clang-format on

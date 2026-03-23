@@ -17,27 +17,30 @@ namespace rasm {
 
     class Engine {
     public:
-                        Engine(const EngineConfig& config);
-                        ~Engine();
-        Scene           createScene();
-        MeshHandle      loadMesh(const std::string& path);
-        TextureHandle   loadTexture(const std::string& path);
-        Material        createMaterial(MaterialTemplate type);
-        RenderGraph     createRenderGraph();
-        Entity          createEntity(const Scene& scene, const std::string& name);
-        void            beginFrame();
-        void            endFrame();
-        void            render(Scene& scene, Entity& camera);
-        bool            running() const;
-        EngineConfig    getConfig() const;
-        Window&         getWindow() const;
-        WindowHandle    getMainWindow() const;
-        RenderContext&  getRenderContext() const;
-        BufferHandle    getNextBufferHandle();
-        TextureHandle   getNextTextureHandle();
-        ShaderHandle    getNextShaderHandle();
-        PipelineHandle  getNextPipelineHandle();
-        
+                            Engine(const EngineConfig& config);
+                            ~Engine();
+        Scene               createScene();
+        MeshHandle          loadMesh(const std::string& path);
+        TextureHandle       loadTexture(const std::string& path);
+        Material            createMaterial(MaterialTemplate type);
+        RenderGraph         createRenderGraph();
+        Entity              createEntity(const Scene& scene, const std::string& name);
+        void                beginFrame();
+        void                endFrame();
+        void                render(Scene& scene, Entity& camera);
+        bool                running() const;
+        EngineConfig        getConfig() const;
+        Window&             getWindow() const;
+        WindowHandle        getMainWindow() const;
+        RenderContext&      getRenderContext() const;
+        BufferHandle        getNextBufferHandle();
+        TextureHandle       getNextTextureHandle();
+        ShaderHandle        getNextShaderHandle();
+        PipelineHandle      getNextPipelineHandle();
+        CommandPoolHandle   getNextCommandPoolHandle();
+        CommandBufferHandle getNextCommandBufferHandle();
+        SemaphoreHandle     getNextSemaphoreHandle();
+        FenceHandle         getNextFenceHandle();
 
     private:
         EngineConfig                                    config;

@@ -78,22 +78,32 @@ namespace rasm
     struct TextureTag;
     struct MaterialTag;
     struct PipelineTag;
+    struct CommandPoolTag;
+    struct CommandBufferTag;
+    struct SemaphoreTag;
+    struct FenceTag;
+    struct SwapchainTag;
     struct ShaderTag;
     struct SceneTag;
     struct EntityTag;
     struct WindowTag;
     struct ResourceTag;
 
-    using MeshHandle        = Handle<MeshTag>;
-    using BufferHandle      = Handle<BufferTag>;
-    using TextureHandle     = Handle<TextureTag>;
-    using MaterialHandle    = Handle<MaterialTag>;
-    using PipelineHandle    = Handle<PipelineTag>;
-    using ShaderHandle      = Handle<ShaderTag>;
-    using SceneHandle       = Handle<SceneTag>;
-    using EntityHandle      = Handle<EntityTag>;
-    using WindowHandle      = Handle<WindowTag>;
-    using ResourceHandle    = Handle<ResourceTag>;
+    using MeshHandle          = Handle<MeshTag>;
+    using BufferHandle        = Handle<BufferTag>;
+    using TextureHandle       = Handle<TextureTag>;
+    using MaterialHandle      = Handle<MaterialTag>;
+    using PipelineHandle      = Handle<PipelineTag>;
+    using CommandPoolHandle   = Handle<CommandPoolTag>;
+    using CommandBufferHandle = Handle<CommandBufferTag>;
+    using SemaphoreHandle     = Handle<SemaphoreTag>;
+    using FenceHandle         = Handle<FenceTag>;
+    using SwapchainHandle     = Handle<SwapchainTag>;
+    using ShaderHandle        = Handle<ShaderTag>;
+    using SceneHandle         = Handle<SceneTag>;
+    using EntityHandle        = Handle<EntityTag>;
+    using WindowHandle        = Handle<WindowTag>;
+    using ResourceHandle      = Handle<ResourceTag>;
 
     struct EngineConfig
     {
@@ -106,14 +116,19 @@ namespace rasm
 
     struct HandleCounters
     {
-        uint64_t scene      = 1;
-        uint64_t entity     = 1;
-        uint64_t mesh       = 1;
-        uint64_t texture    = 1;
-        uint64_t material   = 1;
-        uint64_t buffer     = 1;
-        uint64_t pipeline   = 1;
-        uint64_t shader     = 1;
+        uint64_t scene          = 1;
+        uint64_t entity         = 1;
+        uint64_t mesh           = 1;
+        uint64_t texture        = 1;
+        uint64_t material       = 1;
+        uint64_t buffer         = 1;
+        uint64_t pipeline       = 1;
+        uint64_t shader         = 1;
+        uint64_t commandPool    = 1;
+        uint64_t commandBuffer  = 1;
+        uint64_t semaphore      = 1;
+        uint64_t fence          = 1;
+        uint64_t swapchain      = 1;
     };
 
     struct TextureRaw
@@ -144,6 +159,8 @@ namespace rasm
             TEXTURE,
             BUFFER,
             SHADER,
+            GRAPHICS_PIPELINE,
+            COMPUTE_PIPELINE
             // Add more types as needed
         } type;
 
@@ -172,7 +189,73 @@ namespace rasm
                 uint64_t        sourceSize;
                 const char *    source;
             } shader;
+
+            // Pipeline-specific data
+            struct
+            {
+                // ShaderHandle vertexShader;
+                // ShaderHandle fragmentShader;
+            } pipeline;
         };
+
+        bool operator==(const ResourceDesc& other) const
+        {
+            if (type != other.type || name != other.name)
+                return false;
+
+            switch (type)
+            {
+            case Type::TEXTURE:
+                return texture.width == other.texture.width &&
+                       texture.height == other.texture.height &&
+                       texture.format == other.texture.format &&
+                       texture.usage == other.texture.usage;
+            case Type::BUFFER:
+                return buffer.size == other.buffer.size &&
+                       buffer.stride == other.buffer.stride &&
+                       buffer.usage == other.buffer.usage;
+            case Type::SHADER:
+                return shader.shaderType == other.shader.shaderType &&
+                       shader.sourceSize == other.shader.sourceSize &&
+                       std::string(shader.source, shader.sourceSize) == std::string(other.shader.source, other.shader.sourceSize);
+            case Type::GRAPHICS_PIPELINE:
+            case Type::COMPUTE_PIPELINE:
+                // For pipelines, you would compare the relevant fields (e.g., shader handles)
+                return true; // Placeholder, implement as needed
+            default:
+                return false;
+            }
+        }
+    };
+
+    struct ResourceDescHash
+    {
+        std::size_t operator()(const ResourceDesc& desc) const
+        {
+            switch (desc.type)
+            {
+            case ResourceDesc::Type::TEXTURE:
+                return std::hash<std::string>()(desc.name) ^
+                       std::hash<uint32_t>()(desc.texture.width) ^
+                       std::hash<uint32_t>()(desc.texture.height) ^
+                       std::hash<uint32_t>()(static_cast<uint32_t>(desc.texture.format)) ^
+                       std::hash<uint32_t>()(static_cast<uint32_t>(desc.texture.usage));
+            case ResourceDesc::Type::BUFFER:
+                return std::hash<std::string>()(desc.name) ^
+                       std::hash<uint64_t>()(desc.buffer.size) ^
+                       std::hash<uint64_t>()(desc.buffer.stride) ^
+                       std::hash<uint64_t>()(static_cast<uint64_t>(desc.buffer.usage));
+            case ResourceDesc::Type::SHADER:
+                return std::hash<std::string>()(desc.name) ^
+                       std::hash<uint64_t>()(desc.shader.sourceSize) ^
+                       std::hash<uint32_t>()(static_cast<uint32_t>(desc.shader.shaderType));
+            case ResourceDesc::Type::GRAPHICS_PIPELINE:
+            case ResourceDesc::Type::COMPUTE_PIPELINE:
+                return std::hash<std::string>()(desc.name);
+            default:
+                return 0;
+            }
+        }
     };
 
 }

@@ -8,7 +8,6 @@
 #include "rasm/core/renderGraph.h"
 #include "rasm/gfx/context.h"
 
-
 #include "spdlog/spdlog.h"
 
 #define TINYGLTF_IMPLEMENTATION
@@ -20,7 +19,6 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
-
 namespace rasm
 {
 
@@ -29,12 +27,12 @@ namespace rasm
         // In a real implementation, this is where we'd initialize the window, graphics context, etc.
         spdlog::info("Engine initialized with config: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
                      config.appName, config.windowWidth, config.windowHeight, config.enableValidation);
-    
+
         this->window = Window(this, config.windowWidth, config.windowHeight);
         this->mainWindow = this->window.createWindow();
 
         ctx = RenderContext(this);
-        if(!ctx.initialize(config.preferredBackend))
+        if (!ctx.initialize(config.preferredBackend))
         {
             spdlog::error("Failed to initialize render context.");
         }
@@ -62,7 +60,7 @@ namespace rasm
         }
 
         ctx.cleanup();
-        
+
         this->window.destroyWindow(this->mainWindow);
         spdlog::info("Engine shutdown, cleaned up resources.");
     }
@@ -187,7 +185,6 @@ namespace rasm
         return graph;
     }
 
-
     void Engine::beginFrame() {}
 
     void Engine::endFrame()
@@ -223,11 +220,10 @@ namespace rasm
             }
         }
 
-        auto& cameraComp = camera.getComponent<Camera>();
+        auto &cameraComp = camera.getComponent<Camera>();
         spdlog::info("Camera Entity {}, Type: {}",
                      camera.id().index,
                      cameraComp.type == CameraType::PERSPECTIVE ? "Perspective" : "Orthographic");
-
     }
 
     bool Engine::running() const
@@ -250,9 +246,9 @@ namespace rasm
         return config;
     }
 
-    Window& Engine::getWindow() const
+    Window &Engine::getWindow() const
     {
-        return const_cast<Window&>(window);
+        return const_cast<Window &>(window);
     }
 
     WindowHandle Engine::getMainWindow() const
@@ -260,9 +256,9 @@ namespace rasm
         return mainWindow;
     }
 
-    RenderContext& Engine::getRenderContext() const
+    RenderContext &Engine::getRenderContext() const
     {
-        return const_cast<RenderContext&>(ctx);
+        return const_cast<RenderContext &>(ctx);
     }
 
     BufferHandle Engine::getNextBufferHandle()
@@ -285,4 +281,23 @@ namespace rasm
         return PipelineHandle{nextHandle.pipeline++, 1};
     }
 
+    CommandPoolHandle Engine::getNextCommandPoolHandle()
+    {
+        return CommandPoolHandle{nextHandle.commandPool++, 1};
+    }
+
+    CommandBufferHandle Engine::getNextCommandBufferHandle()
+    {
+        return CommandBufferHandle{nextHandle.commandBuffer++, 1};
+    }
+
+    SemaphoreHandle Engine::getNextSemaphoreHandle()
+    {
+        return SemaphoreHandle{nextHandle.semaphore++, 1};
+    }
+
+    FenceHandle Engine::getNextFenceHandle()
+    {
+        return FenceHandle{nextHandle.fence++, 1};
+    }
 }
