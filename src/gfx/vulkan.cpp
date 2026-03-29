@@ -546,6 +546,7 @@ namespace rasm::gfx
                                          .pColorAttachments = &colorAttachment};
 
         vkCmdBeginRendering(commandBuffer.commandBuffer, &renderingInfo);
+        first_render = false;
     }
 
     void VulkanContext::endRendering(const CommandBufferVKHandle &commandBuffer)
@@ -678,8 +679,15 @@ namespace rasm::gfx
     {
         vkb::PhysicalDeviceSelector phys_device_selector(vkb_instance);
 
+        VkPhysicalDeviceVulkan13Features features13 = {};
+        features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        features13.dynamicRendering = VK_TRUE; // Explicitly enable the feature
+
         // select() grabs a PhysicalDevice, By default, this will prefer a discrete GPU.
-        auto physical_device_selector_return = phys_device_selector.set_surface(surface).select();
+        auto physical_device_selector_return = phys_device_selector
+                                                   .set_surface(surface)
+                                                   .set_required_features_13(features13) // Enable the 1.3 core feature
+                                                   .select();
 
         if (!physical_device_selector_return)
         {

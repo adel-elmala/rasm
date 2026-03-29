@@ -217,7 +217,7 @@ namespace rasm
             case Type::SHADER:
                 return shader.shaderType == other.shader.shaderType &&
                        shader.sourceSize == other.shader.sourceSize &&
-                       std::string(shader.source, shader.sourceSize) == std::string(other.shader.source, other.shader.sourceSize);
+                       shader.source == other.shader.source;
             case Type::GRAPHICS_PIPELINE:
             case Type::COMPUTE_PIPELINE:
                 // For pipelines, you would compare the relevant fields (e.g., shader handles)

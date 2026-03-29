@@ -6,6 +6,7 @@
 #include "VkBootstrap.h"
 
 #include "rasm/core/types.h"
+#include "rasm/gfx/types.h"
 
 struct VmaAllocator_T;
 using VmaAllocator = VmaAllocator_T*;
