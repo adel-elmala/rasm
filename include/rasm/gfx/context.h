@@ -22,7 +22,7 @@ namespace rasm
         BufferHandle        createBuffer(ResourceDesc desc);
         TextureHandle       createTexture(ResourceDesc desc);
         ShaderHandle        createShader(ResourceDesc desc);
-        PipelineHandle      createPipeline(ResourceDesc desc, const ShaderHandle& vertexShader, const ShaderHandle& fragmentShader);
+        PipelineHandle      createPipeline(ResourceDesc desc);
         CommandPoolHandle   createCommandPool(vkb::QueueType type);
         CommandBufferHandle createCommandBuffer(const CommandPoolHandle& commandPool);
         SemaphoreHandle     createSemaphore(bool timeline = false, uint64_t initialValue = 0);

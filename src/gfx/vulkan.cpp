@@ -5,6 +5,8 @@
 
 #include "spdlog/spdlog.h"
 
+#include "vk_mem_alloc.h"
+
 #define VMA_VULKAN_VERSION 1004000 // Vulkan 1.4
 #define VMA_IMPLEMENTATION
 #include "vk_mem_alloc.h"
@@ -21,6 +23,7 @@ namespace rasm::gfx
     vkb::Result<uint32_t>               _get_queue_index(const vkb::Device &device, vkb::QueueType type);
     vkb::Result<VkSurfaceKHR>           _init_surface(const vkb::Instance &instance, const Window &window, WindowHandle handle);
     vkb::Result<vkb::Swapchain>         _init_swapchain(const vkb::Device &device);
+    vkb::Result<vkb::Swapchain>         _recreate_swapchain(const vkb::Device &device, vkb::Swapchain &old_swapchain);
     VkBufferUsageFlagBits               _to_vk_buffer_usage_flags(BufferUsage usage);
     VkImageUsageFlags                   _to_vk_image_usage_flags(TextureUsage usage);
     VkFormat                            _to_vk_format(TextureFormat format);
@@ -448,15 +451,15 @@ namespace rasm::gfx
 
     std::optional<SwapchainVKHandle> VulkanContext::recreateSwapchain()
     {
-        auto vkb_swapchain = _init_swapchain(this->device);
+        auto swapchain_ret = _recreate_swapchain(this->device, this->swapchain);
 
-        if (!vkb_swapchain)
+        if (!swapchain_ret)
         {
             spdlog::error("Failed to recreate swapchain.");
             return {};
         }
 
-        this->swapchain = vkb_swapchain.value();
+        this->swapchain = swapchain_ret.value();
         SwapchainVKHandle rawHandle = {{}, swapchain};
         return rawHandle;
     }
@@ -511,6 +514,8 @@ namespace rasm::gfx
 
     void VulkanContext::beginRendering(const CommandBufferVKHandle &commandBuffer)
     {
+        static bool first_render = true;
+
         // transition swapchain image to color attachment optimal layout before rendering
         auto swapchainImagesResult = swapchain.get_images();
         auto swapchainImageViewsResult = swapchain.get_image_views();
@@ -525,7 +530,7 @@ namespace rasm::gfx
         transitionImageLayout(commandBuffer, swapchainImage,
                               0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                               VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                              VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                              first_render ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
         VkRenderingAttachmentInfo colorAttachment = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
                                                      .imageView = swapchainImageView,
@@ -541,12 +546,12 @@ namespace rasm::gfx
                                          .pColorAttachments = &colorAttachment};
 
         vkCmdBeginRendering(commandBuffer.commandBuffer, &renderingInfo);
-
-        this->current_swapchain_image = (this->current_swapchain_image + 1) % swapchain.image_count;
     }
 
     void VulkanContext::endRendering(const CommandBufferVKHandle &commandBuffer)
     {
+        vkCmdEndRendering(commandBuffer.commandBuffer);
+
         // transition swapchain image back to present src layout after rendering
         auto swapchainImagesResult = swapchain.get_images();
         if (!swapchainImagesResult)
@@ -561,7 +566,7 @@ namespace rasm::gfx
                               VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
-        vkCmdEndRendering(commandBuffer.commandBuffer);
+        this->current_swapchain_image = (this->current_swapchain_image + 1) % swapchain.image_count;
     }
 
     void VulkanContext::removeBuffer(const BufferVKHandle &buffer)

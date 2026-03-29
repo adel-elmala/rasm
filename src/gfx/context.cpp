@@ -185,7 +185,7 @@ namespace rasm
         }
     }
 
-    PipelineHandle RenderContext::createPipeline(ResourceDesc desc, const ShaderHandle &vertexShader, const ShaderHandle &fragmentShader)
+    PipelineHandle RenderContext::createPipeline(ResourceDesc desc)
     {
         assert(desc.type == ResourceDesc::Type::GRAPHICS_PIPELINE || desc.type == ResourceDesc::Type::COMPUTE_PIPELINE);
 
@@ -206,8 +206,8 @@ namespace rasm
                 return {};
             }
 
-            auto vertexIt = shaderCache.find(vertexShader);
-            auto fragmentIt = shaderCache.find(fragmentShader);
+            auto vertexIt = shaderCache.find(desc.pipeline.vertexShader);
+            auto fragmentIt = shaderCache.find(desc.pipeline.fragmentShader);
             if (vertexIt == shaderCache.end() || fragmentIt == shaderCache.end())
             {
                 spdlog::error("Shader handle not found in cache during pipeline creation.");

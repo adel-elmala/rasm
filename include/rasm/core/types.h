@@ -193,8 +193,8 @@ namespace rasm
             // Pipeline-specific data
             struct
             {
-                // ShaderHandle vertexShader;
-                // ShaderHandle fragmentShader;
+                ShaderHandle vertexShader;
+                ShaderHandle fragmentShader;
             } pipeline;
         };
 
@@ -221,11 +221,15 @@ namespace rasm
             case Type::GRAPHICS_PIPELINE:
             case Type::COMPUTE_PIPELINE:
                 // For pipelines, you would compare the relevant fields (e.g., shader handles)
-                return true; // Placeholder, implement as needed
+                return pipeline.vertexShader == other.pipeline.vertexShader &&
+                       pipeline.fragmentShader == other.pipeline.fragmentShader;
             default:
                 return false;
             }
         }
+
+        ResourceDesc() {}
+        ~ResourceDesc() {}
     };
 
     struct ResourceDescHash
@@ -251,7 +255,9 @@ namespace rasm
                        std::hash<uint32_t>()(static_cast<uint32_t>(desc.shader.shaderType));
             case ResourceDesc::Type::GRAPHICS_PIPELINE:
             case ResourceDesc::Type::COMPUTE_PIPELINE:
-                return std::hash<std::string>()(desc.name);
+                return std::hash<std::string>()(desc.name) ^
+                       std::hash<uint64_t>()(static_cast<uint64_t>(desc.pipeline.vertexShader.index)) ^
+                       std::hash<uint64_t>()(static_cast<uint64_t>(desc.pipeline.fragmentShader.index));
             default:
                 return 0;
             }

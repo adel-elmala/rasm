@@ -1,12 +1,14 @@
 // clang-format off
 #pragma once
 
+#include <optional>
+
 #include "VkBootstrap.h"
-#include "vk_mem_alloc.h"
 
 #include "rasm/core/types.h"
 
-#include <optional>
+struct VmaAllocator_T;
+using VmaAllocator = VmaAllocator_T*;
 
 namespace rasm
 {

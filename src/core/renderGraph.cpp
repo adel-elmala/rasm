@@ -102,7 +102,9 @@ namespace rasm
     {
         if (!compiled) compile();
 
-        auto& ctx = owner->getRenderContext();
+        engine->getWindow().pollEvents();
+
+        auto& ctx = engine->getRenderContext();
         for (const auto &passIdx : executionOrder)
         {
             passes[passIdx].execute(ctx);

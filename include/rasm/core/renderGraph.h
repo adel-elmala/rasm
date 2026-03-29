@@ -48,7 +48,7 @@ namespace rasm
     {
         friend class PassBuilder;
     public:
-             RenderGraph(Engine* owner) : owner(owner) {}
+             RenderGraph(Engine* owner) : engine(owner) {}
              ~RenderGraph() = default;
         void addPass(std::string name,
                  std::function<void(PassBuilder&)> setup, 
@@ -65,7 +65,7 @@ namespace rasm
         std::vector<Pass>           passes;
         std::vector<uint32_t>       executionOrder; // Sorted pass indices
         std::vector<ResourceDesc>   resources;
-        Engine*                     owner    = nullptr;
+        Engine*                     engine   = nullptr;
         bool                        compiled = false;
     };
 }

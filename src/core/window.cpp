@@ -1,4 +1,5 @@
 #include "rasm/core/window.h"
+#include "rasm/core/engine.h"
 
 #include "SDL3/SDL.h"
 #include "SDL3/SDL_vulkan.h"
@@ -46,15 +47,15 @@ namespace rasm
             {
                 // Handle quit event, e.g., set a flag in the engine to stop the main loop
                 spdlog::info("Quit event received, shutting down.");
-                // engine->stop(); // Assuming there's a method to stop the engine
+                engine->isRunning = false;
             } else if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
                 spdlog::info("Window close event received, shutting down.");
-                // engine->stop(); // Assuming there's a method to stop the engine
+                engine->isRunning = false;
             }
              else
             {
                 // Handle other events (e.g., input, window resize, etc.)
-                spdlog::info("Received event of type: {}", event.type);
+                spdlog::debug("Received event of type: {}", event.type);
             }
         }
     }

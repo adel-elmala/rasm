@@ -193,11 +193,6 @@ namespace rasm
     void Engine::endFrame()
     {
         ++frameCount;
-        // Prevent sample boilerplate from running forever.
-        if (frameCount > 300)
-        {
-            isRunning = false;
-        }
     }
 
     void Engine::render(Scene &scene, Entity &camera)

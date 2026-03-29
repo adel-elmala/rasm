@@ -18,6 +18,8 @@
 namespace rasm {
 
     class Engine {
+    friend class Window;
+
     public:
                             Engine(const EngineConfig& config);
                             ~Engine();
@@ -45,7 +47,7 @@ namespace rasm {
         FenceHandle         getNextFenceHandle();
         SwapchainHandle     getNextSwapchainHandle();
 
-    private:
+    protected:
         EngineConfig                                    config;
         std::unordered_map<std::string, MeshHandle>     loadedMeshes;
         std::unordered_map<std::string, TextureHandle>  loadedTextures;
