@@ -64,6 +64,7 @@ namespace rasm
         if (handle.isValid())
         {
             SDL_DestroyWindow(reinterpret_cast<SDL_Window*>(handle.index));
+            SDL_Quit();
         }
     }
 }

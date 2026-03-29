@@ -1,3 +1,5 @@
+#include <cassert>
+
 #include "rasm/core/engine.h"
 #include "rasm/gfx/vulkan.h"
 
@@ -193,8 +195,8 @@ namespace rasm::gfx
     VkViewport createViewPort(float width, float height, float minDepth, float maxDepth)
     {
         VkViewport viewport = {
-            .x = -1.0f,
-            .y = -1.0f,
+            .x = 0.0f,
+            .y = 0.0f,
             .width = width,
             .height = height,
             .minDepth = minDepth,
@@ -305,16 +307,44 @@ namespace rasm::gfx
                 .pName = "main",
             }};
 
+        // Dynamic rendering: describe the formats used by this pipeline.
+        // NOTE: These formats must match the actual color and depth attachments
+        // used when beginning dynamic rendering.
+        VkFormat colorAttachmentFormat = VK_FORMAT_B8G8R8A8_UNORM;
+        VkFormat depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+
+        VkPipelineRenderingCreateInfo pipelineRenderingInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+            .pNext = nullptr,
+            .viewMask = 0,
+            .colorAttachmentCount = 1,
+            .pColorAttachmentFormats = &colorAttachmentFormat,
+            .depthAttachmentFormat = depthAttachmentFormat,
+            .stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
+        };
+
+        VkPipelineViewportStateCreateInfo viewportStateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .viewportCount = 1,
+            .pViewports = nullptr, // viewports are set dynamically
+            .scissorCount = 1,
+            .pScissors = nullptr, // scissors are set dynamically
+        };
+
         VkGraphicsPipelineCreateInfo pipelineInfo = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                                                     .pNext = &pipelineRenderingInfo,
                                                      .stageCount = 2,
                                                      .pStages = shaderStages,
                                                      .pVertexInputState = &vertexInputInfo,
                                                      .pInputAssemblyState = &inputAssemblyInfo,
-                                                     .pViewportState = nullptr, // dynamic
+                                                     .pViewportState = &viewportStateInfo,
                                                      .pRasterizationState = &rasterizerInfo,
                                                      .pMultisampleState = &multisampleInfo,
                                                      .pDepthStencilState = &depthStencilInfo,
                                                      .pColorBlendState = &colorBlendInfo,
+                                                     .pDynamicState = &dynamicStateInfo,
                                                      .layout = pipelineLayout,
                                                      .renderPass = VK_NULL_HANDLE, // dynamic rendering, will be set later
                                                      .subpass = 0};
@@ -337,7 +367,14 @@ namespace rasm::gfx
     {
         VkCommandPoolCreateInfo poolInfo = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
         poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        poolInfo.queueFamilyIndex = _get_queue_index(this->device, type).value();
+
+        auto queue_index_result = _get_queue_index(this->device, type);
+        if (!queue_index_result)
+        {
+            spdlog::error("Failed to get queue family index for command pool.");
+            return {};
+        }
+        poolInfo.queueFamilyIndex = queue_index_result.value();
 
         VkCommandPool commandPool;
         auto result = vkCreateCommandPool(this->device.device, &poolInfo, nullptr, &commandPool);
@@ -658,6 +695,7 @@ namespace rasm::gfx
                     }
                 }
             }
+            return physical_device_selector_return;
         }
 
         auto physical_device = physical_device_selector_return.value();
@@ -702,7 +740,7 @@ namespace rasm::gfx
         {
             spdlog::error("Failed to get queue. Error: {}", queue_ret.error().message());
         }
-        return queue_ret.value();
+        return queue_ret;
     }
 
     vkb::Result<uint32_t> _get_queue_index(const vkb::Device &device, vkb::QueueType type)
@@ -712,7 +750,7 @@ namespace rasm::gfx
         {
             spdlog::error("Failed to get queue index. Error: {}", queue_index_ret.error().message());
         }
-        return queue_index_ret.value();
+        return queue_index_ret;
     }
 
     vkb::Result<VkSurfaceKHR> _init_surface(const vkb::Instance &instance, const Window &window, WindowHandle handle)
@@ -752,7 +790,7 @@ namespace rasm::gfx
         vkb::destroy_swapchain(old_swapchain);
 
         // Get the new swapchain and place it in our variable
-         return swap_ret;
+        return swap_ret;
     }
 
     VkBufferUsageFlagBits _to_vk_buffer_usage_flags(BufferUsage usage)

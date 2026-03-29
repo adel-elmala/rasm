@@ -126,6 +126,7 @@ namespace rasm
         {
             // TODO: Implement OBJ loading
             spdlog::error("OBJ loading not implemented yet: {}", path);
+            return MeshHandle{};
         }
 
         auto handle = MeshHandle{nextHandle.mesh++, 1};
@@ -246,9 +247,9 @@ namespace rasm
         return config;
     }
 
-    Window &Engine::getWindow() const
+    Window &Engine::getWindow()
     {
-        return const_cast<Window &>(window);
+        return window;
     }
 
     WindowHandle Engine::getMainWindow() const
@@ -256,9 +257,9 @@ namespace rasm
         return mainWindow;
     }
 
-    RenderContext &Engine::getRenderContext() const
+    RenderContext &Engine::getRenderContext()
     {
-        return const_cast<RenderContext &>(ctx);
+        return ctx;
     }
 
     BufferHandle Engine::getNextBufferHandle()
@@ -299,5 +300,10 @@ namespace rasm
     FenceHandle Engine::getNextFenceHandle()
     {
         return FenceHandle{nextHandle.fence++, 1};
+    }
+
+    SwapchainHandle Engine::getNextSwapchainHandle()
+    {
+        return SwapchainHandle{nextHandle.swapchain++, 1};
     }
 }

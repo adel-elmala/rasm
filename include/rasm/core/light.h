@@ -26,8 +26,8 @@ namespace rasm
 
     protected:
         LightType   type;
-        float       intensity;
-        glm::vec3   color;
+        float       intensity   = 1.0f;
+        glm::vec3   color       = glm::vec3(1.0f);
     };
 
 }

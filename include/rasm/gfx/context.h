@@ -1,6 +1,8 @@
 // clang-format off
 #pragma once
 
+#include <unordered_map>
+
 #include "rasm/core/types.h"
 #include "rasm/gfx/types.h"
 #include "rasm/gfx/vulkan.h"
@@ -25,7 +27,7 @@ namespace rasm
         CommandBufferHandle createCommandBuffer(const CommandPoolHandle& commandPool);
         SemaphoreHandle     createSemaphore(bool timeline = false, uint64_t initialValue = 0);
         FenceHandle         createFence(bool signaled = false);
-        SwapchainHandle     recreateSwapchain();
+        bool                recreateSwapchain();
         void                bindPipeline(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline);
         void                setUniform(const CommandBufferHandle& commandBuffer, const std::string& name, const void* data, size_t size);
         void                draw(const CommandBufferHandle& commandBuffer, const uint32_t vertexCount, uint32_t instanceCount = 1);

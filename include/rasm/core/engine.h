@@ -3,6 +3,8 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "rasm/core/types.h"
 #include "rasm/core/rasm.h"
@@ -30,9 +32,9 @@ namespace rasm {
         void                render(Scene& scene, Entity& camera);
         bool                running() const;
         EngineConfig        getConfig() const;
-        Window&             getWindow() const;
+        Window&             getWindow();
         WindowHandle        getMainWindow() const;
-        RenderContext&      getRenderContext() const;
+        RenderContext&      getRenderContext();
         BufferHandle        getNextBufferHandle();
         TextureHandle       getNextTextureHandle();
         ShaderHandle        getNextShaderHandle();
@@ -41,6 +43,7 @@ namespace rasm {
         CommandBufferHandle getNextCommandBufferHandle();
         SemaphoreHandle     getNextSemaphoreHandle();
         FenceHandle         getNextFenceHandle();
+        SwapchainHandle     getNextSwapchainHandle();
 
     private:
         EngineConfig                                    config;

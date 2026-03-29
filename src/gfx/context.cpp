@@ -1,3 +1,5 @@
+#include <cassert>
+
 #include "rasm/core/engine.h"
 #include "rasm/gfx/context.h"
 #include "rasm/gfx/vulkan.h"
@@ -264,7 +266,14 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto commandBuffer = vulkanContext.createCommandBuffer(commandPoolCache[commandPool]);
+            auto it = commandPoolCache.find(commandPool);
+            if (it == commandPoolCache.end())
+            {
+                spdlog::error("Failed to create Vulkan command buffer: command pool handle not found.");
+                return {};
+            }
+
+            auto commandBuffer = vulkanContext.createCommandBuffer(it->second);
             if (!commandBuffer)
             {
                 spdlog::error("Failed to create Vulkan command buffer.");
@@ -347,6 +356,30 @@ namespace rasm
         default:
             spdlog::error("Unsupported backend during fence creation.");
             return {};
+        }
+    }
+
+    bool RenderContext::recreateSwapchain()
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto swapchain = vulkanContext.recreateSwapchain();
+            if (!swapchain)
+            {
+                spdlog::error("Failed to recreate Vulkan swapchain.");
+                return false;
+            }
+            return true;
+        }
+        case Backend::DX12:
+            return false;
+        case Backend::METAL:
+            return false;
+        default:
+            spdlog::error("Unsupported backend during swapchain recreation.");
+            return false;
         }
     }
 

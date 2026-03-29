@@ -25,6 +25,13 @@ namespace rasm
     {
         if (compiled) return;
 
+        // Reset in-degrees and successors for all passes
+        for (auto &pass : passes)
+        {
+            pass.inDegree = 0;
+            pass.successors.clear();
+        }
+
         // 1. Map resources to their producers
         std::vector<ResourceMetadata> resourceMeta(resources.size());
         for (uint32_t i = 0, nPasses = static_cast<uint32_t>(passes.size()); i < nPasses; ++i)
@@ -80,7 +87,9 @@ namespace rasm
         // 4. Safety Check: Circular Dependencies
         if (sortedIndices.size() != passes.size())
         {
-            throw std::runtime_error("Frame Graph contains a cycle!");
+            spdlog::error("Frame Graph contains a cycle!");
+            compiled = false;
+            return;
         }
 
         // 5. Store the final execution order
@@ -93,7 +102,7 @@ namespace rasm
     {
         if (!compiled) compile();
 
-        auto ctx = owner->getRenderContext();
+        auto& ctx = owner->getRenderContext();
         for (const auto &passIdx : executionOrder)
         {
             passes[passIdx].execute(ctx);
