@@ -243,12 +243,6 @@ namespace rasm::gfx
         VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo = {VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
         inputAssemblyInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
-        VkViewport viewport = createViewPort(static_cast<float>(swapchain.extent.width), static_cast<float>(swapchain.extent.height), 0.0f, 1.0f);
-
-        viewport.maxDepth = 1.0f;
-
-        VkRect2D scissor = createScissor(0, 0, swapchain.extent.width, swapchain.extent.height);
-
         VkPipelineRasterizationStateCreateInfo rasterizerInfo = createRasterizer(VK_POLYGON_MODE_FILL, VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_CLOCKWISE);
 
         VkPipelineMultisampleStateCreateInfo multisampleInfo = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
@@ -547,6 +541,8 @@ namespace rasm::gfx
                                          .pColorAttachments = &colorAttachment};
 
         vkCmdBeginRendering(commandBuffer.commandBuffer, &renderingInfo);
+
+        this->current_swapchain_image = (this->current_swapchain_image + 1) % swapchain.image_count;
     }
 
     void VulkanContext::endRendering(const CommandBufferVKHandle &commandBuffer)
@@ -755,7 +751,7 @@ namespace rasm::gfx
 
     vkb::Result<VkSurfaceKHR> _init_surface(const vkb::Instance &instance, const Window &window, WindowHandle handle)
     {
-        auto surface_ret = window.createSurfaceVk(handle, instance);
+        auto surface_ret = window.createSurfaceVk(handle, instance.instance);
 
         if (!surface_ret)
         {

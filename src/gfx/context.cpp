@@ -199,6 +199,13 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
+            // TODO: only graphics pipelines are supported in this implementation, need to add compute pipeline support later.
+            if (desc.type != ResourceDesc::Type::GRAPHICS_PIPELINE)
+            {
+                spdlog::error("Only graphics pipelines are supported in this implementation.");
+                return {};
+            }
+
             auto vertexIt = shaderCache.find(vertexShader);
             auto fragmentIt = shaderCache.find(fragmentShader);
             if (vertexIt == shaderCache.end() || fragmentIt == shaderCache.end())

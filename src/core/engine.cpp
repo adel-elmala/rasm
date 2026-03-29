@@ -35,6 +35,8 @@ namespace rasm
         if (!ctx.initialize(config.preferredBackend))
         {
             spdlog::error("Failed to initialize render context.");
+            ctx.cleanup();
+            isRunning = false;
         }
     }
 
