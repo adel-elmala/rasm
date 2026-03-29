@@ -7,9 +7,9 @@ namespace rasm
     Light::~Light() {}
 
     void Light::setColor(const glm::vec3 &color) {
-        // TODO: Store the color and use it during rendering.
+        this->color = color;
     }
     void Light::setIntensity(float intensity) {
-        // TODO: Store the intensity and use it during rendering.
+        this->intensity = intensity;
     }
 }

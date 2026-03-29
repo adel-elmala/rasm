@@ -1,15 +1,22 @@
+// clang-format off
 #pragma once
 
 #include "rasm/core/rasm.h"
 
-namespace rasm {
+namespace rasm
+{
 
-    struct Mesh
+    class Mesh
     {
-        MeshHandle handle{};
+    public:
+                        Mesh();
+        explicit        Mesh(MeshHandle meshHandle);
+                        ~Mesh();
+        [[nodiscard]]   MeshHandle id() const;
 
-        Mesh() = default;
-        explicit Mesh(MeshHandle meshHandle) : handle(meshHandle) {}
+    private:
+        MeshHandle handle{};
     };
 
 }
+// clang-format on

@@ -22,7 +22,15 @@ namespace rasm
         if (engine == nullptr) {
             return Entity();
         }
-        return engine->createEntity(*this, name);
+
+        if (!isValid()) {
+            return Entity();
+        }
+
+        auto entity = engine->createEntity(*this, name);
+        entities.push_back(entity);
+
+        return entity;
     }
 
 }
