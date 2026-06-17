@@ -366,6 +366,424 @@ namespace rasm
         }
     }
 
+    std::vector<TextureHandle> RenderContext::getSwapchainImages()
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto images = vulkanContext.getSwapchainImages();
+            std::vector<TextureHandle> handles;
+            for (auto &image : images)
+            {
+                auto handle = engine->getNextTextureHandle();
+                image.handle = handle;
+                textureCache[handle] = image;
+                handles.push_back(handle);
+            }
+            return handles;
+        }
+        case Backend::DX12:
+            return {};
+        case Backend::METAL:
+            return {};
+        default:
+            spdlog::error("Unsupported backend during swapchain image retrieval.");
+            return {};
+        }
+    }
+
+    bool RenderContext::fillBuffer(const BufferHandle &buffer, const void *data, size_t size, size_t offset)
+    {
+        assert(data != nullptr && "Data pointer cannot be null.");
+        assert(size > 0 && "Size must be greater than zero.");
+        assert(offset >= 0 && "Offset must be non-negative.");
+        assert(buffer.isValid() && "Buffer handle must be valid.");
+
+        auto it = bufferCache.find(buffer);
+        if (it == bufferCache.end())
+        {
+            spdlog::error("Buffer handle not found in cache during fillBuffer.");
+            return false;
+        }
+
+        auto gpuBuffer = it->second;
+
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            vulkanContext.fillBuffer(gpuBuffer, data, size, offset);
+            return true;
+        }
+        case Backend::DX12:
+            return false;
+        case Backend::METAL:
+            return false;
+        default:
+            spdlog::error("Unsupported backend during fillBuffer.");
+            return false;
+        }
+    }
+
+    Format RenderContext::getSwapchainImageFormat()
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+            return vulkanContext.getSwapchainImageFormat();
+        case Backend::DX12:
+            return Format::UNKNOWN;
+        case Backend::METAL:
+            return Format::UNKNOWN;
+        default:
+            spdlog::error("Unsupported backend during swapchain image format retrieval.");
+            return Format::UNKNOWN;
+        }
+    }
+
+    bool RenderContext::waitForFence(FenceHandle fence, uint64_t timeout)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto it = fenceCache.find(fence);
+            if (it == fenceCache.end())
+            {
+                spdlog::error("Fence handle not found in cache during waitForFence.");
+                return false;
+            }
+            auto fenceVKHandle = it->second;
+            return vulkanContext.waitForFence(fenceVKHandle, timeout);
+        }
+        case Backend::DX12:
+            return false;
+        case Backend::METAL:
+            return false;
+        default:
+            spdlog::error("Unsupported backend during fence wait.");
+            return false;
+        }
+    }
+
+    bool RenderContext::resetFence(FenceHandle fence)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto it = fenceCache.find(fence);
+            if (it == fenceCache.end())
+            {
+                spdlog::error("Fence handle not found in cache during resetFence.");
+                return false;
+            }
+            auto fenceVKHandle = it->second;
+            return vulkanContext.resetFence(fenceVKHandle);
+        }
+        case Backend::DX12:
+            return false;
+        case Backend::METAL:
+            return false;
+        default:
+            spdlog::error("Unsupported backend during fence reset.");
+            return false;
+        }
+    }
+
+    bool RenderContext::acquireNextImage(SemaphoreHandle signalSemaphore, uint64_t timeout, uint32_t &imageIndex)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto it = semaphoreCache.find(signalSemaphore);
+            if (it == semaphoreCache.end())
+            {
+                spdlog::error("Semaphore handle not found in cache during acquireNextImage.");
+                return false;
+            }
+            auto semaphoreVKHandle = it->second;
+            return vulkanContext.acquireNextImage(semaphoreVKHandle, timeout, imageIndex);
+        }
+        case Backend::DX12:
+            return false;
+        case Backend::METAL:
+            return false;
+        default:
+            spdlog::error("Unsupported backend during image acquisition.");
+            return false;
+        }
+    }
+
+    bool RenderContext::beginCommandBuffer(const CommandBufferHandle &commandBuffer)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto it = commandBufferCache.find(commandBuffer);
+            if (it == commandBufferCache.end())
+            {
+                spdlog::error("Command buffer handle not found in cache during beginCommandBuffer.");
+                return false;
+            }
+            return vulkanContext.beginCommandBuffer(it->second);
+        }
+        case Backend::DX12:
+            return false;
+        case Backend::METAL:
+            return false;
+        default:
+            spdlog::error("Unsupported backend during beginCommandBuffer.");
+            return false;
+        }
+    }
+
+    bool RenderContext::endCommandBuffer(const CommandBufferHandle &commandBuffer)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto it = commandBufferCache.find(commandBuffer);
+            if (it == commandBufferCache.end())
+            {
+                spdlog::error("Command buffer handle not found in cache during endCommandBuffer.");
+                return false;
+            }
+            return vulkanContext.endCommandBuffer(it->second);
+        }
+        case Backend::DX12:
+            return false;
+        case Backend::METAL:
+            return false;
+        default:
+            spdlog::error("Unsupported backend during endCommandBuffer.");
+            return false;
+        }
+    }
+
+    bool RenderContext::transitionImageLayout(const CommandBufferHandle &commandBuffer, TextureHandle texture, TextureUsage oldUsage, TextureUsage newUsage)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto commandBufferIt = commandBufferCache.find(commandBuffer);
+            auto textureIt = textureCache.find(texture);
+            if (commandBufferIt == commandBufferCache.end())
+            {
+                spdlog::error("Command buffer handle not found in cache during transitionImageLayout.");
+                return false;
+            }
+            if (textureIt == textureCache.end())
+            {
+                spdlog::error("Texture handle not found in cache during transitionImageLayout.");
+                return false;
+            }
+
+            return vulkanContext.transitionImageLayout(commandBufferIt->second, textureIt->second, oldUsage, newUsage);
+        }
+        case Backend::DX12:
+            return false;
+        case Backend::METAL:
+            return false;
+        default:
+            spdlog::error("Unsupported backend during image layout transition.");
+            return false;
+        }
+    }
+
+    bool RenderContext::beginRendering(const CommandBufferHandle &commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto colorIt = textureCache.find(colorAttachment);
+            auto depthIt = textureCache.find(depthAttachment);
+            auto commandBufferIt = commandBufferCache.find(commandBuffer);
+            if (commandBufferIt == commandBufferCache.end())
+            {
+                spdlog::error("Command buffer handle not found in cache during beginRendering.");
+                return false;
+            }
+            if (colorIt == textureCache.end())
+            {
+                spdlog::error("Color attachment texture handle not found in cache during beginRendering.");
+                return false;
+            }
+            if (depthIt == textureCache.end())
+            {
+                spdlog::error("Depth attachment texture handle not found in cache during beginRendering.");
+                return false;
+            }
+
+            return vulkanContext.beginRendering(commandBufferIt->second, colorIt->second, depthIt->second);
+        }
+        case Backend::DX12:
+            return false;
+        case Backend::METAL:
+            return false;
+        default:
+            spdlog::error("Unsupported backend during beginRendering.");
+            return false;
+        }
+    }
+
+    bool RenderContext::endRendering(const CommandBufferHandle &commandBuffer)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto commandBufferIt = commandBufferCache.find(commandBuffer);
+            if (commandBufferIt == commandBufferCache.end())
+            {
+                spdlog::error("Command buffer handle not found in cache during endRendering.");
+                return false;
+            }
+            return vulkanContext.endRendering(commandBufferIt->second);
+        }
+        case Backend::DX12:
+            return false;
+        case Backend::METAL:
+            return false;
+        default:
+            spdlog::error("Unsupported backend during endRendering.");
+            return false;
+        }
+    }
+
+    bool RenderContext::setViewport(const CommandBufferHandle &commandBuffer, float x, float y, float width, float height, float minDepth, float maxDepth)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto commandBufferIt = commandBufferCache.find(commandBuffer);
+            if (commandBufferIt == commandBufferCache.end())
+            {
+                spdlog::error("Command buffer handle not found in cache during setViewport.");
+                return false;
+            }
+            return vulkanContext.setViewport(commandBufferIt->second, x, y, width, height, minDepth, maxDepth);
+        }
+        case Backend::DX12:
+            return false;
+        case Backend::METAL:
+            return false;
+        default:
+            spdlog::error("Unsupported backend during setViewport.");
+            return false;
+        }
+    }
+
+    bool RenderContext::setScissor(const CommandBufferHandle &commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto commandBufferIt = commandBufferCache.find(commandBuffer);
+            if (commandBufferIt == commandBufferCache.end())
+            {
+                spdlog::error("Command buffer handle not found in cache during setScissor.");
+                return false;
+            }
+            return vulkanContext.setScissor(commandBufferIt->second, x, y, width, height);
+        }
+        case Backend::DX12:
+            return false;
+        case Backend::METAL:
+            return false;
+        default:
+            spdlog::error("Unsupported backend during setScissor.");
+            return false;
+        }
+    }
+
+    bool RenderContext::submit(const CommandBufferHandle &commandBuffer, const std::vector<SemaphoreHandle> &waitSemaphores, const std::vector<SemaphoreHandle> &signalSemaphores, FenceHandle fence)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto commandBufferIt = commandBufferCache.find(commandBuffer);
+            if (commandBufferIt == commandBufferCache.end())
+            {
+                spdlog::error("Command buffer handle not found in cache during submit.");
+                return false;
+            }
+
+            std::vector<gfx::SemaphoreVKHandle> waitSemaphoresVK;
+            for (const auto &sem : waitSemaphores)
+            {
+                auto it = semaphoreCache.find(sem);
+                if (it == semaphoreCache.end())
+                {
+                    spdlog::error("Wait semaphore handle not found in cache during submit.");
+                    return false;
+                }
+                waitSemaphoresVK.push_back(it->second);
+            }
+            std::vector<gfx::SemaphoreVKHandle> signalSemaphoresVK;
+            for (const auto &sem : signalSemaphores)
+            {
+                auto it = semaphoreCache.find(sem);
+                if (it == semaphoreCache.end())
+                {
+                    spdlog::error("Signal semaphore handle not found in cache during submit.");
+                    return false;
+                }
+                signalSemaphoresVK.push_back(it->second);
+            }
+
+            auto it = fenceCache.find(fence);
+            if (it == fenceCache.end())
+            {
+                spdlog::error("Fence handle not found in cache during submit.");
+                return false;
+            }
+            auto fenceVK = it->second;
+            return vulkanContext.submit(commandBufferIt->second, waitSemaphoresVK, signalSemaphoresVK, fenceVK);
+        }
+        case Backend::DX12:
+            return false;
+        case Backend::METAL:
+            return false;
+        default:
+            spdlog::error("Unsupported backend during submit.");
+            return false;
+        }
+    }
+
+    bool RenderContext::present(uint32_t imageIndex, SemaphoreHandle waitSemaphore)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto semIt = semaphoreCache.find(waitSemaphore);
+            if (semIt == semaphoreCache.end())
+            {
+                spdlog::error("Wait semaphore handle not found in cache during present.");
+                return false;
+            }
+            return vulkanContext.present(imageIndex, semIt->second);
+        }
+        case Backend::DX12:
+            return false;
+        case Backend::METAL:
+            return false;
+        default:
+            spdlog::error("Unsupported backend during present.");
+            return false;
+        }
+    }
+
     bool RenderContext::recreateSwapchain()
     {
         switch (backend)
@@ -422,6 +840,70 @@ namespace rasm
         }
     }
 
+    void RenderContext::bindVertexBuffer(const CommandBufferHandle &commandBuffer, const BufferHandle &buffer, uint64_t offset, uint64_t binding)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto bufferIt = bufferCache.find(buffer);
+            auto commandBufferIt = commandBufferCache.find(commandBuffer);
+            if (bufferIt == bufferCache.end())
+            {
+                spdlog::error("Buffer handle not found in cache during vertex buffer binding.");
+                return;
+            }
+            if (commandBufferIt == commandBufferCache.end())
+            {
+                spdlog::error("Command buffer handle not found in cache during vertex buffer binding.");
+                return;
+            }
+
+            vulkanContext.bindVertexBuffer(commandBufferIt->second, bufferIt->second, offset, binding);
+            break;
+        }
+        case Backend::DX12:
+            break;
+        case Backend::METAL:
+            break;
+        default:
+            spdlog::error("Unsupported backend during vertex buffer binding.");
+            break;
+        }
+    }
+
+    void RenderContext::bindIndexBuffer(const CommandBufferHandle &commandBuffer, const BufferHandle &buffer, uint64_t offset, Format indexType)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto bufferIt = bufferCache.find(buffer);
+            auto commandBufferIt = commandBufferCache.find(commandBuffer);
+            if (bufferIt == bufferCache.end())
+            {
+                spdlog::error("Buffer handle not found in cache during index buffer binding.");
+                return;
+            }
+            if (commandBufferIt == commandBufferCache.end())
+            {
+                spdlog::error("Command buffer handle not found in cache during index buffer binding.");
+                return;
+            }
+
+            vulkanContext.bindIndexBuffer(commandBufferIt->second, bufferIt->second, offset, indexType);
+            break;
+        }
+        case Backend::DX12:
+            break;
+        case Backend::METAL:
+            break;
+        default:
+            spdlog::error("Unsupported backend during index buffer binding.");
+            break;
+        }
+    }
+
     void RenderContext::setUniform(const CommandBufferHandle &commandBuffer, const std::string &name, const void *data, size_t size)
     {
         switch (backend)
@@ -468,6 +950,32 @@ namespace rasm
             break;
         default:
             spdlog::error("Unsupported backend during draw call.");
+            break;
+        }
+    }
+
+
+    void RenderContext::drawIndexed(const CommandBufferHandle &commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint64_t vertexOffset, uint64_t firstIndex, uint64_t firstInstance)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto commandBufferIt = commandBufferCache.find(commandBuffer);
+            if (commandBufferIt == commandBufferCache.end())
+            {
+                spdlog::error("Command buffer handle not found in cache during indexed draw call.");
+                return;
+            }
+            vulkanContext.drawIndexed(commandBufferIt->second, indexCount, instanceCount, vertexOffset, firstIndex, firstInstance);
+            break;
+        }
+        case Backend::DX12:
+            break;
+        case Backend::METAL:
+            break;
+        default:
+            spdlog::error("Unsupported backend during indexed draw call.");
             break;
         }
     }

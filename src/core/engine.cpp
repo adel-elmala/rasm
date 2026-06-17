@@ -13,6 +13,9 @@
 #define TINYGLTF_IMPLEMENTATION
 #include "tiny_gltf.h"
 
+#define TINYOBJLOADER_IMPLEMENTATION
+#include "tiny_obj_loader.h"
+
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -38,17 +41,52 @@ namespace rasm
             ctx.cleanup();
             isRunning = false;
         }
+
+        // TODO: add a engine config option to specify max frame in flight, for now we will just use 2 for double buffering.
+        // Initialize frame resources for double buffering
+        for (int i = 0; i < 2; ++i)
+        {
+            frameResources[i].commandPool = ctx.createCommandPool(vkb::QueueType::graphics);
+            frameResources[i].commandBuffer = ctx.createCommandBuffer(frameResources[i].commandPool);
+            frameResources[i].readyToDrawSemaphore = ctx.createSemaphore();
+            frameResources[i].inFlightFence = ctx.createFence(true);
+
+            // Assuming a fixed size for shader data buffer for simplicity
+            ResourceDesc shaderDataBufferDesc{};
+            shaderDataBufferDesc.type = ResourceDesc::Type::BUFFER;
+            shaderDataBufferDesc.buffer.size = 1024 * 1024; // 1 MB
+            shaderDataBufferDesc.buffer.usage = BufferUsage::UNIFORM;
+
+            frameResources[i].shaderDataBuffer = ctx.createBuffer(shaderDataBufferDesc);
+        }
+
+        // Create swapchain and associated resources
+        swapchain.imageHandles = ctx.getSwapchainImages();
+        for (size_t i = 0; i < swapchain.imageHandles.size(); ++i)
+        {
+            swapchain.readyToPresentSemaphores.push_back(ctx.createSemaphore());
+        }
+        swapchain.imageFormat = ctx.getSwapchainImageFormat(); 
+
+        // Create a depth texture.
+        auto depthTextureDesc = ResourceDesc{};
+        depthTextureDesc.type = ResourceDesc::Type::TEXTURE;
+        depthTextureDesc.texture.width = static_cast<uint32_t>(config.windowWidth);
+        depthTextureDesc.texture.height = static_cast<uint32_t>(config.windowHeight);
+        depthTextureDesc.texture.format = Format::D24_UNORM_S8_UINT; // TODO: check this format
+        depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
+        depthTexture = ctx.createTexture(depthTextureDesc);
     }
 
     Engine::~Engine()
     {
         // Clean up resources, free memory, etc.
-        for (auto &tex : textureData)
+        for (auto &[handle, tex] : textureData)
         {
             stbi_image_free(tex.data);
         }
 
-        for (auto &mesh : meshData)
+        for (auto &[handle, mesh] : meshData)
         {
             if (mesh.type == MeshRaw::MeshType::GLTF)
             {
@@ -88,6 +126,7 @@ namespace rasm
             return MeshHandle{};
         }
 
+        MeshRaw mesh{};
         if (extension == "gltf" || extension == "glb")
         {
             tinygltf::TinyGLTF loader;
@@ -119,20 +158,47 @@ namespace rasm
                 return MeshHandle{};
             }
 
-            MeshRaw mesh{};
             mesh.type = MeshRaw::MeshType::GLTF;
             mesh.data = std::move(model);
-            meshData.push_back(mesh);
         }
         else
         {
-            // TODO: Implement OBJ loading
-            spdlog::error("OBJ loading not implemented yet: {}", path);
-            return MeshHandle{};
+            tinyobj::attrib_t attrib;
+            std::vector<tinyobj::shape_t> shapes;
+            std::vector<tinyobj::material_t> materials;
+
+            if (!tinyobj::LoadObj(&attrib, &shapes, &materials, nullptr, nullptr, path.c_str()))
+            {
+                spdlog::error("Failed to load OBJ model: {}", path);
+                return MeshHandle{};
+            }
+
+            // Load vertex and index data
+            std::vector<Vertex> out_vertices;
+            std::vector<uint32_t> out_indices;
+
+            for (auto &index : shapes[0].mesh.indices)
+            {
+                Vertex v{
+                    .pos = {attrib.vertices[index.vertex_index * 3], -attrib.vertices[index.vertex_index * 3 + 1], attrib.vertices[index.vertex_index * 3 + 2]},
+                    .normal = {attrib.normals[index.normal_index * 3], -attrib.normals[index.normal_index * 3 + 1], attrib.normals[index.normal_index * 3 + 2]},
+                    .uv = {attrib.texcoords[index.texcoord_index * 2], 1.0 - attrib.texcoords[index.texcoord_index * 2 + 1]}};
+
+                out_vertices.push_back(v);
+                out_indices.push_back(static_cast<uint32_t>(out_indices.size()));
+            }
+
+            mesh.type = MeshRaw::MeshType::OBJ;
+
+            ObjRaw objRaw{};
+            objRaw.vertices = std::move(out_vertices);
+            objRaw.indices = std::move(out_indices);
+            mesh.data = std::move(objRaw);
         }
 
-        auto handle = MeshHandle{nextHandle.mesh++, 1};
+        auto handle = getNextMeshHandle();
         loadedMeshes[path] = handle;
+        meshData.insert({handle, std::move(mesh)});
 
         return handle;
     }
@@ -168,18 +234,61 @@ namespace rasm
         tex.channels = nChannels;
         tex.data = data;
 
-        textureData.push_back(tex);
-
-        auto handle = TextureHandle{nextHandle.texture++, 1};
+        auto handle = getNextTextureHandle();
         loadedTextures[path] = handle;
+        textureData.insert({handle, std::move(tex)});
 
         return handle;
+    }
+
+    BufferHandle Engine::uploadMesh(const MeshHandle &handle)
+    {
+        // TODO: remove mesh from meshData after uploading to GPU.
+        auto it = meshData.find(handle);
+        if (it == meshData.end())
+        {
+            spdlog::error("Mesh handle not found for upload.");
+            return BufferHandle{};
+        }
+
+        auto &mesh = it->second;
+
+        if (mesh.type == MeshRaw::MeshType::GLTF)
+        {
+            // In a real implementation, this is where we'd upload the GLTF mesh data to the GPU.
+            spdlog::info("Uploading GLTF mesh with handle: {}", handle.index);
+        }
+        else if (mesh.type == MeshRaw::MeshType::OBJ)
+        {
+            auto &objRaw = std::get<ObjRaw>(mesh.data);
+
+            auto bufferDesc = ResourceDesc{};
+            bufferDesc.name = "OBJ Vertex + index Buffer";
+            bufferDesc.type = ResourceDesc::Type::BUFFER;
+            bufferDesc.buffer.size = objRaw.vertices.size() * sizeof(Vertex) + objRaw.indices.size() * sizeof(uint32_t);
+            bufferDesc.buffer.stride = sizeof(Vertex);
+            bufferDesc.buffer.offset = objRaw.vertices.size() * sizeof(Vertex);
+            bufferDesc.buffer.usage = BufferUsage::VERTEXINDEX;
+
+            auto bufferHandle = ctx.createBuffer(bufferDesc);
+
+            ctx.fillBuffer(bufferHandle, objRaw.vertices.data(), objRaw.vertices.size() * sizeof(Vertex), 0);
+            ctx.fillBuffer(bufferHandle, objRaw.indices.data(), objRaw.indices.size() * sizeof(uint32_t), objRaw.vertices.size() * sizeof(Vertex));
+            return bufferHandle;
+        }
+        else
+        {
+            spdlog::error("Unknown mesh type for upload.");
+            return BufferHandle{};
+        }
+
+        return BufferHandle{};
     }
 
     Material Engine::createMaterial(MaterialTemplate type)
     {
         const MaterialHandle id{nextHandle.material++, 1};
-        return Material(id);
+        return Material(id, type);
     }
 
     RenderGraph Engine::createRenderGraph()
@@ -188,17 +297,161 @@ namespace rasm
         return graph;
     }
 
-    void Engine::beginFrame() {}
+    void Engine::beginFrame()
+    {
+        // wait for the gpu to finish rendering the previous frame
+        auto &currentFrame = frameResources[frameCount];
+        ctx.waitForFence(currentFrame.inFlightFence);
+        ctx.resetFence(currentFrame.inFlightFence);
+
+        // acquire the next image from the swapchain
+        ctx.acquireNextImage(currentFrame.readyToDrawSemaphore, UINT64_MAX, imageIdx);
+
+        // update shader data buffer with per-frame data (e.g., camera matrices, time, etc.)
+        // For this example, we'll just fill it with 0xCC.
+        std::vector<char> shaderData(1024 * 1024, 0xCC);
+        ctx.fillBuffer(currentFrame.shaderDataBuffer, shaderData.data(), shaderData.size());
+
+        // record commands for the current frame
+        ctx.beginCommandBuffer(currentFrame.commandBuffer);
+
+        // transition swapchain image to be ready for rendering
+        ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
+        ctx.transitionImageLayout(currentFrame.commandBuffer, depthTexture, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
+
+        // begin dynamic rendering
+        ctx.beginRendering(currentFrame.commandBuffer ,swapchain.imageHandles[imageIdx], depthTexture);
+        ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(config.windowWidth), static_cast<float>(config.windowHeight));
+        ctx.setScissor(currentFrame.commandBuffer, 0, 0, config.windowWidth, config.windowHeight);
+    }
 
     void Engine::endFrame()
     {
-        ++frameCount;
+        auto &currentFrame = frameResources[frameCount];
+
+        ctx.endRendering(currentFrame.commandBuffer);
+
+        ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::COLOR_ATTACHMENT, TextureUsage::PRESENT_SRC);
+
+        ctx.endCommandBuffer(frameResources[frameCount].commandBuffer);
+
+        ctx.submit(frameResources[frameCount].commandBuffer,
+                   {frameResources[frameCount].readyToDrawSemaphore},
+                   {swapchain.readyToPresentSemaphores[imageIdx]},
+                   frameResources[frameCount].inFlightFence);
+
+        ctx.present(imageIdx, swapchain.readyToPresentSemaphores[imageIdx]);
+
+        frameCount = (frameCount + 1) % 2; // Toggle between 0 and 1 for double buffering
+    }
+
+    CompiledScene Engine::compileScene(Scene &scene)
+    {
+        if (!scene.isValid())
+        {
+            spdlog::error("Invalid scene handle for compilation.");
+            return CompiledScene{};
+        }
+
+        if (compiledScenes.find(scene.id()) != compiledScenes.end())
+        {
+            return compiledScenes[scene.id()];
+        }
+
+        CompiledScene compiledScene;
+
+        for (Entity &entity : scene.entities)
+        {
+            if (entity.hasComponent<Mesh>() && entity.hasComponent<Material>())
+            {
+                auto &matComp = entity.getComponent<Material>();
+                auto &meshComp = entity.getComponent<Mesh>();
+
+                auto bufferHandle = uploadMesh(meshComp.id());
+                if (!bufferHandle.isValid()) 
+                {
+                    spdlog::error("Failed to upload mesh for Entity {}. Skipping.", entity.id().index);
+                    continue;
+                }
+
+                compiledScene.meshData[entity.id()] = bufferHandle;
+                compiledScene.materialToMeshes[matComp.id()].insert(entity.id());
+            }
+        }
+
+        auto swapchainImages = ctx.getSwapchainImages();
+        auto swapchainFormat = ctx.getSwapchainImageFormat();
+        auto depthFormat = Format::D24_UNORM_S8_UINT;
+
+        for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
+        {
+            // create a pipeline for each material.
+            auto pipelineDesc = ResourceDesc{};
+            pipelineDesc.type = ResourceDesc::Type::GRAPHICS_PIPELINE;
+            pipelineDesc.name = "Pipeline for Material " + std::to_string(materialHandle.index);
+
+            auto [vertSrc, fragSrc] = Material::getShaderSources(materialHandle, MaterialTemplate::BASIC); // TODO: pick the right material
+
+            auto shaderDesc = ResourceDesc{};
+            shaderDesc.type = ResourceDesc::Type::SHADER;
+            shaderDesc.shader.shaderType = ShaderType::VERTEX;
+            shaderDesc.shader.sourceSize = vertSrc.size();
+            shaderDesc.shader.source = vertSrc.data();
+
+            pipelineDesc.pipeline.vertexShader = ctx.createShader(shaderDesc);
+
+            shaderDesc.shader.shaderType = ShaderType::FRAGMENT;
+            shaderDesc.shader.sourceSize = fragSrc.size();
+            shaderDesc.shader.source = fragSrc.data();
+
+            pipelineDesc.pipeline.fragmentShader = ctx.createShader(shaderDesc);
+
+            pipelineDesc.pipeline.topology = PrimitiveTopology::TRIANGLE_LIST;
+
+            pipelineDesc.pipeline.colorAttachmentFormat = swapchainFormat;
+            pipelineDesc.pipeline.depthStencilAttachmentFormat = depthFormat;
+            pipelineDesc.pipeline.vertexInputLayout = {
+                .attributes = {
+                    {.binding = 0, .location = 0, .format = Format::R32G32B32_SFLOAT,.size = sizeof(float) * 3, .offset = 0}, // position
+                    {.binding = 0, .location = 1, .format = Format::R32G32B32_SFLOAT, .size = sizeof(float) * 3, .offset = 12}, // normal
+                    {.binding = 0, .location = 2, .format = Format::R32G32_SFLOAT, .size = sizeof(float) * 2, .offset = 24}, // uv
+                    {.used = false}
+                },
+                .binding = 0,
+                .stride = sizeof(Vertex),
+                .perInstance = false
+            };
+
+            auto pipeline = ctx.createPipeline(pipelineDesc);
+            compiledScene.materialToPipeline[materialHandle] = pipeline;
+        }
+
+        compiledScenes[scene.id()] = compiledScene;
+
+        return compiledScene;
     }
 
     void Engine::render(Scene &scene, Entity &camera)
     {
         this->window.pollEvents();
 
+        auto compiledScene = compileScene(scene);
+        auto &currentFrame = frameResources[frameCount];
+        auto commandBuffer = currentFrame.commandBuffer;
+
+        for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
+        {
+            ctx.bindPipeline(commandBuffer, compiledScene.materialToPipeline[materialHandle]);
+            for (const auto &entityHandle : entitySet)
+            {
+                auto bufferHandle = compiledScene.meshData[entityHandle];
+                ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
+                ctx.bindIndexBuffer(commandBuffer, bufferHandle, 0, Format::U32_UINT);
+                ctx.drawIndexed(commandBuffer, 3, 1, 0, 0, 0);
+            }
+        }
+
+        #if 0
         for (Entity &entity : scene.entities)
         {
             if (entity.hasComponent<Mesh>() && entity.hasComponent<Material>() && entity.hasComponent<Transform>())
@@ -222,6 +475,7 @@ namespace rasm
         spdlog::info("Camera Entity {}, Type: {}",
                      camera.id().index,
                      cameraComp.type == CameraType::PERSPECTIVE ? "Perspective" : "Orthographic");
+        #endif
     }
 
     bool Engine::running() const
@@ -257,6 +511,11 @@ namespace rasm
     RenderContext &Engine::getRenderContext()
     {
         return ctx;
+    }
+
+    MeshHandle Engine::getNextMeshHandle()
+    {
+        return MeshHandle{nextHandle.mesh++, 1};
     }
 
     BufferHandle Engine::getNextBufferHandle()

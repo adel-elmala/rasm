@@ -25,6 +25,7 @@ namespace rasm {
                             ~Engine();
         Scene               createScene();
         MeshHandle          loadMesh(const std::string& path);
+        BufferHandle        uploadMesh(const MeshHandle& handle);
         TextureHandle       loadTexture(const std::string& path);
         Material            createMaterial(MaterialTemplate type);
         RenderGraph         createRenderGraph();
@@ -37,6 +38,7 @@ namespace rasm {
         Window&             getWindow();
         WindowHandle        getMainWindow() const;
         RenderContext&      getRenderContext();
+        MeshHandle          getNextMeshHandle();
         BufferHandle        getNextBufferHandle();
         TextureHandle       getNextTextureHandle();
         ShaderHandle        getNextShaderHandle();
@@ -46,19 +48,25 @@ namespace rasm {
         SemaphoreHandle     getNextSemaphoreHandle();
         FenceHandle         getNextFenceHandle();
         SwapchainHandle     getNextSwapchainHandle();
+        CompiledScene       compileScene(Scene& scene);
 
     protected:
-        EngineConfig                                    config;
-        std::unordered_map<std::string, MeshHandle>     loadedMeshes;
-        std::unordered_map<std::string, TextureHandle>  loadedTextures;
-        std::vector<TextureRaw>                         textureData;
-        std::vector<MeshRaw>                            meshData;
-        RenderContext                                   ctx{};
-        HandleCounters                                  nextHandle{};
-        WindowHandle                                    mainWindow{};
-        Window                                          window{};
-        uint64_t                                        frameCount = 0;
-        bool                                            isRunning = true;
+        EngineConfig                                                config;
+        FrameResources                                              frameResources[2]; // Double buffering
+        Swapchain                                                   swapchain{};
+        TextureHandle                                               depthTexture{};
+        std::unordered_map<std::string, MeshHandle>                 loadedMeshes;
+        std::unordered_map<std::string, TextureHandle>              loadedTextures;
+        std::unordered_map<TextureHandle, TextureRaw, HandleHash>   textureData;
+        std::unordered_map<MeshHandle, MeshRaw, HandleHash>         meshData;
+        std::unordered_map<SceneHandle, CompiledScene, HandleHash>  compiledScenes;
+        RenderContext                                               ctx{};
+        HandleCounters                                              nextHandle{};
+        WindowHandle                                                mainWindow{};
+        Window                                                      window{};
+        uint64_t                                                    frameCount = 0;
+        uint32_t                                                    imageIdx = 0;
+        bool                                                        isRunning = true;
     };
 
 }

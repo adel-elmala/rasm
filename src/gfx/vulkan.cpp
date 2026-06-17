@@ -24,9 +24,13 @@ namespace rasm::gfx
     vkb::Result<VkSurfaceKHR>           _init_surface(const vkb::Instance &instance, const Window &window, WindowHandle handle);
     vkb::Result<vkb::Swapchain>         _init_swapchain(const vkb::Device &device);
     vkb::Result<vkb::Swapchain>         _recreate_swapchain(const vkb::Device &device, vkb::Swapchain &old_swapchain);
-    VkBufferUsageFlagBits               _to_vk_buffer_usage_flags(BufferUsage usage);
+    VkBufferUsageFlags                  _to_vk_buffer_usage_flags(BufferUsage usage);
     VkImageUsageFlags                   _to_vk_image_usage_flags(TextureUsage usage);
-    VkFormat                            _to_vk_format(TextureFormat format);
+    VkFormat                            _to_vk_format(Format format);
+    Format                              _to_format(VkFormat format);
+        VkIndexType                         _to_vk_index_type(Format format);
+    VkPrimitiveTopology                 _to_vk_topology(PrimitiveTopology topology);
+    VkImageAspectFlags                  _to_vk_aspect_mask(TextureUsage usage);
     const char *                        _to_vk_result_string(VkResult result);
 
     // clang-format on
@@ -80,6 +84,14 @@ namespace rasm::gfx
             return false;
         this->graphics_queue = vkb_queue.value();
 
+        // get graphics queue family index
+        auto graphics_queue_index_result = _get_queue_index(vkb_device.value(), vkb::QueueType::graphics);
+
+        if (!graphics_queue_index_result)
+            return false;
+
+        this->graphics_queue_family_index = graphics_queue_index_result.value();
+
         // create swapchain
         auto vkb_swapchain = _init_swapchain(vkb_device.value());
 
@@ -87,14 +99,22 @@ namespace rasm::gfx
             return false;
 
         this->swapchain = vkb_swapchain.value();
+        this->swapchain_image_format = swapchain.image_format;
+        this->swapchain_image_count = swapchain.image_count;
 
         // create VMA allocator
+        VmaVulkanFunctions vkFunctions{
+            .vkGetInstanceProcAddr = vkGetInstanceProcAddr,
+            .vkGetDeviceProcAddr = vkGetDeviceProcAddr,
+            .vkCreateImage = vkCreateImage};
+
         VmaAllocatorCreateInfo allocatorCreateInfo = {};
-        allocatorCreateInfo.flags = VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
+        allocatorCreateInfo.flags = VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT | VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
         allocatorCreateInfo.vulkanApiVersion = VK_API_VERSION_1_4;
         allocatorCreateInfo.physicalDevice = physical_device.physical_device;
         allocatorCreateInfo.device = device.device;
         allocatorCreateInfo.instance = instance.instance;
+        allocatorCreateInfo.pVulkanFunctions = &vkFunctions;
 
         if (vmaCreateAllocator(&allocatorCreateInfo, &this->allocator) != VK_SUCCESS)
         {
@@ -122,12 +142,16 @@ namespace rasm::gfx
         bufferInfo.size = desc.buffer.size;
         bufferInfo.usage = _to_vk_buffer_usage_flags(desc.buffer.usage);
 
-        VmaAllocationCreateInfo allocInfo = {};
-        allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+        VmaAllocationCreateInfo allocCI = {};
+        allocCI.usage = VMA_MEMORY_USAGE_AUTO;
+        allocCI.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT |
+                        VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
         VkBuffer buffer;
         VmaAllocation allocation;
-        auto result = vmaCreateBuffer(this->allocator, &bufferInfo, &allocInfo, &buffer, &allocation, nullptr);
+        VmaAllocationInfo allocInfo;
+        auto result = vmaCreateBuffer(this->allocator, &bufferInfo, &allocCI, &buffer, &allocation, &allocInfo);
 
         if (result != VK_SUCCESS)
         {
@@ -135,7 +159,7 @@ namespace rasm::gfx
             return {};
         }
 
-        BufferVKHandle rawHandle = {desc, {}, buffer, allocation};
+        BufferVKHandle rawHandle = {desc, {}, buffer, allocation, allocInfo};
         return rawHandle;
     }
 
@@ -143,6 +167,7 @@ namespace rasm::gfx
     {
         assert(desc.type == ResourceDesc::Type::TEXTURE);
 
+        // TODO: check if the format is supported by the device, and if not, find a compatible one
         VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
         imageInfo.extent.width = desc.texture.width;
@@ -159,6 +184,7 @@ namespace rasm::gfx
 
         VmaAllocationCreateInfo allocInfo = {};
         allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+        allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
 
         VkImage image;
         VmaAllocation allocation;
@@ -170,7 +196,24 @@ namespace rasm::gfx
             return {};
         }
 
-        TextureVKHandle rawHandle = {desc, {}, image, VK_NULL_HANDLE, allocation};
+        VkImageViewCreateInfo viewInfo = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        viewInfo.image = image;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = _to_vk_format(desc.texture.format);
+        viewInfo.subresourceRange.aspectMask = _to_vk_aspect_mask(desc.texture.usage);
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        VkImageView imageView;
+        result = vkCreateImageView(this->device.device, &viewInfo, nullptr, &imageView);
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to create image view. Error: {}", _to_vk_result_string(result));
+            vmaDestroyImage(this->allocator, image, allocation);
+            return {};
+        }
+
+        TextureVKHandle rawHandle = {desc, {}, image, imageView, allocation};
         return rawHandle;
     }
 
@@ -195,91 +238,33 @@ namespace rasm::gfx
         return rawHandle;
     }
 
-    VkViewport createViewPort(float width, float height, float minDepth, float maxDepth)
-    {
-        VkViewport viewport = {
-            .x = 0.0f,
-            .y = 0.0f,
-            .width = width,
-            .height = height,
-            .minDepth = minDepth,
-            .maxDepth = maxDepth,
-        };
-
-        return viewport;
-    }
-
-    VkRect2D createScissor(int32_t x, int32_t y, uint32_t width, uint32_t height)
-    {
-        VkRect2D scissor = {
-            .offset = {x, y},
-            .extent = {width, height}};
-
-        return scissor;
-    }
-
     VkPipelineRasterizationStateCreateInfo createRasterizer(VkPolygonMode polygonMode, VkCullModeFlags cullMode, VkFrontFace frontFace)
     {
-        VkPipelineRasterizationStateCreateInfo rasterizer{.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-                                                          .depthClampEnable = VK_FALSE,
-                                                          .rasterizerDiscardEnable = VK_FALSE,
-                                                          .polygonMode = polygonMode,
-                                                          .cullMode = cullMode,
-                                                          .frontFace = frontFace,
-                                                          .depthBiasEnable = VK_FALSE,
-                                                          .lineWidth = 1.0f};
+        VkPipelineRasterizationStateCreateInfo rasterizer{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .depthClampEnable = VK_FALSE,
+            .rasterizerDiscardEnable = VK_FALSE,
+            .polygonMode = polygonMode,
+            .cullMode = cullMode,
+            .frontFace = frontFace,
+            .depthBiasEnable = VK_FALSE,
+            .lineWidth = 1.0f};
+
         return rasterizer;
     }
 
     std::optional<PipelineVKHandle> VulkanContext::createGraphicsPipeline(ResourceDesc desc, const ShaderVKHandle &vertexShader, const ShaderVKHandle &fragmentShader)
     {
-        VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPushConstantRange pushConstantRange{
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+            .size = sizeof(VkDeviceAddress)};
 
-        VkPipelineDynamicStateCreateInfo dynamicStateInfo = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-        dynamicStateInfo.pDynamicStates = dynamic_states;
-        dynamicStateInfo.dynamicStateCount = 2;
-
-        // skip for now
-        VkPipelineVertexInputStateCreateInfo vertexInputInfo = {VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-
-        // skip for now
-        VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo = {VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-        inputAssemblyInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-        VkPipelineRasterizationStateCreateInfo rasterizerInfo = createRasterizer(VK_POLYGON_MODE_FILL, VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_CLOCKWISE);
-
-        VkPipelineMultisampleStateCreateInfo multisampleInfo = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-                                                                .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
-                                                                .sampleShadingEnable = VK_FALSE};
-
-        VkPipelineDepthStencilStateCreateInfo depthStencilInfo = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-                                                                  .depthTestEnable = VK_TRUE,
-                                                                  .depthWriteEnable = VK_TRUE,
-                                                                  .depthCompareOp = VK_COMPARE_OP_LESS,
-                                                                  .depthBoundsTestEnable = VK_FALSE,
-                                                                  .stencilTestEnable = VK_FALSE};
-
-        VkPipelineColorBlendAttachmentState colorBlendAttachment = {
-            .blendEnable = VK_FALSE,
-            .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
-            .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-            .colorBlendOp = VK_BLEND_OP_ADD,
-            .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-            .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
-            .alphaBlendOp = VK_BLEND_OP_ADD,
-            .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
-        };
-
-        VkPipelineColorBlendStateCreateInfo colorBlendInfo = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-                                                              .logicOpEnable = VK_FALSE,
-                                                              .attachmentCount = 1,
-                                                              .pAttachments = &colorBlendAttachment};
-
-        VkPipelineLayoutCreateInfo pipelineLayoutInfo = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-                                                         .setLayoutCount = 0,
-                                                         .pSetLayouts = nullptr,
-                                                         .pushConstantRangeCount = 0,
-                                                         .pPushConstantRanges = nullptr};
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount = 0,
+            .pSetLayouts = nullptr,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &pushConstantRange};
 
         VkPipelineLayout pipelineLayout;
         auto result = vkCreatePipelineLayout(this->device.device, &pipelineLayoutInfo, nullptr, &pipelineLayout);
@@ -289,6 +274,35 @@ namespace rasm::gfx
             spdlog::error("Failed to create pipeline layout. Error: {}", _to_vk_result_string(result));
             return {};
         }
+
+        VkVertexInputBindingDescription vertexBinding{
+            .binding = desc.pipeline.vertexInputLayout.binding,
+            .stride = desc.pipeline.vertexInputLayout.stride,
+            .inputRate = desc.pipeline.vertexInputLayout.perInstance ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX};
+
+        std::vector<VkVertexInputAttributeDescription> vertexAttributes;
+        for (const auto &attr : desc.pipeline.vertexInputLayout.attributes)
+        {
+            if (!attr.used)
+                continue;
+
+            vertexAttributes.push_back({.location = attr.location,
+                                        .binding = attr.binding,
+                                        .format = _to_vk_format(attr.format),
+                                        .offset = attr.offset});
+        }
+
+        VkPipelineVertexInputStateCreateInfo vertexInputInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            .vertexBindingDescriptionCount = 1,
+            .pVertexBindingDescriptions = &vertexBinding,
+            .vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexAttributes.size()),
+            .pVertexAttributeDescriptions = vertexAttributes.data()};
+
+        VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .topology = _to_vk_topology(desc.pipeline.topology),
+        };
 
         VkPipelineShaderStageCreateInfo shaderStages[] = {
             {
@@ -304,47 +318,81 @@ namespace rasm::gfx
                 .pName = "main",
             }};
 
+        VkPipelineViewportStateCreateInfo viewportStateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .viewportCount = 1,
+            .scissorCount = 1,
+        };
+
+        VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+
+        VkPipelineDynamicStateCreateInfo dynamicStateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            .dynamicStateCount = 2,
+            .pDynamicStates = dynamic_states,
+        };
+
+        VkPipelineDepthStencilStateCreateInfo depthStencilInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .depthTestEnable = VK_TRUE,
+            .depthWriteEnable = VK_TRUE,
+            .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+            .depthBoundsTestEnable = VK_FALSE,
+            .stencilTestEnable = VK_FALSE};
+
         // Dynamic rendering: describe the formats used by this pipeline.
         // NOTE: These formats must match the actual color and depth attachments
         // used when beginning dynamic rendering.
-        VkFormat colorAttachmentFormat = VK_FORMAT_B8G8R8A8_UNORM;
-        VkFormat depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+        VkFormat colorAttachmentFormat = _to_vk_format(desc.pipeline.colorAttachmentFormat);
+        VkFormat depthAttachmentFormat = _to_vk_format(desc.pipeline.depthStencilAttachmentFormat);
 
         VkPipelineRenderingCreateInfo pipelineRenderingInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-            .pNext = nullptr,
-            .viewMask = 0,
             .colorAttachmentCount = 1,
             .pColorAttachmentFormats = &colorAttachmentFormat,
             .depthAttachmentFormat = depthAttachmentFormat,
             .stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
         };
 
-        VkPipelineViewportStateCreateInfo viewportStateInfo = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .viewportCount = 1,
-            .pViewports = nullptr, // viewports are set dynamically
-            .scissorCount = 1,
-            .pScissors = nullptr, // scissors are set dynamically
+        VkPipelineColorBlendAttachmentState colorBlendAttachment = {
+            .blendEnable = VK_FALSE,
+            .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+            .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .colorBlendOp = VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+            .alphaBlendOp = VK_BLEND_OP_ADD,
+            .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
         };
 
-        VkGraphicsPipelineCreateInfo pipelineInfo = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-                                                     .pNext = &pipelineRenderingInfo,
-                                                     .stageCount = 2,
-                                                     .pStages = shaderStages,
-                                                     .pVertexInputState = &vertexInputInfo,
-                                                     .pInputAssemblyState = &inputAssemblyInfo,
-                                                     .pViewportState = &viewportStateInfo,
-                                                     .pRasterizationState = &rasterizerInfo,
-                                                     .pMultisampleState = &multisampleInfo,
-                                                     .pDepthStencilState = &depthStencilInfo,
-                                                     .pColorBlendState = &colorBlendInfo,
-                                                     .pDynamicState = &dynamicStateInfo,
-                                                     .layout = pipelineLayout,
-                                                     .renderPass = VK_NULL_HANDLE, // dynamic rendering, will be set later
-                                                     .subpass = 0};
+        VkPipelineColorBlendStateCreateInfo colorBlendInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .attachmentCount = 1,
+            .pAttachments = &colorBlendAttachment};
+
+        VkPipelineRasterizationStateCreateInfo rasterizerInfo = createRasterizer(VK_POLYGON_MODE_FILL,
+                                                                                 VK_CULL_MODE_BACK_BIT,
+                                                                                 VK_FRONT_FACE_CLOCKWISE);
+
+        VkPipelineMultisampleStateCreateInfo multisampleInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+            .sampleShadingEnable = VK_FALSE};
+
+        VkGraphicsPipelineCreateInfo pipelineInfo = {
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = &pipelineRenderingInfo,
+            .stageCount = 2,
+            .pStages = shaderStages,
+            .pVertexInputState = &vertexInputInfo,
+            .pInputAssemblyState = &inputAssemblyInfo,
+            .pViewportState = &viewportStateInfo,
+            .pRasterizationState = &rasterizerInfo,
+            .pMultisampleState = &multisampleInfo,
+            .pDepthStencilState = &depthStencilInfo,
+            .pColorBlendState = &colorBlendInfo,
+            .pDynamicState = &dynamicStateInfo,
+            .layout = pipelineLayout};
 
         VkPipeline pipeline;
         result = vkCreateGraphicsPipelines(this->device.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
@@ -449,6 +497,42 @@ namespace rasm::gfx
         return rawHandle;
     }
 
+    std::vector<TextureVKHandle> VulkanContext::getSwapchainImages()
+    {
+        auto swapchainImagesResult = swapchain.get_images();
+        auto swapchainImageViewsResult = swapchain.get_image_views();
+
+        if (!swapchainImagesResult || !swapchainImageViewsResult)
+        {
+            spdlog::error("Failed to get swapchain images or image views. Error: {} {}", swapchainImagesResult.error().message(), swapchainImageViewsResult.error().message());
+            return {};
+        }
+
+        const auto &images = swapchainImagesResult.value();
+        const auto &imageViews = swapchainImageViewsResult.value();
+
+        std::vector<TextureVKHandle> imageHandles;
+        ResourceDesc desc{};
+        desc.type = ResourceDesc::Type::TEXTURE;
+        desc.texture.width = swapchain.extent.width;
+        desc.texture.height = swapchain.extent.height;
+        desc.texture.format = _to_format(swapchain.image_format);
+        desc.texture.usage = TextureUsage::COLOR_ATTACHMENT;
+
+        for (size_t i = 0; i < images.size(); i++)
+        {
+            TextureVKHandle handle = {desc, {}, images[i], imageViews[i], {}};
+            imageHandles.push_back(handle);
+        }
+
+        return imageHandles;
+    }
+
+    Format VulkanContext::getSwapchainImageFormat()
+    {
+        return _to_format(swapchain.image_format);
+    }
+
     std::optional<SwapchainVKHandle> VulkanContext::recreateSwapchain()
     {
         auto swapchain_ret = _recreate_swapchain(this->device, this->swapchain);
@@ -464,8 +548,71 @@ namespace rasm::gfx
         return rawHandle;
     }
 
-    void VulkanContext::transitionImageLayout(const CommandBufferVKHandle &commandBuffer, VkImage image, VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask, VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask, VkImageLayout oldLayout, VkImageLayout newLayout)
+    void VulkanContext::fillBuffer(const BufferVKHandle &buffer, const void *data, size_t size, size_t offset)
     {
+        assert(offset + size <= buffer.desc.buffer.size);
+        std::memcpy(static_cast<uint8_t *>(buffer.allocationInfo.pMappedData) + offset, data, size);
+    }
+
+    bool VulkanContext::transitionImageLayout(const CommandBufferVKHandle &commandBuffer, const TextureVKHandle &image, const TextureUsage &oldUsage, const TextureUsage &newUsage)
+    {
+        VkImageLayout oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkImageLayout newLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkAccessFlags srcAccessMask = 0;
+        VkAccessFlags dstAccessMask = 0;
+        VkPipelineStageFlags srcStageMask = 0;
+        VkPipelineStageFlags dstStageMask = 0;
+
+        // Determine the old and new layouts based on the usage flags
+        auto usageToLayout = [](TextureUsage usage) -> VkImageLayout
+        {
+            switch (usage)
+            {
+            case TextureUsage::UNKNOWN:
+                return VK_IMAGE_LAYOUT_UNDEFINED;
+            case TextureUsage::COLOR_ATTACHMENT:
+                return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
+                return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            case TextureUsage::PRESENT_SRC:
+                return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            default:
+                spdlog::error("Unsupported texture usage for layout transition.");
+                return VK_IMAGE_LAYOUT_UNDEFINED;
+            }
+        };
+
+        oldLayout = usageToLayout(oldUsage);
+        newLayout = usageToLayout(newUsage);
+
+        auto getAccessMaskAndStage = [](VkImageLayout layout, VkAccessFlags &accessMask, VkPipelineStageFlags &stageMask)
+        {
+            switch (layout)
+            {
+            case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+                accessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                stageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+                break;
+            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+                accessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                stageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+                break;
+            case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+                accessMask = 0;                                   // No access mask for present
+                stageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT; // Use bottom of pipe for present
+                break;
+            default:
+                spdlog::error("Unsupported image layout for access mask and stage.");
+                accessMask = 0;
+                stageMask = 0;
+                break;
+            }
+        };
+
+        getAccessMaskAndStage(oldLayout, srcAccessMask, srcStageMask);
+        getAccessMaskAndStage(newLayout, dstAccessMask, dstStageMask);
+
+        VkImageAspectFlags aspectMask = (image.desc.texture.usage == TextureUsage::DEPTH_STENCIL_ATTACHMENT) ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
         VkImageMemoryBarrier2 barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                                          .srcStageMask = srcStageMask,
                                          .srcAccessMask = srcAccessMask,
@@ -473,11 +620,9 @@ namespace rasm::gfx
                                          .dstAccessMask = dstAccessMask,
                                          .oldLayout = oldLayout,
                                          .newLayout = newLayout,
-                                         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                         .image = image,
+                                         .image = image.image,
                                          .subresourceRange = {
-                                             .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                             .aspectMask = aspectMask,
                                              .baseMipLevel = 0,
                                              .levelCount = 1,
                                              .baseArrayLayer = 0,
@@ -489,85 +634,158 @@ namespace rasm::gfx
                                            .pImageMemoryBarriers = &barrier};
 
         vkCmdPipelineBarrier2(commandBuffer.commandBuffer, &dependencyInfo);
+        return true;
     }
 
-    void VulkanContext::beginCommandBuffer(const CommandBufferVKHandle &commandBuffer)
+    bool VulkanContext::beginCommandBuffer(const CommandBufferVKHandle &commandBuffer)
     {
-        VkCommandBufferBeginInfo beginInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-        beginInfo.flags = 0;
-
-        auto result = vkBeginCommandBuffer(commandBuffer.commandBuffer, &beginInfo);
-        if (result != VK_SUCCESS)
+        auto reset_result = vkResetCommandBuffer(commandBuffer.commandBuffer, 0);
+        if (reset_result != VK_SUCCESS)
         {
-            spdlog::error("Failed to begin command buffer. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to reset command buffer. Error: {}", _to_vk_result_string(reset_result));
+            return false;
         }
+
+        VkCommandBufferBeginInfo beginInfo = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        };
+
+        auto begin_result = vkBeginCommandBuffer(commandBuffer.commandBuffer, &beginInfo);
+        if (begin_result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to begin command buffer. Error: {}", _to_vk_result_string(begin_result));
+            return false;
+        }
+        return true;
     }
 
-    void VulkanContext::endCommandBuffer(const CommandBufferVKHandle &commandBuffer)
+    bool VulkanContext::endCommandBuffer(const CommandBufferVKHandle &commandBuffer)
     {
         auto result = vkEndCommandBuffer(commandBuffer.commandBuffer);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to end command buffer. Error: {}", _to_vk_result_string(result));
+            return false;
         }
+        return true;
     }
 
-    void VulkanContext::beginRendering(const CommandBufferVKHandle &commandBuffer)
+    bool VulkanContext::beginRendering(const CommandBufferVKHandle &commandBuffer, const TextureVKHandle &colorAttachment, const TextureVKHandle &depthAttachment)
     {
-        static bool first_render = true;
+        // begin dynamic rendering
+        VkRenderingAttachmentInfo colorAttachmentInfo{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .imageView = colorAttachment.view,
+            .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .clearValue{.color{1.0f, 0.0f, 0.0f, 1.0f}}};
 
-        // transition swapchain image to color attachment optimal layout before rendering
-        auto swapchainImagesResult = swapchain.get_images();
-        auto swapchainImageViewsResult = swapchain.get_image_views();
-        if (!swapchainImagesResult || !swapchainImageViewsResult)
-        {
-            spdlog::error("Failed to get swapchain images or image views. Error: {} {}", swapchainImagesResult.error().message(), swapchainImageViewsResult.error().message());
-            return;
-        }
-        auto swapchainImage = swapchainImagesResult.value()[this->current_swapchain_image];
-        auto swapchainImageView = swapchainImageViewsResult.value()[this->current_swapchain_image];
+        VkRenderingAttachmentInfo depthAttachmentInfo{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .imageView = depthAttachment.view,
+            .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .clearValue = {.depthStencil = {1.0f, 0}}};
 
-        transitionImageLayout(commandBuffer, swapchainImage,
-                              0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                              first_render ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-
-        VkRenderingAttachmentInfo colorAttachment = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                                                     .imageView = swapchainImageView,
-                                                     .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                                     .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                                                     .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-                                                     .clearValue = {.color = {{0.0f, 0.0f, 0.0f, 1.0f}}}};
-
-        VkRenderingInfo renderingInfo = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-                                         .renderArea = {.offset = {0, 0}, .extent = swapchain.extent},
-                                         .layerCount = 1,
-                                         .colorAttachmentCount = 1,
-                                         .pColorAttachments = &colorAttachment};
+        VkRenderingInfo renderingInfo{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .renderArea{
+                .extent{
+                    .width = colorAttachment.desc.texture.width,
+                    .height = colorAttachment.desc.texture.height}},
+            .layerCount = 1,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &colorAttachmentInfo,
+            .pDepthAttachment = &depthAttachmentInfo};
 
         vkCmdBeginRendering(commandBuffer.commandBuffer, &renderingInfo);
-        first_render = false;
+        return true;
     }
 
-    void VulkanContext::endRendering(const CommandBufferVKHandle &commandBuffer)
+    bool VulkanContext::endRendering(const CommandBufferVKHandle &commandBuffer)
     {
         vkCmdEndRendering(commandBuffer.commandBuffer);
+        return true;
+    }
 
-        // transition swapchain image back to present src layout after rendering
-        auto swapchainImagesResult = swapchain.get_images();
-        if (!swapchainImagesResult)
+    bool VulkanContext::setViewport(const CommandBufferVKHandle &commandBuffer, float x, float y, float width, float height, float minDepth, float maxDepth)
+    {
+        VkViewport viewport = {
+            .x = x,
+            .y = y,
+            .width = width,
+            .height = height,
+            .minDepth = minDepth,
+            .maxDepth = maxDepth};
+
+        vkCmdSetViewport(commandBuffer.commandBuffer, 0, 1, &viewport);
+        return true;
+    }
+
+    bool VulkanContext::setScissor(const CommandBufferVKHandle &commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height)
+    {
+        VkRect2D scissor = {
+            .offset = {x, y},
+            .extent = {width, height}};
+
+        vkCmdSetScissor(commandBuffer.commandBuffer, 0, 1, &scissor);
+        return true;
+    }
+
+    bool VulkanContext::submit(const CommandBufferVKHandle &commandBuffer, const std::vector<SemaphoreVKHandle> &waitSemaphores, const std::vector<SemaphoreVKHandle> &signalSemaphores, const FenceVKHandle &fence)
+    {
+        VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+
+        std::vector<VkSemaphore> waitVkSemaphores;
+        for (const auto &waitSemaphore : waitSemaphores)
         {
-            spdlog::error("Failed to get swapchain images. Error: {}", swapchainImagesResult.error().message());
-            return;
+            waitVkSemaphores.push_back(waitSemaphore.semaphore);
         }
-        auto swapchainImage = swapchainImagesResult.value()[this->current_swapchain_image];
 
-        transitionImageLayout(commandBuffer, swapchainImage,
-                              VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0,
-                              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        std::vector<VkSemaphore> signalVkSemaphores;
+        for (const auto &signalSemaphore : signalSemaphores)
+        {
+            signalVkSemaphores.push_back(signalSemaphore.semaphore);
+        }
 
-        this->current_swapchain_image = (this->current_swapchain_image + 1) % swapchain.image_count;
+        VkSubmitInfo submitInfo = {
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .waitSemaphoreCount = static_cast<uint32_t>(waitVkSemaphores.size()),
+            .pWaitSemaphores = waitVkSemaphores.data(),
+            .pWaitDstStageMask = waitStages,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &commandBuffer.commandBuffer,
+            .signalSemaphoreCount = static_cast<uint32_t>(signalVkSemaphores.size()),
+            .pSignalSemaphores = signalVkSemaphores.data()};
+
+        auto result = vkQueueSubmit(this->graphics_queue, 1, &submitInfo, fence.fence);
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to submit command buffer. Error: {}", _to_vk_result_string(result));
+            return false;
+        }
+        return true;
+    }
+    bool VulkanContext::present(uint32_t imageIndex, const SemaphoreVKHandle &waitSemaphore)
+    {
+        VkPresentInfoKHR presentInfo = {
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &waitSemaphore.semaphore,
+            .swapchainCount = 1,
+            .pSwapchains = &this->swapchain.swapchain,
+            .pImageIndices = &imageIndex};
+
+        auto result = vkQueuePresentKHR(this->graphics_queue, &presentInfo);
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to present swapchain image. Error: {}", _to_vk_result_string(result));
+            return false;
+        }
+        return true;
     }
 
     void VulkanContext::removeBuffer(const BufferVKHandle &buffer)
@@ -611,6 +829,19 @@ namespace rasm::gfx
         vkCmdBindPipeline(commandBuffer.commandBuffer, pipeline.desc.type == ResourceDesc::Type::GRAPHICS_PIPELINE ? VK_PIPELINE_BIND_POINT_GRAPHICS : VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
     }
 
+    void VulkanContext::bindVertexBuffer(const CommandBufferVKHandle &commandBuffer, const BufferVKHandle &buffer, uint64_t offset, uint64_t binding)
+    {
+        VkBuffer vertexBuffers[] = {buffer.buffer};
+        VkDeviceSize offsets[] = {offset};
+        vkCmdBindVertexBuffers(commandBuffer.commandBuffer, binding, 1, vertexBuffers, offsets);
+    }
+
+    void VulkanContext::bindIndexBuffer(const CommandBufferVKHandle &commandBuffer, const BufferVKHandle &buffer, uint64_t offset, Format indexType)
+    {
+        auto vkIndexType = _to_vk_index_type(indexType);
+        vkCmdBindIndexBuffer(commandBuffer.commandBuffer, buffer.buffer, offset, vkIndexType);
+    }
+
     void VulkanContext::setUniform(const CommandBufferVKHandle &commandBuffer, const std::string &name, const void *data, size_t size)
     {
         commandBuffer;
@@ -624,6 +855,44 @@ namespace rasm::gfx
         vkCmdDraw(commandBuffer.commandBuffer, vertexCount, instanceCount, 0, 0);
     }
 
+    void VulkanContext::drawIndexed(const CommandBufferVKHandle &commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint64_t vertexOffset, uint64_t firstIndex, uint64_t firstInstance)
+    {
+        vkCmdDrawIndexed(commandBuffer.commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
+    }
+
+    bool VulkanContext::waitForFence(const FenceVKHandle &fence, uint64_t timeout)
+    {
+        auto result = vkWaitForFences(this->device.device, 1, &fence.fence, VK_TRUE, timeout);
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to wait for fence. Error: {}", _to_vk_result_string(result));
+            return false;
+        }
+        return true;
+    }
+
+    bool VulkanContext::resetFence(const FenceVKHandle &fence)
+    {
+        auto result = vkResetFences(this->device.device, 1, &fence.fence);
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to reset fence. Error: {}", _to_vk_result_string(result));
+            return false;
+        }
+        return true;
+    }
+
+    bool VulkanContext::acquireNextImage(const SemaphoreVKHandle &semaphore, uint64_t timeout, uint32_t &imageIndex)
+    {
+        auto result = vkAcquireNextImageKHR(this->device.device, this->swapchain.swapchain, timeout, semaphore.semaphore, VK_NULL_HANDLE, &imageIndex);
+
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to acquire next image. Error: {}", _to_vk_result_string(result));
+            return false;
+        }
+        return true;
+    }
     // ----------------------------------------------------------
     // private helper functions for Vulkan setup and management.
     // ----------------------------------------------------------
@@ -679,14 +948,32 @@ namespace rasm::gfx
     {
         vkb::PhysicalDeviceSelector phys_device_selector(vkb_instance);
 
-        VkPhysicalDeviceVulkan13Features features13 = {};
-        features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-        features13.dynamicRendering = VK_TRUE; // Explicitly enable the feature
+        VkPhysicalDeviceVulkan12Features enabledVk12Features{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+            .descriptorIndexing = VK_TRUE,
+            .shaderSampledImageArrayNonUniformIndexing = VK_TRUE,
+            .descriptorBindingVariableDescriptorCount = VK_TRUE,
+            .runtimeDescriptorArray = VK_TRUE,
+            .bufferDeviceAddress = VK_TRUE};
+
+        VkPhysicalDeviceVulkan13Features enabledVk13Features{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+            .pNext = &enabledVk12Features,
+            .synchronization2 = VK_TRUE,
+            .dynamicRendering = VK_TRUE,
+        };
+
+        VkPhysicalDeviceFeatures enabledVk10Features{
+            .samplerAnisotropy = VK_TRUE};
 
         // select() grabs a PhysicalDevice, By default, this will prefer a discrete GPU.
         auto physical_device_selector_return = phys_device_selector
                                                    .set_surface(surface)
-                                                   .set_required_features_13(features13) // Enable the 1.3 core feature
+                                                   .set_required_features_13(enabledVk13Features)               // Enable the 1.3 core feature
+                                                   .set_required_features_12(enabledVk12Features)               // Enable the 1.2 core feature
+                                                   .set_required_features(enabledVk10Features)                  // Enable the 1.0 core feature
+                                                   .add_required_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME)     // Enable swapchain extension
+                                                   .add_required_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) // Enable memory budget extension
                                                    .select();
 
         if (!physical_device_selector_return)
@@ -802,7 +1089,7 @@ namespace rasm::gfx
         return swap_ret;
     }
 
-    VkBufferUsageFlagBits _to_vk_buffer_usage_flags(BufferUsage usage)
+    VkBufferUsageFlags _to_vk_buffer_usage_flags(BufferUsage usage)
     {
         switch (usage)
         {
@@ -810,27 +1097,86 @@ namespace rasm::gfx
             return VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
         case BufferUsage::INDEX:
             return VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+        case BufferUsage::VERTEXINDEX:
+            return VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
         case BufferUsage::UNIFORM:
             return VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
         case BufferUsage::STORAGE:
             return VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         default:
-            return static_cast<VkBufferUsageFlagBits>(0);
+            return static_cast<VkBufferUsageFlags>(0);
         }
     }
 
-    VkFormat _to_vk_format(TextureFormat format)
+    VkPrimitiveTopology _to_vk_topology(PrimitiveTopology topology)
+    {
+        switch (topology)
+        {
+        case PrimitiveTopology::POINT_LIST:
+            return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+        case PrimitiveTopology::LINE_LIST:
+            return VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+        case PrimitiveTopology::LINE_STRIP:
+            return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+        case PrimitiveTopology::TRIANGLE_LIST:
+            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        case PrimitiveTopology::TRIANGLE_STRIP:
+            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+        default:
+            return VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
+        }
+    }
+
+    VkFormat _to_vk_format(Format format)
     {
         switch (format)
         {
-        case TextureFormat::RGBA8:
+        case Format::R32G32B32_SFLOAT:
+            return VK_FORMAT_R32G32B32_SFLOAT;
+        case Format::R32G32_SFLOAT:
+            return VK_FORMAT_R32G32_SFLOAT;
+        case Format::R8G8B8A8_UNORM:
             return VK_FORMAT_R8G8B8A8_UNORM;
-        case TextureFormat::RGBA16F:
+        case Format::R16G16B16A16_SFLOAT:
             return VK_FORMAT_R16G16B16A16_SFLOAT;
-        case TextureFormat::DEPTH24STENCIL8:
+        case Format::D24_UNORM_S8_UINT:
             return VK_FORMAT_D24_UNORM_S8_UINT;
+        case Format::UNKNOWN:
+            return VK_FORMAT_UNDEFINED;
         default:
             return VK_FORMAT_UNDEFINED;
+        }
+    }
+
+    VkIndexType _to_vk_index_type(Format format)
+    {
+        switch (format)
+        {
+        case Format::U16_UINT:
+            return VK_INDEX_TYPE_UINT16;
+        case Format::U32_UINT:
+            return VK_INDEX_TYPE_UINT32;
+        default:
+            return VK_INDEX_TYPE_MAX_ENUM;
+        }
+    }
+
+    Format _to_format(VkFormat vkFormat)
+    {
+        switch (vkFormat)
+        {
+        case VK_FORMAT_R32G32B32_SFLOAT:
+            return Format::R32G32B32_SFLOAT;
+        case VK_FORMAT_R32G32_SFLOAT:
+            return Format::R32G32_SFLOAT;
+        case VK_FORMAT_R8G8B8A8_UNORM:
+            return Format::R8G8B8A8_UNORM;
+        case VK_FORMAT_R16G16B16A16_SFLOAT:
+            return Format::R16G16B16A16_SFLOAT;
+        case VK_FORMAT_D24_UNORM_S8_UINT:
+            return Format::D24_UNORM_S8_UINT;
+        default:
+            return Format::UNKNOWN;
         }
     }
 
@@ -854,6 +1200,19 @@ namespace rasm::gfx
             return VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
         case TextureUsage::INPUT_ATTACHMENT:
             return VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+        default:
+            return 0;
+        }
+    }
+
+    VkImageAspectFlags _to_vk_aspect_mask(TextureUsage usage)
+    {
+        switch (usage)
+        {
+        case TextureUsage::COLOR_ATTACHMENT:
+            return VK_IMAGE_ASPECT_COLOR_BIT;
+        case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
+            return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
         default:
             return 0;
         }

@@ -13,6 +13,7 @@ namespace rasm::gfx
         BufferHandle handle;
         VkBuffer buffer;
         VmaAllocation allocation;
+        VmaAllocationInfo allocationInfo;
     };
 
     struct TextureVKHandle

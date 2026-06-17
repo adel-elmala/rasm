@@ -13,6 +13,7 @@ namespace rasm
         BASIC,
         PBR,
         UNLIT,
+        SHADER,
 
         COUNT,
     };
@@ -42,16 +43,18 @@ namespace rasm
 
     public:
                         Material();
-        explicit        Material(MaterialHandle materialHandle);
+        explicit        Material(MaterialHandle materialHandle, MaterialTemplate type);
                         ~Material();
         [[nodiscard]]   MaterialHandle id() const;
         void            setTexture(PbrSlot slot, TextureHandle texture);
         void            setFloat(PbrParam param, float value);
+        static std::pair<std::vector<char>, std::vector<char>> getShaderSources(const MaterialHandle& handle, MaterialTemplate type);
 
     private:
         std::array<TextureHandle, static_cast<std::size_t>(PbrSlot::COUNT)> textures{};
         std::array<float, static_cast<std::size_t>(PbrParam::COUNT)>        scalarParams{};
         MaterialHandle                                                      handle{};
+        MaterialTemplate                                                    type{};
 
         static constexpr std::size_t toIndex(PbrSlot slot)
         {

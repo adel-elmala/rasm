@@ -7,6 +7,8 @@
 #include <variant>
 
 #include "tiny_gltf.h"
+#include "glm/glm.hpp"
+
 
 namespace rasm
 {
@@ -21,6 +23,7 @@ namespace rasm
     {
         VERTEX,
         INDEX,
+        VERTEXINDEX,
         UNIFORM,
         STORAGE
     };
@@ -35,13 +38,20 @@ namespace rasm
         DEPTH_STENCIL_ATTACHMENT,
         TRANSIENT_ATTACHMENT,
         INPUT_ATTACHMENT,
+        PRESENT_SRC,
+        UNKNOWN,
     };
 
-    enum class TextureFormat
+    enum class Format
     {
-        RGBA8,
-        RGBA16F,
-        DEPTH24STENCIL8
+        R8G8B8A8_UNORM,
+        R16G16B16A16_SFLOAT,
+        R32G32B32_SFLOAT,
+        D24_UNORM_S8_UINT,
+        R32G32_SFLOAT,
+        U16_UINT,
+        U32_UINT,
+        UNKNOWN
     };
 
     enum class ShaderType
@@ -49,6 +59,15 @@ namespace rasm
         VERTEX,
         FRAGMENT,
         COMPUTE
+    };
+
+    enum class PrimitiveTopology
+    {
+        TRIANGLE_LIST,
+        LINE_LIST,
+        POINT_LIST,
+        TRIANGLE_STRIP,
+        LINE_STRIP,
     };
 
     const static std::unordered_set<std::string> supportedMeshExtensions    = {"obj", "gltf", "glb"};
@@ -131,6 +150,22 @@ namespace rasm
         uint64_t swapchain      = 1;
     };
 
+    struct FrameResources
+    {
+        CommandPoolHandle   commandPool;
+        CommandBufferHandle commandBuffer;
+        SemaphoreHandle     readyToDrawSemaphore;
+        FenceHandle         inFlightFence;
+        BufferHandle        shaderDataBuffer;
+    };
+
+    struct Swapchain
+    {
+        std::vector<TextureHandle>      imageHandles;
+        std::vector<SemaphoreHandle>    readyToPresentSemaphores;
+        Format                          imageFormat;
+    };
+
     struct TextureRaw
     {
         uint32_t        width;
@@ -139,7 +174,19 @@ namespace rasm
         unsigned char*  data;
     };
 
-    
+    struct Vertex
+    {
+        glm::vec3 pos;
+        glm::vec3 normal;
+        glm::vec2 uv;
+    };
+
+    struct ObjRaw
+    {
+        std::vector<Vertex>     vertices;
+        std::vector<uint32_t>   indices;
+    };
+
     struct MeshRaw
     {
         enum class MeshType
@@ -148,7 +195,27 @@ namespace rasm
             OBJ
         };
         MeshType type;
-        std::variant<tinygltf::Model, std::string> data;
+        std::variant<tinygltf::Model, ObjRaw> data;
+    };
+
+    struct VertexAttributeDescription
+    {
+        uint32_t    binding;
+        uint32_t    location;
+        Format      format;
+        uint32_t    size;
+        uint32_t    offset;
+        bool        used = false;
+    };
+
+    constexpr uint32_t MAX_VERTEX_ATTRIBUTES = 4;
+
+    struct VertexInputLayout
+    {
+        VertexAttributeDescription  attributes[MAX_VERTEX_ATTRIBUTES];
+        uint32_t                    binding;
+        uint32_t                    stride;
+        bool                        perInstance;
     };
 
     struct ResourceDesc
@@ -170,7 +237,7 @@ namespace rasm
             {
                 uint32_t        width;
                 uint32_t        height;
-                TextureFormat   format;
+                Format          format;
                 TextureUsage    usage;
             } texture;
 
@@ -179,6 +246,7 @@ namespace rasm
             {
                 uint64_t        size;
                 uint64_t        stride;
+                uint64_t        offset;
                 BufferUsage     usage;
             } buffer;
 
@@ -193,8 +261,12 @@ namespace rasm
             // Pipeline-specific data
             struct
             {
-                ShaderHandle vertexShader;
-                ShaderHandle fragmentShader;
+                ShaderHandle      vertexShader;
+                ShaderHandle      fragmentShader;
+                VertexInputLayout vertexInputLayout;
+                PrimitiveTopology topology;
+                Format            colorAttachmentFormat;
+                Format            depthStencilAttachmentFormat;
             } pipeline;
         };
 
@@ -222,7 +294,8 @@ namespace rasm
             case Type::COMPUTE_PIPELINE:
                 // For pipelines, you would compare the relevant fields (e.g., shader handles)
                 return pipeline.vertexShader == other.pipeline.vertexShader &&
-                       pipeline.fragmentShader == other.pipeline.fragmentShader;
+                       pipeline.fragmentShader == other.pipeline.fragmentShader &&
+                       pipeline.topology == other.pipeline.topology;
             default:
                 return false;
             }
@@ -257,11 +330,19 @@ namespace rasm
             case ResourceDesc::Type::COMPUTE_PIPELINE:
                 return std::hash<std::string>()(desc.name) ^
                        std::hash<uint64_t>()(static_cast<uint64_t>(desc.pipeline.vertexShader.index)) ^
-                       std::hash<uint64_t>()(static_cast<uint64_t>(desc.pipeline.fragmentShader.index));
+                       std::hash<uint64_t>()(static_cast<uint64_t>(desc.pipeline.fragmentShader.index)) ^
+                       std::hash<uint32_t>()(static_cast<uint32_t>(desc.pipeline.topology));
             default:
                 return 0;
             }
         }
+    };
+
+    struct CompiledScene
+    {
+        std::unordered_map<MaterialHandle, std::unordered_set<EntityHandle, HandleHash>, HandleHash> materialToMeshes;
+        std::unordered_map<MaterialHandle, PipelineHandle, HandleHash> materialToPipeline;
+        std::unordered_map<EntityHandle, BufferHandle, HandleHash> meshData;
     };
 
 }

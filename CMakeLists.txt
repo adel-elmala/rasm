@@ -29,13 +29,16 @@ find_package(Tracy CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_path(TINYGLTF_INCLUDE_DIRS "tiny_gltf.h")
+find_package(tinyobjloader CONFIG REQUIRED)
 
 
 add_library(rasm_lib STATIC ${RASM_SRC})
 target_link_libraries(rasm_lib PRIVATE glm::glm Tracy::TracyClient SDL3::SDL3) 
 target_link_libraries(rasm_lib PUBLIC Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator)
 target_link_libraries(rasm_lib PRIVATE vk-bootstrap::vk-bootstrap vk-bootstrap::vk-bootstrap-compiler-warnings)
+target_link_libraries(rasm_lib PRIVATE  tinyobjloader::tinyobjloader)
 target_link_libraries(rasm_lib PUBLIC  spdlog::spdlog) # make it private later, keep for debugging now
+
 target_include_directories(rasm_lib PUBLIC ${Stb_INCLUDE_DIR} ${TINYGLTF_INCLUDE_DIRS} ${Vulkan_INCLUDE_DIRS} include)
 
 
