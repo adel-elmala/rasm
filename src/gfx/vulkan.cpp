@@ -28,7 +28,7 @@ namespace rasm::gfx
     VkImageUsageFlags                   _to_vk_image_usage_flags(TextureUsage usage);
     VkFormat                            _to_vk_format(Format format);
     Format                              _to_format(VkFormat format);
-        VkIndexType                         _to_vk_index_type(Format format);
+    VkIndexType                         _to_vk_index_type(Format format);
     VkPrimitiveTopology                 _to_vk_topology(PrimitiveTopology topology);
     VkImageAspectFlags                  _to_vk_aspect_mask(TextureUsage usage);
     const char *                        _to_vk_result_string(VkResult result);
@@ -76,6 +76,9 @@ namespace rasm::gfx
             return false;
 
         this->device = vkb_device.value();
+
+        // Create the dispatch table
+        this->dispatch_table = this->device.make_table();
 
         // get graphics queue
         auto vkb_queue = _init_queue(vkb_device.value(), vkb::QueueType::graphics);
@@ -127,11 +130,20 @@ namespace rasm::gfx
 
     void VulkanContext::cleanup()
     {
-        vmaDestroyAllocator(allocator);
+        waitIdle();
+
+        auto imageViews = swapchain.get_image_views().value();
+        swapchain.destroy_image_views(imageViews.size(), imageViews.data());
         vkb::destroy_swapchain(swapchain);
+        vmaDestroyAllocator(allocator);
         vkb::destroy_device(device);
         vkb::destroy_surface(instance, surface);
         vkb::destroy_instance(instance);
+    }
+
+    void VulkanContext::waitIdle()
+    {
+        vkDeviceWaitIdle(this->device.device);
     }
 
     std::optional<BufferVKHandle> VulkanContext::createBuffer(ResourceDesc desc)
@@ -158,6 +170,15 @@ namespace rasm::gfx
             spdlog::error("Failed to create buffer. Error: {}", _to_vk_result_string(result));
             return {};
         }
+
+        // Set a debug name for the buffer
+        VkDebugUtilsObjectNameInfoEXT bufferNameInfo = {};
+        bufferNameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+        bufferNameInfo.objectType = VK_OBJECT_TYPE_BUFFER;
+        bufferNameInfo.objectHandle = (uint64_t)buffer;
+        bufferNameInfo.pObjectName = desc.name.c_str();
+
+        this->dispatch_table.setDebugUtilsObjectNameEXT(&bufferNameInfo);
 
         BufferVKHandle rawHandle = {desc, {}, buffer, allocation, allocInfo};
         return rawHandle;
@@ -213,6 +234,23 @@ namespace rasm::gfx
             return {};
         }
 
+        // Set a debug name for the image
+        VkDebugUtilsObjectNameInfoEXT imageNameInfo = {};
+        imageNameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+        imageNameInfo.objectType = VK_OBJECT_TYPE_IMAGE;
+        imageNameInfo.objectHandle = (uint64_t)image;
+        imageNameInfo.pObjectName = desc.name.c_str();
+
+        // Set a debug name for the image view
+        VkDebugUtilsObjectNameInfoEXT imageViewNameInfo = {};
+        imageViewNameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+        imageViewNameInfo.objectType = VK_OBJECT_TYPE_IMAGE_VIEW;
+        imageViewNameInfo.objectHandle = (uint64_t)imageView;
+        imageViewNameInfo.pObjectName = desc.name.c_str();
+
+        this->dispatch_table.setDebugUtilsObjectNameEXT(&imageNameInfo);
+        this->dispatch_table.setDebugUtilsObjectNameEXT(&imageViewNameInfo);
+
         TextureVKHandle rawHandle = {desc, {}, image, imageView, allocation};
         return rawHandle;
     }
@@ -233,6 +271,16 @@ namespace rasm::gfx
             spdlog::error("Failed to create shader module. Error: {}", _to_vk_result_string(result));
             return {};
         }
+
+
+        // Set a debug name for the shader module
+        VkDebugUtilsObjectNameInfoEXT shaderNameInfo = {};
+        shaderNameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+        shaderNameInfo.objectType = VK_OBJECT_TYPE_SHADER_MODULE;
+        shaderNameInfo.objectHandle = (uint64_t)shaderModule;
+        shaderNameInfo.pObjectName = desc.name.c_str();
+
+        this->dispatch_table.setDebugUtilsObjectNameEXT(&shaderNameInfo);
 
         ShaderVKHandle rawHandle = {desc, {}, shaderModule};
         return rawHandle;
@@ -404,6 +452,15 @@ namespace rasm::gfx
             return {};
         }
 
+        // Set a debug name for the pipeline
+        VkDebugUtilsObjectNameInfoEXT pipelineNameInfo = {};
+        pipelineNameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+        pipelineNameInfo.objectType = VK_OBJECT_TYPE_PIPELINE;
+        pipelineNameInfo.objectHandle = (uint64_t)pipeline;
+        pipelineNameInfo.pObjectName = desc.name.c_str();
+
+        this->dispatch_table.setDebugUtilsObjectNameEXT(&pipelineNameInfo);
+
         PipelineVKHandle rawHandle = {desc, {}, pipeline, pipelineLayout};
         return rawHandle;
     }
@@ -500,16 +557,14 @@ namespace rasm::gfx
     std::vector<TextureVKHandle> VulkanContext::getSwapchainImages()
     {
         auto swapchainImagesResult = swapchain.get_images();
-        auto swapchainImageViewsResult = swapchain.get_image_views();
 
-        if (!swapchainImagesResult || !swapchainImageViewsResult)
+        if (!swapchainImagesResult)
         {
-            spdlog::error("Failed to get swapchain images or image views. Error: {} {}", swapchainImagesResult.error().message(), swapchainImageViewsResult.error().message());
+            spdlog::error("Failed to get swapchain images or image views. Error: {}", swapchainImagesResult.error().message());
             return {};
         }
 
         const auto &images = swapchainImagesResult.value();
-        const auto &imageViews = swapchainImageViewsResult.value();
 
         std::vector<TextureVKHandle> imageHandles;
         ResourceDesc desc{};
@@ -521,7 +576,7 @@ namespace rasm::gfx
 
         for (size_t i = 0; i < images.size(); i++)
         {
-            TextureVKHandle handle = {desc, {}, images[i], imageViews[i], {}};
+            TextureVKHandle handle = {desc, {}, images[i], {}, {}};
             imageHandles.push_back(handle);
         }
 
@@ -558,10 +613,10 @@ namespace rasm::gfx
     {
         VkImageLayout oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         VkImageLayout newLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        VkAccessFlags srcAccessMask = 0;
-        VkAccessFlags dstAccessMask = 0;
-        VkPipelineStageFlags srcStageMask = 0;
-        VkPipelineStageFlags dstStageMask = 0;
+        VkAccessFlags2 srcAccessMask = 0;
+        VkAccessFlags2 dstAccessMask = 0;
+        VkPipelineStageFlags2 srcStageMask = 0;
+        VkPipelineStageFlags2 dstStageMask = 0;
 
         // Determine the old and new layouts based on the usage flags
         auto usageToLayout = [](TextureUsage usage) -> VkImageLayout
@@ -585,32 +640,44 @@ namespace rasm::gfx
         oldLayout = usageToLayout(oldUsage);
         newLayout = usageToLayout(newUsage);
 
-        auto getAccessMaskAndStage = [](VkImageLayout layout, VkAccessFlags &accessMask, VkPipelineStageFlags &stageMask)
+        auto getAccessMaskAndStage = [](TextureUsage newUsage, VkAccessFlags2 &srcAccessMask, VkAccessFlags2 &dstAccessMask, VkPipelineStageFlags2 &srcStageMask, VkPipelineStageFlags2 &dstStageMask)
         {
-            switch (layout)
+            switch (newUsage)
             {
-            case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-                accessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-                stageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            case TextureUsage::COLOR_ATTACHMENT:
+                srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+                srcAccessMask = VK_ACCESS_2_NONE;
+                dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
                 break;
-            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
-                accessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                stageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+            case TextureUsage::PRESENT_SRC:
+                srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                dstStageMask = VK_PIPELINE_STAGE_2_NONE;
+
+                srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                dstAccessMask = VK_ACCESS_2_NONE;
+
+            case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
+                dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+
+                srcAccessMask = VK_ACCESS_2_NONE;
+                dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+
+                srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+
                 break;
-            case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
-                accessMask = 0;                                   // No access mask for present
-                stageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT; // Use bottom of pipe for present
+
                 break;
             default:
-                spdlog::error("Unsupported image layout for access mask and stage.");
-                accessMask = 0;
-                stageMask = 0;
+                spdlog::error("Unsupported new texture usage for layout transition.");
                 break;
             }
         };
 
-        getAccessMaskAndStage(oldLayout, srcAccessMask, srcStageMask);
-        getAccessMaskAndStage(newLayout, dstAccessMask, dstStageMask);
+        getAccessMaskAndStage(newUsage, srcAccessMask, dstAccessMask, srcStageMask, dstStageMask);
 
         VkImageAspectFlags aspectMask = (image.desc.texture.usage == TextureUsage::DEPTH_STENCIL_ATTACHMENT) ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
         VkImageMemoryBarrier2 barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
@@ -795,6 +862,7 @@ namespace rasm::gfx
 
     void VulkanContext::removeTexture(const TextureVKHandle &texture)
     {
+        vkDestroyImageView(this->device.device, texture.view, nullptr);
         vmaDestroyImage(this->allocator, texture.image, texture.allocation);
     }
 
@@ -829,7 +897,7 @@ namespace rasm::gfx
         vkCmdBindPipeline(commandBuffer.commandBuffer, pipeline.desc.type == ResourceDesc::Type::GRAPHICS_PIPELINE ? VK_PIPELINE_BIND_POINT_GRAPHICS : VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
     }
 
-    void VulkanContext::bindVertexBuffer(const CommandBufferVKHandle &commandBuffer, const BufferVKHandle &buffer, uint64_t offset, uint64_t binding)
+    void VulkanContext::bindVertexBuffer(const CommandBufferVKHandle &commandBuffer, const BufferVKHandle &buffer, uint64_t offset, uint32_t binding)
     {
         VkBuffer vertexBuffers[] = {buffer.buffer};
         VkDeviceSize offsets[] = {offset};
@@ -855,7 +923,7 @@ namespace rasm::gfx
         vkCmdDraw(commandBuffer.commandBuffer, vertexCount, instanceCount, 0, 0);
     }
 
-    void VulkanContext::drawIndexed(const CommandBufferVKHandle &commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint64_t vertexOffset, uint64_t firstIndex, uint64_t firstInstance)
+    void VulkanContext::drawIndexed(const CommandBufferVKHandle &commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint32_t vertexOffset, uint32_t firstIndex, uint32_t firstInstance)
     {
         vkCmdDrawIndexed(commandBuffer.commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
     }
@@ -920,7 +988,8 @@ namespace rasm::gfx
         {
             instance_builder.enable_validation_layers()
                 // Validation needs to send errors via a callback, have vk-bootstrap do it
-                .use_default_debug_messenger();
+                .use_default_debug_messenger()
+                .enable_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         }
 
         // instance level extension

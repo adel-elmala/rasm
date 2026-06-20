@@ -38,6 +38,7 @@ namespace rasm
             std::vector<TextureVKHandle>            getSwapchainImages();
             Format                                  getSwapchainImageFormat();
             std::optional<SwapchainVKHandle>        recreateSwapchain();
+            void                                    waitIdle();
             void                                    fillBuffer(const BufferVKHandle& buffer, const void* data, size_t size, size_t offset = 0);
             void                                    transitionImageLayout(const CommandBufferVKHandle& commandBuffer, VkImage image, VkAccessFlags2 srcAccessMask, VkAccessFlags2 dstAccessMask, VkPipelineStageFlags2 srcStageMask, VkPipelineStageFlags2 dstStageMask, VkImageLayout oldLayout, VkImageLayout newLayout);
             void                                    removeBuffer(const BufferVKHandle& buffer);
@@ -48,11 +49,11 @@ namespace rasm
             void                                    removeSemaphore(const SemaphoreVKHandle& semaphore);
             void                                    removeFence(const FenceVKHandle& fence);
             void                                    bindPipeline(const CommandBufferVKHandle& commandBuffer, const PipelineVKHandle& pipeline);
-            void                                    bindVertexBuffer(const CommandBufferVKHandle& commandBuffer, const BufferVKHandle& buffer, uint64_t offset, uint64_t binding = 0);
+            void                                    bindVertexBuffer(const CommandBufferVKHandle& commandBuffer, const BufferVKHandle& buffer, uint64_t offset, uint32_t binding = 0);
             void                                    bindIndexBuffer(const CommandBufferVKHandle& commandBuffer, const BufferVKHandle& buffer, uint64_t offset, Format indexType);
             void                                    setUniform(const CommandBufferVKHandle& commandBuffer, const std::string& name, const void* data, size_t size);
             void                                    draw(const CommandBufferVKHandle& commandBuffer, uint32_t vertexCount, uint32_t instanceCount = 1);
-            void                                    drawIndexed(const CommandBufferVKHandle& commandBuffer, uint32_t indexCount, uint32_t instanceCount = 1, uint64_t vertexOffset = 0, uint64_t firstIndex = 0, uint64_t firstInstance = 0);
+            void                                    drawIndexed(const CommandBufferVKHandle& commandBuffer, uint32_t indexCount, uint32_t instanceCount = 1, uint32_t vertexOffset = 0, uint32_t firstIndex = 0, uint32_t firstInstance = 0);
             bool                                    waitForFence(const FenceVKHandle& fence, uint64_t timeout = UINT64_MAX);
             bool                                    resetFence(const FenceVKHandle& fence);
             bool                                    acquireNextImage(const SemaphoreVKHandle& signalSemaphore, uint64_t timeout , uint32_t& imageIndex);
@@ -72,6 +73,7 @@ namespace rasm
             vkb::Instance       instance                    = {};
             vkb::PhysicalDevice physical_device             = {};
             vkb::Device         device                      = {};
+            vkb::DispatchTable  dispatch_table              = {};
             VkQueue             graphics_queue              = {};
             vkb::Swapchain      swapchain                   = {};
             VkFormat            swapchain_image_format      = VK_FORMAT_UNDEFINED;

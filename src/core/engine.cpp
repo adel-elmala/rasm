@@ -54,6 +54,7 @@ namespace rasm
             // Assuming a fixed size for shader data buffer for simplicity
             ResourceDesc shaderDataBufferDesc{};
             shaderDataBufferDesc.type = ResourceDesc::Type::BUFFER;
+            shaderDataBufferDesc.name = "ShaderDataBuffer";
             shaderDataBufferDesc.buffer.size = 1024 * 1024; // 1 MB
             shaderDataBufferDesc.buffer.usage = BufferUsage::UNIFORM;
 
@@ -71,6 +72,7 @@ namespace rasm
         // Create a depth texture.
         auto depthTextureDesc = ResourceDesc{};
         depthTextureDesc.type = ResourceDesc::Type::TEXTURE;
+        depthTextureDesc.name = "DepthTexture";
         depthTextureDesc.texture.width = static_cast<uint32_t>(config.windowWidth);
         depthTextureDesc.texture.height = static_cast<uint32_t>(config.windowHeight);
         depthTextureDesc.texture.format = Format::D24_UNORM_S8_UINT; // TODO: check this format
@@ -308,8 +310,8 @@ namespace rasm
         ctx.acquireNextImage(currentFrame.readyToDrawSemaphore, UINT64_MAX, imageIdx);
 
         // update shader data buffer with per-frame data (e.g., camera matrices, time, etc.)
-        // For this example, we'll just fill it with 0xCC.
-        std::vector<char> shaderData(1024 * 1024, 0xCC);
+        // For this example, we'll just fill it with 0x00.
+        std::vector<char> shaderData(1024 * 1024, 0x00);
         ctx.fillBuffer(currentFrame.shaderDataBuffer, shaderData.data(), shaderData.size());
 
         // record commands for the current frame
@@ -379,7 +381,6 @@ namespace rasm
             }
         }
 
-        auto swapchainImages = ctx.getSwapchainImages();
         auto swapchainFormat = ctx.getSwapchainImageFormat();
         auto depthFormat = Format::D24_UNORM_S8_UINT;
 
@@ -433,6 +434,7 @@ namespace rasm
 
     void Engine::render(Scene &scene, Entity &camera)
     {
+        (void) camera;
         this->window.pollEvents();
 
         auto compiledScene = compileScene(scene);

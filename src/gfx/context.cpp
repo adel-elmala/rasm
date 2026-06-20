@@ -48,6 +48,23 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
+            vulkanContext.waitIdle(); // Ensure the device is idle before cleanup
+
+            for (const auto &[handle, commandPool] : commandPoolCache)
+            {
+                vulkanContext.removeCommandPool(commandPool);
+            }
+
+            for (const auto &[handle, fence] : fenceCache)
+            {
+                vulkanContext.removeFence(fence);
+            }
+
+            for (const auto &[handle, semaphore] : semaphoreCache)
+            {
+                vulkanContext.removeSemaphore(semaphore);
+            }
+
             for (const auto &[handle, buffer] : bufferCache)
             {
                 vulkanContext.removeBuffer(buffer);
@@ -55,7 +72,10 @@ namespace rasm
 
             for (const auto &[handle, texture] : textureCache)
             {
-                vulkanContext.removeTexture(texture);
+                if (swapchainImageCache.find(handle) == swapchainImageCache.end()) // Only remove non-swapchain textures
+                {
+                    vulkanContext.removeTexture(texture);
+                }
             }
 
             for (const auto &[handle, shader] : shaderCache)
@@ -351,8 +371,7 @@ namespace rasm
             FenceHandle handle = engine->getNextFenceHandle();
             fence->handle = handle; // Fences might not need a handle in the same way as buffers/textures
 
-            // Optionally store in a cache if you want to manage fences similarly
-            // fenceCache[handle] = fence.value();
+            fenceCache[handle] = fence.value();
 
             return handle;
         }
@@ -379,6 +398,7 @@ namespace rasm
                 auto handle = engine->getNextTextureHandle();
                 image.handle = handle;
                 textureCache[handle] = image;
+                swapchainImageCache[handle] = image; // Store in swapchain-specific cache
                 handles.push_back(handle);
             }
             return handles;
@@ -840,7 +860,7 @@ namespace rasm
         }
     }
 
-    void RenderContext::bindVertexBuffer(const CommandBufferHandle &commandBuffer, const BufferHandle &buffer, uint64_t offset, uint64_t binding)
+    void RenderContext::bindVertexBuffer(const CommandBufferHandle &commandBuffer, const BufferHandle &buffer, uint64_t offset, uint32_t binding)
     {
         switch (backend)
         {
@@ -955,7 +975,7 @@ namespace rasm
     }
 
 
-    void RenderContext::drawIndexed(const CommandBufferHandle &commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint64_t vertexOffset, uint64_t firstIndex, uint64_t firstInstance)
+    void RenderContext::drawIndexed(const CommandBufferHandle &commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint32_t vertexOffset, uint32_t firstIndex, uint32_t firstInstance)
     {
         switch (backend)
         {

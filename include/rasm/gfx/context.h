@@ -44,11 +44,11 @@ namespace rasm
         bool                                submit(const CommandBufferHandle& commandBuffer, const std::vector<SemaphoreHandle>& waitSemaphores, const std::vector<SemaphoreHandle>& signalSemaphores, FenceHandle fence);
         bool                                present(uint32_t imageIndex, SemaphoreHandle waitSemaphore);
         void                                bindPipeline(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline);
-        void                                bindVertexBuffer(const CommandBufferHandle& commandBuffer, const BufferHandle& buffer, uint64_t offset, uint64_t binding = 0);
+        void                                bindVertexBuffer(const CommandBufferHandle& commandBuffer, const BufferHandle& buffer, uint64_t offset, uint32_t binding = 0);
         void                                bindIndexBuffer(const CommandBufferHandle& commandBuffer, const BufferHandle& buffer, uint64_t offset, Format indexType);
         void                                setUniform(const CommandBufferHandle& commandBuffer, const std::string& name, const void* data, size_t size);
         void                                draw(const CommandBufferHandle& commandBuffer, const uint32_t vertexCount, uint32_t instanceCount = 1);
-        void                                drawIndexed(const CommandBufferHandle& commandBuffer, uint32_t indexCount, uint32_t instanceCount = 1, uint64_t vertexOffset = 0, uint64_t firstIndex = 0, uint64_t firstInstance = 0);
+        void                                drawIndexed(const CommandBufferHandle& commandBuffer, uint32_t indexCount, uint32_t instanceCount = 1, uint32_t vertexOffset = 0, uint32_t firstIndex = 0, uint32_t firstInstance = 0);
 
     protected:
         Engine*                                                                         engine        = nullptr;
@@ -57,6 +57,7 @@ namespace rasm
         // TODO: make the cache non-vulkan specific.
         std::unordered_map<BufferHandle, gfx::BufferVKHandle, HandleHash>               bufferCache;
         std::unordered_map<TextureHandle, gfx::TextureVKHandle, HandleHash>             textureCache;
+        std::unordered_map<TextureHandle, gfx::TextureVKHandle, HandleHash>             swapchainImageCache;
         std::unordered_map<ShaderHandle, gfx::ShaderVKHandle, HandleHash>               shaderCache;
         std::unordered_map<PipelineHandle, gfx::PipelineVKHandle, HandleHash>           pipelineCache;
         std::unordered_map<CommandPoolHandle, gfx::CommandPoolVKHandle, HandleHash>     commandPoolCache;
