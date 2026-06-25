@@ -280,7 +280,6 @@ namespace rasm::gfx
             return {};
         }
 
-
         // Set a debug name for the shader module
         VkDebugUtilsObjectNameInfoEXT shaderNameInfo = {};
         shaderNameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
@@ -573,7 +572,6 @@ namespace rasm::gfx
             return {};
         }
 
-
         const auto &images = swapchainImagesResult.value();
         const auto &imageViews = swapchainImageViewsResult.value();
 
@@ -668,19 +666,13 @@ namespace rasm::gfx
 
                 srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
                 dstAccessMask = VK_ACCESS_2_NONE;
-
+                break;
             case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
-                dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+                dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR;
 
                 srcAccessMask = VK_ACCESS_2_NONE;
-                dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-
-                srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-
-                break;
-
+                dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
                 break;
             default:
                 spdlog::error("Unsupported new texture usage for layout transition.");

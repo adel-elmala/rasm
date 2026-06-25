@@ -59,11 +59,22 @@ namespace rasm
             // Assuming a fixed size for shader data buffer for simplicity
             ResourceDesc shaderDataBufferDesc{};
             shaderDataBufferDesc.type = ResourceDesc::Type::BUFFER;
-            shaderDataBufferDesc.name = "ShaderDataBuffer";
+            shaderDataBufferDesc.name = "ShaderDataBuffer for Frame " + std::to_string(i);
             shaderDataBufferDesc.buffer.size = 1024 * 1024; // 1 MB
             shaderDataBufferDesc.buffer.usage = BufferUsage::DEVICE_ADDRESS;
 
             frameResources[i].shaderDataBuffer = ctx.createBuffer(shaderDataBufferDesc);
+
+            // Create a depth texture.
+            auto depthTextureDesc = ResourceDesc{};
+            depthTextureDesc.type = ResourceDesc::Type::TEXTURE;
+            depthTextureDesc.name = "DepthTexture for Frame " + std::to_string(i);
+            depthTextureDesc.texture.width = static_cast<uint32_t>(config.windowWidth);
+            depthTextureDesc.texture.height = static_cast<uint32_t>(config.windowHeight);
+            depthTextureDesc.texture.format = Format::D24_UNORM_S8_UINT; // TODO: check this format
+            depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
+
+            frameResources[i].depthTexture = ctx.createTexture(depthTextureDesc);
         }
 
         // Create swapchain and associated resources
@@ -72,17 +83,7 @@ namespace rasm
         {
             swapchain.readyToPresentSemaphores.push_back(ctx.createSemaphore());
         }
-        swapchain.imageFormat = ctx.getSwapchainImageFormat(); 
-
-        // Create a depth texture.
-        auto depthTextureDesc = ResourceDesc{};
-        depthTextureDesc.type = ResourceDesc::Type::TEXTURE;
-        depthTextureDesc.name = "DepthTexture";
-        depthTextureDesc.texture.width = static_cast<uint32_t>(config.windowWidth);
-        depthTextureDesc.texture.height = static_cast<uint32_t>(config.windowHeight);
-        depthTextureDesc.texture.format = Format::D24_UNORM_S8_UINT; // TODO: check this format
-        depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
-        depthTexture = ctx.createTexture(depthTextureDesc);
+        swapchain.imageFormat = ctx.getSwapchainImageFormat();
     }
 
     Engine::~Engine()
@@ -325,10 +326,10 @@ namespace rasm
 
         // transition swapchain image to be ready for rendering
         ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
-        ctx.transitionImageLayout(currentFrame.commandBuffer, depthTexture, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
+        ctx.transitionImageLayout(currentFrame.commandBuffer, currentFrame.depthTexture, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
 
         // begin dynamic rendering
-        ctx.beginRendering(currentFrame.commandBuffer ,swapchain.imageHandles[imageIdx], depthTexture);
+        ctx.beginRendering(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], currentFrame.depthTexture);
         ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(config.windowWidth), static_cast<float>(config.windowHeight));
         ctx.setScissor(currentFrame.commandBuffer, 0, 0, config.windowWidth, config.windowHeight);
     }
@@ -376,7 +377,7 @@ namespace rasm
                 auto &meshComp = entity.getComponent<Mesh>();
 
                 auto bufferHandle = uploadMesh(meshComp.id());
-                if (!bufferHandle.isValid()) 
+                if (!bufferHandle.isValid())
                 {
                     spdlog::error("Failed to upload mesh for Entity {}. Skipping.", entity.id().index);
                     continue;
@@ -419,15 +420,13 @@ namespace rasm
             pipelineDesc.pipeline.depthStencilAttachmentFormat = depthFormat;
             pipelineDesc.pipeline.vertexInputLayout = {
                 .attributes = {
-                    {.binding = 0, .location = 0, .format = Format::R32G32B32_SFLOAT,.size = sizeof(float) * 3, .offset = 0, .used = true}, // position
+                    {.binding = 0, .location = 0, .format = Format::R32G32B32_SFLOAT, .size = sizeof(float) * 3, .offset = 0, .used = true},  // position
                     {.binding = 0, .location = 1, .format = Format::R32G32B32_SFLOAT, .size = sizeof(float) * 3, .offset = 12, .used = true}, // normal
-                    {.binding = 0, .location = 2, .format = Format::R32G32_SFLOAT, .size = sizeof(float) * 2, .offset = 24, .used = true}, // uv
-                    {.used = false}
-                },
+                    {.binding = 0, .location = 2, .format = Format::R32G32_SFLOAT, .size = sizeof(float) * 2, .offset = 24, .used = true},    // uv
+                    {.used = false}},
                 .binding = 0,
                 .stride = sizeof(Vertex),
-                .perInstance = false
-            };
+                .perInstance = false};
 
             auto pipeline = ctx.createPipeline(pipelineDesc);
             compiledScene.materialToPipeline[materialHandle] = pipeline;
@@ -440,7 +439,7 @@ namespace rasm
 
     void Engine::render(Scene &scene, Entity &camera)
     {
-        (void) camera;
+        (void)camera;
         this->window.pollEvents();
 
         auto compiledScene = compileScene(scene);
@@ -449,16 +448,15 @@ namespace rasm
         auto shaderDataBuffer = currentFrame.shaderDataBuffer;
 
         auto windowAspect = static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight);
-        auto camPos = glm::vec3(0.0f, 0.0f, -10.0f); // Example camera position
+        auto camPos = glm::vec3(0.0f, 0.0f, -5.0f); // Example camera position
 
         auto projection = glm::perspective(glm::radians(45.0f), windowAspect, 0.1f, 32.0f);
         auto view = glm::translate(glm::mat4(1.0f), camPos);
-        auto model = glm::scale(glm::mat4(1.0f), glm::vec3(0.1f));
+        auto model = glm::scale(glm::mat4(1.0f), glm::vec3(0.01f));
 
         ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), 0);
         ctx.fillBuffer(shaderDataBuffer, &view, sizeof(view), sizeof(projection));
         ctx.fillBuffer(shaderDataBuffer, &model, sizeof(model), sizeof(projection) + sizeof(view));
-
 
         auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
 
@@ -477,7 +475,7 @@ namespace rasm
             }
         }
 
-        #if 0
+#if 0
         for (Entity &entity : scene.entities)
         {
             if (entity.hasComponent<Mesh>() && entity.hasComponent<Material>() && entity.hasComponent<Transform>())
@@ -501,7 +499,7 @@ namespace rasm
         spdlog::info("Camera Entity {}, Type: {}",
                      camera.id().index,
                      cameraComp.type == CameraType::PERSPECTIVE ? "Perspective" : "Orthographic");
-        #endif
+#endif
     }
 
     bool Engine::running() const

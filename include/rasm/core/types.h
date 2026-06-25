@@ -160,6 +160,7 @@ namespace rasm
         SemaphoreHandle     readyToDrawSemaphore;
         FenceHandle         inFlightFence;
         BufferHandle        shaderDataBuffer;
+        TextureHandle       depthTexture;
     };
 
     struct Swapchain
