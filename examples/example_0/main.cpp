@@ -25,7 +25,7 @@ int main() {
     rasm::Scene scene = engine.createScene();
 
     // 3. Load resources
-    rasm::MeshHandle cubeMesh = engine.loadMesh("assets/models/Box.glb");
+    rasm::MeshHandle cubeMesh = engine.loadMesh("assets/models/bunny.obj");
     rasm::TextureHandle albedoTexture = engine.loadTexture("assets/textures/test0.jpg");
     rasm::TextureHandle normalTexture = engine.loadTexture("assets/textures/test1.jpg");
 

@@ -22,6 +22,11 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#include "glm/glm.hpp"
+#include "glm/gtc/matrix_transform.hpp"
+#include "glm/gtc/quaternion.hpp"
+
 namespace rasm
 {
 
@@ -56,7 +61,7 @@ namespace rasm
             shaderDataBufferDesc.type = ResourceDesc::Type::BUFFER;
             shaderDataBufferDesc.name = "ShaderDataBuffer";
             shaderDataBufferDesc.buffer.size = 1024 * 1024; // 1 MB
-            shaderDataBufferDesc.buffer.usage = BufferUsage::UNIFORM;
+            shaderDataBufferDesc.buffer.usage = BufferUsage::DEVICE_ADDRESS;
 
             frameResources[i].shaderDataBuffer = ctx.createBuffer(shaderDataBufferDesc);
         }
@@ -267,10 +272,11 @@ namespace rasm
             auto bufferDesc = ResourceDesc{};
             bufferDesc.name = "OBJ Vertex + index Buffer";
             bufferDesc.type = ResourceDesc::Type::BUFFER;
-            bufferDesc.buffer.size = objRaw.vertices.size() * sizeof(Vertex) + objRaw.indices.size() * sizeof(uint32_t);
-            bufferDesc.buffer.stride = sizeof(Vertex);
-            bufferDesc.buffer.offset = objRaw.vertices.size() * sizeof(Vertex);
             bufferDesc.buffer.usage = BufferUsage::VERTEXINDEX;
+            bufferDesc.buffer.size = objRaw.vertices.size() * sizeof(Vertex) + objRaw.indices.size() * sizeof(uint32_t);
+            bufferDesc.buffer.vertexIndexBuffer.indexCount = objRaw.indices.size();
+            bufferDesc.buffer.vertexIndexBuffer.vertexCount = objRaw.vertices.size();
+            bufferDesc.buffer.vertexIndexBuffer.offset = objRaw.vertices.size() * sizeof(Vertex);
 
             auto bufferHandle = ctx.createBuffer(bufferDesc);
 
@@ -413,9 +419,9 @@ namespace rasm
             pipelineDesc.pipeline.depthStencilAttachmentFormat = depthFormat;
             pipelineDesc.pipeline.vertexInputLayout = {
                 .attributes = {
-                    {.binding = 0, .location = 0, .format = Format::R32G32B32_SFLOAT,.size = sizeof(float) * 3, .offset = 0}, // position
-                    {.binding = 0, .location = 1, .format = Format::R32G32B32_SFLOAT, .size = sizeof(float) * 3, .offset = 12}, // normal
-                    {.binding = 0, .location = 2, .format = Format::R32G32_SFLOAT, .size = sizeof(float) * 2, .offset = 24}, // uv
+                    {.binding = 0, .location = 0, .format = Format::R32G32B32_SFLOAT,.size = sizeof(float) * 3, .offset = 0, .used = true}, // position
+                    {.binding = 0, .location = 1, .format = Format::R32G32B32_SFLOAT, .size = sizeof(float) * 3, .offset = 12, .used = true}, // normal
+                    {.binding = 0, .location = 2, .format = Format::R32G32_SFLOAT, .size = sizeof(float) * 2, .offset = 24, .used = true}, // uv
                     {.used = false}
                 },
                 .binding = 0,
@@ -440,16 +446,34 @@ namespace rasm
         auto compiledScene = compileScene(scene);
         auto &currentFrame = frameResources[frameCount];
         auto commandBuffer = currentFrame.commandBuffer;
+        auto shaderDataBuffer = currentFrame.shaderDataBuffer;
+
+        auto windowAspect = static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight);
+        auto camPos = glm::vec3(0.0f, 0.0f, -10.0f); // Example camera position
+
+        auto projection = glm::perspective(glm::radians(45.0f), windowAspect, 0.1f, 32.0f);
+        auto view = glm::translate(glm::mat4(1.0f), camPos);
+        auto model = glm::scale(glm::mat4(1.0f), glm::vec3(0.1f));
+
+        ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), 0);
+        ctx.fillBuffer(shaderDataBuffer, &view, sizeof(view), sizeof(projection));
+        ctx.fillBuffer(shaderDataBuffer, &model, sizeof(model), sizeof(projection) + sizeof(view));
+
+
+        auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
 
         for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
         {
-            ctx.bindPipeline(commandBuffer, compiledScene.materialToPipeline[materialHandle]);
+            auto pipeline = compiledScene.materialToPipeline[materialHandle];
+            ctx.bindPipeline(commandBuffer, pipeline);
             for (const auto &entityHandle : entitySet)
             {
                 auto bufferHandle = compiledScene.meshData[entityHandle];
+                auto desc = ctx.getResourceDesc(bufferHandle);
                 ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
-                ctx.bindIndexBuffer(commandBuffer, bufferHandle, 0, Format::U32_UINT);
-                ctx.drawIndexed(commandBuffer, 3, 1, 0, 0, 0);
+                ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.vertexIndexBuffer.offset, Format::U32_UINT);
+                ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX, &shaderDataBufferAddress, sizeof(shaderDataBufferAddress), 0);
+                ctx.drawIndexed(commandBuffer, desc.buffer.vertexIndexBuffer.indexCount, 1, 0, 0, 0);
             }
         }
 

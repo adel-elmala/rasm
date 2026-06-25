@@ -462,6 +462,47 @@ namespace rasm
         }
     }
 
+    uint64_t RenderContext::getBufferDeviceAddress(const BufferHandle &buffer)
+    {
+        auto it = bufferCache.find(buffer);
+        if (it == bufferCache.end())
+        {
+            spdlog::error("Buffer handle not found in cache during getBufferDeviceAddress.");
+            return 0;
+        }
+
+        auto gpuBuffer = it->second;
+
+        if (gpuBuffer.desc.type != ResourceDesc::Type::BUFFER || gpuBuffer.desc.buffer.usage != BufferUsage::DEVICE_ADDRESS)
+        {
+            spdlog::error("Buffer is not of type DEVICE_ADDRESS during getBufferDeviceAddress.");
+            return 0;
+        }
+        return gpuBuffer.desc.buffer.deviceAddressBuffer.address;
+    }
+
+    ResourceDesc RenderContext::getResourceDesc(const BufferHandle &buffer)
+    {
+        auto it = bufferCache.find(buffer);
+        if (it == bufferCache.end())
+        {
+            spdlog::error("Buffer handle not found in cache during getResourceDesc.");
+            return {};
+        }
+        return it->second.desc;
+    }
+
+    ResourceDesc RenderContext::getResourceDesc(const TextureHandle &texture)
+    {
+        auto it = textureCache.find(texture);
+        if (it == textureCache.end())
+        {
+            spdlog::error("Texture handle not found in cache during getResourceDesc.");
+            return {};
+        }
+        return it->second.desc;
+    }
+
     bool RenderContext::waitForFence(FenceHandle fence, uint64_t timeout)
     {
         switch (backend)
@@ -924,6 +965,38 @@ namespace rasm
         }
     }
 
+    void RenderContext::pushConstants(const CommandBufferHandle &commandBuffer, const PipelineHandle &pipeline, ShaderType stage, const void *data, uint32_t size, uint32_t offset)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto commandBufferIt = commandBufferCache.find(commandBuffer);
+            auto pipelineIt = pipelineCache.find(pipeline);
+            if (commandBufferIt == commandBufferCache.end())
+            {
+                spdlog::error("Command buffer handle not found in cache during push constants.");
+                return;
+            }
+            if (pipelineIt == pipelineCache.end())
+            {
+                spdlog::error("Pipeline handle not found in cache during push constants.");
+                return;
+            }
+
+            vulkanContext.pushConstants(commandBufferIt->second, pipelineIt->second, stage, data, size, offset);
+            break;
+        }
+        case Backend::DX12:
+            break;
+        case Backend::METAL:
+            break;
+        default:
+            spdlog::error("Unsupported backend during push constants.");
+            break;
+        }
+    }
+
     void RenderContext::setUniform(const CommandBufferHandle &commandBuffer, const std::string &name, const void *data, size_t size)
     {
         switch (backend)
@@ -973,7 +1046,6 @@ namespace rasm
             break;
         }
     }
-
 
     void RenderContext::drawIndexed(const CommandBufferHandle &commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint32_t vertexOffset, uint32_t firstIndex, uint32_t firstInstance)
     {

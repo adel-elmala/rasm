@@ -25,7 +25,8 @@ namespace rasm
         INDEX,
         VERTEXINDEX,
         UNIFORM,
-        STORAGE
+        STORAGE,
+        DEVICE_ADDRESS,
     };
 
     enum class TextureUsage
@@ -45,6 +46,8 @@ namespace rasm
     enum class Format
     {
         R8G8B8A8_UNORM,
+        R8G8B8A8_SRGB,
+        B8G8R8A8_SRGB,
         R16G16B16A16_SFLOAT,
         R32G32B32_SFLOAT,
         D24_UNORM_S8_UINT,
@@ -244,10 +247,37 @@ namespace rasm
             // Buffer-specific data
             struct
             {
-                uint64_t        size;
-                uint64_t        stride;
-                uint64_t        offset;
                 BufferUsage     usage;
+                uint64_t        size;
+                union {
+                    struct {
+                        uint64_t        indexCount;
+                        uint64_t        vertexCount;
+                        uint64_t        offset;
+                    } vertexIndexBuffer;
+
+                    struct {
+                        uint64_t        vertexCount;
+                        uint64_t        offset;
+                    } vertexBuffer;
+
+                    struct {
+                        uint64_t        indexCount;
+                        uint64_t        offset;
+                    } indexBuffer;
+
+                    struct {
+                        uint64_t        offset;
+                    } uniformBuffer;
+
+                    struct {
+                        uint64_t        offset;
+                    } storageBuffer;
+
+                    struct {
+                        uint64_t        address;
+                    } deviceAddressBuffer;
+                };
             } buffer;
 
             // Shader-specific data
@@ -284,8 +314,10 @@ namespace rasm
                        texture.usage == other.texture.usage;
             case Type::BUFFER:
                 return buffer.size == other.buffer.size &&
-                       buffer.stride == other.buffer.stride &&
-                       buffer.usage == other.buffer.usage;
+                       buffer.usage == other.buffer.usage &&
+                       buffer.vertexIndexBuffer.indexCount == other.buffer.vertexIndexBuffer.indexCount &&
+                       buffer.vertexIndexBuffer.vertexCount == other.buffer.vertexIndexBuffer.vertexCount &&
+                       buffer.vertexIndexBuffer.offset == other.buffer.vertexIndexBuffer.offset;
             case Type::SHADER:
                 return shader.shaderType == other.shader.shaderType &&
                        shader.sourceSize == other.shader.sourceSize &&
@@ -320,8 +352,10 @@ namespace rasm
             case ResourceDesc::Type::BUFFER:
                 return std::hash<std::string>()(desc.name) ^
                        std::hash<uint64_t>()(desc.buffer.size) ^
-                       std::hash<uint64_t>()(desc.buffer.stride) ^
-                       std::hash<uint64_t>()(static_cast<uint64_t>(desc.buffer.usage));
+                       std::hash<uint64_t>()(static_cast<uint64_t>(desc.buffer.usage)) ^
+                       std::hash<uint64_t>()(desc.buffer.vertexIndexBuffer.indexCount) ^
+                       std::hash<uint64_t>()(desc.buffer.vertexIndexBuffer.vertexCount) ^
+                       std::hash<uint64_t>()(desc.buffer.vertexIndexBuffer.offset);
             case ResourceDesc::Type::SHADER:
                 return std::hash<std::string>()(desc.name) ^
                        std::hash<uint64_t>()(desc.shader.sourceSize) ^

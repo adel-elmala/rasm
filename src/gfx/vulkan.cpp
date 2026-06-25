@@ -30,6 +30,7 @@ namespace rasm::gfx
     Format                              _to_format(VkFormat format);
     VkIndexType                         _to_vk_index_type(Format format);
     VkPrimitiveTopology                 _to_vk_topology(PrimitiveTopology topology);
+    VkShaderStageFlags                  _to_vk_shader_stage_flags(ShaderType stage);
     VkImageAspectFlags                  _to_vk_aspect_mask(TextureUsage usage);
     const char *                        _to_vk_result_string(VkResult result);
 
@@ -169,6 +170,13 @@ namespace rasm::gfx
         {
             spdlog::error("Failed to create buffer. Error: {}", _to_vk_result_string(result));
             return {};
+        }
+
+        if (desc.buffer.usage == BufferUsage::DEVICE_ADDRESS)
+        {
+            VkBufferDeviceAddressInfo bufferAddressInfo = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+            bufferAddressInfo.buffer = buffer;
+            desc.buffer.deviceAddressBuffer.address = vkGetBufferDeviceAddress(this->device.device, &bufferAddressInfo);
         }
 
         // Set a debug name for the buffer
@@ -357,13 +365,13 @@ namespace rasm::gfx
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                 .stage = VK_SHADER_STAGE_VERTEX_BIT,
                 .module = vertexShader.module,
-                .pName = "main",
+                .pName = "vertMain",
             },
             {
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                 .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
                 .module = fragmentShader.module,
-                .pName = "main",
+                .pName = "fragMain",
             }};
 
         VkPipelineViewportStateCreateInfo viewportStateInfo = {
@@ -557,14 +565,17 @@ namespace rasm::gfx
     std::vector<TextureVKHandle> VulkanContext::getSwapchainImages()
     {
         auto swapchainImagesResult = swapchain.get_images();
+        auto swapchainImageViewsResult = swapchain.get_image_views();
 
-        if (!swapchainImagesResult)
+        if (!swapchainImagesResult || !swapchainImageViewsResult)
         {
-            spdlog::error("Failed to get swapchain images or image views. Error: {}", swapchainImagesResult.error().message());
+            spdlog::error("Failed to get swapchain images or image views. Error: {} {}", swapchainImagesResult.error().message(), swapchainImageViewsResult.error().message());
             return {};
         }
 
+
         const auto &images = swapchainImagesResult.value();
+        const auto &imageViews = swapchainImageViewsResult.value();
 
         std::vector<TextureVKHandle> imageHandles;
         ResourceDesc desc{};
@@ -576,7 +587,7 @@ namespace rasm::gfx
 
         for (size_t i = 0; i < images.size(); i++)
         {
-            TextureVKHandle handle = {desc, {}, images[i], {}, {}};
+            TextureVKHandle handle = {desc, {}, images[i], imageViews[i], {}};
             imageHandles.push_back(handle);
         }
 
@@ -910,6 +921,12 @@ namespace rasm::gfx
         vkCmdBindIndexBuffer(commandBuffer.commandBuffer, buffer.buffer, offset, vkIndexType);
     }
 
+    void VulkanContext::pushConstants(const CommandBufferVKHandle &commandBuffer, const PipelineVKHandle &pipeline, ShaderType stage, const void *data, uint32_t size, uint32_t offset)
+    {
+        auto stageFlags = _to_vk_shader_stage_flags(stage);
+        vkCmdPushConstants(commandBuffer.commandBuffer, pipeline.layout, stageFlags, offset, size, data);
+    }
+
     void VulkanContext::setUniform(const CommandBufferVKHandle &commandBuffer, const std::string &name, const void *data, size_t size)
     {
         commandBuffer;
@@ -1172,8 +1189,25 @@ namespace rasm::gfx
             return VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
         case BufferUsage::STORAGE:
             return VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        case BufferUsage::DEVICE_ADDRESS:
+            return VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
         default:
             return static_cast<VkBufferUsageFlags>(0);
+        }
+    }
+
+    VkShaderStageFlags _to_vk_shader_stage_flags(ShaderType stage)
+    {
+        switch (stage)
+        {
+        case ShaderType::VERTEX:
+            return VK_SHADER_STAGE_VERTEX_BIT;
+        case ShaderType::FRAGMENT:
+            return VK_SHADER_STAGE_FRAGMENT_BIT;
+        case ShaderType::COMPUTE:
+            return VK_SHADER_STAGE_COMPUTE_BIT;
+        default:
+            return static_cast<VkShaderStageFlags>(0);
         }
     }
 
@@ -1210,6 +1244,10 @@ namespace rasm::gfx
             return VK_FORMAT_R16G16B16A16_SFLOAT;
         case Format::D24_UNORM_S8_UINT:
             return VK_FORMAT_D24_UNORM_S8_UINT;
+        case Format::R8G8B8A8_SRGB:
+            return VK_FORMAT_R8G8B8A8_SRGB;
+        case Format::B8G8R8A8_SRGB:
+            return VK_FORMAT_B8G8R8A8_SRGB;
         case Format::UNKNOWN:
             return VK_FORMAT_UNDEFINED;
         default:
@@ -1240,6 +1278,10 @@ namespace rasm::gfx
             return Format::R32G32_SFLOAT;
         case VK_FORMAT_R8G8B8A8_UNORM:
             return Format::R8G8B8A8_UNORM;
+        case VK_FORMAT_R8G8B8A8_SRGB:
+            return Format::R8G8B8A8_SRGB;
+        case VK_FORMAT_B8G8R8A8_SRGB:
+            return Format::B8G8R8A8_SRGB;
         case VK_FORMAT_R16G16B16A16_SFLOAT:
             return Format::R16G16B16A16_SFLOAT;
         case VK_FORMAT_D24_UNORM_S8_UINT:

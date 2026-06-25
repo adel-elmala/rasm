@@ -47,8 +47,8 @@ namespace rasm
         case MaterialTemplate::PBR:
         case MaterialTemplate::UNLIT:
         {
-            std::string vertPath = "assets/shaders/build/basic_vert.spv";
-            std::string fragPath = "assets/shaders/build/basic_frag.spv";
+            std::string vertPath = "./shaders/build/0.spv";
+            std::string fragPath = "./shaders/build/0.spv";
 
             std::ifstream vertFile(vertPath, std::ios::binary | std::ios::ate);
             if (!vertFile)

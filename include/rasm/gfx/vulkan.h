@@ -52,6 +52,7 @@ namespace rasm
             void                                    bindVertexBuffer(const CommandBufferVKHandle& commandBuffer, const BufferVKHandle& buffer, uint64_t offset, uint32_t binding = 0);
             void                                    bindIndexBuffer(const CommandBufferVKHandle& commandBuffer, const BufferVKHandle& buffer, uint64_t offset, Format indexType);
             void                                    setUniform(const CommandBufferVKHandle& commandBuffer, const std::string& name, const void* data, size_t size);
+            void                                    pushConstants(const CommandBufferVKHandle& commandBuffer, const PipelineVKHandle& pipeline, ShaderType stage, const void* data, uint32_t size, uint32_t offset = 0);
             void                                    draw(const CommandBufferVKHandle& commandBuffer, uint32_t vertexCount, uint32_t instanceCount = 1);
             void                                    drawIndexed(const CommandBufferVKHandle& commandBuffer, uint32_t indexCount, uint32_t instanceCount = 1, uint32_t vertexOffset = 0, uint32_t firstIndex = 0, uint32_t firstInstance = 0);
             bool                                    waitForFence(const FenceVKHandle& fence, uint64_t timeout = UINT64_MAX);
@@ -81,7 +82,6 @@ namespace rasm
             VkSurfaceKHR        surface                     = VK_NULL_HANDLE;
             uint32_t            graphics_queue_family_index = 0;
             uint32_t            current_swapchain_image     = 0;
-
         };
     }
 }

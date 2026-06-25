@@ -29,6 +29,9 @@ namespace rasm
         FenceHandle                         createFence(bool signaled = false);
         std::vector<TextureHandle>          getSwapchainImages();
         Format                              getSwapchainImageFormat();
+        uint64_t                            getBufferDeviceAddress(const BufferHandle& buffer);
+        ResourceDesc                        getResourceDesc(const BufferHandle& buffer);
+        ResourceDesc                        getResourceDesc(const TextureHandle& texture);
         bool                                waitForFence(FenceHandle fence, uint64_t timeout = UINT64_MAX);
         bool                                resetFence(FenceHandle fence);
         bool                                acquireNextImage(SemaphoreHandle signalSemaphore, uint64_t timeout, uint32_t& imageIndex);
@@ -46,6 +49,7 @@ namespace rasm
         void                                bindPipeline(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline);
         void                                bindVertexBuffer(const CommandBufferHandle& commandBuffer, const BufferHandle& buffer, uint64_t offset, uint32_t binding = 0);
         void                                bindIndexBuffer(const CommandBufferHandle& commandBuffer, const BufferHandle& buffer, uint64_t offset, Format indexType);
+        void                                pushConstants(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline, ShaderType stage, const void* data, uint32_t size, uint32_t offset = 0);
         void                                setUniform(const CommandBufferHandle& commandBuffer, const std::string& name, const void* data, size_t size);
         void                                draw(const CommandBufferHandle& commandBuffer, const uint32_t vertexCount, uint32_t instanceCount = 1);
         void                                drawIndexed(const CommandBufferHandle& commandBuffer, uint32_t indexCount, uint32_t instanceCount = 1, uint32_t vertexOffset = 0, uint32_t firstIndex = 0, uint32_t firstInstance = 0);
