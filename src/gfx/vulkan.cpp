@@ -102,9 +102,26 @@ namespace rasm::gfx
         if (!vkb_swapchain)
             return false;
 
-        this->swapchain = vkb_swapchain.value();
-        this->swapchain_image_format = swapchain.image_format;
-        this->swapchain_image_count = swapchain.image_count;
+        this->swapchain.swapchain = vkb_swapchain.value();
+        this->swapchain.imageFormat = _to_format(swapchain.swapchain.image_format);
+        this->swapchain.imageCount = swapchain.swapchain.image_count;
+        auto images = swapchain.swapchain.get_images().value();
+        auto views = swapchain.swapchain.get_image_views().value();
+
+        for (uint32_t i = 0; i < swapchain.swapchain.image_count; ++i)
+        {
+            TextureVKHandle imageHandle;
+            imageHandle.handle = {};
+            imageHandle.image = images[i];
+            imageHandle.view = views[i];
+            imageHandle.desc.type = ResourceDesc::Type::TEXTURE;
+            imageHandle.desc.texture.width = swapchain.swapchain.extent.width;
+            imageHandle.desc.texture.height = swapchain.swapchain.extent.height;
+            imageHandle.desc.texture.format = swapchain.imageFormat;
+            imageHandle.desc.texture.usage = TextureUsage::COLOR_ATTACHMENT;
+
+            this->swapchain.images.push_back(imageHandle);
+        }
 
         // create VMA allocator
         VmaVulkanFunctions vkFunctions{
@@ -133,9 +150,12 @@ namespace rasm::gfx
     {
         waitIdle();
 
-        auto imageViews = swapchain.get_image_views().value();
-        swapchain.destroy_image_views(imageViews.size(), imageViews.data());
-        vkb::destroy_swapchain(swapchain);
+        for (auto &imageHandle : swapchain.images)
+        {
+            vkDestroyImageView(device.device, imageHandle.view, nullptr);
+        }
+
+        vkb::destroy_swapchain(swapchain.swapchain);
         vmaDestroyAllocator(allocator);
         vkb::destroy_device(device);
         vkb::destroy_surface(instance, surface);
@@ -563,43 +583,17 @@ namespace rasm::gfx
 
     std::vector<TextureVKHandle> VulkanContext::getSwapchainImages()
     {
-        auto swapchainImagesResult = swapchain.get_images();
-        auto swapchainImageViewsResult = swapchain.get_image_views();
-
-        if (!swapchainImagesResult || !swapchainImageViewsResult)
-        {
-            spdlog::error("Failed to get swapchain images or image views. Error: {} {}", swapchainImagesResult.error().message(), swapchainImageViewsResult.error().message());
-            return {};
-        }
-
-        const auto &images = swapchainImagesResult.value();
-        const auto &imageViews = swapchainImageViewsResult.value();
-
-        std::vector<TextureVKHandle> imageHandles;
-        ResourceDesc desc{};
-        desc.type = ResourceDesc::Type::TEXTURE;
-        desc.texture.width = swapchain.extent.width;
-        desc.texture.height = swapchain.extent.height;
-        desc.texture.format = _to_format(swapchain.image_format);
-        desc.texture.usage = TextureUsage::COLOR_ATTACHMENT;
-
-        for (size_t i = 0; i < images.size(); i++)
-        {
-            TextureVKHandle handle = {desc, {}, images[i], imageViews[i], {}};
-            imageHandles.push_back(handle);
-        }
-
-        return imageHandles;
+        return swapchain.images;
     }
 
     Format VulkanContext::getSwapchainImageFormat()
     {
-        return _to_format(swapchain.image_format);
+        return _to_format(swapchain.swapchain.image_format);
     }
 
     std::optional<SwapchainVKHandle> VulkanContext::recreateSwapchain()
     {
-        auto swapchain_ret = _recreate_swapchain(this->device, this->swapchain);
+        auto swapchain_ret = _recreate_swapchain(this->device, this->swapchain.swapchain);
 
         if (!swapchain_ret)
         {
@@ -607,9 +601,29 @@ namespace rasm::gfx
             return {};
         }
 
-        this->swapchain = swapchain_ret.value();
-        SwapchainVKHandle rawHandle = {{}, swapchain};
-        return rawHandle;
+        this->swapchain.swapchain = swapchain_ret.value();
+        this->swapchain.imageFormat = _to_format(swapchain.swapchain.image_format);
+        this->swapchain.imageCount = swapchain.swapchain.image_count;
+
+        auto images = swapchain.swapchain.get_images().value();
+        auto views = swapchain.swapchain.get_image_views().value();
+
+        for (uint32_t i = 0; i < swapchain.swapchain.image_count; ++i)
+        {
+            TextureVKHandle imageHandle;
+            imageHandle.handle = {};
+            imageHandle.image = images[i];
+            imageHandle.view = views[i];
+            imageHandle.desc.type = ResourceDesc::Type::TEXTURE;
+            imageHandle.desc.texture.width = swapchain.swapchain.extent.width;
+            imageHandle.desc.texture.height = swapchain.swapchain.extent.height;
+            imageHandle.desc.texture.format = swapchain.imageFormat;
+            imageHandle.desc.texture.usage = TextureUsage::COLOR_ATTACHMENT;
+
+            this->swapchain.images.push_back(imageHandle);
+        }
+
+        return this->swapchain;
     }
 
     void VulkanContext::fillBuffer(const BufferVKHandle &buffer, const void *data, size_t size, size_t offset)
@@ -846,7 +860,7 @@ namespace rasm::gfx
             .waitSemaphoreCount = 1,
             .pWaitSemaphores = &waitSemaphore.semaphore,
             .swapchainCount = 1,
-            .pSwapchains = &this->swapchain.swapchain,
+            .pSwapchains = &this->swapchain.swapchain.swapchain,
             .pImageIndices = &imageIndex};
 
         auto result = vkQueuePresentKHR(this->graphics_queue, &presentInfo);

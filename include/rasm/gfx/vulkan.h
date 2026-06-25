@@ -76,9 +76,7 @@ namespace rasm
             vkb::Device         device                      = {};
             vkb::DispatchTable  dispatch_table              = {};
             VkQueue             graphics_queue              = {};
-            vkb::Swapchain      swapchain                   = {};
-            VkFormat            swapchain_image_format      = VK_FORMAT_UNDEFINED;
-            size_t              swapchain_image_count       = 0;
+            SwapchainVKHandle   swapchain                   = {};
             VkSurfaceKHR        surface                     = VK_NULL_HANDLE;
             uint32_t            graphics_queue_family_index = 0;
             uint32_t            current_swapchain_image     = 0;

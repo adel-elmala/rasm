@@ -73,6 +73,9 @@ namespace rasm::gfx
     {
         SwapchainHandle handle;
         vkb::Swapchain swapchain;
+        std::vector<TextureVKHandle> images;
+        Format imageFormat;
+        uint32_t imageCount;
     };
 }
 // clang-format on
