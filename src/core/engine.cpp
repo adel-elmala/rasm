@@ -29,6 +29,21 @@
 
 namespace rasm
 {
+    ShaderCompiler::Target getShaderCompilerTarget(rasm::Backend backend)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+            return ShaderCompiler::Target::SPIRV;
+        case Backend::DX12:
+            return ShaderCompiler::Target::HLSL;
+        case Backend::METAL:
+            return ShaderCompiler::Target::MSL;
+        default:
+            spdlog::error("Unsupported backend for shader compilation.");
+            return ShaderCompiler::Target::SPIRV; // Default to SPIR-V
+        }
+    }
 
     Engine::Engine(const EngineConfig &config) : config(config)
     {
@@ -83,6 +98,13 @@ namespace rasm
             swapchain.readyToPresentSemaphores.push_back(ctx.createSemaphore());
         }
         swapchain.imageFormat = ctx.getSwapchainImageFormat();
+
+        auto shaderTarget = getShaderCompilerTarget(config.preferredBackend);
+        if (!shaderCompiler.initialize(shaderTarget))
+        {
+            spdlog::error("Failed to initialize shader compiler.");
+            isRunning = false;
+        }
     }
 
     Engine::~Engine()
@@ -130,6 +152,7 @@ namespace rasm
         if (supportedMeshExtensions.find(extension) == supportedMeshExtensions.end())
         {
             spdlog::error("Unsupported mesh format: {}", extension);
+            isRunning = false;
             return MeshHandle{};
         }
 
@@ -223,6 +246,7 @@ namespace rasm
         if (supportedTextureExtensions.find(extension) == supportedTextureExtensions.end())
         {
             spdlog::error("Unsupported texture format: {}", extension);
+            isRunning = false;
             return TextureHandle{};
         }
 
@@ -232,6 +256,7 @@ namespace rasm
         if (!data)
         {
             spdlog::error("Failed to load texture: {}", path);
+            isRunning = false;
             return TextureHandle{};
         }
 
@@ -255,6 +280,7 @@ namespace rasm
         if (it == meshData.end())
         {
             spdlog::error("Mesh handle not found for upload.");
+            isRunning = false;
             return BufferHandle{};
         }
 
@@ -287,6 +313,7 @@ namespace rasm
         else
         {
             spdlog::error("Unknown mesh type for upload.");
+            isRunning = false;
             return BufferHandle{};
         }
 
@@ -399,6 +426,7 @@ namespace rasm
         if (!scene.isValid())
         {
             spdlog::error("Invalid scene handle for compilation.");
+            isRunning = false;
             return CompiledScene{};
         }
 
@@ -420,6 +448,7 @@ namespace rasm
                 if (!bufferHandle.isValid())
                 {
                     spdlog::error("Failed to upload mesh for Entity {}. Skipping.", entity.id().index);
+                    isRunning = false;
                     continue;
                 }
 
@@ -438,19 +467,23 @@ namespace rasm
             pipelineDesc.type = ResourceDesc::Type::GRAPHICS_PIPELINE;
             pipelineDesc.name = "Pipeline for Material " + std::to_string(materialHandle.index);
 
-            auto [vertSrc, fragSrc] = Material::getShaderSources(materialHandle, MaterialTemplate::BASIC); // TODO: pick the right material
+            auto shaderPath = Material::getShaderSources(materialHandle, MaterialTemplate::BASIC); // TODO: pick the right material
+
+            auto shaderName = shaderPath.substr(shaderPath.find_last_of("/\\") + 1);
+            auto vertShader = shaderCompiler.compile(shaderPath, shaderName + ".vert.slang","vertMain");
+            auto fragShader = shaderCompiler.compile(shaderPath, shaderName + ".frag.slang","fragMain");
 
             auto shaderDesc = ResourceDesc{};
             shaderDesc.type = ResourceDesc::Type::SHADER;
             shaderDesc.shader.shaderType = ShaderType::VERTEX;
-            shaderDesc.shader.sourceSize = vertSrc.size();
-            shaderDesc.shader.source = vertSrc.data();
+            shaderDesc.shader.sourceSize = vertShader.size();
+            shaderDesc.shader.source = reinterpret_cast<const char*>(vertShader.data());
 
             pipelineDesc.pipeline.vertexShader = ctx.createShader(shaderDesc);
 
             shaderDesc.shader.shaderType = ShaderType::FRAGMENT;
-            shaderDesc.shader.sourceSize = fragSrc.size();
-            shaderDesc.shader.source = fragSrc.data();
+            shaderDesc.shader.sourceSize = fragShader.size();
+            shaderDesc.shader.source = reinterpret_cast<const char*>(fragShader.data());
 
             pipelineDesc.pipeline.fragmentShader = ctx.createShader(shaderDesc);
 
@@ -487,7 +520,7 @@ namespace rasm
         auto shaderDataBuffer = currentFrame.shaderDataBuffer;
 
         auto windowAspect = static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight);
-        auto camPos = glm::vec3(0.0f, 0.0f, -5.0f); // Example camera position
+        auto camPos = glm::vec3(0.0f, 0.0f, -1.0f); // Example camera position
 
         auto projection = glm::perspective(glm::radians(45.0f), windowAspect, 0.1f, 32.0f);
         auto view = glm::translate(glm::mat4(1.0f), camPos);
@@ -513,32 +546,6 @@ namespace rasm
                 ctx.drawIndexed(commandBuffer, static_cast<uint32_t>(desc.buffer.vertexIndexBuffer.indexCount), 1, 0, 0, 0);
             }
         }
-
-#if 0
-        for (Entity &entity : scene.entities)
-        {
-            if (entity.hasComponent<Mesh>() && entity.hasComponent<Material>() && entity.hasComponent<Transform>())
-            {
-                // In a real implementation, this is where we'd issue draw calls to the GPU.
-                // For this example, we'll just log the entity ID and its mesh/material.
-                auto &meshComp = entity.getComponent<Mesh>();
-                auto &matComp = entity.getComponent<Material>();
-                spdlog::info("Rendering Entity {} with Mesh {} and Material {}",
-                             entity.id().index, meshComp.id().index, matComp.id().index);
-            }
-            else if (entity.hasComponent<Light>())
-            {
-                auto &lightComp = entity.getComponent<Light>();
-                spdlog::info("Light Entity {}, Color: ({}, {}, {}), Intensity: {}",
-                             entity.id().index, lightComp.color.r, lightComp.color.g, lightComp.color.b, lightComp.intensity);
-            }
-        }
-
-        auto &cameraComp = camera.getComponent<Camera>();
-        spdlog::info("Camera Entity {}, Type: {}",
-                     camera.id().index,
-                     cameraComp.type == CameraType::PERSPECTIVE ? "Perspective" : "Orthographic");
-#endif
     }
 
     bool Engine::running() const

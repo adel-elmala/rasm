@@ -48,7 +48,7 @@ namespace rasm
         [[nodiscard]]   MaterialHandle id() const;
         void            setTexture(PbrSlot slot, TextureHandle texture);
         void            setFloat(PbrParam param, float value);
-        static std::pair<std::vector<char>, std::vector<char>> getShaderSources(const MaterialHandle& handle, MaterialTemplate type);
+        static std::string getShaderSources(const MaterialHandle& handle, MaterialTemplate type);
 
     private:
         std::array<TextureHandle, static_cast<std::size_t>(PbrSlot::COUNT)> textures{};
