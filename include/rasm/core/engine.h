@@ -17,6 +17,8 @@
 
 namespace rasm {
 
+    constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+
     class Engine {
     friend class Window;
 
@@ -34,6 +36,7 @@ namespace rasm {
         void                endFrame();
         void                render(Scene& scene, Entity& camera);
         bool                running() const;
+        void                recreateSwapchain();
         EngineConfig        getConfig() const;
         Window&             getWindow();
         WindowHandle        getMainWindow() const;
@@ -52,7 +55,7 @@ namespace rasm {
 
     protected:
         EngineConfig                                                config;
-        FrameResources                                              frameResources[2]; // Double buffering
+        FrameResources                                              frameResources[MAX_FRAMES_IN_FLIGHT]; // Double buffering
         Swapchain                                                   swapchain{};
         TextureHandle                                               depthTexture{};
         std::unordered_map<std::string, MeshHandle>                 loadedMeshes;
@@ -67,6 +70,7 @@ namespace rasm {
         uint64_t                                                    frameCount = 0;
         uint32_t                                                    imageIdx = 0;
         bool                                                        isRunning = true;
+        bool                                                        resized = false;
     };
 
 }

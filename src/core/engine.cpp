@@ -47,9 +47,8 @@ namespace rasm
             isRunning = false;
         }
 
-        // TODO: add a engine config option to specify max frame in flight, for now we will just use 2 for double buffering.
         // Initialize frame resources for double buffering
-        for (int i = 0; i < 2; ++i)
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             frameResources[i].commandPool = ctx.createCommandPool(vkb::QueueType::graphics);
             frameResources[i].commandBuffer = ctx.createCommandBuffer(frameResources[i].commandPool);
@@ -313,6 +312,12 @@ namespace rasm
         ctx.waitForFence(currentFrame.inFlightFence);
         ctx.resetFence(currentFrame.inFlightFence);
 
+        if (this->resized)
+        {
+            recreateSwapchain();
+            this->resized = false;
+        }
+
         // acquire the next image from the swapchain
         ctx.acquireNextImage(currentFrame.readyToDrawSemaphore, UINT64_MAX, imageIdx);
 
@@ -352,6 +357,39 @@ namespace rasm
         ctx.present(imageIdx, swapchain.readyToPresentSemaphores[imageIdx]);
 
         frameCount = (frameCount + 1) % 2; // Toggle between 0 and 1 for double buffering
+    }
+
+    void Engine::recreateSwapchain()
+    {
+        ctx.recreateSwapchain();
+        swapchain.imageHandles = ctx.getSwapchainImages();
+        swapchain.imageFormat = ctx.getSwapchainImageFormat();
+
+        // Destroy old semaphores
+        for (auto &semaphore : swapchain.readyToPresentSemaphores)
+        {
+            ctx.destroySemaphore(semaphore);
+        }
+        swapchain.readyToPresentSemaphores.clear();
+
+        for (size_t i = 0; i < swapchain.imageHandles.size(); ++i)
+        {
+            swapchain.readyToPresentSemaphores.push_back(ctx.createSemaphore());
+        }
+
+        // Update depth textures for each frame resource
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        {
+            auto depthTextureDesc = ResourceDesc{};
+            depthTextureDesc.type = ResourceDesc::Type::TEXTURE;
+            depthTextureDesc.name = "DepthTexture for Frame " + std::to_string(i);
+            depthTextureDesc.texture.width = static_cast<uint32_t>(config.windowWidth);
+            depthTextureDesc.texture.height = static_cast<uint32_t>(config.windowHeight);
+            depthTextureDesc.texture.format = Format::D24_UNORM_S8_UINT; // TODO: check this format
+            depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
+
+            frameResources[i].depthTexture = ctx.createTexture(depthTextureDesc);
+        }
     }
 
     CompiledScene Engine::compileScene(Scene &scene)
@@ -471,7 +509,7 @@ namespace rasm
                 ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
                 ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.vertexIndexBuffer.offset, Format::U32_UINT);
                 ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX, &shaderDataBufferAddress, sizeof(shaderDataBufferAddress), 0);
-                ctx.drawIndexed(commandBuffer, desc.buffer.vertexIndexBuffer.indexCount, 1, 0, 0, 0);
+                ctx.drawIndexed(commandBuffer, static_cast<uint32_t>(desc.buffer.vertexIndexBuffer.indexCount), 1, 0, 0, 0);
             }
         }
 

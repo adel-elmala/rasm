@@ -30,32 +30,52 @@ namespace rasm
     VkSurfaceKHR Window::createSurfaceVk(WindowHandle handle, VkInstance instance) const
     {
         VkSurfaceKHR surface;
-        if (!SDL_Vulkan_CreateSurface(reinterpret_cast<SDL_Window*>(handle.index), instance, nullptr, &surface)) {
+        if (!SDL_Vulkan_CreateSurface(reinterpret_cast<SDL_Window *>(handle.index), instance, nullptr, &surface))
+        {
             spdlog::error("Failed to create Vulkan surface: {}", SDL_GetError());
             return VK_NULL_HANDLE;
         }
         return surface;
     }
 
-
     void Window::pollEvents()
     {
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
-            if (event.type == SDL_EVENT_QUIT)
+            switch (event.type)
+            {
+            case SDL_EVENT_QUIT:
             {
                 // Handle quit event, e.g., set a flag in the engine to stop the main loop
                 spdlog::info("Quit event received, shutting down.");
                 engine->isRunning = false;
-            } else if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
-                spdlog::info("Window close event received, shutting down.");
-                engine->isRunning = false;
+                break;
             }
-             else
+            case SDL_EVENT_KEY_DOWN:
+            {
+                switch (event.key.key)
+                {
+                case SDLK_ESCAPE:
+                    spdlog::info("Escape key pressed, closing window.");
+                    engine->isRunning = false;
+                    break;
+                }
+                break;
+            }
+            case SDL_EVENT_WINDOW_RESIZED:
+            {
+                engine->config.windowWidth = event.window.data1;
+                engine->config.windowHeight = event.window.data2;
+                engine->resized = true;
+                break;
+            }
+            default:
             {
                 // Handle other events (e.g., input, window resize, etc.)
                 spdlog::debug("Received event of type: {}", event.type);
+                break;
+            }
             }
         }
     }
@@ -64,7 +84,7 @@ namespace rasm
     {
         if (handle.isValid())
         {
-            SDL_DestroyWindow(reinterpret_cast<SDL_Window*>(handle.index));
+            SDL_DestroyWindow(reinterpret_cast<SDL_Window *>(handle.index));
             SDL_Quit();
         }
     }

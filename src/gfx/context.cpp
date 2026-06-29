@@ -385,6 +385,34 @@ namespace rasm
         }
     }
 
+    void RenderContext::destroySemaphore(const SemaphoreHandle &semaphore)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto it = semaphoreCache.find(semaphore);
+            if (it == semaphoreCache.end())
+            {
+                spdlog::error("Semaphore handle not found in cache during destroySemaphore.");
+                return;
+            }
+            vulkanContext.removeSemaphore(it->second);
+            semaphoreCache.erase(it);
+            break;
+        }
+        case Backend::DX12:
+            // Implement DX12 semaphore destruction if needed
+            break;
+        case Backend::METAL:
+            // Implement Metal semaphore destruction if needed
+            break;
+        default:
+            spdlog::error("Unsupported backend during semaphore destruction.");
+            break;
+        }
+    }
+
     std::vector<TextureHandle> RenderContext::getSwapchainImages()
     {
         switch (backend)
