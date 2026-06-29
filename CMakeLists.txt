@@ -15,6 +15,7 @@ set(RASM_SRC
             "src/core/scene.cpp"
             "src/core/renderGraph.cpp"
             "src/core/window.cpp"
+            "src/core/shaderCompiler.cpp"
             "src/gfx/context.cpp"
             "src/gfx/vulkan.cpp"
     )
@@ -30,6 +31,7 @@ find_package(Stb REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_path(TINYGLTF_INCLUDE_DIRS "tiny_gltf.h")
 find_package(tinyobjloader CONFIG REQUIRED)
+find_package(slang CONFIG REQUIRED)
 
 
 add_library(rasm_lib STATIC ${RASM_SRC})
@@ -38,6 +40,7 @@ target_link_libraries(rasm_lib PUBLIC Vulkan::Vulkan GPUOpen::VulkanMemoryAlloca
 target_link_libraries(rasm_lib PRIVATE vk-bootstrap::vk-bootstrap vk-bootstrap::vk-bootstrap-compiler-warnings)
 target_link_libraries(rasm_lib PRIVATE  tinyobjloader::tinyobjloader)
 target_link_libraries(rasm_lib PUBLIC  spdlog::spdlog) # make it private later, keep for debugging now
+target_link_libraries(rasm_lib PRIVATE slang::slang)
 
 target_include_directories(rasm_lib PUBLIC ${Stb_INCLUDE_DIR} ${TINYGLTF_INCLUDE_DIRS} ${Vulkan_INCLUDE_DIRS} include)
 

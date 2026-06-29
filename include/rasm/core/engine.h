@@ -14,6 +14,7 @@
 #include "rasm/core/renderGraph.h"
 #include "rasm/core/window.h"
 #include "rasm/gfx/context.h"
+#include "rasm/core/shaderCompiler.h"
 
 namespace rasm {
 
@@ -64,6 +65,7 @@ namespace rasm {
         std::unordered_map<MeshHandle, MeshRaw, HandleHash>         meshData;
         std::unordered_map<SceneHandle, CompiledScene, HandleHash>  compiledScenes;
         RenderContext                                               ctx{};
+        ShaderCompiler                                              shaderCompiler{};
         HandleCounters                                              nextHandle{};
         WindowHandle                                                mainWindow{};
         Window                                                      window{};

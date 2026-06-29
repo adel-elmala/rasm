@@ -39,57 +39,15 @@ namespace rasm
         scalarParams[index] = value;
     }
 
-    std::pair<std::vector<char>, std::vector<char>> Material::getShaderSources(const MaterialHandle &handle, MaterialTemplate type)
+    std::string Material::getShaderSources(const MaterialHandle &handle, MaterialTemplate type)
     {
         switch (type)
         {
         case MaterialTemplate::BASIC:
         case MaterialTemplate::PBR:
         case MaterialTemplate::UNLIT:
-        {
-            std::string vertPath = "./shaders/build/0.spv";
-            std::string fragPath = "./shaders/build/0.spv";
-
-            std::ifstream vertFile(vertPath, std::ios::binary | std::ios::ate);
-            if (!vertFile)
-            {
-                spdlog::error("Failed to open vertex shader file: {}", vertPath);
-                return {};
-            }
-            std::ifstream fragFile(fragPath, std::ios::binary | std::ios::ate);
-            if (!fragFile)
-            {
-                spdlog::error("Failed to open fragment shader file: {}", fragPath);
-                return {};
-            }
-
-            std::streamsize vertSize = vertFile.tellg();
-            vertFile.seekg(0, std::ios::beg);
-            std::vector<char> vertBuffer(vertSize);
-
-            if (!vertFile.read(vertBuffer.data(), vertSize))
-            {
-                spdlog::error("Failed to read vertex shader file: {}", vertPath);
-                return {};
-            }
-
-            std::streamsize fragSize = fragFile.tellg();
-            fragFile.seekg(0, std::ios::beg);
-            std::vector<char> fragBuffer(fragSize);
-
-            if (!fragFile.read(fragBuffer.data(), fragSize))
-            {
-                spdlog::error("Failed to read fragment shader file: {}", fragPath);
-                return {};
-            }
-            return {vertBuffer, fragBuffer};
-        }
         case MaterialTemplate::SHADER:
-        {
-
-            return {};
-            break;
-        }
+            return "./shaders/common/test.slang";
         default:
         {
             spdlog::error("Unknown material template type for shader retrieval.");

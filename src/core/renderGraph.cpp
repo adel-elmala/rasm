@@ -23,7 +23,8 @@ namespace rasm
 
     void RenderGraph::compile()
     {
-        if (compiled) return;
+        if (compiled)
+            return;
 
         // Reset in-degrees and successors for all passes
         for (auto &pass : passes)
@@ -100,11 +101,10 @@ namespace rasm
 
     void RenderGraph::execute()
     {
-        if (!compiled) compile();
+        if (!compiled)
+            compile();
 
-        engine->getWindow().pollEvents();
-
-        auto& ctx = engine->getRenderContext();
+        auto &ctx = engine->getRenderContext();
         for (const auto &passIdx : executionOrder)
         {
             passes[passIdx].execute(ctx);
@@ -112,7 +112,8 @@ namespace rasm
     }
 
     // Internal helpers for the Builder
-    ResourceHandle RenderGraph::internalCreate(ResourceDesc desc) {
+    ResourceHandle RenderGraph::internalCreate(ResourceDesc desc)
+    {
         resources.push_back(desc);
         return {resources.size() - 1, 1};
     }
