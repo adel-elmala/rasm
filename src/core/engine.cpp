@@ -312,6 +312,8 @@ namespace rasm
         ctx.waitForFence(currentFrame.inFlightFence);
         ctx.resetFence(currentFrame.inFlightFence);
 
+        this->window.pollEvents();
+
         if (this->resized)
         {
             recreateSwapchain();
@@ -478,7 +480,6 @@ namespace rasm
     void Engine::render(Scene &scene, Entity &camera)
     {
         (void)camera;
-        this->window.pollEvents();
 
         auto compiledScene = compileScene(scene);
         auto &currentFrame = frameResources[frameCount];

@@ -865,7 +865,7 @@ namespace rasm::gfx
             .pImageIndices = &imageIndex};
 
         auto result = vkQueuePresentKHR(this->graphics_queue, &presentInfo);
-        if (result != VK_SUCCESS && result != VK_ERROR_OUT_OF_DATE_KHR)
+        if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to present swapchain image. Error: {}", _to_vk_result_string(result));
             return false;
