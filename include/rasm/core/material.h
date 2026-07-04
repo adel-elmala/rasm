@@ -4,7 +4,7 @@
 #include <array>
 #include <cstddef>
 
-#include "rasm/core/rasm.h"
+#include "rasm/core/types.h"
 
 namespace rasm
 {

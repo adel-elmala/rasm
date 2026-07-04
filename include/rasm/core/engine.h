@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "rasm/core/types.h"
-#include "rasm/core/rasm.h"
 #include "rasm/core/entity.h"
 #include "rasm/core/scene.h"
 #include "rasm/core/material.h"
@@ -33,7 +32,7 @@ namespace rasm {
         Material            createMaterial(MaterialTemplate type);
         RenderGraph         createRenderGraph();
         Entity              createEntity(const Scene& scene, const std::string& name);
-        void                beginFrame();
+        void                beginFrame(Entity &camera);
         void                endFrame();
         void                render(Scene& scene, Entity& camera);
         bool                running() const;

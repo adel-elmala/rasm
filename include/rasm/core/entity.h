@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <utility>
 
-#include "rasm/core/rasm.h"
+#include "rasm/core/types.h"
 
 namespace rasm
 {

@@ -1,12 +1,8 @@
 #include "glm/glm.hpp"
 #include "glm/gtc/quaternion.hpp"
 
-#include "rasm/core/engine.h"
-#include "rasm/core/material.h"
-#include "rasm/core/mesh.h"
-#include "rasm/core/math.h"
-#include "rasm/core/camera.h"
-#include "rasm/core/light.h"
+#include "rasm/rasm.h"
+
 
 int main() {
     // 1. Create engine instance
@@ -41,16 +37,16 @@ int main() {
     cube.addComponent<rasm::Mesh>(cubeMesh);
     cube.addComponent<rasm::Material>(material);
     cube.addComponent<rasm::Transform>(
-        glm::vec3(0.0f, 0.0f, 0.0f),  // position
-        glm::quat(),                  // rotation
-        glm::vec3(1.0f)               // scale
+        glm::vec3(0.0f, 0.0f, -10.0f),                        // position
+        glm::quat(1.0f, 0.0f, 0.0f, 0.0f),                  // rotation
+        glm::vec3(0.05f)                                     // scale
     );
 
     // 6. Create a camera
     rasm::Entity camera = scene.createEntity("MainCamera");
     rasm::Camera& cameraLens = camera.addComponent<rasm::Camera>(rasm::CameraType::PERSPECTIVE);
-    cameraLens.setPerspective(45.0f, 16.0f / 9.0f, 0.1f, 1000.0f);
-    camera.addComponent<rasm::Transform>(glm::vec3(0.0f, 0.0f, 5.0f));
+    cameraLens.setPerspective(45.0f, static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight), 0.1f, 32.0f);
+    camera.addComponent<rasm::Transform>(glm::vec3(0.0f, 0.0f, -1.0f));
 
     // 7. Create a light
     rasm::Entity light = scene.createEntity("DirectionalLight");
@@ -61,10 +57,10 @@ int main() {
 
     // 8. Main loop
     while (engine.running()) {
-        engine.beginFrame();
+        engine.beginFrame(camera);
 
         // Update transforms, animations, etc.
-        cube.getComponent<rasm::Transform>().rotate(glm::vec3(0.0f, 1.0f, 0.0f), 0.01f);
+        cube.getComponent<rasm::Transform>().rotate(glm::vec3(0.0f, 1.0f, 0.0f), glm::radians(0.01f));
 
         // Render the scene
         engine.render(scene, camera);

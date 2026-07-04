@@ -332,14 +332,14 @@ namespace rasm
         return graph;
     }
 
-    void Engine::beginFrame()
+    void Engine::beginFrame(Entity &camera)
     {
         // wait for the gpu to finish rendering the previous frame
         auto &currentFrame = frameResources[frameCount];
         ctx.waitForFence(currentFrame.inFlightFence);
         ctx.resetFence(currentFrame.inFlightFence);
 
-        this->window.pollEvents();
+        this->window.pollEvents(camera);
 
         if (this->resized)
         {
@@ -437,7 +437,7 @@ namespace rasm
 
         CompiledScene compiledScene;
 
-        for (Entity &entity : scene.entities)
+        for (auto &[entityHandle, entity] : scene.entities)
         {
             if (entity.hasComponent<Mesh>() && entity.hasComponent<Material>())
             {
@@ -516,23 +516,20 @@ namespace rasm
 
     void Engine::render(Scene &scene, Entity &camera)
     {
-        (void)camera;
-
         auto compiledScene = compileScene(scene);
         auto &currentFrame = frameResources[frameCount];
         auto commandBuffer = currentFrame.commandBuffer;
         auto shaderDataBuffer = currentFrame.shaderDataBuffer;
 
-        auto windowAspect = static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight);
-        auto camPos = glm::vec3(0.0f, 0.0f, -1.0f); // Example camera position
+        auto cam = camera.getComponent<Camera>();
+        auto camTransform = camera.getComponent<rasm::Transform>();
+        auto camPos = camTransform.position;
 
-        auto projection = glm::perspective(glm::radians(45.0f), windowAspect, 0.1f, 32.0f);
+        auto projection = cam.getProjectionMatrix();
         auto view = glm::translate(glm::mat4(1.0f), camPos);
-        auto model = glm::scale(glm::mat4(1.0f), glm::vec3(0.01f));
 
         ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), 0);
         ctx.fillBuffer(shaderDataBuffer, &view, sizeof(view), sizeof(projection));
-        ctx.fillBuffer(shaderDataBuffer, &model, sizeof(model), sizeof(projection) + sizeof(view));
 
         auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
 
@@ -542,6 +539,12 @@ namespace rasm
             ctx.bindPipeline(commandBuffer, pipeline);
             for (const auto &entityHandle : entitySet)
             {
+                auto modelTransform = scene.entities.find(entityHandle)->second.getComponent<rasm::Transform>();
+
+                auto model = glm::translate(glm::mat4(1.0f), modelTransform.getPosition()) *
+                             glm::mat4_cast(modelTransform.getRotation()) *
+                             glm::scale(glm::mat4(1.0f), modelTransform.getScale());
+                ctx.fillBuffer(shaderDataBuffer, &model, sizeof(model), sizeof(projection) + sizeof(view));
                 auto bufferHandle = compiledScene.meshData[entityHandle];
                 auto desc = ctx.getResourceDesc(bufferHandle);
                 ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);

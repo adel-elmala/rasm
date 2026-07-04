@@ -11,7 +11,6 @@ set(RASM_SRC
             "src/core/material.cpp"
             "src/core/math.cpp"
             "src/core/mesh.cpp"
-            "src/core/rasm.cpp" 
             "src/core/scene.cpp"
             "src/core/renderGraph.cpp"
             "src/core/window.cpp"

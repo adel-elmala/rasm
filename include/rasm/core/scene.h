@@ -2,9 +2,8 @@
 #pragma once
 
 #include <string>
-#include <vector>
+#include <unordered_set>
 
-#include "rasm/core/rasm.h"
 #include "rasm/core/entity.h"
 
 namespace rasm {
@@ -23,7 +22,7 @@ namespace rasm {
 
     protected:
         SceneHandle         handle{};
-        std::vector<Entity> entities;
+        std::unordered_map<EntityHandle, Entity, HandleHash> entities;
         Engine*             engine = nullptr;
     };
 

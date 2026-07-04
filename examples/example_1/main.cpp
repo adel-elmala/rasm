@@ -1,8 +1,5 @@
 // Future API sketch (not implemented yet):
-#include "rasm/core/rasm.h"
-#include "rasm/core/engine.h"
-#include "rasm/core/renderGraph.h"
-#include "rasm/core/types.h"
+#include "rasm/rasm.h"
 
 // User-defined pass with explicit typed settings and material handle ownership.
 class CustomBloomPass
@@ -63,6 +60,10 @@ int main()
     rasm::Engine engine(config);
     rasm::Scene scene = engine.createScene();
     rasm::Entity camera = scene.createEntity("MainCamera");
+    rasm::Camera& cameraLens = camera.addComponent<rasm::Camera>(rasm::CameraType::PERSPECTIVE);
+    cameraLens.setPerspective(45.0f, static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight), 0.1f, 32.0f);
+    camera.addComponent<rasm::Transform>(glm::vec3(0.0f, 0.0f, -1.0f));
+
 
     // rasm::MaterialHandle bloomMaterial = engine.createMaterialFromGLSL(
     //     "shaders/fullscreen.vert",
@@ -101,7 +102,7 @@ int main()
 
     while (engine.running())
     {
-        engine.beginFrame();
+        engine.beginFrame(camera);
         graph.execute();
         engine.endFrame();
     }

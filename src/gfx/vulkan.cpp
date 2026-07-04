@@ -446,7 +446,7 @@ namespace rasm::gfx
             .pAttachments = &colorBlendAttachment};
 
         VkPipelineRasterizationStateCreateInfo rasterizerInfo = createRasterizer(VK_POLYGON_MODE_FILL,
-                                                                                 VK_CULL_MODE_BACK_BIT,
+                                                                                 VK_CULL_MODE_NONE,
                                                                                  VK_FRONT_FACE_CLOCKWISE);
 
         VkPipelineMultisampleStateCreateInfo multisampleInfo = {

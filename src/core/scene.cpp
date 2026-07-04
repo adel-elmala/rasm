@@ -28,7 +28,7 @@ namespace rasm
         }
 
         auto entity = engine->createEntity(*this, name);
-        entities.push_back(entity);
+        entities[entity.id()] = entity;
 
         return entity;
     }

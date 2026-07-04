@@ -6,6 +6,7 @@
 #include "vulkan/vulkan.h"
 
 #include "rasm/core/types.h"
+#include "rasm/core/entity.h"
 
 namespace rasm
 {
@@ -26,7 +27,7 @@ namespace rasm
         WindowHandle    createWindow();
         VkSurfaceKHR    createSurfaceVk(WindowHandle handle, VkInstance instance) const;
         void            destroyWindow(WindowHandle handle);
-        void            pollEvents();
+        void            pollEvents(Entity &camera);
 
     protected:
         Engine *engine = nullptr;

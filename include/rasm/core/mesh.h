@@ -1,7 +1,7 @@
 // clang-format off
 #pragma once
 
-#include "rasm/core/rasm.h"
+#include "rasm/core/types.h"
 
 namespace rasm
 {

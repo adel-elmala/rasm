@@ -1,5 +1,6 @@
 #include "rasm/core/window.h"
 #include "rasm/core/engine.h"
+#include "rasm/core/math.h"
 
 #include "SDL3/SDL.h"
 #include "SDL3/SDL_vulkan.h"
@@ -38,7 +39,7 @@ namespace rasm
         return surface;
     }
 
-    void Window::pollEvents()
+    void Window::pollEvents(Entity &camera)
     {
         SDL_Event event;
         while (SDL_PollEvent(&event))
@@ -54,14 +55,38 @@ namespace rasm
             }
             case SDL_EVENT_KEY_DOWN:
             {
+                auto &cam = camera.getComponent<Transform>();
+
                 switch (event.key.key)
                 {
                 case SDLK_ESCAPE:
+                {
                     spdlog::info("Escape key pressed, closing window.");
                     engine->isRunning = false;
                     break;
                 }
-                break;
+                case SDLK_W:
+                {
+                    cam.setPosition(cam.getPosition() + glm::vec3(0.0f, 0.0f, 1.0f)); // Move forward
+                    break;
+                }
+                case SDLK_S:
+                {
+                    cam.setPosition(cam.getPosition() + glm::vec3(0.0f, 0.0f, -1.0f)); // Move backward
+                    break;
+                }
+                case SDLK_A:
+                {
+                    cam.setPosition(cam.getPosition() + glm::vec3(1.0f, 0.0f, 0.0f)); // Move left
+                    break;
+                }
+                case SDLK_D:
+                {
+                    cam.setPosition(cam.getPosition() + glm::vec3(-1.0f, 0.0f, 0.0f)); // Move right
+                    break;
+                }
+                }
+            break;
             }
             case SDL_EVENT_WINDOW_RESIZED:
             {
