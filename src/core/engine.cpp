@@ -470,20 +470,20 @@ namespace rasm
             auto shaderPath = Material::getShaderSources(materialHandle, MaterialTemplate::BASIC); // TODO: pick the right material
 
             auto shaderName = shaderPath.substr(shaderPath.find_last_of("/\\") + 1);
-            auto vertShader = shaderCompiler.compile(shaderPath, shaderName + ".vert.slang","vertMain");
-            auto fragShader = shaderCompiler.compile(shaderPath, shaderName + ".frag.slang","fragMain");
+            auto vertShader = shaderCompiler.compile(shaderPath, shaderName + ".vert.slang", "vertMain");
+            auto fragShader = shaderCompiler.compile(shaderPath, shaderName + ".frag.slang", "fragMain");
 
             auto shaderDesc = ResourceDesc{};
             shaderDesc.type = ResourceDesc::Type::SHADER;
             shaderDesc.shader.shaderType = ShaderType::VERTEX;
             shaderDesc.shader.sourceSize = vertShader.code.size();
-            shaderDesc.shader.source = reinterpret_cast<const char*>(vertShader.code.data());
+            shaderDesc.shader.source = reinterpret_cast<const char *>(vertShader.code.data());
 
             pipelineDesc.pipeline.vertexShader = ctx.createShader(shaderDesc);
 
             shaderDesc.shader.shaderType = ShaderType::FRAGMENT;
             shaderDesc.shader.sourceSize = fragShader.code.size();
-            shaderDesc.shader.source = reinterpret_cast<const char*>(fragShader.code.data());
+            shaderDesc.shader.source = reinterpret_cast<const char *>(fragShader.code.data());
 
             pipelineDesc.pipeline.fragmentShader = ctx.createShader(shaderDesc);
 
@@ -528,11 +528,9 @@ namespace rasm
         auto projection = cam.getProjectionMatrix();
         auto view = glm::translate(glm::mat4(1.0f), camPos);
 
-        ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), 0);
-        ctx.fillBuffer(shaderDataBuffer, &view, sizeof(view), sizeof(projection));
-
         auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
 
+        auto shaderDataIdx = 0;
         for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
         {
             auto pipeline = compiledScene.materialToPipeline[materialHandle];
@@ -544,13 +542,20 @@ namespace rasm
                 auto model = glm::translate(glm::mat4(1.0f), modelTransform.getPosition()) *
                              glm::mat4_cast(modelTransform.getRotation()) *
                              glm::scale(glm::mat4(1.0f), modelTransform.getScale());
-                ctx.fillBuffer(shaderDataBuffer, &model, sizeof(model), sizeof(projection) + sizeof(view));
+
+                auto baseOffset = (sizeof(projection) + sizeof(view) + sizeof(model)) * shaderDataIdx;
+                ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), baseOffset);
+                ctx.fillBuffer(shaderDataBuffer, &view, sizeof(view), sizeof(projection) + baseOffset);
+                ctx.fillBuffer(shaderDataBuffer, &model, sizeof(model), sizeof(projection) + sizeof(view) + baseOffset);
+
                 auto bufferHandle = compiledScene.meshData[entityHandle];
                 auto desc = ctx.getResourceDesc(bufferHandle);
                 ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
                 ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.vertexIndexBuffer.offset, Format::U32_UINT);
-                ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX, &shaderDataBufferAddress, sizeof(shaderDataBufferAddress), 0);
+                auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;
+                ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX, &targetShaderDataBufferAddress, sizeof(targetShaderDataBufferAddress), 0);
                 ctx.drawIndexed(commandBuffer, static_cast<uint32_t>(desc.buffer.vertexIndexBuffer.indexCount), 1, 0, 0, 0);
+                shaderDataIdx++;
             }
         }
     }
