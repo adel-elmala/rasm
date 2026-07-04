@@ -476,14 +476,14 @@ namespace rasm
             auto shaderDesc = ResourceDesc{};
             shaderDesc.type = ResourceDesc::Type::SHADER;
             shaderDesc.shader.shaderType = ShaderType::VERTEX;
-            shaderDesc.shader.sourceSize = vertShader.size();
-            shaderDesc.shader.source = reinterpret_cast<const char*>(vertShader.data());
+            shaderDesc.shader.sourceSize = vertShader.code.size();
+            shaderDesc.shader.source = reinterpret_cast<const char*>(vertShader.code.data());
 
             pipelineDesc.pipeline.vertexShader = ctx.createShader(shaderDesc);
 
             shaderDesc.shader.shaderType = ShaderType::FRAGMENT;
-            shaderDesc.shader.sourceSize = fragShader.size();
-            shaderDesc.shader.source = reinterpret_cast<const char*>(fragShader.data());
+            shaderDesc.shader.sourceSize = fragShader.code.size();
+            shaderDesc.shader.source = reinterpret_cast<const char*>(fragShader.code.data());
 
             pipelineDesc.pipeline.fragmentShader = ctx.createShader(shaderDesc);
 
@@ -491,12 +491,16 @@ namespace rasm
 
             pipelineDesc.pipeline.colorAttachmentFormat = swapchainFormat;
             pipelineDesc.pipeline.depthStencilAttachmentFormat = depthFormat;
+
+            rasm::VertexAttributeDescription attrDesc[4] = {};
+            auto size = std::min(vertShader.vertexInputLayout.size(), static_cast<size_t>(4));
+            for (size_t i = 0; i < size; ++i)
+            {
+                attrDesc[i] = vertShader.vertexInputLayout[i];
+            }
+
             pipelineDesc.pipeline.vertexInputLayout = {
-                .attributes = {
-                    {.binding = 0, .location = 0, .format = Format::R32G32B32_SFLOAT, .size = sizeof(float) * 3, .offset = 0, .used = true},  // position
-                    {.binding = 0, .location = 1, .format = Format::R32G32B32_SFLOAT, .size = sizeof(float) * 3, .offset = 12, .used = true}, // normal
-                    {.binding = 0, .location = 2, .format = Format::R32G32_SFLOAT, .size = sizeof(float) * 2, .offset = 24, .used = true},    // uv
-                    {.used = false}},
+                .attributes = {attrDesc[0], attrDesc[1], attrDesc[2], attrDesc[3]},
                 .binding = 0,
                 .stride = sizeof(Vertex),
                 .perInstance = false};

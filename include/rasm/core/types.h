@@ -50,6 +50,7 @@ namespace rasm
         B8G8R8A8_SRGB,
         R16G16B16A16_SFLOAT,
         R32G32B32_SFLOAT,
+        R32G32B32A32_SFLOAT,
         D24_UNORM_S8_UINT,
         R32G32_SFLOAT,
         U16_UINT,

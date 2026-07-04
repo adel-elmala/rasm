@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rasm/core/types.h"
 #include <slang.h>
 #include <slang-com-ptr.h>
 
@@ -19,14 +20,20 @@ namespace rasm
             GLSL
         };
 
+        struct compiledShader
+        {
+            std::vector<uint8_t> code;
+            std::vector<VertexAttributeDescription> vertexInputLayout;
+        };
+
         ShaderCompiler() = default;
         ~ShaderCompiler() = default;
 
         bool initialize(Target target);
         void shutdown();
 
-        std::vector<uint8_t> compile(const std::string &sourcePath, const std::string &outputPath, const std::string &entryPointName);
-        std::vector<uint8_t> compileFromString(const std::string &sourceCode, const std::string &outputPath, const std::string &entryPointName);
+        compiledShader compile(const std::string &sourcePath, const std::string &outputPath, const std::string &entryPointName);
+        compiledShader compileFromString(const std::string &sourceCode, const std::string &outputPath, const std::string &entryPointName);
 
     private:
         slang::TargetDesc getTargetDesc(Target target);
