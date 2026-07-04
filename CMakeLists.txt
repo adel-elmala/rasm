@@ -9,7 +9,7 @@ set(RASM_SRC
             "src/core/entity.cpp" 
             "src/core/light.cpp"
             "src/core/material.cpp"
-            "src/core/math.cpp"
+            "src/core/transform.cpp"
             "src/core/mesh.cpp"
             "src/core/scene.cpp"
             "src/core/renderGraph.cpp"

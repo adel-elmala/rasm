@@ -6,7 +6,7 @@
 #include "rasm/core/scene.h"
 #include "rasm/core/engine.h"
 #include "rasm/core/window.h"
-#include "rasm/core/math.h"
+#include "rasm/core/transform.h"
 #include "rasm/core/camera.h"
 #include "rasm/core/light.h"
 #include "rasm/core/material.h"
