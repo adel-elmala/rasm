@@ -27,6 +27,8 @@ namespace rasm
         CommandBufferHandle                 createCommandBuffer(const CommandPoolHandle& commandPool);
         SemaphoreHandle                     createSemaphore(bool timeline = false, uint64_t initialValue = 0);
         FenceHandle                         createFence(bool signaled = false);
+        RenderTargetHandle                  createRenderTarget(const std::string& name, uint32_t width = 0, uint32_t height = 0, Format colorFormat = Format::UNKNOWN, Format depthFormat = Format::UNKNOWN);
+        const RenderTarget&                 getRenderTarget(const RenderTargetHandle& handle);
         std::vector<TextureHandle>          getSwapchainImages();
         Format                              getSwapchainImageFormat();
         uint64_t                            getBufferDeviceAddress(const BufferHandle& buffer);
@@ -69,6 +71,7 @@ namespace rasm
         std::unordered_map<CommandBufferHandle, gfx::CommandBufferVKHandle, HandleHash> commandBufferCache;
         std::unordered_map<SemaphoreHandle, gfx::SemaphoreVKHandle, HandleHash>         semaphoreCache;
         std::unordered_map<FenceHandle, gfx::FenceVKHandle, HandleHash>                 fenceCache;
+        std::unordered_map<RenderTargetHandle, RenderTarget, HandleHash>                renderTargetCache;
 
         // map resource handles to their desc.
         std::unordered_map<ResourceDesc, BufferHandle, ResourceDescHash> bufferDescCache;

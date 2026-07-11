@@ -35,7 +35,7 @@ namespace rasm
     class PassBuilder {
     public:
              PassBuilder(RenderGraph& g, uint32_t passIdx) : graph(g), currentPass(passIdx) {}
-             ResourceHandle createTexture(ResourceDesc desc);
+             ResourceHandle createResource(ResourceDesc desc);
         void read(ResourceHandle handle);
         void write(ResourceHandle handle);
 
@@ -64,7 +64,6 @@ namespace rasm
     
         std::vector<Pass>           passes;
         std::vector<uint32_t>       executionOrder; // Sorted pass indices
-        std::vector<ResourceDesc>   resources;
         Engine*                     engine   = nullptr;
         bool                        compiled = false;
     };

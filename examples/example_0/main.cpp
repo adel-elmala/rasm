@@ -32,23 +32,21 @@ int main()
     material.setFloat(rasm::PbrParam::ROUGHNESS, 0.5f);
     material.setFloat(rasm::PbrParam::METALLIC, 0.0f);
 
-
-    rasm::Entity bunny2 = scene.createEntity("bunny2");
-    bunny2.addComponent<rasm::Mesh>(bunnyMesh);
-    bunny2.addComponent<rasm::Material>(material);
-    bunny2.addComponent<rasm::Transform>(
-        glm::vec3(5.0f, 0.0f, -10.0f),     // position
-        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
-        glm::vec3(0.05f)                   // scale
-    );
-
-
     // 5. Create entities in the scene
     rasm::Entity bunny = scene.createEntity("bunny");
     bunny.addComponent<rasm::Mesh>(bunnyMesh);
     bunny.addComponent<rasm::Material>(material);
     bunny.addComponent<rasm::Transform>(
         glm::vec3(0.0f, 0.0f, -10.0f),     // position
+        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
+        glm::vec3(0.05f)                   // scale
+    );
+
+    rasm::Entity bunny2 = scene.createEntity("bunny2");
+    bunny2.addComponent<rasm::Mesh>(bunnyMesh);
+    bunny2.addComponent<rasm::Material>(material);
+    bunny2.addComponent<rasm::Transform>(
+        glm::vec3(5.0f, 0.0f, -10.0f),     // position
         glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
         glm::vec3(0.05f)                   // scale
     );
@@ -78,8 +76,6 @@ int main()
     // 8. Main loop
     while (engine.running())
     {
-        engine.beginFrame(camera);
-
         // Update transforms, animations, etc.
         bunny.getComponent<rasm::Transform>().rotate(glm::vec3(0.0f, 1.0f, 0.0f), glm::radians(0.01f));
         bunny2.getComponent<rasm::Transform>().rotate(glm::vec3(1.0f, 1.0f, 0.0f), glm::radians(0.01f));
@@ -87,7 +83,6 @@ int main()
 
         // Render the scene
         engine.render(scene, camera);
-        engine.endFrame();
     }
 
     return 0;

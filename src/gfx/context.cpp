@@ -385,6 +385,58 @@ namespace rasm
         }
     }
 
+    RenderTargetHandle RenderContext::createRenderTarget(const std::string &name, uint32_t width, uint32_t height, Format colorFormat, Format depthFormat)
+    {
+        ResourceDesc colorDesc{};
+        colorDesc.type = ResourceDesc::Type::TEXTURE;
+        colorDesc.name = name + " Color Texture";
+        colorDesc.texture.width = width;
+        colorDesc.texture.height = height;
+        colorDesc.texture.format = colorFormat;
+        colorDesc.texture.usage = TextureUsage::COLOR_ATTACHMENT;
+
+        ResourceDesc depthDesc{};
+        depthDesc.type = ResourceDesc::Type::TEXTURE;
+        depthDesc.name = name + " Depth Texture";
+        depthDesc.texture.width = width;
+        depthDesc.texture.height = height;
+        depthDesc.texture.format = depthFormat;
+        depthDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
+
+        auto colorHandle = createTexture(colorDesc);
+        auto depthHandle = createTexture(depthDesc);
+
+        RenderTargetHandle rtHandle = engine->getNextRenderTargetHandle();
+        RenderTarget rt{};
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        {
+            rt.colorAttachment[i] = colorHandle;
+            rt.depthAttachment[i] = depthHandle;
+        }
+
+        rt.width = width;
+        rt.height = height;
+        rt.colorFormat = colorFormat;
+        rt.depthFormat = depthFormat;
+
+        renderTargetCache[rtHandle] = rt;
+
+
+        return rtHandle;
+    }
+
+    const RenderTarget& RenderContext::getRenderTarget(const RenderTargetHandle &handle)
+    {
+        auto it = renderTargetCache.find(handle);
+        if (it == renderTargetCache.end())
+        {
+            spdlog::error("Render target handle not found in cache.");
+            static RenderTarget emptyRenderTarget{};
+            return emptyRenderTarget;
+        }
+        return it->second;
+    }
+
     void RenderContext::destroySemaphore(const SemaphoreHandle &semaphore)
     {
         switch (backend)

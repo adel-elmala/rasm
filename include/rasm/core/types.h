@@ -12,6 +12,8 @@
 
 namespace rasm
 {
+    constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+
     enum class Backend
     {
         VULKAN,
@@ -111,6 +113,7 @@ namespace rasm
     struct EntityTag;
     struct WindowTag;
     struct ResourceTag;
+    struct RenderTargetTag;
 
     using MeshHandle          = Handle<MeshTag>;
     using BufferHandle        = Handle<BufferTag>;
@@ -127,6 +130,7 @@ namespace rasm
     using EntityHandle        = Handle<EntityTag>;
     using WindowHandle        = Handle<WindowTag>;
     using ResourceHandle      = Handle<ResourceTag>;
+    using RenderTargetHandle   = Handle<RenderTargetTag>;
 
     struct EngineConfig
     {
@@ -152,6 +156,7 @@ namespace rasm
         uint64_t semaphore      = 1;
         uint64_t fence          = 1;
         uint64_t swapchain      = 1;
+        uint64_t renderTarget   = 1;
     };
 
     struct FrameResources
@@ -232,7 +237,8 @@ namespace rasm
             BUFFER,
             SHADER,
             GRAPHICS_PIPELINE,
-            COMPUTE_PIPELINE
+            COMPUTE_PIPELINE,
+            RENDER_TARGET,
             // Add more types as needed
         } type;
 
@@ -300,6 +306,14 @@ namespace rasm
                 Format            colorAttachmentFormat;
                 Format            depthStencilAttachmentFormat;
             } pipeline;
+
+            struct
+            {
+                uint32_t width;
+                uint32_t height;
+                Format colorFormat;
+                Format depthFormat;
+            } renderTarget;
         };
 
         bool operator==(const ResourceDesc& other) const
@@ -330,6 +344,11 @@ namespace rasm
                 return pipeline.vertexShader == other.pipeline.vertexShader &&
                        pipeline.fragmentShader == other.pipeline.fragmentShader &&
                        pipeline.topology == other.pipeline.topology;
+            case Type::RENDER_TARGET:
+                return renderTarget.width == other.renderTarget.width &&
+                       renderTarget.height == other.renderTarget.height &&
+                       renderTarget.colorFormat == other.renderTarget.colorFormat &&
+                       renderTarget.depthFormat == other.renderTarget.depthFormat;
             default:
                 return false;
             }
@@ -368,6 +387,11 @@ namespace rasm
                        std::hash<uint64_t>()(static_cast<uint64_t>(desc.pipeline.vertexShader.index)) ^
                        std::hash<uint64_t>()(static_cast<uint64_t>(desc.pipeline.fragmentShader.index)) ^
                        std::hash<uint32_t>()(static_cast<uint32_t>(desc.pipeline.topology));
+            case ResourceDesc::Type::RENDER_TARGET:
+                return std::hash<uint32_t>()(desc.renderTarget.width) ^
+                       std::hash<uint32_t>()(desc.renderTarget.height) ^
+                       std::hash<uint32_t>()(static_cast<uint32_t>(desc.renderTarget.colorFormat)) ^
+                       std::hash<uint32_t>()(static_cast<uint32_t>(desc.renderTarget.depthFormat));
             default:
                 return 0;
             }
@@ -379,6 +403,16 @@ namespace rasm
         std::unordered_map<MaterialHandle, std::unordered_set<EntityHandle, HandleHash>, HandleHash> materialToMeshes;
         std::unordered_map<MaterialHandle, PipelineHandle, HandleHash> materialToPipeline;
         std::unordered_map<EntityHandle, BufferHandle, HandleHash> meshData;
+    };
+
+    struct RenderTarget
+    {
+        TextureHandle colorAttachment[rasm::MAX_FRAMES_IN_FLIGHT];
+        TextureHandle depthAttachment[rasm::MAX_FRAMES_IN_FLIGHT];
+        uint32_t width;
+        uint32_t height;
+        Format colorFormat;
+        Format depthFormat;
     };
 
 }

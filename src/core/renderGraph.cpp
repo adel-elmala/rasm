@@ -34,12 +34,13 @@ namespace rasm
         }
 
         // 1. Map resources to their producers
-        std::vector<ResourceMetadata> resourceMeta(resources.size());
+        std::unordered_map<ResourceHandle, uint32_t, HandleHash> resourceToProducer;
         for (uint32_t i = 0, nPasses = static_cast<uint32_t>(passes.size()); i < nPasses; ++i)
         {
-            for (auto outHandle : passes[i].outputs)
+            auto &pass = passes[i];
+            for (auto outHandle : pass.outputs)
             {
-                resourceMeta[outHandle.index].producerIdx = i;
+                resourceToProducer[outHandle] = i;
             }
         }
 
@@ -48,7 +49,7 @@ namespace rasm
         {
             for (auto inHandle : passes[i].inputs)
             {
-                uint32_t producerIdx = resourceMeta[inHandle.index].producerIdx;
+                uint32_t producerIdx = resourceToProducer[inHandle];
                 if (producerIdx != static_cast<uint32_t>(-1) && producerIdx != i)
                 {
                     // There is a dependency: Producer -> Current Pass
@@ -114,15 +115,15 @@ namespace rasm
     // Internal helpers for the Builder
     ResourceHandle RenderGraph::internalCreate(ResourceDesc desc)
     {
-        resources.push_back(desc);
-        return {resources.size() - 1, 1};
+        auto handle = engine->createResource(desc);
+        return handle;
     }
 
     void RenderGraph::internalRead(uint32_t passIdx, ResourceHandle h) { passes[passIdx].inputs.push_back(h); }
 
     void RenderGraph::internalWrite(uint32_t passIdx, ResourceHandle h) { passes[passIdx].outputs.push_back(h); }
 
-    ResourceHandle PassBuilder::createTexture(ResourceDesc desc) { return graph.internalCreate(desc); }
+    ResourceHandle PassBuilder::createResource(ResourceDesc desc) { return graph.internalCreate(desc); }
 
     void PassBuilder::read(ResourceHandle handle) { graph.internalRead(currentPass, handle); }
 

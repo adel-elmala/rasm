@@ -326,10 +326,57 @@ namespace rasm
         return Material(id, type);
     }
 
+    ResourceHandle Engine::createResource(const ResourceDesc &desc)
+    {
+        ResourceHandle handle{};
+
+        switch (desc.type)
+        {
+        case ResourceDesc::Type::TEXTURE:
+        {
+            auto textureHandle = ctx.createTexture(desc);
+            handle.generation = textureHandle.generation;
+            handle.index = textureHandle.index;
+            break;
+        }
+        case ResourceDesc::Type::BUFFER:
+        {
+            auto bufferHandle = ctx.createBuffer(desc);
+            handle.generation = bufferHandle.generation;
+            handle.index = bufferHandle.index;
+            break;
+        }
+        case ResourceDesc::Type::RENDER_TARGET:
+        {
+            auto renderTargetHandle = ctx.createRenderTarget(desc.name, desc.renderTarget.width, desc.renderTarget.height, desc.renderTarget.colorFormat, desc.renderTarget.depthFormat);
+            handle.generation = renderTargetHandle.generation;
+            handle.index = renderTargetHandle.index;
+            break;
+        }
+        default:
+        {
+            spdlog::error("Unsupported resource type for creation.");
+            break;
+        }
+        }
+
+        return handle;
+    }
+
     RenderGraph Engine::createRenderGraph()
     {
         RenderGraph graph(this);
         return graph;
+    }
+
+    RenderTargetHandle Engine::createRenderTarget(const std::string &name, uint32_t width, uint32_t height, Format colorFormat, Format depthFormat)
+    {
+        auto widthToUse = (width == 0) ? static_cast<uint32_t>(config.windowWidth) : width;
+        auto heightToUse = (height == 0) ? static_cast<uint32_t>(config.windowHeight) : height;
+        auto colorFormatToUse = (colorFormat == Format::UNKNOWN) ? swapchain.imageFormat : colorFormat;
+        auto depthFormatToUse = (depthFormat == Format::UNKNOWN) ? Format::D24_UNORM_S8_UINT : depthFormat;
+
+        return ctx.createRenderTarget(name, widthToUse, heightToUse, colorFormatToUse, depthFormatToUse);
     }
 
     void Engine::beginFrame(Entity &camera)
@@ -349,11 +396,6 @@ namespace rasm
 
         // acquire the next image from the swapchain
         ctx.acquireNextImage(currentFrame.readyToDrawSemaphore, UINT64_MAX, imageIdx);
-
-        // update shader data buffer with per-frame data (e.g., camera matrices, time, etc.)
-        // For this example, we'll just fill it with 0x00.
-        std::vector<char> shaderData(1024 * 1024, 0x00);
-        ctx.fillBuffer(currentFrame.shaderDataBuffer, shaderData.data(), shaderData.size());
 
         // record commands for the current frame
         ctx.beginCommandBuffer(currentFrame.commandBuffer);
@@ -375,6 +417,54 @@ namespace rasm
         ctx.endRendering(currentFrame.commandBuffer);
 
         ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::COLOR_ATTACHMENT, TextureUsage::PRESENT_SRC);
+
+        ctx.endCommandBuffer(frameResources[frameCount].commandBuffer);
+
+        ctx.submit(frameResources[frameCount].commandBuffer,
+                   {frameResources[frameCount].readyToDrawSemaphore},
+                   {swapchain.readyToPresentSemaphores[imageIdx]},
+                   frameResources[frameCount].inFlightFence);
+
+        ctx.present(imageIdx, swapchain.readyToPresentSemaphores[imageIdx]);
+
+        frameCount = (frameCount + 1) % 2; // Toggle between 0 and 1 for double buffering
+    }
+
+    void Engine::beginOffscreenFrame(const RenderTargetHandle &renderTarget, Entity &camera)
+    {
+        auto &currentFrame = frameResources[frameCount];
+        ctx.waitForFence(currentFrame.inFlightFence);
+        ctx.resetFence(currentFrame.inFlightFence);
+
+        this->window.pollEvents(camera);
+
+        // acquire the next image from the swapchain
+        ctx.acquireNextImage(currentFrame.readyToDrawSemaphore, UINT64_MAX, imageIdx);
+
+        // record commands for the current frame
+        ctx.beginCommandBuffer(currentFrame.commandBuffer);
+
+        const RenderTarget &renderTargetData = ctx.getRenderTarget(renderTarget);
+
+        // transition render target images to be ready for rendering
+        ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
+        ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.depthAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
+
+        // begin dynamic rendering
+        ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], renderTargetData.depthAttachment[frameCount]);
+        ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(renderTargetData.width), static_cast<float>(renderTargetData.height));
+        ctx.setScissor(currentFrame.commandBuffer, 0, 0, renderTargetData.width, renderTargetData.height);
+    }
+
+    void Engine::endOffscreenFrame(const RenderTargetHandle &renderTarget)
+    {
+        (void)renderTarget; // Suppress unused parameter warning
+
+        auto &currentFrame = frameResources[frameCount];
+
+        ctx.endRendering(currentFrame.commandBuffer);
+
+        ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::UNKNOWN, TextureUsage::PRESENT_SRC);
 
         ctx.endCommandBuffer(frameResources[frameCount].commandBuffer);
 
@@ -516,6 +606,8 @@ namespace rasm
 
     void Engine::render(Scene &scene, Entity &camera)
     {
+        beginFrame(camera);
+
         auto compiledScene = compileScene(scene);
         auto &currentFrame = frameResources[frameCount];
         auto commandBuffer = currentFrame.commandBuffer;
@@ -558,6 +650,58 @@ namespace rasm
                 shaderDataIdx++;
             }
         }
+
+        endFrame();
+    }
+
+    void Engine::render(Scene &scene, Entity &camera, const RenderTargetHandle &renderTarget)
+    {
+        beginOffscreenFrame(renderTarget, camera);
+
+        auto compiledScene = compileScene(scene);
+        auto &currentFrame = frameResources[frameCount];
+        auto commandBuffer = currentFrame.commandBuffer;
+        auto shaderDataBuffer = currentFrame.shaderDataBuffer;
+
+        auto cam = camera.getComponent<Camera>();
+        auto camTransform = camera.getComponent<rasm::Transform>();
+        auto camPos = camTransform.position;
+
+        auto projection = cam.getProjectionMatrix();
+        auto view = glm::translate(glm::mat4(1.0f), camPos);
+
+        auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
+
+        auto shaderDataIdx = 0;
+        for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
+        {
+            auto pipeline = compiledScene.materialToPipeline[materialHandle];
+            ctx.bindPipeline(commandBuffer, pipeline);
+            for (const auto &entityHandle : entitySet)
+            {
+                auto modelTransform = scene.entities.find(entityHandle)->second.getComponent<rasm::Transform>();
+
+                auto model = glm::translate(glm::mat4(1.0f), modelTransform.getPosition()) *
+                             glm::mat4_cast(modelTransform.getRotation()) *
+                             glm::scale(glm::mat4(1.0f), modelTransform.getScale());
+
+                auto baseOffset = (sizeof(projection) + sizeof(view) + sizeof(model)) * shaderDataIdx;
+                ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), baseOffset);
+                ctx.fillBuffer(shaderDataBuffer, &view, sizeof(view), sizeof(projection) + baseOffset);
+                ctx.fillBuffer(shaderDataBuffer, &model, sizeof(model), sizeof(projection) + sizeof(view) + baseOffset);
+
+                auto bufferHandle = compiledScene.meshData[entityHandle];
+                auto desc = ctx.getResourceDesc(bufferHandle);
+                ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
+                ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.vertexIndexBuffer.offset, Format::U32_UINT);
+                auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;
+                ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX, &targetShaderDataBufferAddress, sizeof(targetShaderDataBufferAddress), 0);
+                ctx.drawIndexed(commandBuffer, static_cast<uint32_t>(desc.buffer.vertexIndexBuffer.indexCount), 1, 0, 0, 0);
+                shaderDataIdx++;
+            }
+        }
+
+        endOffscreenFrame(renderTarget);
     }
 
     bool Engine::running() const
@@ -643,5 +787,10 @@ namespace rasm
     SwapchainHandle Engine::getNextSwapchainHandle()
     {
         return SwapchainHandle{nextHandle.swapchain++, 1};
+    }
+
+    RenderTargetHandle Engine::getNextRenderTargetHandle()
+    {
+        return RenderTargetHandle{nextHandle.renderTarget++, 1};
     }
 }

@@ -17,7 +17,6 @@
 
 namespace rasm {
 
-    constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
     class Engine {
     friend class Window;
@@ -30,11 +29,16 @@ namespace rasm {
         BufferHandle        uploadMesh(const MeshHandle& handle);
         TextureHandle       loadTexture(const std::string& path);
         Material            createMaterial(MaterialTemplate type);
+        ResourceHandle      createResource(const ResourceDesc& desc);
         RenderGraph         createRenderGraph();
         Entity              createEntity(const Scene& scene, const std::string& name);
+        RenderTargetHandle  createRenderTarget(const std::string& name, uint32_t width = 0, uint32_t height = 0, Format colorFormat = Format::UNKNOWN, Format depthFormat = Format::UNKNOWN);
         void                beginFrame(Entity &camera);
+        void                beginOffscreenFrame(const RenderTargetHandle &renderTarget, Entity &camera);
+        void                endOffscreenFrame(const RenderTargetHandle &renderTarget);
         void                endFrame();
         void                render(Scene& scene, Entity& camera);
+        void                render(Scene& scene, Entity& camera, const RenderTargetHandle& renderTarget);
         bool                running() const;
         void                recreateSwapchain();
         EngineConfig        getConfig() const;
@@ -51,6 +55,7 @@ namespace rasm {
         SemaphoreHandle     getNextSemaphoreHandle();
         FenceHandle         getNextFenceHandle();
         SwapchainHandle     getNextSwapchainHandle();
+        RenderTargetHandle  getNextRenderTargetHandle();
         CompiledScene       compileScene(Scene& scene);
 
     protected:
