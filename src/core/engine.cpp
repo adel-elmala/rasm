@@ -72,7 +72,7 @@ namespace rasm
 
             // Assuming a fixed size for shader data buffer for simplicity
             ResourceDesc shaderDataBufferDesc{};
-            shaderDataBufferDesc.type = ResourceDesc::Type::BUFFER;
+            shaderDataBufferDesc.type = ResourceType::BUFFER;
             shaderDataBufferDesc.name = "ShaderDataBuffer for Frame " + std::to_string(i);
             shaderDataBufferDesc.buffer.size = 1024 * 1024; // 1 MB
             shaderDataBufferDesc.buffer.usage = BufferUsage::DEVICE_ADDRESS;
@@ -81,7 +81,7 @@ namespace rasm
 
             // Create a depth texture.
             auto depthTextureDesc = ResourceDesc{};
-            depthTextureDesc.type = ResourceDesc::Type::TEXTURE;
+            depthTextureDesc.type = ResourceType::TEXTURE;
             depthTextureDesc.name = "DepthTexture for Frame " + std::to_string(i);
             depthTextureDesc.texture.width = static_cast<uint32_t>(config.windowWidth);
             depthTextureDesc.texture.height = static_cast<uint32_t>(config.windowHeight);
@@ -105,6 +105,33 @@ namespace rasm
             spdlog::error("Failed to initialize shader compiler.");
             isRunning = false;
         }
+
+        // Create bindless texture descriptor set layout, pool, and set
+        ResourceDesc bindlessLayoutDesc{};
+        bindlessLayoutDesc.type = ResourceType::BINDLESS_DESCRIPTOR_SET_LAYOUT;
+        bindlessLayoutDesc.name = "BindlessDescriptorSetLayout";
+        bindlessLayoutDesc.bindlessDescriptorSetLayout.stage = ShaderType::FRAGMENT;
+        bindlessLayoutDesc.bindlessDescriptorSetLayout.count = MAX_BINDLESS_TEXTURES;
+        bindlessLayoutDesc.bindlessDescriptorSetLayout.type = ResourceType::TEXTURE;
+
+        bindlessDescriptorSetLayout = ctx.createBindlessDescriptorSetLayout(bindlessLayoutDesc);
+
+        ResourceDesc bindlessPoolDesc{};
+        bindlessPoolDesc.type = ResourceType::DESCRIPTOR_POOL;
+        bindlessPoolDesc.name = "BindlessDescriptorPool";
+        bindlessPoolDesc.descriptorPool.descriptorType[0].descriptorType = ResourceType::TEXTURE;
+        bindlessPoolDesc.descriptorPool.descriptorType[0].descriptorCount = MAX_BINDLESS_TEXTURES;
+        bindlessPoolDesc.descriptorPool.maxSets = 1;
+
+        bindlessDescriptorPool = ctx.createDescriptorPool(bindlessPoolDesc);
+
+        ResourceDesc bindlessSetDesc{};
+        bindlessSetDesc.type = ResourceType::DESCRIPTOR_SET;
+        bindlessSetDesc.name = "BindlessDescriptorSet";
+        bindlessSetDesc.descriptorSet.pool = bindlessDescriptorPool;
+        bindlessSetDesc.descriptorSet.layout = bindlessDescriptorSetLayout;
+
+        bindlessDescriptorSet = ctx.allocateDescriptorSet(bindlessSetDesc, bindlessDescriptorPool, bindlessDescriptorSetLayout);
     }
 
     Engine::~Engine()
@@ -251,7 +278,7 @@ namespace rasm
         }
 
         int width, height, nChannels;
-        unsigned char *data = stbi_load(path.c_str(), &width, &height, &nChannels, 0);
+        unsigned char *data = stbi_load(path.c_str(), &width, &height, &nChannels, 4);
 
         if (!data)
         {
@@ -266,11 +293,36 @@ namespace rasm
         tex.channels = nChannels;
         tex.data = data;
 
-        auto handle = getNextTextureHandle();
-        loadedTextures[path] = handle;
-        textureData.insert({handle, std::move(tex)});
+        auto textureDesc = ResourceDesc{};
+        textureDesc.name = path;
+        textureDesc.type = ResourceType::TEXTURE;
+        textureDesc.texture.width = width;
+        textureDesc.texture.height = height;
+        textureDesc.texture.format = Format::R8G8B8A8_UNORM;
+        textureDesc.texture.usage = TextureUsage::SAMPLED;
 
-        return handle;
+        auto textureHandle = ctx.createTexture(textureDesc);
+        if (!ctx.fillTexture(textureHandle, data))
+        {
+            spdlog::error("Failed to fill texture: {}", path);
+            isRunning = false;
+            return TextureHandle{};
+        }
+
+        // using the handle index as the slot for bindless descriptor set
+        // this will result in a fragmented bindless descriptor set if the handles are not contiguous, (e.g, some handles are not for a sampled texture...),
+        // but for simplicity we will use this approach for now
+        if (!ctx.updateBindlessDescriptorSet(bindlessDescriptorSet, textureHandle, static_cast<uint32_t>(textureHandle.index)))
+        {
+            spdlog::error("Failed to update bindless descriptor set for texture: {}", path);
+            isRunning = false;
+            return TextureHandle{};
+        }
+
+        loadedTextures[path] = textureHandle;
+        textureData.insert({textureHandle, std::move(tex)});
+
+        return textureHandle;
     }
 
     BufferHandle Engine::uploadMesh(const MeshHandle &handle)
@@ -297,7 +349,7 @@ namespace rasm
 
             auto bufferDesc = ResourceDesc{};
             bufferDesc.name = "OBJ Vertex + index Buffer";
-            bufferDesc.type = ResourceDesc::Type::BUFFER;
+            bufferDesc.type = ResourceType::BUFFER;
             bufferDesc.buffer.usage = BufferUsage::VERTEXINDEX;
             bufferDesc.buffer.size = objRaw.vertices.size() * sizeof(Vertex) + objRaw.indices.size() * sizeof(uint32_t);
             bufferDesc.buffer.vertexIndexBuffer.indexCount = objRaw.indices.size();
@@ -332,21 +384,21 @@ namespace rasm
 
         switch (desc.type)
         {
-        case ResourceDesc::Type::TEXTURE:
+        case ResourceType::TEXTURE:
         {
             auto textureHandle = ctx.createTexture(desc);
             handle.generation = textureHandle.generation;
             handle.index = textureHandle.index;
             break;
         }
-        case ResourceDesc::Type::BUFFER:
+        case ResourceType::BUFFER:
         {
             auto bufferHandle = ctx.createBuffer(desc);
             handle.generation = bufferHandle.generation;
             handle.index = bufferHandle.index;
             break;
         }
-        case ResourceDesc::Type::RENDER_TARGET:
+        case ResourceType::RENDER_TARGET:
         {
             auto renderTargetHandle = ctx.createRenderTarget(desc.name, desc.renderTarget.width, desc.renderTarget.height, desc.renderTarget.colorFormat, desc.renderTarget.depthFormat);
             handle.generation = renderTargetHandle.generation;
@@ -500,7 +552,7 @@ namespace rasm
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             auto depthTextureDesc = ResourceDesc{};
-            depthTextureDesc.type = ResourceDesc::Type::TEXTURE;
+            depthTextureDesc.type = ResourceType::TEXTURE;
             depthTextureDesc.name = "DepthTexture for Frame " + std::to_string(i);
             depthTextureDesc.texture.width = static_cast<uint32_t>(config.windowWidth);
             depthTextureDesc.texture.height = static_cast<uint32_t>(config.windowHeight);
@@ -554,7 +606,7 @@ namespace rasm
         {
             // create a pipeline for each material.
             auto pipelineDesc = ResourceDesc{};
-            pipelineDesc.type = ResourceDesc::Type::GRAPHICS_PIPELINE;
+            pipelineDesc.type = ResourceType::GRAPHICS_PIPELINE;
             pipelineDesc.name = "Pipeline for Material " + std::to_string(materialHandle.index);
 
             auto shaderPath = Material::getShaderSources(materialHandle, MaterialTemplate::BASIC); // TODO: pick the right material
@@ -564,7 +616,7 @@ namespace rasm
             auto fragShader = shaderCompiler.compile(shaderPath, shaderName + ".frag.slang", "fragMain");
 
             auto shaderDesc = ResourceDesc{};
-            shaderDesc.type = ResourceDesc::Type::SHADER;
+            shaderDesc.type = ResourceType::SHADER;
             shaderDesc.shader.shaderType = ShaderType::VERTEX;
             shaderDesc.shader.sourceSize = vertShader.code.size();
             shaderDesc.shader.source = reinterpret_cast<const char *>(vertShader.code.data());
@@ -594,6 +646,8 @@ namespace rasm
                 .binding = 0,
                 .stride = sizeof(Vertex),
                 .perInstance = false};
+
+            pipelineDesc.pipeline.descriptorSetLayout = bindlessDescriptorSetLayout;
 
             auto pipeline = ctx.createPipeline(pipelineDesc);
             compiledScene.materialToPipeline[materialHandle] = pipeline;
@@ -642,6 +696,7 @@ namespace rasm
 
                 auto bufferHandle = compiledScene.meshData[entityHandle];
                 auto desc = ctx.getResourceDesc(bufferHandle);
+                ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
                 ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
                 ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.vertexIndexBuffer.offset, Format::U32_UINT);
                 auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;
@@ -792,5 +847,20 @@ namespace rasm
     RenderTargetHandle Engine::getNextRenderTargetHandle()
     {
         return RenderTargetHandle{nextHandle.renderTarget++, 1};
+    }
+
+    DescriptorSetLayoutHandle Engine::getNextDescriptorSetLayoutHandle()
+    {
+        return DescriptorSetLayoutHandle{nextHandle.descriptorSetLayout++, 1};
+    }
+
+    DescriptorSetHandle Engine::getNextDescriptorSetHandle()
+    {
+        return DescriptorSetHandle{nextHandle.descriptorSet++, 1};
+    }
+
+    DescriptorPoolHandle Engine::getNextDescriptorPoolHandle()
+    {
+        return DescriptorPoolHandle{nextHandle.descriptorPool++, 1};
     }
 }

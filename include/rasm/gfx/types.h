@@ -22,6 +22,7 @@ namespace rasm::gfx
         TextureHandle handle;
         VkImage image;
         VkImageView view;
+        VkSampler sampler;
         VmaAllocation allocation;
     };
 
@@ -76,6 +77,29 @@ namespace rasm::gfx
         std::vector<TextureVKHandle> images;
         Format imageFormat;
         uint32_t imageCount;
+    };
+
+    struct DescriptorSetLayoutVKHandle
+    {
+        ResourceDesc desc;
+        DescriptorSetLayoutHandle handle;
+        VkDescriptorSetLayout layout;
+    };
+
+    struct DescriptorPoolVKHandle
+    {
+        ResourceDesc desc;
+        DescriptorPoolHandle handle;
+        VkDescriptorPool pool;
+    };
+
+    struct DescriptorSetVKHandle
+    {
+        ResourceDesc desc;
+        DescriptorSetHandle handle;
+        DescriptorPoolVKHandle pool;
+        DescriptorSetLayoutVKHandle layout;
+        VkDescriptorSet set;
     };
 }
 // clang-format on

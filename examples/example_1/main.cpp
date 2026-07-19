@@ -98,7 +98,7 @@ int main()
         {
             auto rtDesc = rasm::ResourceDesc{};
             rtDesc.name = "offscreen_rt";
-            rtDesc.type = rasm::ResourceDesc::Type::RENDER_TARGET;
+            rtDesc.type = rasm::ResourceType::RENDER_TARGET;
             rtDesc.renderTarget.width = config.windowWidth;
             rtDesc.renderTarget.height = config.windowHeight;
             rtDesc.renderTarget.colorFormat = engine.getRenderContext().getSwapchainImageFormat();

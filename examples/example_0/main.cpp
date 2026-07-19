@@ -22,7 +22,7 @@ int main()
 
     // 3. Load resources
     rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/bunny.obj");
-    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/textures/test0.jpg");
+    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/textures/bunny-atlas.jpg");
     rasm::TextureHandle normalTexture = engine.loadTexture("assets/textures/test1.jpg");
 
     // 4. Create a material

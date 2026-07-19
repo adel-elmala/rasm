@@ -207,7 +207,7 @@ namespace rasm
 
     PipelineHandle RenderContext::createPipeline(ResourceDesc desc)
     {
-        assert(desc.type == ResourceDesc::Type::GRAPHICS_PIPELINE || desc.type == ResourceDesc::Type::COMPUTE_PIPELINE);
+        assert(desc.type == ResourceType::GRAPHICS_PIPELINE || desc.type == ResourceType::COMPUTE_PIPELINE);
 
         auto cachedIt = pipelineDescCache.find(desc);
         if (cachedIt != pipelineDescCache.end())
@@ -220,7 +220,7 @@ namespace rasm
         case Backend::VULKAN:
         {
             // TODO: only graphics pipelines are supported in this implementation, need to add compute pipeline support later.
-            if (desc.type != ResourceDesc::Type::GRAPHICS_PIPELINE)
+            if (desc.type != ResourceType::GRAPHICS_PIPELINE)
             {
                 spdlog::error("Only graphics pipelines are supported in this implementation.");
                 return {};
@@ -228,13 +228,14 @@ namespace rasm
 
             auto vertexIt = shaderCache.find(desc.pipeline.vertexShader);
             auto fragmentIt = shaderCache.find(desc.pipeline.fragmentShader);
-            if (vertexIt == shaderCache.end() || fragmentIt == shaderCache.end())
+            auto bindlessLayoutIt = descriptorSetLayoutCache.find(desc.pipeline.descriptorSetLayout);
+            if (vertexIt == shaderCache.end() || fragmentIt == shaderCache.end() || bindlessLayoutIt == descriptorSetLayoutCache.end())
             {
-                spdlog::error("Shader handle not found in cache during pipeline creation.");
+                spdlog::error("Shader or descriptor set layout handle not found in cache during pipeline creation.");
                 return {};
             }
 
-            auto pipeline = vulkanContext.createGraphicsPipeline(desc, vertexIt->second, fragmentIt->second);
+            auto pipeline = vulkanContext.createGraphicsPipeline(desc, vertexIt->second, fragmentIt->second, bindlessLayoutIt->second);
             if (!pipeline)
             {
                 spdlog::error("Failed to create Vulkan pipeline.");
@@ -253,6 +254,122 @@ namespace rasm
             return {};
         default:
             spdlog::error("Unsupported backend during pipeline creation.");
+            return {};
+        }
+    }
+
+    DescriptorSetLayoutHandle RenderContext::createBindlessDescriptorSetLayout(ResourceDesc desc)
+    {
+        assert(desc.type == ResourceType::BINDLESS_DESCRIPTOR_SET_LAYOUT);
+
+        auto cachedIt = descriptorSetLayoutDescCache.find(desc);
+        if (cachedIt != descriptorSetLayoutDescCache.end())
+        {
+            return cachedIt->second;
+        }
+
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto layout = vulkanContext.createBindlessDescriptorSetLayout(desc);
+            if (!layout)
+            {
+                spdlog::error("Failed to create Vulkan bindless descriptor set layout.");
+                return {};
+            }
+            DescriptorSetLayoutHandle handle = engine->getNextDescriptorSetLayoutHandle();
+            layout->handle = handle;
+
+            descriptorSetLayoutCache[handle] = layout.value();
+            descriptorSetLayoutDescCache[desc] = handle;
+
+            return handle;
+        }
+        case Backend::DX12:
+        case Backend::METAL:
+        default:
+            spdlog::error("Unsupported backend during bindless descriptor set layout creation.");
+            return {};
+        }
+    }
+
+    DescriptorPoolHandle RenderContext::createDescriptorPool(ResourceDesc desc)
+    {
+        assert(desc.type == ResourceType::DESCRIPTOR_POOL);
+
+        auto cachedIt = descriptorPoolDescCache.find(desc);
+        if (cachedIt != descriptorPoolDescCache.end())
+        {
+            return cachedIt->second;
+        }
+
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto pool = vulkanContext.createDescriptorPool(desc);
+            if (!pool)
+            {
+                spdlog::error("Failed to create Vulkan descriptor pool.");
+                return {};
+            }
+            DescriptorPoolHandle handle = engine->getNextDescriptorPoolHandle();
+            pool->handle = handle;
+
+            descriptorPoolCache[handle] = pool.value();
+            descriptorPoolDescCache[desc] = handle;
+
+            return handle;
+        }
+        case Backend::DX12:
+        case Backend::METAL:
+        default:
+            spdlog::error("Unsupported backend during descriptor pool creation.");
+            return {};
+        }
+    }
+
+    DescriptorSetHandle RenderContext::allocateDescriptorSet(ResourceDesc desc, const DescriptorPoolHandle &pool, const DescriptorSetLayoutHandle &layout)
+    {
+        assert(desc.type == ResourceType::DESCRIPTOR_SET);
+
+        auto cachedIt = descriptorSetDescCache.find(desc);
+        if (cachedIt != descriptorSetDescCache.end())
+        {
+            return cachedIt->second;
+        }
+
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto poolIt = descriptorPoolCache.find(pool);
+            auto layoutIt = descriptorSetLayoutCache.find(layout);
+            if (poolIt == descriptorPoolCache.end() || layoutIt == descriptorSetLayoutCache.end())
+            {
+                spdlog::error("Descriptor pool or layout handle not found in cache during descriptor set allocation.");
+                return {};
+            }
+
+            auto descriptorSet = vulkanContext.allocateDescriptorSet(desc, poolIt->second, layoutIt->second);
+            if (!descriptorSet)
+            {
+                spdlog::error("Failed to allocate Vulkan descriptor set.");
+                return {};
+            }
+            DescriptorSetHandle handle = engine->getNextDescriptorSetHandle();
+            descriptorSet->handle = handle;
+
+            descriptorSetCache[handle] = descriptorSet.value();
+            descriptorSetDescCache[desc] = handle;
+
+            return handle;
+        }
+        case Backend::DX12:
+        case Backend::METAL:
+        default:
+            spdlog::error("Unsupported backend during descriptor set allocation.");
             return {};
         }
     }
@@ -388,7 +505,7 @@ namespace rasm
     RenderTargetHandle RenderContext::createRenderTarget(const std::string &name, uint32_t width, uint32_t height, Format colorFormat, Format depthFormat)
     {
         ResourceDesc colorDesc{};
-        colorDesc.type = ResourceDesc::Type::TEXTURE;
+        colorDesc.type = ResourceType::TEXTURE;
         colorDesc.name = name + " Color Texture";
         colorDesc.texture.width = width;
         colorDesc.texture.height = height;
@@ -396,7 +513,7 @@ namespace rasm
         colorDesc.texture.usage = TextureUsage::COLOR_ATTACHMENT;
 
         ResourceDesc depthDesc{};
-        depthDesc.type = ResourceDesc::Type::TEXTURE;
+        depthDesc.type = ResourceType::TEXTURE;
         depthDesc.name = name + " Depth Texture";
         depthDesc.texture.width = width;
         depthDesc.texture.height = height;
@@ -421,11 +538,10 @@ namespace rasm
 
         renderTargetCache[rtHandle] = rt;
 
-
         return rtHandle;
     }
 
-    const RenderTarget& RenderContext::getRenderTarget(const RenderTargetHandle &handle)
+    const RenderTarget &RenderContext::getRenderTarget(const RenderTargetHandle &handle)
     {
         auto it = renderTargetCache.find(handle);
         if (it == renderTargetCache.end())
@@ -526,6 +642,37 @@ namespace rasm
         }
     }
 
+    bool RenderContext::fillTexture(const TextureHandle &textureHandle, const void *data)
+    {
+        assert(data != nullptr && "Data pointer cannot be null.");
+        assert(textureHandle.isValid() && "Texture handle must be valid.");
+
+        auto it = textureCache.find(textureHandle);
+        if (it == textureCache.end())
+        {
+            spdlog::error("Texture handle not found in cache during fillTexture.");
+            return false;
+        }
+
+        auto gpuTexture = it->second;
+
+        switch (backend)
+        {
+        case Backend::VULKAN:
+            vulkanContext.fillTexture(gpuTexture, data);
+            return true;
+        case Backend::DX12:
+            spdlog::error("DirectX 12 backend is not implemented yet for fillTexture.");
+            return false;
+        case Backend::METAL:
+            spdlog::error("Metal backend is not implemented yet for fillTexture.");
+            return false;
+        default:
+            spdlog::error("Unsupported backend during fillTexture.");
+            return false;
+        }
+    }
+
     Format RenderContext::getSwapchainImageFormat()
     {
         switch (backend)
@@ -553,7 +700,7 @@ namespace rasm
 
         auto gpuBuffer = it->second;
 
-        if (gpuBuffer.desc.type != ResourceDesc::Type::BUFFER || gpuBuffer.desc.buffer.usage != BufferUsage::DEVICE_ADDRESS)
+        if (gpuBuffer.desc.type != ResourceType::BUFFER || gpuBuffer.desc.buffer.usage != BufferUsage::DEVICE_ADDRESS)
         {
             spdlog::error("Buffer is not of type DEVICE_ADDRESS during getBufferDeviceAddress.");
             return 0;
@@ -582,6 +729,36 @@ namespace rasm
         }
         return it->second.desc;
     }
+
+    bool RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot)
+    {
+        assert(slot < MAX_BINDLESS_TEXTURES && "Slot index exceeds maximum bindless textures.");
+
+        auto bindlessIt = descriptorSetCache.find(bindlessSet);
+        auto textureIt = textureCache.find(texture);
+        if (bindlessIt == descriptorSetCache.end())
+        {
+            spdlog::error("Bindless descriptor set handle not found in cache during updateBindlessDescriptorSet.");
+            return false;
+        }
+        if (textureIt == textureCache.end())
+        {
+            spdlog::error("Texture handle not found in cache during updateBindlessDescriptorSet.");
+            return false;
+        }
+
+        switch (backend)
+        {
+        case Backend::VULKAN:
+            return vulkanContext.updateBindlessDescriptorSet(bindlessIt->second, textureIt->second, slot);
+        case Backend::DX12:
+        case Backend::METAL:
+        default:
+            spdlog::error("Unsupported backend during bindless descriptor set update.");
+            return false;
+        }
+    }
+
 
     bool RenderContext::waitForFence(FenceHandle fence, uint64_t timeout)
     {
@@ -1041,6 +1218,42 @@ namespace rasm
             break;
         default:
             spdlog::error("Unsupported backend during index buffer binding.");
+            break;
+        }
+    }
+
+    void RenderContext::bindDescriptorSet(const CommandBufferHandle &commandBuffer, const PipelineHandle &pipeline, const DescriptorSetHandle &descriptorSet, uint32_t setIndex)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto commandBufferIt = commandBufferCache.find(commandBuffer);
+            auto pipelineIt = pipelineCache.find(pipeline);
+            auto descriptorSetIt = descriptorSetCache.find(descriptorSet);
+            if (commandBufferIt == commandBufferCache.end())
+            {
+                spdlog::error("Command buffer handle not found in cache during descriptor set binding.");
+                return;
+            }
+            if (pipelineIt == pipelineCache.end())
+            {
+                spdlog::error("Pipeline handle not found in cache during descriptor set binding.");
+                return;
+            }
+            if (descriptorSetIt == descriptorSetCache.end())
+            {
+                spdlog::error("Descriptor set handle not found in cache during descriptor set binding.");
+                return;
+            }
+
+            vulkanContext.bindDescriptorSet(commandBufferIt->second, pipelineIt->second, descriptorSetIt->second, setIndex);
+            break;
+        }
+        case Backend::DX12:
+        case Backend::METAL:
+        default:
+            spdlog::error("Unsupported backend during descriptor set binding.");
             break;
         }
     }

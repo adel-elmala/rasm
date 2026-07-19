@@ -13,6 +13,8 @@
 namespace rasm
 {
     constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+    constexpr int MAX_DESCRIPTOR_TYPES = 1;
+    constexpr uint32_t MAX_BINDLESS_TEXTURES = 1024;
 
     enum class Backend
     {
@@ -50,6 +52,7 @@ namespace rasm
         R8G8B8A8_UNORM,
         R8G8B8A8_SRGB,
         B8G8R8A8_SRGB,
+        R8G8B8_UNORM,
         R16G16B16A16_SFLOAT,
         R32G32B32_SFLOAT,
         R32G32B32A32_SFLOAT,
@@ -114,6 +117,9 @@ namespace rasm
     struct WindowTag;
     struct ResourceTag;
     struct RenderTargetTag;
+    struct DescriptorSetLayoutTag;
+    struct DescriptorPoolTag;
+    struct DescriptorSetTag;
 
     using MeshHandle          = Handle<MeshTag>;
     using BufferHandle        = Handle<BufferTag>;
@@ -131,6 +137,9 @@ namespace rasm
     using WindowHandle        = Handle<WindowTag>;
     using ResourceHandle      = Handle<ResourceTag>;
     using RenderTargetHandle   = Handle<RenderTargetTag>;
+    using DescriptorSetLayoutHandle = Handle<DescriptorSetLayoutTag>;
+    using DescriptorPoolHandle = Handle<DescriptorPoolTag>;
+    using DescriptorSetHandle = Handle<DescriptorSetTag>;
 
     struct EngineConfig
     {
@@ -143,20 +152,23 @@ namespace rasm
 
     struct HandleCounters
     {
-        uint64_t scene          = 1;
-        uint64_t entity         = 1;
-        uint64_t mesh           = 1;
-        uint64_t texture        = 1;
-        uint64_t material       = 1;
-        uint64_t buffer         = 1;
-        uint64_t pipeline       = 1;
-        uint64_t shader         = 1;
-        uint64_t commandPool    = 1;
-        uint64_t commandBuffer  = 1;
-        uint64_t semaphore      = 1;
-        uint64_t fence          = 1;
-        uint64_t swapchain      = 1;
-        uint64_t renderTarget   = 1;
+        uint64_t scene                  = 1;
+        uint64_t entity                 = 1;
+        uint64_t mesh                   = 1;
+        uint64_t texture                = 1;
+        uint64_t material               = 1;
+        uint64_t buffer                 = 1;
+        uint64_t pipeline               = 1;
+        uint64_t shader                 = 1;
+        uint64_t commandPool            = 1;
+        uint64_t commandBuffer          = 1;
+        uint64_t semaphore              = 1;
+        uint64_t fence                  = 1;
+        uint64_t swapchain              = 1;
+        uint64_t renderTarget           = 1;
+        uint64_t descriptorSetLayout    = 1;
+        uint64_t descriptorPool         = 1;
+        uint64_t descriptorSet          = 1;
     };
 
     struct FrameResources
@@ -228,19 +240,33 @@ namespace rasm
         bool                        perInstance;
     };
 
+
+    enum class ResourceType
+    {
+        TEXTURE,
+        BUFFER,
+        SHADER,
+        SAMPLER,
+        GRAPHICS_PIPELINE,
+        COMPUTE_PIPELINE,
+        RENDER_TARGET,
+        BINDLESS_DESCRIPTOR_SET_LAYOUT,
+        DESCRIPTOR_POOL,
+        DESCRIPTOR_SET,
+        // Add more types as needed
+    };
+
+    struct DescriptorPoolSizeDesc
+    {
+        uint32_t descriptorCount;
+        ResourceType descriptorType;
+    };
+
+
     struct ResourceDesc
     {
         std::string name;
-        enum class Type
-        {
-            TEXTURE,
-            BUFFER,
-            SHADER,
-            GRAPHICS_PIPELINE,
-            COMPUTE_PIPELINE,
-            RENDER_TARGET,
-            // Add more types as needed
-        } type;
+        ResourceType type;
 
         union {
             // Texture-specific data
@@ -299,12 +325,13 @@ namespace rasm
             // Pipeline-specific data
             struct
             {
-                ShaderHandle      vertexShader;
-                ShaderHandle      fragmentShader;
-                VertexInputLayout vertexInputLayout;
-                PrimitiveTopology topology;
-                Format            colorAttachmentFormat;
-                Format            depthStencilAttachmentFormat;
+                ShaderHandle                vertexShader;
+                ShaderHandle                fragmentShader;
+                VertexInputLayout           vertexInputLayout;
+                DescriptorSetLayoutHandle   descriptorSetLayout;
+                PrimitiveTopology           topology;
+                Format                      colorAttachmentFormat;
+                Format                      depthStencilAttachmentFormat;
             } pipeline;
 
             struct
@@ -314,6 +341,25 @@ namespace rasm
                 Format colorFormat;
                 Format depthFormat;
             } renderTarget;
+
+            struct 
+            {
+                ShaderType stage;
+                uint32_t count;
+                ResourceType type;
+            } bindlessDescriptorSetLayout;
+
+            struct
+            {
+                DescriptorPoolSizeDesc descriptorType[MAX_DESCRIPTOR_TYPES];
+                uint32_t maxSets;
+            } descriptorPool;
+
+            struct
+            {
+                DescriptorPoolHandle pool;
+                DescriptorSetLayoutHandle layout;
+            } descriptorSet;
         };
 
         bool operator==(const ResourceDesc& other) const
@@ -323,32 +369,54 @@ namespace rasm
 
             switch (type)
             {
-            case Type::TEXTURE:
+            case ResourceType::TEXTURE:
                 return texture.width == other.texture.width &&
                        texture.height == other.texture.height &&
                        texture.format == other.texture.format &&
                        texture.usage == other.texture.usage;
-            case Type::BUFFER:
+            case ResourceType::BUFFER:
                 return buffer.size == other.buffer.size &&
                        buffer.usage == other.buffer.usage &&
                        buffer.vertexIndexBuffer.indexCount == other.buffer.vertexIndexBuffer.indexCount &&
                        buffer.vertexIndexBuffer.vertexCount == other.buffer.vertexIndexBuffer.vertexCount &&
                        buffer.vertexIndexBuffer.offset == other.buffer.vertexIndexBuffer.offset;
-            case Type::SHADER:
+            case ResourceType::SHADER:
                 return shader.shaderType == other.shader.shaderType &&
                        shader.sourceSize == other.shader.sourceSize &&
                        shader.source == other.shader.source;
-            case Type::GRAPHICS_PIPELINE:
-            case Type::COMPUTE_PIPELINE:
+            case ResourceType::GRAPHICS_PIPELINE:
+            case ResourceType::COMPUTE_PIPELINE:
                 // For pipelines, you would compare the relevant fields (e.g., shader handles)
                 return pipeline.vertexShader == other.pipeline.vertexShader &&
                        pipeline.fragmentShader == other.pipeline.fragmentShader &&
                        pipeline.topology == other.pipeline.topology;
-            case Type::RENDER_TARGET:
+            case ResourceType::RENDER_TARGET:
                 return renderTarget.width == other.renderTarget.width &&
                        renderTarget.height == other.renderTarget.height &&
                        renderTarget.colorFormat == other.renderTarget.colorFormat &&
                        renderTarget.depthFormat == other.renderTarget.depthFormat;
+            case ResourceType::BINDLESS_DESCRIPTOR_SET_LAYOUT:
+                return bindlessDescriptorSetLayout.stage == other.bindlessDescriptorSetLayout.stage &&
+                       bindlessDescriptorSetLayout.count == other.bindlessDescriptorSetLayout.count &&
+                       bindlessDescriptorSetLayout.type == other.bindlessDescriptorSetLayout.type;
+            case ResourceType::DESCRIPTOR_POOL:
+            {
+                auto equal = false;
+                for (uint32_t i = 0; i < MAX_DESCRIPTOR_TYPES; ++i)
+                {
+                    if (descriptorPool.descriptorType[i].descriptorType != other.descriptorPool.descriptorType[i].descriptorType ||
+                        descriptorPool.descriptorType[i].descriptorCount != other.descriptorPool.descriptorType[i].descriptorCount)
+                    {
+                        equal = false;
+                        break;
+                    }
+                    equal = true;
+                }
+                return equal && descriptorPool.maxSets == other.descriptorPool.maxSets;
+            }
+            case ResourceType::DESCRIPTOR_SET:
+                return descriptorSet.pool == other.descriptorSet.pool &&
+                       descriptorSet.layout == other.descriptorSet.layout;
             default:
                 return false;
             }
@@ -364,34 +432,51 @@ namespace rasm
         {
             switch (desc.type)
             {
-            case ResourceDesc::Type::TEXTURE:
+            case ResourceType::TEXTURE:
                 return std::hash<std::string>()(desc.name) ^
                        std::hash<uint32_t>()(desc.texture.width) ^
                        std::hash<uint32_t>()(desc.texture.height) ^
                        std::hash<uint32_t>()(static_cast<uint32_t>(desc.texture.format)) ^
                        std::hash<uint32_t>()(static_cast<uint32_t>(desc.texture.usage));
-            case ResourceDesc::Type::BUFFER:
+            case ResourceType::BUFFER:
                 return std::hash<std::string>()(desc.name) ^
                        std::hash<uint64_t>()(desc.buffer.size) ^
                        std::hash<uint64_t>()(static_cast<uint64_t>(desc.buffer.usage)) ^
                        std::hash<uint64_t>()(desc.buffer.vertexIndexBuffer.indexCount) ^
                        std::hash<uint64_t>()(desc.buffer.vertexIndexBuffer.vertexCount) ^
                        std::hash<uint64_t>()(desc.buffer.vertexIndexBuffer.offset);
-            case ResourceDesc::Type::SHADER:
+            case ResourceType::SHADER:
                 return std::hash<std::string>()(desc.name) ^
                        std::hash<uint64_t>()(desc.shader.sourceSize) ^
                        std::hash<uint32_t>()(static_cast<uint32_t>(desc.shader.shaderType));
-            case ResourceDesc::Type::GRAPHICS_PIPELINE:
-            case ResourceDesc::Type::COMPUTE_PIPELINE:
+            case ResourceType::GRAPHICS_PIPELINE:
+            case ResourceType::COMPUTE_PIPELINE:
                 return std::hash<std::string>()(desc.name) ^
                        std::hash<uint64_t>()(static_cast<uint64_t>(desc.pipeline.vertexShader.index)) ^
                        std::hash<uint64_t>()(static_cast<uint64_t>(desc.pipeline.fragmentShader.index)) ^
                        std::hash<uint32_t>()(static_cast<uint32_t>(desc.pipeline.topology));
-            case ResourceDesc::Type::RENDER_TARGET:
+            case ResourceType::RENDER_TARGET:
                 return std::hash<uint32_t>()(desc.renderTarget.width) ^
                        std::hash<uint32_t>()(desc.renderTarget.height) ^
                        std::hash<uint32_t>()(static_cast<uint32_t>(desc.renderTarget.colorFormat)) ^
                        std::hash<uint32_t>()(static_cast<uint32_t>(desc.renderTarget.depthFormat));
+            case ResourceType::BINDLESS_DESCRIPTOR_SET_LAYOUT:
+                return std::hash<uint32_t>()(static_cast<uint32_t>(desc.bindlessDescriptorSetLayout.stage)) ^
+                       std::hash<uint32_t>()(desc.bindlessDescriptorSetLayout.count) ^
+                       std::hash<uint32_t>()(static_cast<uint32_t>(desc.bindlessDescriptorSetLayout.type));
+            case ResourceType::DESCRIPTOR_POOL:
+            {
+                auto hash = std::hash<uint32_t>()(desc.descriptorPool.maxSets);
+                for (uint32_t i = 0; i < MAX_DESCRIPTOR_TYPES; ++i)
+                {
+                    hash ^= std::hash<uint32_t>()(static_cast<uint32_t>(desc.descriptorPool.descriptorType[i].descriptorType)) ^
+                            std::hash<uint32_t>()(desc.descriptorPool.descriptorType[i].descriptorCount);
+                }
+                return hash;
+            }
+            case ResourceType::DESCRIPTOR_SET:
+                return std::hash<uint64_t>()(static_cast<uint64_t>(desc.descriptorSet.pool.index)) ^
+                       std::hash<uint64_t>()(static_cast<uint64_t>(desc.descriptorSet.layout.index));
             default:
                 return 0;
             }

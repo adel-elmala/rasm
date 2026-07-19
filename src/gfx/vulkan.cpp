@@ -32,6 +32,7 @@ namespace rasm::gfx
     VkPrimitiveTopology                 _to_vk_topology(PrimitiveTopology topology);
     VkShaderStageFlags                  _to_vk_shader_stage_flags(ShaderType stage);
     VkImageAspectFlags                  _to_vk_aspect_mask(TextureUsage usage);
+    VkDescriptorType                    _to_vk_descriptor_type(ResourceType type);
     const char *                        _to_vk_result_string(VkResult result);
 
     // clang-format on
@@ -114,7 +115,7 @@ namespace rasm::gfx
             imageHandle.handle = {};
             imageHandle.image = images[i];
             imageHandle.view = views[i];
-            imageHandle.desc.type = ResourceDesc::Type::TEXTURE;
+            imageHandle.desc.type = ResourceType::TEXTURE;
             imageHandle.desc.texture.width = swapchain.swapchain.extent.width;
             imageHandle.desc.texture.height = swapchain.swapchain.extent.height;
             imageHandle.desc.texture.format = swapchain.imageFormat;
@@ -169,7 +170,7 @@ namespace rasm::gfx
 
     std::optional<BufferVKHandle> VulkanContext::createBuffer(ResourceDesc desc)
     {
-        assert(desc.type == ResourceDesc::Type::BUFFER);
+        assert(desc.type == ResourceType::BUFFER);
 
         VkBufferCreateInfo bufferInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bufferInfo.size = desc.buffer.size;
@@ -212,9 +213,60 @@ namespace rasm::gfx
         return rawHandle;
     }
 
+    void VulkanContext::fillTexture(const TextureVKHandle &texture, const void *data)
+    {
+        assert(texture.desc.type == ResourceType::TEXTURE && texture.desc.texture.usage == TextureUsage::SAMPLED);
+
+        // 1. Transition layout from UNDEFINED to SHADER_READ directly on the CPU
+        VkHostImageLayoutTransitionInfo transitionDstInfo = {};
+        transitionDstInfo.sType = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO;
+        transitionDstInfo.image = texture.image;
+        transitionDstInfo.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        transitionDstInfo.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        transitionDstInfo.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                              .baseMipLevel = 0,
+                                              .levelCount = 1,
+                                              .baseArrayLayer = 0,
+                                              .layerCount = 1};
+
+        auto result = vkTransitionImageLayout(device, 1, &transitionDstInfo);
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to transition image layout. Error: {}", _to_vk_result_string(result));
+            return;
+        }
+
+        // 2. Copy raw pixels directly into the OPTIMAL image
+        VkMemoryToImageCopy region = {};
+        region.sType = VK_STRUCTURE_TYPE_MEMORY_TO_IMAGE_COPY;
+        region.pHostPointer = data;
+        region.memoryRowLength = texture.desc.texture.width;
+        region.memoryImageHeight = texture.desc.texture.height;
+        region.imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                   .mipLevel = 0,
+                                   .baseArrayLayer = 0,
+                                   .layerCount = 1};
+        region.imageExtent = {texture.desc.texture.width, texture.desc.texture.height, 1};
+
+        VkCopyMemoryToImageInfo copyInfo = {};
+        copyInfo.sType = VK_STRUCTURE_TYPE_COPY_MEMORY_TO_IMAGE_INFO;
+        copyInfo.flags = 0;
+        copyInfo.dstImage = texture.image;
+        copyInfo.dstImageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        copyInfo.regionCount = 1;
+        copyInfo.pRegions = &region;
+
+        result = vkCopyMemoryToImage(device, &copyInfo);
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to copy memory to image. Error: {}", _to_vk_result_string(result));
+            return;
+        }
+    }
+
     std::optional<TextureVKHandle> VulkanContext::createTexture(ResourceDesc desc)
     {
-        assert(desc.type == ResourceDesc::Type::TEXTURE);
+        assert(desc.type == ResourceType::TEXTURE);
 
         // TODO: check if the format is supported by the device, and if not, find a compatible one
         VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
@@ -234,6 +286,13 @@ namespace rasm::gfx
         VmaAllocationCreateInfo allocInfo = {};
         allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
         allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+
+        if (desc.texture.usage == TextureUsage::SAMPLED)
+        {
+            allocInfo.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT |
+                               VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                               VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
+        }
 
         VkImage image;
         VmaAllocation allocation;
@@ -262,6 +321,28 @@ namespace rasm::gfx
             return {};
         }
 
+        // create a sampler for the texture
+        VkSampler sampler = VK_NULL_HANDLE;
+        if (desc.texture.usage == TextureUsage::SAMPLED)
+        {
+
+            VkSamplerCreateInfo samplerInfo = {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+            samplerInfo.magFilter = VK_FILTER_LINEAR;
+            samplerInfo.minFilter = VK_FILTER_LINEAR;
+            samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+
+            result = vkCreateSampler(this->device.device, &samplerInfo, nullptr, &sampler);
+            if (result != VK_SUCCESS)
+            {
+                spdlog::error("Failed to create sampler. Error: {}", _to_vk_result_string(result));
+                vkDestroyImageView(this->device.device, imageView, nullptr);
+                vmaDestroyImage(this->allocator, image, allocation);
+                return {};
+            }
+        }
+
         // Set a debug name for the image
         VkDebugUtilsObjectNameInfoEXT imageNameInfo = {};
         imageNameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
@@ -279,13 +360,13 @@ namespace rasm::gfx
         this->dispatch_table.setDebugUtilsObjectNameEXT(&imageNameInfo);
         this->dispatch_table.setDebugUtilsObjectNameEXT(&imageViewNameInfo);
 
-        TextureVKHandle rawHandle = {desc, {}, image, imageView, allocation};
+        TextureVKHandle rawHandle = {desc, {}, image, imageView, sampler, allocation};
         return rawHandle;
     }
 
     std::optional<ShaderVKHandle> VulkanContext::createShader(ResourceDesc desc)
     {
-        assert(desc.type == ResourceDesc::Type::SHADER);
+        assert(desc.type == ResourceType::SHADER);
 
         VkShaderModuleCreateInfo shaderModuleInfo = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
         shaderModuleInfo.codeSize = desc.shader.sourceSize;
@@ -328,16 +409,18 @@ namespace rasm::gfx
         return rasterizer;
     }
 
-    std::optional<PipelineVKHandle> VulkanContext::createGraphicsPipeline(ResourceDesc desc, const ShaderVKHandle &vertexShader, const ShaderVKHandle &fragmentShader)
+    std::optional<PipelineVKHandle> VulkanContext::createGraphicsPipeline(ResourceDesc desc, const ShaderVKHandle &vertexShader, const ShaderVKHandle &fragmentShader, const DescriptorSetLayoutVKHandle &bindlessDescriptorSetLayout)
     {
         VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
             .size = sizeof(VkDeviceAddress)};
 
+        VkDescriptorSetLayout setLayouts[] = {bindlessDescriptorSetLayout.layout};
+
         VkPipelineLayoutCreateInfo pipelineLayoutInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 0,
-            .pSetLayouts = nullptr,
+            .setLayoutCount = 1,
+            .pSetLayouts = setLayouts,
             .pushConstantRangeCount = 1,
             .pPushConstantRanges = &pushConstantRange};
 
@@ -581,6 +664,106 @@ namespace rasm::gfx
         return rawHandle;
     }
 
+    std::optional<DescriptorSetLayoutVKHandle> VulkanContext::createBindlessDescriptorSetLayout(ResourceDesc desc)
+    {
+        assert(desc.type == ResourceType::BINDLESS_DESCRIPTOR_SET_LAYOUT);
+
+        // Allow updating after binding, and allow empty slots in our giant array
+        VkDescriptorBindingFlags bindlessFlags =
+            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
+            VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+
+        VkDescriptorSetLayoutBindingFlagsCreateInfo extendedInfo = {};
+        extendedInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+        extendedInfo.bindingCount = 1;
+        extendedInfo.pBindingFlags = &bindlessFlags;
+
+        // Create a binding for 10,000 textures
+        VkDescriptorSetLayoutBinding samplerLayoutBinding = {};
+        samplerLayoutBinding.binding = 0;
+        samplerLayoutBinding.descriptorType = _to_vk_descriptor_type(desc.bindlessDescriptorSetLayout.type);
+        samplerLayoutBinding.descriptorCount = desc.bindlessDescriptorSetLayout.count; // The Bindless Array
+        samplerLayoutBinding.stageFlags = _to_vk_shader_stage_flags(desc.bindlessDescriptorSetLayout.stage);
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo = {};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        // Crucial flag for the layout itself
+        layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+        layoutInfo.bindingCount = 1;
+        layoutInfo.pBindings = &samplerLayoutBinding;
+        layoutInfo.pNext = &extendedInfo;
+
+        VkDescriptorSetLayout bindlessLayout;
+        if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &bindlessLayout) != VK_SUCCESS)
+        {
+            spdlog::error("Failed to create bindless textures descriptor set layout.");
+            return {};
+        }
+
+        DescriptorSetLayoutVKHandle rawHandle = {desc, {}, bindlessLayout};
+        return rawHandle;
+    }
+
+    std::optional<DescriptorPoolVKHandle> VulkanContext::createDescriptorPool(ResourceDesc desc)
+    {
+        assert(desc.type == ResourceType::DESCRIPTOR_POOL);
+
+        std::vector<VkDescriptorPoolSize> poolSizes;
+        for (const auto &poolSize : desc.descriptorPool.descriptorType)
+        {
+            VkDescriptorPoolSize vkPoolSize = {};
+            vkPoolSize.type = _to_vk_descriptor_type(poolSize.descriptorType);
+            vkPoolSize.descriptorCount = poolSize.descriptorCount;
+            poolSizes.push_back(vkPoolSize);
+        }
+
+        VkDescriptorPoolCreateInfo poolInfo = {};
+        poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+        poolInfo.pPoolSizes = poolSizes.data();
+        poolInfo.maxSets = desc.descriptorPool.maxSets;
+        poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+
+        VkDescriptorPool descriptorPool;
+        if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS)
+        {
+            spdlog::error("Failed to create descriptor pool.");
+            return {};
+        }
+
+        DescriptorPoolVKHandle rawHandle = {desc, {}, descriptorPool};
+        return rawHandle;
+    }
+
+    std::optional<DescriptorSetVKHandle> VulkanContext::allocateDescriptorSet(ResourceDesc desc, const DescriptorPoolVKHandle &pool, const DescriptorSetLayoutVKHandle &layout)
+    {
+        assert(desc.type == ResourceType::DESCRIPTOR_SET);
+
+        uint32_t variableDescCount{static_cast<uint32_t>(layout.desc.bindlessDescriptorSetLayout.count)};
+
+        VkDescriptorSetVariableDescriptorCountAllocateInfo variableDescCountAI{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO_EXT,
+            .descriptorSetCount = 1,
+            .pDescriptorCounts = &variableDescCount};
+
+        VkDescriptorSetAllocateInfo texDescSetAlloc{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .pNext = &variableDescCountAI,
+            .descriptorPool = pool.pool,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &layout.layout};
+
+        VkDescriptorSet descriptorSet;
+        if (vkAllocateDescriptorSets(device, &texDescSetAlloc, &descriptorSet) != VK_SUCCESS)
+        {
+            spdlog::error("Failed to allocate descriptor set.");
+            return {};
+        }
+
+        DescriptorSetVKHandle rawHandle = {desc, {}, pool, layout, descriptorSet};
+        return rawHandle;
+    }
+
     std::vector<TextureVKHandle> VulkanContext::getSwapchainImages()
     {
         return swapchain.images;
@@ -615,7 +798,7 @@ namespace rasm::gfx
             imageHandle.handle = {};
             imageHandle.image = images[i];
             imageHandle.view = views[i];
-            imageHandle.desc.type = ResourceDesc::Type::TEXTURE;
+            imageHandle.desc.type = ResourceType::TEXTURE;
             imageHandle.desc.texture.width = swapchain.swapchain.extent.width;
             imageHandle.desc.texture.height = swapchain.swapchain.extent.height;
             imageHandle.desc.texture.format = swapchain.imageFormat;
@@ -631,6 +814,26 @@ namespace rasm::gfx
     {
         assert(offset + size <= buffer.desc.buffer.size);
         std::memcpy(static_cast<uint8_t *>(buffer.allocationInfo.pMappedData) + offset, data, size);
+    }
+
+    bool VulkanContext::updateBindlessDescriptorSet(const DescriptorSetVKHandle &bindlessSet, const TextureVKHandle &texture, uint32_t slot)
+    {
+        VkDescriptorImageInfo imageInfo = {};
+        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfo.imageView = texture.view;
+        imageInfo.sampler = texture.sampler;
+
+        VkWriteDescriptorSet descriptorWrite = {};
+        descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrite.dstSet = bindlessSet.set;
+        descriptorWrite.dstBinding = 0;
+        descriptorWrite.dstArrayElement = slot;
+        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptorWrite.descriptorCount = 1; // We are only writing one texture
+        descriptorWrite.pImageInfo = &imageInfo;
+
+        vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+        return true;
     }
 
     bool VulkanContext::transitionImageLayout(const CommandBufferVKHandle &commandBuffer, const TextureVKHandle &image, const TextureUsage &oldUsage, const TextureUsage &newUsage)
@@ -912,7 +1115,7 @@ namespace rasm::gfx
 
     void VulkanContext::bindPipeline(const CommandBufferVKHandle &commandBuffer, const PipelineVKHandle &pipeline)
     {
-        vkCmdBindPipeline(commandBuffer.commandBuffer, pipeline.desc.type == ResourceDesc::Type::GRAPHICS_PIPELINE ? VK_PIPELINE_BIND_POINT_GRAPHICS : VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+        vkCmdBindPipeline(commandBuffer.commandBuffer, pipeline.desc.type == ResourceType::GRAPHICS_PIPELINE ? VK_PIPELINE_BIND_POINT_GRAPHICS : VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
     }
 
     void VulkanContext::bindVertexBuffer(const CommandBufferVKHandle &commandBuffer, const BufferVKHandle &buffer, uint64_t offset, uint32_t binding)
@@ -926,6 +1129,18 @@ namespace rasm::gfx
     {
         auto vkIndexType = _to_vk_index_type(indexType);
         vkCmdBindIndexBuffer(commandBuffer.commandBuffer, buffer.buffer, offset, vkIndexType);
+    }
+
+    void VulkanContext::bindDescriptorSet(const CommandBufferVKHandle &commandBuffer, const PipelineVKHandle &pipeline, const DescriptorSetVKHandle &descriptorSet, uint32_t setIndex)
+    {
+        vkCmdBindDescriptorSets(commandBuffer.commandBuffer,
+                                pipeline.desc.type == ResourceType::GRAPHICS_PIPELINE ? VK_PIPELINE_BIND_POINT_GRAPHICS : VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeline.layout,
+                                setIndex,
+                                1,
+                                &descriptorSet.set,
+                                0,
+                                nullptr);
     }
 
     void VulkanContext::pushConstants(const CommandBufferVKHandle &commandBuffer, const PipelineVKHandle &pipeline, ShaderType stage, const void *data, uint32_t size, uint32_t offset)
@@ -1045,6 +1260,8 @@ namespace rasm::gfx
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
             .descriptorIndexing = VK_TRUE,
             .shaderSampledImageArrayNonUniformIndexing = VK_TRUE,
+            .descriptorBindingSampledImageUpdateAfterBind = VK_TRUE,
+            .descriptorBindingPartiallyBound = VK_TRUE,
             .descriptorBindingVariableDescriptorCount = VK_TRUE,
             .runtimeDescriptorArray = VK_TRUE,
             .bufferDeviceAddress = VK_TRUE};
@@ -1056,12 +1273,18 @@ namespace rasm::gfx
             .dynamicRendering = VK_TRUE,
         };
 
+        VkPhysicalDeviceVulkan14Features enabledVk14Features{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES,
+            .pNext = &enabledVk13Features,
+            .hostImageCopy = VK_TRUE};
+
         VkPhysicalDeviceFeatures enabledVk10Features{
             .samplerAnisotropy = VK_TRUE};
 
         // select() grabs a PhysicalDevice, By default, this will prefer a discrete GPU.
         auto physical_device_selector_return = phys_device_selector
                                                    .set_surface(surface)
+                                                   .set_required_features_14(enabledVk14Features)               // Enable the 1.4 core feature
                                                    .set_required_features_13(enabledVk13Features)               // Enable the 1.3 core feature
                                                    .set_required_features_12(enabledVk12Features)               // Enable the 1.2 core feature
                                                    .set_required_features(enabledVk10Features)                  // Enable the 1.0 core feature
@@ -1264,6 +1487,8 @@ namespace rasm::gfx
             return VK_FORMAT_B8G8R8A8_SRGB;
         case Format::R32G32B32A32_SFLOAT:
             return VK_FORMAT_R32G32B32A32_SFLOAT;
+        case Format::R8G8B8_UNORM:
+            return VK_FORMAT_R8G8B8_UNORM;
         case Format::UNKNOWN:
             return VK_FORMAT_UNDEFINED;
         default:
@@ -1302,6 +1527,8 @@ namespace rasm::gfx
             return Format::R16G16B16A16_SFLOAT;
         case VK_FORMAT_D24_UNORM_S8_UINT:
             return Format::D24_UNORM_S8_UINT;
+        case VK_FORMAT_R8G8B8_UNORM:
+            return Format::R8G8B8_UNORM;
         default:
             return Format::UNKNOWN;
         }
@@ -1316,7 +1543,8 @@ namespace rasm::gfx
         case TextureUsage::TRANSFER_DST:
             return VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         case TextureUsage::SAMPLED:
-            return VK_IMAGE_USAGE_SAMPLED_BIT;
+            // VK_EXT_host_image_copy must be enabled for VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT to be valid.
+            return VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_HOST_TRANSFER_BIT;
         case TextureUsage::STORAGE:
             return VK_IMAGE_USAGE_STORAGE_BIT;
         case TextureUsage::COLOR_ATTACHMENT:
@@ -1337,11 +1565,27 @@ namespace rasm::gfx
         switch (usage)
         {
         case TextureUsage::COLOR_ATTACHMENT:
+        case TextureUsage::SAMPLED:
             return VK_IMAGE_ASPECT_COLOR_BIT;
         case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
             return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
         default:
             return 0;
+        }
+    }
+
+    VkDescriptorType _to_vk_descriptor_type(ResourceType type)
+    {
+        switch (type)
+        {
+        case ResourceType::BUFFER:
+            return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        case ResourceType::SAMPLER:
+            return VK_DESCRIPTOR_TYPE_SAMPLER;
+        case ResourceType::TEXTURE:
+            return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        default:
+            return VK_DESCRIPTOR_TYPE_MAX_ENUM;
         }
     }
 
