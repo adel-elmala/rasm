@@ -489,12 +489,12 @@ namespace rasm
 
         ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::COLOR_ATTACHMENT, TextureUsage::PRESENT_SRC);
 
-        ctx.endCommandBuffer(frameResources[frameCount].commandBuffer);
+        ctx.endCommandBuffer(currentFrame.commandBuffer);
 
-        ctx.submit(frameResources[frameCount].commandBuffer,
-                   {frameResources[frameCount].readyToDrawSemaphore},
+        ctx.submit(currentFrame.commandBuffer,
+                   {currentFrame.readyToDrawSemaphore},
                    {swapchain.readyToPresentSemaphores[imageIdx]},
-                   frameResources[frameCount].inFlightFence);
+                   currentFrame.inFlightFence);
 
         ctx.present(imageIdx, swapchain.readyToPresentSemaphores[imageIdx]);
 
@@ -508,9 +508,6 @@ namespace rasm
         ctx.resetFence(currentFrame.inFlightFence);
 
         this->window.pollEvents(camera);
-
-        // acquire the next image from the swapchain
-        ctx.acquireNextImage(currentFrame.readyToDrawSemaphore, UINT64_MAX, imageIdx);
 
         // record commands for the current frame
         ctx.beginCommandBuffer(currentFrame.commandBuffer);
@@ -527,24 +524,17 @@ namespace rasm
         ctx.setScissor(currentFrame.commandBuffer, 0, 0, renderTargetData.width, renderTargetData.height);
     }
 
-    void Engine::endOffscreenFrame(const RenderTargetHandle &renderTarget)
+    void Engine::endOffscreenFrame()
     {
-        (void)renderTarget; // Suppress unused parameter warning
-
         auto &currentFrame = frameResources[frameCount];
 
         ctx.endRendering(currentFrame.commandBuffer);
+        ctx.endCommandBuffer(currentFrame.commandBuffer);
 
-        ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::UNKNOWN, TextureUsage::PRESENT_SRC);
-
-        ctx.endCommandBuffer(frameResources[frameCount].commandBuffer);
-
-        ctx.submit(frameResources[frameCount].commandBuffer,
-                   {frameResources[frameCount].readyToDrawSemaphore},
-                   {swapchain.readyToPresentSemaphores[imageIdx]},
-                   frameResources[frameCount].inFlightFence);
-
-        ctx.present(imageIdx, swapchain.readyToPresentSemaphores[imageIdx]);
+        ctx.submit(currentFrame.commandBuffer,
+                   {},
+                   {},
+                   currentFrame.inFlightFence);
 
         frameCount = (frameCount + 1) % 2; // Toggle between 0 and 1 for double buffering
     }
@@ -783,7 +773,7 @@ namespace rasm
             }
         }
 
-        endOffscreenFrame(renderTarget);
+        endOffscreenFrame();
     }
 
     bool Engine::running() const

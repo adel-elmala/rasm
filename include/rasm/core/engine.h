@@ -36,7 +36,7 @@ namespace rasm {
         RenderTargetHandle          createRenderTarget(const std::string& name, uint32_t width = 0, uint32_t height = 0, Format colorFormat = Format::UNKNOWN, Format depthFormat = Format::UNKNOWN);
         void                        beginFrame(Entity &camera);
         void                        beginOffscreenFrame(const RenderTargetHandle &renderTarget, Entity &camera);
-        void                        endOffscreenFrame(const RenderTargetHandle &renderTarget);
+        void                        endOffscreenFrame();
         void                        endFrame();
         void                        render(Scene& scene, Entity& camera);
         void                        render(Scene& scene, Entity& camera, const RenderTargetHandle& renderTarget);
