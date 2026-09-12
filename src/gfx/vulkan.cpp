@@ -289,8 +289,7 @@ namespace rasm::gfx
 
         if (desc.texture.usage == TextureUsage::SAMPLED)
         {
-            allocInfo.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT |
-                               VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+            allocInfo.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                                VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
         }
 
