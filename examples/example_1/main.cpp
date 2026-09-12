@@ -1,53 +1,6 @@
 // Future API sketch (not implemented yet):
 #include "rasm/rasm.h"
 
-// User-defined pass with explicit typed settings and material handle ownership.
-class CustomBloomPass
-{
-public:
-    struct Settings
-    {
-        float threshold = 1.0f;
-        float intensity = 0.5f;
-    };
-
-    CustomBloomPass(rasm::Material material, Settings settings)
-        : material_(material), settings_(settings) {}
-
-    void setup(rasm::PassBuilder &builder)
-    {
-        // Slot names are the graph-level contract for this pass.
-        // input_ = builder.read("scene_color");
-
-        // rasm::ResourceDesc desc = {};
-        // desc.texture.width = builder.getTextureWidth(input_);
-        // desc.texture.height = builder.getTextureHeight(input_);
-        // desc.texture.format = rasm::Format::RGBA16F;
-        // desc.usage = rasm::TextureUsage::RenderTarget | rasm::TextureUsage::Sampled;
-
-        // output_ = builder.createTexture("bloom_color", desc);
-        // builder.write(output_);
-    }
-
-    void execute(rasm::RenderContext &ctx)
-    {
-        // ctx.setRenderTarget(output_);
-        // ctx.clear(glm::vec4(0.0f));
-
-        // ctx.bindMaterial(material_);
-        // ctx.bindTexture("u_sceneColor", input_);
-        // ctx.setFloat("u_threshold", settings_.threshold);
-        // ctx.setFloat("u_intensity", settings_.intensity);
-        // ctx.drawFullscreenQuad();
-    }
-
-private:
-    rasm::ResourceHandle input_;
-    rasm::ResourceHandle output_;
-    rasm::Material material_;
-    Settings settings_;
-};
-
 int main()
 {
     rasm::EngineConfig config = {
@@ -68,20 +21,20 @@ int main()
 
     // Load resources
     rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/bunny.obj");
-    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/textures/test0.jpg");
+    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/textures/test1.jpg");
     rasm::TextureHandle normalTexture = engine.loadTexture("assets/textures/test1.jpg");
 
     // Create a material
-    rasm::Material material = engine.createMaterial(rasm::MaterialTemplate::PBR);
-    material.setTexture(rasm::PbrSlot::ALBEDO, albedoTexture);
-    material.setTexture(rasm::PbrSlot::NORMAL, normalTexture);
-    material.setFloat(rasm::PbrParam::ROUGHNESS, 0.5f);
-    material.setFloat(rasm::PbrParam::METALLIC, 0.0f);
+    rasm::Material *material = engine.createMaterial(rasm::MaterialTemplate::PBR);
+    material->setTexture(rasm::PbrSlot::ALBEDO, albedoTexture);
+    material->setTexture(rasm::PbrSlot::NORMAL, normalTexture);
+    material->setFloat(rasm::PbrParam::ROUGHNESS, 0.5f);
+    material->setFloat(rasm::PbrParam::METALLIC, 0.0f);
 
     // Create entities in the scene
     rasm::Entity bunny = scene.createEntity("bunny");
     bunny.addComponent<rasm::Mesh>(bunnyMesh);
-    bunny.addComponent<rasm::Material>(material);
+    bunny.addComponent<rasm::Material>(*material);
     bunny.addComponent<rasm::Transform>(
         glm::vec3(0.0f, 0.0f, -10.0f),     // position
         glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
@@ -114,17 +67,87 @@ int main()
             engine.render(scene, camera, renderTargetHandle);
         });
 
-    auto bloomPass = CustomBloomPass(rasm::Material{} /*bloomMaterial*/, CustomBloomPass::Settings{1.0f, 0.5f});
+    auto overlayScene = engine.createScene();
 
     graph.addPass(
-        "Bloom",
-        [&bloomPass](rasm::PassBuilder &builder)
+        "overlay",
+        [&engine, &overlayScene, &rtHandle](rasm::PassBuilder &builder)
         {
-            bloomPass.setup(builder);
+            builder.read(rtHandle);
+            std::vector<rasm::Vertex> vertices = {
+                {.pos = glm::vec3(-1.0f, -1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(0.0f, 0.0f)},
+                {.pos = glm::vec3(1.0f, -1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(1.0f, 0.0f)},
+                {.pos = glm::vec3(1.0f, 1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(1.0f, 1.0f)},
+                {.pos = glm::vec3(-1.0f, 1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(0.0f, 1.0f)}};
+
+            std::vector<uint32_t> indices = {
+                0, 1, 2, // first triangle
+                2, 3, 0  // second triangle
+            };
+
+            auto overlayMesh = engine.createMesh(vertices, indices);
+
+            auto overlayRect = overlayScene.createEntity("overlayRect");
+            overlayRect.addComponent<rasm::Mesh>(overlayMesh);
+            overlayRect.addComponent<rasm::Transform>();
+
+            auto overlayMaterial = engine.createMaterial(rasm::MaterialTemplate::SHADER);
+            overlayMaterial->setShaderName("overlayShader");
+            overlayMaterial->setShaderSource(R"(
+                struct VSInput
+                {
+                    float3 Pos;
+                    float3 Normal;
+                    float2 UV;
+                };
+
+                struct ShaderData
+                {
+                    float4x4 projection;
+                    float4x4 view;
+                    float4x4 model;
+                };
+
+                struct VSOutput
+                {
+                    float4 Pos : SV_POSITION;
+                    float3 Normal : NORMAL;
+                    float2 UV : TEXCOORD0;
+                };
+
+                [shader("vertex")]
+                VSOutput vertMain(VSInput input, uniform ShaderData *shaderData)
+                {
+                    VSOutput output;
+                    float4x4 modelMat = shaderData->model;
+                    float4x4 viewMat = shaderData->view;
+                    float4x4 projectionMat = shaderData->projection;
+
+                    // output.Pos = mul(projectionMat, mul(viewMat, mul(modelMat, float4(input.Pos.xyz, 1.0))));
+                    output.Pos = float4(input.Pos.xyz, 1.0);
+                    output.Normal = input.Normal;
+                    output.UV = input.UV;
+
+                    return output;
+                }
+
+                [[vk::binding(0, 0)]]
+                Sampler2D gTextures[];
+
+
+                [shader("fragment")]
+                float4 fragMain(VSOutput input) : SV_TARGET
+                {
+                    float3 color = gTextures[6].Sample(input.UV).rgb;
+                    return float4(color, 1.0);
+                }
+            )");
+
+            overlayRect.addComponent<rasm::Material>(*overlayMaterial);
         },
-        [&bloomPass](rasm::RenderContext &ctx)
+        [&engine, &overlayScene, &camera](rasm::RenderContext &ctx)
         {
-            bloomPass.execute(ctx);
+            engine.render(overlayScene, camera);
         });
 
     graph.compile();

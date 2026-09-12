@@ -167,6 +167,23 @@ namespace rasm
         return Scene(this, id);
     }
 
+    MeshHandle Engine::createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices)
+    {
+        auto handle = getNextMeshHandle();
+
+        ObjRaw objRaw{};
+        objRaw.vertices = std::move(vertices);
+        objRaw.indices = std::move(indices);
+
+        MeshRaw mesh{};
+        mesh.type = MeshRaw::MeshType::OBJ;
+        mesh.data = std::move(objRaw);
+
+        meshData[handle] = std::move(mesh);
+
+        return handle;
+    }
+
     MeshHandle Engine::loadMesh(const std::string &path)
     {
         // find if the mesh is already loaded, if so return existing handle
@@ -372,10 +389,12 @@ namespace rasm
         return BufferHandle{};
     }
 
-    Material Engine::createMaterial(MaterialTemplate type)
+    Material *Engine::createMaterial(MaterialTemplate type)
     {
         const MaterialHandle id{nextHandle.material++, 1};
-        return Material(id, type);
+        Material *material = new Material(id, type);
+        loadedMaterials[id] = material;
+        return material;
     }
 
     ResourceHandle Engine::createResource(const ResourceDesc &desc)
@@ -609,11 +628,18 @@ namespace rasm
             pipelineDesc.type = ResourceType::GRAPHICS_PIPELINE;
             pipelineDesc.name = "Pipeline for Material " + std::to_string(materialHandle.index);
 
-            auto shaderPath = Material::getShaderSources(materialHandle, MaterialTemplate::BASIC); // TODO: pick the right material
+            auto material = loadedMaterials.find(materialHandle);
+            if (material == loadedMaterials.end())
+            {
+                spdlog::error("Material not found for handle {}.", materialHandle.index);
+                continue;
+            }
 
-            auto shaderName = shaderPath.substr(shaderPath.find_last_of("/\\") + 1);
-            auto vertShader = shaderCompiler.compile(shaderPath, shaderName + ".vert.slang", "vertMain");
-            auto fragShader = shaderCompiler.compile(shaderPath, shaderName + ".frag.slang", "fragMain");
+            auto shaderSource = material->second->getShaderSources();
+
+            auto shaderName = material->second->getShaderName();
+            auto vertShader = shaderCompiler.compileFromString(shaderSource, shaderName + ".vert.slang", "vertMain");
+            auto fragShader = shaderCompiler.compileFromString(shaderSource, shaderName + ".frag.slang", "fragMain");
 
             auto shaderDesc = ResourceDesc{};
             shaderDesc.type = ResourceType::SHADER;
@@ -747,6 +773,7 @@ namespace rasm
 
                 auto bufferHandle = compiledScene.meshData[entityHandle];
                 auto desc = ctx.getResourceDesc(bufferHandle);
+                ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet);
                 ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
                 ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.vertexIndexBuffer.offset, Format::U32_UINT);
                 auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;

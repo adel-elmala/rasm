@@ -26,16 +26,16 @@ int main()
     rasm::TextureHandle normalTexture = engine.loadTexture("assets/textures/test1.jpg");
 
     // 4. Create a material
-    rasm::Material material = engine.createMaterial(rasm::MaterialTemplate::PBR);
-    material.setTexture(rasm::PbrSlot::ALBEDO, albedoTexture);
-    material.setTexture(rasm::PbrSlot::NORMAL, normalTexture);
-    material.setFloat(rasm::PbrParam::ROUGHNESS, 0.5f);
-    material.setFloat(rasm::PbrParam::METALLIC, 0.0f);
+    rasm::Material* material = engine.createMaterial(rasm::MaterialTemplate::PBR);
+    material->setTexture(rasm::PbrSlot::ALBEDO, albedoTexture);
+    material->setTexture(rasm::PbrSlot::NORMAL, normalTexture);
+    material->setFloat(rasm::PbrParam::ROUGHNESS, 0.5f);
+    material->setFloat(rasm::PbrParam::METALLIC, 0.0f);
 
     // 5. Create entities in the scene
     rasm::Entity bunny = scene.createEntity("bunny");
     bunny.addComponent<rasm::Mesh>(bunnyMesh);
-    bunny.addComponent<rasm::Material>(material);
+    bunny.addComponent<rasm::Material>(*material);
     bunny.addComponent<rasm::Transform>(
         glm::vec3(0.0f, 0.0f, -10.0f),     // position
         glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
@@ -44,7 +44,7 @@ int main()
 
     rasm::Entity bunny2 = scene.createEntity("bunny2");
     bunny2.addComponent<rasm::Mesh>(bunnyMesh);
-    bunny2.addComponent<rasm::Material>(material);
+    bunny2.addComponent<rasm::Material>(*material);
     bunny2.addComponent<rasm::Transform>(
         glm::vec3(5.0f, 0.0f, -10.0f),     // position
         glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
@@ -53,7 +53,7 @@ int main()
 
     rasm::Entity bunny3 = scene.createEntity("bunny3");
     bunny3.addComponent<rasm::Mesh>(bunnyMesh);
-    bunny3.addComponent<rasm::Material>(material);
+    bunny3.addComponent<rasm::Material>(*material);
     bunny3.addComponent<rasm::Transform>(
         glm::vec3(-5.0f, 1.0f, -10.0f),     // position
         glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation

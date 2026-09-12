@@ -48,13 +48,18 @@ namespace rasm
         [[nodiscard]]   MaterialHandle id() const;
         void            setTexture(PbrSlot slot, TextureHandle texture);
         void            setFloat(PbrParam param, float value);
-        static std::string getShaderSources(const MaterialHandle& handle, MaterialTemplate type);
+        void            setShaderSource(const std::string& source);
+        void            setShaderName(const std::string& name);
+        std::string     getShaderSources();
+        std::string     getShaderName();
 
     private:
         std::array<TextureHandle, static_cast<std::size_t>(PbrSlot::COUNT)> textures{};
         std::array<float, static_cast<std::size_t>(PbrParam::COUNT)>        scalarParams{};
         MaterialHandle                                                      handle{};
         MaterialTemplate                                                    type{};
+        std::string                                                         shaderSource{};
+        std::string                                                         shaderName{};
 
         static constexpr std::size_t toIndex(PbrSlot slot)
         {

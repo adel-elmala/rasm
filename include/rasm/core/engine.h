@@ -25,10 +25,11 @@ namespace rasm {
                                     Engine(const EngineConfig& config);
                                     ~Engine();
         Scene                       createScene();
+        MeshHandle                  createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices);
         MeshHandle                  loadMesh(const std::string& path);
         BufferHandle                uploadMesh(const MeshHandle& handle);
         TextureHandle               loadTexture(const std::string& path);
-        Material                    createMaterial(MaterialTemplate type);
+        Material*                   createMaterial(MaterialTemplate type);
         ResourceHandle              createResource(const ResourceDesc& desc);
         RenderGraph                 createRenderGraph();
         Entity                      createEntity(const Scene& scene, const std::string& name);
@@ -70,6 +71,7 @@ namespace rasm {
         std::unordered_map<std::string, TextureHandle>              loadedTextures;
         std::unordered_map<TextureHandle, TextureRaw, HandleHash>   textureData;
         std::unordered_map<MeshHandle, MeshRaw, HandleHash>         meshData;
+        std::unordered_map<MaterialHandle, Material*, HandleHash>   loadedMaterials;
         std::unordered_map<SceneHandle, CompiledScene, HandleHash>  compiledScenes;
         RenderContext                                               ctx{};
         ShaderCompiler                                              shaderCompiler{};
