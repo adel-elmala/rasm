@@ -530,21 +530,20 @@ namespace rasm
         depthDesc.texture.format = depthFormat;
         depthDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
 
-        // auto colorHandle = createTexture(colorDesc);
-        // auto depthHandle = createTexture(depthDesc);
-
         RenderTargetHandle rtHandle = engine->getNextRenderTargetHandle();
-        RenderTarget rt{};
+
+        RenderTarget rt = {
+            .width = width,
+            .height = height,
+            .colorFormat = colorFormat,
+            .depthFormat = depthFormat,
+        };
+
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             rt.colorAttachment[i] = createTexture(colorDesc);
             rt.depthAttachment[i] = createTexture(depthDesc);
         }
-
-        rt.width = width;
-        rt.height = height;
-        rt.colorFormat = colorFormat;
-        rt.depthFormat = depthFormat;
 
         renderTargetCache[rtHandle] = rt;
 
