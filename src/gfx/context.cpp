@@ -50,6 +50,16 @@ namespace rasm
         {
             vulkanContext.waitIdle(); // Ensure the device is idle before cleanup
 
+            for (const auto &[handle, descriptorSetLayout] : descriptorSetLayoutCache)
+            {
+                vulkanContext.removeDescriptorSetLayout(descriptorSetLayout);
+            }
+
+            for (const auto &[handle, descriptorPool] : descriptorPoolCache)
+            {
+                vulkanContext.removeDescriptorPool(descriptorPool);
+            }
+
             for (const auto &[handle, commandPool] : commandPoolCache)
             {
                 vulkanContext.removeCommandPool(commandPool);

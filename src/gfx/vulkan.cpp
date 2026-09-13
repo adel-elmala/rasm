@@ -1082,6 +1082,8 @@ namespace rasm::gfx
 
     void VulkanContext::removeTexture(const TextureVKHandle &texture)
     {
+        if (texture.sampler != VK_NULL_HANDLE) 
+            vkDestroySampler(this->device.device, texture.sampler, nullptr);
         vkDestroyImageView(this->device.device, texture.view, nullptr);
         vmaDestroyImage(this->allocator, texture.image, texture.allocation);
     }
@@ -1100,6 +1102,16 @@ namespace rasm::gfx
     void VulkanContext::removeCommandPool(const CommandPoolVKHandle &commandPool)
     {
         vkDestroyCommandPool(this->device.device, commandPool.commandPool, nullptr);
+    }
+
+    void VulkanContext::removeDescriptorPool(const DescriptorPoolVKHandle &descriptorPool)
+    {
+        vkDestroyDescriptorPool(this->device.device, descriptorPool.pool, nullptr);
+    }
+
+    void VulkanContext::removeDescriptorSetLayout(const DescriptorSetLayoutVKHandle &descriptorSetLayout)
+    {
+        vkDestroyDescriptorSetLayout(this->device.device, descriptorSetLayout.layout, nullptr);
     }
 
     void VulkanContext::removeSemaphore(const SemaphoreVKHandle &semaphore)
