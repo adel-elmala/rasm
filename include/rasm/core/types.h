@@ -121,25 +121,25 @@ namespace rasm
     struct DescriptorPoolTag;
     struct DescriptorSetTag;
 
-    using MeshHandle          = Handle<MeshTag>;
-    using BufferHandle        = Handle<BufferTag>;
-    using TextureHandle       = Handle<TextureTag>;
-    using MaterialHandle      = Handle<MaterialTag>;
-    using PipelineHandle      = Handle<PipelineTag>;
-    using CommandPoolHandle   = Handle<CommandPoolTag>;
-    using CommandBufferHandle = Handle<CommandBufferTag>;
-    using SemaphoreHandle     = Handle<SemaphoreTag>;
-    using FenceHandle         = Handle<FenceTag>;
-    using SwapchainHandle     = Handle<SwapchainTag>;
-    using ShaderHandle        = Handle<ShaderTag>;
-    using SceneHandle         = Handle<SceneTag>;
-    using EntityHandle        = Handle<EntityTag>;
-    using WindowHandle        = Handle<WindowTag>;
-    using ResourceHandle      = Handle<ResourceTag>;
-    using RenderTargetHandle   = Handle<RenderTargetTag>;
+    using MeshHandle                = Handle<MeshTag>;
+    using BufferHandle              = Handle<BufferTag>;
+    using TextureHandle             = Handle<TextureTag>;
+    using MaterialHandle            = Handle<MaterialTag>;
+    using PipelineHandle            = Handle<PipelineTag>;
+    using CommandPoolHandle         = Handle<CommandPoolTag>;
+    using CommandBufferHandle       = Handle<CommandBufferTag>;
+    using SemaphoreHandle           = Handle<SemaphoreTag>;
+    using FenceHandle               = Handle<FenceTag>;
+    using SwapchainHandle           = Handle<SwapchainTag>;
+    using ShaderHandle              = Handle<ShaderTag>;
+    using SceneHandle               = Handle<SceneTag>;
+    using EntityHandle              = Handle<EntityTag>;
+    using WindowHandle              = Handle<WindowTag>;
+    using ResourceHandle            = Handle<ResourceTag>;
+    using RenderTargetHandle        = Handle<RenderTargetTag>;
     using DescriptorSetLayoutHandle = Handle<DescriptorSetLayoutTag>;
-    using DescriptorPoolHandle = Handle<DescriptorPoolTag>;
-    using DescriptorSetHandle = Handle<DescriptorSetTag>;
+    using DescriptorPoolHandle      = Handle<DescriptorPoolTag>;
+    using DescriptorSetHandle       = Handle<DescriptorSetTag>;
 
     struct EngineConfig
     {
