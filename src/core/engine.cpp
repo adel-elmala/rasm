@@ -498,7 +498,7 @@ namespace rasm
 
         ctx.present(imageIdx, swapchain.readyToPresentSemaphores[imageIdx]);
 
-        frameCount = (frameCount + 1) % 2; // Toggle between 0 and 1 for double buffering
+        frameCount = (frameCount + 1) % MAX_FRAMES_IN_FLIGHT; // Toggle between 0 and 1 for double buffering
     }
 
     void Engine::beginOffscreenFrame(const RenderTargetHandle &renderTarget, Entity &camera)
@@ -536,7 +536,7 @@ namespace rasm
                    {},
                    currentFrame.inFlightFence);
 
-        frameCount = (frameCount + 1) % 2; // Toggle between 0 and 1 for double buffering
+        frameCount = (frameCount + 1) % MAX_FRAMES_IN_FLIGHT; // Toggle between 0 and 1 for double buffering
     }
 
     void Engine::recreateSwapchain()
