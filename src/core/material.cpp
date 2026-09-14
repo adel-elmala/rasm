@@ -1,108 +1,78 @@
 #include "rasm/core/material.h"
+#include "rasm/core/engine.h"
+#include "rasm/core/utils.h"
+
 #include "spdlog/spdlog.h"
+
 #include <fstream>
 #include <vector>
 
 namespace rasm
 {
 
-    Material::Material() {}
-    Material::Material(MaterialHandle materialHandle, MaterialTemplate type)
-        : handle(materialHandle), type(type)
+    MaterialHandle Engine::createMaterial(MaterialType type, TextureHandle textures[], ShaderHandle shader)
     {
+        if (type == MaterialType::SHADER && !shader.isValid())
+        {
+            spdlog::error("Invalid shader handle provided for custom shader material.");
+            return {};
+        }
+
+        MaterialHandle handle = getNextMaterialHandle();
+        if (handle.index >= MAX_MATERIALS)
+        {
+            spdlog::error("Exceeded maximum number of materials.");
+            return {};
+        }
+
+        auto material = Material{.handle = handle, .type = type, .shader = shader};
+        if (textures)
+        {
+            for (uint32_t i = 0; i < MAX_TEXTURE_SLOTS; ++i)
+            {
+                material.textures[i] = textures[i];
+            }
+        }
+
         switch (type)
         {
-        case MaterialTemplate::BASIC:
-            shaderName = "basic";
+        case MaterialType::BASIC:
+            material.name = "basic";
+            material.shader = createShader(readFile("./shaders/common/basic.slang"));
             break;
-        case MaterialTemplate::PBR:
-            shaderName = "pbr";
+        case MaterialType::PBR:
+            material.name = "pbr";
+            material.shader = createShader(readFile("./shaders/common/pbr.slang"));
             break;
-        case MaterialTemplate::UNLIT:
-            shaderName = "unlit";
+        case MaterialType::UNLIT:
+            material.name = "unlit";
+            material.shader = createShader(readFile("./shaders/common/unlit.slang"));
             break;
-        case MaterialTemplate::SHADER:
-            shaderName = "shader";
+        case MaterialType::SHADER:
+            material.name = "shader";
             break;
 
         default:
             spdlog::error("Unknown material template type.");
             break;
         }
-    }
-    Material::~Material() {}
 
-    MaterialHandle Material::id() const
-    {
+        registery.materials[handle.index] = material;
+
         return handle;
     }
 
-    void Material::setTexture(PbrSlot slot, TextureHandle texture)
+    ShaderHandle Engine::createShader(const std::string &shaderSource)
     {
-        const std::size_t index = toIndex(slot);
-        if (index >= textures.size())
+        ShaderHandle handle = getNextShaderHandle();
+        if (handle.index >= MAX_SHADERS)
         {
-            spdlog::error("PbrSlot enum value exceeds textures array size.");
-            return;
-        }
-
-        textures[index] = texture;
-    }
-    void Material::setFloat(PbrParam param, float value)
-    {
-        const std::size_t index = toIndex(param);
-        if (index >= scalarParams.size())
-        {
-            spdlog::error("PbrParam enum value exceeds scalarParams array size.");
-            return;
-        }
-
-        scalarParams[index] = value;
-    }
-
-    void Material::setShaderSource(const std::string &source)
-    {
-        shaderSource = source;
-    }
-
-    void Material::setShaderName(const std::string &name)
-    {
-        shaderName = name;
-    }
-
-    std::string Material::getShaderSources()
-    {
-        switch (this->type)
-        {
-        case MaterialTemplate::BASIC:
-        case MaterialTemplate::PBR:
-        case MaterialTemplate::UNLIT:
-        {
-            auto filePath = "./shaders/common/test.slang";
-            std::ifstream file(filePath);
-            if (!file.is_open())
-            {
-                spdlog::error("Failed to open shader file: {}", filePath);
-                return "";
-            }
-
-            std::stringstream buffer;
-            buffer << file.rdbuf();
-            return buffer.str();
-        }
-        case MaterialTemplate::SHADER:
-            return shaderSource;
-        default:
-        {
-            spdlog::error("Unknown material template type for shader retrieval.");
+            spdlog::error("Exceeded maximum number of shaders.");
             return {};
         }
-        }
-    }
 
-    std::string Material::getShaderName()
-    {
-        return shaderName;
-    }
+        registery.shaders[handle.index] = shaderSource;
 
+        return handle;
+    }
 }

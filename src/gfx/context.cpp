@@ -768,6 +768,19 @@ namespace rasm
         }
     }
 
+    // bool RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle &bindlessSet, const RenderTargetHandle &renderTarget, uint32_t slot)
+    // {
+    //     assert(slot < MAX_BINDLESS_TEXTURES && "Slot index exceeds maximum bindless textures.");
+
+    //     auto renderTargetIt = renderTargetCache.find(renderTarget);
+    //     if (renderTargetIt == renderTargetCache.end())
+    //     {
+    //         spdlog::error("Render target handle not found in cache during updateBindlessDescriptorSet.");
+    //         return false;
+    //     }
+
+    //     return updateBindlessDescriptorSet(bindlessSet, renderTargetIt->second, slot);
+    // }
 
     bool RenderContext::waitForFence(FenceHandle fence, uint64_t timeout)
     {

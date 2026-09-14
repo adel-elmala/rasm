@@ -17,6 +17,7 @@ set(RASM_SRC
             "src/core/shaderCompiler.cpp"
             "src/gfx/context.cpp"
             "src/gfx/vulkan.cpp"
+            "src/core/utils.cpp"
     )
 
 # required external libs
@@ -55,6 +56,11 @@ rasm_lib
 target_link_libraries(Example_1 PUBLIC
 rasm_lib
 )
+
+
+set(CMAKE_CXX_CODE_ANALYSIS_DEFAULT OFF)
+string(REPLACE "/Zi" "/Z7" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+string(REPLACE "/Zi" "/Z7" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
 
 if (MSVC)
     add_compile_options(/arch:AVX2)

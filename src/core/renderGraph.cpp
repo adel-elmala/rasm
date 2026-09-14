@@ -106,10 +106,24 @@ namespace rasm
             compile();
 
         auto &ctx = engine->getRenderContext();
+
+        auto scene = engine->getScene();
+        auto camera = scene.getCamera();
+
+        if (!camera.has_value()) {
+            spdlog::warn("No camera found in the current scene.");
+        }
+
+        auto cameraEntity = camera.value();
+
+        engine->beginFrame(cameraEntity);
         for (const auto &passIdx : executionOrder)
         {
+            engine->beginPass();
             passes[passIdx].execute(ctx);
+            engine->endPass();
         }
+        engine->endFrame();
     }
 
     // Internal helpers for the Builder

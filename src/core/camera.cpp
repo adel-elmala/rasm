@@ -1,40 +1,22 @@
 #include "rasm/core/camera.h"
-#include "glm/gtc/matrix_transform.hpp"
+#include "rasm/core/engine.h"
 
 namespace rasm
 {
-    Camera::Camera(CameraType type) : projection{.type = type} {}
-    Camera::~Camera() {}
-
-    void Camera::setPerspective(float fovY, float aspect, float nearZ, float farZ)
+    CameraHandle Engine::createCamera(CameraProjection projection, Transform transform)
     {
-        projection.type = CameraType::PERSPECTIVE;
-        projection.perspective.fovY = fovY;
-        projection.perspective.aspect = aspect;
-        projection.perspective.nearZ = nearZ;
-        projection.perspective.farZ = farZ;
+        auto handle = getNextCameraHandle();
+        registery.cameras[handle.index] = Camera{projection, transform};
+        return handle;
     }
 
-    void Camera::setOrthographic(float left, float right, float bottom, float top, float nearZ, float farZ)
+    void Engine::setCameraTransform(CameraHandle camera, Transform transform)
     {
-        projection.type = CameraType::ORTHOGRAPHIC;
-        projection.orthographic.left = left;
-        projection.orthographic.right = right;
-        projection.orthographic.bottom = bottom;
-        projection.orthographic.top = top;
-        projection.orthographic.nearZ = nearZ;
-        projection.orthographic.farZ = farZ;
+        registery.cameras[camera.index].transform = transform;
     }
 
-    glm::mat4 Camera::getProjectionMatrix() const
+    void Engine::setCameraProjection(CameraHandle camera, CameraProjection projection)
     {
-        if (projection.type == CameraType::PERSPECTIVE)
-        {
-            return glm::perspective(glm::radians(projection.perspective.fovY), projection.perspective.aspect, projection.perspective.nearZ, projection.perspective.farZ);
-        }
-        else
-        {
-            return glm::ortho(projection.orthographic.left, projection.orthographic.right, projection.orthographic.bottom, projection.orthographic.top, projection.orthographic.nearZ, projection.orthographic.farZ);
-        }
+        registery.cameras[camera.index].projection = projection;
     }
 }

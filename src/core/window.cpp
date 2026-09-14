@@ -1,6 +1,7 @@
 #include "rasm/core/window.h"
 #include "rasm/core/engine.h"
 #include "rasm/core/transform.h"
+#include "rasm/core/camera.h"
 
 #include "SDL3/SDL.h"
 #include "SDL3/SDL_vulkan.h"
@@ -39,7 +40,7 @@ namespace rasm
         return surface;
     }
 
-    void Window::pollEvents(Entity &camera)
+    void Window::pollEvents(CameraHandle camera)
     {
         SDL_Event event;
         while (SDL_PollEvent(&event))
@@ -55,7 +56,7 @@ namespace rasm
             }
             case SDL_EVENT_KEY_DOWN:
             {
-                auto &cam = camera.getComponent<Transform>();
+                auto &cam = engine->registery.cameras[camera.index].transform;
 
                 switch (event.key.key)
                 {
@@ -67,22 +68,22 @@ namespace rasm
                 }
                 case SDLK_W:
                 {
-                    cam.setPosition(cam.getPosition() + glm::vec3(0.0f, 0.0f, 1.0f)); // Move forward
+                    cam.position += glm::vec3(0.0f, 0.0f, 1.0f); // Move forward
                     break;
                 }
                 case SDLK_S:
                 {
-                    cam.setPosition(cam.getPosition() + glm::vec3(0.0f, 0.0f, -1.0f)); // Move backward
+                    cam.position += glm::vec3(0.0f, 0.0f, -1.0f); // Move backward
                     break;
                 }
                 case SDLK_A:
                 {
-                    cam.setPosition(cam.getPosition() + glm::vec3(1.0f, 0.0f, 0.0f)); // Move left
+                    cam.position += glm::vec3(1.0f, 0.0f, 0.0f); // Move left
                     break;
                 }
                 case SDLK_D:
                 {
-                    cam.setPosition(cam.getPosition() + glm::vec3(-1.0f, 0.0f, 0.0f)); // Move right
+                    cam.position += glm::vec3(-1.0f, 0.0f, 0.0f); // Move right
                     break;
                 }
                 }

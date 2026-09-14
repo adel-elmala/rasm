@@ -1,7 +1,7 @@
 // clang-format off
 #pragma once
 
-#include "glm/glm.hpp"
+#include "rasm/core/transform.h"
 
 namespace rasm {
     enum class CameraType
@@ -36,20 +36,10 @@ namespace rasm {
         };
     };
 
-    class Engine;
-
-    class Camera
+    struct Camera 
     {
-    friend class Engine;
-    public:
-                    Camera(CameraType type = CameraType::PERSPECTIVE);
-                    ~Camera();
-        void        setPerspective(float fovY, float aspect, float nearZ, float farZ);
-        void        setOrthographic(float left, float right, float bottom, float top, float nearZ, float farZ);
-        glm::mat4   getProjectionMatrix() const;
-
-    protected:
         CameraProjection projection;
+        Transform transform;
     };
 
 }

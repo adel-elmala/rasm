@@ -114,9 +114,11 @@ namespace rasm
     struct ShaderTag;
     struct SceneTag;
     struct EntityTag;
+    struct CameraTag;
     struct WindowTag;
     struct ResourceTag;
     struct RenderTargetTag;
+    struct LightTag;
     struct DescriptorSetLayoutTag;
     struct DescriptorPoolTag;
     struct DescriptorSetTag;
@@ -134,6 +136,8 @@ namespace rasm
     using ShaderHandle              = Handle<ShaderTag>;
     using SceneHandle               = Handle<SceneTag>;
     using EntityHandle              = Handle<EntityTag>;
+    using CameraHandle              = Handle<CameraTag>;
+    using LightHandle               = Handle<LightTag>;
     using WindowHandle              = Handle<WindowTag>;
     using ResourceHandle            = Handle<ResourceTag>;
     using RenderTargetHandle        = Handle<RenderTargetTag>;
@@ -169,6 +173,8 @@ namespace rasm
         uint64_t descriptorSetLayout    = 1;
         uint64_t descriptorPool         = 1;
         uint64_t descriptorSet          = 1;
+        uint64_t camera                 = 1;
+        uint64_t light                  = 1;
     };
 
     struct FrameResources
@@ -196,35 +202,11 @@ namespace rasm
         unsigned char*  data;
     };
 
-    struct Vertex
-    {
-        glm::vec3 pos;
-        glm::vec3 normal;
-        glm::vec2 uv;
-    };
-
-    struct ObjRaw
-    {
-        std::vector<Vertex>     vertices;
-        std::vector<uint32_t>   indices;
-    };
-
-    struct MeshRaw
-    {
-        enum class MeshType
-        {
-            GLTF,
-            OBJ
-        };
-        MeshType type;
-        std::variant<tinygltf::Model, ObjRaw> data;
-    };
-
     struct VertexAttributeDescription
     {
         uint32_t    binding;
         uint32_t    location;
-        Format      format;
+        rasm::Format      format;
         uint32_t    size;
         uint32_t    offset;
         bool        used = false;
@@ -239,7 +221,6 @@ namespace rasm
         uint32_t                    stride;
         bool                        perInstance;
     };
-
 
     enum class ResourceType
     {
@@ -481,13 +462,6 @@ namespace rasm
                 return 0;
             }
         }
-    };
-
-    struct CompiledScene
-    {
-        std::unordered_map<MaterialHandle, std::unordered_set<EntityHandle, HandleHash>, HandleHash> materialToMeshes;
-        std::unordered_map<MaterialHandle, PipelineHandle, HandleHash> materialToPipeline;
-        std::unordered_map<EntityHandle, BufferHandle, HandleHash> meshData;
     };
 
     struct RenderTarget

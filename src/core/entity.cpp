@@ -1,25 +1,45 @@
+#include "rasm/core/engine.h"
 #include "rasm/core/entity.h"
 
 namespace rasm
 {
+    EntityHandle Engine::createEntity(const std::string &name, MeshHandle mesh, MaterialHandle material, Transform transform)
+    {
+        const EntityHandle id = getNextEntityHandle();
 
-    Entity::Entity()
-        : storage(std::make_shared<ComponentStorage>()) {}
+        auto entity = Entity{.handle = id,
+                             .name = name,
+                             .mesh = mesh,
+                             .material = material,
+                             .transform = transform};
 
-    Entity::Entity(EntityHandle entityHandle)
-        : handle(entityHandle), storage(std::make_shared<ComponentStorage>()) {}
+        registery.entities[id.index] = entity;
 
-    Entity::Entity(EntityHandle entityHandle, const std::string &name)
-        : handle(entityHandle), name(name), storage(std::make_shared<ComponentStorage>()) {}
-    
-    Entity::~Entity() {}
-
-    EntityHandle Entity::id() const {
-        return handle;
+        return id;
     }
 
-    bool Entity::isValid() const {
-        return handle.isValid();
+    void Engine::updateTransform(EntityHandle entity, Transform transform)
+    {
+        if (entity.index >= MAX_ENTITIES || !registery.entities[entity.index].handle.isValid())
+        {
+            spdlog::error("Invalid entity handle for updating transform.");
+            isRunning = false;
+            return;
+        }
+
+        registery.entities[entity.index].transform = transform;
+    }
+
+    Transform Engine::getTransform(EntityHandle entity)
+    {
+        if (entity.index >= MAX_ENTITIES || !registery.entities[entity.index].handle.isValid())
+        {
+            spdlog::error("Invalid entity handle for getting transform.");
+            isRunning = false;
+            return Transform{};
+        }
+
+        return registery.entities[entity.index].transform;
     }
 
 }

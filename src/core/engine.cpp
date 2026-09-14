@@ -6,6 +6,7 @@
 #include "rasm/core/entity.h"
 #include "rasm/core/camera.h"
 #include "rasm/core/renderGraph.h"
+#include "rasm/core/utils.h"
 #include "rasm/gfx/context.h"
 
 #include "spdlog/spdlog.h"
@@ -142,14 +143,14 @@ namespace rasm
             stbi_image_free(tex.data);
         }
 
-        for (auto &[handle, mesh] : meshData)
+        for (auto mesh : registery.meshes)
         {
-            if (mesh.type == MeshRaw::MeshType::GLTF)
+            if (mesh.type == Mesh::MeshType::GLTF)
             {
                 // tinygltf::Model doesn't require explicit cleanup.
             }
 
-            if (mesh.type == MeshRaw::MeshType::OBJ)
+            if (mesh.type == Mesh::MeshType::OBJ)
             {
                 // If we had implemented OBJ loading, we would clean up any allocated resources here.
             }
@@ -161,12 +162,6 @@ namespace rasm
         spdlog::info("Engine shutdown, cleaned up resources.");
     }
 
-    Scene Engine::createScene()
-    {
-        const SceneHandle id{nextHandle.scene++, 1};
-        return Scene(this, id);
-    }
-
     MeshHandle Engine::createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices)
     {
         auto handle = getNextMeshHandle();
@@ -175,11 +170,11 @@ namespace rasm
         objRaw.vertices = std::move(vertices);
         objRaw.indices = std::move(indices);
 
-        MeshRaw mesh{};
-        mesh.type = MeshRaw::MeshType::OBJ;
+        Mesh mesh{};
+        mesh.type = Mesh::MeshType::OBJ;
         mesh.data = std::move(objRaw);
 
-        meshData[handle] = std::move(mesh);
+        registery.meshes[handle.index] = std::move(mesh);
 
         return handle;
     }
@@ -200,7 +195,7 @@ namespace rasm
             return MeshHandle{};
         }
 
-        MeshRaw mesh{};
+        Mesh mesh{};
         if (extension == "gltf" || extension == "glb")
         {
             tinygltf::TinyGLTF loader;
@@ -232,7 +227,7 @@ namespace rasm
                 return MeshHandle{};
             }
 
-            mesh.type = MeshRaw::MeshType::GLTF;
+            mesh.type = Mesh::MeshType::GLTF;
             mesh.data = std::move(model);
         }
         else
@@ -262,7 +257,7 @@ namespace rasm
                 out_indices.push_back(static_cast<uint32_t>(out_indices.size()));
             }
 
-            mesh.type = MeshRaw::MeshType::OBJ;
+            mesh.type = Mesh::MeshType::OBJ;
 
             ObjRaw objRaw{};
             objRaw.vertices = std::move(out_vertices);
@@ -272,7 +267,8 @@ namespace rasm
 
         auto handle = getNextMeshHandle();
         loadedMeshes[path] = handle;
-        meshData.insert({handle, std::move(mesh)});
+
+        registery.meshes[handle.index] = std::move(mesh);
 
         return handle;
     }
@@ -345,22 +341,21 @@ namespace rasm
     BufferHandle Engine::uploadMesh(const MeshHandle &handle)
     {
         // TODO: remove mesh from meshData after uploading to GPU.
-        auto it = meshData.find(handle);
-        if (it == meshData.end())
+        if (handle.index == 0 || handle.index > MAX_MESHES)
         {
             spdlog::error("Mesh handle not found for upload.");
             isRunning = false;
             return BufferHandle{};
         }
 
-        auto &mesh = it->second;
+        auto mesh = registery.meshes[handle.index];
 
-        if (mesh.type == MeshRaw::MeshType::GLTF)
+        if (mesh.type == Mesh::MeshType::GLTF)
         {
             // In a real implementation, this is where we'd upload the GLTF mesh data to the GPU.
             spdlog::info("Uploading GLTF mesh with handle: {}", handle.index);
         }
-        else if (mesh.type == MeshRaw::MeshType::OBJ)
+        else if (mesh.type == Mesh::MeshType::OBJ)
         {
             auto &objRaw = std::get<ObjRaw>(mesh.data);
 
@@ -387,14 +382,6 @@ namespace rasm
         }
 
         return BufferHandle{};
-    }
-
-    Material *Engine::createMaterial(MaterialTemplate type)
-    {
-        const MaterialHandle id{nextHandle.material++, 1};
-        Material *material = new Material(id, type);
-        loadedMaterials[id] = material;
-        return material;
     }
 
     ResourceHandle Engine::createResource(const ResourceDesc &desc)
@@ -450,7 +437,7 @@ namespace rasm
         return ctx.createRenderTarget(name, widthToUse, heightToUse, colorFormatToUse, depthFormatToUse);
     }
 
-    void Engine::beginFrame(Entity &camera)
+    void Engine::beginFrame(CameraHandle camera)
     {
         // wait for the gpu to finish rendering the previous frame
         auto &currentFrame = frameResources[frameCount];
@@ -470,10 +457,6 @@ namespace rasm
 
         // record commands for the current frame
         ctx.beginCommandBuffer(currentFrame.commandBuffer);
-
-        // transition swapchain image to be ready for rendering
-        ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
-        ctx.transitionImageLayout(currentFrame.commandBuffer, currentFrame.depthTexture, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
 
         // begin dynamic rendering
         ctx.beginRendering(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], currentFrame.depthTexture);
@@ -501,7 +484,8 @@ namespace rasm
         frameCount = (frameCount + 1) % MAX_FRAMES_IN_FLIGHT; // Toggle between 0 and 1 for double buffering
     }
 
-    void Engine::beginOffscreenFrame(const RenderTargetHandle &renderTarget, Entity &camera)
+    // TODO: delete
+    void Engine::beginOffscreenFrame(const RenderTargetHandle &renderTarget, CameraHandle camera)
     {
         auto &currentFrame = frameResources[frameCount];
         ctx.waitForFence(currentFrame.inFlightFence);
@@ -524,6 +508,7 @@ namespace rasm
         ctx.setScissor(currentFrame.commandBuffer, 0, 0, renderTargetData.width, renderTargetData.height);
     }
 
+    // TODO: delete
     void Engine::endOffscreenFrame()
     {
         auto &currentFrame = frameResources[frameCount];
@@ -537,6 +522,62 @@ namespace rasm
                    currentFrame.inFlightFence);
 
         frameCount = (frameCount + 1) % MAX_FRAMES_IN_FLIGHT; // Toggle between 0 and 1 for double buffering
+    }
+
+    void Engine::beginPass()
+    {
+        auto currentFrame = frameResources[frameCount];
+
+        if (currentRenderTarget.isValid())
+        {
+            auto renderTargetData = ctx.getRenderTarget(currentRenderTarget);
+
+            // transition render target images to be ready for rendering
+            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
+            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.depthAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
+        }
+        else
+        {
+            // transition swapchain image to be ready for rendering
+            ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
+            ctx.transitionImageLayout(currentFrame.commandBuffer, currentFrame.depthTexture, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
+        }
+    }
+
+    void Engine::endPass()
+    {
+        auto currentFrame = frameResources[frameCount];
+
+        if (currentRenderTarget.isValid())
+        {
+            auto renderTargetData = ctx.getRenderTarget(currentRenderTarget);
+
+            // transition render target images to be ready for sampling
+            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], TextureUsage::COLOR_ATTACHMENT, TextureUsage::SAMPLED);
+            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.depthAttachment[frameCount], TextureUsage::DEPTH_STENCIL_ATTACHMENT, TextureUsage::SAMPLED);
+        }
+
+        // TODO: insert barrier to ensure the pass has finished before subsequent operations
+    }
+
+    void Engine::setRenderTarget(const RenderTargetHandle &renderTarget)
+    {
+        this->currentRenderTarget = renderTarget;
+    }
+
+    void Engine::resetRenderTarget()
+    {
+        this->currentRenderTarget = RenderTargetHandle{};
+    }
+
+    void Engine::setScene(SceneHandle scene)
+    {
+        this->currentScene = scene;
+    }
+
+    SceneHandle Engine::getScene() const
+    {
+        return currentScene;
     }
 
     void Engine::recreateSwapchain()
@@ -572,109 +613,7 @@ namespace rasm
         }
     }
 
-    CompiledScene Engine::compileScene(Scene &scene)
-    {
-        if (!scene.isValid())
-        {
-            spdlog::error("Invalid scene handle for compilation.");
-            isRunning = false;
-            return CompiledScene{};
-        }
-
-        if (compiledScenes.find(scene.id()) != compiledScenes.end())
-        {
-            return compiledScenes[scene.id()];
-        }
-
-        CompiledScene compiledScene;
-
-        for (auto &[entityHandle, entity] : scene.entities)
-        {
-            if (entity.hasComponent<Mesh>() && entity.hasComponent<Material>())
-            {
-                auto &matComp = entity.getComponent<Material>();
-                auto &meshComp = entity.getComponent<Mesh>();
-
-                auto bufferHandle = uploadMesh(meshComp.id());
-                if (!bufferHandle.isValid())
-                {
-                    spdlog::error("Failed to upload mesh for Entity {}. Skipping.", entity.id().index);
-                    isRunning = false;
-                    continue;
-                }
-
-                compiledScene.meshData[entity.id()] = bufferHandle;
-                compiledScene.materialToMeshes[matComp.id()].insert(entity.id());
-            }
-        }
-
-        auto swapchainFormat = ctx.getSwapchainImageFormat();
-        auto depthFormat = Format::D24_UNORM_S8_UINT;
-
-        for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
-        {
-            // create a pipeline for each material.
-            auto pipelineDesc = ResourceDesc{};
-            pipelineDesc.type = ResourceType::GRAPHICS_PIPELINE;
-            pipelineDesc.name = "Pipeline for Material " + std::to_string(materialHandle.index);
-
-            auto material = loadedMaterials.find(materialHandle);
-            if (material == loadedMaterials.end())
-            {
-                spdlog::error("Material not found for handle {}.", materialHandle.index);
-                continue;
-            }
-
-            auto shaderSource = material->second->getShaderSources();
-
-            auto shaderName = material->second->getShaderName();
-            auto vertShader = shaderCompiler.compileFromString(shaderSource, shaderName + ".vert.slang", "vertMain");
-            auto fragShader = shaderCompiler.compileFromString(shaderSource, shaderName + ".frag.slang", "fragMain");
-
-            auto shaderDesc = ResourceDesc{};
-            shaderDesc.type = ResourceType::SHADER;
-            shaderDesc.shader.shaderType = ShaderType::VERTEX;
-            shaderDesc.shader.sourceSize = vertShader.code.size();
-            shaderDesc.shader.source = reinterpret_cast<const char *>(vertShader.code.data());
-
-            pipelineDesc.pipeline.vertexShader = ctx.createShader(shaderDesc);
-
-            shaderDesc.shader.shaderType = ShaderType::FRAGMENT;
-            shaderDesc.shader.sourceSize = fragShader.code.size();
-            shaderDesc.shader.source = reinterpret_cast<const char *>(fragShader.code.data());
-
-            pipelineDesc.pipeline.fragmentShader = ctx.createShader(shaderDesc);
-
-            pipelineDesc.pipeline.topology = PrimitiveTopology::TRIANGLE_LIST;
-
-            pipelineDesc.pipeline.colorAttachmentFormat = swapchainFormat;
-            pipelineDesc.pipeline.depthStencilAttachmentFormat = depthFormat;
-
-            rasm::VertexAttributeDescription attrDesc[4] = {};
-            auto size = std::min(vertShader.vertexInputLayout.size(), static_cast<size_t>(4));
-            for (size_t i = 0; i < size; ++i)
-            {
-                attrDesc[i] = vertShader.vertexInputLayout[i];
-            }
-
-            pipelineDesc.pipeline.vertexInputLayout = {
-                .attributes = {attrDesc[0], attrDesc[1], attrDesc[2], attrDesc[3]},
-                .binding = 0,
-                .stride = sizeof(Vertex),
-                .perInstance = false};
-
-            pipelineDesc.pipeline.descriptorSetLayout = bindlessDescriptorSetLayout;
-
-            auto pipeline = ctx.createPipeline(pipelineDesc);
-            compiledScene.materialToPipeline[materialHandle] = pipeline;
-        }
-
-        compiledScenes[scene.id()] = compiledScene;
-
-        return compiledScene;
-    }
-
-    void Engine::render(Scene &scene, Entity &camera)
+    void Engine::render(SceneHandle scene, CameraHandle camera)
     {
         beginFrame(camera);
 
@@ -683,11 +622,11 @@ namespace rasm
         auto commandBuffer = currentFrame.commandBuffer;
         auto shaderDataBuffer = currentFrame.shaderDataBuffer;
 
-        auto cam = camera.getComponent<Camera>();
-        auto camTransform = camera.getComponent<rasm::Transform>();
+        auto cam = registery.cameras[camera.index];
+        auto camTransform = cam.transform;
         auto camPos = camTransform.position;
 
-        auto projection = cam.getProjectionMatrix();
+        auto projection = getProjectionMatrix(cam.projection);
         auto view = glm::translate(glm::mat4(1.0f), camPos);
 
         auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
@@ -699,11 +638,11 @@ namespace rasm
             ctx.bindPipeline(commandBuffer, pipeline);
             for (const auto &entityHandle : entitySet)
             {
-                auto modelTransform = scene.entities.find(entityHandle)->second.getComponent<rasm::Transform>();
+                auto modelTransform = registery.entities[entityHandle.index].transform;
 
-                auto model = glm::translate(glm::mat4(1.0f), modelTransform.getPosition()) *
-                             glm::mat4_cast(modelTransform.getRotation()) *
-                             glm::scale(glm::mat4(1.0f), modelTransform.getScale());
+                auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
+                             glm::mat4_cast(modelTransform.rotation) *
+                             glm::scale(glm::mat4(1.0f), modelTransform.scale);
 
                 auto baseOffset = (sizeof(projection) + sizeof(view) + sizeof(model)) * shaderDataIdx;
                 ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), baseOffset);
@@ -725,7 +664,7 @@ namespace rasm
         endFrame();
     }
 
-    void Engine::render(Scene &scene, Entity &camera, const RenderTargetHandle &renderTarget)
+    void Engine::render(SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget)
     {
         beginOffscreenFrame(renderTarget, camera);
 
@@ -734,11 +673,11 @@ namespace rasm
         auto commandBuffer = currentFrame.commandBuffer;
         auto shaderDataBuffer = currentFrame.shaderDataBuffer;
 
-        auto cam = camera.getComponent<Camera>();
-        auto camTransform = camera.getComponent<rasm::Transform>();
+        auto cam = registery.cameras[camera.index];
+        auto camTransform = cam.transform;
         auto camPos = camTransform.position;
 
-        auto projection = cam.getProjectionMatrix();
+        auto projection = getProjectionMatrix(cam.projection);
         auto view = glm::translate(glm::mat4(1.0f), camPos);
 
         auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
@@ -750,11 +689,11 @@ namespace rasm
             ctx.bindPipeline(commandBuffer, pipeline);
             for (const auto &entityHandle : entitySet)
             {
-                auto modelTransform = scene.entities.find(entityHandle)->second.getComponent<rasm::Transform>();
+                auto modelTransform = registery.entities[entityHandle.index].transform;
 
-                auto model = glm::translate(glm::mat4(1.0f), modelTransform.getPosition()) *
-                             glm::mat4_cast(modelTransform.getRotation()) *
-                             glm::scale(glm::mat4(1.0f), modelTransform.getScale());
+                auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
+                             glm::mat4_cast(modelTransform.rotation) *
+                             glm::scale(glm::mat4(1.0f), modelTransform.scale);
 
                 auto baseOffset = (sizeof(projection) + sizeof(view) + sizeof(model)) * shaderDataIdx;
                 ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), baseOffset);
@@ -781,14 +720,9 @@ namespace rasm
         return isRunning;
     }
 
-    Entity Engine::createEntity(const Scene &scene, const std::string &name)
+    FrameResources &Engine::getCurrentFrameResources()
     {
-        if (!scene.isValid())
-        {
-            return Entity();
-        }
-        const EntityHandle id{nextHandle.entity++, 1};
-        return Entity(id, name);
+        return frameResources[frameCount % MAX_FRAMES_IN_FLIGHT];
     }
 
     EngineConfig Engine::getConfig() const
@@ -879,5 +813,30 @@ namespace rasm
     DescriptorPoolHandle Engine::getNextDescriptorPoolHandle()
     {
         return DescriptorPoolHandle{nextHandle.descriptorPool++, 1};
+    }
+
+    MaterialHandle Engine::getNextMaterialHandle()
+    {
+        return MaterialHandle{nextHandle.material++, 1};
+    }
+
+    ShaderHandle Engine::getNextShaderHandle()
+    {
+        return ShaderHandle{nextHandle.shader++, 1};
+    }
+
+    CameraHandle Engine::getNextCameraHandle()
+    {
+        return CameraHandle{nextHandle.camera++, 1};
+    }
+
+    EntityHandle Engine::getNextEntityHandle()
+    {
+        return EntityHandle{nextHandle.entity++, 1};
+    }
+
+    LightHandle Engine::getNextLightHandle()
+    {
+        return LightHandle{nextHandle.light++, 1};
     }
 }
