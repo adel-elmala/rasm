@@ -1,4 +1,4 @@
-﻿{
+{
     "version": 3,
     "configurePresets": [
         {
@@ -25,10 +25,10 @@
                 "value": "x64",
                 "strategy": "external"
             },
-          "cacheVariables": {
-            "CMAKE_BUILD_TYPE": "Debug",
-            "CMAKE_TOOLCHAIN_FILE": "E:\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake"
-          }
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_TOOLCHAIN_FILE": "E:\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake"
+            }
         },
         {
             "name": "x64-release",
@@ -56,6 +56,17 @@
             "inherits": "x86-debug",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "macOS",
+            "displayName": "macOS",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
+                "CMAKE_TOOLCHAIN_FILE": "/Users/adel/vcpkg/scripts/buildsystems/vcpkg.cmake"
             }
         }
     ]
