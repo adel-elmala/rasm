@@ -107,16 +107,10 @@ namespace rasm
 
         auto &ctx = engine->getRenderContext();
 
-        auto scene = engine->getScene();
-        auto camera = scene.getCamera();
+        auto scene = engine->registery.scenes[engine->currentScene.index];
+        auto camera = scene.cameras[0]; // TODO: handle multi-cameras
 
-        if (!camera.has_value()) {
-            spdlog::warn("No camera found in the current scene.");
-        }
-
-        auto cameraEntity = camera.value();
-
-        engine->beginFrame(cameraEntity);
+        engine->beginFrame(camera);
         for (const auto &passIdx : executionOrder)
         {
             engine->beginPass();

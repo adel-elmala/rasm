@@ -14,25 +14,28 @@ namespace rasm {
     {
         CameraType type;
 
+        struct Perspective
+        {
+            float fovY;
+            float aspect;
+            float nearZ;
+            float farZ;
+        };
+        
+        struct Orthographic
+        {
+            float left;
+            float right;
+            float bottom;
+            float top;
+            float nearZ;
+            float farZ;
+        };
+
         union
         {
-            struct Perspective
-            {
-                float fovY;
-                float aspect;
-                float nearZ;
-                float farZ;
-            } perspective;
-            
-            struct Orthographic
-            {
-                float left;
-                float right;
-                float bottom;
-                float top;
-                float nearZ;
-                float farZ;
-            } orthographic;
+            Perspective perspective;
+            Orthographic orthographic;
         };
     };
 

@@ -30,12 +30,6 @@ namespace rasm {
         size_t lightCount = 0;
     };
 
-    struct SceneArray
-    {
-        Scene scenes[MAX_SCENES]{};
-        size_t count = 0;
-    };
-
     struct CompiledScene
     {
         std::unordered_map<MaterialHandle, std::unordered_set<EntityHandle, HandleHash>, HandleHash> materialToMeshes;

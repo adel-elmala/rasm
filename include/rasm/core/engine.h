@@ -26,6 +26,8 @@ namespace rasm {
 
     class Engine {
     friend class Window;
+    friend class RenderGraph;
+
 
     public:
                                     Engine(const EngineConfig& config);
@@ -106,7 +108,6 @@ namespace rasm {
         DescriptorSetLayoutHandle                                   bindlessDescriptorSetLayout{};
         DescriptorPoolHandle                                        bindlessDescriptorPool{};
         DescriptorSetHandle                                         bindlessDescriptorSet{};
-        SceneArray                                                  sceneArray{};
         SceneHandle                                                 currentScene{};
         RenderTargetHandle                                          currentRenderTarget{};
         uint64_t                                                    frameCount = 0;
@@ -123,6 +124,7 @@ namespace rasm {
             std::string     shaders[MAX_SHADERS]                      = {};
             Mesh            meshes[MAX_MESHES]                        = {};
             Light           lights[MAX_LIGHTS]                        = {};
+            Scene           scenes[MAX_SCENES]                        = {};
         };
 
         Registery registery = {};

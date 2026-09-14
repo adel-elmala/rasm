@@ -8,24 +8,26 @@ namespace rasm
     {
         const SceneHandle id{nextHandle.scene++, 1};
 
-        auto scene = Scene{id, Camera{}, {}};
-        sceneArray.scenes[sceneArray.count++] = scene;
+        auto scene = Scene{.handle = id};
+        registery.scenes[id.index] = scene;
 
-        assert(sceneArray.count <= MAX_SCENES);
-        assert(id.index == sceneArray.count - 1);
+        assert(id.index < MAX_SCENES);
+
+        currentScene = id;
+
         return id;
     }
 
     void Engine::addEntityToScene(SceneHandle scene, EntityHandle entity)
     {
-        if (scene.index >= sceneArray.count)
+        if (scene.index >= MAX_SCENES)
         {
             spdlog::error("Invalid scene handle for adding entity.");
             isRunning = false;
             return;
         }
 
-        auto &sceneRef = sceneArray.scenes[scene.index];
+        auto &sceneRef = registery.scenes[scene.index];
 
         if (sceneRef.entityCount + 1 > MAX_ENTITIES_PER_SCENE)
         {
@@ -38,14 +40,14 @@ namespace rasm
 
     void Engine::addCameraToScene(SceneHandle scene, CameraHandle camera)
     {
-        if (scene.index >= sceneArray.count)
+        if (scene.index >= MAX_SCENES)
         {
             spdlog::error("Invalid scene handle for adding camera.");
             isRunning = false;
             return;
         }
 
-        auto &sceneRef = sceneArray.scenes[scene.index];
+        auto &sceneRef = registery.scenes[scene.index];
 
         if (sceneRef.cameraCount + 1 > MAX_CAMERAS_PER_SCENE)
         {
@@ -58,14 +60,14 @@ namespace rasm
 
     void Engine::addLightToScene(SceneHandle scene, LightHandle light)
     {
-        if (scene.index >= sceneArray.count)
+        if (scene.index >= MAX_SCENES)
         {
             spdlog::error("Invalid scene handle for adding light.");
             isRunning = false;
             return;
         }
 
-        auto &sceneRef = sceneArray.scenes[scene.index];
+        auto &sceneRef = registery.scenes[scene.index];
 
         if (sceneRef.lightCount + 1 > MAX_LIGHTS_PER_SCENE)
         {
@@ -78,7 +80,7 @@ namespace rasm
 
     CompiledScene Engine::compileScene(SceneHandle scene)
     {
-        if (scene.index >= sceneArray.count)
+        if (scene.index >= MAX_SCENES)
         {
             spdlog::error("Invalid scene handle for compilation.");
             isRunning = false;
@@ -92,7 +94,7 @@ namespace rasm
 
         CompiledScene compiledScene;
 
-        auto _scene = sceneArray.scenes[scene.index];
+        auto _scene = registery.scenes[scene.index];
 
         for (auto entityHandle : _scene.entities)
         {

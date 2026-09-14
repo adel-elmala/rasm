@@ -15,37 +15,46 @@ int main()
     // set up the scene
     rasm::SceneHandle scene = engine.createScene();
 
-    // set up the main camera
-    rasm::Entity camera = scene.createEntity("MainCamera");
-    rasm::Camera &cameraLens = camera.addComponent<rasm::Camera>(rasm::CameraType::PERSPECTIVE);
-    cameraLens.setPerspective(45.0f,
-                              static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight),
-                              0.1f, 32.0f);
-    camera.addComponent<rasm::Transform>(glm::vec3(0.0f, 0.0f, -1.0f));
+    // Create a camera
+    rasm::CameraHandle camera = engine.createCamera(rasm::CameraProjection{.type = rasm::CameraType::PERSPECTIVE,
+                                                                           .perspective{.fovY = 45.0f,
+                                                                                        .aspect = static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight),
+                                                                                        .nearZ = 0.1f,
+                                                                                        .farZ = 32.0f}},
+                                                    rasm::Transform{
+                                                        glm::vec3(0.0f, 0.0f, -1.0f),      // position
+                                                        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
+                                                        glm::vec3(1.0f)                    // scale
+                                                    });
 
-    // Load model and textures
+    // Load resources
     rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/bunny.obj");
 
-    // Create entities in the scene
-    rasm::Entity bunny = scene.createEntity("bunny");
-    bunny.addComponent<rasm::Mesh>(bunnyMesh);
-
-    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/textures/test1.jpg");
+    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/textures/bunny-atlas.jpg");
     rasm::TextureHandle normalTexture = engine.loadTexture("assets/textures/test1.jpg");
 
     // Create a material
-    rasm::Material *material = engine.createMaterial(rasm::MaterialTemplate::PBR); // TODO: don't expose raw pointer
-    material->setTexture(rasm::PbrSlot::ALBEDO, albedoTexture);
-    material->setTexture(rasm::PbrSlot::NORMAL, normalTexture);
-    material->setFloat(rasm::PbrParam::ROUGHNESS, 0.5f);
-    material->setFloat(rasm::PbrParam::METALLIC, 0.0f);
+    rasm::TextureHandle textures[] = {albedoTexture, normalTexture};
+    rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::PBR, textures);
 
-    bunny.addComponent<rasm::Material>(*material);
-    bunny.addComponent<rasm::Transform>(
-        glm::vec3(0.0f, 0.0f, -10.0f),     // position
-        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
-        glm::vec3(0.05f)                   // scale
-    );
+    // Create entities in the scene
+    rasm::EntityHandle bunny = engine.createEntity("bunny", bunnyMesh, material, rasm::Transform{
+                                                                                     glm::vec3(0.0f, 0.0f, -10.0f),     // position
+                                                                                     glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
+                                                                                     glm::vec3(0.05f)                   // scale
+                                                                                 });
+
+
+    // Create a directional light
+    rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL,  // type
+                                                 glm::vec3(1.0f, 1.0f, 1.0f),   // color
+                                                 1.0f,                          // intensity
+                                                 glm::vec3(0.0f, 10.0f, 0.0f),  // position
+                                                 glm::vec3(0.0f, -1.0f, 0.0f)); // direction
+
+    engine.addEntityToScene(scene, bunny);
+    engine.addCameraToScene(scene, camera);
+    engine.addLightToScene(scene, light);
 
     rasm::RenderGraph graph = engine.createRenderGraph();
 
@@ -122,12 +131,12 @@ int main()
 
     auto overlayScene = engine.createScene();
 
-        // set up the main camera
+    // set up the main camera
     rasm::Entity overLaycamera = overlayScene.createEntity("MainCamera");
     rasm::Camera &overLaycameraLens = overLaycamera.addComponent<rasm::Camera>(rasm::CameraType::PERSPECTIVE);
     overLaycameraLens.setPerspective(45.0f,
-                              static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight),
-                              0.1f, 32.0f);
+                                     static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight),
+                                     0.1f, 32.0f);
     overLaycamera.addComponent<rasm::Transform>(glm::vec3(0.0f, 0.0f, -1.0f));
 
     graph.addPass(
@@ -263,6 +272,5 @@ int main()
     {
         graph.execute();
     }
-
     return 0;
 }

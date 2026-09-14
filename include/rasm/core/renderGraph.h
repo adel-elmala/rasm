@@ -46,6 +46,7 @@ namespace rasm
 
     class RenderGraph
     {
+        friend class Engine;
         friend class PassBuilder;
     public:
              RenderGraph(Engine* owner) : engine(owner) {}

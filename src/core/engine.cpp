@@ -820,11 +820,6 @@ namespace rasm
         return MaterialHandle{nextHandle.material++, 1};
     }
 
-    ShaderHandle Engine::getNextShaderHandle()
-    {
-        return ShaderHandle{nextHandle.shader++, 1};
-    }
-
     CameraHandle Engine::getNextCameraHandle()
     {
         return CameraHandle{nextHandle.camera++, 1};
