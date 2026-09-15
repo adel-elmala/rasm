@@ -1,5 +1,6 @@
 // Future API sketch (not implemented yet):
 #include "rasm/rasm.h"
+#include "rasm/core/utils.h"
 
 int main()
 {
@@ -90,7 +91,7 @@ int main()
             auto camTransform = engine.getCameraTransform(camera);
             auto camPos = camTransform.position;
 
-            auto projection = engine.getCameraProjection(camera);
+            auto projection = getProjectionMatrix(engine.getCameraProjection(camera));
             auto view = glm::translate(glm::mat4(1.0f), camPos);
 
             auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
@@ -216,12 +217,12 @@ int main()
             auto camTransform = engine.getCameraTransform(camera);
             auto camPos = camTransform.position;
 
-            auto projection = engine.getCameraProjection(camera);
+            auto projection = getProjectionMatrix(engine.getCameraProjection(camera));
             auto view = glm::translate(glm::mat4(1.0f), camPos);
 
             auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
 
-            auto shaderDataIdx = 0;
+            auto shaderDataIdx = 3;
             for (const auto& [materialHandle, entitySet] : compiledScene.materialToMeshes)
             {
                 auto pipeline = compiledScene.materialToPipeline[materialHandle];
@@ -229,7 +230,6 @@ int main()
                 for (const auto& entityHandle : entitySet)
                 {
                     auto modelTransform = engine.getTransform(entityHandle);
-                    // auto modelTransform = scene.getEntity(entityHandle).value()->getComponent<rasm::Transform>();
 
                     auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
                         glm::mat4_cast(modelTransform.rotation) *

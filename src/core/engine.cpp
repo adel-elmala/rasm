@@ -572,8 +572,8 @@ namespace rasm
             auto renderTargetData = ctx.getRenderTarget(currentRenderTarget);
 
             // transition render target images to be ready for sampling
-            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], TextureUsage::COLOR_ATTACHMENT, TextureUsage::SAMPLED);
-            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.depthAttachment[frameCount], TextureUsage::DEPTH_STENCIL_ATTACHMENT, TextureUsage::SAMPLED);
+            // ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], TextureUsage::COLOR_ATTACHMENT, TextureUsage::SAMPLED);
+            // ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.depthAttachment[frameCount], TextureUsage::DEPTH_STENCIL_ATTACHMENT, TextureUsage::SAMPLED);
         }
         else
         {
@@ -639,6 +639,7 @@ namespace rasm
     void Engine::render(SceneHandle scene, CameraHandle camera)
     {
         beginFrame(camera);
+        beginPass();
 
         auto compiledScene = compileScene(scene);
         auto& currentFrame = frameResources[frameCount];
@@ -683,7 +684,7 @@ namespace rasm
                 shaderDataIdx++;
             }
         }
-
+        endPass();
         endFrame();
     }
 
