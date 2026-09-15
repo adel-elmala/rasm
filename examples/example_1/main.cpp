@@ -35,7 +35,7 @@ int main()
 
     // Create a material
     rasm::TextureHandle textures[] = { albedoTexture, normalTexture };
-    rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::PBR, textures);
+    rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::BASIC, textures);
 
     // Create entities in the scene
     rasm::EntityHandle bunny = engine.createEntity("bunny", bunnyMesh, material, rasm::Transform{
@@ -43,7 +43,6 @@ int main()
                                                                                      glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
                                                                                      glm::vec3(0.05f)                   // scale
         });
-
 
     // Create a directional light
     rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL,  // type
@@ -116,7 +115,7 @@ int main()
 
                     auto bufferHandle = compiledScene.meshData[entityHandle];
                     auto desc = ctx.getResourceDesc(bufferHandle);
-                    // ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
+                    ctx.bindDescriptorSet(commandBuffer, pipeline, engine.getBindlessDescriptorSet(), 0);
                     ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
                     ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.vertexIndexBuffer.offset, rasm::Format::U32_UINT);
                     auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;
@@ -129,8 +128,6 @@ int main()
 
     auto overlayScene = engine.createScene();
     engine.addCameraToScene(overlayScene, camera);
-
-    // set up the main camera
 
     graph.addPass(
         "overlay",
@@ -245,7 +242,7 @@ int main()
 
                     auto bufferHandle = compiledScene.meshData[entityHandle];
                     auto desc = ctx.getResourceDesc(bufferHandle);
-                    // ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
+                    ctx.bindDescriptorSet(commandBuffer, pipeline, engine.getBindlessDescriptorSet(), 0);
                     ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
                     ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.vertexIndexBuffer.offset, rasm::Format::U32_UINT);
                     auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;

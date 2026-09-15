@@ -25,7 +25,7 @@ namespace rasm
             return {};
         }
 
-        auto material = Material{.handle = handle, .type = type, .textures = {}, .shader = shader};
+        auto material = Material{ .handle = handle, .type = type, .textures = {}, .shader = shader };
         if (textures)
         {
             for (uint32_t i = 0; i < MAX_TEXTURE_SLOTS; ++i)
@@ -38,7 +38,7 @@ namespace rasm
         {
         case MaterialType::BASIC:
             material.name = "basic";
-            material.shader = createShader(readFile("./shaders/common/basic.slang"));
+            material.shader = createShader(readFile("./shaders/common/test.slang"));
             break;
         case MaterialType::PBR:
             material.name = "pbr";
@@ -63,7 +63,7 @@ namespace rasm
         return handle;
     }
 
-    ShaderHandle Engine::createShader(const std::string &shaderSource)
+    ShaderHandle Engine::createShader(const std::string& shaderSource)
     {
         ShaderHandle handle = getNextShaderHandle();
         if (handle.index >= MAX_SHADERS)

@@ -18,7 +18,6 @@
 
 namespace rasm {
 
-
     constexpr uint32_t MAX_MATERIALS = 256;
     constexpr uint32_t MAX_SHADERS = 256;
     constexpr uint32_t MAX_CAMERAS = 8;
@@ -67,11 +66,12 @@ namespace rasm {
         void                        resetRenderTarget();
         void                        setScene(SceneHandle scene);
         SceneHandle                 getScene() const;
-        FrameResources& getCurrentFrameResources();
+        DescriptorSetHandle         getBindlessDescriptorSet();
+        FrameResources&             getCurrentFrameResources();
         EngineConfig                getConfig() const;
-        Window& getWindow();
+        Window&                     getWindow();
         WindowHandle                getMainWindow() const;
-        RenderContext& getRenderContext();
+        RenderContext&              getRenderContext();
         MeshHandle                  getNextMeshHandle();
         ShaderHandle                getNextShaderHandle();
         BufferHandle                getNextBufferHandle();

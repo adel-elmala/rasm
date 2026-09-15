@@ -16,7 +16,7 @@ int main()
     };
 
     rasm::Engine engine(config);
-#if 0
+#if 1
 
     // 2. Create a scene
     rasm::SceneHandle scene = engine.createScene();
@@ -33,7 +33,7 @@ int main()
 
     // 4. Create a material
     rasm::TextureHandle textures[] = { albedoTexture, normalTexture };
-    rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::PBR, textures);
+    rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::BASIC, textures);
 
     // 5. Create entities in the scene
     rasm::EntityHandle bunny = engine.createEntity("bunny", bunnyMesh, material, rasm::Transform{

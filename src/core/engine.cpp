@@ -46,11 +46,11 @@ namespace rasm
         }
     }
 
-    Engine::Engine(const EngineConfig &config) : config(config)
+    Engine::Engine(const EngineConfig& config) : config(config)
     {
         // In a real implementation, this is where we'd initialize the window, graphics context, etc.
         spdlog::info("Engine initialized with config: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
-                     config.appName, config.windowWidth, config.windowHeight, config.enableValidation);
+            config.appName, config.windowWidth, config.windowHeight, config.enableValidation);
 
         this->window = Window(this, config.windowWidth, config.windowHeight);
         this->mainWindow = this->window.createWindow();
@@ -138,7 +138,7 @@ namespace rasm
     Engine::~Engine()
     {
         // Clean up resources, free memory, etc.
-        for (auto &[handle, tex] : textureData)
+        for (auto& [handle, tex] : textureData)
         {
             stbi_image_free(tex.data);
         }
@@ -186,7 +186,7 @@ namespace rasm
         return handle;
     }
 
-    MeshHandle Engine::loadMesh(const std::string &path)
+    MeshHandle Engine::loadMesh(const std::string& path)
     {
         // find if the mesh is already loaded, if so return existing handle
         if (loadedMeshes.find(path) != loadedMeshes.end())
@@ -261,12 +261,12 @@ namespace rasm
             std::vector<Vertex> out_vertices;
             std::vector<uint32_t> out_indices;
 
-            for (auto &index : shapes[0].mesh.indices)
+            for (auto& index : shapes[0].mesh.indices)
             {
                 Vertex v{
-                    .pos = {attrib.vertices[index.vertex_index * 3], -attrib.vertices[index.vertex_index * 3 + 1], attrib.vertices[index.vertex_index * 3 + 2]},
-                    .normal = {attrib.normals[index.normal_index * 3], -attrib.normals[index.normal_index * 3 + 1], attrib.normals[index.normal_index * 3 + 2]},
-                    .uv = {attrib.texcoords[index.texcoord_index * 2], 1.0 - attrib.texcoords[index.texcoord_index * 2 + 1]}};
+                    .pos = { attrib.vertices[index.vertex_index * 3], -attrib.vertices[index.vertex_index * 3 + 1], attrib.vertices[index.vertex_index * 3 + 2] },
+                    .normal = { attrib.normals[index.normal_index * 3], -attrib.normals[index.normal_index * 3 + 1], attrib.normals[index.normal_index * 3 + 2] },
+                    .uv = { attrib.texcoords[index.texcoord_index * 2], 1.0 - attrib.texcoords[index.texcoord_index * 2 + 1] } };
 
                 out_vertices.push_back(v);
                 out_indices.push_back(static_cast<uint32_t>(out_indices.size()));
@@ -295,7 +295,7 @@ namespace rasm
         return handle;
     }
 
-    TextureHandle Engine::loadTexture(const std::string &path)
+    TextureHandle Engine::loadTexture(const std::string& path)
     {
         // find if the texture is already loaded, if so return existing handle
         if (loadedTextures.find(path) != loadedTextures.end())
@@ -313,7 +313,7 @@ namespace rasm
         }
 
         int width, height, nChannels;
-        unsigned char *data = stbi_load(path.c_str(), &width, &height, &nChannels, 4);
+        unsigned char* data = stbi_load(path.c_str(), &width, &height, &nChannels, 4);
 
         if (!data)
         {
@@ -355,12 +355,12 @@ namespace rasm
         }
 
         loadedTextures[path] = textureHandle;
-        textureData.insert({textureHandle, std::move(tex)});
+        textureData.insert({ textureHandle, std::move(tex) });
 
         return textureHandle;
     }
 
-    BufferHandle Engine::uploadMesh(const MeshHandle &handle)
+    BufferHandle Engine::uploadMesh(const MeshHandle& handle)
     {
         // TODO: remove mesh from meshData after uploading to GPU.
         if (handle.index == 0 || handle.index >= registery.meshes.size())
@@ -379,7 +379,7 @@ namespace rasm
         }
         else if (mesh.type == Mesh::MeshType::OBJ)
         {
-            auto &objRaw = std::get<ObjRaw>(mesh.data);
+            auto& objRaw = std::get<ObjRaw>(mesh.data);
 
             auto bufferDesc = ResourceDesc{};
             bufferDesc.name = "OBJ Vertex + index Buffer";
@@ -406,7 +406,7 @@ namespace rasm
         return BufferHandle{};
     }
 
-    ResourceHandle Engine::createResource(const ResourceDesc &desc)
+    ResourceHandle Engine::createResource(const ResourceDesc& desc)
     {
         ResourceHandle handle{};
 
@@ -449,7 +449,7 @@ namespace rasm
         return graph;
     }
 
-    RenderTargetHandle Engine::createRenderTarget(const std::string &name, uint32_t width, uint32_t height, Format colorFormat, Format depthFormat)
+    RenderTargetHandle Engine::createRenderTarget(const std::string& name, uint32_t width, uint32_t height, Format colorFormat, Format depthFormat)
     {
         auto widthToUse = (width == 0) ? static_cast<uint32_t>(config.windowWidth) : width;
         auto heightToUse = (height == 0) ? static_cast<uint32_t>(config.windowHeight) : height;
@@ -462,7 +462,7 @@ namespace rasm
     void Engine::beginFrame(CameraHandle camera)
     {
         // wait for the gpu to finish rendering the previous frame
-        auto &currentFrame = frameResources[frameCount];
+        auto& currentFrame = frameResources[frameCount];
         ctx.waitForFence(currentFrame.inFlightFence);
         ctx.resetFence(currentFrame.inFlightFence);
 
@@ -479,27 +479,18 @@ namespace rasm
 
         // record commands for the current frame
         ctx.beginCommandBuffer(currentFrame.commandBuffer);
-
-        // begin dynamic rendering
-        ctx.beginRendering(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], currentFrame.depthTexture);
-        ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(config.windowWidth), static_cast<float>(config.windowHeight));
-        ctx.setScissor(currentFrame.commandBuffer, 0, 0, config.windowWidth, config.windowHeight);
     }
 
     void Engine::endFrame()
     {
-        auto &currentFrame = frameResources[frameCount];
-
-        ctx.endRendering(currentFrame.commandBuffer);
-
-        ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::COLOR_ATTACHMENT, TextureUsage::PRESENT_SRC);
+        auto& currentFrame = frameResources[frameCount];
 
         ctx.endCommandBuffer(currentFrame.commandBuffer);
 
         ctx.submit(currentFrame.commandBuffer,
-                   {currentFrame.readyToDrawSemaphore},
-                   {swapchain.readyToPresentSemaphores[imageIdx]},
-                   currentFrame.inFlightFence);
+            { currentFrame.readyToDrawSemaphore },
+            { swapchain.readyToPresentSemaphores[imageIdx] },
+            currentFrame.inFlightFence);
 
         ctx.present(imageIdx, swapchain.readyToPresentSemaphores[imageIdx]);
 
@@ -507,9 +498,9 @@ namespace rasm
     }
 
     // TODO: delete
-    void Engine::beginOffscreenFrame(const RenderTargetHandle &renderTarget, CameraHandle camera)
+    void Engine::beginOffscreenFrame(const RenderTargetHandle& renderTarget, CameraHandle camera)
     {
-        auto &currentFrame = frameResources[frameCount];
+        auto& currentFrame = frameResources[frameCount];
         ctx.waitForFence(currentFrame.inFlightFence);
         ctx.resetFence(currentFrame.inFlightFence);
 
@@ -518,7 +509,7 @@ namespace rasm
         // record commands for the current frame
         ctx.beginCommandBuffer(currentFrame.commandBuffer);
 
-        const RenderTarget &renderTargetData = ctx.getRenderTarget(renderTarget);
+        const RenderTarget& renderTargetData = ctx.getRenderTarget(renderTarget);
 
         // transition render target images to be ready for rendering
         ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
@@ -533,15 +524,15 @@ namespace rasm
     // TODO: delete
     void Engine::endOffscreenFrame()
     {
-        auto &currentFrame = frameResources[frameCount];
+        auto& currentFrame = frameResources[frameCount];
 
         ctx.endRendering(currentFrame.commandBuffer);
         ctx.endCommandBuffer(currentFrame.commandBuffer);
 
         ctx.submit(currentFrame.commandBuffer,
-                   {},
-                   {},
-                   currentFrame.inFlightFence);
+            {},
+            {},
+            currentFrame.inFlightFence);
 
         frameCount = (frameCount + 1) % MAX_FRAMES_IN_FLIGHT; // Toggle between 0 and 1 for double buffering
     }
@@ -564,11 +555,17 @@ namespace rasm
             ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
             ctx.transitionImageLayout(currentFrame.commandBuffer, currentFrame.depthTexture, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
         }
+
+        // begin dynamic rendering
+        ctx.beginRendering(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], currentFrame.depthTexture);
+        ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(config.windowWidth), static_cast<float>(config.windowHeight));
+        ctx.setScissor(currentFrame.commandBuffer, 0, 0, config.windowWidth, config.windowHeight);
     }
 
     void Engine::endPass()
     {
         auto currentFrame = frameResources[frameCount];
+        ctx.endRendering(currentFrame.commandBuffer);
 
         if (currentRenderTarget.isValid())
         {
@@ -578,11 +575,15 @@ namespace rasm
             ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], TextureUsage::COLOR_ATTACHMENT, TextureUsage::SAMPLED);
             ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.depthAttachment[frameCount], TextureUsage::DEPTH_STENCIL_ATTACHMENT, TextureUsage::SAMPLED);
         }
+        else
+        {
+            ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::COLOR_ATTACHMENT, TextureUsage::PRESENT_SRC);
+        }
 
         // TODO: insert barrier to ensure the pass has finished before subsequent operations
     }
 
-    void Engine::setRenderTarget(const RenderTargetHandle &renderTarget)
+    void Engine::setRenderTarget(const RenderTargetHandle& renderTarget)
     {
         this->currentRenderTarget = renderTarget;
     }
@@ -609,7 +610,7 @@ namespace rasm
         swapchain.imageFormat = ctx.getSwapchainImageFormat();
 
         // Destroy old semaphores
-        for (auto &semaphore : swapchain.readyToPresentSemaphores)
+        for (auto& semaphore : swapchain.readyToPresentSemaphores)
         {
             ctx.destroySemaphore(semaphore);
         }
@@ -640,7 +641,7 @@ namespace rasm
         beginFrame(camera);
 
         auto compiledScene = compileScene(scene);
-        auto &currentFrame = frameResources[frameCount];
+        auto& currentFrame = frameResources[frameCount];
         auto commandBuffer = currentFrame.commandBuffer;
         auto shaderDataBuffer = currentFrame.shaderDataBuffer;
 
@@ -654,17 +655,17 @@ namespace rasm
         auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
 
         auto shaderDataIdx = 0;
-        for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
+        for (const auto& [materialHandle, entitySet] : compiledScene.materialToMeshes)
         {
             auto pipeline = compiledScene.materialToPipeline[materialHandle];
             ctx.bindPipeline(commandBuffer, pipeline);
-            for (const auto &entityHandle : entitySet)
+            for (const auto& entityHandle : entitySet)
             {
                 auto modelTransform = registery.entities[entityHandle.index].transform;
 
                 auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
-                             glm::mat4_cast(modelTransform.rotation) *
-                             glm::scale(glm::mat4(1.0f), modelTransform.scale);
+                    glm::mat4_cast(modelTransform.rotation) *
+                    glm::scale(glm::mat4(1.0f), modelTransform.scale);
 
                 auto baseOffset = (sizeof(projection) + sizeof(view) + sizeof(model)) * shaderDataIdx;
                 ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), baseOffset);
@@ -686,12 +687,12 @@ namespace rasm
         endFrame();
     }
 
-    void Engine::render(SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget)
+    void Engine::render(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget)
     {
         beginOffscreenFrame(renderTarget, camera);
 
         auto compiledScene = compileScene(scene);
-        auto &currentFrame = frameResources[frameCount];
+        auto& currentFrame = frameResources[frameCount];
         auto commandBuffer = currentFrame.commandBuffer;
         auto shaderDataBuffer = currentFrame.shaderDataBuffer;
 
@@ -705,17 +706,17 @@ namespace rasm
         auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
 
         auto shaderDataIdx = 0;
-        for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
+        for (const auto& [materialHandle, entitySet] : compiledScene.materialToMeshes)
         {
             auto pipeline = compiledScene.materialToPipeline[materialHandle];
             ctx.bindPipeline(commandBuffer, pipeline);
-            for (const auto &entityHandle : entitySet)
+            for (const auto& entityHandle : entitySet)
             {
                 auto modelTransform = registery.entities[entityHandle.index].transform;
 
                 auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
-                             glm::mat4_cast(modelTransform.rotation) *
-                             glm::scale(glm::mat4(1.0f), modelTransform.scale);
+                    glm::mat4_cast(modelTransform.rotation) *
+                    glm::scale(glm::mat4(1.0f), modelTransform.scale);
 
                 auto baseOffset = (sizeof(projection) + sizeof(view) + sizeof(model)) * shaderDataIdx;
                 ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), baseOffset);
@@ -742,7 +743,7 @@ namespace rasm
         return isRunning;
     }
 
-    FrameResources &Engine::getCurrentFrameResources()
+    FrameResources& Engine::getCurrentFrameResources()
     {
         return frameResources[frameCount % MAX_FRAMES_IN_FLIGHT];
     }
@@ -752,7 +753,7 @@ namespace rasm
         return config;
     }
 
-    Window &Engine::getWindow()
+    Window& Engine::getWindow()
     {
         return window;
     }
@@ -762,98 +763,103 @@ namespace rasm
         return mainWindow;
     }
 
-    RenderContext &Engine::getRenderContext()
+    RenderContext& Engine::getRenderContext()
     {
         return ctx;
     }
 
+    DescriptorSetHandle Engine::getBindlessDescriptorSet()
+    {
+        return bindlessDescriptorSet;
+    }
+
     MeshHandle Engine::getNextMeshHandle()
     {
-        return MeshHandle{nextHandle.mesh++, 1};
+        return MeshHandle{ nextHandle.mesh++, 1 };
     }
 
     BufferHandle Engine::getNextBufferHandle()
     {
-        return BufferHandle{nextHandle.buffer++, 1};
+        return BufferHandle{ nextHandle.buffer++, 1 };
     }
 
     TextureHandle Engine::getNextTextureHandle()
     {
-        return TextureHandle{nextHandle.texture++, 1};
+        return TextureHandle{ nextHandle.texture++, 1 };
     }
 
     ShaderHandle Engine::getNextShaderHandle()
     {
-        return ShaderHandle{nextHandle.shader++, 1};
+        return ShaderHandle{ nextHandle.shader++, 1 };
     }
 
     PipelineHandle Engine::getNextPipelineHandle()
     {
-        return PipelineHandle{nextHandle.pipeline++, 1};
+        return PipelineHandle{ nextHandle.pipeline++, 1 };
     }
 
     CommandPoolHandle Engine::getNextCommandPoolHandle()
     {
-        return CommandPoolHandle{nextHandle.commandPool++, 1};
+        return CommandPoolHandle{ nextHandle.commandPool++, 1 };
     }
 
     CommandBufferHandle Engine::getNextCommandBufferHandle()
     {
-        return CommandBufferHandle{nextHandle.commandBuffer++, 1};
+        return CommandBufferHandle{ nextHandle.commandBuffer++, 1 };
     }
 
     SemaphoreHandle Engine::getNextSemaphoreHandle()
     {
-        return SemaphoreHandle{nextHandle.semaphore++, 1};
+        return SemaphoreHandle{ nextHandle.semaphore++, 1 };
     }
 
     FenceHandle Engine::getNextFenceHandle()
     {
-        return FenceHandle{nextHandle.fence++, 1};
+        return FenceHandle{ nextHandle.fence++, 1 };
     }
 
     SwapchainHandle Engine::getNextSwapchainHandle()
     {
-        return SwapchainHandle{nextHandle.swapchain++, 1};
+        return SwapchainHandle{ nextHandle.swapchain++, 1 };
     }
 
     RenderTargetHandle Engine::getNextRenderTargetHandle()
     {
-        return RenderTargetHandle{nextHandle.renderTarget++, 1};
+        return RenderTargetHandle{ nextHandle.renderTarget++, 1 };
     }
 
     DescriptorSetLayoutHandle Engine::getNextDescriptorSetLayoutHandle()
     {
-        return DescriptorSetLayoutHandle{nextHandle.descriptorSetLayout++, 1};
+        return DescriptorSetLayoutHandle{ nextHandle.descriptorSetLayout++, 1 };
     }
 
     DescriptorSetHandle Engine::getNextDescriptorSetHandle()
     {
-        return DescriptorSetHandle{nextHandle.descriptorSet++, 1};
+        return DescriptorSetHandle{ nextHandle.descriptorSet++, 1 };
     }
 
     DescriptorPoolHandle Engine::getNextDescriptorPoolHandle()
     {
-        return DescriptorPoolHandle{nextHandle.descriptorPool++, 1};
+        return DescriptorPoolHandle{ nextHandle.descriptorPool++, 1 };
     }
 
     MaterialHandle Engine::getNextMaterialHandle()
     {
-        return MaterialHandle{nextHandle.material++, 1};
+        return MaterialHandle{ nextHandle.material++, 1 };
     }
 
     CameraHandle Engine::getNextCameraHandle()
     {
-        return CameraHandle{nextHandle.camera++, 1};
+        return CameraHandle{ nextHandle.camera++, 1 };
     }
 
     EntityHandle Engine::getNextEntityHandle()
     {
-        return EntityHandle{nextHandle.entity++, 1};
+        return EntityHandle{ nextHandle.entity++, 1 };
     }
 
     LightHandle Engine::getNextLightHandle()
     {
-        return LightHandle{nextHandle.light++, 1};
+        return LightHandle{ nextHandle.light++, 1 };
     }
 }

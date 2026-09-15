@@ -16,14 +16,14 @@ namespace rasm::gfx
     // clang-format off
 
     // Forward declarations of private helper functions for Vulkan setup and management.
-    vkb::Result<vkb::Instance>          _init_instance(const char *app_name, bool enable_validation_layers);
-    vkb::Result<vkb::PhysicalDevice>    _init_physical_device(const vkb::Instance &vkb_instance, VkSurfaceKHR surface);
-    vkb::Result<vkb::Device>            _init_logical_device(const vkb::PhysicalDevice &physical_device);
-    vkb::Result<VkQueue>                _init_queue(const vkb::Device &device, vkb::QueueType type);
-    vkb::Result<uint32_t>               _get_queue_index(const vkb::Device &device, vkb::QueueType type);
-    vkb::Result<VkSurfaceKHR>           _init_surface(const vkb::Instance &instance, const Window &window, WindowHandle handle);
-    vkb::Result<vkb::Swapchain>         _init_swapchain(const vkb::Device &device);
-    vkb::Result<vkb::Swapchain>         _recreate_swapchain(const vkb::Device &device, SwapchainVKHandle &old_swapchain);
+    vkb::Result<vkb::Instance>          _init_instance(const char* app_name, bool enable_validation_layers);
+    vkb::Result<vkb::PhysicalDevice>    _init_physical_device(const vkb::Instance& vkb_instance, VkSurfaceKHR surface);
+    vkb::Result<vkb::Device>            _init_logical_device(const vkb::PhysicalDevice& physical_device);
+    vkb::Result<VkQueue>                _init_queue(const vkb::Device& device, vkb::QueueType type);
+    vkb::Result<uint32_t>               _get_queue_index(const vkb::Device& device, vkb::QueueType type);
+    vkb::Result<VkSurfaceKHR>           _init_surface(const vkb::Instance& instance, const Window& window, WindowHandle handle);
+    vkb::Result<vkb::Swapchain>         _init_swapchain(const vkb::Device& device);
+    vkb::Result<vkb::Swapchain>         _recreate_swapchain(const vkb::Device& device, SwapchainVKHandle& old_swapchain);
     VkBufferUsageFlags                  _to_vk_buffer_usage_flags(BufferUsage usage);
     VkImageUsageFlags                   _to_vk_image_usage_flags(TextureUsage usage);
     VkFormat                            _to_vk_format(Format format);
@@ -33,14 +33,14 @@ namespace rasm::gfx
     VkShaderStageFlags                  _to_vk_shader_stage_flags(ShaderType stage);
     VkImageAspectFlags                  _to_vk_aspect_mask(TextureUsage usage);
     VkDescriptorType                    _to_vk_descriptor_type(ResourceType type);
-    const char *                        _to_vk_result_string(VkResult result);
+    const char* _to_vk_result_string(VkResult result);
 
     // clang-format on
 }
 
 namespace rasm::gfx
 {
-    VulkanContext::VulkanContext(Engine *owner) : engine(owner) {}
+    VulkanContext::VulkanContext(Engine* owner) : engine(owner) {}
 
     VulkanContext::~VulkanContext() {}
 
@@ -128,7 +128,7 @@ namespace rasm::gfx
         VmaVulkanFunctions vkFunctions{
             .vkGetInstanceProcAddr = vkGetInstanceProcAddr,
             .vkGetDeviceProcAddr = vkGetDeviceProcAddr,
-            .vkCreateImage = vkCreateImage};
+            .vkCreateImage = vkCreateImage };
 
         VmaAllocatorCreateInfo allocatorCreateInfo = {};
         allocatorCreateInfo.flags = VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT | VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
@@ -151,7 +151,7 @@ namespace rasm::gfx
     {
         waitIdle();
 
-        for (auto &imageHandle : swapchain.images)
+        for (auto& imageHandle : swapchain.images)
         {
             vkDestroyImageView(device.device, imageHandle.view, nullptr);
         }
@@ -172,15 +172,15 @@ namespace rasm::gfx
     {
         assert(desc.type == ResourceType::BUFFER);
 
-        VkBufferCreateInfo bufferInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        VkBufferCreateInfo bufferInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
         bufferInfo.size = desc.buffer.size;
         bufferInfo.usage = _to_vk_buffer_usage_flags(desc.buffer.usage);
 
         VmaAllocationCreateInfo allocCI = {};
         allocCI.usage = VMA_MEMORY_USAGE_AUTO;
         allocCI.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT |
-                        VMA_ALLOCATION_CREATE_MAPPED_BIT;
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT |
+            VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
         VkBuffer buffer;
         VmaAllocation allocation;
@@ -195,7 +195,7 @@ namespace rasm::gfx
 
         if (desc.buffer.usage == BufferUsage::DEVICE_ADDRESS)
         {
-            VkBufferDeviceAddressInfo bufferAddressInfo = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+            VkBufferDeviceAddressInfo bufferAddressInfo = { VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
             bufferAddressInfo.buffer = buffer;
             desc.buffer.deviceAddressBuffer.address = vkGetBufferDeviceAddress(this->device.device, &bufferAddressInfo);
         }
@@ -209,11 +209,11 @@ namespace rasm::gfx
 
         this->dispatch_table.setDebugUtilsObjectNameEXT(&bufferNameInfo);
 
-        BufferVKHandle rawHandle = {desc, {}, buffer, allocation, allocInfo};
+        BufferVKHandle rawHandle = { desc,{}, buffer, allocation, allocInfo };
         return rawHandle;
     }
 
-    void VulkanContext::fillTexture(const TextureVKHandle &texture, const void *data)
+    void VulkanContext::fillTexture(const TextureVKHandle& texture, const void* data)
     {
         assert(texture.desc.type == ResourceType::TEXTURE && texture.desc.texture.usage == TextureUsage::SAMPLED);
 
@@ -223,11 +223,11 @@ namespace rasm::gfx
         transitionDstInfo.image = texture.image;
         transitionDstInfo.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         transitionDstInfo.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        transitionDstInfo.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionDstInfo.subresourceRange = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                                               .baseMipLevel = 0,
                                               .levelCount = 1,
                                               .baseArrayLayer = 0,
-                                              .layerCount = 1};
+                                              .layerCount = 1 };
 
         auto result = vkTransitionImageLayout(device, 1, &transitionDstInfo);
         if (result != VK_SUCCESS)
@@ -242,11 +242,11 @@ namespace rasm::gfx
         region.pHostPointer = data;
         region.memoryRowLength = texture.desc.texture.width;
         region.memoryImageHeight = texture.desc.texture.height;
-        region.imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        region.imageSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                                    .mipLevel = 0,
                                    .baseArrayLayer = 0,
-                                   .layerCount = 1};
-        region.imageExtent = {texture.desc.texture.width, texture.desc.texture.height, 1};
+                                   .layerCount = 1 };
+        region.imageExtent = { texture.desc.texture.width, texture.desc.texture.height, 1 };
 
         VkCopyMemoryToImageInfo copyInfo = {};
         copyInfo.sType = VK_STRUCTURE_TYPE_COPY_MEMORY_TO_IMAGE_INFO;
@@ -269,7 +269,7 @@ namespace rasm::gfx
         assert(desc.type == ResourceType::TEXTURE);
 
         // TODO: check if the format is supported by the device, and if not, find a compatible one
-        VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        VkImageCreateInfo imageInfo = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
         imageInfo.extent.width = desc.texture.width;
         imageInfo.extent.height = desc.texture.height;
@@ -290,7 +290,7 @@ namespace rasm::gfx
         if (desc.texture.usage == TextureUsage::SAMPLED)
         {
             allocInfo.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                               VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
         }
 
         VkImage image;
@@ -303,7 +303,7 @@ namespace rasm::gfx
             return {};
         }
 
-        VkImageViewCreateInfo viewInfo = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        VkImageViewCreateInfo viewInfo = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
         viewInfo.image = image;
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
         viewInfo.format = _to_vk_format(desc.texture.format);
@@ -325,7 +325,7 @@ namespace rasm::gfx
         if (desc.texture.usage == TextureUsage::SAMPLED)
         {
 
-            VkSamplerCreateInfo samplerInfo = {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+            VkSamplerCreateInfo samplerInfo = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
             samplerInfo.magFilter = VK_FILTER_LINEAR;
             samplerInfo.minFilter = VK_FILTER_LINEAR;
             samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
@@ -359,7 +359,7 @@ namespace rasm::gfx
         this->dispatch_table.setDebugUtilsObjectNameEXT(&imageNameInfo);
         this->dispatch_table.setDebugUtilsObjectNameEXT(&imageViewNameInfo);
 
-        TextureVKHandle rawHandle = {desc, {}, image, imageView, sampler, allocation};
+        TextureVKHandle rawHandle = { desc,{}, image, imageView, sampler, allocation };
         return rawHandle;
     }
 
@@ -367,9 +367,9 @@ namespace rasm::gfx
     {
         assert(desc.type == ResourceType::SHADER);
 
-        VkShaderModuleCreateInfo shaderModuleInfo = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        VkShaderModuleCreateInfo shaderModuleInfo = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
         shaderModuleInfo.codeSize = desc.shader.sourceSize;
-        shaderModuleInfo.pCode = reinterpret_cast<const uint32_t *>(desc.shader.source);
+        shaderModuleInfo.pCode = reinterpret_cast<const uint32_t*>(desc.shader.source);
 
         VkShaderModule shaderModule;
         auto result = vkCreateShaderModule(this->device.device, &shaderModuleInfo, nullptr, &shaderModule);
@@ -389,7 +389,7 @@ namespace rasm::gfx
 
         this->dispatch_table.setDebugUtilsObjectNameEXT(&shaderNameInfo);
 
-        ShaderVKHandle rawHandle = {desc, {}, shaderModule};
+        ShaderVKHandle rawHandle = { desc,{}, shaderModule };
         return rawHandle;
     }
 
@@ -403,25 +403,25 @@ namespace rasm::gfx
             .cullMode = cullMode,
             .frontFace = frontFace,
             .depthBiasEnable = VK_FALSE,
-            .lineWidth = 1.0f};
+            .lineWidth = 1.0f };
 
         return rasterizer;
     }
 
-    std::optional<PipelineVKHandle> VulkanContext::createGraphicsPipeline(ResourceDesc desc, const ShaderVKHandle &vertexShader, const ShaderVKHandle &fragmentShader, const DescriptorSetLayoutVKHandle &bindlessDescriptorSetLayout)
+    std::optional<PipelineVKHandle> VulkanContext::createGraphicsPipeline(ResourceDesc desc, const ShaderVKHandle& vertexShader, const ShaderVKHandle& fragmentShader, const DescriptorSetLayoutVKHandle& bindlessDescriptorSetLayout)
     {
         VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-            .size = sizeof(VkDeviceAddress)};
+            .size = sizeof(VkDeviceAddress) };
 
-        VkDescriptorSetLayout setLayouts[] = {bindlessDescriptorSetLayout.layout};
+        VkDescriptorSetLayout setLayouts[] = { bindlessDescriptorSetLayout.layout };
 
         VkPipelineLayoutCreateInfo pipelineLayoutInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .setLayoutCount = 1,
             .pSetLayouts = setLayouts,
             .pushConstantRangeCount = 1,
-            .pPushConstantRanges = &pushConstantRange};
+            .pPushConstantRanges = &pushConstantRange };
 
         VkPipelineLayout pipelineLayout;
         auto result = vkCreatePipelineLayout(this->device.device, &pipelineLayoutInfo, nullptr, &pipelineLayout);
@@ -435,18 +435,18 @@ namespace rasm::gfx
         VkVertexInputBindingDescription vertexBinding{
             .binding = desc.pipeline.vertexInputLayout.binding,
             .stride = desc.pipeline.vertexInputLayout.stride,
-            .inputRate = desc.pipeline.vertexInputLayout.perInstance ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX};
+            .inputRate = desc.pipeline.vertexInputLayout.perInstance ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX };
 
         std::vector<VkVertexInputAttributeDescription> vertexAttributes;
-        for (const auto &attr : desc.pipeline.vertexInputLayout.attributes)
+        for (const auto& attr : desc.pipeline.vertexInputLayout.attributes)
         {
             if (!attr.used)
                 continue;
 
-            vertexAttributes.push_back({.location = attr.location,
+            vertexAttributes.push_back({ .location = attr.location,
                                         .binding = attr.binding,
                                         .format = _to_vk_format(attr.format),
-                                        .offset = attr.offset});
+                                        .offset = attr.offset });
         }
 
         VkPipelineVertexInputStateCreateInfo vertexInputInfo = {
@@ -454,7 +454,7 @@ namespace rasm::gfx
             .vertexBindingDescriptionCount = 1,
             .pVertexBindingDescriptions = &vertexBinding,
             .vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexAttributes.size()),
-            .pVertexAttributeDescriptions = vertexAttributes.data()};
+            .pVertexAttributeDescriptions = vertexAttributes.data() };
 
         VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -473,7 +473,7 @@ namespace rasm::gfx
                 .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
                 .module = fragmentShader.module,
                 .pName = "fragMain",
-            }};
+            } };
 
         VkPipelineViewportStateCreateInfo viewportStateInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
@@ -481,7 +481,7 @@ namespace rasm::gfx
             .scissorCount = 1,
         };
 
-        VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkDynamicState dynamic_states[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
 
         VkPipelineDynamicStateCreateInfo dynamicStateInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
@@ -495,7 +495,7 @@ namespace rasm::gfx
             .depthWriteEnable = VK_TRUE,
             .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
             .depthBoundsTestEnable = VK_FALSE,
-            .stencilTestEnable = VK_FALSE};
+            .stencilTestEnable = VK_FALSE };
 
         // Dynamic rendering: describe the formats used by this pipeline.
         // NOTE: These formats must match the actual color and depth attachments
@@ -525,16 +525,16 @@ namespace rasm::gfx
         VkPipelineColorBlendStateCreateInfo colorBlendInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
             .attachmentCount = 1,
-            .pAttachments = &colorBlendAttachment};
+            .pAttachments = &colorBlendAttachment };
 
         VkPipelineRasterizationStateCreateInfo rasterizerInfo = createRasterizer(VK_POLYGON_MODE_FILL,
-                                                                                 VK_CULL_MODE_NONE,
-                                                                                 VK_FRONT_FACE_CLOCKWISE);
+            VK_CULL_MODE_NONE,
+            VK_FRONT_FACE_CLOCKWISE);
 
         VkPipelineMultisampleStateCreateInfo multisampleInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
             .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
-            .sampleShadingEnable = VK_FALSE};
+            .sampleShadingEnable = VK_FALSE };
 
         VkGraphicsPipelineCreateInfo pipelineInfo = {
             .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -549,7 +549,7 @@ namespace rasm::gfx
             .pDepthStencilState = &depthStencilInfo,
             .pColorBlendState = &colorBlendInfo,
             .pDynamicState = &dynamicStateInfo,
-            .layout = pipelineLayout};
+            .layout = pipelineLayout };
 
         VkPipeline pipeline;
         result = vkCreateGraphicsPipelines(this->device.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
@@ -570,13 +570,13 @@ namespace rasm::gfx
 
         this->dispatch_table.setDebugUtilsObjectNameEXT(&pipelineNameInfo);
 
-        PipelineVKHandle rawHandle = {desc, {}, pipeline, pipelineLayout};
+        PipelineVKHandle rawHandle = { desc,{}, pipeline, pipelineLayout };
         return rawHandle;
     }
 
     std::optional<CommandPoolVKHandle> VulkanContext::createCommandPool(vkb::QueueType type)
     {
-        VkCommandPoolCreateInfo poolInfo = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+        VkCommandPoolCreateInfo poolInfo = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
         poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 
         auto queue_index_result = _get_queue_index(this->device, type);
@@ -596,13 +596,13 @@ namespace rasm::gfx
             return {};
         }
 
-        CommandPoolVKHandle rawHandle = {{}, commandPool};
+        CommandPoolVKHandle rawHandle = { {}, commandPool };
         return rawHandle;
     }
 
-    std::optional<CommandBufferVKHandle> VulkanContext::createCommandBuffer(const CommandPoolVKHandle &commandPool)
+    std::optional<CommandBufferVKHandle> VulkanContext::createCommandBuffer(const CommandPoolVKHandle& commandPool)
     {
-        VkCommandBufferAllocateInfo allocInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        VkCommandBufferAllocateInfo allocInfo = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
         allocInfo.commandPool = commandPool.commandPool;
         allocInfo.commandBufferCount = 1;
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -616,7 +616,7 @@ namespace rasm::gfx
             return {};
         }
 
-        CommandBufferVKHandle rawHandle = {{}, commandBuffer};
+        CommandBufferVKHandle rawHandle = { {}, commandBuffer };
         return rawHandle;
     }
 
@@ -630,7 +630,7 @@ namespace rasm::gfx
 
         VkSemaphoreCreateInfo semaphoreInfo = {
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-            .pNext = &typeInfo};
+            .pNext = &typeInfo };
 
         VkSemaphore semaphore;
         auto result = vkCreateSemaphore(this->device.device, &semaphoreInfo, nullptr, &semaphore);
@@ -641,13 +641,13 @@ namespace rasm::gfx
             return {};
         }
 
-        SemaphoreVKHandle rawHandle = {timeline ? SemaphoreVKHandle::Type::TIMELINE : SemaphoreVKHandle::Type::BINARY, {}, semaphore};
+        SemaphoreVKHandle rawHandle = { timeline ? SemaphoreVKHandle::Type::TIMELINE : SemaphoreVKHandle::Type::BINARY,{}, semaphore };
         return rawHandle;
     }
 
     std::optional<FenceVKHandle> VulkanContext::createFence(bool signaled)
     {
-        VkFenceCreateInfo fenceInfo = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        VkFenceCreateInfo fenceInfo = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
         fenceInfo.flags = signaled ? VK_FENCE_CREATE_SIGNALED_BIT : 0;
 
         VkFence fence;
@@ -659,7 +659,7 @@ namespace rasm::gfx
             return {};
         }
 
-        FenceVKHandle rawHandle = {{}, fence};
+        FenceVKHandle rawHandle = { {}, fence };
         return rawHandle;
     }
 
@@ -699,7 +699,7 @@ namespace rasm::gfx
             return {};
         }
 
-        DescriptorSetLayoutVKHandle rawHandle = {desc, {}, bindlessLayout};
+        DescriptorSetLayoutVKHandle rawHandle = { desc,{}, bindlessLayout };
         return rawHandle;
     }
 
@@ -708,7 +708,7 @@ namespace rasm::gfx
         assert(desc.type == ResourceType::DESCRIPTOR_POOL);
 
         std::vector<VkDescriptorPoolSize> poolSizes;
-        for (const auto &poolSize : desc.descriptorPool.descriptorType)
+        for (const auto& poolSize : desc.descriptorPool.descriptorType)
         {
             VkDescriptorPoolSize vkPoolSize = {};
             vkPoolSize.type = _to_vk_descriptor_type(poolSize.descriptorType);
@@ -730,27 +730,27 @@ namespace rasm::gfx
             return {};
         }
 
-        DescriptorPoolVKHandle rawHandle = {desc, {}, descriptorPool};
+        DescriptorPoolVKHandle rawHandle = { desc,{}, descriptorPool };
         return rawHandle;
     }
 
-    std::optional<DescriptorSetVKHandle> VulkanContext::allocateDescriptorSet(ResourceDesc desc, const DescriptorPoolVKHandle &pool, const DescriptorSetLayoutVKHandle &layout)
+    std::optional<DescriptorSetVKHandle> VulkanContext::allocateDescriptorSet(ResourceDesc desc, const DescriptorPoolVKHandle& pool, const DescriptorSetLayoutVKHandle& layout)
     {
         assert(desc.type == ResourceType::DESCRIPTOR_SET);
 
-        uint32_t variableDescCount{static_cast<uint32_t>(layout.desc.bindlessDescriptorSetLayout.count)};
+        uint32_t variableDescCount{ static_cast<uint32_t>(layout.desc.bindlessDescriptorSetLayout.count) };
 
         VkDescriptorSetVariableDescriptorCountAllocateInfo variableDescCountAI{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO_EXT,
             .descriptorSetCount = 1,
-            .pDescriptorCounts = &variableDescCount};
+            .pDescriptorCounts = &variableDescCount };
 
         VkDescriptorSetAllocateInfo texDescSetAlloc{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .pNext = &variableDescCountAI,
             .descriptorPool = pool.pool,
             .descriptorSetCount = 1,
-            .pSetLayouts = &layout.layout};
+            .pSetLayouts = &layout.layout };
 
         VkDescriptorSet descriptorSet;
         if (vkAllocateDescriptorSets(device, &texDescSetAlloc, &descriptorSet) != VK_SUCCESS)
@@ -759,7 +759,7 @@ namespace rasm::gfx
             return {};
         }
 
-        DescriptorSetVKHandle rawHandle = {desc, {}, pool, layout, descriptorSet};
+        DescriptorSetVKHandle rawHandle = { desc,{}, pool, layout, descriptorSet };
         return rawHandle;
     }
 
@@ -809,13 +809,13 @@ namespace rasm::gfx
         return this->swapchain;
     }
 
-    void VulkanContext::fillBuffer(const BufferVKHandle &buffer, const void *data, size_t size, size_t offset)
+    void VulkanContext::fillBuffer(const BufferVKHandle& buffer, const void* data, size_t size, size_t offset)
     {
         assert(offset + size <= buffer.desc.buffer.size);
-        std::memcpy(static_cast<uint8_t *>(buffer.allocationInfo.pMappedData) + offset, data, size);
+        std::memcpy(static_cast<uint8_t*>(buffer.allocationInfo.pMappedData) + offset, data, size);
     }
 
-    bool VulkanContext::updateBindlessDescriptorSet(const DescriptorSetVKHandle &bindlessSet, const TextureVKHandle &texture, uint32_t slot)
+    bool VulkanContext::updateBindlessDescriptorSet(const DescriptorSetVKHandle& bindlessSet, const TextureVKHandle& texture, uint32_t slot)
     {
         VkDescriptorImageInfo imageInfo = {};
         imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -835,7 +835,7 @@ namespace rasm::gfx
         return true;
     }
 
-    bool VulkanContext::transitionImageLayout(const CommandBufferVKHandle &commandBuffer, const TextureVKHandle &image, const TextureUsage &oldUsage, const TextureUsage &newUsage)
+    bool VulkanContext::transitionImageLayout(const CommandBufferVKHandle& commandBuffer, const TextureVKHandle& image, const TextureUsage& oldUsage, const TextureUsage& newUsage)
     {
         VkImageLayout oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         VkImageLayout newLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -846,61 +846,70 @@ namespace rasm::gfx
 
         // Determine the old and new layouts based on the usage flags
         auto usageToLayout = [](TextureUsage usage) -> VkImageLayout
-        {
-            switch (usage)
             {
-            case TextureUsage::UNKNOWN:
-                return VK_IMAGE_LAYOUT_UNDEFINED;
-            case TextureUsage::COLOR_ATTACHMENT:
-                return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
-                return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-            case TextureUsage::PRESENT_SRC:
-                return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-            default:
-                spdlog::error("Unsupported texture usage for layout transition.");
-                return VK_IMAGE_LAYOUT_UNDEFINED;
-            }
-        };
+                switch (usage)
+                {
+                case TextureUsage::UNKNOWN:
+                    return VK_IMAGE_LAYOUT_UNDEFINED;
+                case TextureUsage::COLOR_ATTACHMENT:
+                    return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
+                    return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+                case TextureUsage::PRESENT_SRC:
+                    return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+                case TextureUsage::SAMPLED:
+                    return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                default:
+                    spdlog::error("Unsupported texture usage for layout transition.");
+                    return VK_IMAGE_LAYOUT_UNDEFINED;
+                }
+            };
 
         oldLayout = usageToLayout(oldUsage);
         newLayout = usageToLayout(newUsage);
 
-        auto getAccessMaskAndStage = [](TextureUsage newUsage, VkAccessFlags2 &srcAccessMask, VkAccessFlags2 &dstAccessMask, VkPipelineStageFlags2 &srcStageMask, VkPipelineStageFlags2 &dstStageMask)
-        {
-            switch (newUsage)
+        auto getAccessMaskAndStage = [](TextureUsage newUsage, VkAccessFlags2& srcAccessMask, VkAccessFlags2& dstAccessMask, VkPipelineStageFlags2& srcStageMask, VkPipelineStageFlags2& dstStageMask)
             {
-            case TextureUsage::COLOR_ATTACHMENT:
-                srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                switch (newUsage)
+                {
+                case TextureUsage::COLOR_ATTACHMENT:
+                    srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                    dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
 
-                srcAccessMask = VK_ACCESS_2_NONE;
-                dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                break;
-            case TextureUsage::PRESENT_SRC:
-                srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                dstStageMask = VK_PIPELINE_STAGE_2_NONE;
+                    srcAccessMask = VK_ACCESS_2_NONE;
+                    dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                    break;
+                case TextureUsage::PRESENT_SRC:
+                    srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                    dstStageMask = VK_PIPELINE_STAGE_2_NONE;
 
-                srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                dstAccessMask = VK_ACCESS_2_NONE;
-                break;
-            case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
-                srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-                dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR;
+                    srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                    dstAccessMask = VK_ACCESS_2_NONE;
+                    break;
+                case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
+                    srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+                    dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR;
 
-                srcAccessMask = VK_ACCESS_2_NONE;
-                dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                break;
-            default:
-                spdlog::error("Unsupported new texture usage for layout transition.");
-                break;
-            }
-        };
+                    srcAccessMask = VK_ACCESS_2_NONE;
+                    dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                    break;
+                case TextureUsage::SAMPLED:
+                    srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                    dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+
+                    srcAccessMask = VK_ACCESS_2_NONE;
+                    dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                    break;
+                default:
+                    spdlog::error("Unsupported new texture usage for layout transition.");
+                    break;
+                }
+            };
 
         getAccessMaskAndStage(newUsage, srcAccessMask, dstAccessMask, srcStageMask, dstStageMask);
 
         VkImageAspectFlags aspectMask = (image.desc.texture.usage == TextureUsage::DEPTH_STENCIL_ATTACHMENT) ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-        VkImageMemoryBarrier2 barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        VkImageMemoryBarrier2 barrier = { .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                                          .srcStageMask = srcStageMask,
                                          .srcAccessMask = srcAccessMask,
                                          .dstStageMask = dstStageMask,
@@ -914,17 +923,17 @@ namespace rasm::gfx
                                              .levelCount = 1,
                                              .baseArrayLayer = 0,
                                              .layerCount = 1,
-                                         }};
+                                         } };
 
-        VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        VkDependencyInfo dependencyInfo = { .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
                                            .imageMemoryBarrierCount = 1,
-                                           .pImageMemoryBarriers = &barrier};
+                                           .pImageMemoryBarriers = &barrier };
 
         vkCmdPipelineBarrier2(commandBuffer.commandBuffer, &dependencyInfo);
         return true;
     }
 
-    bool VulkanContext::beginCommandBuffer(const CommandBufferVKHandle &commandBuffer)
+    bool VulkanContext::beginCommandBuffer(const CommandBufferVKHandle& commandBuffer)
     {
         auto reset_result = vkResetCommandBuffer(commandBuffer.commandBuffer, 0);
         if (reset_result != VK_SUCCESS)
@@ -947,7 +956,7 @@ namespace rasm::gfx
         return true;
     }
 
-    bool VulkanContext::endCommandBuffer(const CommandBufferVKHandle &commandBuffer)
+    bool VulkanContext::endCommandBuffer(const CommandBufferVKHandle& commandBuffer)
     {
         auto result = vkEndCommandBuffer(commandBuffer.commandBuffer);
         if (result != VK_SUCCESS)
@@ -958,7 +967,7 @@ namespace rasm::gfx
         return true;
     }
 
-    bool VulkanContext::beginRendering(const CommandBufferVKHandle &commandBuffer, const TextureVKHandle &colorAttachment, const TextureVKHandle &depthAttachment)
+    bool VulkanContext::beginRendering(const CommandBufferVKHandle& commandBuffer, const TextureVKHandle& colorAttachment, const TextureVKHandle& depthAttachment)
     {
         // begin dynamic rendering
         VkRenderingAttachmentInfo colorAttachmentInfo{
@@ -967,7 +976,7 @@ namespace rasm::gfx
             .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue{.color{1.0f, 0.0f, 0.0f, 1.0f}}};
+            .clearValue{ .color{ 1.0f, 0.0f, 0.0f, 1.0f } } };
 
         VkRenderingAttachmentInfo depthAttachmentInfo{
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -975,30 +984,30 @@ namespace rasm::gfx
             .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            .clearValue = {.depthStencil = {1.0f, 0}}};
+            .clearValue = { .depthStencil = { 1.0f, 0 } } };
 
         VkRenderingInfo renderingInfo{
             .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
             .renderArea{
                 .extent{
                     .width = colorAttachment.desc.texture.width,
-                    .height = colorAttachment.desc.texture.height}},
+                    .height = colorAttachment.desc.texture.height } },
             .layerCount = 1,
             .colorAttachmentCount = 1,
             .pColorAttachments = &colorAttachmentInfo,
-            .pDepthAttachment = &depthAttachmentInfo};
+            .pDepthAttachment = &depthAttachmentInfo };
 
         vkCmdBeginRendering(commandBuffer.commandBuffer, &renderingInfo);
         return true;
     }
 
-    bool VulkanContext::endRendering(const CommandBufferVKHandle &commandBuffer)
+    bool VulkanContext::endRendering(const CommandBufferVKHandle& commandBuffer)
     {
         vkCmdEndRendering(commandBuffer.commandBuffer);
         return true;
     }
 
-    bool VulkanContext::setViewport(const CommandBufferVKHandle &commandBuffer, float x, float y, float width, float height, float minDepth, float maxDepth)
+    bool VulkanContext::setViewport(const CommandBufferVKHandle& commandBuffer, float x, float y, float width, float height, float minDepth, float maxDepth)
     {
         VkViewport viewport = {
             .x = x,
@@ -1006,34 +1015,34 @@ namespace rasm::gfx
             .width = width,
             .height = height,
             .minDepth = minDepth,
-            .maxDepth = maxDepth};
+            .maxDepth = maxDepth };
 
         vkCmdSetViewport(commandBuffer.commandBuffer, 0, 1, &viewport);
         return true;
     }
 
-    bool VulkanContext::setScissor(const CommandBufferVKHandle &commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height)
+    bool VulkanContext::setScissor(const CommandBufferVKHandle& commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height)
     {
         VkRect2D scissor = {
-            .offset = {x, y},
-            .extent = {width, height}};
+            .offset = { x, y },
+            .extent = { width, height } };
 
         vkCmdSetScissor(commandBuffer.commandBuffer, 0, 1, &scissor);
         return true;
     }
 
-    bool VulkanContext::submit(const CommandBufferVKHandle &commandBuffer, const std::vector<SemaphoreVKHandle> &waitSemaphores, const std::vector<SemaphoreVKHandle> &signalSemaphores, const FenceVKHandle &fence)
+    bool VulkanContext::submit(const CommandBufferVKHandle& commandBuffer, const std::vector<SemaphoreVKHandle>& waitSemaphores, const std::vector<SemaphoreVKHandle>& signalSemaphores, const FenceVKHandle& fence)
     {
-        VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 
         std::vector<VkSemaphore> waitVkSemaphores;
-        for (const auto &waitSemaphore : waitSemaphores)
+        for (const auto& waitSemaphore : waitSemaphores)
         {
             waitVkSemaphores.push_back(waitSemaphore.semaphore);
         }
 
         std::vector<VkSemaphore> signalVkSemaphores;
-        for (const auto &signalSemaphore : signalSemaphores)
+        for (const auto& signalSemaphore : signalSemaphores)
         {
             signalVkSemaphores.push_back(signalSemaphore.semaphore);
         }
@@ -1046,7 +1055,7 @@ namespace rasm::gfx
             .commandBufferCount = 1,
             .pCommandBuffers = &commandBuffer.commandBuffer,
             .signalSemaphoreCount = static_cast<uint32_t>(signalVkSemaphores.size()),
-            .pSignalSemaphores = signalVkSemaphores.data()};
+            .pSignalSemaphores = signalVkSemaphores.data() };
 
         auto result = vkQueueSubmit(this->graphics_queue, 1, &submitInfo, fence.fence);
         if (result != VK_SUCCESS)
@@ -1056,7 +1065,7 @@ namespace rasm::gfx
         }
         return true;
     }
-    bool VulkanContext::present(uint32_t imageIndex, const SemaphoreVKHandle &waitSemaphore)
+    bool VulkanContext::present(uint32_t imageIndex, const SemaphoreVKHandle& waitSemaphore)
     {
         VkPresentInfoKHR presentInfo = {
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
@@ -1064,7 +1073,7 @@ namespace rasm::gfx
             .pWaitSemaphores = &waitSemaphore.semaphore,
             .swapchainCount = 1,
             .pSwapchains = &this->swapchain.swapchain.swapchain,
-            .pImageIndices = &imageIndex};
+            .pImageIndices = &imageIndex };
 
         auto result = vkQueuePresentKHR(this->graphics_queue, &presentInfo);
         if (result != VK_SUCCESS)
@@ -1075,92 +1084,92 @@ namespace rasm::gfx
         return true;
     }
 
-    void VulkanContext::removeBuffer(const BufferVKHandle &buffer)
+    void VulkanContext::removeBuffer(const BufferVKHandle& buffer)
     {
         vmaDestroyBuffer(this->allocator, buffer.buffer, buffer.allocation);
     }
 
-    void VulkanContext::removeTexture(const TextureVKHandle &texture)
+    void VulkanContext::removeTexture(const TextureVKHandle& texture)
     {
-        if (texture.sampler != VK_NULL_HANDLE) 
+        if (texture.sampler != VK_NULL_HANDLE)
             vkDestroySampler(this->device.device, texture.sampler, nullptr);
         vkDestroyImageView(this->device.device, texture.view, nullptr);
         vmaDestroyImage(this->allocator, texture.image, texture.allocation);
     }
 
-    void VulkanContext::removeShader(const ShaderVKHandle &shader)
+    void VulkanContext::removeShader(const ShaderVKHandle& shader)
     {
         vkDestroyShaderModule(this->device.device, shader.module, nullptr);
     }
 
-    void VulkanContext::removePipeline(const PipelineVKHandle &pipeline)
+    void VulkanContext::removePipeline(const PipelineVKHandle& pipeline)
     {
         vkDestroyPipeline(this->device.device, pipeline.pipeline, nullptr);
         vkDestroyPipelineLayout(this->device.device, pipeline.layout, nullptr);
     }
 
-    void VulkanContext::removeCommandPool(const CommandPoolVKHandle &commandPool)
+    void VulkanContext::removeCommandPool(const CommandPoolVKHandle& commandPool)
     {
         vkDestroyCommandPool(this->device.device, commandPool.commandPool, nullptr);
     }
 
-    void VulkanContext::removeDescriptorPool(const DescriptorPoolVKHandle &descriptorPool)
+    void VulkanContext::removeDescriptorPool(const DescriptorPoolVKHandle& descriptorPool)
     {
         vkDestroyDescriptorPool(this->device.device, descriptorPool.pool, nullptr);
     }
 
-    void VulkanContext::removeDescriptorSetLayout(const DescriptorSetLayoutVKHandle &descriptorSetLayout)
+    void VulkanContext::removeDescriptorSetLayout(const DescriptorSetLayoutVKHandle& descriptorSetLayout)
     {
         vkDestroyDescriptorSetLayout(this->device.device, descriptorSetLayout.layout, nullptr);
     }
 
-    void VulkanContext::removeSemaphore(const SemaphoreVKHandle &semaphore)
+    void VulkanContext::removeSemaphore(const SemaphoreVKHandle& semaphore)
     {
         vkDestroySemaphore(this->device.device, semaphore.semaphore, nullptr);
     }
 
-    void VulkanContext::removeFence(const FenceVKHandle &fence)
+    void VulkanContext::removeFence(const FenceVKHandle& fence)
     {
         vkDestroyFence(this->device.device, fence.fence, nullptr);
     }
 
-    void VulkanContext::bindPipeline(const CommandBufferVKHandle &commandBuffer, const PipelineVKHandle &pipeline)
+    void VulkanContext::bindPipeline(const CommandBufferVKHandle& commandBuffer, const PipelineVKHandle& pipeline)
     {
         vkCmdBindPipeline(commandBuffer.commandBuffer, pipeline.desc.type == ResourceType::GRAPHICS_PIPELINE ? VK_PIPELINE_BIND_POINT_GRAPHICS : VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
     }
 
-    void VulkanContext::bindVertexBuffer(const CommandBufferVKHandle &commandBuffer, const BufferVKHandle &buffer, uint64_t offset, uint32_t binding)
+    void VulkanContext::bindVertexBuffer(const CommandBufferVKHandle& commandBuffer, const BufferVKHandle& buffer, uint64_t offset, uint32_t binding)
     {
-        VkBuffer vertexBuffers[] = {buffer.buffer};
-        VkDeviceSize offsets[] = {offset};
+        VkBuffer vertexBuffers[] = { buffer.buffer };
+        VkDeviceSize offsets[] = { offset };
         vkCmdBindVertexBuffers(commandBuffer.commandBuffer, binding, 1, vertexBuffers, offsets);
     }
 
-    void VulkanContext::bindIndexBuffer(const CommandBufferVKHandle &commandBuffer, const BufferVKHandle &buffer, uint64_t offset, Format indexType)
+    void VulkanContext::bindIndexBuffer(const CommandBufferVKHandle& commandBuffer, const BufferVKHandle& buffer, uint64_t offset, Format indexType)
     {
         auto vkIndexType = _to_vk_index_type(indexType);
         vkCmdBindIndexBuffer(commandBuffer.commandBuffer, buffer.buffer, offset, vkIndexType);
     }
 
-    void VulkanContext::bindDescriptorSet(const CommandBufferVKHandle &commandBuffer, const PipelineVKHandle &pipeline, const DescriptorSetVKHandle &descriptorSet, uint32_t setIndex)
+    void VulkanContext::bindDescriptorSet(const CommandBufferVKHandle& commandBuffer, const PipelineVKHandle& pipeline, const DescriptorSetVKHandle& descriptorSet, uint32_t setIndex)
     {
         vkCmdBindDescriptorSets(commandBuffer.commandBuffer,
-                                pipeline.desc.type == ResourceType::GRAPHICS_PIPELINE ? VK_PIPELINE_BIND_POINT_GRAPHICS : VK_PIPELINE_BIND_POINT_COMPUTE,
-                                pipeline.layout,
-                                setIndex,
-                                1,
-                                &descriptorSet.set,
-                                0,
-                                nullptr);
+            pipeline.desc.type == ResourceType::GRAPHICS_PIPELINE ? VK_PIPELINE_BIND_POINT_GRAPHICS : VK_PIPELINE_BIND_POINT_COMPUTE,
+            pipeline.layout,
+            setIndex,
+            1,
+            &descriptorSet.set,
+            0,
+            nullptr);
     }
 
-    void VulkanContext::pushConstants(const CommandBufferVKHandle &commandBuffer, const PipelineVKHandle &pipeline, ShaderType stage, const void *data, uint32_t size, uint32_t offset)
+    void VulkanContext::pushConstants(const CommandBufferVKHandle& commandBuffer, const PipelineVKHandle& pipeline, ShaderType stage, const void* data, uint32_t size, uint32_t offset)
     {
         auto stageFlags = _to_vk_shader_stage_flags(stage);
         vkCmdPushConstants(commandBuffer.commandBuffer, pipeline.layout, stageFlags, offset, size, data);
     }
 
-    void VulkanContext::setUniform(const CommandBufferVKHandle &commandBuffer, const std::string &name, const void *data, size_t size)
+    void VulkanContext::setUniform(const CommandBufferVKHandle& commandBuffer, const std::string& name, const void* data, size_t size)
     {
         commandBuffer;
         name;
@@ -1168,17 +1177,17 @@ namespace rasm::gfx
         size;
     }
 
-    void VulkanContext::draw(const CommandBufferVKHandle &commandBuffer, uint32_t vertexCount, uint32_t instanceCount)
+    void VulkanContext::draw(const CommandBufferVKHandle& commandBuffer, uint32_t vertexCount, uint32_t instanceCount)
     {
         vkCmdDraw(commandBuffer.commandBuffer, vertexCount, instanceCount, 0, 0);
     }
 
-    void VulkanContext::drawIndexed(const CommandBufferVKHandle &commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint32_t vertexOffset, uint32_t firstIndex, uint32_t firstInstance)
+    void VulkanContext::drawIndexed(const CommandBufferVKHandle& commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint32_t vertexOffset, uint32_t firstIndex, uint32_t firstInstance)
     {
         vkCmdDrawIndexed(commandBuffer.commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
     }
 
-    bool VulkanContext::waitForFence(const FenceVKHandle &fence, uint64_t timeout)
+    bool VulkanContext::waitForFence(const FenceVKHandle& fence, uint64_t timeout)
     {
         auto result = vkWaitForFences(this->device.device, 1, &fence.fence, VK_TRUE, timeout);
         if (result != VK_SUCCESS)
@@ -1189,7 +1198,7 @@ namespace rasm::gfx
         return true;
     }
 
-    bool VulkanContext::resetFence(const FenceVKHandle &fence)
+    bool VulkanContext::resetFence(const FenceVKHandle& fence)
     {
         auto result = vkResetFences(this->device.device, 1, &fence.fence);
         if (result != VK_SUCCESS)
@@ -1200,7 +1209,7 @@ namespace rasm::gfx
         return true;
     }
 
-    bool VulkanContext::acquireNextImage(const SemaphoreVKHandle &semaphore, uint64_t timeout, uint32_t &imageIndex)
+    bool VulkanContext::acquireNextImage(const SemaphoreVKHandle& semaphore, uint64_t timeout, uint32_t& imageIndex)
     {
         auto result = vkAcquireNextImageKHR(this->device.device, this->swapchain.swapchain, timeout, semaphore.semaphore, VK_NULL_HANDLE, &imageIndex);
 
@@ -1215,7 +1224,7 @@ namespace rasm::gfx
     // private helper functions for Vulkan setup and management.
     // ----------------------------------------------------------
 
-    vkb::Result<vkb::Instance> _init_instance(const char *app_name, bool enable_validation_layers)
+    vkb::Result<vkb::Instance> _init_instance(const char* app_name, bool enable_validation_layers)
     {
         vkb::InstanceBuilder instance_builder;
 
@@ -1249,11 +1258,11 @@ namespace rasm::gfx
         // }
 
         auto instance_ret = instance_builder
-                                .set_app_name(app_name ? app_name : "rasm_app")
-                                .set_engine_name("rasm")
-                                .require_api_version(1, 4, 0)
-                                .set_minimum_instance_version(1, 3, 0)
-                                .build();
+            .set_app_name(app_name ? app_name : "rasm_app")
+            .set_engine_name("rasm")
+            .require_api_version(1, 4, 0)
+            .set_minimum_instance_version(1, 3, 0)
+            .build();
 
         if (!instance_ret)
         {
@@ -1263,7 +1272,7 @@ namespace rasm::gfx
         return instance_ret;
     }
 
-    vkb::Result<vkb::PhysicalDevice> _init_physical_device(const vkb::Instance &vkb_instance, VkSurfaceKHR surface)
+    vkb::Result<vkb::PhysicalDevice> _init_physical_device(const vkb::Instance& vkb_instance, VkSurfaceKHR surface)
     {
         vkb::PhysicalDeviceSelector phys_device_selector(vkb_instance);
 
@@ -1275,7 +1284,7 @@ namespace rasm::gfx
             .descriptorBindingPartiallyBound = VK_TRUE,
             .descriptorBindingVariableDescriptorCount = VK_TRUE,
             .runtimeDescriptorArray = VK_TRUE,
-            .bufferDeviceAddress = VK_TRUE};
+            .bufferDeviceAddress = VK_TRUE };
 
         VkPhysicalDeviceVulkan13Features enabledVk13Features{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
@@ -1287,32 +1296,32 @@ namespace rasm::gfx
         VkPhysicalDeviceVulkan14Features enabledVk14Features{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES,
             .pNext = &enabledVk13Features,
-            .hostImageCopy = VK_TRUE};
+            .hostImageCopy = VK_TRUE };
 
         VkPhysicalDeviceFeatures enabledVk10Features{
-            .samplerAnisotropy = VK_TRUE};
+            .samplerAnisotropy = VK_TRUE };
 
         // select() grabs a PhysicalDevice, By default, this will prefer a discrete GPU.
         auto physical_device_selector_return = phys_device_selector
-                                                   .set_surface(surface)
-                                                   .set_required_features_14(enabledVk14Features)               // Enable the 1.4 core feature
-                                                   .set_required_features_13(enabledVk13Features)               // Enable the 1.3 core feature
-                                                   .set_required_features_12(enabledVk12Features)               // Enable the 1.2 core feature
-                                                   .set_required_features(enabledVk10Features)                  // Enable the 1.0 core feature
-                                                   .add_required_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME)     // Enable swapchain extension
-                                                   .add_required_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) // Enable memory budget extension
-                                                   .select();
+            .set_surface(surface)
+            .set_required_features_14(enabledVk14Features)               // Enable the 1.4 core feature
+            .set_required_features_13(enabledVk13Features)               // Enable the 1.3 core feature
+            .set_required_features_12(enabledVk12Features)               // Enable the 1.2 core feature
+            .set_required_features(enabledVk10Features)                  // Enable the 1.0 core feature
+            .add_required_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME)     // Enable swapchain extension
+            .add_required_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) // Enable memory budget extension
+            .select();
 
         if (!physical_device_selector_return)
         {
             // If no suitable devices were found, detailed_failure_reasons() will contain a list of reasons why.
             if (physical_device_selector_return.error() == vkb::PhysicalDeviceError::no_suitable_device)
             {
-                const auto &detailed_reasons = physical_device_selector_return.detailed_failure_reasons();
+                const auto& detailed_reasons = physical_device_selector_return.detailed_failure_reasons();
                 if (!detailed_reasons.empty())
                 {
                     spdlog::error("GPU Selection failure reasons:\n");
-                    for (const std::string &reason : detailed_reasons)
+                    for (const std::string& reason : detailed_reasons)
                     {
                         spdlog::error("{}", reason);
                     }
@@ -1328,9 +1337,9 @@ namespace rasm::gfx
             "\t\t\t\t\tdriver version: {}.{}.{} --  API version: {}.{}.{}",
             physical_device.properties.deviceName,
             physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? "Discrete" : physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? "Integrated"
-                                                                                                     : physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU      ? "Virtual"
-                                                                                                     : physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU              ? "CPU"
-                                                                                                                                                                                         : "Other",
+            : physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU ? "Virtual"
+            : physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU ? "CPU"
+            : "Other",
             physical_device.memory_properties.memoryHeaps[0].size / (1024 * 1024),
             VK_VERSION_MAJOR(physical_device.properties.driverVersion),
             VK_VERSION_MINOR(physical_device.properties.driverVersion),
@@ -1342,9 +1351,9 @@ namespace rasm::gfx
         return physical_device_selector_return;
     }
 
-    vkb::Result<vkb::Device> _init_logical_device(const vkb::PhysicalDevice &physical_device)
+    vkb::Result<vkb::Device> _init_logical_device(const vkb::PhysicalDevice& physical_device)
     {
-        vkb::DeviceBuilder device_builder{physical_device};
+        vkb::DeviceBuilder device_builder{ physical_device };
 
         auto dev_ret = device_builder.build();
 
@@ -1356,7 +1365,7 @@ namespace rasm::gfx
         return dev_ret;
     }
 
-    vkb::Result<VkQueue> _init_queue(const vkb::Device &device, vkb::QueueType type)
+    vkb::Result<VkQueue> _init_queue(const vkb::Device& device, vkb::QueueType type)
     {
         auto queue_ret = device.get_queue(type);
         if (!queue_ret)
@@ -1366,7 +1375,7 @@ namespace rasm::gfx
         return queue_ret;
     }
 
-    vkb::Result<uint32_t> _get_queue_index(const vkb::Device &device, vkb::QueueType type)
+    vkb::Result<uint32_t> _get_queue_index(const vkb::Device& device, vkb::QueueType type)
     {
         auto queue_index_ret = device.get_queue_index(type);
         if (!queue_index_ret)
@@ -1376,7 +1385,7 @@ namespace rasm::gfx
         return queue_index_ret;
     }
 
-    vkb::Result<VkSurfaceKHR> _init_surface(const vkb::Instance &instance, const Window &window, WindowHandle handle)
+    vkb::Result<VkSurfaceKHR> _init_surface(const vkb::Instance& instance, const Window& window, WindowHandle handle)
     {
         auto surface_ret = window.createSurfaceVk(handle, instance.instance);
 
@@ -1388,9 +1397,9 @@ namespace rasm::gfx
         return vkb::Result<VkSurfaceKHR>{surface_ret};
     }
 
-    vkb::Result<vkb::Swapchain> _init_swapchain(const vkb::Device &device)
+    vkb::Result<vkb::Swapchain> _init_swapchain(const vkb::Device& device)
     {
-        vkb::SwapchainBuilder swapchain_builder{device};
+        vkb::SwapchainBuilder swapchain_builder{ device };
         auto swap_ret = swapchain_builder.build();
         if (!swap_ret)
         {
@@ -1399,11 +1408,11 @@ namespace rasm::gfx
         return swap_ret;
     }
 
-    vkb::Result<vkb::Swapchain> _recreate_swapchain(const vkb::Device &device, SwapchainVKHandle &old_swapchain)
+    vkb::Result<vkb::Swapchain> _recreate_swapchain(const vkb::Device& device, SwapchainVKHandle& old_swapchain)
     {
         vkDeviceWaitIdle(device.device);
 
-        vkb::SwapchainBuilder swapchain_builder{device};
+        vkb::SwapchainBuilder swapchain_builder{ device };
         auto swap_ret = swapchain_builder.set_old_swapchain(old_swapchain.swapchain).build();
         if (!swap_ret)
         {
@@ -1414,7 +1423,7 @@ namespace rasm::gfx
         // Even though we recycled the previous swapchain, we need to free its resources.
         vkb::destroy_swapchain(old_swapchain.swapchain);
 
-        for (const auto &image : old_swapchain.images)
+        for (const auto& image : old_swapchain.images)
         {
             vkDestroyImageView(device.device, image.view, nullptr);
         }
@@ -1600,7 +1609,7 @@ namespace rasm::gfx
         }
     }
 
-    const char *_to_vk_result_string(VkResult result)
+    const char* _to_vk_result_string(VkResult result)
     {
         switch (result)
         {
