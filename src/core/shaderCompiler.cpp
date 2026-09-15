@@ -188,7 +188,7 @@ namespace rasm
         }
         }
 
-        return std::move(vertexAttributes);
+        return vertexAttributes;
     }
 
     std::vector<VertexAttributeDescription> getProgramVertexInputLayout(Slang::ComPtr<slang::IComponentType> program)

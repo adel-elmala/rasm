@@ -37,7 +37,7 @@ find_package(slang CONFIG REQUIRED)
 add_library(rasm_lib STATIC ${RASM_SRC})
 target_link_libraries(rasm_lib PRIVATE glm::glm Tracy::TracyClient SDL3::SDL3) 
 target_link_libraries(rasm_lib PUBLIC Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator)
-target_link_libraries(rasm_lib PRIVATE vk-bootstrap::vk-bootstrap vk-bootstrap::vk-bootstrap-compiler-warnings)
+target_link_libraries(rasm_lib PRIVATE vk-bootstrap::vk-bootstrap)
 target_link_libraries(rasm_lib PRIVATE  tinyobjloader::tinyobjloader)
 target_link_libraries(rasm_lib PUBLIC  spdlog::spdlog) # make it private later, keep for debugging now
 target_link_libraries(rasm_lib PRIVATE slang::slang)
@@ -57,11 +57,14 @@ target_link_libraries(Example_1 PUBLIC
 rasm_lib
 )
 
-
-set(CMAKE_CXX_CODE_ANALYSIS_DEFAULT OFF)
-string(REPLACE "/Zi" "/Z7" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
-string(REPLACE "/Zi" "/Z7" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
-
-if (MSVC)
+if (MSVC AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(/arch:AVX2)
+elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    add_compile_options(-mavx2)
+endif()
+
+if (MSVC AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # target_compile_options(rasm_lib PRIVATE /W4)
+else()
+    # target_compile_options(rasm_lib PRIVATE -Wall -Wextra)
 endif()
