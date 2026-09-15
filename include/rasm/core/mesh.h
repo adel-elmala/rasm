@@ -11,7 +11,7 @@
 namespace rasm
 {
 
-    constexpr uint32_t MAX_MESHES = 1024 * 1024;
+    constexpr uint32_t MAX_MESHES = 8;
 
     struct Vertex
     {

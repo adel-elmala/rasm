@@ -6,7 +6,7 @@ namespace rasm
     CameraHandle Engine::createCamera(CameraProjection projection, Transform transform)
     {
         auto handle = getNextCameraHandle();
-        registery.cameras[handle.index] = Camera{projection, transform};
+        registery.cameras[handle.index] = Camera{ projection, transform };
         return handle;
     }
 
@@ -18,5 +18,15 @@ namespace rasm
     void Engine::setCameraProjection(CameraHandle camera, CameraProjection projection)
     {
         registery.cameras[camera.index].projection = projection;
+    }
+
+    Transform Engine::getCameraTransform(CameraHandle camera)
+    {
+        return registery.cameras[camera.index].transform;
+    }
+
+    CameraProjection Engine::getCameraProjection(CameraHandle camera)
+    {
+        return registery.cameras[camera.index].projection;
     }
 }

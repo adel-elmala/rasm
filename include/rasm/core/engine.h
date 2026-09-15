@@ -19,19 +19,18 @@
 namespace rasm {
 
 
-    constexpr uint32_t MAX_MATERIALS = 1024;
-    constexpr uint32_t MAX_SHADERS = 1024;
-    constexpr uint32_t MAX_CAMERAS = 1024;
-    constexpr uint32_t MAX_LIGHTS = 1024;
+    constexpr uint32_t MAX_MATERIALS = 256;
+    constexpr uint32_t MAX_SHADERS = 256;
+    constexpr uint32_t MAX_CAMERAS = 8;
+    constexpr uint32_t MAX_LIGHTS = 128;
 
     class Engine {
-    friend class Window;
-    friend class RenderGraph;
-
+        friend class Window;
+        friend class RenderGraph;
 
     public:
-                                    Engine(const EngineConfig& config);
-                                    ~Engine();
+        Engine(const EngineConfig& config);
+        ~Engine();
         SceneHandle                 createScene();
         void                        addEntityToScene(SceneHandle scene, EntityHandle entity);
         void                        addCameraToScene(SceneHandle scene, CameraHandle camera);
@@ -49,11 +48,13 @@ namespace rasm {
         CameraHandle                createCamera(CameraProjection projection, Transform transform);
         LightHandle                 createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), float intensity = 1.0f, glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f));
         Transform                   getTransform(EntityHandle entity);
+        Transform                   getCameraTransform(CameraHandle camera);
+        CameraProjection            getCameraProjection(CameraHandle camera);
         void                        updateTransform(EntityHandle entity, Transform transform);
         void                        setCameraTransform(CameraHandle camera, Transform transform);
         void                        setCameraProjection(CameraHandle camera, CameraProjection projection);
         void                        beginFrame(CameraHandle camera);
-        void                        beginOffscreenFrame(const RenderTargetHandle &renderTarget, CameraHandle camera);
+        void                        beginOffscreenFrame(const RenderTargetHandle& renderTarget, CameraHandle camera);
         void                        endOffscreenFrame();
         void                        endFrame();
         void                        beginPass();
@@ -62,15 +63,15 @@ namespace rasm {
         void                        render(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget);
         bool                        running() const;
         void                        recreateSwapchain();
-        void                        setRenderTarget(const RenderTargetHandle &renderTarget);
+        void                        setRenderTarget(const RenderTargetHandle& renderTarget);
         void                        resetRenderTarget();
         void                        setScene(SceneHandle scene);
         SceneHandle                 getScene() const;
-        FrameResources&             getCurrentFrameResources();
+        FrameResources& getCurrentFrameResources();
         EngineConfig                getConfig() const;
-        Window&                     getWindow();
+        Window& getWindow();
         WindowHandle                getMainWindow() const;
-        RenderContext&              getRenderContext();
+        RenderContext& getRenderContext();
         MeshHandle                  getNextMeshHandle();
         ShaderHandle                getNextShaderHandle();
         BufferHandle                getNextBufferHandle();
@@ -115,16 +116,15 @@ namespace rasm {
         bool                                                        isRunning = true;
         bool                                                        resized = false;
 
-
-        struct Registery 
+        struct Registery
         {
-            Entity          entities[MAX_ENTITIES]                    = {};
-            Material        materials[MAX_MATERIALS]                  = {};
-            Camera          cameras[MAX_CAMERAS]                      = {};
-            std::string     shaders[MAX_SHADERS]                      = {};
-            Mesh            meshes[MAX_MESHES]                        = {};
-            Light           lights[MAX_LIGHTS]                        = {};
-            Scene           scenes[MAX_SCENES]                        = {};
+            Entity          entities[MAX_ENTITIES] = {};
+            Material        materials[MAX_MATERIALS] = {};
+            Camera          cameras[MAX_CAMERAS] = {};
+            std::string     shaders[MAX_SHADERS] = {};
+            Mesh            meshes[MAX_MESHES] = {};
+            Light           lights[MAX_LIGHTS] = {};
+            Scene           scenes[MAX_SCENES] = {};
         };
 
         Registery registery = {};
