@@ -13,6 +13,14 @@ namespace rasm
                              .material = material,
                              .transform = transform};
 
+        if (id.index >= MAX_ENTITIES)
+        {
+            spdlog::error("Exceeded maximum number of entities.");
+            isRunning = false;
+            return {};
+        }
+
+        registery.entities.resize(id.index + 1);
         registery.entities[id.index] = entity;
 
         return id;
@@ -20,7 +28,7 @@ namespace rasm
 
     void Engine::updateTransform(EntityHandle entity, Transform transform)
     {
-        if (entity.index >= MAX_ENTITIES || !registery.entities[entity.index].handle.isValid())
+        if (entity.index >= registery.entities.size() || !registery.entities[entity.index].handle.isValid())
         {
             spdlog::error("Invalid entity handle for updating transform.");
             isRunning = false;
@@ -32,7 +40,7 @@ namespace rasm
 
     Transform Engine::getTransform(EntityHandle entity)
     {
-        if (entity.index >= MAX_ENTITIES || !registery.entities[entity.index].handle.isValid())
+        if (entity.index >= registery.entities.size() || !registery.entities[entity.index].handle.isValid())
         {
             spdlog::error("Invalid entity handle for getting transform.");
             isRunning = false;

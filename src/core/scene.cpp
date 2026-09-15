@@ -14,10 +14,14 @@ SceneHandle Engine::createScene() {
                      .lights = {},
                      .lightCount = 0};
 
+  if (id.index >= MAX_SCENES) {
+    spdlog::error("Exceeded maximum number of scenes.");
+    isRunning = false;
+    return {};
+  }
+
+  registery.scenes.resize(id.index + 1);
   registery.scenes[id.index] = scene;
-
-  assert(id.index < MAX_SCENES);
-
   currentScene = id;
 
   return id;

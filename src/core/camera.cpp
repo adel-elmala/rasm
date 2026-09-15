@@ -6,6 +6,13 @@ namespace rasm
     CameraHandle Engine::createCamera(CameraProjection projection, Transform transform)
     {
         auto handle = getNextCameraHandle();
+        if (handle.index >= MAX_CAMERAS)
+        {
+            spdlog::error("Exceeded maximum number of cameras.");
+            isRunning = false;
+            return {};
+        }
+        registery.cameras.resize(handle.index + 1);
         registery.cameras[handle.index] = Camera{ projection, transform };
         return handle;
     }

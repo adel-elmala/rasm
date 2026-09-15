@@ -16,6 +16,14 @@ namespace rasm
         light.position = position;
         light.direction = direction;
 
+        if (handle.index >= MAX_LIGHTS)
+        {
+            spdlog::error("Exceeded maximum number of lights.");
+            isRunning = false;
+            return {};
+        }
+
+        registery.lights.resize(handle.index + 1);
         registery.lights[handle.index] = light;
 
         return handle;

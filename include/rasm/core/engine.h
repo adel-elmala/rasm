@@ -118,13 +118,13 @@ namespace rasm {
 
         struct Registery
         {
-            Entity          entities[MAX_ENTITIES] = {};
-            Material        materials[MAX_MATERIALS] = {};
-            Camera          cameras[MAX_CAMERAS] = {};
-            std::string     shaders[MAX_SHADERS] = {};
-            Mesh            meshes[MAX_MESHES] = {};
-            Light           lights[MAX_LIGHTS] = {};
-            Scene           scenes[MAX_SCENES] = {};
+            std::vector<Entity>      entities;
+            std::vector<Material>    materials;
+            std::vector<Camera>      cameras;
+            std::vector<std::string> shaders;
+            std::vector<Mesh>        meshes;
+            std::vector<Light>       lights;
+            std::vector<Scene>       scenes;
         };
 
         Registery registery = {};

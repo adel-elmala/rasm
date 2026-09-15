@@ -165,6 +165,12 @@ namespace rasm
     MeshHandle Engine::createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices)
     {
         auto handle = getNextMeshHandle();
+        if (handle.index >= MAX_MESHES)
+        {
+            spdlog::error("Exceeded maximum number of meshes.");
+            isRunning = false;
+            return {};
+        }
 
         ObjRaw objRaw{};
         objRaw.vertices = std::move(vertices);
@@ -174,6 +180,7 @@ namespace rasm
         mesh.type = Mesh::MeshType::OBJ;
         mesh.data = std::move(objRaw);
 
+        registery.meshes.resize(handle.index + 1);
         registery.meshes[handle.index] = std::move(mesh);
 
         return handle;
@@ -224,6 +231,7 @@ namespace rasm
             if (!ret)
             {
                 spdlog::error("Failed to load GLTF model: {}", path);
+                isRunning = false;
                 return MeshHandle{};
             }
 
@@ -239,6 +247,13 @@ namespace rasm
             if (!tinyobj::LoadObj(&attrib, &shapes, &materials, nullptr, nullptr, path.c_str()))
             {
                 spdlog::error("Failed to load OBJ model: {}", path);
+                isRunning = false;
+                return MeshHandle{};
+            }
+            if (shapes.empty())
+            {
+                spdlog::error("OBJ model contains no shapes: {}", path);
+                isRunning = false;
                 return MeshHandle{};
             }
 
@@ -266,8 +281,15 @@ namespace rasm
         }
 
         auto handle = getNextMeshHandle();
+        if (handle.index >= MAX_MESHES)
+        {
+            spdlog::error("Exceeded maximum number of meshes.");
+            isRunning = false;
+            return {};
+        }
         loadedMeshes[path] = handle;
 
+        registery.meshes.resize(handle.index + 1);
         registery.meshes[handle.index] = std::move(mesh);
 
         return handle;
@@ -341,7 +363,7 @@ namespace rasm
     BufferHandle Engine::uploadMesh(const MeshHandle &handle)
     {
         // TODO: remove mesh from meshData after uploading to GPU.
-        if (handle.index == 0 || handle.index > MAX_MESHES)
+        if (handle.index == 0 || handle.index >= registery.meshes.size())
         {
             spdlog::error("Mesh handle not found for upload.");
             isRunning = false;

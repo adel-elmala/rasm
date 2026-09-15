@@ -57,6 +57,7 @@ namespace rasm
             break;
         }
 
+        registery.materials.resize(handle.index + 1);
         registery.materials[handle.index] = material;
 
         return handle;
@@ -71,6 +72,7 @@ namespace rasm
             return {};
         }
 
+        registery.shaders.resize(handle.index + 1);
         registery.shaders[handle.index] = shaderSource;
 
         return handle;

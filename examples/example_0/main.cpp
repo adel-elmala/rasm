@@ -26,6 +26,10 @@ int main()
 
     rasm::TextureHandle albedoTexture = engine.loadTexture("assets/textures/bunny-atlas.jpg");
     rasm::TextureHandle normalTexture = engine.loadTexture("assets/textures/test1.jpg");
+    if (!bunnyMesh.isValid() || !albedoTexture.isValid() || !normalTexture.isValid())
+    {
+        return 1;
+    }
 
     // 4. Create a material
     rasm::TextureHandle textures[] = { albedoTexture, normalTexture };
