@@ -4,6 +4,7 @@
 #include "rasm/core/transform.h"
 
 namespace rasm {
+
     enum class CameraType
     {
         PERSPECTIVE,
@@ -21,7 +22,7 @@ namespace rasm {
             float nearZ;
             float farZ;
         };
-        
+
         struct Orthographic
         {
             float left;

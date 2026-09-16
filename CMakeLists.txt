@@ -18,6 +18,7 @@ set(RASM_SRC
             "src/gfx/context.cpp"
             "src/gfx/vulkan.cpp"
             "src/core/utils.cpp"
+            "src/core/handle.cpp"
     )
 
 # required external libs

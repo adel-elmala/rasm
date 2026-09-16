@@ -1,6 +1,5 @@
 // Future API sketch (not implemented yet):
 #include "rasm/rasm.h"
-#include "rasm/core/utils.h"
 
 int main()
 {

@@ -128,7 +128,7 @@ namespace rasm
                 spdlog::error("Failed to create Vulkan buffer.");
                 return {};
             }
-            BufferHandle handle = engine->getNextBufferHandle();
+            BufferHandle handle = engine->handleManager.getNextBufferHandle();
             buffer->handle = handle;
 
             bufferCache[handle] = buffer.value();
@@ -163,7 +163,7 @@ namespace rasm
                 spdlog::error("Failed to create Vulkan texture.");
                 return {};
             }
-            TextureHandle handle = engine->getNextTextureHandle();
+            TextureHandle handle = engine->handleManager.getNextTextureHandle();
             texture->handle = handle;
             textureCache[handle] = texture.value();
             textureDescCache[desc] = handle;
@@ -197,7 +197,7 @@ namespace rasm
                 spdlog::error("Failed to create Vulkan shader.");
                 return {};
             }
-            ShaderHandle handle = engine->getNextShaderHandle();
+            ShaderHandle handle = engine->handleManager.getNextShaderHandle();
             shader->handle = handle;
 
             shaderCache[handle] = shader.value();
@@ -251,7 +251,7 @@ namespace rasm
                 spdlog::error("Failed to create Vulkan pipeline.");
                 return {};
             }
-            PipelineHandle handle = engine->getNextPipelineHandle();
+            PipelineHandle handle = engine->handleManager.getNextPipelineHandle();
             pipeline->handle = handle;
 
             pipelineCache[handle] = pipeline.value();
@@ -288,7 +288,7 @@ namespace rasm
                 spdlog::error("Failed to create Vulkan bindless descriptor set layout.");
                 return {};
             }
-            DescriptorSetLayoutHandle handle = engine->getNextDescriptorSetLayoutHandle();
+            DescriptorSetLayoutHandle handle = engine->handleManager.getNextDescriptorSetLayoutHandle();
             layout->handle = handle;
 
             descriptorSetLayoutCache[handle] = layout.value();
@@ -324,7 +324,7 @@ namespace rasm
                 spdlog::error("Failed to create Vulkan descriptor pool.");
                 return {};
             }
-            DescriptorPoolHandle handle = engine->getNextDescriptorPoolHandle();
+            DescriptorPoolHandle handle = engine->handleManager.getNextDescriptorPoolHandle();
             pool->handle = handle;
 
             descriptorPoolCache[handle] = pool.value();
@@ -368,7 +368,7 @@ namespace rasm
                 spdlog::error("Failed to allocate Vulkan descriptor set.");
                 return {};
             }
-            DescriptorSetHandle handle = engine->getNextDescriptorSetHandle();
+            DescriptorSetHandle handle = engine->handleManager.getNextDescriptorSetHandle();
             descriptorSet->handle = handle;
 
             descriptorSetCache[handle] = descriptorSet.value();
@@ -397,7 +397,7 @@ namespace rasm
                 return {};
             }
 
-            CommandPoolHandle handle = engine->getNextCommandPoolHandle();
+            CommandPoolHandle handle = engine->handleManager.getNextCommandPoolHandle();
             commandPool->handle = handle;
 
             commandPoolCache[handle] = commandPool.value();
@@ -434,7 +434,7 @@ namespace rasm
                 return {};
             }
 
-            CommandBufferHandle handle = engine->getNextCommandBufferHandle();
+            CommandBufferHandle handle = engine->handleManager.getNextCommandBufferHandle();
             commandBuffer->handle = handle;
 
             commandBufferCache[handle] = commandBuffer.value();
@@ -464,7 +464,7 @@ namespace rasm
                 return {};
             }
 
-            SemaphoreHandle handle = engine->getNextSemaphoreHandle();
+            SemaphoreHandle handle = engine->handleManager.getNextSemaphoreHandle();
             semaphore->handle = handle; // Semaphores might not need a handle in the same way as buffers/textures
 
             // Optionally store in a cache if you want to manage semaphores similarly
@@ -495,7 +495,7 @@ namespace rasm
                 return {};
             }
 
-            FenceHandle handle = engine->getNextFenceHandle();
+            FenceHandle handle = engine->handleManager.getNextFenceHandle();
             fence->handle = handle; // Fences might not need a handle in the same way as buffers/textures
 
             fenceCache[handle] = fence.value();
@@ -530,7 +530,7 @@ namespace rasm
         depthDesc.texture.format = depthFormat;
         depthDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
 
-        RenderTargetHandle rtHandle = engine->getNextRenderTargetHandle();
+        RenderTargetHandle rtHandle = engine->handleManager.getNextRenderTargetHandle();
 
         RenderTarget rt = {
             .colorAttachment = {},
@@ -602,7 +602,7 @@ namespace rasm
             std::vector<TextureHandle> handles;
             for (auto& image : images)
             {
-                auto handle = engine->getNextTextureHandle();
+                auto handle = engine->handleManager.getNextTextureHandle();
                 image.handle = handle;
                 textureCache[handle] = image;
                 swapchainImageCache[handle] = image; // Store in swapchain-specific cache

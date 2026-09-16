@@ -21,7 +21,7 @@ namespace rasm::gfx
     vkb::Result<vkb::Device>            _init_logical_device(const vkb::PhysicalDevice& physical_device);
     vkb::Result<VkQueue>                _init_queue(const vkb::Device& device, vkb::QueueType type);
     vkb::Result<uint32_t>               _get_queue_index(const vkb::Device& device, vkb::QueueType type);
-    vkb::Result<VkSurfaceKHR>           _init_surface(const vkb::Instance& instance, const Window& window, WindowHandle handle);
+    vkb::Result<VkSurfaceKHR>           _init_surface(const vkb::Instance& instance, Engine* engine);
     vkb::Result<vkb::Swapchain>         _init_swapchain(const vkb::Device& device);
     vkb::Result<vkb::Swapchain>         _recreate_swapchain(const vkb::Device& device, SwapchainVKHandle& old_swapchain);
     VkBufferUsageFlags                  _to_vk_buffer_usage_flags(BufferUsage usage);
@@ -57,7 +57,7 @@ namespace rasm::gfx
         this->instance = vkb_instance.value();
 
         // create surface
-        auto vkb_surface = _init_surface(vkb_instance.value(), engine->getWindow(), engine->getMainWindow());
+        auto vkb_surface = _init_surface(vkb_instance.value(), engine);
         if (!vkb_surface)
             return false;
 
@@ -1171,10 +1171,10 @@ namespace rasm::gfx
 
     void VulkanContext::setUniform(const CommandBufferVKHandle& commandBuffer, const std::string& name, const void* data, size_t size)
     {
-        commandBuffer;
-        name;
-        data;
-        size;
+        (void)commandBuffer;
+        (void)name;
+        (void)data;
+        (void)size;
     }
 
     void VulkanContext::draw(const CommandBufferVKHandle& commandBuffer, uint32_t vertexCount, uint32_t instanceCount)
@@ -1385,9 +1385,10 @@ namespace rasm::gfx
         return queue_index_ret;
     }
 
-    vkb::Result<VkSurfaceKHR> _init_surface(const vkb::Instance& instance, const Window& window, WindowHandle handle)
+    vkb::Result<VkSurfaceKHR> _init_surface(const vkb::Instance& instance, Engine* engine)
     {
-        auto surface_ret = window.createSurfaceVk(handle, instance.instance);
+        auto handle = engine->getMainWindow();
+        auto surface_ret = engine->createSurfaceVk(handle, instance.instance);
 
         if (!surface_ret)
         {

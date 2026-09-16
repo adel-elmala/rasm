@@ -4,8 +4,6 @@
 
 #include "spdlog/spdlog.h"
 
-#include <fstream>
-#include <vector>
 
 namespace rasm
 {
@@ -18,10 +16,10 @@ namespace rasm
             return {};
         }
 
-        MaterialHandle handle = getNextMaterialHandle();
+        MaterialHandle handle = handleManager.getNextMaterialHandle();
         if (handle.index >= MAX_MATERIALS)
         {
-            spdlog::error("Exceeded maximum number of materials.");
+            spdlog::warn("Exceeded maximum number of materials.");
             return {};
         }
 
@@ -38,7 +36,7 @@ namespace rasm
         {
         case MaterialType::BASIC:
             material.name = "basic";
-            material.shader = createShader(readFile("./shaders/common/test.slang"));
+            material.shader = createShader(readFile("./shaders/common/basic.slang"));
             break;
         case MaterialType::PBR:
             material.name = "pbr";
@@ -65,10 +63,10 @@ namespace rasm
 
     ShaderHandle Engine::createShader(const std::string& shaderSource)
     {
-        ShaderHandle handle = getNextShaderHandle();
+        ShaderHandle handle = handleManager.getNextShaderHandle();
         if (handle.index >= MAX_SHADERS)
         {
-            spdlog::error("Exceeded maximum number of shaders.");
+            spdlog::warn("Exceeded maximum number of shaders.");
             return {};
         }
 

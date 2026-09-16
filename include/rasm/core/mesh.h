@@ -34,7 +34,7 @@ namespace rasm
             OBJ
         };
         MeshType type;
-        std::variant<tinygltf::Model, ObjRaw> data; // TODO: convert to raw union
+        std::variant<tinygltf::Model, ObjRaw> data;
     };
 
 }

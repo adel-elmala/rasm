@@ -1,13 +1,14 @@
 // clang-format off
 #pragma once
 
-#include <string>
-#include <vector>
-#include <functional>
+#include "rasm/core/types.h"
+#include "rasm/core/resource.h"
 
 #include "spdlog/spdlog.h"
 
-#include "types.h"
+#include <string>
+#include <vector>
+#include <functional>
 
 namespace rasm
 {

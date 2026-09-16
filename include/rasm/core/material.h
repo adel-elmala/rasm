@@ -1,9 +1,6 @@
 // clang-format off
 #pragma once
 
-#include <array>
-#include <cstddef>
-
 #include "rasm/core/types.h"
 
 namespace rasm

@@ -1,21 +1,7 @@
 #include "rasm/core/engine.h"
-#include "rasm/core/mesh.h"
-#include "rasm/core/material.h"
-#include "rasm/core/light.h"
-#include "rasm/core/transform.h"
-#include "rasm/core/entity.h"
-#include "rasm/core/camera.h"
-#include "rasm/core/renderGraph.h"
 #include "rasm/core/utils.h"
-#include "rasm/gfx/context.h"
 
 #include "spdlog/spdlog.h"
-
-#define TINYGLTF_IMPLEMENTATION
-#include "tiny_gltf.h"
-
-#define TINYOBJLOADER_IMPLEMENTATION
-#include "tiny_obj_loader.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -46,14 +32,13 @@ namespace rasm
         }
     }
 
-    Engine::Engine(const EngineConfig& config) : config(config)
+    Engine::Engine(const EngineConfig &config) : config(config)
     {
         // In a real implementation, this is where we'd initialize the window, graphics context, etc.
         spdlog::info("Engine initialized with config: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
-            config.appName, config.windowWidth, config.windowHeight, config.enableValidation);
+                     config.appName, config.windowWidth, config.windowHeight, config.enableValidation);
 
-        this->window = Window(this, config.windowWidth, config.windowHeight);
-        this->mainWindow = this->window.createWindow();
+        this->mainWindow = createWindow(config.windowWidth, config.windowHeight);
 
         ctx = RenderContext(this);
         if (!ctx.initialize(config.preferredBackend))
@@ -138,7 +123,7 @@ namespace rasm
     Engine::~Engine()
     {
         // Clean up resources, free memory, etc.
-        for (auto& [handle, tex] : textureData)
+        for (auto &[handle, tex] : registery.textureData)
         {
             stbi_image_free(tex.data);
         }
@@ -158,149 +143,16 @@ namespace rasm
 
         ctx.cleanup();
 
-        this->window.destroyWindow(this->mainWindow);
+        destroyWindow(this->mainWindow);
         spdlog::info("Engine shutdown, cleaned up resources.");
     }
 
-    MeshHandle Engine::createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices)
-    {
-        auto handle = getNextMeshHandle();
-        if (handle.index >= MAX_MESHES)
-        {
-            spdlog::error("Exceeded maximum number of meshes.");
-            isRunning = false;
-            return {};
-        }
-
-        ObjRaw objRaw{};
-        objRaw.vertices = std::move(vertices);
-        objRaw.indices = std::move(indices);
-
-        Mesh mesh{};
-        mesh.type = Mesh::MeshType::OBJ;
-        mesh.data = std::move(objRaw);
-
-        registery.meshes.resize(handle.index + 1);
-        registery.meshes[handle.index] = std::move(mesh);
-
-        return handle;
-    }
-
-    MeshHandle Engine::loadMesh(const std::string& path)
-    {
-        // find if the mesh is already loaded, if so return existing handle
-        if (loadedMeshes.find(path) != loadedMeshes.end())
-        {
-            return loadedMeshes[path];
-        }
-        // find if the model extension is supported, if not return invalid handle
-        auto extension = path.substr(path.find_last_of(".") + 1);
-        if (supportedMeshExtensions.find(extension) == supportedMeshExtensions.end())
-        {
-            spdlog::error("Unsupported mesh format: {}", extension);
-            isRunning = false;
-            return MeshHandle{};
-        }
-
-        Mesh mesh{};
-        if (extension == "gltf" || extension == "glb")
-        {
-            tinygltf::TinyGLTF loader;
-            tinygltf::Model model;
-
-            std::string err;
-            std::string warn;
-            bool ret = false;
-            if (extension == "gltf")
-            {
-                ret = loader.LoadASCIIFromFile(&model, &err, &warn, path);
-            }
-            else
-            {
-                ret = loader.LoadBinaryFromFile(&model, &err, &warn, path);
-            }
-
-            if (!warn.empty())
-            {
-                spdlog::warn("GLTF loader warning: {}", warn);
-            }
-            if (!err.empty())
-            {
-                spdlog::error("GLTF loader error: {}", err);
-            }
-            if (!ret)
-            {
-                spdlog::error("Failed to load GLTF model: {}", path);
-                isRunning = false;
-                return MeshHandle{};
-            }
-
-            mesh.type = Mesh::MeshType::GLTF;
-            mesh.data = std::move(model);
-        }
-        else
-        {
-            tinyobj::attrib_t attrib;
-            std::vector<tinyobj::shape_t> shapes;
-            std::vector<tinyobj::material_t> materials;
-
-            if (!tinyobj::LoadObj(&attrib, &shapes, &materials, nullptr, nullptr, path.c_str()))
-            {
-                spdlog::error("Failed to load OBJ model: {}", path);
-                isRunning = false;
-                return MeshHandle{};
-            }
-            if (shapes.empty())
-            {
-                spdlog::error("OBJ model contains no shapes: {}", path);
-                isRunning = false;
-                return MeshHandle{};
-            }
-
-            // Load vertex and index data
-            std::vector<Vertex> out_vertices;
-            std::vector<uint32_t> out_indices;
-
-            for (auto& index : shapes[0].mesh.indices)
-            {
-                Vertex v{
-                    .pos = { attrib.vertices[index.vertex_index * 3], -attrib.vertices[index.vertex_index * 3 + 1], attrib.vertices[index.vertex_index * 3 + 2] },
-                    .normal = { attrib.normals[index.normal_index * 3], -attrib.normals[index.normal_index * 3 + 1], attrib.normals[index.normal_index * 3 + 2] },
-                    .uv = { attrib.texcoords[index.texcoord_index * 2], 1.0 - attrib.texcoords[index.texcoord_index * 2 + 1] } };
-
-                out_vertices.push_back(v);
-                out_indices.push_back(static_cast<uint32_t>(out_indices.size()));
-            }
-
-            mesh.type = Mesh::MeshType::OBJ;
-
-            ObjRaw objRaw{};
-            objRaw.vertices = std::move(out_vertices);
-            objRaw.indices = std::move(out_indices);
-            mesh.data = std::move(objRaw);
-        }
-
-        auto handle = getNextMeshHandle();
-        if (handle.index >= MAX_MESHES)
-        {
-            spdlog::error("Exceeded maximum number of meshes.");
-            isRunning = false;
-            return {};
-        }
-        loadedMeshes[path] = handle;
-
-        registery.meshes.resize(handle.index + 1);
-        registery.meshes[handle.index] = std::move(mesh);
-
-        return handle;
-    }
-
-    TextureHandle Engine::loadTexture(const std::string& path)
+    TextureHandle Engine::loadTexture(const std::string &path)
     {
         // find if the texture is already loaded, if so return existing handle
-        if (loadedTextures.find(path) != loadedTextures.end())
+        if (registery.loadedTextures.find(path) != registery.loadedTextures.end())
         {
-            return loadedTextures[path];
+            return registery.loadedTextures[path];
         }
 
         // find if the texture extension is supported, if not return invalid handle
@@ -313,7 +165,7 @@ namespace rasm
         }
 
         int width, height, nChannels;
-        unsigned char* data = stbi_load(path.c_str(), &width, &height, &nChannels, 4);
+        unsigned char *data = stbi_load(path.c_str(), &width, &height, &nChannels, 4);
 
         if (!data)
         {
@@ -354,59 +206,13 @@ namespace rasm
             return TextureHandle{};
         }
 
-        loadedTextures[path] = textureHandle;
-        textureData.insert({ textureHandle, std::move(tex) });
+        registery.loadedTextures[path] = textureHandle;
+        registery.textureData.insert({textureHandle, std::move(tex)});
 
         return textureHandle;
     }
 
-    BufferHandle Engine::uploadMesh(const MeshHandle& handle)
-    {
-        // TODO: remove mesh from meshData after uploading to GPU.
-        if (handle.index == 0 || handle.index >= registery.meshes.size())
-        {
-            spdlog::error("Mesh handle not found for upload.");
-            isRunning = false;
-            return BufferHandle{};
-        }
-
-        auto mesh = registery.meshes[handle.index];
-
-        if (mesh.type == Mesh::MeshType::GLTF)
-        {
-            // In a real implementation, this is where we'd upload the GLTF mesh data to the GPU.
-            spdlog::info("Uploading GLTF mesh with handle: {}", handle.index);
-        }
-        else if (mesh.type == Mesh::MeshType::OBJ)
-        {
-            auto& objRaw = std::get<ObjRaw>(mesh.data);
-
-            auto bufferDesc = ResourceDesc{};
-            bufferDesc.name = "OBJ Vertex + index Buffer";
-            bufferDesc.type = ResourceType::BUFFER;
-            bufferDesc.buffer.usage = BufferUsage::VERTEXINDEX;
-            bufferDesc.buffer.size = objRaw.vertices.size() * sizeof(Vertex) + objRaw.indices.size() * sizeof(uint32_t);
-            bufferDesc.buffer.vertexIndexBuffer.indexCount = objRaw.indices.size();
-            bufferDesc.buffer.vertexIndexBuffer.vertexCount = objRaw.vertices.size();
-            bufferDesc.buffer.vertexIndexBuffer.offset = objRaw.vertices.size() * sizeof(Vertex);
-
-            auto bufferHandle = ctx.createBuffer(bufferDesc);
-
-            ctx.fillBuffer(bufferHandle, objRaw.vertices.data(), objRaw.vertices.size() * sizeof(Vertex), 0);
-            ctx.fillBuffer(bufferHandle, objRaw.indices.data(), objRaw.indices.size() * sizeof(uint32_t), objRaw.vertices.size() * sizeof(Vertex));
-            return bufferHandle;
-        }
-        else
-        {
-            spdlog::error("Unknown mesh type for upload.");
-            isRunning = false;
-            return BufferHandle{};
-        }
-
-        return BufferHandle{};
-    }
-
-    ResourceHandle Engine::createResource(const ResourceDesc& desc)
+    ResourceHandle Engine::createResource(const ResourceDesc &desc)
     {
         ResourceHandle handle{};
 
@@ -449,7 +255,7 @@ namespace rasm
         return graph;
     }
 
-    RenderTargetHandle Engine::createRenderTarget(const std::string& name, uint32_t width, uint32_t height, Format colorFormat, Format depthFormat)
+    RenderTargetHandle Engine::createRenderTarget(const std::string &name, uint32_t width, uint32_t height, Format colorFormat, Format depthFormat)
     {
         auto widthToUse = (width == 0) ? static_cast<uint32_t>(config.windowWidth) : width;
         auto heightToUse = (height == 0) ? static_cast<uint32_t>(config.windowHeight) : height;
@@ -462,11 +268,11 @@ namespace rasm
     void Engine::beginFrame(CameraHandle camera)
     {
         // wait for the gpu to finish rendering the previous frame
-        auto& currentFrame = frameResources[frameCount];
+        auto &currentFrame = frameResources[frameCount];
         ctx.waitForFence(currentFrame.inFlightFence);
         ctx.resetFence(currentFrame.inFlightFence);
 
-        this->window.pollEvents(camera);
+        pollEvents(camera);
 
         if (this->resized)
         {
@@ -483,14 +289,14 @@ namespace rasm
 
     void Engine::endFrame()
     {
-        auto& currentFrame = frameResources[frameCount];
+        auto &currentFrame = frameResources[frameCount];
 
         ctx.endCommandBuffer(currentFrame.commandBuffer);
 
         ctx.submit(currentFrame.commandBuffer,
-            { currentFrame.readyToDrawSemaphore },
-            { swapchain.readyToPresentSemaphores[imageIdx] },
-            currentFrame.inFlightFence);
+                   {currentFrame.readyToDrawSemaphore},
+                   {swapchain.readyToPresentSemaphores[imageIdx]},
+                   currentFrame.inFlightFence);
 
         ctx.present(imageIdx, swapchain.readyToPresentSemaphores[imageIdx]);
 
@@ -498,18 +304,18 @@ namespace rasm
     }
 
     // TODO: delete
-    void Engine::beginOffscreenFrame(const RenderTargetHandle& renderTarget, CameraHandle camera)
+    void Engine::beginOffscreenFrame(const RenderTargetHandle &renderTarget, CameraHandle camera)
     {
-        auto& currentFrame = frameResources[frameCount];
+        auto &currentFrame = frameResources[frameCount];
         ctx.waitForFence(currentFrame.inFlightFence);
         ctx.resetFence(currentFrame.inFlightFence);
 
-        this->window.pollEvents(camera);
+        pollEvents(camera);
 
         // record commands for the current frame
         ctx.beginCommandBuffer(currentFrame.commandBuffer);
 
-        const RenderTarget& renderTargetData = ctx.getRenderTarget(renderTarget);
+        const RenderTarget &renderTargetData = ctx.getRenderTarget(renderTarget);
 
         // transition render target images to be ready for rendering
         ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
@@ -524,15 +330,15 @@ namespace rasm
     // TODO: delete
     void Engine::endOffscreenFrame()
     {
-        auto& currentFrame = frameResources[frameCount];
+        auto &currentFrame = frameResources[frameCount];
 
         ctx.endRendering(currentFrame.commandBuffer);
         ctx.endCommandBuffer(currentFrame.commandBuffer);
 
         ctx.submit(currentFrame.commandBuffer,
-            {},
-            {},
-            currentFrame.inFlightFence);
+                   {},
+                   {},
+                   currentFrame.inFlightFence);
 
         frameCount = (frameCount + 1) % MAX_FRAMES_IN_FLIGHT; // Toggle between 0 and 1 for double buffering
     }
@@ -583,7 +389,7 @@ namespace rasm
         // TODO: insert barrier to ensure the pass has finished before subsequent operations
     }
 
-    void Engine::setRenderTarget(const RenderTargetHandle& renderTarget)
+    void Engine::setRenderTarget(const RenderTargetHandle &renderTarget)
     {
         this->currentRenderTarget = renderTarget;
     }
@@ -610,7 +416,7 @@ namespace rasm
         swapchain.imageFormat = ctx.getSwapchainImageFormat();
 
         // Destroy old semaphores
-        for (auto& semaphore : swapchain.readyToPresentSemaphores)
+        for (auto &semaphore : swapchain.readyToPresentSemaphores)
         {
             ctx.destroySemaphore(semaphore);
         }
@@ -642,7 +448,7 @@ namespace rasm
         beginPass();
 
         auto compiledScene = compileScene(scene);
-        auto& currentFrame = frameResources[frameCount];
+        auto &currentFrame = frameResources[frameCount];
         auto commandBuffer = currentFrame.commandBuffer;
         auto shaderDataBuffer = currentFrame.shaderDataBuffer;
 
@@ -656,17 +462,17 @@ namespace rasm
         auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
 
         auto shaderDataIdx = 0;
-        for (const auto& [materialHandle, entitySet] : compiledScene.materialToMeshes)
+        for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
         {
             auto pipeline = compiledScene.materialToPipeline[materialHandle];
             ctx.bindPipeline(commandBuffer, pipeline);
-            for (const auto& entityHandle : entitySet)
+            for (const auto &entityHandle : entitySet)
             {
                 auto modelTransform = registery.entities[entityHandle.index].transform;
 
                 auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
-                    glm::mat4_cast(modelTransform.rotation) *
-                    glm::scale(glm::mat4(1.0f), modelTransform.scale);
+                             glm::mat4_cast(modelTransform.rotation) *
+                             glm::scale(glm::mat4(1.0f), modelTransform.scale);
 
                 auto baseOffset = (sizeof(projection) + sizeof(view) + sizeof(model)) * shaderDataIdx;
                 ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), baseOffset);
@@ -688,12 +494,12 @@ namespace rasm
         endFrame();
     }
 
-    void Engine::render(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget)
+    void Engine::render(SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget)
     {
         beginOffscreenFrame(renderTarget, camera);
 
         auto compiledScene = compileScene(scene);
-        auto& currentFrame = frameResources[frameCount];
+        auto &currentFrame = frameResources[frameCount];
         auto commandBuffer = currentFrame.commandBuffer;
         auto shaderDataBuffer = currentFrame.shaderDataBuffer;
 
@@ -707,17 +513,17 @@ namespace rasm
         auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
 
         auto shaderDataIdx = 0;
-        for (const auto& [materialHandle, entitySet] : compiledScene.materialToMeshes)
+        for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
         {
             auto pipeline = compiledScene.materialToPipeline[materialHandle];
             ctx.bindPipeline(commandBuffer, pipeline);
-            for (const auto& entityHandle : entitySet)
+            for (const auto &entityHandle : entitySet)
             {
                 auto modelTransform = registery.entities[entityHandle.index].transform;
 
                 auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
-                    glm::mat4_cast(modelTransform.rotation) *
-                    glm::scale(glm::mat4(1.0f), modelTransform.scale);
+                             glm::mat4_cast(modelTransform.rotation) *
+                             glm::scale(glm::mat4(1.0f), modelTransform.scale);
 
                 auto baseOffset = (sizeof(projection) + sizeof(view) + sizeof(model)) * shaderDataIdx;
                 ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), baseOffset);
@@ -744,7 +550,7 @@ namespace rasm
         return isRunning;
     }
 
-    FrameResources& Engine::getCurrentFrameResources()
+    const FrameResources &Engine::getCurrentFrameResources()
     {
         return frameResources[frameCount % MAX_FRAMES_IN_FLIGHT];
     }
@@ -754,17 +560,12 @@ namespace rasm
         return config;
     }
 
-    Window& Engine::getWindow()
-    {
-        return window;
-    }
-
     WindowHandle Engine::getMainWindow() const
     {
         return mainWindow;
     }
 
-    RenderContext& Engine::getRenderContext()
+    RenderContext &Engine::getRenderContext()
     {
         return ctx;
     }
@@ -774,93 +575,4 @@ namespace rasm
         return bindlessDescriptorSet;
     }
 
-    MeshHandle Engine::getNextMeshHandle()
-    {
-        return MeshHandle{ nextHandle.mesh++, 1 };
-    }
-
-    BufferHandle Engine::getNextBufferHandle()
-    {
-        return BufferHandle{ nextHandle.buffer++, 1 };
-    }
-
-    TextureHandle Engine::getNextTextureHandle()
-    {
-        return TextureHandle{ nextHandle.texture++, 1 };
-    }
-
-    ShaderHandle Engine::getNextShaderHandle()
-    {
-        return ShaderHandle{ nextHandle.shader++, 1 };
-    }
-
-    PipelineHandle Engine::getNextPipelineHandle()
-    {
-        return PipelineHandle{ nextHandle.pipeline++, 1 };
-    }
-
-    CommandPoolHandle Engine::getNextCommandPoolHandle()
-    {
-        return CommandPoolHandle{ nextHandle.commandPool++, 1 };
-    }
-
-    CommandBufferHandle Engine::getNextCommandBufferHandle()
-    {
-        return CommandBufferHandle{ nextHandle.commandBuffer++, 1 };
-    }
-
-    SemaphoreHandle Engine::getNextSemaphoreHandle()
-    {
-        return SemaphoreHandle{ nextHandle.semaphore++, 1 };
-    }
-
-    FenceHandle Engine::getNextFenceHandle()
-    {
-        return FenceHandle{ nextHandle.fence++, 1 };
-    }
-
-    SwapchainHandle Engine::getNextSwapchainHandle()
-    {
-        return SwapchainHandle{ nextHandle.swapchain++, 1 };
-    }
-
-    RenderTargetHandle Engine::getNextRenderTargetHandle()
-    {
-        return RenderTargetHandle{ nextHandle.renderTarget++, 1 };
-    }
-
-    DescriptorSetLayoutHandle Engine::getNextDescriptorSetLayoutHandle()
-    {
-        return DescriptorSetLayoutHandle{ nextHandle.descriptorSetLayout++, 1 };
-    }
-
-    DescriptorSetHandle Engine::getNextDescriptorSetHandle()
-    {
-        return DescriptorSetHandle{ nextHandle.descriptorSet++, 1 };
-    }
-
-    DescriptorPoolHandle Engine::getNextDescriptorPoolHandle()
-    {
-        return DescriptorPoolHandle{ nextHandle.descriptorPool++, 1 };
-    }
-
-    MaterialHandle Engine::getNextMaterialHandle()
-    {
-        return MaterialHandle{ nextHandle.material++, 1 };
-    }
-
-    CameraHandle Engine::getNextCameraHandle()
-    {
-        return CameraHandle{ nextHandle.camera++, 1 };
-    }
-
-    EntityHandle Engine::getNextEntityHandle()
-    {
-        return EntityHandle{ nextHandle.entity++, 1 };
-    }
-
-    LightHandle Engine::getNextLightHandle()
-    {
-        return LightHandle{ nextHandle.light++, 1 };
-    }
-}
+} // namespace rasm

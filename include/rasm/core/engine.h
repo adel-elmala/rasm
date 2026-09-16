@@ -1,20 +1,22 @@
 // clang-format off
 #pragma once
 
-#include <cstdint>
-#include <string>
-#include <unordered_map>
-#include <vector>
-
 #include "rasm/core/types.h"
 #include "rasm/core/entity.h"
 #include "rasm/core/scene.h"
 #include "rasm/core/material.h"
 #include "rasm/core/renderGraph.h"
 #include "rasm/core/window.h"
-#include "rasm/gfx/context.h"
-#include "rasm/core/shaderCompiler.h"
+#include "rasm/core/light.h"
 #include "rasm/core/mesh.h"
+#include "rasm/core/shaderCompiler.h"
+#include "rasm/core/handle.h"
+#include "rasm/gfx/context.h"
+
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace rasm {
 
@@ -24,13 +26,17 @@ namespace rasm {
     constexpr uint32_t MAX_LIGHTS = 128;
 
     class Engine {
-        friend class Window;
         friend class RenderGraph;
+        friend class RenderContext;
 
     public:
-        Engine(const EngineConfig& config);
-        ~Engine();
+                                    Engine(const EngineConfig& config);
+                                    ~Engine();
         SceneHandle                 createScene();
+        CompiledScene               compileScene(SceneHandle scene);
+        EntityHandle                createEntity(const std::string& name, MeshHandle mesh = MeshHandle{}, MaterialHandle material = MaterialHandle{}, Transform transform = Transform{});
+        CameraHandle                createCamera(CameraProjection projection, Transform transform);
+        LightHandle                 createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), float intensity = 1.0f, glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f));
         void                        addEntityToScene(SceneHandle scene, EntityHandle entity);
         void                        addCameraToScene(SceneHandle scene, CameraHandle camera);
         void                        addLightToScene(SceneHandle scene, LightHandle light);
@@ -38,14 +44,11 @@ namespace rasm {
         MeshHandle                  loadMesh(const std::string& path);
         BufferHandle                uploadMesh(const MeshHandle& handle);
         TextureHandle               loadTexture(const std::string& path);
-        MaterialHandle              createMaterial(MaterialType type, TextureHandle textures[] = nullptr, ShaderHandle shader = ShaderHandle{});
         ShaderHandle                createShader(const std::string& shaderSource);
+        MaterialHandle              createMaterial(MaterialType type, TextureHandle textures[] = nullptr, ShaderHandle shader = ShaderHandle{});
         ResourceHandle              createResource(const ResourceDesc& desc);
         RenderGraph                 createRenderGraph();
-        EntityHandle                createEntity(const std::string& name, MeshHandle mesh = MeshHandle{}, MaterialHandle material = MaterialHandle{}, Transform transform = Transform{});
         RenderTargetHandle          createRenderTarget(const std::string& name, uint32_t width = 0, uint32_t height = 0, Format colorFormat = Format::UNKNOWN, Format depthFormat = Format::UNKNOWN);
-        CameraHandle                createCamera(CameraProjection projection, Transform transform);
-        LightHandle                 createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), float intensity = 1.0f, glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f));
         Transform                   getTransform(EntityHandle entity);
         Transform                   getCameraTransform(CameraHandle camera);
         CameraProjection            getCameraProjection(CameraHandle camera);
@@ -67,45 +70,26 @@ namespace rasm {
         void                        setScene(SceneHandle scene);
         SceneHandle                 getScene() const;
         DescriptorSetHandle         getBindlessDescriptorSet();
-        FrameResources&             getCurrentFrameResources();
+        const FrameResources&       getCurrentFrameResources();
         EngineConfig                getConfig() const;
-        Window&                     getWindow();
         WindowHandle                getMainWindow() const;
         RenderContext&              getRenderContext();
-        MeshHandle                  getNextMeshHandle();
-        ShaderHandle                getNextShaderHandle();
-        BufferHandle                getNextBufferHandle();
-        TextureHandle               getNextTextureHandle();
-        PipelineHandle              getNextPipelineHandle();
-        CommandPoolHandle           getNextCommandPoolHandle();
-        CommandBufferHandle         getNextCommandBufferHandle();
-        SemaphoreHandle             getNextSemaphoreHandle();
-        FenceHandle                 getNextFenceHandle();
-        SwapchainHandle             getNextSwapchainHandle();
-        RenderTargetHandle          getNextRenderTargetHandle();
-        DescriptorSetLayoutHandle   getNextDescriptorSetLayoutHandle();
-        DescriptorPoolHandle        getNextDescriptorPoolHandle();
-        DescriptorSetHandle         getNextDescriptorSetHandle();
-        MaterialHandle              getNextMaterialHandle();
-        CameraHandle                getNextCameraHandle();
-        EntityHandle                getNextEntityHandle();
-        LightHandle                 getNextLightHandle();
-        CompiledScene               compileScene(SceneHandle scene);
+
+        WindowHandle                createWindow(uint32_t width, uint32_t height);
+        VkSurfaceKHR                createSurfaceVk(WindowHandle handle, VkInstance instance) const;
+        void                        destroyWindow(WindowHandle handle);
+        void                        pollEvents(CameraHandle camera);
 
     protected:
         EngineConfig                                                config;
         FrameResources                                              frameResources[MAX_FRAMES_IN_FLIGHT]; // Double buffering
         Swapchain                                                   swapchain{};
         TextureHandle                                               depthTexture{};
-        std::unordered_map<std::string, MeshHandle>                 loadedMeshes;
-        std::unordered_map<std::string, TextureHandle>              loadedTextures;
-        std::unordered_map<TextureHandle, TextureRaw, HandleHash>   textureData;
         std::unordered_map<SceneHandle, CompiledScene, HandleHash>  compiledScenes;
         RenderContext                                               ctx{};
         ShaderCompiler                                              shaderCompiler{};
-        HandleCounters                                              nextHandle{};
+        HandleManager                                               handleManager{};
         WindowHandle                                                mainWindow{};
-        Window                                                      window{};
         DescriptorSetLayoutHandle                                   bindlessDescriptorSetLayout{};
         DescriptorPoolHandle                                        bindlessDescriptorPool{};
         DescriptorSetHandle                                         bindlessDescriptorSet{};
@@ -116,6 +100,7 @@ namespace rasm {
         bool                                                        isRunning = true;
         bool                                                        resized = false;
 
+    private:
         struct Registery
         {
             std::vector<Entity>      entities;
@@ -125,6 +110,10 @@ namespace rasm {
             std::vector<Mesh>        meshes;
             std::vector<Light>       lights;
             std::vector<Scene>       scenes;
+
+            std::unordered_map<std::string, MeshHandle>                 loadedMeshes;
+            std::unordered_map<std::string, TextureHandle>              loadedTextures;
+            std::unordered_map<TextureHandle, TextureRaw, HandleHash>   textureData;
         };
 
         Registery registery = {};

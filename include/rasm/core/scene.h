@@ -1,18 +1,14 @@
 // clang-format off
 #pragma once
 
-#include <string>
-#include <optional>
-
 #include "rasm/core/types.h"
-#include "rasm/core/camera.h"
-#include "rasm/core/light.h"
 
+#include <string>
 #include <unordered_map>
 
 namespace rasm {
 
-    constexpr int MAX_ENTITIES_PER_SCENE = 128;
+    constexpr int MAX_ENTITIES_PER_SCENE = 1024;
     constexpr int MAX_CAMERAS_PER_SCENE = 8;
     constexpr int MAX_LIGHTS_PER_SCENE = 8;
     constexpr int MAX_SCENES = 16;
