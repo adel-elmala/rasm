@@ -1,1 +1,1 @@
-slangc.exe ./shaders/common/test.slang -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name -entry vertMain -entry fragMain -o ./shaders/build/common/test.spv
+slangc.exe ./shaders/common/basic.slang -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name -entry vertMain -entry fragMain -o ./shaders/build/common/basic.spv

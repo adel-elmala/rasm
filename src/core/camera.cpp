@@ -1,40 +1,64 @@
 #include "rasm/core/camera.h"
-#include "glm/gtc/matrix_transform.hpp"
+#include "rasm/core/engine.h"
 
 namespace rasm
 {
-    Camera::Camera(CameraType type) : projection{.type = type} {}
-    Camera::~Camera() {}
-
-    void Camera::setPerspective(float fovY, float aspect, float nearZ, float farZ)
+    CameraHandle Engine::createCamera(CameraProjection projection, Transform transform)
     {
-        projection.type = CameraType::PERSPECTIVE;
-        projection.perspective.fovY = fovY;
-        projection.perspective.aspect = aspect;
-        projection.perspective.nearZ = nearZ;
-        projection.perspective.farZ = farZ;
+        auto handle = handleManager.getNextCameraHandle();
+        if (handle.index >= MAX_CAMERAS)
+        {
+            spdlog::warn("Exceeded maximum number of cameras.");
+            return {};
+        }
+
+        registery.cameras.resize(handle.index + 1);
+        registery.cameras[handle.index] = Camera{ projection, transform };
+
+        return handle;
     }
 
-    void Camera::setOrthographic(float left, float right, float bottom, float top, float nearZ, float farZ)
+    void Engine::setCameraTransform(CameraHandle camera, Transform transform)
     {
-        projection.type = CameraType::ORTHOGRAPHIC;
-        projection.orthographic.left = left;
-        projection.orthographic.right = right;
-        projection.orthographic.bottom = bottom;
-        projection.orthographic.top = top;
-        projection.orthographic.nearZ = nearZ;
-        projection.orthographic.farZ = farZ;
+        if (!camera.isValid() || camera.index >= registery.cameras.size())
+        {
+            spdlog::error("Invalid camera handle.");
+            return;
+        }
+
+        registery.cameras[camera.index].transform = transform;
     }
 
-    glm::mat4 Camera::getProjectionMatrix() const
+    void Engine::setCameraProjection(CameraHandle camera, CameraProjection projection)
     {
-        if (projection.type == CameraType::PERSPECTIVE)
+        if (!camera.isValid() || camera.index >= registery.cameras.size())
         {
-            return glm::perspective(glm::radians(projection.perspective.fovY), projection.perspective.aspect, projection.perspective.nearZ, projection.perspective.farZ);
+            spdlog::error("Invalid camera handle.");
+            return;
         }
-        else
+
+        registery.cameras[camera.index].projection = projection;
+    }
+
+    Transform Engine::getCameraTransform(CameraHandle camera)
+    {
+        if (!camera.isValid() || camera.index >= registery.cameras.size())
         {
-            return glm::ortho(projection.orthographic.left, projection.orthographic.right, projection.orthographic.bottom, projection.orthographic.top, projection.orthographic.nearZ, projection.orthographic.farZ);
+            spdlog::error("Invalid camera handle.");
+            return Transform{};
         }
+
+        return registery.cameras[camera.index].transform;
+    }
+
+    CameraProjection Engine::getCameraProjection(CameraHandle camera)
+    {
+        if (!camera.isValid() || camera.index >= registery.cameras.size())
+        {
+            spdlog::error("Invalid camera handle.");
+            return CameraProjection{};
+        }
+
+        return registery.cameras[camera.index].projection;
     }
 }

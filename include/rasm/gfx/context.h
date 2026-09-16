@@ -38,6 +38,7 @@ namespace rasm
         ResourceDesc                        getResourceDesc(const BufferHandle& buffer);
         ResourceDesc                        getResourceDesc(const TextureHandle& texture);
         bool                                updateBindlessDescriptorSet(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, uint32_t slot);
+        // bool                                updateBindlessDescriptorSet(const DescriptorSetHandle& bindlessSet, const RenderTargetHandle& renderTarget, uint32_t slot);
         bool                                waitForFence(FenceHandle fence, uint64_t timeout = UINT64_MAX);
         bool                                resetFence(FenceHandle fence);
         bool                                acquireNextImage(SemaphoreHandle signalSemaphore, uint64_t timeout, uint32_t& imageIndex);

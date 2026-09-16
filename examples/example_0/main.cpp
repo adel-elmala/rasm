@@ -16,74 +16,82 @@ int main()
     };
 
     rasm::Engine engine(config);
+#if 1
 
     // 2. Create a scene
-    rasm::Scene scene = engine.createScene();
+    rasm::SceneHandle scene = engine.createScene();
 
     // 3. Load resources
     rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/bunny.obj");
+
     rasm::TextureHandle albedoTexture = engine.loadTexture("assets/textures/bunny-atlas.jpg");
     rasm::TextureHandle normalTexture = engine.loadTexture("assets/textures/test1.jpg");
+    if (!bunnyMesh.isValid() || !albedoTexture.isValid() || !normalTexture.isValid())
+    {
+        return 1;
+    }
 
     // 4. Create a material
-    rasm::Material* material = engine.createMaterial(rasm::MaterialTemplate::PBR);
-    material->setTexture(rasm::PbrSlot::ALBEDO, albedoTexture);
-    material->setTexture(rasm::PbrSlot::NORMAL, normalTexture);
-    material->setFloat(rasm::PbrParam::ROUGHNESS, 0.5f);
-    material->setFloat(rasm::PbrParam::METALLIC, 0.0f);
+    rasm::TextureHandle textures[] = { albedoTexture, normalTexture };
+    rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::BASIC, textures);
 
     // 5. Create entities in the scene
-    rasm::Entity bunny = scene.createEntity("bunny");
-    bunny.addComponent<rasm::Mesh>(bunnyMesh);
-    bunny.addComponent<rasm::Material>(*material);
-    bunny.addComponent<rasm::Transform>(
-        glm::vec3(0.0f, 0.0f, -10.0f),     // position
-        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
-        glm::vec3(0.05f)                   // scale
-    );
+    rasm::EntityHandle bunny = engine.createEntity("bunny", bunnyMesh, material, rasm::Transform{
+                                                                                     glm::vec3(0.0f, 0.0f, -10.0f),     // position
+                                                                                     glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
+                                                                                     glm::vec3(0.05f)                   // scale
+        });
 
-    rasm::Entity bunny2 = scene.createEntity("bunny2");
-    bunny2.addComponent<rasm::Mesh>(bunnyMesh);
-    bunny2.addComponent<rasm::Material>(*material);
-    bunny2.addComponent<rasm::Transform>(
-        glm::vec3(5.0f, 0.0f, -10.0f),     // position
-        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
-        glm::vec3(0.05f)                   // scale
-    );
+    rasm::EntityHandle bunny2 = engine.createEntity("bunny2", bunnyMesh, material, rasm::Transform{
+                                                                                       glm::vec3(5.0f, 0.0f, -10.0f),     // position
+                                                                                       glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
+                                                                                       glm::vec3(0.05f)                   // scale
+        });
 
-    rasm::Entity bunny3 = scene.createEntity("bunny3");
-    bunny3.addComponent<rasm::Mesh>(bunnyMesh);
-    bunny3.addComponent<rasm::Material>(*material);
-    bunny3.addComponent<rasm::Transform>(
-        glm::vec3(-5.0f, 1.0f, -10.0f),     // position
-        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
-        glm::vec3(0.05f)                   // scale
-    );
+    rasm::EntityHandle bunny3 = engine.createEntity("bunny3", bunnyMesh, material, rasm::Transform{
+                                                                                       glm::vec3(-5.0f, 1.0f, -10.0f),    // position
+                                                                                       glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
+                                                                                       glm::vec3(0.05f)                   // scale
+        });
 
     // 6. Create a camera
-    rasm::Entity camera = scene.createEntity("MainCamera");
-    rasm::Camera &cameraLens = camera.addComponent<rasm::Camera>(rasm::CameraType::PERSPECTIVE);
-    cameraLens.setPerspective(45.0f, static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight), 0.1f, 32.0f);
-    camera.addComponent<rasm::Transform>(glm::vec3(0.0f, 0.0f, -1.0f));
+    rasm::CameraHandle camera = engine.createCamera(rasm::CameraProjection{ .type = rasm::CameraType::PERSPECTIVE,
+                                                                           .perspective{ .fovY = 45.0f,
+                                                                                        .aspect = static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight),
+                                                                                        .nearZ = 0.1f,
+                                                                                        .farZ = 32.0f } },
+        rasm::Transform{
+            glm::vec3(0.0f, 0.0f, -1.0f),      // position
+            glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
+            glm::vec3(1.0f)                    // scale
+        });
 
     // 7. Create a light
-    rasm::Entity light = scene.createEntity("DirectionalLight");
-    rasm::Light &sun = light.addComponent<rasm::Light>(rasm::LightType::DIRECTIONAL);
-    sun.setColor(glm::vec3(1.0f, 1.0f, 1.0f));
-    sun.setIntensity(1.0f);
-    light.addComponent<rasm::Transform>().setRotation(glm::angleAxis(glm::radians(-45.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
+    rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL,  // type
+        glm::vec3(1.0f, 1.0f, 1.0f),   // color
+        1.0f,                          // intensity
+        glm::vec3(0.0f, 10.0f, 0.0f),  // position
+        glm::vec3(0.0f, -1.0f, 0.0f)); // direction
+
+    engine.addEntityToScene(scene, bunny);
+    engine.addEntityToScene(scene, bunny2);
+    engine.addEntityToScene(scene, bunny3);
+    engine.addCameraToScene(scene, camera);
+    engine.addLightToScene(scene, light);
+
 
     // 8. Main loop
     while (engine.running())
     {
         // Update transforms, animations, etc.
-        bunny.getComponent<rasm::Transform>().rotate(glm::vec3(0.0f, 1.0f, 0.0f), glm::radians(0.01f));
-        bunny2.getComponent<rasm::Transform>().rotate(glm::vec3(1.0f, 1.0f, 0.0f), glm::radians(0.01f));
-        bunny3.getComponent<rasm::Transform>().rotate(glm::vec3(1.0f, 1.0f, 1.0f), glm::radians(0.01f));
+        engine.updateTransform(bunny, engine.getTransform(bunny).rotate(glm::vec3(0.0f, 1.0f, 0.0f), glm::radians(0.01f)));
+        engine.updateTransform(bunny2, engine.getTransform(bunny2).rotate(glm::vec3(1.0f, 1.0f, 0.0f), glm::radians(0.01f)));
+        engine.updateTransform(bunny3, engine.getTransform(bunny3).rotate(glm::vec3(1.0f, 1.0f, 1.0f), glm::radians(0.01f)));
 
         // Render the scene
         engine.render(scene, camera);
     }
 
+#endif
     return 0;
 }

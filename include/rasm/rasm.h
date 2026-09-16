@@ -12,6 +12,7 @@
 #include "rasm/core/material.h"
 #include "rasm/core/mesh.h"
 #include "rasm/core/renderGraph.h"
+#include "rasm/core/utils.h"
 
 
 // clang-format on

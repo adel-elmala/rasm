@@ -1,13 +1,13 @@
-#include "spdlog/spdlog.h"
-#include <unordered_map>
-#include <queue>
-
 #include "rasm/core/renderGraph.h"
 #include "rasm/core/engine.h"
 
+#include "spdlog/spdlog.h"
+
+#include <unordered_map>
+#include <queue>
+
 namespace rasm
 {
-
     void RenderGraph::addPass(std::string name, std::function<void(PassBuilder &)> setup, std::function<void(RenderContext &)> execute)
     {
         uint32_t passIdx = static_cast<uint32_t>(passes.size());
@@ -106,10 +106,18 @@ namespace rasm
             compile();
 
         auto &ctx = engine->getRenderContext();
+
+        auto scene = engine->registery.scenes[engine->currentScene.index];
+        auto camera = scene.cameras[0]; // TODO: handle multi-cameras
+
+        engine->beginFrame(camera);
         for (const auto &passIdx : executionOrder)
         {
+            engine->beginPass();
             passes[passIdx].execute(ctx);
+            engine->endPass();
         }
+        engine->endFrame();
     }
 
     // Internal helpers for the Builder

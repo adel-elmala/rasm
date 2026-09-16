@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rasm/core/types.h"
+
 #include <slang.h>
 #include <slang-com-ptr.h>
 
