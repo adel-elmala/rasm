@@ -16,7 +16,6 @@ int main()
     };
 
     rasm::Engine engine(config);
-#if 1
 
     // 2. Create a scene
     rasm::SceneHandle scene = engine.createScene();
@@ -92,6 +91,5 @@ int main()
         engine.render(scene, camera);
     }
 
-#endif
     return 0;
 }
