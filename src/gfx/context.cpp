@@ -8,7 +8,7 @@
 
 namespace rasm
 {
-    RenderContext::RenderContext(Engine *owner) : engine(owner)
+    RenderContext::RenderContext(Engine* owner) : engine(owner)
     {
         bufferCache.reserve(25);   // Pre-allocate for 25 buffers
         textureCache.reserve(25);  // Pre-allocate for 25 textures
@@ -50,27 +50,37 @@ namespace rasm
         {
             vulkanContext.waitIdle(); // Ensure the device is idle before cleanup
 
-            for (const auto &[handle, commandPool] : commandPoolCache)
+            for (const auto& [handle, descriptorSetLayout] : descriptorSetLayoutCache)
+            {
+                vulkanContext.removeDescriptorSetLayout(descriptorSetLayout);
+            }
+
+            for (const auto& [handle, descriptorPool] : descriptorPoolCache)
+            {
+                vulkanContext.removeDescriptorPool(descriptorPool);
+            }
+
+            for (const auto& [handle, commandPool] : commandPoolCache)
             {
                 vulkanContext.removeCommandPool(commandPool);
             }
 
-            for (const auto &[handle, fence] : fenceCache)
+            for (const auto& [handle, fence] : fenceCache)
             {
                 vulkanContext.removeFence(fence);
             }
 
-            for (const auto &[handle, semaphore] : semaphoreCache)
+            for (const auto& [handle, semaphore] : semaphoreCache)
             {
                 vulkanContext.removeSemaphore(semaphore);
             }
 
-            for (const auto &[handle, buffer] : bufferCache)
+            for (const auto& [handle, buffer] : bufferCache)
             {
                 vulkanContext.removeBuffer(buffer);
             }
 
-            for (const auto &[handle, texture] : textureCache)
+            for (const auto& [handle, texture] : textureCache)
             {
                 if (swapchainImageCache.find(handle) == swapchainImageCache.end()) // Only remove non-swapchain textures
                 {
@@ -78,12 +88,12 @@ namespace rasm
                 }
             }
 
-            for (const auto &[handle, shader] : shaderCache)
+            for (const auto& [handle, shader] : shaderCache)
             {
                 vulkanContext.removeShader(shader);
             }
 
-            for (const auto &[handle, pipeline] : pipelineCache)
+            for (const auto& [handle, pipeline] : pipelineCache)
             {
                 vulkanContext.removePipeline(pipeline);
             }
@@ -118,7 +128,7 @@ namespace rasm
                 spdlog::error("Failed to create Vulkan buffer.");
                 return {};
             }
-            BufferHandle handle = engine->getNextBufferHandle();
+            BufferHandle handle = engine->handleManager.getNextBufferHandle();
             buffer->handle = handle;
 
             bufferCache[handle] = buffer.value();
@@ -153,7 +163,7 @@ namespace rasm
                 spdlog::error("Failed to create Vulkan texture.");
                 return {};
             }
-            TextureHandle handle = engine->getNextTextureHandle();
+            TextureHandle handle = engine->handleManager.getNextTextureHandle();
             texture->handle = handle;
             textureCache[handle] = texture.value();
             textureDescCache[desc] = handle;
@@ -187,7 +197,7 @@ namespace rasm
                 spdlog::error("Failed to create Vulkan shader.");
                 return {};
             }
-            ShaderHandle handle = engine->getNextShaderHandle();
+            ShaderHandle handle = engine->handleManager.getNextShaderHandle();
             shader->handle = handle;
 
             shaderCache[handle] = shader.value();
@@ -241,7 +251,7 @@ namespace rasm
                 spdlog::error("Failed to create Vulkan pipeline.");
                 return {};
             }
-            PipelineHandle handle = engine->getNextPipelineHandle();
+            PipelineHandle handle = engine->handleManager.getNextPipelineHandle();
             pipeline->handle = handle;
 
             pipelineCache[handle] = pipeline.value();
@@ -278,7 +288,7 @@ namespace rasm
                 spdlog::error("Failed to create Vulkan bindless descriptor set layout.");
                 return {};
             }
-            DescriptorSetLayoutHandle handle = engine->getNextDescriptorSetLayoutHandle();
+            DescriptorSetLayoutHandle handle = engine->handleManager.getNextDescriptorSetLayoutHandle();
             layout->handle = handle;
 
             descriptorSetLayoutCache[handle] = layout.value();
@@ -314,7 +324,7 @@ namespace rasm
                 spdlog::error("Failed to create Vulkan descriptor pool.");
                 return {};
             }
-            DescriptorPoolHandle handle = engine->getNextDescriptorPoolHandle();
+            DescriptorPoolHandle handle = engine->handleManager.getNextDescriptorPoolHandle();
             pool->handle = handle;
 
             descriptorPoolCache[handle] = pool.value();
@@ -330,7 +340,7 @@ namespace rasm
         }
     }
 
-    DescriptorSetHandle RenderContext::allocateDescriptorSet(ResourceDesc desc, const DescriptorPoolHandle &pool, const DescriptorSetLayoutHandle &layout)
+    DescriptorSetHandle RenderContext::allocateDescriptorSet(ResourceDesc desc, const DescriptorPoolHandle& pool, const DescriptorSetLayoutHandle& layout)
     {
         assert(desc.type == ResourceType::DESCRIPTOR_SET);
 
@@ -358,7 +368,7 @@ namespace rasm
                 spdlog::error("Failed to allocate Vulkan descriptor set.");
                 return {};
             }
-            DescriptorSetHandle handle = engine->getNextDescriptorSetHandle();
+            DescriptorSetHandle handle = engine->handleManager.getNextDescriptorSetHandle();
             descriptorSet->handle = handle;
 
             descriptorSetCache[handle] = descriptorSet.value();
@@ -387,7 +397,7 @@ namespace rasm
                 return {};
             }
 
-            CommandPoolHandle handle = engine->getNextCommandPoolHandle();
+            CommandPoolHandle handle = engine->handleManager.getNextCommandPoolHandle();
             commandPool->handle = handle;
 
             commandPoolCache[handle] = commandPool.value();
@@ -404,7 +414,7 @@ namespace rasm
         }
     }
 
-    CommandBufferHandle RenderContext::createCommandBuffer(const CommandPoolHandle &commandPool)
+    CommandBufferHandle RenderContext::createCommandBuffer(const CommandPoolHandle& commandPool)
     {
         switch (backend)
         {
@@ -424,7 +434,7 @@ namespace rasm
                 return {};
             }
 
-            CommandBufferHandle handle = engine->getNextCommandBufferHandle();
+            CommandBufferHandle handle = engine->handleManager.getNextCommandBufferHandle();
             commandBuffer->handle = handle;
 
             commandBufferCache[handle] = commandBuffer.value();
@@ -454,7 +464,7 @@ namespace rasm
                 return {};
             }
 
-            SemaphoreHandle handle = engine->getNextSemaphoreHandle();
+            SemaphoreHandle handle = engine->handleManager.getNextSemaphoreHandle();
             semaphore->handle = handle; // Semaphores might not need a handle in the same way as buffers/textures
 
             // Optionally store in a cache if you want to manage semaphores similarly
@@ -485,7 +495,7 @@ namespace rasm
                 return {};
             }
 
-            FenceHandle handle = engine->getNextFenceHandle();
+            FenceHandle handle = engine->handleManager.getNextFenceHandle();
             fence->handle = handle; // Fences might not need a handle in the same way as buffers/textures
 
             fenceCache[handle] = fence.value();
@@ -502,7 +512,7 @@ namespace rasm
         }
     }
 
-    RenderTargetHandle RenderContext::createRenderTarget(const std::string &name, uint32_t width, uint32_t height, Format colorFormat, Format depthFormat)
+    RenderTargetHandle RenderContext::createRenderTarget(const std::string& name, uint32_t width, uint32_t height, Format colorFormat, Format depthFormat)
     {
         ResourceDesc colorDesc{};
         colorDesc.type = ResourceType::TEXTURE;
@@ -520,28 +530,29 @@ namespace rasm
         depthDesc.texture.format = depthFormat;
         depthDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
 
-        // auto colorHandle = createTexture(colorDesc);
-        // auto depthHandle = createTexture(depthDesc);
+        RenderTargetHandle rtHandle = engine->handleManager.getNextRenderTargetHandle();
 
-        RenderTargetHandle rtHandle = engine->getNextRenderTargetHandle();
-        RenderTarget rt{};
+        RenderTarget rt = {
+            .colorAttachment = {},
+            .depthAttachment = {},
+            .width = width,
+            .height = height,
+            .colorFormat = colorFormat,
+            .depthFormat = depthFormat
+        };
+
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             rt.colorAttachment[i] = createTexture(colorDesc);
             rt.depthAttachment[i] = createTexture(depthDesc);
         }
 
-        rt.width = width;
-        rt.height = height;
-        rt.colorFormat = colorFormat;
-        rt.depthFormat = depthFormat;
-
         renderTargetCache[rtHandle] = rt;
 
         return rtHandle;
     }
 
-    const RenderTarget &RenderContext::getRenderTarget(const RenderTargetHandle &handle)
+    const RenderTarget& RenderContext::getRenderTarget(const RenderTargetHandle& handle)
     {
         auto it = renderTargetCache.find(handle);
         if (it == renderTargetCache.end())
@@ -553,7 +564,7 @@ namespace rasm
         return it->second;
     }
 
-    void RenderContext::destroySemaphore(const SemaphoreHandle &semaphore)
+    void RenderContext::destroySemaphore(const SemaphoreHandle& semaphore)
     {
         switch (backend)
         {
@@ -589,9 +600,9 @@ namespace rasm
         {
             auto images = vulkanContext.getSwapchainImages();
             std::vector<TextureHandle> handles;
-            for (auto &image : images)
+            for (auto& image : images)
             {
-                auto handle = engine->getNextTextureHandle();
+                auto handle = engine->handleManager.getNextTextureHandle();
                 image.handle = handle;
                 textureCache[handle] = image;
                 swapchainImageCache[handle] = image; // Store in swapchain-specific cache
@@ -609,7 +620,7 @@ namespace rasm
         }
     }
 
-    bool RenderContext::fillBuffer(const BufferHandle &buffer, const void *data, size_t size, size_t offset)
+    bool RenderContext::fillBuffer(const BufferHandle& buffer, const void* data, size_t size, size_t offset)
     {
         assert(data != nullptr && "Data pointer cannot be null.");
         assert(size > 0 && "Size must be greater than zero.");
@@ -642,7 +653,7 @@ namespace rasm
         }
     }
 
-    bool RenderContext::fillTexture(const TextureHandle &textureHandle, const void *data)
+    bool RenderContext::fillTexture(const TextureHandle& textureHandle, const void* data)
     {
         assert(data != nullptr && "Data pointer cannot be null.");
         assert(textureHandle.isValid() && "Texture handle must be valid.");
@@ -689,7 +700,7 @@ namespace rasm
         }
     }
 
-    uint64_t RenderContext::getBufferDeviceAddress(const BufferHandle &buffer)
+    uint64_t RenderContext::getBufferDeviceAddress(const BufferHandle& buffer)
     {
         auto it = bufferCache.find(buffer);
         if (it == bufferCache.end())
@@ -708,7 +719,7 @@ namespace rasm
         return gpuBuffer.desc.buffer.deviceAddressBuffer.address;
     }
 
-    ResourceDesc RenderContext::getResourceDesc(const BufferHandle &buffer)
+    ResourceDesc RenderContext::getResourceDesc(const BufferHandle& buffer)
     {
         auto it = bufferCache.find(buffer);
         if (it == bufferCache.end())
@@ -719,7 +730,7 @@ namespace rasm
         return it->second.desc;
     }
 
-    ResourceDesc RenderContext::getResourceDesc(const TextureHandle &texture)
+    ResourceDesc RenderContext::getResourceDesc(const TextureHandle& texture)
     {
         auto it = textureCache.find(texture);
         if (it == textureCache.end())
@@ -730,7 +741,7 @@ namespace rasm
         return it->second.desc;
     }
 
-    bool RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot)
+    bool RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, uint32_t slot)
     {
         assert(slot < MAX_BINDLESS_TEXTURES && "Slot index exceeds maximum bindless textures.");
 
@@ -759,6 +770,19 @@ namespace rasm
         }
     }
 
+    // bool RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle &bindlessSet, const RenderTargetHandle &renderTarget, uint32_t slot)
+    // {
+    //     assert(slot < MAX_BINDLESS_TEXTURES && "Slot index exceeds maximum bindless textures.");
+
+    //     auto renderTargetIt = renderTargetCache.find(renderTarget);
+    //     if (renderTargetIt == renderTargetCache.end())
+    //     {
+    //         spdlog::error("Render target handle not found in cache during updateBindlessDescriptorSet.");
+    //         return false;
+    //     }
+
+    //     return updateBindlessDescriptorSet(bindlessSet, renderTargetIt->second, slot);
+    // }
 
     bool RenderContext::waitForFence(FenceHandle fence, uint64_t timeout)
     {
@@ -810,7 +834,7 @@ namespace rasm
         }
     }
 
-    bool RenderContext::acquireNextImage(SemaphoreHandle signalSemaphore, uint64_t timeout, uint32_t &imageIndex)
+    bool RenderContext::acquireNextImage(SemaphoreHandle signalSemaphore, uint64_t timeout, uint32_t& imageIndex)
     {
         switch (backend)
         {
@@ -835,7 +859,7 @@ namespace rasm
         }
     }
 
-    bool RenderContext::beginCommandBuffer(const CommandBufferHandle &commandBuffer)
+    bool RenderContext::beginCommandBuffer(const CommandBufferHandle& commandBuffer)
     {
         switch (backend)
         {
@@ -859,7 +883,7 @@ namespace rasm
         }
     }
 
-    bool RenderContext::endCommandBuffer(const CommandBufferHandle &commandBuffer)
+    bool RenderContext::endCommandBuffer(const CommandBufferHandle& commandBuffer)
     {
         switch (backend)
         {
@@ -883,7 +907,7 @@ namespace rasm
         }
     }
 
-    bool RenderContext::transitionImageLayout(const CommandBufferHandle &commandBuffer, TextureHandle texture, TextureUsage oldUsage, TextureUsage newUsage)
+    bool RenderContext::transitionImageLayout(const CommandBufferHandle& commandBuffer, TextureHandle texture, TextureUsage oldUsage, TextureUsage newUsage)
     {
         switch (backend)
         {
@@ -914,7 +938,7 @@ namespace rasm
         }
     }
 
-    bool RenderContext::beginRendering(const CommandBufferHandle &commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment)
+    bool RenderContext::beginRendering(const CommandBufferHandle& commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment)
     {
         switch (backend)
         {
@@ -951,7 +975,7 @@ namespace rasm
         }
     }
 
-    bool RenderContext::endRendering(const CommandBufferHandle &commandBuffer)
+    bool RenderContext::endRendering(const CommandBufferHandle& commandBuffer)
     {
         switch (backend)
         {
@@ -975,7 +999,7 @@ namespace rasm
         }
     }
 
-    bool RenderContext::setViewport(const CommandBufferHandle &commandBuffer, float x, float y, float width, float height, float minDepth, float maxDepth)
+    bool RenderContext::setViewport(const CommandBufferHandle& commandBuffer, float x, float y, float width, float height, float minDepth, float maxDepth)
     {
         switch (backend)
         {
@@ -999,7 +1023,7 @@ namespace rasm
         }
     }
 
-    bool RenderContext::setScissor(const CommandBufferHandle &commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height)
+    bool RenderContext::setScissor(const CommandBufferHandle& commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height)
     {
         switch (backend)
         {
@@ -1023,7 +1047,7 @@ namespace rasm
         }
     }
 
-    bool RenderContext::submit(const CommandBufferHandle &commandBuffer, const std::vector<SemaphoreHandle> &waitSemaphores, const std::vector<SemaphoreHandle> &signalSemaphores, FenceHandle fence)
+    bool RenderContext::submit(const CommandBufferHandle& commandBuffer, const std::vector<SemaphoreHandle>& waitSemaphores, const std::vector<SemaphoreHandle>& signalSemaphores, FenceHandle fence)
     {
         switch (backend)
         {
@@ -1037,7 +1061,7 @@ namespace rasm
             }
 
             std::vector<gfx::SemaphoreVKHandle> waitSemaphoresVK;
-            for (const auto &sem : waitSemaphores)
+            for (const auto& sem : waitSemaphores)
             {
                 auto it = semaphoreCache.find(sem);
                 if (it == semaphoreCache.end())
@@ -1048,7 +1072,7 @@ namespace rasm
                 waitSemaphoresVK.push_back(it->second);
             }
             std::vector<gfx::SemaphoreVKHandle> signalSemaphoresVK;
-            for (const auto &sem : signalSemaphores)
+            for (const auto& sem : signalSemaphores)
             {
                 auto it = semaphoreCache.find(sem);
                 if (it == semaphoreCache.end())
@@ -1126,7 +1150,7 @@ namespace rasm
         }
     }
 
-    void RenderContext::bindPipeline(const CommandBufferHandle &commandBuffer, const PipelineHandle &pipeline)
+    void RenderContext::bindPipeline(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline)
     {
         switch (backend)
         {
@@ -1158,7 +1182,7 @@ namespace rasm
         }
     }
 
-    void RenderContext::bindVertexBuffer(const CommandBufferHandle &commandBuffer, const BufferHandle &buffer, uint64_t offset, uint32_t binding)
+    void RenderContext::bindVertexBuffer(const CommandBufferHandle& commandBuffer, const BufferHandle& buffer, uint64_t offset, uint32_t binding)
     {
         switch (backend)
         {
@@ -1190,7 +1214,7 @@ namespace rasm
         }
     }
 
-    void RenderContext::bindIndexBuffer(const CommandBufferHandle &commandBuffer, const BufferHandle &buffer, uint64_t offset, Format indexType)
+    void RenderContext::bindIndexBuffer(const CommandBufferHandle& commandBuffer, const BufferHandle& buffer, uint64_t offset, Format indexType)
     {
         switch (backend)
         {
@@ -1222,7 +1246,7 @@ namespace rasm
         }
     }
 
-    void RenderContext::bindDescriptorSet(const CommandBufferHandle &commandBuffer, const PipelineHandle &pipeline, const DescriptorSetHandle &descriptorSet, uint32_t setIndex)
+    void RenderContext::bindDescriptorSet(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline, const DescriptorSetHandle& descriptorSet, uint32_t setIndex)
     {
         switch (backend)
         {
@@ -1258,7 +1282,7 @@ namespace rasm
         }
     }
 
-    void RenderContext::pushConstants(const CommandBufferHandle &commandBuffer, const PipelineHandle &pipeline, ShaderType stage, const void *data, uint32_t size, uint32_t offset)
+    void RenderContext::pushConstants(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline, ShaderType stage, const void* data, uint32_t size, uint32_t offset)
     {
         switch (backend)
         {
@@ -1290,7 +1314,7 @@ namespace rasm
         }
     }
 
-    void RenderContext::setUniform(const CommandBufferHandle &commandBuffer, const std::string &name, const void *data, size_t size)
+    void RenderContext::setUniform(const CommandBufferHandle& commandBuffer, const std::string& name, const void* data, size_t size)
     {
         switch (backend)
         {
@@ -1315,7 +1339,7 @@ namespace rasm
         }
     }
 
-    void RenderContext::draw(const CommandBufferHandle &commandBuffer, uint32_t vertexCount, uint32_t instanceCount)
+    void RenderContext::draw(const CommandBufferHandle& commandBuffer, uint32_t vertexCount, uint32_t instanceCount)
     {
         switch (backend)
         {
@@ -1340,7 +1364,7 @@ namespace rasm
         }
     }
 
-    void RenderContext::drawIndexed(const CommandBufferHandle &commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint32_t vertexOffset, uint32_t firstIndex, uint32_t firstInstance)
+    void RenderContext::drawIndexed(const CommandBufferHandle& commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint32_t vertexOffset, uint32_t firstIndex, uint32_t firstInstance)
     {
         switch (backend)
         {

@@ -12,34 +12,48 @@ int main()
 
     rasm::Engine engine(config);
 
-    rasm::Scene scene = engine.createScene();
+    // set up the scene
+    rasm::SceneHandle scene = engine.createScene();
 
-    rasm::Entity camera = scene.createEntity("MainCamera");
-    rasm::Camera &cameraLens = camera.addComponent<rasm::Camera>(rasm::CameraType::PERSPECTIVE);
-    cameraLens.setPerspective(45.0f, static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight), 0.1f, 32.0f);
-    camera.addComponent<rasm::Transform>(glm::vec3(0.0f, 0.0f, -1.0f));
+    // Create a camera
+    rasm::CameraHandle camera = engine.createCamera(rasm::CameraProjection{.type = rasm::CameraType::PERSPECTIVE,
+                                                                           .perspective{.fovY = 45.0f,
+                                                                                        .aspect = static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight),
+                                                                                        .nearZ = 0.1f,
+                                                                                        .farZ = 32.0f}},
+                                                    rasm::Transform{
+                                                        glm::vec3(0.0f, 0.0f, -1.0f),      // position
+                                                        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
+                                                        glm::vec3(1.0f)                    // scale
+                                                    });
 
     // Load resources
     rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/bunny.obj");
-    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/textures/test1.jpg");
+
+    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/textures/bunny-atlas.jpg");
     rasm::TextureHandle normalTexture = engine.loadTexture("assets/textures/test1.jpg");
 
     // Create a material
-    rasm::Material *material = engine.createMaterial(rasm::MaterialTemplate::PBR);
-    material->setTexture(rasm::PbrSlot::ALBEDO, albedoTexture);
-    material->setTexture(rasm::PbrSlot::NORMAL, normalTexture);
-    material->setFloat(rasm::PbrParam::ROUGHNESS, 0.5f);
-    material->setFloat(rasm::PbrParam::METALLIC, 0.0f);
+    rasm::TextureHandle textures[] = {albedoTexture, normalTexture};
+    rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::BASIC, textures);
 
     // Create entities in the scene
-    rasm::Entity bunny = scene.createEntity("bunny");
-    bunny.addComponent<rasm::Mesh>(bunnyMesh);
-    bunny.addComponent<rasm::Material>(*material);
-    bunny.addComponent<rasm::Transform>(
-        glm::vec3(0.0f, 0.0f, -10.0f),     // position
-        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
-        glm::vec3(0.05f)                   // scale
-    );
+    rasm::EntityHandle bunny = engine.createEntity("bunny", bunnyMesh, material, rasm::Transform{
+                                                                                     glm::vec3(0.0f, 0.0f, -10.0f),     // position
+                                                                                     glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
+                                                                                     glm::vec3(0.05f)                   // scale
+                                                                                 });
+
+    // Create a directional light
+    rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL,  // type
+                                                 glm::vec3(1.0f, 1.0f, 1.0f),   // color
+                                                 1.0f,                          // intensity
+                                                 glm::vec3(0.0f, 10.0f, 0.0f),  // position
+                                                 glm::vec3(0.0f, -1.0f, 0.0f)); // direction
+
+    engine.addEntityToScene(scene, bunny);
+    engine.addCameraToScene(scene, camera);
+    engine.addLightToScene(scene, light);
 
     rasm::RenderGraph graph = engine.createRenderGraph();
 
@@ -60,14 +74,60 @@ int main()
             rtHandle = builder.createResource(rtDesc);
             builder.write(rtHandle);
         },
+
         [&engine, &scene, &camera, &rtHandle](rasm::RenderContext &ctx)
         {
             // TODO: This is a temporary workaround to get the render target handle from the resource handle.
             rasm::RenderTargetHandle renderTargetHandle{rtHandle.index, rtHandle.generation};
-            engine.render(scene, camera, renderTargetHandle);
+            engine.setRenderTarget(renderTargetHandle);
+
+            auto compiledScene = engine.compileScene(scene);
+
+            auto &currentFrame = engine.getCurrentFrameResources();
+            auto commandBuffer = currentFrame.commandBuffer;
+            auto shaderDataBuffer = currentFrame.shaderDataBuffer;
+
+            auto camTransform = engine.getCameraTransform(camera);
+            auto camPos = camTransform.position;
+
+            auto projection = getProjectionMatrix(engine.getCameraProjection(camera));
+            auto view = glm::translate(glm::mat4(1.0f), camPos);
+
+            auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
+
+            auto shaderDataIdx = 0;
+            for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
+            {
+                auto pipeline = compiledScene.materialToPipeline[materialHandle];
+                ctx.bindPipeline(commandBuffer, pipeline);
+                for (const auto &entityHandle : entitySet)
+                {
+                    auto modelTransform = engine.getTransform(entityHandle);
+
+                    auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
+                                 glm::mat4_cast(modelTransform.rotation) *
+                                 glm::scale(glm::mat4(1.0f), modelTransform.scale);
+
+                    auto baseOffset = (sizeof(projection) + sizeof(view) + sizeof(model)) * shaderDataIdx;
+                    ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), baseOffset);
+                    ctx.fillBuffer(shaderDataBuffer, &view, sizeof(view), sizeof(projection) + baseOffset);
+                    ctx.fillBuffer(shaderDataBuffer, &model, sizeof(model), sizeof(projection) + sizeof(view) + baseOffset);
+
+                    auto bufferHandle = compiledScene.meshData[entityHandle];
+                    auto desc = ctx.getResourceDesc(bufferHandle);
+                    ctx.bindDescriptorSet(commandBuffer, pipeline, engine.getBindlessDescriptorSet(), 0);
+                    ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
+                    ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.vertexIndexBuffer.offset, rasm::Format::U32_UINT);
+                    auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;
+                    ctx.pushConstants(commandBuffer, pipeline, rasm::ShaderType::VERTEX, &targetShaderDataBufferAddress, sizeof(targetShaderDataBufferAddress), 0);
+                    ctx.drawIndexed(commandBuffer, static_cast<uint32_t>(desc.buffer.vertexIndexBuffer.indexCount), 1, 0, 0, 0);
+                    shaderDataIdx++;
+                }
+            }
         });
 
     auto overlayScene = engine.createScene();
+    engine.addCameraToScene(overlayScene, camera);
 
     graph.addPass(
         "overlay",
@@ -87,13 +147,7 @@ int main()
 
             auto overlayMesh = engine.createMesh(vertices, indices);
 
-            auto overlayRect = overlayScene.createEntity("overlayRect");
-            overlayRect.addComponent<rasm::Mesh>(overlayMesh);
-            overlayRect.addComponent<rasm::Transform>();
-
-            auto overlayMaterial = engine.createMaterial(rasm::MaterialTemplate::SHADER);
-            overlayMaterial->setShaderName("overlayShader");
-            overlayMaterial->setShaderSource(R"(
+            auto overLayShader = engine.createShader(R"(
                 struct VSInput
                 {
                     float3 Pos;
@@ -143,11 +197,59 @@ int main()
                 }
             )");
 
-            overlayRect.addComponent<rasm::Material>(*overlayMaterial);
+            auto overlayMaterial = engine.createMaterial(rasm::MaterialType::SHADER, nullptr, overLayShader);
+            auto overlayRect = engine.createEntity("overlayRect", overlayMesh, overlayMaterial);
+
+            engine.addEntityToScene(overlayScene, overlayRect);
         },
+
         [&engine, &overlayScene, &camera](rasm::RenderContext &ctx)
         {
-            engine.render(overlayScene, camera);
+            engine.resetRenderTarget();
+
+            auto compiledScene = engine.compileScene(overlayScene);
+
+            auto &currentFrame = engine.getCurrentFrameResources();
+            auto commandBuffer = currentFrame.commandBuffer;
+            auto shaderDataBuffer = currentFrame.shaderDataBuffer;
+
+            auto camTransform = engine.getCameraTransform(camera);
+            auto camPos = camTransform.position;
+
+            auto projection = getProjectionMatrix(engine.getCameraProjection(camera));
+            auto view = glm::translate(glm::mat4(1.0f), camPos);
+
+            auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
+
+            auto shaderDataIdx = 3;
+            for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
+            {
+                auto pipeline = compiledScene.materialToPipeline[materialHandle];
+                ctx.bindPipeline(commandBuffer, pipeline);
+                for (const auto &entityHandle : entitySet)
+                {
+                    auto modelTransform = engine.getTransform(entityHandle);
+
+                    auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
+                                 glm::mat4_cast(modelTransform.rotation) *
+                                 glm::scale(glm::mat4(1.0f), modelTransform.scale);
+
+                    auto baseOffset = (sizeof(projection) + sizeof(view) + sizeof(model)) * shaderDataIdx;
+                    ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), baseOffset);
+                    ctx.fillBuffer(shaderDataBuffer, &view, sizeof(view), sizeof(projection) + baseOffset);
+                    ctx.fillBuffer(shaderDataBuffer, &model, sizeof(model), sizeof(projection) + sizeof(view) + baseOffset);
+
+                    auto bufferHandle = compiledScene.meshData[entityHandle];
+                    auto desc = ctx.getResourceDesc(bufferHandle);
+                    ctx.bindDescriptorSet(commandBuffer, pipeline, engine.getBindlessDescriptorSet(), 0);
+                    ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
+                    ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.vertexIndexBuffer.offset, rasm::Format::U32_UINT);
+                    auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;
+                    ctx.pushConstants(commandBuffer, pipeline, rasm::ShaderType::VERTEX, &targetShaderDataBufferAddress, sizeof(targetShaderDataBufferAddress), 0);
+                    ctx.drawIndexed(commandBuffer, static_cast<uint32_t>(desc.buffer.vertexIndexBuffer.indexCount), 1, 0, 0, 0);
+                    shaderDataIdx++;
+                }
+            }
         });
 
     graph.compile();

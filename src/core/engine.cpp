@@ -1,20 +1,7 @@
 #include "rasm/core/engine.h"
-#include "rasm/core/mesh.h"
-#include "rasm/core/material.h"
-#include "rasm/core/light.h"
-#include "rasm/core/transform.h"
-#include "rasm/core/entity.h"
-#include "rasm/core/camera.h"
-#include "rasm/core/renderGraph.h"
-#include "rasm/gfx/context.h"
+#include "rasm/core/utils.h"
 
 #include "spdlog/spdlog.h"
-
-#define TINYGLTF_IMPLEMENTATION
-#include "tiny_gltf.h"
-
-#define TINYOBJLOADER_IMPLEMENTATION
-#include "tiny_obj_loader.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -51,8 +38,7 @@ namespace rasm
         spdlog::info("Engine initialized with config: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
                      config.appName, config.windowWidth, config.windowHeight, config.enableValidation);
 
-        this->window = Window(this, config.windowWidth, config.windowHeight);
-        this->mainWindow = this->window.createWindow();
+        this->mainWindow = createWindow(config.windowWidth, config.windowHeight);
 
         ctx = RenderContext(this);
         if (!ctx.initialize(config.preferredBackend))
@@ -137,19 +123,19 @@ namespace rasm
     Engine::~Engine()
     {
         // Clean up resources, free memory, etc.
-        for (auto &[handle, tex] : textureData)
+        for (auto &[handle, tex] : registery.textureData)
         {
             stbi_image_free(tex.data);
         }
 
-        for (auto &[handle, mesh] : meshData)
+        for (auto mesh : registery.meshes)
         {
-            if (mesh.type == MeshRaw::MeshType::GLTF)
+            if (mesh.type == Mesh::MeshType::GLTF)
             {
                 // tinygltf::Model doesn't require explicit cleanup.
             }
 
-            if (mesh.type == MeshRaw::MeshType::OBJ)
+            if (mesh.type == Mesh::MeshType::OBJ)
             {
                 // If we had implemented OBJ loading, we would clean up any allocated resources here.
             }
@@ -157,132 +143,16 @@ namespace rasm
 
         ctx.cleanup();
 
-        this->window.destroyWindow(this->mainWindow);
+        destroyWindow(this->mainWindow);
         spdlog::info("Engine shutdown, cleaned up resources.");
-    }
-
-    Scene Engine::createScene()
-    {
-        const SceneHandle id{nextHandle.scene++, 1};
-        return Scene(this, id);
-    }
-
-    MeshHandle Engine::createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices)
-    {
-        auto handle = getNextMeshHandle();
-
-        ObjRaw objRaw{};
-        objRaw.vertices = std::move(vertices);
-        objRaw.indices = std::move(indices);
-
-        MeshRaw mesh{};
-        mesh.type = MeshRaw::MeshType::OBJ;
-        mesh.data = std::move(objRaw);
-
-        meshData[handle] = std::move(mesh);
-
-        return handle;
-    }
-
-    MeshHandle Engine::loadMesh(const std::string &path)
-    {
-        // find if the mesh is already loaded, if so return existing handle
-        if (loadedMeshes.find(path) != loadedMeshes.end())
-        {
-            return loadedMeshes[path];
-        }
-        // find if the model extension is supported, if not return invalid handle
-        auto extension = path.substr(path.find_last_of(".") + 1);
-        if (supportedMeshExtensions.find(extension) == supportedMeshExtensions.end())
-        {
-            spdlog::error("Unsupported mesh format: {}", extension);
-            isRunning = false;
-            return MeshHandle{};
-        }
-
-        MeshRaw mesh{};
-        if (extension == "gltf" || extension == "glb")
-        {
-            tinygltf::TinyGLTF loader;
-            tinygltf::Model model;
-
-            std::string err;
-            std::string warn;
-            bool ret = false;
-            if (extension == "gltf")
-            {
-                ret = loader.LoadASCIIFromFile(&model, &err, &warn, path);
-            }
-            else
-            {
-                ret = loader.LoadBinaryFromFile(&model, &err, &warn, path);
-            }
-
-            if (!warn.empty())
-            {
-                spdlog::warn("GLTF loader warning: {}", warn);
-            }
-            if (!err.empty())
-            {
-                spdlog::error("GLTF loader error: {}", err);
-            }
-            if (!ret)
-            {
-                spdlog::error("Failed to load GLTF model: {}", path);
-                return MeshHandle{};
-            }
-
-            mesh.type = MeshRaw::MeshType::GLTF;
-            mesh.data = std::move(model);
-        }
-        else
-        {
-            tinyobj::attrib_t attrib;
-            std::vector<tinyobj::shape_t> shapes;
-            std::vector<tinyobj::material_t> materials;
-
-            if (!tinyobj::LoadObj(&attrib, &shapes, &materials, nullptr, nullptr, path.c_str()))
-            {
-                spdlog::error("Failed to load OBJ model: {}", path);
-                return MeshHandle{};
-            }
-
-            // Load vertex and index data
-            std::vector<Vertex> out_vertices;
-            std::vector<uint32_t> out_indices;
-
-            for (auto &index : shapes[0].mesh.indices)
-            {
-                Vertex v{
-                    .pos = {attrib.vertices[index.vertex_index * 3], -attrib.vertices[index.vertex_index * 3 + 1], attrib.vertices[index.vertex_index * 3 + 2]},
-                    .normal = {attrib.normals[index.normal_index * 3], -attrib.normals[index.normal_index * 3 + 1], attrib.normals[index.normal_index * 3 + 2]},
-                    .uv = {attrib.texcoords[index.texcoord_index * 2], 1.0 - attrib.texcoords[index.texcoord_index * 2 + 1]}};
-
-                out_vertices.push_back(v);
-                out_indices.push_back(static_cast<uint32_t>(out_indices.size()));
-            }
-
-            mesh.type = MeshRaw::MeshType::OBJ;
-
-            ObjRaw objRaw{};
-            objRaw.vertices = std::move(out_vertices);
-            objRaw.indices = std::move(out_indices);
-            mesh.data = std::move(objRaw);
-        }
-
-        auto handle = getNextMeshHandle();
-        loadedMeshes[path] = handle;
-        meshData.insert({handle, std::move(mesh)});
-
-        return handle;
     }
 
     TextureHandle Engine::loadTexture(const std::string &path)
     {
         // find if the texture is already loaded, if so return existing handle
-        if (loadedTextures.find(path) != loadedTextures.end())
+        if (registery.loadedTextures.find(path) != registery.loadedTextures.end())
         {
-            return loadedTextures[path];
+            return registery.loadedTextures[path];
         }
 
         // find if the texture extension is supported, if not return invalid handle
@@ -336,65 +206,10 @@ namespace rasm
             return TextureHandle{};
         }
 
-        loadedTextures[path] = textureHandle;
-        textureData.insert({textureHandle, std::move(tex)});
+        registery.loadedTextures[path] = textureHandle;
+        registery.textureData.insert({textureHandle, std::move(tex)});
 
         return textureHandle;
-    }
-
-    BufferHandle Engine::uploadMesh(const MeshHandle &handle)
-    {
-        // TODO: remove mesh from meshData after uploading to GPU.
-        auto it = meshData.find(handle);
-        if (it == meshData.end())
-        {
-            spdlog::error("Mesh handle not found for upload.");
-            isRunning = false;
-            return BufferHandle{};
-        }
-
-        auto &mesh = it->second;
-
-        if (mesh.type == MeshRaw::MeshType::GLTF)
-        {
-            // In a real implementation, this is where we'd upload the GLTF mesh data to the GPU.
-            spdlog::info("Uploading GLTF mesh with handle: {}", handle.index);
-        }
-        else if (mesh.type == MeshRaw::MeshType::OBJ)
-        {
-            auto &objRaw = std::get<ObjRaw>(mesh.data);
-
-            auto bufferDesc = ResourceDesc{};
-            bufferDesc.name = "OBJ Vertex + index Buffer";
-            bufferDesc.type = ResourceType::BUFFER;
-            bufferDesc.buffer.usage = BufferUsage::VERTEXINDEX;
-            bufferDesc.buffer.size = objRaw.vertices.size() * sizeof(Vertex) + objRaw.indices.size() * sizeof(uint32_t);
-            bufferDesc.buffer.vertexIndexBuffer.indexCount = objRaw.indices.size();
-            bufferDesc.buffer.vertexIndexBuffer.vertexCount = objRaw.vertices.size();
-            bufferDesc.buffer.vertexIndexBuffer.offset = objRaw.vertices.size() * sizeof(Vertex);
-
-            auto bufferHandle = ctx.createBuffer(bufferDesc);
-
-            ctx.fillBuffer(bufferHandle, objRaw.vertices.data(), objRaw.vertices.size() * sizeof(Vertex), 0);
-            ctx.fillBuffer(bufferHandle, objRaw.indices.data(), objRaw.indices.size() * sizeof(uint32_t), objRaw.vertices.size() * sizeof(Vertex));
-            return bufferHandle;
-        }
-        else
-        {
-            spdlog::error("Unknown mesh type for upload.");
-            isRunning = false;
-            return BufferHandle{};
-        }
-
-        return BufferHandle{};
-    }
-
-    Material *Engine::createMaterial(MaterialTemplate type)
-    {
-        const MaterialHandle id{nextHandle.material++, 1};
-        Material *material = new Material(id, type);
-        loadedMaterials[id] = material;
-        return material;
     }
 
     ResourceHandle Engine::createResource(const ResourceDesc &desc)
@@ -450,14 +265,14 @@ namespace rasm
         return ctx.createRenderTarget(name, widthToUse, heightToUse, colorFormatToUse, depthFormatToUse);
     }
 
-    void Engine::beginFrame(Entity &camera)
+    void Engine::beginFrame(CameraHandle camera)
     {
         // wait for the gpu to finish rendering the previous frame
         auto &currentFrame = frameResources[frameCount];
         ctx.waitForFence(currentFrame.inFlightFence);
         ctx.resetFence(currentFrame.inFlightFence);
 
-        this->window.pollEvents(camera);
+        pollEvents(camera);
 
         if (this->resized)
         {
@@ -470,24 +285,11 @@ namespace rasm
 
         // record commands for the current frame
         ctx.beginCommandBuffer(currentFrame.commandBuffer);
-
-        // transition swapchain image to be ready for rendering
-        ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
-        ctx.transitionImageLayout(currentFrame.commandBuffer, currentFrame.depthTexture, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
-
-        // begin dynamic rendering
-        ctx.beginRendering(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], currentFrame.depthTexture);
-        ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(config.windowWidth), static_cast<float>(config.windowHeight));
-        ctx.setScissor(currentFrame.commandBuffer, 0, 0, config.windowWidth, config.windowHeight);
     }
 
     void Engine::endFrame()
     {
         auto &currentFrame = frameResources[frameCount];
-
-        ctx.endRendering(currentFrame.commandBuffer);
-
-        ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::COLOR_ATTACHMENT, TextureUsage::PRESENT_SRC);
 
         ctx.endCommandBuffer(currentFrame.commandBuffer);
 
@@ -498,16 +300,17 @@ namespace rasm
 
         ctx.present(imageIdx, swapchain.readyToPresentSemaphores[imageIdx]);
 
-        frameCount = (frameCount + 1) % 2; // Toggle between 0 and 1 for double buffering
+        frameCount = (frameCount + 1) % MAX_FRAMES_IN_FLIGHT; // Toggle between 0 and 1 for double buffering
     }
 
-    void Engine::beginOffscreenFrame(const RenderTargetHandle &renderTarget, Entity &camera)
+    // TODO: delete
+    void Engine::beginOffscreenFrame(const RenderTargetHandle &renderTarget, CameraHandle camera)
     {
         auto &currentFrame = frameResources[frameCount];
         ctx.waitForFence(currentFrame.inFlightFence);
         ctx.resetFence(currentFrame.inFlightFence);
 
-        this->window.pollEvents(camera);
+        pollEvents(camera);
 
         // record commands for the current frame
         ctx.beginCommandBuffer(currentFrame.commandBuffer);
@@ -524,6 +327,7 @@ namespace rasm
         ctx.setScissor(currentFrame.commandBuffer, 0, 0, renderTargetData.width, renderTargetData.height);
     }
 
+    // TODO: delete
     void Engine::endOffscreenFrame()
     {
         auto &currentFrame = frameResources[frameCount];
@@ -536,7 +340,73 @@ namespace rasm
                    {},
                    currentFrame.inFlightFence);
 
-        frameCount = (frameCount + 1) % 2; // Toggle between 0 and 1 for double buffering
+        frameCount = (frameCount + 1) % MAX_FRAMES_IN_FLIGHT; // Toggle between 0 and 1 for double buffering
+    }
+
+    void Engine::beginPass()
+    {
+        auto currentFrame = frameResources[frameCount];
+
+        if (currentRenderTarget.isValid())
+        {
+            auto renderTargetData = ctx.getRenderTarget(currentRenderTarget);
+
+            // transition render target images to be ready for rendering
+            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
+            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.depthAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
+        }
+        else
+        {
+            // transition swapchain image to be ready for rendering
+            ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
+            ctx.transitionImageLayout(currentFrame.commandBuffer, currentFrame.depthTexture, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
+        }
+
+        // begin dynamic rendering
+        ctx.beginRendering(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], currentFrame.depthTexture);
+        ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(config.windowWidth), static_cast<float>(config.windowHeight));
+        ctx.setScissor(currentFrame.commandBuffer, 0, 0, config.windowWidth, config.windowHeight);
+    }
+
+    void Engine::endPass()
+    {
+        auto currentFrame = frameResources[frameCount];
+        ctx.endRendering(currentFrame.commandBuffer);
+
+        if (currentRenderTarget.isValid())
+        {
+            auto renderTargetData = ctx.getRenderTarget(currentRenderTarget);
+
+            // transition render target images to be ready for sampling
+            // ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], TextureUsage::COLOR_ATTACHMENT, TextureUsage::SAMPLED);
+            // ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.depthAttachment[frameCount], TextureUsage::DEPTH_STENCIL_ATTACHMENT, TextureUsage::SAMPLED);
+        }
+        else
+        {
+            ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::COLOR_ATTACHMENT, TextureUsage::PRESENT_SRC);
+        }
+
+        // TODO: insert barrier to ensure the pass has finished before subsequent operations
+    }
+
+    void Engine::setRenderTarget(const RenderTargetHandle &renderTarget)
+    {
+        this->currentRenderTarget = renderTarget;
+    }
+
+    void Engine::resetRenderTarget()
+    {
+        this->currentRenderTarget = RenderTargetHandle{};
+    }
+
+    void Engine::setScene(SceneHandle scene)
+    {
+        this->currentScene = scene;
+    }
+
+    SceneHandle Engine::getScene() const
+    {
+        return currentScene;
     }
 
     void Engine::recreateSwapchain()
@@ -572,122 +442,21 @@ namespace rasm
         }
     }
 
-    CompiledScene Engine::compileScene(Scene &scene)
-    {
-        if (!scene.isValid())
-        {
-            spdlog::error("Invalid scene handle for compilation.");
-            isRunning = false;
-            return CompiledScene{};
-        }
-
-        if (compiledScenes.find(scene.id()) != compiledScenes.end())
-        {
-            return compiledScenes[scene.id()];
-        }
-
-        CompiledScene compiledScene;
-
-        for (auto &[entityHandle, entity] : scene.entities)
-        {
-            if (entity.hasComponent<Mesh>() && entity.hasComponent<Material>())
-            {
-                auto &matComp = entity.getComponent<Material>();
-                auto &meshComp = entity.getComponent<Mesh>();
-
-                auto bufferHandle = uploadMesh(meshComp.id());
-                if (!bufferHandle.isValid())
-                {
-                    spdlog::error("Failed to upload mesh for Entity {}. Skipping.", entity.id().index);
-                    isRunning = false;
-                    continue;
-                }
-
-                compiledScene.meshData[entity.id()] = bufferHandle;
-                compiledScene.materialToMeshes[matComp.id()].insert(entity.id());
-            }
-        }
-
-        auto swapchainFormat = ctx.getSwapchainImageFormat();
-        auto depthFormat = Format::D24_UNORM_S8_UINT;
-
-        for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
-        {
-            // create a pipeline for each material.
-            auto pipelineDesc = ResourceDesc{};
-            pipelineDesc.type = ResourceType::GRAPHICS_PIPELINE;
-            pipelineDesc.name = "Pipeline for Material " + std::to_string(materialHandle.index);
-
-            auto material = loadedMaterials.find(materialHandle);
-            if (material == loadedMaterials.end())
-            {
-                spdlog::error("Material not found for handle {}.", materialHandle.index);
-                continue;
-            }
-
-            auto shaderSource = material->second->getShaderSources();
-
-            auto shaderName = material->second->getShaderName();
-            auto vertShader = shaderCompiler.compileFromString(shaderSource, shaderName + ".vert.slang", "vertMain");
-            auto fragShader = shaderCompiler.compileFromString(shaderSource, shaderName + ".frag.slang", "fragMain");
-
-            auto shaderDesc = ResourceDesc{};
-            shaderDesc.type = ResourceType::SHADER;
-            shaderDesc.shader.shaderType = ShaderType::VERTEX;
-            shaderDesc.shader.sourceSize = vertShader.code.size();
-            shaderDesc.shader.source = reinterpret_cast<const char *>(vertShader.code.data());
-
-            pipelineDesc.pipeline.vertexShader = ctx.createShader(shaderDesc);
-
-            shaderDesc.shader.shaderType = ShaderType::FRAGMENT;
-            shaderDesc.shader.sourceSize = fragShader.code.size();
-            shaderDesc.shader.source = reinterpret_cast<const char *>(fragShader.code.data());
-
-            pipelineDesc.pipeline.fragmentShader = ctx.createShader(shaderDesc);
-
-            pipelineDesc.pipeline.topology = PrimitiveTopology::TRIANGLE_LIST;
-
-            pipelineDesc.pipeline.colorAttachmentFormat = swapchainFormat;
-            pipelineDesc.pipeline.depthStencilAttachmentFormat = depthFormat;
-
-            rasm::VertexAttributeDescription attrDesc[4] = {};
-            auto size = std::min(vertShader.vertexInputLayout.size(), static_cast<size_t>(4));
-            for (size_t i = 0; i < size; ++i)
-            {
-                attrDesc[i] = vertShader.vertexInputLayout[i];
-            }
-
-            pipelineDesc.pipeline.vertexInputLayout = {
-                .attributes = {attrDesc[0], attrDesc[1], attrDesc[2], attrDesc[3]},
-                .binding = 0,
-                .stride = sizeof(Vertex),
-                .perInstance = false};
-
-            pipelineDesc.pipeline.descriptorSetLayout = bindlessDescriptorSetLayout;
-
-            auto pipeline = ctx.createPipeline(pipelineDesc);
-            compiledScene.materialToPipeline[materialHandle] = pipeline;
-        }
-
-        compiledScenes[scene.id()] = compiledScene;
-
-        return compiledScene;
-    }
-
-    void Engine::render(Scene &scene, Entity &camera)
+    void Engine::render(SceneHandle scene, CameraHandle camera)
     {
         beginFrame(camera);
+        beginPass();
 
         auto compiledScene = compileScene(scene);
         auto &currentFrame = frameResources[frameCount];
         auto commandBuffer = currentFrame.commandBuffer;
         auto shaderDataBuffer = currentFrame.shaderDataBuffer;
 
-        auto cam = camera.getComponent<Camera>();
-        auto camTransform = camera.getComponent<rasm::Transform>();
+        auto cam = registery.cameras[camera.index];
+        auto camTransform = cam.transform;
         auto camPos = camTransform.position;
 
-        auto projection = cam.getProjectionMatrix();
+        auto projection = getProjectionMatrix(cam.projection);
         auto view = glm::translate(glm::mat4(1.0f), camPos);
 
         auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
@@ -699,11 +468,11 @@ namespace rasm
             ctx.bindPipeline(commandBuffer, pipeline);
             for (const auto &entityHandle : entitySet)
             {
-                auto modelTransform = scene.entities.find(entityHandle)->second.getComponent<rasm::Transform>();
+                auto modelTransform = registery.entities[entityHandle.index].transform;
 
-                auto model = glm::translate(glm::mat4(1.0f), modelTransform.getPosition()) *
-                             glm::mat4_cast(modelTransform.getRotation()) *
-                             glm::scale(glm::mat4(1.0f), modelTransform.getScale());
+                auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
+                             glm::mat4_cast(modelTransform.rotation) *
+                             glm::scale(glm::mat4(1.0f), modelTransform.scale);
 
                 auto baseOffset = (sizeof(projection) + sizeof(view) + sizeof(model)) * shaderDataIdx;
                 ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), baseOffset);
@@ -721,11 +490,11 @@ namespace rasm
                 shaderDataIdx++;
             }
         }
-
+        endPass();
         endFrame();
     }
 
-    void Engine::render(Scene &scene, Entity &camera, const RenderTargetHandle &renderTarget)
+    void Engine::render(SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget)
     {
         beginOffscreenFrame(renderTarget, camera);
 
@@ -734,11 +503,11 @@ namespace rasm
         auto commandBuffer = currentFrame.commandBuffer;
         auto shaderDataBuffer = currentFrame.shaderDataBuffer;
 
-        auto cam = camera.getComponent<Camera>();
-        auto camTransform = camera.getComponent<rasm::Transform>();
+        auto cam = registery.cameras[camera.index];
+        auto camTransform = cam.transform;
         auto camPos = camTransform.position;
 
-        auto projection = cam.getProjectionMatrix();
+        auto projection = getProjectionMatrix(cam.projection);
         auto view = glm::translate(glm::mat4(1.0f), camPos);
 
         auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
@@ -750,11 +519,11 @@ namespace rasm
             ctx.bindPipeline(commandBuffer, pipeline);
             for (const auto &entityHandle : entitySet)
             {
-                auto modelTransform = scene.entities.find(entityHandle)->second.getComponent<rasm::Transform>();
+                auto modelTransform = registery.entities[entityHandle.index].transform;
 
-                auto model = glm::translate(glm::mat4(1.0f), modelTransform.getPosition()) *
-                             glm::mat4_cast(modelTransform.getRotation()) *
-                             glm::scale(glm::mat4(1.0f), modelTransform.getScale());
+                auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
+                             glm::mat4_cast(modelTransform.rotation) *
+                             glm::scale(glm::mat4(1.0f), modelTransform.scale);
 
                 auto baseOffset = (sizeof(projection) + sizeof(view) + sizeof(model)) * shaderDataIdx;
                 ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), baseOffset);
@@ -781,24 +550,14 @@ namespace rasm
         return isRunning;
     }
 
-    Entity Engine::createEntity(const Scene &scene, const std::string &name)
+    const FrameResources &Engine::getCurrentFrameResources()
     {
-        if (!scene.isValid())
-        {
-            return Entity();
-        }
-        const EntityHandle id{nextHandle.entity++, 1};
-        return Entity(id, name);
+        return frameResources[frameCount % MAX_FRAMES_IN_FLIGHT];
     }
 
     EngineConfig Engine::getConfig() const
     {
         return config;
-    }
-
-    Window &Engine::getWindow()
-    {
-        return window;
     }
 
     WindowHandle Engine::getMainWindow() const
@@ -811,73 +570,9 @@ namespace rasm
         return ctx;
     }
 
-    MeshHandle Engine::getNextMeshHandle()
+    DescriptorSetHandle Engine::getBindlessDescriptorSet()
     {
-        return MeshHandle{nextHandle.mesh++, 1};
+        return bindlessDescriptorSet;
     }
 
-    BufferHandle Engine::getNextBufferHandle()
-    {
-        return BufferHandle{nextHandle.buffer++, 1};
-    }
-
-    TextureHandle Engine::getNextTextureHandle()
-    {
-        return TextureHandle{nextHandle.texture++, 1};
-    }
-
-    ShaderHandle Engine::getNextShaderHandle()
-    {
-        return ShaderHandle{nextHandle.shader++, 1};
-    }
-
-    PipelineHandle Engine::getNextPipelineHandle()
-    {
-        return PipelineHandle{nextHandle.pipeline++, 1};
-    }
-
-    CommandPoolHandle Engine::getNextCommandPoolHandle()
-    {
-        return CommandPoolHandle{nextHandle.commandPool++, 1};
-    }
-
-    CommandBufferHandle Engine::getNextCommandBufferHandle()
-    {
-        return CommandBufferHandle{nextHandle.commandBuffer++, 1};
-    }
-
-    SemaphoreHandle Engine::getNextSemaphoreHandle()
-    {
-        return SemaphoreHandle{nextHandle.semaphore++, 1};
-    }
-
-    FenceHandle Engine::getNextFenceHandle()
-    {
-        return FenceHandle{nextHandle.fence++, 1};
-    }
-
-    SwapchainHandle Engine::getNextSwapchainHandle()
-    {
-        return SwapchainHandle{nextHandle.swapchain++, 1};
-    }
-
-    RenderTargetHandle Engine::getNextRenderTargetHandle()
-    {
-        return RenderTargetHandle{nextHandle.renderTarget++, 1};
-    }
-
-    DescriptorSetLayoutHandle Engine::getNextDescriptorSetLayoutHandle()
-    {
-        return DescriptorSetLayoutHandle{nextHandle.descriptorSetLayout++, 1};
-    }
-
-    DescriptorSetHandle Engine::getNextDescriptorSetHandle()
-    {
-        return DescriptorSetHandle{nextHandle.descriptorSet++, 1};
-    }
-
-    DescriptorPoolHandle Engine::getNextDescriptorPoolHandle()
-    {
-        return DescriptorPoolHandle{nextHandle.descriptorPool++, 1};
-    }
-}
+} // namespace rasm

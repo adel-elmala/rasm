@@ -1,25 +1,50 @@
+#include "rasm/core/engine.h"
 #include "rasm/core/entity.h"
 
 namespace rasm
 {
+    EntityHandle Engine::createEntity(const std::string &name, MeshHandle mesh, MaterialHandle material, Transform transform)
+    {
+        const EntityHandle id = handleManager.getNextEntityHandle();
 
-    Entity::Entity()
-        : storage(std::make_shared<ComponentStorage>()) {}
+        if (id.index >= MAX_ENTITIES)
+        {
+            spdlog::warn("Exceeded maximum number of entities.");
+            return {};
+        }
 
-    Entity::Entity(EntityHandle entityHandle)
-        : handle(entityHandle), storage(std::make_shared<ComponentStorage>()) {}
+        auto entity = Entity{.handle = id,
+                             .name = name,
+                             .mesh = mesh,
+                             .material = material,
+                             .transform = transform};
 
-    Entity::Entity(EntityHandle entityHandle, const std::string &name)
-        : handle(entityHandle), name(name), storage(std::make_shared<ComponentStorage>()) {}
-    
-    Entity::~Entity() {}
+        registery.entities.resize(id.index + 1);
+        registery.entities[id.index] = entity;
 
-    EntityHandle Entity::id() const {
-        return handle;
+        return id;
     }
 
-    bool Entity::isValid() const {
-        return handle.isValid();
+    void Engine::updateTransform(EntityHandle entity, Transform transform)
+    {
+        if (!entity.isValid() || entity.index >= registery.entities.size())
+        {
+            spdlog::error("Invalid entity handle for updating transform.");
+            return;
+        }
+
+        registery.entities[entity.index].transform = transform;
+    }
+
+    Transform Engine::getTransform(EntityHandle entity)
+    {
+        if (!entity.isValid() || entity.index >= registery.entities.size())
+        {
+            spdlog::error("Invalid entity handle for getting transform.");
+            return Transform{};
+        }
+
+        return registery.entities[entity.index].transform;
     }
 
 }
