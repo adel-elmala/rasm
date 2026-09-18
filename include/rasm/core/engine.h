@@ -46,9 +46,10 @@ namespace rasm {
         TextureHandle               loadTexture(const std::string& path);
         ShaderHandle                createShader(const std::string& shaderSource);
         MaterialHandle              createMaterial(MaterialType type, TextureHandle textures[] = nullptr, ShaderHandle shader = ShaderHandle{});
-        ResourceHandle              createResource(const ResourceDesc& desc);
+        TextureHandle               createTexture(const ResourceDesc& desc);
+        BufferHandle                createBuffer(const ResourceDesc& desc);
+        RenderTargetHandle          createRenderTarget(const ResourceDesc& desc);
         RenderGraph                 createRenderGraph();
-        RenderTargetHandle          createRenderTarget(const std::string& name, uint32_t width = 0, uint32_t height = 0, Format colorFormat = Format::UNKNOWN, Format depthFormat = Format::UNKNOWN);
         Transform                   getTransform(EntityHandle entity);
         Transform                   getCameraTransform(CameraHandle camera);
         CameraProjection            getCameraProjection(CameraHandle camera);

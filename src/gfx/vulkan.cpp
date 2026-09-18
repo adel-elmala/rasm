@@ -322,7 +322,9 @@ namespace rasm::gfx
 
         // create a sampler for the texture
         VkSampler sampler = VK_NULL_HANDLE;
-        if (desc.texture.usage == TextureUsage::SAMPLED)
+        if (desc.texture.usage == TextureUsage::SAMPLED ||
+            desc.texture.usage == TextureUsage::SAMPLED_COLOR_ATTACHMENT ||
+            desc.texture.usage == TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT)
         {
 
             VkSamplerCreateInfo samplerInfo = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
@@ -908,7 +910,9 @@ namespace rasm::gfx
 
         getAccessMaskAndStage(newUsage, srcAccessMask, dstAccessMask, srcStageMask, dstStageMask);
 
-        VkImageAspectFlags aspectMask = (image.desc.texture.usage == TextureUsage::DEPTH_STENCIL_ATTACHMENT) ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+        VkImageAspectFlags aspectMask = (image.desc.texture.usage == TextureUsage::DEPTH_STENCIL_ATTACHMENT ||
+                                        image.desc.texture.usage == TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT) ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT 
+                                                                                                                    : VK_IMAGE_ASPECT_COLOR_BIT;
         VkImageMemoryBarrier2 barrier = { .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                                          .srcStageMask = srcStageMask,
                                          .srcAccessMask = srcAccessMask,
@@ -1572,6 +1576,10 @@ namespace rasm::gfx
             return VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
             return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        case TextureUsage::SAMPLED_COLOR_ATTACHMENT:
+            return VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        case TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT:
+            return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         case TextureUsage::TRANSIENT_ATTACHMENT:
             return VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
         case TextureUsage::INPUT_ATTACHMENT:
@@ -1587,9 +1595,11 @@ namespace rasm::gfx
         {
         case TextureUsage::COLOR_ATTACHMENT:
         case TextureUsage::SAMPLED:
+        case TextureUsage::SAMPLED_COLOR_ATTACHMENT:
             return VK_IMAGE_ASPECT_COLOR_BIT;
         case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
-            return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+        case TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT:
+            return VK_IMAGE_ASPECT_DEPTH_BIT;
         default:
             return 0;
         }

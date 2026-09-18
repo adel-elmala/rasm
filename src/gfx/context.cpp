@@ -512,39 +512,45 @@ namespace rasm
         }
     }
 
-    RenderTargetHandle RenderContext::createRenderTarget(const std::string& name, uint32_t width, uint32_t height, Format colorFormat, Format depthFormat)
+    RenderTargetHandle RenderContext::createRenderTarget(const ResourceDesc& desc)
     {
         ResourceDesc colorDesc{};
         colorDesc.type = ResourceType::TEXTURE;
-        colorDesc.name = name + " Color Texture";
-        colorDesc.texture.width = width;
-        colorDesc.texture.height = height;
-        colorDesc.texture.format = colorFormat;
-        colorDesc.texture.usage = TextureUsage::COLOR_ATTACHMENT;
+        colorDesc.name = desc.name + " Color Texture";
+        colorDesc.texture.width = desc.renderTarget.width;
+        colorDesc.texture.height = desc.renderTarget.height;
+        colorDesc.texture.format = desc.renderTarget.colorFormat;
+        colorDesc.texture.usage = TextureUsage::SAMPLED_COLOR_ATTACHMENT;
 
         ResourceDesc depthDesc{};
         depthDesc.type = ResourceType::TEXTURE;
-        depthDesc.name = name + " Depth Texture";
-        depthDesc.texture.width = width;
-        depthDesc.texture.height = height;
-        depthDesc.texture.format = depthFormat;
-        depthDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
+        depthDesc.name = desc.name + " Depth Texture";
+        depthDesc.texture.width = desc.renderTarget.width;
+        depthDesc.texture.height = desc.renderTarget.height;
+        depthDesc.texture.format = desc.renderTarget.depthFormat;
+        depthDesc.texture.usage = TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT;
 
         RenderTargetHandle rtHandle = engine->handleManager.getNextRenderTargetHandle();
 
         RenderTarget rt = {
             .colorAttachment = {},
             .depthAttachment = {},
-            .width = width,
-            .height = height,
-            .colorFormat = colorFormat,
-            .depthFormat = depthFormat
+            .width = desc.renderTarget.width,
+            .height = desc.renderTarget.height,
+            .colorFormat = desc.renderTarget.colorFormat,
+            .depthFormat = desc.renderTarget.depthFormat
         };
 
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
-            rt.colorAttachment[i] = createTexture(colorDesc);
-            rt.depthAttachment[i] = createTexture(depthDesc);
+            auto colorHandle = createTexture(colorDesc);
+            auto depthHandle = createTexture(depthDesc);
+            
+            rt.colorAttachment[i] = colorHandle;
+            rt.depthAttachment[i] = depthHandle;
+
+            updateBindlessDescriptorSet(engine->getBindlessDescriptorSet(), colorHandle, colorHandle.index);
+            updateBindlessDescriptorSet(engine->getBindlessDescriptorSet(), depthHandle, depthHandle.index);
         }
 
         renderTargetCache[rtHandle] = rt;

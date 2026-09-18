@@ -62,7 +62,7 @@ int main()
 
     rasm::RenderGraph graph = engine.createRenderGraph();
 
-    rasm::ResourceHandle rtHandle{};
+    rasm::RenderTargetHandle rtHandle{};
     // Standard forward rendering pass.
     graph.addPass(
         "Forward",
@@ -76,16 +76,12 @@ int main()
             rtDesc.renderTarget.colorFormat = engine.getRenderContext().getSwapchainImageFormat();
             rtDesc.renderTarget.depthFormat = rasm::Format::D24_UNORM_S8_UINT;
 
-            rtHandle = builder.createResource(rtDesc);
+            rtHandle = builder.createRenderTarget(rtDesc);
             builder.write(rtHandle);
         },
 
         [&engine, &scene, &camera, &rtHandle](rasm::RenderContext &ctx)
         {
-            // TODO: This is a temporary workaround to get the render target handle from the resource handle.
-            rasm::RenderTargetHandle renderTargetHandle{rtHandle.index, rtHandle.generation};
-            engine.setRenderTarget(renderTargetHandle);
-
             auto compiledScene = engine.compileScene(scene);
 
             auto &currentFrame = engine.getCurrentFrameResources();
@@ -197,7 +193,7 @@ int main()
                 [shader("fragment")]
                 float4 fragMain(VSOutput input) : SV_TARGET
                 {
-                    float3 color = gTextures[6].Sample(input.UV).rgb;
+                    float3 color = gTextures[8].Sample(input.UV).rgb;
                     return float4(color, 1.0);
                 }
             )");
@@ -210,8 +206,6 @@ int main()
 
         [&engine, &overlayScene, &camera](rasm::RenderContext &ctx)
         {
-            engine.resetRenderTarget();
-
             auto compiledScene = engine.compileScene(overlayScene);
 
             auto &currentFrame = engine.getCurrentFrameResources();

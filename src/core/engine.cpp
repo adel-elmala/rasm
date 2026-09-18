@@ -212,57 +212,43 @@ namespace rasm
         return textureHandle;
     }
 
-    ResourceHandle Engine::createResource(const ResourceDesc &desc)
+    TextureHandle Engine::createTexture(const ResourceDesc &desc)
     {
-        ResourceHandle handle{};
-
-        switch (desc.type)
+        if (desc.type != ResourceType::TEXTURE)
         {
-        case ResourceType::TEXTURE:
-        {
-            auto textureHandle = ctx.createTexture(desc);
-            handle.generation = textureHandle.generation;
-            handle.index = textureHandle.index;
-            break;
-        }
-        case ResourceType::BUFFER:
-        {
-            auto bufferHandle = ctx.createBuffer(desc);
-            handle.generation = bufferHandle.generation;
-            handle.index = bufferHandle.index;
-            break;
-        }
-        case ResourceType::RENDER_TARGET:
-        {
-            auto renderTargetHandle = ctx.createRenderTarget(desc.name, desc.renderTarget.width, desc.renderTarget.height, desc.renderTarget.colorFormat, desc.renderTarget.depthFormat);
-            handle.generation = renderTargetHandle.generation;
-            handle.index = renderTargetHandle.index;
-            break;
-        }
-        default:
-        {
-            spdlog::error("Unsupported resource type for creation.");
-            break;
-        }
+            spdlog::error("Invalid resource type for createTexture.");
+            return TextureHandle{};
         }
 
-        return handle;
+        return ctx.createTexture(desc);
+    }
+
+    BufferHandle Engine::createBuffer(const ResourceDesc &desc)
+    {
+        if (desc.type != ResourceType::BUFFER)
+        {
+            spdlog::error("Invalid resource type for createBuffer.");
+            return BufferHandle{};
+        }
+
+        return ctx.createBuffer(desc);
+    }
+
+    RenderTargetHandle Engine::createRenderTarget(const ResourceDesc &desc)
+    {
+        if (desc.type != ResourceType::RENDER_TARGET)
+        {
+            spdlog::error("Invalid resource type for createRenderTarget.");
+            return RenderTargetHandle{};
+        }
+
+        return ctx.createRenderTarget(desc);
     }
 
     RenderGraph Engine::createRenderGraph()
     {
         RenderGraph graph(this);
         return graph;
-    }
-
-    RenderTargetHandle Engine::createRenderTarget(const std::string &name, uint32_t width, uint32_t height, Format colorFormat, Format depthFormat)
-    {
-        auto widthToUse = (width == 0) ? static_cast<uint32_t>(config.windowWidth) : width;
-        auto heightToUse = (height == 0) ? static_cast<uint32_t>(config.windowHeight) : height;
-        auto colorFormatToUse = (colorFormat == Format::UNKNOWN) ? swapchain.imageFormat : colorFormat;
-        auto depthFormatToUse = (depthFormat == Format::UNKNOWN) ? Format::D24_UNORM_S8_UINT : depthFormat;
-
-        return ctx.createRenderTarget(name, widthToUse, heightToUse, colorFormatToUse, depthFormatToUse);
     }
 
     void Engine::beginFrame(CameraHandle camera)
@@ -354,16 +340,17 @@ namespace rasm
             // transition render target images to be ready for rendering
             ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
             ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.depthAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
+            ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], renderTargetData.depthAttachment[frameCount]);
         }
         else
         {
             // transition swapchain image to be ready for rendering
             ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
             ctx.transitionImageLayout(currentFrame.commandBuffer, currentFrame.depthTexture, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
+            ctx.beginRendering(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], currentFrame.depthTexture);
         }
 
         // begin dynamic rendering
-        ctx.beginRendering(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], currentFrame.depthTexture);
         ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(config.windowWidth), static_cast<float>(config.windowHeight));
         ctx.setScissor(currentFrame.commandBuffer, 0, 0, config.windowWidth, config.windowHeight);
     }
