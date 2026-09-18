@@ -194,6 +194,8 @@ int main()
                 float4 fragMain(VSOutput input) : SV_TARGET
                 {
                     float3 color = gTextures[8].Sample(input.UV).rgb;
+                    if (color.x == 1.0 && color.y == 0.0 && color.z == 0.0) 
+                        color = float3(0.0, 1.0, 0.0);
                     return float4(color, 1.0);
                 }
             )");
