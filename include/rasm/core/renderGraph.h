@@ -1,13 +1,14 @@
 // clang-format off
 #pragma once
 
-#include <string>
-#include <vector>
-#include <functional>
+#include "rasm/core/types.h"
+#include "rasm/core/resource.h"
 
 #include "spdlog/spdlog.h"
 
-#include "types.h"
+#include <string>
+#include <vector>
+#include <functional>
 
 namespace rasm
 {
@@ -17,8 +18,12 @@ namespace rasm
     struct Pass
     {
         std::string                         name;
-        std::vector<ResourceHandle>         inputs;
-        std::vector<ResourceHandle>         outputs;
+        std::vector<TextureHandle>          inputTextures;
+        std::vector<BufferHandle>           inputBuffers;
+        std::vector<RenderTargetHandle>     inputRenderTargets;
+        std::vector<TextureHandle>          outputTextures;
+        std::vector<BufferHandle>           outputBuffers;
+        RenderTargetHandle                  outputRenderTarget;
         std::function<void(RenderContext&)> execute;
 
         // For Sorting
@@ -34,10 +39,16 @@ namespace rasm
     
     class PassBuilder {
     public:
-             PassBuilder(RenderGraph& g, uint32_t passIdx) : graph(g), currentPass(passIdx) {}
-             ResourceHandle createResource(ResourceDesc desc);
-        void read(ResourceHandle handle);
-        void write(ResourceHandle handle);
+                                PassBuilder(RenderGraph& g, uint32_t passIdx) : graph(g), currentPass(passIdx) {}
+        TextureHandle           createTexture(ResourceDesc desc);
+        BufferHandle            createBuffer(ResourceDesc desc);
+        RenderTargetHandle      createRenderTarget(ResourceDesc desc);
+        void                    read(TextureHandle handle);
+        void                    read(BufferHandle handle);
+        void                    read(RenderTargetHandle handle);
+        void                    write(TextureHandle handle);
+        void                    write(BufferHandle handle);
+        void                    write(RenderTargetHandle rt);
 
     private:
         RenderGraph&    graph;
@@ -53,14 +64,21 @@ namespace rasm
         void addPass(std::string name,
                  std::function<void(PassBuilder&)> setup, 
                  std::function<void(RenderContext&)> execute);
+
         void compile();
         void execute();
 
     protected:
-        void            analyzeDependencies();
-        ResourceHandle  internalCreate(ResourceDesc desc);
-        void            internalRead(uint32_t passIdx, ResourceHandle h);
-        void            internalWrite(uint32_t passIdx, ResourceHandle h);
+        void                analyzeDependencies();
+        TextureHandle       CreateTexture(ResourceDesc desc);
+        BufferHandle        CreateBuffer(ResourceDesc desc);
+        RenderTargetHandle  CreateRenderTarget(ResourceDesc desc);
+        void                Read(uint32_t passIdx, TextureHandle h);
+        void                Read(uint32_t passIdx, BufferHandle h);
+        void                Read(uint32_t passIdx, RenderTargetHandle h);
+        void                Write(uint32_t passIdx, TextureHandle h);
+        void                Write(uint32_t passIdx, BufferHandle h);
+        void                Write(uint32_t passIdx, RenderTargetHandle h);
     
         std::vector<Pass>           passes;
         std::vector<uint32_t>       executionOrder; // Sorted pass indices

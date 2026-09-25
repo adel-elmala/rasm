@@ -1,14 +1,11 @@
 // clang-format off
 #pragma once
 
-#include <array>
-#include <cstddef>
-
 #include "rasm/core/types.h"
 
 namespace rasm
 {
-    enum class MaterialTemplate
+    enum class MaterialType
     {
         BASIC,
         PBR,
@@ -38,37 +35,16 @@ namespace rasm
         COUNT,
     };
 
-    class Material
+
+    constexpr uint32_t MAX_TEXTURE_SLOTS = 8;
+
+    struct Material
     {
-
-    public:
-                        Material();
-        explicit        Material(MaterialHandle materialHandle, MaterialTemplate type);
-                        ~Material();
-        [[nodiscard]]   MaterialHandle id() const;
-        void            setTexture(PbrSlot slot, TextureHandle texture);
-        void            setFloat(PbrParam param, float value);
-        void            setShaderSource(const std::string& source);
-        void            setShaderName(const std::string& name);
-        std::string     getShaderSources();
-        std::string     getShaderName();
-
-    private:
-        std::array<TextureHandle, static_cast<std::size_t>(PbrSlot::COUNT)> textures{};
-        std::array<float, static_cast<std::size_t>(PbrParam::COUNT)>        scalarParams{};
-        MaterialHandle                                                      handle{};
-        MaterialTemplate                                                    type{};
-        std::string                                                         shaderSource{};
-        std::string                                                         shaderName{};
-
-        static constexpr std::size_t toIndex(PbrSlot slot)
-        {
-            return static_cast<std::size_t>(slot);
-        }
-        static constexpr std::size_t toIndex(PbrParam param)
-        {
-            return static_cast<std::size_t>(param);
-        }
+        const char*    name{};
+        MaterialHandle handle{};
+        MaterialType   type{};
+        TextureHandle  textures[MAX_TEXTURE_SLOTS];
+        ShaderHandle   shader{};
     };
 
 }

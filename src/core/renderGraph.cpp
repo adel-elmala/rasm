@@ -1,13 +1,13 @@
-#include "spdlog/spdlog.h"
-#include <unordered_map>
-#include <queue>
-
 #include "rasm/core/renderGraph.h"
 #include "rasm/core/engine.h"
 
+#include "spdlog/spdlog.h"
+
+#include <unordered_map>
+#include <queue>
+
 namespace rasm
 {
-
     void RenderGraph::addPass(std::string name, std::function<void(PassBuilder &)> setup, std::function<void(RenderContext &)> execute)
     {
         uint32_t passIdx = static_cast<uint32_t>(passes.size());
@@ -34,22 +34,55 @@ namespace rasm
         }
 
         // 1. Map resources to their producers
-        std::unordered_map<ResourceHandle, uint32_t, HandleHash> resourceToProducer;
-        for (uint32_t i = 0, nPasses = static_cast<uint32_t>(passes.size()); i < nPasses; ++i)
+        std::unordered_map<TextureHandle, uint32_t, HandleHash> texturesWriters;
+        std::unordered_map<BufferHandle, uint32_t, HandleHash> buffersWriters;
+        std::unordered_map<RenderTargetHandle, uint32_t, HandleHash> renderTargetsWriters;
+        for (uint32_t i = 0; i < passes.size(); ++i)
         {
             auto &pass = passes[i];
-            for (auto outHandle : pass.outputs)
+            for (auto outHandle : pass.outputTextures)
             {
-                resourceToProducer[outHandle] = i;
+                texturesWriters[outHandle] = i;
+            }
+
+            for (auto outHandle : pass.outputBuffers)
+            {
+                buffersWriters[outHandle] = i;
+            }
+            if (pass.outputRenderTarget.isValid())
+            {
+                renderTargetsWriters[pass.outputRenderTarget] = i;
             }
         }
 
         // 2. Build the Adjacency List (Edges)
-        for (uint32_t i = 0, nPasses = static_cast<uint32_t>(passes.size()); i < nPasses; ++i)
+        for (uint32_t i = 0; i < passes.size(); ++i)
         {
-            for (auto inHandle : passes[i].inputs)
+            for (auto inHandle : passes[i].inputTextures)
             {
-                uint32_t producerIdx = resourceToProducer[inHandle];
+                uint32_t producerIdx = texturesWriters.find(inHandle) != texturesWriters.end() ? texturesWriters[inHandle] : static_cast<uint32_t>(-1);
+                if (producerIdx != static_cast<uint32_t>(-1) && producerIdx != i)
+                {
+                    // There is a dependency: Producer -> Current Pass
+                    passes[producerIdx].successors.push_back(i);
+                    passes[i].inDegree++;
+                }
+            }
+
+            for (auto inHandle : passes[i].inputRenderTargets)
+            {
+                uint32_t producerIdx = renderTargetsWriters.find(inHandle) != renderTargetsWriters.end() ? renderTargetsWriters[inHandle] : static_cast<uint32_t>(-1);
+                if (producerIdx != static_cast<uint32_t>(-1) && producerIdx != i)
+                {
+                    // There is a dependency: Producer -> Current Pass
+                    passes[producerIdx].successors.push_back(i);
+                    passes[i].inDegree++;
+                }
+            }
+
+            for (auto inHandle : passes[i].inputBuffers)
+            {
+                uint32_t producerIdx = buffersWriters.find(inHandle) != buffersWriters.end() ? buffersWriters[inHandle] : static_cast<uint32_t>(-1);
                 if (producerIdx != static_cast<uint32_t>(-1) && producerIdx != i)
                 {
                     // There is a dependency: Producer -> Current Pass
@@ -106,26 +139,96 @@ namespace rasm
             compile();
 
         auto &ctx = engine->getRenderContext();
+
+        auto scene = engine->registery.scenes[engine->currentScene.index];
+        auto camera = scene.cameras[0]; // TODO: handle multi-cameras
+
+        engine->beginFrame(camera);
         for (const auto &passIdx : executionOrder)
         {
-            passes[passIdx].execute(ctx);
+            auto &pass = passes[passIdx];
+            engine->setRenderTarget(pass.outputRenderTarget);
+            engine->beginPass();
+            pass.execute(ctx);
+            engine->endPass();
+            engine->resetRenderTarget();
         }
+        engine->endFrame();
     }
 
-    // Internal helpers for the Builder
-    ResourceHandle RenderGraph::internalCreate(ResourceDesc desc)
+    TextureHandle RenderGraph::CreateTexture(ResourceDesc desc)
     {
-        auto handle = engine->createResource(desc);
+        auto handle = engine->createTexture(desc);
         return handle;
     }
 
-    void RenderGraph::internalRead(uint32_t passIdx, ResourceHandle h) { passes[passIdx].inputs.push_back(h); }
+    BufferHandle RenderGraph::CreateBuffer(ResourceDesc desc)
+    {
+        auto handle = engine->createBuffer(desc);
+        return handle;
+    }
 
-    void RenderGraph::internalWrite(uint32_t passIdx, ResourceHandle h) { passes[passIdx].outputs.push_back(h); }
+    RenderTargetHandle RenderGraph::CreateRenderTarget(ResourceDesc desc)
+    {
+        auto handle = engine->createRenderTarget(desc);
+        return handle;
+    }
 
-    ResourceHandle PassBuilder::createResource(ResourceDesc desc) { return graph.internalCreate(desc); }
+    void RenderGraph::Read(uint32_t passIdx, TextureHandle h) { passes[passIdx].inputTextures.push_back(h); }
 
-    void PassBuilder::read(ResourceHandle handle) { graph.internalRead(currentPass, handle); }
+    void RenderGraph::Read(uint32_t passIdx, BufferHandle h) { passes[passIdx].inputBuffers.push_back(h); }
 
-    void PassBuilder::write(ResourceHandle handle) { graph.internalWrite(currentPass, handle); }
+    void RenderGraph::Read(uint32_t passIdx, RenderTargetHandle h) { passes[passIdx].inputRenderTargets.push_back(h); }
+
+    void RenderGraph::Write(uint32_t passIdx, TextureHandle h) { passes[passIdx].outputTextures.push_back(h); }
+
+    void RenderGraph::Write(uint32_t passIdx, BufferHandle h) { passes[passIdx].outputBuffers.push_back(h); }
+
+    void RenderGraph::Write(uint32_t passIdx, RenderTargetHandle h) { passes[passIdx].outputRenderTarget = h; }
+
+    TextureHandle PassBuilder::createTexture(ResourceDesc desc)
+    {
+        if (desc.type != ResourceType::TEXTURE)
+        {
+            spdlog::error("Attempted to create a texture with a non-texture resource description.");
+            return TextureHandle{};
+        }
+
+        return graph.CreateTexture(desc);
+    }
+
+    BufferHandle PassBuilder::createBuffer(ResourceDesc desc)
+    {
+        if (desc.type != ResourceType::BUFFER)
+        {
+            spdlog::error("Attempted to create a buffer with a non-buffer resource description.");
+            return BufferHandle{};
+        }
+
+        return graph.CreateBuffer(desc);
+    }
+
+    RenderTargetHandle PassBuilder::createRenderTarget(ResourceDesc desc)
+    {
+        if (desc.type != ResourceType::RENDER_TARGET)
+        {
+            spdlog::error("Attempted to create a render target with a non-render target resource description.");
+            return RenderTargetHandle{};
+        }
+
+        return graph.CreateRenderTarget(desc);
+    }
+
+    void PassBuilder::read(TextureHandle handle) { graph.Read(currentPass, handle); }
+
+    void PassBuilder::read(BufferHandle handle) { graph.Read(currentPass, handle); }
+
+    void PassBuilder::read(RenderTargetHandle handle) { graph.Read(currentPass, handle); }
+
+    void PassBuilder::write(TextureHandle handle) { graph.Write(currentPass, handle); }
+
+    void PassBuilder::write(BufferHandle handle) { graph.Write(currentPass, handle); }
+
+    void PassBuilder::write(RenderTargetHandle handle) { graph.Write(currentPass, handle); }
+
 }
