@@ -112,15 +112,21 @@ namespace rasm
             std::vector<Vertex> out_vertices;
             std::vector<uint32_t> out_indices;
 
-            for (auto &index : shapes[0].mesh.indices)
+            for (const auto &shape : shapes)
             {
-                Vertex v{
-                    .pos = {attrib.vertices[index.vertex_index * 3], -attrib.vertices[index.vertex_index * 3 + 1], attrib.vertices[index.vertex_index * 3 + 2]},
-                    .normal = {attrib.normals[index.normal_index * 3], -attrib.normals[index.normal_index * 3 + 1], attrib.normals[index.normal_index * 3 + 2]},
-                    .uv = {attrib.texcoords[index.texcoord_index * 2], 1.0 - attrib.texcoords[index.texcoord_index * 2 + 1]}};
+                for (auto &index : shape.mesh.indices)
+                {
+                    Vertex v = {};
 
-                out_vertices.push_back(v);
-                out_indices.push_back(static_cast<uint32_t>(out_indices.size()));
+                    v.pos = {attrib.vertices[index.vertex_index * 3], -attrib.vertices[index.vertex_index * 3 + 1], attrib.vertices[index.vertex_index * 3 + 2]};
+                    if (attrib.normals.size() > 0)
+                        v.normal = {attrib.normals[index.normal_index * 3], -attrib.normals[index.normal_index * 3 + 1], attrib.normals[index.normal_index * 3 + 2]};
+                    if (attrib.texcoords.size() > 0)
+                        v.uv = {attrib.texcoords[index.texcoord_index * 2], 1.0 - attrib.texcoords[index.texcoord_index * 2 + 1]};
+
+                    out_vertices.push_back(v);
+                    out_indices.push_back(static_cast<uint32_t>(out_indices.size()));
+                }
             }
 
             ObjRaw objRaw{};

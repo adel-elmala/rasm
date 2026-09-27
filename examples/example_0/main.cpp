@@ -21,36 +21,35 @@ int main()
     rasm::SceneHandle scene = engine.createScene();
 
     // 3. Load resources
-    rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/bunny.obj");
+    rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/bunny/bunny.obj");
 
-    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/textures/bunny-atlas.jpg");
-    rasm::TextureHandle normalTexture = engine.loadTexture("assets/textures/test1.jpg");
-    if (!bunnyMesh.isValid() || !albedoTexture.isValid() || !normalTexture.isValid())
+    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/models/bunny/bunny-atlas.jpg");
+    if (!bunnyMesh.isValid() || !albedoTexture.isValid())
     {
         return 1;
     }
 
     // 4. Create a material
-    rasm::TextureHandle textures[] = { albedoTexture, normalTexture };
+    rasm::TextureHandle textures[] = { albedoTexture };
     rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::BASIC, textures);
 
     // 5. Create entities in the scene
     rasm::EntityHandle bunny = engine.createEntity("bunny", bunnyMesh, material, rasm::Transform{
                                                                                      glm::vec3(0.0f, 0.0f, -10.0f),     // position
                                                                                      glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
-                                                                                     glm::vec3(0.05f)                   // scale
+                                                                                     glm::vec3(0.005f)                  // scale
         });
 
     rasm::EntityHandle bunny2 = engine.createEntity("bunny2", bunnyMesh, material, rasm::Transform{
                                                                                        glm::vec3(5.0f, 0.0f, -10.0f),     // position
                                                                                        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
-                                                                                       glm::vec3(0.05f)                   // scale
+                                                                                       glm::vec3(0.005f)                  // scale
         });
 
     rasm::EntityHandle bunny3 = engine.createEntity("bunny3", bunnyMesh, material, rasm::Transform{
                                                                                        glm::vec3(-5.0f, 1.0f, -10.0f),    // position
                                                                                        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
-                                                                                       glm::vec3(0.05f)                   // scale
+                                                                                       glm::vec3(0.005f)                  // scale
         });
 
     // 6. Create a camera
