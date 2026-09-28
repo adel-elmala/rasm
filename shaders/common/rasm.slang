@@ -1,4 +1,4 @@
-enum VertexFormat : uint8_t { Full, PosOnly };
+enum VertexFormat : uint32_t { Full, PosOnly };
 
 struct VertexFull       { float3 pos; float3 normal; float2 uv; };
 struct VertexPosOnly    { float3 pos; };
@@ -20,11 +20,11 @@ struct Modeldata
 
 struct SceneData
 {
-    float4x4   projection;
-    float4x4   view;
-    uint64_t   vertsPtr;
-    DrawInfo*  drawInfoPtr;
-    Modeldata* modeldataPtr;
+    float4x4        projection;
+    float4x4        view;
+    VertexFull*     vertsPtr;
+    DrawInfo*       drawInfoPtr;
+    Modeldata*      modeldataPtr;
 };
 
 struct PushConstants
@@ -69,24 +69,15 @@ VSOutput vertMain(VSInput input)
     float4x4 viewMat = pc.scene->view;
     float4x4 projectionMat = pc.scene->projection;
 
-    int vertexOffset = pc.scene->drawInfoPtr[drawID].vertexOffset;
-    // switch (pc.scene->drawInfoPtr[drawID].vertFormat)
-    // {
-    //     case VertexFormat::Full:
-    //     {
-            VertexFull* inputFull = (VertexFull *)(pc.scene->vertsPtr + vertexOffset);
-            VertexFull inputFullVal = inputFull[input.vertexID];
-            // output.Pos = mul(projectionMat, mul(viewMat, mul(modelMat, float4(inputFullVal.pos, 1.0))));
-            // output.Normal = normalize(mul((float3x3)modelMat, inputFull.normal));
-            // output.UV = inputFull.uv;
-    //     } break;
+    // SV_VertexID maps to the Vulkan VertexIndex built-in, which for an indexed draw already is
+    // (index value + vertexOffset). The mega vertex buffer must therefore be indexed straight from
+    // its base, otherwise the per-draw vertexOffset gets applied twice and the shader reads out of
+    // bounds.
+    VertexFull vert = pc.scene->vertsPtr[input.vertexID];
 
-    //     case VertexFormat::PosOnly:
-    //     {
-    //         VertexPosOnly inputPosOnly = *(VertexPosOnly *)(pc.scene->vertsPtr + vertexOffset + (input.vertexID - vertexOffset) * sizeof(VertexPosOnly));
-    //         output.Pos = mul(projectionMat, mul(viewMat, mul(modelMat, float4(inputPosOnly.pos, 1.0))));
-    //     }
-    // }
+    output.Pos = mul(projectionMat, mul(viewMat, mul(modelMat, float4(vert.pos, 1.0))));
+    output.Normal = normalize(mul((float3x3)modelMat, vert.normal));
+    output.UV = vert.uv;
 
     return output;
 }

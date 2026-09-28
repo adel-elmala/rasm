@@ -194,12 +194,9 @@ namespace rasm::gfx
             return {};
         }
 
-        if (desc.buffer.usage == BufferUsage::DEVICE_ADDRESS || desc.buffer.usage == BufferUsage::STORAGE)
-        {
-            VkBufferDeviceAddressInfo bufferAddressInfo = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
-            bufferAddressInfo.buffer = buffer;
-            desc.buffer.deviceAddressBuffer.address = vkGetBufferDeviceAddress(this->device.device, &bufferAddressInfo);
-        }
+        VkBufferDeviceAddressInfo bufferAddressInfo = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+        bufferAddressInfo.buffer = buffer;
+        desc.buffer.deviceAddressBuffer.address = vkGetBufferDeviceAddress(this->device.device, &bufferAddressInfo);
 
         // Set a debug name for the buffer
         VkDebugUtilsObjectNameInfoEXT bufferNameInfo = {};
@@ -1511,24 +1508,28 @@ namespace rasm::gfx
 
     VkBufferUsageFlags _to_vk_buffer_usage_flags(BufferUsage usage)
     {
+        // Every buffer is created with the device-address bit so that its GPU address can be
+        // handed to shaders through push constants / other buffers regardless of its primary usage.
+        VkBufferUsageFlags flags = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+
         switch (usage)
         {
         case BufferUsage::VERTEX:
-            return VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+            return flags | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
         case BufferUsage::INDEX:
-            return VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+            return flags | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
         case BufferUsage::INDIRECT:
-            return VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+            return flags | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
         case BufferUsage::VERTEXINDEX:
-            return VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+            return flags | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
         case BufferUsage::UNIFORM:
-            return VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+            return flags | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
         case BufferUsage::STORAGE:
-            return VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+            return flags | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         case BufferUsage::DEVICE_ADDRESS:
-            return VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+            return flags;
         default:
-            return static_cast<VkBufferUsageFlags>(0);
+            return flags;
         }
     }
 

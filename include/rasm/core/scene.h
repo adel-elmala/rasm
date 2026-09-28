@@ -2,6 +2,7 @@
 #pragma once
 
 #include "rasm/core/types.h"
+#include "rasm/core/mesh.h"
 
 #include <string>
 #include <unordered_map>
@@ -44,7 +45,9 @@ namespace rasm {
         uint32_t drawInfoCount;
     };
 
-    enum  VertexFormat : uint8_t { Full, PosOnly };
+    // uint32_t underlying type: DrawInfo is read through a buffer-device-address pointer in the
+    // shader, and 8-bit loads there would require the storageBuffer8BitAccess feature.
+    enum  VertexFormat : uint32_t { Full, PosOnly };
 
     struct VertexFull       { glm::vec3 pos;  glm::vec3 normal; glm::vec2 uv; };
     struct VertexPosOnly    { glm::vec3 pos; };
@@ -68,5 +71,14 @@ namespace rasm {
         uint64_t    drawInfoPtr;
         uint64_t    modeldataPtr;
     };
+
+    // These structs are read by shaders/common/rasm.slang through buffer-device-address pointers,
+    // compiled with scalar layout. Any drift here silently corrupts the GPU reads.
+    static_assert(sizeof(VertexFull) == 32, "VertexFull must match the shader's scalar layout");
+    static_assert(sizeof(VertexFull) == sizeof(Vertex), "The mega vertex buffer is filled with Vertex");
+    static_assert(sizeof(DrawInfo) == 24, "DrawInfo must match the shader's scalar layout");
+    static_assert(offsetof(DrawInfo, firstInstance) == 16, "DrawInfo must stay VkDrawIndexedIndirectCommand compatible");
+    static_assert(sizeof(SceneData) == 152, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, vertsPtr) == 128, "SceneData must match the shader's scalar layout");
 }
 // clang-format on

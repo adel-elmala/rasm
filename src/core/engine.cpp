@@ -446,26 +446,17 @@ namespace rasm
         auto projection = getProjectionMatrix(cam.projection);
         auto view = glm::translate(glm::mat4(1.0f), camPos);
 
-        auto baseOffset = 0;
         ctx.bindPipeline(commandBuffer, preparedScene.uberMaterialPipeline);
         {
-            ctx.fillBuffer(preparedScene.sceneDataBuffer, &projection, sizeof(projection), baseOffset);
-            baseOffset += sizeof(projection);
+            // Build the SceneData exactly as the shader declares it so the layouts cannot drift apart.
+            SceneData sceneData{};
+            sceneData.projection = projection;
+            sceneData.view = view;
+            sceneData.vertsPtr = ctx.getBufferDeviceAddress(preparedScene.megaVertexBuffer);
+            sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(preparedScene.drawInfoBuffer);
+            sceneData.modeldataPtr = ctx.getBufferDeviceAddress(preparedScene.megaModelMatsBuffer);
 
-            ctx.fillBuffer(preparedScene.sceneDataBuffer, &view, sizeof(view), baseOffset);
-            baseOffset += sizeof(view);
-
-            auto megaVertBufferPtr = ctx.getBufferDeviceAddress(preparedScene.megaVertexBuffer);
-            ctx.fillBuffer(preparedScene.sceneDataBuffer, &megaVertBufferPtr, sizeof(uint64_t), baseOffset);
-            baseOffset += sizeof(uint64_t);
-
-            auto drawInfoBufferPtr = ctx.getBufferDeviceAddress(preparedScene.drawInfoBuffer);
-            ctx.fillBuffer(preparedScene.sceneDataBuffer, &drawInfoBufferPtr, sizeof(uint64_t), baseOffset);
-            baseOffset += sizeof(uint64_t);
-
-            auto megaIndexBufferPtr = ctx.getBufferDeviceAddress(preparedScene.megaIndexBuffer);
-            ctx.fillBuffer(preparedScene.sceneDataBuffer, &megaIndexBufferPtr, sizeof(uint64_t), baseOffset);
-            baseOffset += sizeof(uint64_t);
+            ctx.fillBuffer(preparedScene.sceneDataBuffer, &sceneData, sizeof(sceneData), 0);
 
             ctx.bindDescriptorSet(commandBuffer, preparedScene.uberMaterialPipeline, bindlessDescriptorSet, 0);
             ctx.bindIndexBuffer(commandBuffer, preparedScene.megaIndexBuffer, 0, Format::U32_UINT);

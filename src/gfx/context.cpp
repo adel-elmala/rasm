@@ -716,11 +716,18 @@ namespace rasm
 
         auto gpuBuffer = it->second;
 
-        if (gpuBuffer.desc.type != ResourceType::BUFFER && (gpuBuffer.desc.buffer.usage != BufferUsage::DEVICE_ADDRESS || gpuBuffer.desc.buffer.usage != BufferUsage::STORAGE))
+        if (gpuBuffer.desc.type != ResourceType::BUFFER)
         {
-            spdlog::error("Buffer is not of type DEVICE_ADDRESS during getBufferDeviceAddress.");
+            spdlog::error("Handle is not a buffer during getBufferDeviceAddress.");
             return 0;
         }
+
+        if (gpuBuffer.desc.buffer.deviceAddressBuffer.address == 0)
+        {
+            spdlog::error("Buffer '{}' has no device address.", gpuBuffer.desc.name);
+            return 0;
+        }
+
         return gpuBuffer.desc.buffer.deviceAddressBuffer.address;
     }
 

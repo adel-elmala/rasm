@@ -186,7 +186,8 @@ namespace rasm
 
     // allocate mega-model buffer and draw info buffer for the scene.
     bufferDesc.name = "Mega Model Buffer";
-    bufferDesc.buffer.size = nMeshes * (4 * 4 * 4); // 4x4 matrix of float4 (16 floats, 4 bytes each)
+    bufferDesc.buffer.usage = BufferUsage::STORAGE;
+    bufferDesc.buffer.size = nMeshes * sizeof(glm::mat4);
     auto megaModelBufferHandle = ctx.createBuffer(bufferDesc);
 
     if (!megaModelBufferHandle.isValid())
@@ -199,7 +200,7 @@ namespace rasm
 
     bufferDesc.name = "Draw Info Buffer";
     bufferDesc.buffer.usage = BufferUsage::INDIRECT;
-    bufferDesc.buffer.size = nMeshes * sizeof(DrawInfo); // TODO: find out the size of DrawInfo structure
+    bufferDesc.buffer.size = nMeshes * sizeof(DrawInfo);
 
     auto drawInfoBufferHandle = ctx.createBuffer(bufferDesc);
 
@@ -213,6 +214,7 @@ namespace rasm
 
     // create sceneData buffer for the scene.
     bufferDesc.name = "Scene Data Buffer";
+    bufferDesc.buffer.usage = BufferUsage::STORAGE;
     bufferDesc.buffer.size = sizeof(SceneData);
 
     auto sceneDataBufferHandle = ctx.createBuffer(bufferDesc);
@@ -338,7 +340,6 @@ namespace rasm
     return preparedScene;
   }
 
-  # if 1
   CompiledScene Engine::compileScene(SceneHandle scene)
   {
     if (!scene.isValid() || scene.index >= MAX_SCENES)
@@ -443,6 +444,5 @@ namespace rasm
 
     return compiledScene;
   }
-  #endif
 } // namespace rasm
  
