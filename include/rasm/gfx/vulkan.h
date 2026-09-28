@@ -7,6 +7,7 @@
 
 #include "rasm/core/types.h"
 #include "rasm/gfx/types.h"
+#include "rasm/core/profiler.h"
 
 struct VmaAllocator_T;
 using VmaAllocator = VmaAllocator_T*;
@@ -41,6 +42,7 @@ namespace rasm
             std::vector<TextureVKHandle>               getSwapchainImages();
             Format                                     getSwapchainImageFormat();
             std::optional<SwapchainVKHandle>           recreateSwapchain();
+            VRAMStats                                  queryVRAMStats();
             void                                       waitIdle();
             void                                       fillBuffer(const BufferVKHandle& buffer, const void* data, size_t size, size_t offset = 0);
             void                                       fillTexture(const TextureVKHandle& texture, const void* data);
@@ -62,6 +64,7 @@ namespace rasm
             void                                       pushConstants(const CommandBufferVKHandle& commandBuffer, const PipelineVKHandle& pipeline, ShaderType stage, const void* data, uint32_t size, uint32_t offset = 0);
             void                                       draw(const CommandBufferVKHandle& commandBuffer, uint32_t vertexCount, uint32_t instanceCount = 1);
             void                                       drawIndexed(const CommandBufferVKHandle& commandBuffer, uint32_t indexCount, uint32_t instanceCount = 1, uint32_t vertexOffset = 0, uint32_t firstIndex = 0, uint32_t firstInstance = 0);
+            void                                       drawIndexedIndirect(const CommandBufferVKHandle& commandBuffer, const BufferVKHandle& buffer, uint64_t offset, uint32_t drawCount, uint32_t stride);
             bool                                       updateBindlessDescriptorSet(const DescriptorSetVKHandle& bindlessSet, const TextureVKHandle& texture, uint32_t slot);
             bool                                       waitForFence(const FenceVKHandle& fence, uint64_t timeout = UINT64_MAX);
             bool                                       resetFence(const FenceVKHandle& fence);

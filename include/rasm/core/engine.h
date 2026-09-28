@@ -11,6 +11,7 @@
 #include "rasm/core/mesh.h"
 #include "rasm/core/shaderCompiler.h"
 #include "rasm/core/handle.h"
+#include "rasm/core/profiler.h"
 #include "rasm/gfx/context.h"
 
 #include <cstdint>
@@ -34,6 +35,7 @@ namespace rasm {
                                     ~Engine();
         SceneHandle                 createScene();
         CompiledScene               compileScene(SceneHandle scene);
+        PreparedScene               prepareScene(SceneHandle scene);
         EntityHandle                createEntity(const std::string& name, MeshHandle mesh = MeshHandle{}, MaterialHandle material = MaterialHandle{}, Transform transform = Transform{});
         CameraHandle                createCamera(CameraProjection projection, Transform transform);
         LightHandle                 createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), float intensity = 1.0f, glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f));
@@ -63,6 +65,7 @@ namespace rasm {
         void                        beginPass();
         void                        endPass();
         void                        render(SceneHandle scene, CameraHandle camera);
+        void                        render2(SceneHandle scene, CameraHandle camera);
         void                        render(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget);
         bool                        running() const;
         void                        recreateSwapchain();
@@ -75,6 +78,8 @@ namespace rasm {
         EngineConfig                getConfig() const;
         WindowHandle                getMainWindow() const;
         RenderContext&              getRenderContext();
+        MeshSize                    getMeshByteSize(const MeshHandle &handle) const;
+        void                        queryMemoryStats();
 
         WindowHandle                createWindow(uint32_t width, uint32_t height);
         VkSurfaceKHR                createSurfaceVk(WindowHandle handle, VkInstance instance) const;
@@ -83,10 +88,12 @@ namespace rasm {
 
     protected:
         EngineConfig                                                config;
+        Profiler                                                    profiler{};
         FrameResources                                              frameResources[MAX_FRAMES_IN_FLIGHT]; // Double buffering
         Swapchain                                                   swapchain{};
         TextureHandle                                               depthTexture{};
-        std::unordered_map<SceneHandle, CompiledScene, HandleHash>  compiledScenes;
+        std::unordered_map<SceneHandle, CompiledScene, HandleHash>  compiledScenes; // TODO: Delete when no longer needed
+        std::unordered_map<SceneHandle, PreparedScene, HandleHash>  preparedScenes;
         RenderContext                                               ctx{};
         ShaderCompiler                                              shaderCompiler{};
         HandleManager                                               handleManager{};

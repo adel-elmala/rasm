@@ -28,32 +28,6 @@ namespace rasm
         METAL
     };
 
-    enum class BufferUsage
-    {
-        VERTEX,
-        INDEX,
-        VERTEXINDEX,
-        UNIFORM,
-        STORAGE,
-        DEVICE_ADDRESS,
-    };
-
-    enum class TextureUsage
-    {
-        TRANSFER_SRC,
-        TRANSFER_DST,
-        SAMPLED,
-        STORAGE,
-        COLOR_ATTACHMENT,
-        DEPTH_STENCIL_ATTACHMENT,
-        SAMPLED_COLOR_ATTACHMENT,
-        SAMPLED_DEPTH_STENCIL_ATTACHMENT,
-        TRANSIENT_ATTACHMENT,
-        INPUT_ATTACHMENT,
-        PRESENT_SRC,
-        UNKNOWN,
-    };
-
     enum class Format
     {
         R8G8B8A8_UNORM,
@@ -136,6 +110,7 @@ namespace rasm
         uint32_t                    binding;
         uint32_t                    stride;
         bool                        perInstance;
+        bool                        vertexPulling = false;
     };
 
     struct RenderTarget

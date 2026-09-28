@@ -189,4 +189,33 @@ namespace rasm
         return BufferHandle{};
     }
 
+    MeshSize Engine::getMeshByteSize(const MeshHandle &handle) const
+    {
+        if (!handle.isValid() || handle.index >= registery.meshes.size())
+        {
+            spdlog::error("Mesh handle not found for getting byte size.");
+            return MeshSize{0, 0};
+        }
+
+        auto mesh = registery.meshes[handle.index];
+
+        if (mesh.type == Mesh::MeshType::GLTF)
+        {
+            // In a real implementation, this is where we'd calculate the GLTF mesh byte size.
+            return MeshSize{0, 0}; // Placeholder
+        }
+        else if (mesh.type == Mesh::MeshType::OBJ)
+        {
+            auto &objRaw = std::get<ObjRaw>(mesh.data);
+            return MeshSize{
+                objRaw.vertices.size() * sizeof(Vertex),
+                objRaw.indices.size() * sizeof(uint32_t)
+            };
+        }
+        else
+        {
+            spdlog::error("Unknown mesh type for getting byte size.");
+            return MeshSize{0, 0};
+        }
+    }
 }

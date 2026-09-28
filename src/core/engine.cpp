@@ -429,6 +429,55 @@ namespace rasm
         }
     }
 
+    void Engine::render2(SceneHandle scene, CameraHandle camera)
+    {
+        beginFrame(camera);
+        beginPass();
+
+        auto preparedScene = prepareScene(scene);
+
+        auto &currentFrame = frameResources[frameCount];
+        auto commandBuffer = currentFrame.commandBuffer;
+
+        auto cam = registery.cameras[camera.index];
+        auto camTransform = cam.transform;
+        auto camPos = camTransform.position;
+
+        auto projection = getProjectionMatrix(cam.projection);
+        auto view = glm::translate(glm::mat4(1.0f), camPos);
+
+        auto baseOffset = 0;
+        ctx.bindPipeline(commandBuffer, preparedScene.uberMaterialPipeline);
+        {
+            ctx.fillBuffer(preparedScene.sceneDataBuffer, &projection, sizeof(projection), baseOffset);
+            baseOffset += sizeof(projection);
+
+            ctx.fillBuffer(preparedScene.sceneDataBuffer, &view, sizeof(view), baseOffset);
+            baseOffset += sizeof(view);
+
+            auto megaVertBufferPtr = ctx.getBufferDeviceAddress(preparedScene.megaVertexBuffer);
+            ctx.fillBuffer(preparedScene.sceneDataBuffer, &megaVertBufferPtr, sizeof(uint64_t), baseOffset);
+            baseOffset += sizeof(uint64_t);
+
+            auto drawInfoBufferPtr = ctx.getBufferDeviceAddress(preparedScene.drawInfoBuffer);
+            ctx.fillBuffer(preparedScene.sceneDataBuffer, &drawInfoBufferPtr, sizeof(uint64_t), baseOffset);
+            baseOffset += sizeof(uint64_t);
+
+            auto megaIndexBufferPtr = ctx.getBufferDeviceAddress(preparedScene.megaIndexBuffer);
+            ctx.fillBuffer(preparedScene.sceneDataBuffer, &megaIndexBufferPtr, sizeof(uint64_t), baseOffset);
+            baseOffset += sizeof(uint64_t);
+
+            ctx.bindDescriptorSet(commandBuffer, preparedScene.uberMaterialPipeline, bindlessDescriptorSet, 0);
+            ctx.bindIndexBuffer(commandBuffer, preparedScene.megaIndexBuffer, 0, Format::U32_UINT);
+
+            auto sceneDataBufferPtr = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer);
+            ctx.pushConstants(commandBuffer, preparedScene.uberMaterialPipeline, ShaderType::VERTEX, &sceneDataBufferPtr, sizeof(uint64_t), 0);
+            ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, 0, preparedScene.drawInfoCount, sizeof(DrawInfo));
+        }
+        endPass();
+        endFrame();
+    }
+
     void Engine::render(SceneHandle scene, CameraHandle camera)
     {
         beginFrame(camera);

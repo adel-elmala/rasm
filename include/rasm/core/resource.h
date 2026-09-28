@@ -10,6 +10,33 @@
 namespace rasm
 {
 
+    enum class TextureUsage
+    {
+        TRANSFER_SRC,
+        TRANSFER_DST,
+        SAMPLED,
+        STORAGE,
+        COLOR_ATTACHMENT,
+        DEPTH_STENCIL_ATTACHMENT,
+        SAMPLED_COLOR_ATTACHMENT,
+        SAMPLED_DEPTH_STENCIL_ATTACHMENT,
+        TRANSIENT_ATTACHMENT,
+        INPUT_ATTACHMENT,
+        PRESENT_SRC,
+        UNKNOWN,
+    };
+
+    enum class BufferUsage
+    {
+        VERTEX,
+        INDEX,
+        INDIRECT,
+        VERTEXINDEX,
+        UNIFORM,
+        STORAGE,
+        DEVICE_ADDRESS,
+    };
+
     enum class ResourceType
     {
         TEXTURE,

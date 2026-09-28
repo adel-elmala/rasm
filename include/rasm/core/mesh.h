@@ -37,5 +37,11 @@ namespace rasm
         std::variant<tinygltf::Model, ObjRaw> data;
     };
 
+    struct MeshSize
+    {
+        uint64_t verticesByteSize;
+        uint64_t indicesByteSize;
+    };
+
 }
 // clang-format on
