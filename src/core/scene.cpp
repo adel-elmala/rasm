@@ -289,6 +289,11 @@ namespace rasm
       drawInfo.firstInstance = 0; // TODO: support multiple instances
       drawInfo.vertFormat = VertexFormat::Full; // TODO: determine the correct vertex format based on the mesh
 
+      auto matHandle = entity.material;
+      auto material = getMaterial(matHandle);
+
+      drawInfo.textureIndex = getBindlessTextureIndex(material.textures[0]); // TODO: support multiple textures per material
+
       ctx.fillBuffer(preparedScene.drawInfoBuffer, &drawInfo, sizeof(drawInfo), drawInfoBufferOffset);
       drawInfoBufferOffset += sizeof(drawInfo);
 

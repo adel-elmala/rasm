@@ -30,7 +30,7 @@ int main()
     }
 
     // 4. Create a material
-    rasm::TextureHandle textures[] = { albedoTexture };
+    std::vector<rasm::TextureHandle> textures = { albedoTexture };
     rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::BASIC, textures);
 
     // 5. Create entities in the scene

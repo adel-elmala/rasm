@@ -10,6 +10,7 @@ struct DrawInfo
     uint32_t        firstIndex;
     int32_t         vertexOffset;
     uint32_t        firstInstance;
+    uint32_t        textureIndex; // Index of the texture to use for this draw call
     VertexFormat    vertFormat;
 };
 
@@ -89,6 +90,6 @@ Sampler2D gTextures[];
 [shader("fragment")]
 float4 fragMain(VSOutput input) : SV_TARGET
 {
-    float3 color = gTextures[6].Sample(input.UV).xyz;
+    float3 color = gTextures[pc.scene->drawInfoPtr->textureIndex].Sample(input.UV).xyz;
     return float4(color, 1.0);
 }

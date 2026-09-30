@@ -411,7 +411,7 @@ namespace rasm::gfx
     std::optional<PipelineVKHandle> VulkanContext::createGraphicsPipeline(ResourceDesc desc, const ShaderVKHandle &vertexShader, const ShaderVKHandle &fragmentShader, const DescriptorSetLayoutVKHandle &bindlessDescriptorSetLayout)
     {
         VkPushConstantRange pushConstantRange{
-            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .size = sizeof(VkDeviceAddress)};
 
         VkDescriptorSetLayout setLayouts[] = {bindlessDescriptorSetLayout.layout};
@@ -818,7 +818,7 @@ namespace rasm::gfx
         std::memcpy(static_cast<uint8_t *>(buffer.allocationInfo.pMappedData) + offset, data, size);
     }
 
-    bool VulkanContext::updateBindlessDescriptorSet(const DescriptorSetVKHandle &bindlessSet, const TextureVKHandle &texture, uint32_t slot)
+    void VulkanContext::updateBindlessDescriptorSet(const DescriptorSetVKHandle &bindlessSet, const TextureVKHandle &texture, uint32_t slot)
     {
         VkDescriptorImageInfo imageInfo = {};
         imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -835,7 +835,6 @@ namespace rasm::gfx
         descriptorWrite.pImageInfo = &imageInfo;
 
         vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
-        return true;
     }
 
     bool VulkanContext::transitionImageLayout(const CommandBufferVKHandle &commandBuffer, const TextureVKHandle &image, const TextureUsage &oldUsage, const TextureUsage &newUsage)
@@ -1543,6 +1542,8 @@ namespace rasm::gfx
             return VK_SHADER_STAGE_FRAGMENT_BIT;
         case ShaderType::COMPUTE:
             return VK_SHADER_STAGE_COMPUTE_BIT;
+        case ShaderType::VERTEX_FRAGMENT:
+            return VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         default:
             return static_cast<VkShaderStageFlags>(0);
         }

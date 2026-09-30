@@ -62,7 +62,7 @@ namespace rasm
             shaderDataBufferDesc.type = ResourceType::BUFFER;
             shaderDataBufferDesc.name = "ShaderDataBuffer for Frame " + std::to_string(i);
             shaderDataBufferDesc.buffer.size = 1024 * 1024; // 1 MB
-            shaderDataBufferDesc.buffer.usage = BufferUsage::DEVICE_ADDRESS;
+            shaderDataBufferDesc.buffer.usage = BufferUsage::STORAGE;
 
             frameResources[i].shaderDataBuffer = ctx.createBuffer(shaderDataBufferDesc);
 
@@ -196,15 +196,6 @@ namespace rasm
             return TextureHandle{};
         }
 
-        // using the handle index as the slot for bindless descriptor set
-        // this will result in a fragmented bindless descriptor set if the handles are not contiguous, (e.g, some handles are not for a sampled texture...),
-        // but for simplicity we will use this approach for now
-        if (!ctx.updateBindlessDescriptorSet(bindlessDescriptorSet, textureHandle, static_cast<uint32_t>(textureHandle.index)))
-        {
-            spdlog::error("Failed to update bindless descriptor set for texture: {}", path);
-            return TextureHandle{};
-        }
-
         registery.loadedTextures[path] = textureHandle;
         registery.textureData.insert({textureHandle, std::move(tex)});
 
@@ -303,11 +294,11 @@ namespace rasm
         const RenderTarget &renderTargetData = ctx.getRenderTarget(renderTarget);
 
         // transition render target images to be ready for rendering
-        ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
-        ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.depthAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
+        ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
+        ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].depth, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
 
         // begin dynamic rendering
-        ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], renderTargetData.depthAttachment[frameCount]);
+        ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, renderTargetData.attachments[frameCount].depth);
         ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(renderTargetData.width), static_cast<float>(renderTargetData.height));
         ctx.setScissor(currentFrame.commandBuffer, 0, 0, renderTargetData.width, renderTargetData.height);
     }
@@ -337,9 +328,9 @@ namespace rasm
             auto renderTargetData = ctx.getRenderTarget(currentRenderTarget);
 
             // transition render target images to be ready for rendering
-            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
-            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.depthAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
-            ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], renderTargetData.depthAttachment[frameCount]);
+            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
+            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].depth, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
+            ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, renderTargetData.attachments[frameCount].depth);
         }
         else
         {
@@ -461,7 +452,7 @@ namespace rasm
             ctx.bindIndexBuffer(commandBuffer, preparedScene.megaIndexBuffer, 0, Format::U32_UINT);
 
             auto sceneDataBufferPtr = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer);
-            ctx.pushConstants(commandBuffer, preparedScene.uberMaterialPipeline, ShaderType::VERTEX, &sceneDataBufferPtr, sizeof(uint64_t), 0);
+            ctx.pushConstants(commandBuffer, preparedScene.uberMaterialPipeline, ShaderType::VERTEX_FRAGMENT, &sceneDataBufferPtr, sizeof(uint64_t), 0);
             ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, 0, preparedScene.drawInfoCount, sizeof(DrawInfo));
         }
         endPass();
@@ -599,6 +590,30 @@ namespace rasm
     DescriptorSetHandle Engine::getBindlessDescriptorSet()
     {
         return bindlessDescriptorSet;
+    }
+
+    uint32_t Engine::addBindlessTexture(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot)
+    {
+        auto txtID = ctx.updateBindlessDescriptorSet(bindlessSet, texture, slot);
+
+        registery.bindlessTextureIndexMap[texture] = txtID;
+        return txtID;
+    }
+
+    uint32_t Engine::getBindlessTextureIndex(const TextureHandle &texture)
+    {
+        auto it = registery.bindlessTextureIndexMap.find(texture);
+        if (it != registery.bindlessTextureIndexMap.end())
+        {
+            return it->second;
+        }
+        return UINT32_MAX;
+    }
+
+    RenderTargetAttachments Engine::getRenderTargetAttachments(const RenderTargetHandle &renderTarget)
+    {
+        auto &rt = ctx.getRenderTarget(renderTarget);
+        return rt.attachments[frameCount % MAX_FRAMES_IN_FLIGHT];
     }
 
 } // namespace rasm

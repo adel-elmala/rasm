@@ -47,11 +47,12 @@ namespace rasm {
         BufferHandle                uploadMesh(const MeshHandle& handle);
         TextureHandle               loadTexture(const std::string& path);
         ShaderHandle                createShader(const std::string& shaderSource);
-        MaterialHandle              createMaterial(MaterialType type, TextureHandle textures[] = nullptr, ShaderHandle shader = ShaderHandle{});
+        MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {}, ShaderHandle shader = ShaderHandle{});
         TextureHandle               createTexture(const ResourceDesc& desc);
         BufferHandle                createBuffer(const ResourceDesc& desc);
         RenderTargetHandle          createRenderTarget(const ResourceDesc& desc);
         RenderGraph                 createRenderGraph();
+        const Material&             getMaterial(const MaterialHandle &handle);
         Transform                   getTransform(EntityHandle entity);
         Transform                   getCameraTransform(CameraHandle camera);
         CameraProjection            getCameraProjection(CameraHandle camera);
@@ -80,7 +81,11 @@ namespace rasm {
         RenderContext&              getRenderContext();
         MeshSize                    getMeshByteSize(const MeshHandle &handle) const;
         void                        queryMemoryStats();
+        uint32_t                    addBindlessTexture(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot = MAX_BINDLESS_TEXTURES);
+        uint32_t                    getBindlessTextureIndex(const TextureHandle &texture);
+        RenderTargetAttachments     getRenderTargetAttachments(const RenderTargetHandle &renderTarget);
 
+        // window related
         WindowHandle                createWindow(uint32_t width, uint32_t height);
         VkSurfaceKHR                createSurfaceVk(WindowHandle handle, VkInstance instance) const;
         void                        destroyWindow(WindowHandle handle);
@@ -122,6 +127,7 @@ namespace rasm {
             std::unordered_map<std::string, MeshHandle>                 loadedMeshes;
             std::unordered_map<std::string, TextureHandle>              loadedTextures;
             std::unordered_map<TextureHandle, TextureRaw, HandleHash>   textureData;
+            std::unordered_map<TextureHandle, uint32_t, HandleHash>     bindlessTextureIndexMap; // slot in the bindless descriptor set
         };
 
         Registery registery = {};

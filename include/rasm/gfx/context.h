@@ -39,7 +39,7 @@ namespace rasm
         ResourceDesc                        getResourceDesc(const BufferHandle& buffer);
         ResourceDesc                        getResourceDesc(const TextureHandle& texture);
         VRAMStats                           queryVRAMStats();
-        bool                                updateBindlessDescriptorSet(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, uint32_t slot);
+        uint32_t                            updateBindlessDescriptorSet(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, uint32_t slot = MAX_BINDLESS_TEXTURES);
         // bool                                updateBindlessDescriptorSet(const DescriptorSetHandle& bindlessSet, const RenderTargetHandle& renderTarget, uint32_t slot);
         bool                                waitForFence(FenceHandle fence, uint64_t timeout = UINT64_MAX);
         bool                                resetFence(FenceHandle fence);
@@ -94,6 +94,8 @@ namespace rasm
         std::unordered_map<ResourceDesc, DescriptorSetLayoutHandle, ResourceDescHash>               descriptorSetLayoutDescCache;
         std::unordered_map<ResourceDesc, DescriptorPoolHandle, ResourceDescHash>                    descriptorPoolDescCache;
         std::unordered_map<ResourceDesc, DescriptorSetHandle, ResourceDescHash>                     descriptorSetDescCache;
+
+        uint32_t                                                                                    nextBindlessTextureIndex = 0;
     };
 }
 // clang-format on

@@ -8,7 +8,7 @@
 namespace rasm
 {
 
-    MaterialHandle Engine::createMaterial(MaterialType type, TextureHandle textures[], ShaderHandle shader)
+    MaterialHandle Engine::createMaterial(MaterialType type, std::vector<TextureHandle> textures, ShaderHandle shader)
     {
         if (type == MaterialType::SHADER && !shader.isValid())
         {
@@ -24,11 +24,15 @@ namespace rasm
         }
 
         auto material = Material{ .handle = handle, .type = type, .textures = {}, .shader = shader };
-        if (textures)
+        if (!textures.empty())
         {
-            for (uint32_t i = 0; i < MAX_TEXTURE_SLOTS; ++i)
+            for (uint32_t i = 0; i < MAX_TEXTURE_SLOTS && i < textures.size(); ++i)
             {
-                material.textures[i] = textures[i];
+                auto textureHandle = textures[i];
+                if (!textureHandle.isValid())
+                    continue;
+                material.textures[i] = textureHandle;
+                addBindlessTexture(bindlessDescriptorSet, textureHandle);
             }
         }
 
@@ -74,5 +78,15 @@ namespace rasm
         registery.shaders[handle.index] = shaderSource;
 
         return handle;
+    }
+
+    const Material &Engine::getMaterial(const MaterialHandle &handle)
+    {
+        if (handle.index >= registery.materials.size())
+        {
+            spdlog::error("Invalid material handle.");
+            throw std::runtime_error("Invalid material handle.");
+        }
+        return registery.materials[handle.index];
     }
 }

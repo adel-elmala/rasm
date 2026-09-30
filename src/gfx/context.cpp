@@ -533,8 +533,7 @@ namespace rasm
         RenderTargetHandle rtHandle = engine->handleManager.getNextRenderTargetHandle();
 
         RenderTarget rt = {
-            .colorAttachment = {},
-            .depthAttachment = {},
+            .attachments = {},
             .width = desc.renderTarget.width,
             .height = desc.renderTarget.height,
             .colorFormat = desc.renderTarget.colorFormat,
@@ -545,11 +544,14 @@ namespace rasm
             auto colorHandle = createTexture(colorDesc);
             auto depthHandle = createTexture(depthDesc);
 
-            rt.colorAttachment[i] = colorHandle;
-            rt.depthAttachment[i] = depthHandle;
+            rt.attachments[i].color = colorHandle;
+            rt.attachments[i].depth = depthHandle;
 
-            updateBindlessDescriptorSet(engine->getBindlessDescriptorSet(), colorHandle, colorHandle.index);
-            updateBindlessDescriptorSet(engine->getBindlessDescriptorSet(), depthHandle, depthHandle.index);
+            auto colorAttachmentIndex = updateBindlessDescriptorSet(engine->getBindlessDescriptorSet(), colorHandle);
+            auto depthAttachmentIndex = updateBindlessDescriptorSet(engine->getBindlessDescriptorSet(), depthHandle);
+
+            engine->registery.bindlessTextureIndexMap[colorHandle] = colorAttachmentIndex;
+            engine->registery.bindlessTextureIndexMap[depthHandle] = depthAttachmentIndex;
         }
 
         renderTargetCache[rtHandle] = rt;
@@ -767,9 +769,9 @@ namespace rasm
         }
     }
 
-    bool RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot)
+    uint32_t RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot)
     {
-        assert(slot < MAX_BINDLESS_TEXTURES && "Slot index exceeds maximum bindless textures.");
+        assert(slot <= MAX_BINDLESS_TEXTURES && "Slot index exceeds maximum bindless textures.");
 
         auto bindlessIt = descriptorSetCache.find(bindlessSet);
         auto textureIt = textureCache.find(texture);
@@ -787,13 +789,15 @@ namespace rasm
         switch (backend)
         {
         case Backend::VULKAN:
-            return vulkanContext.updateBindlessDescriptorSet(bindlessIt->second, textureIt->second, slot);
+            vulkanContext.updateBindlessDescriptorSet(bindlessIt->second, textureIt->second, slot == MAX_BINDLESS_TEXTURES ? nextBindlessTextureIndex++ : slot);
+            break;
         case Backend::DX12:
         case Backend::METAL:
         default:
             spdlog::error("Unsupported backend during bindless descriptor set update.");
-            return false;
+            return MAX_BINDLESS_TEXTURES;
         }
+        return slot == MAX_BINDLESS_TEXTURES ? nextBindlessTextureIndex - 1 : slot;
     }
 
     // bool RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle &bindlessSet, const RenderTargetHandle &renderTarget, uint32_t slot)

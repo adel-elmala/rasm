@@ -65,7 +65,7 @@ namespace rasm
             void                                       draw(const CommandBufferVKHandle& commandBuffer, uint32_t vertexCount, uint32_t instanceCount = 1);
             void                                       drawIndexed(const CommandBufferVKHandle& commandBuffer, uint32_t indexCount, uint32_t instanceCount = 1, uint32_t vertexOffset = 0, uint32_t firstIndex = 0, uint32_t firstInstance = 0);
             void                                       drawIndexedIndirect(const CommandBufferVKHandle& commandBuffer, const BufferVKHandle& buffer, uint64_t offset, uint32_t drawCount, uint32_t stride);
-            bool                                       updateBindlessDescriptorSet(const DescriptorSetVKHandle& bindlessSet, const TextureVKHandle& texture, uint32_t slot);
+            void                                       updateBindlessDescriptorSet(const DescriptorSetVKHandle& bindlessSet, const TextureVKHandle& texture, uint32_t slot);
             bool                                       waitForFence(const FenceVKHandle& fence, uint64_t timeout = UINT64_MAX);
             bool                                       resetFence(const FenceVKHandle& fence);
             bool                                       acquireNextImage(const SemaphoreVKHandle& signalSemaphore, uint64_t timeout , uint32_t& imageIndex);

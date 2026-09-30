@@ -48,6 +48,7 @@ namespace rasm
     {
         VERTEX,
         FRAGMENT,
+        VERTEX_FRAGMENT,
         COMPUTE
     };
 
@@ -113,10 +114,15 @@ namespace rasm
         bool                        vertexPulling = false;
     };
 
+    struct RenderTargetAttachments
+    {
+        TextureHandle color;
+        TextureHandle depth;
+    };
+
     struct RenderTarget
     {
-        TextureHandle colorAttachment[rasm::MAX_FRAMES_IN_FLIGHT];
-        TextureHandle depthAttachment[rasm::MAX_FRAMES_IN_FLIGHT];
+        RenderTargetAttachments attachments[rasm::MAX_FRAMES_IN_FLIGHT];
         uint32_t width;
         uint32_t height;
         Format colorFormat;
