@@ -196,7 +196,7 @@ namespace rasm::gfx
 
         VkBufferDeviceAddressInfo bufferAddressInfo = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
         bufferAddressInfo.buffer = buffer;
-        desc.buffer.deviceAddressBuffer.address = vkGetBufferDeviceAddress(this->device.device, &bufferAddressInfo);
+        desc.buffer.deviceAddress = vkGetBufferDeviceAddress(this->device.device, &bufferAddressInfo);
 
         // Set a debug name for the buffer
         VkDebugUtilsObjectNameInfoEXT bufferNameInfo = {};

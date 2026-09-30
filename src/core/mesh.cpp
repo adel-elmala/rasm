@@ -172,7 +172,7 @@ namespace rasm
             bufferDesc.buffer.size = objRaw.vertices.size() * sizeof(Vertex) + objRaw.indices.size() * sizeof(uint32_t);
             bufferDesc.buffer.vertexIndexBuffer.indexCount = objRaw.indices.size();
             bufferDesc.buffer.vertexIndexBuffer.vertexCount = objRaw.vertices.size();
-            bufferDesc.buffer.vertexIndexBuffer.offset = objRaw.vertices.size() * sizeof(Vertex);
+            bufferDesc.buffer.offset = objRaw.vertices.size() * sizeof(Vertex);
 
             auto bufferHandle = ctx.createBuffer(bufferDesc);
 

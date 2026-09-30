@@ -164,14 +164,12 @@ namespace rasm
     bufferDesc.type = ResourceType::BUFFER;
     bufferDesc.buffer.usage = BufferUsage::STORAGE;
     bufferDesc.buffer.size = totalVertexBufferSize;
-    bufferDesc.buffer.storageBuffer.offset = 0;
 
     auto vertexBufferHandle = ctx.createBuffer(bufferDesc);
 
     bufferDesc.name = "Mega Index Buffer";
     bufferDesc.buffer.usage = BufferUsage::INDEX;
     bufferDesc.buffer.size = totalIndexBufferSize;
-    bufferDesc.buffer.storageBuffer.offset = 0;
 
     auto indexBufferHandle = ctx.createBuffer(bufferDesc);
 

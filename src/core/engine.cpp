@@ -510,7 +510,7 @@ namespace rasm
                 auto desc = ctx.getResourceDesc(bufferHandle);
                 ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
                 ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
-                ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.vertexIndexBuffer.offset, Format::U32_UINT);
+                ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.offset, Format::U32_UINT);
                 auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;
                 ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX, &targetShaderDataBufferAddress, sizeof(targetShaderDataBufferAddress), 0);
                 ctx.drawIndexed(commandBuffer, static_cast<uint32_t>(desc.buffer.vertexIndexBuffer.indexCount), 1, 0, 0, 0);
@@ -561,7 +561,7 @@ namespace rasm
                 auto desc = ctx.getResourceDesc(bufferHandle);
                 ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet);
                 ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
-                ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.vertexIndexBuffer.offset, Format::U32_UINT);
+                ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.offset, Format::U32_UINT);
                 auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;
                 ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX, &targetShaderDataBufferAddress, sizeof(targetShaderDataBufferAddress), 0);
                 ctx.drawIndexed(commandBuffer, static_cast<uint32_t>(desc.buffer.vertexIndexBuffer.indexCount), 1, 0, 0, 0);

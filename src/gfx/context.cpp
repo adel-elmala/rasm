@@ -722,13 +722,13 @@ namespace rasm
             return 0;
         }
 
-        if (gpuBuffer.desc.buffer.deviceAddressBuffer.address == 0)
+        if (gpuBuffer.desc.buffer.deviceAddress == 0)
         {
             spdlog::error("Buffer '{}' has no device address.", gpuBuffer.desc.name);
             return 0;
         }
 
-        return gpuBuffer.desc.buffer.deviceAddressBuffer.address;
+        return gpuBuffer.desc.buffer.deviceAddress;
     }
 
     ResourceDesc RenderContext::getResourceDesc(const BufferHandle &buffer)
