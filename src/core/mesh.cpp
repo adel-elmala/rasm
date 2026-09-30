@@ -15,7 +15,6 @@ namespace rasm
         if (handle.index >= MAX_MESHES)
         {
             spdlog::error("Exceeded maximum number of meshes.");
-            isRunning = false;
             return {};
         }
 

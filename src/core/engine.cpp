@@ -46,6 +46,7 @@ namespace rasm
             spdlog::error("Failed to initialize render context.");
             ctx.cleanup();
             isRunning = false;
+            return;
         }
 
         // Initialize frame resources for double buffering
@@ -89,7 +90,9 @@ namespace rasm
         if (!shaderCompiler.initialize(shaderTarget))
         {
             spdlog::error("Failed to initialize shader compiler.");
+            ctx.cleanup();
             isRunning = false;
+            return;
         }
 
         // Create bindless texture descriptor set layout, pool, and set
@@ -160,7 +163,6 @@ namespace rasm
         if (supportedTextureExtensions.find(extension) == supportedTextureExtensions.end())
         {
             spdlog::error("Unsupported texture format: {}", extension);
-            isRunning = false;
             return TextureHandle{};
         }
 
@@ -170,7 +172,6 @@ namespace rasm
         if (!data)
         {
             spdlog::error("Failed to load texture: {}", path);
-            isRunning = false;
             return TextureHandle{};
         }
 
@@ -192,7 +193,6 @@ namespace rasm
         if (!ctx.fillTexture(textureHandle, data))
         {
             spdlog::error("Failed to fill texture: {}", path);
-            isRunning = false;
             return TextureHandle{};
         }
 
@@ -202,7 +202,6 @@ namespace rasm
         if (!ctx.updateBindlessDescriptorSet(bindlessDescriptorSet, textureHandle, static_cast<uint32_t>(textureHandle.index)))
         {
             spdlog::error("Failed to update bindless descriptor set for texture: {}", path);
-            isRunning = false;
             return TextureHandle{};
         }
 
