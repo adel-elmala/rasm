@@ -438,7 +438,6 @@ namespace rasm
 
         ctx.bindPipeline(commandBuffer, preparedScene.uberMaterialPipeline);
         {
-            // Build the SceneData exactly as the shader declares it so the layouts cannot drift apart.
             SceneData sceneData{};
             sceneData.projection = projection;
             sceneData.view = view;
@@ -493,6 +492,7 @@ namespace rasm
         {
             auto pipeline = compiledScene.materialToPipeline[materialHandle];
             ctx.bindPipeline(commandBuffer, pipeline);
+            ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
 
             auto mat = getMaterial(materialHandle);
             shaderData.textureIndex = getBindlessTextureIndex(mat.textures[0]); // TODO: handle cases where material has more than 1 texture
@@ -510,7 +510,6 @@ namespace rasm
 
                 auto bufferHandle = compiledScene.meshData[entityHandle];
                 auto desc = ctx.getResourceDesc(bufferHandle);
-                ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
                 ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
                 ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.offset, Format::U32_UINT);
                 auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;
@@ -556,6 +555,7 @@ namespace rasm
         {
             auto pipeline = compiledScene.materialToPipeline[materialHandle];
             ctx.bindPipeline(commandBuffer, pipeline);
+            ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet);
 
             auto mat = getMaterial(materialHandle);
             shaderData.textureIndex = getBindlessTextureIndex(mat.textures[0]); // TODO: handle cases where material has more than 1 texture
@@ -573,7 +573,6 @@ namespace rasm
 
                 auto bufferHandle = compiledScene.meshData[entityHandle];
                 auto desc = ctx.getResourceDesc(bufferHandle);
-                ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet);
                 ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
                 ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.offset, Format::U32_UINT);
                 auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;

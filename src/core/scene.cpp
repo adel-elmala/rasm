@@ -286,7 +286,7 @@ namespace rasm
       drawInfo.instanceCount = 1; // TODO: support multiple instances
       drawInfo.firstIndex = IndexOffset;
       drawInfo.vertexOffset = VertexOffset;
-      drawInfo.firstInstance = 0; // TODO: support multiple instances
+      drawInfo.firstInstance = 0;               // TODO: support multiple instances
       drawInfo.vertFormat = VertexFormat::Full; // TODO: determine the correct vertex format based on the mesh
 
       auto matHandle = entity.material;
@@ -448,4 +448,3 @@ namespace rasm
     return compiledScene;
   }
 } // namespace rasm
- 

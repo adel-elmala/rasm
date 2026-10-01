@@ -109,6 +109,7 @@ int main()
             {
                 auto pipeline = compiledScene.materialToPipeline[materialHandle];
                 ctx.bindPipeline(commandBuffer, pipeline);
+                ctx.bindDescriptorSet(commandBuffer, pipeline, engine.getBindlessDescriptorSet(), 0);
 
                 auto mat = engine.getMaterial(materialHandle);
                 shaderData.textureIndex = engine.getBindlessTextureIndex(mat.textures[0]); // TODO: handle cases where material has more than 1 texture
@@ -126,7 +127,6 @@ int main()
 
                     auto bufferHandle = compiledScene.meshData[entityHandle];
                     auto desc = ctx.getResourceDesc(bufferHandle);
-                    ctx.bindDescriptorSet(commandBuffer, pipeline, engine.getBindlessDescriptorSet(), 0);
                     ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
                     ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.offset, rasm::Format::U32_UINT);
                     auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;
@@ -252,6 +252,8 @@ int main()
             {
                 auto pipeline = compiledScene.materialToPipeline[materialHandle];
                 ctx.bindPipeline(commandBuffer, pipeline);
+                ctx.bindDescriptorSet(commandBuffer, pipeline, engine.getBindlessDescriptorSet(), 0);
+
                 for (const auto &entityHandle : entitySet)
                 {
                     auto modelTransform = engine.getTransform(entityHandle);
@@ -265,7 +267,6 @@ int main()
 
                     auto bufferHandle = compiledScene.meshData[entityHandle];
                     auto desc = ctx.getResourceDesc(bufferHandle);
-                    ctx.bindDescriptorSet(commandBuffer, pipeline, engine.getBindlessDescriptorSet(), 0);
                     ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
                     ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.offset, rasm::Format::U32_UINT);
                     auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;
