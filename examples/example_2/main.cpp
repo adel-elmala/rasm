@@ -7,7 +7,7 @@ int main()
 {
     // 1. Create engine instance
     rasm::EngineConfig config = {
-        .appName = "example_0",
+        .appName = "example_2",
         .windowWidth = 720,
         .windowHeight = 480,
         .enableValidation = true,
@@ -21,9 +21,9 @@ int main()
     rasm::SceneHandle scene = engine.createScene();
 
     // 3. Load resources
-    rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/obj/bunny/bunny.obj");
+    rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/gltf/ancient_egyptian_pottery/scene.gltf");
 
-    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/models/obj/bunny/bunny-atlas.jpg");
+    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/models/gltf/ancient_egyptian_pottery/textures/Pottery_baseColor.jpeg");
     if (!bunnyMesh.isValid() || !albedoTexture.isValid())
     {
         return 1;

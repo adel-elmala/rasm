@@ -80,6 +80,7 @@ namespace rasm {
         WindowHandle                getMainWindow() const;
         RenderContext&              getRenderContext();
         MeshSize                    getMeshByteSize(const MeshHandle &handle) const;
+        std::vector<GltfRaw>        processMesh(const Mesh &mesh);
         void                        queryMemoryStats();
         uint32_t                    addBindlessTexture(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot = MAX_BINDLESS_TEXTURES);
         uint32_t                    getBindlessTextureIndex(const TextureHandle &texture);

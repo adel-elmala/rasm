@@ -50,6 +50,7 @@ target_include_directories(rasm_lib PUBLIC ${Stb_INCLUDE_DIR} ${TINYGLTF_INCLUDE
 # example executable
 add_executable(Example_0 "examples/example_0/main.cpp")
 add_executable(Example_1 "examples/example_1/main.cpp")
+add_executable(Example_2 "examples/example_2/main.cpp")
 
 target_link_libraries(Example_0 PUBLIC
 rasm_lib
@@ -58,6 +59,12 @@ rasm_lib
 target_link_libraries(Example_1 PUBLIC
 rasm_lib
 )
+
+target_link_libraries(Example_2 PUBLIC
+rasm_lib
+)
+
+
 
 if (MSVC AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(/arch:AVX2)

@@ -28,9 +28,9 @@ int main()
                                                     });
 
     // Load resources
-    rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/bunny/bunny.obj");
+    rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/obj/bunny/bunny.obj");
 
-    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/models/bunny/bunny-atlas.jpg");
+    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/models/obj/bunny/bunny-atlas.jpg");
 
     if (!bunnyMesh.isValid() || !albedoTexture.isValid())
     {

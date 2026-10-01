@@ -26,6 +26,12 @@ namespace rasm
         std::vector<uint32_t>   indices;
     };
 
+    struct GltfRaw
+    {
+        ObjRaw objRaw;
+        glm::mat4 transform;
+    };
+
     struct Mesh
     {
         enum class MeshType

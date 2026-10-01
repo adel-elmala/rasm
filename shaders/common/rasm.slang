@@ -70,11 +70,9 @@ VSOutput vertMain(VSInput input)
     float4x4 viewMat = pc.scene->view;
     float4x4 projectionMat = pc.scene->projection;
 
-    // SV_VertexID maps to the Vulkan VertexIndex built-in, which for an indexed draw already is
-    // (index value + vertexOffset). The mega vertex buffer must therefore be indexed straight from
-    // its base, otherwise the per-draw vertexOffset gets applied twice and the shader reads out of
-    // bounds.
-    VertexFull vert = pc.scene->vertsPtr[input.vertexID];
+    // Slang lowers SV_VertexID to (VertexIndex - BaseVertex) to match D3D semantics, so it is the raw
+    // index-buffer value and the per-draw vertexOffset must be added back to address the mega buffer.
+    VertexFull vert = pc.scene->vertsPtr[input.vertexID + pc.scene->drawInfoPtr[drawID].vertexOffset];
 
     output.Pos = mul(projectionMat, mul(viewMat, mul(modelMat, float4(vert.pos, 1.0))));
     output.Normal = normalize(mul((float3x3)modelMat, vert.normal));
