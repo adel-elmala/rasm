@@ -15,7 +15,6 @@ namespace rasm
         if (handle.index >= MAX_MESHES)
         {
             spdlog::error("Exceeded maximum number of meshes.");
-            isRunning = false;
             return {};
         }
 
@@ -172,7 +171,7 @@ namespace rasm
             bufferDesc.buffer.size = objRaw.vertices.size() * sizeof(Vertex) + objRaw.indices.size() * sizeof(uint32_t);
             bufferDesc.buffer.vertexIndexBuffer.indexCount = objRaw.indices.size();
             bufferDesc.buffer.vertexIndexBuffer.vertexCount = objRaw.vertices.size();
-            bufferDesc.buffer.vertexIndexBuffer.offset = objRaw.vertices.size() * sizeof(Vertex);
+            bufferDesc.buffer.offset = objRaw.vertices.size() * sizeof(Vertex);
 
             auto bufferHandle = ctx.createBuffer(bufferDesc);
 
@@ -189,4 +188,33 @@ namespace rasm
         return BufferHandle{};
     }
 
+    MeshSize Engine::getMeshByteSize(const MeshHandle &handle) const
+    {
+        if (!handle.isValid() || handle.index >= registery.meshes.size())
+        {
+            spdlog::error("Mesh handle not found for getting byte size.");
+            return MeshSize{0, 0};
+        }
+
+        auto mesh = registery.meshes[handle.index];
+
+        if (mesh.type == Mesh::MeshType::GLTF)
+        {
+            // In a real implementation, this is where we'd calculate the GLTF mesh byte size.
+            return MeshSize{0, 0}; // Placeholder
+        }
+        else if (mesh.type == Mesh::MeshType::OBJ)
+        {
+            auto &objRaw = std::get<ObjRaw>(mesh.data);
+            return MeshSize{
+                objRaw.vertices.size() * sizeof(Vertex),
+                objRaw.indices.size() * sizeof(uint32_t)
+            };
+        }
+        else
+        {
+            spdlog::error("Unknown mesh type for getting byte size.");
+            return MeshSize{0, 0};
+        }
+    }
 }

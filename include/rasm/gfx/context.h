@@ -6,6 +6,7 @@
 #include "rasm/core/types.h"
 #include "rasm/gfx/types.h"
 #include "rasm/gfx/vulkan.h"
+#include "rasm/core/profiler.h"
 
 namespace rasm
 {
@@ -37,7 +38,8 @@ namespace rasm
         uint64_t                            getBufferDeviceAddress(const BufferHandle& buffer);
         ResourceDesc                        getResourceDesc(const BufferHandle& buffer);
         ResourceDesc                        getResourceDesc(const TextureHandle& texture);
-        bool                                updateBindlessDescriptorSet(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, uint32_t slot);
+        VRAMStats                           queryVRAMStats();
+        uint32_t                            updateBindlessDescriptorSet(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, uint32_t slot = MAX_BINDLESS_TEXTURES);
         // bool                                updateBindlessDescriptorSet(const DescriptorSetHandle& bindlessSet, const RenderTargetHandle& renderTarget, uint32_t slot);
         bool                                waitForFence(FenceHandle fence, uint64_t timeout = UINT64_MAX);
         bool                                resetFence(FenceHandle fence);
@@ -63,6 +65,7 @@ namespace rasm
         void                                setUniform(const CommandBufferHandle& commandBuffer, const std::string& name, const void* data, size_t size);
         void                                draw(const CommandBufferHandle& commandBuffer, const uint32_t vertexCount, uint32_t instanceCount = 1);
         void                                drawIndexed(const CommandBufferHandle& commandBuffer, uint32_t indexCount, uint32_t instanceCount = 1, uint32_t vertexOffset = 0, uint32_t firstIndex = 0, uint32_t firstInstance = 0);
+        void                                drawIndexedIndirect(const CommandBufferHandle& commandBuffer, const BufferHandle& drawInfoBuffer, uint32_t offset, uint32_t drawCount, uint32_t stride);
 
     protected:
         Engine*                                                                                     engine        = nullptr;
@@ -91,6 +94,8 @@ namespace rasm
         std::unordered_map<ResourceDesc, DescriptorSetLayoutHandle, ResourceDescHash>               descriptorSetLayoutDescCache;
         std::unordered_map<ResourceDesc, DescriptorPoolHandle, ResourceDescHash>                    descriptorPoolDescCache;
         std::unordered_map<ResourceDesc, DescriptorSetHandle, ResourceDescHash>                     descriptorSetDescCache;
+
+        uint32_t                                                                                    nextBindlessTextureIndex = 0;
     };
 }
 // clang-format on

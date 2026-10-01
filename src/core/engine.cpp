@@ -46,6 +46,7 @@ namespace rasm
             spdlog::error("Failed to initialize render context.");
             ctx.cleanup();
             isRunning = false;
+            return;
         }
 
         // Initialize frame resources for double buffering
@@ -61,7 +62,7 @@ namespace rasm
             shaderDataBufferDesc.type = ResourceType::BUFFER;
             shaderDataBufferDesc.name = "ShaderDataBuffer for Frame " + std::to_string(i);
             shaderDataBufferDesc.buffer.size = 1024 * 1024; // 1 MB
-            shaderDataBufferDesc.buffer.usage = BufferUsage::DEVICE_ADDRESS;
+            shaderDataBufferDesc.buffer.usage = BufferUsage::STORAGE;
 
             frameResources[i].shaderDataBuffer = ctx.createBuffer(shaderDataBufferDesc);
 
@@ -89,7 +90,9 @@ namespace rasm
         if (!shaderCompiler.initialize(shaderTarget))
         {
             spdlog::error("Failed to initialize shader compiler.");
+            ctx.cleanup();
             isRunning = false;
+            return;
         }
 
         // Create bindless texture descriptor set layout, pool, and set
@@ -160,7 +163,6 @@ namespace rasm
         if (supportedTextureExtensions.find(extension) == supportedTextureExtensions.end())
         {
             spdlog::error("Unsupported texture format: {}", extension);
-            isRunning = false;
             return TextureHandle{};
         }
 
@@ -170,7 +172,6 @@ namespace rasm
         if (!data)
         {
             spdlog::error("Failed to load texture: {}", path);
-            isRunning = false;
             return TextureHandle{};
         }
 
@@ -192,17 +193,6 @@ namespace rasm
         if (!ctx.fillTexture(textureHandle, data))
         {
             spdlog::error("Failed to fill texture: {}", path);
-            isRunning = false;
-            return TextureHandle{};
-        }
-
-        // using the handle index as the slot for bindless descriptor set
-        // this will result in a fragmented bindless descriptor set if the handles are not contiguous, (e.g, some handles are not for a sampled texture...),
-        // but for simplicity we will use this approach for now
-        if (!ctx.updateBindlessDescriptorSet(bindlessDescriptorSet, textureHandle, static_cast<uint32_t>(textureHandle.index)))
-        {
-            spdlog::error("Failed to update bindless descriptor set for texture: {}", path);
-            isRunning = false;
             return TextureHandle{};
         }
 
@@ -304,11 +294,11 @@ namespace rasm
         const RenderTarget &renderTargetData = ctx.getRenderTarget(renderTarget);
 
         // transition render target images to be ready for rendering
-        ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
-        ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.depthAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
+        ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
+        ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].depth, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
 
         // begin dynamic rendering
-        ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], renderTargetData.depthAttachment[frameCount]);
+        ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, renderTargetData.attachments[frameCount].depth);
         ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(renderTargetData.width), static_cast<float>(renderTargetData.height));
         ctx.setScissor(currentFrame.commandBuffer, 0, 0, renderTargetData.width, renderTargetData.height);
     }
@@ -338,9 +328,9 @@ namespace rasm
             auto renderTargetData = ctx.getRenderTarget(currentRenderTarget);
 
             // transition render target images to be ready for rendering
-            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
-            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.depthAttachment[frameCount], TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
-            ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], renderTargetData.depthAttachment[frameCount]);
+            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
+            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].depth, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
+            ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, renderTargetData.attachments[frameCount].depth);
         }
         else
         {
@@ -429,6 +419,45 @@ namespace rasm
         }
     }
 
+    void Engine::render2(SceneHandle scene, CameraHandle camera)
+    {
+        beginFrame(camera);
+        beginPass();
+
+        auto preparedScene = prepareScene(scene);
+
+        auto &currentFrame = frameResources[frameCount];
+        auto commandBuffer = currentFrame.commandBuffer;
+
+        auto cam = registery.cameras[camera.index];
+        auto camTransform = cam.transform;
+        auto camPos = camTransform.position;
+
+        auto projection = getProjectionMatrix(cam.projection);
+        auto view = glm::translate(glm::mat4(1.0f), camPos);
+
+        ctx.bindPipeline(commandBuffer, preparedScene.uberMaterialPipeline);
+        {
+            SceneData sceneData{};
+            sceneData.projection = projection;
+            sceneData.view = view;
+            sceneData.vertsPtr = ctx.getBufferDeviceAddress(preparedScene.megaVertexBuffer);
+            sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(preparedScene.drawInfoBuffer);
+            sceneData.modeldataPtr = ctx.getBufferDeviceAddress(preparedScene.megaModelMatsBuffer);
+
+            ctx.fillBuffer(preparedScene.sceneDataBuffer, &sceneData, sizeof(sceneData), 0);
+
+            ctx.bindDescriptorSet(commandBuffer, preparedScene.uberMaterialPipeline, bindlessDescriptorSet, 0);
+            ctx.bindIndexBuffer(commandBuffer, preparedScene.megaIndexBuffer, 0, Format::U32_UINT);
+
+            auto sceneDataBufferPtr = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer);
+            ctx.pushConstants(commandBuffer, preparedScene.uberMaterialPipeline, ShaderType::VERTEX_FRAGMENT, &sceneDataBufferPtr, sizeof(uint64_t), 0);
+            ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, 0, preparedScene.drawInfoCount, sizeof(DrawInfo));
+        }
+        endPass();
+        endFrame();
+    }
+
     void Engine::render(SceneHandle scene, CameraHandle camera)
     {
         beginFrame(camera);
@@ -443,8 +472,18 @@ namespace rasm
         auto camTransform = cam.transform;
         auto camPos = camTransform.position;
 
-        auto projection = getProjectionMatrix(cam.projection);
-        auto view = glm::translate(glm::mat4(1.0f), camPos);
+        struct ShaderData
+        {
+            glm::mat4 projection;
+            glm::mat4 view;
+            glm::mat4 model;
+            uint32_t textureIndex;
+        };
+
+        ShaderData shaderData{};
+
+        shaderData.projection = getProjectionMatrix(cam.projection);
+        shaderData.view = glm::translate(glm::mat4(1.0f), camPos);
 
         auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
 
@@ -453,26 +492,28 @@ namespace rasm
         {
             auto pipeline = compiledScene.materialToPipeline[materialHandle];
             ctx.bindPipeline(commandBuffer, pipeline);
+            ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
+
+            auto mat = getMaterial(materialHandle);
+            shaderData.textureIndex = getBindlessTextureIndex(mat.textures[0]); // TODO: handle cases where material has more than 1 texture
+
             for (const auto &entityHandle : entitySet)
             {
                 auto modelTransform = registery.entities[entityHandle.index].transform;
 
-                auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
-                             glm::mat4_cast(modelTransform.rotation) *
-                             glm::scale(glm::mat4(1.0f), modelTransform.scale);
+                shaderData.model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
+                                   glm::mat4_cast(modelTransform.rotation) *
+                                   glm::scale(glm::mat4(1.0f), modelTransform.scale);
 
-                auto baseOffset = (sizeof(projection) + sizeof(view) + sizeof(model)) * shaderDataIdx;
-                ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), baseOffset);
-                ctx.fillBuffer(shaderDataBuffer, &view, sizeof(view), sizeof(projection) + baseOffset);
-                ctx.fillBuffer(shaderDataBuffer, &model, sizeof(model), sizeof(projection) + sizeof(view) + baseOffset);
+                auto baseOffset = sizeof(ShaderData) * shaderDataIdx;
+                ctx.fillBuffer(shaderDataBuffer, &shaderData, sizeof(shaderData), baseOffset);
 
                 auto bufferHandle = compiledScene.meshData[entityHandle];
                 auto desc = ctx.getResourceDesc(bufferHandle);
-                ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
                 ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
-                ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.vertexIndexBuffer.offset, Format::U32_UINT);
+                ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.offset, Format::U32_UINT);
                 auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;
-                ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX, &targetShaderDataBufferAddress, sizeof(targetShaderDataBufferAddress), 0);
+                ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX_FRAGMENT, &targetShaderDataBufferAddress, sizeof(targetShaderDataBufferAddress), 0);
                 ctx.drawIndexed(commandBuffer, static_cast<uint32_t>(desc.buffer.vertexIndexBuffer.indexCount), 1, 0, 0, 0);
                 shaderDataIdx++;
             }
@@ -494,8 +535,18 @@ namespace rasm
         auto camTransform = cam.transform;
         auto camPos = camTransform.position;
 
-        auto projection = getProjectionMatrix(cam.projection);
-        auto view = glm::translate(glm::mat4(1.0f), camPos);
+        struct ShaderData
+        {
+            glm::mat4 projection;
+            glm::mat4 view;
+            glm::mat4 model;
+            uint32_t textureIndex;
+        };
+
+        ShaderData shaderData{};
+
+        shaderData.projection = getProjectionMatrix(cam.projection);
+        shaderData.view = glm::translate(glm::mat4(1.0f), camPos);
 
         auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
 
@@ -504,26 +555,28 @@ namespace rasm
         {
             auto pipeline = compiledScene.materialToPipeline[materialHandle];
             ctx.bindPipeline(commandBuffer, pipeline);
+            ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet);
+
+            auto mat = getMaterial(materialHandle);
+            shaderData.textureIndex = getBindlessTextureIndex(mat.textures[0]); // TODO: handle cases where material has more than 1 texture
+
             for (const auto &entityHandle : entitySet)
             {
                 auto modelTransform = registery.entities[entityHandle.index].transform;
 
-                auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
-                             glm::mat4_cast(modelTransform.rotation) *
-                             glm::scale(glm::mat4(1.0f), modelTransform.scale);
+                shaderData.model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
+                                   glm::mat4_cast(modelTransform.rotation) *
+                                   glm::scale(glm::mat4(1.0f), modelTransform.scale);
 
-                auto baseOffset = (sizeof(projection) + sizeof(view) + sizeof(model)) * shaderDataIdx;
-                ctx.fillBuffer(shaderDataBuffer, &projection, sizeof(projection), baseOffset);
-                ctx.fillBuffer(shaderDataBuffer, &view, sizeof(view), sizeof(projection) + baseOffset);
-                ctx.fillBuffer(shaderDataBuffer, &model, sizeof(model), sizeof(projection) + sizeof(view) + baseOffset);
+                auto baseOffset = sizeof(ShaderData) * shaderDataIdx;
+                ctx.fillBuffer(shaderDataBuffer, &shaderData, sizeof(shaderData), baseOffset);
 
                 auto bufferHandle = compiledScene.meshData[entityHandle];
                 auto desc = ctx.getResourceDesc(bufferHandle);
-                ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet);
                 ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
-                ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.vertexIndexBuffer.offset, Format::U32_UINT);
+                ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.offset, Format::U32_UINT);
                 auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;
-                ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX, &targetShaderDataBufferAddress, sizeof(targetShaderDataBufferAddress), 0);
+                ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX_FRAGMENT, &targetShaderDataBufferAddress, sizeof(targetShaderDataBufferAddress), 0);
                 ctx.drawIndexed(commandBuffer, static_cast<uint32_t>(desc.buffer.vertexIndexBuffer.indexCount), 1, 0, 0, 0);
                 shaderDataIdx++;
             }
@@ -560,6 +613,30 @@ namespace rasm
     DescriptorSetHandle Engine::getBindlessDescriptorSet()
     {
         return bindlessDescriptorSet;
+    }
+
+    uint32_t Engine::addBindlessTexture(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot)
+    {
+        auto txtID = ctx.updateBindlessDescriptorSet(bindlessSet, texture, slot);
+
+        registery.bindlessTextureIndexMap[texture] = txtID;
+        return txtID;
+    }
+
+    uint32_t Engine::getBindlessTextureIndex(const TextureHandle &texture)
+    {
+        auto it = registery.bindlessTextureIndexMap.find(texture);
+        if (it != registery.bindlessTextureIndexMap.end())
+        {
+            return it->second;
+        }
+        return UINT32_MAX;
+    }
+
+    RenderTargetAttachments Engine::getRenderTargetAttachments(const RenderTargetHandle &renderTarget)
+    {
+        auto &rt = ctx.getRenderTarget(renderTarget);
+        return rt.attachments[frameCount % MAX_FRAMES_IN_FLIGHT];
     }
 
 } // namespace rasm

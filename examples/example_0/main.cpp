@@ -30,7 +30,7 @@ int main()
     }
 
     // 4. Create a material
-    rasm::TextureHandle textures[] = { albedoTexture };
+    std::vector<rasm::TextureHandle> textures = { albedoTexture };
     rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::BASIC, textures);
 
     // 5. Create entities in the scene
@@ -87,7 +87,7 @@ int main()
         engine.updateTransform(bunny3, engine.getTransform(bunny3).rotate(glm::vec3(1.0f, 1.0f, 1.0f), glm::radians(0.01f)));
 
         // Render the scene
-        engine.render(scene, camera);
+        engine.render2(scene, camera);
     }
 
     return 0;
