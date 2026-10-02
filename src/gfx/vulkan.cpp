@@ -505,13 +505,16 @@ namespace rasm::gfx
         // used when beginning dynamic rendering.
         VkFormat colorAttachmentFormat = _to_vk_format(desc.pipeline.colorAttachmentFormat);
         VkFormat depthAttachmentFormat = _to_vk_format(desc.pipeline.depthStencilAttachmentFormat);
+        // combined depth/stencil formats must declare the stencil aspect too (Metal validation asserts otherwise).
+        bool hasStencil = depthAttachmentFormat == VK_FORMAT_D24_UNORM_S8_UINT ||
+                          depthAttachmentFormat == VK_FORMAT_D32_SFLOAT_S8_UINT;
 
         VkPipelineRenderingCreateInfo pipelineRenderingInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
             .colorAttachmentCount = 1,
             .pColorAttachmentFormats = &colorAttachmentFormat,
             .depthAttachmentFormat = depthAttachmentFormat,
-            .stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
+            .stencilAttachmentFormat = hasStencil ? depthAttachmentFormat : VK_FORMAT_UNDEFINED,
         };
 
         VkPipelineColorBlendAttachmentState colorBlendAttachment = {
@@ -991,6 +994,10 @@ namespace rasm::gfx
             .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
             .clearValue = {.depthStencil = {1.0f, 0}}};
 
+        // must match the pipeline's stencilAttachmentFormat (see createGraphicsPipeline).
+        Format depthFormat = depthAttachment.desc.texture.format;
+        bool hasStencil = depthFormat == Format::D24_UNORM_S8_UINT || depthFormat == Format::D32_SFLOAT_S8_UINT;
+
         VkRenderingInfo renderingInfo{
             .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
             .renderArea{
@@ -1000,7 +1007,8 @@ namespace rasm::gfx
             .layerCount = 1,
             .colorAttachmentCount = 1,
             .pColorAttachments = &colorAttachmentInfo,
-            .pDepthAttachment = &depthAttachmentInfo};
+            .pDepthAttachment = &depthAttachmentInfo,
+            .pStencilAttachment = hasStencil ? &depthAttachmentInfo : nullptr};
 
         vkCmdBeginRendering(commandBuffer.commandBuffer, &renderingInfo);
         return true;
@@ -1670,7 +1678,9 @@ namespace rasm::gfx
         case TextureUsage::SAMPLED_COLOR_ATTACHMENT:
             return VK_IMAGE_ASPECT_COLOR_BIT;
         case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
+            return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
         case TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT:
+            // sampled views may only reference a single aspect
             return VK_IMAGE_ASPECT_DEPTH_BIT;
         default:
             return 0;
