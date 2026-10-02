@@ -73,7 +73,7 @@ int main()
             rtDesc.renderTarget.width = config.windowWidth;
             rtDesc.renderTarget.height = config.windowHeight;
             rtDesc.renderTarget.colorFormat = engine.getRenderContext().getSwapchainImageFormat();
-            rtDesc.renderTarget.depthFormat = rasm::Format::D24_UNORM_S8_UINT;
+            rtDesc.renderTarget.depthFormat = rasm::Format::D32_SFLOAT_S8_UINT;
 
             rtHandle = builder.createRenderTarget(rtDesc);
             builder.write(rtHandle);
