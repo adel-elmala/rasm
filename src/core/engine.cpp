@@ -72,7 +72,7 @@ namespace rasm
             depthTextureDesc.name = "DepthTexture for Frame " + std::to_string(i);
             depthTextureDesc.texture.width = static_cast<uint32_t>(config.windowWidth);
             depthTextureDesc.texture.height = static_cast<uint32_t>(config.windowHeight);
-            depthTextureDesc.texture.format = Format::D24_UNORM_S8_UINT; // TODO: check this format
+            depthTextureDesc.texture.format = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
             depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
 
             frameResources[i].depthTexture = ctx.createTexture(depthTextureDesc);
@@ -412,7 +412,7 @@ namespace rasm
             depthTextureDesc.name = "DepthTexture for Frame " + std::to_string(i);
             depthTextureDesc.texture.width = static_cast<uint32_t>(config.windowWidth);
             depthTextureDesc.texture.height = static_cast<uint32_t>(config.windowHeight);
-            depthTextureDesc.texture.format = Format::D24_UNORM_S8_UINT; // TODO: check this format
+            depthTextureDesc.texture.format = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
             depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
 
             frameResources[i].depthTexture = ctx.createTexture(depthTextureDesc);

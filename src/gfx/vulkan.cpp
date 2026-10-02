@@ -180,7 +180,6 @@ namespace rasm::gfx
         VmaAllocationCreateInfo allocCI = {};
         allocCI.usage = VMA_MEMORY_USAGE_AUTO;
         allocCI.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT |
                         VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
         VkBuffer buffer;
@@ -451,12 +450,14 @@ namespace rasm::gfx
                                         .offset = attr.offset});
         }
 
+        // With vertex pulling the shader fetches vertices itself, so use an empty vertex input state.
+        // This is core Vulkan and avoids VK_EXT_vertex_input_dynamic_state, which MoltenVK doesn't support.
         VkPipelineVertexInputStateCreateInfo vertexInputInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-            .vertexBindingDescriptionCount = 1,
-            .pVertexBindingDescriptions = &vertexBinding,
-            .vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexAttributes.size()),
-            .pVertexAttributeDescriptions = vertexAttributes.data()};
+            .vertexBindingDescriptionCount = vertexPulling ? 0u : 1u,
+            .pVertexBindingDescriptions = vertexPulling ? nullptr : &vertexBinding,
+            .vertexAttributeDescriptionCount = vertexPulling ? 0u : static_cast<uint32_t>(vertexAttributes.size()),
+            .pVertexAttributeDescriptions = vertexPulling ? nullptr : vertexAttributes.data()};
 
         VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -484,8 +485,6 @@ namespace rasm::gfx
         };
 
         std::vector<VkDynamicState> dynamic_states = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-        if (vertexPulling)
-            dynamic_states.push_back(VK_DYNAMIC_STATE_VERTEX_INPUT_EXT);
 
         VkPipelineDynamicStateCreateInfo dynamicStateInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
@@ -545,7 +544,7 @@ namespace rasm::gfx
             .pNext = &pipelineRenderingInfo,
             .stageCount = 2,
             .pStages = shaderStages,
-            .pVertexInputState = vertexPulling ? nullptr : &vertexInputInfo,
+            .pVertexInputState = &vertexInputInfo,
             .pInputAssemblyState = &inputAssemblyInfo,
             .pViewportState = &viewportStateInfo,
             .pRasterizationState = &rasterizerInfo,
@@ -815,6 +814,7 @@ namespace rasm::gfx
     void VulkanContext::fillBuffer(const BufferVKHandle &buffer, const void *data, size_t size, size_t offset)
     {
         assert(offset + size <= buffer.desc.buffer.size);
+        assert(buffer.allocationInfo.pMappedData != nullptr);
         std::memcpy(static_cast<uint8_t *>(buffer.allocationInfo.pMappedData) + offset, data, size);
     }
 
@@ -1194,7 +1194,6 @@ namespace rasm::gfx
 
     void VulkanContext::drawIndexedIndirect(const CommandBufferVKHandle &commandBuffer, const BufferVKHandle &buffer, uint64_t offset, uint32_t drawCount, uint32_t stride)
     {
-        this->dispatch_table.cmdSetVertexInputEXT(commandBuffer.commandBuffer, 0, nullptr, 0 , nullptr);
         vkCmdDrawIndexedIndirect(commandBuffer.commandBuffer, buffer.buffer, offset, drawCount, stride);
     }
 
@@ -1365,11 +1364,6 @@ namespace rasm::gfx
             .shaderInt64 = VK_TRUE,
         };
 
-        VkPhysicalDeviceVertexInputDynamicStateFeaturesEXT vertex_input_features{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_INPUT_DYNAMIC_STATE_FEATURES_EXT,
-            .vertexInputDynamicState = VK_TRUE,
-        };
-
         // select() grabs a PhysicalDevice, By default, this will prefer a discrete GPU.
         auto physical_device_selector_return = phys_device_selector
                                                    .set_surface(surface)
@@ -1380,8 +1374,6 @@ namespace rasm::gfx
                                                    .set_required_features(enabledVk10Features)                  // Enable the 1.0 core feature
                                                    .add_required_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME)     // Enable swapchain extension
                                                    .add_required_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) // Enable memory budget extension
-                                                   .add_required_extension(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME) // Enable vertex input dynamic state extension
-                                                   .add_required_extension_features(vertex_input_features) // Enable vertex input dynamic state extension
                                                    .select();
 
         if (!physical_device_selector_return)
@@ -1582,6 +1574,8 @@ namespace rasm::gfx
             return VK_FORMAT_R16G16B16A16_SFLOAT;
         case Format::D24_UNORM_S8_UINT:
             return VK_FORMAT_D24_UNORM_S8_UINT;
+        case Format::D32_SFLOAT_S8_UINT:
+            return VK_FORMAT_D32_SFLOAT_S8_UINT;
         case Format::R8G8B8A8_SRGB:
             return VK_FORMAT_R8G8B8A8_SRGB;
         case Format::B8G8R8A8_SRGB:
@@ -1630,6 +1624,8 @@ namespace rasm::gfx
             return Format::D24_UNORM_S8_UINT;
         case VK_FORMAT_R8G8B8_UNORM:
             return Format::R8G8B8_UNORM;
+        case VK_FORMAT_D32_SFLOAT_S8_UINT:
+            return Format::D32_SFLOAT_S8_UINT;
         default:
             return Format::UNKNOWN;
         }

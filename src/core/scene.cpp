@@ -303,7 +303,7 @@ namespace rasm
 
     // create a pipeline for the UberMaterial.
     auto swapchainFormat = ctx.getSwapchainImageFormat();
-    auto depthFormat = Format::D24_UNORM_S8_UINT;
+    auto depthFormat = Format::D32_SFLOAT_S8_UINT;
 
     auto pipelineDesc = ResourceDesc{};
     pipelineDesc.type = ResourceType::GRAPHICS_PIPELINE;
@@ -382,7 +382,7 @@ namespace rasm
     }
 
     auto swapchainFormat = ctx.getSwapchainImageFormat();
-    auto depthFormat = Format::D24_UNORM_S8_UINT;
+    auto depthFormat = Format::D32_SFLOAT_S8_UINT;
 
     for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
     {
