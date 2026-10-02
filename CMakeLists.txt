@@ -19,6 +19,7 @@ set(RASM_SRC
             "src/gfx/vulkan.cpp"
             "src/core/utils.cpp"
             "src/core/handle.cpp"
+            "src/core/profiler.cpp"
     )
 
 # required external libs

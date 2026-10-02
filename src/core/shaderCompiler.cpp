@@ -57,7 +57,10 @@ namespace rasm
                 {slang::CompilerOptionName::VulkanUseEntryPointName,
                  {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}},
                 {slang::CompilerOptionName::MatrixLayoutColumn,
-                 {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}}};
+                 {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}},
+                 {slang::CompilerOptionName::GLSLForceScalarLayout,
+                 {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}}
+            };
 
         sessionDesc.compilerOptionEntries = options;
         sessionDesc.compilerOptionEntryCount = static_cast<uint32_t>(sizeof(options) / sizeof(options[0]));

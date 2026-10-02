@@ -28,32 +28,6 @@ namespace rasm
         METAL
     };
 
-    enum class BufferUsage
-    {
-        VERTEX,
-        INDEX,
-        VERTEXINDEX,
-        UNIFORM,
-        STORAGE,
-        DEVICE_ADDRESS,
-    };
-
-    enum class TextureUsage
-    {
-        TRANSFER_SRC,
-        TRANSFER_DST,
-        SAMPLED,
-        STORAGE,
-        COLOR_ATTACHMENT,
-        DEPTH_STENCIL_ATTACHMENT,
-        SAMPLED_COLOR_ATTACHMENT,
-        SAMPLED_DEPTH_STENCIL_ATTACHMENT,
-        TRANSIENT_ATTACHMENT,
-        INPUT_ATTACHMENT,
-        PRESENT_SRC,
-        UNKNOWN,
-    };
-
     enum class Format
     {
         R8G8B8A8_UNORM,
@@ -74,6 +48,7 @@ namespace rasm
     {
         VERTEX,
         FRAGMENT,
+        VERTEX_FRAGMENT,
         COMPUTE
     };
 
@@ -136,12 +111,18 @@ namespace rasm
         uint32_t                    binding;
         uint32_t                    stride;
         bool                        perInstance;
+        bool                        vertexPulling = false;
+    };
+
+    struct RenderTargetAttachments
+    {
+        TextureHandle color;
+        TextureHandle depth;
     };
 
     struct RenderTarget
     {
-        TextureHandle colorAttachment[rasm::MAX_FRAMES_IN_FLIGHT];
-        TextureHandle depthAttachment[rasm::MAX_FRAMES_IN_FLIGHT];
+        RenderTargetAttachments attachments[rasm::MAX_FRAMES_IN_FLIGHT];
         uint32_t width;
         uint32_t height;
         Format colorFormat;

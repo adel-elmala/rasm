@@ -10,6 +10,7 @@ struct ShaderData
     float4x4 projection;
     float4x4 view;
     float4x4 model;
+    uint32_t textureIndex;
 };
 
 struct VSOutput
@@ -19,13 +20,21 @@ struct VSOutput
     float2 UV : TEXCOORD0;
 };
 
+struct PushConstants
+{
+    ShaderData *shaderDataPtr;
+};
+
+[[vk::push_constant]]
+ConstantBuffer<PushConstants> pc;
+
 [shader("vertex")]
-VSOutput vertMain(VSInput input, uniform ShaderData *shaderData)
+VSOutput vertMain(VSInput input)
 {
     VSOutput output;
-    float4x4 modelMat = shaderData->model;
-    float4x4 viewMat = shaderData->view;
-    float4x4 projectionMat = shaderData->projection;
+    float4x4 modelMat = pc.shaderDataPtr->model;
+    float4x4 viewMat = pc.shaderDataPtr->view;
+    float4x4 projectionMat = pc.shaderDataPtr->projection;
 
     output.Pos = mul(projectionMat, mul(viewMat, mul(modelMat, float4(input.Pos.xyz, 1.0))));
     output.Normal = normalize(mul((float3x3)modelMat, input.Normal));
@@ -34,6 +43,7 @@ VSOutput vertMain(VSInput input, uniform ShaderData *shaderData)
     return output;
 }
 
+
 [[vk::binding(0, 0)]]
 Sampler2D gTextures[];
 
@@ -41,6 +51,6 @@ Sampler2D gTextures[];
 [shader("fragment")]
 float4 fragMain(VSOutput input) : SV_TARGET
 {
-    float3 color = gTextures[6].Sample(input.UV).xyz;
+    float3 color = gTextures[pc.shaderDataPtr->textureIndex].Sample(input.UV).xyz;
     return float4(color, 1.0);
 }

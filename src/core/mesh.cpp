@@ -15,7 +15,6 @@ namespace rasm
         if (handle.index >= MAX_MESHES)
         {
             spdlog::error("Exceeded maximum number of meshes.");
-            isRunning = false;
             return {};
         }
 
@@ -112,15 +111,21 @@ namespace rasm
             std::vector<Vertex> out_vertices;
             std::vector<uint32_t> out_indices;
 
-            for (auto &index : shapes[0].mesh.indices)
+            for (const auto &shape : shapes)
             {
-                Vertex v{
-                    .pos = {attrib.vertices[index.vertex_index * 3], -attrib.vertices[index.vertex_index * 3 + 1], attrib.vertices[index.vertex_index * 3 + 2]},
-                    .normal = {attrib.normals[index.normal_index * 3], -attrib.normals[index.normal_index * 3 + 1], attrib.normals[index.normal_index * 3 + 2]},
-                    .uv = {attrib.texcoords[index.texcoord_index * 2], 1.0 - attrib.texcoords[index.texcoord_index * 2 + 1]}};
+                for (auto &index : shape.mesh.indices)
+                {
+                    Vertex v = {};
 
-                out_vertices.push_back(v);
-                out_indices.push_back(static_cast<uint32_t>(out_indices.size()));
+                    v.pos = {attrib.vertices[index.vertex_index * 3], -attrib.vertices[index.vertex_index * 3 + 1], attrib.vertices[index.vertex_index * 3 + 2]};
+                    if (attrib.normals.size() > 0)
+                        v.normal = {attrib.normals[index.normal_index * 3], -attrib.normals[index.normal_index * 3 + 1], attrib.normals[index.normal_index * 3 + 2]};
+                    if (attrib.texcoords.size() > 0)
+                        v.uv = {attrib.texcoords[index.texcoord_index * 2], 1.0 - attrib.texcoords[index.texcoord_index * 2 + 1]};
+
+                    out_vertices.push_back(v);
+                    out_indices.push_back(static_cast<uint32_t>(out_indices.size()));
+                }
             }
 
             ObjRaw objRaw{};
@@ -166,7 +171,7 @@ namespace rasm
             bufferDesc.buffer.size = objRaw.vertices.size() * sizeof(Vertex) + objRaw.indices.size() * sizeof(uint32_t);
             bufferDesc.buffer.vertexIndexBuffer.indexCount = objRaw.indices.size();
             bufferDesc.buffer.vertexIndexBuffer.vertexCount = objRaw.vertices.size();
-            bufferDesc.buffer.vertexIndexBuffer.offset = objRaw.vertices.size() * sizeof(Vertex);
+            bufferDesc.buffer.offset = objRaw.vertices.size() * sizeof(Vertex);
 
             auto bufferHandle = ctx.createBuffer(bufferDesc);
 
@@ -183,4 +188,33 @@ namespace rasm
         return BufferHandle{};
     }
 
+    MeshSize Engine::getMeshByteSize(const MeshHandle &handle) const
+    {
+        if (!handle.isValid() || handle.index >= registery.meshes.size())
+        {
+            spdlog::error("Mesh handle not found for getting byte size.");
+            return MeshSize{0, 0};
+        }
+
+        auto mesh = registery.meshes[handle.index];
+
+        if (mesh.type == Mesh::MeshType::GLTF)
+        {
+            // In a real implementation, this is where we'd calculate the GLTF mesh byte size.
+            return MeshSize{0, 0}; // Placeholder
+        }
+        else if (mesh.type == Mesh::MeshType::OBJ)
+        {
+            auto &objRaw = std::get<ObjRaw>(mesh.data);
+            return MeshSize{
+                objRaw.vertices.size() * sizeof(Vertex),
+                objRaw.indices.size() * sizeof(uint32_t)
+            };
+        }
+        else
+        {
+            spdlog::error("Unknown mesh type for getting byte size.");
+            return MeshSize{0, 0};
+        }
+    }
 }
