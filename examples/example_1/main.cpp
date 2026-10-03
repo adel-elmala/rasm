@@ -11,6 +11,8 @@ int main()
         .preferredBackend = rasm::Backend::VULKAN};
 
     rasm::Engine engine(config);
+    if (!engine.running())
+        return 1;
 
     // set up the scene
     rasm::SceneHandle scene = engine.createScene();
@@ -38,7 +40,7 @@ int main()
     }
 
     // Create a material
-    std::vector<rasm::TextureHandle> textures = { albedoTexture };
+    std::vector<rasm::TextureHandle> textures = {albedoTexture};
     rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::BASIC, textures);
 
     // Create entities in the scene
@@ -138,11 +140,11 @@ int main()
         });
 
     // set up overlay mesh and shader
-     std::vector<rasm::Vertex> vertices = {
-                {.pos = glm::vec3(-1.0f, -1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(0.0f, 0.0f)},
-                {.pos = glm::vec3(1.0f, -1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(1.0f, 0.0f)},
-                {.pos = glm::vec3(1.0f, 1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(1.0f, 1.0f)},
-                {.pos = glm::vec3(-1.0f, 1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(0.0f, 1.0f)}};
+    std::vector<rasm::Vertex> vertices = {
+        {.pos = glm::vec3(-1.0f, -1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(0.0f, 0.0f)},
+        {.pos = glm::vec3(1.0f, -1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(1.0f, 0.0f)},
+        {.pos = glm::vec3(1.0f, 1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(1.0f, 1.0f)},
+        {.pos = glm::vec3(-1.0f, 1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(0.0f, 1.0f)}};
 
     std::vector<uint32_t> indices = {
         0, 1, 2, // first triangle
@@ -210,7 +212,6 @@ int main()
     auto overlayScene = engine.createScene();
     engine.addCameraToScene(overlayScene, camera);
     engine.addEntityToScene(overlayScene, overlayRect);
-
 
     graph.addPass(
         "overlay",

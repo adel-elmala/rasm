@@ -35,17 +35,27 @@ namespace rasm
     Engine::Engine(const EngineConfig &config) : config(config)
     {
         // In a real implementation, this is where we'd initialize the window, graphics context, etc.
-        spdlog::info("Engine initialized with config: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
+        spdlog::info("initializing engine with config: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
                      config.appName, config.windowWidth, config.windowHeight, config.enableValidation);
 
-        this->mainWindow = createWindow(config.windowWidth, config.windowHeight);
-
         ctx = RenderContext(this);
+
+        if (config.windowWidth <= 0 || config.windowHeight <= 0)
+        {
+            spdlog::error("Window dimensions must be positive.");
+            return;
+        }
+
+        this->mainWindow = createWindow(config.windowWidth, config.windowHeight);
+        if (!mainWindow.isValid())
+        {
+            spdlog::error("Failed to initialize engine window.");
+            return;
+        }
+
         if (!ctx.initialize(config.preferredBackend))
         {
             spdlog::error("Failed to initialize render context.");
-            ctx.cleanup();
-            isRunning = false;
             return;
         }
 
@@ -53,9 +63,29 @@ namespace rasm
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             frameResources[i].commandPool = ctx.createCommandPool(vkb::QueueType::graphics);
+            if (!frameResources[i].commandPool.isValid())
+            {
+                spdlog::error("Failed to create command pool for frame {}", i);
+                return;
+            }
             frameResources[i].commandBuffer = ctx.createCommandBuffer(frameResources[i].commandPool);
+            if (!frameResources[i].commandBuffer.isValid())
+            {
+                spdlog::error("Failed to create command buffer for frame {}", i);
+                return;
+            }
             frameResources[i].readyToDrawSemaphore = ctx.createSemaphore();
+            if (!frameResources[i].readyToDrawSemaphore.isValid())
+            {
+                spdlog::error("Failed to create ready-to-draw semaphore for frame {}", i);
+                return;
+            }
             frameResources[i].inFlightFence = ctx.createFence(true);
+            if (!frameResources[i].inFlightFence.isValid())
+            {
+                spdlog::error("Failed to create in-flight fence for frame {}", i);
+                return;
+            }
 
             // Assuming a fixed size for shader data buffer for simplicity
             ResourceDesc shaderDataBufferDesc{};
@@ -65,6 +95,11 @@ namespace rasm
             shaderDataBufferDesc.buffer.usage = BufferUsage::STORAGE;
 
             frameResources[i].shaderDataBuffer = ctx.createBuffer(shaderDataBufferDesc);
+            if (!frameResources[i].shaderDataBuffer.isValid())
+            {
+                spdlog::error("Failed to create shader data buffer for frame {}", i);
+                return;
+            }
 
             // Create a depth texture.
             auto depthTextureDesc = ResourceDesc{};
@@ -76,13 +111,24 @@ namespace rasm
             depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
 
             frameResources[i].depthTexture = ctx.createTexture(depthTextureDesc);
+            if (!frameResources[i].depthTexture.isValid())
+            {
+                spdlog::error("Failed to create depth texture for frame {}", i);
+                return;
+            }
         }
 
         // Create swapchain and associated resources
         swapchain.imageHandles = ctx.getSwapchainImages();
         for (size_t i = 0; i < swapchain.imageHandles.size(); ++i)
         {
-            swapchain.readyToPresentSemaphores.push_back(ctx.createSemaphore());
+            auto semaphore = ctx.createSemaphore();
+            if (!semaphore.isValid())
+            {
+                spdlog::error("Failed to create ready-to-present semaphore for swapchain image {}", i);
+                return;
+            }
+            swapchain.readyToPresentSemaphores.push_back(semaphore);
         }
         swapchain.imageFormat = ctx.getSwapchainImageFormat();
 
@@ -90,8 +136,6 @@ namespace rasm
         if (!shaderCompiler.initialize(shaderTarget))
         {
             spdlog::error("Failed to initialize shader compiler.");
-            ctx.cleanup();
-            isRunning = false;
             return;
         }
 
@@ -104,6 +148,11 @@ namespace rasm
         bindlessLayoutDesc.bindlessDescriptorSetLayout.type = ResourceType::TEXTURE;
 
         bindlessDescriptorSetLayout = ctx.createBindlessDescriptorSetLayout(bindlessLayoutDesc);
+        if (!bindlessDescriptorSetLayout.isValid())
+        {
+            spdlog::error("Failed to create bindless descriptor set layout.");
+            return;
+        }
 
         ResourceDesc bindlessPoolDesc{};
         bindlessPoolDesc.type = ResourceType::DESCRIPTOR_POOL;
@@ -113,6 +162,11 @@ namespace rasm
         bindlessPoolDesc.descriptorPool.maxSets = 1;
 
         bindlessDescriptorPool = ctx.createDescriptorPool(bindlessPoolDesc);
+        if (!bindlessDescriptorPool.isValid())
+        {
+            spdlog::error("Failed to create bindless descriptor pool.");
+            return;
+        }
 
         ResourceDesc bindlessSetDesc{};
         bindlessSetDesc.type = ResourceType::DESCRIPTOR_SET;
@@ -121,6 +175,13 @@ namespace rasm
         bindlessSetDesc.descriptorSet.layout = bindlessDescriptorSetLayout;
 
         bindlessDescriptorSet = ctx.allocateDescriptorSet(bindlessSetDesc, bindlessDescriptorPool, bindlessDescriptorSetLayout);
+        if (!bindlessDescriptorSet.isValid())
+        {
+            spdlog::error("Failed to allocate bindless descriptor set.");
+            return;
+        }
+
+        isRunning = true;
     }
 
     Engine::~Engine()
@@ -618,7 +679,11 @@ namespace rasm
     uint32_t Engine::addBindlessTexture(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot)
     {
         auto txtID = ctx.updateBindlessDescriptorSet(bindlessSet, texture, slot);
-
+        if (txtID == UINT32_MAX)
+        {
+            spdlog::error("Failed to add bindless texture.");
+            return UINT32_MAX;
+        }
         registery.bindlessTextureIndexMap[texture] = txtID;
         return txtID;
     }

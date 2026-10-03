@@ -2,15 +2,25 @@
     "version": 3,
     "configurePresets": [
         {
-            "name": "windows-base",
+            "name": "base",
             "hidden": true,
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build/${presetName}",
-            "installDir": "${sourceDir}/install/${presetName}",
             "cacheVariables": {
-                "CMAKE_C_COMPILER": "C:/Program Files/LLVM/bin/clang.exe",
-                "CMAKE_CXX_COMPILER": "C:/Program Files/LLVM/bin/clang++.exe",
-                "CMAKE_RC_COMPILER": "C:/Program Files/LLVM/bin/llvm-rc.exe"
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+                "CMAKE_CXX_COMPILER": "clang++"
+            }
+        },
+        {
+            "name": "windows-base",
+            "hidden": true,
+            "inherits": "base",
+            "architecture": {
+                "value": "x64",
+                "strategy": "external"
+            },
+            "cacheVariables": {
+                "VCPKG_TARGET_TRIPLET": "x64-windows"
             },
             "condition": {
                 "type": "equals",
@@ -20,74 +30,51 @@
         },
         {
             "name": "x64-debug",
-            "displayName": "x64 Debug",
+            "displayName": "Windows x64 Debug",
             "inherits": "windows-base",
-            "architecture": {
-                "value": "x64",
-                "strategy": "external"
-            },
             "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "CMAKE_TOOLCHAIN_FILE": "E:\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake",
-                "VCPKG_TARGET_TRIPLET": "x64-windows"
+                "CMAKE_BUILD_TYPE": "Debug"
             }
         },
         {
             "name": "x64-release",
-            "displayName": "x64 Release",
+            "displayName": "Windows x64 Release",
             "inherits": "x64-debug",
             "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "CMAKE_TOOLCHAIN_FILE": "E:\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake",
-                "VCPKG_TARGET_TRIPLET": "x64-windows"
+                "CMAKE_BUILD_TYPE": "Release"
             }
         },
         {
-            "name": "x86-debug",
-            "displayName": "x86 Debug",
-            "inherits": "windows-base",
-            "architecture": {
-                "value": "x86",
-                "strategy": "external"
-            },
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "CMAKE_TOOLCHAIN_FILE": "E:\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake",
-                "VCPKG_TARGET_TRIPLET": "x86-windows"
-            }
-        },
-        {
-            "name": "x86-release",
-            "displayName": "x86 Release",
-            "inherits": "x86-debug",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "CMAKE_TOOLCHAIN_FILE": "E:\\vcpkg\\scripts\\buildsystems\\vcpkg.cmake",
-                "VCPKG_TARGET_TRIPLET": "x86-windows"
+            "name": "macOS-base",
+            "hidden": true,
+            "inherits": "base",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Darwin"
             }
         },
         {
             "name": "macOS",
-            "displayName": "macOS",
-            "generator": "Ninja",
-            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "displayName": "macOS native Debug",
+            "inherits": "macOS-base",
             "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
-                "CMAKE_TOOLCHAIN_FILE": "/Users/adel/vcpkg/scripts/buildsystems/vcpkg.cmake"
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "macOS-release",
+            "displayName": "macOS native Release",
+            "inherits": "macOS",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
             }
         },
         {
             "name": "macOS-Xcode",
-            "displayName": "macOS Xcode",
-            "generator": "Xcode",
-            "binaryDir": "${sourceDir}/out/build/${presetName}",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}",
-                "CMAKE_TOOLCHAIN_FILE": "/Users/adel/vcpkg/scripts/buildsystems/vcpkg.cmake",
-                "VCPKG_TARGET_TRIPLET": "arm64-osx"
-            }
+            "displayName": "macOS native Xcode",
+            "inherits": "macOS-base",
+            "generator": "Xcode"
         }
     ],
     "buildPresets": [
@@ -100,20 +87,17 @@
             "configurePreset": "x64-release"
         },
         {
-            "name": "x86-debug",
-            "configurePreset": "x86-debug"
-        },
-        {
-            "name": "x86-release",
-            "configurePreset": "x86-release"
-        },
-        {
             "name": "macOS",
             "configurePreset": "macOS"
         },
         {
+            "name": "macOS-release",
+            "configurePreset": "macOS-release"
+        },
+        {
             "name": "macOS-Xcode",
-            "configurePreset": "macOS-Xcode"
+            "configurePreset": "macOS-Xcode",
+            "configuration": "Debug"
         }
     ]
 }

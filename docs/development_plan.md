@@ -5,11 +5,11 @@
 1) Make the low-level API as convenient and simple to use as possible, don't expose unnecessary methods
 2) Extend the engine by adding more examples, drive the development of the engine by what the examples needs from the engine.
 3) Manage gpu resources:
-    - use multi-draw-indirect
-    - use a single bindless desc set for textures
-    - use a single buffer for all uniforms needed
-    - use a single vertex/index buffer that contains all the vertices of all meshes added to the scene
-    - try out one uber shader, but write the shader in seperate files and use `#include` for better readability and maintainability.
+    - ~~use multi-draw-indirect~~ - DONE
+    - ~~use a single bindless desc set for textures~~- DONE
+    - ~~use a single buffer for all uniforms needed~~ - DONE
+    - ~~use a single vertex/index buffer that contains all the vertices of all meshes added to the scene~~ - DONE
+    - try out one uber shader, but write the shader in seperate files and use `#include` for better readability and maintainability. - basic skeleton is done
 4) Manage cpu resources:
     - build a custom memory areana, make a custom allocator.
 5) Move the engine to be built in C instead of C++ so it can be ported easly to other languages, don't use STD
