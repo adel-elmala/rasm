@@ -28,9 +28,9 @@ int main()
                                                     });
 
     // Load resources
-    rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/bunny/bunny.obj");
+    rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/obj/bunny/bunny.obj");
 
-    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/models/bunny/bunny-atlas.jpg");
+    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/models/obj/bunny/bunny-atlas.jpg");
 
     if (!bunnyMesh.isValid() || !albedoTexture.isValid())
     {
@@ -73,7 +73,7 @@ int main()
             rtDesc.renderTarget.width = config.windowWidth;
             rtDesc.renderTarget.height = config.windowHeight;
             rtDesc.renderTarget.colorFormat = engine.getRenderContext().getSwapchainImageFormat();
-            rtDesc.renderTarget.depthFormat = rasm::Format::D24_UNORM_S8_UINT;
+            rtDesc.renderTarget.depthFormat = rasm::Format::D32_SFLOAT_S8_UINT;
 
             rtHandle = builder.createRenderTarget(rtDesc);
             builder.write(rtHandle);

@@ -18,25 +18,29 @@ namespace rasm
     enum class PbrSlot
     {
         ALBEDO,
-        NORMAL,
-        ROUGHNESS,
         METALLIC,
+        ROUGHNESS,
+        NORMAL,
+        OCCLUSION,
         EMISSIVE,
 
         COUNT,
     };
 
-    enum class PbrParam
+    enum class PbrParam : uint32_t
     {
-        ROUGHNESS,
-        METALLIC,
-        EMISSIVEINTENSITY,
+        ALBEDO              = 0,      // vec3
+        METALLIC            = 3,      // float
+        ROUGHNESS           = 4,      // float
+        NORMAL_SCALE        = 5,      // float
+        OCCLUSION_STRENGTH  = 6,      // float
+        EMISSIVE_FACTOR      = 7,      // vec3
 
-        COUNT,
+        COUNT = 10,
     };
 
-
-    constexpr uint32_t MAX_TEXTURE_SLOTS = 8;
+    constexpr uint32_t MAX_TEXTURE_SLOTS = static_cast<uint32_t>(PbrSlot::COUNT);
+    constexpr uint32_t MAX_PARAM_SLOTS   = static_cast<uint32_t>(PbrParam::COUNT);
 
     struct Material
     {
@@ -44,6 +48,7 @@ namespace rasm
         MaterialHandle handle{};
         MaterialType   type{};
         TextureHandle  textures[MAX_TEXTURE_SLOTS];
+        float          params[MAX_PARAM_SLOTS];
         ShaderHandle   shader{};
     };
 

@@ -10,13 +10,52 @@ struct DrawInfo
     uint32_t        firstIndex;
     int32_t         vertexOffset;
     uint32_t        firstInstance;
-    uint32_t        textureIndex; // Index of the texture to use for this draw call
-    VertexFormat    vertFormat;
+};
+
+struct MetallicRoughnessMaterial
+{
+    float3      baseColorFactor;
+    uint32_t    baseColorTextureIndex;
+    uint32_t    metallicRoughnessTextureIndex;
+    uint32_t    metallicRoughtnessTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
+    float       metallicFactor;
+    float       roughnessFactor;
+};
+
+struct NormalMaterial
+{
+    uint32_t normalTextureIndex;
+    uint32_t normalTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
+    float scale;
+};
+
+struct OcclusionMaterial
+{
+    uint32_t occlusionTextureIndex;
+    uint32_t occlusionTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
+    float strength;
+};
+
+struct EmissiveMaterial
+{
+    uint32_t emissiveTextureIndex;
+    uint32_t emissiveTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
+    float3   emissiveFactor;
+};
+
+struct Material
+{
+    MetallicRoughnessMaterial   metallicRoughness;
+    NormalMaterial              normal;
+    OcclusionMaterial           occlusion;
+    EmissiveMaterial            emissive;
 };
 
 struct Modeldata
 {
-    float4x4 model[];
+    float4x4        worldMatrix; 
+    Material        material;
+    VertexFormat    vertFormat;
 };
 
 struct SceneData
@@ -58,6 +97,7 @@ struct VSOutput
     float4 Pos : SV_POSITION;
     float3 Normal : NORMAL;
     float2 UV : TEXCOORD0;
+    uint drawID;
 };
 
 [shader("vertex")]
@@ -65,16 +105,15 @@ VSOutput vertMain(VSInput input)
 {
     VSOutput output = {};
     uint drawID = getDrawIndex();
+    output.drawID = drawID;
 
-    float4x4 modelMat = pc.scene->modeldataPtr->model[drawID];
+    float4x4 modelMat = pc.scene->modeldataPtr[drawID].worldMatrix;
     float4x4 viewMat = pc.scene->view;
     float4x4 projectionMat = pc.scene->projection;
 
-    // SV_VertexID maps to the Vulkan VertexIndex built-in, which for an indexed draw already is
-    // (index value + vertexOffset). The mega vertex buffer must therefore be indexed straight from
-    // its base, otherwise the per-draw vertexOffset gets applied twice and the shader reads out of
-    // bounds.
-    VertexFull vert = pc.scene->vertsPtr[input.vertexID];
+    // Slang lowers SV_VertexID to (VertexIndex - BaseVertex) to match D3D semantics, so it is the raw
+    // index-buffer value and the per-draw vertexOffset must be added back to address the mega buffer.
+    VertexFull vert = pc.scene->vertsPtr[input.vertexID + pc.scene->drawInfoPtr[drawID].vertexOffset];
 
     output.Pos = mul(projectionMat, mul(viewMat, mul(modelMat, float4(vert.pos, 1.0))));
     output.Normal = normalize(mul((float3x3)modelMat, vert.normal));
@@ -90,6 +129,6 @@ Sampler2D gTextures[];
 [shader("fragment")]
 float4 fragMain(VSOutput input) : SV_TARGET
 {
-    float3 color = gTextures[pc.scene->drawInfoPtr->textureIndex].Sample(input.UV).xyz;
+    float3 color = gTextures[pc.scene->modeldataPtr[input.drawID].material.metallicRoughness.baseColorTextureIndex].Sample(input.UV).xyz;
     return float4(color, 1.0);
 }

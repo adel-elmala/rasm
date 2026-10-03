@@ -4,6 +4,7 @@
 #include "glm/glm.hpp"
 
 #include "tiny_gltf.h"
+#include "rasm/core/material.h"
 
 #include <variant>
 
@@ -26,6 +27,19 @@ namespace rasm
         std::vector<uint32_t>   indices;
     };
 
+    struct SubGLTFRaw
+    {
+        ObjRaw              objRaw;
+        glm::mat4           transform;
+        MaterialHandle      material;
+    };
+
+    struct GLTFRaw
+    {
+        tinygltf::Model model;
+        std::vector<SubGLTFRaw> subGltfRaws;
+    };
+
     struct Mesh
     {
         enum class MeshType
@@ -34,7 +48,7 @@ namespace rasm
             OBJ
         };
         MeshType type;
-        std::variant<tinygltf::Model, ObjRaw> data;
+        std::variant<GLTFRaw, ObjRaw> data;
     };
 
     struct MeshSize

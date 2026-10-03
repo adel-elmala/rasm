@@ -38,47 +38,12 @@ namespace rasm {
     {
         BufferHandle megaVertexBuffer;
         BufferHandle megaIndexBuffer;
-        BufferHandle megaModelMatsBuffer;
+        BufferHandle megaModelDataBuffer;
         BufferHandle drawInfoBuffer;
         BufferHandle sceneDataBuffer;
         PipelineHandle uberMaterialPipeline;
         uint32_t drawInfoCount;
     };
 
-    // uint32_t underlying type: DrawInfo is read through a buffer-device-address pointer in the
-    // shader, and 8-bit loads there would require the storageBuffer8BitAccess feature.
-    enum  VertexFormat : uint32_t { Full, PosOnly };
-
-    struct VertexFull       { glm::vec3 pos;  glm::vec3 normal; glm::vec2 uv; };
-    struct VertexPosOnly    { glm::vec3 pos; };
-
-    struct DrawInfo
-    {
-        // Information about a single draw call
-        uint32_t        indexCount;
-        uint32_t        instanceCount;
-        uint32_t        firstIndex;
-        int32_t         vertexOffset;
-        uint32_t        firstInstance;
-        uint32_t        textureIndex; // Index of the texture to use for this draw call
-        VertexFormat    vertFormat;
-    };
-
-    struct SceneData
-    {
-        glm::mat4   projection;
-        glm::mat4   view;
-        uint64_t    vertsPtr;
-        uint64_t    drawInfoPtr;
-        uint64_t    modeldataPtr;
-    };
-
-    // These structs are read by shaders/common/rasm.slang through buffer-device-address pointers,
-    // compiled with scalar layout. Any drift here silently corrupts the GPU reads.
-    static_assert(sizeof(VertexFull) == 32, "VertexFull must match the shader's scalar layout");
-    static_assert(sizeof(VertexFull) == sizeof(Vertex), "The mega vertex buffer is filled with Vertex");
-    static_assert(sizeof(DrawInfo) == 28, "DrawInfo must match the shader's scalar layout");
-    static_assert(offsetof(DrawInfo, firstInstance) == 16, "DrawInfo must stay VkDrawIndexedIndirectCommand compatible");
-    static_assert(sizeof(SceneData) == 152, "SceneData must match the shader's scalar layout");
 }
 // clang-format on

@@ -1,0 +1,11 @@
+Model Information:
+* title:	Ancient Egyptian Pottery
+* source:	https://sketchfab.com/3d-models/ancient-egyptian-pottery-690932f4d1c3450da7af05aa4d801273
+* author:	stef.bracke (https://sketchfab.com/stef.bracke)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Ancient Egyptian Pottery" (https://sketchfab.com/3d-models/ancient-egyptian-pottery-690932f4d1c3450da7af05aa4d801273) by stef.bracke (https://sketchfab.com/stef.bracke) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

@@ -19,6 +19,9 @@
 #include <unordered_map>
 #include <vector>
 
+namespace tinygltf { struct Model; }
+namespace tinygltf { struct Node; }
+
 namespace rasm {
 
     constexpr uint32_t MAX_MATERIALS = 256;
@@ -44,15 +47,19 @@ namespace rasm {
         void                        addLightToScene(SceneHandle scene, LightHandle light);
         MeshHandle                  createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices);
         MeshHandle                  loadMesh(const std::string& path);
+        MeshHandle                  loadGLTF(const std::string& path);
         BufferHandle                uploadMesh(const MeshHandle& handle);
         TextureHandle               loadTexture(const std::string& path);
         ShaderHandle                createShader(const std::string& shaderSource);
         MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {}, ShaderHandle shader = ShaderHandle{});
+        std::vector<MaterialHandle> loadMaterials(MeshHandle meshHandle);
+        MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex);
         TextureHandle               createTexture(const ResourceDesc& desc);
         BufferHandle                createBuffer(const ResourceDesc& desc);
         RenderTargetHandle          createRenderTarget(const ResourceDesc& desc);
         RenderGraph                 createRenderGraph();
         const Material&             getMaterial(const MaterialHandle &handle);
+        gfx::Material               convertToGfxMaterial(const Material &mat);
         Transform                   getTransform(EntityHandle entity);
         Transform                   getCameraTransform(CameraHandle camera);
         CameraProjection            getCameraProjection(CameraHandle camera);
@@ -91,6 +98,11 @@ namespace rasm {
         void                        destroyWindow(WindowHandle handle);
         void                        pollEvents(CameraHandle camera);
 
+
+        std::vector<SubGLTFRaw>        extractGLTFRaws(const tinygltf::Model &model, uint32_t meshIndex, const glm::mat4 &globalTransform);
+        std::vector<SubGLTFRaw>        traverseNodes(const tinygltf::Model &model, int nodeIndex, const glm::mat4 &parentTransform);
+        GLTFRaw                        processGLTF(const tinygltf::Model &model);
+        GLTFRaw                        processMesh(const Mesh &mesh);
     protected:
         EngineConfig                                                config;
         Profiler                                                    profiler{};
