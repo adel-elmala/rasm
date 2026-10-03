@@ -30,22 +30,10 @@ int main()
 
     // Create entities in the scene
     rasm::EntityHandle pottery = engine.createEntity("pottery", potteryGLTF, {}, rasm::Transform{
-                                                                             glm::vec3(0.0f, 0.0f, -10.0f),     // position
-                                                                             glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
-                                                                             glm::vec3(0.005f)                  // scale
-                                                                         });
-
-    rasm::EntityHandle pottery2 = engine.createEntity("pottery2", potteryGLTF, {}, rasm::Transform{
-                                                                               glm::vec3(5.0f, 0.0f, -10.0f),     // position
-                                                                               glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
-                                                                               glm::vec3(0.005f)                  // scale
-                                                                           });
-
-    rasm::EntityHandle pottery3 = engine.createEntity("pottery3", potteryGLTF, {}, rasm::Transform{
-                                                                               glm::vec3(-5.0f, 1.0f, -10.0f),    // position
-                                                                               glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
-                                                                               glm::vec3(0.005f)                  // scale
-                                                                           });
+                                                                                     glm::vec3(0.0f, 0.0f, -10.0f),     // position
+                                                                                     glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
+                                                                                     glm::vec3(0.005f)                  // scale
+                                                                                 });
 
     // Create a camera
     rasm::CameraHandle camera = engine.createCamera(rasm::CameraProjection{.type = rasm::CameraType::PERSPECTIVE,
@@ -67,8 +55,6 @@ int main()
                                                  glm::vec3(0.0f, -1.0f, 0.0f)); // direction
 
     engine.addEntityToScene(scene, pottery);
-    engine.addEntityToScene(scene, pottery2);
-    engine.addEntityToScene(scene, pottery3);
     engine.addCameraToScene(scene, camera);
     engine.addLightToScene(scene, light);
 
@@ -77,8 +63,6 @@ int main()
     {
         // Update transforms, animations, etc.
         engine.updateTransform(pottery, engine.getTransform(pottery).rotate(glm::vec3(0.0f, 1.0f, 0.0f), glm::radians(0.01f)));
-        engine.updateTransform(pottery2, engine.getTransform(pottery2).rotate(glm::vec3(1.0f, 1.0f, 0.0f), glm::radians(0.01f)));
-        engine.updateTransform(pottery3, engine.getTransform(pottery3).rotate(glm::vec3(1.0f, 1.0f, 1.0f), glm::radians(0.01f)));
 
         // Render the scene
         engine.render2(scene, camera);

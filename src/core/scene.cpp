@@ -332,7 +332,7 @@ namespace rasm
     pipelineDesc.pipeline.descriptorSetLayout = bindlessDescriptorSetLayout;
 
     preparedScene.uberMaterialPipeline = ctx.createPipeline(pipelineDesc);
-    preparedScene.drawInfoCount = sceneGltfRaws.size();
+    preparedScene.drawInfoCount = sceneEntities.size();
 
     preparedScenes[scene] = preparedScene;
     return preparedScene;
