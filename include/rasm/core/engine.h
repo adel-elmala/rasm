@@ -103,27 +103,28 @@ namespace rasm {
         std::vector<SubGLTFRaw>        traverseNodes(const tinygltf::Model &model, int nodeIndex, const glm::mat4 &parentTransform);
         GLTFRaw                        processGLTF(const tinygltf::Model &model);
         GLTFRaw                        processMesh(const Mesh &mesh);
+
     protected:
-        EngineConfig                                                config;
-        Profiler                                                    profiler{};
-        FrameResources                                              frameResources[MAX_FRAMES_IN_FLIGHT]; // Double buffering
-        Swapchain                                                   swapchain{};
-        TextureHandle                                               depthTexture{};
-        std::unordered_map<SceneHandle, CompiledScene, HandleHash>  compiledScenes; // TODO: Delete when no longer needed
-        std::unordered_map<SceneHandle, PreparedScene, HandleHash>  preparedScenes;
-        RenderContext                                               ctx{};
-        ShaderCompiler                                              shaderCompiler{};
-        HandleManager                                               handleManager{};
-        WindowHandle                                                mainWindow{};
-        DescriptorSetLayoutHandle                                   bindlessDescriptorSetLayout{};
-        DescriptorPoolHandle                                        bindlessDescriptorPool{};
-        DescriptorSetHandle                                         bindlessDescriptorSet{};
-        SceneHandle                                                 currentScene{};
-        RenderTargetHandle                                          currentRenderTarget{};
-        uint64_t                                                    frameCount = 0;
-        uint32_t                                                    imageIdx = 0;
-        bool                                                        isRunning = true;
-        bool                                                        resized = false;
+        EngineConfig                                                config                                  = {};
+        Profiler                                                    profiler                                = {};
+        FrameResources                                              frameResources[MAX_FRAMES_IN_FLIGHT]    = {}; // Double buffering
+        Swapchain                                                   swapchain                               = {};
+        TextureHandle                                               depthTexture                            = {};
+        std::unordered_map<SceneHandle, CompiledScene, HandleHash>  compiledScenes                          = {}; // TODO: Delete when no longer needed
+        std::unordered_map<SceneHandle, PreparedScene, HandleHash>  preparedScenes                          = {};
+        RenderContext                                               ctx                                     = {};
+        ShaderCompiler                                              shaderCompiler                          = {};
+        HandleManager                                               handleManager                           = {};
+        WindowHandle                                                mainWindow                              = {};
+        DescriptorSetLayoutHandle                                   bindlessDescriptorSetLayout             = {};
+        DescriptorPoolHandle                                        bindlessDescriptorPool                  = {};
+        DescriptorSetHandle                                         bindlessDescriptorSet                   = {};
+        SceneHandle                                                 currentScene                            = {};
+        RenderTargetHandle                                          currentRenderTarget                     = {};
+        uint64_t                                                    frameCount                              = 0;
+        uint32_t                                                    imageIdx                                = 0;
+        bool                                                        isRunning                               = false;
+        bool                                                        resized                                 = false;
 
     private:
         struct Registery
