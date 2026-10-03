@@ -22,8 +22,10 @@ int main()
 
     // Load resources
     rasm::MeshHandle potteryGLTF = engine.loadGLTF("assets/models/gltf/ancient_egyptian_pottery/scene.gltf");
+    rasm::MeshHandle characterGLTF = engine.loadGLTF("assets/models/gltf/cartoon-character/source/model.glb");
+    rasm::MeshHandle roomGLTF = engine.loadGLTF("assets/models/gltf/coffee-room/scene.gltf");
 
-    if (!potteryGLTF.isValid())
+    if (!potteryGLTF.isValid() || !characterGLTF.isValid() || !roomGLTF.isValid())
     {
         return 1;
     }
@@ -32,8 +34,20 @@ int main()
     rasm::EntityHandle pottery = engine.createEntity("pottery", potteryGLTF, {}, rasm::Transform{
                                                                                      glm::vec3(0.0f, 0.0f, -10.0f),     // position
                                                                                      glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
-                                                                                     glm::vec3(0.005f)                  // scale
+                                                                                     glm::vec3(0.002f)                  // scale
                                                                                  });
+
+    rasm::EntityHandle character = engine.createEntity("character", characterGLTF, {}, rasm::Transform{
+                                                                                           glm::vec3(3.0f, 0.0f, -10.0f),                                           // position
+                                                                                           glm::angleAxis(glm::radians(90.0f * 3.0f), glm::vec3(0.0f, 1.0f, 0.0f)), // rotation
+                                                                                           glm::vec3(2.0f)                                                          // scale
+                                                                                       });
+
+    rasm::EntityHandle room = engine.createEntity("room", roomGLTF, {}, rasm::Transform{
+                                                                            glm::vec3(-5.0f, 0.0f, -10.0f),    // position
+                                                                            glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
+                                                                            glm::vec3(2.0f)                    // scale
+                                                                        });
 
     // Create a camera
     rasm::CameraHandle camera = engine.createCamera(rasm::CameraProjection{.type = rasm::CameraType::PERSPECTIVE,
@@ -55,6 +69,8 @@ int main()
                                                  glm::vec3(0.0f, -1.0f, 0.0f)); // direction
 
     engine.addEntityToScene(scene, pottery);
+    engine.addEntityToScene(scene, room);
+    engine.addEntityToScene(scene, character);
     engine.addCameraToScene(scene, camera);
     engine.addLightToScene(scene, light);
 
@@ -63,6 +79,8 @@ int main()
     {
         // Update transforms, animations, etc.
         engine.updateTransform(pottery, engine.getTransform(pottery).rotate(glm::vec3(0.0f, 1.0f, 0.0f), glm::radians(0.01f)));
+        engine.updateTransform(character, engine.getTransform(character).rotate(glm::vec3(0.0f, 1.0f, 0.0f), glm::radians(0.01f)));
+        engine.updateTransform(room, engine.getTransform(room).rotate(glm::vec3(0.0f, 1.0f, 0.0f), glm::radians(0.01f)));
 
         // Render the scene
         engine.render2(scene, camera);
