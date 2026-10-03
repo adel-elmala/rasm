@@ -106,8 +106,20 @@ namespace rasm::gfx
         this->swapchain.swapchain = vkb_swapchain.value();
         this->swapchain.imageFormat = _to_format(swapchain.swapchain.image_format);
         this->swapchain.imageCount = swapchain.swapchain.image_count;
-        auto images = swapchain.swapchain.get_images().value();
-        auto views = swapchain.swapchain.get_image_views().value();
+        auto imagesResult = swapchain.swapchain.get_images();
+        if (!imagesResult)
+        {
+            spdlog::error("Failed to get swapchain images: {}", imagesResult.error().message());
+            return false;
+        }
+        auto viewsResult = swapchain.swapchain.get_image_views();
+        if (!viewsResult)
+        {
+            spdlog::error("Failed to get swapchain image views: {}", viewsResult.error().message());
+            return false;
+        }
+        const auto &images = imagesResult.value();
+        const auto &views = viewsResult.value();
 
         for (uint32_t i = 0; i < swapchain.swapchain.image_count; ++i)
         {
@@ -156,17 +168,31 @@ namespace rasm::gfx
         {
             vkDestroyImageView(device.device, imageHandle.view, nullptr);
         }
-
-        vkb::destroy_swapchain(swapchain.swapchain);
-        vmaDestroyAllocator(allocator);
-        vkb::destroy_device(device);
-        vkb::destroy_surface(instance, surface);
-        vkb::destroy_instance(instance);
+        swapchain.images.clear();
+        if (swapchain.swapchain.swapchain != VK_NULL_HANDLE)
+            vkb::destroy_swapchain(swapchain.swapchain);
+        swapchain = {};
+        if (allocator != nullptr)
+            vmaDestroyAllocator(allocator);
+        allocator = nullptr;
+        if (device.device != VK_NULL_HANDLE)
+            vkb::destroy_device(device);
+        device = {};
+        if (surface != VK_NULL_HANDLE)
+            vkb::destroy_surface(instance, surface);
+        surface = VK_NULL_HANDLE;
+        if (instance.instance != VK_NULL_HANDLE)
+            vkb::destroy_instance(instance);
+        instance = {};
+        physical_device = {};
+        dispatch_table = {};
+        graphics_queue = VK_NULL_HANDLE;
     }
 
     void VulkanContext::waitIdle()
     {
-        vkDeviceWaitIdle(this->device.device);
+        if (device.device != VK_NULL_HANDLE)
+            vkDeviceWaitIdle(this->device.device);
     }
 
     std::optional<BufferVKHandle> VulkanContext::createBuffer(ResourceDesc desc)

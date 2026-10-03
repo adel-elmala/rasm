@@ -1,0 +1,19 @@
+{
+    "name": "rasm",
+    "version": "0.1.0",
+    "dependencies": [
+        "vk-bootstrap",
+        "vulkan-memory-allocator",
+        "glm",
+        {
+            "name": "sdl3",
+            "features": ["vulkan"]
+        },
+        "tracy",
+        "stb",
+        "spdlog",
+        "tinygltf",
+        "tinyobjloader",
+        "shader-slang"
+    ]
+}
