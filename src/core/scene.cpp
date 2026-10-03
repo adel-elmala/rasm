@@ -2,6 +2,7 @@
 #include "rasm/core/camera.h"
 #include "rasm/core/engine.h"
 #include "rasm/core/utils.h"
+#include "rasm/gfx/types.h"
 
 #include <variant>
 
@@ -129,7 +130,7 @@ namespace rasm
     uint64_t totalVertexBufferSize = 0;
     uint64_t totalIndexBufferSize = 0;
 
-    std::vector<GltfRaw> sceneGltfRaws;
+    std::vector<GLTFRaw> sceneGltfRaws;
     std::vector<Entity> sceneEntities;
 
     for (auto entityHandle : sceneRef.entities)
@@ -146,12 +147,12 @@ namespace rasm
       auto &meshData = registery.meshes[mesh.index];
 
       auto entityGltfRaws = processMesh(meshData);
-      sceneGltfRaws.insert(sceneGltfRaws.end(), entityGltfRaws.begin(), entityGltfRaws.end());
+      sceneGltfRaws.push_back(entityGltfRaws);
 
-      for (auto &gltfRaw : entityGltfRaws)
+      for (auto &subGLTF : entityGltfRaws.subGltfRaws)
       {
-        totalVertexBufferSize += gltfRaw.objRaw.vertices.size() * sizeof(Vertex);
-        totalIndexBufferSize += gltfRaw.objRaw.indices.size() * sizeof(uint32_t);
+        totalVertexBufferSize += subGLTF.objRaw.vertices.size() * sizeof(Vertex);
+        totalIndexBufferSize += subGLTF.objRaw.indices.size() * sizeof(uint32_t);
         sceneEntities.push_back(entity);
       }
     }
@@ -189,9 +190,9 @@ namespace rasm
     preparedScene.megaIndexBuffer = indexBufferHandle;
 
     // allocate mega-model buffer and draw info buffer for the scene.
-    bufferDesc.name = "Mega Model Buffer";
+    bufferDesc.name = "Mega Model data Buffer";
     bufferDesc.buffer.usage = BufferUsage::STORAGE;
-    bufferDesc.buffer.size = sceneGltfRaws.size() * sizeof(glm::mat4);
+    bufferDesc.buffer.size = sceneEntities.size() * sizeof(gfx::Modeldata);
     auto megaModelBufferHandle = ctx.createBuffer(bufferDesc);
 
     if (!megaModelBufferHandle.isValid())
@@ -200,11 +201,11 @@ namespace rasm
       return PreparedScene{};
     }
 
-    preparedScene.megaModelMatsBuffer = megaModelBufferHandle;
+    preparedScene.megaModelDataBuffer = megaModelBufferHandle;
 
     bufferDesc.name = "Draw Info Buffer";
     bufferDesc.buffer.usage = BufferUsage::INDIRECT;
-    bufferDesc.buffer.size = sceneGltfRaws.size() * sizeof(DrawInfo);
+    bufferDesc.buffer.size = sceneEntities.size() * sizeof(gfx::DrawInfo);
 
     auto drawInfoBufferHandle = ctx.createBuffer(bufferDesc);
 
@@ -219,7 +220,7 @@ namespace rasm
     // create sceneData buffer for the scene.
     bufferDesc.name = "Scene Data Buffer";
     bufferDesc.buffer.usage = BufferUsage::STORAGE;
-    bufferDesc.buffer.size = sizeof(SceneData);
+    bufferDesc.buffer.size = sizeof(gfx::SceneData);
 
     auto sceneDataBufferHandle = ctx.createBuffer(bufferDesc);
 
@@ -242,49 +243,57 @@ namespace rasm
     uint32_t idx = 0;
     for (auto &gltfRaw : sceneGltfRaws)
     {
-      auto nVertices = gltfRaw.objRaw.vertices.size();
-      auto nIndices = gltfRaw.objRaw.indices.size();
-      auto vSize = nVertices * sizeof(Vertex);
-      auto iSize = nIndices * sizeof(uint32_t);
+      for (auto &subGLTF : gltfRaw.subGltfRaws)
+      {
+        auto nVertices = subGLTF.objRaw.vertices.size();
+        auto nIndices = subGLTF.objRaw.indices.size();
+        auto vSize = nVertices * sizeof(gfx::VertexFull);
+        auto iSize = nIndices * sizeof(uint32_t);
 
-      ctx.fillBuffer(preparedScene.megaVertexBuffer, gltfRaw.objRaw.vertices.data(), vSize, vertexBufferOffset);
-      ctx.fillBuffer(preparedScene.megaIndexBuffer, gltfRaw.objRaw.indices.data(), iSize, indexBufferOffset);
+        ctx.fillBuffer(preparedScene.megaVertexBuffer, subGLTF.objRaw.vertices.data(), vSize, vertexBufferOffset);
+        ctx.fillBuffer(preparedScene.megaIndexBuffer, subGLTF.objRaw.indices.data(), iSize, indexBufferOffset);
 
-      vertexBufferOffset += vSize;
-      indexBufferOffset += iSize;
+        vertexBufferOffset += vSize;
+        indexBufferOffset += iSize;
 
-      // fill the model matrix buffer with the current entity's model matrix.
-      auto sceneEntity = sceneEntities[idx];
-      auto modelTransform = sceneEntity.transform;
+        // fill the model matrix buffer with the current entity's model matrix.
+        auto sceneEntity = sceneEntities[idx];
+        auto modelTransform = sceneEntity.transform;
 
-      auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
-                   glm::mat4_cast(modelTransform.rotation) *
-                   glm::scale(glm::mat4(1.0f), modelTransform.scale);
+        auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
+                     glm::mat4_cast(modelTransform.rotation) *
+                     glm::scale(glm::mat4(1.0f), modelTransform.scale);
 
-      model = model * gltfRaw.transform;
+        model = model * subGLTF.transform;
 
-      ctx.fillBuffer(preparedScene.megaModelMatsBuffer, &model, sizeof(model), modelBufferOffset);
-      modelBufferOffset += sizeof(model);
+        gfx::Modeldata modelData{};
+        modelData.worldMatrix = model;
+        modelData.vertFormat = gfx::VertexFormat::Full;
+        if (subGLTF.material.isValid())
+        {
+          modelData.material = convertToGfxMaterial(getMaterial(subGLTF.material));
+        } else {
+          // Use a default material if the subGLTF material is not valid.
+          modelData.material = convertToGfxMaterial(getMaterial(sceneEntity.material));
+        }
 
-      auto drawInfo = DrawInfo{};
-      drawInfo.indexCount = nIndices;
-      drawInfo.instanceCount = 1; // TODO: support multiple instances
-      drawInfo.firstIndex = IndexOffset;
-      drawInfo.vertexOffset = VertexOffset;
-      drawInfo.firstInstance = 0;               // TODO: support multiple instances
-      drawInfo.vertFormat = VertexFormat::Full; // TODO: determine the correct vertex format based on the mesh
+        ctx.fillBuffer(preparedScene.megaModelDataBuffer, &modelData, sizeof(modelData), modelBufferOffset);
+        modelBufferOffset += sizeof(modelData);
 
-      auto matHandle = sceneEntity.material;
-      auto material = getMaterial(matHandle);
+        auto drawInfo = gfx::DrawInfo{};
+        drawInfo.indexCount = nIndices;
+        drawInfo.instanceCount = 1; // TODO: support multiple instances
+        drawInfo.firstIndex = IndexOffset;
+        drawInfo.vertexOffset = VertexOffset;
+        drawInfo.firstInstance = 0; // TODO: support multiple instances
 
-      drawInfo.textureIndex = getBindlessTextureIndex(material.textures[0]); // TODO: support multiple textures per material
+        ctx.fillBuffer(preparedScene.drawInfoBuffer, &drawInfo, sizeof(drawInfo), drawInfoBufferOffset);
+        drawInfoBufferOffset += sizeof(drawInfo);
 
-      ctx.fillBuffer(preparedScene.drawInfoBuffer, &drawInfo, sizeof(drawInfo), drawInfoBufferOffset);
-      drawInfoBufferOffset += sizeof(drawInfo);
-
-      IndexOffset += nIndices;
-      VertexOffset += nVertices;
-      idx++;
+        IndexOffset += nIndices;
+        VertexOffset += nVertices;
+        idx++;
+      }
     }
 
     // create a pipeline for the UberMaterial.

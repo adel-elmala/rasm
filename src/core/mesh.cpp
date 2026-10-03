@@ -1,5 +1,6 @@
 #include "rasm/core/mesh.h"
 #include "rasm/core/engine.h"
+#include "rasm/gfx/types.h"
 
 #define TINYGLTF_IMPLEMENTATION
 #include "tiny_gltf.h"
@@ -92,7 +93,7 @@ namespace rasm
             }
 
             mesh.type = Mesh::MeshType::GLTF;
-            mesh.data = std::move(model);
+            mesh.data = processGLTF(model);
         }
         else
         {
@@ -148,6 +149,11 @@ namespace rasm
         return handle;
     }
 
+    MeshHandle Engine::loadGLTF(const std::string &path)
+    {
+        return loadMesh(path);
+    }
+
     BufferHandle Engine::uploadMesh(const MeshHandle &handle)
     {
         // TODO: remove mesh from meshData after uploading to GPU.
@@ -192,9 +198,9 @@ namespace rasm
         return BufferHandle{};
     }
 
-    std::vector<GltfRaw> extractGLTFRaws(const tinygltf::Model &model, uint32_t meshIndex, const glm::mat4 &globalTransform)
+    std::vector<SubGLTFRaw> Engine::extractGLTFRaws(const tinygltf::Model &model, uint32_t meshIndex, const glm::mat4 &globalTransform)
     {
-        std::vector<GltfRaw> gltfRaws;
+        std::vector<SubGLTFRaw> subGltfs;
 
         const auto &mesh = model.meshes[meshIndex];
         for (const auto &primitive : mesh.primitives)
@@ -238,6 +244,8 @@ namespace rasm
                 uvPtr = reinterpret_cast<const float *>(&(model.buffers[bv.buffer].data[acc.byteOffset + bv.byteOffset]));
                 uvStride = acc.ByteStride(bv) / sizeof(float);
             }
+
+            // TODO: Extract all remaining vertex attributes (tangents, colors,TEXCOORD_0,...)
 
             // Interleave the data into our standard Vertex struct
             for (size_t i = 0; i < vertexCount; ++i)
@@ -293,10 +301,13 @@ namespace rasm
                 }
             }
 
-            gltfRaws.push_back({{vertices, indices}, globalTransform});
+            // --- 3. EXTRACT MATERIAL INFO (if any)
+            int materialIndex = primitive.material;
+            MaterialHandle materialHandle = loadMaterial(model, materialIndex);
+            subGltfs.push_back({{vertices, indices}, globalTransform, materialHandle});
         }
 
-        return gltfRaws;
+        return subGltfs;
     }
 
     // Helper: Convert a glTF node's properties into a local GLM matrix
@@ -335,7 +346,7 @@ namespace rasm
     }
 
     // Recursive function to traverse the scene graph node tree
-    std::vector<GltfRaw> traverseNodes(const tinygltf::Model &model, int nodeIndex, const glm::mat4 &parentTransform)
+    std::vector<SubGLTFRaw> Engine::traverseNodes(const tinygltf::Model &model, int nodeIndex, const glm::mat4 &parentTransform)
     {
         if (nodeIndex < 0 || nodeIndex >= model.nodes.size())
             return {};
@@ -346,25 +357,25 @@ namespace rasm
         glm::mat4 localTransform = getLocalTransform(node);
         glm::mat4 globalTransform = parentTransform * localTransform;
 
-        std::vector<GltfRaw> gltfRaws;
+        std::vector<SubGLTFRaw> subGltfs;
         // If this node instantiates a mesh, we now have its world transform!
         if (node.mesh >= 0)
         {
             auto extractedRaws = extractGLTFRaws(model, node.mesh, globalTransform);
-            gltfRaws.insert(gltfRaws.end(), extractedRaws.begin(), extractedRaws.end());
+            subGltfs.insert(subGltfs.end(), extractedRaws.begin(), extractedRaws.end());
         }
 
         // Recursively process all child nodes
         for (int childIndex : node.children)
         {
             auto childRaws = traverseNodes(model, childIndex, globalTransform);
-            gltfRaws.insert(gltfRaws.end(), childRaws.begin(), childRaws.end());
+            subGltfs.insert(subGltfs.end(), childRaws.begin(), childRaws.end());
         }
-        return gltfRaws;
+        return subGltfs;
     }
 
     // Entry point: Start traversal from the root nodes of the active scene
-    std::vector<GltfRaw> processGLTF(const tinygltf::Model &model)
+    GLTFRaw Engine::processGLTF(const tinygltf::Model &model)
     {
         // Default to the first scene if model.defaultScene is not specified
         int sceneIndex = model.defaultScene >= 0 ? model.defaultScene : 0;
@@ -373,7 +384,8 @@ namespace rasm
 
         const tinygltf::Scene &scene = model.scenes[sceneIndex];
 
-        std::vector<GltfRaw> gltfRaws;
+        GLTFRaw gltfRaw;
+        gltfRaw.model = model;
 
         // Root transform flips Y into the engine's Vulkan clip-space convention (Y down), matching what the
         // OBJ loader does per-vertex. Applied on the left so it acts after the glTF node hierarchy.
@@ -382,23 +394,23 @@ namespace rasm
         for (int rootNodeIndex : scene.nodes)
         {
             auto extractedRaws = traverseNodes(model, rootNodeIndex, rootTransform);
-            gltfRaws.insert(gltfRaws.end(), extractedRaws.begin(), extractedRaws.end());
+            gltfRaw.subGltfRaws.insert(gltfRaw.subGltfRaws.end(), extractedRaws.begin(), extractedRaws.end());
         }
 
-        return gltfRaws;
+        return gltfRaw;
     }
 
-    std::vector<GltfRaw> Engine::processMesh(const Mesh &mesh)
+    GLTFRaw Engine::processMesh(const Mesh &mesh)
     {
         if (mesh.type == Mesh::MeshType::OBJ)
         {
-            return {{std::get<ObjRaw>(mesh.data), glm::mat4(1.0f)}};
+            return GLTFRaw{tinygltf::Model{}, std::vector<SubGLTFRaw>{SubGLTFRaw{std::get<ObjRaw>(mesh.data), glm::mat4(1.0f), MaterialHandle{}}}};
         }
         else if (mesh.type == Mesh::MeshType::GLTF)
         {
-            return processGLTF(std::get<tinygltf::Model>(mesh.data));
+            return std::get<GLTFRaw>(mesh.data);
         }
-        return {};
+        return GLTFRaw{};
     }
 
     MeshSize Engine::getMeshByteSize(const MeshHandle &handle) const

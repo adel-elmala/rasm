@@ -438,12 +438,12 @@ namespace rasm
 
         ctx.bindPipeline(commandBuffer, preparedScene.uberMaterialPipeline);
         {
-            SceneData sceneData{};
+            gfx::SceneData sceneData{};
             sceneData.projection = projection;
             sceneData.view = view;
             sceneData.vertsPtr = ctx.getBufferDeviceAddress(preparedScene.megaVertexBuffer);
             sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(preparedScene.drawInfoBuffer);
-            sceneData.modeldataPtr = ctx.getBufferDeviceAddress(preparedScene.megaModelMatsBuffer);
+            sceneData.modeldataPtr = ctx.getBufferDeviceAddress(preparedScene.megaModelDataBuffer);
 
             ctx.fillBuffer(preparedScene.sceneDataBuffer, &sceneData, sizeof(sceneData), 0);
 
@@ -452,7 +452,7 @@ namespace rasm
 
             auto sceneDataBufferPtr = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer);
             ctx.pushConstants(commandBuffer, preparedScene.uberMaterialPipeline, ShaderType::VERTEX_FRAGMENT, &sceneDataBufferPtr, sizeof(uint64_t), 0);
-            ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, 0, preparedScene.drawInfoCount, sizeof(DrawInfo));
+            ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, 0, preparedScene.drawInfoCount, sizeof(gfx::DrawInfo));
         }
         endPass();
         endFrame();
