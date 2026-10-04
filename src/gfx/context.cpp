@@ -98,6 +98,27 @@ namespace rasm
                 vulkanContext.removePipeline(pipeline);
             }
             vulkanContext.cleanup();
+            bufferCache.clear();
+            textureCache.clear();
+            shaderCache.clear();
+            pipelineCache.clear();
+            commandPoolCache.clear();
+            commandBufferCache.clear();
+            fenceCache.clear();
+            semaphoreCache.clear();
+            descriptorSetLayoutCache.clear();
+            descriptorPoolCache.clear();
+            descriptorSetCache.clear();
+            swapchainImageCache.clear();
+            renderTargetCache.clear();
+            bufferDescCache.clear();
+            textureDescCache.clear();
+            shaderDescCache.clear();
+            pipelineDescCache.clear();
+            descriptorSetLayoutDescCache.clear();
+            descriptorPoolDescCache.clear();
+            descriptorSetDescCache.clear();
+            nextBindlessTextureIndex = 0;
             break;
         }
         case Backend::DX12:
@@ -771,19 +792,23 @@ namespace rasm
 
     uint32_t RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot)
     {
-        assert(slot <= MAX_BINDLESS_TEXTURES && "Slot index exceeds maximum bindless textures.");
+        if (slot > MAX_BINDLESS_TEXTURES || (slot == MAX_BINDLESS_TEXTURES && nextBindlessTextureIndex >= MAX_BINDLESS_TEXTURES))
+        {
+            spdlog::error("Slot index exceeds maximum bindless textures.");
+            return UINT32_MAX;
+        }
 
         auto bindlessIt = descriptorSetCache.find(bindlessSet);
         auto textureIt = textureCache.find(texture);
         if (bindlessIt == descriptorSetCache.end())
         {
             spdlog::error("Bindless descriptor set handle not found in cache during updateBindlessDescriptorSet.");
-            return false;
+            return UINT32_MAX;
         }
         if (textureIt == textureCache.end())
         {
             spdlog::error("Texture handle not found in cache during updateBindlessDescriptorSet.");
-            return false;
+            return UINT32_MAX;
         }
 
         switch (backend)
@@ -795,24 +820,10 @@ namespace rasm
         case Backend::METAL:
         default:
             spdlog::error("Unsupported backend during bindless descriptor set update.");
-            return MAX_BINDLESS_TEXTURES;
+            return UINT32_MAX;
         }
         return slot == MAX_BINDLESS_TEXTURES ? nextBindlessTextureIndex - 1 : slot;
     }
-
-    // bool RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle &bindlessSet, const RenderTargetHandle &renderTarget, uint32_t slot)
-    // {
-    //     assert(slot < MAX_BINDLESS_TEXTURES && "Slot index exceeds maximum bindless textures.");
-
-    //     auto renderTargetIt = renderTargetCache.find(renderTarget);
-    //     if (renderTargetIt == renderTargetCache.end())
-    //     {
-    //         spdlog::error("Render target handle not found in cache during updateBindlessDescriptorSet.");
-    //         return false;
-    //     }
-
-    //     return updateBindlessDescriptorSet(bindlessSet, renderTargetIt->second, slot);
-    // }
 
     bool RenderContext::waitForFence(FenceHandle fence, uint64_t timeout)
     {

@@ -201,7 +201,7 @@ namespace rasm
         auto layout = program->getLayout(0);
         auto nEntrys = layout->getEntryPointCount();
 
-        for (size_t i = 0; i <= nEntrys; ++i)
+        for (size_t i = 0; i < nEntrys; ++i)
         {
             auto entry = layout->getEntryPointByIndex(i);
 

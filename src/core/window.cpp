@@ -22,6 +22,7 @@ namespace rasm
         if (!wind)
         {
             spdlog::error("Failed to create SDL window: {}", SDL_GetError());
+            SDL_Quit();
             return WindowHandle{};
         }
 
