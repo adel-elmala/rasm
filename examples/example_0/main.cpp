@@ -69,9 +69,10 @@ int main()
     // 7. Create a light
     rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL,  // type
                                                  glm::vec3(1.0f, 1.0f, 1.0f),   // color
-                                                 1.0f,                          // intensity
                                                  glm::vec3(0.0f, 10.0f, 0.0f),  // position
-                                                 glm::vec3(0.0f, -1.0f, 0.0f)); // direction
+                                                 glm::vec3(0.0f, -1.0f, 0.0f), // direction
+                                                 1.0f,                          // intensity
+                                                 10.0f);                        // range
 
     engine.addEntityToScene(scene, bunny);
     engine.addEntityToScene(scene, bunny2);

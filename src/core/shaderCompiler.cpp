@@ -10,6 +10,7 @@
 #include <array>
 #include <fstream>
 #include <string>
+#include <filesystem>
 
 namespace rasm
 {
@@ -48,9 +49,19 @@ namespace rasm
 
         slang::TargetDesc targetDesc = getTargetDesc(target);
 
+        std::filesystem::path cwd = std::filesystem::current_path();
+        spdlog::info("Current Working Directory at runtime is: {}", cwd.string());
+
+        // Adjust the text "../../" depending on how deep your build folder is from your project root
+        std::string pathCommon = (cwd / "shaders/common").string();
+
+        const char *searchPaths[] = {pathCommon.c_str()};
+
         slang::SessionDesc sessionDesc = {};
         sessionDesc.targets = &targetDesc;
         sessionDesc.targetCount = 1;
+        sessionDesc.searchPaths = searchPaths;
+        sessionDesc.searchPathCount = static_cast<uint32_t>(sizeof(searchPaths) / sizeof(searchPaths[0]));
 
         slang::CompilerOptionEntry options[] =
             {
@@ -58,9 +69,8 @@ namespace rasm
                  {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}},
                 {slang::CompilerOptionName::MatrixLayoutColumn,
                  {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}},
-                 {slang::CompilerOptionName::GLSLForceScalarLayout,
-                 {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}}
-            };
+                {slang::CompilerOptionName::GLSLForceScalarLayout,
+                 {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}}};
 
         sessionDesc.compilerOptionEntries = options;
         sessionDesc.compilerOptionEntryCount = static_cast<uint32_t>(sizeof(options) / sizeof(options[0]));
@@ -118,7 +128,6 @@ namespace rasm
 
         return Format::UNKNOWN;
     }
-
 
     uint32_t formatSize(Format format)
     {

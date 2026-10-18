@@ -12,13 +12,14 @@
 namespace rasm
 {
 
-    constexpr uint32_t MAX_MESHES = 8;
+    constexpr uint32_t MAX_MESHES              = 8;
+    constexpr uint32_t MAX_VERTEX_UV_SETS      = 3;
 
     struct Vertex
     {
         glm::vec3 pos;
         glm::vec3 normal;
-        glm::vec2 uv;
+        glm::vec2 uv[MAX_VERTEX_UV_SETS];
     };
 
     struct ObjRaw

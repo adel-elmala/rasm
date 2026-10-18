@@ -64,17 +64,26 @@ int main()
                                                     });
 
     // Create a light
-    rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL,  // type
-                                                 glm::vec3(1.0f, 1.0f, 1.0f),   // color
-                                                 1.0f,                          // intensity
-                                                 glm::vec3(0.0f, 10.0f, 0.0f),  // position
-                                                 glm::vec3(0.0f, -1.0f, 0.0f)); // direction
+    rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL, // type
+                                                 glm::vec3(1.0f, 1.0f, 1.0f),  // color
+                                                 glm::vec3(0.0f, 10.0f, 0.0f), // position
+                                                 glm::vec3(0.0f, -1.0f, 0.0f), // direction
+                                                 1.0f,                         // intensity
+                                                 100.0f);                      // range
+
+    rasm::LightHandle pointLight = engine.createLight(rasm::LightType::POINT,        // type
+                                                      glm::vec3(1.0f, 1.0f, 1.0f),   // color
+                                                      glm::vec3(10.0f, 10.0f, -10000.0f), // position
+                                                      glm::vec3(0.0f, -1.0f, 0.0f),  // direction
+                                                      0.0f,                          // intensity
+                                                      0.01f);                       // range
 
     engine.addEntityToScene(scene, pottery);
     engine.addEntityToScene(scene, room);
     engine.addEntityToScene(scene, character);
     engine.addCameraToScene(scene, camera);
     engine.addLightToScene(scene, light);
+    engine.addLightToScene(scene, pointLight);
 
     // Main loop
     while (engine.running())

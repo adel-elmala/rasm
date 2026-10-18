@@ -53,9 +53,10 @@ int main()
     // Create a directional light
     rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL,  // type
                                                  glm::vec3(1.0f, 1.0f, 1.0f),   // color
-                                                 1.0f,                          // intensity
                                                  glm::vec3(0.0f, 10.0f, 0.0f),  // position
-                                                 glm::vec3(0.0f, -1.0f, 0.0f)); // direction
+                                                 glm::vec3(0.0f, -1.0f, 0.0f), // direction
+                                                 1.0f,                          // intensity
+                                                 10.0f);                        // range
 
     engine.addEntityToScene(scene, bunny);
     engine.addCameraToScene(scene, camera);
@@ -141,10 +142,10 @@ int main()
 
     // set up overlay mesh and shader
     std::vector<rasm::Vertex> vertices = {
-        {.pos = glm::vec3(-1.0f, -1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(0.0f, 0.0f)},
-        {.pos = glm::vec3(1.0f, -1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(1.0f, 0.0f)},
-        {.pos = glm::vec3(1.0f, 1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(1.0f, 1.0f)},
-        {.pos = glm::vec3(-1.0f, 1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(0.0f, 1.0f)}};
+        {.pos = glm::vec3(-1.0f, -1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = {glm::vec2(0.0f, 0.0f)}},
+        {.pos = glm::vec3(1.0f, -1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = {glm::vec2(1.0f, 0.0f)}},
+        {.pos = glm::vec3(1.0f, 1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = {glm::vec2(1.0f, 1.0f)}},
+        {.pos = glm::vec3(-1.0f, 1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = {glm::vec2(0.0f, 1.0f)}}};
 
     std::vector<uint32_t> indices = {
         0, 1, 2, // first triangle

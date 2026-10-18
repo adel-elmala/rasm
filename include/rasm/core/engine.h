@@ -25,9 +25,8 @@ namespace tinygltf { struct Node; }
 namespace rasm {
 
     constexpr uint32_t MAX_MATERIALS = 256;
-    constexpr uint32_t MAX_SHADERS = 256;
-    constexpr uint32_t MAX_CAMERAS = 8;
-    constexpr uint32_t MAX_LIGHTS = 128;
+    constexpr uint32_t MAX_SHADERS   = 256;
+    constexpr uint32_t MAX_CAMERAS   = 8;
 
     class Engine {
         friend class RenderGraph;
@@ -41,7 +40,7 @@ namespace rasm {
         PreparedScene               prepareScene(SceneHandle scene);
         EntityHandle                createEntity(const std::string& name, MeshHandle mesh = MeshHandle{}, MaterialHandle material = MaterialHandle{}, Transform transform = Transform{});
         CameraHandle                createCamera(CameraProjection projection, Transform transform);
-        LightHandle                 createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), float intensity = 1.0f, glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f));
+        LightHandle                 createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f), float intensity = 1.0f, float range = 10.0f);
         void                        addEntityToScene(SceneHandle scene, EntityHandle entity);
         void                        addCameraToScene(SceneHandle scene, CameraHandle camera);
         void                        addLightToScene(SceneHandle scene, LightHandle light);

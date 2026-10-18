@@ -4,10 +4,16 @@
 #include "rasm/core/utils.h"
 #include "rasm/gfx/types.h"
 
+#include <cstddef>
 #include <variant>
 
 namespace rasm
 {
+  // The mega vertex buffer is written with Vertex and read in the shader as gfx::VertexFull
+  // (scalar layout); the two must not drift apart.
+  static_assert(sizeof(Vertex) == sizeof(gfx::VertexFull), "Vertex must match the shader's VertexFull");
+  static_assert(offsetof(Vertex, uv) == offsetof(gfx::VertexFull, uv), "Vertex must match the shader's VertexFull");
+
   SceneHandle Engine::createScene()
   {
     const SceneHandle id = handleManager.getNextSceneHandle();
@@ -268,6 +274,7 @@ namespace rasm
 
         gfx::Modeldata modelData{};
         modelData.worldMatrix = model;
+        modelData.normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
         modelData.vertFormat = gfx::VertexFormat::Full;
         if (subGLTF.material.isValid())
         {

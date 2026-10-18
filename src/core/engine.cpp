@@ -482,6 +482,14 @@ namespace rasm
 
     void Engine::render2(SceneHandle scene, CameraHandle camera)
     {
+        if (!scene.isValid() || scene.index >= MAX_SCENES)
+        {
+            spdlog::error("Invalid scene handle for preparation.");
+            return ;
+        }
+
+        auto &sceneRef = registery.scenes[scene.index];
+
         beginFrame(camera);
         beginPass();
 
@@ -502,6 +510,23 @@ namespace rasm
             gfx::SceneData sceneData{};
             sceneData.projection = projection;
             sceneData.view = view;
+            sceneData.cameraWorldPosition = camPos;
+            sceneData.numLights = sceneRef.lightCount;
+            for (uint32_t i = 0; i < sceneRef.lightCount; ++i)
+            {
+                LightHandle sceneLight = sceneRef.lights[i];
+                Light sceneLightData = registery.lights[sceneLight.index];
+
+                gfx::Light light {};
+                light.position = sceneLightData.position;
+                light.direction = sceneLightData.direction;
+                light.color = sceneLightData.color;
+                light.intensity = sceneLightData.intensity;
+                light.range = sceneLightData.range;
+                light.type = static_cast<gfx::LightType>(sceneLightData.type);
+
+                sceneData.lights[i] = light;
+            }
             sceneData.vertsPtr = ctx.getBufferDeviceAddress(preparedScene.megaVertexBuffer);
             sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(preparedScene.drawInfoBuffer);
             sceneData.modeldataPtr = ctx.getBufferDeviceAddress(preparedScene.megaModelDataBuffer);
