@@ -13,6 +13,7 @@
 #include "rasm/core/handle.h"
 #include "rasm/core/profiler.h"
 #include "rasm/gfx/context.h"
+#include "rasm/gfx/uberMaterialTypes.h"
 
 #include <cstdint>
 #include <string>

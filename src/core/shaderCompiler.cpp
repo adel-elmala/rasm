@@ -1,5 +1,6 @@
 #include "rasm/core/shaderCompiler.h"
 #include "rasm/core/types.h"
+#include "rasm/gfx/uberMaterialTypes.h"
 
 #include "slang.h"
 #include "slang-com-helper.h"
@@ -232,6 +233,101 @@ namespace rasm
             }
         }
         return vertexAttributes;
+    }
+
+    struct StructInfo
+    {
+        std::string name;
+        std::vector<StructInfo> members;
+        size_t size = 0;
+        int32_t alignment = 0;
+        size_t offset = 0;
+    };
+
+    std::optional<StructInfo> getStructInfo(Slang::ComPtr<slang::IComponentType> program, const std::string &name)
+    {
+        auto programLayout = program->getLayout();
+
+        auto structReflection = programLayout->findTypeByName(name.c_str());
+        if (!structReflection)
+        {
+            spdlog::error("Struct {} not found in shader program.", name);
+            return std::nullopt;
+        }
+
+        auto structLayout = programLayout->getTypeLayout(structReflection, slang::LayoutRules::DefaultStructuredBuffer);
+
+        auto structInfo = StructInfo{};
+        structInfo.name = name;
+
+        // Use getStride() if this struct is going to be used in arrays/buffers
+        // to account for trailing layout/alignment padding.
+        structInfo.size = structLayout->getSize();
+
+        if (structLayout && structLayout->getKind() == slang::TypeReflection::Kind::Struct)
+        {
+            auto nFields = structLayout->getFieldCount();
+            for (size_t i = 0; i < nFields; ++i)
+            {
+                auto field = structLayout->getFieldByIndex(static_cast<unsigned int>(i));
+                auto fieldName = field->getName();
+
+                // Explicitly query uniform byte offset
+                auto fieldOffset = field->getOffset(slang::ParameterCategory::Uniform);
+
+                auto fieldType = field->getTypeLayout();
+                auto fieldAlignment = fieldType->getAlignment();
+                auto fieldSize = fieldType->getSize();
+
+                structInfo.members.push_back(StructInfo{
+                    .name = fieldName ? fieldName : "",
+                    .size = fieldSize,
+                    .alignment = fieldAlignment,
+                    .offset = fieldOffset});
+            }
+        }
+
+        return structInfo;
+    }
+
+    void printStructInfo(const StructInfo &structInfo)
+    {
+        spdlog::info("Struct: {} (size: {}, alignment: {})", structInfo.name, structInfo.size, structInfo.alignment);
+        for (const auto &member : structInfo.members)
+        {
+            spdlog::info("  Member: {} (size: {}, alignment: {}, offset: {})", member.name, member.size, member.alignment, member.offset);
+        }
+    }
+
+    void validateRasmStructs(Slang::ComPtr<slang::IComponentType> program)
+    {
+        auto validate = [&program](std::string structName, size_t expectedSize)
+        {
+            auto si = getStructInfo(program, structName);
+            if (!si)
+            {
+                spdlog::error("Failed to get struct info for {}", structName);
+                return;
+            }
+
+            if (si->size != expectedSize)
+            {
+                spdlog::error("Size mismatch for {}: expected {}, got {}", structName, expectedSize, si->size);
+                printStructInfo(*si);
+            }
+        };
+
+        validate("VertexFull", sizeof(gfx::VertexFull));
+        validate("VertexPosOnly", sizeof(gfx::VertexPosOnly));
+        validate("DrawInfo", sizeof(gfx::DrawInfo));
+        validate("Modeldata", sizeof(gfx::Modeldata));
+        validate("SceneData", sizeof(gfx::SceneData));
+        validate("Light", sizeof(gfx::Light));
+        validate("MetallicRoughnessMaterial", sizeof(gfx::MetallicRoughnessMaterial));
+        validate("NormalMaterial", sizeof(gfx::NormalMaterial));
+        validate("OcclusionMaterial", sizeof(gfx::OcclusionMaterial));
+        validate("EmissiveMaterial", sizeof(gfx::EmissiveMaterial));
+        validate("Material", sizeof(gfx::Material));
     }
 
     ShaderCompiler::compiledShader ShaderCompiler::compile(const std::string &sourcePath, const std::string &outputPath, const std::string &entryPointName)
