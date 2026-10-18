@@ -272,6 +272,8 @@ namespace rasm
 
         model = model * subGLTF.transform;
 
+        preparedScene.modelUniforms.push_back({sceneEntity.handle, subGLTF.transform});
+
         gfx::Modeldata modelData{};
         modelData.worldMatrix = model;
         modelData.normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
@@ -279,7 +281,9 @@ namespace rasm
         if (subGLTF.material.isValid())
         {
           modelData.material = convertToGfxMaterial(getMaterial(subGLTF.material));
-        } else {
+        }
+        else
+        {
           // Use a default material if the subGLTF material is not valid.
           modelData.material = convertToGfxMaterial(getMaterial(sceneEntity.material));
         }
@@ -449,4 +453,29 @@ namespace rasm
 
     return compiledScene;
   }
+
+  void Engine::updateUniforms(PreparedScene &preparedScene)
+  {
+    size_t modelBufferOffset = 0;
+
+    for (const auto &[EntityHandle, gltfTransform] : preparedScene.modelUniforms)
+    {
+      auto entity = registery.entities[EntityHandle.index];
+      auto modelTransform = entity.transform;
+
+      auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
+                   glm::mat4_cast(modelTransform.rotation) *
+                   glm::scale(glm::mat4(1.0f), modelTransform.scale);
+
+      model = model * gltfTransform;
+
+      gfx::Modeldata modelData{};
+      modelData.worldMatrix = model;
+      modelData.normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
+
+      ctx.fillBuffer(preparedScene.megaModelDataBuffer, &modelData, sizeof(glm::mat4) + sizeof(glm::mat3), modelBufferOffset);
+      modelBufferOffset += sizeof(modelData);
+    }
+  }
+
 } // namespace rasm

@@ -533,6 +533,8 @@ namespace rasm
 
             ctx.fillBuffer(preparedScene.sceneDataBuffer, &sceneData, sizeof(sceneData), 0);
 
+            updateUniforms(preparedScene);
+
             ctx.bindDescriptorSet(commandBuffer, preparedScene.uberMaterialPipeline, bindlessDescriptorSet, 0);
             ctx.bindIndexBuffer(commandBuffer, preparedScene.megaIndexBuffer, 0, Format::U32_UINT);
 

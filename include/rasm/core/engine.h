@@ -91,6 +91,7 @@ namespace rasm {
         uint32_t                    addBindlessTexture(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot = MAX_BINDLESS_TEXTURES);
         uint32_t                    getBindlessTextureIndex(const TextureHandle &texture);
         RenderTargetAttachments     getRenderTargetAttachments(const RenderTargetHandle &renderTarget);
+        void                        updateUniforms(PreparedScene &preparedScene);
 
         // window related
         WindowHandle                createWindow(uint32_t width, uint32_t height);

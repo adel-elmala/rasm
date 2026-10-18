@@ -36,13 +36,14 @@ namespace rasm {
 
     struct PreparedScene
     {
-        BufferHandle    megaVertexBuffer;
-        BufferHandle    megaIndexBuffer;
-        BufferHandle    megaModelDataBuffer;
-        BufferHandle    drawInfoBuffer;
-        BufferHandle    sceneDataBuffer;
-        PipelineHandle  uberMaterialPipeline;
-        uint32_t        drawInfoCount;
+        BufferHandle                                       megaVertexBuffer;
+        BufferHandle                                       megaIndexBuffer;
+        BufferHandle                                       megaModelDataBuffer;
+        BufferHandle                                       drawInfoBuffer;
+        BufferHandle                                       sceneDataBuffer;
+        PipelineHandle                                     uberMaterialPipeline;
+        std::vector<std::pair<EntityHandle, glm::mat4>>    modelUniforms;
+        uint32_t                                           drawInfoCount;
     };
 
 }
