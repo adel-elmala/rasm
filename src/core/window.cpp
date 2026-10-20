@@ -59,11 +59,15 @@ namespace rasm
 
     void Engine::pollEvents(CameraHandle camera)
     {
+        profiler.updateDeltaTime();
+
+        glm::vec2 dragStart = mainWindow.lastMousePos;
+        glm::vec2 dragEnd = mainWindow.lastMousePos;
+        float wheelDelta = 0.0f;
+
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
-            CameraInput input{.key = CameraInput::Key::NONE};
-
             switch (event.type)
             {
             case SDL_EVENT_QUIT:
@@ -74,46 +78,18 @@ namespace rasm
             }
             case SDL_EVENT_KEY_DOWN:
             {
-                switch (event.key.key)
-                {
-                case SDLK_ESCAPE:
+                if (event.key.key == SDLK_ESCAPE)
                 {
                     spdlog::info("Escape key pressed, closing window.");
                     isRunning = false;
-                    break;
-                }
-                case SDLK_W:
-                {
-                    input.key = CameraInput::Key::W;
-                    break;
-                }
-                case SDLK_S:
-                {
-                    input.key = CameraInput::Key::S;
-                    break;
-                }
-                case SDLK_A:
-                {
-                    input.key = CameraInput::Key::A;
-                    break;
-                }
-                case SDLK_D:
-                {
-                    input.key = CameraInput::Key::D;
-                    break;
-                }
-                }
-
-                // Free-fly movement is driven by key events.
-                if (input.key != CameraInput::Key::NONE)
-                {
-                    updateCamera(camera, input);
                 }
                 break;
             }
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
             {
                 mainWindow.lastMousePos = toNDC(glm::vec2(event.button.x, event.button.y), mainWindow);
+                dragStart = mainWindow.lastMousePos;
+                dragEnd = mainWindow.lastMousePos;
                 mainWindow.mouseDragActive = true;
                 break;
             }
@@ -129,17 +105,12 @@ namespace rasm
                     break;
                 }
 
-                input.mouseStart = mainWindow.lastMousePos;
-                input.mouseEnd = toNDC(glm::vec2(event.motion.x, event.motion.y), mainWindow);
-
-                updateCamera(camera, input);
-                mainWindow.lastMousePos = input.mouseEnd;
+                dragEnd = toNDC(glm::vec2(event.motion.x, event.motion.y), mainWindow);
                 break;
             }
             case SDL_EVENT_MOUSE_WHEEL:
             {
-                input.wheelDelta = event.wheel.y;
-                updateCamera(camera, input);
+                wheelDelta += event.wheel.y;
                 break;
             }
             case SDL_EVENT_WINDOW_RESIZED:
@@ -150,6 +121,11 @@ namespace rasm
                 updateCameraAspectRatio(static_cast<float>(mainWindow.width) / static_cast<float>(mainWindow.height));
                 break;
             }
+            case SDL_EVENT_WINDOW_FOCUS_LOST:
+            {
+                SDL_ResetKeyboard();
+                break;
+            }
             default:
             {
                 // Handle other events (e.g., input, window resize, etc.)
@@ -158,6 +134,24 @@ namespace rasm
             }
             }
         }
+
+        const bool *keys = SDL_GetKeyboardState(nullptr);
+
+        CameraInput input{};
+        input.deltaTime = profiler.deltaTime;
+        input.wheelDelta = wheelDelta;
+        if (mainWindow.mouseDragActive)
+        {
+            input.mouseStart = dragStart;
+            input.mouseEnd = dragEnd;
+        }
+        input.forward = keys[SDL_SCANCODE_W];
+        input.backward = keys[SDL_SCANCODE_S];
+        input.left = keys[SDL_SCANCODE_A];
+        input.right = keys[SDL_SCANCODE_D];
+
+        updateCamera(camera, input);
+        mainWindow.lastMousePos = dragEnd;
     }
 
     void Engine::destroyWindow(const Window &window)

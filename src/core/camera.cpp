@@ -25,7 +25,9 @@ namespace rasm
             .projection = projection,
             .controller = CameraController{.type = CameraController::Type::TRACK_BALL,
                                            .trackBall = {.radius = radius,
-                                                         .center = transform.position + forward * radius}},
+                                                         .center = transform.position + forward * radius,
+                                                         .orbitSensitivity = 1.0f,
+                                                        }},
             .transform = transform,
         };
 
@@ -62,7 +64,18 @@ namespace rasm
             return;
         }
 
-        registery.cameras[camera.index].controller = controller;
+        auto &cam = registery.cameras[camera.index];
+
+        if (controller.type == CameraController::Type::FREE_FLY)
+        {
+            // Seed the free-fly angles from the current orientation so switching
+            // controllers does not snap the view. Roll is intentionally discarded.
+            const glm::vec3 forward = cam.transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+            controller.freeFly.pitch = std::asin(glm::clamp(forward.y, -1.0f, 1.0f));
+            controller.freeFly.yaw = std::atan2(-forward.x, -forward.z);
+        }
+
+        cam.controller = controller;
     }
 
     CameraController Engine::getCameraController(CameraHandle camera)
@@ -185,26 +198,48 @@ namespace rasm
 
     void updateFreeFlyCamera(Camera &cam, const CameraInput &input)
     {
+        auto &freeFly = cam.controller.freeFly;
         auto &transform = cam.transform;
 
-        // Update the camera's transform based on the input.
-        // This is a placeholder implementation; actual implementation may vary.
-        switch (input.key)
+        // Look: yaw around world up, pitch around the camera's local right axis.
+        // Rebuilding the rotation from yaw/pitch keeps the horizon level.
+        const float deltaX = input.mouseEnd.x - input.mouseStart.x;
+        const float deltaY = input.mouseEnd.y - input.mouseStart.y;
+
+        freeFly.yaw -= deltaX * freeFly.lookSensitivity;
+        freeFly.pitch += deltaY * freeFly.lookSensitivity;
+
+        const float maxPitch = glm::radians(89.0f);
+        freeFly.pitch = glm::clamp(freeFly.pitch, -maxPitch, maxPitch);
+
+        transform.rotation = glm::normalize(glm::angleAxis(freeFly.yaw, glm::vec3(0.0f, 1.0f, 0.0f)) *
+                                            glm::angleAxis(freeFly.pitch, glm::vec3(1.0f, 0.0f, 0.0f)));
+
+        // Movement: held keys, frame-time based.
+        const glm::vec3 forward = transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
+        const glm::vec3 right = transform.rotation * glm::vec3(1.0f, 0.0f, 0.0f);
+
+        glm::vec3 move(0.0f);
+        if (input.forward)
         {
-        case CameraInput::Key::W:
-            transform.position += glm::vec3(0.0f, 0.0f, -1.0f);
-            break;
-        case CameraInput::Key::S:
-            transform.position += glm::vec3(0.0f, 0.0f, 1.0f);
-            break;
-        case CameraInput::Key::A:
-            transform.position += glm::vec3(-1.0f, 0.0f, 0.0f);
-            break;
-        case CameraInput::Key::D:
-            transform.position += glm::vec3(1.0f, 0.0f, 0.0f);
-            break;
-        default:
-            break;
+            move += forward;
+        }
+        if (input.backward)
+        {
+            move -= forward;
+        }
+        if (input.right)
+        {
+            move += right;
+        }
+        if (input.left)
+        {
+            move -= right;
+        }
+
+        if (glm::dot(move, move) > 1e-6f)
+        {
+            transform.position += glm::normalize(move) * freeFly.speed * input.deltaTime;
         }
     }
 
@@ -222,6 +257,12 @@ namespace rasm
         // The sphere points are in camera space, so the axis is a camera-local axis.
         auto axis = glm::cross(p0, p1);
         auto angle = std::acos(glm::clamp(glm::dot(p0, p1), -1.0f, 1.0f));
+
+        // The drag arc already describes the full rotation for this frame, so
+        // delta time must not be applied here; doing so would make the same
+        // mouse movement rotate the camera differently depending on frame rate.
+        angle *= cam.controller.trackBall.orbitSensitivity;
+
         if (glm::dot(axis, axis) > 1e-12f)
         {
             axis = glm::normalize(axis);

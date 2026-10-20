@@ -7,12 +7,15 @@ namespace rasm {
 
     struct CameraInput
     {
-        enum class Key { W, A, S, D, NONE };
+        glm::vec2   mouseStart = glm::vec2(0.0f);  // NDC coordinates [-1, 1]
+        glm::vec2   mouseEnd   = glm::vec2(0.0f);  // NDC coordinates [-1, 1]
+        float       wheelDelta = 0.0f;             // scroll wheel delta
+        float       deltaTime  = 0.0f;             // frame time in seconds
 
-        Key         key;
-        glm::vec2   mouseStart;  // NDC coordinates [-1, 1]
-        glm::vec2   mouseEnd;    // NDC coordinates [-1, 1]
-        float       wheelDelta;  // scroll wheel delta
+        bool        forward  = false;
+        bool        backward = false;
+        bool        left     = false;
+        bool        right    = false;
     };
 
 
@@ -54,13 +57,15 @@ namespace rasm {
         {
             float       radius;
             glm::vec3   center;
+            float       orbitSensitivity; // multiplier for drag rotation
         };
 
         struct FreeFly
         {
             float yaw;
             float pitch;
-            float speed;
+            float speed;            // units per second
+            float lookSensitivity;  // radians per NDC unit
         };
 
         Type type;

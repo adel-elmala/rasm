@@ -29,6 +29,13 @@ int main()
                                                         glm::vec3(1.0f)                    // scale
                                                     });
 
+    // Orbit the trackball around the scene.
+    const glm::vec3 orbitCenter(0.0f, 0.0f, -10.0f);
+    engine.setCameraController(camera, rasm::CameraController{
+                                           .type = rasm::CameraController::Type::TRACK_BALL,
+                                           .trackBall = {.radius = glm::length(orbitCenter - engine.getCameraTransform(camera).position),
+                                                         .center = orbitCenter,
+                                                         .orbitSensitivity = 1.0f}});
     // Load resources
     rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/obj/bunny/bunny.obj");
 
@@ -49,13 +56,6 @@ int main()
                                                                                      glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
                                                                                      glm::vec3(0.005f)                  // scale
                                                                                  });
-
-    // Orbit the trackball around the scene.
-    const glm::vec3 orbitCenter(0.0f, 0.0f, -10.0f);
-    engine.setCameraController(camera, rasm::CameraController{
-                                           .type = rasm::CameraController::Type::TRACK_BALL,
-                                           .trackBall = {.radius = glm::length(orbitCenter - engine.getCameraTransform(camera).position),
-                                                         .center = orbitCenter}});
 
     // Create a directional light
     rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL,  // type

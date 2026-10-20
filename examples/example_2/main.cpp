@@ -68,7 +68,8 @@ int main()
     engine.setCameraController(camera, rasm::CameraController{
                                            .type = rasm::CameraController::Type::TRACK_BALL,
                                            .trackBall = {.radius = glm::length(orbitCenter - engine.getCameraTransform(camera).position),
-                                                         .center = orbitCenter}});
+                                                         .center = orbitCenter,
+                                                         .orbitSensitivity = 1.0f}});
 
     // Create a light
     rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL,  // type

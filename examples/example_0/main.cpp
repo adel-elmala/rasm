@@ -66,12 +66,10 @@ int main()
                                                         glm::vec3(1.0f)                    // scale
                                                     });
 
-    // Orbit the trackball around the scene.
-    const glm::vec3 orbitCenter(0.0f, 0.0f, -10.0f);
+    // Use the free-fly controller.
     engine.setCameraController(camera, rasm::CameraController{
-                                           .type = rasm::CameraController::Type::TRACK_BALL,
-                                           .trackBall = {.radius = glm::length(orbitCenter - engine.getCameraTransform(camera).position),
-                                                         .center = orbitCenter}});
+                                           .type = rasm::CameraController::Type::FREE_FLY,
+                                           .freeFly = {.speed = 5.0f, .lookSensitivity = 1.0f}});
 
     // 7. Create a light
     rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL,  // type
