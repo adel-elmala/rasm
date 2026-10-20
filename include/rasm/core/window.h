@@ -11,16 +11,14 @@
 namespace rasm
 {
 
-    // TODO: delete this entire file, not needed anymore
     struct Window
     {
-        struct Extent
-        {
-            uint32_t width;
-            uint32_t height;
-        };
-
-        Extent extent{1080, 720}; 
+        WindowHandle    handle;
+        uint32_t        width;
+        uint32_t        height;
+        bool            mouseDragActive;
+        bool            resized;
+        glm::vec2       lastMousePos = glm::vec2(0.0f);
     };
 
 }

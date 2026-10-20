@@ -1,6 +1,7 @@
 // clang-format off
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 
 namespace rasm {
@@ -15,7 +16,14 @@ namespace rasm {
 
     struct Profiler
     {
-        VRAMStats gpu_memory_stats;
+        VRAMStats gpu_memory_stats = {};
+        float     deltaTime = 0.0f; // seconds since the previous frame
+
+        void updateDeltaTime();
+
+    private:
+        std::chrono::steady_clock::time_point last_frame_time{};
+        bool                                  has_last_frame_time = false;
     };
 
 } // namespace rasm
