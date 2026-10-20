@@ -55,7 +55,7 @@ namespace rasm {
 
         struct TrackBall
         {
-            float       radius;
+            float       radius;            // target orbit radius, wheel zoom eases toward it
             glm::vec3   center;
             float       orbitSensitivity; // multiplier for drag rotation
         };
@@ -74,13 +74,18 @@ namespace rasm {
             TrackBall   trackBall;
             FreeFly     freeFly;
         };
+
+        // Exponential smoothing speed for the rendered transform. Higher values
+        // are snappier; <= 0 disables easing and snaps to the target directly.
+        float easingSpeed = 12.0f;
     };
 
     struct Camera 
     {
         CameraProjection    projection;
         CameraController    controller;
-        Transform           transform;  // camera to world transform -  (world position, rotation quaternion, scale not used)
+        Transform           transform;       // current (rendered) camera transform
+        Transform           targetTransform; // desired transform, eased toward each frame
     };
 
 }

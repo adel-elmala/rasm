@@ -69,7 +69,8 @@ int main()
     // Use the free-fly controller.
     engine.setCameraController(camera, rasm::CameraController{
                                            .type = rasm::CameraController::Type::FREE_FLY,
-                                           .freeFly = {.speed = 5.0f, .lookSensitivity = 1.0f}});
+                                           .freeFly = {.speed = 5.0f, .lookSensitivity = 1.0f},
+                                           .easingSpeed = 6.0f});
 
     // 7. Create a light
     rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL,  // type

@@ -29,6 +29,7 @@ namespace rasm
                                                          .orbitSensitivity = 1.0f,
                                                         }},
             .transform = transform,
+            .targetTransform = transform,
         };
 
         return handle;
@@ -42,7 +43,9 @@ namespace rasm
             return;
         }
 
-        registery.cameras[camera.index].transform = transform;
+        auto &cam = registery.cameras[camera.index];
+        cam.transform = transform;
+        cam.targetTransform = transform;
     }
 
     void Engine::setCameraProjection(CameraHandle camera, CameraProjection projection)
@@ -65,6 +68,9 @@ namespace rasm
         }
 
         auto &cam = registery.cameras[camera.index];
+
+        // Start the new controller from the current rendered pose.
+        cam.targetTransform = cam.transform;
 
         if (controller.type == CameraController::Type::FREE_FLY)
         {
@@ -199,7 +205,7 @@ namespace rasm
     void updateFreeFlyCamera(Camera &cam, const CameraInput &input)
     {
         auto &freeFly = cam.controller.freeFly;
-        auto &transform = cam.transform;
+        auto &transform = cam.targetTransform;
 
         // Look: yaw around world up, pitch around the camera's local right axis.
         // Rebuilding the rotation from yaw/pitch keeps the horizon level.
@@ -245,6 +251,8 @@ namespace rasm
 
     void updateTrackballCamera(Camera &cam, const CameraInput &input)
     {
+        auto &transform = cam.targetTransform;
+
         // No drag delta means there is nothing to orbit.
         if (input.mouseStart == input.mouseEnd && input.wheelDelta == 0.0f)
         {
@@ -258,9 +266,6 @@ namespace rasm
         auto axis = glm::cross(p0, p1);
         auto angle = std::acos(glm::clamp(glm::dot(p0, p1), -1.0f, 1.0f));
 
-        // The drag arc already describes the full rotation for this frame, so
-        // delta time must not be applied here; doing so would make the same
-        // mouse movement rotate the camera differently depending on frame rate.
         angle *= cam.controller.trackBall.orbitSensitivity;
 
         if (glm::dot(axis, axis) > 1e-12f)
@@ -269,7 +274,7 @@ namespace rasm
 
             // Compose on the right to rotate in the camera's local frame.
             // The inverse rotation (-angle) makes the scene follow the cursor, as in a grab-style trackball.
-            cam.transform.rotation = glm::normalize(cam.transform.rotation * glm::angleAxis(-angle, axis));
+            transform.rotation = glm::normalize(transform.rotation * glm::angleAxis(-angle, axis));
         }
 
         // Apply zoom based on the scroll wheel delta.
@@ -279,8 +284,39 @@ namespace rasm
             cam.controller.trackBall.radius = glm::max(radius, 0.0f);
         }
 
-        cam.transform.position = cam.controller.trackBall.center +
-                                 cam.controller.trackBall.radius * (cam.transform.rotation * glm::vec3(0.0f, 0.0f, 1.0f));
+        transform.position = cam.controller.trackBall.center +
+                             cam.controller.trackBall.radius * (transform.rotation * glm::vec3(0.0f, 0.0f, 1.0f));
+    }
+
+    void easeCamera(Camera &cam, float deltaTime)
+    {
+        const float easingSpeed = cam.controller.easingSpeed;
+        if (easingSpeed <= 0.0f || deltaTime <= 0.0f)
+        {
+            cam.transform = cam.targetTransform;
+            return;
+        }
+
+        // Exponential smoothing is frame-rate independent.
+        const float t = 1.0f - std::exp(-easingSpeed * deltaTime);
+        cam.transform.rotation = glm::normalize(glm::slerp(cam.transform.rotation, cam.targetTransform.rotation, t));
+        cam.transform.scale = glm::mix(cam.transform.scale, cam.targetTransform.scale, t);
+
+        if (cam.controller.type == CameraController::Type::TRACK_BALL)
+        {
+            // Keep the camera on the orbit sphere while its rotation eases.
+            // Linearly interpolating the position would cut across the arc and
+            // make the camera drift closer to the orbit center.
+            const auto &trackBall = cam.controller.trackBall;
+            const float currentRadius = glm::length(cam.transform.position - trackBall.center);
+            const float radius = glm::mix(currentRadius, trackBall.radius, t);
+            cam.transform.position = trackBall.center +
+                                     radius * (cam.transform.rotation * glm::vec3(0.0f, 0.0f, 1.0f));
+        }
+        else
+        {
+            cam.transform.position = glm::mix(cam.transform.position, cam.targetTransform.position, t);
+        }
     }
 
     void Engine::updateCamera(CameraHandle camera, const CameraInput &input)
@@ -301,6 +337,8 @@ namespace rasm
         {
             updateTrackballCamera(cam, input);
         }
+
+        easeCamera(cam, input.deltaTime);
     }
 
 }

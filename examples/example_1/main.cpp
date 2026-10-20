@@ -35,7 +35,8 @@ int main()
                                            .type = rasm::CameraController::Type::TRACK_BALL,
                                            .trackBall = {.radius = glm::length(orbitCenter - engine.getCameraTransform(camera).position),
                                                          .center = orbitCenter,
-                                                         .orbitSensitivity = 1.0f}});
+                                                         .orbitSensitivity = 1.0f},
+                                           .easingSpeed = 6.0f});
     // Load resources
     rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/obj/bunny/bunny.obj");
 
