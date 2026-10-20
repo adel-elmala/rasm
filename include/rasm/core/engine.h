@@ -63,9 +63,15 @@ namespace rasm {
         Transform                   getTransform(EntityHandle entity);
         Transform                   getCameraTransform(CameraHandle camera);
         CameraProjection            getCameraProjection(CameraHandle camera);
+        CameraController            getCameraController(CameraHandle camera);
+        glm::mat4                   getProjectionMatrix(CameraHandle camera);
+        glm::mat4                   getViewMatrix(CameraHandle camera);
+        void                        updateCameraAspectRatio(float aspect);
+        void                        updateCamera(CameraHandle camera, const CameraInput &input);
         void                        updateTransform(EntityHandle entity, Transform transform);
         void                        setCameraTransform(CameraHandle camera, Transform transform);
         void                        setCameraProjection(CameraHandle camera, CameraProjection projection);
+        void                        setCameraController(CameraHandle camera, CameraController controller);
         void                        beginFrame(CameraHandle camera);
         void                        beginOffscreenFrame(const RenderTargetHandle& renderTarget, CameraHandle camera);
         void                        endOffscreenFrame();
@@ -84,7 +90,7 @@ namespace rasm {
         DescriptorSetHandle         getBindlessDescriptorSet();
         const FrameResources&       getCurrentFrameResources();
         EngineConfig                getConfig() const;
-        WindowHandle                getMainWindow() const;
+        const Window&               getMainWindow() const;
         RenderContext&              getRenderContext();
         MeshSize                    getMeshByteSize(const MeshHandle &handle) const;
         void                        queryMemoryStats();
@@ -93,9 +99,9 @@ namespace rasm {
         RenderTargetAttachments     getRenderTargetAttachments(const RenderTargetHandle &renderTarget);
 
         // window related
-        WindowHandle                createWindow(uint32_t width, uint32_t height);
-        VkSurfaceKHR                createSurfaceVk(WindowHandle handle, VkInstance instance) const;
-        void                        destroyWindow(WindowHandle handle);
+        Window                      createWindow(uint32_t width, uint32_t height);
+        VkSurfaceKHR                createSurfaceVk(const Window& window, VkInstance instance) const;
+        void                        destroyWindow(const Window& window);
         void                        pollEvents(CameraHandle camera);
 
 
@@ -115,7 +121,7 @@ namespace rasm {
         RenderContext                                               ctx                                     = {};
         ShaderCompiler                                              shaderCompiler                          = {};
         HandleManager                                               handleManager                           = {};
-        WindowHandle                                                mainWindow                              = {};
+        Window                                                      mainWindow                              = {};
         DescriptorSetLayoutHandle                                   bindlessDescriptorSetLayout             = {};
         DescriptorPoolHandle                                        bindlessDescriptorPool                  = {};
         DescriptorSetHandle                                         bindlessDescriptorSet                   = {};
@@ -124,7 +130,6 @@ namespace rasm {
         uint64_t                                                    frameCount                              = 0;
         uint32_t                                                    imageIdx                                = 0;
         bool                                                        isRunning                               = false;
-        bool                                                        resized                                 = false;
 
     private:
         struct Registery

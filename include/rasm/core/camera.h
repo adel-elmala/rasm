@@ -5,15 +5,20 @@
 
 namespace rasm {
 
-    enum class CameraType
+    struct CameraInput
     {
-        PERSPECTIVE,
-        ORTHOGRAPHIC
+        enum class Key { W, A, S, D, NONE };
+
+        Key         key;
+        glm::vec2   mouseStart;  // NDC coordinates [-1, 1]
+        glm::vec2   mouseEnd;    // NDC coordinates [-1, 1]
+        float       wheelDelta;  // scroll wheel delta
     };
+
 
     struct CameraProjection
     {
-        CameraType type;
+        enum class Type { PERSPECTIVE, ORTHOGRAPHIC };
 
         struct Perspective
         {
@@ -33,17 +38,44 @@ namespace rasm {
             float farZ;
         };
 
+        Type type;
         union
         {
-            Perspective perspective;
-            Orthographic orthographic;
+            Perspective     perspective;
+            Orthographic    orthographic;
+        };
+    };
+
+    struct CameraController
+    {
+        enum class Type { TRACK_BALL, FREE_FLY };
+
+        struct TrackBall
+        {
+            float       radius;
+            glm::vec3   center;
+        };
+
+        struct FreeFly
+        {
+            float yaw;
+            float pitch;
+            float speed;
+        };
+
+        Type type;
+        union
+        {
+            TrackBall   trackBall;
+            FreeFly     freeFly;
         };
     };
 
     struct Camera 
     {
-        CameraProjection projection;
-        Transform transform;
+        CameraProjection    projection;
+        CameraController    controller;
+        Transform           transform;  // camera to world transform -  (world position, rotation quaternion, scale not used)
     };
 
 }

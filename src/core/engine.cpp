@@ -47,7 +47,7 @@ namespace rasm
         }
 
         this->mainWindow = createWindow(config.windowWidth, config.windowHeight);
-        if (!mainWindow.isValid())
+        if (!mainWindow.handle.isValid())
         {
             spdlog::error("Failed to initialize engine window.");
             return;
@@ -105,8 +105,8 @@ namespace rasm
             auto depthTextureDesc = ResourceDesc{};
             depthTextureDesc.type = ResourceType::TEXTURE;
             depthTextureDesc.name = "DepthTexture for Frame " + std::to_string(i);
-            depthTextureDesc.texture.width = static_cast<uint32_t>(config.windowWidth);
-            depthTextureDesc.texture.height = static_cast<uint32_t>(config.windowHeight);
+            depthTextureDesc.texture.width = static_cast<uint32_t>(mainWindow.width);
+            depthTextureDesc.texture.height = static_cast<uint32_t>(mainWindow.height);
             depthTextureDesc.texture.format = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
             depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
 
@@ -311,10 +311,10 @@ namespace rasm
 
         pollEvents(camera);
 
-        if (this->resized)
+        if (this->mainWindow.resized)
         {
             recreateSwapchain();
-            this->resized = false;
+            this->mainWindow.resized = false;
         }
 
         // acquire the next image from the swapchain
@@ -402,8 +402,8 @@ namespace rasm
         }
 
         // begin dynamic rendering
-        ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(config.windowWidth), static_cast<float>(config.windowHeight));
-        ctx.setScissor(currentFrame.commandBuffer, 0, 0, config.windowWidth, config.windowHeight);
+        ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(mainWindow.width), static_cast<float>(mainWindow.height));
+        ctx.setScissor(currentFrame.commandBuffer, 0, 0, mainWindow.width, mainWindow.height);
     }
 
     void Engine::endPass()
@@ -471,8 +471,8 @@ namespace rasm
             auto depthTextureDesc = ResourceDesc{};
             depthTextureDesc.type = ResourceType::TEXTURE;
             depthTextureDesc.name = "DepthTexture for Frame " + std::to_string(i);
-            depthTextureDesc.texture.width = static_cast<uint32_t>(config.windowWidth);
-            depthTextureDesc.texture.height = static_cast<uint32_t>(config.windowHeight);
+            depthTextureDesc.texture.width = static_cast<uint32_t>(mainWindow.width);
+            depthTextureDesc.texture.height = static_cast<uint32_t>(mainWindow.height);
             depthTextureDesc.texture.format = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
             depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
 
@@ -490,12 +490,8 @@ namespace rasm
         auto &currentFrame = frameResources[frameCount];
         auto commandBuffer = currentFrame.commandBuffer;
 
-        auto cam = registery.cameras[camera.index];
-        auto camTransform = cam.transform;
-        auto camPos = camTransform.position;
-
-        auto projection = getProjectionMatrix(cam.projection);
-        auto view = glm::translate(glm::mat4(1.0f), camPos);
+        auto projection = getProjectionMatrix(camera);
+        auto view = getViewMatrix(camera);
 
         ctx.bindPipeline(commandBuffer, preparedScene.uberMaterialPipeline);
         {
@@ -529,10 +525,6 @@ namespace rasm
         auto commandBuffer = currentFrame.commandBuffer;
         auto shaderDataBuffer = currentFrame.shaderDataBuffer;
 
-        auto cam = registery.cameras[camera.index];
-        auto camTransform = cam.transform;
-        auto camPos = camTransform.position;
-
         struct ShaderData
         {
             glm::mat4 projection;
@@ -543,8 +535,8 @@ namespace rasm
 
         ShaderData shaderData{};
 
-        shaderData.projection = getProjectionMatrix(cam.projection);
-        shaderData.view = glm::translate(glm::mat4(1.0f), camPos);
+        shaderData.projection = getProjectionMatrix(camera);
+        shaderData.view = getViewMatrix(camera);
 
         auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
 
@@ -606,8 +598,8 @@ namespace rasm
 
         ShaderData shaderData{};
 
-        shaderData.projection = getProjectionMatrix(cam.projection);
-        shaderData.view = glm::translate(glm::mat4(1.0f), camPos);
+        shaderData.projection = getProjectionMatrix(camera);
+        shaderData.view = getViewMatrix(camera);
 
         auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
 
@@ -661,7 +653,7 @@ namespace rasm
         return config;
     }
 
-    WindowHandle Engine::getMainWindow() const
+    const Window& Engine::getMainWindow() const
     {
         return mainWindow;
     }

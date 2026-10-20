@@ -3,6 +3,8 @@
 #include "rasm/core/transform.h"
 #include "rasm/core/camera.h"
 
+#include <algorithm>
+
 #include "SDL3/SDL.h"
 #include "SDL3/SDL_vulkan.h"
 #include "spdlog/spdlog.h"
@@ -10,12 +12,12 @@
 namespace rasm
 {
 
-    WindowHandle Engine::createWindow(uint32_t width, uint32_t height)
+    Window Engine::createWindow(uint32_t width, uint32_t height)
     {
         if (!SDL_Init(SDL_INIT_VIDEO))
         {
             spdlog::error("Failed to initialize SDL: {}", SDL_GetError());
-            return WindowHandle{};
+            return Window{};
         }
 
         auto wind = SDL_CreateWindow("RASM Engine", width, height, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
@@ -23,16 +25,21 @@ namespace rasm
         {
             spdlog::error("Failed to create SDL window: {}", SDL_GetError());
             SDL_Quit();
-            return WindowHandle{};
+            return Window{};
         }
 
-        return {.index = reinterpret_cast<uint64_t>(wind), .generation = 1}; // Placeholder handle generation logic
+        Window window{};
+        window.handle = {.index = reinterpret_cast<uint64_t>(wind), .generation = 1}; // Placeholder handle generation logic
+        window.width = width;
+        window.height = height;
+
+        return window;
     }
 
-    VkSurfaceKHR Engine::createSurfaceVk(WindowHandle handle, VkInstance instance) const
+    VkSurfaceKHR Engine::createSurfaceVk(const Window &window, VkInstance instance) const
     {
         VkSurfaceKHR surface;
-        if (!SDL_Vulkan_CreateSurface(reinterpret_cast<SDL_Window *>(handle.index), instance, nullptr, &surface))
+        if (!SDL_Vulkan_CreateSurface(reinterpret_cast<SDL_Window *>(window.handle.index), instance, nullptr, &surface))
         {
             spdlog::error("Failed to create Vulkan surface: {}", SDL_GetError());
             return VK_NULL_HANDLE;
@@ -40,11 +47,23 @@ namespace rasm
         return surface;
     }
 
+    // Convert screen coordinates to NDC. Both axes are normalized by the smaller
+    // window dimension so that the virtual trackball stays circular on non-square windows.
+    glm::vec2 toNDC(const glm::vec2 &screenPos, const Window &window)
+    {
+        float minDim = static_cast<float>(std::min(window.width, window.height));
+        float x = (2.0f * screenPos.x - static_cast<float>(window.width)) / minDim;
+        float y = (2.0f * screenPos.y - static_cast<float>(window.height)) / minDim;
+        return glm::vec2(x, y);
+    }
+
     void Engine::pollEvents(CameraHandle camera)
     {
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
+            CameraInput input{.key = CameraInput::Key::NONE};
+
             switch (event.type)
             {
             case SDL_EVENT_QUIT:
@@ -55,8 +74,6 @@ namespace rasm
             }
             case SDL_EVENT_KEY_DOWN:
             {
-                auto &cam = registery.cameras[camera.index].transform;
-
                 switch (event.key.key)
                 {
                 case SDLK_ESCAPE:
@@ -67,32 +84,70 @@ namespace rasm
                 }
                 case SDLK_W:
                 {
-                    cam.position += glm::vec3(0.0f, 0.0f, 1.0f); // Move forward
+                    input.key = CameraInput::Key::W;
                     break;
                 }
                 case SDLK_S:
                 {
-                    cam.position += glm::vec3(0.0f, 0.0f, -1.0f); // Move backward
+                    input.key = CameraInput::Key::S;
                     break;
                 }
                 case SDLK_A:
                 {
-                    cam.position += glm::vec3(1.0f, 0.0f, 0.0f); // Move left
+                    input.key = CameraInput::Key::A;
                     break;
                 }
                 case SDLK_D:
                 {
-                    cam.position += glm::vec3(-1.0f, 0.0f, 0.0f); // Move right
+                    input.key = CameraInput::Key::D;
                     break;
                 }
                 }
-            break;
+
+                // Free-fly movement is driven by key events.
+                if (input.key != CameraInput::Key::NONE)
+                {
+                    updateCamera(camera, input);
+                }
+                break;
+            }
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+            {
+                mainWindow.lastMousePos = toNDC(glm::vec2(event.button.x, event.button.y), mainWindow);
+                mainWindow.mouseDragActive = true;
+                break;
+            }
+            case SDL_EVENT_MOUSE_BUTTON_UP:
+            {
+                mainWindow.mouseDragActive = false;
+                break;
+            }
+            case SDL_EVENT_MOUSE_MOTION:
+            {
+                if (!mainWindow.mouseDragActive)
+                {
+                    break;
+                }
+
+                input.mouseStart = mainWindow.lastMousePos;
+                input.mouseEnd = toNDC(glm::vec2(event.motion.x, event.motion.y), mainWindow);
+
+                updateCamera(camera, input);
+                mainWindow.lastMousePos = input.mouseEnd;
+                break;
+            }
+            case SDL_EVENT_MOUSE_WHEEL:
+            {
+                input.wheelDelta = event.wheel.y;
+                updateCamera(camera, input);
+                break;
             }
             case SDL_EVENT_WINDOW_RESIZED:
             {
-                config.windowWidth = event.window.data1;
-                config.windowHeight = event.window.data2;
-                resized = true;
+                mainWindow.resized = true;
+                mainWindow.width = event.window.data1;
+                mainWindow.height = event.window.data2;
+                updateCameraAspectRatio(static_cast<float>(mainWindow.width) / static_cast<float>(mainWindow.height));
                 break;
             }
             default:
@@ -105,11 +160,11 @@ namespace rasm
         }
     }
 
-    void Engine::destroyWindow(WindowHandle handle)
+    void Engine::destroyWindow(const Window &window)
     {
-        if (handle.isValid())
+        if (window.handle.isValid())
         {
-            SDL_DestroyWindow(reinterpret_cast<SDL_Window *>(handle.index));
+            SDL_DestroyWindow(reinterpret_cast<SDL_Window *>(window.handle.index));
             SDL_Quit();
         }
     }
