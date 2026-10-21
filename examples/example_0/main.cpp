@@ -55,7 +55,7 @@ int main()
                                                                                    });
 
     // 6. Create a camera
-    rasm::CameraHandle camera = engine.createCamera(rasm::CameraProjection{.type = rasm::CameraType::PERSPECTIVE,
+    rasm::CameraHandle camera = engine.createCamera(rasm::CameraProjection{.type = rasm::CameraProjection::Type::PERSPECTIVE,
                                                                            .perspective{.fovY = 45.0f,
                                                                                         .aspect = static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight),
                                                                                         .nearZ = 0.1f,
@@ -65,6 +65,12 @@ int main()
                                                         glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
                                                         glm::vec3(1.0f)                    // scale
                                                     });
+
+    // Use the free-fly controller.
+    engine.setCameraController(camera, rasm::CameraController{
+                                           .type = rasm::CameraController::Type::FREE_FLY,
+                                           .freeFly = {.speed = 5.0f, .lookSensitivity = 1.0f},
+                                           .easingSpeed = 6.0f});
 
     // 7. Create a light
     rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL,  // type
