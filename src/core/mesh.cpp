@@ -220,7 +220,7 @@ namespace rasm
             const float *normPtr = nullptr;
             const float *uvPtrs[MAX_VERTEX_UV_SETS] = {};
 
-            size_t posStride = 0, normStride = 0, uvStride = 0;
+            size_t posStride = 0, normStride = 0, uvStrides[MAX_VERTEX_UV_SETS] = {};
 
             // Positions (REQUIRED for a valid mesh)
             if (primitive.attributes.count("POSITION") > 0)
@@ -252,7 +252,7 @@ namespace rasm
                     const tinygltf::Accessor &acc = model.accessors[primitive.attributes.at(attrName)];
                     const tinygltf::BufferView &bv = model.bufferViews[acc.bufferView];
                     uvPtrs[set] = reinterpret_cast<const float *>(&(model.buffers[bv.buffer].data[acc.byteOffset + bv.byteOffset]));
-                    uvStride = acc.ByteStride(bv) / sizeof(float);
+                    uvStrides[set] = acc.ByteStride(bv) / sizeof(float);
                 }
             }
 
@@ -279,8 +279,8 @@ namespace rasm
                 {
                     if (uvPtrs[set])
                     {
-                        v.uv[set][0] = uvPtrs[set][i * uvStride + 0];
-                        v.uv[set][1] = uvPtrs[set][i * uvStride + 1];
+                        v.uv[set][0] = uvPtrs[set][i * uvStrides[set] + 0];
+                        v.uv[set][1] = uvPtrs[set][i * uvStrides[set] + 1];
                     }
                 }
                 vertices.push_back(v);

@@ -211,12 +211,17 @@ namespace rasm
         spdlog::info("Engine shutdown, cleaned up resources.");
     }
 
-    TextureHandle Engine::loadTexture(const std::string &path)
+    TextureHandle Engine::loadTexture(const std::string &path, Format format)
     {
-        // find if the texture is already loaded, if so return existing handle
-        if (registery.loadedTextures.find(path) != registery.loadedTextures.end())
+        if (format != Format::R8G8B8A8_SRGB && format != Format::R8G8B8A8_UNORM)
         {
-            return registery.loadedTextures[path];
+            spdlog::error("loadTexture requires RGBA8 sRGB or UNORM format.");
+            return {};
+        }
+        const auto cacheKey = path + "#" + std::to_string(static_cast<int>(format));
+        if (registery.loadedTextures.find(cacheKey) != registery.loadedTextures.end())
+        {
+            return registery.loadedTextures[cacheKey];
         }
 
         // find if the texture extension is supported, if not return invalid handle
@@ -239,7 +244,7 @@ namespace rasm
         TextureRaw tex{};
         tex.width = width;
         tex.height = height;
-        tex.channels = nChannels;
+        tex.channels = 4;
         tex.data = data;
 
         auto textureDesc = ResourceDesc{};
@@ -247,7 +252,7 @@ namespace rasm
         textureDesc.type = ResourceType::TEXTURE;
         textureDesc.texture.width = width;
         textureDesc.texture.height = height;
-        textureDesc.texture.format = Format::R8G8B8A8_UNORM;
+        textureDesc.texture.format = format;
         textureDesc.texture.usage = TextureUsage::SAMPLED;
 
         auto textureHandle = ctx.createTexture(textureDesc);
@@ -257,7 +262,7 @@ namespace rasm
             return TextureHandle{};
         }
 
-        registery.loadedTextures[path] = textureHandle;
+        registery.loadedTextures[cacheKey] = textureHandle;
         registery.textureData.insert({textureHandle, std::move(tex)});
 
         return textureHandle;
@@ -526,16 +531,16 @@ namespace rasm
             }
             sceneData.vertsPtr = ctx.getBufferDeviceAddress(preparedScene.megaVertexBuffer);
             sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(preparedScene.drawInfoBuffer);
-            sceneData.modeldataPtr = ctx.getBufferDeviceAddress(preparedScene.megaModelDataBuffer);
+            sceneData.modeldataPtr = ctx.getBufferDeviceAddress(preparedScene.megaModelDataBuffer[frameCount]);
 
-            ctx.fillBuffer(preparedScene.sceneDataBuffer, &sceneData, sizeof(sceneData), 0);
+            ctx.fillBuffer(preparedScene.sceneDataBuffer[frameCount], &sceneData, sizeof(sceneData), 0);
 
             updateUniforms(preparedScene);
 
             ctx.bindDescriptorSet(commandBuffer, preparedScene.uberMaterialPipeline, bindlessDescriptorSet, 0);
             ctx.bindIndexBuffer(commandBuffer, preparedScene.megaIndexBuffer, 0, Format::U32_UINT);
 
-            auto sceneDataBufferPtr = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer);
+            auto sceneDataBufferPtr = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer[frameCount]);
             ctx.pushConstants(commandBuffer, preparedScene.uberMaterialPipeline, ShaderType::VERTEX_FRAGMENT, &sceneDataBufferPtr, sizeof(uint64_t), 0);
             ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, 0, preparedScene.drawInfoCount, sizeof(gfx::DrawInfo));
         }

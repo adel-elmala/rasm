@@ -88,7 +88,7 @@ float V_SmithGGXCorrelated(float NoV, float NoL, float roughness)
     float a2 = roughness * roughness;
     float GGXL = NoV * sqrt((-NoL * a2 + NoL) * NoL + a2);
     float GGXV = NoL * sqrt((-NoV * a2 + NoV) * NoV + a2);
-    return 0.5 / (GGXV + GGXL);
+    return 0.5 / max(GGXV + GGXL, 1e-8);
 }
 
 // Lambertian diffuse BRDF
@@ -97,31 +97,33 @@ float Fd_Lambert()
     return 1.0 / PI;
 }
 
-float3 getNormalFromMap(Sampler2D uNormalTexture, float2 uv, float3 normal, float3 tangent)
+// Reconstruct a UV-aligned tangent frame from fragment derivatives. This supports meshes
+// without TANGENT attributes, mirrored UVs, and the normal texture's selected UV set.
+float3 getNormalFromMap(Sampler2D texture, float2 uv, float3 position, float3 normal, float scale)
 {
-    float3 tangentNormal = (uNormalTexture.Sample(uv).xyz) * 2.0 - 1.0;
-
     float3 N = normalize(normal);
-    float3 T = normalize(tangent);
-
+    float3 dpdx = ddx(position);
+    float3 dpdy = ddy(position);
+    float2 duvdx = ddx(uv);
+    float2 duvdy = ddy(uv);
+    float determinant = duvdx.x * duvdy.y - duvdx.y * duvdy.x;
+    float3 T = (dpdx * duvdy.y - dpdy * duvdx.y);
+    // Dividing by the UV determinant preserves handedness for mirrored UV islands.
+    T *= determinant < 0.0 ? -1.0 : 1.0;
+    T -= N * dot(N, T);
+    float tLength2 = dot(T, T);
+    float3 tangentNormal = texture.Sample(uv).xyz * 2.0 - 1.0;
+    tangentNormal.xy *= scale;
+    if (abs(determinant) < 1e-10 || tLength2 < 1e-16)
+        return N;
+    T *= rsqrt(tLength2);
+    float3 bitangent = (dpdy * duvdx.x - dpdx * duvdy.x) * (determinant < 0.0 ? -1.0 : 1.0);
+    // UV determinant alone also contains screen-space orientation. Compare against the
+    // reconstructed bitangent so a flipped viewport does not flip normal-map Y.
     float3 B = cross(N, T);
-    if (dot(B, B) < 1e-8)
-    {
-        // The vertex stage currently passes the normal as the tangent (meshes have no tangents
-        // yet), which makes cross(N, T) zero and the TBN NaN. Build a valid orthonormal basis
-        // from an arbitrary helper axis instead.
-        float3 helper = abs(N.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
-        T = normalize(cross(helper, N));
-        B = cross(N, T);
-    }
-    else
-    {
-        T = normalize(T);
-        B = normalize(B);
-    }
-
-    float3x3 TBN = float3x3(T, B, N);
-    return normalize(mul(TBN, tangentNormal));
+    B *= dot(B, bitangent) < 0.0 ? -1.0 : 1.0;
+    // Explicit vector combination avoids confusing row/column matrix conventions.
+    return normalize(T * tangentNormal.x + B * tangentNormal.y + N * tangentNormal.z);
 }
 
 // Structure containing all the necessary information for PBR shading calculations
@@ -129,7 +131,6 @@ struct PBRInfo
 {
     float3      vPosition;           // world position
     float3      vNormal;             // world normal
-    float3      vTangent;            // world tangent
     float3      cameraPosition;      // world camera position
     float2      baseColorUV;         // UV coordinates for the base color texture
     float2      metallicRoughnessUV; // UV coordinates for the metallic-roughness texture
@@ -187,11 +188,11 @@ float4 PBR(Sampler2D gTextures[], PBRInfo pbrInfo)
     float3 n = pbrInfo.vNormal;
     uint normalIdx = pbrInfo.material.normal.normalTextureIndex;
     if (hasTexture(normalIdx))
-        n = getNormalFromMap(gTextures[normalIdx], pbrInfo.normalUV, pbrInfo.vNormal, pbrInfo.vTangent);
+        n = getNormalFromMap(gTextures[normalIdx], pbrInfo.normalUV, pbrInfo.vPosition, pbrInfo.vNormal, pbrInfo.material.normal.scale);
     n = normalize(n);
 
     float3 v    = normalize(pbrInfo.cameraPosition - pbrInfo.vPosition);
-    float  NoV  = abs(dot(n, v)) + 1e-5;
+    float  NoV  = max(dot(n, v), 1e-5);
 
     // 3. Setup reflectance at normal incidence (f0)
     // Dielectrics have a constant f0 of ~0.04 (4% reflectance), metals use baseColor
@@ -222,29 +223,32 @@ float4 PBR(Sampler2D gTextures[], PBRInfo pbrInfo)
         else {
             // Point Light
             float3 lightDir         = light.position - pbrInfo.vPosition;
-            float  distanceToLight   = length(lightDir);
-
-            l = normalize(lightDir);
+            float distanceSquared = max(dot(lightDir, lightDir), 1e-6);
+            float distanceToLight = sqrt(distanceSquared);
+            l = lightDir / distanceToLight;
 
             // Physical inverse-square law attenuation with clamping range
-            attenuation = 1.0 / (distanceToLight * distanceToLight);
+            attenuation = 1.0 / distanceSquared;
             // Optional smooth falloff window:
-            attenuation *= pow(max(1.0 - pow(distanceToLight / light.range, 4.0), 0.0), 2.0);
+            // A zero range means unbounded inverse-square falloff.
+            if (light.range > 0.0)
+                attenuation *= pow(max(1.0 - pow(distanceToLight / light.range, 4.0), 0.0), 2.0);
         }
 
-        float3 h   = normalize(v + l);
+        float3 halfVector = v + l;
+        float3 h = halfVector * rsqrt(max(dot(halfVector, halfVector), 1e-8));
         float  NoL = clamp(dot(n, l), 0.0, 1.0);
         float  NoH = clamp(dot(n, h), 0.0, 1.0);
         float  LoH = clamp(dot(l, h), 0.0, 1.0);
 
-        if (NoL > 0.0 || NoV > 0.0) {
+        if (NoL > 0.0) {
             // Evaluate Cook-Torrance Specular BRDF terms
             float  D = D_GGX(NoH, alpha);
             float3 F = F_Schlick(LoH, f0);
             float  V = V_SmithGGXCorrelated(NoV, NoL, alpha);
 
             float3 Fr = (D * V) * F;
-            float3 Fd = diffuseColor * Fd_Lambert();
+            float3 Fd = (1.0 - F) * diffuseColor * Fd_Lambert();
 
             // Total surface reflection for this light source
             float3 radiance = light.color * light.intensity * attenuation * NoL;
@@ -253,14 +257,13 @@ float4 PBR(Sampler2D gTextures[], PBRInfo pbrInfo)
     }
 
     // 5. Ambient / Environment lighting approximation
-    float3 ambient = float3(0.03) * baseColor * ao; // Simple ambient baseline
+    float3 ambient = float3(0.03) * diffuseColor * ao; // Simple ambient baseline
 
     // 6. Final color composition
     float3 finalColor = ambient + totalDirectLighting + emissive;
 
-    // Simple tone mapping (ACES / Gamma correction)
+    // Reinhard maps HDR radiance to display range. The sRGB attachment performs encoding.
     finalColor = finalColor / (finalColor + float3(1.0)); // Reinhard tone mapping
-    finalColor = pow(finalColor, float3(1.0 / 2.2));      // Gamma correction
 
     return float4(finalColor, baseColorTex.a);
 }

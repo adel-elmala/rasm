@@ -845,6 +845,10 @@ namespace rasm::gfx
         assert(offset + size <= buffer.desc.buffer.size);
         assert(buffer.allocationInfo.pMappedData != nullptr);
         std::memcpy(static_cast<uint8_t *>(buffer.allocationInfo.pMappedData) + offset, data, size);
+        // VMA may choose non-coherent host-visible memory; coherent allocations make this a no-op.
+        auto result = vmaFlushAllocation(allocator, buffer.allocation, offset, size);
+        if (result != VK_SUCCESS)
+            spdlog::error("Failed to flush buffer memory: {}", _to_vk_result_string(result));
     }
 
     void VulkanContext::updateBindlessDescriptorSet(const DescriptorSetVKHandle &bindlessSet, const TextureVKHandle &texture, uint32_t slot)
@@ -1010,7 +1014,7 @@ namespace rasm::gfx
             .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue{.color{1.0f, 0.0f, 0.0f, 1.0f}}};
+            .clearValue{.color{0.018f, 0.018f, 0.018f, 1.0f}}};
 
         VkRenderingAttachmentInfo depthAttachmentInfo{
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -1499,7 +1503,7 @@ namespace rasm::gfx
     vkb::Result<vkb::Swapchain> _init_swapchain(const vkb::Device &device)
     {
         vkb::SwapchainBuilder swapchain_builder{device};
-        auto swap_ret = swapchain_builder.build();
+        auto swap_ret = swapchain_builder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}).build();
         if (!swap_ret)
         {
             spdlog::error("Failed to create swapchain. Error: {}", swap_ret.error().message());
@@ -1512,7 +1516,7 @@ namespace rasm::gfx
         vkDeviceWaitIdle(device.device);
 
         vkb::SwapchainBuilder swapchain_builder{device};
-        auto swap_ret = swapchain_builder.set_old_swapchain(old_swapchain.swapchain).build();
+        auto swap_ret = swapchain_builder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}).set_old_swapchain(old_swapchain.swapchain).build();
         if (!swap_ret)
         {
             spdlog::error("Failed to recreate swapchain. Error: {}", swap_ret.error().message());

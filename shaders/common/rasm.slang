@@ -4,7 +4,7 @@
 
 struct VSInput
 {
-    // SV_VertexID automatically includes the baseVertex offset from the indirect call
+    // Slang exposes the raw index here; vertMain restores the indirect draw baseVertex.
     uint vertexID : SV_VertexID;
 };
 
@@ -13,14 +13,13 @@ struct VSOutput
     float4 clipPosition  : SV_POSITION;
     float3 worldPosition : POSITION;
     float3 worldNormal   : NORMAL;
-    float3 Tangent       : TANGENT;
     // glTF materials pick a UV set per texture (TEXCOORD_0..2); carry them all and let the
     // fragment shader select using the material's per-texture texCoord.
     float2 uv0            : TEXCOORD0;
     float2 uv1            : TEXCOORD1;
     float2 uv2            : TEXCOORD2;
     float3 worldCameraPosition : TEXCOORD3;
-    uint   drawID;
+    nointerpolation uint drawID;
 };
 
 [shader("vertex")]
@@ -44,7 +43,6 @@ VSOutput vertMain(VSInput input)
     if (dot(output.worldNormal, output.worldNormal) < 1e-12) output.worldNormal = float3(0.0, 0.0, 1.0);
     output.worldNormal          = normalize(output.worldNormal);
     output.worldCameraPosition  = pc.scene->cameraWorldPosition;
-    output.Tangent              = output.worldNormal; // TODO: use the actual tangent from the vertex data
     output.uv0                  = vert.uv[0];
     output.uv1                  = vert.uv[1];
     output.uv2                  = vert.uv[2];
@@ -64,7 +62,6 @@ float4 fragMain(VSOutput input) : SV_TARGET
     PBRInfo info = {};
     info.vPosition              = input.worldPosition;
     info.vNormal                = input.worldNormal;
-    info.vTangent               = input.Tangent;
     info.cameraPosition         = input.worldCameraPosition;
     // Each texture samples the UV set the glTF material asked for.
     info.baseColorUV            = selectUV(material.metallicRoughness.baseColorTextureCoordinate, input.uv0, input.uv1, input.uv2);

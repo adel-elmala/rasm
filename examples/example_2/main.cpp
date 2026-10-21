@@ -58,7 +58,7 @@ int main()
                                                                                         .nearZ = 0.1f,
                                                                                         .farZ = 32.0f}},
                                                     rasm::Transform{
-                                                        glm::vec3(0.0f, 0.0f, -1.0f),      // position
+                                                        glm::vec3(0.0f, 0.0f, 4.0f),       // position
                                                         glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
                                                         glm::vec3(1.0f)                    // scale
                                                     });
@@ -72,26 +72,29 @@ int main()
                                                          .orbitSensitivity = 1.0f},
                                            .easingSpeed = 6.0f});
 
-    // Create a light
-    rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL, // type
-                                                 glm::vec3(1.0f, 1.0f, 1.0f),  // color
-                                                 glm::vec3(0.0f, 10.0f, 0.0f), // position
-                                                 glm::vec3(0.0f, -1.0f, 0.0f), // direction
-                                                 1.0f,                         // intensity
-                                                 100.0f);                      // range
-
-    rasm::LightHandle pointLight = engine.createLight(rasm::LightType::POINT,        // type
-                                                      glm::vec3(1.0f, 1.0f, 1.0f),   // color
-                                                      glm::vec3(10.0f, 10.0f, -10000.0f), // position
-                                                      glm::vec3(0.0f, -1.0f, 0.0f),  // direction
-                                                      0.0f,                          // intensity
-                                                      0.01f);                       // range
+    // Warm key and cool fill expose surface shape and specular response from the camera.
+    rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL,
+                                                 glm::vec3(1.0f, 0.92f, 0.82f),
+                                                 glm::vec3(0.0f),
+                                                 glm::normalize(glm::vec3(-0.5f, -0.8f, -1.0f)),
+                                                 3.0f, 0.0f);
+    rasm::LightHandle fillLight = engine.createLight(rasm::LightType::DIRECTIONAL,
+                                                     glm::vec3(0.65f, 0.8f, 1.0f),
+                                                     glm::vec3(0.0f),
+                                                     glm::normalize(glm::vec3(0.8f, -0.2f, -0.4f)),
+                                                     1.0f, 0.0f);
+    rasm::LightHandle pointLight = engine.createLight(rasm::LightType::POINT,
+                                                      glm::vec3(1.0f, 0.85f, 0.65f),
+                                                      glm::vec3(0.0f, 3.0f, -7.0f),
+                                                      glm::vec3(0.0f),
+                                                      40.0f, 18.0f);
 
     engine.addEntityToScene(scene, pottery);
     engine.addEntityToScene(scene, room);
     engine.addEntityToScene(scene, character);
     engine.addCameraToScene(scene, camera);
     engine.addLightToScene(scene, light);
+    engine.addLightToScene(scene, fillLight);
     engine.addLightToScene(scene, pointLight);
 
     // Main loop

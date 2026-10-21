@@ -49,7 +49,8 @@ namespace rasm {
         MeshHandle                  loadMesh(const std::string& path);
         MeshHandle                  loadGLTF(const std::string& path);
         BufferHandle                uploadMesh(const MeshHandle& handle);
-        TextureHandle               loadTexture(const std::string& path);
+        // Color images default to sRGB; pass R8G8B8A8_UNORM for normal/MR/AO data.
+        TextureHandle               loadTexture(const std::string& path, Format format = Format::R8G8B8A8_SRGB);
         ShaderHandle                createShader(const std::string& shaderSource);
         MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {}, ShaderHandle shader = ShaderHandle{});
         std::vector<MaterialHandle> loadMaterials(MeshHandle meshHandle);

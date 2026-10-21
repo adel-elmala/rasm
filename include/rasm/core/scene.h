@@ -38,9 +38,9 @@ namespace rasm {
     {
         BufferHandle                                       megaVertexBuffer;
         BufferHandle                                       megaIndexBuffer;
-        BufferHandle                                       megaModelDataBuffer;
+        BufferHandle                                       megaModelDataBuffer[MAX_FRAMES_IN_FLIGHT];
         BufferHandle                                       drawInfoBuffer;
-        BufferHandle                                       sceneDataBuffer;
+        BufferHandle                                       sceneDataBuffer[MAX_FRAMES_IN_FLIGHT];
         PipelineHandle                                     uberMaterialPipeline;
         std::vector<std::pair<EntityHandle, glm::mat4>>    modelUniforms;
         uint32_t                                           drawInfoCount;
