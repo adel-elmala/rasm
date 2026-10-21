@@ -1,4 +1,8 @@
 #include <cassert>
+#include <algorithm>
+
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "stb_image_resize2.h"
 
 #include "rasm/core/engine.h"
 #include "rasm/gfx/vulkan.h"
@@ -248,7 +252,7 @@ namespace rasm::gfx
         transitionDstInfo.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         transitionDstInfo.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                                               .baseMipLevel = 0,
-                                              .levelCount = 1,
+                                              .levelCount = texture.mipLevels,
                                               .baseArrayLayer = 0,
                                               .layerCount = 1};
 
@@ -259,25 +263,50 @@ namespace rasm::gfx
             return;
         }
 
-        // 2. Copy raw pixels directly into the OPTIMAL image
-        VkMemoryToImageCopy region = {};
-        region.sType = VK_STRUCTURE_TYPE_MEMORY_TO_IMAGE_COPY;
-        region.pHostPointer = data;
-        region.memoryRowLength = texture.desc.texture.width;
-        region.memoryImageHeight = texture.desc.texture.height;
-        region.imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                   .mipLevel = 0,
-                                   .baseArrayLayer = 0,
-                                   .layerCount = 1};
-        region.imageExtent = {texture.desc.texture.width, texture.desc.texture.height, 1};
+        // Generate the complete RGBA8 mip chain on the host, matching this backend's
+        // host-image-copy upload path. Color must be filtered in linear light; data maps
+        // (normal/MR/AO) must retain their linear encoding. No GPU blit support is required.
+        std::vector<std::vector<unsigned char>> mipData(texture.mipLevels - 1);
+        std::vector<VkMemoryToImageCopy> regions(texture.mipLevels);
+        const auto *pixels = static_cast<const unsigned char *>(data);
+        uint32_t width = texture.desc.texture.width;
+        uint32_t height = texture.desc.texture.height;
+        for (uint32_t level = 0; level < texture.mipLevels; ++level)
+        {
+            auto &region = regions[level];
+            region.sType = VK_STRUCTURE_TYPE_MEMORY_TO_IMAGE_COPY;
+            region.pHostPointer = pixels;
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
+            region.imageExtent = {width, height, 1};
+            if (level + 1 < texture.mipLevels)
+            {
+                auto nextWidth = std::max(1u, width / 2);
+                auto nextHeight = std::max(1u, height / 2);
+                auto &next = mipData[level];
+                next.resize(static_cast<size_t>(nextWidth) * nextHeight * 4);
+                unsigned char *resized = nullptr;
+                if (texture.desc.texture.format == Format::R8G8B8A8_SRGB ||
+                    texture.desc.texture.format == Format::B8G8R8A8_SRGB)
+                    resized = stbir_resize_uint8_srgb(pixels, width, height, 0, next.data(), nextWidth, nextHeight, 0, STBIR_RGBA);
+                else
+                    resized = stbir_resize_uint8_linear(pixels, width, height, 0, next.data(), nextWidth, nextHeight, 0, STBIR_4CHANNEL);
+                if (!resized)
+                {
+                    spdlog::error("Failed to generate mip level {} for '{}'", level + 1, texture.desc.name);
+                    return;
+                }
+                pixels = next.data();
+                width = nextWidth;
+                height = nextHeight;
+            }
+        }
 
         VkCopyMemoryToImageInfo copyInfo = {};
         copyInfo.sType = VK_STRUCTURE_TYPE_COPY_MEMORY_TO_IMAGE_INFO;
-        copyInfo.flags = 0;
         copyInfo.dstImage = texture.image;
         copyInfo.dstImageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        copyInfo.regionCount = 1;
-        copyInfo.pRegions = &region;
+        copyInfo.regionCount = static_cast<uint32_t>(regions.size());
+        copyInfo.pRegions = regions.data();
 
         result = vkCopyMemoryToImage(device, &copyInfo);
         if (result != VK_SUCCESS)
@@ -297,7 +326,17 @@ namespace rasm::gfx
         imageInfo.extent.width = desc.texture.width;
         imageInfo.extent.height = desc.texture.height;
         imageInfo.extent.depth = 1;
-        imageInfo.mipLevels = 1;
+        // Only sampled RGBA8 images use this upload/generation path. Render targets and
+        // other formats retain a single level.
+        uint32_t mipLevels = 1;
+        if (desc.texture.usage == TextureUsage::SAMPLED &&
+            (desc.texture.format == Format::R8G8B8A8_UNORM || desc.texture.format == Format::R8G8B8A8_SRGB ||
+             desc.texture.format == Format::B8G8R8A8_SRGB))
+        {
+            for (uint32_t size = std::max(desc.texture.width, desc.texture.height); size > 1; size /= 2)
+                ++mipLevels;
+        }
+        imageInfo.mipLevels = mipLevels;
         imageInfo.arrayLayers = 1;
         imageInfo.format = _to_vk_format(desc.texture.format);
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -331,7 +370,7 @@ namespace rasm::gfx
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
         viewInfo.format = _to_vk_format(desc.texture.format);
         viewInfo.subresourceRange.aspectMask = _to_vk_aspect_mask(desc.texture.usage);
-        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.levelCount = mipLevels;
         viewInfo.subresourceRange.layerCount = 1;
 
         VkImageView imageView;
@@ -353,6 +392,13 @@ namespace rasm::gfx
             VkSamplerCreateInfo samplerInfo = {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
             samplerInfo.magFilter = VK_FILTER_LINEAR;
             samplerInfo.minFilter = VK_FILTER_LINEAR;
+            samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+            samplerInfo.maxLod = static_cast<float>(mipLevels - 1);
+            // Anisotropy is already required when selecting the physical device.
+            VkPhysicalDeviceProperties properties{};
+            vkGetPhysicalDeviceProperties(physical_device, &properties);
+            samplerInfo.anisotropyEnable = VK_TRUE;
+            samplerInfo.maxAnisotropy = std::min(8.0f, properties.limits.maxSamplerAnisotropy);
             samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
@@ -384,7 +430,7 @@ namespace rasm::gfx
         this->dispatch_table.setDebugUtilsObjectNameEXT(&imageNameInfo);
         this->dispatch_table.setDebugUtilsObjectNameEXT(&imageViewNameInfo);
 
-        TextureVKHandle rawHandle = {desc, {}, image, imageView, sampler, allocation};
+        TextureVKHandle rawHandle = {desc, {}, image, imageView, sampler, allocation, mipLevels};
         return rawHandle;
     }
 
@@ -958,7 +1004,7 @@ namespace rasm::gfx
                                          .subresourceRange = {
                                              .aspectMask = aspectMask,
                                              .baseMipLevel = 0,
-                                             .levelCount = 1,
+                                             .levelCount = image.mipLevels,
                                              .baseArrayLayer = 0,
                                              .layerCount = 1,
                                          }};

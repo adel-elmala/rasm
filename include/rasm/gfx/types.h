@@ -27,6 +27,7 @@ namespace rasm::gfx
         VkImageView     view;
         VkSampler       sampler;
         VmaAllocation   allocation;
+        uint32_t        mipLevels = 1;
     };
 
     struct ShaderVKHandle
