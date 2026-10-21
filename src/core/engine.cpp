@@ -498,6 +498,7 @@ namespace rasm
         auto &currentFrame = frameResources[frameCount];
         auto commandBuffer = currentFrame.commandBuffer;
 
+        auto &cameraRef = registery.cameras[camera.index];
         auto projection = getProjectionMatrix(camera);
         auto view = getViewMatrix(camera);
 
@@ -506,7 +507,7 @@ namespace rasm
             gfx::SceneData sceneData{};
             sceneData.projection = projection;
             sceneData.view = view;
-            sceneData.cameraWorldPosition = camPos;
+            sceneData.cameraWorldPosition = cameraRef.transform.position;
             sceneData.numLights = sceneRef.lightCount;
             for (uint32_t i = 0; i < sceneRef.lightCount; ++i)
             {
