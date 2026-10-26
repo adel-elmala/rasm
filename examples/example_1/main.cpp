@@ -18,7 +18,7 @@ int main()
     rasm::SceneHandle scene = engine.createScene();
 
     // Create a camera
-    rasm::CameraHandle camera = engine.createCamera(rasm::CameraProjection{.type = rasm::CameraType::PERSPECTIVE,
+    rasm::CameraHandle camera = engine.createCamera(rasm::CameraProjection{.type = rasm::CameraProjection::Type::PERSPECTIVE,
                                                                            .perspective{.fovY = 45.0f,
                                                                                         .aspect = static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight),
                                                                                         .nearZ = 0.1f,
@@ -29,6 +29,14 @@ int main()
                                                         glm::vec3(1.0f)                    // scale
                                                     });
 
+    // Orbit the trackball around the scene.
+    const glm::vec3 orbitCenter(0.0f, 0.0f, -10.0f);
+    engine.setCameraController(camera, rasm::CameraController{
+                                           .type = rasm::CameraController::Type::TRACK_BALL,
+                                           .trackBall = {.radius = glm::length(orbitCenter - engine.getCameraTransform(camera).position),
+                                                         .center = orbitCenter,
+                                                         .orbitSensitivity = 1.0f},
+                                           .easingSpeed = 6.0f});
     // Load resources
     rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/obj/bunny/bunny.obj");
 
@@ -53,9 +61,10 @@ int main()
     // Create a directional light
     rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL,  // type
                                                  glm::vec3(1.0f, 1.0f, 1.0f),   // color
-                                                 1.0f,                          // intensity
                                                  glm::vec3(0.0f, 10.0f, 0.0f),  // position
-                                                 glm::vec3(0.0f, -1.0f, 0.0f)); // direction
+                                                 glm::vec3(0.0f, -1.0f, 0.0f), // direction
+                                                 1.0f,                          // intensity
+                                                 10.0f);                        // range
 
     engine.addEntityToScene(scene, bunny);
     engine.addCameraToScene(scene, camera);
@@ -89,9 +98,6 @@ int main()
             auto commandBuffer = currentFrame.commandBuffer;
             auto shaderDataBuffer = currentFrame.shaderDataBuffer;
 
-            auto camTransform = engine.getCameraTransform(camera);
-            auto camPos = camTransform.position;
-
             struct ShaderData
             {
                 glm::mat4 projection;
@@ -101,8 +107,8 @@ int main()
             };
 
             ShaderData shaderData{};
-            shaderData.projection = getProjectionMatrix(engine.getCameraProjection(camera));
-            shaderData.view = glm::translate(glm::mat4(1.0f), camPos);
+            shaderData.projection = engine.getProjectionMatrix(camera);
+            shaderData.view = engine.getViewMatrix(camera);
 
             auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
 
@@ -141,10 +147,10 @@ int main()
 
     // set up overlay mesh and shader
     std::vector<rasm::Vertex> vertices = {
-        {.pos = glm::vec3(-1.0f, -1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(0.0f, 0.0f)},
-        {.pos = glm::vec3(1.0f, -1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(1.0f, 0.0f)},
-        {.pos = glm::vec3(1.0f, 1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(1.0f, 1.0f)},
-        {.pos = glm::vec3(-1.0f, 1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = glm::vec2(0.0f, 1.0f)}};
+        {.pos = glm::vec3(-1.0f, -1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = {glm::vec2(0.0f, 0.0f)}},
+        {.pos = glm::vec3(1.0f, -1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = {glm::vec2(1.0f, 0.0f)}},
+        {.pos = glm::vec3(1.0f, 1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = {glm::vec2(1.0f, 1.0f)}},
+        {.pos = glm::vec3(-1.0f, 1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = {glm::vec2(0.0f, 1.0f)}}};
 
     std::vector<uint32_t> indices = {
         0, 1, 2, // first triangle
@@ -228,9 +234,6 @@ int main()
             auto commandBuffer = currentFrame.commandBuffer;
             auto shaderDataBuffer = currentFrame.shaderDataBuffer;
 
-            auto camTransform = engine.getCameraTransform(camera);
-            auto camPos = camTransform.position;
-
             struct ShaderData
             {
                 glm::mat4 projection;
@@ -240,8 +243,8 @@ int main()
             };
 
             ShaderData shaderData{};
-            shaderData.projection = getProjectionMatrix(engine.getCameraProjection(camera));
-            shaderData.view = glm::translate(glm::mat4(1.0f), camPos);
+            shaderData.projection = engine.getProjectionMatrix(camera);
+            shaderData.view = engine.getViewMatrix(camera);
 
             auto rt_color_attachment = engine.getRenderTargetAttachments(rtHandle).color;
             shaderData.textureIndex = engine.getBindlessTextureIndex(rt_color_attachment); // TODO: handle cases where material has more than 1 texture

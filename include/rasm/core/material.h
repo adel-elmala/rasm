@@ -48,6 +48,7 @@ namespace rasm
         MaterialHandle handle{};
         MaterialType   type{};
         TextureHandle  textures[MAX_TEXTURE_SLOTS];
+        uint32_t       texCoords[MAX_TEXTURE_SLOTS];
         float          params[MAX_PARAM_SLOTS];
         ShaderHandle   shader{};
     };

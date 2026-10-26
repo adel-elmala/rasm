@@ -17,6 +17,9 @@ namespace rasm
     constexpr uint32_t  MAX_DESCRIPTOR_TYPES    = 1;
     constexpr uint32_t  MAX_BINDLESS_TEXTURES   = 1024;
     constexpr uint32_t  MAX_VERTEX_ATTRIBUTES   = 4;
+    // Sentinel written by the CPU when a material slot has no texture bound; the shader must
+    // never sample the bindless array with this index.
+    constexpr uint32_t  INVALID_TEXTURE_INDEX   = 0xFFFFFFFF;
 
     const static std::unordered_set<std::string> supportedMeshExtensions    = {"obj", "gltf", "glb"};
     const static std::unordered_set<std::string> supportedTextureExtensions = {"png", "jpg", "jpeg"};

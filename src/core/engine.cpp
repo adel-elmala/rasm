@@ -47,7 +47,7 @@ namespace rasm
         }
 
         this->mainWindow = createWindow(config.windowWidth, config.windowHeight);
-        if (!mainWindow.isValid())
+        if (!mainWindow.handle.isValid())
         {
             spdlog::error("Failed to initialize engine window.");
             return;
@@ -105,8 +105,8 @@ namespace rasm
             auto depthTextureDesc = ResourceDesc{};
             depthTextureDesc.type = ResourceType::TEXTURE;
             depthTextureDesc.name = "DepthTexture for Frame " + std::to_string(i);
-            depthTextureDesc.texture.width = static_cast<uint32_t>(config.windowWidth);
-            depthTextureDesc.texture.height = static_cast<uint32_t>(config.windowHeight);
+            depthTextureDesc.texture.width = static_cast<uint32_t>(mainWindow.width);
+            depthTextureDesc.texture.height = static_cast<uint32_t>(mainWindow.height);
             depthTextureDesc.texture.format = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
             depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
 
@@ -211,12 +211,17 @@ namespace rasm
         spdlog::info("Engine shutdown, cleaned up resources.");
     }
 
-    TextureHandle Engine::loadTexture(const std::string &path)
+    TextureHandle Engine::loadTexture(const std::string &path, Format format)
     {
-        // find if the texture is already loaded, if so return existing handle
-        if (registery.loadedTextures.find(path) != registery.loadedTextures.end())
+        if (format != Format::R8G8B8A8_SRGB && format != Format::R8G8B8A8_UNORM)
         {
-            return registery.loadedTextures[path];
+            spdlog::error("loadTexture requires RGBA8 sRGB or UNORM format.");
+            return {};
+        }
+        const auto cacheKey = path + "#" + std::to_string(static_cast<int>(format));
+        if (registery.loadedTextures.find(cacheKey) != registery.loadedTextures.end())
+        {
+            return registery.loadedTextures[cacheKey];
         }
 
         // find if the texture extension is supported, if not return invalid handle
@@ -239,7 +244,7 @@ namespace rasm
         TextureRaw tex{};
         tex.width = width;
         tex.height = height;
-        tex.channels = nChannels;
+        tex.channels = 4;
         tex.data = data;
 
         auto textureDesc = ResourceDesc{};
@@ -247,7 +252,7 @@ namespace rasm
         textureDesc.type = ResourceType::TEXTURE;
         textureDesc.texture.width = width;
         textureDesc.texture.height = height;
-        textureDesc.texture.format = Format::R8G8B8A8_UNORM;
+        textureDesc.texture.format = format;
         textureDesc.texture.usage = TextureUsage::SAMPLED;
 
         auto textureHandle = ctx.createTexture(textureDesc);
@@ -257,7 +262,7 @@ namespace rasm
             return TextureHandle{};
         }
 
-        registery.loadedTextures[path] = textureHandle;
+        registery.loadedTextures[cacheKey] = textureHandle;
         registery.textureData.insert({textureHandle, std::move(tex)});
 
         return textureHandle;
@@ -311,10 +316,10 @@ namespace rasm
 
         pollEvents(camera);
 
-        if (this->resized)
+        if (this->mainWindow.resized)
         {
             recreateSwapchain();
-            this->resized = false;
+            this->mainWindow.resized = false;
         }
 
         // acquire the next image from the swapchain
@@ -402,8 +407,8 @@ namespace rasm
         }
 
         // begin dynamic rendering
-        ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(config.windowWidth), static_cast<float>(config.windowHeight));
-        ctx.setScissor(currentFrame.commandBuffer, 0, 0, config.windowWidth, config.windowHeight);
+        ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(mainWindow.width), static_cast<float>(mainWindow.height));
+        ctx.setScissor(currentFrame.commandBuffer, 0, 0, mainWindow.width, mainWindow.height);
     }
 
     void Engine::endPass()
@@ -471,8 +476,8 @@ namespace rasm
             auto depthTextureDesc = ResourceDesc{};
             depthTextureDesc.type = ResourceType::TEXTURE;
             depthTextureDesc.name = "DepthTexture for Frame " + std::to_string(i);
-            depthTextureDesc.texture.width = static_cast<uint32_t>(config.windowWidth);
-            depthTextureDesc.texture.height = static_cast<uint32_t>(config.windowHeight);
+            depthTextureDesc.texture.width = static_cast<uint32_t>(mainWindow.width);
+            depthTextureDesc.texture.height = static_cast<uint32_t>(mainWindow.height);
             depthTextureDesc.texture.format = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
             depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
 
@@ -482,6 +487,14 @@ namespace rasm
 
     void Engine::render2(SceneHandle scene, CameraHandle camera)
     {
+        if (!scene.isValid() || scene.index >= MAX_SCENES)
+        {
+            spdlog::error("Invalid scene handle for preparation.");
+            return ;
+        }
+
+        auto &sceneRef = registery.scenes[scene.index];
+
         beginFrame(camera);
         beginPass();
 
@@ -490,28 +503,44 @@ namespace rasm
         auto &currentFrame = frameResources[frameCount];
         auto commandBuffer = currentFrame.commandBuffer;
 
-        auto cam = registery.cameras[camera.index];
-        auto camTransform = cam.transform;
-        auto camPos = camTransform.position;
-
-        auto projection = getProjectionMatrix(cam.projection);
-        auto view = glm::translate(glm::mat4(1.0f), camPos);
+        auto &cameraRef = registery.cameras[camera.index];
+        auto projection = getProjectionMatrix(camera);
+        auto view = getViewMatrix(camera);
 
         ctx.bindPipeline(commandBuffer, preparedScene.uberMaterialPipeline);
         {
             gfx::SceneData sceneData{};
             sceneData.projection = projection;
             sceneData.view = view;
+            sceneData.cameraWorldPosition = cameraRef.transform.position;
+            sceneData.numLights = sceneRef.lightCount;
+            for (uint32_t i = 0; i < sceneRef.lightCount; ++i)
+            {
+                LightHandle sceneLight = sceneRef.lights[i];
+                Light sceneLightData = registery.lights[sceneLight.index];
+
+                gfx::Light light {};
+                light.position = sceneLightData.position;
+                light.direction = sceneLightData.direction;
+                light.color = sceneLightData.color;
+                light.intensity = sceneLightData.intensity;
+                light.range = sceneLightData.range;
+                light.type = static_cast<gfx::LightType>(sceneLightData.type);
+
+                sceneData.lights[i] = light;
+            }
             sceneData.vertsPtr = ctx.getBufferDeviceAddress(preparedScene.megaVertexBuffer);
             sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(preparedScene.drawInfoBuffer);
-            sceneData.modeldataPtr = ctx.getBufferDeviceAddress(preparedScene.megaModelDataBuffer);
+            sceneData.modeldataPtr = ctx.getBufferDeviceAddress(preparedScene.megaModelDataBuffer[frameCount]);
 
-            ctx.fillBuffer(preparedScene.sceneDataBuffer, &sceneData, sizeof(sceneData), 0);
+            ctx.fillBuffer(preparedScene.sceneDataBuffer[frameCount], &sceneData, sizeof(sceneData), 0);
+
+            updateUniforms(preparedScene);
 
             ctx.bindDescriptorSet(commandBuffer, preparedScene.uberMaterialPipeline, bindlessDescriptorSet, 0);
             ctx.bindIndexBuffer(commandBuffer, preparedScene.megaIndexBuffer, 0, Format::U32_UINT);
 
-            auto sceneDataBufferPtr = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer);
+            auto sceneDataBufferPtr = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer[frameCount]);
             ctx.pushConstants(commandBuffer, preparedScene.uberMaterialPipeline, ShaderType::VERTEX_FRAGMENT, &sceneDataBufferPtr, sizeof(uint64_t), 0);
             ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, 0, preparedScene.drawInfoCount, sizeof(gfx::DrawInfo));
         }
@@ -529,10 +558,6 @@ namespace rasm
         auto commandBuffer = currentFrame.commandBuffer;
         auto shaderDataBuffer = currentFrame.shaderDataBuffer;
 
-        auto cam = registery.cameras[camera.index];
-        auto camTransform = cam.transform;
-        auto camPos = camTransform.position;
-
         struct ShaderData
         {
             glm::mat4 projection;
@@ -543,8 +568,8 @@ namespace rasm
 
         ShaderData shaderData{};
 
-        shaderData.projection = getProjectionMatrix(cam.projection);
-        shaderData.view = glm::translate(glm::mat4(1.0f), camPos);
+        shaderData.projection = getProjectionMatrix(camera);
+        shaderData.view = getViewMatrix(camera);
 
         auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
 
@@ -606,8 +631,8 @@ namespace rasm
 
         ShaderData shaderData{};
 
-        shaderData.projection = getProjectionMatrix(cam.projection);
-        shaderData.view = glm::translate(glm::mat4(1.0f), camPos);
+        shaderData.projection = getProjectionMatrix(camera);
+        shaderData.view = getViewMatrix(camera);
 
         auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
 
@@ -661,7 +686,7 @@ namespace rasm
         return config;
     }
 
-    WindowHandle Engine::getMainWindow() const
+    const Window& Engine::getMainWindow() const
     {
         return mainWindow;
     }

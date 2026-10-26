@@ -4,10 +4,17 @@
 #include "rasm/core/utils.h"
 #include "rasm/gfx/types.h"
 
+#include <cstddef>
+#include <cstdlib>
 #include <variant>
 
 namespace rasm
 {
+  // The mega vertex buffer is written with Vertex and read in the shader as gfx::VertexFull
+  // (scalar layout); the two must not drift apart.
+  static_assert(sizeof(Vertex) == sizeof(gfx::VertexFull), "Vertex must match the shader's VertexFull");
+  static_assert(offsetof(Vertex, uv) == offsetof(gfx::VertexFull, uv), "Vertex must match the shader's VertexFull");
+
   SceneHandle Engine::createScene()
   {
     const SceneHandle id = handleManager.getNextSceneHandle();
@@ -193,15 +200,12 @@ namespace rasm
     bufferDesc.name = "Mega Model data Buffer";
     bufferDesc.buffer.usage = BufferUsage::STORAGE;
     bufferDesc.buffer.size = sceneEntities.size() * sizeof(gfx::Modeldata);
-    auto megaModelBufferHandle = ctx.createBuffer(bufferDesc);
-
-    if (!megaModelBufferHandle.isValid())
+    // Mutable uniforms belong to a frame slot; other slots may still be executing on the GPU.
+    for (auto &buffer : preparedScene.megaModelDataBuffer)
     {
-      spdlog::error("Failed to create mega model buffer for the scene.");
-      return PreparedScene{};
+      buffer = ctx.createBuffer(bufferDesc);
+      if (!buffer.isValid()) return PreparedScene{};
     }
-
-    preparedScene.megaModelDataBuffer = megaModelBufferHandle;
 
     bufferDesc.name = "Draw Info Buffer";
     bufferDesc.buffer.usage = BufferUsage::INDIRECT;
@@ -222,15 +226,11 @@ namespace rasm
     bufferDesc.buffer.usage = BufferUsage::STORAGE;
     bufferDesc.buffer.size = sizeof(gfx::SceneData);
 
-    auto sceneDataBufferHandle = ctx.createBuffer(bufferDesc);
-
-    if (!sceneDataBufferHandle.isValid())
+    for (auto &buffer : preparedScene.sceneDataBuffer)
     {
-      spdlog::error("Failed to create scene data buffer for the scene.");
-      return PreparedScene{};
+      buffer = ctx.createBuffer(bufferDesc);
+      if (!buffer.isValid()) return PreparedScene{};
     }
-
-    preparedScene.sceneDataBuffer = sceneDataBufferHandle;
 
     uint64_t vertexBufferOffset = 0;
     uint64_t indexBufferOffset = 0;
@@ -266,18 +266,24 @@ namespace rasm
 
         model = model * subGLTF.transform;
 
+        preparedScene.modelUniforms.push_back({sceneEntity.handle, subGLTF.transform});
+
         gfx::Modeldata modelData{};
         modelData.worldMatrix = model;
+        modelData.normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
         modelData.vertFormat = gfx::VertexFormat::Full;
         if (subGLTF.material.isValid())
         {
           modelData.material = convertToGfxMaterial(getMaterial(subGLTF.material));
-        } else {
+        }
+        else
+        {
           // Use a default material if the subGLTF material is not valid.
           modelData.material = convertToGfxMaterial(getMaterial(sceneEntity.material));
         }
 
-        ctx.fillBuffer(preparedScene.megaModelDataBuffer, &modelData, sizeof(modelData), modelBufferOffset);
+        for (auto buffer : preparedScene.megaModelDataBuffer)
+          ctx.fillBuffer(buffer, &modelData, sizeof(modelData), modelBufferOffset);
         modelBufferOffset += sizeof(modelData);
 
         auto drawInfo = gfx::DrawInfo{};
@@ -442,4 +448,29 @@ namespace rasm
 
     return compiledScene;
   }
+
+  void Engine::updateUniforms(PreparedScene &preparedScene)
+  {
+    size_t modelBufferOffset = 0;
+
+    for (const auto &[EntityHandle, gltfTransform] : preparedScene.modelUniforms)
+    {
+      auto entity = registery.entities[EntityHandle.index];
+      auto modelTransform = entity.transform;
+
+      auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
+                   glm::mat4_cast(modelTransform.rotation) *
+                   glm::scale(glm::mat4(1.0f), modelTransform.scale);
+
+      model = model * gltfTransform;
+
+      gfx::Modeldata modelData{};
+      modelData.worldMatrix = model;
+      modelData.normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
+
+      ctx.fillBuffer(preparedScene.megaModelDataBuffer[frameCount], &modelData, offsetof(gfx::Modeldata, material), modelBufferOffset);
+      modelBufferOffset += sizeof(modelData);
+    }
+  }
+
 } // namespace rasm

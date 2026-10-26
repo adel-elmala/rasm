@@ -30,19 +30,20 @@ namespace rasm {
     struct CompiledScene
     {
         std::unordered_map<MaterialHandle, std::unordered_set<EntityHandle, HandleHash>, HandleHash> materialToMeshes;
-        std::unordered_map<MaterialHandle, PipelineHandle, HandleHash> materialToPipeline;
-        std::unordered_map<EntityHandle, BufferHandle, HandleHash> meshData;
+        std::unordered_map<MaterialHandle, PipelineHandle, HandleHash>                               materialToPipeline;
+        std::unordered_map<EntityHandle, BufferHandle, HandleHash>                                   meshData;
     };
 
     struct PreparedScene
     {
-        BufferHandle megaVertexBuffer;
-        BufferHandle megaIndexBuffer;
-        BufferHandle megaModelDataBuffer;
-        BufferHandle drawInfoBuffer;
-        BufferHandle sceneDataBuffer;
-        PipelineHandle uberMaterialPipeline;
-        uint32_t drawInfoCount;
+        BufferHandle                                       megaVertexBuffer;
+        BufferHandle                                       megaIndexBuffer;
+        BufferHandle                                       megaModelDataBuffer[MAX_FRAMES_IN_FLIGHT];
+        BufferHandle                                       drawInfoBuffer;
+        BufferHandle                                       sceneDataBuffer[MAX_FRAMES_IN_FLIGHT];
+        PipelineHandle                                     uberMaterialPipeline;
+        std::vector<std::pair<EntityHandle, glm::mat4>>    modelUniforms;
+        uint32_t                                           drawInfoCount;
     };
 
 }
