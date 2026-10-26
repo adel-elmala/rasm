@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-RASM is an early-stage C++20 GPU-driven rendering engine (static lib `rasm_lib` + example executables). Vulkan 1.4 is the only backend today; Metal, D3D12 and WebGPU are planned. Shaders are written in Slang. Target users: indie games, visualization tools, map engines.
+RASM is an early-stage C++20 GPU-driven rendering engine (static lib target `rasm`, alias `rasm::rasm`, + example executables). Vulkan 1.4 is the only backend today; Metal, D3D12 and WebGPU are planned. Shaders are written in Slang. Target users: indie games, visualization tools, map engines.
 
 ## Docs — read the relevant one before changing code
 
@@ -19,18 +19,24 @@ RASM is an early-stage C++20 GPU-driven rendering engine (static lib `rasm_lib` 
 ```powershell
 cmake --preset x64-debug            # or x64-release; macOS / macOS-release / macOS-Xcode on macOS
 cmake --build --preset x64-debug
-cmake --build --preset x64-debug --target Example_2   # single example
-.\build\x64-debug\Example_2.exe     # must run from the repo root
+cmake --build --preset x64-debug --target 02_gltf     # single example
+.\build\x64-debug\examples\02_gltf.exe                 # must run from the repo root
 ```
 
-- Requires `VCPKG_ROOT`; presets use Ninja + `clang++`. Optional `-DRASM_ENABLE_AVX2=ON` (x86 only).
-- New `.cpp` files must be added to `RASM_SRC` in `CMakeLists.txt`; new examples need `add_executable` + `target_link_libraries(... rasm_lib)`.
+- Requires `VCPKG_ROOT`; presets use Ninja + `clang++`. Options: `-DRASM_ENABLE_AVX2=ON` (x86 only), `-DRASM_BUILD_EXAMPLES=OFF`.
+- New `.cpp` files must be added to `RASM_SRC` in `src/CMakeLists.txt`. New examples go in `examples/NN_name/main.cpp` plus a `rasm_add_example(NN_name)` line in `examples/CMakeLists.txt`.
 - No test suite or lint config yet. Verify changes by running the examples with `EngineConfig::enableValidation = true` — a change that adds validation messages is not done.
-- Shaders are compiled at runtime from `./shaders/common` (cwd-relative), and examples load `assets/...` relative to cwd. `compile-shaders.bat` is only an offline compile check.
+- Shaders are compiled at runtime from `./shaders/passes` with includes resolved from `./shaders/lib` (cwd-relative), and examples load `assets/...` relative to cwd. `tools/compile-shaders.bat` is only an offline compile check.
+
+## Layout
+
+- `include/rasm/` is the public API, with the low-level API in `include/rasm/render/`.
+- `src/` is private: `core/`, `platform/`, `assets/`, `scene/`, `renderer/`, `rhi/` (+ `rhi/vulkan/`). `src/thirdparty_impl.cpp` is the only file that defines `*_IMPLEMENTATION` macros.
+- Private headers are included relative to `src/` (e.g. `"rhi/vulkan/vulkanContext.h"`). `src/` is temporarily a PUBLIC include directory until `D2`; don't add new public→private includes.
 
 ## Invariants that are easy to break
 
-- C++ structs in `include/rasm/gfx/uberMaterialTypes.h` must match `shaders/common/core.slang`/`pbr.slang` byte-for-byte (scalar layout); update both sides and the `static_assert`s together.
+- C++ structs in `src/renderer/uberMaterialTypes.h` must match `shaders/lib/core.slang`/`pbr.slang` byte-for-byte (scalar layout); update both sides and the `static_assert`s together.
 - `RenderContext::create*` returns an existing handle for an equal `ResourceDesc` (name + fields) — resources that must be distinct need distinct names until `B1` is fixed.
 - `frameCount` is the frame-in-flight slot (0/1); per-frame mutable buffers are indexed by it.
 - `prepareScene` is cached per scene after the first `render2`; only transforms update afterwards.

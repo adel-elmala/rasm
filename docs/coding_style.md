@@ -41,7 +41,7 @@ Known deviations to migrate, rather than copy:
 
 - Every header starts with `#pragma once`.
 - One main type per header. Small helper types that belong to it may live beside it.
-- **Public versus private.** `include/rasm/` is the API that users compile against.
+- **Public versus private.** `include/rasm/` is the API that users compile against. Everything under `src/` is private. `src/` is temporarily also a public include directory until `D2` is done; don't add new uses of that.
   - Public headers must not include backend or third-party implementation headers. That means no `vulkan.h`, `VkBootstrap.h`, `vk_mem_alloc.h`, `slang.h`, `tiny_gltf.h` or `SDL`.
   - Forward-declare instead, as `engine.h` already does for `tinygltf::Model`.
   - Backend and implementation headers go under `src/`.
@@ -50,14 +50,30 @@ Known deviations to migrate, rather than copy:
   2. `rasm/...` headers,
   3. third-party headers,
   4. standard library headers.
-- Use the `"rasm/core/xyz.h"` form for project headers.
-- Single-header library implementations (`STB_IMAGE_IMPLEMENTATION`, `TINYGLTF_IMPLEMENTATION`, `VMA_IMPLEMENTATION`, …) go in exactly one `.cpp` each, preferably in a dedicated `src/thirdparty_impl.cpp`.
+- Include paths:
+  - public headers as `"rasm/xyz.h"` or `"rasm/render/xyz.h"`,
+  - private headers relative to `src/`, e.g. `"core/utils.h"`, `"renderer/shaderCompiler.h"`, `"rhi/vulkan/vulkanContext.h"`.
+- Where new code goes:
+
+  | Kind of code | Directory |
+  |---|---|
+  | Handles, utilities, allocators | `src/core/` |
+  | Window, input, OS | `src/platform/` |
+  | File formats and importers | `src/assets/` |
+  | Scene model | `src/scene/` |
+  | Passes, render graph, shader compilation, GPU structs | `src/renderer/` |
+  | Backend-neutral GPU layer | `src/rhi/` |
+  | One backend | `src/rhi/<backend>/` |
+  | Shared shader modules | `shaders/lib/` |
+  | Pass and entry shaders | `shaders/passes/` |
+  | A new example | `examples/NN_name/main.cpp`, plus one `rasm_add_example(NN_name)` line in `examples/CMakeLists.txt` |
+- Single-header library implementations (`STB_IMAGE_IMPLEMENTATION`, `TINYGLTF_IMPLEMENTATION`, `VMA_IMPLEMENTATION`, …) are defined only in `src/thirdparty_impl.cpp`. Mind the include order documented there.
 - Library configuration macros that change behaviour (`GLM_FORCE_DEPTH_ZERO_TO_ONE`, `VMA_VULKAN_VERSION`) are set **once, in CMake**, with `target_compile_definitions`. Never set them in a `.cpp` file: a define placed after a header has already been included has no effect (see `B2`).
 
 ## 4. Formatting
 
 - 4 spaces of indentation, no tabs. Allman braces, where the opening brace goes on its own line.
-- **Aligned declarations in headers.** Headers that declare large APIs or structs wrap their body in `// clang-format off` / `// clang-format on` and align return types, names, member types and default values in columns (see `engine.h`, `context.h`, `gfx/types.h`). Keep that alignment when you add lines.
+- **Aligned declarations in headers.** Headers that declare large APIs or structs wrap their body in `// clang-format off` / `// clang-format on` and align return types, names, member types and default values in columns (see `engine.h`, `renderContext.h`, `vulkanTypes.h`). Keep that alignment when you add lines.
 - `.cpp` files are formatted with clang-format. The repo has no `.clang-format` yet. Until one is committed, match the surrounding code. A starting point that matches the current `.cpp` style:
 
   ```yaml
@@ -79,7 +95,7 @@ Known deviations to migrate, rather than copy:
   - Descriptor structs must be value-initialized to zero. Unions must not be left indeterminate (`B18`).
   - Put fields in a descriptor only when they are compared and hashed. Anything that affects the created object must take part in equality.
 - **GPU-visible structs** (anything a shader reads through a pointer or a buffer):
-  - live in `include/rasm/gfx/uberMaterialTypes.h` (or its successor) and are mirrored in `shaders/common/core.slang`,
+  - live in `src/renderer/uberMaterialTypes.h` (or its successor) and are mirrored in `shaders/lib/core.slang`,
   - use only `uint32_t`, `int32_t`, `float`, `uint64_t`, `glm::vec2/3/4`, `glm::mat3/4` (scalar layout),
   - have a `static_assert` on `sizeof` and on every offset that a later field's correctness depends on,
   - change on both sides in the same commit.
@@ -107,7 +123,7 @@ Known deviations to migrate, rather than copy:
 
 ## 8. Vulkan and backend code
 
-- All Vulkan calls live under the backend (`src/gfx/vulkan.cpp`, later `src/rhi/vulkan/`). Core code never includes `vulkan.h` or uses `Vk*` types.
+- All Vulkan calls live under the backend (`src/rhi/vulkan/`). Code outside `src/rhi/` never includes `vulkan.h` or uses `Vk*` types. (`window.cpp` and `renderContext.h` still do today: `D1`/`D2`.)
 - Use synchronization2 (`vkCmdPipelineBarrier2`, `VkDependencyInfo`) and dynamic rendering. Do not introduce render passes or framebuffers.
 - Every created object gets a debug name, which is a no-op when debug utils is unavailable.
 - Check every `VkResult`. Swapchain functions must handle `VK_SUBOPTIMAL_KHR` and `VK_ERROR_OUT_OF_DATE_KHR` explicitly.

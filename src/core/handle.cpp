@@ -1,4 +1,4 @@
-#include "rasm/core/handle.h"
+#include "rasm/handle.h"
 
 namespace rasm
 {

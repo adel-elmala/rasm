@@ -4,11 +4,11 @@ This document describes how RASM is built **today** (branch `feat/pbr`, Oct 2026
 
 ## 1. Overview
 
-RASM is a C++20 rendering engine with a single implemented backend (Vulkan 1.4). It is built as a static library (`rasm_lib`) and driven by small example programs. Its rendering core is *GPU-driven*: the whole scene is drawn with one `vkCmdDrawIndexedIndirect` call. Vertices are pulled from a mega buffer through buffer device addresses, textures are accessed through one bindless descriptor array, and the only per-draw binding is a 64-bit push constant.
+RASM is a C++20 rendering engine with a single implemented backend (Vulkan 1.4). It is built as a static library (`rasm`, alias `rasm::rasm`) and driven by small example programs. Its rendering core is *GPU-driven*: the whole scene is drawn with one `vkCmdDrawIndexedIndirect` call. Vertices are pulled from a mega buffer through buffer device addresses, textures are accessed through one bindless descriptor array, and the only per-draw binding is a 64-bit push constant.
 
 ```mermaid
 flowchart TD
-    App["Application (examples/)"] --> Engine["rasm::Engine<br/>(include/rasm/core/engine.h)"]
+    App["Application (examples/)"] --> Engine["rasm::Engine<br/>(include/rasm/engine.h)"]
     Engine --> Registry["Registry<br/>entities, meshes, materials,<br/>cameras, lights, scenes"]
     Engine --> Assets["Asset loading<br/>mesh.cpp (tinygltf, tinyobj)<br/>material.cpp, stb_image"]
     Engine --> Platform["Window + input<br/>window.cpp (SDL3)"]
@@ -22,28 +22,36 @@ flowchart TD
 
 | Layer | Files | Responsibility |
 |---|---|---|
-| Public API | `include/rasm/rasm.h`, `core/engine.h` | Single facade class `Engine`; everything is created through it and referenced by handles. |
-| Core | `src/core/*` | Scene/entity/camera/light registries, asset import, scene preparation, frame loop, input, shader compilation, render graph. |
-| Render context | `src/gfx/context.cpp` | Backend-agnostic(ish) API over handles; owns the handle → backend-object maps and the creation-dedup caches. |
-| Vulkan backend | `src/gfx/vulkan.cpp` | Instance/device/swapchain setup, VMA allocations, pipelines, barriers, submission. |
-| Shaders | `shaders/common/*.slang` | Uber shader (`rasm.slang`), shared GPU structs (`core.slang`), PBR BRDF (`pbr.slang`), legacy shader (`basic.slang`). |
+| Public API | `include/rasm/` (`rasm.h`, `engine.h`, …) and `include/rasm/render/` (`renderGraph.h`, `renderContext.h`, `resource.h`) | Single facade class `Engine`; everything is created through it and referenced by handles. The low-level API (render graph, `RenderContext`, `ResourceDesc`) lives in `render/`. |
+| Engine | `src/engine.cpp` | Construction, frame loop (`beginFrame`/`render2`/`endFrame`), texture loading. |
+| Core utilities | `src/core/` | Handle manager, profiler, file reading. |
+| Platform | `src/platform/window.cpp` | SDL3 window, surface creation, event polling and camera input. |
+| Assets | `src/assets/` | glTF/OBJ import (`mesh.cpp`), materials and glTF material/texture import (`material.cpp`). |
+| Scene | `src/scene/` | Scenes, entities, cameras, lights, transforms; scene preparation for rendering (`scene.cpp`). |
+| Renderer | `src/renderer/` | Render graph, Slang shader compiler, GPU struct definitions (`uberMaterialTypes.h`). |
+| Render context | `src/rhi/renderContext.cpp` | Backend-agnostic(ish) API over handles; owns the handle → backend-object maps and the creation-dedup caches. |
+| Vulkan backend | `src/rhi/vulkan/` | `VulkanContext`: instance/device/swapchain setup, VMA allocations, pipelines, barriers, submission. `vulkanTypes.h`: Vulkan handle structs. |
+| Third-party implementations | `src/thirdparty_impl.cpp` | The single translation unit with the `*_IMPLEMENTATION` defines (stb, tinygltf, tinyobjloader, VMA). |
+| Shaders | `shaders/lib/`, `shaders/passes/` | `lib/`: shared modules: GPU structs (`core.slang`), PBR BRDF (`pbr.slang`). `passes/`: entry shaders: the uber shader (`rasm.slang`) and the legacy shader (`basic.slang`). |
+
+`src/` is currently also a *public* include directory, because public headers still include private ones (`renderer/shaderCompiler.h`, `renderer/uberMaterialTypes.h`, `rhi/vulkan/*`). Removing that is `D2`.
 
 ## 2. Object model: handles and registries
 
-**Handles** (`core/handle.h`) are typed `Handle<Tag>{ uint64_t index; uint64_t generation; }` values. `generation == 0` means invalid. `HandleManager` hands out a monotonically increasing `index` per type, starting at 1, with `generation` always 1. Handles are never recycled or invalidated, and there is no destroy API (see `D4`).
+**Handles** (`rasm/handle.h`) are typed `Handle<Tag>{ uint64_t index; uint64_t generation; }` values. `generation == 0` means invalid. `HandleManager` hands out a monotonically increasing `index` per type, starting at 1, with `generation` always 1. Handles are never recycled or invalidated, and there is no destroy API (see `D4`).
 
 There are two kinds of handle owner:
 
 - **CPU-side objects** live in `Engine::registery` (a private struct of `std::vector`s) and are indexed directly by `handle.index`. These are `Entity`, `Mesh`, `Material`, `Camera`, `Light`, `Scene` and shader *source strings*. Slot 0 is an unused default-constructed element. Each `create*` checks `index` against a compile-time `MAX_*` constant.
-- **GPU objects** live in `RenderContext`. Each type has an `unordered_map<Handle, gfx::XxxVKHandle>` cache (`bufferCache`, `textureCache`, `pipelineCache`, …). The backend structs (`gfx/types.h`) carry the raw Vulkan objects plus a copy of the `ResourceDesc` they were created from.
+- **GPU objects** live in `RenderContext`. Each type has an `unordered_map<Handle, gfx::XxxVKHandle>` cache (`bufferCache`, `textureCache`, `pipelineCache`, …). The backend structs (`src/rhi/vulkan/vulkanTypes.h`) carry the raw Vulkan objects plus a copy of the `ResourceDesc` they were created from.
 
-**`ResourceDesc`** (`core/resource.h`) is the one creation descriptor for every GPU resource. It is a tagged union of `texture`, `buffer`, `shader`, `pipeline`, `renderTarget`, `bindlessDescriptorSetLayout`, `descriptorPool` and `descriptorSet`, with a `std::string name`. It has a hand-written `operator==` and `ResourceDescHash`.
+**`ResourceDesc`** (`rasm/render/resource.h`) is the one creation descriptor for every GPU resource. It is a tagged union of `texture`, `buffer`, `shader`, `pipeline`, `renderTarget`, `bindlessDescriptorSetLayout`, `descriptorPool` and `descriptorSet`, with a `std::string name`. It has a hand-written `operator==` and `ResourceDescHash`.
 
 **Creation dedup.** `RenderContext::create{Buffer,Texture,Shader,Pipeline,…}` first looks the desc up in a `*DescCache` (`unordered_map<ResourceDesc, Handle>`). If an *equal* desc was created before, it returns the existing handle instead of creating a new resource. This is why every resource name matters: two buffers with the same name and size are the same buffer (see `B1`).
 
 ## 3. Engine lifetime and the frame loop
 
-### Construction (`Engine::Engine`, `src/core/engine.cpp`)
+### Construction (`Engine::Engine`, `src/engine.cpp`)
 1. Create the SDL3 window (`createWindow`).
 2. `RenderContext::initialize` creates a `VulkanContext`, which:
    - creates the instance (validation optional),
@@ -52,7 +60,7 @@ There are two kinds of handle owner:
    - creates the device, graphics queue, swapchain (`B8G8R8A8_SRGB`) and VMA allocator.
 3. Create per-frame resources for `MAX_FRAMES_IN_FLIGHT = 2` slots: a command pool and buffer, an image-acquired semaphore, an in-flight fence (created signaled), a 1 MB "shader data" buffer (legacy path only), and a depth texture (`D32_SFLOAT_S8_UINT`).
 4. Create one render-finished semaphore per swapchain image.
-5. Initialize the Slang session (SPIR-V 1.4, scalar layout, column-major matrices, search path `cwd/shaders/common`).
+5. Initialize the Slang session (SPIR-V 1.4, scalar layout, column-major matrices, search path `cwd/shaders/lib`).
 6. Create the single bindless descriptor set: layout, pool and set. It is binding 0 of set 0, an array of 1024 `COMBINED_IMAGE_SAMPLER`s with `UPDATE_AFTER_BIND | PARTIALLY_BOUND`.
 7. `isRunning = true`. Any failure returns early and leaves `running() == false`.
 
@@ -98,7 +106,7 @@ Notes:
 
 ## 4. The GPU-driven path: `prepareScene` + `render2`
 
-`Engine::prepareScene` (`src/core/scene.cpp`) runs once per scene, the first time that scene is rendered, and its result is cached in `Engine::preparedScenes`. It does the following:
+`Engine::prepareScene` (`src/scene/scene.cpp`) runs once per scene, the first time that scene is rendered, and its result is cached in `Engine::preparedScenes`. It does the following:
 
 1. **Flattens the scene.** For every entity with a mesh, `processMesh` returns a list of `SubGLTFRaw`s: one per glTF primitive, or one for an OBJ. Each holds interleaved `Vertex` data, `uint32_t` indices, the node's world transform, and a material handle.
 2. **Allocates scene buffers.** All are host-visible and persistently mapped:
@@ -111,7 +119,7 @@ Notes:
    | `drawInfoBuffer` | INDIRECT | One `gfx::DrawInfo` (`VkDrawIndexedIndirectCommand` layout) per draw. |
    | `sceneDataBuffer[2]` | STORAGE | One `gfx::SceneData` per frame slot. |
 3. **Writes draw records.** For each sub-mesh i it sets `DrawInfo{indexCount, 1, firstIndex = running index offset, vertexOffset = running vertex offset, 0}`. `Modeldata[i]` gets the entity transform × node transform and the converted `gfx::Material`.
-4. **Builds the uber pipeline.** It compiles `shaders/common/rasm.slang` (`vertMain`/`fragMain`) and creates a graphics pipeline with an empty vertex-input state (vertex pulling) and the bindless set layout.
+4. **Builds the uber pipeline.** It compiles `shaders/passes/rasm.slang` (`vertMain`/`fragMain`) and creates a graphics pipeline with an empty vertex-input state (vertex pulling) and the bindless set layout.
 
 Every frame, `updateUniforms` rewrites only the matrix part of each `Modeldata` (`offsetof(Modeldata, material)` bytes) from the current entity transforms.
 
@@ -133,11 +141,11 @@ In `vertMain`:
 
 ### CPU/GPU struct contract
 
-The C++ structs in `include/rasm/gfx/uberMaterialTypes.h` and the Slang structs in `shaders/common/core.slang` and `pbr.slang` must match byte for byte under **scalar layout**. The C++ side `static_assert`s the sizes and key offsets (`SceneData` = 552 bytes, `Modeldata` = 184 bytes, …), and `rasm::Vertex` is asserted equal to `gfx::VertexFull`. When you change a struct, change both sides and the asserts. `ShaderCompiler::validateRasmStructs` could check the sizes against Slang reflection at runtime, but nothing calls it yet.
+The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `shaders/lib/core.slang` and `pbr.slang` must match byte for byte under **scalar layout**. The C++ side `static_assert`s the sizes and key offsets (`SceneData` = 552 bytes, `Modeldata` = 184 bytes, …), and `rasm::Vertex` is asserted equal to `gfx::VertexFull`. When you change a struct, change both sides and the asserts. `ShaderCompiler::validateRasmStructs` could check the sizes against Slang reflection at runtime, but nothing calls it yet.
 
 ## 5. Materials and textures
 
-- `rasm::Material` (`core/material.h`) is a CPU-side record:
+- `rasm::Material` (`rasm/material.h`) is a CPU-side record:
   - `textures[PbrSlot::COUNT]` and `texCoords[...]`,
   - a flat `float params[]` indexed by `PbrParam` offsets (albedo is 3 floats at offset 0, metallic is at 3, …),
   - a `ShaderHandle`.
@@ -163,7 +171,7 @@ The C++ structs in `include/rasm/gfx/uberMaterialTypes.h` and the Slang structs 
 - `ShaderCompiler` wraps one Slang global session and one session.
 - `compileFromString(source, moduleName, entryPoint)` loads a module, finds the entry point, composes, links and returns SPIR-V. For the legacy path it also returns a vertex-input layout reflected from the entry point.
 - Shaders are compiled **at runtime from source** every time a pipeline is built. Nothing is cached.
-- `compile-shaders.bat` is an offline `slangc` invocation that is useful for checking compile errors. The engine does not consume its output.
+- `tools/compile-shaders.bat` is an offline `slangc` invocation that is useful for checking compile errors. The engine does not consume its output.
 
 ## 8. Camera and input
 
@@ -176,29 +184,29 @@ The C++ structs in `include/rasm/gfx/uberMaterialTypes.h` and the Slang structs 
 
 - `RenderGraph::addPass(name, setup, execute)` records the resources each pass reads and writes through `PassBuilder`. `compile()` builds producer → consumer edges and topologically sorts the passes (Kahn's algorithm, with cycle detection).
 - `execute()` runs `beginFrame` once, then for each pass in order calls `setRenderTarget(pass.outputRenderTarget)`, `beginPass`, `pass.execute(ctx)` and `endPass`. A pass without an output render target renders to the swapchain. Last comes `endFrame`.
-- The graph currently only orders passes. It does not insert barriers or layout transitions, does not allocate transient resources, and uses the current scene's first camera. Only `examples/example_1` uses it, together with the legacy `compileScene` path.
+- The graph currently only orders passes. It does not insert barriers or layout transitions, does not allocate transient resources, and uses the current scene's first camera. Only `examples/01_render_graph` uses it, together with the legacy `compileScene` path.
 
 ## 10. The legacy path: `compileScene` + `render`
 
-`compileScene` uploads one combined vertex+index buffer per entity (OBJ only) and builds one pipeline per material, with classic vertex input reflected from Slang. `render()` binds the pipeline, the vertex and index buffers, and a push-constant pointer into the 1 MB per-frame shader-data buffer, then issues one `drawIndexed` per entity. It survives for `example_1` and is slated for removal (`D10`).
+`compileScene` uploads one combined vertex+index buffer per entity (OBJ only) and builds one pipeline per material, with classic vertex input reflected from Slang. `render()` binds the pipeline, the vertex and index buffers, and a push-constant pointer into the 1 MB per-frame shader-data buffer, then issues one `drawIndexed` per entity. It survives for `01_render_graph` and is slated for removal (`D10`).
 
 ## 11. Compile-time limits
 
 | Constant | Value | Where |
 |---|---|---|
-| `MAX_FRAMES_IN_FLIGHT` | 2 | `core/types.h` |
-| `MAX_BINDLESS_TEXTURES` | 1024 | `core/types.h` |
-| `MAX_MESHES` | 8 (7 usable) | `core/mesh.h` |
-| `MAX_ENTITIES` / `MAX_ENTITIES_PER_SCENE` | 1024 | `core/entity.h`, `core/scene.h` |
-| `MAX_MATERIALS`, `MAX_SHADERS` | 256 | `core/engine.h` |
-| `MAX_CAMERAS` | 8 | `core/engine.h` |
-| `MAX_LIGHTS` (global) / per scene | 8 / 8 | `core/light.h`, `core/scene.h` |
-| `MAX_SCENES` | 16 | `core/scene.h` |
-| `MAX_VERTEX_UV_SETS` | 3 | `core/mesh.h` (mirrored in `core.slang`) |
+| `MAX_FRAMES_IN_FLIGHT` | 2 | `rasm/types.h` |
+| `MAX_BINDLESS_TEXTURES` | 1024 | `rasm/types.h` |
+| `MAX_MESHES` | 8 (7 usable) | `rasm/mesh.h` |
+| `MAX_ENTITIES` / `MAX_ENTITIES_PER_SCENE` | 1024 | `rasm/entity.h`, `rasm/scene.h` |
+| `MAX_MATERIALS`, `MAX_SHADERS` | 256 | `rasm/engine.h` |
+| `MAX_CAMERAS` | 8 | `rasm/engine.h` |
+| `MAX_LIGHTS` (global) / per scene | 8 / 8 | `rasm/light.h`, `rasm/scene.h` |
+| `MAX_SCENES` | 16 | `rasm/scene.h` |
+| `MAX_VERTEX_UV_SETS` | 3 | `rasm/mesh.h` (mirrored in `core.slang`) |
 
 ## 12. Conventions that cross files
 
-- **Working directory.** Shaders (`./shaders/common`) and example assets (`assets/...`) are opened relative to the process working directory, so run from the repo root.
+- **Working directory.** Shaders (`./shaders/passes`, includes from `./shaders/lib`) and example assets (`assets/...`) are opened relative to the process working directory, so run from the repo root.
 - **Coordinate system.** The engine works in a Y-down world: imported geometry is mirrored in Y (`D8`), and back-face culling is disabled. Light directions and camera transforms are expressed in that mirrored space.
 - **Depth.** `D32_SFLOAT_S8_UINT`, cleared to 1.0, compare `LESS_OR_EQUAL`.
 - **Output.** The PBR shader applies Reinhard tone mapping. The sRGB swapchain format does the gamma encoding, so shaders must output linear color.
