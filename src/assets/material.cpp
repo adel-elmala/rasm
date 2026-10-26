@@ -158,6 +158,17 @@ namespace rasm
                 int source = model.textures[textureIndex].source;
                 if (source < 0 || source >= static_cast<int>(model.images.size()))
                     return {};
+
+                // Primitives and materials share images; upload each (image, color space) once per model.
+                if (registery.gltfImportModel != &model)
+                {
+                    registery.gltfImportModel = &model;
+                    registery.gltfImageTextures.clear();
+                }
+                const uint64_t cacheKey = (static_cast<uint64_t>(source) << 1) | (srgb ? 1u : 0u);
+                if (auto it = registery.gltfImageTextures.find(cacheKey); it != registery.gltfImageTextures.end())
+                    return it->second;
+
                 const auto &image = model.images[source];
                 if (image.bits != 8 || image.component < 1 || image.component > 4 ||
                     image.width <= 0 || image.height <= 0)
@@ -179,7 +190,7 @@ namespace rasm
                         rgba[i * 4 + 3] = src[image.component - 1];
                 }
                 ResourceDesc desc{};
-                desc.name = image.uri;
+                desc.name = image.uri.empty() ? "glTF image " + std::to_string(source) : image.uri;
                 desc.type = ResourceType::TEXTURE;
                 desc.texture.width = image.width;
                 desc.texture.height = image.height;
@@ -189,6 +200,7 @@ namespace rasm
                 if (!texture.isValid() || !ctx.fillTexture(texture, rgba.data()))
                     return {};
                 addBindlessTexture(bindlessDescriptorSet, texture);
+                registery.gltfImageTextures[cacheKey] = texture;
                 return texture;
             };
 
