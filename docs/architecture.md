@@ -47,7 +47,7 @@ There are two kinds of handle owner:
 
 **`ResourceDesc`** (`rasm/render/resource.h`) is the one creation descriptor for every GPU resource. It is a tagged union of `texture`, `buffer`, `shader`, `pipeline`, `renderTarget`, `bindlessDescriptorSetLayout`, `descriptorPool` and `descriptorSet`, with a `std::string name`. It has a hand-written `operator==` and `ResourceDescHash`.
 
-**Creation dedup.** `RenderContext::create{Buffer,Texture,Shader,Pipeline,…}` first looks the desc up in a `*DescCache` (`unordered_map<ResourceDesc, Handle>`). If an *equal* desc was created before, it returns the existing handle instead of creating a new resource. This is why every resource name matters: two buffers with the same name and size are the same buffer (see `B1`).
+**Creation dedup.** Only immutable objects are deduplicated: `createShader`, `createPipeline` and `createBindlessDescriptorSetLayout` first look the desc up in a `*DescCache` (`unordered_map<ResourceDesc, Handle>`) and return the existing handle for an equal desc. Equality covers the full state: shader equality compares the SPIR-V bytes, and pipeline equality compares shaders, vertex input layout, descriptor set layout, topology and attachment formats. Buffers, textures, descriptor pools and descriptor sets are mutable, so every `create*`/`allocate*` call makes a new object (fixed `B1`). Callers that want sharing cache at the asset level: `loadTexture` caches by path and format, and glTF import caches per model by image index and color space.
 
 ## 3. Engine lifetime and the frame loop
 

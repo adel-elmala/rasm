@@ -478,6 +478,9 @@ namespace rasm
             depthTextureDesc.texture.format = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
             depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
 
+            // Swapchain recreation waited for the device to go idle, so the old texture is unused.
+            if (frameResources[i].depthTexture.isValid())
+                ctx.destroyTexture(frameResources[i].depthTexture);
             frameResources[i].depthTexture = ctx.createTexture(depthTextureDesc);
         }
     }

@@ -107,6 +107,8 @@ namespace rasm
         uint32_t                size;
         uint32_t                offset;
         bool                    used = false;
+
+        bool operator==(const VertexAttributeDescription&) const = default;
     };
 
     struct VertexInputLayout
@@ -116,6 +118,8 @@ namespace rasm
         uint32_t                    stride;
         bool                        perInstance;
         bool                        vertexPulling = false;
+
+        bool operator==(const VertexInputLayout&) const = default;
     };
 
     struct RenderTargetAttachments

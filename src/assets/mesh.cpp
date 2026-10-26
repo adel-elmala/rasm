@@ -451,11 +451,18 @@ namespace rasm
         // OBJ loader does per-vertex. Applied on the left so it acts after the glTF node hierarchy.
         const glm::mat4 rootTransform = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, 1.0f));
 
+        // Models are loaded into a local, so consecutive models can share an address: start each with an empty image cache.
+        registery.gltfImportModel = &model;
+        registery.gltfImageTextures.clear();
+
         for (int rootNodeIndex : scene.nodes)
         {
             auto extractedRaws = traverseNodes(model, rootNodeIndex, rootTransform);
             gltfRaw.subGltfRaws.insert(gltfRaw.subGltfRaws.end(), extractedRaws.begin(), extractedRaws.end());
         }
+
+        registery.gltfImportModel = nullptr;
+        registery.gltfImageTextures.clear();
 
         return gltfRaw;
     }
