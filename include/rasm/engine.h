@@ -148,6 +148,10 @@ namespace rasm {
             std::unordered_map<std::string, TextureHandle>              loadedTextures;
             std::unordered_map<TextureHandle, TextureRaw, HandleHash>   textureData;
             std::unordered_map<TextureHandle, uint32_t, HandleHash>     bindlessTextureIndexMap; // slot in the bindless descriptor set
+
+            // Textures of the glTF model being imported, keyed by (image index << 1 | sRGB).
+            const tinygltf::Model*                                      gltfImportModel = nullptr;
+            std::unordered_map<uint64_t, TextureHandle>                 gltfImageTextures;
         };
 
         Registery registery = {};

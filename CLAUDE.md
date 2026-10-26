@@ -37,7 +37,7 @@ cmake --build --preset x64-debug --target 02_gltf     # single example
 ## Invariants that are easy to break
 
 - C++ structs in `src/renderer/uberMaterialTypes.h` must match `shaders/lib/core.slang`/`pbr.slang` byte-for-byte (scalar layout); update both sides and the `static_assert`s together.
-- `RenderContext::create*` returns an existing handle for an equal `ResourceDesc` (name + fields) — resources that must be distinct need distinct names until `B1` is fixed.
+- `RenderContext::createBuffer`/`createTexture` always create a new resource (no dedup since `B1`) — cache at the asset level if you want sharing, and destroy what you replace. Shaders, pipelines and descriptor set layouts are still deduplicated, so any new field in their `ResourceDesc` must be added to `operator==`.
 - `frameCount` is the frame-in-flight slot (0/1); per-frame mutable buffers are indexed by it.
 - `prepareScene` is cached per scene after the first `render2`; only transforms update afterwards.
 - Normal/metallic-roughness/AO textures must be `R8G8B8A8_UNORM`; color/emissive `R8G8B8A8_SRGB`. Shaders output linear color.

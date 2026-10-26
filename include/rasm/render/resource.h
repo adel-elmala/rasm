@@ -4,8 +4,10 @@
 #include "rasm/types.h"
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace rasm
 {
@@ -163,15 +165,19 @@ namespace rasm
                        buffer.vertexIndexBuffer.indexCount == other.buffer.vertexIndexBuffer.indexCount &&
                        buffer.vertexIndexBuffer.vertexCount == other.buffer.vertexIndexBuffer.vertexCount;
             case ResourceType::SHADER:
+                // Compare the code itself: callers pass pointers into temporary SPIR-V blobs.
                 return shader.shaderType == other.shader.shaderType &&
                        shader.sourceSize == other.shader.sourceSize &&
-                       shader.source == other.shader.source;
+                       (shader.sourceSize == 0 || std::memcmp(shader.source, other.shader.source, shader.sourceSize) == 0);
             case ResourceType::GRAPHICS_PIPELINE:
             case ResourceType::COMPUTE_PIPELINE:
-                // For pipelines, you would compare the relevant fields (e.g., shader handles)
                 return pipeline.vertexShader == other.pipeline.vertexShader &&
                        pipeline.fragmentShader == other.pipeline.fragmentShader &&
-                       pipeline.topology == other.pipeline.topology;
+                       pipeline.vertexInputLayout == other.pipeline.vertexInputLayout &&
+                       pipeline.descriptorSetLayout == other.pipeline.descriptorSetLayout &&
+                       pipeline.topology == other.pipeline.topology &&
+                       pipeline.colorAttachmentFormat == other.pipeline.colorAttachmentFormat &&
+                       pipeline.depthStencilAttachmentFormat == other.pipeline.depthStencilAttachmentFormat;
             case ResourceType::RENDER_TARGET:
                 return renderTarget.width == other.renderTarget.width &&
                        renderTarget.height == other.renderTarget.height &&
@@ -229,7 +235,7 @@ namespace rasm
                        std::hash<uint64_t>()(desc.buffer.vertexIndexBuffer.vertexCount);
             case ResourceType::SHADER:
                 return std::hash<std::string>()(desc.name) ^
-                       std::hash<uint64_t>()(desc.shader.sourceSize) ^
+                       std::hash<std::string_view>()(std::string_view(desc.shader.source, desc.shader.sourceSize)) ^
                        std::hash<uint32_t>()(static_cast<uint32_t>(desc.shader.shaderType));
             case ResourceType::GRAPHICS_PIPELINE:
             case ResourceType::COMPUTE_PIPELINE:

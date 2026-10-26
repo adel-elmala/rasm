@@ -100,7 +100,7 @@ Next steps, in order:
 
 ### High severity
 
-**B1 — Creation dedup aliases resources that must be distinct.** *Confirmed.*
+**B1 — Creation dedup aliases resources that must be distinct.** *Fixed 2026-10-26:* buffer, texture, descriptor-pool and descriptor-set dedup has been removed. Shader and pipeline dedup is now keyed on full state; shader equality used to compare the SPIR-V *pointer*. glTF images are cached per model by image index and color space. Resize destroys the old depth textures. The original finding follows.
 `RenderContext::create{Buffer,Texture,…}` returns an existing handle when it has seen an equal `ResourceDesc` before ([renderContext.cpp:136-140](../src/rhi/renderContext.cpp#L136-L140), [:171-175](../src/rhi/renderContext.cpp#L171-L175)). This bites in several places:
 - `prepareScene` creates `megaModelDataBuffer[i]` and `sceneDataBuffer[i]` in a loop with an identical desc ([scene.cpp:204-208](../src/scene/scene.cpp#L204-L208), [:229-233](../src/scene/scene.cpp#L229-L233)). Both frame slots get the **same** buffer, so the CPU rewrites `SceneData`/`Modeldata` while the GPU may still be reading them for the previous frame. That undoes the frames-in-flight fix in `27bb89a`.
 - Render-target attachments per frame slot alias each other ([renderContext.cpp:563-566](../src/rhi/renderContext.cpp#L563-L566)).

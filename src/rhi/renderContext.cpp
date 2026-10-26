@@ -111,13 +111,9 @@ namespace rasm
             descriptorSetCache.clear();
             swapchainImageCache.clear();
             renderTargetCache.clear();
-            bufferDescCache.clear();
-            textureDescCache.clear();
             shaderDescCache.clear();
             pipelineDescCache.clear();
             descriptorSetLayoutDescCache.clear();
-            descriptorPoolDescCache.clear();
-            descriptorSetDescCache.clear();
             nextBindlessTextureIndex = 0;
             break;
         }
@@ -133,12 +129,6 @@ namespace rasm
 
     BufferHandle RenderContext::createBuffer(ResourceDesc desc)
     {
-        auto cachedIt = bufferDescCache.find(desc);
-        if (cachedIt != bufferDescCache.end())
-        {
-            return cachedIt->second;
-        }
-
         switch (backend)
         {
         case Backend::VULKAN:
@@ -153,7 +143,6 @@ namespace rasm
             buffer->handle = handle;
 
             bufferCache[handle] = buffer.value();
-            bufferDescCache[desc] = handle;
             return handle;
         }
         case Backend::DX12:
@@ -168,12 +157,6 @@ namespace rasm
 
     TextureHandle RenderContext::createTexture(ResourceDesc desc)
     {
-        auto cachedIt = textureDescCache.find(desc);
-        if (cachedIt != textureDescCache.end())
-        {
-            return cachedIt->second;
-        }
-
         switch (backend)
         {
         case Backend::VULKAN:
@@ -187,7 +170,6 @@ namespace rasm
             TextureHandle handle = engine->handleManager.getNextTextureHandle();
             texture->handle = handle;
             textureCache[handle] = texture.value();
-            textureDescCache[desc] = handle;
             return handle;
         }
         case Backend::DX12:
@@ -329,12 +311,6 @@ namespace rasm
     {
         assert(desc.type == ResourceType::DESCRIPTOR_POOL);
 
-        auto cachedIt = descriptorPoolDescCache.find(desc);
-        if (cachedIt != descriptorPoolDescCache.end())
-        {
-            return cachedIt->second;
-        }
-
         switch (backend)
         {
         case Backend::VULKAN:
@@ -349,7 +325,6 @@ namespace rasm
             pool->handle = handle;
 
             descriptorPoolCache[handle] = pool.value();
-            descriptorPoolDescCache[desc] = handle;
 
             return handle;
         }
@@ -364,12 +339,6 @@ namespace rasm
     DescriptorSetHandle RenderContext::allocateDescriptorSet(ResourceDesc desc, const DescriptorPoolHandle &pool, const DescriptorSetLayoutHandle &layout)
     {
         assert(desc.type == ResourceType::DESCRIPTOR_SET);
-
-        auto cachedIt = descriptorSetDescCache.find(desc);
-        if (cachedIt != descriptorSetDescCache.end())
-        {
-            return cachedIt->second;
-        }
 
         switch (backend)
         {
@@ -393,7 +362,6 @@ namespace rasm
             descriptorSet->handle = handle;
 
             descriptorSetCache[handle] = descriptorSet.value();
-            descriptorSetDescCache[desc] = handle;
 
             return handle;
         }
@@ -590,6 +558,31 @@ namespace rasm
             return emptyRenderTarget;
         }
         return it->second;
+    }
+
+    void RenderContext::destroyTexture(const TextureHandle &texture)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto it = textureCache.find(texture);
+            if (it == textureCache.end())
+            {
+                spdlog::error("Texture handle not found in cache during destroyTexture.");
+                return;
+            }
+            vulkanContext.removeTexture(it->second);
+            textureCache.erase(it);
+            break;
+        }
+        case Backend::DX12:
+        case Backend::METAL:
+            break;
+        default:
+            spdlog::error("Unsupported backend during texture destruction.");
+            break;
+        }
     }
 
     void RenderContext::destroySemaphore(const SemaphoreHandle &semaphore)

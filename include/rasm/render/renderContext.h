@@ -57,6 +57,7 @@ namespace rasm
         bool                                submit(const CommandBufferHandle& commandBuffer, const std::vector<SemaphoreHandle>& waitSemaphores, const std::vector<SemaphoreHandle>& signalSemaphores, FenceHandle fence);
         bool                                present(uint32_t imageIndex, SemaphoreHandle waitSemaphore);
         void                                destroySemaphore(const SemaphoreHandle& semaphore);
+        void                                destroyTexture(const TextureHandle& texture);
         void                                bindPipeline(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline);
         void                                bindVertexBuffer(const CommandBufferHandle& commandBuffer, const BufferHandle& buffer, uint64_t offset, uint32_t binding = 0);
         void                                bindIndexBuffer(const CommandBufferHandle& commandBuffer, const BufferHandle& buffer, uint64_t offset, Format indexType);
@@ -86,14 +87,11 @@ namespace rasm
         std::unordered_map<DescriptorPoolHandle, gfx::DescriptorPoolVKHandle, HandleHash>           descriptorPoolCache;
         std::unordered_map<DescriptorSetHandle, gfx::DescriptorSetVKHandle, HandleHash>             descriptorSetCache;
 
-        // map resource handles to their desc.
-        std::unordered_map<ResourceDesc, BufferHandle, ResourceDescHash>                            bufferDescCache;
-        std::unordered_map<ResourceDesc, TextureHandle, ResourceDescHash>                           textureDescCache;
+        // Dedup caches, only for immutable objects keyed on their full state. Mutable resources
+        // (buffers, textures, descriptor pools/sets) are always created fresh (B1).
         std::unordered_map<ResourceDesc, ShaderHandle, ResourceDescHash>                            shaderDescCache;
         std::unordered_map<ResourceDesc, PipelineHandle, ResourceDescHash>                          pipelineDescCache;
         std::unordered_map<ResourceDesc, DescriptorSetLayoutHandle, ResourceDescHash>               descriptorSetLayoutDescCache;
-        std::unordered_map<ResourceDesc, DescriptorPoolHandle, ResourceDescHash>                    descriptorPoolDescCache;
-        std::unordered_map<ResourceDesc, DescriptorSetHandle, ResourceDescHash>                     descriptorSetDescCache;
 
         uint32_t                                                                                    nextBindlessTextureIndex = 0;
     };
