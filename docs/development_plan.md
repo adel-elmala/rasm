@@ -30,7 +30,7 @@ The engine's **data model** (GPU scene tables, instance and material indices, dr
 Goal: fix correctness bugs before building anything on top.
 
 - [x] Remove desc-based dedup for buffers and textures. Keep it only for immutable objects keyed on their full state (`B1`, done 2026-10-26).
-- [ ] Zero-initialize `ResourceDesc` (`B18`).
+- [x] Zero-initialize `ResourceDesc` (`B18`, done 2026-10-26).
 - [ ] Set GLM and VMA configuration macros in CMake. Fix the depth range (`B2`, `C7`).
 - [ ] Always enable `VK_EXT_debug_utils` when it is available, and guard the naming calls (`B3`).
 - [ ] Make acquire/present robust: handle out-of-date and suboptimal swapchains, reset the fence after a successful acquire, skip frames while minimized, and drop leaked depth textures and stale swapchain handles (`B4`, `B5`, `B17`).

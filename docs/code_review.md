@@ -167,7 +167,7 @@ Next steps, in order:
 - `beginPass` sets the viewport and scissor from the *window* size, not the render-target size ([engine.cpp:407-408](../src/engine.cpp#L407-L408)).
 - The depth attachment of each RT also goes into the bindless array as a combined depth/stencil image.
 
-**B18 — `ResourceDesc` is not zero-initialized.** *Confirmed (undefined behaviour).*
+**B18 — `ResourceDesc` is not zero-initialized.** *Fixed 2026-10-26:* the constructor now zeroes the whole union and `type` has a default initializer. The original finding follows.
 - `ResourceDesc() {}` is a user-provided constructor ([resource.h:207](../include/rasm/render/resource.h#L207)), so `ResourceDesc desc{}` does **not** zero the union.
 - Fields that a caller doesn't set (`buffer.offset`, `vertexIndexBuffer.*`, and texture fields when you use the buffer variant) are indeterminate. `operator==` and `ResourceDescHash` read them, so dedup (B1) also depends on stack garbage.
 
