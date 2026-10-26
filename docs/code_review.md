@@ -15,96 +15,84 @@ This review covers the whole repository as of `feat/pbr` @ `61d8028`. Every find
 
 ## 1. Folder structure
 
-> **Status (2026-10-26):** the proposed layout below has been applied as a move-only change (no behaviour change). All three examples build, and they run validation-clean in a normal window.
->
-> | Problem | Status |
-> |---|---|
-> | 1. Public headers expose internals | **Open (`D2`).** Private headers now live in `src/`, but `src/` is temporarily a PUBLIC include directory because `engine.h` and `renderContext.h` still include them. |
-> | 2. `gfx/` mixes three things | **Done.** Split into `include/rasm/render/`, `src/rhi/vulkan/` and `src/renderer/`. |
-> | 3. `core/` is a grab bag | **Done** at file level: `src/{core,platform,assets,scene,renderer}`. Some files still mix concerns (e.g. `scene.cpp` holds `prepareScene`; `material.cpp` holds glTF import). |
-> | 4. Shaders found via the working directory | **Partly done.** Split into `shaders/lib` and `shaders/passes`. Still cwd-relative (`D11`). |
-> | 5. Single CMakeLists | **Done:** `src/` and `examples/` subdirectories, `RASM_BUILD_EXAMPLES`, the `rasm` target with alias `rasm::rasm`, and `cmake/RasmExample.cmake`. **Open:** install/export. |
-> | 6. No tests or CI | **Open** (plan phase 1.5). |
-> | 7. Leftovers | **Done:** `.gitmodules` removed, `compile-shaders.bat` moved to `tools/`. The untracked root `CMakeFiles/` (stray CMake output) was left for you to delete. |
-> | 8. Binary assets in git | **Open.** No LFS change was made. |
->
-> The layout as it was at review time is kept below for reference.
+This section describes the layout as of `6efdf48` and lists only the problems that remain.
 
-### Layout at review time
+### Current layout
 
 ```
-CMakeLists.txt          single CMake file: library + 3 examples
-CMakePresets.json       x64-debug/release, macOS, macOS-release, macOS-Xcode
-compile-shaders.bat     Windows-only offline slangc call (output unused)
-include/rasm/
-  rasm.h                umbrella header
-  core/                 engine, scene, entity, mesh, material, camera, light, handle, renderGraph, resource, types, ...
-  gfx/                  context.h, types.h (Vk handle structs), vulkan.h, uberMaterialTypes.h
-src/core/               implementation of include/rasm/core
-src/gfx/                context.cpp, vulkan.cpp
-shaders/common/         all .slang files
-examples/example_{0,1,2}/
-assets/models/...       sample models (binary, in git)
+CMakeLists.txt                  top level: options (RASM_ENABLE_AVX2, RASM_BUILD_EXAMPLES), add_subdirectory(...)
+CMakePresets.json               x64-debug/release, macOS, macOS-release, macOS-Xcode
+cmake/RasmExample.cmake         rasm_add_example()
+include/rasm/                   public API (still includes third-party and private headers, see §1.1)
+  rasm.h                        umbrella header
+  engine.h scene.h entity.h transform.h camera.h light.h material.h mesh.h
+  handle.h types.h window.h profiler.h
+  render/                       low-level API: renderContext.h, renderGraph.h, resource.h
+src/
+  CMakeLists.txt                target `rasm`, alias `rasm::rasm`
+  engine.cpp                    frame loop (not yet split into renderer/)
+  core/                         handle, profiler, utils
+  platform/                     window.cpp (SDL3 window + input)
+  assets/                       material.cpp (incl. glTF material/texture import), mesh.cpp (glTF + OBJ)
+  scene/                        scene (incl. prepareScene), entity, transform, camera, light
+  renderer/                     renderGraph, shaderCompiler, uberMaterialTypes.h (shader ABI)
+  rhi/                          renderContext.cpp (backend switch)
+    vulkan/                     vulkanContext.{h,cpp}, vulkanTypes.h
+  thirdparty_impl.cpp           the only *_IMPLEMENTATION defines
+shaders/
+  lib/                          core.slang (GPU structs), pbr.slang
+  passes/                       basic.slang, rasm.slang
+examples/
+  CMakeLists.txt
+  00_hello_scene/ 01_render_graph/ 02_gltf/
+tools/compile-shaders.bat       offline compile check only (output unused)
+assets/models/{gltf,obj}/       sample models (binary, in plain git)
 docs/
-.gitmodules             references thirdparty/imgui (not present)
 ```
 
 ### Problems
 
-1. **Public headers expose implementation details.**
-   - `rasm.h` includes `core/engine.h`, which includes `gfx/context.h` → `gfx/vulkan.h` → `VkBootstrap.h` and `vk_mem_alloc.h`.
-   - `core/types.h` includes `tiny_gltf.h`, `core/window.h` includes `vulkan/vulkan.h`, and `core/shaderCompiler.h` includes `slang.h`.
-   - Every application therefore compiles against Vulkan, vk-bootstrap, VMA, Slang and tinygltf, and inherits their include paths (`target_include_directories(... PUBLIC ...)`).
-   - This makes compiles slow and makes the backend impossible to swap. It also blocks a stable API or ABI, which you need before RASM can be embedded in games, viz tools or map engines.
-2. **`gfx/` mixes three different things:**
-   - the backend-neutral context API (`context.h`),
-   - Vulkan backend internals (`vulkan.h`, `gfx/types.h`),
-   - the shader ABI (`uberMaterialTypes.h`).
+1. **Public headers expose implementation details (`D2`).**
+   - `engine.h` includes the private `renderer/shaderCompiler.h` and `renderer/uberMaterialTypes.h`; `render/renderContext.h` includes `rhi/vulkan/vulkanTypes.h` and `rhi/vulkan/vulkanContext.h` (→ vk-bootstrap, VMA).
+   - `types.h` and `mesh.h` include `tiny_gltf.h`, `window.h` includes `vulkan/vulkan.h`, and `render/renderGraph.h` includes `spdlog/spdlog.h`.
+   - Because of this, `src/` is temporarily a PUBLIC include directory, and Vulkan, VMA, vk-bootstrap, Slang, glm, Tracy, spdlog and the tinygltf/stb include paths are all linked PUBLIC. Applications still compile against the whole backend.
+   - This keeps compiles slow, makes the backend impossible to swap, and blocks a stable API/ABI.
+2. **Some files still mix concerns.**
+   - `scene/scene.cpp` holds `prepareScene` and pipeline creation (renderer logic);
+   - `assets/material.cpp` holds both the material API and glTF texture import;
+   - `engine.cpp` (frame loop) still sits at the root of `src/`.
+3. **Shaders are found through the working directory (`D11`).** Paths are cwd-relative (`./shaders/passes/...` in `material.cpp`/`scene.cpp`, `cwd/shaders/lib` in `shaderCompiler.cpp`), so the examples only work when run from the repo root (not from the build directory, an IDE, or an installed app).
+4. **No install/export.** There is no `install()`/`export()`, so `find_package(rasm)` does not work.
+5. **No `tests/` and no CI** (plan phase 1.5).
+6. **Binary assets live in plain git.** The glTF/OBJ sample models are committed directly, so the clone grows with every asset added.
 
-   When Metal, D3D12 and WebGPU arrive, each needs its own directory.
-3. **`core/` is a grab bag.** It holds platform code (window and input, SDL), asset import (glTF, OBJ, images), the scene model, renderer logic (scene preparation, frame loop, render graph) and utilities. These have different dependencies and different rates of change.
-4. **Shaders are found through the working directory.** `./shaders/common` and the Slang search path `cwd/shaders/common` only work when you run from the repo root (not from the build directory, an IDE, or an installed app). All shaders sit in one `common/` folder whatever their role.
-5. **A single CMakeLists** builds the library and the examples together. There is no `RASM_BUILD_EXAMPLES` option, no install/export (`find_package(rasm)`), and no namespaced alias target (`rasm::rasm`); the target is named `rasm_lib`.
-6. **No `tests/` and no CI.**
-7. **Leftovers.** There is a stale `thirdparty/imgui` submodule entry in `.gitmodules`, a stray `CMakeFiles/` at the repo root, and a Windows-only `compile-shaders.bat` whose output nothing uses.
-8. **Binary assets live in plain git.** Several glTF scenes with textures are committed, so the clone grows with every asset you add.
+### What is left of the target layout
 
-### Proposed layout
+Compared with the current layout, the target still needs:
 
 ```
-CMakeLists.txt                  top level: options, add_subdirectory(...)
-cmake/                          helper modules (rasm_add_example, shader copy/embedding, warnings)
-include/rasm/                   PUBLIC API ONLY — no third-party headers
-  rasm.h
-  engine.h  scene.h  camera.h  light.h  material.h  mesh.h  handle.h  types.h  config.h
-  render/                       public low-level API: renderGraph.h, rhi.h (device-agnostic types)
+include/rasm/                   PUBLIC API ONLY — no third-party or src/ headers (D2)
+  config.h                      EngineConfig incl. assetRoot / shader dir
+  render/rhi.h                  device-agnostic types replacing the Vk structs in renderContext.h (D1)
 src/
-  core/                         handles, pools, logging, math helpers, memory/allocators
-  platform/                     window + input (sdl3/), native-surface integration
-  assets/                       gltf/, obj/, image/ loaders → produce CPU-side asset data
-  scene/                        entities, transforms, cameras, lights, scene → GPU scene sync
-  renderer/                     frame loop, GPU scene, passes (forward, culling, shadow, post), render graph
-  rhi/                          backend-neutral device interface
-    vulkan/                     current vulkan.cpp/.h, Vk handle structs, VMA/vk-bootstrap
-    metal/  d3d12/  webgpu/     future backends
-  thirdparty_impl.cpp           STB/TINYGLTF/VMA *_IMPLEMENTATION defines in one place
+  renderer/                     + frame loop from engine.cpp, prepareScene/GPU scene from scene.cpp,
+                                  passes (forward, culling, shadow, post)
+  assets/gltf/ obj/ image/      split loaders out of material.cpp / mesh.cpp
+  rhi/metal/ d3d12/ webgpu/     future backends
 shaders/
-  lib/                          shared modules: core (GPU structs), brdf, color, bindings
-  passes/                       forward.slang, cull.slang, shadow.slang, tonemap.slang ...
+  lib/                          + brdf, color, bindings modules as they are factored out
+  passes/                       + cull, shadow, tonemap ...
   materials/                    material evaluation modules
-examples/
-  CMakeLists.txt
-  00_hello_scene/ 01_render_graph/ 02_gltf/ ...   descriptive names, one CMake call each
-tests/                          unit tests (handles, desc hashing, gltf import) + image tests
-tools/                          scripts (shader compile check, asset download)
+tests/                          unit tests (handles, desc hashing, glTF import) + image tests
+tools/                          + asset download script
 assets/                         keep small; large models via Git LFS or a download script
-docs/
 ```
 
-Migration tips:
-- Do this incrementally. Move files only while you are working on them, and change `CMakeLists.txt` in the same commit.
-- Start with the public/private header split (`D2`). It gives the most value and is the hardest thing to retrofit later.
-- Make the shader path configurable: add a `RASM_SHADER_DIR` compile definition and an `EngineConfig::assetRoot`, plus a post-build copy of `shaders/` next to the binaries.
+Next steps, in order:
+- Finish the public/private header split (`D2`). It gives the most value and is the hardest to retrofit; once done, make `src/` and the backend libraries PRIVATE in `src/CMakeLists.txt`.
+- Make the shader path configurable (`D11`): a `RASM_SHADER_DIR` compile definition and an `EngineConfig::assetRoot`, plus a post-build copy of `shaders/` next to the binaries.
+- Keep moving code incrementally: move a file only while you are working on it, and change the CMake lists in the same commit.
+- Add `install()`/`export()` and a `tests/` target alongside CI (phase 1.5).
 
 ---
 
@@ -257,7 +245,7 @@ Use a right-handed Y-up world (glTF's convention) and do the Vulkan flip with a 
 
 **D10 — There are two rendering paths.** `render`/`compileScene` (the legacy per-entity path) and `render2`/`prepareScene` (GPU-driven) coexist, together with `begin/endOffscreenFrame`, which is marked "TODO: delete". Pick the GPU-driven path, port `01_render_graph` to it, and delete the rest.
 
-**D11 — Assets and shaders are located through the working directory** (§1.4).
+**D11 — Assets and shaders are located through the working directory** (§1.3).
 
 **D12 — The shader code is Vulkan-only.**
 - `spirv_asm` for `DrawIndex` ([core.slang:52-60](../shaders/lib/core.slang#L52-L60)) is SPIR-V specific.
