@@ -63,7 +63,7 @@ namespace rasm
     struct ResourceDesc
     {
         std::string name;
-        ResourceType type;
+        ResourceType type = {};
 
         union {
             // Texture-specific data
@@ -210,7 +210,14 @@ namespace rasm
             }
         }
 
-        ResourceDesc() {}
+        // The union has no default constructor (handles have member initializers), so zero its
+        // bytes here: fields a caller doesn't set must compare and hash deterministically (B18).
+        // The union is the last member, so it runs to the end of the object.
+        ResourceDesc()
+        {
+            auto* unionBegin = reinterpret_cast<unsigned char*>(&texture);
+            std::memset(unionBegin, 0, reinterpret_cast<unsigned char*>(this + 1) - unionBegin);
+        }
         ~ResourceDesc() {}
     };
 
