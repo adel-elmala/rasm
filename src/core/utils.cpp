@@ -1,7 +1,7 @@
 #include <fstream>
 #include <sstream>
 
-#include "rasm/core/utils.h"
+#include "core/utils.h"
 #include "spdlog/spdlog.h"
 
 namespace rasm

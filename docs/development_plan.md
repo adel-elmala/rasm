@@ -37,7 +37,7 @@ Goal: fix correctness bugs before building anything on top.
 - [ ] Cache glTF materials and textures per model. Add a default material (`B7`, `B8`).
 - [ ] glTF geometry: generate indices for non-indexed primitives, skip non-triangle modes with a warning, and validate strides and buffer views (`B6`).
 - [ ] Delete or fix `UNLIT`, the `loadMaterials` declaration and the spot-light enum value (`B9`, `B14`, `B15`). Make empty scenes work (`B16`). Fix `submit` wait stages (`B11`) and the Slang options leak (`B12`).
-- [ ] Remove the legacy path (`render`/`compileScene`/offscreen frame) and port `example_1` to the GPU-driven path with a fixed render-target flow (`D10`, `B10`).
+- [ ] Remove the legacy path (`render`/`compileScene`/offscreen frame) and port `01_render_graph` to the GPU-driven path with a fixed render-target flow (`D10`, `B10`).
 - [ ] Call `validateRasmStructs` in debug builds (`C6`). Add Tracy frame marks and zones for frame, prepare, upload and submit (`D16`).
 
 **Exit criteria:** all examples run validation-clean in Debug and Release (with `enableValidation = false`), survive resize and minimize, and a model with 100+ primitives sharing materials loads within the limits.
@@ -47,12 +47,11 @@ Goal: fix correctness bugs before building anything on top.
 Goal: the structural changes that every later feature depends on. They get much harder to make later.
 
 ### 1.1 Project structure and public API
-- [ ] Split public and private headers. `include/rasm/` must contain no Vulkan, VMA, vk-bootstrap, Slang, tinygltf or SDL headers (`D2`, review §1).
-- [ ] Restructure the source tree into `platform/`, `assets/`, `scene/`, `renderer/`, `rhi/vulkan/` as you touch each area (review §1).
-- [ ] Rework CMake:
-  - targets `rasm` + `rasm::rasm`, and options `RASM_BUILD_EXAMPLES` / `RASM_BUILD_TESTS`,
-  - install and export targets (`find_package(rasm)`),
-  - put the `*_IMPLEMENTATION` defines in one translation unit (`C10`).
+- [ ] Split public and private headers. `include/rasm/` must contain no Vulkan, VMA, vk-bootstrap, Slang, tinygltf or SDL headers. Then make `src/` a PRIVATE include directory (`D2`, review §1). *The files are already in their final places; what remains is removing the includes.*
+- [x] Restructure the source tree into `core/`, `platform/`, `assets/`, `scene/`, `renderer/`, `rhi/vulkan/`, and shaders into `lib/` and `passes/` (review §1, done 2026-10-26).
+- [x] CMake: `src/` and `examples/` subdirectories, the `rasm` target with alias `rasm::rasm`, the `RASM_BUILD_EXAMPLES` option, and the `rasm_add_example()` helper.
+- [x] Put the `*_IMPLEMENTATION` defines in one translation unit, `src/thirdparty_impl.cpp` (`C10`).
+- [ ] Install and export targets (`find_package(rasm)`). Add `RASM_BUILD_TESTS` together with the first tests.
 - [ ] Locate assets and shaders through configuration: `EngineConfig::assetRoot`, a `RASM_SHADER_DIR` default, and shaders copied next to the binaries (`D11`).
 - [ ] Commit a `.clang-format` and normalize formatting in a dedicated commit (`C1`, `C2`).
 
