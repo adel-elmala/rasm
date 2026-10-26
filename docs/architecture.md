@@ -178,7 +178,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - `Camera` holds a `CameraProjection` (a union of perspective and orthographic), a `CameraController` (trackball or free-fly, plus `easingSpeed`), the rendered `transform`, and a `targetTransform`.
 - `pollEvents` converts SDL events into a `CameraInput`: mouse drag in NDC normalized by the smaller window dimension, wheel delta, WASD state and frame delta-time. It feeds that input to `updateCamera`, which updates the target with the active controller and then eases the rendered transform toward it with exponential smoothing. The trackball eases along the orbit sphere.
 - Window resize updates every camera's aspect ratio and marks the swapchain for recreation. Escape or closing the window sets `isRunning = false`.
-- View matrix = `conjugate(rotation)` × `translate(−position)`. Projection uses `glm::perspective`/`glm::ortho` (see `B2` about the depth range).
+- View matrix = `conjugate(rotation)` × `translate(−position)`. Projection uses `glm::perspective`/`glm::ortho` with the Vulkan [0, 1] depth range (`GLM_FORCE_DEPTH_ZERO_TO_ONE` is a PUBLIC compile definition of `rasm`, see `B2`).
 
 ## 9. Render graph (low-level path)
 

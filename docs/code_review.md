@@ -110,7 +110,7 @@ Next steps, in order:
 
 *Fix:* remove desc-based dedup from buffer and texture creation. Keep dedup only for immutable objects (samplers, pipeline layouts, pipelines), keyed on their *complete* state. Asset-level caching (by path, or by model + image index) belongs in the asset layer.
 
-**B2 — The projection uses the OpenGL depth range [-1, 1].** *Confirmed.*
+**B2 — The projection uses the OpenGL depth range [-1, 1].** *Fixed 2026-10-26:* `GLM_FORCE_DEPTH_ZERO_TO_ONE` is now a PUBLIC compile definition of the `rasm` target in [src/CMakeLists.txt](../src/CMakeLists.txt), and the define in `engine.cpp` was removed. The original finding follows.
 - `#define GLM_FORCE_DEPTH_ZERO_TO_ONE` sits at [engine.cpp:9](../src/engine.cpp#L9), *after* `engine.h` has already included glm through `rasm/types.h`, so it has no effect. `camera.cpp` never sees it either.
 - `glm::perspective`/`glm::ortho` therefore emit z in [-1, 1]. Vulkan clips z < 0, which moves the effective near plane to ≈ 2·n·f/(n+f) (≈ 0.2 for n = 0.1, f = 32) and wastes half the depth range.
 

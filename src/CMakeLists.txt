@@ -42,6 +42,10 @@ target_link_libraries(rasm PUBLIC spdlog::spdlog) # make it private later, keep 
 target_link_libraries(rasm PRIVATE tinyobjloader::tinyobjloader)
 target_link_libraries(rasm PRIVATE SDL3::SDL3)
 
+# Library configuration macros live here, never in a .cpp (B2). PUBLIC so every consumer that
+# includes glm sees the same definitions (ODR) and gets a Vulkan [0, 1] clip-space depth range.
+target_compile_definitions(rasm PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE)
+
 target_include_directories(rasm PUBLIC ${Stb_INCLUDE_DIR} ${TINYGLTF_INCLUDE_DIRS} ${Vulkan_INCLUDE_DIRS} "${PROJECT_SOURCE_DIR}/include")
 # TODO(D2): src/ is public only because public headers still include private ones
 # (renderer/shaderCompiler.h, renderer/uberMaterialTypes.h, rhi/vulkan/*). Make it PRIVATE once they don't.
