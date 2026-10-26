@@ -58,12 +58,12 @@ cmake --build --preset x64-debug
 other presets are also available, check `cmakepresets.json`.
 
 ### 3. Run
-Examples executables can be found in `/build` folder under the `x64-debug` preset folder
+Examples executables can be found in `/build` folder under the `x64-debug` preset folder, in `examples/`. Run them from the repository root (shaders and assets are loaded relative to it):
 
 ```
-.\build\x64-debug\Example_0.exe
-.\build\x64-debug\Example_1.exe
-.\build\x64-debug\Example_2.exe
+.\build\x64-debug\examples\00_hello_scene.exe
+.\build\x64-debug\examples\01_render_graph.exe
+.\build\x64-debug\examples\02_gltf.exe
 ```
 
 ## macOS (Apple Silicon or Intel)
@@ -118,10 +118,10 @@ cmake --build --preset macOs
 other presets are also available, check `cmakepresets.json`.
 
 ### 3. Run
-Examples executables can be found in `/build` folder under the `macOs` preset folder
+Examples executables can be found in `/build` folder under the `macOS` preset folder, in `examples/`. Run them from the repository root:
 
 ```
-./build/macOs/Example_0
-./build/macOs/Example_1
-./build/macOs/Example_2
+./build/macOS/examples/00_hello_scene
+./build/macOS/examples/01_render_graph
+./build/macOS/examples/02_gltf
 ```

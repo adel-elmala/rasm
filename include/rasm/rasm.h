@@ -1,18 +1,17 @@
 // clang-format off
 #pragma once
 
-#include "rasm/core/types.h"
-#include "rasm/core/entity.h"
-#include "rasm/core/scene.h"
-#include "rasm/core/engine.h"
-#include "rasm/core/window.h"
-#include "rasm/core/transform.h"
-#include "rasm/core/camera.h"
-#include "rasm/core/light.h"
-#include "rasm/core/material.h"
-#include "rasm/core/mesh.h"
-#include "rasm/core/renderGraph.h"
-#include "rasm/core/utils.h"
+#include "rasm/types.h"
+#include "rasm/entity.h"
+#include "rasm/scene.h"
+#include "rasm/engine.h"
+#include "rasm/window.h"
+#include "rasm/transform.h"
+#include "rasm/camera.h"
+#include "rasm/light.h"
+#include "rasm/material.h"
+#include "rasm/mesh.h"
+#include "rasm/render/renderGraph.h"
 
 
 // clang-format on

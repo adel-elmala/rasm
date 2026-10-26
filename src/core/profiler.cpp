@@ -1,5 +1,5 @@
-#include "rasm/core/profiler.h"
-#include "rasm/core/engine.h"
+#include "rasm/profiler.h"
+#include "rasm/engine.h"
 
 #include <algorithm>
 
