@@ -26,6 +26,17 @@ namespace rasm
         }
 
         auto material = Material{.handle = handle, .type = type, .textures = {}, .shader = shader};
+
+        // Uber-material defaults for hand-made materials (loadMaterial fills these from the glTF
+        // file instead): white base color so the albedo texture is not multiplied by zero,
+        // non-metallic and fully rough surface.
+        material.params[static_cast<uint32_t>(PbrParam::ALBEDO)]                = 1.0f;
+        material.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 1]            = 1.0f;
+        material.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 2]            = 1.0f;
+        material.params[static_cast<uint32_t>(PbrParam::METALLIC)]              = 0.0f;
+        material.params[static_cast<uint32_t>(PbrParam::ROUGHNESS)]             = 1.0f;
+        material.params[static_cast<uint32_t>(PbrParam::NORMAL_SCALE)]          = 1.0f;
+        material.params[static_cast<uint32_t>(PbrParam::OCCLUSION_STRENGTH)]    = 1.0f;
         if (!textures.empty())
         {
             for (uint32_t i = 0; i < MAX_TEXTURE_SLOTS && i < textures.size(); ++i)
@@ -46,7 +57,7 @@ namespace rasm
             break;
         case MaterialType::PBR:
             material.name = "pbr";
-            material.shader = createShader(readFile("./shaders/common/pbr.slang"));
+            material.shader = createShader(readFile("./shaders/common/rasm.slang"));
             break;
         case MaterialType::UNLIT:
             material.name = "unlit";
@@ -106,125 +117,93 @@ namespace rasm
         auto mat = Material{.handle = handle, .type = MaterialType::PBR, .textures = {}, .shader = {}};
 
         const tinygltf::Material *material = &model.materials[materialIndex];
+
+        // glTF lets each texture pick its own TEXCOORD_n set. The vertex data carries
+        // MAX_VERTEX_UV_SETS sets; anything beyond that is out of our support for now.
+        auto resolveTexCoord = [&](int texCoord, const char *slotName) -> uint32_t
         {
-            // Extract Albedo (Base Color) Texture and Factor
-            auto baseColorTextureIndex = material->pbrMetallicRoughness.baseColorTexture.index;
-            auto &baseColorTexture = model.textures[baseColorTextureIndex];
-            auto &baseColorImage = model.images[baseColorTexture.source];
+            if (texCoord < 0 || texCoord >= static_cast<int>(MAX_VERTEX_UV_SETS))
+            {
+                spdlog::warn("Material '{}' references {} texCoord set {} but only {} sets are supported; falling back to TEXCOORD_0.",
+                             material->name, slotName, texCoord, MAX_VERTEX_UV_SETS);
+                return 0;
+            }
+            return static_cast<uint32_t>(texCoord);
+        };
 
-            auto baseColorTexDesc = ResourceDesc{};
-            baseColorTexDesc.name = baseColorImage.uri;
-            baseColorTexDesc.type = ResourceType::TEXTURE;
-            baseColorTexDesc.texture.width = baseColorImage.width;
-            baseColorTexDesc.texture.height = baseColorImage.height;
-            baseColorTexDesc.texture.format = baseColorImage.component == 4 ? Format::R8G8B8A8_SRGB : Format::R8G8B8_UNORM;
-            baseColorTexDesc.texture.usage = TextureUsage::SAMPLED;
+        mat.texCoords[static_cast<uint32_t>(PbrSlot::ALBEDO)] = resolveTexCoord(material->pbrMetallicRoughness.baseColorTexture.texCoord, "baseColor");
+        mat.texCoords[static_cast<uint32_t>(PbrSlot::METALLIC)] = resolveTexCoord(material->pbrMetallicRoughness.metallicRoughnessTexture.texCoord, "metallicRoughness");
+        mat.texCoords[static_cast<uint32_t>(PbrSlot::ROUGHNESS)] = mat.texCoords[static_cast<uint32_t>(PbrSlot::METALLIC)];
+        mat.texCoords[static_cast<uint32_t>(PbrSlot::NORMAL)] = resolveTexCoord(material->normalTexture.texCoord, "normal");
+        mat.texCoords[static_cast<uint32_t>(PbrSlot::OCCLUSION)] = resolveTexCoord(material->occlusionTexture.texCoord, "occlusion");
+        mat.texCoords[static_cast<uint32_t>(PbrSlot::EMISSIVE)] = resolveTexCoord(material->emissiveTexture.texCoord, "emissive");
 
-            TextureHandle baseColorTextureHandle = createTexture(baseColorTexDesc);
-            addBindlessTexture(bindlessDescriptorSet, baseColorTextureHandle);
-            ctx.fillTexture(baseColorTextureHandle, baseColorImage.image.data()); // TODO: make sure first that the texture was not filled before
-            mat.textures[static_cast<uint32_t>(PbrSlot::ALBEDO)] = baseColorTextureHandle;
+        {
+            // glTF defaults: metallicFactor = 1.0, roughnessFactor = 1.0. tinygltf keeps those
+            // defaults even when no metallicRoughness texture exists, so always copy them over.
+            mat.params[static_cast<uint32_t>(PbrParam::METALLIC)] = material->pbrMetallicRoughness.metallicFactor;
+            mat.params[static_cast<uint32_t>(PbrParam::ROUGHNESS)] = material->pbrMetallicRoughness.roughnessFactor;
 
+            // Same for the base color factor: a material may tint with it without any texture.
             mat.params[static_cast<uint32_t>(PbrParam::ALBEDO)] = material->pbrMetallicRoughness.baseColorFactor[0];
             mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 1] = material->pbrMetallicRoughness.baseColorFactor[1];
             mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 2] = material->pbrMetallicRoughness.baseColorFactor[2];
 
-            // Extract Metallic-Roughness Texture and Factors
-            auto metallicRoughnessTextureIndex = material->pbrMetallicRoughness.metallicRoughnessTexture.index;
-            if (metallicRoughnessTextureIndex >= 0)
+            // Color textures are sRGB; material data is linear (glTF 2.0).
+            // Expand to RGBA8 to avoid unsupported RGB Vulkan formats and mismatched upload sizes.
+            auto uploadTexture = [&](int textureIndex, bool srgb) -> TextureHandle
             {
-                auto &metallicRoughnessTexture = model.textures[metallicRoughnessTextureIndex];
-                auto &metallicRoughnessImage = model.images[metallicRoughnessTexture.source];
+                if (textureIndex < 0 || textureIndex >= static_cast<int>(model.textures.size()))
+                    return {};
+                int source = model.textures[textureIndex].source;
+                if (source < 0 || source >= static_cast<int>(model.images.size()))
+                    return {};
+                const auto &image = model.images[source];
+                if (image.bits != 8 || image.component < 1 || image.component > 4 ||
+                    image.width <= 0 || image.height <= 0)
+                {
+                    spdlog::error("Unsupported glTF image '{}' (expected 8-bit components).", image.uri);
+                    return {};
+                }
+                size_t pixels = static_cast<size_t>(image.width) * image.height;
+                if (image.image.size() < pixels * image.component)
+                    return {};
+                std::vector<unsigned char> rgba(pixels * 4, 255);
+                for (size_t i = 0; i < pixels; ++i)
+                {
+                    const auto *src = image.image.data() + i * image.component;
+                    rgba[i * 4] = src[0];
+                    rgba[i * 4 + 1] = image.component >= 3 ? src[1] : src[0];
+                    rgba[i * 4 + 2] = image.component >= 3 ? src[2] : src[0];
+                    if (image.component == 2 || image.component == 4)
+                        rgba[i * 4 + 3] = src[image.component - 1];
+                }
+                ResourceDesc desc{};
+                desc.name = image.uri;
+                desc.type = ResourceType::TEXTURE;
+                desc.texture.width = image.width;
+                desc.texture.height = image.height;
+                desc.texture.format = srgb ? Format::R8G8B8A8_SRGB : Format::R8G8B8A8_UNORM;
+                desc.texture.usage = TextureUsage::SAMPLED;
+                auto texture = createTexture(desc);
+                if (!texture.isValid() || !ctx.fillTexture(texture, rgba.data()))
+                    return {};
+                addBindlessTexture(bindlessDescriptorSet, texture);
+                return texture;
+            };
 
-                auto metallicRoughnessTexDesc = ResourceDesc{};
-                metallicRoughnessTexDesc.name = metallicRoughnessImage.uri;
-                metallicRoughnessTexDesc.type = ResourceType::TEXTURE;
-                metallicRoughnessTexDesc.texture.width = metallicRoughnessImage.width;
-                metallicRoughnessTexDesc.texture.height = metallicRoughnessImage.height;
-                metallicRoughnessTexDesc.texture.format = metallicRoughnessImage.component == 4 ? Format::R8G8B8A8_SRGB : Format::R8G8B8_UNORM;
-                metallicRoughnessTexDesc.texture.usage = TextureUsage::SAMPLED;
-
-                TextureHandle metallicRoughnessTextureHandle = createTexture(metallicRoughnessTexDesc);
-                addBindlessTexture(bindlessDescriptorSet, metallicRoughnessTextureHandle);
-                ctx.fillTexture(metallicRoughnessTextureHandle, metallicRoughnessImage.image.data()); // TODO: make sure first that the texture was not filled before
-                mat.textures[static_cast<uint32_t>(PbrSlot::METALLIC)] = metallicRoughnessTextureHandle;
-                mat.textures[static_cast<uint32_t>(PbrSlot::ROUGHNESS)] = metallicRoughnessTextureHandle;
-
-                // material->pbrMetallicRoughness.metallicRoughnessTexture.texCoord; // TODO: use that txt_coord slot...
-                mat.params[static_cast<uint32_t>(PbrParam::METALLIC)] = material->pbrMetallicRoughness.metallicFactor;
-                mat.params[static_cast<uint32_t>(PbrParam::ROUGHNESS)] = material->pbrMetallicRoughness.roughnessFactor;
-            }
-            // Extract other material properties (Normal, Occlusion, Emissive) if available
-            auto normalTextureIndex = material->normalTexture.index;
-            if (normalTextureIndex >= 0)
-            {
-                auto &normalTexture = model.textures[normalTextureIndex];
-                auto &normalImage = model.images[normalTexture.source];
-
-                ResourceDesc normalTexDesc{};
-                normalTexDesc.name = normalImage.uri;
-                normalTexDesc.type = ResourceType::TEXTURE;
-                normalTexDesc.texture.width = normalImage.width;
-                normalTexDesc.texture.height = normalImage.height;
-                normalTexDesc.texture.format = normalImage.component == 4 ? Format::R8G8B8A8_SRGB : Format::R8G8B8_UNORM;
-                normalTexDesc.texture.usage = TextureUsage::SAMPLED;
-
-                TextureHandle normalTextureHandle = createTexture(normalTexDesc);
-                addBindlessTexture(bindlessDescriptorSet, normalTextureHandle);
-                ctx.fillTexture(normalTextureHandle, normalImage.image.data()); // TODO: make sure first that the texture was not filled before
-                mat.textures[static_cast<uint32_t>(PbrSlot::NORMAL)] = normalTextureHandle;
-
-                // material->normalTexture.texCoord; // TODO: use that txt_coord slot...
-                mat.params[static_cast<uint32_t>(PbrParam::NORMAL_SCALE)] = material->normalTexture.scale;
-            }
-
-            auto occlusionTextureIndex = material->occlusionTexture.index;
-            if (occlusionTextureIndex >= 0)
-            {
-                auto &occlusionTexture = model.textures[occlusionTextureIndex];
-                auto &occlusionImage = model.images[occlusionTexture.source];
-
-                ResourceDesc occlusionTexDesc{};
-                occlusionTexDesc.name = occlusionImage.uri;
-                occlusionTexDesc.type = ResourceType::TEXTURE;
-                occlusionTexDesc.texture.width = occlusionImage.width;
-                occlusionTexDesc.texture.height = occlusionImage.height;
-                occlusionTexDesc.texture.format = occlusionImage.component == 4 ? Format::R8G8B8A8_SRGB : Format::R8G8B8_UNORM;
-                occlusionTexDesc.texture.usage = TextureUsage::SAMPLED;
-
-                TextureHandle occlusionTextureHandle = createTexture(occlusionTexDesc);
-                addBindlessTexture(bindlessDescriptorSet, occlusionTextureHandle);
-                ctx.fillTexture(occlusionTextureHandle, occlusionImage.image.data()); // TODO: make sure first that the texture was not filled before
-                mat.textures[static_cast<uint32_t>(PbrSlot::OCCLUSION)] = occlusionTextureHandle;
-
-                // material->occlusionTexture.texCoord; // TODO: use that txt_coord slot...
-                mat.params[static_cast<uint32_t>(PbrParam::OCCLUSION_STRENGTH)] = material->occlusionTexture.strength;
-            }
-
-            auto emissiveTextureIndex = material->emissiveTexture.index;
-            if (emissiveTextureIndex >= 0)
-            {
-                auto &emissiveTexture = model.textures[emissiveTextureIndex];
-                auto &emissiveImage = model.images[emissiveTexture.source];
-
-                ResourceDesc emissiveTexDesc{};
-                emissiveTexDesc.name = emissiveImage.uri;
-                emissiveTexDesc.type = ResourceType::TEXTURE;
-                emissiveTexDesc.texture.width = emissiveImage.width;
-                emissiveTexDesc.texture.height = emissiveImage.height;
-                emissiveTexDesc.texture.format = emissiveImage.component == 4 ? Format::R8G8B8A8_SRGB : Format::R8G8B8_UNORM;
-                emissiveTexDesc.texture.usage = TextureUsage::SAMPLED;
-
-                TextureHandle emissiveTextureHandle = createTexture(emissiveTexDesc);
-                addBindlessTexture(bindlessDescriptorSet, emissiveTextureHandle);
-                ctx.fillTexture(emissiveTextureHandle, emissiveImage.image.data()); // TODO: make sure first that the texture was not filled before
-                mat.textures[static_cast<uint32_t>(PbrSlot::EMISSIVE)] = emissiveTextureHandle;
-
-                // material->emissiveTexture.texCoord; // TODO: use that txt_coord slot...
-                mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR)] = material->emissiveFactor[0];
-                mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + 1] = material->emissiveFactor[1];
-                mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + 2] = material->emissiveFactor[2];
-            }
+            mat.textures[static_cast<uint32_t>(PbrSlot::ALBEDO)] =
+                uploadTexture(material->pbrMetallicRoughness.baseColorTexture.index, true);
+            auto mr = uploadTexture(material->pbrMetallicRoughness.metallicRoughnessTexture.index, false);
+            mat.textures[static_cast<uint32_t>(PbrSlot::METALLIC)] = mr;
+            mat.textures[static_cast<uint32_t>(PbrSlot::ROUGHNESS)] = mr;
+            mat.textures[static_cast<uint32_t>(PbrSlot::NORMAL)] = uploadTexture(material->normalTexture.index, false);
+            mat.textures[static_cast<uint32_t>(PbrSlot::OCCLUSION)] = uploadTexture(material->occlusionTexture.index, false);
+            mat.textures[static_cast<uint32_t>(PbrSlot::EMISSIVE)] = uploadTexture(material->emissiveTexture.index, true);
+            mat.params[static_cast<uint32_t>(PbrParam::NORMAL_SCALE)] = material->normalTexture.scale;
+            mat.params[static_cast<uint32_t>(PbrParam::OCCLUSION_STRENGTH)] = material->occlusionTexture.strength;
+            for (uint32_t i = 0; i < 3; ++i)
+                mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + i] = material->emissiveFactor[i];
         }
 
         registery.materials.resize(handle.index + 1);
@@ -266,22 +245,30 @@ namespace rasm
         gmat.pbr.baseColorFactor[1] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 1];
         gmat.pbr.baseColorFactor[2] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 2];
 
+        // glTF texCoord set per texture; the shader selects the matching interpolated UV set.
+        auto texCoordOf = [](uint32_t texCoord) -> uint32_t { return texCoord < MAX_VERTEX_UV_SETS ? texCoord : 0u; };
+
         gmat.pbr.baseColorTextureIndex = getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::ALBEDO)]);
+        gmat.pbr.baseColorTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::ALBEDO)]);
         gmat.pbr.metallicRoughnessTextureIndex = getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::METALLIC)]);
+        gmat.pbr.metallicRoughtnessTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::METALLIC)]);
 
         gmat.pbr.metallicFactor = mat.params[static_cast<uint32_t>(PbrParam::METALLIC)];
         gmat.pbr.roughnessFactor = mat.params[static_cast<uint32_t>(PbrParam::ROUGHNESS)];
 
         // normal map
         gmat.normal.normalTextureIndex = getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::NORMAL)]);
+        gmat.normal.normalTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::NORMAL)]);
         gmat.normal.scale = mat.params[static_cast<uint32_t>(PbrParam::NORMAL_SCALE)];
 
         // occlusion map
         gmat.occlusion.occlusionTextureIndex = getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::OCCLUSION)]);
+        gmat.occlusion.occlusionTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::OCCLUSION)]);
         gmat.occlusion.strength = mat.params[static_cast<uint32_t>(PbrParam::OCCLUSION_STRENGTH)];
 
         // emissive map
         gmat.emissive.emissiveTextureIndex = getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::EMISSIVE)]);
+        gmat.emissive.emissiveTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::EMISSIVE)]);
         gmat.emissive.emissiveFactor[0] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR)];
         gmat.emissive.emissiveFactor[1] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + 1];
         gmat.emissive.emissiveFactor[2] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + 2];

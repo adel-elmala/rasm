@@ -1,0 +1,12 @@
+Damaged Helmet
+==============
+
+Source: https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/DamagedHelmet
+
+Authors / licenses:
+- ctxwing -- (c) 2018 -- CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)
+- theblueturtle_ -- (c) 2016 -- CC BY-NC 4.0 (https://creativecommons.org/licenses/by-nc/4.0/)
+
+The model was rebuilt and converted to glTF by ctxwing, based on the earlier
+model by theblueturtle_. Attribution is required, and commercial use of the
+original model is not permitted.

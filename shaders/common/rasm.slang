@@ -1,123 +1,52 @@
-enum VertexFormat : uint32_t { Full, PosOnly };
-
-struct VertexFull       { float3 pos; float3 normal; float2 uv; };
-struct VertexPosOnly    { float3 pos; };
-
-struct DrawInfo
-{
-    uint32_t        indexCount;
-    uint32_t        instanceCount;
-    uint32_t        firstIndex;
-    int32_t         vertexOffset;
-    uint32_t        firstInstance;
-};
-
-struct MetallicRoughnessMaterial
-{
-    float3      baseColorFactor;
-    uint32_t    baseColorTextureIndex;
-    uint32_t    metallicRoughnessTextureIndex;
-    uint32_t    metallicRoughtnessTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
-    float       metallicFactor;
-    float       roughnessFactor;
-};
-
-struct NormalMaterial
-{
-    uint32_t normalTextureIndex;
-    uint32_t normalTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
-    float scale;
-};
-
-struct OcclusionMaterial
-{
-    uint32_t occlusionTextureIndex;
-    uint32_t occlusionTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
-    float strength;
-};
-
-struct EmissiveMaterial
-{
-    uint32_t emissiveTextureIndex;
-    uint32_t emissiveTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
-    float3   emissiveFactor;
-};
-
-struct Material
-{
-    MetallicRoughnessMaterial   metallicRoughness;
-    NormalMaterial              normal;
-    OcclusionMaterial           occlusion;
-    EmissiveMaterial            emissive;
-};
-
-struct Modeldata
-{
-    float4x4        worldMatrix; 
-    Material        material;
-    VertexFormat    vertFormat;
-};
-
-struct SceneData
-{
-    float4x4        projection;
-    float4x4        view;
-    VertexFull*     vertsPtr;
-    DrawInfo*       drawInfoPtr;
-    Modeldata*      modeldataPtr;
-};
-
-struct PushConstants
-{
-    SceneData* scene;
-};
-
-[[vk::push_constant]]
-ConstantBuffer<PushConstants> pc;
-
-// Define a function to pull the native Vulkan DrawIndex built-in
-uint getDrawIndex()
-{
-    return spirv_asm
-    {
-        OpExtension "SPV_KHR_shader_draw_parameters";
-        OpCapability DrawParameters;
-        result:$$uint = OpLoad builtin(DrawIndex:uint);
-    };
-}
+// clang-format off
+#include "pbr.slang"
+#include "core.slang"
 
 struct VSInput
 {
-    // SV_VertexID automatically includes the baseVertex offset from the indirect call
+    // Slang exposes the raw index here; vertMain restores the indirect draw baseVertex.
     uint vertexID : SV_VertexID;
 };
 
 struct VSOutput
 {
-    float4 Pos : SV_POSITION;
-    float3 Normal : NORMAL;
-    float2 UV : TEXCOORD0;
-    uint drawID;
+    float4 clipPosition  : SV_POSITION;
+    float3 worldPosition : POSITION;
+    float3 worldNormal   : NORMAL;
+    // glTF materials pick a UV set per texture (TEXCOORD_0..2); carry them all and let the
+    // fragment shader select using the material's per-texture texCoord.
+    float2 uv0            : TEXCOORD0;
+    float2 uv1            : TEXCOORD1;
+    float2 uv2            : TEXCOORD2;
+    float3 worldCameraPosition : TEXCOORD3;
+    nointerpolation uint drawID;
 };
 
 [shader("vertex")]
 VSOutput vertMain(VSInput input)
 {
-    VSOutput output = {};
     uint drawID = getDrawIndex();
-    output.drawID = drawID;
 
-    float4x4 modelMat = pc.scene->modeldataPtr[drawID].worldMatrix;
-    float4x4 viewMat = pc.scene->view;
-    float4x4 projectionMat = pc.scene->projection;
+    float4x4 modelMat       = pc.scene->modeldataPtr[drawID].worldMatrix;
+    float4x4 viewMat        = pc.scene->view;
+    float4x4 projectionMat  = pc.scene->projection;
+    float3x3 normalMat      = pc.scene->modeldataPtr[drawID].normalMatrix;
 
     // Slang lowers SV_VertexID to (VertexIndex - BaseVertex) to match D3D semantics, so it is the raw
     // index-buffer value and the per-draw vertexOffset must be added back to address the mega buffer.
     VertexFull vert = pc.scene->vertsPtr[input.vertexID + pc.scene->drawInfoPtr[drawID].vertexOffset];
 
-    output.Pos = mul(projectionMat, mul(viewMat, mul(modelMat, float4(vert.pos, 1.0))));
-    output.Normal = normalize(mul((float3x3)modelMat, vert.normal));
-    output.UV = vert.uv;
+    VSOutput output = {};
+    output.clipPosition         = mul(projectionMat, mul(viewMat, mul(modelMat, float4(vert.pos, 1.0))));
+    output.worldPosition        = mul(modelMat, float4(vert.pos, 1.0)).xyz;
+    output.worldNormal          = mul(normalMat, vert.normal);
+    if (dot(output.worldNormal, output.worldNormal) < 1e-12) output.worldNormal = float3(0.0, 0.0, 1.0);
+    output.worldNormal          = normalize(output.worldNormal);
+    output.worldCameraPosition  = pc.scene->cameraWorldPosition;
+    output.uv0                  = vert.uv[0];
+    output.uv1                  = vert.uv[1];
+    output.uv2                  = vert.uv[2];
+    output.drawID               = drawID;
 
     return output;
 }
@@ -125,10 +54,26 @@ VSOutput vertMain(VSInput input)
 [[vk::binding(0, 0)]]
 Sampler2D gTextures[];
 
-
 [shader("fragment")]
 float4 fragMain(VSOutput input) : SV_TARGET
 {
-    float3 color = gTextures[pc.scene->modeldataPtr[input.drawID].material.metallicRoughness.baseColorTextureIndex].Sample(input.UV).xyz;
-    return float4(color, 1.0);
+    Material material = pc.scene->modeldataPtr[input.drawID].material;
+
+    PBRInfo info = {};
+    info.vPosition              = input.worldPosition;
+    info.vNormal                = input.worldNormal;
+    info.cameraPosition         = input.worldCameraPosition;
+    // Each texture samples the UV set the glTF material asked for.
+    info.baseColorUV            = selectUV(material.metallicRoughness.baseColorTextureCoordinate, input.uv0, input.uv1, input.uv2);
+    info.metallicRoughnessUV    = selectUV(material.metallicRoughness.metallicRoughtnessTextureCoordinate, input.uv0, input.uv1, input.uv2);
+    info.normalUV               = selectUV(material.normal.normalTextureCoordinate, input.uv0, input.uv1, input.uv2);
+    info.occlusionUV            = selectUV(material.occlusion.occlusionTextureCoordinate, input.uv0, input.uv1, input.uv2);
+    info.emissiveUV             = selectUV(material.emissive.emissiveTextureCoordinate, input.uv0, input.uv1, input.uv2);
+    info.numLights              = pc.scene->numLights;
+    info.lights                 = pc.scene->lights;
+    info.material               = material;
+
+    return PBR(gTextures, info);
 }
+
+// clang-format on

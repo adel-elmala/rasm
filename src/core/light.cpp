@@ -4,7 +4,7 @@
 namespace rasm
 {
 
-    LightHandle Engine::createLight(LightType type, glm::vec3 color, float intensity, glm::vec3 position, glm::vec3 direction)
+    LightHandle Engine::createLight(LightType type, glm::vec3 color, glm::vec3 position, glm::vec3 direction, float intensity, float range)
     {
         LightHandle handle = handleManager.getNextLightHandle();
 
@@ -21,6 +21,7 @@ namespace rasm
         light.intensity = intensity;
         light.position = position;
         light.direction = direction;
+        light.range = range;
 
         registery.lights.resize(handle.index + 1);
         registery.lights[handle.index] = light;

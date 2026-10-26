@@ -12,6 +12,11 @@
 #include "glm/gtc/matrix_transform.hpp"
 #include <glm/gtc/type_ptr.hpp>
 
+#include <string>
+#include <cstring>
+#include <cassert>
+#include <vector>
+
 namespace rasm
 {
     MeshHandle Engine::createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices)
@@ -126,7 +131,7 @@ namespace rasm
                     if (attrib.normals.size() > 0)
                         v.normal = {attrib.normals[index.normal_index * 3], -attrib.normals[index.normal_index * 3 + 1], attrib.normals[index.normal_index * 3 + 2]};
                     if (attrib.texcoords.size() > 0)
-                        v.uv = {attrib.texcoords[index.texcoord_index * 2], 1.0 - attrib.texcoords[index.texcoord_index * 2 + 1]};
+                        v.uv[0] = {attrib.texcoords[index.texcoord_index * 2], 1.0 - attrib.texcoords[index.texcoord_index * 2 + 1]};
 
                     out_vertices.push_back(v);
                     out_indices.push_back(static_cast<uint32_t>(out_indices.size()));
@@ -213,9 +218,9 @@ namespace rasm
             // Get pointers to the standard attributes
             const float *posPtr = nullptr;
             const float *normPtr = nullptr;
-            const float *uvPtr = nullptr;
+            const float *uvPtrs[MAX_VERTEX_UV_SETS] = {};
 
-            size_t posStride = 0, normStride = 0, uvStride = 0;
+            size_t posStride = 0, normStride = 0, uvStrides[MAX_VERTEX_UV_SETS] = {};
 
             // Positions (REQUIRED for a valid mesh)
             if (primitive.attributes.count("POSITION") > 0)
@@ -236,16 +241,22 @@ namespace rasm
                 normStride = acc.ByteStride(bv) / sizeof(float);
             }
 
-            // Texture Coordinates / UVs (OPTIONAL)
-            if (primitive.attributes.count("TEXCOORD_0") > 0)
+            // Texture Coordinates / UVs (OPTIONAL). glTF materials reference a set per texture
+            // (baseColor may use TEXCOORD_0 while the normal map uses TEXCOORD_2), so load every
+            // supported set. Missing sets stay (0, 0).
+            for (uint32_t set = 0; set < MAX_VERTEX_UV_SETS; ++set)
             {
-                const tinygltf::Accessor &acc = model.accessors[primitive.attributes.at("TEXCOORD_0")];
-                const tinygltf::BufferView &bv = model.bufferViews[acc.bufferView];
-                uvPtr = reinterpret_cast<const float *>(&(model.buffers[bv.buffer].data[acc.byteOffset + bv.byteOffset]));
-                uvStride = acc.ByteStride(bv) / sizeof(float);
+                std::string attrName = "TEXCOORD_" + std::to_string(set);
+                if (primitive.attributes.count(attrName) > 0)
+                {
+                    const tinygltf::Accessor &acc = model.accessors[primitive.attributes.at(attrName)];
+                    const tinygltf::BufferView &bv = model.bufferViews[acc.bufferView];
+                    uvPtrs[set] = reinterpret_cast<const float *>(&(model.buffers[bv.buffer].data[acc.byteOffset + bv.byteOffset]));
+                    uvStrides[set] = acc.ByteStride(bv) / sizeof(float);
+                }
             }
 
-            // TODO: Extract all remaining vertex attributes (tangents, colors,TEXCOORD_0,...)
+            // TODO: Extract all remaining vertex attributes (tangents, colors,...)
 
             // Interleave the data into our standard Vertex struct
             for (size_t i = 0; i < vertexCount; ++i)
@@ -264,12 +275,64 @@ namespace rasm
                     v.normal[1] = normPtr[i * normStride + 1];
                     v.normal[2] = normPtr[i * normStride + 2];
                 }
-                if (uvPtr)
+                for (uint32_t set = 0; set < MAX_VERTEX_UV_SETS; ++set)
                 {
-                    v.uv[0] = uvPtr[i * uvStride + 0];
-                    v.uv[1] = uvPtr[i * uvStride + 1];
+                    if (uvPtrs[set])
+                    {
+                        v.uv[set][0] = uvPtrs[set][i * uvStrides[set] + 0];
+                        v.uv[set][1] = uvPtrs[set][i * uvStrides[set] + 1];
+                    }
                 }
                 vertices.push_back(v);
+            }
+
+            // Compute smooth normals if the primitive has no NORMAL attribute
+            if (!normPtr)
+            {
+                for (auto &vert : vertices)
+                {
+                    vert.normal = glm::vec3(0.0f);
+                }
+                std::vector<uint32_t> indicesBuf;
+                if (primitive.indices > -1)
+                {
+                    const tinygltf::Accessor &indexAccessor = model.accessors[primitive.indices];
+                    const tinygltf::BufferView &indexBufferView = model.bufferViews[indexAccessor.bufferView];
+                    const tinygltf::Buffer &indexBuffer = model.buffers[indexBufferView.buffer];
+                    const unsigned char *indexData = &(indexBuffer.data[indexAccessor.byteOffset + indexBufferView.byteOffset]);
+                    for (size_t i = 0; i < indexAccessor.count; ++i)
+                    {
+                        if (indexAccessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT)
+                            indicesBuf.push_back(reinterpret_cast<const uint32_t *>(indexData)[i]);
+                        else if (indexAccessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
+                            indicesBuf.push_back(reinterpret_cast<const uint16_t *>(indexData)[i]);
+                        else if (indexAccessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE)
+                            indicesBuf.push_back(reinterpret_cast<const uint8_t *>(indexData)[i]);
+                    }
+                }
+                else
+                {
+                    for (size_t i = 0; i < vertexCount; ++i)
+                        indicesBuf.push_back(static_cast<uint32_t>(i));
+                }
+                for (size_t i = 0; i + 2 < indicesBuf.size(); i += 3)
+                {
+                    Vertex &v0 = vertices[indicesBuf[i]];
+                    Vertex &v1 = vertices[indicesBuf[i + 1]];
+                    Vertex &v2 = vertices[indicesBuf[i + 2]];
+                    glm::vec3 faceNormal = glm::cross(v1.pos - v0.pos, v2.pos - v0.pos);
+                    v0.normal += faceNormal;
+                    v1.normal += faceNormal;
+                    v2.normal += faceNormal;
+                }
+                for (auto &vert : vertices)
+                {
+                    float len2 = glm::dot(vert.normal, vert.normal);
+                    if (len2 > 0.0f)
+                        vert.normal *= glm::inversesqrt(len2);
+                    else
+                        vert.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+                }
             }
 
             // --- 2. EXTRACT INDEX BUFFER ---

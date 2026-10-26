@@ -13,6 +13,7 @@
 #include "rasm/core/handle.h"
 #include "rasm/core/profiler.h"
 #include "rasm/gfx/context.h"
+#include "rasm/gfx/uberMaterialTypes.h"
 
 #include <cstdint>
 #include <string>
@@ -25,9 +26,8 @@ namespace tinygltf { struct Node; }
 namespace rasm {
 
     constexpr uint32_t MAX_MATERIALS = 256;
-    constexpr uint32_t MAX_SHADERS = 256;
-    constexpr uint32_t MAX_CAMERAS = 8;
-    constexpr uint32_t MAX_LIGHTS = 128;
+    constexpr uint32_t MAX_SHADERS   = 256;
+    constexpr uint32_t MAX_CAMERAS   = 8;
 
     class Engine {
         friend class RenderGraph;
@@ -41,7 +41,7 @@ namespace rasm {
         PreparedScene               prepareScene(SceneHandle scene);
         EntityHandle                createEntity(const std::string& name, MeshHandle mesh = MeshHandle{}, MaterialHandle material = MaterialHandle{}, Transform transform = Transform{});
         CameraHandle                createCamera(CameraProjection projection, Transform transform);
-        LightHandle                 createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), float intensity = 1.0f, glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f));
+        LightHandle                 createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f), float intensity = 1.0f, float range = 10.0f);
         void                        addEntityToScene(SceneHandle scene, EntityHandle entity);
         void                        addCameraToScene(SceneHandle scene, CameraHandle camera);
         void                        addLightToScene(SceneHandle scene, LightHandle light);
@@ -49,7 +49,8 @@ namespace rasm {
         MeshHandle                  loadMesh(const std::string& path);
         MeshHandle                  loadGLTF(const std::string& path);
         BufferHandle                uploadMesh(const MeshHandle& handle);
-        TextureHandle               loadTexture(const std::string& path);
+        // Color images default to sRGB; pass R8G8B8A8_UNORM for normal/MR/AO data.
+        TextureHandle               loadTexture(const std::string& path, Format format = Format::R8G8B8A8_SRGB);
         ShaderHandle                createShader(const std::string& shaderSource);
         MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {}, ShaderHandle shader = ShaderHandle{});
         std::vector<MaterialHandle> loadMaterials(MeshHandle meshHandle);
@@ -97,6 +98,7 @@ namespace rasm {
         uint32_t                    addBindlessTexture(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot = MAX_BINDLESS_TEXTURES);
         uint32_t                    getBindlessTextureIndex(const TextureHandle &texture);
         RenderTargetAttachments     getRenderTargetAttachments(const RenderTargetHandle &renderTarget);
+        void                        updateUniforms(PreparedScene &preparedScene);
 
         // window related
         Window                      createWindow(uint32_t width, uint32_t height);

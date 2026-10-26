@@ -33,7 +33,7 @@ int main()
 
     // 4. Create a material
     std::vector<rasm::TextureHandle> textures = {albedoTexture};
-    rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::BASIC, textures);
+    rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::PBR, textures);
 
     // 5. Create entities in the scene
     rasm::EntityHandle bunny = engine.createEntity("bunny", bunnyMesh, material, rasm::Transform{
@@ -61,7 +61,7 @@ int main()
                                                                                         .nearZ = 0.1f,
                                                                                         .farZ = 32.0f}},
                                                     rasm::Transform{
-                                                        glm::vec3(0.0f, 0.0f, -1.0f),      // position
+                                                        glm::vec3(0.0f, 0.0f, 4.0f),       // position
                                                         glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
                                                         glm::vec3(1.0f)                    // scale
                                                     });
@@ -72,18 +72,30 @@ int main()
                                            .freeFly = {.speed = 5.0f, .lookSensitivity = 1.0f},
                                            .easingSpeed = 6.0f});
 
-    // 7. Create a light
-    rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL,  // type
-                                                 glm::vec3(1.0f, 1.0f, 1.0f),   // color
-                                                 1.0f,                          // intensity
-                                                 glm::vec3(0.0f, 10.0f, 0.0f),  // position
-                                                 glm::vec3(0.0f, -1.0f, 0.0f)); // direction
+    // Warm key and cool fill expose surface shape and specular response from the camera.
+    rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL,
+                                                 glm::vec3(1.0f, 0.92f, 0.82f),
+                                                 glm::vec3(0.0f),
+                                                 glm::normalize(glm::vec3(-0.5f, -0.8f, -1.0f)),
+                                                 3.0f, 0.0f);
+    rasm::LightHandle fillLight = engine.createLight(rasm::LightType::DIRECTIONAL,
+                                                     glm::vec3(0.65f, 0.8f, 1.0f),
+                                                     glm::vec3(0.0f),
+                                                     glm::normalize(glm::vec3(0.8f, -0.2f, -0.4f)),
+                                                     1.0f, 0.0f);
+    rasm::LightHandle pointLight = engine.createLight(rasm::LightType::POINT,
+                                                      glm::vec3(1.0f, 0.85f, 0.65f),
+                                                      glm::vec3(0.0f, 3.0f, -7.0f),
+                                                      glm::vec3(0.0f),
+                                                      40.0f, 18.0f);
 
     engine.addEntityToScene(scene, bunny);
     engine.addEntityToScene(scene, bunny2);
     engine.addEntityToScene(scene, bunny3);
     engine.addCameraToScene(scene, camera);
     engine.addLightToScene(scene, light);
+    engine.addLightToScene(scene, fillLight);
+    engine.addLightToScene(scene, pointLight);
 
     // 8. Main loop
     while (engine.running())
