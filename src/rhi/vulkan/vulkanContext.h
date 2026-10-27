@@ -41,7 +41,8 @@ namespace rasm
             std::optional<FenceVKHandle>               createFence(bool signaled = false);
             std::vector<TextureVKHandle>               getSwapchainImages();
             Format                                     getSwapchainImageFormat();
-            std::optional<SwapchainVKHandle>           recreateSwapchain();
+            glm::uvec2                                 getSwapchainExtent();
+            SwapchainStatus                            recreateSwapchain();
             VRAMStats                                  queryVRAMStats();
             void                                       waitIdle();
             void                                       fillBuffer(const BufferVKHandle& buffer, const void* data, size_t size, size_t offset = 0);
@@ -68,7 +69,7 @@ namespace rasm
             void                                       updateBindlessDescriptorSet(const DescriptorSetVKHandle& bindlessSet, const TextureVKHandle& texture, uint32_t slot);
             bool                                       waitForFence(const FenceVKHandle& fence, uint64_t timeout = UINT64_MAX);
             bool                                       resetFence(const FenceVKHandle& fence);
-            bool                                       acquireNextImage(const SemaphoreVKHandle& signalSemaphore, uint64_t timeout , uint32_t& imageIndex);
+            SwapchainStatus                            acquireNextImage(const SemaphoreVKHandle& signalSemaphore, uint64_t timeout , uint32_t& imageIndex);
             bool                                       beginCommandBuffer(const CommandBufferVKHandle& commandBuffer);
             bool                                       endCommandBuffer(const CommandBufferVKHandle& commandBuffer);
             bool                                       transitionImageLayout(const CommandBufferVKHandle& commandBuffer, const TextureVKHandle& texture, const TextureUsage& oldUsage, const TextureUsage& newUsage);
@@ -77,10 +78,12 @@ namespace rasm
             bool                                       setViewport(const CommandBufferVKHandle& commandBuffer, float x, float y, float width, float height, float minDepth = 0.0f, float maxDepth = 1.0f);
             bool                                       setScissor(const CommandBufferVKHandle& commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height);
             bool                                       submit(const CommandBufferVKHandle& commandBuffer, const std::vector<SemaphoreVKHandle>& waitSemaphores, const std::vector<SemaphoreVKHandle>& signalSemaphores, const FenceVKHandle& fence);
-            bool                                       present(uint32_t imageIndex, const SemaphoreVKHandle& waitSemaphore);
+            SwapchainStatus                            present(uint32_t imageIndex, const SemaphoreVKHandle& waitSemaphore);
 
         private:
             void                                       setObjectName(VkObjectType type, uint64_t handle, const std::string& name);
+            bool                                       loadSwapchainImages();
+            VkExtent2D                                 getDesiredSwapchainExtent() const;
 
             Engine*             engine                      = nullptr;
             VmaAllocator        allocator                   = {};

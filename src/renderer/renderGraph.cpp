@@ -143,7 +143,8 @@ namespace rasm
         auto scene = engine->registery.scenes[engine->currentScene.index];
         auto camera = scene.cameras[0]; // TODO: handle multi-cameras
 
-        engine->beginFrame(camera);
+        if (!engine->beginFrame(camera))
+            return;
         for (const auto &passIdx : executionOrder)
         {
             auto &pass = passes[passIdx];

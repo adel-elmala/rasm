@@ -80,11 +80,12 @@ sequenceDiagram
     participant E as Engine
     participant C as RenderContext/Vulkan
     App->>E: render2(scene, camera)
-    E->>C: wait + reset inFlightFence[frame]
     E->>E: pollEvents(camera) → SDL events, camera controller, deltaTime
-    E->>C: recreateSwapchain() if window resized
-    E->>C: acquireNextImage(imageAcquired[frame])
-    E->>C: begin command buffer
+    E->>E: skip frame if minimized / 0×0
+    E->>C: recreateSwapchain() if resized or out of date (skip frame if it fails)
+    E->>C: wait inFlightFence[frame]
+    E->>C: acquireNextImage(imageAcquired[frame]) (skip frame on OUT_OF_DATE)
+    E->>C: reset inFlightFence[frame], begin command buffer
     E->>C: beginPass: barriers (swapchain→COLOR_ATTACHMENT, depth→DEPTH), beginRendering (CLEAR), viewport/scissor
     E->>E: prepareScene(scene) (cached after first call)
     E->>C: bind uber pipeline
@@ -95,14 +96,16 @@ sequenceDiagram
     E->>C: drawIndexedIndirect(drawInfoBuffer, drawInfoCount)
     E->>C: endPass: endRendering, swapchain→PRESENT_SRC
     E->>C: submit (wait imageAcquired, signal renderFinished[image], fence)
-    E->>C: present
+    E->>C: present (SUBOPTIMAL / OUT_OF_DATE → recreate next frame)
     E->>E: frameCount = (frameCount + 1) % 2
 ```
 
 Notes:
 - `frameCount` is the frame-in-flight **slot index** (0 or 1), not a running frame counter.
 - Input handling, delta-time measurement and the camera controller run inside `beginFrame`. The caller passes the camera that should receive input.
-- Acquire and present results are not checked (`B4`).
+- `beginFrame` returns `false` when the frame is skipped. The caller then records nothing and does not call `endFrame`. A skipped frame leaves the fence signaled.
+- Acquire, present and `recreateSwapchain` return `SwapchainStatus` (`OK`, `SUBOPTIMAL`, `OUT_OF_DATE`, `FAILURE`). `SUBOPTIMAL` from acquire still renders the frame, because the image was acquired and its semaphore will be signaled. `Engine::swapchainOutOfDate` schedules recreation.
+- Swapchain-sized resources (depth textures, viewport, camera aspect) use the swapchain extent in pixels (`Swapchain::width`/`height`). `Window::width`/`height` are logical and are only used for mouse input.
 
 ## 4. The GPU-driven path: `prepareScene` + `render2`
 

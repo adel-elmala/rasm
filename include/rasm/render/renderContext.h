@@ -35,6 +35,7 @@ namespace rasm
         const RenderTarget&                 getRenderTarget(const RenderTargetHandle& handle);
         std::vector<TextureHandle>          getSwapchainImages();
         Format                              getSwapchainImageFormat();
+        glm::uvec2                          getSwapchainExtent();
         uint64_t                            getBufferDeviceAddress(const BufferHandle& buffer);
         ResourceDesc                        getResourceDesc(const BufferHandle& buffer);
         ResourceDesc                        getResourceDesc(const TextureHandle& texture);
@@ -43,19 +44,20 @@ namespace rasm
         // bool                                updateBindlessDescriptorSet(const DescriptorSetHandle& bindlessSet, const RenderTargetHandle& renderTarget, uint32_t slot);
         bool                                waitForFence(FenceHandle fence, uint64_t timeout = UINT64_MAX);
         bool                                resetFence(FenceHandle fence);
-        bool                                acquireNextImage(SemaphoreHandle signalSemaphore, uint64_t timeout, uint32_t& imageIndex);
+        [[nodiscard]] SwapchainStatus       acquireNextImage(SemaphoreHandle signalSemaphore, uint64_t timeout, uint32_t& imageIndex);
         bool                                beginCommandBuffer(const CommandBufferHandle& commandBuffer);
         bool                                endCommandBuffer(const CommandBufferHandle& commandBuffer);
         bool                                transitionImageLayout(const CommandBufferHandle& commandBuffer, TextureHandle texture, TextureUsage oldUsage, TextureUsage newUsage);
         bool                                fillBuffer(const BufferHandle& buffer, const void* data, size_t size, size_t offset = 0);
         bool                                fillTexture(const TextureHandle& texture, const void* data);
-        bool                                recreateSwapchain();
+        // Invalidates the handles returned by getSwapchainImages unless the result is OUT_OF_DATE.
+        [[nodiscard]] SwapchainStatus       recreateSwapchain();
         bool                                beginRendering(const CommandBufferHandle& commandBuffer,TextureHandle colorAttachment, TextureHandle depthAttachment);
         bool                                endRendering(const CommandBufferHandle& commandBuffer);
         bool                                setViewport(const CommandBufferHandle& commandBuffer, float x, float y, float width, float height, float minDepth = 0.0f, float maxDepth = 1.0f);
         bool                                setScissor(const CommandBufferHandle& commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height);
         bool                                submit(const CommandBufferHandle& commandBuffer, const std::vector<SemaphoreHandle>& waitSemaphores, const std::vector<SemaphoreHandle>& signalSemaphores, FenceHandle fence);
-        bool                                present(uint32_t imageIndex, SemaphoreHandle waitSemaphore);
+        [[nodiscard]] SwapchainStatus       present(uint32_t imageIndex, SemaphoreHandle waitSemaphore);
         void                                destroySemaphore(const SemaphoreHandle& semaphore);
         void                                destroyTexture(const TextureHandle& texture);
         void                                bindPipeline(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline);

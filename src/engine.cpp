@@ -96,37 +96,11 @@ namespace rasm
                 spdlog::error("Failed to create shader data buffer for frame {}", i);
                 return;
             }
-
-            // Create a depth texture.
-            auto depthTextureDesc = ResourceDesc{};
-            depthTextureDesc.type = ResourceType::TEXTURE;
-            depthTextureDesc.name = "DepthTexture for Frame " + std::to_string(i);
-            depthTextureDesc.texture.width = static_cast<uint32_t>(mainWindow.width);
-            depthTextureDesc.texture.height = static_cast<uint32_t>(mainWindow.height);
-            depthTextureDesc.texture.format = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
-            depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
-
-            frameResources[i].depthTexture = ctx.createTexture(depthTextureDesc);
-            if (!frameResources[i].depthTexture.isValid())
-            {
-                spdlog::error("Failed to create depth texture for frame {}", i);
-                return;
-            }
         }
 
-        // Create swapchain and associated resources
-        swapchain.imageHandles = ctx.getSwapchainImages();
-        for (size_t i = 0; i < swapchain.imageHandles.size(); ++i)
-        {
-            auto semaphore = ctx.createSemaphore();
-            if (!semaphore.isValid())
-            {
-                spdlog::error("Failed to create ready-to-present semaphore for swapchain image {}", i);
-                return;
-            }
-            swapchain.readyToPresentSemaphores.push_back(semaphore);
-        }
-        swapchain.imageFormat = ctx.getSwapchainImageFormat();
+        // Swapchain images, present semaphores and depth textures
+        if (!createSwapchainResources())
+            return;
 
         auto shaderTarget = getShaderCompilerTarget(config.preferredBackend);
         if (!shaderCompiler.initialize(shaderTarget))
@@ -303,26 +277,46 @@ namespace rasm
         return graph;
     }
 
-    void Engine::beginFrame(CameraHandle camera)
+    bool Engine::beginFrame(CameraHandle camera)
     {
-        // wait for the gpu to finish rendering the previous frame
-        auto &currentFrame = frameResources[frameCount];
-        ctx.waitForFence(currentFrame.inFlightFence);
-        ctx.resetFence(currentFrame.inFlightFence);
-
         pollEvents(camera);
 
-        if (this->mainWindow.resized)
+        // Nothing can be presented to a minimized or zero-sized window (B5).
+        if (mainWindow.minimized || mainWindow.pixelWidth == 0 || mainWindow.pixelHeight == 0)
+            return false;
+
+        if (mainWindow.resized || swapchainOutOfDate)
         {
-            recreateSwapchain();
-            this->mainWindow.resized = false;
+            mainWindow.resized = false;
+            swapchainOutOfDate = !recreateSwapchain();
+            if (swapchainOutOfDate)
+                return false;
         }
 
-        // acquire the next image from the swapchain
-        ctx.acquireNextImage(currentFrame.readyToDrawSemaphore, UINT64_MAX, imageIdx);
+        // wait for the gpu to finish rendering the previous frame in this slot
+        auto &currentFrame = frameResources[frameCount];
+        if (!ctx.waitForFence(currentFrame.inFlightFence))
+            return false;
+
+        // acquire the next image from the swapchain (B4)
+        auto status = ctx.acquireNextImage(currentFrame.readyToDrawSemaphore, UINT64_MAX, imageIdx);
+        if (status == SwapchainStatus::OUT_OF_DATE)
+        {
+            // The semaphore was not signaled; skip the frame and recreate next time.
+            swapchainOutOfDate = true;
+            return false;
+        }
+        if (status == SwapchainStatus::FAILURE)
+            return false;
+        if (status == SwapchainStatus::SUBOPTIMAL)
+            swapchainOutOfDate = true; // The image is acquired and still usable; recreate after this frame.
+
+        // Reset only once work will be submitted, so a skipped frame leaves the fence signaled.
+        ctx.resetFence(currentFrame.inFlightFence);
 
         // record commands for the current frame
         ctx.beginCommandBuffer(currentFrame.commandBuffer);
+        return true;
     }
 
     void Engine::endFrame()
@@ -331,12 +325,15 @@ namespace rasm
 
         ctx.endCommandBuffer(currentFrame.commandBuffer);
 
-        ctx.submit(currentFrame.commandBuffer,
-                   {currentFrame.readyToDrawSemaphore},
-                   {swapchain.readyToPresentSemaphores[imageIdx]},
-                   currentFrame.inFlightFence);
-
-        ctx.present(imageIdx, swapchain.readyToPresentSemaphores[imageIdx]);
+        if (ctx.submit(currentFrame.commandBuffer,
+                       {currentFrame.readyToDrawSemaphore},
+                       {swapchain.readyToPresentSemaphores[imageIdx]},
+                       currentFrame.inFlightFence))
+        {
+            auto status = ctx.present(imageIdx, swapchain.readyToPresentSemaphores[imageIdx]);
+            if (status == SwapchainStatus::SUBOPTIMAL || status == SwapchainStatus::OUT_OF_DATE)
+                swapchainOutOfDate = true;
+        }
 
         frameCount = (frameCount + 1) % MAX_FRAMES_IN_FLIGHT; // Toggle between 0 and 1 for double buffering
     }
@@ -384,10 +381,14 @@ namespace rasm
     void Engine::beginPass()
     {
         auto currentFrame = frameResources[frameCount];
+        uint32_t width = swapchain.width;
+        uint32_t height = swapchain.height;
 
         if (currentRenderTarget.isValid())
         {
             auto renderTargetData = ctx.getRenderTarget(currentRenderTarget);
+            width = renderTargetData.width;
+            height = renderTargetData.height;
 
             // transition render target images to be ready for rendering
             ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
@@ -403,8 +404,8 @@ namespace rasm
         }
 
         // begin dynamic rendering
-        ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(mainWindow.width), static_cast<float>(mainWindow.height));
-        ctx.setScissor(currentFrame.commandBuffer, 0, 0, mainWindow.width, mainWindow.height);
+        ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
+        ctx.setScissor(currentFrame.commandBuffer, 0, 0, width, height);
     }
 
     void Engine::endPass()
@@ -448,13 +449,35 @@ namespace rasm
         return currentScene;
     }
 
-    void Engine::recreateSwapchain()
+    bool Engine::recreateSwapchain()
     {
-        ctx.recreateSwapchain();
+        auto status = ctx.recreateSwapchain();
+        if (status == SwapchainStatus::OUT_OF_DATE)
+            return false; // The surface is 0x0; the old swapchain and its resources are kept.
+        if (status != SwapchainStatus::OK)
+        {
+            // The old swapchain is gone, so are its image handles.
+            swapchain.imageHandles.clear();
+            return false;
+        }
+        if (!createSwapchainResources())
+            return false;
+        spdlog::info("Recreated swapchain: {}x{}", swapchain.width, swapchain.height);
+        return true;
+    }
+
+    // Called at startup and after a successful swapchain recreation, both with the device idle.
+    bool Engine::createSwapchainResources()
+    {
         swapchain.imageHandles = ctx.getSwapchainImages();
         swapchain.imageFormat = ctx.getSwapchainImageFormat();
 
-        // Destroy old semaphores
+        // Size everything from the swapchain extent. It is in pixels and can differ from the
+        // window's logical size on HiDPI displays (B17).
+        auto extent = ctx.getSwapchainExtent();
+        swapchain.width = extent.x;
+        swapchain.height = extent.y;
+
         for (auto &semaphore : swapchain.readyToPresentSemaphores)
         {
             ctx.destroySemaphore(semaphore);
@@ -463,25 +486,38 @@ namespace rasm
 
         for (size_t i = 0; i < swapchain.imageHandles.size(); ++i)
         {
-            swapchain.readyToPresentSemaphores.push_back(ctx.createSemaphore());
+            auto semaphore = ctx.createSemaphore();
+            if (!semaphore.isValid())
+            {
+                spdlog::error("Failed to create ready-to-present semaphore for swapchain image {}", i);
+                return false;
+            }
+            swapchain.readyToPresentSemaphores.push_back(semaphore);
         }
 
-        // Update depth textures for each frame resource
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             auto depthTextureDesc = ResourceDesc{};
             depthTextureDesc.type = ResourceType::TEXTURE;
             depthTextureDesc.name = "DepthTexture for Frame " + std::to_string(i);
-            depthTextureDesc.texture.width = static_cast<uint32_t>(mainWindow.width);
-            depthTextureDesc.texture.height = static_cast<uint32_t>(mainWindow.height);
+            depthTextureDesc.texture.width = swapchain.width;
+            depthTextureDesc.texture.height = swapchain.height;
             depthTextureDesc.texture.format = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
             depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
 
-            // Swapchain recreation waited for the device to go idle, so the old texture is unused.
+            // The device is idle, so the old texture is unused.
             if (frameResources[i].depthTexture.isValid())
                 ctx.destroyTexture(frameResources[i].depthTexture);
             frameResources[i].depthTexture = ctx.createTexture(depthTextureDesc);
+            if (!frameResources[i].depthTexture.isValid())
+            {
+                spdlog::error("Failed to create depth texture for frame {}", i);
+                return false;
+            }
         }
+
+        updateCameraAspectRatio(static_cast<float>(swapchain.width) / static_cast<float>(swapchain.height));
+        return true;
     }
 
     void Engine::render2(SceneHandle scene, CameraHandle camera)
@@ -494,7 +530,8 @@ namespace rasm
 
         auto &sceneRef = registery.scenes[scene.index];
 
-        beginFrame(camera);
+        if (!beginFrame(camera))
+            return;
         beginPass();
 
         auto preparedScene = prepareScene(scene);
@@ -549,7 +586,8 @@ namespace rasm
 
     void Engine::render(SceneHandle scene, CameraHandle camera)
     {
-        beginFrame(camera);
+        if (!beginFrame(camera))
+            return;
         beginPass();
 
         auto compiledScene = compileScene(scene);
