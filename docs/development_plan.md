@@ -117,7 +117,7 @@ Goal: production look and completeness for glTF content. The order is roughly by
 - [ ] **Image-based lighting**: an environment map, prefiltered specular, irradiance and a BRDF LUT.
 - [ ] **glTF completeness**:
   - alpha modes (`MASK` with alpha-to-coverage, and `BLEND` as a sorted transparent pass),
-  - vertex colors, tangents,
+  - vertex colors (tangents done 2026-10-27),
   - `KHR_texture_transform`, `KHR_materials_emissive_strength`, `KHR_mesh_quantization`,
   - KTX2/Basis textures.
 - [ ] **Many lights**: clustered forward lighting. Remove the fixed `MAX_LIGHTS = 8`.

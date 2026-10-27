@@ -13,7 +13,7 @@ namespace rasm::gfx {
     enum VertexFormat : uint32_t { Full, PosOnly };
 
     // Must match rasm::Vertex (static asserted in scene.cpp) and shaders/lib/core.slang.
-    struct VertexFull       { glm::vec3 pos; glm::vec3 normal; glm::vec2 uv[MAX_VERTEX_UV_SETS]; };
+    struct VertexFull       { glm::vec3 pos; glm::vec3 normal; glm::vec2 uv[MAX_VERTEX_UV_SETS]; glm::vec4 tangent; };
     struct VertexPosOnly    { glm::vec3 pos; };
 
     enum LightType : uint32_t { Directional , Point };
@@ -102,7 +102,8 @@ namespace rasm::gfx {
     // compiled with GLSL scalar layout. Any drift here silently corrupts the GPU reads (a wrong
     // vertsPtr/modeldataPtr turns into a device lost on the first draw).
     static_assert(sizeof(Light) == 48, "Light must match the shader's scalar layout");
-    static_assert(sizeof(VertexFull) == 48, "VertexFull must match the shader's scalar layout");
+    static_assert(sizeof(VertexFull) == 64, "VertexFull must match the shader's scalar layout");
+    static_assert(offsetof(VertexFull, tangent) == 48, "VertexFull must match the shader's scalar layout");
     static_assert(sizeof(MetallicRoughnessMaterial) == 36, "MetallicRoughnessMaterial must match the shader's scalar layout");
     static_assert(sizeof(Material) == 80, "Material must match the shader's scalar layout");
     static_assert(sizeof(Modeldata) == 184, "Modeldata must match the shader's scalar layout");

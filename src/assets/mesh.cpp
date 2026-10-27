@@ -533,7 +533,13 @@ namespace rasm
             for (uint32_t set = 0; set < MAX_VERTEX_UV_SETS; ++set)
                 hasUvs[set] = readVertexAttribute(model, primitive, "TEXCOORD_" + std::to_string(set), vertexCount, 2, uvs[set], uvComponents[set], primitiveName);
 
-            // TODO: Extract all remaining vertex attributes (tangents, colors,...)
+            // Tangents (OPTIONAL, VEC4). The glTF spec requires ignoring them when normals are generated.
+            // Without them tangent.w stays 0 and the shader reconstructs a frame from UV derivatives.
+            std::vector<float> tangents;
+            uint32_t tangentComponents = 0;
+            const bool hasTangents = hasNormals && readVertexAttribute(model, primitive, "TANGENT", vertexCount, 4, tangents, tangentComponents, primitiveName);
+
+            // TODO: Extract all remaining vertex attributes (colors, joints, weights,...)
 
             // Interleave the data into our standard Vertex struct
             std::vector<Vertex> vertices(vertexCount);
@@ -546,6 +552,12 @@ namespace rasm
                 for (uint32_t set = 0; set < MAX_VERTEX_UV_SETS; ++set)
                     if (hasUvs[set])
                         v.uv[set] = glm::make_vec2(&uvs[set][i * uvComponents[set]]);
+                if (hasTangents)
+                {
+                    v.tangent = glm::make_vec4(&tangents[i * tangentComponents]);
+                    // w must be ±1; snapping it keeps 0 free to mean "no tangent" (quantized w can round off 1).
+                    v.tangent.w = v.tangent.w < 0.0f ? -1.0f : 1.0f;
+                }
             }
 
             // --- 2. EXTRACT INDEX BUFFER ---

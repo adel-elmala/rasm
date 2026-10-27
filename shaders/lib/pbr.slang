@@ -97,11 +97,29 @@ float Fd_Lambert()
     return 1.0 / PI;
 }
 
-// Reconstruct a UV-aligned tangent frame from fragment derivatives. This supports meshes
-// without TANGENT attributes, mirrored UVs, and the normal texture's selected UV set.
-float3 getNormalFromMap(Sampler2D texture, float2 uv, float3 position, float3 normal, float scale)
+// Perturb the normal with a tangent-space normal map. Meshes with glTF TANGENTs (tangent.w = ±1) use the
+// authored frame. Otherwise a UV-aligned frame is reconstructed from fragment derivatives, which supports
+// mirrored UVs and the normal texture's selected UV set.
+float3 getNormalFromMap(Sampler2D texture, float2 uv, float3 position, float3 normal, float4 tangent, float scale)
 {
     float3 N = normalize(normal);
+    float3 tangentNormal = texture.Sample(uv).xyz * 2.0 - 1.0;
+    tangentNormal.xy *= scale;
+
+    if (abs(tangent.w) > 0.5)
+    {
+        // Re-orthogonalize: interpolation leaves T slightly off the surface. The glTF spec defines
+        // the bitangent as cross(N, T) * w.
+        float3 T = tangent.xyz - N * dot(N, tangent.xyz);
+        float authoredLength2 = dot(T, T);
+        if (authoredLength2 > 1e-16)
+        {
+            T *= rsqrt(authoredLength2);
+            float3 B = cross(N, T) * (tangent.w < 0.0 ? -1.0 : 1.0);
+            return normalize(T * tangentNormal.x + B * tangentNormal.y + N * tangentNormal.z);
+        }
+    }
+
     float3 dpdx = ddx(position);
     float3 dpdy = ddy(position);
     float2 duvdx = ddx(uv);
@@ -112,16 +130,17 @@ float3 getNormalFromMap(Sampler2D texture, float2 uv, float3 position, float3 no
     T *= determinant < 0.0 ? -1.0 : 1.0;
     T -= N * dot(N, T);
     float tLength2 = dot(T, T);
-    float3 tangentNormal = texture.Sample(uv).xyz * 2.0 - 1.0;
-    tangentNormal.xy *= scale;
     if (abs(determinant) < 1e-10 || tLength2 < 1e-16)
         return N;
     T *= rsqrt(tLength2);
-    float3 bitangent = (dpdy * duvdx.x - dpdx * duvdy.x) * (determinant < 0.0 ? -1.0 : 1.0);
-    // UV determinant alone also contains screen-space orientation. Compare against the
-    // reconstructed bitangent so a flipped viewport does not flip normal-map Y.
+    // dP/dv: the direction in which v increases.
+    float3 dpdv = (dpdy * duvdx.x - dpdx * duvdy.x) * (determinant < 0.0 ? -1.0 : 1.0);
+    // glTF puts the UV origin at the image's top-left and normal maps store +Y = up in the image, so the
+    // bitangent points toward decreasing v (-dP/dv), matching cross(N, T) * w for authored tangents.
+    // Choosing B's sign against dP/dv, not from the UV determinant alone, keeps a flipped viewport
+    // from flipping normal-map Y.
     float3 B = cross(N, T);
-    B *= dot(B, bitangent) < 0.0 ? -1.0 : 1.0;
+    B *= dot(B, dpdv) > 0.0 ? -1.0 : 1.0;
     // Explicit vector combination avoids confusing row/column matrix conventions.
     return normalize(T * tangentNormal.x + B * tangentNormal.y + N * tangentNormal.z);
 }
@@ -131,6 +150,7 @@ struct PBRInfo
 {
     float3      vPosition;           // world position
     float3      vNormal;             // world normal
+    float4      vTangent;            // world tangent, w = bitangent sign (0 when the mesh has no tangents)
     float3      cameraPosition;      // world camera position
     float2      baseColorUV;         // UV coordinates for the base color texture
     float2      metallicRoughnessUV; // UV coordinates for the metallic-roughness texture
@@ -188,7 +208,7 @@ float4 PBR(Sampler2D gTextures[], PBRInfo pbrInfo)
     float3 n = pbrInfo.vNormal;
     uint normalIdx = pbrInfo.material.normal.normalTextureIndex;
     if (hasTexture(normalIdx))
-        n = getNormalFromMap(gTextures[normalIdx], pbrInfo.normalUV, pbrInfo.vPosition, pbrInfo.vNormal, pbrInfo.material.normal.scale);
+        n = getNormalFromMap(gTextures[normalIdx], pbrInfo.normalUV, pbrInfo.vPosition, pbrInfo.vNormal, pbrInfo.vTangent, pbrInfo.material.normal.scale);
     n = normalize(n);
 
     float3 v    = normalize(pbrInfo.cameraPosition - pbrInfo.vPosition);

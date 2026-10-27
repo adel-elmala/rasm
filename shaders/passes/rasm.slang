@@ -13,6 +13,7 @@ struct VSOutput
     float4 clipPosition  : SV_POSITION;
     float3 worldPosition : POSITION;
     float3 worldNormal   : NORMAL;
+    float4 worldTangent  : TANGENT;     // w = bitangent sign, 0 when the mesh has no tangents
     // glTF materials pick a UV set per texture (TEXCOORD_0..2); carry them all and let the
     // fragment shader select using the material's per-texture texCoord.
     float2 uv0            : TEXCOORD0;
@@ -42,6 +43,11 @@ VSOutput vertMain(VSInput input)
     output.worldNormal          = mul(normalMat, vert.normal);
     if (dot(output.worldNormal, output.worldNormal) < 1e-12) output.worldNormal = float3(0.0, 0.0, 1.0);
     output.worldNormal          = normalize(output.worldNormal);
+    // Tangents lie in the surface, so they transform with the model matrix, not the normal matrix. A mirroring
+    // transform (negative determinant, e.g. the glTF root Y flip) reverses cross(N, T), so fold its sign into w.
+    float3x3 modelMat3          = (float3x3)modelMat;
+    float handedness            = determinant(modelMat3) < 0.0 ? -1.0 : 1.0;
+    output.worldTangent         = float4(mul(modelMat3, vert.tangent.xyz), vert.tangent.w * handedness);
     output.worldCameraPosition  = pc.scene->cameraWorldPosition;
     output.uv0                  = vert.uv[0];
     output.uv1                  = vert.uv[1];
@@ -62,6 +68,7 @@ float4 fragMain(VSOutput input) : SV_TARGET
     PBRInfo info = {};
     info.vPosition              = input.worldPosition;
     info.vNormal                = input.worldNormal;
+    info.vTangent               = input.worldTangent;
     info.cameraPosition         = input.worldCameraPosition;
     // Each texture samples the UV set the glTF material asked for.
     info.baseColorUV            = selectUV(material.metallicRoughness.baseColorTextureCoordinate, input.uv0, input.uv1, input.uv2);
