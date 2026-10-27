@@ -80,6 +80,8 @@ namespace rasm
             bool                                       present(uint32_t imageIndex, const SemaphoreVKHandle& waitSemaphore);
 
         private:
+            void                                       setObjectName(VkObjectType type, uint64_t handle, const std::string& name);
+
             Engine*             engine                      = nullptr;
             VmaAllocator        allocator                   = {};
             vkb::Instance       instance                    = {};
@@ -91,6 +93,7 @@ namespace rasm
             VkSurfaceKHR        surface                     = VK_NULL_HANDLE;
             uint32_t            graphics_queue_family_index = 0;
             uint32_t            current_swapchain_image     = 0;
+            bool                debug_utils_enabled         = false;
         };
     }
 }
