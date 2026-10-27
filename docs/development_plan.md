@@ -34,7 +34,7 @@ Goal: fix correctness bugs before building anything on top.
 - [x] Set GLM and VMA configuration macros in CMake. Fix the depth range (`B2`, `C7`, done 2026-10-26).
 - [x] Always enable `VK_EXT_debug_utils` when it is available, and guard the naming calls (`B3`).
 - [x] Make acquire/present robust: handle out-of-date and suboptimal swapchains, reset the fence after a successful acquire, skip frames while minimized, and drop leaked depth textures and stale swapchain handles (`B4`, `B5`, `B17`, done 2026-10-27).
-- [ ] Cache glTF materials and textures per model. Add a default material (`B7`, `B8`).
+- [x] Cache glTF materials and textures per model. Add a default material (`B7`, `B8`, done 2026-10-27).
 - [ ] glTF geometry: generate indices for non-indexed primitives, skip non-triangle modes with a warning, and validate strides and buffer views (`B6`).
 - [ ] Delete or fix `UNLIT`, the `loadMaterials` declaration and the spot-light enum value (`B9`, `B14`, `B15`). Make empty scenes work (`B16`). Fix `submit` wait stages (`B11`) and the Slang options leak (`B12`).
 - [ ] Remove the legacy path (`render`/`compileScene`/offscreen frame) and port `01_render_graph` to the GPU-driven path with a fixed render-target flow (`D10`, `B10`).

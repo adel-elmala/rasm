@@ -166,7 +166,8 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - `Engine::loadMesh(path)` dispatches on the file extension and caches by path in `registery.loadedMeshes`.
   - **OBJ** (tinyobjloader) is de-indexed into one vertex per index. Y and V are flipped per vertex.
   - **glTF/GLB** (tinygltf) goes through `processGLTF`, which walks the default scene's node tree from a root transform of `scale(1, −1, 1)` (the Y flip). For each mesh node, `extractGLTFRaws` reads `POSITION`, `NORMAL` and `TEXCOORD_0..2` (assumed float), indices (8/16/32-bit), and computes smooth normals when they are missing. It calls `loadMaterial` for each primitive.
-- `loadMaterial` maps a glTF PBR material to `rasm::Material`. It expands images to RGBA8 and uploads each texture.
+- `loadMaterial` maps a glTF PBR material to `rasm::Material`. It expands images to RGBA8 and uploads each texture. `processGLTF` creates a `GltfImportCache` for each import and passes it down to `loadMaterial`. It caches materials by material index and textures by image index and color space, so primitives that share a material share one `MaterialHandle` and one set of bindless slots.
+- A primitive without a material uses its entity's material. `getMaterial` resolves an invalid handle to `defaultMaterial`, the glTF default material (white, metallic 1, roughness 1) created at startup.
 - The whole `tinygltf::Model`, including decoded images, is kept in the `Mesh` (`GLTFRaw::model`). CPU vertex data is never released.
 
 ## 7. Shader compilation

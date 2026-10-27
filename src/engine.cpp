@@ -151,6 +151,16 @@ namespace rasm
             return;
         }
 
+        // The glTF default material: white base color, metallic 1, roughness 1.
+        defaultMaterial = createMaterial(MaterialType::PBR);
+        if (!defaultMaterial.isValid())
+        {
+            spdlog::error("Failed to create the default material.");
+            return;
+        }
+        registery.materials[defaultMaterial.index].name = "default";
+        registery.materials[defaultMaterial.index].params[static_cast<uint32_t>(PbrParam::METALLIC)] = 1.0f;
+
         isRunning = true;
     }
 

@@ -146,13 +146,13 @@ Next steps, in order:
 - `ByteStride()` returning -1 and `bufferView == -1` are not checked.
 - The tangent attribute is ignored. That is acceptable for now because tangents are reconstructed in the shader.
 
-**B7 — glTF materials and textures are duplicated for every primitive.** *Confirmed.*
+**B7 — glTF materials and textures are duplicated for every primitive.** *Fixed 2026-10-27:* `loadMaterial` caches materials per model by material index, next to the per-model image cache from `B1`. Both live in a `GltfImportCache` that `processGLTF` creates for each import. A global texture cache is still open. The original finding follows.
 - `extractGLTFRaws` calls `loadMaterial` for each primitive ([mesh.cpp:365-366](../src/assets/mesh.cpp#L365-L366)). Each call creates a new material and uploads every one of its textures again, taking new bindless slots ([material.cpp:154-193](../src/assets/material.cpp#L154-L193)).
 - A model whose 50 primitives share one material consumes 50 materials and up to 250 bindless slots. The limits are 256 materials and 1024 slots, so medium-sized scenes fail.
 
 *Fix:* add a per-model cache from material index to `MaterialHandle` and from image index to `TextureHandle` (and later a global texture cache).
 
-**B8 — Missing materials crash or render black.** *Confirmed.*
+**B8 — Missing materials crash or render black.** *Fixed 2026-10-27:* the engine creates `defaultMaterial` (the glTF default material) at startup, and `getMaterial` resolves invalid handles to it instead of throwing. Primitives without a material still prefer their entity's material. The original finding follows.
 - `getMaterial` checks only `index >= size()` and throws ([material.cpp:229-236](../src/assets/material.cpp#L229-L236)). An OBJ entity without a material, in a program that never created a material, throws an uncaught `std::runtime_error` from `prepareScene` ([scene.cpp:282](../src/scene/scene.cpp#L282)).
 - If other materials do exist, an invalid handle (index 0) returns the zeroed slot 0. A glTF primitive without a material then renders with base color 0 (black) instead of the glTF default material (white, metallic 1, roughness 1).
 
@@ -256,7 +256,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 
 **D13 — Queues and synchronization.** There is only one graphics queue: no transfer or async-compute queue. Timeline semaphores are supported by `createSemaphore` but unused. Uploads are synchronous on the main thread.
 
-**D14 — Error handling is inconsistent.** Many `bool` results are ignored (`beginCommandBuffer`, `submit`, `fillBuffer`, `createTexture` in `loadTexture`). `getMaterial` throws. Some runtime errors are `assert`s.
+**D14 — Error handling is inconsistent.** Many `bool` results are ignored (`beginCommandBuffer`, `submit`, `fillBuffer`, `createTexture` in `loadTexture`). Some runtime errors are `assert`s.
 
 **D15 — Hard-coded limits** are spread across headers (see [architecture.md §11](architecture.md#11-compile-time-limits)). Move them into `EngineConfig`, or grow the containers dynamically. Size GPU tables from the config.
 
