@@ -15,26 +15,270 @@
 
 namespace rasm
 {
-    void diagnoseIfNeeded(slang::IBlob *diagnosticsBlob)
+    namespace
     {
-        if (diagnosticsBlob != nullptr)
+        void diagnoseIfNeeded(slang::IBlob *diagnosticsBlob)
         {
-            spdlog::error("Shader compilation diagnostics: {}", (const char *)diagnosticsBlob->getBufferPointer());
-        }
-    }
-
-    std::string loadFileToString(const std::string &filePath)
-    {
-        std::ifstream file(filePath);
-        if (!file.is_open())
-        {
-            spdlog::error("Failed to open file: {}", filePath);
-            return "";
+            if (diagnosticsBlob != nullptr)
+            {
+                spdlog::error("Shader compilation diagnostics: {}", (const char *)diagnosticsBlob->getBufferPointer());
+            }
         }
 
-        std::stringstream buffer;
-        buffer << file.rdbuf();
-        return buffer.str();
+        std::string loadFileToString(const std::string &filePath)
+        {
+            std::ifstream file(filePath);
+            if (!file.is_open())
+            {
+                spdlog::error("Failed to open file: {}", filePath);
+                return "";
+            }
+
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            return buffer.str();
+        }
+
+        rasm::Format mapSlangTypeToFormat(slang::TypeReflection *type)
+        {
+            if (!type)
+                return Format::UNKNOWN;
+
+            switch (type->getKind())
+            {
+            case slang::TypeReflection::Kind::Vector:
+            {
+                auto elementType = type->getElementType();
+                auto elementCount = type->getElementCount();
+
+                if (elementType->getKind() == slang::TypeReflection::Kind::Scalar)
+                {
+                    switch (elementType->getScalarType())
+                    {
+                    case slang::TypeReflection::ScalarType::Float32:
+                        if (elementCount == 2)
+                            return Format::R32G32_SFLOAT;
+                        else if (elementCount == 3)
+                            return Format::R32G32B32_SFLOAT;
+                        else if (elementCount == 4)
+                            return Format::R32G32B32A32_SFLOAT;
+                        break;
+                    case slang::TypeReflection::ScalarType::UInt8:
+                        if (elementCount == 4)
+                            return Format::R8G8B8A8_UNORM; // Assuming UNORM for simplicity
+                        break;
+                    default:
+                        break;
+                    }
+                }
+                break;
+            }
+            default:
+                break;
+            }
+
+            return Format::UNKNOWN;
+        }
+
+        uint32_t formatSize(Format format)
+        {
+            switch (format)
+            {
+            case Format::R8G8B8A8_UNORM:
+            case Format::R8G8B8A8_SRGB:
+            case Format::B8G8R8A8_SRGB:
+                return 4;
+            case Format::R16G16B16A16_SFLOAT:
+                return 8;
+            case Format::R32G32B32_SFLOAT:
+                return 12;
+            case Format::R32G32B32A32_SFLOAT:
+                return 16;
+            case Format::D24_UNORM_S8_UINT:
+                return 4; // 3 bytes for depth + 1 byte for stencil
+            case Format::R32G32_SFLOAT:
+                return 8;
+            case Format::U16_UINT:
+                return 2;
+            case Format::U32_UINT:
+                return 4;
+            default:
+                return 0; // Unknown format
+            }
+        }
+
+        std::vector<VertexAttributeDescription> slangParamToAttrb(slang::VariableLayoutReflection *param, uint32_t &totalOffset)
+        {
+            std::vector<VertexAttributeDescription> vertexAttributes;
+
+            auto typeLayout = param->getTypeLayout();
+            auto paramType = typeLayout->getType();
+
+            switch (paramType->getKind())
+            {
+            case slang::TypeReflection::Kind::Struct:
+            {
+                auto memberCount = typeLayout->getFieldCount();
+
+                for (size_t k = 0; k < memberCount; ++k)
+                {
+                    auto member = typeLayout->getFieldByIndex(static_cast<unsigned int>(k));
+                    auto attrs = slangParamToAttrb(member, totalOffset);
+                    vertexAttributes.insert(vertexAttributes.end(), attrs.begin(), attrs.end());
+                }
+                break;
+            }
+            case slang::TypeReflection::Kind::Vector:
+            case slang::TypeReflection::Kind::Scalar:
+            {
+                VertexAttributeDescription attrDesc;
+
+                attrDesc.binding = 0; // Assuming a single binding for simplicity
+                attrDesc.location = static_cast<uint32_t>(param->getOffset(slang::ParameterCategory::VaryingInput));
+                attrDesc.offset = totalOffset;
+                attrDesc.format = mapSlangTypeToFormat(paramType);
+                attrDesc.size = formatSize(attrDesc.format);
+                attrDesc.used = true;
+
+                totalOffset += attrDesc.size;
+                vertexAttributes.push_back(attrDesc);
+                break;
+            }
+            default:
+            {
+                spdlog::warn("Unsupported parameter type for vertex input layout: {}", static_cast<int>(paramType->getKind()));
+                break;
+            }
+            }
+
+            return vertexAttributes;
+        }
+
+        std::vector<VertexAttributeDescription> getProgramVertexInputLayout(Slang::ComPtr<slang::IComponentType> program)
+        {
+            std::vector<VertexAttributeDescription> vertexAttributes;
+
+            auto layout = program->getLayout(0);
+            auto nEntrys = layout->getEntryPointCount();
+
+            for (size_t i = 0; i < nEntrys; ++i)
+            {
+                auto entry = layout->getEntryPointByIndex(i);
+
+                if (entry->getStage() != SLANG_STAGE_VERTEX)
+                    continue;
+
+                auto nParams = entry->getParameterCount();
+
+                uint32_t totalOffset = 0;
+                for (size_t j = 0; j < nParams; ++j)
+                {
+                    auto param = entry->getParameterByIndex(static_cast<unsigned int>(j));
+
+                    if (param->getCategory() == slang::ParameterCategory::VaryingInput)
+                    {
+                        auto attrs = slangParamToAttrb(param, totalOffset);
+                        vertexAttributes.insert(vertexAttributes.end(), attrs.begin(), attrs.end());
+                    }
+                }
+            }
+            return vertexAttributes;
+        }
+
+        struct StructInfo
+        {
+            std::string name;
+            std::vector<StructInfo> members;
+            size_t size = 0;
+            int32_t alignment = 0;
+            size_t offset = 0;
+        };
+
+        std::optional<StructInfo> getStructInfo(Slang::ComPtr<slang::IComponentType> program, const std::string &name)
+        {
+            auto programLayout = program->getLayout();
+
+            auto structReflection = programLayout->findTypeByName(name.c_str());
+            if (!structReflection)
+            {
+                spdlog::error("Struct {} not found in shader program.", name);
+                return std::nullopt;
+            }
+
+            auto structLayout = programLayout->getTypeLayout(structReflection, slang::LayoutRules::DefaultStructuredBuffer);
+
+            auto structInfo = StructInfo{};
+            structInfo.name = name;
+
+            // Use getStride() if this struct is going to be used in arrays/buffers
+            // to account for trailing layout/alignment padding.
+            structInfo.size = structLayout->getSize();
+
+            if (structLayout && structLayout->getKind() == slang::TypeReflection::Kind::Struct)
+            {
+                auto nFields = structLayout->getFieldCount();
+                for (size_t i = 0; i < nFields; ++i)
+                {
+                    auto field = structLayout->getFieldByIndex(static_cast<unsigned int>(i));
+                    auto fieldName = field->getName();
+
+                    // Explicitly query uniform byte offset
+                    auto fieldOffset = field->getOffset(slang::ParameterCategory::Uniform);
+
+                    auto fieldType = field->getTypeLayout();
+                    auto fieldAlignment = fieldType->getAlignment();
+                    auto fieldSize = fieldType->getSize();
+
+                    structInfo.members.push_back(StructInfo{
+                        .name = fieldName ? fieldName : "",
+                        .size = fieldSize,
+                        .alignment = fieldAlignment,
+                        .offset = fieldOffset});
+                }
+            }
+
+            return structInfo;
+        }
+
+        void printStructInfo(const StructInfo &structInfo)
+        {
+            spdlog::info("Struct: {} (size: {}, alignment: {})", structInfo.name, structInfo.size, structInfo.alignment);
+            for (const auto &member : structInfo.members)
+            {
+                spdlog::info("  Member: {} (size: {}, alignment: {}, offset: {})", member.name, member.size, member.alignment, member.offset);
+            }
+        }
+
+        void validateRasmStructs(Slang::ComPtr<slang::IComponentType> program)
+        {
+            auto validate = [&program](std::string structName, size_t expectedSize)
+            {
+                auto si = getStructInfo(program, structName);
+                if (!si)
+                {
+                    spdlog::error("Failed to get struct info for {}", structName);
+                    return;
+                }
+
+                if (si->size != expectedSize)
+                {
+                    spdlog::error("Size mismatch for {}: expected {}, got {}", structName, expectedSize, si->size);
+                    printStructInfo(*si);
+                }
+            };
+
+            validate("VertexFull", sizeof(gfx::VertexFull));
+            validate("VertexPosOnly", sizeof(gfx::VertexPosOnly));
+            validate("DrawInfo", sizeof(gfx::DrawInfo));
+            validate("Modeldata", sizeof(gfx::Modeldata));
+            validate("SceneData", sizeof(gfx::SceneData));
+            validate("Light", sizeof(gfx::Light));
+            validate("MetallicRoughnessMaterial", sizeof(gfx::MetallicRoughnessMaterial));
+            validate("NormalMaterial", sizeof(gfx::NormalMaterial));
+            validate("OcclusionMaterial", sizeof(gfx::OcclusionMaterial));
+            validate("EmissiveMaterial", sizeof(gfx::EmissiveMaterial));
+            validate("Material", sizeof(gfx::Material));
+        }
     }
 
     bool ShaderCompiler::initialize(Target target)
@@ -88,247 +332,6 @@ namespace rasm
     }
 
     void ShaderCompiler::shutdown() {}
-
-    rasm::Format mapSlangTypeToFormat(slang::TypeReflection *type)
-    {
-        if (!type)
-            return Format::UNKNOWN;
-
-        switch (type->getKind())
-        {
-        case slang::TypeReflection::Kind::Vector:
-        {
-            auto elementType = type->getElementType();
-            auto elementCount = type->getElementCount();
-
-            if (elementType->getKind() == slang::TypeReflection::Kind::Scalar)
-            {
-                switch (elementType->getScalarType())
-                {
-                case slang::TypeReflection::ScalarType::Float32:
-                    if (elementCount == 2)
-                        return Format::R32G32_SFLOAT;
-                    else if (elementCount == 3)
-                        return Format::R32G32B32_SFLOAT;
-                    else if (elementCount == 4)
-                        return Format::R32G32B32A32_SFLOAT;
-                    break;
-                case slang::TypeReflection::ScalarType::UInt8:
-                    if (elementCount == 4)
-                        return Format::R8G8B8A8_UNORM; // Assuming UNORM for simplicity
-                    break;
-                default:
-                    break;
-                }
-            }
-            break;
-        }
-        default:
-            break;
-        }
-
-        return Format::UNKNOWN;
-    }
-
-    uint32_t formatSize(Format format)
-    {
-        switch (format)
-        {
-        case Format::R8G8B8A8_UNORM:
-        case Format::R8G8B8A8_SRGB:
-        case Format::B8G8R8A8_SRGB:
-            return 4;
-        case Format::R16G16B16A16_SFLOAT:
-            return 8;
-        case Format::R32G32B32_SFLOAT:
-            return 12;
-        case Format::R32G32B32A32_SFLOAT:
-            return 16;
-        case Format::D24_UNORM_S8_UINT:
-            return 4; // 3 bytes for depth + 1 byte for stencil
-        case Format::R32G32_SFLOAT:
-            return 8;
-        case Format::U16_UINT:
-            return 2;
-        case Format::U32_UINT:
-            return 4;
-        default:
-            return 0; // Unknown format
-        }
-    }
-
-    std::vector<VertexAttributeDescription> slangParamToAttrb(slang::VariableLayoutReflection *param, uint32_t &totalOffset)
-    {
-        std::vector<VertexAttributeDescription> vertexAttributes;
-
-        auto typeLayout = param->getTypeLayout();
-        auto paramType = typeLayout->getType();
-
-        switch (paramType->getKind())
-        {
-        case slang::TypeReflection::Kind::Struct:
-        {
-            auto memberCount = typeLayout->getFieldCount();
-
-            for (size_t k = 0; k < memberCount; ++k)
-            {
-                auto member = typeLayout->getFieldByIndex(static_cast<unsigned int>(k));
-                auto attrs = slangParamToAttrb(member, totalOffset);
-                vertexAttributes.insert(vertexAttributes.end(), attrs.begin(), attrs.end());
-            }
-            break;
-        }
-        case slang::TypeReflection::Kind::Vector:
-        case slang::TypeReflection::Kind::Scalar:
-        {
-            VertexAttributeDescription attrDesc;
-
-            attrDesc.binding = 0; // Assuming a single binding for simplicity
-            attrDesc.location = static_cast<uint32_t>(param->getOffset(slang::ParameterCategory::VaryingInput));
-            attrDesc.offset = totalOffset;
-            attrDesc.format = mapSlangTypeToFormat(paramType);
-            attrDesc.size = formatSize(attrDesc.format);
-            attrDesc.used = true;
-
-            totalOffset += attrDesc.size;
-            vertexAttributes.push_back(attrDesc);
-            break;
-        }
-        default:
-        {
-            spdlog::warn("Unsupported parameter type for vertex input layout: {}", static_cast<int>(paramType->getKind()));
-            break;
-        }
-        }
-
-        return vertexAttributes;
-    }
-
-    std::vector<VertexAttributeDescription> getProgramVertexInputLayout(Slang::ComPtr<slang::IComponentType> program)
-    {
-        std::vector<VertexAttributeDescription> vertexAttributes;
-
-        auto layout = program->getLayout(0);
-        auto nEntrys = layout->getEntryPointCount();
-
-        for (size_t i = 0; i < nEntrys; ++i)
-        {
-            auto entry = layout->getEntryPointByIndex(i);
-
-            if (entry->getStage() != SLANG_STAGE_VERTEX)
-                continue;
-
-            auto nParams = entry->getParameterCount();
-
-            uint32_t totalOffset = 0;
-            for (size_t j = 0; j < nParams; ++j)
-            {
-                auto param = entry->getParameterByIndex(static_cast<unsigned int>(j));
-
-                if (param->getCategory() == slang::ParameterCategory::VaryingInput)
-                {
-                    auto attrs = slangParamToAttrb(param, totalOffset);
-                    vertexAttributes.insert(vertexAttributes.end(), attrs.begin(), attrs.end());
-                }
-            }
-        }
-        return vertexAttributes;
-    }
-
-    struct StructInfo
-    {
-        std::string name;
-        std::vector<StructInfo> members;
-        size_t size = 0;
-        int32_t alignment = 0;
-        size_t offset = 0;
-    };
-
-    std::optional<StructInfo> getStructInfo(Slang::ComPtr<slang::IComponentType> program, const std::string &name)
-    {
-        auto programLayout = program->getLayout();
-
-        auto structReflection = programLayout->findTypeByName(name.c_str());
-        if (!structReflection)
-        {
-            spdlog::error("Struct {} not found in shader program.", name);
-            return std::nullopt;
-        }
-
-        auto structLayout = programLayout->getTypeLayout(structReflection, slang::LayoutRules::DefaultStructuredBuffer);
-
-        auto structInfo = StructInfo{};
-        structInfo.name = name;
-
-        // Use getStride() if this struct is going to be used in arrays/buffers
-        // to account for trailing layout/alignment padding.
-        structInfo.size = structLayout->getSize();
-
-        if (structLayout && structLayout->getKind() == slang::TypeReflection::Kind::Struct)
-        {
-            auto nFields = structLayout->getFieldCount();
-            for (size_t i = 0; i < nFields; ++i)
-            {
-                auto field = structLayout->getFieldByIndex(static_cast<unsigned int>(i));
-                auto fieldName = field->getName();
-
-                // Explicitly query uniform byte offset
-                auto fieldOffset = field->getOffset(slang::ParameterCategory::Uniform);
-
-                auto fieldType = field->getTypeLayout();
-                auto fieldAlignment = fieldType->getAlignment();
-                auto fieldSize = fieldType->getSize();
-
-                structInfo.members.push_back(StructInfo{
-                    .name = fieldName ? fieldName : "",
-                    .size = fieldSize,
-                    .alignment = fieldAlignment,
-                    .offset = fieldOffset});
-            }
-        }
-
-        return structInfo;
-    }
-
-    void printStructInfo(const StructInfo &structInfo)
-    {
-        spdlog::info("Struct: {} (size: {}, alignment: {})", structInfo.name, structInfo.size, structInfo.alignment);
-        for (const auto &member : structInfo.members)
-        {
-            spdlog::info("  Member: {} (size: {}, alignment: {}, offset: {})", member.name, member.size, member.alignment, member.offset);
-        }
-    }
-
-    void validateRasmStructs(Slang::ComPtr<slang::IComponentType> program)
-    {
-        auto validate = [&program](std::string structName, size_t expectedSize)
-        {
-            auto si = getStructInfo(program, structName);
-            if (!si)
-            {
-                spdlog::error("Failed to get struct info for {}", structName);
-                return;
-            }
-
-            if (si->size != expectedSize)
-            {
-                spdlog::error("Size mismatch for {}: expected {}, got {}", structName, expectedSize, si->size);
-                printStructInfo(*si);
-            }
-        };
-
-        validate("VertexFull", sizeof(gfx::VertexFull));
-        validate("VertexPosOnly", sizeof(gfx::VertexPosOnly));
-        validate("DrawInfo", sizeof(gfx::DrawInfo));
-        validate("Modeldata", sizeof(gfx::Modeldata));
-        validate("SceneData", sizeof(gfx::SceneData));
-        validate("Light", sizeof(gfx::Light));
-        validate("MetallicRoughnessMaterial", sizeof(gfx::MetallicRoughnessMaterial));
-        validate("NormalMaterial", sizeof(gfx::NormalMaterial));
-        validate("OcclusionMaterial", sizeof(gfx::OcclusionMaterial));
-        validate("EmissiveMaterial", sizeof(gfx::EmissiveMaterial));
-        validate("Material", sizeof(gfx::Material));
-    }
 
     ShaderCompiler::compiledShader ShaderCompiler::compile(const std::string &sourcePath, const std::string &outputPath, const std::string &entryPointName)
     {
