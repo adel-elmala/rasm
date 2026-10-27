@@ -12,30 +12,549 @@
 
 namespace rasm::gfx
 {
-    // clang-format off
+    namespace
+    {
+        // clang-format off
 
-    // Forward declarations of private helper functions for Vulkan setup and management.
-    vkb::Result<vkb::Instance>          _init_instance(const char* app_name, bool enable_validation_layers, bool& debug_utils_enabled);
-    vkb::Result<vkb::PhysicalDevice>    _init_physical_device(const vkb::Instance& vkb_instance, VkSurfaceKHR surface);
-    vkb::Result<vkb::Device>            _init_logical_device(const vkb::PhysicalDevice& physical_device);
-    vkb::Result<VkQueue>                _init_queue(const vkb::Device& device, vkb::QueueType type);
-    vkb::Result<uint32_t>               _get_queue_index(const vkb::Device& device, vkb::QueueType type);
-    vkb::Result<VkSurfaceKHR>           _init_surface(const vkb::Instance& instance, Engine* engine);
-    vkb::Result<vkb::Swapchain>         _init_swapchain(const vkb::Device& device, VkExtent2D desired_extent);
-    vkb::Result<vkb::Swapchain>         _recreate_swapchain(const vkb::Device& device, SwapchainVKHandle& old_swapchain, VkExtent2D desired_extent);
-    SwapchainStatus                     _to_swapchain_status(VkResult result);
-    VkBufferUsageFlags                  _to_vk_buffer_usage_flags(BufferUsage usage);
-    VkImageUsageFlags                   _to_vk_image_usage_flags(TextureUsage usage);
-    VkFormat                            _to_vk_format(Format format);
-    Format                              _to_format(VkFormat format);
-    VkIndexType                         _to_vk_index_type(Format format);
-    VkPrimitiveTopology                 _to_vk_topology(PrimitiveTopology topology);
-    VkShaderStageFlags                  _to_vk_shader_stage_flags(ShaderType stage);
-    VkImageAspectFlags                  _to_vk_aspect_mask(TextureUsage usage);
-    VkDescriptorType                    _to_vk_descriptor_type(ResourceType type);
-    const char* _to_vk_result_string(VkResult result);
+        // Private helper functions for Vulkan setup and management.
+        vkb::Result<vkb::Instance>          _init_instance(const char* app_name, bool enable_validation_layers, bool& debug_utils_enabled);
+        vkb::Result<vkb::PhysicalDevice>    _init_physical_device(const vkb::Instance& vkb_instance, VkSurfaceKHR surface);
+        vkb::Result<vkb::Device>            _init_logical_device(const vkb::PhysicalDevice& physical_device);
+        vkb::Result<VkQueue>                _init_queue(const vkb::Device& device, vkb::QueueType type);
+        vkb::Result<uint32_t>               _get_queue_index(const vkb::Device& device, vkb::QueueType type);
+        vkb::Result<VkSurfaceKHR>           _init_surface(const vkb::Instance& instance, Engine* engine);
+        vkb::Result<vkb::Swapchain>         _init_swapchain(const vkb::Device& device, VkExtent2D desired_extent);
+        vkb::Result<vkb::Swapchain>         _recreate_swapchain(const vkb::Device& device, SwapchainVKHandle& old_swapchain, VkExtent2D desired_extent);
+        SwapchainStatus                     _to_swapchain_status(VkResult result);
+        VkBufferUsageFlags                  _to_vk_buffer_usage_flags(BufferUsage usage);
+        VkImageUsageFlags                   _to_vk_image_usage_flags(TextureUsage usage);
+        VkFormat                            _to_vk_format(Format format);
+        Format                              _to_format(VkFormat format);
+        VkIndexType                         _to_vk_index_type(Format format);
+        VkPrimitiveTopology                 _to_vk_topology(PrimitiveTopology topology);
+        VkShaderStageFlags                  _to_vk_shader_stage_flags(ShaderType stage);
+        VkImageAspectFlags                  _to_vk_aspect_mask(TextureUsage usage);
+        VkDescriptorType                    _to_vk_descriptor_type(ResourceType type);
+        const char* _to_vk_result_string(VkResult result);
 
-    // clang-format on
+        // clang-format on
+
+        VkPipelineRasterizationStateCreateInfo createRasterizer(VkPolygonMode polygonMode, VkCullModeFlags cullMode, VkFrontFace frontFace)
+        {
+            VkPipelineRasterizationStateCreateInfo rasterizer{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                .depthClampEnable = VK_FALSE,
+                .rasterizerDiscardEnable = VK_FALSE,
+                .polygonMode = polygonMode,
+                .cullMode = cullMode,
+                .frontFace = frontFace,
+                .depthBiasEnable = VK_FALSE,
+                .lineWidth = 1.0f};
+
+            return rasterizer;
+        }
+
+        vkb::Result<vkb::Instance> _init_instance(const char *app_name, bool enable_validation_layers, bool &debug_utils_enabled)
+        {
+            debug_utils_enabled = false;
+
+            vkb::InstanceBuilder instance_builder;
+
+            auto system_info_ret = vkb::SystemInfo::get_system_info();
+            if (!system_info_ret)
+            {
+                spdlog::error("Failed to get system info. Error: {}", system_info_ret.error().message());
+                return vkb::Result<vkb::Instance>{system_info_ret.error()};
+            }
+
+            auto system_info = system_info_ret.value();
+
+            // check for a layer
+            // if (system_info.is_layer_available("VK_LAYER_LUNARG_api_dump"))
+            // {
+            //     instance_builder.enable_layer("VK_LAYER_LUNARG_api_dump");
+            // }
+
+            // Debug utils is cheap, so enable it whenever it is available: object names show up in
+            // RenderDoc / Nsight even without validation (B3).
+            if (system_info.debug_utils_available)
+            {
+                instance_builder.enable_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+                debug_utils_enabled = true;
+            }
+
+            if (enable_validation_layers && system_info.validation_layers_available)
+            {
+                instance_builder.enable_validation_layers();
+
+                // Validation needs to send errors via a callback, have vk-bootstrap do it
+                if (debug_utils_enabled)
+                    instance_builder.use_default_debug_messenger();
+            }
+
+            // instance level extension
+            // if (system_info.is_extension_available("VK_KHR_get_physical_device_properties2"))
+            // {
+            //     instance_builder.enable_extension("VK_KHR_get_physical_device_properties2");
+            // }
+
+            auto instance_ret = instance_builder
+                                    .set_app_name(app_name ? app_name : "rasm_app")
+                                    .set_engine_name("rasm")
+                                    .require_api_version(1, 4, 0)
+                                    .set_minimum_instance_version(1, 3, 0)
+                                    .build();
+
+            if (!instance_ret)
+            {
+                spdlog::error("Failed to create Vulkan instance. Error: {}", instance_ret.error().message());
+            }
+
+            return instance_ret;
+        }
+
+        vkb::Result<vkb::PhysicalDevice> _init_physical_device(const vkb::Instance &vkb_instance, VkSurfaceKHR surface)
+        {
+            vkb::PhysicalDeviceSelector phys_device_selector(vkb_instance);
+
+            VkPhysicalDeviceVulkan11Features enabledVk11Features{
+                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
+                .pNext = nullptr,
+                .shaderDrawParameters = VK_TRUE,
+            };
+
+            VkPhysicalDeviceVulkan12Features enabledVk12Features{
+                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+                .pNext = &enabledVk11Features,
+                .storagePushConstant8 = VK_TRUE,
+                .shaderInt8 = VK_TRUE,
+                .descriptorIndexing = VK_TRUE,
+                .shaderSampledImageArrayNonUniformIndexing = VK_TRUE,
+                .descriptorBindingSampledImageUpdateAfterBind = VK_TRUE,
+                .descriptorBindingPartiallyBound = VK_TRUE,
+                .descriptorBindingVariableDescriptorCount = VK_TRUE,
+                .runtimeDescriptorArray = VK_TRUE,
+                .scalarBlockLayout = VK_TRUE,
+                .bufferDeviceAddress = VK_TRUE,
+            };
+
+            VkPhysicalDeviceVulkan13Features enabledVk13Features{
+                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+                .pNext = &enabledVk12Features,
+                .synchronization2 = VK_TRUE,
+                .dynamicRendering = VK_TRUE,
+            };
+
+            VkPhysicalDeviceVulkan14Features enabledVk14Features{
+                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES,
+                .pNext = &enabledVk13Features,
+                .hostImageCopy = VK_TRUE};
+
+            VkPhysicalDeviceFeatures enabledVk10Features{
+                .multiDrawIndirect = VK_TRUE,
+                .samplerAnisotropy = VK_TRUE,
+                .shaderInt64 = VK_TRUE,
+            };
+
+            // select() grabs a PhysicalDevice, By default, this will prefer a discrete GPU.
+            auto physical_device_selector_return = phys_device_selector
+                                                       .set_surface(surface)
+                                                       .set_required_features_14(enabledVk14Features)               // Enable the 1.4 core feature
+                                                       .set_required_features_13(enabledVk13Features)               // Enable the 1.3 core feature
+                                                       .set_required_features_12(enabledVk12Features)               // Enable the 1.2 core feature
+                                                       .set_required_features_11(enabledVk11Features)               // Enable the 1.1 core feature
+                                                       .set_required_features(enabledVk10Features)                  // Enable the 1.0 core feature
+                                                       .add_required_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME)     // Enable swapchain extension
+                                                       .add_required_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) // Enable memory budget extension
+                                                       .select();
+
+            if (!physical_device_selector_return)
+            {
+                // If no suitable devices were found, detailed_failure_reasons() will contain a list of reasons why.
+                if (physical_device_selector_return.error() == vkb::PhysicalDeviceError::no_suitable_device)
+                {
+                    const auto &detailed_reasons = physical_device_selector_return.detailed_failure_reasons();
+                    if (!detailed_reasons.empty())
+                    {
+                        spdlog::error("GPU Selection failure reasons:\n");
+                        for (const std::string &reason : detailed_reasons)
+                        {
+                            spdlog::error("{}", reason);
+                        }
+                    }
+                }
+                return physical_device_selector_return;
+            }
+
+            auto physical_device = physical_device_selector_return.value();
+            spdlog::info(
+                "Selected GPU information:\n"
+                "\t\t\t\t\tname: {} -- type: {} --  memory: {} MB\n"
+                "\t\t\t\t\tdriver version: {}.{}.{} --  API version: {}.{}.{}",
+                physical_device.properties.deviceName,
+                physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? "Discrete" : physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? "Integrated"
+                                                                                                         : physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU      ? "Virtual"
+                                                                                                         : physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU              ? "CPU"
+                                                                                                                                                                                             : "Other",
+                physical_device.memory_properties.memoryHeaps[0].size / (1024 * 1024),
+                VK_VERSION_MAJOR(physical_device.properties.driverVersion),
+                VK_VERSION_MINOR(physical_device.properties.driverVersion),
+                VK_VERSION_PATCH(physical_device.properties.driverVersion),
+                VK_VERSION_MAJOR(physical_device.properties.apiVersion),
+                VK_VERSION_MINOR(physical_device.properties.apiVersion),
+                VK_VERSION_PATCH(physical_device.properties.apiVersion));
+
+            return physical_device_selector_return;
+        }
+
+        vkb::Result<vkb::Device> _init_logical_device(const vkb::PhysicalDevice &physical_device)
+        {
+            vkb::DeviceBuilder device_builder{physical_device};
+
+            auto dev_ret = device_builder.build();
+
+            if (!dev_ret)
+            {
+                spdlog::error("Failed to create logical device. Error: {}", dev_ret.error().message());
+            }
+
+            return dev_ret;
+        }
+
+        vkb::Result<VkQueue> _init_queue(const vkb::Device &device, vkb::QueueType type)
+        {
+            auto queue_ret = device.get_queue(type);
+            if (!queue_ret)
+            {
+                spdlog::error("Failed to get queue. Error: {}", queue_ret.error().message());
+            }
+            return queue_ret;
+        }
+
+        vkb::Result<uint32_t> _get_queue_index(const vkb::Device &device, vkb::QueueType type)
+        {
+            auto queue_index_ret = device.get_queue_index(type);
+            if (!queue_index_ret)
+            {
+                spdlog::error("Failed to get queue index. Error: {}", queue_index_ret.error().message());
+            }
+            return queue_index_ret;
+        }
+
+        vkb::Result<VkSurfaceKHR> _init_surface(const vkb::Instance &instance, Engine *engine)
+        {
+            auto handle = engine->getMainWindow();
+            auto surface_ret = engine->createSurfaceVk(handle, instance.instance);
+
+            if (!surface_ret)
+            {
+                return vkb::Result<VkSurfaceKHR>{vkb::Error{}};
+            }
+
+            return vkb::Result<VkSurfaceKHR>{surface_ret};
+        }
+
+        vkb::Result<vkb::Swapchain> _init_swapchain(const vkb::Device &device, VkExtent2D desired_extent)
+        {
+            vkb::SwapchainBuilder swapchain_builder{device};
+            auto swap_ret = swapchain_builder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+                                .set_desired_extent(desired_extent.width, desired_extent.height)
+                                .build();
+            if (!swap_ret)
+            {
+                spdlog::error("Failed to create swapchain. Error: {}", swap_ret.error().message());
+            }
+            return swap_ret;
+        }
+
+        // The caller must make sure the device is idle.
+        vkb::Result<vkb::Swapchain> _recreate_swapchain(const vkb::Device &device, SwapchainVKHandle &old_swapchain, VkExtent2D desired_extent)
+        {
+            vkb::SwapchainBuilder swapchain_builder{device};
+            auto swap_ret = swapchain_builder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+                                .set_desired_extent(desired_extent.width, desired_extent.height)
+                                .set_old_swapchain(old_swapchain.swapchain)
+                                .build();
+            if (!swap_ret)
+            {
+                spdlog::error("Failed to recreate swapchain. Error: {}", swap_ret.error().message());
+            }
+
+            // Passing it as oldSwapchain retired the old swapchain, even if creation failed, so it is
+            // destroyed either way.
+            for (const auto &image : old_swapchain.images)
+            {
+                vkDestroyImageView(device.device, image.view, nullptr);
+            }
+            if (old_swapchain.swapchain.swapchain != VK_NULL_HANDLE)
+                vkb::destroy_swapchain(old_swapchain.swapchain);
+
+            return swap_ret;
+        }
+
+        SwapchainStatus _to_swapchain_status(VkResult result)
+        {
+            switch (result)
+            {
+            case VK_SUCCESS:
+                return SwapchainStatus::OK;
+            case VK_SUBOPTIMAL_KHR:
+                return SwapchainStatus::SUBOPTIMAL;
+            case VK_ERROR_OUT_OF_DATE_KHR:
+                return SwapchainStatus::OUT_OF_DATE;
+            default:
+                return SwapchainStatus::FAILURE;
+            }
+        }
+
+        VkBufferUsageFlags _to_vk_buffer_usage_flags(BufferUsage usage)
+        {
+            // Every buffer is created with the device-address bit so that its GPU address can be
+            // handed to shaders through push constants / other buffers regardless of its primary usage.
+            VkBufferUsageFlags flags = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+
+            switch (usage)
+            {
+            case BufferUsage::VERTEX:
+                return flags | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+            case BufferUsage::INDEX:
+                return flags | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+            case BufferUsage::INDIRECT:
+                return flags | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+            case BufferUsage::VERTEXINDEX:
+                return flags | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+            case BufferUsage::UNIFORM:
+                return flags | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+            case BufferUsage::STORAGE:
+                return flags | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+            case BufferUsage::DEVICE_ADDRESS:
+                return flags;
+            default:
+                return flags;
+            }
+        }
+
+        VkShaderStageFlags _to_vk_shader_stage_flags(ShaderType stage)
+        {
+            switch (stage)
+            {
+            case ShaderType::VERTEX:
+                return VK_SHADER_STAGE_VERTEX_BIT;
+            case ShaderType::FRAGMENT:
+                return VK_SHADER_STAGE_FRAGMENT_BIT;
+            case ShaderType::COMPUTE:
+                return VK_SHADER_STAGE_COMPUTE_BIT;
+            case ShaderType::VERTEX_FRAGMENT:
+                return VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+            default:
+                return static_cast<VkShaderStageFlags>(0);
+            }
+        }
+
+        VkPrimitiveTopology _to_vk_topology(PrimitiveTopology topology)
+        {
+            switch (topology)
+            {
+            case PrimitiveTopology::POINT_LIST:
+                return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+            case PrimitiveTopology::LINE_LIST:
+                return VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+            case PrimitiveTopology::LINE_STRIP:
+                return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+            case PrimitiveTopology::TRIANGLE_LIST:
+                return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            case PrimitiveTopology::TRIANGLE_STRIP:
+                return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+            default:
+                return VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
+            }
+        }
+
+        VkFormat _to_vk_format(Format format)
+        {
+            switch (format)
+            {
+            case Format::R32G32B32_SFLOAT:
+                return VK_FORMAT_R32G32B32_SFLOAT;
+            case Format::R32G32_SFLOAT:
+                return VK_FORMAT_R32G32_SFLOAT;
+            case Format::R8G8B8A8_UNORM:
+                return VK_FORMAT_R8G8B8A8_UNORM;
+            case Format::R16G16B16A16_SFLOAT:
+                return VK_FORMAT_R16G16B16A16_SFLOAT;
+            case Format::D24_UNORM_S8_UINT:
+                return VK_FORMAT_D24_UNORM_S8_UINT;
+            case Format::D32_SFLOAT_S8_UINT:
+                return VK_FORMAT_D32_SFLOAT_S8_UINT;
+            case Format::R8G8B8A8_SRGB:
+                return VK_FORMAT_R8G8B8A8_SRGB;
+            case Format::B8G8R8A8_SRGB:
+                return VK_FORMAT_B8G8R8A8_SRGB;
+            case Format::R32G32B32A32_SFLOAT:
+                return VK_FORMAT_R32G32B32A32_SFLOAT;
+            case Format::R8G8B8_UNORM:
+                return VK_FORMAT_R8G8B8_UNORM;
+            case Format::UNKNOWN:
+                return VK_FORMAT_UNDEFINED;
+            default:
+                return VK_FORMAT_UNDEFINED;
+            }
+        }
+
+        VkIndexType _to_vk_index_type(Format format)
+        {
+            switch (format)
+            {
+            case Format::U16_UINT:
+                return VK_INDEX_TYPE_UINT16;
+            case Format::U32_UINT:
+                return VK_INDEX_TYPE_UINT32;
+            default:
+                return VK_INDEX_TYPE_MAX_ENUM;
+            }
+        }
+
+        Format _to_format(VkFormat vkFormat)
+        {
+            switch (vkFormat)
+            {
+            case VK_FORMAT_R32G32B32_SFLOAT:
+                return Format::R32G32B32_SFLOAT;
+            case VK_FORMAT_R32G32_SFLOAT:
+                return Format::R32G32_SFLOAT;
+            case VK_FORMAT_R8G8B8A8_UNORM:
+                return Format::R8G8B8A8_UNORM;
+            case VK_FORMAT_R8G8B8A8_SRGB:
+                return Format::R8G8B8A8_SRGB;
+            case VK_FORMAT_B8G8R8A8_SRGB:
+                return Format::B8G8R8A8_SRGB;
+            case VK_FORMAT_R16G16B16A16_SFLOAT:
+                return Format::R16G16B16A16_SFLOAT;
+            case VK_FORMAT_D24_UNORM_S8_UINT:
+                return Format::D24_UNORM_S8_UINT;
+            case VK_FORMAT_R8G8B8_UNORM:
+                return Format::R8G8B8_UNORM;
+            case VK_FORMAT_D32_SFLOAT_S8_UINT:
+                return Format::D32_SFLOAT_S8_UINT;
+            default:
+                return Format::UNKNOWN;
+            }
+        }
+
+        VkImageUsageFlags _to_vk_image_usage_flags(TextureUsage usage)
+        {
+            switch (usage)
+            {
+            case TextureUsage::TRANSFER_SRC:
+                return VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            case TextureUsage::TRANSFER_DST:
+                return VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            case TextureUsage::SAMPLED:
+                // VK_EXT_host_image_copy must be enabled for VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT to be valid.
+                return VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_HOST_TRANSFER_BIT;
+            case TextureUsage::STORAGE:
+                return VK_IMAGE_USAGE_STORAGE_BIT;
+            case TextureUsage::COLOR_ATTACHMENT:
+                return VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+            case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
+                return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+            case TextureUsage::SAMPLED_COLOR_ATTACHMENT:
+                return VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            case TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT:
+                return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            case TextureUsage::TRANSIENT_ATTACHMENT:
+                return VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+            case TextureUsage::INPUT_ATTACHMENT:
+                return VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+            default:
+                return 0;
+            }
+        }
+
+        VkImageAspectFlags _to_vk_aspect_mask(TextureUsage usage)
+        {
+            switch (usage)
+            {
+            case TextureUsage::COLOR_ATTACHMENT:
+            case TextureUsage::SAMPLED:
+            case TextureUsage::SAMPLED_COLOR_ATTACHMENT:
+                return VK_IMAGE_ASPECT_COLOR_BIT;
+            case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
+                return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+            case TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT:
+                // sampled views may only reference a single aspect
+                return VK_IMAGE_ASPECT_DEPTH_BIT;
+            default:
+                return 0;
+            }
+        }
+
+        VkDescriptorType _to_vk_descriptor_type(ResourceType type)
+        {
+            switch (type)
+            {
+            case ResourceType::BUFFER:
+                return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            case ResourceType::SAMPLER:
+                return VK_DESCRIPTOR_TYPE_SAMPLER;
+            case ResourceType::TEXTURE:
+                return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            default:
+                return VK_DESCRIPTOR_TYPE_MAX_ENUM;
+            }
+        }
+
+        const char *_to_vk_result_string(VkResult result)
+        {
+            switch (result)
+            {
+            case VK_SUCCESS:
+                return "Success";
+            case VK_NOT_READY:
+                return "Not Ready";
+            case VK_TIMEOUT:
+                return "Timeout";
+            case VK_EVENT_SET:
+                return "Event Set";
+            case VK_EVENT_RESET:
+                return "Event Reset";
+            case VK_INCOMPLETE:
+                return "Incomplete";
+            case VK_ERROR_OUT_OF_HOST_MEMORY:
+                return "Out of Host Memory";
+            case VK_ERROR_OUT_OF_DEVICE_MEMORY:
+                return "Out of Device Memory";
+            case VK_ERROR_INITIALIZATION_FAILED:
+                return "Initialization Failed";
+            case VK_ERROR_DEVICE_LOST:
+                return "Device Lost";
+            case VK_ERROR_MEMORY_MAP_FAILED:
+                return "Memory Map Failed";
+            case VK_ERROR_LAYER_NOT_PRESENT:
+                return "Layer Not Present";
+            case VK_ERROR_EXTENSION_NOT_PRESENT:
+                return "Extension Not Present";
+            case VK_ERROR_FEATURE_NOT_PRESENT:
+                return "Feature Not Present";
+            case VK_ERROR_INCOMPATIBLE_DRIVER:
+                return "Incompatible Driver";
+            case VK_ERROR_TOO_MANY_OBJECTS:
+                return "Too Many Objects";
+            case VK_ERROR_FORMAT_NOT_SUPPORTED:
+                return "Format Not Supported";
+            case VK_ERROR_FRAGMENTED_POOL:
+                return "Fragmented Pool";
+            case VK_ERROR_OUT_OF_DATE_KHR:
+                return "Out of Date KHR";
+            case VK_SUBOPTIMAL_KHR:
+                return "Suboptimal KHR";
+            case VK_ERROR_SURFACE_LOST_KHR:
+                return "Surface Lost KHR";
+            default:
+                return "Unknown Error";
+            }
+        }
+    }
 }
 
 namespace rasm::gfx
@@ -401,21 +920,6 @@ namespace rasm::gfx
 
         ShaderVKHandle rawHandle = {desc, {}, shaderModule};
         return rawHandle;
-    }
-
-    VkPipelineRasterizationStateCreateInfo createRasterizer(VkPolygonMode polygonMode, VkCullModeFlags cullMode, VkFrontFace frontFace)
-    {
-        VkPipelineRasterizationStateCreateInfo rasterizer{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-            .depthClampEnable = VK_FALSE,
-            .rasterizerDiscardEnable = VK_FALSE,
-            .polygonMode = polygonMode,
-            .cullMode = cullMode,
-            .frontFace = frontFace,
-            .depthBiasEnable = VK_FALSE,
-            .lineWidth = 1.0f};
-
-        return rasterizer;
     }
 
     std::optional<PipelineVKHandle> VulkanContext::createGraphicsPipeline(ResourceDesc desc, const ShaderVKHandle &vertexShader, const ShaderVKHandle &fragmentShader, const DescriptorSetLayoutVKHandle &bindlessDescriptorSetLayout)
@@ -1351,508 +1855,4 @@ namespace rasm::gfx
         this->dispatch_table.setDebugUtilsObjectNameEXT(&nameInfo);
     }
 
-    // ----------------------------------------------------------
-    // private helper functions for Vulkan setup and management.
-    // ----------------------------------------------------------
-
-    vkb::Result<vkb::Instance> _init_instance(const char *app_name, bool enable_validation_layers, bool &debug_utils_enabled)
-    {
-        debug_utils_enabled = false;
-
-        vkb::InstanceBuilder instance_builder;
-
-        auto system_info_ret = vkb::SystemInfo::get_system_info();
-        if (!system_info_ret)
-        {
-            spdlog::error("Failed to get system info. Error: {}", system_info_ret.error().message());
-            return vkb::Result<vkb::Instance>{system_info_ret.error()};
-        }
-
-        auto system_info = system_info_ret.value();
-
-        // check for a layer
-        // if (system_info.is_layer_available("VK_LAYER_LUNARG_api_dump"))
-        // {
-        //     instance_builder.enable_layer("VK_LAYER_LUNARG_api_dump");
-        // }
-
-        // Debug utils is cheap, so enable it whenever it is available: object names show up in
-        // RenderDoc / Nsight even without validation (B3).
-        if (system_info.debug_utils_available)
-        {
-            instance_builder.enable_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-            debug_utils_enabled = true;
-        }
-
-        if (enable_validation_layers && system_info.validation_layers_available)
-        {
-            instance_builder.enable_validation_layers();
-
-            // Validation needs to send errors via a callback, have vk-bootstrap do it
-            if (debug_utils_enabled)
-                instance_builder.use_default_debug_messenger();
-        }
-
-        // instance level extension
-        // if (system_info.is_extension_available("VK_KHR_get_physical_device_properties2"))
-        // {
-        //     instance_builder.enable_extension("VK_KHR_get_physical_device_properties2");
-        // }
-
-        auto instance_ret = instance_builder
-                                .set_app_name(app_name ? app_name : "rasm_app")
-                                .set_engine_name("rasm")
-                                .require_api_version(1, 4, 0)
-                                .set_minimum_instance_version(1, 3, 0)
-                                .build();
-
-        if (!instance_ret)
-        {
-            spdlog::error("Failed to create Vulkan instance. Error: {}", instance_ret.error().message());
-        }
-
-        return instance_ret;
-    }
-
-    vkb::Result<vkb::PhysicalDevice> _init_physical_device(const vkb::Instance &vkb_instance, VkSurfaceKHR surface)
-    {
-        vkb::PhysicalDeviceSelector phys_device_selector(vkb_instance);
-
-        VkPhysicalDeviceVulkan11Features enabledVk11Features{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
-            .pNext = nullptr,
-            .shaderDrawParameters = VK_TRUE,
-        };
-
-        VkPhysicalDeviceVulkan12Features enabledVk12Features{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
-            .pNext = &enabledVk11Features,
-            .storagePushConstant8 = VK_TRUE,
-            .shaderInt8 = VK_TRUE,
-            .descriptorIndexing = VK_TRUE,
-            .shaderSampledImageArrayNonUniformIndexing = VK_TRUE,
-            .descriptorBindingSampledImageUpdateAfterBind = VK_TRUE,
-            .descriptorBindingPartiallyBound = VK_TRUE,
-            .descriptorBindingVariableDescriptorCount = VK_TRUE,
-            .runtimeDescriptorArray = VK_TRUE,
-            .scalarBlockLayout = VK_TRUE,
-            .bufferDeviceAddress = VK_TRUE,
-        };
-
-        VkPhysicalDeviceVulkan13Features enabledVk13Features{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
-            .pNext = &enabledVk12Features,
-            .synchronization2 = VK_TRUE,
-            .dynamicRendering = VK_TRUE,
-        };
-
-        VkPhysicalDeviceVulkan14Features enabledVk14Features{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES,
-            .pNext = &enabledVk13Features,
-            .hostImageCopy = VK_TRUE};
-
-        VkPhysicalDeviceFeatures enabledVk10Features{
-            .multiDrawIndirect = VK_TRUE,
-            .samplerAnisotropy = VK_TRUE,
-            .shaderInt64 = VK_TRUE,
-        };
-
-        // select() grabs a PhysicalDevice, By default, this will prefer a discrete GPU.
-        auto physical_device_selector_return = phys_device_selector
-                                                   .set_surface(surface)
-                                                   .set_required_features_14(enabledVk14Features)               // Enable the 1.4 core feature
-                                                   .set_required_features_13(enabledVk13Features)               // Enable the 1.3 core feature
-                                                   .set_required_features_12(enabledVk12Features)               // Enable the 1.2 core feature
-                                                   .set_required_features_11(enabledVk11Features)               // Enable the 1.1 core feature
-                                                   .set_required_features(enabledVk10Features)                  // Enable the 1.0 core feature
-                                                   .add_required_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME)     // Enable swapchain extension
-                                                   .add_required_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) // Enable memory budget extension
-                                                   .select();
-
-        if (!physical_device_selector_return)
-        {
-            // If no suitable devices were found, detailed_failure_reasons() will contain a list of reasons why.
-            if (physical_device_selector_return.error() == vkb::PhysicalDeviceError::no_suitable_device)
-            {
-                const auto &detailed_reasons = physical_device_selector_return.detailed_failure_reasons();
-                if (!detailed_reasons.empty())
-                {
-                    spdlog::error("GPU Selection failure reasons:\n");
-                    for (const std::string &reason : detailed_reasons)
-                    {
-                        spdlog::error("{}", reason);
-                    }
-                }
-            }
-            return physical_device_selector_return;
-        }
-
-        auto physical_device = physical_device_selector_return.value();
-        spdlog::info(
-            "Selected GPU information:\n"
-            "\t\t\t\t\tname: {} -- type: {} --  memory: {} MB\n"
-            "\t\t\t\t\tdriver version: {}.{}.{} --  API version: {}.{}.{}",
-            physical_device.properties.deviceName,
-            physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? "Discrete" : physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? "Integrated"
-                                                                                                     : physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU      ? "Virtual"
-                                                                                                     : physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU              ? "CPU"
-                                                                                                                                                                                         : "Other",
-            physical_device.memory_properties.memoryHeaps[0].size / (1024 * 1024),
-            VK_VERSION_MAJOR(physical_device.properties.driverVersion),
-            VK_VERSION_MINOR(physical_device.properties.driverVersion),
-            VK_VERSION_PATCH(physical_device.properties.driverVersion),
-            VK_VERSION_MAJOR(physical_device.properties.apiVersion),
-            VK_VERSION_MINOR(physical_device.properties.apiVersion),
-            VK_VERSION_PATCH(physical_device.properties.apiVersion));
-
-        return physical_device_selector_return;
-    }
-
-    vkb::Result<vkb::Device> _init_logical_device(const vkb::PhysicalDevice &physical_device)
-    {
-        vkb::DeviceBuilder device_builder{physical_device};
-
-        auto dev_ret = device_builder.build();
-
-        if (!dev_ret)
-        {
-            spdlog::error("Failed to create logical device. Error: {}", dev_ret.error().message());
-        }
-
-        return dev_ret;
-    }
-
-    vkb::Result<VkQueue> _init_queue(const vkb::Device &device, vkb::QueueType type)
-    {
-        auto queue_ret = device.get_queue(type);
-        if (!queue_ret)
-        {
-            spdlog::error("Failed to get queue. Error: {}", queue_ret.error().message());
-        }
-        return queue_ret;
-    }
-
-    vkb::Result<uint32_t> _get_queue_index(const vkb::Device &device, vkb::QueueType type)
-    {
-        auto queue_index_ret = device.get_queue_index(type);
-        if (!queue_index_ret)
-        {
-            spdlog::error("Failed to get queue index. Error: {}", queue_index_ret.error().message());
-        }
-        return queue_index_ret;
-    }
-
-    vkb::Result<VkSurfaceKHR> _init_surface(const vkb::Instance &instance, Engine *engine)
-    {
-        auto handle = engine->getMainWindow();
-        auto surface_ret = engine->createSurfaceVk(handle, instance.instance);
-
-        if (!surface_ret)
-        {
-            return vkb::Result<VkSurfaceKHR>{vkb::Error{}};
-        }
-
-        return vkb::Result<VkSurfaceKHR>{surface_ret};
-    }
-
-    vkb::Result<vkb::Swapchain> _init_swapchain(const vkb::Device &device, VkExtent2D desired_extent)
-    {
-        vkb::SwapchainBuilder swapchain_builder{device};
-        auto swap_ret = swapchain_builder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-                            .set_desired_extent(desired_extent.width, desired_extent.height)
-                            .build();
-        if (!swap_ret)
-        {
-            spdlog::error("Failed to create swapchain. Error: {}", swap_ret.error().message());
-        }
-        return swap_ret;
-    }
-
-    // The caller must make sure the device is idle.
-    vkb::Result<vkb::Swapchain> _recreate_swapchain(const vkb::Device &device, SwapchainVKHandle &old_swapchain, VkExtent2D desired_extent)
-    {
-        vkb::SwapchainBuilder swapchain_builder{device};
-        auto swap_ret = swapchain_builder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-                            .set_desired_extent(desired_extent.width, desired_extent.height)
-                            .set_old_swapchain(old_swapchain.swapchain)
-                            .build();
-        if (!swap_ret)
-        {
-            spdlog::error("Failed to recreate swapchain. Error: {}", swap_ret.error().message());
-        }
-
-        // Passing it as oldSwapchain retired the old swapchain, even if creation failed, so it is
-        // destroyed either way.
-        for (const auto &image : old_swapchain.images)
-        {
-            vkDestroyImageView(device.device, image.view, nullptr);
-        }
-        if (old_swapchain.swapchain.swapchain != VK_NULL_HANDLE)
-            vkb::destroy_swapchain(old_swapchain.swapchain);
-
-        return swap_ret;
-    }
-
-    SwapchainStatus _to_swapchain_status(VkResult result)
-    {
-        switch (result)
-        {
-        case VK_SUCCESS:
-            return SwapchainStatus::OK;
-        case VK_SUBOPTIMAL_KHR:
-            return SwapchainStatus::SUBOPTIMAL;
-        case VK_ERROR_OUT_OF_DATE_KHR:
-            return SwapchainStatus::OUT_OF_DATE;
-        default:
-            return SwapchainStatus::FAILURE;
-        }
-    }
-
-    VkBufferUsageFlags _to_vk_buffer_usage_flags(BufferUsage usage)
-    {
-        // Every buffer is created with the device-address bit so that its GPU address can be
-        // handed to shaders through push constants / other buffers regardless of its primary usage.
-        VkBufferUsageFlags flags = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-
-        switch (usage)
-        {
-        case BufferUsage::VERTEX:
-            return flags | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-        case BufferUsage::INDEX:
-            return flags | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-        case BufferUsage::INDIRECT:
-            return flags | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
-        case BufferUsage::VERTEXINDEX:
-            return flags | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-        case BufferUsage::UNIFORM:
-            return flags | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-        case BufferUsage::STORAGE:
-            return flags | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        case BufferUsage::DEVICE_ADDRESS:
-            return flags;
-        default:
-            return flags;
-        }
-    }
-
-    VkShaderStageFlags _to_vk_shader_stage_flags(ShaderType stage)
-    {
-        switch (stage)
-        {
-        case ShaderType::VERTEX:
-            return VK_SHADER_STAGE_VERTEX_BIT;
-        case ShaderType::FRAGMENT:
-            return VK_SHADER_STAGE_FRAGMENT_BIT;
-        case ShaderType::COMPUTE:
-            return VK_SHADER_STAGE_COMPUTE_BIT;
-        case ShaderType::VERTEX_FRAGMENT:
-            return VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-        default:
-            return static_cast<VkShaderStageFlags>(0);
-        }
-    }
-
-    VkPrimitiveTopology _to_vk_topology(PrimitiveTopology topology)
-    {
-        switch (topology)
-        {
-        case PrimitiveTopology::POINT_LIST:
-            return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
-        case PrimitiveTopology::LINE_LIST:
-            return VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
-        case PrimitiveTopology::LINE_STRIP:
-            return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
-        case PrimitiveTopology::TRIANGLE_LIST:
-            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-        case PrimitiveTopology::TRIANGLE_STRIP:
-            return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
-        default:
-            return VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
-        }
-    }
-
-    VkFormat _to_vk_format(Format format)
-    {
-        switch (format)
-        {
-        case Format::R32G32B32_SFLOAT:
-            return VK_FORMAT_R32G32B32_SFLOAT;
-        case Format::R32G32_SFLOAT:
-            return VK_FORMAT_R32G32_SFLOAT;
-        case Format::R8G8B8A8_UNORM:
-            return VK_FORMAT_R8G8B8A8_UNORM;
-        case Format::R16G16B16A16_SFLOAT:
-            return VK_FORMAT_R16G16B16A16_SFLOAT;
-        case Format::D24_UNORM_S8_UINT:
-            return VK_FORMAT_D24_UNORM_S8_UINT;
-        case Format::D32_SFLOAT_S8_UINT:
-            return VK_FORMAT_D32_SFLOAT_S8_UINT;
-        case Format::R8G8B8A8_SRGB:
-            return VK_FORMAT_R8G8B8A8_SRGB;
-        case Format::B8G8R8A8_SRGB:
-            return VK_FORMAT_B8G8R8A8_SRGB;
-        case Format::R32G32B32A32_SFLOAT:
-            return VK_FORMAT_R32G32B32A32_SFLOAT;
-        case Format::R8G8B8_UNORM:
-            return VK_FORMAT_R8G8B8_UNORM;
-        case Format::UNKNOWN:
-            return VK_FORMAT_UNDEFINED;
-        default:
-            return VK_FORMAT_UNDEFINED;
-        }
-    }
-
-    VkIndexType _to_vk_index_type(Format format)
-    {
-        switch (format)
-        {
-        case Format::U16_UINT:
-            return VK_INDEX_TYPE_UINT16;
-        case Format::U32_UINT:
-            return VK_INDEX_TYPE_UINT32;
-        default:
-            return VK_INDEX_TYPE_MAX_ENUM;
-        }
-    }
-
-    Format _to_format(VkFormat vkFormat)
-    {
-        switch (vkFormat)
-        {
-        case VK_FORMAT_R32G32B32_SFLOAT:
-            return Format::R32G32B32_SFLOAT;
-        case VK_FORMAT_R32G32_SFLOAT:
-            return Format::R32G32_SFLOAT;
-        case VK_FORMAT_R8G8B8A8_UNORM:
-            return Format::R8G8B8A8_UNORM;
-        case VK_FORMAT_R8G8B8A8_SRGB:
-            return Format::R8G8B8A8_SRGB;
-        case VK_FORMAT_B8G8R8A8_SRGB:
-            return Format::B8G8R8A8_SRGB;
-        case VK_FORMAT_R16G16B16A16_SFLOAT:
-            return Format::R16G16B16A16_SFLOAT;
-        case VK_FORMAT_D24_UNORM_S8_UINT:
-            return Format::D24_UNORM_S8_UINT;
-        case VK_FORMAT_R8G8B8_UNORM:
-            return Format::R8G8B8_UNORM;
-        case VK_FORMAT_D32_SFLOAT_S8_UINT:
-            return Format::D32_SFLOAT_S8_UINT;
-        default:
-            return Format::UNKNOWN;
-        }
-    }
-
-    VkImageUsageFlags _to_vk_image_usage_flags(TextureUsage usage)
-    {
-        switch (usage)
-        {
-        case TextureUsage::TRANSFER_SRC:
-            return VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        case TextureUsage::TRANSFER_DST:
-            return VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        case TextureUsage::SAMPLED:
-            // VK_EXT_host_image_copy must be enabled for VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT to be valid.
-            return VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_HOST_TRANSFER_BIT;
-        case TextureUsage::STORAGE:
-            return VK_IMAGE_USAGE_STORAGE_BIT;
-        case TextureUsage::COLOR_ATTACHMENT:
-            return VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-        case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
-            return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-        case TextureUsage::SAMPLED_COLOR_ATTACHMENT:
-            return VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-        case TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT:
-            return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-        case TextureUsage::TRANSIENT_ATTACHMENT:
-            return VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
-        case TextureUsage::INPUT_ATTACHMENT:
-            return VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
-        default:
-            return 0;
-        }
-    }
-
-    VkImageAspectFlags _to_vk_aspect_mask(TextureUsage usage)
-    {
-        switch (usage)
-        {
-        case TextureUsage::COLOR_ATTACHMENT:
-        case TextureUsage::SAMPLED:
-        case TextureUsage::SAMPLED_COLOR_ATTACHMENT:
-            return VK_IMAGE_ASPECT_COLOR_BIT;
-        case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
-            return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-        case TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT:
-            // sampled views may only reference a single aspect
-            return VK_IMAGE_ASPECT_DEPTH_BIT;
-        default:
-            return 0;
-        }
-    }
-
-    VkDescriptorType _to_vk_descriptor_type(ResourceType type)
-    {
-        switch (type)
-        {
-        case ResourceType::BUFFER:
-            return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        case ResourceType::SAMPLER:
-            return VK_DESCRIPTOR_TYPE_SAMPLER;
-        case ResourceType::TEXTURE:
-            return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        default:
-            return VK_DESCRIPTOR_TYPE_MAX_ENUM;
-        }
-    }
-
-    const char *_to_vk_result_string(VkResult result)
-    {
-        switch (result)
-        {
-        case VK_SUCCESS:
-            return "Success";
-        case VK_NOT_READY:
-            return "Not Ready";
-        case VK_TIMEOUT:
-            return "Timeout";
-        case VK_EVENT_SET:
-            return "Event Set";
-        case VK_EVENT_RESET:
-            return "Event Reset";
-        case VK_INCOMPLETE:
-            return "Incomplete";
-        case VK_ERROR_OUT_OF_HOST_MEMORY:
-            return "Out of Host Memory";
-        case VK_ERROR_OUT_OF_DEVICE_MEMORY:
-            return "Out of Device Memory";
-        case VK_ERROR_INITIALIZATION_FAILED:
-            return "Initialization Failed";
-        case VK_ERROR_DEVICE_LOST:
-            return "Device Lost";
-        case VK_ERROR_MEMORY_MAP_FAILED:
-            return "Memory Map Failed";
-        case VK_ERROR_LAYER_NOT_PRESENT:
-            return "Layer Not Present";
-        case VK_ERROR_EXTENSION_NOT_PRESENT:
-            return "Extension Not Present";
-        case VK_ERROR_FEATURE_NOT_PRESENT:
-            return "Feature Not Present";
-        case VK_ERROR_INCOMPATIBLE_DRIVER:
-            return "Incompatible Driver";
-        case VK_ERROR_TOO_MANY_OBJECTS:
-            return "Too Many Objects";
-        case VK_ERROR_FORMAT_NOT_SUPPORTED:
-            return "Format Not Supported";
-        case VK_ERROR_FRAGMENTED_POOL:
-            return "Fragmented Pool";
-        case VK_ERROR_OUT_OF_DATE_KHR:
-            return "Out of Date KHR";
-        case VK_SUBOPTIMAL_KHR:
-            return "Suboptimal KHR";
-        case VK_ERROR_SURFACE_LOST_KHR:
-            return "Surface Lost KHR";
-        default:
-            return "Unknown Error";
-        }
-    }
 }

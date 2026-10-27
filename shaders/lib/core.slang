@@ -6,9 +6,10 @@
 enum VertexFormat : uint32_t { Full, PosOnly };
 
 // Must match rasm::Vertex / rasm::gfx::VertexFull (scalar layout). Unused UV sets are zero.
+// tangent.w is the bitangent sign (±1), or 0 when the mesh has no tangents.
 static const uint MAX_VERTEX_UV_SETS = 3;
 
-struct VertexFull       { float3 pos; float3 normal; float2 uv[MAX_VERTEX_UV_SETS]; };
+struct VertexFull       { float3 pos; float3 normal; float2 uv[MAX_VERTEX_UV_SETS]; float4 tangent; };
 struct VertexPosOnly    { float3 pos; };
 
 struct DrawInfo

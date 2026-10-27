@@ -11,6 +11,18 @@
 
 namespace rasm
 {
+    namespace
+    {
+        // Convert screen coordinates to NDC. Both axes are normalized by the smaller
+        // window dimension so that the virtual trackball stays circular on non-square windows.
+        glm::vec2 toNDC(const glm::vec2 &screenPos, const Window &window)
+        {
+            float minDim = static_cast<float>(std::min(window.width, window.height));
+            float x = (2.0f * screenPos.x - static_cast<float>(window.width)) / minDim;
+            float y = (2.0f * screenPos.y - static_cast<float>(window.height)) / minDim;
+            return glm::vec2(x, y);
+        }
+    }
 
     Window Engine::createWindow(uint32_t width, uint32_t height)
     {
@@ -56,16 +68,6 @@ namespace rasm
             return VK_NULL_HANDLE;
         }
         return surface;
-    }
-
-    // Convert screen coordinates to NDC. Both axes are normalized by the smaller
-    // window dimension so that the virtual trackball stays circular on non-square windows.
-    glm::vec2 toNDC(const glm::vec2 &screenPos, const Window &window)
-    {
-        float minDim = static_cast<float>(std::min(window.width, window.height));
-        float x = (2.0f * screenPos.x - static_cast<float>(window.width)) / minDim;
-        float y = (2.0f * screenPos.y - static_cast<float>(window.height)) / minDim;
-        return glm::vec2(x, y);
     }
 
     void Engine::pollEvents(CameraHandle camera)

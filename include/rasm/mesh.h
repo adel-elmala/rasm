@@ -21,6 +21,7 @@ namespace rasm
         glm::vec3 pos;
         glm::vec3 normal;
         glm::vec2 uv[MAX_VERTEX_UV_SETS];
+        glm::vec4 tangent;      // glTF TANGENT: xyz tangent, w = bitangent sign (±1). w = 0 means none; the shader reconstructs one.
     };
 
     struct ObjRaw
