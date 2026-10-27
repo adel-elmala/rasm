@@ -721,6 +721,22 @@ namespace rasm
         }
     }
 
+    glm::uvec2 RenderContext::getSwapchainExtent()
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+            return vulkanContext.getSwapchainExtent();
+        case Backend::DX12:
+            return {};
+        case Backend::METAL:
+            return {};
+        default:
+            spdlog::error("Unsupported backend during swapchain extent retrieval.");
+            return {};
+        }
+    }
+
     uint64_t RenderContext::getBufferDeviceAddress(const BufferHandle &buffer)
     {
         auto it = bufferCache.find(buffer);
@@ -868,7 +884,7 @@ namespace rasm
         }
     }
 
-    bool RenderContext::acquireNextImage(SemaphoreHandle signalSemaphore, uint64_t timeout, uint32_t &imageIndex)
+    SwapchainStatus RenderContext::acquireNextImage(SemaphoreHandle signalSemaphore, uint64_t timeout, uint32_t &imageIndex)
     {
         switch (backend)
         {
@@ -878,18 +894,18 @@ namespace rasm
             if (it == semaphoreCache.end())
             {
                 spdlog::error("Semaphore handle not found in cache during acquireNextImage.");
-                return false;
+                return SwapchainStatus::FAILURE;
             }
             auto semaphoreVKHandle = it->second;
             return vulkanContext.acquireNextImage(semaphoreVKHandle, timeout, imageIndex);
         }
         case Backend::DX12:
-            return false;
+            return SwapchainStatus::FAILURE;
         case Backend::METAL:
-            return false;
+            return SwapchainStatus::FAILURE;
         default:
             spdlog::error("Unsupported backend during image acquisition.");
-            return false;
+            return SwapchainStatus::FAILURE;
         }
     }
 
@@ -1136,7 +1152,7 @@ namespace rasm
         }
     }
 
-    bool RenderContext::present(uint32_t imageIndex, SemaphoreHandle waitSemaphore)
+    SwapchainStatus RenderContext::present(uint32_t imageIndex, SemaphoreHandle waitSemaphore)
     {
         switch (backend)
         {
@@ -1146,41 +1162,47 @@ namespace rasm
             if (semIt == semaphoreCache.end())
             {
                 spdlog::error("Wait semaphore handle not found in cache during present.");
-                return false;
+                return SwapchainStatus::FAILURE;
             }
             return vulkanContext.present(imageIndex, semIt->second);
         }
         case Backend::DX12:
-            return false;
+            return SwapchainStatus::FAILURE;
         case Backend::METAL:
-            return false;
+            return SwapchainStatus::FAILURE;
         default:
             spdlog::error("Unsupported backend during present.");
-            return false;
+            return SwapchainStatus::FAILURE;
         }
     }
 
-    bool RenderContext::recreateSwapchain()
+    SwapchainStatus RenderContext::recreateSwapchain()
     {
         switch (backend)
         {
         case Backend::VULKAN:
         {
-            auto swapchain = vulkanContext.recreateSwapchain();
-            if (!swapchain)
-            {
+            auto status = vulkanContext.recreateSwapchain();
+            if (status == SwapchainStatus::FAILURE)
                 spdlog::error("Failed to recreate Vulkan swapchain.");
-                return false;
+
+            // OUT_OF_DATE means the old swapchain was kept. Otherwise its images are gone, so drop
+            // their handles (B5).
+            if (status != SwapchainStatus::OUT_OF_DATE)
+            {
+                for (const auto &[handle, image] : swapchainImageCache)
+                    textureCache.erase(handle);
+                swapchainImageCache.clear();
             }
-            return true;
+            return status;
         }
         case Backend::DX12:
-            return false;
+            return SwapchainStatus::FAILURE;
         case Backend::METAL:
-            return false;
+            return SwapchainStatus::FAILURE;
         default:
             spdlog::error("Unsupported backend during swapchain recreation.");
-            return false;
+            return SwapchainStatus::FAILURE;
         }
     }
 
