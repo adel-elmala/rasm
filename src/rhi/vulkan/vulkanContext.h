@@ -80,7 +80,7 @@ namespace rasm
             bool                                       present(uint32_t imageIndex, const SemaphoreVKHandle& waitSemaphore);
 
         private:
-            void                                        setObjectName(VkObjectType type, uint64_t handle, const std::string& name);
+            void                                       setObjectName(VkObjectType type, uint64_t handle, const std::string& name);
 
             Engine*             engine                      = nullptr;
             VmaAllocator        allocator                   = {};
