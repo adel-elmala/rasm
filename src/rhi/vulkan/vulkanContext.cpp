@@ -15,7 +15,7 @@ namespace rasm::gfx
     // clang-format off
 
     // Forward declarations of private helper functions for Vulkan setup and management.
-    vkb::Result<vkb::Instance>          _init_instance(const char* app_name, bool enable_validation_layers);
+    vkb::Result<vkb::Instance>          _init_instance(const char* app_name, bool enable_validation_layers, bool& debug_utils_enabled);
     vkb::Result<vkb::PhysicalDevice>    _init_physical_device(const vkb::Instance& vkb_instance, VkSurfaceKHR surface);
     vkb::Result<vkb::Device>            _init_logical_device(const vkb::PhysicalDevice& physical_device);
     vkb::Result<VkQueue>                _init_queue(const vkb::Device& device, vkb::QueueType type);
@@ -48,7 +48,7 @@ namespace rasm::gfx
         auto config = engine->getConfig();
 
         // create Vulkan instance
-        auto vkb_instance = _init_instance(config.appName.c_str(), config.enableValidation);
+        auto vkb_instance = _init_instance(config.appName.c_str(), config.enableValidation, this->debug_utils_enabled);
 
         if (!vkb_instance)
             return false;
@@ -222,14 +222,7 @@ namespace rasm::gfx
         bufferAddressInfo.buffer = buffer;
         desc.buffer.deviceAddress = vkGetBufferDeviceAddress(this->device.device, &bufferAddressInfo);
 
-        // Set a debug name for the buffer
-        VkDebugUtilsObjectNameInfoEXT bufferNameInfo = {};
-        bufferNameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
-        bufferNameInfo.objectType = VK_OBJECT_TYPE_BUFFER;
-        bufferNameInfo.objectHandle = (uint64_t)buffer;
-        bufferNameInfo.pObjectName = desc.name.c_str();
-
-        this->dispatch_table.setDebugUtilsObjectNameEXT(&bufferNameInfo);
+        setObjectName(VK_OBJECT_TYPE_BUFFER, (uint64_t)buffer, desc.name);
 
         BufferVKHandle rawHandle = {desc, {}, buffer, allocation, allocInfo};
         return rawHandle;
@@ -408,22 +401,8 @@ namespace rasm::gfx
             }
         }
 
-        // Set a debug name for the image
-        VkDebugUtilsObjectNameInfoEXT imageNameInfo = {};
-        imageNameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
-        imageNameInfo.objectType = VK_OBJECT_TYPE_IMAGE;
-        imageNameInfo.objectHandle = (uint64_t)image;
-        imageNameInfo.pObjectName = desc.name.c_str();
-
-        // Set a debug name for the image view
-        VkDebugUtilsObjectNameInfoEXT imageViewNameInfo = {};
-        imageViewNameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
-        imageViewNameInfo.objectType = VK_OBJECT_TYPE_IMAGE_VIEW;
-        imageViewNameInfo.objectHandle = (uint64_t)imageView;
-        imageViewNameInfo.pObjectName = desc.name.c_str();
-
-        this->dispatch_table.setDebugUtilsObjectNameEXT(&imageNameInfo);
-        this->dispatch_table.setDebugUtilsObjectNameEXT(&imageViewNameInfo);
+        setObjectName(VK_OBJECT_TYPE_IMAGE, (uint64_t)image, desc.name);
+        setObjectName(VK_OBJECT_TYPE_IMAGE_VIEW, (uint64_t)imageView, desc.name);
 
         TextureVKHandle rawHandle = {desc, {}, image, imageView, sampler, allocation, mipLevels};
         return rawHandle;
@@ -446,14 +425,7 @@ namespace rasm::gfx
             return {};
         }
 
-        // Set a debug name for the shader module
-        VkDebugUtilsObjectNameInfoEXT shaderNameInfo = {};
-        shaderNameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
-        shaderNameInfo.objectType = VK_OBJECT_TYPE_SHADER_MODULE;
-        shaderNameInfo.objectHandle = (uint64_t)shaderModule;
-        shaderNameInfo.pObjectName = desc.name.c_str();
-
-        this->dispatch_table.setDebugUtilsObjectNameEXT(&shaderNameInfo);
+        setObjectName(VK_OBJECT_TYPE_SHADER_MODULE, (uint64_t)shaderModule, desc.name);
 
         ShaderVKHandle rawHandle = {desc, {}, shaderModule};
         return rawHandle;
@@ -634,14 +606,7 @@ namespace rasm::gfx
             return {};
         }
 
-        // Set a debug name for the pipeline
-        VkDebugUtilsObjectNameInfoEXT pipelineNameInfo = {};
-        pipelineNameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
-        pipelineNameInfo.objectType = VK_OBJECT_TYPE_PIPELINE;
-        pipelineNameInfo.objectHandle = (uint64_t)pipeline;
-        pipelineNameInfo.pObjectName = desc.name.c_str();
-
-        this->dispatch_table.setDebugUtilsObjectNameEXT(&pipelineNameInfo);
+        setObjectName(VK_OBJECT_TYPE_PIPELINE, (uint64_t)pipeline, desc.name);
 
         PipelineVKHandle rawHandle = {desc, {}, pipeline, pipelineLayout};
         return rawHandle;
@@ -1348,12 +1313,28 @@ namespace rasm::gfx
         return vramStats;
     }
 
+    void VulkanContext::setObjectName(VkObjectType type, uint64_t handle, const std::string &name)
+    {
+        // Skip naming when the extension is not enabled; the function pointer is null or invalid then (B3)
+        if (!this->debug_utils_enabled || !this->dispatch_table.fp_vkSetDebugUtilsObjectNameEXT || name.empty())
+            return;
+
+        VkDebugUtilsObjectNameInfoEXT nameInfo = {VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT};
+        nameInfo.objectType = type;
+        nameInfo.objectHandle = handle;
+        nameInfo.pObjectName = name.c_str();
+
+        this->dispatch_table.setDebugUtilsObjectNameEXT(&nameInfo);
+    }
+
     // ----------------------------------------------------------
     // private helper functions for Vulkan setup and management.
     // ----------------------------------------------------------
 
-    vkb::Result<vkb::Instance> _init_instance(const char *app_name, bool enable_validation_layers)
+    vkb::Result<vkb::Instance> _init_instance(const char *app_name, bool enable_validation_layers, bool &debug_utils_enabled)
     {
+        debug_utils_enabled = false;
+
         vkb::InstanceBuilder instance_builder;
 
         auto system_info_ret = vkb::SystemInfo::get_system_info();
@@ -1371,12 +1352,21 @@ namespace rasm::gfx
         //     instance_builder.enable_layer("VK_LAYER_LUNARG_api_dump");
         // }
 
+        // Debug utils is cheap, so enable it whenever it is available: object names show up in
+        // RenderDoc / Nsight even without validation (B3).
+        if (system_info.debug_utils_available)
+        {
+            instance_builder.enable_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+            debug_utils_enabled = true;
+        }
+
         if (enable_validation_layers && system_info.validation_layers_available)
         {
-            instance_builder.enable_validation_layers()
-                // Validation needs to send errors via a callback, have vk-bootstrap do it
-                .use_default_debug_messenger()
-                .enable_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+            instance_builder.enable_validation_layers();
+
+            // Validation needs to send errors via a callback, have vk-bootstrap do it
+            if (debug_utils_enabled)
+                instance_builder.use_default_debug_messenger();
         }
 
         // instance level extension
