@@ -73,7 +73,9 @@ namespace rasm {
         void                        setCameraTransform(CameraHandle camera, Transform transform);
         void                        setCameraProjection(CameraHandle camera, CameraProjection projection);
         void                        setCameraController(CameraHandle camera, CameraController controller);
-        void                        beginFrame(CameraHandle camera);
+        // Returns false when the frame must be skipped (minimized, swapchain out of date); then do not
+        // record anything or call endFrame.
+        [[nodiscard]] bool          beginFrame(CameraHandle camera);
         void                        beginOffscreenFrame(const RenderTargetHandle& renderTarget, CameraHandle camera);
         void                        endOffscreenFrame();
         void                        endFrame();
@@ -83,7 +85,7 @@ namespace rasm {
         void                        render2(SceneHandle scene, CameraHandle camera);
         void                        render(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget);
         bool                        running() const;
-        void                        recreateSwapchain();
+        bool                        recreateSwapchain();
         void                        setRenderTarget(const RenderTargetHandle& renderTarget);
         void                        resetRenderTarget();
         void                        setScene(SceneHandle scene);
@@ -113,6 +115,8 @@ namespace rasm {
         GLTFRaw                        processMesh(const Mesh &mesh);
 
     protected:
+        bool                                                        createSwapchainResources();
+
         EngineConfig                                                config                                  = {};
         Profiler                                                    profiler                                = {};
         FrameResources                                              frameResources[MAX_FRAMES_IN_FLIGHT]    = {}; // Double buffering
@@ -132,6 +136,7 @@ namespace rasm {
         uint64_t                                                    frameCount                              = 0;
         uint32_t                                                    imageIdx                                = 0;
         bool                                                        isRunning                               = false;
+        bool                                                        swapchainOutOfDate                      = false;
 
     private:
         struct Registery

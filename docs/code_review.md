@@ -123,14 +123,14 @@ Next steps, in order:
 
 *Fix:* always enable `VK_EXT_debug_utils` when it is available (it is cheap), and skip naming when it is not.
 
-**B4 — Swapchain acquire and present results are ignored; the fence is reset before acquire.** *Confirmed.*
+**B4 — Swapchain acquire and present results are ignored; the fence is reset before acquire.** *Fixed 2026-10-27:* acquire, present and recreation return `SwapchainStatus`. `beginFrame` waits on the fence, acquires, and resets the fence only after a successful acquire. It returns `false` to skip the frame on `OUT_OF_DATE`. `SUBOPTIMAL` from acquire and `SUBOPTIMAL`/`OUT_OF_DATE` from present set `swapchainOutOfDate`, and the swapchain is recreated at the start of the next frame. The original finding follows.
 - `beginFrame` waits on and resets `inFlightFence`, then ignores the result of `acquireNextImage` ([engine.cpp:310-326](../src/engine.cpp#L310-L326)). `present` failures are only logged ([vulkanContext.cpp:1162-1168](../src/rhi/vulkan/vulkanContext.cpp#L1162-L1168)).
 - On `VK_ERROR_OUT_OF_DATE_KHR` the image-acquired semaphore is never signaled, yet the frame still submits work that waits on it. That is invalid usage and can hang.
 - `VK_SUBOPTIMAL_KHR` is treated as an error.
 
 *Fix:* acquire first. On `OUT_OF_DATE`, recreate the swapchain and skip the frame. Reset the fence only after a successful acquire. Recreate on `SUBOPTIMAL` or `OUT_OF_DATE` from present.
 
-**B5 — Resize and minimize can destroy the swapchain, and leak.** *Confirmed (failure path), Likely (trigger).*
+**B5 — Resize and minimize can destroy the swapchain, and leak.** *Fixed 2026-10-27:* frames are skipped while the window is minimized or 0×0, and `pollEvents` blocks for events instead of spinning. `VulkanContext::recreateSwapchain` keeps the old swapchain when the surface extent is 0 (`OUT_OF_DATE`). When creation fails it destroys the retired swapchain and leaves none, so acquire reports `OUT_OF_DATE` and the engine retries. `get_images`/`get_image_views` are checked. `RenderContext::recreateSwapchain` drops the old swapchain image handles from `textureCache`. The depth textures were already destroyed on resize (`B1`). The original finding follows.
 - Minimizing gives a 0×0 extent, so swapchain creation fails. `_recreate_swapchain` destroys the old swapchain anyway ([vulkanContext.cpp:1561-1568](../src/rhi/vulkan/vulkanContext.cpp#L1561-L1568)), `Engine::recreateSwapchain` ignores the failure ([engine.cpp:454](../src/engine.cpp#L454)), and the next acquire uses a destroyed swapchain.
 - `get_images().value()` is called unchecked ([vulkanContext.cpp:862-863](../src/rhi/vulkan/vulkanContext.cpp#L862-L863)).
 - Every resize leaks the previous depth textures ([engine.cpp:471-482](../src/engine.cpp#L471-L482)) and leaves stale swapchain `TextureVKHandle`s in `textureCache` ([renderContext.cpp:631-637](../src/rhi/renderContext.cpp#L631-L637)).
@@ -190,7 +190,7 @@ Next steps, in order:
 
 **B16** — For an empty scene, `prepareScene` requests zero-sized buffers. Creation fails, the result is not cached, and every frame retries and logs errors. Then `render2` binds an invalid pipeline ([scene.cpp:199-233](../src/scene/scene.cpp#L199-L233)).
 
-**B17** — Resize uses `SDL_EVENT_WINDOW_RESIZED`, which reports logical size ([window.cpp:116-122](../src/platform/window.cpp#L116-L122)). The depth texture and viewport use `mainWindow` size, while the swapchain extent comes from the surface. On scaled or HiDPI displays they can disagree. Use `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` / `SDL_GetWindowSizeInPixels`, and size everything from the swapchain extent. *Likely.*
+**B17** — *Fixed 2026-10-27:* `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` triggers recreation. `Window` has `pixelWidth`/`pixelHeight` (the swapchain's desired extent) next to the logical `width`/`height` used for mouse input. Depth textures, viewport, scissor and camera aspect come from the swapchain extent (`Swapchain::width`/`height`). The original finding follows. Resize uses `SDL_EVENT_WINDOW_RESIZED`, which reports logical size ([window.cpp:116-122](../src/platform/window.cpp#L116-L122)). The depth texture and viewport use `mainWindow` size, while the swapchain extent comes from the surface. On scaled or HiDPI displays they can disagree. Use `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` / `SDL_GetWindowSizeInPixels`, and size everything from the swapchain extent. *Likely.*
 
 ---
 

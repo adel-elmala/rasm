@@ -65,6 +65,15 @@ namespace rasm
         LINE_STRIP,
     };
 
+    // Result of acquire, present and swapchain recreation.
+    enum class SwapchainStatus
+    {
+        OK,
+        SUBOPTIMAL,     // the image was acquired/presented, but the swapchain should be recreated
+        OUT_OF_DATE,    // the swapchain is unusable (or the surface is 0x0) until it is recreated
+        FAILURE
+    };
+
     struct EngineConfig
     {
         std::string appName             = {};
@@ -89,6 +98,8 @@ namespace rasm
         std::vector<TextureHandle>      imageHandles;
         std::vector<SemaphoreHandle>    readyToPresentSemaphores;
         Format                          imageFormat;
+        uint32_t                        width   = 0; // swapchain extent in pixels
+        uint32_t                        height  = 0;
     };
 
     struct TextureRaw

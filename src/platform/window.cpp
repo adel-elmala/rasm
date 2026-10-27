@@ -28,10 +28,21 @@ namespace rasm
             return Window{};
         }
 
+        int pixelWidth = 0;
+        int pixelHeight = 0;
+        if (!SDL_GetWindowSizeInPixels(wind, &pixelWidth, &pixelHeight))
+        {
+            spdlog::warn("Failed to query window size in pixels: {}", SDL_GetError());
+            pixelWidth = static_cast<int>(width);
+            pixelHeight = static_cast<int>(height);
+        }
+
         Window window{};
         window.handle = {.index = reinterpret_cast<uint64_t>(wind), .generation = 1}; // Placeholder handle generation logic
         window.width = width;
         window.height = height;
+        window.pixelWidth = static_cast<uint32_t>(pixelWidth);
+        window.pixelHeight = static_cast<uint32_t>(pixelHeight);
 
         return window;
     }
@@ -64,6 +75,10 @@ namespace rasm
         glm::vec2 dragStart = mainWindow.lastMousePos;
         glm::vec2 dragEnd = mainWindow.lastMousePos;
         float wheelDelta = 0.0f;
+
+        // Nothing is rendered while minimized, so block until an event arrives instead of spinning.
+        if (mainWindow.minimized)
+            SDL_WaitEventTimeout(nullptr, 100);
 
         SDL_Event event;
         while (SDL_PollEvent(&event))
@@ -115,10 +130,28 @@ namespace rasm
             }
             case SDL_EVENT_WINDOW_RESIZED:
             {
-                mainWindow.resized = true;
+                // Logical size, only used for mouse coordinates.
                 mainWindow.width = event.window.data1;
                 mainWindow.height = event.window.data2;
-                updateCameraAspectRatio(static_cast<float>(mainWindow.width) / static_cast<float>(mainWindow.height));
+                break;
+            }
+            case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+            {
+                // The swapchain, depth textures, viewport and camera aspect follow the pixel size (B17).
+                mainWindow.resized = true;
+                mainWindow.pixelWidth = event.window.data1;
+                mainWindow.pixelHeight = event.window.data2;
+                break;
+            }
+            case SDL_EVENT_WINDOW_MINIMIZED:
+            {
+                mainWindow.minimized = true;
+                break;
+            }
+            case SDL_EVENT_WINDOW_RESTORED:
+            case SDL_EVENT_WINDOW_MAXIMIZED:
+            {
+                mainWindow.minimized = false;
                 break;
             }
             case SDL_EVENT_WINDOW_FOCUS_LOST:

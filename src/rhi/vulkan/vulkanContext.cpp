@@ -21,8 +21,9 @@ namespace rasm::gfx
     vkb::Result<VkQueue>                _init_queue(const vkb::Device& device, vkb::QueueType type);
     vkb::Result<uint32_t>               _get_queue_index(const vkb::Device& device, vkb::QueueType type);
     vkb::Result<VkSurfaceKHR>           _init_surface(const vkb::Instance& instance, Engine* engine);
-    vkb::Result<vkb::Swapchain>         _init_swapchain(const vkb::Device& device);
-    vkb::Result<vkb::Swapchain>         _recreate_swapchain(const vkb::Device& device, SwapchainVKHandle& old_swapchain);
+    vkb::Result<vkb::Swapchain>         _init_swapchain(const vkb::Device& device, VkExtent2D desired_extent);
+    vkb::Result<vkb::Swapchain>         _recreate_swapchain(const vkb::Device& device, SwapchainVKHandle& old_swapchain, VkExtent2D desired_extent);
+    SwapchainStatus                     _to_swapchain_status(VkResult result);
     VkBufferUsageFlags                  _to_vk_buffer_usage_flags(BufferUsage usage);
     VkImageUsageFlags                   _to_vk_image_usage_flags(TextureUsage usage);
     VkFormat                            _to_vk_format(Format format);
@@ -97,43 +98,14 @@ namespace rasm::gfx
         this->graphics_queue_family_index = graphics_queue_index_result.value();
 
         // create swapchain
-        auto vkb_swapchain = _init_swapchain(vkb_device.value());
+        auto vkb_swapchain = _init_swapchain(vkb_device.value(), getDesiredSwapchainExtent());
 
         if (!vkb_swapchain)
             return false;
 
         this->swapchain.swapchain = vkb_swapchain.value();
-        this->swapchain.imageFormat = _to_format(swapchain.swapchain.image_format);
-        this->swapchain.imageCount = swapchain.swapchain.image_count;
-        auto imagesResult = swapchain.swapchain.get_images();
-        if (!imagesResult)
-        {
-            spdlog::error("Failed to get swapchain images: {}", imagesResult.error().message());
+        if (!loadSwapchainImages())
             return false;
-        }
-        auto viewsResult = swapchain.swapchain.get_image_views();
-        if (!viewsResult)
-        {
-            spdlog::error("Failed to get swapchain image views: {}", viewsResult.error().message());
-            return false;
-        }
-        const auto &images = imagesResult.value();
-        const auto &views = viewsResult.value();
-
-        for (uint32_t i = 0; i < swapchain.swapchain.image_count; ++i)
-        {
-            TextureVKHandle imageHandle;
-            imageHandle.handle = {};
-            imageHandle.image = images[i];
-            imageHandle.view = views[i];
-            imageHandle.desc.type = ResourceType::TEXTURE;
-            imageHandle.desc.texture.width = swapchain.swapchain.extent.width;
-            imageHandle.desc.texture.height = swapchain.swapchain.extent.height;
-            imageHandle.desc.texture.format = swapchain.imageFormat;
-            imageHandle.desc.texture.usage = TextureUsage::COLOR_ATTACHMENT;
-
-            this->swapchain.images.push_back(imageHandle);
-        }
 
         // create VMA allocator
         VmaVulkanFunctions vkFunctions{
@@ -810,24 +782,69 @@ namespace rasm::gfx
         return _to_format(swapchain.swapchain.image_format);
     }
 
-    std::optional<SwapchainVKHandle> VulkanContext::recreateSwapchain()
+    glm::uvec2 VulkanContext::getSwapchainExtent()
     {
-        auto swapchain_ret = _recreate_swapchain(this->device, this->swapchain);
+        return {swapchain.swapchain.extent.width, swapchain.swapchain.extent.height};
+    }
 
-        if (!swapchain_ret)
+    SwapchainStatus VulkanContext::recreateSwapchain()
+    {
+        waitIdle();
+
+        // A minimized window has a 0x0 surface, and no swapchain can be created for it. Keep the
+        // old swapchain until the surface has pixels again (B5).
+        VkSurfaceCapabilitiesKHR capabilities{};
+        auto capsResult = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device.physical_device, surface, &capabilities);
+        if (capsResult != VK_SUCCESS)
         {
-            spdlog::error("Failed to recreate swapchain.");
-            return {};
+            spdlog::error("Failed to query surface capabilities. Error: {}", _to_vk_result_string(capsResult));
+            return SwapchainStatus::FAILURE;
         }
+        if (capabilities.currentExtent.width == 0 || capabilities.currentExtent.height == 0)
+            return SwapchainStatus::OUT_OF_DATE;
+
+        auto swapchain_ret = _recreate_swapchain(this->device, this->swapchain, getDesiredSwapchainExtent());
+
+        // The old swapchain is retired and destroyed even when creation fails. Without a swapchain,
+        // acquire reports OUT_OF_DATE so the caller keeps trying to recreate it.
+        this->swapchain = {};
+        if (!swapchain_ret)
+            return SwapchainStatus::FAILURE;
 
         this->swapchain.swapchain = swapchain_ret.value();
+        if (!loadSwapchainImages())
+        {
+            for (const auto &image : swapchain.images)
+                vkDestroyImageView(device.device, image.view, nullptr);
+            vkb::destroy_swapchain(swapchain.swapchain);
+            this->swapchain = {};
+            return SwapchainStatus::FAILURE;
+        }
+
+        return SwapchainStatus::OK;
+    }
+
+    bool VulkanContext::loadSwapchainImages()
+    {
         this->swapchain.imageFormat = _to_format(swapchain.swapchain.image_format);
         this->swapchain.imageCount = swapchain.swapchain.image_count;
-
-        auto images = swapchain.swapchain.get_images().value();
-        auto views = swapchain.swapchain.get_image_views().value();
-
         this->swapchain.images.clear();
+
+        auto imagesResult = swapchain.swapchain.get_images();
+        if (!imagesResult)
+        {
+            spdlog::error("Failed to get swapchain images: {}", imagesResult.error().message());
+            return false;
+        }
+        auto viewsResult = swapchain.swapchain.get_image_views();
+        if (!viewsResult)
+        {
+            spdlog::error("Failed to get swapchain image views: {}", viewsResult.error().message());
+            return false;
+        }
+        const auto &images = imagesResult.value();
+        const auto &views = viewsResult.value();
+
         for (uint32_t i = 0; i < swapchain.swapchain.image_count; ++i)
         {
             TextureVKHandle imageHandle;
@@ -842,8 +859,14 @@ namespace rasm::gfx
 
             this->swapchain.images.push_back(imageHandle);
         }
+        return true;
+    }
 
-        return this->swapchain;
+    // Only used when the surface leaves the extent to the swapchain (currentExtent == 0xFFFFFFFF, e.g. Wayland).
+    VkExtent2D VulkanContext::getDesiredSwapchainExtent() const
+    {
+        const auto &window = engine->getMainWindow();
+        return {window.pixelWidth, window.pixelHeight};
     }
 
     void VulkanContext::fillBuffer(const BufferVKHandle &buffer, const void *data, size_t size, size_t offset)
@@ -1114,8 +1137,11 @@ namespace rasm::gfx
         }
         return true;
     }
-    bool VulkanContext::present(uint32_t imageIndex, const SemaphoreVKHandle &waitSemaphore)
+    SwapchainStatus VulkanContext::present(uint32_t imageIndex, const SemaphoreVKHandle &waitSemaphore)
     {
+        if (swapchain.swapchain.swapchain == VK_NULL_HANDLE)
+            return SwapchainStatus::OUT_OF_DATE;
+
         VkPresentInfoKHR presentInfo = {
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
             .waitSemaphoreCount = 1,
@@ -1125,12 +1151,10 @@ namespace rasm::gfx
             .pImageIndices = &imageIndex};
 
         auto result = vkQueuePresentKHR(this->graphics_queue, &presentInfo);
-        if (result != VK_SUCCESS)
-        {
+        auto status = _to_swapchain_status(result);
+        if (status == SwapchainStatus::FAILURE)
             spdlog::error("Failed to present swapchain image. Error: {}", _to_vk_result_string(result));
-            return false;
-        }
-        return true;
+        return status;
     }
 
     void VulkanContext::removeBuffer(const BufferVKHandle &buffer)
@@ -1263,16 +1287,16 @@ namespace rasm::gfx
         return true;
     }
 
-    bool VulkanContext::acquireNextImage(const SemaphoreVKHandle &semaphore, uint64_t timeout, uint32_t &imageIndex)
+    SwapchainStatus VulkanContext::acquireNextImage(const SemaphoreVKHandle &semaphore, uint64_t timeout, uint32_t &imageIndex)
     {
-        auto result = vkAcquireNextImageKHR(this->device.device, this->swapchain.swapchain, timeout, semaphore.semaphore, VK_NULL_HANDLE, &imageIndex);
+        if (swapchain.swapchain.swapchain == VK_NULL_HANDLE)
+            return SwapchainStatus::OUT_OF_DATE;
 
-        if (result != VK_SUCCESS)
-        {
+        auto result = vkAcquireNextImageKHR(this->device.device, this->swapchain.swapchain, timeout, semaphore.semaphore, VK_NULL_HANDLE, &imageIndex);
+        auto status = _to_swapchain_status(result);
+        if (status == SwapchainStatus::FAILURE)
             spdlog::error("Failed to acquire next image. Error: {}", _to_vk_result_string(result));
-            return false;
-        }
-        return true;
+        return status;
     }
 
     VRAMStats VulkanContext::queryVRAMStats()
@@ -1531,10 +1555,12 @@ namespace rasm::gfx
         return vkb::Result<VkSurfaceKHR>{surface_ret};
     }
 
-    vkb::Result<vkb::Swapchain> _init_swapchain(const vkb::Device &device)
+    vkb::Result<vkb::Swapchain> _init_swapchain(const vkb::Device &device, VkExtent2D desired_extent)
     {
         vkb::SwapchainBuilder swapchain_builder{device};
-        auto swap_ret = swapchain_builder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}).build();
+        auto swap_ret = swapchain_builder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+                            .set_desired_extent(desired_extent.width, desired_extent.height)
+                            .build();
         if (!swap_ret)
         {
             spdlog::error("Failed to create swapchain. Error: {}", swap_ret.error().message());
@@ -1542,28 +1568,44 @@ namespace rasm::gfx
         return swap_ret;
     }
 
-    vkb::Result<vkb::Swapchain> _recreate_swapchain(const vkb::Device &device, SwapchainVKHandle &old_swapchain)
+    // The caller must make sure the device is idle.
+    vkb::Result<vkb::Swapchain> _recreate_swapchain(const vkb::Device &device, SwapchainVKHandle &old_swapchain, VkExtent2D desired_extent)
     {
-        vkDeviceWaitIdle(device.device);
-
         vkb::SwapchainBuilder swapchain_builder{device};
-        auto swap_ret = swapchain_builder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}).set_old_swapchain(old_swapchain.swapchain).build();
+        auto swap_ret = swapchain_builder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+                            .set_desired_extent(desired_extent.width, desired_extent.height)
+                            .set_old_swapchain(old_swapchain.swapchain)
+                            .build();
         if (!swap_ret)
         {
             spdlog::error("Failed to recreate swapchain. Error: {}", swap_ret.error().message());
-            // If it failed to create a swapchain, the old swapchain handle is invalid.
-            old_swapchain.swapchain.swapchain = VK_NULL_HANDLE;
         }
-        // Even though we recycled the previous swapchain, we need to free its resources.
-        vkb::destroy_swapchain(old_swapchain.swapchain);
 
+        // Passing it as oldSwapchain retired the old swapchain, even if creation failed, so it is
+        // destroyed either way.
         for (const auto &image : old_swapchain.images)
         {
             vkDestroyImageView(device.device, image.view, nullptr);
         }
+        if (old_swapchain.swapchain.swapchain != VK_NULL_HANDLE)
+            vkb::destroy_swapchain(old_swapchain.swapchain);
 
-        // Get the new swapchain and place it in our variable
         return swap_ret;
+    }
+
+    SwapchainStatus _to_swapchain_status(VkResult result)
+    {
+        switch (result)
+        {
+        case VK_SUCCESS:
+            return SwapchainStatus::OK;
+        case VK_SUBOPTIMAL_KHR:
+            return SwapchainStatus::SUBOPTIMAL;
+        case VK_ERROR_OUT_OF_DATE_KHR:
+            return SwapchainStatus::OUT_OF_DATE;
+        default:
+            return SwapchainStatus::FAILURE;
+        }
     }
 
     VkBufferUsageFlags _to_vk_buffer_usage_flags(BufferUsage usage)
@@ -1805,6 +1847,10 @@ namespace rasm::gfx
             return "Fragmented Pool";
         case VK_ERROR_OUT_OF_DATE_KHR:
             return "Out of Date KHR";
+        case VK_SUBOPTIMAL_KHR:
+            return "Suboptimal KHR";
+        case VK_ERROR_SURFACE_LOST_KHR:
+            return "Surface Lost KHR";
         default:
             return "Unknown Error";
         }
