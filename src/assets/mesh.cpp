@@ -200,7 +200,7 @@ namespace rasm
         return BufferHandle{};
     }
 
-    std::vector<SubGLTFRaw> Engine::extractGLTFRaws(const tinygltf::Model &model, uint32_t meshIndex, const glm::mat4 &globalTransform)
+    std::vector<SubGLTFRaw> Engine::extractGLTFRaws(const tinygltf::Model &model, uint32_t meshIndex, const glm::mat4 &globalTransform, GltfImportCache &cache)
     {
         std::vector<SubGLTFRaw> subGltfs;
 
@@ -363,7 +363,7 @@ namespace rasm
 
             // --- 3. EXTRACT MATERIAL INFO (if any)
             int materialIndex = primitive.material;
-            MaterialHandle materialHandle = loadMaterial(model, materialIndex);
+            MaterialHandle materialHandle = loadMaterial(model, materialIndex, cache);
             subGltfs.push_back({{vertices, indices}, globalTransform, materialHandle});
         }
 
@@ -406,7 +406,7 @@ namespace rasm
     }
 
     // Recursive function to traverse the scene graph node tree
-    std::vector<SubGLTFRaw> Engine::traverseNodes(const tinygltf::Model &model, int nodeIndex, const glm::mat4 &parentTransform)
+    std::vector<SubGLTFRaw> Engine::traverseNodes(const tinygltf::Model &model, int nodeIndex, const glm::mat4 &parentTransform, GltfImportCache &cache)
     {
         if (nodeIndex < 0 || nodeIndex >= model.nodes.size())
             return {};
@@ -421,14 +421,14 @@ namespace rasm
         // If this node instantiates a mesh, we now have its world transform!
         if (node.mesh >= 0)
         {
-            auto extractedRaws = extractGLTFRaws(model, node.mesh, globalTransform);
+            auto extractedRaws = extractGLTFRaws(model, node.mesh, globalTransform, cache);
             subGltfs.insert(subGltfs.end(), extractedRaws.begin(), extractedRaws.end());
         }
 
         // Recursively process all child nodes
         for (int childIndex : node.children)
         {
-            auto childRaws = traverseNodes(model, childIndex, globalTransform);
+            auto childRaws = traverseNodes(model, childIndex, globalTransform, cache);
             subGltfs.insert(subGltfs.end(), childRaws.begin(), childRaws.end());
         }
         return subGltfs;
@@ -451,18 +451,12 @@ namespace rasm
         // OBJ loader does per-vertex. Applied on the left so it acts after the glTF node hierarchy.
         const glm::mat4 rootTransform = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, 1.0f));
 
-        // Models are loaded into a local, so consecutive models can share an address: start each with an empty image cache.
-        registery.gltfImportModel = &model;
-        registery.gltfImageTextures.clear();
-
+        GltfImportCache cache;
         for (int rootNodeIndex : scene.nodes)
         {
-            auto extractedRaws = traverseNodes(model, rootNodeIndex, rootTransform);
+            auto extractedRaws = traverseNodes(model, rootNodeIndex, rootTransform, cache);
             gltfRaw.subGltfRaws.insert(gltfRaw.subGltfRaws.end(), extractedRaws.begin(), extractedRaws.end());
         }
-
-        registery.gltfImportModel = nullptr;
-        registery.gltfImageTextures.clear();
 
         return gltfRaw;
     }

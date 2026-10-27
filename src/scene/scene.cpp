@@ -272,15 +272,9 @@ namespace rasm
         modelData.worldMatrix = model;
         modelData.normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
         modelData.vertFormat = gfx::VertexFormat::Full;
-        if (subGLTF.material.isValid())
-        {
-          modelData.material = convertToGfxMaterial(getMaterial(subGLTF.material));
-        }
-        else
-        {
-          // Use a default material if the subGLTF material is not valid.
-          modelData.material = convertToGfxMaterial(getMaterial(sceneEntity.material));
-        }
+        // Primitives without a material use the entity's; getMaterial resolves an invalid one to the default material.
+        auto material = subGLTF.material.isValid() ? subGLTF.material : sceneEntity.material;
+        modelData.material = convertToGfxMaterial(getMaterial(material));
 
         for (auto buffer : preparedScene.megaModelDataBuffer)
           ctx.fillBuffer(buffer, &modelData, sizeof(modelData), modelBufferOffset);

@@ -7,6 +7,7 @@
 #include "rasm/material.h"
 
 #include <variant>
+#include <unordered_map>
 
 
 namespace rasm
@@ -56,6 +57,14 @@ namespace rasm
     {
         uint64_t verticesByteSize;
         uint64_t indicesByteSize;
+    };
+
+    // Materials and textures created while importing one glTF model, so primitives that share a material
+    // (and materials that share an image) create it once. Textures are keyed by (image index << 1 | sRGB).
+    struct GltfImportCache
+    {
+        std::unordered_map<int, MaterialHandle>         materials;
+        std::unordered_map<uint64_t, TextureHandle>     imageTextures;
     };
 
 }
