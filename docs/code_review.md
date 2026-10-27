@@ -116,7 +116,7 @@ Next steps, in order:
 
 *Fix:* set `GLM_FORCE_DEPTH_ZERO_TO_ONE` (and `GLM_FORCE_RADIANS` if wanted) with `target_compile_definitions(rasm PUBLIC ...)`, or call `glm::perspectiveRH_ZO` explicitly. After that, move to reversed-Z (see the plan, phase 1).
 
-**B3 — Debug-name calls without the debug-utils extension.** *Likely.*
+**B3 — Debug-name calls without the debug-utils extension.** *Fixed 2026-10-27:* `_init_instance` now enables `VK_EXT_debug_utils` whenever the instance reports it, independent of validation, and all naming goes through `VulkanContext::setObjectName`, which does nothing when the extension is not enabled. The original finding follows.
 - `setDebugUtilsObjectNameEXT` is called for every buffer, image, view, shader and pipeline ([vulkanContext.cpp:232](../src/rhi/vulkan/vulkanContext.cpp#L232), [:425-426](../src/rhi/vulkan/vulkanContext.cpp#L425-L426), [:456](../src/rhi/vulkan/vulkanContext.cpp#L456), [:644](../src/rhi/vulkan/vulkanContext.cpp#L644)).
 - `VK_EXT_debug_utils` is enabled only when validation is requested *and* available ([vulkanContext.cpp:1374-1380](../src/rhi/vulkan/vulkanContext.cpp#L1374-L1380)).
 - With `enableValidation = false`, or on a machine without the SDK layers, the dispatch-table entry is most likely null, so the first `createBuffer` crashes. Every release build is affected.
