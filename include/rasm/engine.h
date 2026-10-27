@@ -54,7 +54,7 @@ namespace rasm {
         ShaderHandle                createShader(const std::string& shaderSource);
         MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {}, ShaderHandle shader = ShaderHandle{});
         std::vector<MaterialHandle> loadMaterials(MeshHandle meshHandle);
-        MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex);
+        MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
         TextureHandle               createTexture(const ResourceDesc& desc);
         BufferHandle                createBuffer(const ResourceDesc& desc);
         RenderTargetHandle          createRenderTarget(const ResourceDesc& desc);
@@ -109,8 +109,8 @@ namespace rasm {
         void                        pollEvents(CameraHandle camera);
 
 
-        std::vector<SubGLTFRaw>        extractGLTFRaws(const tinygltf::Model &model, uint32_t meshIndex, const glm::mat4 &globalTransform);
-        std::vector<SubGLTFRaw>        traverseNodes(const tinygltf::Model &model, int nodeIndex, const glm::mat4 &parentTransform);
+        std::vector<SubGLTFRaw>        extractGLTFRaws(const tinygltf::Model &model, uint32_t meshIndex, const glm::mat4 &globalTransform, GltfImportCache &cache);
+        std::vector<SubGLTFRaw>        traverseNodes(const tinygltf::Model &model, int nodeIndex, const glm::mat4 &parentTransform, GltfImportCache &cache);
         GLTFRaw                        processGLTF(const tinygltf::Model &model);
         GLTFRaw                        processMesh(const Mesh &mesh);
 
@@ -131,6 +131,7 @@ namespace rasm {
         DescriptorSetLayoutHandle                                   bindlessDescriptorSetLayout             = {};
         DescriptorPoolHandle                                        bindlessDescriptorPool                  = {};
         DescriptorSetHandle                                         bindlessDescriptorSet                   = {};
+        MaterialHandle                                              defaultMaterial                         = {}; // used for invalid material handles
         SceneHandle                                                 currentScene                            = {};
         RenderTargetHandle                                          currentRenderTarget                     = {};
         uint64_t                                                    frameCount                              = 0;
@@ -153,10 +154,6 @@ namespace rasm {
             std::unordered_map<std::string, TextureHandle>              loadedTextures;
             std::unordered_map<TextureHandle, TextureRaw, HandleHash>   textureData;
             std::unordered_map<TextureHandle, uint32_t, HandleHash>     bindlessTextureIndexMap; // slot in the bindless descriptor set
-
-            // Textures of the glTF model being imported, keyed by (image index << 1 | sRGB).
-            const tinygltf::Model*                                      gltfImportModel = nullptr;
-            std::unordered_map<uint64_t, TextureHandle>                 gltfImageTextures;
         };
 
         Registery registery = {};

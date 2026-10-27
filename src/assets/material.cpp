@@ -94,18 +94,23 @@ namespace rasm
         const auto &GLTFraw = std::get<GLTFRaw>(mesh.data);
 
         std::vector<MaterialHandle> handles;
+        GltfImportCache cache;
         for (int i = 0; i < GLTFraw.subGltfRaws.size(); ++i)
         {
-            handles.push_back(loadMaterial(GLTFraw.model, i));
+            handles.push_back(loadMaterial(GLTFraw.model, i, cache));
         }
         return handles;
     }
 #endif
 
-    MaterialHandle Engine::loadMaterial(const tinygltf::Model &model, int materialIndex)
+    MaterialHandle Engine::loadMaterial(const tinygltf::Model &model, int materialIndex, GltfImportCache &cache)
     {
         if (materialIndex < 0 || materialIndex >= model.materials.size())
             return {};
+
+        // Primitives share materials and materials share images; create each of them once per model.
+        if (auto it = cache.materials.find(materialIndex); it != cache.materials.end())
+            return it->second;
 
         MaterialHandle handle = handleManager.getNextMaterialHandle();
         if (handle.index >= MAX_MATERIALS)
@@ -159,14 +164,9 @@ namespace rasm
                 if (source < 0 || source >= static_cast<int>(model.images.size()))
                     return {};
 
-                // Primitives and materials share images; upload each (image, color space) once per model.
-                if (registery.gltfImportModel != &model)
-                {
-                    registery.gltfImportModel = &model;
-                    registery.gltfImageTextures.clear();
-                }
+                // Upload each (image, color space) once per model.
                 const uint64_t cacheKey = (static_cast<uint64_t>(source) << 1) | (srgb ? 1u : 0u);
-                if (auto it = registery.gltfImageTextures.find(cacheKey); it != registery.gltfImageTextures.end())
+                if (auto it = cache.imageTextures.find(cacheKey); it != cache.imageTextures.end())
                     return it->second;
 
                 const auto &image = model.images[source];
@@ -200,7 +200,7 @@ namespace rasm
                 if (!texture.isValid() || !ctx.fillTexture(texture, rgba.data()))
                     return {};
                 addBindlessTexture(bindlessDescriptorSet, texture);
-                registery.gltfImageTextures[cacheKey] = texture;
+                cache.imageTextures[cacheKey] = texture;
                 return texture;
             };
 
@@ -220,6 +220,7 @@ namespace rasm
 
         registery.materials.resize(handle.index + 1);
         registery.materials[handle.index] = mat;
+        cache.materials[materialIndex] = handle;
         return handle;
     }
 
@@ -240,12 +241,18 @@ namespace rasm
 
     const Material &Engine::getMaterial(const MaterialHandle &handle)
     {
-        if (handle.index >= registery.materials.size())
-        {
-            spdlog::error("Invalid material handle.");
-            throw std::runtime_error("Invalid material handle.");
-        }
-        return registery.materials[handle.index];
+        if (handle.isValid() && handle.index < registery.materials.size())
+            return registery.materials[handle.index];
+
+        if (handle.isValid())
+            spdlog::error("Invalid material handle {}; using the default material.", handle.index);
+        if (defaultMaterial.isValid())
+            return registery.materials[defaultMaterial.index];
+
+        // Only reachable when engine construction failed before creating the default material.
+        static const Material noMaterial{};
+        spdlog::error("No default material; the engine did not initialize.");
+        return noMaterial;
     }
 
     gfx::Material Engine::convertToGfxMaterial(const Material &mat)
