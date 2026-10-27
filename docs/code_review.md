@@ -139,7 +139,7 @@ Next steps, in order:
 
 ### Medium severity
 
-**B6 — Gaps in glTF geometry import.** *Confirmed.*
+**B6 — Gaps in glTF geometry import.** *Fixed 2026-10-27:* `extractGLTFRaws` reads every attribute and index buffer through one accessor reader. It handles byte strides, accessors without a buffer view, sparse accessors, and normalized or integer components (`KHR_mesh_quantization`). It bounds-checks the accessor against its buffer view and the buffer view against its buffer. Non-indexed primitives get generated indices, which the smooth-normal path now shares. Triangle strips and fans become triangle lists. Points and lines are skipped with a warning. Primitives with a missing or invalid `POSITION`, invalid indices, or indices out of range are also skipped with a warning. An invalid optional attribute is ignored with a warning. Tangents are still ignored. The original finding follows.
 - Primitives without indices get an empty index list and are never drawn. Indices are filled only when `primitive.indices > -1` ([mesh.cpp:336-362](../src/assets/mesh.cpp#L336-L362)), and the smooth-normal path generates indices but does not keep them.
 - `primitive.mode` is ignored, so lines, points and strips are drawn as triangle lists.
 - Accessors are assumed to be tightly typed `float`. This breaks `KHR_mesh_quantization`, normalized integer UVs, and sparse accessors.

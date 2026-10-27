@@ -12,19 +12,22 @@
 
 namespace rasm
 {
-    ShaderCompiler::Target getShaderCompilerTarget(rasm::Backend backend)
+    namespace
     {
-        switch (backend)
+        ShaderCompiler::Target getShaderCompilerTarget(rasm::Backend backend)
         {
-        case Backend::VULKAN:
-            return ShaderCompiler::Target::SPIRV;
-        case Backend::DX12:
-            return ShaderCompiler::Target::HLSL;
-        case Backend::METAL:
-            return ShaderCompiler::Target::MSL;
-        default:
-            spdlog::error("Unsupported backend for shader compilation.");
-            return ShaderCompiler::Target::SPIRV; // Default to SPIR-V
+            switch (backend)
+            {
+            case Backend::VULKAN:
+                return ShaderCompiler::Target::SPIRV;
+            case Backend::DX12:
+                return ShaderCompiler::Target::HLSL;
+            case Backend::METAL:
+                return ShaderCompiler::Target::MSL;
+            default:
+                spdlog::error("Unsupported backend for shader compilation.");
+                return ShaderCompiler::Target::SPIRV; // Default to SPIR-V
+            }
         }
     }
 

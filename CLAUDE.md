@@ -34,6 +34,11 @@ cmake --build --preset x64-debug --target 02_gltf     # single example
 - `src/` is private: `core/`, `platform/`, `assets/`, `scene/`, `renderer/`, `rhi/` (+ `rhi/vulkan/`). `src/thirdparty_impl.cpp` is the only file that defines `*_IMPLEMENTATION` macros.
 - Private headers are included relative to `src/` (e.g. `"rhi/vulkan/vulkanContext.h"`). `src/` is temporarily a PUBLIC include directory until `D2`; don't add new public→private includes.
 
+## Code rules
+
+- No templates in RASM code: no function, class, variable or lambda templates (`template <...>`, `auto` parameters in lambdas). Write concrete overloads or functions per type instead. Using third-party/std templates (`std::vector`, `std::unordered_map`) is fine. The only exception is `Handle<Tag>` in `include/rasm/handle.h`.
+- File-local helpers (functions, structs) go in one unnamed namespace at the top of the `.cpp` file: right after the includes, or as the first thing inside `namespace rasm` / `rasm::gfx` when the helpers use engine types. Never open a second unnamed namespace or define helpers between functions further down.
+
 ## Invariants that are easy to break
 
 - C++ structs in `src/renderer/uberMaterialTypes.h` must match `shaders/lib/core.slang`/`pbr.slang` byte-for-byte (scalar layout); update both sides and the `static_assert`s together.
