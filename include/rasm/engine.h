@@ -83,6 +83,12 @@ namespace rasm {
         void                        endPass();
         void                        render(SceneHandle scene, CameraHandle camera);
         void                        render2(SceneHandle scene, CameraHandle camera);
+        // Records the GPU-driven draw of a scene into the current pass (render graph passes). Its
+        // pipeline targets the swapchain format, so a render target it draws into must use that format.
+        void                        drawScene(SceneHandle scene, CameraHandle camera);
+        // Builds a pipeline from Slang source with vertMain/fragMain entry points. It has no vertex input
+        // (the shader pulls or generates its vertices) and uses the bindless set and the 8-byte push constant.
+        PipelineHandle              createPipeline(const std::string& name, const std::string& shaderSource, Format colorFormat, Format depthFormat = Format::D32_SFLOAT_S8_UINT);
         void                        render(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget);
         bool                        running() const;
         bool                        recreateSwapchain();

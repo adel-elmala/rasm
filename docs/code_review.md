@@ -161,7 +161,7 @@ Next steps, in order:
 **B9 — `MaterialType::UNLIT` references a missing shader.** *Confirmed.*
 `createMaterial(UNLIT)` reads `./shaders/passes/unlit.slang` ([material.cpp:64](../src/assets/material.cpp#L64)), which does not exist. The file read fails and later compilation fails.
 
-**B10 — The render-target path is broken.** *Confirmed.*
+**B10 — The render-target path is broken.** *Fixed 2026-10-27:* `endPass` transitions render-target color and depth to `SHADER_READ_ONLY_OPTIMAL`, and `transitionImageLayout` takes its source scope from the old usage, so the barrier waits for the attachment writes. Render-target depth is stored and sampled with a nearest-filter sampler. Render-target samplers clamp to the edge. The per-slot attachments no longer alias (B1), and the viewport already came from the render-target size. `01_render_graph` samples render targets validation-clean. The original finding follows.
 - The attachments for each frame slot alias each other (B1).
 - After rendering, the color attachment is never transitioned to `SHADER_READ_ONLY_OPTIMAL`: the barrier is commented out ([engine.cpp:416-423](../src/engine.cpp#L416-L423)). The bindless descriptor promises that layout ([vulkanContext.cpp:898](../src/rhi/vulkan/vulkanContext.cpp#L898)), so `01_render_graph` samples an image that is still in `COLOR_ATTACHMENT_OPTIMAL`. The default validation layers do not report this, because bindless (partially bound, update-after-bind) descriptors are only layout-checked with GPU-assisted validation.
 - `beginPass` sets the viewport and scissor from the *window* size, not the render-target size ([engine.cpp:407-408](../src/engine.cpp#L407-L408)).
@@ -245,7 +245,7 @@ Use a right-handed Y-up world (glTF's convention) and do the Vulkan flip with a 
 - Each pass starts its own rendering scope with `CLEAR` ([vulkanContext.cpp:1056](../src/rhi/vulkan/vulkanContext.cpp#L1056)), so two passes that target the swapchain overwrite each other.
 - The camera is hardcoded to `scene.cameras[0]`, and the main path (`render2`) doesn't use the graph at all.
 
-**D10 — There are two rendering paths.** `render`/`compileScene` (the legacy per-entity path) and `render2`/`prepareScene` (GPU-driven) coexist, together with `begin/endOffscreenFrame`, which is marked "TODO: delete". Pick the GPU-driven path, port `01_render_graph` to it, and delete the rest.
+**D10 — There are two rendering paths.** `render`/`compileScene` (the legacy per-entity path) and `render2`/`prepareScene` (GPU-driven) coexist, together with `begin/endOffscreenFrame`, which is marked "TODO: delete". Pick the GPU-driven path, port `01_render_graph` to it, and delete the rest. *Partly done 2026-10-27:* `01_render_graph` now uses `drawScene` and `createPipeline`, so no example uses the legacy path any more. Deleting it remains.
 
 **D11 — Assets and shaders are located through the working directory** (§1.3).
 
@@ -306,7 +306,6 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
   - `setUniform` (a no-op), `render(scene, camera, renderTarget)`, `begin/endOffscreenFrame`, `CompiledScene`.
   - `#if 0 loadMaterials`, the empty mesh loop in `~Engine`, the glTF branch of `getMeshByteSize`.
   - `VertexFormat::PosOnly`, `MAX_DESCRIPTOR_TYPES`, `compile-shaders.bat`.
-  - The "Future API sketch (not implemented yet)" header in `01_render_graph`, which is out of date.
 - **C4 — Duplication.**
   - `readFile` and `loadFileToString`.
   - The model-matrix composition appears three times ([scene.cpp:263](../src/scene/scene.cpp#L263), [:461](../src/scene/scene.cpp#L461), [engine.cpp:587](../src/engine.cpp#L587)); `Transform` should have a `toMatrix()` instead.

@@ -37,7 +37,8 @@ Goal: fix correctness bugs before building anything on top.
 - [x] Cache glTF materials and textures per model. Add a default material (`B7`, `B8`, done 2026-10-27).
 - [x] glTF geometry: generate indices for non-indexed primitives, skip non-triangle modes with a warning, and validate strides and buffer views (`B6`, done 2026-10-27).
 - [ ] Delete or fix `UNLIT`, the `loadMaterials` declaration and the spot-light enum value (`B9`, `B14`, `B15`). Make empty scenes work (`B16`). Fix `submit` wait stages (`B11`) and the Slang options leak (`B12`).
-- [ ] Remove the legacy path (`render`/`compileScene`/offscreen frame) and port `01_render_graph` to the GPU-driven path with a fixed render-target flow (`D10`, `B10`).
+- [x] Port `01_render_graph` to the GPU-driven path with a fixed render-target flow (`D10`, `B10`, done 2026-10-27).
+- [ ] Remove the legacy path (`render`/`compileScene`/offscreen frame), which no example uses any more (`D10`).
 - [ ] Call `validateRasmStructs` in debug builds (`C6`). Add Tracy frame marks and zones for frame, prepare, upload and submit (`D16`).
 
 **Exit criteria:** all examples run validation-clean in Debug and Release (with `enableValidation = false`), survive resize and minimize, and a model with 100+ primitives sharing materials loads within the limits.

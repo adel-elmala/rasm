@@ -881,6 +881,21 @@ namespace rasm::gfx
             samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            if (desc.texture.usage != TextureUsage::SAMPLED)
+            {
+                // Render targets are read by screen-space passes: wrapping would bleed the opposite edge in.
+                samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+                samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+                samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            }
+            if (desc.texture.usage == TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT)
+            {
+                // Linear filtering of depth formats is optional, and blending depths is meaningless anyway.
+                samplerInfo.magFilter = VK_FILTER_NEAREST;
+                samplerInfo.minFilter = VK_FILTER_NEAREST;
+                samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+                samplerInfo.anisotropyEnable = VK_FALSE;
+            }
 
             result = vkCreateSampler(this->device.device, &samplerInfo, nullptr, &sampler);
             if (result != VK_SUCCESS)
@@ -1476,6 +1491,22 @@ namespace rasm::gfx
 
         getAccessMaskAndStage(newUsage, srcAccessMask, dstAccessMask, srcStageMask, dstStageMask);
 
+        // Leaving an attachment usage: the barrier must wait for its writes, e.g. a render target
+        // that a later pass samples (B10).
+        switch (oldUsage)
+        {
+        case TextureUsage::COLOR_ATTACHMENT:
+            srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            break;
+        case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
+            srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+            srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            break;
+        default:
+            break;
+        }
+
         VkImageAspectFlags aspectMask = (image.desc.texture.usage == TextureUsage::DEPTH_STENCIL_ATTACHMENT ||
                                          image.desc.texture.usage == TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT)
                                             ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
@@ -1554,7 +1585,8 @@ namespace rasm::gfx
             .imageView = depthAttachment.view,
             .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            // Render-target depth may be sampled by a later pass, so keep it.
+            .storeOp = depthAttachment.desc.texture.usage == TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE,
             .clearValue = {.depthStencil = {1.0f, 0}}};
 
         // must match the pipeline's stencilAttachmentFormat (see createGraphicsPipeline).

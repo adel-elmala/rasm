@@ -430,9 +430,10 @@ namespace rasm
         {
             auto renderTargetData = ctx.getRenderTarget(currentRenderTarget);
 
-            // transition render target images to be ready for sampling
-            // ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], TextureUsage::COLOR_ATTACHMENT, TextureUsage::SAMPLED);
-            // ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.depthAttachment[frameCount], TextureUsage::DEPTH_STENCIL_ATTACHMENT, TextureUsage::SAMPLED);
+            // Later passes sample render targets through the bindless set, whose descriptors promise
+            // SHADER_READ_ONLY_OPTIMAL (B10).
+            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::COLOR_ATTACHMENT, TextureUsage::SAMPLED);
+            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT, TextureUsage::SAMPLED);
         }
         else
         {
@@ -541,11 +542,23 @@ namespace rasm
             return ;
         }
 
-        auto &sceneRef = registery.scenes[scene.index];
-
         if (!beginFrame(camera))
             return;
         beginPass();
+        drawScene(scene, camera);
+        endPass();
+        endFrame();
+    }
+
+    void Engine::drawScene(SceneHandle scene, CameraHandle camera)
+    {
+        if (!scene.isValid() || scene.index >= MAX_SCENES)
+        {
+            spdlog::error("Invalid scene handle for drawing.");
+            return;
+        }
+
+        auto &sceneRef = registery.scenes[scene.index];
 
         auto preparedScene = prepareScene(scene);
 
@@ -593,8 +606,42 @@ namespace rasm
             ctx.pushConstants(commandBuffer, preparedScene.uberMaterialPipeline, ShaderType::VERTEX_FRAGMENT, &sceneDataBufferPtr, sizeof(uint64_t), 0);
             ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, 0, preparedScene.drawInfoCount, sizeof(gfx::DrawInfo));
         }
-        endPass();
-        endFrame();
+    }
+
+    PipelineHandle Engine::createPipeline(const std::string &name, const std::string &shaderSource, Format colorFormat, Format depthFormat)
+    {
+        // Slang caches modules by name, so every distinct source needs its own name.
+        auto vertShader = shaderCompiler.compileFromString(shaderSource, name + ".vert.slang", "vertMain");
+        auto fragShader = shaderCompiler.compileFromString(shaderSource, name + ".frag.slang", "fragMain");
+        if (vertShader.code.empty() || fragShader.code.empty())
+        {
+            spdlog::error("Failed to compile the shaders of pipeline '{}'.", name);
+            return PipelineHandle{};
+        }
+
+        auto shaderDesc = ResourceDesc{};
+        shaderDesc.type = ResourceType::SHADER;
+        shaderDesc.shader.shaderType = ShaderType::VERTEX;
+        shaderDesc.shader.sourceSize = vertShader.code.size();
+        shaderDesc.shader.source = reinterpret_cast<const char *>(vertShader.code.data());
+
+        auto pipelineDesc = ResourceDesc{};
+        pipelineDesc.type = ResourceType::GRAPHICS_PIPELINE;
+        pipelineDesc.name = "Pipeline for " + name;
+        pipelineDesc.pipeline.vertexShader = ctx.createShader(shaderDesc);
+
+        shaderDesc.shader.shaderType = ShaderType::FRAGMENT;
+        shaderDesc.shader.sourceSize = fragShader.code.size();
+        shaderDesc.shader.source = reinterpret_cast<const char *>(fragShader.code.data());
+
+        pipelineDesc.pipeline.fragmentShader = ctx.createShader(shaderDesc);
+        pipelineDesc.pipeline.topology = PrimitiveTopology::TRIANGLE_LIST;
+        pipelineDesc.pipeline.colorAttachmentFormat = colorFormat;
+        pipelineDesc.pipeline.depthStencilAttachmentFormat = depthFormat;
+        pipelineDesc.pipeline.vertexInputLayout = {.vertexPulling = true};
+        pipelineDesc.pipeline.descriptorSetLayout = bindlessDescriptorSetLayout;
+
+        return ctx.createPipeline(pipelineDesc);
     }
 
     void Engine::render(SceneHandle scene, CameraHandle camera)

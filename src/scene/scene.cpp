@@ -298,41 +298,7 @@ namespace rasm
     }
 
     // create a pipeline for the UberMaterial.
-    auto swapchainFormat = ctx.getSwapchainImageFormat();
-    auto depthFormat = Format::D32_SFLOAT_S8_UINT;
-
-    auto pipelineDesc = ResourceDesc{};
-    pipelineDesc.type = ResourceType::GRAPHICS_PIPELINE;
-    pipelineDesc.name = "Pipeline for Uber-Material";
-
-    auto shaderSource = readFile("./shaders/passes/rasm.slang");
-    auto vertShader = shaderCompiler.compileFromString(shaderSource, "rasm.vert.slang", "vertMain");
-    auto fragShader = shaderCompiler.compileFromString(shaderSource, "rasm.frag.slang", "fragMain");
-
-    auto shaderDesc = ResourceDesc{};
-    shaderDesc.type = ResourceType::SHADER;
-    shaderDesc.shader.shaderType = ShaderType::VERTEX;
-    shaderDesc.shader.sourceSize = vertShader.code.size();
-    shaderDesc.shader.source = reinterpret_cast<const char *>(vertShader.code.data());
-
-    pipelineDesc.pipeline.vertexShader = ctx.createShader(shaderDesc);
-
-    shaderDesc.shader.shaderType = ShaderType::FRAGMENT;
-    shaderDesc.shader.sourceSize = fragShader.code.size();
-    shaderDesc.shader.source = reinterpret_cast<const char *>(fragShader.code.data());
-
-    pipelineDesc.pipeline.fragmentShader = ctx.createShader(shaderDesc);
-
-    pipelineDesc.pipeline.topology = PrimitiveTopology::TRIANGLE_LIST;
-
-    pipelineDesc.pipeline.colorAttachmentFormat = swapchainFormat;
-    pipelineDesc.pipeline.depthStencilAttachmentFormat = depthFormat;
-
-    pipelineDesc.pipeline.vertexInputLayout = {.vertexPulling = true};
-
-    pipelineDesc.pipeline.descriptorSetLayout = bindlessDescriptorSetLayout;
-
-    preparedScene.uberMaterialPipeline = ctx.createPipeline(pipelineDesc);
+    preparedScene.uberMaterialPipeline = createPipeline("rasm", readFile("./shaders/passes/rasm.slang"), ctx.getSwapchainImageFormat());
     preparedScene.drawInfoCount = sceneEntities.size();
 
     preparedScenes[scene] = preparedScene;

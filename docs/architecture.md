@@ -58,7 +58,7 @@ There are two kinds of handle owner:
    - creates the surface (it calls back into `Engine::createSurfaceVk`),
    - selects a physical device with the required features (below),
    - creates the device, graphics queue, swapchain (`B8G8R8A8_SRGB`) and VMA allocator.
-3. Create per-frame resources for `MAX_FRAMES_IN_FLIGHT = 2` slots: a command pool and buffer, an image-acquired semaphore, an in-flight fence (created signaled), a 1 MB "shader data" buffer (legacy path only), and a depth texture (`D32_SFLOAT_S8_UINT`).
+3. Create per-frame resources for `MAX_FRAMES_IN_FLIGHT = 2` slots: a command pool and buffer, an image-acquired semaphore, an in-flight fence (created signaled), a 1 MB "shader data" buffer (legacy path and render-graph pass parameters), and a depth texture (`D32_SFLOAT_S8_UINT`).
 4. Create one render-finished semaphore per swapchain image.
 5. Initialize the Slang session (SPIR-V 1.4, scalar layout, column-major matrices, search path `cwd/shaders/lib`).
 6. Create the single bindless descriptor set: layout, pool and set. It is binding 0 of set 0, an array of 1024 `COMBINED_IMAGE_SAMPLER`s with `UPDATE_AFTER_BIND | PARTIALLY_BOUND`.
@@ -189,11 +189,13 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 
 - `RenderGraph::addPass(name, setup, execute)` records the resources each pass reads and writes through `PassBuilder`. `compile()` builds producer → consumer edges and topologically sorts the passes (Kahn's algorithm, with cycle detection).
 - `execute()` runs `beginFrame` once, then for each pass in order calls `setRenderTarget(pass.outputRenderTarget)`, `beginPass`, `pass.execute(ctx)` and `endPass`. A pass without an output render target renders to the swapchain. Last comes `endFrame`.
-- The graph currently only orders passes. It does not insert barriers or layout transitions, does not allocate transient resources, and uses the current scene's first camera. Only `examples/01_render_graph` uses it, together with the legacy `compileScene` path.
+- **Render targets.** `createRenderTarget` makes a color and a depth texture per frame slot and puts both into the bindless array. `beginPass` transitions them to attachment layouts and clears them. `endPass` transitions both to `SHADER_READ_ONLY_OPTIMAL`, the layout the bindless descriptors promise, with a barrier that waits for the attachment writes, so any later pass can sample them. Render-target depth is stored (swapchain depth is not), and its sampler uses nearest filtering. Render-target samplers clamp to the edge. Render targets have a fixed size and are not recreated on resize.
+- **Pass contents.** `Engine::drawScene(scene, camera)` records the GPU-driven scene draw (§4) into the current pass; its pipeline targets the swapchain format. `Engine::createPipeline(name, source, colorFormat)` compiles `vertMain`/`fragMain` into a pipeline without vertex input, for fullscreen passes. Such passes pass parameters through the 8-byte push constant as a pointer into the per-frame shader-data buffer.
+- The graph itself still only orders passes: the transitions above are fixed per pass in `beginPass`/`endPass`, not derived from the declared reads and writes. It does not allocate transient resources, and it uses the current scene's first camera. Only `examples/01_render_graph` uses it (forward pass, bloom and composite).
 
 ## 10. The legacy path: `compileScene` + `render`
 
-`compileScene` uploads one combined vertex+index buffer per entity (OBJ only) and builds one pipeline per material, with classic vertex input reflected from Slang. `render()` binds the pipeline, the vertex and index buffers, and a push-constant pointer into the 1 MB per-frame shader-data buffer, then issues one `drawIndexed` per entity. It survives for `01_render_graph` and is slated for removal (`D10`).
+`compileScene` uploads one combined vertex+index buffer per entity (OBJ only) and builds one pipeline per material, with classic vertex input reflected from Slang. `render()` binds the pipeline, the vertex and index buffers, and a push-constant pointer into the 1 MB per-frame shader-data buffer, then issues one `drawIndexed` per entity. No example uses it any more; it is slated for removal (`D10`).
 
 ## 11. Compile-time limits
 
