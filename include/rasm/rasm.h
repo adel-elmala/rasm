@@ -13,5 +13,4 @@
 #include "rasm/mesh.h"
 #include "rasm/render/renderGraph.h"
 
-
 // clang-format on

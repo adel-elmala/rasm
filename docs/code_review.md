@@ -61,9 +61,9 @@ docs/
    - `scene/scene.cpp` holds `prepareScene` and pipeline creation (renderer logic);
    - `assets/material.cpp` holds both the material API and glTF texture import;
    - `engine.cpp` (frame loop) still sits at the root of `src/`.
-3. **Shaders are found through the working directory (`D11`).** Paths are cwd-relative (`./shaders/passes/...` in `material.cpp`/`scene.cpp`, `cwd/shaders/lib` in `shaderCompiler.cpp`), so the examples only work when run from the repo root (not from the build directory, an IDE, or an installed app).
-4. **No install/export.** There is no `install()`/`export()`, so `find_package(rasm)` does not work.
-5. **No `tests/` and no CI** (plan phase 1.5).
+3. **Shaders are found through the working directory (`D11`).** *Fixed 2026-11-01:* shaders load from `EngineConfig::shaderDir`, by default a `shaders/` folder beside the executable, and `EngineConfig::assetRoot` locates assets. The original finding follows. Paths are cwd-relative (`./shaders/passes/...` in `material.cpp`/`scene.cpp`, `cwd/shaders/lib` in `shaderCompiler.cpp`), so the examples only work when run from the repo root (not from the build directory, an IDE, or an installed app).
+4. **No install/export.** *Fixed 2026-11-01:* `cmake/RasmInstall.cmake` installs the library, public headers and shaders and exports `rasm::rasm`, so `find_package(rasm)` works from an install tree or a build tree. The original finding follows. There is no `install()`/`export()`, so `find_package(rasm)` does not work.
+5. **No `tests/` and no CI** (plan phase 1.5). *Partly resolved 2026-11-01:* `tests/` has a doctest target run through CTest. CI is still missing.
 6. **Binary assets live in plain git.** The glTF/OBJ sample models are committed directly, so the clone grows with every asset added.
 
 ### What is left of the target layout
@@ -89,9 +89,8 @@ assets/                         keep small; large models via Git LFS or a downlo
 ```
 
 Next steps, in order:
-- Make the shader path configurable (`D11`): a `RASM_SHADER_DIR` compile definition and an `EngineConfig::assetRoot`, plus a post-build copy of `shaders/` next to the binaries.
 - Keep moving code incrementally: move a file only while you are working on it, and change the CMake lists in the same commit.
-- Add `install()`/`export()` and a `tests/` target alongside CI (phase 1.5).
+- Add CI that builds the presets and runs `rasm_tests` (phase 1.5).
 
 ---
 
@@ -115,7 +114,7 @@ Next steps, in order:
 
 *Fix:* set `GLM_FORCE_DEPTH_ZERO_TO_ONE` (and `GLM_FORCE_RADIANS` if wanted) with `target_compile_definitions(rasm PUBLIC ...)`, or call `glm::perspectiveRH_ZO` explicitly. After that, move to reversed-Z (see the plan, phase 1).
 
-**B3 — Debug-name calls without the debug-utils extension.** *Fixed 2026-10-27:* `_init_instance` now enables `VK_EXT_debug_utils` whenever the instance reports it, independent of validation, and all naming goes through `VulkanContext::setObjectName`, which does nothing when the extension is not enabled. The original finding follows.
+**B3 — Debug-name calls without the debug-utils extension.** *Fixed 2026-10-27:* `initInstance` now enables `VK_EXT_debug_utils` whenever the instance reports it, independent of validation, and all naming goes through `VulkanContext::setObjectName`, which does nothing when the extension is not enabled. The original finding follows.
 - `setDebugUtilsObjectNameEXT` is called for every buffer, image, view, shader and pipeline ([vulkanContext.cpp:232](../src/rhi/vulkan/vulkanContext.cpp#L232), [:425-426](../src/rhi/vulkan/vulkanContext.cpp#L425-L426), [:456](../src/rhi/vulkan/vulkanContext.cpp#L456), [:644](../src/rhi/vulkan/vulkanContext.cpp#L644)).
 - `VK_EXT_debug_utils` is enabled only when validation is requested *and* available ([vulkanContext.cpp:1374-1380](../src/rhi/vulkan/vulkanContext.cpp#L1374-L1380)).
 - With `enableValidation = false`, or on a machine without the SDK layers, the dispatch-table entry is most likely null, so the first `createBuffer` crashes. Every release build is affected.
@@ -177,6 +176,8 @@ Next steps, in order:
 **B20 — Shader dedup keys pointed at freed SPIR-V.** *Fixed 2026-11-01:* `RenderContext::createShader` now keeps its own copy of the SPIR-V in `shaderSources`, and the cache key points at that copy. The bug came from `B1`, which made shader equality compare the code instead of the pointer. `shaderDescCache` still stored the caller's pointer into a temporary blob, so every later lookup that reached `operator==` ran `memcmp` on freed memory. This crashed intermittently with an access violation in any application that compiled the same shader twice, such as one that prepared a second scene. In a debug build, 5 of 30 runs crashed before the fix and 0 of 60 after it.
 
 **B21 — Non-FIFO present modes crash `vkDestroyDevice` on NVIDIA.** *Worked around 2026-11-01; root cause unknown:* both swapchain builders now request `VK_PRESENT_MODE_FIFO_KHR`, so the frame rate is capped at the display's refresh rate. With vk-bootstrap's default of MAILBOX, closing a window that fills the screen raised an access violation inside `nvoglv64.dll` (driver 610.296, RTX 3060) during `vkDestroyDevice`. It depends on the window size, not on the example or on render targets: `00_hello_scene` crashes at 1920x1080 on a 1920x1080 display, and `01_render_graph` does not crash at 720x480. IMMEDIATE crashes too, and so does MAILBOX capped to about 60 fps, so it is not a frame-rate problem. Waiting 500 ms before teardown, destroying the swapchain before the semaphores, skipping the startup swapchain recreation and disabling validation do not help, and validation reports nothing. FIFO gave 0 crashes in 30 runs, against 40–100% per batch with the others. `vkcube` does not crash in any present mode at the same size, so the engine does something it does not, and that difference has not been found. The trigger is NVIDIA's overlay: with it turned off in the NVIDIA App, MAILBOX at 1920x1080 gave 0 crashes in 16 runs. `nvspcap64.dll` (NVIDIA's capture hook) stays loaded either way, but the overlay processes do not run. Keep FIFO while the overlay can be on, because it is on by default for many users, and revisit this before adding a way to turn vsync off.
+
+**B22 — `Transform::rotate` did nothing on a default transform.** *Fixed 2026-11-01:* `Transform::rotation` now defaults to `glm::identity<glm::quat>()`. It used `glm::quat()`, which value-initializes to all zeros, not to identity. A zero quaternion passes for identity in `q * v` and `mat4_cast`, so nothing looked wrong, but any composition stays zero. Every entity or camera that didn't set a rotation was affected: the spin calls in `00_hello_scene` and `02_gltf` were no-ops, and the first trackball drag of such a camera was lost. Those objects now spin.
 
 ### Low severity
 
@@ -250,7 +251,7 @@ Use a right-handed Y-up world (glTF's convention) and do the Vulkan flip with a 
 
 **D10 — There are two rendering paths.** *Fixed 2026-11-01:* the legacy path is gone, with `render2` renamed to `render`. `01_render_graph` draws through `Engine::drawScene` and `Engine::createPipeline`. The removal also took out what only the legacy path used: `basic.slang`, `MaterialType::BASIC` and `SHADER`, `Material::shader`, `Engine::createShader`, `uploadMesh`, the per-frame shader data buffer, the vertex-input reflection in `ShaderCompiler`, `VertexInputLayout`, `BufferUsage::VERTEX` and `VERTEXINDEX`, the vertex and index fields of the buffer desc, `bindVertexBuffer` and `SAMPLED_DEPTH_STENCIL_ATTACHMENT`. With `drawScene` public, each call has its own `SceneData` slot, fits the camera to the pass's aspect ratio, and refuses a render target with other formats than the scene's pipeline. A frame that never renders to the swapchain clears it in `endFrame`, because it is presented anyway. The original finding follows. `render`/`compileScene` (the legacy per-entity path) and `render2`/`prepareScene` (GPU-driven) coexist, together with `begin/endOffscreenFrame`, which is marked "TODO: delete". Pick the GPU-driven path, port `01_render_graph` to it, and delete the rest.
 
-**D11 — Assets and shaders are located through the working directory** (§1.3).
+**D11 — Assets and shaders are located through the working directory** (§1.3). *Fixed 2026-11-01:* see [architecture.md §11](architecture.md#11-conventions-that-cross-files).
 
 **D12 — The shader code is Vulkan-only.**
 - `spirv_asm` for `DrawIndex` ([core.slang:114-122](../shaders/lib/core.slang#L114-L122)) is SPIR-V specific.
@@ -267,7 +268,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 
 **D16 — Profiling.** *Partly resolved:* the frame loop, `prepareScene`, uploads, submit and present now have Tracy zones and a frame mark, with the client in on-demand mode. Still open: Tracy is linked publicly, there are no GPU timestamps, nothing turns Tracy off (every build listens on TCP 8086 on all interfaces, which a shipped game must not do), and the VRAM check in `prepareScene` compares host-visible allocations against the device-local budget.
 
-**D17 — No tests and no CI.** Pure-CPU pieces such as handle pools, desc hashing, glTF import, camera math and render-graph sorting are easy to unit-test. Rendering can be covered with headless golden-image tests once offscreen rendering exists.
+**D17 — No tests and no CI.** *Partly resolved 2026-11-01:* `rasm_tests` covers handles, descriptor equality and hashing, render-graph sorting, transforms and camera math. It found `B22` on its first run. glTF import, CI and image tests are still open. Pure-CPU pieces such as handle pools, desc hashing, glTF import, camera math and render-graph sorting are easy to unit-test. Rendering can be covered with headless golden-image tests once offscreen rendering exists.
 
 ---
 
@@ -303,17 +304,17 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 
 ## 5. Code health
 
-- **C1 — Naming inconsistencies.** `registery`, `metallicRoughtness`, `compiledShader`, the snake_case `VulkanContext` members, PascalCase GPU enums, and `RenderGraph::CreateTexture` beside `PassBuilder::createTexture`. See the [coding style](coding_style.md#2-naming).
-- **C2 — Formatting.** `scene.cpp` uses 2-space indentation while everything else uses 4, and there is no `.clang-format` in the repo.
+- **C1 — Naming inconsistencies.** *Fixed 2026-11-01:* these names are gone, along with the rest of the snake_case in `vulkanContext.cpp` and its `_init_*` and `_to_*` free functions. `gfx::VertexFormat` and `gfx::LightType` are now `enum class` with UPPER_SNAKE values on both the C++ and Slang sides. The fields in `rasm/profiler.h` and the remaining odd locals followed, and a `readability-identifier-naming` run of clang-tidy over every source file now reports nothing but `supportedMeshExtensions` and `supportedTextureExtensions`, which are runtime sets and rightly camelCase. The exceptions are listed in the [coding style](coding_style.md#2-naming). The original finding follows. `registery`, `metallicRoughtness`, `compiledShader`, the snake_case `VulkanContext` members, PascalCase GPU enums, and `RenderGraph::CreateTexture` beside `PassBuilder::createTexture`.
+- **C2 — Formatting.** *Fixed 2026-11-01:* the repo has a `.clang-format` and all C++ files follow it. It sets no column limit, because a limit collapsed hand-placed line breaks and changed about 500 extra lines. The original finding follows. `scene.cpp` uses 2-space indentation while everything else uses 4, and there is no `.clang-format` in the repo.
 - **C3 — Dead or placeholder code.**
   - `setUniform` (a no-op).
   - The glTF branch of `getMeshByteSize`.
-  - `VertexFormat::PosOnly`, `MAX_DESCRIPTOR_TYPES`, `compile-shaders.bat`.
+  - `VertexFormat::POS_ONLY`, `MAX_DESCRIPTOR_TYPES`, `compile-shaders.bat`.
 - **C4 — Duplication.**
   - `readFile` and `loadFileToString`.
   - The model-matrix composition appears twice, in `prepareScene` and `updateUniforms`; `Transform` should have a `toMatrix()` instead.
   - The glTF index-reading loop appears twice.
-- **C5 — Copies instead of references.** `auto mesh = registery.meshes[...]`, `auto entity = ...`, `auto _scene = ...`.
+- **C5 — Copies instead of references.** `auto mesh = registry.meshes[...]`, `auto entity = ...`, `auto _scene = ...`.
 - **C6 — An unused check.** *Resolved:* `validateRasmStructs` was never called because its sizes did not match. It asked `ProgramLayout::getTypeLayout` for the layout, and no `LayoutRules` value selects the layout of data behind a pointer, so it reported std140/std430 padding (`Modeldata` 240 bytes instead of 188). It now walks `pc` -> `scene` -> the pointer fields, which agrees with the `Offset` decorations in the SPIR-V, and asserts sizes and field offsets after linking any shader that uses `SceneData`.
 - **C7 — A misplaced define.** *Resolved in the folder-layout change:* the ineffective `VMA_VULKAN_VERSION` define (it came after `vk_mem_alloc.h` was already included) was dropped. VMA's default, derived from the Vulkan headers, is the same 1004000 for every translation unit. If you ever need to pin it, set it in CMake.
 - **C8 — Header-level objects.** `const static std::unordered_set<std::string>` lives in `types.h`, which makes one copy per translation unit and runs static initializers. Make it `inline constexpr` arrays or move it into the `.cpp`.

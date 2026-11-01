@@ -26,17 +26,19 @@ namespace rasm
         std::function<void(RenderContext&)> execute;
 
         // For Sorting
-        uint32_t                inDegree = 0; 
+        uint32_t                inDegree = 0;
         std::vector<uint32_t>   successors; // Pass indices that depend on this one
     };
 
-    struct ResourceMetadata {
+    struct ResourceMetadata
+    {
         uint32_t producerIdx = static_cast<uint32_t>(-1); // Which pass writes this resource?
     };
 
     class RenderGraph;
-    
-    class PassBuilder {
+
+    class PassBuilder
+    {
     public:
                                 PassBuilder(RenderGraph& g, uint32_t passIdx) : graph(g), currentPass(passIdx) {}
         TextureHandle           createTexture(ResourceDesc desc);
@@ -61,7 +63,7 @@ namespace rasm
              RenderGraph(Engine* owner) : engine(owner) {}
              ~RenderGraph() = default;
         void addPass(std::string name,
-                 std::function<void(PassBuilder&)> setup, 
+                 std::function<void(PassBuilder&)> setup,
                  std::function<void(RenderContext&)> execute);
 
         void compile();
@@ -69,16 +71,16 @@ namespace rasm
 
     protected:
         void                analyzeDependencies();
-        TextureHandle       CreateTexture(ResourceDesc desc);
-        BufferHandle        CreateBuffer(ResourceDesc desc);
-        RenderTargetHandle  CreateRenderTarget(ResourceDesc desc);
-        void                Read(uint32_t passIdx, TextureHandle h);
-        void                Read(uint32_t passIdx, BufferHandle h);
-        void                Read(uint32_t passIdx, RenderTargetHandle h);
-        void                Write(uint32_t passIdx, TextureHandle h);
-        void                Write(uint32_t passIdx, BufferHandle h);
-        void                Write(uint32_t passIdx, RenderTargetHandle h);
-    
+        TextureHandle       createTexture(ResourceDesc desc);
+        BufferHandle        createBuffer(ResourceDesc desc);
+        RenderTargetHandle  createRenderTarget(ResourceDesc desc);
+        void                read(uint32_t passIdx, TextureHandle h);
+        void                read(uint32_t passIdx, BufferHandle h);
+        void                read(uint32_t passIdx, RenderTargetHandle h);
+        void                write(uint32_t passIdx, TextureHandle h);
+        void                write(uint32_t passIdx, BufferHandle h);
+        void                write(uint32_t passIdx, RenderTargetHandle h);
+
         std::vector<Pass>           passes;
         std::vector<uint32_t>       executionOrder; // Sorted pass indices
         Engine*                     engine   = nullptr;

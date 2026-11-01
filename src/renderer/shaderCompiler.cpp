@@ -1,5 +1,6 @@
 #include "renderer/shaderCompiler.h"
 #include "rasm/types.h"
+#include "platform/paths.h"
 #include "renderer/uberMaterialTypes.h"
 
 #include "slang.h"
@@ -187,7 +188,7 @@ namespace rasm
                                      {"baseColorTextureIndex", offsetof(gfx::MetallicRoughnessMaterial, baseColorTextureIndex)},
                                      {"baseColorTextureCoordinate", offsetof(gfx::MetallicRoughnessMaterial, baseColorTextureCoordinate)},
                                      {"metallicRoughnessTextureIndex", offsetof(gfx::MetallicRoughnessMaterial, metallicRoughnessTextureIndex)},
-                                     {"metallicRoughtnessTextureCoordinate", offsetof(gfx::MetallicRoughnessMaterial, metallicRoughtnessTextureCoordinate)},
+                                     {"metallicRoughnessTextureCoordinate", offsetof(gfx::MetallicRoughnessMaterial, metallicRoughnessTextureCoordinate)},
                                      {"metallicFactor", offsetof(gfx::MetallicRoughnessMaterial, metallicFactor)},
                                      {"roughnessFactor", offsetof(gfx::MetallicRoughnessMaterial, roughnessFactor)}});
 
@@ -210,8 +211,18 @@ namespace rasm
         }
     }
 
-    bool ShaderCompiler::initialize(Target target)
+    bool ShaderCompiler::initialize(Target target, const std::string &shaderDir)
     {
+        const std::filesystem::path libDir = pathFromUtf8(shaderDir) / "lib";
+        const std::filesystem::path uberShader = pathFromUtf8(shaderDir) / "passes/rasm.slang";
+        std::error_code errorCode;
+        if (!std::filesystem::is_directory(libDir, errorCode) || !std::filesystem::is_regular_file(uberShader, errorCode))
+        {
+            spdlog::error("Shaders not found in {}. Copy them there, or set EngineConfig::shaderDir.", shaderDir);
+            return false;
+        }
+        spdlog::info("Loading shaders from {}", shaderDir);
+
         // Create Slang Global Session
         auto result = createGlobalSession(globalSession.writeRef());
 
@@ -223,11 +234,7 @@ namespace rasm
 
         slang::TargetDesc targetDesc = getTargetDesc(target);
 
-        std::filesystem::path cwd = std::filesystem::current_path();
-        spdlog::info("Current Working Directory at runtime is: {}", cwd.string());
-
-        // Adjust the text "../../" depending on how deep your build folder is from your project root
-        std::string pathLib = (cwd / "shaders/lib").string();
+        const std::string pathLib = pathToUtf8(libDir);
 
         const char *searchPaths[] = {pathLib.c_str()};
 
@@ -262,7 +269,7 @@ namespace rasm
 
     void ShaderCompiler::shutdown() {}
 
-    ShaderCompiler::compiledShader ShaderCompiler::compile(const std::string &sourcePath, const std::string &outputPath, const std::string &entryPointName)
+    ShaderCompiler::CompiledShader ShaderCompiler::compile(const std::string &sourcePath, const std::string &outputPath, const std::string &entryPointName)
     {
         auto sourceCode = loadFileToString(sourcePath);
         if (sourceCode.empty())
@@ -274,7 +281,7 @@ namespace rasm
         return compileFromString(sourceCode, outputPath, entryPointName);
     }
 
-    ShaderCompiler::compiledShader ShaderCompiler::compileFromString(const std::string &sourceCode, const std::string &outputPath, const std::string &entryPointName)
+    ShaderCompiler::CompiledShader ShaderCompiler::compileFromString(const std::string &sourceCode, const std::string &outputPath, const std::string &entryPointName)
     {
         // The session keeps every module and rejects a second one with the same name and different source,
         // so hash the source into the name.
@@ -347,7 +354,7 @@ namespace rasm
 
         assert(validateRasmStructs(linkedProgram->getLayout()) && "C++ structs must match shaders/lib/core.slang");
 
-        constexpr SlangInt targetIndex = 0;
+        constexpr SlangInt TARGET_INDEX = 0;
 
         // Get Target Code
         Slang::ComPtr<slang::IBlob> compiledBlob;
@@ -355,7 +362,7 @@ namespace rasm
             Slang::ComPtr<slang::IBlob> diagnosticsBlob;
 
             SlangResult result = linkedProgram->getEntryPointCode(0,
-                                                                  targetIndex,
+                                                                  TARGET_INDEX,
                                                                   compiledBlob.writeRef(),
                                                                   diagnosticsBlob.writeRef());
             diagnoseIfNeeded(diagnosticsBlob);
@@ -372,7 +379,7 @@ namespace rasm
         std::vector<uint8_t> code(blobSize);
         std::memcpy(code.data(), pBlob, blobSize);
 
-        ShaderCompiler::compiledShader result;
+        ShaderCompiler::CompiledShader result;
         result.code = std::move(code);
 
         return result;

@@ -3,7 +3,8 @@
 
 #include "rasm/transform.h"
 
-namespace rasm {
+namespace rasm
+{
 
     struct CameraInput
     {
@@ -80,7 +81,7 @@ namespace rasm {
         float easingSpeed = 12.0f;
     };
 
-    struct Camera 
+    struct Camera
     {
         CameraProjection    projection;
         CameraController    controller;

@@ -9,9 +9,10 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace rasm::gfx {
+namespace rasm::gfx
+{
 
-    enum VertexFormat : uint32_t { Full, PosOnly };
+    enum class VertexFormat : uint32_t { FULL, POS_ONLY };
 
     // Selects how the uber shader's fragMain shades a model. Must match shaders/lib/core.slang.
     enum class MaterialId : uint32_t { PBR, UNLIT };
@@ -20,7 +21,7 @@ namespace rasm::gfx {
     struct VertexFull       { glm::vec3 pos; glm::vec3 normal; glm::vec2 uv[MAX_VERTEX_UV_SETS]; glm::vec4 tangent; };
     struct VertexPosOnly    { glm::vec3 pos; };
 
-    enum LightType : uint32_t { Directional , Point };
+    enum class LightType : uint32_t { DIRECTIONAL, POINT };
 
     struct Light
     {
@@ -48,7 +49,7 @@ namespace rasm::gfx {
         uint32_t        baseColorTextureIndex;
         uint32_t        baseColorTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
         uint32_t        metallicRoughnessTextureIndex;
-        uint32_t        metallicRoughtnessTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
+        uint32_t        metallicRoughnessTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
         float           metallicFactor;
         float           roughnessFactor;
     };
@@ -84,8 +85,8 @@ namespace rasm::gfx {
 
     struct Modeldata
     {
-        glm::mat4       worldMatrix; 
-        glm::mat3       normalMatrix; 
+        glm::mat4       worldMatrix;
+        glm::mat3       normalMatrix;
         Material        material;
         VertexFormat    vertFormat;
         MaterialId      materialId;

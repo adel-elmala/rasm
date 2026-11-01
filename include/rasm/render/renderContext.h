@@ -17,7 +17,7 @@ namespace rasm
     class RenderContext
     {
     public:
-                                            RenderContext(Engine *owner);
+                                            RenderContext(Engine* owner);
                                             ~RenderContext();
         bool                                initialize(Backend backend);
         void                                cleanup();
@@ -27,7 +27,7 @@ namespace rasm
         PipelineHandle                      createPipeline(ResourceDesc desc);
         DescriptorSetLayoutHandle           createBindlessDescriptorSetLayout(ResourceDesc desc);
         DescriptorPoolHandle                createDescriptorPool(ResourceDesc desc);
-        DescriptorSetHandle                 allocateDescriptorSet(ResourceDesc desc, const DescriptorPoolHandle &pool, const DescriptorSetLayoutHandle &layout);
+        DescriptorSetHandle                 allocateDescriptorSet(ResourceDesc desc, const DescriptorPoolHandle& pool, const DescriptorSetLayoutHandle& layout);
         CommandPoolHandle                   createCommandPool();
         CommandBufferHandle                 createCommandBuffer(const CommandPoolHandle& commandPool);
         SemaphoreHandle                     createSemaphore(bool timeline = false, uint64_t initialValue = 0);

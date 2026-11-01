@@ -101,7 +101,7 @@ struct PBRInfo
     Material    material;            // material properties
 };
 
-float4 PBR(Sampler2D gTextures[], PBRInfo pbrInfo)
+float4 shadePBR(Sampler2D gTextures[], PBRInfo pbrInfo)
 {
     float metallicFactor    = pbrInfo.material.metallicRoughness.metallicFactor;
     float roughnessFactor   = pbrInfo.material.metallicRoughness.roughnessFactor;
@@ -170,7 +170,7 @@ float4 PBR(Sampler2D gTextures[], PBRInfo pbrInfo)
         float3 l;
         float attenuation = 1.0;
 
-        if (light.type == LightType.Directional) {
+        if (light.type == LightType.DIRECTIONAL) {
             // Directional Light: direction points from the light towards the surface,
             // L points from the surface towards the light.
             l = normalize(-light.direction);

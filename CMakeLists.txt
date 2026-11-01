@@ -7,6 +7,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(RASM_ENABLE_AVX2 "Build the engine for AVX2-capable x86 CPUs" OFF)
 option(RASM_BUILD_EXAMPLES "Build the example applications" ${PROJECT_IS_TOP_LEVEL})
+option(RASM_BUILD_TESTS "Build the unit tests" ${PROJECT_IS_TOP_LEVEL})
+option(RASM_INSTALL "Generate the install and export rules" ${PROJECT_IS_TOP_LEVEL})
+set(RASM_SHADER_DIR "shaders" CACHE STRING "Default shader directory, resolved against the executable's directory if relative")
+# The value ends up in a C string literal, where a Windows backslash would start an escape sequence.
+cmake_path(CONVERT "${RASM_SHADER_DIR}" TO_CMAKE_PATH_LIST RASM_SHADER_DIR)
 
 if (RASM_ENABLE_AVX2)
     if (APPLE AND CMAKE_OSX_ARCHITECTURES)
@@ -21,8 +26,19 @@ endif()
 
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
+include(GNUInstallDirs)
+
 add_subdirectory(src)
 
 if (RASM_BUILD_EXAMPLES)
     add_subdirectory(examples)
+endif()
+
+if (RASM_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
+if (RASM_INSTALL)
+    include(RasmInstall)
 endif()

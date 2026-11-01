@@ -13,8 +13,8 @@ namespace rasm
         DIRECTIONAL,
         POINT
     };
-    
-    struct Light 
+
+    struct Light
     {
         LightHandle handle;
         LightType   type;

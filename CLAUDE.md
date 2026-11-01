@@ -20,18 +20,23 @@ RASM is an early-stage C++20 GPU-driven rendering engine (static lib target `ras
 cmake --preset x64-debug            # or x64-release; macOS / macOS-release / macOS-Xcode on macOS
 cmake --build --preset x64-debug
 cmake --build --preset x64-debug --target 02_gltf     # single example
-.\build\x64-debug\examples\02_gltf.exe                 # must run from the repo root
+.\build\x64-debug\examples\02_gltf.exe                 # runs from any directory
+ctest --preset x64-debug                               # unit tests
+cmake --install build\x64-debug                        # into install/, for find_package(rasm)
 ```
 
-- Requires `VCPKG_ROOT`; presets use Ninja + `clang++`. Options: `-DRASM_ENABLE_AVX2=ON` (x86 only), `-DRASM_BUILD_EXAMPLES=OFF`.
-- New `.cpp` files must be added to `RASM_SRC` in `src/CMakeLists.txt`. New examples go in `examples/NN_name/main.cpp` plus a `rasm_add_example(NN_name)` line in `examples/CMakeLists.txt`.
-- No test suite or lint config yet. Verify changes by running the examples with `EngineConfig::enableValidation = true` — a change that adds validation messages is not done.
-- Shaders are compiled at runtime from `./shaders/passes` with includes resolved from `./shaders/lib` (cwd-relative), and examples load `assets/...` relative to cwd. `tools/compile-shaders.bat` is only an offline compile check.
+- Requires `VCPKG_ROOT`; presets use Ninja + `clang++`. Options: `-DRASM_ENABLE_AVX2=ON` (x86 only), `-DRASM_BUILD_EXAMPLES=OFF`, `-DRASM_BUILD_TESTS=OFF`, `-DRASM_INSTALL=OFF`, `-DRASM_SHADER_DIR=<path>`.
+- New `.cpp` files must be added to `RASM_SRC` in `src/CMakeLists.txt`. New examples go in `examples/NN_name/main.cpp` plus a `rasm_add_example(NN_name)` line in `examples/CMakeLists.txt`. New test files go in `tests/` and on the `rasm_tests` list in `tests/CMakeLists.txt`.
+- A new dependency linked to `rasm`, PUBLIC or PRIVATE, also needs a `find_dependency` line in `cmake/rasmConfig.cmake.in`: `rasm` is static, so consumers link it too.
+- Run `clang-format -i <file>` on `.cpp` files you change. It keeps line breaks (no column limit) and skips `// clang-format off` regions. Every header is wrapped in those guards and hand-aligned in columns, so new headers need them too (see `docs/coding_style.md` section 4).
+- `rasm_tests` (doctest, no GPU) covers CPU-side code only, and there is no lint config yet. Verify rendering changes by running the examples with `EngineConfig::enableValidation = true` — a change that adds validation messages is not done.
+- Shaders are compiled at runtime from `EngineConfig::shaderDir`, by default a `shaders/` folder beside the executable. Examples set `shaderDir` to the repo's `shaders/` and `assetRoot` to its `assets/`, so a shader edit shows up the next time an example starts, with no build. `tools/compile-shaders.bat` is only an offline compile check.
 
 ## Layout
 
 - `include/rasm/` is the public API, with the low-level API in `include/rasm/render/`.
 - `src/` is private: `core/`, `platform/`, `assets/`, `scene/`, `renderer/`, `rhi/` (+ `rhi/vulkan/`). `src/thirdparty_impl.cpp` is the only file that defines `*_IMPLEMENTATION` macros.
+- `tests/` links `rasm::rasm` like any application, so it only sees the public API.
 - Private headers are included relative to `src/` (e.g. `"rhi/vulkan/vulkanContext.h"`). `src/` is a PRIVATE include directory, so public headers can't include private ones; forward-declare, or use a private `Impl` like `RenderContext` does.
 
 ## Code rules

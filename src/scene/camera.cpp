@@ -9,10 +9,10 @@ namespace rasm
 {
     namespace
     {
-        glm::vec3 projectOnSphere(const glm::vec2 &NDCPoint)
+        glm::vec3 projectOnSphere(const glm::vec2 &ndcPoint)
         {
-            float x = NDCPoint.x;
-            float y = NDCPoint.y;
+            float x = ndcPoint.x;
+            float y = ndcPoint.y;
             float z = 0.0f;
 
             float lengthSquared = x * x + y * y;
@@ -197,14 +197,15 @@ namespace rasm
         const float radius = 1.0f;
         const glm::vec3 forward = transform.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
 
-        registery.cameras.resize(handle.index + 1);
-        registery.cameras[handle.index] = Camera{
+        registry.cameras.resize(handle.index + 1);
+        registry.cameras[handle.index] = Camera{
             .projection = projection,
             .controller = CameraController{.type = CameraController::Type::TRACK_BALL,
-                                           .trackBall = {.radius = radius,
-                                                         .center = transform.position + forward * radius,
-                                                         .orbitSensitivity = 1.0f,
-                                                        }},
+                                           .trackBall = {
+                                               .radius = radius,
+                                               .center = transform.position + forward * radius,
+                                               .orbitSensitivity = 1.0f,
+                                           }},
             .transform = transform,
             .targetTransform = transform,
         };
@@ -214,37 +215,37 @@ namespace rasm
 
     void Engine::setCameraTransform(CameraHandle camera, Transform transform)
     {
-        if (!camera.isValid() || camera.index >= registery.cameras.size())
+        if (!camera.isValid() || camera.index >= registry.cameras.size())
         {
             spdlog::error("Invalid camera handle.");
             return;
         }
 
-        auto &cam = registery.cameras[camera.index];
+        auto &cam = registry.cameras[camera.index];
         cam.transform = transform;
         cam.targetTransform = transform;
     }
 
     void Engine::setCameraProjection(CameraHandle camera, CameraProjection projection)
     {
-        if (!camera.isValid() || camera.index >= registery.cameras.size())
+        if (!camera.isValid() || camera.index >= registry.cameras.size())
         {
             spdlog::error("Invalid camera handle.");
             return;
         }
 
-        registery.cameras[camera.index].projection = projection;
+        registry.cameras[camera.index].projection = projection;
     }
 
     void Engine::setCameraController(CameraHandle camera, CameraController controller)
     {
-        if (!camera.isValid() || camera.index >= registery.cameras.size())
+        if (!camera.isValid() || camera.index >= registry.cameras.size())
         {
             spdlog::error("Invalid camera handle.");
             return;
         }
 
-        auto &cam = registery.cameras[camera.index];
+        auto &cam = registry.cameras[camera.index];
 
         // Start the new controller from the current rendered pose.
         cam.targetTransform = cam.transform;
@@ -263,40 +264,40 @@ namespace rasm
 
     CameraController Engine::getCameraController(CameraHandle camera)
     {
-        if (!camera.isValid() || camera.index >= registery.cameras.size())
+        if (!camera.isValid() || camera.index >= registry.cameras.size())
         {
             spdlog::error("Invalid camera handle.");
             return CameraController{};
         }
 
-        return registery.cameras[camera.index].controller;
+        return registry.cameras[camera.index].controller;
     }
 
     Transform Engine::getCameraTransform(CameraHandle camera)
     {
-        if (!camera.isValid() || camera.index >= registery.cameras.size())
+        if (!camera.isValid() || camera.index >= registry.cameras.size())
         {
             spdlog::error("Invalid camera handle.");
             return Transform{};
         }
 
-        return registery.cameras[camera.index].transform;
+        return registry.cameras[camera.index].transform;
     }
 
     CameraProjection Engine::getCameraProjection(CameraHandle camera)
     {
-        if (!camera.isValid() || camera.index >= registery.cameras.size())
+        if (!camera.isValid() || camera.index >= registry.cameras.size())
         {
             spdlog::error("Invalid camera handle.");
             return CameraProjection{};
         }
 
-        return registery.cameras[camera.index].projection;
+        return registry.cameras[camera.index].projection;
     }
 
     void Engine::updateCameraAspectRatio(float aspect)
     {
-        for (auto &camera : registery.cameras)
+        for (auto &camera : registry.cameras)
         {
             setProjectionAspect(camera.projection, aspect);
         }
@@ -304,37 +305,37 @@ namespace rasm
 
     glm::mat4 Engine::getProjectionMatrix(CameraHandle camera)
     {
-        if (!camera.isValid() || camera.index >= registery.cameras.size())
+        if (!camera.isValid() || camera.index >= registry.cameras.size())
         {
             spdlog::error("Invalid camera handle.");
             return glm::mat4(1.0f);
         }
 
-        return toProjectionMatrix(registery.cameras[camera.index].projection);
+        return toProjectionMatrix(registry.cameras[camera.index].projection);
     }
 
     glm::mat4 Engine::getProjectionMatrix(CameraHandle camera, float aspect)
     {
-        if (!camera.isValid() || camera.index >= registery.cameras.size())
+        if (!camera.isValid() || camera.index >= registry.cameras.size())
         {
             spdlog::error("Invalid camera handle.");
             return glm::mat4(1.0f);
         }
 
-        auto projection = registery.cameras[camera.index].projection;
+        auto projection = registry.cameras[camera.index].projection;
         setProjectionAspect(projection, aspect);
         return toProjectionMatrix(projection);
     }
 
     glm::mat4 Engine::getViewMatrix(CameraHandle camera)
     {
-        if (!camera.isValid() || camera.index >= registery.cameras.size())
+        if (!camera.isValid() || camera.index >= registry.cameras.size())
         {
             spdlog::error("Invalid camera handle.");
             return glm::mat4(1.0f);
         }
 
-        auto &transform = registery.cameras[camera.index].transform;
+        auto &transform = registry.cameras[camera.index].transform;
 
         // Compute the view matrix from the camera's world transform.
         // The view matrix is the inverse of the camera's world transform.
@@ -347,13 +348,13 @@ namespace rasm
 
     void Engine::updateCamera(CameraHandle camera, const CameraInput &input)
     {
-        if (!camera.isValid() || camera.index >= registery.cameras.size())
+        if (!camera.isValid() || camera.index >= registry.cameras.size())
         {
             spdlog::error("Invalid camera handle.");
             return;
         }
 
-        auto &cam = registery.cameras[camera.index];
+        auto &cam = registry.cameras[camera.index];
 
         if (cam.controller.type == CameraController::Type::FREE_FLY)
         {

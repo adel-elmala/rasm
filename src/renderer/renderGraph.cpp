@@ -124,6 +124,8 @@ namespace rasm
         if (sortedIndices.size() != passes.size())
         {
             spdlog::error("Frame Graph contains a cycle!");
+            // execute() keeps running frames so the window stays responsive, but they draw no passes.
+            executionOrder.clear();
             compiled = false;
             return;
         }
@@ -143,7 +145,7 @@ namespace rasm
 
         auto &ctx = engine->getRenderContext();
 
-        auto scene = engine->registery.scenes[engine->currentScene.index];
+        auto scene = engine->registry.scenes[engine->currentScene.index];
         auto camera = scene.cameras[0]; // TODO: handle multi-cameras
 
         if (!engine->beginFrame(camera))
@@ -160,35 +162,35 @@ namespace rasm
         engine->endFrame();
     }
 
-    TextureHandle RenderGraph::CreateTexture(ResourceDesc desc)
+    TextureHandle RenderGraph::createTexture(ResourceDesc desc)
     {
         auto handle = engine->createTexture(desc);
         return handle;
     }
 
-    BufferHandle RenderGraph::CreateBuffer(ResourceDesc desc)
+    BufferHandle RenderGraph::createBuffer(ResourceDesc desc)
     {
         auto handle = engine->createBuffer(desc);
         return handle;
     }
 
-    RenderTargetHandle RenderGraph::CreateRenderTarget(ResourceDesc desc)
+    RenderTargetHandle RenderGraph::createRenderTarget(ResourceDesc desc)
     {
         auto handle = engine->createRenderTarget(desc);
         return handle;
     }
 
-    void RenderGraph::Read(uint32_t passIdx, TextureHandle h) { passes[passIdx].inputTextures.push_back(h); }
+    void RenderGraph::read(uint32_t passIdx, TextureHandle h) { passes[passIdx].inputTextures.push_back(h); }
 
-    void RenderGraph::Read(uint32_t passIdx, BufferHandle h) { passes[passIdx].inputBuffers.push_back(h); }
+    void RenderGraph::read(uint32_t passIdx, BufferHandle h) { passes[passIdx].inputBuffers.push_back(h); }
 
-    void RenderGraph::Read(uint32_t passIdx, RenderTargetHandle h) { passes[passIdx].inputRenderTargets.push_back(h); }
+    void RenderGraph::read(uint32_t passIdx, RenderTargetHandle h) { passes[passIdx].inputRenderTargets.push_back(h); }
 
-    void RenderGraph::Write(uint32_t passIdx, TextureHandle h) { passes[passIdx].outputTextures.push_back(h); }
+    void RenderGraph::write(uint32_t passIdx, TextureHandle h) { passes[passIdx].outputTextures.push_back(h); }
 
-    void RenderGraph::Write(uint32_t passIdx, BufferHandle h) { passes[passIdx].outputBuffers.push_back(h); }
+    void RenderGraph::write(uint32_t passIdx, BufferHandle h) { passes[passIdx].outputBuffers.push_back(h); }
 
-    void RenderGraph::Write(uint32_t passIdx, RenderTargetHandle h) { passes[passIdx].outputRenderTarget = h; }
+    void RenderGraph::write(uint32_t passIdx, RenderTargetHandle h) { passes[passIdx].outputRenderTarget = h; }
 
     TextureHandle PassBuilder::createTexture(ResourceDesc desc)
     {
@@ -198,7 +200,7 @@ namespace rasm
             return TextureHandle{};
         }
 
-        return graph.CreateTexture(desc);
+        return graph.createTexture(desc);
     }
 
     BufferHandle PassBuilder::createBuffer(ResourceDesc desc)
@@ -209,7 +211,7 @@ namespace rasm
             return BufferHandle{};
         }
 
-        return graph.CreateBuffer(desc);
+        return graph.createBuffer(desc);
     }
 
     RenderTargetHandle PassBuilder::createRenderTarget(ResourceDesc desc)
@@ -220,19 +222,19 @@ namespace rasm
             return RenderTargetHandle{};
         }
 
-        return graph.CreateRenderTarget(desc);
+        return graph.createRenderTarget(desc);
     }
 
-    void PassBuilder::read(TextureHandle handle) { graph.Read(currentPass, handle); }
+    void PassBuilder::read(TextureHandle handle) { graph.read(currentPass, handle); }
 
-    void PassBuilder::read(BufferHandle handle) { graph.Read(currentPass, handle); }
+    void PassBuilder::read(BufferHandle handle) { graph.read(currentPass, handle); }
 
-    void PassBuilder::read(RenderTargetHandle handle) { graph.Read(currentPass, handle); }
+    void PassBuilder::read(RenderTargetHandle handle) { graph.read(currentPass, handle); }
 
-    void PassBuilder::write(TextureHandle handle) { graph.Write(currentPass, handle); }
+    void PassBuilder::write(TextureHandle handle) { graph.write(currentPass, handle); }
 
-    void PassBuilder::write(BufferHandle handle) { graph.Write(currentPass, handle); }
+    void PassBuilder::write(BufferHandle handle) { graph.write(currentPass, handle); }
 
-    void PassBuilder::write(RenderTargetHandle handle) { graph.Write(currentPass, handle); }
+    void PassBuilder::write(RenderTargetHandle handle) { graph.write(currentPass, handle); }
 
 }

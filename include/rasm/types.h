@@ -80,6 +80,8 @@ namespace rasm
         int         windowHeight        = 0;
         bool        enableValidation    = false;
         Backend     preferredBackend    = Backend::VULKAN;
+        std::string assetRoot           = {};
+        std::string shaderDir           = {};
     };
 
     struct FrameResources

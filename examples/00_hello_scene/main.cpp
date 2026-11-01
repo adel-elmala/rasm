@@ -11,7 +11,9 @@ int main()
         .windowWidth = 720,
         .windowHeight = 480,
         .enableValidation = true,
-        .preferredBackend = rasm::Backend::VULKAN
+        .preferredBackend = rasm::Backend::VULKAN,
+        .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
+        .shaderDir = RASM_EXAMPLE_SHADER_DIR
 
     };
 
@@ -23,9 +25,9 @@ int main()
     rasm::SceneHandle scene = engine.createScene();
 
     // 3. Load resources
-    rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/obj/bunny/bunny.obj");
+    rasm::MeshHandle bunnyMesh = engine.loadMesh("models/obj/bunny/bunny.obj");
 
-    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/models/obj/bunny/bunny-atlas.jpg");
+    rasm::TextureHandle albedoTexture = engine.loadTexture("models/obj/bunny/bunny-atlas.jpg");
     if (!bunnyMesh.isValid() || !albedoTexture.isValid())
     {
         return 1;

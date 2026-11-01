@@ -42,7 +42,7 @@ Applications compile against `include/rasm/` and glm only. `src/`, the backend l
 
 There are two kinds of handle owner:
 
-- **CPU-side objects** live in `Engine::registery` (a private struct of `std::vector`s) and are indexed directly by `handle.index`. These are `Entity`, `Mesh`, `Material`, `Camera`, `Light` and `Scene`. Slot 0 is an unused default-constructed element. Each `create*` checks `index` against a compile-time `MAX_*` constant.
+- **CPU-side objects** live in `Engine::registry` (a private struct of `std::vector`s) and are indexed directly by `handle.index`. These are `Entity`, `Mesh`, `Material`, `Camera`, `Light` and `Scene`. Slot 0 is an unused default-constructed element. Each `create*` checks `index` against a compile-time `MAX_*` constant.
 - **GPU objects** live in `RenderContext`. Each type has an `unordered_map<Handle, gfx::XxxVKHandle>` cache (`bufferCache`, `textureCache`, `pipelineCache`, …). The backend structs (`src/rhi/vulkan/vulkanTypes.h`) carry the raw Vulkan objects plus a copy of the `ResourceDesc` they were created from.
 
 **`ResourceDesc`** (`rasm/render/resource.h`) is the one creation descriptor for every GPU resource. It is a tagged union of `texture`, `buffer`, `shader`, `pipeline`, `renderTarget`, `bindlessDescriptorSetLayout`, `descriptorPool` and `descriptorSet`, with a `std::string name`. The constructor zeroes the whole union, so fields a caller leaves unset are 0 (fixed `B18`). It has a hand-written `operator==` and `ResourceDescHash`.
@@ -60,7 +60,7 @@ There are two kinds of handle owner:
    - creates the device, graphics queue, swapchain (`B8G8R8A8_SRGB`) and VMA allocator.
 3. Create per-frame resources for `MAX_FRAMES_IN_FLIGHT = 2` slots: a command pool and buffer, an image-acquired semaphore, an in-flight fence (created signaled), and a depth texture (`D32_SFLOAT_S8_UINT`).
 4. Create one render-finished semaphore per swapchain image.
-5. Initialize the Slang session (SPIR-V 1.4, scalar layout, column-major matrices, search path `cwd/shaders/lib`).
+5. Initialize the Slang session (SPIR-V 1.4, scalar layout, column-major matrices, search path `lib/` under `EngineConfig::shaderDir`). A missing folder fails here, so a wrong path stops startup instead of failing every frame.
 6. Create the single bindless descriptor set: layout, pool and set. It is binding 0 of set 0, an array of 1024 `COMBINED_IMAGE_SAMPLER`s with `UPDATE_AFTER_BIND | PARTIALLY_BOUND`.
 7. `isRunning = true`. Any failure returns early and leaves `running() == false`.
 
@@ -161,7 +161,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
   - `textures[PbrSlot::COUNT]` and `texCoords[...]`,
   - a flat `float params[]` indexed by `PbrParam` offsets (albedo is 3 floats at offset 0, metallic is at 3, …).
 - `convertToGfxMaterial` (`scene.cpp`) turns it into the GPU `gfx::Material`. Texture handles are replaced by bindless slot indices, and `INVALID_TEXTURE_INDEX` (0xFFFFFFFF) means "no texture".
-- **Bindless slots.** `Engine::addBindlessTexture` → `RenderContext::updateBindlessDescriptorSet` writes the texture into the next free slot (`nextBindlessTextureIndex++`), or into a slot the caller names, which also moves `nextBindlessTextureIndex` past it. The slot is remembered in `registery.bindlessTextureIndexMap`. Automatic allocation never reuses a slot; naming a slot that is already taken replaces its descriptor.
+- **Bindless slots.** `Engine::addBindlessTexture` → `RenderContext::updateBindlessDescriptorSet` writes the texture into the next free slot (`nextBindlessTextureIndex++`), or into a slot the caller names, which also moves `nextBindlessTextureIndex` past it. The slot is remembered in `registry.bindlessTextureIndexMap`. Automatic allocation never reuses a slot; naming a slot that is already taken replaces its descriptor.
 - **Texture upload.** This is `VulkanContext::fillTexture`:
   - the image is transitioned on the host and filled with `VK_EXT_host_image_copy` (core in 1.4), so no command buffer or staging buffer is involved;
   - the full mip chain is generated on the CPU with `stb_image_resize2`, sRGB-aware for sRGB formats;
@@ -171,7 +171,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 
 ## 6. Asset import
 
-- `Engine::loadMesh(path)` dispatches on the file extension and caches by path in `registery.loadedMeshes`.
+- `Engine::loadMesh(path)` dispatches on the file extension and caches by resolved path in `registry.loadedMeshes`, so a relative and an absolute path to one file share a mesh.
   - **OBJ** (tinyobjloader) is de-indexed into one vertex per index. Y and V are flipped per vertex.
   - **glTF/GLB** (tinygltf) goes through `processGLTF`, which walks the default scene's node tree from a root transform of `scale(1, −1, 1)` (the Y flip). The walk uses an explicit stack and imports each node once, skipping out-of-range references and any node reached a second time (a cycle, or a node with two parents, which glTF forbids). For each mesh node, `extractGLTFRaws` reads `POSITION`, `NORMAL`, `TANGENT` and `TEXCOORD_0..2` and the indices through one validated accessor reader. That reader handles strides, sparse accessors and quantized or normalized components. Strips and fans become triangle lists, primitives without indices get generated ones, and point and line primitives are skipped. Missing normals are computed as smooth normals, and in that case `TANGENT` is ignored, as the glTF spec requires. It calls `loadMaterial` for each primitive.
 - **Tangents and normal maps.** `Vertex::tangent` holds the glTF tangent with w = ±1, or w = 0 when the mesh has none. The vertex shader transforms it with the model matrix and multiplies w by the sign of the matrix's determinant, so mirroring transforms such as the root Y flip keep the bitangent right. `getNormalFromMap` uses the authored frame (B = cross(N, T)·w) when w ≠ 0. Otherwise it reconstructs a frame from UV derivatives, with B pointing toward decreasing v (glTF normal maps store +Y as up in the image).
@@ -184,6 +184,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - `ShaderCompiler` wraps one Slang global session and one session.
 - `compileFromString(source, moduleName, entryPoint)` loads a module, finds the entry point, composes, links and returns SPIR-V. The session keeps every module and rejects a second one with the same name and different source, so the name it loads includes a hash of the source. Callers can reuse a name.
 - Shaders are compiled **at runtime from source** every time a pipeline is built. Nothing is cached.
+- The examples set `shaderDir` to the repo's `shaders/`, so a shader edit reaches an example the next time it starts, with no build.
 - `tools/compile-shaders.bat` is an offline `slangc` invocation that is useful for checking compile errors. The engine does not consume its output.
 
 ## 8. Camera and input
@@ -196,7 +197,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 
 ## 9. Render graph (low-level path)
 
-- `RenderGraph::addPass(name, setup, execute)` records the resources each pass reads and writes through `PassBuilder`. `compile()` builds producer → consumer edges and topologically sorts the passes (Kahn's algorithm, with cycle detection).
+- `RenderGraph::addPass(name, setup, execute)` records the resources each pass reads and writes through `PassBuilder`. `compile()` builds producer → consumer edges and topologically sorts the passes (Kahn's algorithm, with cycle detection). A cycle logs an error and empties the execution order, so `execute()` draws no passes and tries again next frame. It still runs the frame, which keeps the window handling events.
 - `execute()` runs `beginFrame` once, then for each pass in order calls `setRenderTarget(pass.outputRenderTarget)`, `beginPass`, `pass.execute(ctx)` and `endPass`. A pass without an output render target renders to the swapchain. Last comes `endFrame`.
 - The graph currently only orders passes. It does not insert barriers or layout transitions, does not allocate transient resources, and uses the current scene's first camera. Only `examples/01_render_graph` uses it.
 - A pass records through `Engine::drawScene`, or through its own pipeline from `Engine::createPipeline`. That example's overlay pass does the second: it binds a pipeline and draws a screen-covering triangle.
@@ -220,7 +221,11 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 
 ## 11. Conventions that cross files
 
-- **Working directory.** Shaders (`./shaders/passes`, includes from `./shaders/lib`) and example assets (`assets/...`) are opened relative to the process working directory, so run from the repo root.
+- **Paths.** Nothing depends on the working directory unless the application asks for it.
+  - `EngineConfig::shaderDir` is the folder holding `lib/` and `passes/`. When empty, it takes the `RASM_SHADER_DIR` default, which is `shaders`.
+  - `EngineConfig::assetRoot` is the folder that relative paths passed to `loadMesh`, `loadGLTF` and `loadTexture` resolve against. Absolute paths ignore it. When empty, paths are opened as given, which means relative to the working directory.
+  - A relative `shaderDir` or `assetRoot` resolves against the executable's directory, and `getConfig()` returns the absolute result. `resolveAssetPath` gives the path a load would open.
+  - Paths are UTF-8. `src/platform/paths.h` converts them, because `std::filesystem::path` otherwise assumes the Windows ANSI code page. A string that isn't valid UTF-8 is read in that code page instead, which is what `path::string()` returns. `resolveAssetPath` always returns UTF-8, and stb_image (through `STBI_WINDOWS_UTF8`), tinygltf and the `std::ifstream` that `loadMesh` gives tinyobjloader all open it as such.
 - **Coordinate system.** The engine works in a Y-down world: imported geometry is mirrored in Y (`D8`), and back-face culling is disabled. Light directions and camera transforms are expressed in that mirrored space.
 - **Depth.** `D32_SFLOAT_S8_UINT`, cleared to 1.0, compare `LESS_OR_EQUAL`.
 - **Output.** The PBR shader applies Reinhard tone mapping. The sRGB swapchain format does the gamma encoding, so shaders must output linear color.

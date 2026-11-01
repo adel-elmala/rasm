@@ -21,14 +21,16 @@
 
 namespace tinygltf { class Model; }
 
-namespace rasm {
+namespace rasm
+{
 
     class ShaderCompiler;
 
     constexpr uint32_t MAX_MATERIALS = 256;
     constexpr uint32_t MAX_CAMERAS   = 8;
 
-    class Engine {
+    class Engine
+    {
         friend class RenderGraph;
         friend class RenderContext;
 
@@ -59,7 +61,7 @@ namespace rasm {
         // renders to the swapchain's color format with D32_SFLOAT_S8_UINT depth, and returns invalid on failure.
         // The name is a label, so two pipelines can share one.
         PipelineHandle              createPipeline(const std::string& name, const std::string& shaderSource);
-        const Material&             getMaterial(const MaterialHandle &handle);
+        const Material&             getMaterial(const MaterialHandle& handle);
         Transform                   getTransform(EntityHandle entity);
         Transform                   getCameraTransform(CameraHandle camera);
         CameraProjection            getCameraProjection(CameraHandle camera);
@@ -69,7 +71,7 @@ namespace rasm {
         glm::mat4                   getProjectionMatrix(CameraHandle camera, float aspect);
         glm::mat4                   getViewMatrix(CameraHandle camera);
         void                        updateCameraAspectRatio(float aspect);
-        void                        updateCamera(CameraHandle camera, const CameraInput &input);
+        void                        updateCamera(CameraHandle camera, const CameraInput& input);
         void                        updateTransform(EntityHandle entity, Transform transform);
         void                        setCameraTransform(CameraHandle camera, Transform transform);
         void                        setCameraProjection(CameraHandle camera, CameraProjection projection);
@@ -96,15 +98,16 @@ namespace rasm {
         DescriptorSetHandle         getBindlessDescriptorSet();
         const FrameResources&       getCurrentFrameResources();
         EngineConfig                getConfig() const;
+        std::string                 resolveAssetPath(const std::string& path) const;
         const Window&               getMainWindow() const;
         RenderContext&              getRenderContext();
-        MeshSize                    getMeshByteSize(const MeshHandle &handle) const;
+        MeshSize                    getMeshByteSize(const MeshHandle& handle) const;
         void                        queryMemoryStats();
-        uint32_t                    addBindlessTexture(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot = MAX_BINDLESS_TEXTURES);
-        uint32_t                    getBindlessTextureIndex(const TextureHandle &texture);
+        uint32_t                    addBindlessTexture(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, uint32_t slot = MAX_BINDLESS_TEXTURES);
+        uint32_t                    getBindlessTextureIndex(const TextureHandle& texture);
         // The render target's color texture for the current frame slot, so fetch it every frame.
-        TextureHandle               getRenderTargetTexture(const RenderTargetHandle &renderTarget);
-        void                        updateUniforms(const PreparedScene &preparedScene);
+        TextureHandle               getRenderTargetTexture(const RenderTargetHandle& renderTarget);
+        void                        updateUniforms(const PreparedScene& preparedScene);
 
         // window related
         Window                      createWindow(uint32_t width, uint32_t height);
@@ -138,12 +141,12 @@ namespace rasm {
         bool                                                        swapchainRendered                       = false; // a pass rendered to the swapchain this frame
 
     private:
-        MaterialHandle              loadMaterial(const tinygltf::Model &model, int materialIndex, GltfImportCache &cache);
-        std::vector<SubGLTFRaw>     extractGLTFRaws(const tinygltf::Model &model, uint32_t meshIndex, const glm::mat4 &globalTransform, GltfImportCache &cache);
-        std::vector<SubGLTFRaw>     traverseNodes(const tinygltf::Model &model, const std::vector<int> &rootNodes, const glm::mat4 &rootTransform, GltfImportCache &cache);
-        GLTFRaw                     processGLTF(const tinygltf::Model &model);
+        MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
+        std::vector<SubGLTFRaw>     extractGLTFRaws(const tinygltf::Model& model, uint32_t meshIndex, const glm::mat4& globalTransform, GltfImportCache& cache);
+        std::vector<SubGLTFRaw>     traverseNodes(const tinygltf::Model& model, const std::vector<int>& rootNodes, const glm::mat4& rootTransform, GltfImportCache& cache);
+        GLTFRaw                     processGLTF(const tinygltf::Model& model);
 
-        struct Registery
+        struct Registry
         {
             std::vector<Entity>      entities;
             std::vector<Material>    materials;
@@ -158,7 +161,7 @@ namespace rasm {
             std::unordered_map<TextureHandle, uint32_t, HandleHash>     bindlessTextureIndexMap; // slot in the bindless descriptor set
         };
 
-        Registery registery = {};
+        Registry registry = {};
     };
 
 }
