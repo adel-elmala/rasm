@@ -60,7 +60,7 @@ There are two kinds of handle owner:
    - creates the device, graphics queue, swapchain (`B8G8R8A8_SRGB`) and VMA allocator.
 3. Create per-frame resources for `MAX_FRAMES_IN_FLIGHT = 2` slots: a command pool and buffer, an image-acquired semaphore, an in-flight fence (created signaled), and a depth texture (`D32_SFLOAT_S8_UINT`).
 4. Create one render-finished semaphore per swapchain image.
-5. Initialize the Slang session (SPIR-V 1.4, scalar layout, column-major matrices, search path `cwd/shaders/lib`).
+5. Initialize the Slang session (SPIR-V 1.4, scalar layout, column-major matrices, search path `lib/` under `EngineConfig::shaderDir`). A missing folder fails here, so a wrong path stops startup instead of failing every frame.
 6. Create the single bindless descriptor set: layout, pool and set. It is binding 0 of set 0, an array of 1024 `COMBINED_IMAGE_SAMPLER`s with `UPDATE_AFTER_BIND | PARTIALLY_BOUND`.
 7. `isRunning = true`. Any failure returns early and leaves `running() == false`.
 
@@ -171,7 +171,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 
 ## 6. Asset import
 
-- `Engine::loadMesh(path)` dispatches on the file extension and caches by path in `registery.loadedMeshes`.
+- `Engine::loadMesh(path)` dispatches on the file extension and caches by resolved path in `registery.loadedMeshes`, so a relative and an absolute path to one file share a mesh.
   - **OBJ** (tinyobjloader) is de-indexed into one vertex per index. Y and V are flipped per vertex.
   - **glTF/GLB** (tinygltf) goes through `processGLTF`, which walks the default scene's node tree from a root transform of `scale(1, −1, 1)` (the Y flip). The walk uses an explicit stack and imports each node once, skipping out-of-range references and any node reached a second time (a cycle, or a node with two parents, which glTF forbids). For each mesh node, `extractGLTFRaws` reads `POSITION`, `NORMAL`, `TANGENT` and `TEXCOORD_0..2` and the indices through one validated accessor reader. That reader handles strides, sparse accessors and quantized or normalized components. Strips and fans become triangle lists, primitives without indices get generated ones, and point and line primitives are skipped. Missing normals are computed as smooth normals, and in that case `TANGENT` is ignored, as the glTF spec requires. It calls `loadMaterial` for each primitive.
 - **Tangents and normal maps.** `Vertex::tangent` holds the glTF tangent with w = ±1, or w = 0 when the mesh has none. The vertex shader transforms it with the model matrix and multiplies w by the sign of the matrix's determinant, so mirroring transforms such as the root Y flip keep the bitangent right. `getNormalFromMap` uses the authored frame (B = cross(N, T)·w) when w ≠ 0. Otherwise it reconstructs a frame from UV derivatives, with B pointing toward decreasing v (glTF normal maps store +Y as up in the image).
@@ -184,6 +184,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - `ShaderCompiler` wraps one Slang global session and one session.
 - `compileFromString(source, moduleName, entryPoint)` loads a module, finds the entry point, composes, links and returns SPIR-V. The session keeps every module and rejects a second one with the same name and different source, so the name it loads includes a hash of the source. Callers can reuse a name.
 - Shaders are compiled **at runtime from source** every time a pipeline is built. Nothing is cached.
+- The examples read the copy of `shaders/` beside their executables, which `rasm_example_shaders` refreshes on every build. So a shader edit in the repo reaches a running example after `cmake --build`, without a relink.
 - `tools/compile-shaders.bat` is an offline `slangc` invocation that is useful for checking compile errors. The engine does not consume its output.
 
 ## 8. Camera and input
@@ -220,7 +221,11 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 
 ## 11. Conventions that cross files
 
-- **Working directory.** Shaders (`./shaders/passes`, includes from `./shaders/lib`) and example assets (`assets/...`) are opened relative to the process working directory, so run from the repo root.
+- **Paths.** Nothing depends on the working directory unless the application asks for it.
+  - `EngineConfig::shaderDir` is the folder holding `lib/` and `passes/`. When empty, it takes the `RASM_SHADER_DIR` default, which is `shaders`.
+  - `EngineConfig::assetRoot` is the folder that relative paths passed to `loadMesh`, `loadGLTF` and `loadTexture` resolve against. Absolute paths ignore it. When empty, paths are opened as given, which means relative to the working directory.
+  - A relative `shaderDir` or `assetRoot` resolves against the executable's directory, and `getConfig()` returns the absolute result. `resolveAssetPath` gives the path a load would open.
+  - Paths are UTF-8. `src/platform/paths.h` converts them, because `std::filesystem::path` otherwise assumes the Windows ANSI code page.
 - **Coordinate system.** The engine works in a Y-down world: imported geometry is mirrored in Y (`D8`), and back-face culling is disabled. Light directions and camera transforms are expressed in that mirrored space.
 - **Depth.** `D32_SFLOAT_S8_UINT`, cleared to 1.0, compare `LESS_OR_EQUAL`.
 - **Output.** The PBR shader applies Reinhard tone mapping. The sRGB swapchain format does the gamma encoding, so shaders must output linear color.

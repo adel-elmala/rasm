@@ -20,16 +20,16 @@ RASM is an early-stage C++20 GPU-driven rendering engine (static lib target `ras
 cmake --preset x64-debug            # or x64-release; macOS / macOS-release / macOS-Xcode on macOS
 cmake --build --preset x64-debug
 cmake --build --preset x64-debug --target 02_gltf     # single example
-.\build\x64-debug\examples\02_gltf.exe                 # must run from the repo root
+.\build\x64-debug\examples\02_gltf.exe                 # runs from any directory
 ctest --preset x64-debug                               # unit tests
 cmake --install build\x64-debug                        # into install/, for find_package(rasm)
 ```
 
-- Requires `VCPKG_ROOT`; presets use Ninja + `clang++`. Options: `-DRASM_ENABLE_AVX2=ON` (x86 only), `-DRASM_BUILD_EXAMPLES=OFF`, `-DRASM_BUILD_TESTS=OFF`, `-DRASM_INSTALL=OFF`.
+- Requires `VCPKG_ROOT`; presets use Ninja + `clang++`. Options: `-DRASM_ENABLE_AVX2=ON` (x86 only), `-DRASM_BUILD_EXAMPLES=OFF`, `-DRASM_BUILD_TESTS=OFF`, `-DRASM_INSTALL=OFF`, `-DRASM_SHADER_DIR=<path>`.
 - New `.cpp` files must be added to `RASM_SRC` in `src/CMakeLists.txt`. New examples go in `examples/NN_name/main.cpp` plus a `rasm_add_example(NN_name)` line in `examples/CMakeLists.txt`. New test files go in `tests/` and on the `rasm_tests` list in `tests/CMakeLists.txt`.
 - A new dependency linked to `rasm`, PUBLIC or PRIVATE, also needs a `find_dependency` line in `cmake/rasmConfig.cmake.in`: `rasm` is static, so consumers link it too.
 - `rasm_tests` (doctest, no GPU) covers CPU-side code only, and there is no lint config yet. Verify rendering changes by running the examples with `EngineConfig::enableValidation = true` — a change that adds validation messages is not done.
-- Shaders are compiled at runtime from `./shaders/passes` with includes resolved from `./shaders/lib` (cwd-relative), and examples load `assets/...` relative to cwd. `tools/compile-shaders.bat` is only an offline compile check.
+- Shaders are compiled at runtime from `EngineConfig::shaderDir`, by default a `shaders/` folder beside the executable. Examples read the copy in their build folder, so a shader edit needs `cmake --build` before it shows up. Examples load assets through `EngineConfig::assetRoot`, which points at the repo's `assets/`. `tools/compile-shaders.bat` is only an offline compile check.
 
 ## Layout
 

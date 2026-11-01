@@ -96,6 +96,7 @@ namespace rasm {
         DescriptorSetHandle         getBindlessDescriptorSet();
         const FrameResources&       getCurrentFrameResources();
         EngineConfig                getConfig() const;
+        std::string                 resolveAssetPath(const std::string& path) const;
         const Window&               getMainWindow() const;
         RenderContext&              getRenderContext();
         MeshSize                    getMeshByteSize(const MeshHandle &handle) const;

@@ -1,5 +1,6 @@
 #include "renderer/shaderCompiler.h"
 #include "rasm/types.h"
+#include "platform/paths.h"
 #include "renderer/uberMaterialTypes.h"
 
 #include "slang.h"
@@ -210,8 +211,17 @@ namespace rasm
         }
     }
 
-    bool ShaderCompiler::initialize(Target target)
+    bool ShaderCompiler::initialize(Target target, const std::string &shaderDir)
     {
+        const std::filesystem::path libDir = pathFromUtf8(shaderDir) / "lib";
+        std::error_code errorCode;
+        if (!std::filesystem::is_directory(libDir, errorCode))
+        {
+            spdlog::error("Shaders not found in {}. Copy them there, or set EngineConfig::shaderDir.", shaderDir);
+            return false;
+        }
+        spdlog::info("Loading shaders from {}", shaderDir);
+
         // Create Slang Global Session
         auto result = createGlobalSession(globalSession.writeRef());
 
@@ -223,11 +233,7 @@ namespace rasm
 
         slang::TargetDesc targetDesc = getTargetDesc(target);
 
-        std::filesystem::path cwd = std::filesystem::current_path();
-        spdlog::info("Current Working Directory at runtime is: {}", cwd.string());
-
-        // Adjust the text "../../" depending on how deep your build folder is from your project root
-        std::string pathLib = (cwd / "shaders/lib").string();
+        const std::string pathLib = pathToUtf8(libDir);
 
         const char *searchPaths[] = {pathLib.c_str()};
 

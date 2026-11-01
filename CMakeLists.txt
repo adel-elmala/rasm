@@ -9,6 +9,7 @@ option(RASM_ENABLE_AVX2 "Build the engine for AVX2-capable x86 CPUs" OFF)
 option(RASM_BUILD_EXAMPLES "Build the example applications" ${PROJECT_IS_TOP_LEVEL})
 option(RASM_BUILD_TESTS "Build the unit tests" ${PROJECT_IS_TOP_LEVEL})
 option(RASM_INSTALL "Generate the install and export rules" ${PROJECT_IS_TOP_LEVEL})
+set(RASM_SHADER_DIR "shaders" CACHE STRING "Default shader directory, resolved against the executable's directory if relative")
 
 if (RASM_ENABLE_AVX2)
     if (APPLE AND CMAKE_OSX_ARCHITECTURES)

@@ -58,7 +58,7 @@ cmake --build --preset x64-debug
 other presets are also available, check `cmakepresets.json`.
 
 ### 3. Run
-Examples executables can be found in `/build` folder under the `x64-debug` preset folder, in `examples/`. Run them from the repository root (shaders and assets are loaded relative to it):
+Examples executables can be found in `/build` folder under the `x64-debug` preset folder, in `examples/`. They can run from any directory. Each build copies `shaders/` next to them, so run `cmake --build` after editing a shader:
 
 ```
 .\build\x64-debug\examples\00_hello_scene.exe
@@ -118,7 +118,7 @@ cmake --build --preset macOs
 other presets are also available, check `cmakepresets.json`.
 
 ### 3. Run
-Examples executables can be found in `/build` folder under the `macOS` preset folder, in `examples/`. Run them from the repository root:
+Examples executables can be found in `/build` folder under the `macOS` preset folder, in `examples/`. They can run from any directory. Each build copies `shaders/` next to them, so run `cmake --build` after editing a shader:
 
 ```
 ./build/macOS/examples/00_hello_scene
@@ -155,7 +155,8 @@ target_link_libraries(my_app PRIVATE rasm::rasm)
 ```
 
 - RASM is a static library, so the project also needs RASM's link dependencies: Vulkan SDK, vk-bootstrap, VulkanMemoryAllocator, glm, SDL3, Tracy, spdlog, tinyobjloader and Slang. With vcpkg, add `vk-bootstrap`, `vulkan-memory-allocator`, `glm`, `sdl3` with the `vulkan` feature, `tracy` with the `on-demand` feature, `spdlog`, `tinyobjloader` and `shader-slang` to its manifest.
-- Shaders are compiled at runtime and found through the working directory (`D11`), so the application must run from a directory that contains a `shaders/` folder. Copy `share/rasm/shaders` from the install prefix.
+- Shaders are compiled at runtime, so the application needs them when it ships. By default the engine looks in a `shaders/` folder next to the executable, so copy `share/rasm/shaders` from the install prefix there. To keep them elsewhere, set `EngineConfig::shaderDir`.
+- Set `EngineConfig::assetRoot` to have relative `loadMesh` and `loadTexture` paths resolve against a folder of your choice. A relative `shaderDir` or `assetRoot` is resolved against the executable's directory.
 - To use a build tree without installing, set `rasm_DIR` to it, for example `-Drasm_DIR=<repo>/build/x64-debug`.
 - Pass `-DRASM_INSTALL=OFF` to skip the install rules, which is the default when RASM is added with `add_subdirectory`.
 

@@ -4,6 +4,7 @@ set(RASM_SRC
             "core/handle.cpp"
             "core/profiler.cpp"
             "core/utils.cpp"
+            "platform/paths.cpp"
             "platform/window.cpp"
             "assets/mesh.cpp"
             "assets/material.cpp"
@@ -51,6 +52,7 @@ target_link_libraries(rasm PRIVATE SDL3::SDL3)
 # Library configuration macros live here, never in a .cpp (B2). PUBLIC so every consumer that
 # includes glm sees the same definitions (ODR) and gets a Vulkan [0, 1] clip-space depth range.
 target_compile_definitions(rasm PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE)
+target_compile_definitions(rasm PRIVATE RASM_SHADER_DIR="${RASM_SHADER_DIR}")
 
 target_include_directories(rasm PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>" "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 target_include_directories(rasm PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" ${Stb_INCLUDE_DIR} ${TINYGLTF_INCLUDE_DIRS} ${Vulkan_INCLUDE_DIRS})

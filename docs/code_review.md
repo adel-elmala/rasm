@@ -61,7 +61,7 @@ docs/
    - `scene/scene.cpp` holds `prepareScene` and pipeline creation (renderer logic);
    - `assets/material.cpp` holds both the material API and glTF texture import;
    - `engine.cpp` (frame loop) still sits at the root of `src/`.
-3. **Shaders are found through the working directory (`D11`).** Paths are cwd-relative (`./shaders/passes/...` in `material.cpp`/`scene.cpp`, `cwd/shaders/lib` in `shaderCompiler.cpp`), so the examples only work when run from the repo root (not from the build directory, an IDE, or an installed app).
+3. **Shaders are found through the working directory (`D11`).** *Fixed 2026-11-01:* shaders load from `EngineConfig::shaderDir`, by default a `shaders/` folder beside the executable, and `EngineConfig::assetRoot` locates assets. The original finding follows. Paths are cwd-relative (`./shaders/passes/...` in `material.cpp`/`scene.cpp`, `cwd/shaders/lib` in `shaderCompiler.cpp`), so the examples only work when run from the repo root (not from the build directory, an IDE, or an installed app).
 4. **No install/export.** *Fixed 2026-11-01:* `cmake/RasmInstall.cmake` installs the library, public headers and shaders and exports `rasm::rasm`, so `find_package(rasm)` works from an install tree or a build tree. The original finding follows. There is no `install()`/`export()`, so `find_package(rasm)` does not work.
 5. **No `tests/` and no CI** (plan phase 1.5). *Partly resolved 2026-11-01:* `tests/` has a doctest target run through CTest. CI is still missing.
 6. **Binary assets live in plain git.** The glTF/OBJ sample models are committed directly, so the clone grows with every asset added.
@@ -89,7 +89,6 @@ assets/                         keep small; large models via Git LFS or a downlo
 ```
 
 Next steps, in order:
-- Make the shader path configurable (`D11`): a `RASM_SHADER_DIR` compile definition and an `EngineConfig::assetRoot`, plus a post-build copy of `shaders/` next to the binaries.
 - Keep moving code incrementally: move a file only while you are working on it, and change the CMake lists in the same commit.
 - Add CI that builds the presets and runs `rasm_tests` (phase 1.5).
 
@@ -252,7 +251,7 @@ Use a right-handed Y-up world (glTF's convention) and do the Vulkan flip with a 
 
 **D10 — There are two rendering paths.** *Fixed 2026-11-01:* the legacy path is gone, with `render2` renamed to `render`. `01_render_graph` draws through `Engine::drawScene` and `Engine::createPipeline`. The removal also took out what only the legacy path used: `basic.slang`, `MaterialType::BASIC` and `SHADER`, `Material::shader`, `Engine::createShader`, `uploadMesh`, the per-frame shader data buffer, the vertex-input reflection in `ShaderCompiler`, `VertexInputLayout`, `BufferUsage::VERTEX` and `VERTEXINDEX`, the vertex and index fields of the buffer desc, `bindVertexBuffer` and `SAMPLED_DEPTH_STENCIL_ATTACHMENT`. With `drawScene` public, each call has its own `SceneData` slot, fits the camera to the pass's aspect ratio, and refuses a render target with other formats than the scene's pipeline. A frame that never renders to the swapchain clears it in `endFrame`, because it is presented anyway. The original finding follows. `render`/`compileScene` (the legacy per-entity path) and `render2`/`prepareScene` (GPU-driven) coexist, together with `begin/endOffscreenFrame`, which is marked "TODO: delete". Pick the GPU-driven path, port `01_render_graph` to it, and delete the rest.
 
-**D11 — Assets and shaders are located through the working directory** (§1.3).
+**D11 — Assets and shaders are located through the working directory** (§1.3). *Fixed 2026-11-01:* see [architecture.md §11](architecture.md#11-conventions-that-cross-files). One limit remains on Windows: `stbi_load` and tinyobjloader open narrow paths with the ANSI code page, so an `assetRoot` with characters outside that page fails to load, while tinygltf and the shader path handle them.
 
 **D12 — The shader code is Vulkan-only.**
 - `spirv_asm` for `DrawIndex` ([core.slang:114-122](../shaders/lib/core.slang#L114-L122)) is SPIR-V specific.

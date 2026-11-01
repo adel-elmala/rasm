@@ -53,7 +53,7 @@ Goal: the structural changes that every later feature depends on. They get much 
 - [x] CMake: `src/` and `examples/` subdirectories, the `rasm` target with alias `rasm::rasm`, the `RASM_BUILD_EXAMPLES` option, and the `rasm_add_example()` helper.
 - [x] Put the `*_IMPLEMENTATION` defines in one translation unit, `src/thirdparty_impl.cpp` (`C10`).
 - [x] Install and export targets (`find_package(rasm)`). Add `RASM_BUILD_TESTS` together with the first tests (done 2026-11-01).
-- [ ] Locate assets and shaders through configuration: `EngineConfig::assetRoot`, a `RASM_SHADER_DIR` default, and shaders copied next to the binaries (`D11`).
+- [x] Locate assets and shaders through configuration: `EngineConfig::assetRoot`, a `RASM_SHADER_DIR` default, and shaders copied next to the binaries (`D11`, done 2026-11-01).
 - [ ] Commit a `.clang-format` and normalize formatting in a dedicated commit (`C1`, `C2`).
 
 ### 1.2 RHI

@@ -1,5 +1,6 @@
 #include "rasm/engine.h"
 #include "core/utils.h"
+#include "platform/paths.h"
 #include "renderer/shaderCompiler.h"
 #include "renderer/uberMaterialTypes.h"
 
@@ -40,6 +41,12 @@ namespace rasm
         // In a real implementation, this is where we'd initialize the window, graphics context, etc.
         spdlog::info("initializing engine with config: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
                      config.appName, config.windowWidth, config.windowHeight, config.enableValidation);
+
+        this->config.shaderDir = resolveFromExecutableDir(config.shaderDir.empty() ? RASM_SHADER_DIR : config.shaderDir);
+        if (!config.assetRoot.empty())
+        {
+            this->config.assetRoot = resolveFromExecutableDir(config.assetRoot);
+        }
 
         if (config.windowWidth <= 0 || config.windowHeight <= 0)
         {
@@ -94,7 +101,7 @@ namespace rasm
             return;
 
         auto shaderTarget = getShaderCompilerTarget(config.preferredBackend);
-        if (!shaderCompiler->initialize(shaderTarget))
+        if (!shaderCompiler->initialize(shaderTarget, this->config.shaderDir))
         {
             spdlog::error("Failed to initialize shader compiler.");
             return;
@@ -169,13 +176,23 @@ namespace rasm
         spdlog::info("Engine shutdown, cleaned up resources.");
     }
 
-    TextureHandle Engine::loadTexture(const std::string &path, Format format)
+    std::string Engine::resolveAssetPath(const std::string &path) const
+    {
+        if (config.assetRoot.empty())
+        {
+            return path;
+        }
+        return pathToUtf8((pathFromUtf8(config.assetRoot) / pathFromUtf8(path)).lexically_normal());
+    }
+
+    TextureHandle Engine::loadTexture(const std::string &assetPath, Format format)
     {
         if (format != Format::R8G8B8A8_SRGB && format != Format::R8G8B8A8_UNORM)
         {
             spdlog::error("loadTexture requires RGBA8 sRGB or UNORM format.");
             return {};
         }
+        const std::string path = resolveAssetPath(assetPath);
         const auto cacheKey = path + "#" + std::to_string(static_cast<int>(format));
         if (registery.loadedTextures.find(cacheKey) != registery.loadedTextures.end())
         {

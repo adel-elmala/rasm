@@ -334,8 +334,10 @@ namespace rasm
         return handle;
     }
 
-    MeshHandle Engine::loadMesh(const std::string &path)
+    MeshHandle Engine::loadMesh(const std::string &assetPath)
     {
+        const std::string path = resolveAssetPath(assetPath);
+
         // find if the mesh is already loaded, if so return existing handle
         if (registery.loadedMeshes.find(path) != registery.loadedMeshes.end())
         {

@@ -2,6 +2,7 @@
 #include "rasm/camera.h"
 #include "rasm/engine.h"
 #include "core/utils.h"
+#include "platform/paths.h"
 #include "renderer/uberMaterialTypes.h"
 
 #include "spdlog/spdlog.h"
@@ -278,7 +279,7 @@ namespace rasm
 
     // create a pipeline for the UberMaterial. A failed preparation retries every frame, so this comes
     // before the buffers: a shader error must not allocate and fill them each time.
-    preparedScene.uberMaterialPipeline = createPipeline("rasm", readFile("./shaders/passes/rasm.slang"));
+    preparedScene.uberMaterialPipeline = createPipeline("rasm", readFile(pathFromUtf8(config.shaderDir) / "passes/rasm.slang"));
 
     if (!preparedScene.uberMaterialPipeline.isValid())
     {

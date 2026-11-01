@@ -29,7 +29,7 @@ namespace rasm
         ShaderCompiler() = default;
         ~ShaderCompiler() = default;
 
-        bool initialize(Target target);
+        bool initialize(Target target, const std::string &shaderDir);
         void shutdown();
 
         compiledShader compile(const std::string &sourcePath, const std::string &outputPath, const std::string &entryPointName);
