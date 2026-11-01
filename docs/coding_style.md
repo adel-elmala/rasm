@@ -43,9 +43,9 @@ Known deviations to migrate, rather than copy:
 
 - Every header starts with `#pragma once`.
 - One main type per header. Small helper types that belong to it may live beside it.
-- **Public versus private.** `include/rasm/` is the API that users compile against. Everything under `src/` is private. `src/` is temporarily also a public include directory until `D2` is done; don't add new uses of that.
-  - Public headers must not include backend or third-party implementation headers. That means no `vulkan.h`, `VkBootstrap.h`, `vk_mem_alloc.h`, `slang.h`, `tiny_gltf.h` or `SDL`.
-  - Forward-declare instead, as `engine.h` already does for `tinygltf::Model`.
+- **Public versus private.** `include/rasm/` is the API that users compile against. Everything under `src/` is private, and `src/` is a PRIVATE include directory, so applications cannot reach it.
+  - Public headers must not include backend or third-party implementation headers. That means no `vulkan.h`, `VkBootstrap.h`, `vk_mem_alloc.h`, `slang.h`, `tiny_gltf.h`, `spdlog`, Tracy or `SDL`. glm is the only third-party library in the public API.
+  - Forward-declare instead, as `engine.h` does for `tinygltf::Model` and `ShaderCompiler`. A class that must own backend objects keeps them in a private `Impl`, as `RenderContext` does.
   - Backend and implementation headers go under `src/`.
 - Include order, with a blank line between groups:
   1. the file's own header (in `.cpp` files),
@@ -126,7 +126,7 @@ Known deviations to migrate, rather than copy:
 
 ## 8. Vulkan and backend code
 
-- All Vulkan calls live under the backend (`src/rhi/vulkan/`). Code outside `src/rhi/` never includes `vulkan.h` or uses `Vk*` types. (`window.cpp` and `renderContext.h` still do today: `D1`/`D2`.)
+- All Vulkan calls live under the backend (`src/rhi/vulkan/`). Code outside `src/rhi/` never includes `vulkan.h` or uses `Vk*` types.
 - Use synchronization2 (`vkCmdPipelineBarrier2`, `VkDependencyInfo`) and dynamic rendering. Do not introduce render passes or framebuffers.
 - Every created object gets a debug name, which is a no-op when debug utils is unavailable.
 - Check every `VkResult`. Swapchain functions must handle `VK_SUBOPTIMAL_KHR` and `VK_ERROR_OUT_OF_DATE_KHR` explicitly.

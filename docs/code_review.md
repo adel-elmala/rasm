@@ -52,7 +52,7 @@ docs/
 
 ### Problems
 
-1. **Public headers expose implementation details (`D2`).**
+1. **Public headers expose implementation details (`D2`).** *Fixed 2026-11-01:* public headers include nothing from `src/` and no third-party header except glm. `RenderContext` keeps its Vulkan state in a private `Impl`, and `Engine` holds `ShaderCompiler` through a forward declaration. `src/`, the backend libraries and the tinygltf/stb include paths are PRIVATE. The original finding follows.
    - `engine.h` includes the private `renderer/shaderCompiler.h` and `renderer/uberMaterialTypes.h`; `render/renderContext.h` includes `rhi/vulkan/vulkanTypes.h` and `rhi/vulkan/vulkanContext.h` (→ vk-bootstrap, VMA).
    - `types.h` and `mesh.h` include `tiny_gltf.h`, `window.h` includes `vulkan/vulkan.h`, and `render/renderGraph.h` includes `spdlog/spdlog.h`.
    - Because of this, `src/` is temporarily a PUBLIC include directory, and Vulkan, VMA, vk-bootstrap, Slang, glm, Tracy, spdlog and the tinygltf/stb include paths are all linked PUBLIC. Applications still compile against the whole backend.
@@ -73,7 +73,7 @@ Compared with the current layout, the target still needs:
 ```
 include/rasm/                   PUBLIC API ONLY — no third-party or src/ headers (D2)
   config.h                      EngineConfig incl. assetRoot / shader dir
-  render/rhi.h                  device-agnostic types replacing the Vk structs in renderContext.h (D1)
+  render/rhi.h                  device-agnostic types replacing the Vk structs in RenderContext::Impl (D1)
 src/
   renderer/                     + frame loop from engine.cpp, prepareScene/GPU scene from scene.cpp,
                                   passes (forward, culling, shadow, post)
@@ -89,7 +89,6 @@ assets/                         keep small; large models via Git LFS or a downlo
 ```
 
 Next steps, in order:
-- Finish the public/private header split (`D2`). It gives the most value and is the hardest to retrofit; once done, make `src/` and the backend libraries PRIVATE in `src/CMakeLists.txt`.
 - Make the shader path configurable (`D11`): a `RASM_SHADER_DIR` compile definition and an `EngineConfig::assetRoot`, plus a post-build copy of `shaders/` next to the binaries.
 - Keep moving code incrementally: move a file only while you are working on it, and change the CMake lists in the same commit.
 - Add `install()`/`export()` and a `tests/` target alongside CI (phase 1.5).
@@ -202,13 +201,13 @@ Next steps, in order:
 
 ## 3. Design and architecture
 
-**D1 — The backend abstraction does not scale.** Every `RenderContext` method is a `switch (backend)` with empty DX12/Metal branches (≈1,300 lines, mostly boilerplate). `vkb::QueueType` leaks into the "neutral" API ([context.h:30](../include/rasm/render/renderContext.h#L30)). Replace it with an RHI interface:
+**D1 — The backend abstraction does not scale.** Every `RenderContext` method is a `switch (backend)` with empty DX12/Metal branches (≈1,300 lines, mostly boilerplate). Replace it with an RHI interface:
 - a small set of objects (`Device`, `Buffer`, `Texture`, `Sampler`, `Pipeline`, `CommandList`, `Queue`, `Swapchain`, `Fence`/timeline),
 - either a virtual interface or a compile-time backend selection,
 - a pool per object type with generational handles.
 
-**D2 — The public API leaks its implementation.** See §1.1. In addition:
-- `Engine` exposes about 80 public methods that mix the high-level API with internals: `createSurfaceVk`, `traverseNodes`, `processGLTF`, `extractGLTFRaws` and `convertToGfxMaterial` are all public.
+**D2 — The public API leaks its implementation.** *Mostly fixed 2026-11-01:* the header split is done (see §1.1). `createSurfaceVk` moved into the Vulkan backend, `convertToGfxMaterial` is a helper in `scene.cpp`, and the glTF import functions are private. Still open:
+- `Engine` keeps a large public surface that mixes the high-level API with lower-level calls such as `updateUniforms`, `addBindlessTexture`, `createWindow` and `pollEvents`.
 - `RenderGraph` and `RenderContext` are friends of `Engine`.
 
 **D3 — `Engine` is a god object.** It owns the window, input, assets, scene registry, cameras, the frame loop and the renderer. Split it into subsystems that `Engine` composes: `Platform`, `AssetManager`, `Scene`, `Renderer`, `rhi::Device`. Then integrators can use only the pieces they need, for example the renderer with their own window and asset pipeline.
@@ -292,7 +291,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 - `getMeshByteSize` copies a whole `Mesh`.
 - `RenderGraph::execute` copies `Scene`, which holds 1,040 handles ([renderGraph.cpp:143](../src/renderer/renderGraph.cpp#L143)).
 
-**P6 — CPU memory retention.** The full `tinygltf::Model` (with decoded images), CPU vertex and index arrays, and the `stbi` pixel data for every `loadTexture` stay resident for the engine's lifetime.
+**P6 — CPU memory retention.** *Partly fixed 2026-11-01:* `GLTFRaw` no longer keeps a copy of the `tinygltf::Model`, so the decoded glTF images are freed after import. CPU vertex and index arrays and the `stbi` pixel data for every `loadTexture` still stay resident for the engine's lifetime.
 
 **P7 — Per-frame CPU work grows with draw count.** `updateUniforms` recomputes and uploads every model and normal matrix every frame, with no dirty tracking. That is fine now, but it becomes the bottleneck at 10⁴–10⁵ instances. Plan for dirty ranges and, later, GPU-side transform computation.
 

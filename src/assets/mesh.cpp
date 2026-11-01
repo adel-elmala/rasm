@@ -1,6 +1,7 @@
 #include "rasm/mesh.h"
 #include "rasm/engine.h"
-#include "rhi/vulkan/vulkanTypes.h"
+
+#include "spdlog/spdlog.h"
 
 #include "tiny_gltf.h"
 #include "tiny_obj_loader.h"
@@ -620,7 +621,6 @@ namespace rasm
         const tinygltf::Scene &scene = model.scenes[sceneIndex];
 
         GLTFRaw gltfRaw;
-        gltfRaw.model = model;
 
         // Root transform flips Y into the engine's Vulkan clip-space convention (Y down), matching what the
         // OBJ loader does per-vertex. Applied on the left so it acts after the glTF node hierarchy.

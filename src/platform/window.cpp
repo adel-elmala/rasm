@@ -6,7 +6,6 @@
 #include <algorithm>
 
 #include "SDL3/SDL.h"
-#include "SDL3/SDL_vulkan.h"
 #include "spdlog/spdlog.h"
 
 namespace rasm
@@ -57,17 +56,6 @@ namespace rasm
         window.pixelHeight = static_cast<uint32_t>(pixelHeight);
 
         return window;
-    }
-
-    VkSurfaceKHR Engine::createSurfaceVk(const Window &window, VkInstance instance) const
-    {
-        VkSurfaceKHR surface;
-        if (!SDL_Vulkan_CreateSurface(reinterpret_cast<SDL_Window *>(window.handle.index), instance, nullptr, &surface))
-        {
-            spdlog::error("Failed to create Vulkan surface: {}", SDL_GetError());
-            return VK_NULL_HANDLE;
-        }
-        return surface;
     }
 
     void Engine::pollEvents(CameraHandle camera)

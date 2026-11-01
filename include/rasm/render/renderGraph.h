@@ -4,8 +4,7 @@
 #include "rasm/types.h"
 #include "rasm/render/resource.h"
 
-#include "spdlog/spdlog.h"
-
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <functional>

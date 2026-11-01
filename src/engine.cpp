@@ -1,5 +1,7 @@
 #include "rasm/engine.h"
 #include "core/utils.h"
+#include "renderer/shaderCompiler.h"
+#include "renderer/uberMaterialTypes.h"
 
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
@@ -33,13 +35,11 @@ namespace rasm
         }
     }
 
-    Engine::Engine(const EngineConfig &config) : config(config)
+    Engine::Engine(const EngineConfig &config) : config(config), ctx(this), shaderCompiler(std::make_unique<ShaderCompiler>())
     {
         // In a real implementation, this is where we'd initialize the window, graphics context, etc.
         spdlog::info("initializing engine with config: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
                      config.appName, config.windowWidth, config.windowHeight, config.enableValidation);
-
-        ctx = RenderContext(this);
 
         if (config.windowWidth <= 0 || config.windowHeight <= 0)
         {
@@ -63,7 +63,7 @@ namespace rasm
         // Initialize frame resources for double buffering
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
-            frameResources[i].commandPool = ctx.createCommandPool(vkb::QueueType::graphics);
+            frameResources[i].commandPool = ctx.createCommandPool(QueueType::GRAPHICS);
             if (!frameResources[i].commandPool.isValid())
             {
                 spdlog::error("Failed to create command pool for frame {}", i);
@@ -94,7 +94,7 @@ namespace rasm
             return;
 
         auto shaderTarget = getShaderCompilerTarget(config.preferredBackend);
-        if (!shaderCompiler.initialize(shaderTarget))
+        if (!shaderCompiler->initialize(shaderTarget))
         {
             spdlog::error("Failed to initialize shader compiler.");
             return;
@@ -161,19 +161,6 @@ namespace rasm
         for (auto &[handle, tex] : registery.textureData)
         {
             stbi_image_free(tex.data);
-        }
-
-        for (auto mesh : registery.meshes)
-        {
-            if (mesh.type == Mesh::MeshType::GLTF)
-            {
-                // tinygltf::Model doesn't require explicit cleanup.
-            }
-
-            if (mesh.type == Mesh::MeshType::OBJ)
-            {
-                // If we had implemented OBJ loading, we would clean up any allocated resources here.
-            }
         }
 
         ctx.cleanup();
@@ -282,8 +269,8 @@ namespace rasm
     {
         ZoneScoped;
 
-        auto vertShader = shaderCompiler.compileFromString(shaderSource, name + ".vert.slang", "vertMain");
-        auto fragShader = shaderCompiler.compileFromString(shaderSource, name + ".frag.slang", "fragMain");
+        auto vertShader = shaderCompiler->compileFromString(shaderSource, name + ".vert.slang", "vertMain");
+        auto fragShader = shaderCompiler->compileFromString(shaderSource, name + ".frag.slang", "fragMain");
 
         if (vertShader.code.empty() || fragShader.code.empty())
         {

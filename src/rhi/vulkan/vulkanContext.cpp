@@ -10,6 +10,8 @@
 
 #include "vk_mem_alloc.h"
 
+#include "SDL3/SDL_vulkan.h"
+
 namespace rasm::gfx
 {
     namespace
@@ -243,15 +245,15 @@ namespace rasm::gfx
 
         vkb::Result<VkSurfaceKHR> _init_surface(const vkb::Instance &instance, Engine *engine)
         {
-            auto handle = engine->getMainWindow();
-            auto surface_ret = engine->createSurfaceVk(handle, instance.instance);
-
-            if (!surface_ret)
+            const auto &window = engine->getMainWindow();
+            VkSurfaceKHR surface = VK_NULL_HANDLE;
+            if (!SDL_Vulkan_CreateSurface(reinterpret_cast<SDL_Window *>(window.handle.index), instance.instance, nullptr, &surface))
             {
+                spdlog::error("Failed to create Vulkan surface: {}", SDL_GetError());
                 return vkb::Result<VkSurfaceKHR>{vkb::Error{}};
             }
 
-            return vkb::Result<VkSurfaceKHR>{surface_ret};
+            return vkb::Result<VkSurfaceKHR>{surface};
         }
 
         // FIFO, because with NVIDIA's overlay on, the other present modes crash vkDestroyDevice when the window fills the screen (B21).

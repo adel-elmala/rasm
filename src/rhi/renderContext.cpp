@@ -1,4 +1,7 @@
 #include <cassert>
+#include <deque>
+#include <string>
+#include <unordered_map>
 
 #include "rasm/engine.h"
 #include "rasm/render/renderContext.h"
@@ -9,13 +12,59 @@
 
 namespace rasm
 {
-    RenderContext::RenderContext(Engine *owner) : engine(owner)
+    namespace
     {
-        bufferCache.reserve(25);   // Pre-allocate for 25 buffers
-        textureCache.reserve(25);  // Pre-allocate for 25 textures
-        shaderCache.reserve(25);   // Pre-allocate for 25 shaders
-        pipelineCache.reserve(25); // Pre-allocate for 25 pipelines
+        vkb::QueueType toVkbQueueType(QueueType type)
+        {
+            switch (type)
+            {
+            case QueueType::COMPUTE:
+                return vkb::QueueType::compute;
+            case QueueType::TRANSFER:
+                return vkb::QueueType::transfer;
+            default:
+                return vkb::QueueType::graphics;
+            }
+        }
     }
+
+    struct RenderContext::Impl
+    {
+        gfx::VulkanContext                                                                          vulkanContext = {};
+        // TODO: make the cache non-vulkan specific.
+        std::unordered_map<BufferHandle, gfx::BufferVKHandle, HandleHash>                           bufferCache;
+        std::unordered_map<TextureHandle, gfx::TextureVKHandle, HandleHash>                         textureCache;
+        std::unordered_map<TextureHandle, gfx::TextureVKHandle, HandleHash>                         swapchainImageCache;
+        std::unordered_map<ShaderHandle, gfx::ShaderVKHandle, HandleHash>                           shaderCache;
+        std::unordered_map<PipelineHandle, gfx::PipelineVKHandle, HandleHash>                       pipelineCache;
+        std::unordered_map<CommandPoolHandle, gfx::CommandPoolVKHandle, HandleHash>                 commandPoolCache;
+        std::unordered_map<CommandBufferHandle, gfx::CommandBufferVKHandle, HandleHash>             commandBufferCache;
+        std::unordered_map<SemaphoreHandle, gfx::SemaphoreVKHandle, HandleHash>                     semaphoreCache;
+        std::unordered_map<FenceHandle, gfx::FenceVKHandle, HandleHash>                             fenceCache;
+        std::unordered_map<RenderTargetHandle, RenderTarget, HandleHash>                            renderTargetCache;
+        std::unordered_map<DescriptorSetLayoutHandle, gfx::DescriptorSetLayoutVKHandle, HandleHash> descriptorSetLayoutCache;
+        std::unordered_map<DescriptorPoolHandle, gfx::DescriptorPoolVKHandle, HandleHash>           descriptorPoolCache;
+        std::unordered_map<DescriptorSetHandle, gfx::DescriptorSetVKHandle, HandleHash>             descriptorSetCache;
+
+        // Dedup caches, only for immutable objects keyed on their full state. Mutable resources
+        // (buffers, textures, descriptor pools/sets) are always created fresh (B1).
+        std::unordered_map<ResourceDesc, ShaderHandle, ResourceDescHash>                            shaderDescCache;
+        std::deque<std::string>                                                                     shaderSources;  // SPIR-V the shaderDescCache keys point at; a deque keeps those pointers stable
+        std::unordered_map<ResourceDesc, PipelineHandle, ResourceDescHash>                          pipelineDescCache;
+        std::unordered_map<ResourceDesc, DescriptorSetLayoutHandle, ResourceDescHash>               descriptorSetLayoutDescCache;
+
+        uint32_t                                                                                    nextBindlessTextureIndex = 0;
+    };
+
+    RenderContext::RenderContext(Engine *owner) : engine(owner), impl(std::make_unique<Impl>())
+    {
+        impl->bufferCache.reserve(25);   // Pre-allocate for 25 buffers
+        impl->textureCache.reserve(25);  // Pre-allocate for 25 textures
+        impl->shaderCache.reserve(25);   // Pre-allocate for 25 shaders
+        impl->pipelineCache.reserve(25); // Pre-allocate for 25 pipelines
+    }
+
+    RenderContext::~RenderContext() = default;
 
     bool RenderContext::initialize(Backend _backend)
     {
@@ -24,8 +73,8 @@ namespace rasm
         switch (backend)
         {
         case Backend::VULKAN:
-            vulkanContext = gfx::VulkanContext(engine);
-            if (!vulkanContext.initialize())
+            impl->vulkanContext = gfx::VulkanContext(engine);
+            if (!impl->vulkanContext.initialize())
             {
                 spdlog::error("Failed to initialize Vulkan context.");
                 return false;
@@ -49,74 +98,74 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            vulkanContext.waitIdle(); // Ensure the device is idle before cleanup
+            impl->vulkanContext.waitIdle(); // Ensure the device is idle before cleanup
 
-            for (const auto &[handle, descriptorSetLayout] : descriptorSetLayoutCache)
+            for (const auto &[handle, descriptorSetLayout] : impl->descriptorSetLayoutCache)
             {
-                vulkanContext.removeDescriptorSetLayout(descriptorSetLayout);
+                impl->vulkanContext.removeDescriptorSetLayout(descriptorSetLayout);
             }
 
-            for (const auto &[handle, descriptorPool] : descriptorPoolCache)
+            for (const auto &[handle, descriptorPool] : impl->descriptorPoolCache)
             {
-                vulkanContext.removeDescriptorPool(descriptorPool);
+                impl->vulkanContext.removeDescriptorPool(descriptorPool);
             }
 
-            for (const auto &[handle, commandPool] : commandPoolCache)
+            for (const auto &[handle, commandPool] : impl->commandPoolCache)
             {
-                vulkanContext.removeCommandPool(commandPool);
+                impl->vulkanContext.removeCommandPool(commandPool);
             }
 
-            for (const auto &[handle, fence] : fenceCache)
+            for (const auto &[handle, fence] : impl->fenceCache)
             {
-                vulkanContext.removeFence(fence);
+                impl->vulkanContext.removeFence(fence);
             }
 
-            for (const auto &[handle, semaphore] : semaphoreCache)
+            for (const auto &[handle, semaphore] : impl->semaphoreCache)
             {
-                vulkanContext.removeSemaphore(semaphore);
+                impl->vulkanContext.removeSemaphore(semaphore);
             }
 
-            for (const auto &[handle, buffer] : bufferCache)
+            for (const auto &[handle, buffer] : impl->bufferCache)
             {
-                vulkanContext.removeBuffer(buffer);
+                impl->vulkanContext.removeBuffer(buffer);
             }
 
-            for (const auto &[handle, texture] : textureCache)
+            for (const auto &[handle, texture] : impl->textureCache)
             {
-                if (swapchainImageCache.find(handle) == swapchainImageCache.end()) // Only remove non-swapchain textures
+                if (impl->swapchainImageCache.find(handle) == impl->swapchainImageCache.end()) // Only remove non-swapchain textures
                 {
-                    vulkanContext.removeTexture(texture);
+                    impl->vulkanContext.removeTexture(texture);
                 }
             }
 
-            for (const auto &[handle, shader] : shaderCache)
+            for (const auto &[handle, shader] : impl->shaderCache)
             {
-                vulkanContext.removeShader(shader);
+                impl->vulkanContext.removeShader(shader);
             }
 
-            for (const auto &[handle, pipeline] : pipelineCache)
+            for (const auto &[handle, pipeline] : impl->pipelineCache)
             {
-                vulkanContext.removePipeline(pipeline);
+                impl->vulkanContext.removePipeline(pipeline);
             }
-            vulkanContext.cleanup();
-            bufferCache.clear();
-            textureCache.clear();
-            shaderCache.clear();
-            pipelineCache.clear();
-            commandPoolCache.clear();
-            commandBufferCache.clear();
-            fenceCache.clear();
-            semaphoreCache.clear();
-            descriptorSetLayoutCache.clear();
-            descriptorPoolCache.clear();
-            descriptorSetCache.clear();
-            swapchainImageCache.clear();
-            renderTargetCache.clear();
-            shaderDescCache.clear();
-            shaderSources.clear();
-            pipelineDescCache.clear();
-            descriptorSetLayoutDescCache.clear();
-            nextBindlessTextureIndex = 0;
+            impl->vulkanContext.cleanup();
+            impl->bufferCache.clear();
+            impl->textureCache.clear();
+            impl->shaderCache.clear();
+            impl->pipelineCache.clear();
+            impl->commandPoolCache.clear();
+            impl->commandBufferCache.clear();
+            impl->fenceCache.clear();
+            impl->semaphoreCache.clear();
+            impl->descriptorSetLayoutCache.clear();
+            impl->descriptorPoolCache.clear();
+            impl->descriptorSetCache.clear();
+            impl->swapchainImageCache.clear();
+            impl->renderTargetCache.clear();
+            impl->shaderDescCache.clear();
+            impl->shaderSources.clear();
+            impl->pipelineDescCache.clear();
+            impl->descriptorSetLayoutDescCache.clear();
+            impl->nextBindlessTextureIndex = 0;
             break;
         }
         case Backend::DX12:
@@ -135,7 +184,7 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto buffer = vulkanContext.createBuffer(desc);
+            auto buffer = impl->vulkanContext.createBuffer(desc);
             if (!buffer)
             {
                 spdlog::error("Failed to create Vulkan buffer.");
@@ -144,7 +193,7 @@ namespace rasm
             BufferHandle handle = engine->handleManager.getNextBufferHandle();
             buffer->handle = handle;
 
-            bufferCache[handle] = buffer.value();
+            impl->bufferCache[handle] = buffer.value();
             return handle;
         }
         case Backend::DX12:
@@ -163,7 +212,7 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto texture = vulkanContext.createTexture(desc);
+            auto texture = impl->vulkanContext.createTexture(desc);
             if (!texture)
             {
                 spdlog::error("Failed to create Vulkan texture.");
@@ -171,7 +220,7 @@ namespace rasm
             }
             TextureHandle handle = engine->handleManager.getNextTextureHandle();
             texture->handle = handle;
-            textureCache[handle] = texture.value();
+            impl->textureCache[handle] = texture.value();
             return handle;
         }
         case Backend::DX12:
@@ -186,8 +235,8 @@ namespace rasm
 
     ShaderHandle RenderContext::createShader(ResourceDesc desc)
     {
-        auto cachedIt = shaderDescCache.find(desc);
-        if (cachedIt != shaderDescCache.end())
+        auto cachedIt = impl->shaderDescCache.find(desc);
+        if (cachedIt != impl->shaderDescCache.end())
         {
             return cachedIt->second;
         }
@@ -196,7 +245,7 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto shader = vulkanContext.createShader(desc);
+            auto shader = impl->vulkanContext.createShader(desc);
             if (!shader)
             {
                 spdlog::error("Failed to create Vulkan shader.");
@@ -206,12 +255,12 @@ namespace rasm
             shader->handle = handle;
 
             // Callers pass temporary SPIR-V, but the cache key is compared by content on every later lookup.
-            shaderSources.emplace_back(desc.shader.source, desc.shader.sourceSize);
-            desc.shader.source = shaderSources.back().data();
+            impl->shaderSources.emplace_back(desc.shader.source, desc.shader.sourceSize);
+            desc.shader.source = impl->shaderSources.back().data();
             shader->desc.shader.source = desc.shader.source;
 
-            shaderCache[handle] = shader.value();
-            shaderDescCache[desc] = handle;
+            impl->shaderCache[handle] = shader.value();
+            impl->shaderDescCache[desc] = handle;
 
             return handle;
         }
@@ -229,8 +278,8 @@ namespace rasm
     {
         assert(desc.type == ResourceType::GRAPHICS_PIPELINE || desc.type == ResourceType::COMPUTE_PIPELINE);
 
-        auto cachedIt = pipelineDescCache.find(desc);
-        if (cachedIt != pipelineDescCache.end())
+        auto cachedIt = impl->pipelineDescCache.find(desc);
+        if (cachedIt != impl->pipelineDescCache.end())
         {
             return cachedIt->second;
         }
@@ -246,16 +295,16 @@ namespace rasm
                 return {};
             }
 
-            auto vertexIt = shaderCache.find(desc.pipeline.vertexShader);
-            auto fragmentIt = shaderCache.find(desc.pipeline.fragmentShader);
-            auto bindlessLayoutIt = descriptorSetLayoutCache.find(desc.pipeline.descriptorSetLayout);
-            if (vertexIt == shaderCache.end() || fragmentIt == shaderCache.end() || bindlessLayoutIt == descriptorSetLayoutCache.end())
+            auto vertexIt = impl->shaderCache.find(desc.pipeline.vertexShader);
+            auto fragmentIt = impl->shaderCache.find(desc.pipeline.fragmentShader);
+            auto bindlessLayoutIt = impl->descriptorSetLayoutCache.find(desc.pipeline.descriptorSetLayout);
+            if (vertexIt == impl->shaderCache.end() || fragmentIt == impl->shaderCache.end() || bindlessLayoutIt == impl->descriptorSetLayoutCache.end())
             {
                 spdlog::error("Shader or descriptor set layout handle not found in cache during pipeline creation.");
                 return {};
             }
 
-            auto pipeline = vulkanContext.createGraphicsPipeline(desc, vertexIt->second, fragmentIt->second, bindlessLayoutIt->second);
+            auto pipeline = impl->vulkanContext.createGraphicsPipeline(desc, vertexIt->second, fragmentIt->second, bindlessLayoutIt->second);
             if (!pipeline)
             {
                 spdlog::error("Failed to create Vulkan pipeline.");
@@ -264,8 +313,8 @@ namespace rasm
             PipelineHandle handle = engine->handleManager.getNextPipelineHandle();
             pipeline->handle = handle;
 
-            pipelineCache[handle] = pipeline.value();
-            pipelineDescCache[desc] = handle;
+            impl->pipelineCache[handle] = pipeline.value();
+            impl->pipelineDescCache[desc] = handle;
             return handle;
         }
         case Backend::DX12:
@@ -282,8 +331,8 @@ namespace rasm
     {
         assert(desc.type == ResourceType::BINDLESS_DESCRIPTOR_SET_LAYOUT);
 
-        auto cachedIt = descriptorSetLayoutDescCache.find(desc);
-        if (cachedIt != descriptorSetLayoutDescCache.end())
+        auto cachedIt = impl->descriptorSetLayoutDescCache.find(desc);
+        if (cachedIt != impl->descriptorSetLayoutDescCache.end())
         {
             return cachedIt->second;
         }
@@ -292,7 +341,7 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto layout = vulkanContext.createBindlessDescriptorSetLayout(desc);
+            auto layout = impl->vulkanContext.createBindlessDescriptorSetLayout(desc);
             if (!layout)
             {
                 spdlog::error("Failed to create Vulkan bindless descriptor set layout.");
@@ -301,8 +350,8 @@ namespace rasm
             DescriptorSetLayoutHandle handle = engine->handleManager.getNextDescriptorSetLayoutHandle();
             layout->handle = handle;
 
-            descriptorSetLayoutCache[handle] = layout.value();
-            descriptorSetLayoutDescCache[desc] = handle;
+            impl->descriptorSetLayoutCache[handle] = layout.value();
+            impl->descriptorSetLayoutDescCache[desc] = handle;
 
             return handle;
         }
@@ -322,7 +371,7 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto pool = vulkanContext.createDescriptorPool(desc);
+            auto pool = impl->vulkanContext.createDescriptorPool(desc);
             if (!pool)
             {
                 spdlog::error("Failed to create Vulkan descriptor pool.");
@@ -331,7 +380,7 @@ namespace rasm
             DescriptorPoolHandle handle = engine->handleManager.getNextDescriptorPoolHandle();
             pool->handle = handle;
 
-            descriptorPoolCache[handle] = pool.value();
+            impl->descriptorPoolCache[handle] = pool.value();
 
             return handle;
         }
@@ -351,15 +400,15 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto poolIt = descriptorPoolCache.find(pool);
-            auto layoutIt = descriptorSetLayoutCache.find(layout);
-            if (poolIt == descriptorPoolCache.end() || layoutIt == descriptorSetLayoutCache.end())
+            auto poolIt = impl->descriptorPoolCache.find(pool);
+            auto layoutIt = impl->descriptorSetLayoutCache.find(layout);
+            if (poolIt == impl->descriptorPoolCache.end() || layoutIt == impl->descriptorSetLayoutCache.end())
             {
                 spdlog::error("Descriptor pool or layout handle not found in cache during descriptor set allocation.");
                 return {};
             }
 
-            auto descriptorSet = vulkanContext.allocateDescriptorSet(desc, poolIt->second, layoutIt->second);
+            auto descriptorSet = impl->vulkanContext.allocateDescriptorSet(desc, poolIt->second, layoutIt->second);
             if (!descriptorSet)
             {
                 spdlog::error("Failed to allocate Vulkan descriptor set.");
@@ -368,7 +417,7 @@ namespace rasm
             DescriptorSetHandle handle = engine->handleManager.getNextDescriptorSetHandle();
             descriptorSet->handle = handle;
 
-            descriptorSetCache[handle] = descriptorSet.value();
+            impl->descriptorSetCache[handle] = descriptorSet.value();
 
             return handle;
         }
@@ -380,13 +429,13 @@ namespace rasm
         }
     }
 
-    CommandPoolHandle RenderContext::createCommandPool(vkb::QueueType type)
+    CommandPoolHandle RenderContext::createCommandPool(QueueType type)
     {
         switch (backend)
         {
         case Backend::VULKAN:
         {
-            auto commandPool = vulkanContext.createCommandPool(type);
+            auto commandPool = impl->vulkanContext.createCommandPool(toVkbQueueType(type));
             if (!commandPool)
             {
                 spdlog::error("Failed to create Vulkan command pool.");
@@ -396,7 +445,7 @@ namespace rasm
             CommandPoolHandle handle = engine->handleManager.getNextCommandPoolHandle();
             commandPool->handle = handle;
 
-            commandPoolCache[handle] = commandPool.value();
+            impl->commandPoolCache[handle] = commandPool.value();
 
             return handle;
         }
@@ -416,14 +465,14 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto it = commandPoolCache.find(commandPool);
-            if (it == commandPoolCache.end())
+            auto it = impl->commandPoolCache.find(commandPool);
+            if (it == impl->commandPoolCache.end())
             {
                 spdlog::error("Failed to create Vulkan command buffer: command pool handle not found.");
                 return {};
             }
 
-            auto commandBuffer = vulkanContext.createCommandBuffer(it->second);
+            auto commandBuffer = impl->vulkanContext.createCommandBuffer(it->second);
             if (!commandBuffer)
             {
                 spdlog::error("Failed to create Vulkan command buffer.");
@@ -433,7 +482,7 @@ namespace rasm
             CommandBufferHandle handle = engine->handleManager.getNextCommandBufferHandle();
             commandBuffer->handle = handle;
 
-            commandBufferCache[handle] = commandBuffer.value();
+            impl->commandBufferCache[handle] = commandBuffer.value();
 
             return handle;
         }
@@ -453,7 +502,7 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto semaphore = vulkanContext.createSemaphore(timeline, initialValue);
+            auto semaphore = impl->vulkanContext.createSemaphore(timeline, initialValue);
             if (!semaphore)
             {
                 spdlog::error("Failed to create Vulkan semaphore.");
@@ -464,7 +513,7 @@ namespace rasm
             semaphore->handle = handle; // Semaphores might not need a handle in the same way as buffers/textures
 
             // Optionally store in a cache if you want to manage semaphores similarly
-            semaphoreCache[handle] = semaphore.value();
+            impl->semaphoreCache[handle] = semaphore.value();
 
             return handle;
         }
@@ -484,7 +533,7 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto fence = vulkanContext.createFence(signaled);
+            auto fence = impl->vulkanContext.createFence(signaled);
             if (!fence)
             {
                 spdlog::error("Failed to create Vulkan fence.");
@@ -494,7 +543,7 @@ namespace rasm
             FenceHandle handle = engine->handleManager.getNextFenceHandle();
             fence->handle = handle; // Fences might not need a handle in the same way as buffers/textures
 
-            fenceCache[handle] = fence.value();
+            impl->fenceCache[handle] = fence.value();
 
             return handle;
         }
@@ -549,15 +598,15 @@ namespace rasm
             engine->registery.bindlessTextureIndexMap[colorHandle] = colorAttachmentIndex;
         }
 
-        renderTargetCache[rtHandle] = rt;
+        impl->renderTargetCache[rtHandle] = rt;
 
         return rtHandle;
     }
 
     const RenderTarget &RenderContext::getRenderTarget(const RenderTargetHandle &handle)
     {
-        auto it = renderTargetCache.find(handle);
-        if (it == renderTargetCache.end())
+        auto it = impl->renderTargetCache.find(handle);
+        if (it == impl->renderTargetCache.end())
         {
             spdlog::error("Render target handle not found in cache.");
             static RenderTarget emptyRenderTarget{};
@@ -572,14 +621,14 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto it = textureCache.find(texture);
-            if (it == textureCache.end())
+            auto it = impl->textureCache.find(texture);
+            if (it == impl->textureCache.end())
             {
                 spdlog::error("Texture handle not found in cache during destroyTexture.");
                 return;
             }
-            vulkanContext.removeTexture(it->second);
-            textureCache.erase(it);
+            impl->vulkanContext.removeTexture(it->second);
+            impl->textureCache.erase(it);
             break;
         }
         case Backend::DX12:
@@ -597,14 +646,14 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto it = bufferCache.find(buffer);
-            if (it == bufferCache.end())
+            auto it = impl->bufferCache.find(buffer);
+            if (it == impl->bufferCache.end())
             {
                 spdlog::error("Buffer handle not found in cache during destroyBuffer.");
                 return;
             }
-            vulkanContext.removeBuffer(it->second);
-            bufferCache.erase(it);
+            impl->vulkanContext.removeBuffer(it->second);
+            impl->bufferCache.erase(it);
             break;
         }
         case Backend::DX12:
@@ -622,14 +671,14 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto it = semaphoreCache.find(semaphore);
-            if (it == semaphoreCache.end())
+            auto it = impl->semaphoreCache.find(semaphore);
+            if (it == impl->semaphoreCache.end())
             {
                 spdlog::error("Semaphore handle not found in cache during destroySemaphore.");
                 return;
             }
-            vulkanContext.removeSemaphore(it->second);
-            semaphoreCache.erase(it);
+            impl->vulkanContext.removeSemaphore(it->second);
+            impl->semaphoreCache.erase(it);
             break;
         }
         case Backend::DX12:
@@ -650,14 +699,14 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto images = vulkanContext.getSwapchainImages();
+            auto images = impl->vulkanContext.getSwapchainImages();
             std::vector<TextureHandle> handles;
             for (auto &image : images)
             {
                 auto handle = engine->handleManager.getNextTextureHandle();
                 image.handle = handle;
-                textureCache[handle] = image;
-                swapchainImageCache[handle] = image; // Store in swapchain-specific cache
+                impl->textureCache[handle] = image;
+                impl->swapchainImageCache[handle] = image; // Store in swapchain-specific cache
                 handles.push_back(handle);
             }
             return handles;
@@ -679,8 +728,8 @@ namespace rasm
         assert(offset >= 0 && "Offset must be non-negative.");
         assert(buffer.isValid() && "Buffer handle must be valid.");
 
-        auto it = bufferCache.find(buffer);
-        if (it == bufferCache.end())
+        auto it = impl->bufferCache.find(buffer);
+        if (it == impl->bufferCache.end())
         {
             spdlog::error("Buffer handle not found in cache during fillBuffer.");
             return false;
@@ -692,7 +741,7 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            vulkanContext.fillBuffer(gpuBuffer, data, size, offset);
+            impl->vulkanContext.fillBuffer(gpuBuffer, data, size, offset);
             return true;
         }
         case Backend::DX12:
@@ -712,8 +761,8 @@ namespace rasm
         assert(data != nullptr && "Data pointer cannot be null.");
         assert(textureHandle.isValid() && "Texture handle must be valid.");
 
-        auto it = textureCache.find(textureHandle);
-        if (it == textureCache.end())
+        auto it = impl->textureCache.find(textureHandle);
+        if (it == impl->textureCache.end())
         {
             spdlog::error("Texture handle not found in cache during fillTexture.");
             return false;
@@ -724,7 +773,7 @@ namespace rasm
         switch (backend)
         {
         case Backend::VULKAN:
-            vulkanContext.fillTexture(gpuTexture, data);
+            impl->vulkanContext.fillTexture(gpuTexture, data);
             return true;
         case Backend::DX12:
             spdlog::error("DirectX 12 backend is not implemented yet for fillTexture.");
@@ -743,7 +792,7 @@ namespace rasm
         switch (backend)
         {
         case Backend::VULKAN:
-            return vulkanContext.getSwapchainImageFormat();
+            return impl->vulkanContext.getSwapchainImageFormat();
         case Backend::DX12:
             return Format::UNKNOWN;
         case Backend::METAL:
@@ -759,7 +808,7 @@ namespace rasm
         switch (backend)
         {
         case Backend::VULKAN:
-            return vulkanContext.getSwapchainExtent();
+            return impl->vulkanContext.getSwapchainExtent();
         case Backend::DX12:
             return {};
         case Backend::METAL:
@@ -772,8 +821,8 @@ namespace rasm
 
     uint64_t RenderContext::getBufferDeviceAddress(const BufferHandle &buffer)
     {
-        auto it = bufferCache.find(buffer);
-        if (it == bufferCache.end())
+        auto it = impl->bufferCache.find(buffer);
+        if (it == impl->bufferCache.end())
         {
             spdlog::error("Buffer handle not found in cache during getBufferDeviceAddress.");
             return 0;
@@ -798,8 +847,8 @@ namespace rasm
 
     ResourceDesc RenderContext::getResourceDesc(const BufferHandle &buffer)
     {
-        auto it = bufferCache.find(buffer);
-        if (it == bufferCache.end())
+        auto it = impl->bufferCache.find(buffer);
+        if (it == impl->bufferCache.end())
         {
             spdlog::error("Buffer handle not found in cache during getResourceDesc.");
             return {};
@@ -809,8 +858,8 @@ namespace rasm
 
     ResourceDesc RenderContext::getResourceDesc(const TextureHandle &texture)
     {
-        auto it = textureCache.find(texture);
-        if (it == textureCache.end())
+        auto it = impl->textureCache.find(texture);
+        if (it == impl->textureCache.end())
         {
             spdlog::error("Texture handle not found in cache during getResourceDesc.");
             return {};
@@ -823,7 +872,7 @@ namespace rasm
         switch (backend)
         {
         case Backend::VULKAN:
-            return vulkanContext.queryVRAMStats();
+            return impl->vulkanContext.queryVRAMStats();
         case Backend::DX12:
         case Backend::METAL:
         default:
@@ -834,20 +883,20 @@ namespace rasm
 
     uint32_t RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot)
     {
-        if (slot > MAX_BINDLESS_TEXTURES || (slot == MAX_BINDLESS_TEXTURES && nextBindlessTextureIndex >= MAX_BINDLESS_TEXTURES))
+        if (slot > MAX_BINDLESS_TEXTURES || (slot == MAX_BINDLESS_TEXTURES && impl->nextBindlessTextureIndex >= MAX_BINDLESS_TEXTURES))
         {
             spdlog::error("Slot index exceeds maximum bindless textures.");
             return UINT32_MAX;
         }
 
-        auto bindlessIt = descriptorSetCache.find(bindlessSet);
-        auto textureIt = textureCache.find(texture);
-        if (bindlessIt == descriptorSetCache.end())
+        auto bindlessIt = impl->descriptorSetCache.find(bindlessSet);
+        auto textureIt = impl->textureCache.find(texture);
+        if (bindlessIt == impl->descriptorSetCache.end())
         {
             spdlog::error("Bindless descriptor set handle not found in cache during updateBindlessDescriptorSet.");
             return UINT32_MAX;
         }
-        if (textureIt == textureCache.end())
+        if (textureIt == impl->textureCache.end())
         {
             spdlog::error("Texture handle not found in cache during updateBindlessDescriptorSet.");
             return UINT32_MAX;
@@ -856,7 +905,7 @@ namespace rasm
         switch (backend)
         {
         case Backend::VULKAN:
-            vulkanContext.updateBindlessDescriptorSet(bindlessIt->second, textureIt->second, slot == MAX_BINDLESS_TEXTURES ? nextBindlessTextureIndex++ : slot);
+            impl->vulkanContext.updateBindlessDescriptorSet(bindlessIt->second, textureIt->second, slot == MAX_BINDLESS_TEXTURES ? impl->nextBindlessTextureIndex++ : slot);
             break;
         case Backend::DX12:
         case Backend::METAL:
@@ -864,7 +913,7 @@ namespace rasm
             spdlog::error("Unsupported backend during bindless descriptor set update.");
             return UINT32_MAX;
         }
-        return slot == MAX_BINDLESS_TEXTURES ? nextBindlessTextureIndex - 1 : slot;
+        return slot == MAX_BINDLESS_TEXTURES ? impl->nextBindlessTextureIndex - 1 : slot;
     }
 
     bool RenderContext::waitForFence(FenceHandle fence, uint64_t timeout)
@@ -875,14 +924,14 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto it = fenceCache.find(fence);
-            if (it == fenceCache.end())
+            auto it = impl->fenceCache.find(fence);
+            if (it == impl->fenceCache.end())
             {
                 spdlog::error("Fence handle not found in cache during waitForFence.");
                 return false;
             }
             auto fenceVKHandle = it->second;
-            return vulkanContext.waitForFence(fenceVKHandle, timeout);
+            return impl->vulkanContext.waitForFence(fenceVKHandle, timeout);
         }
         case Backend::DX12:
             return false;
@@ -900,14 +949,14 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto it = fenceCache.find(fence);
-            if (it == fenceCache.end())
+            auto it = impl->fenceCache.find(fence);
+            if (it == impl->fenceCache.end())
             {
                 spdlog::error("Fence handle not found in cache during resetFence.");
                 return false;
             }
             auto fenceVKHandle = it->second;
-            return vulkanContext.resetFence(fenceVKHandle);
+            return impl->vulkanContext.resetFence(fenceVKHandle);
         }
         case Backend::DX12:
             return false;
@@ -927,14 +976,14 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto it = semaphoreCache.find(signalSemaphore);
-            if (it == semaphoreCache.end())
+            auto it = impl->semaphoreCache.find(signalSemaphore);
+            if (it == impl->semaphoreCache.end())
             {
                 spdlog::error("Semaphore handle not found in cache during acquireNextImage.");
                 return SwapchainStatus::FAILURE;
             }
             auto semaphoreVKHandle = it->second;
-            return vulkanContext.acquireNextImage(semaphoreVKHandle, timeout, imageIndex);
+            return impl->vulkanContext.acquireNextImage(semaphoreVKHandle, timeout, imageIndex);
         }
         case Backend::DX12:
             return SwapchainStatus::FAILURE;
@@ -952,13 +1001,13 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto it = commandBufferCache.find(commandBuffer);
-            if (it == commandBufferCache.end())
+            auto it = impl->commandBufferCache.find(commandBuffer);
+            if (it == impl->commandBufferCache.end())
             {
                 spdlog::error("Command buffer handle not found in cache during beginCommandBuffer.");
                 return false;
             }
-            return vulkanContext.beginCommandBuffer(it->second);
+            return impl->vulkanContext.beginCommandBuffer(it->second);
         }
         case Backend::DX12:
             return false;
@@ -976,13 +1025,13 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto it = commandBufferCache.find(commandBuffer);
-            if (it == commandBufferCache.end())
+            auto it = impl->commandBufferCache.find(commandBuffer);
+            if (it == impl->commandBufferCache.end())
             {
                 spdlog::error("Command buffer handle not found in cache during endCommandBuffer.");
                 return false;
             }
-            return vulkanContext.endCommandBuffer(it->second);
+            return impl->vulkanContext.endCommandBuffer(it->second);
         }
         case Backend::DX12:
             return false;
@@ -1000,20 +1049,20 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto commandBufferIt = commandBufferCache.find(commandBuffer);
-            auto textureIt = textureCache.find(texture);
-            if (commandBufferIt == commandBufferCache.end())
+            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
+            auto textureIt = impl->textureCache.find(texture);
+            if (commandBufferIt == impl->commandBufferCache.end())
             {
                 spdlog::error("Command buffer handle not found in cache during transitionImageLayout.");
                 return false;
             }
-            if (textureIt == textureCache.end())
+            if (textureIt == impl->textureCache.end())
             {
                 spdlog::error("Texture handle not found in cache during transitionImageLayout.");
                 return false;
             }
 
-            return vulkanContext.transitionImageLayout(commandBufferIt->second, textureIt->second, oldUsage, newUsage);
+            return impl->vulkanContext.transitionImageLayout(commandBufferIt->second, textureIt->second, oldUsage, newUsage);
         }
         case Backend::DX12:
             return false;
@@ -1031,26 +1080,26 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto colorIt = textureCache.find(colorAttachment);
-            auto depthIt = textureCache.find(depthAttachment);
-            auto commandBufferIt = commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == commandBufferCache.end())
+            auto colorIt = impl->textureCache.find(colorAttachment);
+            auto depthIt = impl->textureCache.find(depthAttachment);
+            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
+            if (commandBufferIt == impl->commandBufferCache.end())
             {
                 spdlog::error("Command buffer handle not found in cache during beginRendering.");
                 return false;
             }
-            if (colorIt == textureCache.end())
+            if (colorIt == impl->textureCache.end())
             {
                 spdlog::error("Color attachment texture handle not found in cache during beginRendering.");
                 return false;
             }
-            if (depthIt == textureCache.end())
+            if (depthIt == impl->textureCache.end())
             {
                 spdlog::error("Depth attachment texture handle not found in cache during beginRendering.");
                 return false;
             }
 
-            return vulkanContext.beginRendering(commandBufferIt->second, colorIt->second, depthIt->second, clearColor);
+            return impl->vulkanContext.beginRendering(commandBufferIt->second, colorIt->second, depthIt->second, clearColor);
         }
         case Backend::DX12:
             return false;
@@ -1068,13 +1117,13 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto commandBufferIt = commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == commandBufferCache.end())
+            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
+            if (commandBufferIt == impl->commandBufferCache.end())
             {
                 spdlog::error("Command buffer handle not found in cache during endRendering.");
                 return false;
             }
-            return vulkanContext.endRendering(commandBufferIt->second);
+            return impl->vulkanContext.endRendering(commandBufferIt->second);
         }
         case Backend::DX12:
             return false;
@@ -1092,13 +1141,13 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto commandBufferIt = commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == commandBufferCache.end())
+            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
+            if (commandBufferIt == impl->commandBufferCache.end())
             {
                 spdlog::error("Command buffer handle not found in cache during setViewport.");
                 return false;
             }
-            return vulkanContext.setViewport(commandBufferIt->second, x, y, width, height, minDepth, maxDepth);
+            return impl->vulkanContext.setViewport(commandBufferIt->second, x, y, width, height, minDepth, maxDepth);
         }
         case Backend::DX12:
             return false;
@@ -1116,13 +1165,13 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto commandBufferIt = commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == commandBufferCache.end())
+            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
+            if (commandBufferIt == impl->commandBufferCache.end())
             {
                 spdlog::error("Command buffer handle not found in cache during setScissor.");
                 return false;
             }
-            return vulkanContext.setScissor(commandBufferIt->second, x, y, width, height);
+            return impl->vulkanContext.setScissor(commandBufferIt->second, x, y, width, height);
         }
         case Backend::DX12:
             return false;
@@ -1142,8 +1191,8 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto commandBufferIt = commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == commandBufferCache.end())
+            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
+            if (commandBufferIt == impl->commandBufferCache.end())
             {
                 spdlog::error("Command buffer handle not found in cache during submit.");
                 return false;
@@ -1152,8 +1201,8 @@ namespace rasm
             std::vector<gfx::SemaphoreVKHandle> waitSemaphoresVK;
             for (const auto &sem : waitSemaphores)
             {
-                auto it = semaphoreCache.find(sem);
-                if (it == semaphoreCache.end())
+                auto it = impl->semaphoreCache.find(sem);
+                if (it == impl->semaphoreCache.end())
                 {
                     spdlog::error("Wait semaphore handle not found in cache during submit.");
                     return false;
@@ -1163,8 +1212,8 @@ namespace rasm
             std::vector<gfx::SemaphoreVKHandle> signalSemaphoresVK;
             for (const auto &sem : signalSemaphores)
             {
-                auto it = semaphoreCache.find(sem);
-                if (it == semaphoreCache.end())
+                auto it = impl->semaphoreCache.find(sem);
+                if (it == impl->semaphoreCache.end())
                 {
                     spdlog::error("Signal semaphore handle not found in cache during submit.");
                     return false;
@@ -1172,14 +1221,14 @@ namespace rasm
                 signalSemaphoresVK.push_back(it->second);
             }
 
-            auto it = fenceCache.find(fence);
-            if (it == fenceCache.end())
+            auto it = impl->fenceCache.find(fence);
+            if (it == impl->fenceCache.end())
             {
                 spdlog::error("Fence handle not found in cache during submit.");
                 return false;
             }
             auto fenceVK = it->second;
-            return vulkanContext.submit(commandBufferIt->second, waitSemaphoresVK, signalSemaphoresVK, fenceVK);
+            return impl->vulkanContext.submit(commandBufferIt->second, waitSemaphoresVK, signalSemaphoresVK, fenceVK);
         }
         case Backend::DX12:
             return false;
@@ -1199,13 +1248,13 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto semIt = semaphoreCache.find(waitSemaphore);
-            if (semIt == semaphoreCache.end())
+            auto semIt = impl->semaphoreCache.find(waitSemaphore);
+            if (semIt == impl->semaphoreCache.end())
             {
                 spdlog::error("Wait semaphore handle not found in cache during present.");
                 return SwapchainStatus::FAILURE;
             }
-            return vulkanContext.present(imageIndex, semIt->second);
+            return impl->vulkanContext.present(imageIndex, semIt->second);
         }
         case Backend::DX12:
             return SwapchainStatus::FAILURE;
@@ -1223,7 +1272,7 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto status = vulkanContext.recreateSwapchain();
+            auto status = impl->vulkanContext.recreateSwapchain();
             if (status == SwapchainStatus::FAILURE)
                 spdlog::error("Failed to recreate Vulkan swapchain.");
 
@@ -1231,9 +1280,9 @@ namespace rasm
             // their handles (B5).
             if (status != SwapchainStatus::OUT_OF_DATE)
             {
-                for (const auto &[handle, image] : swapchainImageCache)
-                    textureCache.erase(handle);
-                swapchainImageCache.clear();
+                for (const auto &[handle, image] : impl->swapchainImageCache)
+                    impl->textureCache.erase(handle);
+                impl->swapchainImageCache.clear();
             }
             return status;
         }
@@ -1253,20 +1302,20 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto pipelineIt = pipelineCache.find(pipeline);
-            auto commandBufferIt = commandBufferCache.find(commandBuffer);
-            if (pipelineIt == pipelineCache.end())
+            auto pipelineIt = impl->pipelineCache.find(pipeline);
+            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
+            if (pipelineIt == impl->pipelineCache.end())
             {
                 spdlog::error("Pipeline handle not found in cache during binding.");
                 return;
             }
-            if (commandBufferIt == commandBufferCache.end())
+            if (commandBufferIt == impl->commandBufferCache.end())
             {
                 spdlog::error("Command buffer handle not found in cache during binding.");
                 return;
             }
 
-            vulkanContext.bindPipeline(commandBufferIt->second, pipelineIt->second);
+            impl->vulkanContext.bindPipeline(commandBufferIt->second, pipelineIt->second);
             break;
         }
         case Backend::DX12:
@@ -1285,20 +1334,20 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto bufferIt = bufferCache.find(buffer);
-            auto commandBufferIt = commandBufferCache.find(commandBuffer);
-            if (bufferIt == bufferCache.end())
+            auto bufferIt = impl->bufferCache.find(buffer);
+            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
+            if (bufferIt == impl->bufferCache.end())
             {
                 spdlog::error("Buffer handle not found in cache during index buffer binding.");
                 return;
             }
-            if (commandBufferIt == commandBufferCache.end())
+            if (commandBufferIt == impl->commandBufferCache.end())
             {
                 spdlog::error("Command buffer handle not found in cache during index buffer binding.");
                 return;
             }
 
-            vulkanContext.bindIndexBuffer(commandBufferIt->second, bufferIt->second, offset, indexType);
+            impl->vulkanContext.bindIndexBuffer(commandBufferIt->second, bufferIt->second, offset, indexType);
             break;
         }
         case Backend::DX12:
@@ -1317,26 +1366,26 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto commandBufferIt = commandBufferCache.find(commandBuffer);
-            auto pipelineIt = pipelineCache.find(pipeline);
-            auto descriptorSetIt = descriptorSetCache.find(descriptorSet);
-            if (commandBufferIt == commandBufferCache.end())
+            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
+            auto pipelineIt = impl->pipelineCache.find(pipeline);
+            auto descriptorSetIt = impl->descriptorSetCache.find(descriptorSet);
+            if (commandBufferIt == impl->commandBufferCache.end())
             {
                 spdlog::error("Command buffer handle not found in cache during descriptor set binding.");
                 return;
             }
-            if (pipelineIt == pipelineCache.end())
+            if (pipelineIt == impl->pipelineCache.end())
             {
                 spdlog::error("Pipeline handle not found in cache during descriptor set binding.");
                 return;
             }
-            if (descriptorSetIt == descriptorSetCache.end())
+            if (descriptorSetIt == impl->descriptorSetCache.end())
             {
                 spdlog::error("Descriptor set handle not found in cache during descriptor set binding.");
                 return;
             }
 
-            vulkanContext.bindDescriptorSet(commandBufferIt->second, pipelineIt->second, descriptorSetIt->second, setIndex);
+            impl->vulkanContext.bindDescriptorSet(commandBufferIt->second, pipelineIt->second, descriptorSetIt->second, setIndex);
             break;
         }
         case Backend::DX12:
@@ -1353,20 +1402,20 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto commandBufferIt = commandBufferCache.find(commandBuffer);
-            auto pipelineIt = pipelineCache.find(pipeline);
-            if (commandBufferIt == commandBufferCache.end())
+            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
+            auto pipelineIt = impl->pipelineCache.find(pipeline);
+            if (commandBufferIt == impl->commandBufferCache.end())
             {
                 spdlog::error("Command buffer handle not found in cache during push constants.");
                 return;
             }
-            if (pipelineIt == pipelineCache.end())
+            if (pipelineIt == impl->pipelineCache.end())
             {
                 spdlog::error("Pipeline handle not found in cache during push constants.");
                 return;
             }
 
-            vulkanContext.pushConstants(commandBufferIt->second, pipelineIt->second, stage, data, size, offset);
+            impl->vulkanContext.pushConstants(commandBufferIt->second, pipelineIt->second, stage, data, size, offset);
             break;
         }
         case Backend::DX12:
@@ -1385,13 +1434,13 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto commandBufferIt = commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == commandBufferCache.end())
+            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
+            if (commandBufferIt == impl->commandBufferCache.end())
             {
                 spdlog::error("Command buffer handle not found in cache during uniform setting.");
                 return;
             }
-            vulkanContext.setUniform(commandBufferIt->second, name, data, size);
+            impl->vulkanContext.setUniform(commandBufferIt->second, name, data, size);
             break;
         }
         case Backend::DX12:
@@ -1410,13 +1459,13 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto commandBufferIt = commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == commandBufferCache.end())
+            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
+            if (commandBufferIt == impl->commandBufferCache.end())
             {
                 spdlog::error("Command buffer handle not found in cache during draw call.");
                 return;
             }
-            vulkanContext.draw(commandBufferIt->second, vertexCount, instanceCount);
+            impl->vulkanContext.draw(commandBufferIt->second, vertexCount, instanceCount);
             break;
         }
         case Backend::DX12:
@@ -1435,13 +1484,13 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto commandBufferIt = commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == commandBufferCache.end())
+            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
+            if (commandBufferIt == impl->commandBufferCache.end())
             {
                 spdlog::error("Command buffer handle not found in cache during indexed draw call.");
                 return;
             }
-            vulkanContext.drawIndexed(commandBufferIt->second, indexCount, instanceCount, vertexOffset, firstIndex, firstInstance);
+            impl->vulkanContext.drawIndexed(commandBufferIt->second, indexCount, instanceCount, vertexOffset, firstIndex, firstInstance);
             break;
         }
         case Backend::DX12:
@@ -1460,19 +1509,19 @@ namespace rasm
         {
         case Backend::VULKAN:
         {
-            auto commandBufferIt = commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == commandBufferCache.end())
+            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
+            if (commandBufferIt == impl->commandBufferCache.end())
             {
                 spdlog::error("Command buffer handle not found in cache during indexed indirect draw call.");
                 return;
             }
-            auto drawInfoBufferIt = bufferCache.find(drawInfoBuffer);
-            if (drawInfoBufferIt == bufferCache.end())
+            auto drawInfoBufferIt = impl->bufferCache.find(drawInfoBuffer);
+            if (drawInfoBufferIt == impl->bufferCache.end())
             {
                 spdlog::error("Draw info buffer handle not found in cache during indexed indirect draw call.");
                 return;
             }
-            vulkanContext.drawIndexedIndirect(commandBufferIt->second, drawInfoBufferIt->second, offset, drawCount, stride);
+            impl->vulkanContext.drawIndexedIndirect(commandBufferIt->second, drawInfoBufferIt->second, offset, drawCount, stride);
             break;
         }
         case Backend::DX12:

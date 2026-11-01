@@ -1,6 +1,8 @@
 #include "rasm/engine.h"
 #include "rasm/entity.h"
 
+#include "spdlog/spdlog.h"
+
 namespace rasm
 {
     EntityHandle Engine::createEntity(const std::string &name, MeshHandle mesh, MaterialHandle material, Transform transform)

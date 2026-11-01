@@ -32,7 +32,7 @@ cmake --build --preset x64-debug --target 02_gltf     # single example
 
 - `include/rasm/` is the public API, with the low-level API in `include/rasm/render/`.
 - `src/` is private: `core/`, `platform/`, `assets/`, `scene/`, `renderer/`, `rhi/` (+ `rhi/vulkan/`). `src/thirdparty_impl.cpp` is the only file that defines `*_IMPLEMENTATION` macros.
-- Private headers are included relative to `src/` (e.g. `"rhi/vulkan/vulkanContext.h"`). `src/` is temporarily a PUBLIC include directory until `D2`; don't add new public→private includes.
+- Private headers are included relative to `src/` (e.g. `"rhi/vulkan/vulkanContext.h"`). `src/` is a PRIVATE include directory, so public headers can't include private ones; forward-declare, or use a private `Impl` like `RenderContext` does.
 
 ## Code rules
 

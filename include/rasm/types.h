@@ -3,13 +3,13 @@
 
 #include "rasm/handle.h"
 
-#include "tiny_gltf.h"
 #include "glm/glm.hpp"
 
 #include <cstdint>
 #include <string>
 #include <unordered_set>
 #include <variant>
+#include <vector>
 
 namespace rasm
 {
@@ -62,6 +62,13 @@ namespace rasm
         POINT_LIST,
         TRIANGLE_STRIP,
         LINE_STRIP,
+    };
+
+    enum class QueueType
+    {
+        GRAPHICS,
+        COMPUTE,
+        TRANSFER
     };
 
     // Result of acquire, present and swapchain recreation.

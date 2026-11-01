@@ -3,11 +3,12 @@
 
 #include "glm/glm.hpp"
 
-#include "tiny_gltf.h"
 #include "rasm/material.h"
 
+#include <cstdint>
 #include <variant>
 #include <unordered_map>
+#include <vector>
 
 
 namespace rasm
@@ -39,7 +40,6 @@ namespace rasm
 
     struct GLTFRaw
     {
-        tinygltf::Model model;
         std::vector<SubGLTFRaw> subGltfRaws;
     };
 

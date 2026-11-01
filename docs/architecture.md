@@ -25,7 +25,7 @@ flowchart TD
 | Public API | `include/rasm/` (`rasm.h`, `engine.h`, …) and `include/rasm/render/` (`renderGraph.h`, `renderContext.h`, `resource.h`) | Single facade class `Engine`; everything is created through it and referenced by handles. The low-level API (render graph, `RenderContext`, `ResourceDesc`) lives in `render/`. |
 | Engine | `src/engine.cpp` | Construction, frame loop (`beginFrame`/`render`/`endFrame`), texture loading. |
 | Core utilities | `src/core/` | Handle manager, profiler, file reading. |
-| Platform | `src/platform/window.cpp` | SDL3 window, surface creation, event polling and camera input. |
+| Platform | `src/platform/window.cpp` | SDL3 window, event polling and camera input. |
 | Assets | `src/assets/` | glTF/OBJ import (`mesh.cpp`), materials and glTF material/texture import (`material.cpp`). |
 | Scene | `src/scene/` | Scenes, entities, cameras, lights, transforms; scene preparation for rendering (`scene.cpp`). |
 | Renderer | `src/renderer/` | Render graph, Slang shader compiler, GPU struct definitions (`uberMaterialTypes.h`). |
@@ -34,7 +34,7 @@ flowchart TD
 | Third-party implementations | `src/thirdparty_impl.cpp` | The single translation unit with the `*_IMPLEMENTATION` defines (stb, tinygltf, tinyobjloader, VMA). |
 | Shaders | `shaders/lib/`, `shaders/passes/` | `lib/`: shared modules: GPU structs (`core.slang`), PBR BRDF (`pbr.slang`), unlit shading (`unlit.slang`). `passes/`: entry shaders: the uber shader (`rasm.slang`). |
 
-`src/` is currently also a *public* include directory, because public headers still include private ones (`renderer/shaderCompiler.h`, `renderer/uberMaterialTypes.h`, `rhi/vulkan/*`). Removing that is `D2`.
+Applications compile against `include/rasm/` and glm only. `src/`, the backend libraries and the tinygltf/stb include paths are PRIVATE to the `rasm` target, and static linking still pulls the libraries in. `RenderContext` keeps its Vulkan state in a private `RenderContext::Impl`, defined in `src/rhi/renderContext.cpp`. `Engine` holds `ShaderCompiler` through a forward declaration.
 
 ## 2. Object model: handles and registries
 
@@ -55,7 +55,7 @@ There are two kinds of handle owner:
 1. Create the SDL3 window (`createWindow`).
 2. `RenderContext::initialize` creates a `VulkanContext`, which:
    - creates the instance (validation optional),
-   - creates the surface (it calls back into `Engine::createSurfaceVk`),
+   - creates the surface from the main window (`SDL_Vulkan_CreateSurface`),
    - selects a physical device with the required features (below),
    - creates the device, graphics queue, swapchain (`B8G8R8A8_SRGB`) and VMA allocator.
 3. Create per-frame resources for `MAX_FRAMES_IN_FLIGHT = 2` slots: a command pool and buffer, an image-acquired semaphore, an in-flight fence (created signaled), and a depth texture (`D32_SFLOAT_S8_UINT`).
@@ -160,7 +160,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - `rasm::Material` (`rasm/material.h`) is a CPU-side record:
   - `textures[PbrSlot::COUNT]` and `texCoords[...]`,
   - a flat `float params[]` indexed by `PbrParam` offsets (albedo is 3 floats at offset 0, metallic is at 3, …).
-- `convertToGfxMaterial` turns it into the GPU `gfx::Material`. Texture handles are replaced by bindless slot indices, and `INVALID_TEXTURE_INDEX` (0xFFFFFFFF) means "no texture".
+- `convertToGfxMaterial` (`scene.cpp`) turns it into the GPU `gfx::Material`. Texture handles are replaced by bindless slot indices, and `INVALID_TEXTURE_INDEX` (0xFFFFFFFF) means "no texture".
 - **Bindless slots.** `Engine::addBindlessTexture` → `RenderContext::updateBindlessDescriptorSet` writes the texture into the next free slot (`nextBindlessTextureIndex++`). The slot is remembered in `registery.bindlessTextureIndexMap`. Slots are never reused.
 - **Texture upload.** This is `VulkanContext::fillTexture`:
   - the image is transitioned on the host and filled with `VK_EXT_host_image_copy` (core in 1.4), so no command buffer or staging buffer is involved;
@@ -177,7 +177,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - **Tangents and normal maps.** `Vertex::tangent` holds the glTF tangent with w = ±1, or w = 0 when the mesh has none. The vertex shader transforms it with the model matrix and multiplies w by the sign of the matrix's determinant, so mirroring transforms such as the root Y flip keep the bitangent right. `getNormalFromMap` uses the authored frame (B = cross(N, T)·w) when w ≠ 0. Otherwise it reconstructs a frame from UV derivatives, with B pointing toward decreasing v (glTF normal maps store +Y as up in the image).
 - `loadMaterial` maps a glTF PBR material to `rasm::Material`. Materials with `KHR_materials_unlit` become `MaterialType::UNLIT`, and only their base color texture is uploaded. It expands images to RGBA8 and uploads each texture. `processGLTF` creates a `GltfImportCache` for each import and passes it down to `loadMaterial`. It caches materials by material index and textures by image index and color space, so primitives that share a material share one `MaterialHandle` and one set of bindless slots.
 - A primitive without a material uses its entity's material. `getMaterial` resolves an invalid handle to `defaultMaterial`, the glTF default material (white, metallic 1, roughness 1) created at startup.
-- The whole `tinygltf::Model`, including decoded images, is kept in the `Mesh` (`GLTFRaw::model`). CPU vertex data is never released.
+- The `tinygltf::Model`, including decoded images, is freed when the import returns. CPU vertex data is never released.
 
 ## 7. Shader compilation
 

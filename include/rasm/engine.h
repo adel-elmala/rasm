@@ -9,21 +9,21 @@
 #include "rasm/window.h"
 #include "rasm/light.h"
 #include "rasm/mesh.h"
-#include "renderer/shaderCompiler.h"      // TODO(D2): private header (src/), needed until Engine hides its members
 #include "rasm/handle.h"
 #include "rasm/profiler.h"
 #include "rasm/render/renderContext.h"
-#include "renderer/uberMaterialTypes.h"   // TODO(D2): private header (src/), needed for convertToGfxMaterial
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-namespace tinygltf { struct Model; }
-namespace tinygltf { struct Node; }
+namespace tinygltf { class Model; }
 
 namespace rasm {
+
+    class ShaderCompiler;
 
     constexpr uint32_t MAX_MATERIALS = 256;
     constexpr uint32_t MAX_CAMERAS   = 8;
@@ -51,7 +51,6 @@ namespace rasm {
         // Color images default to sRGB; pass R8G8B8A8_UNORM for normal/MR/AO data.
         TextureHandle               loadTexture(const std::string& path, Format format = Format::R8G8B8A8_SRGB);
         MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {});
-        MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
         TextureHandle               createTexture(const ResourceDesc& desc);
         BufferHandle                createBuffer(const ResourceDesc& desc);
         RenderTargetHandle          createRenderTarget(const ResourceDesc& desc);
@@ -61,7 +60,6 @@ namespace rasm {
         // The name is a label, so two pipelines can share one.
         PipelineHandle              createPipeline(const std::string& name, const std::string& shaderSource);
         const Material&             getMaterial(const MaterialHandle &handle);
-        gfx::Material               convertToGfxMaterial(const Material &mat);
         Transform                   getTransform(EntityHandle entity);
         Transform                   getCameraTransform(CameraHandle camera);
         CameraProjection            getCameraProjection(CameraHandle camera);
@@ -110,14 +108,8 @@ namespace rasm {
 
         // window related
         Window                      createWindow(uint32_t width, uint32_t height);
-        VkSurfaceKHR                createSurfaceVk(const Window& window, VkInstance instance) const;
         void                        destroyWindow(const Window& window);
         void                        pollEvents(CameraHandle camera);
-
-
-        std::vector<SubGLTFRaw>        extractGLTFRaws(const tinygltf::Model &model, uint32_t meshIndex, const glm::mat4 &globalTransform, GltfImportCache &cache);
-        std::vector<SubGLTFRaw>        traverseNodes(const tinygltf::Model &model, int nodeIndex, const glm::mat4 &parentTransform, GltfImportCache &cache);
-        GLTFRaw                        processGLTF(const tinygltf::Model &model);
 
     protected:
         bool                                                        createSwapchainResources();
@@ -128,8 +120,8 @@ namespace rasm {
         Swapchain                                                   swapchain                               = {};
         TextureHandle                                               depthTexture                            = {};
         std::unordered_map<SceneHandle, PreparedScene, HandleHash>  preparedScenes                          = {};
-        RenderContext                                               ctx                                     = {};
-        ShaderCompiler                                              shaderCompiler                          = {};
+        RenderContext                                               ctx;
+        std::unique_ptr<ShaderCompiler>                             shaderCompiler                          = {};
         HandleManager                                               handleManager                           = {};
         Window                                                      mainWindow                              = {};
         DescriptorSetLayoutHandle                                   bindlessDescriptorSetLayout             = {};
@@ -146,6 +138,11 @@ namespace rasm {
         bool                                                        swapchainRendered                       = false; // a pass rendered to the swapchain this frame
 
     private:
+        MaterialHandle              loadMaterial(const tinygltf::Model &model, int materialIndex, GltfImportCache &cache);
+        std::vector<SubGLTFRaw>     extractGLTFRaws(const tinygltf::Model &model, uint32_t meshIndex, const glm::mat4 &globalTransform, GltfImportCache &cache);
+        std::vector<SubGLTFRaw>     traverseNodes(const tinygltf::Model &model, int nodeIndex, const glm::mat4 &parentTransform, GltfImportCache &cache);
+        GLTFRaw                     processGLTF(const tinygltf::Model &model);
+
         struct Registery
         {
             std::vector<Entity>      entities;
