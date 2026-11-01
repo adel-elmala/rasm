@@ -1,6 +1,5 @@
 #include "rasm/material.h"
 #include "rasm/engine.h"
-#include "rhi/vulkan/vulkanTypes.h"
 
 #include "spdlog/spdlog.h"
 
@@ -204,46 +203,6 @@ namespace rasm
         static const Material noMaterial{};
         spdlog::error("No default material; the engine did not initialize.");
         return noMaterial;
-    }
-
-    gfx::Material Engine::convertToGfxMaterial(const Material &mat)
-    {
-        gfx::Material gmat{};
-
-        // base color (albedo)
-        gmat.pbr.baseColorFactor[0] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO)];
-        gmat.pbr.baseColorFactor[1] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 1];
-        gmat.pbr.baseColorFactor[2] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 2];
-
-        // glTF texCoord set per texture; the shader selects the matching interpolated UV set.
-        auto texCoordOf = [](uint32_t texCoord) -> uint32_t { return texCoord < MAX_VERTEX_UV_SETS ? texCoord : 0u; };
-
-        gmat.pbr.baseColorTextureIndex = getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::ALBEDO)]);
-        gmat.pbr.baseColorTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::ALBEDO)]);
-        gmat.pbr.metallicRoughnessTextureIndex = getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::METALLIC)]);
-        gmat.pbr.metallicRoughtnessTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::METALLIC)]);
-
-        gmat.pbr.metallicFactor = mat.params[static_cast<uint32_t>(PbrParam::METALLIC)];
-        gmat.pbr.roughnessFactor = mat.params[static_cast<uint32_t>(PbrParam::ROUGHNESS)];
-
-        // normal map
-        gmat.normal.normalTextureIndex = getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::NORMAL)]);
-        gmat.normal.normalTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::NORMAL)]);
-        gmat.normal.scale = mat.params[static_cast<uint32_t>(PbrParam::NORMAL_SCALE)];
-
-        // occlusion map
-        gmat.occlusion.occlusionTextureIndex = getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::OCCLUSION)]);
-        gmat.occlusion.occlusionTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::OCCLUSION)]);
-        gmat.occlusion.strength = mat.params[static_cast<uint32_t>(PbrParam::OCCLUSION_STRENGTH)];
-
-        // emissive map
-        gmat.emissive.emissiveTextureIndex = getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::EMISSIVE)]);
-        gmat.emissive.emissiveTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::EMISSIVE)]);
-        gmat.emissive.emissiveFactor[0] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR)];
-        gmat.emissive.emissiveFactor[1] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + 1];
-        gmat.emissive.emissiveFactor[2] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + 2];
-
-        return gmat;
     }
 
 }

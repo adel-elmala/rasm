@@ -5,8 +5,10 @@
 #include "vk_mem_alloc.h"
 
 #include "rasm/types.h"
+#include "rasm/render/resource.h"
 
 #include <cstddef>
+#include <vector>
 
 namespace rasm::gfx
 {

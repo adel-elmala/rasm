@@ -6,6 +6,7 @@
 #include "rasm/light.h"
 #include "rasm/mesh.h"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace rasm::gfx {

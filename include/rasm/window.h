@@ -3,8 +3,6 @@
 
 #include <cstdint>
 
-#include "vulkan/vulkan.h"
-
 #include "rasm/types.h"
 #include "rasm/camera.h"
 
