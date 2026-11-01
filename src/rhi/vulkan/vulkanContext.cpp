@@ -254,10 +254,12 @@ namespace rasm::gfx
             return vkb::Result<VkSurfaceKHR>{surface_ret};
         }
 
+        // FIFO, because with NVIDIA's overlay on, the other present modes crash vkDestroyDevice when the window fills the screen (B21).
         vkb::Result<vkb::Swapchain> _init_swapchain(const vkb::Device &device, VkExtent2D desired_extent)
         {
             vkb::SwapchainBuilder swapchain_builder{device};
             auto swap_ret = swapchain_builder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+                                .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
                                 .set_desired_extent(desired_extent.width, desired_extent.height)
                                 .build();
             if (!swap_ret)
@@ -272,6 +274,7 @@ namespace rasm::gfx
         {
             vkb::SwapchainBuilder swapchain_builder{device};
             auto swap_ret = swapchain_builder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+                                .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
                                 .set_desired_extent(desired_extent.width, desired_extent.height)
                                 .set_old_swapchain(old_swapchain.swapchain)
                                 .build();
