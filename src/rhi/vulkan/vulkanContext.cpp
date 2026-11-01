@@ -4,13 +4,12 @@
 #include "stb_image_resize2.h"
 
 #include "rasm/engine.h"
+#include "platform/windowSurface.h"
 #include "rhi/vulkan/vulkanContext.h"
 
 #include "spdlog/spdlog.h"
 
 #include "vk_mem_alloc.h"
-
-#include "SDL3/SDL_vulkan.h"
 
 namespace rasm::gfx
 {
@@ -245,13 +244,9 @@ namespace rasm::gfx
 
         vkb::Result<VkSurfaceKHR> _init_surface(const vkb::Instance &instance, Engine *engine)
         {
-            const auto &window = engine->getMainWindow();
             VkSurfaceKHR surface = VK_NULL_HANDLE;
-            if (!SDL_Vulkan_CreateSurface(reinterpret_cast<SDL_Window *>(window.handle.index), instance.instance, nullptr, &surface))
-            {
-                spdlog::error("Failed to create Vulkan surface: {}", SDL_GetError());
+            if (!createWindowSurface(engine->getMainWindow(), instance.instance, &surface))
                 return vkb::Result<VkSurfaceKHR>{vkb::Error{}};
-            }
 
             return vkb::Result<VkSurfaceKHR>{surface};
         }
@@ -795,6 +790,14 @@ namespace rasm::gfx
     {
         assert(desc.type == ResourceType::TEXTURE);
 
+        // Drivers may accept an oversized image instead of failing, so this can't be left to vmaCreateImage.
+        const uint32_t maxExtent = physical_device.properties.limits.maxImageDimension2D;
+        if (desc.texture.width > maxExtent || desc.texture.height > maxExtent)
+        {
+            spdlog::error("Texture '{}' is {}x{}, the device limit is {}.", desc.name, desc.texture.width, desc.texture.height, maxExtent);
+            return {};
+        }
+
         // TODO: check if the format is supported by the device, and if not, find a compatible one
         VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -1060,18 +1063,11 @@ namespace rasm::gfx
         return rawHandle;
     }
 
-    std::optional<CommandPoolVKHandle> VulkanContext::createCommandPool(vkb::QueueType type)
+    std::optional<CommandPoolVKHandle> VulkanContext::createCommandPool()
     {
         VkCommandPoolCreateInfo poolInfo = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
         poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-
-        auto queue_index_result = _get_queue_index(this->device, type);
-        if (!queue_index_result)
-        {
-            spdlog::error("Failed to get queue family index for command pool.");
-            return {};
-        }
-        poolInfo.queueFamilyIndex = queue_index_result.value();
+        poolInfo.queueFamilyIndex = this->graphics_queue_family_index;
 
         VkCommandPool commandPool;
         auto result = vkCreateCommandPool(this->device.device, &poolInfo, nullptr, &commandPool);

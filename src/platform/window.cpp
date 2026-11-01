@@ -2,10 +2,12 @@
 #include "rasm/engine.h"
 #include "rasm/transform.h"
 #include "rasm/camera.h"
+#include "platform/windowSurface.h"
 
 #include <algorithm>
 
 #include "SDL3/SDL.h"
+#include "SDL3/SDL_vulkan.h"
 #include "spdlog/spdlog.h"
 
 namespace rasm
@@ -184,5 +186,15 @@ namespace rasm
             SDL_DestroyWindow(reinterpret_cast<SDL_Window *>(window.handle.index));
             SDL_Quit();
         }
+    }
+
+    bool createWindowSurface(const Window &window, VkInstance instance, VkSurfaceKHR *surface)
+    {
+        if (!SDL_Vulkan_CreateSurface(reinterpret_cast<SDL_Window *>(window.handle.index), instance, nullptr, surface))
+        {
+            spdlog::error("Failed to create Vulkan surface: {}", SDL_GetError());
+            return false;
+        }
+        return true;
     }
 }

@@ -206,7 +206,7 @@ Next steps, in order:
 - either a virtual interface or a compile-time backend selection,
 - a pool per object type with generational handles.
 
-**D2 — The public API leaks its implementation.** *Mostly fixed 2026-11-01:* the header split is done (see §1.1). `createSurfaceVk` moved into the Vulkan backend, `convertToGfxMaterial` is a helper in `scene.cpp`, and the glTF import functions are private. Still open:
+**D2 — The public API leaks its implementation.** *Mostly fixed 2026-11-01:* the header split is done (see §1.1). `createSurfaceVk` became the private `createWindowSurface` in `src/platform/`, so the backend does not depend on SDL, `convertToGfxMaterial` is a helper in `scene.cpp`, and the glTF import functions are private. Still open:
 - `Engine` keeps a large public surface that mixes the high-level API with lower-level calls such as `updateUniforms`, `addBindlessTexture`, `createWindow` and `pollEvents`.
 - `RenderGraph` and `RenderContext` are friends of `Engine`.
 
@@ -259,9 +259,9 @@ Use a right-handed Y-up world (glTF's convention) and do the Vulkan flip with a 
 
 Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction, either bindless `StructuredBuffer` indices or explicitly bound storage buffers, and route draw-ID access through a helper that each target implements.
 
-**D13 — Queues and synchronization.** There is only one graphics queue: no transfer or async-compute queue. Timeline semaphores are supported by `createSemaphore` but unused. Uploads are synchronous on the main thread.
+**D13 — Queues and synchronization.** There is only one graphics queue: no transfer or async-compute queue. `createCommandPool` takes no queue type for that reason; add one together with a submit path for the new queue. Timeline semaphores are supported by `createSemaphore` but unused. Uploads are synchronous on the main thread.
 
-**D14 — Error handling is inconsistent.** Many `bool` results are ignored (`beginCommandBuffer`, `submit`, `fillBuffer`, `createTexture` in `loadTexture`). Some runtime errors are `assert`s.
+**D14 — Error handling is inconsistent.** Many `bool` results are ignored (`beginCommandBuffer`, `submit`, `fillBuffer`). Some runtime errors are `assert`s.
 
 **D15 — Hard-coded limits** are spread across headers (see [architecture.md §10](architecture.md#10-compile-time-limits)). Move them into `EngineConfig`, or grow the containers dynamically. Size GPU tables from the config.
 
@@ -307,7 +307,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 - **C2 — Formatting.** `scene.cpp` uses 2-space indentation while everything else uses 4, and there is no `.clang-format` in the repo.
 - **C3 — Dead or placeholder code.**
   - `setUniform` (a no-op).
-  - The empty mesh loop in `~Engine`, the glTF branch of `getMeshByteSize`.
+  - The glTF branch of `getMeshByteSize`.
   - `VertexFormat::PosOnly`, `MAX_DESCRIPTOR_TYPES`, `compile-shaders.bat`.
 - **C4 — Duplication.**
   - `readFile` and `loadFileToString`.

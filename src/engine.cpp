@@ -63,7 +63,7 @@ namespace rasm
         // Initialize frame resources for double buffering
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
-            frameResources[i].commandPool = ctx.createCommandPool(QueueType::GRAPHICS);
+            frameResources[i].commandPool = ctx.createCommandPool();
             if (!frameResources[i].commandPool.isValid())
             {
                 spdlog::error("Failed to create command pool for frame {}", i);
@@ -214,9 +214,17 @@ namespace rasm
         textureDesc.texture.usage = TextureUsage::SAMPLED;
 
         auto textureHandle = ctx.createTexture(textureDesc);
+        if (!textureHandle.isValid())
+        {
+            spdlog::error("Failed to create texture: {}", path);
+            stbi_image_free(data);
+            return TextureHandle{};
+        }
         if (!ctx.fillTexture(textureHandle, data))
         {
             spdlog::error("Failed to fill texture: {}", path);
+            ctx.destroyTexture(textureHandle);
+            stbi_image_free(data);
             return TextureHandle{};
         }
 

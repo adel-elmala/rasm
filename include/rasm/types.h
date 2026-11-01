@@ -64,13 +64,6 @@ namespace rasm
         LINE_STRIP,
     };
 
-    enum class QueueType
-    {
-        GRAPHICS,
-        COMPUTE,
-        TRANSFER
-    };
-
     // Result of acquire, present and swapchain recreation.
     enum class SwapchainStatus
     {

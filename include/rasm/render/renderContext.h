@@ -28,7 +28,7 @@ namespace rasm
         DescriptorSetLayoutHandle           createBindlessDescriptorSetLayout(ResourceDesc desc);
         DescriptorPoolHandle                createDescriptorPool(ResourceDesc desc);
         DescriptorSetHandle                 allocateDescriptorSet(ResourceDesc desc, const DescriptorPoolHandle &pool, const DescriptorSetLayoutHandle &layout);
-        CommandPoolHandle                   createCommandPool(QueueType type);
+        CommandPoolHandle                   createCommandPool();
         CommandBufferHandle                 createCommandBuffer(const CommandPoolHandle& commandPool);
         SemaphoreHandle                     createSemaphore(bool timeline = false, uint64_t initialValue = 0);
         FenceHandle                         createFence(bool signaled = false);

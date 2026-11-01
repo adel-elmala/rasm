@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cassert>
 #include <deque>
 #include <string>
@@ -12,22 +13,6 @@
 
 namespace rasm
 {
-    namespace
-    {
-        vkb::QueueType toVkbQueueType(QueueType type)
-        {
-            switch (type)
-            {
-            case QueueType::COMPUTE:
-                return vkb::QueueType::compute;
-            case QueueType::TRANSFER:
-                return vkb::QueueType::transfer;
-            default:
-                return vkb::QueueType::graphics;
-            }
-        }
-    }
-
     struct RenderContext::Impl
     {
         gfx::VulkanContext                                                                          vulkanContext = {};
@@ -429,13 +414,13 @@ namespace rasm
         }
     }
 
-    CommandPoolHandle RenderContext::createCommandPool(QueueType type)
+    CommandPoolHandle RenderContext::createCommandPool()
     {
         switch (backend)
         {
         case Backend::VULKAN:
         {
-            auto commandPool = impl->vulkanContext.createCommandPool(toVkbQueueType(type));
+            auto commandPool = impl->vulkanContext.createCommandPool();
             if (!commandPool)
             {
                 spdlog::error("Failed to create Vulkan command pool.");
@@ -575,8 +560,6 @@ namespace rasm
         depthDesc.texture.format = desc.renderTarget.depthFormat;
         depthDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
 
-        RenderTargetHandle rtHandle = engine->handleManager.getNextRenderTargetHandle();
-
         RenderTarget rt = {
             .attachments = {},
             .width = desc.renderTarget.width,
@@ -585,19 +568,44 @@ namespace rasm
             .depthFormat = desc.renderTarget.depthFormat,
             .clearColor = desc.renderTarget.clearColor};
 
-        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        auto destroyAttachments = [&]()
         {
-            auto colorHandle = createTexture(colorDesc);
-            auto depthHandle = createTexture(depthDesc);
+            for (const auto &attachment : rt.attachments)
+            {
+                if (attachment.color.isValid())
+                {
+                    engine->registery.bindlessTextureIndexMap.erase(attachment.color);
+                    destroyTexture(attachment.color);
+                }
+                if (attachment.depth.isValid())
+                    destroyTexture(attachment.depth);
+            }
+        };
 
-            rt.attachments[i].color = colorHandle;
-            rt.attachments[i].depth = depthHandle;
-
-            auto colorAttachmentIndex = updateBindlessDescriptorSet(engine->getBindlessDescriptorSet(), colorHandle);
-
-            engine->registery.bindlessTextureIndexMap[colorHandle] = colorAttachmentIndex;
+        for (auto &attachment : rt.attachments)
+        {
+            attachment.color = createTexture(colorDesc);
+            attachment.depth = createTexture(depthDesc);
+            if (!attachment.color.isValid() || !attachment.depth.isValid())
+            {
+                spdlog::error("Failed to create the attachments of render target '{}'.", desc.name);
+                destroyAttachments();
+                return {};
+            }
         }
 
+        // Only once every attachment exists, so that a failed creation leaves the bindless set untouched.
+        for (const auto &attachment : rt.attachments)
+        {
+            if (engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.color) == UINT32_MAX)
+            {
+                spdlog::error("Failed to make render target '{}' bindless.", desc.name);
+                destroyAttachments();
+                return {};
+            }
+        }
+
+        RenderTargetHandle rtHandle = engine->handleManager.getNextRenderTargetHandle();
         impl->renderTargetCache[rtHandle] = rt;
 
         return rtHandle;
@@ -902,10 +910,12 @@ namespace rasm
             return UINT32_MAX;
         }
 
+        const uint32_t targetSlot = slot == MAX_BINDLESS_TEXTURES ? impl->nextBindlessTextureIndex : slot;
+
         switch (backend)
         {
         case Backend::VULKAN:
-            impl->vulkanContext.updateBindlessDescriptorSet(bindlessIt->second, textureIt->second, slot == MAX_BINDLESS_TEXTURES ? impl->nextBindlessTextureIndex++ : slot);
+            impl->vulkanContext.updateBindlessDescriptorSet(bindlessIt->second, textureIt->second, targetSlot);
             break;
         case Backend::DX12:
         case Backend::METAL:
@@ -913,7 +923,10 @@ namespace rasm
             spdlog::error("Unsupported backend during bindless descriptor set update.");
             return UINT32_MAX;
         }
-        return slot == MAX_BINDLESS_TEXTURES ? impl->nextBindlessTextureIndex - 1 : slot;
+
+        // Explicit slots count too: automatic allocation must never land on one of them.
+        impl->nextBindlessTextureIndex = std::max(impl->nextBindlessTextureIndex, targetSlot + 1);
+        return targetSlot;
     }
 
     bool RenderContext::waitForFence(FenceHandle fence, uint64_t timeout)

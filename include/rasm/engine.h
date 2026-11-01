@@ -140,7 +140,7 @@ namespace rasm {
     private:
         MaterialHandle              loadMaterial(const tinygltf::Model &model, int materialIndex, GltfImportCache &cache);
         std::vector<SubGLTFRaw>     extractGLTFRaws(const tinygltf::Model &model, uint32_t meshIndex, const glm::mat4 &globalTransform, GltfImportCache &cache);
-        std::vector<SubGLTFRaw>     traverseNodes(const tinygltf::Model &model, int nodeIndex, const glm::mat4 &parentTransform, GltfImportCache &cache);
+        std::vector<SubGLTFRaw>     traverseNodes(const tinygltf::Model &model, const std::vector<int> &rootNodes, const glm::mat4 &rootTransform, GltfImportCache &cache);
         GLTFRaw                     processGLTF(const tinygltf::Model &model);
 
         struct Registery
