@@ -36,7 +36,9 @@ namespace rasm {
                                     Engine(const EngineConfig& config);
                                     ~Engine();
         SceneHandle                 createScene();
-        PreparedScene               prepareScene(SceneHandle scene);
+        // Has an invalid pipeline when the scene is invalid or empty, or when preparation failed (logged, and
+        // retried on the next call).
+        const PreparedScene&        prepareScene(SceneHandle scene);
         EntityHandle                createEntity(const std::string& name, MeshHandle mesh = MeshHandle{}, MaterialHandle material = MaterialHandle{}, Transform transform = Transform{});
         CameraHandle                createCamera(CameraProjection projection, Transform transform);
         LightHandle                 createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f), float intensity = 1.0f, float range = 10.0f);
@@ -56,6 +58,7 @@ namespace rasm {
         RenderGraph                 createRenderGraph();
         // Compiles Slang source with vertMain and fragMain entry points. The pipeline has no vertex input and
         // renders to the swapchain's color format with D32_SFLOAT_S8_UINT depth, and returns invalid on failure.
+        // The name is a label, so two pipelines can share one.
         PipelineHandle              createPipeline(const std::string& name, const std::string& shaderSource);
         const Material&             getMaterial(const MaterialHandle &handle);
         gfx::Material               convertToGfxMaterial(const Material &mat);
@@ -64,6 +67,8 @@ namespace rasm {
         CameraProjection            getCameraProjection(CameraHandle camera);
         CameraController            getCameraController(CameraHandle camera);
         glm::mat4                   getProjectionMatrix(CameraHandle camera);
+        // The camera's projection fitted to another aspect ratio. The camera itself does not change.
+        glm::mat4                   getProjectionMatrix(CameraHandle camera, float aspect);
         glm::mat4                   getViewMatrix(CameraHandle camera);
         void                        updateCameraAspectRatio(float aspect);
         void                        updateCamera(CameraHandle camera, const CameraInput &input);
@@ -74,12 +79,15 @@ namespace rasm {
         // Returns false when the frame must be skipped (minimized, swapchain out of date); then do not
         // record anything or call endFrame.
         [[nodiscard]] bool          beginFrame(CameraHandle camera);
+        // Presents the swapchain image, cleared if no pass rendered to it this frame.
         void                        endFrame();
         void                        beginPass();
         void                        endPass();
         void                        render(SceneHandle scene, CameraHandle camera);
-        // Records a scene into the current pass, for render graph passes. A render target must use the
-        // swapchain's color format and D32_SFLOAT_S8_UINT depth, which are the formats of the scene's pipeline.
+        // Records a scene into the current pass, for render graph passes, with the camera fitted to the pass's
+        // aspect ratio. A frame can make MAX_SCENE_DRAWS_PER_FRAME calls. A render target must use the swapchain's
+        // color format and D32_SFLOAT_S8_UINT depth, which are the formats of the scene's pipeline; drawing into
+        // any other logs an error and leaves the pass cleared.
         void                        drawScene(SceneHandle scene, CameraHandle camera);
         bool                        running() const;
         bool                        recreateSwapchain();
@@ -96,8 +104,9 @@ namespace rasm {
         void                        queryMemoryStats();
         uint32_t                    addBindlessTexture(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot = MAX_BINDLESS_TEXTURES);
         uint32_t                    getBindlessTextureIndex(const TextureHandle &texture);
-        RenderTargetAttachments     getRenderTargetAttachments(const RenderTargetHandle &renderTarget);
-        void                        updateUniforms(PreparedScene &preparedScene);
+        // The render target's color texture for the current frame slot, so fetch it every frame.
+        TextureHandle               getRenderTargetTexture(const RenderTargetHandle &renderTarget);
+        void                        updateUniforms(const PreparedScene &preparedScene);
 
         // window related
         Window                      createWindow(uint32_t width, uint32_t height);
@@ -131,8 +140,10 @@ namespace rasm {
         RenderTargetHandle                                          currentRenderTarget                     = {};
         uint64_t                                                    frameCount                              = 0;
         uint32_t                                                    imageIdx                                = 0;
+        uint32_t                                                    sceneDrawCount                          = 0; // drawScene calls this frame
         bool                                                        isRunning                               = false;
         bool                                                        swapchainOutOfDate                      = false;
+        bool                                                        swapchainRendered                       = false; // a pass rendered to the swapchain this frame
 
     private:
         struct Registery

@@ -145,6 +145,39 @@ namespace rasm
                 cam.transform.position = glm::mix(cam.transform.position, cam.targetTransform.position, t);
             }
         }
+
+        void setProjectionAspect(CameraProjection &projection, float aspect)
+        {
+            if (projection.type == CameraProjection::Type::PERSPECTIVE)
+            {
+                projection.perspective.aspect = aspect;
+            }
+            else if (projection.type == CameraProjection::Type::ORTHOGRAPHIC)
+            {
+                // calculate the orthographic aspect ratio based on the new aspect
+                auto centerX = (projection.orthographic.left + projection.orthographic.right) * 0.5f;
+                auto centerY = (projection.orthographic.bottom + projection.orthographic.top) * 0.5f;
+                auto halfWidth = (projection.orthographic.right - projection.orthographic.left) * 0.5f;
+                auto halfHeight = halfWidth / aspect;
+
+                projection.orthographic.left = centerX - halfWidth;
+                projection.orthographic.right = centerX + halfWidth;
+                projection.orthographic.bottom = centerY - halfHeight;
+                projection.orthographic.top = centerY + halfHeight;
+            }
+        }
+
+        glm::mat4 toProjectionMatrix(const CameraProjection &projection)
+        {
+            if (projection.type == CameraProjection::Type::PERSPECTIVE)
+            {
+                return glm::perspective(glm::radians(projection.perspective.fovY), projection.perspective.aspect, projection.perspective.nearZ, projection.perspective.farZ);
+            }
+            else
+            {
+                return glm::ortho(projection.orthographic.left, projection.orthographic.right, projection.orthographic.bottom, projection.orthographic.top, projection.orthographic.nearZ, projection.orthographic.farZ);
+            }
+        }
     }
 
     CameraHandle Engine::createCamera(CameraProjection projection, Transform transform)
@@ -263,23 +296,7 @@ namespace rasm
     {
         for (auto &camera : registery.cameras)
         {
-            if (camera.projection.type == CameraProjection::Type::PERSPECTIVE)
-            {
-                camera.projection.perspective.aspect = aspect;
-            }
-            else if (camera.projection.type == CameraProjection::Type::ORTHOGRAPHIC)
-            {
-                // calculate the orthographic aspect ratio based on the new aspect
-                auto centerX = (camera.projection.orthographic.left + camera.projection.orthographic.right) * 0.5f;
-                auto centerY = (camera.projection.orthographic.bottom + camera.projection.orthographic.top) * 0.5f;
-                auto halfWidth = (camera.projection.orthographic.right - camera.projection.orthographic.left) * 0.5f;
-                auto halfHeight = halfWidth / aspect;
-
-                camera.projection.orthographic.left = centerX - halfWidth;
-                camera.projection.orthographic.right = centerX + halfWidth;
-                camera.projection.orthographic.bottom = centerY - halfHeight;
-                camera.projection.orthographic.top = centerY + halfHeight;
-            }
+            setProjectionAspect(camera.projection, aspect);
         }
     }
 
@@ -291,16 +308,20 @@ namespace rasm
             return glm::mat4(1.0f);
         }
 
-        auto &projection = registery.cameras[camera.index].projection;
+        return toProjectionMatrix(registery.cameras[camera.index].projection);
+    }
 
-        if (projection.type == CameraProjection::Type::PERSPECTIVE)
+    glm::mat4 Engine::getProjectionMatrix(CameraHandle camera, float aspect)
+    {
+        if (!camera.isValid() || camera.index >= registery.cameras.size())
         {
-            return glm::perspective(glm::radians(projection.perspective.fovY), projection.perspective.aspect, projection.perspective.nearZ, projection.perspective.farZ);
+            spdlog::error("Invalid camera handle.");
+            return glm::mat4(1.0f);
         }
-        else
-        {
-            return glm::ortho(projection.orthographic.left, projection.orthographic.right, projection.orthographic.bottom, projection.orthographic.top, projection.orthographic.nearZ, projection.orthographic.farZ);
-        }
+
+        auto projection = registery.cameras[camera.index].projection;
+        setProjectionAspect(projection, aspect);
+        return toProjectionMatrix(projection);
     }
 
     glm::mat4 Engine::getViewMatrix(CameraHandle camera)

@@ -12,6 +12,9 @@ namespace rasm
 {
     namespace
     {
+        constexpr Format DEPTH_FORMAT = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
+        constexpr glm::vec4 SWAPCHAIN_CLEAR_COLOR(0.018f, 0.018f, 0.018f, 1.0f);
+
         ShaderCompiler::Target getShaderCompilerTarget(rasm::Backend backend)
         {
             switch (backend)
@@ -306,9 +309,7 @@ namespace rasm
         pipelineDesc.pipeline.topology = PrimitiveTopology::TRIANGLE_LIST;
 
         pipelineDesc.pipeline.colorAttachmentFormat = ctx.getSwapchainImageFormat();
-        pipelineDesc.pipeline.depthStencilAttachmentFormat = Format::D32_SFLOAT_S8_UINT;
-
-        pipelineDesc.pipeline.vertexInputLayout = {.vertexPulling = true};
+        pipelineDesc.pipeline.depthStencilAttachmentFormat = DEPTH_FORMAT;
 
         pipelineDesc.pipeline.descriptorSetLayout = bindlessDescriptorSetLayout;
 
@@ -352,6 +353,9 @@ namespace rasm
         // Reset only once work will be submitted, so a skipped frame leaves the fence signaled.
         ctx.resetFence(currentFrame.inFlightFence);
 
+        swapchainRendered = false;
+        sceneDrawCount = 0;
+
         // record commands for the current frame
         ctx.beginCommandBuffer(currentFrame.commandBuffer);
         return true;
@@ -360,6 +364,16 @@ namespace rasm
     void Engine::endFrame()
     {
         auto &currentFrame = frameResources[frameCount];
+
+        // Present needs the image in PRESENT_SRC, so a frame that only drew to render targets clears it.
+        if (!swapchainRendered)
+        {
+            auto renderTarget = currentRenderTarget;
+            resetRenderTarget();
+            beginPass();
+            endPass();
+            setRenderTarget(renderTarget);
+        }
 
         ctx.endCommandBuffer(currentFrame.commandBuffer);
 
@@ -391,14 +405,14 @@ namespace rasm
             // transition render target images to be ready for rendering
             ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
             ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].depth, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
-            ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, renderTargetData.attachments[frameCount].depth);
+            ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, renderTargetData.attachments[frameCount].depth, renderTargetData.clearColor);
         }
         else
         {
             // transition swapchain image to be ready for rendering
             ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
             ctx.transitionImageLayout(currentFrame.commandBuffer, currentFrame.depthTexture, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
-            ctx.beginRendering(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], currentFrame.depthTexture);
+            ctx.beginRendering(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], currentFrame.depthTexture, SWAPCHAIN_CLEAR_COLOR);
         }
 
         // begin dynamic rendering
@@ -421,6 +435,7 @@ namespace rasm
         else
         {
             ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::COLOR_ATTACHMENT, TextureUsage::PRESENT_SRC);
+            swapchainRendered = true;
         }
     }
 
@@ -497,7 +512,7 @@ namespace rasm
             depthTextureDesc.name = "DepthTexture for Frame " + std::to_string(i);
             depthTextureDesc.texture.width = swapchain.width;
             depthTextureDesc.texture.height = swapchain.height;
-            depthTextureDesc.texture.format = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
+            depthTextureDesc.texture.format = DEPTH_FORMAT;
             depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
 
             // The device is idle, so the old texture is unused.
@@ -527,19 +542,44 @@ namespace rasm
 
     void Engine::drawScene(SceneHandle scene, CameraHandle camera)
     {
-        auto preparedScene = prepareScene(scene);
+        const auto &preparedScene = prepareScene(scene);
 
         // An invalid or empty scene, or a failed preparation (which prepareScene logged and retries next
         // frame), has no pipeline to bind; the pass keeps its cleared attachments.
         if (!preparedScene.uberMaterialPipeline.isValid())
             return;
 
+        uint32_t width = swapchain.width;
+        uint32_t height = swapchain.height;
+
+        if (currentRenderTarget.isValid())
+        {
+            const auto &renderTargetData = ctx.getRenderTarget(currentRenderTarget);
+            width = renderTargetData.width;
+            height = renderTargetData.height;
+
+            // The pipeline's formats must match the attachments' for the draw to be defined.
+            if (renderTargetData.colorFormat != swapchain.imageFormat || renderTargetData.depthFormat != DEPTH_FORMAT)
+            {
+                spdlog::error("drawScene needs a render target with the swapchain's color format and D32_SFLOAT_S8_UINT depth.");
+                return;
+            }
+        }
+
+        // The GPU reads SceneData after the whole frame is recorded, so every call needs its own slot.
+        if (sceneDrawCount >= MAX_SCENE_DRAWS_PER_FRAME)
+        {
+            spdlog::error("Exceeded maximum number of drawScene calls per frame.");
+            return;
+        }
+        const uint64_t sceneDataOffset = sceneDrawCount++ * sizeof(gfx::SceneData);
+
         auto &sceneRef = registery.scenes[scene.index];
         auto &currentFrame = frameResources[frameCount];
         auto commandBuffer = currentFrame.commandBuffer;
 
         auto &cameraRef = registery.cameras[camera.index];
-        auto projection = getProjectionMatrix(camera);
+        auto projection = getProjectionMatrix(camera, static_cast<float>(width) / static_cast<float>(height));
         auto view = getViewMatrix(camera);
 
         ctx.bindPipeline(commandBuffer, preparedScene.uberMaterialPipeline);
@@ -568,14 +608,14 @@ namespace rasm
             sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(preparedScene.drawInfoBuffer);
             sceneData.modeldataPtr = ctx.getBufferDeviceAddress(preparedScene.megaModelDataBuffer[frameCount]);
 
-            ctx.fillBuffer(preparedScene.sceneDataBuffer[frameCount], &sceneData, sizeof(sceneData), 0);
+            ctx.fillBuffer(preparedScene.sceneDataBuffer[frameCount], &sceneData, sizeof(sceneData), sceneDataOffset);
 
             updateUniforms(preparedScene);
 
             ctx.bindDescriptorSet(commandBuffer, preparedScene.uberMaterialPipeline, bindlessDescriptorSet, 0);
             ctx.bindIndexBuffer(commandBuffer, preparedScene.megaIndexBuffer, 0, Format::U32_UINT);
 
-            auto sceneDataBufferPtr = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer[frameCount]);
+            auto sceneDataBufferPtr = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer[frameCount]) + sceneDataOffset;
             ctx.pushConstants(commandBuffer, preparedScene.uberMaterialPipeline, ShaderType::VERTEX_FRAGMENT, &sceneDataBufferPtr, sizeof(uint64_t), 0);
             ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, 0, preparedScene.drawInfoCount, sizeof(gfx::DrawInfo));
         }
@@ -633,10 +673,10 @@ namespace rasm
         return UINT32_MAX;
     }
 
-    RenderTargetAttachments Engine::getRenderTargetAttachments(const RenderTargetHandle &renderTarget)
+    TextureHandle Engine::getRenderTargetTexture(const RenderTargetHandle &renderTarget)
     {
         auto &rt = ctx.getRenderTarget(renderTarget);
-        return rt.attachments[frameCount % MAX_FRAMES_IN_FLIGHT];
+        return rt.attachments[frameCount % MAX_FRAMES_IN_FLIGHT].color;
     }
 
 } // namespace rasm

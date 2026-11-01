@@ -47,7 +47,7 @@ There are two kinds of handle owner:
 
 **`ResourceDesc`** (`rasm/render/resource.h`) is the one creation descriptor for every GPU resource. It is a tagged union of `texture`, `buffer`, `shader`, `pipeline`, `renderTarget`, `bindlessDescriptorSetLayout`, `descriptorPool` and `descriptorSet`, with a `std::string name`. The constructor zeroes the whole union, so fields a caller leaves unset are 0 (fixed `B18`). It has a hand-written `operator==` and `ResourceDescHash`.
 
-**Creation dedup.** Only immutable objects are deduplicated: `createShader`, `createPipeline` and `createBindlessDescriptorSetLayout` first look the desc up in a `*DescCache` (`unordered_map<ResourceDesc, Handle>`) and return the existing handle for an equal desc. Equality covers the full state: shader equality compares the SPIR-V bytes, and pipeline equality compares shaders, vertex input layout, descriptor set layout, topology and attachment formats. Buffers, textures, descriptor pools and descriptor sets are mutable, so every `create*`/`allocate*` call makes a new object (fixed `B1`). Callers that want sharing cache at the asset level: `loadTexture` caches by path and format, and glTF import caches per model by image index and color space.
+**Creation dedup.** Only immutable objects are deduplicated: `createShader`, `createPipeline` and `createBindlessDescriptorSetLayout` first look the desc up in a `*DescCache` (`unordered_map<ResourceDesc, Handle>`) and return the existing handle for an equal desc. Equality covers the full state: shader equality compares the SPIR-V bytes, and pipeline equality compares shaders, descriptor set layout, topology and attachment formats. Buffers, textures, descriptor pools and descriptor sets are mutable, so every `create*`/`allocate*` call makes a new object (fixed `B1`). Callers that want sharing cache at the asset level: `loadTexture` caches by path and format, and glTF import caches per model by image index and color space.
 
 ## 3. Engine lifetime and the frame loop
 
@@ -89,10 +89,10 @@ sequenceDiagram
     E->>C: beginPass: barriers (swapchain→COLOR_ATTACHMENT, depth→DEPTH), beginRendering (CLEAR), viewport/scissor
     E->>E: prepareScene(scene) (cached after first call)
     E->>C: bind uber pipeline
-    E->>C: write SceneData[frame] (camera, lights, buffer addresses)
+    E->>C: write the call's slot of SceneData[frame] (camera, lights, buffer addresses)
     E->>C: updateUniforms → rewrite Modeldata[frame] transforms
     E->>C: bind bindless set, bind mega index buffer
-    E->>C: push constant = &SceneData[frame]
+    E->>C: push constant = address of that slot
     E->>C: drawIndexedIndirect(drawInfoBuffer, drawInfoCount)
     E->>C: endPass: endRendering, swapchain→PRESENT_SRC
     E->>C: submit (wait imageAcquired, signal renderFinished[image], fence)
@@ -104,6 +104,7 @@ Notes:
 - `frameCount` is the frame-in-flight **slot index** (0 or 1), not a running frame counter.
 - Input handling, delta-time measurement and the camera controller run inside `beginFrame`. The caller passes the camera that should receive input.
 - `beginFrame` returns `false` when the frame is skipped. The caller then records nothing and does not call `endFrame`. A skipped frame leaves the fence signaled.
+- Every frame presents, and present needs the image in `PRESENT_SRC_KHR`. A frame that only draws to render targets gets an empty swapchain pass in `endFrame`, so it presents the clear color. There is no offscreen-only frame yet (`D7`).
 - Acquire, present and `recreateSwapchain` return `SwapchainStatus` (`OK`, `SUBOPTIMAL`, `OUT_OF_DATE`, `FAILURE`). `SUBOPTIMAL` from acquire still renders the frame, because the image was acquired and its semaphore will be signaled. `Engine::swapchainOutOfDate` schedules recreation.
 - Swapchain-sized resources (depth textures, viewport, camera aspect) use the swapchain extent in pixels (`Swapchain::width`/`height`). `Window::width`/`height` are logical and are only used for mouse input.
 - The swapchain always uses `VK_PRESENT_MODE_FIFO_KHR`, so the frame rate is capped at the display's refresh rate (see `B21` in the code review).
@@ -113,7 +114,7 @@ Notes:
 `Engine::render` records one pass with `Engine::drawScene`, which render graph passes can call directly. `Engine::prepareScene` (`src/scene/scene.cpp`) runs once per scene, the first time that scene is rendered, and its result is cached in `Engine::preparedScenes`. It does the following:
 
 1. **Flattens the scene.** For every entity with a mesh it builds a list of `SceneDraw`s: one per glTF primitive, or one for an OBJ. Each points at the interleaved `Vertex` data and `uint32_t` indices in the registry, so nothing is copied, and holds the node's world transform and a material handle. A mesh missing vertices or indices is skipped with a warning.
-2. **Builds the uber pipeline.** `Engine::createPipeline` compiles `shaders/passes/rasm.slang` (`vertMain`/`fragMain`) and creates a graphics pipeline with an empty vertex-input state (vertex pulling) and the bindless set layout. The pipeline has the swapchain's color format and `D32_SFLOAT_S8_UINT` depth, so a render target that `drawScene` draws into must use the same formats.
+2. **Builds the uber pipeline.** `Engine::createPipeline` compiles `shaders/passes/rasm.slang` (`vertMain`/`fragMain`) and creates a graphics pipeline with an empty vertex-input state (vertex pulling) and the bindless set layout. The pipeline has the swapchain's color format and `D32_SFLOAT_S8_UINT` depth, so a render target that `drawScene` draws into must use the same formats. For any other target `drawScene` logs an error and skips the draw.
 3. **Allocates scene buffers.** All are host-visible and persistently mapped:
 
    | Buffer | Usage | Content |
@@ -122,14 +123,16 @@ Notes:
    | `megaIndexBuffer` | INDEX | All indices, *local* to their sub-mesh. |
    | `megaModelDataBuffer[2]` | STORAGE | One `gfx::Modeldata` per draw: world matrix, normal matrix, material, material id. |
    | `drawInfoBuffer` | INDIRECT | One `gfx::DrawInfo` (`VkDrawIndexedIndirectCommand` layout) per draw. |
-   | `sceneDataBuffer[2]` | STORAGE | One `gfx::SceneData` per frame slot. |
+   | `sceneDataBuffer[2]` | STORAGE | `MAX_SCENE_DRAWS_PER_FRAME` `gfx::SceneData`s per frame slot. |
 4. **Writes draw records.** For each sub-mesh i it sets `DrawInfo{indexCount, 1, firstIndex = running index offset, vertexOffset = running vertex offset, 0}`. `Modeldata[i]` gets the entity transform × node transform, the converted `gfx::Material` and the `gfx::MaterialId`.
 
 Every frame, `updateUniforms` rewrites only the matrix part of each `Modeldata` (`offsetof(Modeldata, material)` bytes) from the current entity transforms.
 
-A scene with no geometry returns an empty `PreparedScene` before any buffer is allocated. It is not cached, so entities added later are picked up. `drawScene` skips the draw when the prepared scene has no pipeline, so the pass keeps its clear color.
+The GPU reads `SceneData` after the whole frame is recorded, so each `drawScene` call of a frame writes its own slot of `sceneDataBuffer[frame]` and pushes that slot's address. That is what lets passes in one frame use different cameras. `Modeldata` has no slots: all the calls of a frame share the transforms it holds. Past `MAX_SCENE_DRAWS_PER_FRAME` calls, `drawScene` logs an error and skips the draw.
 
-A failed preparation (out of VRAM, a shader error, a buffer that could not be created) also returns an empty, uncached `PreparedScene`. It logs the failure, destroys any buffers it had created, and retries on the next frame, so a shader fixed on disk is picked up while the application runs. Only a complete result is cached. The pipeline is built before the buffers so that a shader error, which repeats every frame, allocates nothing.
+`prepareScene` returns a const reference to the cached entry. For a scene with no geometry it returns an empty `PreparedScene` before any buffer is allocated and caches nothing, so entities added later are picked up. `drawScene` skips the draw when the prepared scene has no pipeline, so the pass keeps its clear color.
+
+A failed preparation (out of VRAM, a shader error, a buffer that could not be created) also returns an empty `PreparedScene` and caches nothing. It logs the failure, destroys any buffers it had created, and retries on the next frame, so a shader fixed on disk is picked up while the application runs. Only a complete result is cached. The pipeline is built before the buffers so that a shader error, which repeats every frame, allocates nothing.
 
 ### GPU data chain
 
@@ -155,8 +158,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 
 - `rasm::Material` (`rasm/material.h`) is a CPU-side record:
   - `textures[PbrSlot::COUNT]` and `texCoords[...]`,
-  - a flat `float params[]` indexed by `PbrParam` offsets (albedo is 3 floats at offset 0, metallic is at 3, …),
-  - a `ShaderHandle`.
+  - a flat `float params[]` indexed by `PbrParam` offsets (albedo is 3 floats at offset 0, metallic is at 3, …).
 - `convertToGfxMaterial` turns it into the GPU `gfx::Material`. Texture handles are replaced by bindless slot indices, and `INVALID_TEXTURE_INDEX` (0xFFFFFFFF) means "no texture".
 - **Bindless slots.** `Engine::addBindlessTexture` → `RenderContext::updateBindlessDescriptorSet` writes the texture into the next free slot (`nextBindlessTextureIndex++`). The slot is remembered in `registery.bindlessTextureIndexMap`. Slots are never reused.
 - **Texture upload.** This is `VulkanContext::fillTexture`:
@@ -179,7 +181,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 ## 7. Shader compilation
 
 - `ShaderCompiler` wraps one Slang global session and one session.
-- `compileFromString(source, moduleName, entryPoint)` loads a module, finds the entry point, composes, links and returns SPIR-V.
+- `compileFromString(source, moduleName, entryPoint)` loads a module, finds the entry point, composes, links and returns SPIR-V. The session keeps every module and rejects a second one with the same name and different source, so the name it loads includes a hash of the source. Callers can reuse a name.
 - Shaders are compiled **at runtime from source** every time a pipeline is built. Nothing is cached.
 - `tools/compile-shaders.bat` is an offline `slangc` invocation that is useful for checking compile errors. The engine does not consume its output.
 
@@ -188,6 +190,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - `Camera` holds a `CameraProjection` (a union of perspective and orthographic), a `CameraController` (trackball or free-fly, plus `easingSpeed`), the rendered `transform`, and a `targetTransform`.
 - `pollEvents` converts SDL events into a `CameraInput`: mouse drag in NDC normalized by the smaller window dimension, wheel delta, WASD state and frame delta-time. It feeds that input to `updateCamera`, which updates the target with the active controller and then eases the rendered transform toward it with exponential smoothing. The trackball eases along the orbit sphere.
 - Window resize updates every camera's aspect ratio and marks the swapchain for recreation. Escape or closing the window sets `isRunning = false`.
+- `drawScene` fits the camera's projection to the current pass with `getProjectionMatrix(camera, aspect)` and leaves the camera unchanged, so a render target of any shape renders undistorted. A perspective camera keeps its vertical field of view, and an orthographic one keeps its width.
 - View matrix = `conjugate(rotation)` × `translate(−position)`. Projection uses `glm::perspective`/`glm::ortho` with the Vulkan [0, 1] depth range (`GLM_FORCE_DEPTH_ZERO_TO_ONE` is a PUBLIC compile definition of `rasm`, see `B2`).
 
 ## 9. Render graph (low-level path)
@@ -196,7 +199,8 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - `execute()` runs `beginFrame` once, then for each pass in order calls `setRenderTarget(pass.outputRenderTarget)`, `beginPass`, `pass.execute(ctx)` and `endPass`. A pass without an output render target renders to the swapchain. Last comes `endFrame`.
 - The graph currently only orders passes. It does not insert barriers or layout transitions, does not allocate transient resources, and uses the current scene's first camera. Only `examples/01_render_graph` uses it.
 - A pass records through `Engine::drawScene`, or through its own pipeline from `Engine::createPipeline`. That example's overlay pass does the second: it binds a pipeline and draws a screen-covering triangle.
-- A render target has one color and one depth texture per frame slot. `beginPass` transitions the current slot's attachments from `UNDEFINED` and sizes the viewport from the render target. `endPass` transitions the color attachment to `SHADER_READ_ONLY_OPTIMAL`, the layout its bindless descriptor promises. Later passes read it with `getRenderTargetAttachments` and `getBindlessTextureIndex`. Depth is not stored and is not in the bindless array.
+- A render target has one color and one depth texture per frame slot, and a `clearColor` that every pass writing it starts from. `beginPass` transitions the current slot's attachments from `UNDEFINED` and sizes the viewport from the render target. `endPass` transitions the color attachment to `SHADER_READ_ONLY_OPTIMAL`, the layout its bindless descriptor promises. Later passes read it with `getRenderTargetTexture` and `getBindlessTextureIndex`. Depth is not stored and is not in the bindless array.
+- `transitionImageLayout` takes the barrier's source scope from the old usage and its destination scope from the new one. `UNKNOWN` discards the contents and waits for every stage the image could have been used in, including `COLOR_ATTACHMENT_OUTPUT`, which chains the barrier to the acquire semaphore of a swapchain image. A usage without a defined scope logs an error, records no barrier and returns `false`.
 
 ## 10. Compile-time limits
 
@@ -210,6 +214,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 | `MAX_CAMERAS` | 8 | `rasm/engine.h` |
 | `MAX_LIGHTS` (global) / per scene | 8 / 8 | `rasm/light.h`, `rasm/scene.h` |
 | `MAX_SCENES` | 16 | `rasm/scene.h` |
+| `MAX_SCENE_DRAWS_PER_FRAME` | 8 | `rasm/scene.h` |
 | `MAX_VERTEX_UV_SETS` | 3 | `rasm/mesh.h` (mirrored in `core.slang`) |
 
 ## 11. Conventions that cross files

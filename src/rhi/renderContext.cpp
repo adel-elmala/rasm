@@ -532,7 +532,8 @@ namespace rasm
             .width = desc.renderTarget.width,
             .height = desc.renderTarget.height,
             .colorFormat = desc.renderTarget.colorFormat,
-            .depthFormat = desc.renderTarget.depthFormat};
+            .depthFormat = desc.renderTarget.depthFormat,
+            .clearColor = desc.renderTarget.clearColor};
 
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
@@ -1017,7 +1018,7 @@ namespace rasm
         }
     }
 
-    bool RenderContext::beginRendering(const CommandBufferHandle &commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment)
+    bool RenderContext::beginRendering(const CommandBufferHandle &commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment, const glm::vec4 &clearColor)
     {
         switch (backend)
         {
@@ -1042,7 +1043,7 @@ namespace rasm
                 return false;
             }
 
-            return vulkanContext.beginRendering(commandBufferIt->second, colorIt->second, depthIt->second);
+            return vulkanContext.beginRendering(commandBufferIt->second, colorIt->second, depthIt->second, clearColor);
         }
         case Backend::DX12:
             return false;
@@ -1263,38 +1264,6 @@ namespace rasm
             break;
         default:
             spdlog::error("Unsupported backend during pipeline binding.");
-            break;
-        }
-    }
-
-    void RenderContext::bindVertexBuffer(const CommandBufferHandle &commandBuffer, const BufferHandle &buffer, uint64_t offset, uint32_t binding)
-    {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto bufferIt = bufferCache.find(buffer);
-            auto commandBufferIt = commandBufferCache.find(commandBuffer);
-            if (bufferIt == bufferCache.end())
-            {
-                spdlog::error("Buffer handle not found in cache during vertex buffer binding.");
-                return;
-            }
-            if (commandBufferIt == commandBufferCache.end())
-            {
-                spdlog::error("Command buffer handle not found in cache during vertex buffer binding.");
-                return;
-            }
-
-            vulkanContext.bindVertexBuffer(commandBufferIt->second, bufferIt->second, offset, binding);
-            break;
-        }
-        case Backend::DX12:
-            break;
-        case Backend::METAL:
-            break;
-        default:
-            spdlog::error("Unsupported backend during vertex buffer binding.");
             break;
         }
     }

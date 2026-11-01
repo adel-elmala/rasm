@@ -75,6 +75,7 @@ int main()
             rtDesc.renderTarget.height = config.windowHeight;
             rtDesc.renderTarget.colorFormat = engine.getRenderContext().getSwapchainImageFormat();
             rtDesc.renderTarget.depthFormat = rasm::Format::D32_SFLOAT_S8_UINT;
+            rtDesc.renderTarget.clearColor = glm::vec4(0.0f); // alpha 0 marks the background for the overlay
 
             rtHandle = builder.createRenderTarget(rtDesc);
             builder.write(rtHandle);
@@ -117,11 +118,11 @@ int main()
         [shader("fragment")]
         float4 fragMain(VSOutput input) : SV_TARGET
         {
-            float3 color = gTextures[pc.textureIndex].Sample(input.UV).rgb;
-            // Every pass clears to 0.018 gray, so only the background matches.
-            if (all(abs(color - 0.018) < 0.0004))
-                color = float3(0.0, 1.0, 0.0);
-            return float4(color, 1.0);
+            float4 color = gTextures[pc.textureIndex].Sample(input.UV);
+            // The bunny writes alpha 1 over the clear color's 0, so only the background is transparent.
+            if (color.a < 0.5)
+                return float4(0.0, 1.0, 0.0, 1.0);
+            return float4(color.rgb, 1.0);
         }
     )");
 
@@ -137,13 +138,22 @@ int main()
             builder.read(rtHandle);
         },
 
-        [&engine, &overlayPipeline, &rtHandle](rasm::RenderContext &ctx)
+        [&config, &engine, &overlayPipeline, &rtHandle](rasm::RenderContext &ctx)
         {
             auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
 
             // Each frame slot renders to its own attachment.
-            auto textureIndex = engine.getBindlessTextureIndex(engine.getRenderTargetAttachments(rtHandle).color);
+            auto textureIndex = engine.getBindlessTextureIndex(engine.getRenderTargetTexture(rtHandle));
 
+            // The render target keeps its size when the window resizes, so fit it inside without changing its shape.
+            const auto &window = engine.getMainWindow();
+            const float windowWidth = static_cast<float>(window.pixelWidth);
+            const float windowHeight = static_cast<float>(window.pixelHeight);
+            const float scale = glm::min(windowWidth / config.windowWidth, windowHeight / config.windowHeight);
+            const float width = config.windowWidth * scale;
+            const float height = config.windowHeight * scale;
+
+            ctx.setViewport(commandBuffer, (windowWidth - width) * 0.5f, (windowHeight - height) * 0.5f, width, height);
             ctx.bindPipeline(commandBuffer, overlayPipeline);
             ctx.bindDescriptorSet(commandBuffer, overlayPipeline, engine.getBindlessDescriptorSet(), 0);
             ctx.pushConstants(commandBuffer, overlayPipeline, rasm::ShaderType::VERTEX_FRAGMENT, &textureIndex, sizeof(textureIndex), 0);

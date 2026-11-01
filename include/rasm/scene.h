@@ -13,6 +13,7 @@ namespace rasm {
     constexpr int MAX_CAMERAS_PER_SCENE = 8;
     constexpr int MAX_LIGHTS_PER_SCENE = 8;
     constexpr int MAX_SCENES = 16;
+    constexpr uint32_t MAX_SCENE_DRAWS_PER_FRAME = 8;
 
     struct Scene
     {
@@ -42,7 +43,7 @@ namespace rasm {
         BufferHandle                                       megaIndexBuffer;
         BufferHandle                                       megaModelDataBuffer[MAX_FRAMES_IN_FLIGHT];
         BufferHandle                                       drawInfoBuffer;
-        BufferHandle                                       sceneDataBuffer[MAX_FRAMES_IN_FLIGHT];
+        BufferHandle                                       sceneDataBuffer[MAX_FRAMES_IN_FLIGHT]; // one SceneData per drawScene of a frame
         PipelineHandle                                     uberMaterialPipeline;
         std::vector<std::pair<EntityHandle, glm::mat4>>    modelUniforms;
         uint32_t                                           drawInfoCount;

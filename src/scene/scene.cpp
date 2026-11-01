@@ -12,6 +12,9 @@ namespace rasm
 {
   namespace
   {
+    // What prepareScene returns when there is nothing to draw. Its pipeline is invalid.
+    const PreparedScene EMPTY_PREPARED_SCENE{};
+
     gfx::MaterialId getGfxMaterialId(MaterialType type)
     {
       switch (type)
@@ -48,7 +51,7 @@ namespace rasm
     }
 
     // A failed preparation is not cached, so anything it created so far would leak on every retry.
-    PreparedScene discardSceneBuffers(RenderContext &ctx, const PreparedScene &preparedScene)
+    const PreparedScene &discardSceneBuffers(RenderContext &ctx, const PreparedScene &preparedScene)
     {
       std::vector<BufferHandle> buffers = {preparedScene.megaVertexBuffer, preparedScene.megaIndexBuffer, preparedScene.drawInfoBuffer};
       buffers.insert(buffers.end(), std::begin(preparedScene.megaModelDataBuffer), std::end(preparedScene.megaModelDataBuffer));
@@ -60,7 +63,7 @@ namespace rasm
           ctx.destroyBuffer(buffer);
       }
 
-      return PreparedScene{};
+      return EMPTY_PREPARED_SCENE;
     }
   }
 
@@ -171,19 +174,20 @@ namespace rasm
     sceneRef.lights[sceneRef.lightCount++] = light;
   }
 
-  PreparedScene Engine::prepareScene(SceneHandle scene)
+  const PreparedScene &Engine::prepareScene(SceneHandle scene)
   {
     auto preparedScene = PreparedScene{};
 
     if (!scene.isValid() || scene.index >= MAX_SCENES)
     {
       spdlog::error("Invalid scene handle for preparation.");
-      return PreparedScene{};
+      return EMPTY_PREPARED_SCENE;
     }
 
-    if (preparedScenes.find(scene) != preparedScenes.end())
+    auto cachedScene = preparedScenes.find(scene);
+    if (cachedScene != preparedScenes.end())
     {
-      return preparedScenes[scene];
+      return cachedScene->second;
     }
 
     auto &sceneRef = registery.scenes[scene.index];
@@ -210,7 +214,7 @@ namespace rasm
 
     // Nothing to draw: zero-sized buffers are invalid, and staying uncached lets entities added later show up.
     if (sceneDraws.empty())
-      return PreparedScene{};
+      return EMPTY_PREPARED_SCENE;
 
     for (const auto &draw : sceneDraws)
     {
@@ -223,7 +227,7 @@ namespace rasm
     if (profiler.gpu_memory_stats.vram_usage + totalVertexBufferSize + totalIndexBufferSize > profiler.gpu_memory_stats.vram_budget)
     {
       spdlog::warn("Not enough VRAM to allocate buffers for the scene.");
-      return PreparedScene{};
+      return EMPTY_PREPARED_SCENE;
     }
 
     // create a pipeline for the UberMaterial. A failed preparation retries every frame, so this comes
@@ -233,7 +237,7 @@ namespace rasm
     if (!preparedScene.uberMaterialPipeline.isValid())
     {
       spdlog::error("Failed to create the uber material pipeline for the scene.");
-      return PreparedScene{};
+      return EMPTY_PREPARED_SCENE;
     }
 
     // Allocate the vertex and index buffers for the scene.
@@ -283,7 +287,7 @@ namespace rasm
     // create sceneData buffer for the scene.
     bufferDesc.name = "Scene Data Buffer";
     bufferDesc.buffer.usage = BufferUsage::STORAGE;
-    bufferDesc.buffer.size = sizeof(gfx::SceneData);
+    bufferDesc.buffer.size = MAX_SCENE_DRAWS_PER_FRAME * sizeof(gfx::SceneData);
 
     for (auto &buffer : preparedScene.sceneDataBuffer)
     {
@@ -353,11 +357,10 @@ namespace rasm
 
     preparedScene.drawInfoCount = sceneDraws.size();
 
-    preparedScenes[scene] = preparedScene;
-    return preparedScene;
+    return preparedScenes.emplace(scene, std::move(preparedScene)).first->second;
   }
 
-  void Engine::updateUniforms(PreparedScene &preparedScene)
+  void Engine::updateUniforms(const PreparedScene &preparedScene)
   {
     size_t modelBufferOffset = 0;
 

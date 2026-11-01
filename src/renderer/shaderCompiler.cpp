@@ -201,13 +201,17 @@ namespace rasm
 
     ShaderCompiler::compiledShader ShaderCompiler::compileFromString(const std::string &sourceCode, const std::string &outputPath, const std::string &entryPointName)
     {
+        // The session keeps every module and rejects a second one with the same name and different source,
+        // so hash the source into the name.
+        const auto moduleName = outputPath + "." + std::to_string(std::hash<std::string>{}(sourceCode));
+
         // Load module
         Slang::ComPtr<slang::IModule> slangModule;
         {
             Slang::ComPtr<slang::IBlob> diagnosticsBlob;
 
-            slangModule = activeSession->loadModuleFromSourceString(outputPath.c_str(),               // Module name
-                                                                    (buildPath + outputPath).c_str(), // Module path
+            slangModule = activeSession->loadModuleFromSourceString(moduleName.c_str(),               // Module name
+                                                                    (buildPath + moduleName).c_str(), // Module path
                                                                     sourceCode.c_str(),               // Shader source code
                                                                     diagnosticsBlob.writeRef());      // Optional diagnostic container
 
