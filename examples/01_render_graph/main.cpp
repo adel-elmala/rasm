@@ -1,4 +1,3 @@
-// Future API sketch (not implemented yet):
 #include "rasm/rasm.h"
 
 int main()
@@ -49,7 +48,7 @@ int main()
 
     // Create a material
     std::vector<rasm::TextureHandle> textures = {albedoTexture};
-    rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::BASIC, textures);
+    rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::UNLIT, textures);
 
     // Create entities in the scene
     rasm::EntityHandle bunny = engine.createEntity("bunny", bunnyMesh, material, rasm::Transform{
@@ -58,17 +57,8 @@ int main()
                                                                                      glm::vec3(0.005f)                  // scale
                                                                                  });
 
-    // Create a directional light
-    rasm::LightHandle light = engine.createLight(rasm::LightType::DIRECTIONAL,  // type
-                                                 glm::vec3(1.0f, 1.0f, 1.0f),   // color
-                                                 glm::vec3(0.0f, 10.0f, 0.0f),  // position
-                                                 glm::vec3(0.0f, -1.0f, 0.0f), // direction
-                                                 1.0f,                          // intensity
-                                                 10.0f);                        // range
-
     engine.addEntityToScene(scene, bunny);
     engine.addCameraToScene(scene, camera);
-    engine.addLightToScene(scene, light);
 
     rasm::RenderGraph graph = engine.createRenderGraph();
 
@@ -85,117 +75,39 @@ int main()
             rtDesc.renderTarget.height = config.windowHeight;
             rtDesc.renderTarget.colorFormat = engine.getRenderContext().getSwapchainImageFormat();
             rtDesc.renderTarget.depthFormat = rasm::Format::D32_SFLOAT_S8_UINT;
+            rtDesc.renderTarget.clearColor = glm::vec4(0.0f); // alpha 0 marks the background for the overlay
 
             rtHandle = builder.createRenderTarget(rtDesc);
             builder.write(rtHandle);
         },
 
-        [&engine, &scene, &camera, &rtHandle](rasm::RenderContext &ctx)
+        [&engine, &scene, &camera](rasm::RenderContext &)
         {
-            auto compiledScene = engine.compileScene(scene);
-
-            auto &currentFrame = engine.getCurrentFrameResources();
-            auto commandBuffer = currentFrame.commandBuffer;
-            auto shaderDataBuffer = currentFrame.shaderDataBuffer;
-
-            struct ShaderData
-            {
-                glm::mat4 projection;
-                glm::mat4 view;
-                glm::mat4 model;
-                uint32_t textureIndex;
-                glm::vec3 baseColorFactor; // basic.slang multiplies the texture by this
-            };
-
-            ShaderData shaderData{};
-            shaderData.projection = engine.getProjectionMatrix(camera);
-            shaderData.view = engine.getViewMatrix(camera);
-            shaderData.baseColorFactor = glm::vec3(1.0f);
-
-            auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
-
-            auto shaderDataIdx = 0; // TODO: make a new API for allocating and managing per-object shader data
-            for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
-            {
-                auto pipeline = compiledScene.materialToPipeline[materialHandle];
-                ctx.bindPipeline(commandBuffer, pipeline);
-                ctx.bindDescriptorSet(commandBuffer, pipeline, engine.getBindlessDescriptorSet(), 0);
-
-                auto mat = engine.getMaterial(materialHandle);
-                shaderData.textureIndex = engine.getBindlessTextureIndex(mat.textures[0]); // TODO: handle cases where material has more than 1 texture
-
-                for (const auto &entityHandle : entitySet)
-                {
-                    auto modelTransform = engine.getTransform(entityHandle);
-
-                    shaderData.model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
-                                       glm::mat4_cast(modelTransform.rotation) *
-                                       glm::scale(glm::mat4(1.0f), modelTransform.scale);
-
-                    auto baseOffset = sizeof(ShaderData) * shaderDataIdx;
-                    ctx.fillBuffer(shaderDataBuffer, &shaderData, sizeof(shaderData), baseOffset);
-
-                    auto bufferHandle = compiledScene.meshData[entityHandle];
-                    auto desc = ctx.getResourceDesc(bufferHandle);
-                    ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
-                    ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.offset, rasm::Format::U32_UINT);
-                    auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;
-                    ctx.pushConstants(commandBuffer, pipeline, rasm::ShaderType::VERTEX_FRAGMENT, &targetShaderDataBufferAddress, sizeof(targetShaderDataBufferAddress), 0);
-                    ctx.drawIndexed(commandBuffer, static_cast<uint32_t>(desc.buffer.vertexIndexBuffer.indexCount), 1, 0, 0, 0);
-                    shaderDataIdx++;
-                }
-            }
+            engine.drawScene(scene, camera);
         });
 
-    // set up overlay mesh and shader
-    std::vector<rasm::Vertex> vertices = {
-        {.pos = glm::vec3(-1.0f, -1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = {glm::vec2(0.0f, 0.0f)}},
-        {.pos = glm::vec3(1.0f, -1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = {glm::vec2(1.0f, 0.0f)}},
-        {.pos = glm::vec3(1.0f, 1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = {glm::vec2(1.0f, 1.0f)}},
-        {.pos = glm::vec3(-1.0f, 1.0f, 0.0f), .normal = glm::vec3(0.0f, 0.0f, 1.0f), .uv = {glm::vec2(0.0f, 1.0f)}}};
-
-    std::vector<uint32_t> indices = {
-        0, 1, 2, // first triangle
-        2, 3, 0  // second triangle
-    };
-
-    auto overlayMesh = engine.createMesh(vertices, indices);
-
-    auto overLayShader = engine.createShader(R"(
-        struct VSInput
+    // One triangle covers the screen, so the overlay needs no vertex data.
+    auto overlayPipeline = engine.createPipeline("overlay", R"(
+        struct PushConstants
         {
-            float3 Pos;
-            float3 Normal;
-            float2 UV;
+            uint textureIndex;
         };
 
-        struct ShaderData
-        {
-            float4x4 projection;
-            float4x4 view;
-            float4x4 model;
-            uint32_t textureIndex;
-        };
+        [[vk::push_constant]]
+        ConstantBuffer<PushConstants> pc;
 
         struct VSOutput
         {
             float4 Pos : SV_POSITION;
-            float3 Normal : NORMAL;
             float2 UV : TEXCOORD0;
         };
 
         [shader("vertex")]
-        VSOutput vertMain(VSInput input, uniform ShaderData *shaderData)
+        VSOutput vertMain(uint vertexID : SV_VertexID)
         {
             VSOutput output;
-            float4x4 modelMat = shaderData->model;
-            float4x4 viewMat = shaderData->view;
-            float4x4 projectionMat = shaderData->projection;
-
-            // output.Pos = mul(projectionMat, mul(viewMat, mul(modelMat, float4(input.Pos.xyz, 1.0))));
-            output.Pos = float4(input.Pos.xyz, 1.0);
-            output.Normal = input.Normal;
-            output.UV = input.UV;
+            output.UV = float2((vertexID << 1) & 2, vertexID & 2);
+            output.Pos = float4(output.UV * 2.0 - 1.0, 0.0, 1.0);
 
             return output;
         }
@@ -203,23 +115,21 @@ int main()
         [[vk::binding(0, 0)]]
         Sampler2D gTextures[];
 
-
         [shader("fragment")]
-        float4 fragMain(VSOutput input, uniform ShaderData *shaderData) : SV_TARGET
+        float4 fragMain(VSOutput input) : SV_TARGET
         {
-            float3 color = gTextures[shaderData->textureIndex].Sample(input.UV).rgb;
-            if (color.x == 1.0 && color.y == 0.0 && color.z == 0.0) 
-                color = float3(0.0, 1.0, 0.0);
-            return float4(color, 1.0);
+            float4 color = gTextures[pc.textureIndex].Sample(input.UV);
+            // The bunny writes alpha 1 over the clear color's 0, so only the background is transparent.
+            if (color.a < 0.5)
+                return float4(0.0, 1.0, 0.0, 1.0);
+            return float4(color.rgb, 1.0);
         }
     )");
 
-    auto overlayMaterial = engine.createMaterial(rasm::MaterialType::SHADER, {}, overLayShader);
-    auto overlayRect = engine.createEntity("overlayRect", overlayMesh, overlayMaterial);
-
-    auto overlayScene = engine.createScene();
-    engine.addCameraToScene(overlayScene, camera);
-    engine.addEntityToScene(overlayScene, overlayRect);
+    if (!overlayPipeline.isValid())
+    {
+        return 1;
+    }
 
     graph.addPass(
         "overlay",
@@ -228,59 +138,26 @@ int main()
             builder.read(rtHandle);
         },
 
-        [&engine, &overlayScene, &camera, &rtHandle](rasm::RenderContext &ctx)
+        [&config, &engine, &overlayPipeline, &rtHandle](rasm::RenderContext &ctx)
         {
-            auto compiledScene = engine.compileScene(overlayScene);
+            auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
 
-            auto &currentFrame = engine.getCurrentFrameResources();
-            auto commandBuffer = currentFrame.commandBuffer;
-            auto shaderDataBuffer = currentFrame.shaderDataBuffer;
+            // Each frame slot renders to its own attachment.
+            auto textureIndex = engine.getBindlessTextureIndex(engine.getRenderTargetTexture(rtHandle));
 
-            struct ShaderData
-            {
-                glm::mat4 projection;
-                glm::mat4 view;
-                glm::mat4 model;
-                uint32_t textureIndex;
-            };
+            // The render target keeps its size when the window resizes, so fit it inside without changing its shape.
+            const auto &window = engine.getMainWindow();
+            const float windowWidth = static_cast<float>(window.pixelWidth);
+            const float windowHeight = static_cast<float>(window.pixelHeight);
+            const float scale = glm::min(windowWidth / config.windowWidth, windowHeight / config.windowHeight);
+            const float width = config.windowWidth * scale;
+            const float height = config.windowHeight * scale;
 
-            ShaderData shaderData{};
-            shaderData.projection = engine.getProjectionMatrix(camera);
-            shaderData.view = engine.getViewMatrix(camera);
-
-            auto rt_color_attachment = engine.getRenderTargetAttachments(rtHandle).color;
-            shaderData.textureIndex = engine.getBindlessTextureIndex(rt_color_attachment); // TODO: handle cases where material has more than 1 texture
-
-            auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
-
-            auto shaderDataIdx = 3;
-            for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
-            {
-                auto pipeline = compiledScene.materialToPipeline[materialHandle];
-                ctx.bindPipeline(commandBuffer, pipeline);
-                ctx.bindDescriptorSet(commandBuffer, pipeline, engine.getBindlessDescriptorSet(), 0);
-
-                for (const auto &entityHandle : entitySet)
-                {
-                    auto modelTransform = engine.getTransform(entityHandle);
-
-                    shaderData.model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
-                                       glm::mat4_cast(modelTransform.rotation) *
-                                       glm::scale(glm::mat4(1.0f), modelTransform.scale);
-
-                    auto baseOffset = sizeof(ShaderData) * shaderDataIdx;
-                    ctx.fillBuffer(shaderDataBuffer, &shaderData, sizeof(shaderData), baseOffset);
-
-                    auto bufferHandle = compiledScene.meshData[entityHandle];
-                    auto desc = ctx.getResourceDesc(bufferHandle);
-                    ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
-                    ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.offset, rasm::Format::U32_UINT);
-                    auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;
-                    ctx.pushConstants(commandBuffer, pipeline, rasm::ShaderType::VERTEX_FRAGMENT, &targetShaderDataBufferAddress, sizeof(targetShaderDataBufferAddress), 0);
-                    ctx.drawIndexed(commandBuffer, static_cast<uint32_t>(desc.buffer.vertexIndexBuffer.indexCount), 1, 0, 0, 0);
-                    shaderDataIdx++;
-                }
-            }
+            ctx.setViewport(commandBuffer, (windowWidth - width) * 0.5f, (windowHeight - height) * 0.5f, width, height);
+            ctx.bindPipeline(commandBuffer, overlayPipeline);
+            ctx.bindDescriptorSet(commandBuffer, overlayPipeline, engine.getBindlessDescriptorSet(), 0);
+            ctx.pushConstants(commandBuffer, overlayPipeline, rasm::ShaderType::VERTEX_FRAGMENT, &textureIndex, sizeof(textureIndex), 0);
+            ctx.draw(commandBuffer, 3);
         });
 
     graph.compile();

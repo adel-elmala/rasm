@@ -7,13 +7,14 @@
 #include "stb_image_write.h"
 
 #include "glm/glm.hpp"
-#include "glm/gtc/matrix_transform.hpp"
-#include "glm/gtc/quaternion.hpp"
 
 namespace rasm
 {
     namespace
     {
+        constexpr Format DEPTH_FORMAT = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
+        constexpr glm::vec4 SWAPCHAIN_CLEAR_COLOR(0.018f, 0.018f, 0.018f, 1.0f);
+
         ShaderCompiler::Target getShaderCompilerTarget(rasm::Backend backend)
         {
             switch (backend)
@@ -28,12 +29,6 @@ namespace rasm
                 spdlog::error("Unsupported backend for shader compilation.");
                 return ShaderCompiler::Target::SPIRV; // Default to SPIR-V
             }
-        }
-
-        glm::vec3 getBaseColorFactor(const Material &material)
-        {
-            const auto albedo = static_cast<uint32_t>(PbrParam::ALBEDO);
-            return {material.params[albedo], material.params[albedo + 1], material.params[albedo + 2]};
         }
     }
 
@@ -89,20 +84,6 @@ namespace rasm
             if (!frameResources[i].inFlightFence.isValid())
             {
                 spdlog::error("Failed to create in-flight fence for frame {}", i);
-                return;
-            }
-
-            // Assuming a fixed size for shader data buffer for simplicity
-            ResourceDesc shaderDataBufferDesc{};
-            shaderDataBufferDesc.type = ResourceType::BUFFER;
-            shaderDataBufferDesc.name = "ShaderDataBuffer for Frame " + std::to_string(i);
-            shaderDataBufferDesc.buffer.size = 1024 * 1024; // 1 MB
-            shaderDataBufferDesc.buffer.usage = BufferUsage::STORAGE;
-
-            frameResources[i].shaderDataBuffer = ctx.createBuffer(shaderDataBufferDesc);
-            if (!frameResources[i].shaderDataBuffer.isValid())
-            {
-                spdlog::error("Failed to create shader data buffer for frame {}", i);
                 return;
             }
         }
@@ -296,6 +277,45 @@ namespace rasm
         return graph;
     }
 
+    PipelineHandle Engine::createPipeline(const std::string &name, const std::string &shaderSource)
+    {
+        auto vertShader = shaderCompiler.compileFromString(shaderSource, name + ".vert.slang", "vertMain");
+        auto fragShader = shaderCompiler.compileFromString(shaderSource, name + ".frag.slang", "fragMain");
+
+        if (vertShader.code.empty() || fragShader.code.empty())
+        {
+            spdlog::error("Failed to compile the shaders of pipeline '{}'.", name);
+            return {};
+        }
+
+        auto pipelineDesc = ResourceDesc{};
+        pipelineDesc.type = ResourceType::GRAPHICS_PIPELINE;
+        pipelineDesc.name = "Pipeline for " + name;
+
+        auto shaderDesc = ResourceDesc{};
+        shaderDesc.type = ResourceType::SHADER;
+        shaderDesc.shader.shaderType = ShaderType::VERTEX;
+        shaderDesc.shader.sourceSize = vertShader.code.size();
+        shaderDesc.shader.source = reinterpret_cast<const char *>(vertShader.code.data());
+
+        pipelineDesc.pipeline.vertexShader = ctx.createShader(shaderDesc);
+
+        shaderDesc.shader.shaderType = ShaderType::FRAGMENT;
+        shaderDesc.shader.sourceSize = fragShader.code.size();
+        shaderDesc.shader.source = reinterpret_cast<const char *>(fragShader.code.data());
+
+        pipelineDesc.pipeline.fragmentShader = ctx.createShader(shaderDesc);
+
+        pipelineDesc.pipeline.topology = PrimitiveTopology::TRIANGLE_LIST;
+
+        pipelineDesc.pipeline.colorAttachmentFormat = ctx.getSwapchainImageFormat();
+        pipelineDesc.pipeline.depthStencilAttachmentFormat = DEPTH_FORMAT;
+
+        pipelineDesc.pipeline.descriptorSetLayout = bindlessDescriptorSetLayout;
+
+        return ctx.createPipeline(pipelineDesc);
+    }
+
     bool Engine::beginFrame(CameraHandle camera)
     {
         pollEvents(camera);
@@ -333,6 +353,9 @@ namespace rasm
         // Reset only once work will be submitted, so a skipped frame leaves the fence signaled.
         ctx.resetFence(currentFrame.inFlightFence);
 
+        swapchainRendered = false;
+        sceneDrawCount = 0;
+
         // record commands for the current frame
         ctx.beginCommandBuffer(currentFrame.commandBuffer);
         return true;
@@ -341,6 +364,16 @@ namespace rasm
     void Engine::endFrame()
     {
         auto &currentFrame = frameResources[frameCount];
+
+        // Present needs the image in PRESENT_SRC, so a frame that only drew to render targets clears it.
+        if (!swapchainRendered)
+        {
+            auto renderTarget = currentRenderTarget;
+            resetRenderTarget();
+            beginPass();
+            endPass();
+            setRenderTarget(renderTarget);
+        }
 
         ctx.endCommandBuffer(currentFrame.commandBuffer);
 
@@ -353,46 +386,6 @@ namespace rasm
             if (status == SwapchainStatus::SUBOPTIMAL || status == SwapchainStatus::OUT_OF_DATE)
                 swapchainOutOfDate = true;
         }
-
-        frameCount = (frameCount + 1) % MAX_FRAMES_IN_FLIGHT; // Toggle between 0 and 1 for double buffering
-    }
-
-    // TODO: delete
-    void Engine::beginOffscreenFrame(const RenderTargetHandle &renderTarget, CameraHandle camera)
-    {
-        auto &currentFrame = frameResources[frameCount];
-        ctx.waitForFence(currentFrame.inFlightFence);
-        ctx.resetFence(currentFrame.inFlightFence);
-
-        pollEvents(camera);
-
-        // record commands for the current frame
-        ctx.beginCommandBuffer(currentFrame.commandBuffer);
-
-        const RenderTarget &renderTargetData = ctx.getRenderTarget(renderTarget);
-
-        // transition render target images to be ready for rendering
-        ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
-        ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].depth, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
-
-        // begin dynamic rendering
-        ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, renderTargetData.attachments[frameCount].depth);
-        ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(renderTargetData.width), static_cast<float>(renderTargetData.height));
-        ctx.setScissor(currentFrame.commandBuffer, 0, 0, renderTargetData.width, renderTargetData.height);
-    }
-
-    // TODO: delete
-    void Engine::endOffscreenFrame()
-    {
-        auto &currentFrame = frameResources[frameCount];
-
-        ctx.endRendering(currentFrame.commandBuffer);
-        ctx.endCommandBuffer(currentFrame.commandBuffer);
-
-        ctx.submit(currentFrame.commandBuffer,
-                   {},
-                   {},
-                   currentFrame.inFlightFence);
 
         frameCount = (frameCount + 1) % MAX_FRAMES_IN_FLIGHT; // Toggle between 0 and 1 for double buffering
     }
@@ -412,14 +405,14 @@ namespace rasm
             // transition render target images to be ready for rendering
             ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
             ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].depth, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
-            ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, renderTargetData.attachments[frameCount].depth);
+            ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, renderTargetData.attachments[frameCount].depth, renderTargetData.clearColor);
         }
         else
         {
             // transition swapchain image to be ready for rendering
             ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
             ctx.transitionImageLayout(currentFrame.commandBuffer, currentFrame.depthTexture, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
-            ctx.beginRendering(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], currentFrame.depthTexture);
+            ctx.beginRendering(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], currentFrame.depthTexture, SWAPCHAIN_CLEAR_COLOR);
         }
 
         // begin dynamic rendering
@@ -434,18 +427,16 @@ namespace rasm
 
         if (currentRenderTarget.isValid())
         {
-            auto renderTargetData = ctx.getRenderTarget(currentRenderTarget);
-
-            // transition render target images to be ready for sampling
-            // ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.colorAttachment[frameCount], TextureUsage::COLOR_ATTACHMENT, TextureUsage::SAMPLED);
-            // ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.depthAttachment[frameCount], TextureUsage::DEPTH_STENCIL_ATTACHMENT, TextureUsage::SAMPLED);
+            // Later passes sample the color attachment through the bindless set, whose descriptors promise
+            // this layout (B10). Depth is not stored, so it stays an attachment.
+            const auto &renderTargetData = ctx.getRenderTarget(currentRenderTarget);
+            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::COLOR_ATTACHMENT, TextureUsage::SAMPLED);
         }
         else
         {
             ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::COLOR_ATTACHMENT, TextureUsage::PRESENT_SRC);
+            swapchainRendered = true;
         }
-
-        // TODO: insert barrier to ensure the pass has finished before subsequent operations
     }
 
     void Engine::setRenderTarget(const RenderTargetHandle &renderTarget)
@@ -521,7 +512,7 @@ namespace rasm
             depthTextureDesc.name = "DepthTexture for Frame " + std::to_string(i);
             depthTextureDesc.texture.width = swapchain.width;
             depthTextureDesc.texture.height = swapchain.height;
-            depthTextureDesc.texture.format = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
+            depthTextureDesc.texture.format = DEPTH_FORMAT;
             depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
 
             // The device is idle, so the old texture is unused.
@@ -539,36 +530,56 @@ namespace rasm
         return true;
     }
 
-    void Engine::render2(SceneHandle scene, CameraHandle camera)
+    void Engine::render(SceneHandle scene, CameraHandle camera)
     {
-        if (!scene.isValid() || scene.index >= MAX_SCENES)
-        {
-            spdlog::error("Invalid scene handle for preparation.");
-            return ;
-        }
-
-        auto &sceneRef = registery.scenes[scene.index];
-
         if (!beginFrame(camera))
             return;
         beginPass();
+        drawScene(scene, camera);
+        endPass();
+        endFrame();
+    }
 
-        auto preparedScene = prepareScene(scene);
+    void Engine::drawScene(SceneHandle scene, CameraHandle camera)
+    {
+        const auto &preparedScene = prepareScene(scene);
 
-        // An empty scene, or a failed preparation (which prepareScene logged and retries next frame), has
-        // no pipeline to bind; just present the cleared frame.
+        // An invalid or empty scene, or a failed preparation (which prepareScene logged and retries next
+        // frame), has no pipeline to bind; the pass keeps its cleared attachments.
         if (!preparedScene.uberMaterialPipeline.isValid())
-        {
-            endPass();
-            endFrame();
             return;
+
+        uint32_t width = swapchain.width;
+        uint32_t height = swapchain.height;
+
+        if (currentRenderTarget.isValid())
+        {
+            const auto &renderTargetData = ctx.getRenderTarget(currentRenderTarget);
+            width = renderTargetData.width;
+            height = renderTargetData.height;
+
+            // The pipeline's formats must match the attachments' for the draw to be defined.
+            if (renderTargetData.colorFormat != swapchain.imageFormat || renderTargetData.depthFormat != DEPTH_FORMAT)
+            {
+                spdlog::error("drawScene needs a render target with the swapchain's color format and D32_SFLOAT_S8_UINT depth.");
+                return;
+            }
         }
 
+        // The GPU reads SceneData after the whole frame is recorded, so every call needs its own slot.
+        if (sceneDrawCount >= MAX_SCENE_DRAWS_PER_FRAME)
+        {
+            spdlog::error("Exceeded maximum number of drawScene calls per frame.");
+            return;
+        }
+        const uint64_t sceneDataOffset = sceneDrawCount++ * sizeof(gfx::SceneData);
+
+        auto &sceneRef = registery.scenes[scene.index];
         auto &currentFrame = frameResources[frameCount];
         auto commandBuffer = currentFrame.commandBuffer;
 
         auto &cameraRef = registery.cameras[camera.index];
-        auto projection = getProjectionMatrix(camera);
+        auto projection = getProjectionMatrix(camera, static_cast<float>(width) / static_cast<float>(height));
         auto view = getViewMatrix(camera);
 
         ctx.bindPipeline(commandBuffer, preparedScene.uberMaterialPipeline);
@@ -597,147 +608,17 @@ namespace rasm
             sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(preparedScene.drawInfoBuffer);
             sceneData.modeldataPtr = ctx.getBufferDeviceAddress(preparedScene.megaModelDataBuffer[frameCount]);
 
-            ctx.fillBuffer(preparedScene.sceneDataBuffer[frameCount], &sceneData, sizeof(sceneData), 0);
+            ctx.fillBuffer(preparedScene.sceneDataBuffer[frameCount], &sceneData, sizeof(sceneData), sceneDataOffset);
 
             updateUniforms(preparedScene);
 
             ctx.bindDescriptorSet(commandBuffer, preparedScene.uberMaterialPipeline, bindlessDescriptorSet, 0);
             ctx.bindIndexBuffer(commandBuffer, preparedScene.megaIndexBuffer, 0, Format::U32_UINT);
 
-            auto sceneDataBufferPtr = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer[frameCount]);
+            auto sceneDataBufferPtr = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer[frameCount]) + sceneDataOffset;
             ctx.pushConstants(commandBuffer, preparedScene.uberMaterialPipeline, ShaderType::VERTEX_FRAGMENT, &sceneDataBufferPtr, sizeof(uint64_t), 0);
             ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, 0, preparedScene.drawInfoCount, sizeof(gfx::DrawInfo));
         }
-        endPass();
-        endFrame();
-    }
-
-    void Engine::render(SceneHandle scene, CameraHandle camera)
-    {
-        if (!beginFrame(camera))
-            return;
-        beginPass();
-
-        auto compiledScene = compileScene(scene);
-        auto &currentFrame = frameResources[frameCount];
-        auto commandBuffer = currentFrame.commandBuffer;
-        auto shaderDataBuffer = currentFrame.shaderDataBuffer;
-
-        struct ShaderData
-        {
-            glm::mat4 projection;
-            glm::mat4 view;
-            glm::mat4 model;
-            uint32_t textureIndex;
-            glm::vec3 baseColorFactor;
-        };
-
-        ShaderData shaderData{};
-
-        shaderData.projection = getProjectionMatrix(camera);
-        shaderData.view = getViewMatrix(camera);
-
-        auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
-
-        auto shaderDataIdx = 0;
-        for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
-        {
-            auto pipeline = compiledScene.materialToPipeline[materialHandle];
-            ctx.bindPipeline(commandBuffer, pipeline);
-            ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
-
-            auto mat = getMaterial(materialHandle);
-            shaderData.textureIndex = getBindlessTextureIndex(mat.textures[0]); // TODO: handle cases where material has more than 1 texture
-            shaderData.baseColorFactor = getBaseColorFactor(mat);
-
-            for (const auto &entityHandle : entitySet)
-            {
-                auto modelTransform = registery.entities[entityHandle.index].transform;
-
-                shaderData.model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
-                                   glm::mat4_cast(modelTransform.rotation) *
-                                   glm::scale(glm::mat4(1.0f), modelTransform.scale);
-
-                auto baseOffset = sizeof(ShaderData) * shaderDataIdx;
-                ctx.fillBuffer(shaderDataBuffer, &shaderData, sizeof(shaderData), baseOffset);
-
-                auto bufferHandle = compiledScene.meshData[entityHandle];
-                auto desc = ctx.getResourceDesc(bufferHandle);
-                ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
-                ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.offset, Format::U32_UINT);
-                auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;
-                ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX_FRAGMENT, &targetShaderDataBufferAddress, sizeof(targetShaderDataBufferAddress), 0);
-                ctx.drawIndexed(commandBuffer, static_cast<uint32_t>(desc.buffer.vertexIndexBuffer.indexCount), 1, 0, 0, 0);
-                shaderDataIdx++;
-            }
-        }
-        endPass();
-        endFrame();
-    }
-
-    void Engine::render(SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget)
-    {
-        beginOffscreenFrame(renderTarget, camera);
-
-        auto compiledScene = compileScene(scene);
-        auto &currentFrame = frameResources[frameCount];
-        auto commandBuffer = currentFrame.commandBuffer;
-        auto shaderDataBuffer = currentFrame.shaderDataBuffer;
-
-        auto cam = registery.cameras[camera.index];
-        auto camTransform = cam.transform;
-        auto camPos = camTransform.position;
-
-        struct ShaderData
-        {
-            glm::mat4 projection;
-            glm::mat4 view;
-            glm::mat4 model;
-            uint32_t textureIndex;
-            glm::vec3 baseColorFactor;
-        };
-
-        ShaderData shaderData{};
-
-        shaderData.projection = getProjectionMatrix(camera);
-        shaderData.view = getViewMatrix(camera);
-
-        auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
-
-        auto shaderDataIdx = 0;
-        for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
-        {
-            auto pipeline = compiledScene.materialToPipeline[materialHandle];
-            ctx.bindPipeline(commandBuffer, pipeline);
-            ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet);
-
-            auto mat = getMaterial(materialHandle);
-            shaderData.textureIndex = getBindlessTextureIndex(mat.textures[0]); // TODO: handle cases where material has more than 1 texture
-            shaderData.baseColorFactor = getBaseColorFactor(mat);
-
-            for (const auto &entityHandle : entitySet)
-            {
-                auto modelTransform = registery.entities[entityHandle.index].transform;
-
-                shaderData.model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
-                                   glm::mat4_cast(modelTransform.rotation) *
-                                   glm::scale(glm::mat4(1.0f), modelTransform.scale);
-
-                auto baseOffset = sizeof(ShaderData) * shaderDataIdx;
-                ctx.fillBuffer(shaderDataBuffer, &shaderData, sizeof(shaderData), baseOffset);
-
-                auto bufferHandle = compiledScene.meshData[entityHandle];
-                auto desc = ctx.getResourceDesc(bufferHandle);
-                ctx.bindVertexBuffer(commandBuffer, bufferHandle, 0);
-                ctx.bindIndexBuffer(commandBuffer, bufferHandle, desc.buffer.offset, Format::U32_UINT);
-                auto targetShaderDataBufferAddress = shaderDataBufferAddress + baseOffset;
-                ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX_FRAGMENT, &targetShaderDataBufferAddress, sizeof(targetShaderDataBufferAddress), 0);
-                ctx.drawIndexed(commandBuffer, static_cast<uint32_t>(desc.buffer.vertexIndexBuffer.indexCount), 1, 0, 0, 0);
-                shaderDataIdx++;
-            }
-        }
-
-        endOffscreenFrame();
     }
 
     bool Engine::running() const
@@ -792,10 +673,10 @@ namespace rasm
         return UINT32_MAX;
     }
 
-    RenderTargetAttachments Engine::getRenderTargetAttachments(const RenderTargetHandle &renderTarget)
+    TextureHandle Engine::getRenderTargetTexture(const RenderTargetHandle &renderTarget)
     {
         auto &rt = ctx.getRenderTarget(renderTarget);
-        return rt.attachments[frameCount % MAX_FRAMES_IN_FLIGHT];
+        return rt.attachments[frameCount % MAX_FRAMES_IN_FLIGHT].color;
     }
 
 } // namespace rasm

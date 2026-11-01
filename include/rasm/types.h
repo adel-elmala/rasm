@@ -16,7 +16,6 @@ namespace rasm
     constexpr uint32_t  MAX_FRAMES_IN_FLIGHT    = 2;
     constexpr uint32_t  MAX_DESCRIPTOR_TYPES    = 1;
     constexpr uint32_t  MAX_BINDLESS_TEXTURES   = 1024;
-    constexpr uint32_t  MAX_VERTEX_ATTRIBUTES   = 4;
     // Sentinel written by the CPU when a material slot has no texture bound; the shader must
     // never sample the bindless array with this index.
     constexpr uint32_t  INVALID_TEXTURE_INDEX   = 0xFFFFFFFF;
@@ -89,7 +88,6 @@ namespace rasm
         CommandBufferHandle commandBuffer;
         SemaphoreHandle     readyToDrawSemaphore;
         FenceHandle         inFlightFence;
-        BufferHandle        shaderDataBuffer;
         TextureHandle       depthTexture;
     };
 
@@ -110,29 +108,6 @@ namespace rasm
         unsigned char*  data;
     };
 
-    struct VertexAttributeDescription
-    {
-        uint32_t                binding;
-        uint32_t                location;
-        rasm::Format            format;
-        uint32_t                size;
-        uint32_t                offset;
-        bool                    used = false;
-
-        bool operator==(const VertexAttributeDescription&) const = default;
-    };
-
-    struct VertexInputLayout
-    {
-        VertexAttributeDescription  attributes[MAX_VERTEX_ATTRIBUTES];
-        uint32_t                    binding;
-        uint32_t                    stride;
-        bool                        perInstance;
-        bool                        vertexPulling = false;
-
-        bool operator==(const VertexInputLayout&) const = default;
-    };
-
     struct RenderTargetAttachments
     {
         TextureHandle color;
@@ -146,6 +121,7 @@ namespace rasm
         uint32_t height;
         Format colorFormat;
         Format depthFormat;
+        glm::vec4 clearColor;
     };
 
 } // namespace rasm

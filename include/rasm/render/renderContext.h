@@ -54,7 +54,7 @@ namespace rasm
         bool                                fillTexture(const TextureHandle& texture, const void* data);
         // Invalidates the handles returned by getSwapchainImages unless the result is OUT_OF_DATE.
         [[nodiscard]] SwapchainStatus       recreateSwapchain();
-        bool                                beginRendering(const CommandBufferHandle& commandBuffer,TextureHandle colorAttachment, TextureHandle depthAttachment);
+        bool                                beginRendering(const CommandBufferHandle& commandBuffer,TextureHandle colorAttachment, TextureHandle depthAttachment, const glm::vec4& clearColor);
         bool                                endRendering(const CommandBufferHandle& commandBuffer);
         bool                                setViewport(const CommandBufferHandle& commandBuffer, float x, float y, float width, float height, float minDepth = 0.0f, float maxDepth = 1.0f);
         bool                                setScissor(const CommandBufferHandle& commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height);
@@ -64,7 +64,6 @@ namespace rasm
         void                                destroyTexture(const TextureHandle& texture);
         void                                destroyBuffer(const BufferHandle& buffer);
         void                                bindPipeline(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline);
-        void                                bindVertexBuffer(const CommandBufferHandle& commandBuffer, const BufferHandle& buffer, uint64_t offset, uint32_t binding = 0);
         void                                bindIndexBuffer(const CommandBufferHandle& commandBuffer, const BufferHandle& buffer, uint64_t offset, Format indexType);
         void                                bindDescriptorSet(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline, const DescriptorSetHandle& descriptorSet, uint32_t setIndex = 0);
         void                                pushConstants(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline, ShaderType stage, const void* data, uint32_t size, uint32_t offset = 0);

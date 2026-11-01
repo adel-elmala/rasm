@@ -1,6 +1,5 @@
 #include "rasm/material.h"
 #include "rasm/engine.h"
-#include "core/utils.h"
 #include "rhi/vulkan/vulkanTypes.h"
 
 #include "spdlog/spdlog.h"
@@ -10,14 +9,8 @@
 namespace rasm
 {
 
-    MaterialHandle Engine::createMaterial(MaterialType type, std::vector<TextureHandle> textures, ShaderHandle shader)
+    MaterialHandle Engine::createMaterial(MaterialType type, std::vector<TextureHandle> textures)
     {
-        if (type == MaterialType::SHADER && !shader.isValid())
-        {
-            spdlog::error("Invalid shader handle provided for custom shader material.");
-            return {};
-        }
-
         MaterialHandle handle = handleManager.getNextMaterialHandle();
         if (handle.index >= MAX_MATERIALS)
         {
@@ -25,7 +18,7 @@ namespace rasm
             return {};
         }
 
-        auto material = Material{.handle = handle, .type = type, .textures = {}, .shader = shader};
+        auto material = Material{.handle = handle, .type = type, .textures = {}};
 
         // Uber-material defaults for hand-made materials (loadMaterial fills these from the glTF
         // file instead): white base color so the albedo texture is not multiplied by zero,
@@ -51,21 +44,11 @@ namespace rasm
 
         switch (type)
         {
-        case MaterialType::BASIC:
-            material.name = "basic";
-            material.shader = createShader(readFile("./shaders/passes/basic.slang"));
-            break;
         case MaterialType::PBR:
             material.name = "pbr";
-            material.shader = createShader(readFile("./shaders/passes/rasm.slang"));
             break;
         case MaterialType::UNLIT:
-            // render2 shades it with the uber shader's Unlit path; basic.slang is the legacy path's equivalent.
             material.name = "unlit";
-            material.shader = createShader(readFile("./shaders/passes/basic.slang"));
-            break;
-        case MaterialType::SHADER:
-            material.name = "shader";
             break;
 
         default:
@@ -95,7 +78,7 @@ namespace rasm
             return {};
         }
 
-        auto mat = Material{.handle = handle, .type = MaterialType::PBR, .textures = {}, .shader = {}};
+        auto mat = Material{.handle = handle, .type = MaterialType::PBR, .textures = {}};
 
         const tinygltf::Material *material = &model.materials[materialIndex];
 
@@ -204,21 +187,6 @@ namespace rasm
         registery.materials.resize(handle.index + 1);
         registery.materials[handle.index] = mat;
         cache.materials[materialIndex] = handle;
-        return handle;
-    }
-
-    ShaderHandle Engine::createShader(const std::string &shaderSource)
-    {
-        ShaderHandle handle = handleManager.getNextShaderHandle();
-        if (handle.index >= MAX_SHADERS)
-        {
-            spdlog::warn("Exceeded maximum number of shaders.");
-            return {};
-        }
-
-        registery.shaders.resize(handle.index + 1);
-        registery.shaders[handle.index] = shaderSource;
-
         return handle;
     }
 

@@ -12,13 +12,16 @@ namespace rasm
 {
   namespace
   {
+    // What prepareScene returns when there is nothing to draw. Its pipeline is invalid.
+    const PreparedScene EMPTY_PREPARED_SCENE{};
+
     gfx::MaterialId getGfxMaterialId(MaterialType type)
     {
       switch (type)
       {
       case MaterialType::UNLIT:
         return gfx::MaterialId::UNLIT;
-      default: // The uber shader cannot run a custom SHADER, so it falls back to PBR.
+      default:
         return gfx::MaterialId::PBR;
       }
     }
@@ -48,7 +51,7 @@ namespace rasm
     }
 
     // A failed preparation is not cached, so anything it created so far would leak on every retry.
-    PreparedScene discardSceneBuffers(RenderContext &ctx, const PreparedScene &preparedScene)
+    const PreparedScene &discardSceneBuffers(RenderContext &ctx, const PreparedScene &preparedScene)
     {
       std::vector<BufferHandle> buffers = {preparedScene.megaVertexBuffer, preparedScene.megaIndexBuffer, preparedScene.drawInfoBuffer};
       buffers.insert(buffers.end(), std::begin(preparedScene.megaModelDataBuffer), std::end(preparedScene.megaModelDataBuffer));
@@ -60,7 +63,7 @@ namespace rasm
           ctx.destroyBuffer(buffer);
       }
 
-      return PreparedScene{};
+      return EMPTY_PREPARED_SCENE;
     }
   }
 
@@ -171,19 +174,20 @@ namespace rasm
     sceneRef.lights[sceneRef.lightCount++] = light;
   }
 
-  PreparedScene Engine::prepareScene(SceneHandle scene)
+  const PreparedScene &Engine::prepareScene(SceneHandle scene)
   {
     auto preparedScene = PreparedScene{};
 
     if (!scene.isValid() || scene.index >= MAX_SCENES)
     {
       spdlog::error("Invalid scene handle for preparation.");
-      return PreparedScene{};
+      return EMPTY_PREPARED_SCENE;
     }
 
-    if (preparedScenes.find(scene) != preparedScenes.end())
+    auto cachedScene = preparedScenes.find(scene);
+    if (cachedScene != preparedScenes.end())
     {
-      return preparedScenes[scene];
+      return cachedScene->second;
     }
 
     auto &sceneRef = registery.scenes[scene.index];
@@ -210,7 +214,7 @@ namespace rasm
 
     // Nothing to draw: zero-sized buffers are invalid, and staying uncached lets entities added later show up.
     if (sceneDraws.empty())
-      return PreparedScene{};
+      return EMPTY_PREPARED_SCENE;
 
     for (const auto &draw : sceneDraws)
     {
@@ -223,57 +227,17 @@ namespace rasm
     if (profiler.gpu_memory_stats.vram_usage + totalVertexBufferSize + totalIndexBufferSize > profiler.gpu_memory_stats.vram_budget)
     {
       spdlog::warn("Not enough VRAM to allocate buffers for the scene.");
-      return PreparedScene{};
+      return EMPTY_PREPARED_SCENE;
     }
 
     // create a pipeline for the UberMaterial. A failed preparation retries every frame, so this comes
     // before the buffers: a shader error must not allocate and fill them each time.
-    auto swapchainFormat = ctx.getSwapchainImageFormat();
-    auto depthFormat = Format::D32_SFLOAT_S8_UINT;
-
-    auto pipelineDesc = ResourceDesc{};
-    pipelineDesc.type = ResourceType::GRAPHICS_PIPELINE;
-    pipelineDesc.name = "Pipeline for Uber-Material";
-
-    auto shaderSource = readFile("./shaders/passes/rasm.slang");
-    auto vertShader = shaderCompiler.compileFromString(shaderSource, "rasm.vert.slang", "vertMain");
-    auto fragShader = shaderCompiler.compileFromString(shaderSource, "rasm.frag.slang", "fragMain");
-
-    if (vertShader.code.empty() || fragShader.code.empty())
-    {
-      spdlog::error("Failed to compile the uber shader for the scene.");
-      return PreparedScene{};
-    }
-
-    auto shaderDesc = ResourceDesc{};
-    shaderDesc.type = ResourceType::SHADER;
-    shaderDesc.shader.shaderType = ShaderType::VERTEX;
-    shaderDesc.shader.sourceSize = vertShader.code.size();
-    shaderDesc.shader.source = reinterpret_cast<const char *>(vertShader.code.data());
-
-    pipelineDesc.pipeline.vertexShader = ctx.createShader(shaderDesc);
-
-    shaderDesc.shader.shaderType = ShaderType::FRAGMENT;
-    shaderDesc.shader.sourceSize = fragShader.code.size();
-    shaderDesc.shader.source = reinterpret_cast<const char *>(fragShader.code.data());
-
-    pipelineDesc.pipeline.fragmentShader = ctx.createShader(shaderDesc);
-
-    pipelineDesc.pipeline.topology = PrimitiveTopology::TRIANGLE_LIST;
-
-    pipelineDesc.pipeline.colorAttachmentFormat = swapchainFormat;
-    pipelineDesc.pipeline.depthStencilAttachmentFormat = depthFormat;
-
-    pipelineDesc.pipeline.vertexInputLayout = {.vertexPulling = true};
-
-    pipelineDesc.pipeline.descriptorSetLayout = bindlessDescriptorSetLayout;
-
-    preparedScene.uberMaterialPipeline = ctx.createPipeline(pipelineDesc);
+    preparedScene.uberMaterialPipeline = createPipeline("rasm", readFile("./shaders/passes/rasm.slang"));
 
     if (!preparedScene.uberMaterialPipeline.isValid())
     {
       spdlog::error("Failed to create the uber material pipeline for the scene.");
-      return PreparedScene{};
+      return EMPTY_PREPARED_SCENE;
     }
 
     // Allocate the vertex and index buffers for the scene.
@@ -323,7 +287,7 @@ namespace rasm
     // create sceneData buffer for the scene.
     bufferDesc.name = "Scene Data Buffer";
     bufferDesc.buffer.usage = BufferUsage::STORAGE;
-    bufferDesc.buffer.size = sizeof(gfx::SceneData);
+    bufferDesc.buffer.size = MAX_SCENE_DRAWS_PER_FRAME * sizeof(gfx::SceneData);
 
     for (auto &buffer : preparedScene.sceneDataBuffer)
     {
@@ -393,116 +357,10 @@ namespace rasm
 
     preparedScene.drawInfoCount = sceneDraws.size();
 
-    preparedScenes[scene] = preparedScene;
-    return preparedScene;
+    return preparedScenes.emplace(scene, std::move(preparedScene)).first->second;
   }
 
-  CompiledScene Engine::compileScene(SceneHandle scene)
-  {
-    if (!scene.isValid() || scene.index >= MAX_SCENES)
-    {
-      spdlog::error("Invalid scene handle for compilation.");
-      return CompiledScene{};
-    }
-
-    if (compiledScenes.find(scene) != compiledScenes.end())
-    {
-      return compiledScenes[scene];
-    }
-
-    CompiledScene compiledScene;
-
-    auto _scene = registery.scenes[scene.index];
-
-    for (auto entityHandle : _scene.entities)
-    {
-      if (!entityHandle.isValid())
-        continue;
-
-      auto entity = registery.entities[entityHandle.index];
-
-      auto mat = entity.material;
-      auto mesh = entity.mesh;
-
-      auto bufferHandle = uploadMesh(mesh);
-      if (!bufferHandle.isValid())
-      {
-        spdlog::error("Failed to upload mesh for Entity {}. Skipping.", entity.handle.index);
-        continue;
-      }
-
-      compiledScene.meshData[entity.handle] = bufferHandle;
-      compiledScene.materialToMeshes[mat].insert(entity.handle);
-    }
-
-    auto swapchainFormat = ctx.getSwapchainImageFormat();
-    auto depthFormat = Format::D32_SFLOAT_S8_UINT;
-
-    for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
-    {
-      if (!materialHandle.isValid())
-      {
-        spdlog::error("Material is invalid: {}.", materialHandle.index);
-        continue;
-      }
-
-      // create a pipeline for each material.
-      auto pipelineDesc = ResourceDesc{};
-      pipelineDesc.type = ResourceType::GRAPHICS_PIPELINE;
-      pipelineDesc.name = "Pipeline for Material " + std::to_string(materialHandle.index);
-
-      auto material = registery.materials[materialHandle.index];
-
-      auto shader = material.shader;
-      auto shaderSource = registery.shaders[shader.index];
-
-      auto shaderName = material.name;
-      auto vertShader = shaderCompiler.compileFromString(shaderSource, shaderName + std::string(".vert.slang"), "vertMain");
-      auto fragShader = shaderCompiler.compileFromString(shaderSource, shaderName + std::string(".frag.slang"), "fragMain");
-
-      auto shaderDesc = ResourceDesc{};
-      shaderDesc.type = ResourceType::SHADER;
-      shaderDesc.shader.shaderType = ShaderType::VERTEX;
-      shaderDesc.shader.sourceSize = vertShader.code.size();
-      shaderDesc.shader.source = reinterpret_cast<const char *>(vertShader.code.data());
-
-      pipelineDesc.pipeline.vertexShader = ctx.createShader(shaderDesc);
-
-      shaderDesc.shader.shaderType = ShaderType::FRAGMENT;
-      shaderDesc.shader.sourceSize = fragShader.code.size();
-      shaderDesc.shader.source = reinterpret_cast<const char *>(fragShader.code.data());
-
-      pipelineDesc.pipeline.fragmentShader = ctx.createShader(shaderDesc);
-
-      pipelineDesc.pipeline.topology = PrimitiveTopology::TRIANGLE_LIST;
-
-      pipelineDesc.pipeline.colorAttachmentFormat = swapchainFormat;
-      pipelineDesc.pipeline.depthStencilAttachmentFormat = depthFormat;
-
-      rasm::VertexAttributeDescription attrDesc[4] = {};
-      auto size = std::min(vertShader.vertexInputLayout.size(), static_cast<size_t>(4));
-      for (size_t i = 0; i < size; ++i)
-      {
-        attrDesc[i] = vertShader.vertexInputLayout[i];
-      }
-
-      pipelineDesc.pipeline.vertexInputLayout = {.attributes = {attrDesc[0], attrDesc[1], attrDesc[2], attrDesc[3]},
-                                                 .binding = 0,
-                                                 .stride = sizeof(Vertex),
-                                                 .perInstance = false};
-
-      pipelineDesc.pipeline.descriptorSetLayout = bindlessDescriptorSetLayout;
-
-      auto pipeline = ctx.createPipeline(pipelineDesc);
-      compiledScene.materialToPipeline[materialHandle] = pipeline;
-    }
-
-    compiledScenes[scene] = compiledScene;
-
-    return compiledScene;
-  }
-
-  void Engine::updateUniforms(PreparedScene &preparedScene)
+  void Engine::updateUniforms(const PreparedScene &preparedScene)
   {
     size_t modelBufferOffset = 0;
 
