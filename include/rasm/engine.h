@@ -26,7 +26,6 @@ namespace tinygltf { struct Node; }
 namespace rasm {
 
     constexpr uint32_t MAX_MATERIALS = 256;
-    constexpr uint32_t MAX_SHADERS   = 256;
     constexpr uint32_t MAX_CAMERAS   = 8;
 
     class Engine {
@@ -37,7 +36,6 @@ namespace rasm {
                                     Engine(const EngineConfig& config);
                                     ~Engine();
         SceneHandle                 createScene();
-        CompiledScene               compileScene(SceneHandle scene);
         PreparedScene               prepareScene(SceneHandle scene);
         EntityHandle                createEntity(const std::string& name, MeshHandle mesh = MeshHandle{}, MaterialHandle material = MaterialHandle{}, Transform transform = Transform{});
         CameraHandle                createCamera(CameraProjection projection, Transform transform);
@@ -48,16 +46,17 @@ namespace rasm {
         MeshHandle                  createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices);
         MeshHandle                  loadMesh(const std::string& path);
         MeshHandle                  loadGLTF(const std::string& path);
-        BufferHandle                uploadMesh(const MeshHandle& handle);
         // Color images default to sRGB; pass R8G8B8A8_UNORM for normal/MR/AO data.
         TextureHandle               loadTexture(const std::string& path, Format format = Format::R8G8B8A8_SRGB);
-        ShaderHandle                createShader(const std::string& shaderSource);
-        MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {}, ShaderHandle shader = ShaderHandle{});
+        MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {});
         MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
         TextureHandle               createTexture(const ResourceDesc& desc);
         BufferHandle                createBuffer(const ResourceDesc& desc);
         RenderTargetHandle          createRenderTarget(const ResourceDesc& desc);
         RenderGraph                 createRenderGraph();
+        // Compiles Slang source with vertMain and fragMain entry points. The pipeline has no vertex input and
+        // renders to the swapchain's color format with D32_SFLOAT_S8_UINT depth, and returns invalid on failure.
+        PipelineHandle              createPipeline(const std::string& name, const std::string& shaderSource);
         const Material&             getMaterial(const MaterialHandle &handle);
         gfx::Material               convertToGfxMaterial(const Material &mat);
         Transform                   getTransform(EntityHandle entity);
@@ -75,14 +74,13 @@ namespace rasm {
         // Returns false when the frame must be skipped (minimized, swapchain out of date); then do not
         // record anything or call endFrame.
         [[nodiscard]] bool          beginFrame(CameraHandle camera);
-        void                        beginOffscreenFrame(const RenderTargetHandle& renderTarget, CameraHandle camera);
-        void                        endOffscreenFrame();
         void                        endFrame();
         void                        beginPass();
         void                        endPass();
         void                        render(SceneHandle scene, CameraHandle camera);
-        void                        render2(SceneHandle scene, CameraHandle camera);
-        void                        render(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget);
+        // Records a scene into the current pass, for render graph passes. A render target must use the
+        // swapchain's color format and D32_SFLOAT_S8_UINT depth, which are the formats of the scene's pipeline.
+        void                        drawScene(SceneHandle scene, CameraHandle camera);
         bool                        running() const;
         bool                        recreateSwapchain();
         void                        setRenderTarget(const RenderTargetHandle& renderTarget);
@@ -120,7 +118,6 @@ namespace rasm {
         FrameResources                                              frameResources[MAX_FRAMES_IN_FLIGHT]    = {}; // Double buffering
         Swapchain                                                   swapchain                               = {};
         TextureHandle                                               depthTexture                            = {};
-        std::unordered_map<SceneHandle, CompiledScene, HandleHash>  compiledScenes                          = {}; // TODO: Delete when no longer needed
         std::unordered_map<SceneHandle, PreparedScene, HandleHash>  preparedScenes                          = {};
         RenderContext                                               ctx                                     = {};
         ShaderCompiler                                              shaderCompiler                          = {};
@@ -143,7 +140,6 @@ namespace rasm {
             std::vector<Entity>      entities;
             std::vector<Material>    materials;
             std::vector<Camera>      cameras;
-            std::vector<std::string> shaders;
             std::vector<Mesh>        meshes;
             std::vector<Light>       lights;
             std::vector<Scene>       scenes;

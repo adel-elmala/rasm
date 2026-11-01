@@ -523,7 +523,7 @@ namespace rasm
         depthDesc.texture.width = desc.renderTarget.width;
         depthDesc.texture.height = desc.renderTarget.height;
         depthDesc.texture.format = desc.renderTarget.depthFormat;
-        depthDesc.texture.usage = TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT;
+        depthDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
 
         RenderTargetHandle rtHandle = engine->handleManager.getNextRenderTargetHandle();
 
@@ -543,10 +543,8 @@ namespace rasm
             rt.attachments[i].depth = depthHandle;
 
             auto colorAttachmentIndex = updateBindlessDescriptorSet(engine->getBindlessDescriptorSet(), colorHandle);
-            auto depthAttachmentIndex = updateBindlessDescriptorSet(engine->getBindlessDescriptorSet(), depthHandle);
 
             engine->registery.bindlessTextureIndexMap[colorHandle] = colorAttachmentIndex;
-            engine->registery.bindlessTextureIndexMap[depthHandle] = depthAttachmentIndex;
         }
 
         renderTargetCache[rtHandle] = rt;

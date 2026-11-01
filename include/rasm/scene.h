@@ -6,7 +6,6 @@
 #include "rasm/mesh.h"
 
 #include <string>
-#include <unordered_map>
 
 namespace rasm {
 
@@ -26,13 +25,6 @@ namespace rasm {
 
         LightHandle lights[MAX_LIGHTS_PER_SCENE];
         size_t lightCount = 0;
-    };
-
-    struct CompiledScene
-    {
-        std::unordered_map<MaterialHandle, std::unordered_set<EntityHandle, HandleHash>, HandleHash> materialToMeshes;
-        std::unordered_map<MaterialHandle, PipelineHandle, HandleHash>                               materialToPipeline;
-        std::unordered_map<EntityHandle, BufferHandle, HandleHash>                                   meshData;
     };
 
     // One draw of a scene. The geometry stays in the registry, so preparing a scene copies no mesh data.

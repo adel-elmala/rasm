@@ -89,7 +89,6 @@ namespace rasm
         CommandBufferHandle commandBuffer;
         SemaphoreHandle     readyToDrawSemaphore;
         FenceHandle         inFlightFence;
-        BufferHandle        shaderDataBuffer;
         TextureHandle       depthTexture;
     };
 

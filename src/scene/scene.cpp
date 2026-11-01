@@ -18,7 +18,7 @@ namespace rasm
       {
       case MaterialType::UNLIT:
         return gfx::MaterialId::UNLIT;
-      default: // The uber shader cannot run a custom SHADER, so it falls back to PBR.
+      default:
         return gfx::MaterialId::PBR;
       }
     }
@@ -228,47 +228,7 @@ namespace rasm
 
     // create a pipeline for the UberMaterial. A failed preparation retries every frame, so this comes
     // before the buffers: a shader error must not allocate and fill them each time.
-    auto swapchainFormat = ctx.getSwapchainImageFormat();
-    auto depthFormat = Format::D32_SFLOAT_S8_UINT;
-
-    auto pipelineDesc = ResourceDesc{};
-    pipelineDesc.type = ResourceType::GRAPHICS_PIPELINE;
-    pipelineDesc.name = "Pipeline for Uber-Material";
-
-    auto shaderSource = readFile("./shaders/passes/rasm.slang");
-    auto vertShader = shaderCompiler.compileFromString(shaderSource, "rasm.vert.slang", "vertMain");
-    auto fragShader = shaderCompiler.compileFromString(shaderSource, "rasm.frag.slang", "fragMain");
-
-    if (vertShader.code.empty() || fragShader.code.empty())
-    {
-      spdlog::error("Failed to compile the uber shader for the scene.");
-      return PreparedScene{};
-    }
-
-    auto shaderDesc = ResourceDesc{};
-    shaderDesc.type = ResourceType::SHADER;
-    shaderDesc.shader.shaderType = ShaderType::VERTEX;
-    shaderDesc.shader.sourceSize = vertShader.code.size();
-    shaderDesc.shader.source = reinterpret_cast<const char *>(vertShader.code.data());
-
-    pipelineDesc.pipeline.vertexShader = ctx.createShader(shaderDesc);
-
-    shaderDesc.shader.shaderType = ShaderType::FRAGMENT;
-    shaderDesc.shader.sourceSize = fragShader.code.size();
-    shaderDesc.shader.source = reinterpret_cast<const char *>(fragShader.code.data());
-
-    pipelineDesc.pipeline.fragmentShader = ctx.createShader(shaderDesc);
-
-    pipelineDesc.pipeline.topology = PrimitiveTopology::TRIANGLE_LIST;
-
-    pipelineDesc.pipeline.colorAttachmentFormat = swapchainFormat;
-    pipelineDesc.pipeline.depthStencilAttachmentFormat = depthFormat;
-
-    pipelineDesc.pipeline.vertexInputLayout = {.vertexPulling = true};
-
-    pipelineDesc.pipeline.descriptorSetLayout = bindlessDescriptorSetLayout;
-
-    preparedScene.uberMaterialPipeline = ctx.createPipeline(pipelineDesc);
+    preparedScene.uberMaterialPipeline = createPipeline("rasm", readFile("./shaders/passes/rasm.slang"));
 
     if (!preparedScene.uberMaterialPipeline.isValid())
     {
@@ -395,111 +355,6 @@ namespace rasm
 
     preparedScenes[scene] = preparedScene;
     return preparedScene;
-  }
-
-  CompiledScene Engine::compileScene(SceneHandle scene)
-  {
-    if (!scene.isValid() || scene.index >= MAX_SCENES)
-    {
-      spdlog::error("Invalid scene handle for compilation.");
-      return CompiledScene{};
-    }
-
-    if (compiledScenes.find(scene) != compiledScenes.end())
-    {
-      return compiledScenes[scene];
-    }
-
-    CompiledScene compiledScene;
-
-    auto _scene = registery.scenes[scene.index];
-
-    for (auto entityHandle : _scene.entities)
-    {
-      if (!entityHandle.isValid())
-        continue;
-
-      auto entity = registery.entities[entityHandle.index];
-
-      auto mat = entity.material;
-      auto mesh = entity.mesh;
-
-      auto bufferHandle = uploadMesh(mesh);
-      if (!bufferHandle.isValid())
-      {
-        spdlog::error("Failed to upload mesh for Entity {}. Skipping.", entity.handle.index);
-        continue;
-      }
-
-      compiledScene.meshData[entity.handle] = bufferHandle;
-      compiledScene.materialToMeshes[mat].insert(entity.handle);
-    }
-
-    auto swapchainFormat = ctx.getSwapchainImageFormat();
-    auto depthFormat = Format::D32_SFLOAT_S8_UINT;
-
-    for (const auto &[materialHandle, entitySet] : compiledScene.materialToMeshes)
-    {
-      if (!materialHandle.isValid())
-      {
-        spdlog::error("Material is invalid: {}.", materialHandle.index);
-        continue;
-      }
-
-      // create a pipeline for each material.
-      auto pipelineDesc = ResourceDesc{};
-      pipelineDesc.type = ResourceType::GRAPHICS_PIPELINE;
-      pipelineDesc.name = "Pipeline for Material " + std::to_string(materialHandle.index);
-
-      auto material = registery.materials[materialHandle.index];
-
-      auto shader = material.shader;
-      auto shaderSource = registery.shaders[shader.index];
-
-      auto shaderName = material.name;
-      auto vertShader = shaderCompiler.compileFromString(shaderSource, shaderName + std::string(".vert.slang"), "vertMain");
-      auto fragShader = shaderCompiler.compileFromString(shaderSource, shaderName + std::string(".frag.slang"), "fragMain");
-
-      auto shaderDesc = ResourceDesc{};
-      shaderDesc.type = ResourceType::SHADER;
-      shaderDesc.shader.shaderType = ShaderType::VERTEX;
-      shaderDesc.shader.sourceSize = vertShader.code.size();
-      shaderDesc.shader.source = reinterpret_cast<const char *>(vertShader.code.data());
-
-      pipelineDesc.pipeline.vertexShader = ctx.createShader(shaderDesc);
-
-      shaderDesc.shader.shaderType = ShaderType::FRAGMENT;
-      shaderDesc.shader.sourceSize = fragShader.code.size();
-      shaderDesc.shader.source = reinterpret_cast<const char *>(fragShader.code.data());
-
-      pipelineDesc.pipeline.fragmentShader = ctx.createShader(shaderDesc);
-
-      pipelineDesc.pipeline.topology = PrimitiveTopology::TRIANGLE_LIST;
-
-      pipelineDesc.pipeline.colorAttachmentFormat = swapchainFormat;
-      pipelineDesc.pipeline.depthStencilAttachmentFormat = depthFormat;
-
-      rasm::VertexAttributeDescription attrDesc[4] = {};
-      auto size = std::min(vertShader.vertexInputLayout.size(), static_cast<size_t>(4));
-      for (size_t i = 0; i < size; ++i)
-      {
-        attrDesc[i] = vertShader.vertexInputLayout[i];
-      }
-
-      pipelineDesc.pipeline.vertexInputLayout = {.attributes = {attrDesc[0], attrDesc[1], attrDesc[2], attrDesc[3]},
-                                                 .binding = 0,
-                                                 .stride = sizeof(Vertex),
-                                                 .perInstance = false};
-
-      pipelineDesc.pipeline.descriptorSetLayout = bindlessDescriptorSetLayout;
-
-      auto pipeline = ctx.createPipeline(pipelineDesc);
-      compiledScene.materialToPipeline[materialHandle] = pipeline;
-    }
-
-    compiledScenes[scene] = compiledScene;
-
-    return compiledScene;
   }
 
   void Engine::updateUniforms(PreparedScene &preparedScene)

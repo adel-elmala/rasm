@@ -41,7 +41,7 @@ src/
   thirdparty_impl.cpp           the only *_IMPLEMENTATION defines
 shaders/
   lib/                          core.slang (GPU structs), pbr.slang, unlit.slang
-  passes/                       basic.slang, rasm.slang
+  passes/                       rasm.slang
 examples/
   CMakeLists.txt
   00_hello_scene/ 01_render_graph/ 02_gltf/
@@ -161,7 +161,7 @@ Next steps, in order:
 **B9 — `MaterialType::UNLIT` references a missing shader.** *Fixed 2026-10-31:* `gfx::Modeldata` now carries a `MaterialId` that `fragMain` branches on, so `UNLIT` is a path in the uber shader (`Unlit()` in `unlit.slang`). The legacy path uses `basic.slang` for it, which multiplies the first texture by the base color factor and handles a missing texture. glTF materials with `KHR_materials_unlit` import as `UNLIT` and upload only their base color texture. The original finding follows.
 `createMaterial(UNLIT)` reads `./shaders/passes/unlit.slang` ([material.cpp:64](../src/assets/material.cpp#L64)), which does not exist. The file read fails and later compilation fails.
 
-**B10 — The render-target path is broken.** *Confirmed.*
+**B10 — The render-target path is broken.** *Fixed 2026-11-01:* `endPass` moves the color attachment to `SHADER_READ_ONLY_OPTIMAL` behind a barrier that waits for its color writes, depth attachments are no longer sampled or in the bindless array, and `beginPass` sizes the viewport from the render target. `B1` had already removed the aliasing. In `01_render_graph` the overlay reads the render target through this flow. Validation does not guard the fix: on SDK 1.4.363, GPU-assisted validation with `VK_LAYER_GPUAV_IMAGE_LAYOUT=1` did not report the old layout either. The original finding follows.
 - The attachments for each frame slot alias each other (B1).
 - After rendering, the color attachment is never transitioned to `SHADER_READ_ONLY_OPTIMAL`: the barrier is commented out ([engine.cpp:416-423](../src/engine.cpp#L416-L423)). The bindless descriptor promises that layout ([vulkanContext.cpp:898](../src/rhi/vulkan/vulkanContext.cpp#L898)), so `01_render_graph` samples an image that is still in `COLOR_ATTACHMENT_OPTIMAL`. The default validation layers do not report this, because bindless (partially bound, update-after-bind) descriptors are only layout-checked with GPU-assisted validation.
 - `beginPass` sets the viewport and scissor from the *window* size, not the render-target size ([engine.cpp:407-408](../src/engine.cpp#L407-L408)).
@@ -247,9 +247,9 @@ Use a right-handed Y-up world (glTF's convention) and do the Vulkan flip with a 
 - It does not track resource state, so barriers and layout transitions are left to the passes or missing (B10).
 - It has no transient allocation or aliasing.
 - Each pass starts its own rendering scope with `CLEAR` ([vulkanContext.cpp:1056](../src/rhi/vulkan/vulkanContext.cpp#L1056)), so two passes that target the swapchain overwrite each other.
-- The camera is hardcoded to `scene.cameras[0]`, and the main path (`render2`) doesn't use the graph at all.
+- The camera is hardcoded to `scene.cameras[0]`, and `Engine::render` doesn't use the graph at all.
 
-**D10 — There are two rendering paths.** `render`/`compileScene` (the legacy per-entity path) and `render2`/`prepareScene` (GPU-driven) coexist, together with `begin/endOffscreenFrame`, which is marked "TODO: delete". Pick the GPU-driven path, port `01_render_graph` to it, and delete the rest.
+**D10 — There are two rendering paths.** *Fixed 2026-11-01:* the legacy path is gone, with `render2` renamed to `render`. `01_render_graph` draws through `Engine::drawScene` and `Engine::createPipeline`. The removal also took out what only the legacy path used: `basic.slang`, `MaterialType::BASIC` and `SHADER`, `Material::shader`, `Engine::createShader`, `uploadMesh`, the per-frame shader data buffer, and the vertex-input reflection in `ShaderCompiler`. The original finding follows. `render`/`compileScene` (the legacy per-entity path) and `render2`/`prepareScene` (GPU-driven) coexist, together with `begin/endOffscreenFrame`, which is marked "TODO: delete". Pick the GPU-driven path, port `01_render_graph` to it, and delete the rest.
 
 **D11 — Assets and shaders are located through the working directory** (§1.3).
 
@@ -264,7 +264,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 
 **D14 — Error handling is inconsistent.** Many `bool` results are ignored (`beginCommandBuffer`, `submit`, `fillBuffer`, `createTexture` in `loadTexture`). Some runtime errors are `assert`s.
 
-**D15 — Hard-coded limits** are spread across headers (see [architecture.md §11](architecture.md#11-compile-time-limits)). Move them into `EngineConfig`, or grow the containers dynamically. Size GPU tables from the config.
+**D15 — Hard-coded limits** are spread across headers (see [architecture.md §10](architecture.md#10-compile-time-limits)). Move them into `EngineConfig`, or grow the containers dynamically. Size GPU tables from the config.
 
 **D16 — Profiling.** Tracy is linked publicly, but there are no zones, no frame marks and no GPU timestamps. Also, the VRAM check in `prepareScene` compares host-visible allocations against the device-local budget.
 
@@ -289,8 +289,8 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 
 **P5 — Large by-value copies in the scene code.**
 - `prepareScene` no longer copies meshes: `processMesh` is gone, and each `SceneDraw` points into the registry.
-- `uploadMesh` and `getMeshByteSize` copy whole `Mesh`es ([mesh.cpp:168](../src/assets/mesh.cpp#L168), [:484](../src/assets/mesh.cpp#L484)).
-- `RenderGraph::execute` and `compileScene` copy `Scene`, which holds 1,040 handles ([renderGraph.cpp:143](../src/renderer/renderGraph.cpp#L143), [scene.cpp:362](../src/scene/scene.cpp#L362)).
+- `getMeshByteSize` copies a whole `Mesh`.
+- `RenderGraph::execute` copies `Scene`, which holds 1,040 handles ([renderGraph.cpp:143](../src/renderer/renderGraph.cpp#L143)).
 
 **P6 — CPU memory retention.** The full `tinygltf::Model` (with decoded images), CPU vertex and index arrays, and the `stbi` pixel data for every `loadTexture` stay resident for the engine's lifetime.
 
@@ -307,15 +307,13 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 - **C1 — Naming inconsistencies.** `registery`, `metallicRoughtness`, `compiledShader`, the snake_case `VulkanContext` members, PascalCase GPU enums, and `RenderGraph::CreateTexture` beside `PassBuilder::createTexture`. See the [coding style](coding_style.md#2-naming).
 - **C2 — Formatting.** `scene.cpp` uses 2-space indentation while everything else uses 4, and there is no `.clang-format` in the repo.
 - **C3 — Dead or placeholder code.**
-  - `setUniform` (a no-op), `render(scene, camera, renderTarget)`, `begin/endOffscreenFrame`, `CompiledScene`.
+  - `setUniform` (a no-op).
   - The empty mesh loop in `~Engine`, the glTF branch of `getMeshByteSize`.
   - `VertexFormat::PosOnly`, `MAX_DESCRIPTOR_TYPES`, `compile-shaders.bat`.
-  - The "Future API sketch (not implemented yet)" header in `01_render_graph`, which is out of date.
 - **C4 — Duplication.**
   - `readFile` and `loadFileToString`.
-  - The model-matrix composition appears three times ([scene.cpp:263](../src/scene/scene.cpp#L263), [:461](../src/scene/scene.cpp#L461), [engine.cpp:587](../src/engine.cpp#L587)); `Transform` should have a `toMatrix()` instead.
+  - The model-matrix composition appears twice, in `prepareScene` and `updateUniforms`; `Transform` should have a `toMatrix()` instead.
   - The glTF index-reading loop appears twice.
-  - The two `render()` overloads are near-identical.
 - **C5 — Copies instead of references.** `auto mesh = registery.meshes[...]`, `auto entity = ...`, `auto _scene = ...`.
 - **C6 — An unused check.** `validateRasmStructs` exists but is never called. Call it after compiling the uber shader in debug builds.
 - **C7 — A misplaced define.** *Resolved in the folder-layout change:* the ineffective `VMA_VULKAN_VERSION` define (it came after `vk_mem_alloc.h` was already included) was dropped. VMA's default, derived from the Vulkan headers, is the same 1004000 for every translation unit. If you ever need to pin it, set it in CMake.

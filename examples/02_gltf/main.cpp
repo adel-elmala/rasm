@@ -106,7 +106,7 @@ int main()
         engine.updateTransform(room, engine.getTransform(room).rotate(glm::vec3(0.0f, 1.0f, 0.0f), glm::radians(0.01f)));
 
         // Render the scene
-        engine.render2(scene, camera);
+        engine.render(scene, camera);
     }
 
     return 0;

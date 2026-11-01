@@ -24,7 +24,6 @@ namespace rasm
         struct compiledShader
         {
             std::vector<uint8_t> code;
-            std::vector<VertexAttributeDescription> vertexInputLayout;
         };
 
         ShaderCompiler() = default;

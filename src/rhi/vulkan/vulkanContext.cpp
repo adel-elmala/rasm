@@ -1465,10 +1465,11 @@ namespace rasm::gfx
                 dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
                 break;
             case TextureUsage::SAMPLED:
-                srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                // Only render targets come through here: sampling must wait for their color writes.
+                srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
                 dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
 
-                srcAccessMask = VK_ACCESS_2_NONE;
+                srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
                 dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
                 break;
             default:

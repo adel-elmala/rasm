@@ -8,7 +8,7 @@ RASM is an early-stage C++20 GPU-driven rendering engine (static lib target `ras
 
 ## Docs — read the relevant one before changing code
 
-- [docs/architecture.md](docs/architecture.md) — how the engine works today: handles/registries, `RenderContext` dedup caches, frame loop, the GPU-driven `prepareScene`/`render2` path, CPU↔GPU struct contract, materials/bindless, asset import, render graph, limits.
+- [docs/architecture.md](docs/architecture.md) — how the engine works today: handles/registries, `RenderContext` dedup caches, frame loop, the GPU-driven `prepareScene`/`render` path, CPU↔GPU struct contract, materials/bindless, asset import, render graph, limits.
 - [docs/coding_style.md](docs/coding_style.md) — naming, headers, formatting (aligned `// clang-format off` headers), error handling, Vulkan and Slang rules.
 - [docs/code_review.md](docs/code_review.md) — known bugs/design issues with IDs (`B1`, `D4`, `P1`, `C3`, ...). Check it before "fixing" odd behaviour; reference IDs in commits.
 - [docs/development_plan.md](docs/development_plan.md) — phased roadmap; phase 0 (stabilization) comes first.
@@ -44,6 +44,6 @@ cmake --build --preset x64-debug --target 02_gltf     # single example
 - C++ structs in `src/renderer/uberMaterialTypes.h` must match `shaders/lib/core.slang` byte-for-byte (scalar layout); update both sides and the `static_assert`s together.
 - `RenderContext::createBuffer`/`createTexture` always create a new resource (no dedup since `B1`) — cache at the asset level if you want sharing, and destroy what you replace. Shaders, pipelines and descriptor set layouts are still deduplicated, so any new field in their `ResourceDesc` must be added to `operator==`.
 - `frameCount` is the frame-in-flight slot (0/1); per-frame mutable buffers are indexed by it.
-- `prepareScene` is cached per scene after the first `render2`; only transforms update afterwards.
+- `prepareScene` is cached per scene after the first `render`; only transforms update afterwards.
 - Normal/metallic-roughness/AO textures must be `R8G8B8A8_UNORM`; color/emissive `R8G8B8A8_SRGB`. Shaders output linear color.
 - Library config macros (`GLM_FORCE_*`, `VMA_*`) belong in CMake, not in a `.cpp` after headers were included.
