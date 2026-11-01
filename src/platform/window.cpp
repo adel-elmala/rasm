@@ -2,6 +2,7 @@
 #include "rasm/engine.h"
 #include "rasm/transform.h"
 #include "rasm/camera.h"
+#include "platform/windowSurface.h"
 
 #include <algorithm>
 
@@ -57,17 +58,6 @@ namespace rasm
         window.pixelHeight = static_cast<uint32_t>(pixelHeight);
 
         return window;
-    }
-
-    VkSurfaceKHR Engine::createSurfaceVk(const Window &window, VkInstance instance) const
-    {
-        VkSurfaceKHR surface;
-        if (!SDL_Vulkan_CreateSurface(reinterpret_cast<SDL_Window *>(window.handle.index), instance, nullptr, &surface))
-        {
-            spdlog::error("Failed to create Vulkan surface: {}", SDL_GetError());
-            return VK_NULL_HANDLE;
-        }
-        return surface;
     }
 
     void Engine::pollEvents(CameraHandle camera)
@@ -196,5 +186,15 @@ namespace rasm
             SDL_DestroyWindow(reinterpret_cast<SDL_Window *>(window.handle.index));
             SDL_Quit();
         }
+    }
+
+    bool createWindowSurface(const Window &window, VkInstance instance, VkSurfaceKHR *surface)
+    {
+        if (!SDL_Vulkan_CreateSurface(reinterpret_cast<SDL_Window *>(window.handle.index), instance, nullptr, surface))
+        {
+            spdlog::error("Failed to create Vulkan surface: {}", SDL_GetError());
+            return false;
+        }
+        return true;
     }
 }

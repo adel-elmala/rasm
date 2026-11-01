@@ -1,14 +1,14 @@
 // clang-format off
 #pragma once
 
-#include <deque>
+#include <cstdint>
+#include <memory>
 #include <string>
-#include <unordered_map>
+#include <vector>
 
 #include "rasm/types.h"
-#include "rhi/vulkan/vulkanTypes.h"      // TODO(D1/D2): private backend headers (src/), needed until RenderContext stops holding Vulkan objects by value
-#include "rhi/vulkan/vulkanContext.h"
 #include "rasm/profiler.h"
+#include "rasm/render/resource.h"
 
 namespace rasm
 {
@@ -17,9 +17,8 @@ namespace rasm
     class RenderContext
     {
     public:
-                                            RenderContext() = default;
                                             RenderContext(Engine *owner);
-                                            ~RenderContext() = default;
+                                            ~RenderContext();
         bool                                initialize(Backend backend);
         void                                cleanup();
         BufferHandle                        createBuffer(ResourceDesc desc);
@@ -29,7 +28,7 @@ namespace rasm
         DescriptorSetLayoutHandle           createBindlessDescriptorSetLayout(ResourceDesc desc);
         DescriptorPoolHandle                createDescriptorPool(ResourceDesc desc);
         DescriptorSetHandle                 allocateDescriptorSet(ResourceDesc desc, const DescriptorPoolHandle &pool, const DescriptorSetLayoutHandle &layout);
-        CommandPoolHandle                   createCommandPool(vkb::QueueType type);
+        CommandPoolHandle                   createCommandPool();
         CommandBufferHandle                 createCommandBuffer(const CommandPoolHandle& commandPool);
         SemaphoreHandle                     createSemaphore(bool timeline = false, uint64_t initialValue = 0);
         FenceHandle                         createFence(bool signaled = false);
@@ -72,33 +71,12 @@ namespace rasm
         void                                drawIndexed(const CommandBufferHandle& commandBuffer, uint32_t indexCount, uint32_t instanceCount = 1, uint32_t vertexOffset = 0, uint32_t firstIndex = 0, uint32_t firstInstance = 0);
         void                                drawIndexedIndirect(const CommandBufferHandle& commandBuffer, const BufferHandle& drawInfoBuffer, uint32_t offset, uint32_t drawCount, uint32_t stride);
 
-    protected:
-        Engine*                                                                                     engine        = nullptr;
-        gfx::VulkanContext                                                                          vulkanContext = {};
-        Backend                                                                                     backend       = Backend::VULKAN;
-        // TODO: make the cache non-vulkan specific.
-        std::unordered_map<BufferHandle, gfx::BufferVKHandle, HandleHash>                           bufferCache;
-        std::unordered_map<TextureHandle, gfx::TextureVKHandle, HandleHash>                         textureCache;
-        std::unordered_map<TextureHandle, gfx::TextureVKHandle, HandleHash>                         swapchainImageCache;
-        std::unordered_map<ShaderHandle, gfx::ShaderVKHandle, HandleHash>                           shaderCache;
-        std::unordered_map<PipelineHandle, gfx::PipelineVKHandle, HandleHash>                       pipelineCache;
-        std::unordered_map<CommandPoolHandle, gfx::CommandPoolVKHandle, HandleHash>                 commandPoolCache;
-        std::unordered_map<CommandBufferHandle, gfx::CommandBufferVKHandle, HandleHash>             commandBufferCache;
-        std::unordered_map<SemaphoreHandle, gfx::SemaphoreVKHandle, HandleHash>                     semaphoreCache;
-        std::unordered_map<FenceHandle, gfx::FenceVKHandle, HandleHash>                             fenceCache;
-        std::unordered_map<RenderTargetHandle, RenderTarget, HandleHash>                            renderTargetCache;
-        std::unordered_map<DescriptorSetLayoutHandle, gfx::DescriptorSetLayoutVKHandle, HandleHash> descriptorSetLayoutCache;
-        std::unordered_map<DescriptorPoolHandle, gfx::DescriptorPoolVKHandle, HandleHash>           descriptorPoolCache;
-        std::unordered_map<DescriptorSetHandle, gfx::DescriptorSetVKHandle, HandleHash>             descriptorSetCache;
+    private:
+        struct Impl;
 
-        // Dedup caches, only for immutable objects keyed on their full state. Mutable resources
-        // (buffers, textures, descriptor pools/sets) are always created fresh (B1).
-        std::unordered_map<ResourceDesc, ShaderHandle, ResourceDescHash>                            shaderDescCache;
-        std::deque<std::string>                                                                     shaderSources;  // SPIR-V the shaderDescCache keys point at; a deque keeps those pointers stable
-        std::unordered_map<ResourceDesc, PipelineHandle, ResourceDescHash>                          pipelineDescCache;
-        std::unordered_map<ResourceDesc, DescriptorSetLayoutHandle, ResourceDescHash>               descriptorSetLayoutDescCache;
-
-        uint32_t                                                                                    nextBindlessTextureIndex = 0;
+        Engine*                 engine  = nullptr;
+        Backend                 backend = Backend::VULKAN;
+        std::unique_ptr<Impl>   impl;
     };
 }
 // clang-format on

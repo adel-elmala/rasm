@@ -1,6 +1,8 @@
 #include "rasm/light.h"
 #include "rasm/engine.h"
 
+#include "spdlog/spdlog.h"
+
 namespace rasm
 {
 

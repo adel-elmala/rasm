@@ -5,7 +5,10 @@
 #include "rasm/entity.h"
 #include "rasm/mesh.h"
 
+#include <cstddef>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace rasm {
 

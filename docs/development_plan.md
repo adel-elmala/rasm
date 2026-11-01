@@ -48,7 +48,7 @@ Goal: fix correctness bugs before building anything on top.
 Goal: the structural changes that every later feature depends on. They get much harder to make later.
 
 ### 1.1 Project structure and public API
-- [ ] Split public and private headers. `include/rasm/` must contain no Vulkan, VMA, vk-bootstrap, Slang, tinygltf or SDL headers. Then make `src/` a PRIVATE include directory (`D2`, review §1). *The files are already in their final places; what remains is removing the includes.*
+- [x] Split public and private headers. `include/rasm/` contains no Vulkan, VMA, vk-bootstrap, Slang, tinygltf, SDL or spdlog headers, and `src/` and the backend libraries are PRIVATE (`D2`, review §1, done 2026-11-01).
 - [x] Restructure the source tree into `core/`, `platform/`, `assets/`, `scene/`, `renderer/`, `rhi/vulkan/`, and shaders into `lib/` and `passes/` (review §1, done 2026-10-26).
 - [x] CMake: `src/` and `examples/` subdirectories, the `rasm` target with alias `rasm::rasm`, the `RASM_BUILD_EXAMPLES` option, and the `rasm_add_example()` helper.
 - [x] Put the `*_IMPLEMENTATION` defines in one translation unit, `src/thirdparty_impl.cpp` (`C10`).

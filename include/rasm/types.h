@@ -3,13 +3,13 @@
 
 #include "rasm/handle.h"
 
-#include "tiny_gltf.h"
 #include "glm/glm.hpp"
 
 #include <cstdint>
 #include <string>
 #include <unordered_set>
 #include <variant>
+#include <vector>
 
 namespace rasm
 {

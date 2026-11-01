@@ -1,6 +1,7 @@
 #include "rasm/mesh.h"
 #include "rasm/engine.h"
-#include "rhi/vulkan/vulkanTypes.h"
+
+#include "spdlog/spdlog.h"
 
 #include "tiny_gltf.h"
 #include "tiny_obj_loader.h"
@@ -14,6 +15,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cassert>
+#include <iterator>
 #include <vector>
 
 namespace
@@ -265,6 +267,12 @@ namespace
         return out;
     }
 
+    struct PendingNode
+    {
+        int index;
+        glm::mat4 parentTransform;
+    };
+
     // Helper: Convert a glTF node's properties into a local GLM matrix
     glm::mat4 getLocalTransform(const tinygltf::Node &node)
     {
@@ -447,6 +455,12 @@ namespace rasm
     {
         std::vector<SubGLTFRaw> subGltfs;
 
+        if (meshIndex >= model.meshes.size())
+        {
+            spdlog::warn("glTF: skipping out-of-range mesh {} ({} meshes).", meshIndex, model.meshes.size());
+            return subGltfs;
+        }
+
         const auto &mesh = model.meshes[meshIndex];
         for (size_t primitiveIndex = 0; primitiveIndex < mesh.primitives.size(); ++primitiveIndex)
         {
@@ -580,58 +594,78 @@ namespace rasm
         return subGltfs;
     }
 
-    // Recursive function to traverse the scene graph node tree
-    std::vector<SubGLTFRaw> Engine::traverseNodes(const tinygltf::Model &model, int nodeIndex, const glm::mat4 &parentTransform, GltfImportCache &cache)
+    // Depth-first walk of the node tree. glTF requires a strict tree, but nothing enforces it: an explicit stack
+    // survives arbitrarily deep files and the visited list stops cycles.
+    std::vector<SubGLTFRaw> Engine::traverseNodes(const tinygltf::Model &model, const std::vector<int> &rootNodes, const glm::mat4 &rootTransform, GltfImportCache &cache)
     {
-        if (nodeIndex < 0 || nodeIndex >= model.nodes.size())
-            return {};
-
-        const tinygltf::Node &node = model.nodes[nodeIndex];
-
-        // Compute this node's local matrix, then combine with its parent's world matrix
-        glm::mat4 localTransform = getLocalTransform(node);
-        glm::mat4 globalTransform = parentTransform * localTransform;
-
         std::vector<SubGLTFRaw> subGltfs;
-        // If this node instantiates a mesh, we now have its world transform!
-        if (node.mesh >= 0)
+        std::vector<bool> visited(model.nodes.size(), false);
+
+        // Pushed in reverse so nodes pop in file order.
+        std::vector<PendingNode> pending;
+        for (auto root = rootNodes.rbegin(); root != rootNodes.rend(); ++root)
+            pending.push_back({*root, rootTransform});
+
+        while (!pending.empty())
         {
-            auto extractedRaws = extractGLTFRaws(model, node.mesh, globalTransform, cache);
-            subGltfs.insert(subGltfs.end(), extractedRaws.begin(), extractedRaws.end());
+            const PendingNode current = pending.back();
+            pending.pop_back();
+
+            if (current.index < 0 || static_cast<size_t>(current.index) >= model.nodes.size())
+            {
+                spdlog::warn("glTF: skipping out-of-range node {} ({} nodes).", current.index, model.nodes.size());
+                continue;
+            }
+            if (visited[current.index])
+            {
+                spdlog::warn("glTF: skipping node {}, it has more than one parent or is part of a cycle.", current.index);
+                continue;
+            }
+            visited[current.index] = true;
+
+            const tinygltf::Node &node = model.nodes[current.index];
+
+            // Compute this node's local matrix, then combine with its parent's world matrix
+            const glm::mat4 globalTransform = current.parentTransform * getLocalTransform(node);
+
+            // If this node instantiates a mesh, we now have its world transform!
+            if (node.mesh >= 0)
+            {
+                auto extractedRaws = extractGLTFRaws(model, node.mesh, globalTransform, cache);
+                subGltfs.insert(subGltfs.end(), std::make_move_iterator(extractedRaws.begin()), std::make_move_iterator(extractedRaws.end()));
+            }
+
+            for (auto child = node.children.rbegin(); child != node.children.rend(); ++child)
+                pending.push_back({*child, globalTransform});
         }
 
-        // Recursively process all child nodes
-        for (int childIndex : node.children)
-        {
-            auto childRaws = traverseNodes(model, childIndex, globalTransform, cache);
-            subGltfs.insert(subGltfs.end(), childRaws.begin(), childRaws.end());
-        }
         return subGltfs;
     }
 
     // Entry point: Start traversal from the root nodes of the active scene
     GLTFRaw Engine::processGLTF(const tinygltf::Model &model)
     {
-        // Default to the first scene if model.defaultScene is not specified
-        int sceneIndex = model.defaultScene >= 0 ? model.defaultScene : 0;
         if (model.scenes.empty())
             return {};
+
+        // Default to the first scene if model.defaultScene is not specified
+        int sceneIndex = model.defaultScene >= 0 ? model.defaultScene : 0;
+        if (static_cast<size_t>(sceneIndex) >= model.scenes.size())
+        {
+            spdlog::warn("glTF: default scene {} is out of range ({} scenes), using scene 0.", sceneIndex, model.scenes.size());
+            sceneIndex = 0;
+        }
 
         const tinygltf::Scene &scene = model.scenes[sceneIndex];
 
         GLTFRaw gltfRaw;
-        gltfRaw.model = model;
 
         // Root transform flips Y into the engine's Vulkan clip-space convention (Y down), matching what the
         // OBJ loader does per-vertex. Applied on the left so it acts after the glTF node hierarchy.
         const glm::mat4 rootTransform = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, 1.0f));
 
         GltfImportCache cache;
-        for (int rootNodeIndex : scene.nodes)
-        {
-            auto extractedRaws = traverseNodes(model, rootNodeIndex, rootTransform, cache);
-            gltfRaw.subGltfRaws.insert(gltfRaw.subGltfRaws.end(), extractedRaws.begin(), extractedRaws.end());
-        }
+        gltfRaw.subGltfRaws = traverseNodes(model, scene.nodes, rootTransform, cache);
 
         return gltfRaw;
     }

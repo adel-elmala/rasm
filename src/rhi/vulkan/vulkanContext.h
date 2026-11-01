@@ -35,7 +35,7 @@ namespace rasm
             std::optional<DescriptorSetLayoutVKHandle> createBindlessDescriptorSetLayout(ResourceDesc desc);
             std::optional<DescriptorPoolVKHandle>      createDescriptorPool(ResourceDesc desc);
             std::optional<DescriptorSetVKHandle>       allocateDescriptorSet(ResourceDesc desc, const DescriptorPoolVKHandle &pool, const DescriptorSetLayoutVKHandle &layout);
-            std::optional<CommandPoolVKHandle>         createCommandPool(vkb::QueueType type);
+            std::optional<CommandPoolVKHandle>         createCommandPool();
             std::optional<CommandBufferVKHandle>       createCommandBuffer(const CommandPoolVKHandle& commandPool);
             std::optional<SemaphoreVKHandle>           createSemaphore(bool timeline = false, uint64_t initialValue = 0);
             std::optional<FenceVKHandle>               createFence(bool signaled = false);

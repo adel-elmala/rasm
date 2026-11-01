@@ -1,6 +1,8 @@
 #include "rasm/camera.h"
 #include "rasm/engine.h"
 
+#include "spdlog/spdlog.h"
+
 #include <cmath>
 
 namespace rasm
