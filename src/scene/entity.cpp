@@ -21,32 +21,32 @@ namespace rasm
                              .material = material,
                              .transform = transform};
 
-        registery.entities.resize(id.index + 1);
-        registery.entities[id.index] = entity;
+        registry.entities.resize(id.index + 1);
+        registry.entities[id.index] = entity;
 
         return id;
     }
 
     void Engine::updateTransform(EntityHandle entity, Transform transform)
     {
-        if (!entity.isValid() || entity.index >= registery.entities.size())
+        if (!entity.isValid() || entity.index >= registry.entities.size())
         {
             spdlog::error("Invalid entity handle for updating transform.");
             return;
         }
 
-        registery.entities[entity.index].transform = transform;
+        registry.entities[entity.index].transform = transform;
     }
 
     Transform Engine::getTransform(EntityHandle entity)
     {
-        if (!entity.isValid() || entity.index >= registery.entities.size())
+        if (!entity.isValid() || entity.index >= registry.entities.size())
         {
             spdlog::error("Invalid entity handle for getting transform.");
             return Transform{};
         }
 
-        return registery.entities[entity.index].transform;
+        return registry.entities[entity.index].transform;
     }
 
 }

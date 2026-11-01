@@ -328,8 +328,8 @@ namespace rasm
         mesh.type = Mesh::MeshType::OBJ;
         mesh.data = std::move(objRaw);
 
-        registery.meshes.resize(handle.index + 1);
-        registery.meshes[handle.index] = std::move(mesh);
+        registry.meshes.resize(handle.index + 1);
+        registry.meshes[handle.index] = std::move(mesh);
 
         return handle;
     }
@@ -339,9 +339,9 @@ namespace rasm
         const std::string path = resolveAssetPath(assetPath);
 
         // find if the mesh is already loaded, if so return existing handle
-        if (registery.loadedMeshes.find(path) != registery.loadedMeshes.end())
+        if (registry.loadedMeshes.find(path) != registry.loadedMeshes.end())
         {
-            return registery.loadedMeshes[path];
+            return registry.loadedMeshes[path];
         }
 
         // find if the model extension is supported, if not return invalid handle
@@ -412,8 +412,8 @@ namespace rasm
             }
 
             // Load vertex and index data
-            std::vector<Vertex> out_vertices;
-            std::vector<uint32_t> out_indices;
+            std::vector<Vertex> outVertices;
+            std::vector<uint32_t> outIndices;
 
             for (const auto &shape : shapes)
             {
@@ -427,23 +427,23 @@ namespace rasm
                     if (attrib.texcoords.size() > 0)
                         v.uv[0] = {attrib.texcoords[index.texcoord_index * 2], 1.0 - attrib.texcoords[index.texcoord_index * 2 + 1]};
 
-                    out_vertices.push_back(v);
-                    out_indices.push_back(static_cast<uint32_t>(out_indices.size()));
+                    outVertices.push_back(v);
+                    outIndices.push_back(static_cast<uint32_t>(outIndices.size()));
                 }
             }
 
             ObjRaw objRaw{};
-            objRaw.vertices = std::move(out_vertices);
-            objRaw.indices = std::move(out_indices);
+            objRaw.vertices = std::move(outVertices);
+            objRaw.indices = std::move(outIndices);
 
             mesh.type = Mesh::MeshType::OBJ;
             mesh.data = std::move(objRaw);
         }
 
-        registery.loadedMeshes[path] = handle;
+        registry.loadedMeshes[path] = handle;
 
-        registery.meshes.resize(handle.index + 1);
-        registery.meshes[handle.index] = std::move(mesh);
+        registry.meshes.resize(handle.index + 1);
+        registry.meshes[handle.index] = std::move(mesh);
 
         return handle;
     }
@@ -675,13 +675,13 @@ namespace rasm
 
     MeshSize Engine::getMeshByteSize(const MeshHandle &handle) const
     {
-        if (!handle.isValid() || handle.index >= registery.meshes.size())
+        if (!handle.isValid() || handle.index >= registry.meshes.size())
         {
             spdlog::error("Mesh handle not found for getting byte size.");
             return {};
         }
 
-        auto mesh = registery.meshes[handle.index];
+        auto mesh = registry.meshes[handle.index];
 
         MeshSize meshSize{};
 

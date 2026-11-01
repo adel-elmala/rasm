@@ -10,7 +10,8 @@
 #include <utility>
 #include <vector>
 
-namespace rasm {
+namespace rasm
+{
 
     constexpr int MAX_ENTITIES_PER_SCENE = 1024;
     constexpr int MAX_CAMERAS_PER_SCENE = 8;

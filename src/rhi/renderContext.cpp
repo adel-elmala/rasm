@@ -53,9 +53,9 @@ namespace rasm
 
     RenderContext::~RenderContext() = default;
 
-    bool RenderContext::initialize(Backend _backend)
+    bool RenderContext::initialize(Backend backend)
     {
-        this->backend = _backend;
+        this->backend = backend;
 
         switch (backend)
         {
@@ -576,7 +576,7 @@ namespace rasm
             {
                 if (attachment.color.isValid())
                 {
-                    engine->registery.bindlessTextureIndexMap.erase(attachment.color);
+                    engine->registry.bindlessTextureIndexMap.erase(attachment.color);
                     destroyTexture(attachment.color);
                 }
                 if (attachment.depth.isValid())

@@ -22,7 +22,7 @@ namespace rasm
         class VulkanContext
         {
         public:
-                                                       VulkanContext(Engine *owner);
+                                                       VulkanContext(Engine* owner);
                                                        VulkanContext() = default;
                                                        ~VulkanContext();
             bool                                       initialize();
@@ -34,7 +34,7 @@ namespace rasm
             // std::optional<PipelineVKHandle>         createComputePipeline(ResourceDesc desc, const ShaderVKHandle& computeShader);
             std::optional<DescriptorSetLayoutVKHandle> createBindlessDescriptorSetLayout(ResourceDesc desc);
             std::optional<DescriptorPoolVKHandle>      createDescriptorPool(ResourceDesc desc);
-            std::optional<DescriptorSetVKHandle>       allocateDescriptorSet(ResourceDesc desc, const DescriptorPoolVKHandle &pool, const DescriptorSetLayoutVKHandle &layout);
+            std::optional<DescriptorSetVKHandle>       allocateDescriptorSet(ResourceDesc desc, const DescriptorPoolVKHandle& pool, const DescriptorSetLayoutVKHandle& layout);
             std::optional<CommandPoolVKHandle>         createCommandPool();
             std::optional<CommandBufferVKHandle>       createCommandBuffer(const CommandPoolVKHandle& commandPool);
             std::optional<SemaphoreVKHandle>           createSemaphore(bool timeline = false, uint64_t initialValue = 0);
@@ -84,18 +84,18 @@ namespace rasm
             bool                                       loadSwapchainImages();
             VkExtent2D                                 getDesiredSwapchainExtent() const;
 
-            Engine*             engine                      = nullptr;
-            VmaAllocator        allocator                   = {};
-            vkb::Instance       instance                    = {};
-            vkb::PhysicalDevice physical_device             = {};
-            vkb::Device         device                      = {};
-            vkb::DispatchTable  dispatch_table              = {};
-            VkQueue             graphics_queue              = {};
-            SwapchainVKHandle   swapchain                   = {};
-            VkSurfaceKHR        surface                     = VK_NULL_HANDLE;
-            uint32_t            graphics_queue_family_index = 0;
-            uint32_t            current_swapchain_image     = 0;
-            bool                debug_utils_enabled         = false;
+            Engine*             engine                   = nullptr;
+            VmaAllocator        allocator                = {};
+            vkb::Instance       instance                 = {};
+            vkb::PhysicalDevice physicalDevice           = {};
+            vkb::Device         device                   = {};
+            vkb::DispatchTable  dispatchTable            = {};
+            VkQueue             graphicsQueue            = {};
+            SwapchainVKHandle   swapchain                = {};
+            VkSurfaceKHR        surface                  = VK_NULL_HANDLE;
+            uint32_t            graphicsQueueFamilyIndex = 0;
+            uint32_t            currentSwapchainImage    = 0;
+            bool                debugUtilsEnabled        = false;
         };
     }
 }

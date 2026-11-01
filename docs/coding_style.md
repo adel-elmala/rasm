@@ -32,12 +32,10 @@ Naming conventions for specific kinds of function:
 - `update*` does a per-frame mutation.
 - `destroy*` releases an object.
 
-Known deviations to migrate, rather than copy:
-- `VulkanContext` uses snake_case members (`physical_device`, `graphics_queue`) and `_init_*` free functions.
-- The GPU enums `gfx::VertexFormat` and `gfx::LightType` use unscoped PascalCase values. Make them `enum class ... : uint32_t` with UPPER_SNAKE values.
-- `ShaderCompiler::compiledShader` should be `CompiledShader`.
-- `registery` should be `registry`, and `metallicRoughtness` should be `metallicRoughness`.
-- `RenderGraph::CreateTexture` / `Read` / `Write` should become camelCase.
+Deliberate exceptions:
+- The BRDF terms in `pbr.slang` keep their names from the literature (`D_GGX`, `F_Schlick`, `V_SmithGGXCorrelated`, `Fd_Lambert`), so the shader can be checked against the references.
+- `src/thirdparty_impl.cpp` keeps its name, which matches the `*_IMPLEMENTATION` macros it defines.
+- vk-bootstrap's API is snake_case, such as `.physical_device`. Only names RASM declares follow this table.
 
 ## 3. Files and headers
 
@@ -76,7 +74,7 @@ Known deviations to migrate, rather than copy:
 ## 4. Formatting
 
 - 4 spaces of indentation, no tabs. Allman braces, where the opening brace goes on its own line.
-- **Aligned declarations in headers.** Every header, public or private and however small, wraps its whole content in `// clang-format off` / `// clang-format on`, starting on the first line, and aligns return types, names, member types and default values in columns (see `engine.h`, `renderContext.h`, `vulkanTypes.h`). Keep that alignment when you add lines. References sit on the type: `const std::string& path`.
+- **Aligned declarations in headers.** Every header, public or private and however small, wraps its whole content in `// clang-format off` / `// clang-format on`, starting on the first line, and aligns return types, names, member types and default values in columns (see `engine.h`, `renderContext.h`, `vulkanTypes.h`). Keep that alignment when you add lines. References and pointers sit on the type (`const std::string& path`, `Engine* owner`), and braces stay Allman: the formatter skips headers, so nothing fixes these for you.
 - Run `clang-format -i <file>` on `.cpp` files you change. The rules are in [.clang-format](../.clang-format), and it leaves `// clang-format off` regions alone, so use those for hand-aligned blocks in `.cpp` files too (see `RenderContext::Impl`).
 - The formatter has no column limit, so it keeps your line breaks. Keep lines readable at about 160 columns yourself. Long `spdlog` messages and designated initializers may exceed this.
 - Put one field per line in a designated initializer when it doesn't fit comfortably on one line. Multi-line lambdas take their brace on the next line.
@@ -108,7 +106,7 @@ Known deviations to migrate, rather than copy:
   - `info`: lifecycle (device selected, engine started or shutting down).
   - `debug`: per-event detail.
 - Nothing per frame may log above `debug`.
-- Vulkan results always pass through `_to_vk_result_string` (or its successor) in messages.
+- Vulkan results always pass through `toVkResultString` (or its successor) in messages.
 
 ## 7. Comments
 

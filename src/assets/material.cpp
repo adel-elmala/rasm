@@ -57,8 +57,8 @@ namespace rasm
             break;
         }
 
-        registery.materials.resize(handle.index + 1);
-        registery.materials[handle.index] = material;
+        registry.materials.resize(handle.index + 1);
+        registry.materials[handle.index] = material;
 
         return handle;
     }
@@ -185,21 +185,21 @@ namespace rasm
                 mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + i] = material->emissiveFactor[i];
         }
 
-        registery.materials.resize(handle.index + 1);
-        registery.materials[handle.index] = mat;
+        registry.materials.resize(handle.index + 1);
+        registry.materials[handle.index] = mat;
         cache.materials[materialIndex] = handle;
         return handle;
     }
 
     const Material &Engine::getMaterial(const MaterialHandle &handle)
     {
-        if (handle.isValid() && handle.index < registery.materials.size())
-            return registery.materials[handle.index];
+        if (handle.isValid() && handle.index < registry.materials.size())
+            return registry.materials[handle.index];
 
         if (handle.isValid())
             spdlog::error("Invalid material handle {}; using the default material.", handle.index);
         if (defaultMaterial.isValid())
-            return registery.materials[defaultMaterial.index];
+            return registry.materials[defaultMaterial.index];
 
         // Only reachable when engine construction failed before creating the default material.
         static const Material noMaterial{};

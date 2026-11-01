@@ -156,8 +156,8 @@ namespace rasm
             spdlog::error("Failed to create the default material.");
             return;
         }
-        registery.materials[defaultMaterial.index].name = "default";
-        registery.materials[defaultMaterial.index].params[static_cast<uint32_t>(PbrParam::METALLIC)] = 1.0f;
+        registry.materials[defaultMaterial.index].name = "default";
+        registry.materials[defaultMaterial.index].params[static_cast<uint32_t>(PbrParam::METALLIC)] = 1.0f;
 
         isRunning = true;
     }
@@ -165,7 +165,7 @@ namespace rasm
     Engine::~Engine()
     {
         // Clean up resources, free memory, etc.
-        for (auto &[handle, tex] : registery.textureData)
+        for (auto &[handle, tex] : registry.textureData)
         {
             stbi_image_free(tex.data);
         }
@@ -194,9 +194,9 @@ namespace rasm
         }
         const std::string path = resolveAssetPath(assetPath);
         const auto cacheKey = path + "#" + std::to_string(static_cast<int>(format));
-        if (registery.loadedTextures.find(cacheKey) != registery.loadedTextures.end())
+        if (registry.loadedTextures.find(cacheKey) != registry.loadedTextures.end())
         {
-            return registery.loadedTextures[cacheKey];
+            return registry.loadedTextures[cacheKey];
         }
 
         // find if the texture extension is supported, if not return invalid handle
@@ -245,8 +245,8 @@ namespace rasm
             return TextureHandle{};
         }
 
-        registery.loadedTextures[cacheKey] = textureHandle;
-        registery.textureData.insert({textureHandle, std::move(tex)});
+        registry.loadedTextures[cacheKey] = textureHandle;
+        registry.textureData.insert({textureHandle, std::move(tex)});
 
         return textureHandle;
     }
@@ -599,11 +599,11 @@ namespace rasm
         }
         const uint64_t sceneDataOffset = sceneDrawCount++ * sizeof(gfx::SceneData);
 
-        auto &sceneRef = registery.scenes[scene.index];
+        auto &sceneRef = registry.scenes[scene.index];
         auto &currentFrame = frameResources[frameCount];
         auto commandBuffer = currentFrame.commandBuffer;
 
-        auto &cameraRef = registery.cameras[camera.index];
+        auto &cameraRef = registry.cameras[camera.index];
         auto projection = getProjectionMatrix(camera, static_cast<float>(width) / static_cast<float>(height));
         auto view = getViewMatrix(camera);
 
@@ -617,7 +617,7 @@ namespace rasm
             for (uint32_t i = 0; i < sceneRef.lightCount; ++i)
             {
                 LightHandle sceneLight = sceneRef.lights[i];
-                Light sceneLightData = registery.lights[sceneLight.index];
+                Light sceneLightData = registry.lights[sceneLight.index];
 
                 gfx::Light light{};
                 light.position = sceneLightData.position;
@@ -684,14 +684,14 @@ namespace rasm
             spdlog::error("Failed to add bindless texture.");
             return UINT32_MAX;
         }
-        registery.bindlessTextureIndexMap[texture] = txtID;
+        registry.bindlessTextureIndexMap[texture] = txtID;
         return txtID;
     }
 
     uint32_t Engine::getBindlessTextureIndex(const TextureHandle &texture)
     {
-        auto it = registery.bindlessTextureIndexMap.find(texture);
-        if (it != registery.bindlessTextureIndexMap.end())
+        auto it = registry.bindlessTextureIndexMap.find(texture);
+        if (it != registry.bindlessTextureIndexMap.end())
         {
             return it->second;
         }

@@ -188,7 +188,7 @@ namespace rasm
                                      {"baseColorTextureIndex", offsetof(gfx::MetallicRoughnessMaterial, baseColorTextureIndex)},
                                      {"baseColorTextureCoordinate", offsetof(gfx::MetallicRoughnessMaterial, baseColorTextureCoordinate)},
                                      {"metallicRoughnessTextureIndex", offsetof(gfx::MetallicRoughnessMaterial, metallicRoughnessTextureIndex)},
-                                     {"metallicRoughtnessTextureCoordinate", offsetof(gfx::MetallicRoughnessMaterial, metallicRoughtnessTextureCoordinate)},
+                                     {"metallicRoughnessTextureCoordinate", offsetof(gfx::MetallicRoughnessMaterial, metallicRoughnessTextureCoordinate)},
                                      {"metallicFactor", offsetof(gfx::MetallicRoughnessMaterial, metallicFactor)},
                                      {"roughnessFactor", offsetof(gfx::MetallicRoughnessMaterial, roughnessFactor)}});
 
@@ -268,7 +268,7 @@ namespace rasm
 
     void ShaderCompiler::shutdown() {}
 
-    ShaderCompiler::compiledShader ShaderCompiler::compile(const std::string &sourcePath, const std::string &outputPath, const std::string &entryPointName)
+    ShaderCompiler::CompiledShader ShaderCompiler::compile(const std::string &sourcePath, const std::string &outputPath, const std::string &entryPointName)
     {
         auto sourceCode = loadFileToString(sourcePath);
         if (sourceCode.empty())
@@ -280,7 +280,7 @@ namespace rasm
         return compileFromString(sourceCode, outputPath, entryPointName);
     }
 
-    ShaderCompiler::compiledShader ShaderCompiler::compileFromString(const std::string &sourceCode, const std::string &outputPath, const std::string &entryPointName)
+    ShaderCompiler::CompiledShader ShaderCompiler::compileFromString(const std::string &sourceCode, const std::string &outputPath, const std::string &entryPointName)
     {
         // The session keeps every module and rejects a second one with the same name and different source,
         // so hash the source into the name.
@@ -353,7 +353,7 @@ namespace rasm
 
         assert(validateRasmStructs(linkedProgram->getLayout()) && "C++ structs must match shaders/lib/core.slang");
 
-        constexpr SlangInt targetIndex = 0;
+        constexpr SlangInt TARGET_INDEX = 0;
 
         // Get Target Code
         Slang::ComPtr<slang::IBlob> compiledBlob;
@@ -361,7 +361,7 @@ namespace rasm
             Slang::ComPtr<slang::IBlob> diagnosticsBlob;
 
             SlangResult result = linkedProgram->getEntryPointCode(0,
-                                                                  targetIndex,
+                                                                  TARGET_INDEX,
                                                                   compiledBlob.writeRef(),
                                                                   diagnosticsBlob.writeRef());
             diagnoseIfNeeded(diagnosticsBlob);
@@ -378,7 +378,7 @@ namespace rasm
         std::vector<uint8_t> code(blobSize);
         std::memcpy(code.data(), pBlob, blobSize);
 
-        ShaderCompiler::compiledShader result;
+        ShaderCompiler::CompiledShader result;
         result.code = std::move(code);
 
         return result;

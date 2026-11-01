@@ -22,7 +22,7 @@ namespace rasm
             GLSL
         };
 
-        struct compiledShader
+        struct CompiledShader
         {
             std::vector<uint8_t> code;
         };
@@ -33,8 +33,8 @@ namespace rasm
         bool            initialize(Target target, const std::string& shaderDir);
         void            shutdown();
 
-        compiledShader  compile(const std::string& sourcePath, const std::string& outputPath, const std::string& entryPointName);
-        compiledShader  compileFromString(const std::string& sourceCode, const std::string& outputPath, const std::string& entryPointName);
+        CompiledShader  compile(const std::string& sourcePath, const std::string& outputPath, const std::string& entryPointName);
+        CompiledShader  compileFromString(const std::string& sourceCode, const std::string& outputPath, const std::string& entryPointName);
 
     private:
         slang::TargetDesc getTargetDesc(Target target);

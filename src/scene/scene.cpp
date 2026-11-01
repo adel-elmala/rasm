@@ -46,7 +46,7 @@ namespace rasm
             gmat.pbr.baseColorTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::ALBEDO)]);
             gmat.pbr.baseColorTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::ALBEDO)]);
             gmat.pbr.metallicRoughnessTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::METALLIC)]);
-            gmat.pbr.metallicRoughtnessTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::METALLIC)]);
+            gmat.pbr.metallicRoughnessTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::METALLIC)]);
 
             gmat.pbr.metallicFactor = mat.params[static_cast<uint32_t>(PbrParam::METALLIC)];
             gmat.pbr.roughnessFactor = mat.params[static_cast<uint32_t>(PbrParam::ROUGHNESS)];
@@ -136,8 +136,8 @@ namespace rasm
                            .lights = {},
                            .lightCount = 0};
 
-        registery.scenes.resize(id.index + 1);
-        registery.scenes[id.index] = scene;
+        registry.scenes.resize(id.index + 1);
+        registry.scenes[id.index] = scene;
 
         currentScene = id;
 
@@ -158,7 +158,7 @@ namespace rasm
             return;
         }
 
-        auto &sceneRef = registery.scenes[scene.index];
+        auto &sceneRef = registry.scenes[scene.index];
 
         if (sceneRef.entityCount + 1 > MAX_ENTITIES_PER_SCENE)
         {
@@ -183,7 +183,7 @@ namespace rasm
             return;
         }
 
-        auto &sceneRef = registery.scenes[scene.index];
+        auto &sceneRef = registry.scenes[scene.index];
 
         if (sceneRef.cameraCount + 1 > MAX_CAMERAS_PER_SCENE)
         {
@@ -208,7 +208,7 @@ namespace rasm
             return;
         }
 
-        auto &sceneRef = registery.scenes[scene.index];
+        auto &sceneRef = registry.scenes[scene.index];
 
         if (sceneRef.lightCount + 1 > MAX_LIGHTS_PER_SCENE)
         {
@@ -238,7 +238,7 @@ namespace rasm
         // Below the cache lookup, which runs every frame: this zone marks real preparations.
         ZoneScoped;
 
-        auto &sceneRef = registery.scenes[scene.index];
+        auto &sceneRef = registry.scenes[scene.index];
 
         // find all meshes associated with the entities in the scene and compute the total byte size required for them.
         uint64_t totalVertexBufferSize = 0;
@@ -251,13 +251,13 @@ namespace rasm
             if (!entityHandle.isValid())
                 continue;
 
-            const auto &entity = registery.entities[entityHandle.index];
+            const auto &entity = registry.entities[entityHandle.index];
 
             auto mesh = entity.mesh;
             if (!mesh.isValid())
                 continue;
 
-            addMeshDraws(sceneDraws, entity, registery.meshes[mesh.index]);
+            addMeshDraws(sceneDraws, entity, registry.meshes[mesh.index]);
         }
 
         // Nothing to draw: zero-sized buffers are invalid, and staying uncached lets entities added later show up.
@@ -272,7 +272,7 @@ namespace rasm
 
         // allocate one mega vertex-buffer and index-buffer to hold all the mesh data for the scene.
         queryMemoryStats();
-        if (profiler.gpu_memory_stats.vram_usage + totalVertexBufferSize + totalIndexBufferSize > profiler.gpu_memory_stats.vram_budget)
+        if (profiler.gpuMemoryStats.vramUsage + totalVertexBufferSize + totalIndexBufferSize > profiler.gpuMemoryStats.vramBudget)
         {
             spdlog::warn("Not enough VRAM to allocate buffers for the scene.");
             return EMPTY_PREPARED_SCENE;
@@ -350,8 +350,8 @@ namespace rasm
         uint64_t modelBufferOffset = 0;
         uint64_t drawInfoBufferOffset = 0;
 
-        uint32_t IndexOffset = 0;
-        uint32_t VertexOffset = 0;
+        uint32_t indexOffset = 0;
+        uint32_t vertexOffset = 0;
 
         ZoneNamedN(uploadZone, "uploadScene", true);
 
@@ -382,7 +382,7 @@ namespace rasm
             gfx::Modeldata modelData{};
             modelData.worldMatrix = model;
             modelData.normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
-            modelData.vertFormat = gfx::VertexFormat::Full;
+            modelData.vertFormat = gfx::VertexFormat::FULL;
             // Primitives without a material use the entity's; getMaterial resolves an invalid one to the default material.
             auto material = draw.material.isValid() ? draw.material : draw.entity->material;
             const auto &materialRef = getMaterial(material);
@@ -396,15 +396,15 @@ namespace rasm
             auto drawInfo = gfx::DrawInfo{};
             drawInfo.indexCount = nIndices;
             drawInfo.instanceCount = 1; // TODO: support multiple instances
-            drawInfo.firstIndex = IndexOffset;
-            drawInfo.vertexOffset = VertexOffset;
+            drawInfo.firstIndex = indexOffset;
+            drawInfo.vertexOffset = vertexOffset;
             drawInfo.firstInstance = 0; // TODO: support multiple instances
 
             ctx.fillBuffer(preparedScene.drawInfoBuffer, &drawInfo, sizeof(drawInfo), drawInfoBufferOffset);
             drawInfoBufferOffset += sizeof(drawInfo);
 
-            IndexOffset += nIndices;
-            VertexOffset += nVertices;
+            indexOffset += nIndices;
+            vertexOffset += nVertices;
         }
 
         preparedScene.drawInfoCount = sceneDraws.size();
@@ -420,7 +420,7 @@ namespace rasm
 
         for (const auto &[EntityHandle, gltfTransform] : preparedScene.modelUniforms)
         {
-            auto entity = registery.entities[EntityHandle.index];
+            auto entity = registry.entities[EntityHandle.index];
             auto modelTransform = entity.transform;
 
             auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *

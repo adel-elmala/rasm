@@ -25,8 +25,8 @@ namespace rasm
         light.direction = direction;
         light.range = range;
 
-        registery.lights.resize(handle.index + 1);
-        registery.lights[handle.index] = light;
+        registry.lights.resize(handle.index + 1);
+        registry.lights[handle.index] = light;
 
         return handle;
     }
