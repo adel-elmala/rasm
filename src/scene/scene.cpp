@@ -10,6 +10,60 @@
 
 namespace rasm
 {
+  namespace
+  {
+    gfx::MaterialId getGfxMaterialId(MaterialType type)
+    {
+      switch (type)
+      {
+      case MaterialType::UNLIT:
+        return gfx::MaterialId::UNLIT;
+      default: // The uber shader cannot run a custom SHADER, so it falls back to PBR.
+        return gfx::MaterialId::PBR;
+      }
+    }
+
+    void addSceneDraw(std::vector<SceneDraw> &draws, const Entity &entity, const ObjRaw &geometry, const glm::mat4 &transform, MaterialHandle material)
+    {
+      if (geometry.vertices.empty() || geometry.indices.empty())
+      {
+        spdlog::warn("Skipping a mesh of entity {}: it has {} vertices and {} indices, and drawing needs both.",
+                     entity.handle.index, geometry.vertices.size(), geometry.indices.size());
+        return;
+      }
+
+      draws.push_back({&entity, &geometry, transform, material});
+    }
+
+    void addMeshDraws(std::vector<SceneDraw> &draws, const Entity &entity, const Mesh &mesh)
+    {
+      if (mesh.type == Mesh::MeshType::OBJ)
+      {
+        addSceneDraw(draws, entity, std::get<ObjRaw>(mesh.data), glm::mat4(1.0f), MaterialHandle{});
+        return;
+      }
+
+      for (const auto &subGLTF : std::get<GLTFRaw>(mesh.data).subGltfRaws)
+        addSceneDraw(draws, entity, subGLTF.objRaw, subGLTF.transform, subGLTF.material);
+    }
+
+    // A failed preparation is not cached, so anything it created so far would leak on every retry.
+    PreparedScene discardSceneBuffers(RenderContext &ctx, const PreparedScene &preparedScene)
+    {
+      std::vector<BufferHandle> buffers = {preparedScene.megaVertexBuffer, preparedScene.megaIndexBuffer, preparedScene.drawInfoBuffer};
+      buffers.insert(buffers.end(), std::begin(preparedScene.megaModelDataBuffer), std::end(preparedScene.megaModelDataBuffer));
+      buffers.insert(buffers.end(), std::begin(preparedScene.sceneDataBuffer), std::end(preparedScene.sceneDataBuffer));
+
+      for (auto buffer : buffers)
+      {
+        if (buffer.isValid())
+          ctx.destroyBuffer(buffer);
+      }
+
+      return PreparedScene{};
+    }
+  }
+
   // The mega vertex buffer is written with Vertex and read in the shader as gfx::VertexFull
   // (scalar layout); the two must not drift apart.
   static_assert(sizeof(Vertex) == sizeof(gfx::VertexFull), "Vertex must match the shader's VertexFull");
@@ -138,31 +192,30 @@ namespace rasm
     uint64_t totalVertexBufferSize = 0;
     uint64_t totalIndexBufferSize = 0;
 
-    std::vector<GLTFRaw> sceneGltfRaws;
-    std::vector<Entity> sceneEntities;
+    std::vector<SceneDraw> sceneDraws;
 
     for (auto entityHandle : sceneRef.entities)
     {
       if (!entityHandle.isValid())
         continue;
 
-      auto &entity = registery.entities[entityHandle.index];
+      const auto &entity = registery.entities[entityHandle.index];
 
       auto mesh = entity.mesh;
       if (!mesh.isValid())
         continue;
 
-      auto &meshData = registery.meshes[mesh.index];
+      addMeshDraws(sceneDraws, entity, registery.meshes[mesh.index]);
+    }
 
-      auto entityGltfRaws = processMesh(meshData);
-      sceneGltfRaws.push_back(entityGltfRaws);
+    // Nothing to draw: zero-sized buffers are invalid, and staying uncached lets entities added later show up.
+    if (sceneDraws.empty())
+      return PreparedScene{};
 
-      for (auto &subGLTF : entityGltfRaws.subGltfRaws)
-      {
-        totalVertexBufferSize += subGLTF.objRaw.vertices.size() * sizeof(Vertex);
-        totalIndexBufferSize += subGLTF.objRaw.indices.size() * sizeof(uint32_t);
-        sceneEntities.push_back(entity);
-      }
+    for (const auto &draw : sceneDraws)
+    {
+      totalVertexBufferSize += draw.geometry->vertices.size() * sizeof(Vertex);
+      totalIndexBufferSize += draw.geometry->indices.size() * sizeof(uint32_t);
     }
 
     // allocate one mega vertex-buffer and index-buffer to hold all the mesh data for the scene.
@@ -173,131 +226,8 @@ namespace rasm
       return PreparedScene{};
     }
 
-    // Allocate the vertex and index buffers for the scene.
-    auto bufferDesc = ResourceDesc{};
-    bufferDesc.name = "Mega Vertex Buffer";
-    bufferDesc.type = ResourceType::BUFFER;
-    bufferDesc.buffer.usage = BufferUsage::STORAGE;
-    bufferDesc.buffer.size = totalVertexBufferSize;
-
-    auto vertexBufferHandle = ctx.createBuffer(bufferDesc);
-
-    bufferDesc.name = "Mega Index Buffer";
-    bufferDesc.buffer.usage = BufferUsage::INDEX;
-    bufferDesc.buffer.size = totalIndexBufferSize;
-
-    auto indexBufferHandle = ctx.createBuffer(bufferDesc);
-
-    if (!vertexBufferHandle.isValid() || !indexBufferHandle.isValid())
-    {
-      spdlog::error("Failed to create vertex or index buffer for the scene.");
-      return PreparedScene{};
-    }
-
-    preparedScene.megaVertexBuffer = vertexBufferHandle;
-    preparedScene.megaIndexBuffer = indexBufferHandle;
-
-    // allocate mega-model buffer and draw info buffer for the scene.
-    bufferDesc.name = "Mega Model data Buffer";
-    bufferDesc.buffer.usage = BufferUsage::STORAGE;
-    bufferDesc.buffer.size = sceneEntities.size() * sizeof(gfx::Modeldata);
-    // Mutable uniforms belong to a frame slot; other slots may still be executing on the GPU.
-    for (auto &buffer : preparedScene.megaModelDataBuffer)
-    {
-      buffer = ctx.createBuffer(bufferDesc);
-      if (!buffer.isValid()) return PreparedScene{};
-    }
-
-    bufferDesc.name = "Draw Info Buffer";
-    bufferDesc.buffer.usage = BufferUsage::INDIRECT;
-    bufferDesc.buffer.size = sceneEntities.size() * sizeof(gfx::DrawInfo);
-
-    auto drawInfoBufferHandle = ctx.createBuffer(bufferDesc);
-
-    if (!drawInfoBufferHandle.isValid())
-    {
-      spdlog::error("Failed to create draw info buffer for the scene.");
-      return PreparedScene{};
-    }
-
-    preparedScene.drawInfoBuffer = drawInfoBufferHandle;
-
-    // create sceneData buffer for the scene.
-    bufferDesc.name = "Scene Data Buffer";
-    bufferDesc.buffer.usage = BufferUsage::STORAGE;
-    bufferDesc.buffer.size = sizeof(gfx::SceneData);
-
-    for (auto &buffer : preparedScene.sceneDataBuffer)
-    {
-      buffer = ctx.createBuffer(bufferDesc);
-      if (!buffer.isValid()) return PreparedScene{};
-    }
-
-    uint64_t vertexBufferOffset = 0;
-    uint64_t indexBufferOffset = 0;
-    uint64_t modelBufferOffset = 0;
-    uint64_t drawInfoBufferOffset = 0;
-
-    uint32_t IndexOffset = 0;
-    uint32_t VertexOffset = 0;
-
-    uint32_t idx = 0;
-    for (auto &gltfRaw : sceneGltfRaws)
-    {
-      for (auto &subGLTF : gltfRaw.subGltfRaws)
-      {
-        auto nVertices = subGLTF.objRaw.vertices.size();
-        auto nIndices = subGLTF.objRaw.indices.size();
-        auto vSize = nVertices * sizeof(gfx::VertexFull);
-        auto iSize = nIndices * sizeof(uint32_t);
-
-        ctx.fillBuffer(preparedScene.megaVertexBuffer, subGLTF.objRaw.vertices.data(), vSize, vertexBufferOffset);
-        ctx.fillBuffer(preparedScene.megaIndexBuffer, subGLTF.objRaw.indices.data(), iSize, indexBufferOffset);
-
-        vertexBufferOffset += vSize;
-        indexBufferOffset += iSize;
-
-        // fill the model matrix buffer with the current entity's model matrix.
-        auto sceneEntity = sceneEntities[idx];
-        auto modelTransform = sceneEntity.transform;
-
-        auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
-                     glm::mat4_cast(modelTransform.rotation) *
-                     glm::scale(glm::mat4(1.0f), modelTransform.scale);
-
-        model = model * subGLTF.transform;
-
-        preparedScene.modelUniforms.push_back({sceneEntity.handle, subGLTF.transform});
-
-        gfx::Modeldata modelData{};
-        modelData.worldMatrix = model;
-        modelData.normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
-        modelData.vertFormat = gfx::VertexFormat::Full;
-        // Primitives without a material use the entity's; getMaterial resolves an invalid one to the default material.
-        auto material = subGLTF.material.isValid() ? subGLTF.material : sceneEntity.material;
-        modelData.material = convertToGfxMaterial(getMaterial(material));
-
-        for (auto buffer : preparedScene.megaModelDataBuffer)
-          ctx.fillBuffer(buffer, &modelData, sizeof(modelData), modelBufferOffset);
-        modelBufferOffset += sizeof(modelData);
-
-        auto drawInfo = gfx::DrawInfo{};
-        drawInfo.indexCount = nIndices;
-        drawInfo.instanceCount = 1; // TODO: support multiple instances
-        drawInfo.firstIndex = IndexOffset;
-        drawInfo.vertexOffset = VertexOffset;
-        drawInfo.firstInstance = 0; // TODO: support multiple instances
-
-        ctx.fillBuffer(preparedScene.drawInfoBuffer, &drawInfo, sizeof(drawInfo), drawInfoBufferOffset);
-        drawInfoBufferOffset += sizeof(drawInfo);
-
-        IndexOffset += nIndices;
-        VertexOffset += nVertices;
-        idx++;
-      }
-    }
-
-    // create a pipeline for the UberMaterial.
+    // create a pipeline for the UberMaterial. A failed preparation retries every frame, so this comes
+    // before the buffers: a shader error must not allocate and fill them each time.
     auto swapchainFormat = ctx.getSwapchainImageFormat();
     auto depthFormat = Format::D32_SFLOAT_S8_UINT;
 
@@ -308,6 +238,12 @@ namespace rasm
     auto shaderSource = readFile("./shaders/passes/rasm.slang");
     auto vertShader = shaderCompiler.compileFromString(shaderSource, "rasm.vert.slang", "vertMain");
     auto fragShader = shaderCompiler.compileFromString(shaderSource, "rasm.frag.slang", "fragMain");
+
+    if (vertShader.code.empty() || fragShader.code.empty())
+    {
+      spdlog::error("Failed to compile the uber shader for the scene.");
+      return PreparedScene{};
+    }
 
     auto shaderDesc = ResourceDesc{};
     shaderDesc.type = ResourceType::SHADER;
@@ -333,7 +269,129 @@ namespace rasm
     pipelineDesc.pipeline.descriptorSetLayout = bindlessDescriptorSetLayout;
 
     preparedScene.uberMaterialPipeline = ctx.createPipeline(pipelineDesc);
-    preparedScene.drawInfoCount = sceneEntities.size();
+
+    if (!preparedScene.uberMaterialPipeline.isValid())
+    {
+      spdlog::error("Failed to create the uber material pipeline for the scene.");
+      return PreparedScene{};
+    }
+
+    // Allocate the vertex and index buffers for the scene.
+    auto bufferDesc = ResourceDesc{};
+    bufferDesc.name = "Mega Vertex Buffer";
+    bufferDesc.type = ResourceType::BUFFER;
+    bufferDesc.buffer.usage = BufferUsage::STORAGE;
+    bufferDesc.buffer.size = totalVertexBufferSize;
+
+    preparedScene.megaVertexBuffer = ctx.createBuffer(bufferDesc);
+
+    bufferDesc.name = "Mega Index Buffer";
+    bufferDesc.buffer.usage = BufferUsage::INDEX;
+    bufferDesc.buffer.size = totalIndexBufferSize;
+
+    preparedScene.megaIndexBuffer = ctx.createBuffer(bufferDesc);
+
+    if (!preparedScene.megaVertexBuffer.isValid() || !preparedScene.megaIndexBuffer.isValid())
+    {
+      spdlog::error("Failed to create vertex or index buffer for the scene.");
+      return discardSceneBuffers(ctx, preparedScene);
+    }
+
+    // allocate mega-model buffer and draw info buffer for the scene.
+    bufferDesc.name = "Mega Model data Buffer";
+    bufferDesc.buffer.usage = BufferUsage::STORAGE;
+    bufferDesc.buffer.size = sceneDraws.size() * sizeof(gfx::Modeldata);
+    // Mutable uniforms belong to a frame slot; other slots may still be executing on the GPU.
+    for (auto &buffer : preparedScene.megaModelDataBuffer)
+    {
+      buffer = ctx.createBuffer(bufferDesc);
+      if (!buffer.isValid()) return discardSceneBuffers(ctx, preparedScene);
+    }
+
+    bufferDesc.name = "Draw Info Buffer";
+    bufferDesc.buffer.usage = BufferUsage::INDIRECT;
+    bufferDesc.buffer.size = sceneDraws.size() * sizeof(gfx::DrawInfo);
+
+    preparedScene.drawInfoBuffer = ctx.createBuffer(bufferDesc);
+
+    if (!preparedScene.drawInfoBuffer.isValid())
+    {
+      spdlog::error("Failed to create draw info buffer for the scene.");
+      return discardSceneBuffers(ctx, preparedScene);
+    }
+
+    // create sceneData buffer for the scene.
+    bufferDesc.name = "Scene Data Buffer";
+    bufferDesc.buffer.usage = BufferUsage::STORAGE;
+    bufferDesc.buffer.size = sizeof(gfx::SceneData);
+
+    for (auto &buffer : preparedScene.sceneDataBuffer)
+    {
+      buffer = ctx.createBuffer(bufferDesc);
+      if (!buffer.isValid()) return discardSceneBuffers(ctx, preparedScene);
+    }
+
+    uint64_t vertexBufferOffset = 0;
+    uint64_t indexBufferOffset = 0;
+    uint64_t modelBufferOffset = 0;
+    uint64_t drawInfoBufferOffset = 0;
+
+    uint32_t IndexOffset = 0;
+    uint32_t VertexOffset = 0;
+
+    for (const auto &draw : sceneDraws)
+    {
+      auto nVertices = draw.geometry->vertices.size();
+      auto nIndices = draw.geometry->indices.size();
+      auto vSize = nVertices * sizeof(gfx::VertexFull);
+      auto iSize = nIndices * sizeof(uint32_t);
+
+      ctx.fillBuffer(preparedScene.megaVertexBuffer, draw.geometry->vertices.data(), vSize, vertexBufferOffset);
+      ctx.fillBuffer(preparedScene.megaIndexBuffer, draw.geometry->indices.data(), iSize, indexBufferOffset);
+
+      vertexBufferOffset += vSize;
+      indexBufferOffset += iSize;
+
+      // fill the model matrix buffer with the current entity's model matrix.
+      auto modelTransform = draw.entity->transform;
+
+      auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
+                   glm::mat4_cast(modelTransform.rotation) *
+                   glm::scale(glm::mat4(1.0f), modelTransform.scale);
+
+      model = model * draw.transform;
+
+      preparedScene.modelUniforms.push_back({draw.entity->handle, draw.transform});
+
+      gfx::Modeldata modelData{};
+      modelData.worldMatrix = model;
+      modelData.normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
+      modelData.vertFormat = gfx::VertexFormat::Full;
+      // Primitives without a material use the entity's; getMaterial resolves an invalid one to the default material.
+      auto material = draw.material.isValid() ? draw.material : draw.entity->material;
+      const auto &materialRef = getMaterial(material);
+      modelData.material = convertToGfxMaterial(materialRef);
+      modelData.materialId = getGfxMaterialId(materialRef.type);
+
+      for (auto buffer : preparedScene.megaModelDataBuffer)
+        ctx.fillBuffer(buffer, &modelData, sizeof(modelData), modelBufferOffset);
+      modelBufferOffset += sizeof(modelData);
+
+      auto drawInfo = gfx::DrawInfo{};
+      drawInfo.indexCount = nIndices;
+      drawInfo.instanceCount = 1; // TODO: support multiple instances
+      drawInfo.firstIndex = IndexOffset;
+      drawInfo.vertexOffset = VertexOffset;
+      drawInfo.firstInstance = 0; // TODO: support multiple instances
+
+      ctx.fillBuffer(preparedScene.drawInfoBuffer, &drawInfo, sizeof(drawInfo), drawInfoBufferOffset);
+      drawInfoBufferOffset += sizeof(drawInfo);
+
+      IndexOffset += nIndices;
+      VertexOffset += nVertices;
+    }
+
+    preparedScene.drawInfoCount = sceneDraws.size();
 
     preparedScenes[scene] = preparedScene;
     return preparedScene;

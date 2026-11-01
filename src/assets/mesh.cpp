@@ -680,19 +680,6 @@ namespace rasm
         return gltfRaw;
     }
 
-    GLTFRaw Engine::processMesh(const Mesh &mesh)
-    {
-        if (mesh.type == Mesh::MeshType::OBJ)
-        {
-            return GLTFRaw{tinygltf::Model{}, std::vector<SubGLTFRaw>{SubGLTFRaw{std::get<ObjRaw>(mesh.data), glm::mat4(1.0f), MaterialHandle{}}}};
-        }
-        else if (mesh.type == Mesh::MeshType::GLTF)
-        {
-            return std::get<GLTFRaw>(mesh.data);
-        }
-        return GLTFRaw{};
-    }
-
     MeshSize Engine::getMeshByteSize(const MeshHandle &handle) const
     {
         if (!handle.isValid() || handle.index >= registery.meshes.size())

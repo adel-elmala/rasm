@@ -12,6 +12,9 @@ namespace rasm::gfx {
 
     enum VertexFormat : uint32_t { Full, PosOnly };
 
+    // Selects how the uber shader's fragMain shades a model. Must match shaders/lib/core.slang.
+    enum class MaterialId : uint32_t { PBR, UNLIT };
+
     // Must match rasm::Vertex (static asserted in scene.cpp) and shaders/lib/core.slang.
     struct VertexFull       { glm::vec3 pos; glm::vec3 normal; glm::vec2 uv[MAX_VERTEX_UV_SETS]; glm::vec4 tangent; };
     struct VertexPosOnly    { glm::vec3 pos; };
@@ -84,6 +87,7 @@ namespace rasm::gfx {
         glm::mat3       normalMatrix; 
         Material        material;
         VertexFormat    vertFormat;
+        MaterialId      materialId;
     };
 
     struct SceneData
@@ -106,9 +110,10 @@ namespace rasm::gfx {
     static_assert(offsetof(VertexFull, tangent) == 48, "VertexFull must match the shader's scalar layout");
     static_assert(sizeof(MetallicRoughnessMaterial) == 36, "MetallicRoughnessMaterial must match the shader's scalar layout");
     static_assert(sizeof(Material) == 80, "Material must match the shader's scalar layout");
-    static_assert(sizeof(Modeldata) == 184, "Modeldata must match the shader's scalar layout");
+    static_assert(sizeof(Modeldata) == 188, "Modeldata must match the shader's scalar layout");
     static_assert(offsetof(Modeldata, normalMatrix) == 64, "Modeldata must match the shader's scalar layout");
     static_assert(offsetof(Modeldata, material) == 100, "Modeldata must match the shader's scalar layout");
+    static_assert(offsetof(Modeldata, materialId) == 184, "Modeldata must match the shader's scalar layout");
     static_assert(sizeof(SceneData) == 552, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, lights) == 144, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, vertsPtr) == 528, "SceneData must match the shader's scalar layout");

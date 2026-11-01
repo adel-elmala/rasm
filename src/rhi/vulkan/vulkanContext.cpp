@@ -1609,7 +1609,8 @@ namespace rasm::gfx
 
     bool VulkanContext::submit(const CommandBufferVKHandle &commandBuffer, const std::vector<SemaphoreVKHandle> &waitSemaphores, const std::vector<SemaphoreVKHandle> &signalSemaphores, const FenceVKHandle &fence)
     {
-        VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        // pWaitDstStageMask holds one entry per wait semaphore.
+        std::vector<VkPipelineStageFlags> waitStages(waitSemaphores.size(), VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
 
         std::vector<VkSemaphore> waitVkSemaphores;
         for (const auto &waitSemaphore : waitSemaphores)
@@ -1627,7 +1628,7 @@ namespace rasm::gfx
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
             .waitSemaphoreCount = static_cast<uint32_t>(waitVkSemaphores.size()),
             .pWaitSemaphores = waitVkSemaphores.data(),
-            .pWaitDstStageMask = waitStages,
+            .pWaitDstStageMask = waitStages.data(),
             .commandBufferCount = 1,
             .pCommandBuffers = &commandBuffer.commandBuffer,
             .signalSemaphoreCount = static_cast<uint32_t>(signalVkSemaphores.size()),

@@ -53,7 +53,6 @@ namespace rasm {
         TextureHandle               loadTexture(const std::string& path, Format format = Format::R8G8B8A8_SRGB);
         ShaderHandle                createShader(const std::string& shaderSource);
         MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {}, ShaderHandle shader = ShaderHandle{});
-        std::vector<MaterialHandle> loadMaterials(MeshHandle meshHandle);
         MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
         TextureHandle               createTexture(const ResourceDesc& desc);
         BufferHandle                createBuffer(const ResourceDesc& desc);
@@ -112,7 +111,6 @@ namespace rasm {
         std::vector<SubGLTFRaw>        extractGLTFRaws(const tinygltf::Model &model, uint32_t meshIndex, const glm::mat4 &globalTransform, GltfImportCache &cache);
         std::vector<SubGLTFRaw>        traverseNodes(const tinygltf::Model &model, int nodeIndex, const glm::mat4 &parentTransform, GltfImportCache &cache);
         GLTFRaw                        processGLTF(const tinygltf::Model &model);
-        GLTFRaw                        processMesh(const Mesh &mesh);
 
     protected:
         bool                                                        createSwapchainResources();

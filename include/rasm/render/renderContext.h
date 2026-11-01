@@ -1,6 +1,8 @@
 // clang-format off
 #pragma once
 
+#include <deque>
+#include <string>
 #include <unordered_map>
 
 #include "rasm/types.h"
@@ -60,6 +62,7 @@ namespace rasm
         [[nodiscard]] SwapchainStatus       present(uint32_t imageIndex, SemaphoreHandle waitSemaphore);
         void                                destroySemaphore(const SemaphoreHandle& semaphore);
         void                                destroyTexture(const TextureHandle& texture);
+        void                                destroyBuffer(const BufferHandle& buffer);
         void                                bindPipeline(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline);
         void                                bindVertexBuffer(const CommandBufferHandle& commandBuffer, const BufferHandle& buffer, uint64_t offset, uint32_t binding = 0);
         void                                bindIndexBuffer(const CommandBufferHandle& commandBuffer, const BufferHandle& buffer, uint64_t offset, Format indexType);
@@ -92,6 +95,7 @@ namespace rasm
         // Dedup caches, only for immutable objects keyed on their full state. Mutable resources
         // (buffers, textures, descriptor pools/sets) are always created fresh (B1).
         std::unordered_map<ResourceDesc, ShaderHandle, ResourceDescHash>                            shaderDescCache;
+        std::deque<std::string>                                                                     shaderSources;  // SPIR-V the shaderDescCache keys point at; a deque keeps those pointers stable
         std::unordered_map<ResourceDesc, PipelineHandle, ResourceDescHash>                          pipelineDescCache;
         std::unordered_map<ResourceDesc, DescriptorSetLayoutHandle, ResourceDescHash>               descriptorSetLayoutDescCache;
 

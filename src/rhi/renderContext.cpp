@@ -112,6 +112,7 @@ namespace rasm
             swapchainImageCache.clear();
             renderTargetCache.clear();
             shaderDescCache.clear();
+            shaderSources.clear();
             pipelineDescCache.clear();
             descriptorSetLayoutDescCache.clear();
             nextBindlessTextureIndex = 0;
@@ -202,6 +203,11 @@ namespace rasm
             }
             ShaderHandle handle = engine->handleManager.getNextShaderHandle();
             shader->handle = handle;
+
+            // Callers pass temporary SPIR-V, but the cache key is compared by content on every later lookup.
+            shaderSources.emplace_back(desc.shader.source, desc.shader.sourceSize);
+            desc.shader.source = shaderSources.back().data();
+            shader->desc.shader.source = desc.shader.source;
 
             shaderCache[handle] = shader.value();
             shaderDescCache[desc] = handle;
@@ -581,6 +587,31 @@ namespace rasm
             break;
         default:
             spdlog::error("Unsupported backend during texture destruction.");
+            break;
+        }
+    }
+
+    void RenderContext::destroyBuffer(const BufferHandle &buffer)
+    {
+        switch (backend)
+        {
+        case Backend::VULKAN:
+        {
+            auto it = bufferCache.find(buffer);
+            if (it == bufferCache.end())
+            {
+                spdlog::error("Buffer handle not found in cache during destroyBuffer.");
+                return;
+            }
+            vulkanContext.removeBuffer(it->second);
+            bufferCache.erase(it);
+            break;
+        }
+        case Backend::DX12:
+        case Backend::METAL:
+            break;
+        default:
+            spdlog::error("Unsupported backend during buffer destruction.");
             break;
         }
     }

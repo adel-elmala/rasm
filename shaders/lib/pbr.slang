@@ -1,71 +1,10 @@
 // clang-format off
 #pragma once
 
-//  Types
-enum LightType : uint32_t { Directional , Point };
-
-// Must match rasm::gfx::Light exactly (scalar layout): the lights array sits between numLights and
-// the buffer device addresses in SceneData, so any size drift shifts vertsPtr/drawInfoPtr/
-// modeldataPtr and the shader dereferences a garbage address (device lost).
-struct Light
-{
-    float3      position;
-    float       intensity;
-    float3      color;
-    float       range;      // Only used for point lights
-    float3      direction;  // Only used for directional lights
-    LightType   type;
-};
-
-struct MetallicRoughnessMaterial
-{
-    float3      baseColorFactor;
-    uint32_t    baseColorTextureIndex;
-    uint32_t    baseColorTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
-    uint32_t    metallicRoughnessTextureIndex;
-    uint32_t    metallicRoughtnessTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
-    float       metallicFactor;
-    float       roughnessFactor;
-};
-
-struct NormalMaterial
-{
-    uint32_t    normalTextureIndex;
-    uint32_t    normalTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
-    float       scale;
-};
-
-struct OcclusionMaterial
-{
-    uint32_t    occlusionTextureIndex;
-    uint32_t    occlusionTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
-    float       strength;
-};
-
-struct EmissiveMaterial
-{
-    uint32_t    emissiveTextureIndex;
-    uint32_t    emissiveTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
-    float3      emissiveFactor;
-};
-
-struct Material
-{
-    MetallicRoughnessMaterial   metallicRoughness;
-    NormalMaterial              normal;
-    OcclusionMaterial           occlusion;
-    EmissiveMaterial            emissive;
-};
+#include "core.slang"
 
 // Constants
 static const float  PI                  = 3.14159265359;
-static const uint   MAX_LIGHTS          = 8;
-static const uint   INVALID_TEXTURE_INDEX = 0xFFFFFFFF;
-
-bool hasTexture(uint textureIndex)
-{
-    return textureIndex != INVALID_TEXTURE_INDEX;
-}
 
 // Normal distribution function (GGX / Trowbridge-Reitz)
 float D_GGX(float NoH, float roughness)
@@ -164,7 +103,6 @@ struct PBRInfo
 
 float4 PBR(Sampler2D gTextures[], PBRInfo pbrInfo)
 {
-    float3 baseColorFactor  = pbrInfo.material.metallicRoughness.baseColorFactor;
     float metallicFactor    = pbrInfo.material.metallicRoughness.metallicFactor;
     float roughnessFactor   = pbrInfo.material.metallicRoughness.roughnessFactor;
     float3 emissiveFactor   = pbrInfo.material.emissive.emissiveFactor;
@@ -173,10 +111,7 @@ float4 PBR(Sampler2D gTextures[], PBRInfo pbrInfo)
     // glTF defaults keep the render correct when a texture is absent: baseColor = factor only,
     // roughness/metallic = factors, occlusion = 1, emissive = 0, geometric normal.
 
-    uint baseColorIdx = pbrInfo.material.metallicRoughness.baseColorTextureIndex;
-    float4 baseColorTex = float4(baseColorFactor, 1.0);
-    if (hasTexture(baseColorIdx))
-        baseColorTex = gTextures[baseColorIdx].Sample(pbrInfo.baseColorUV) * float4(baseColorFactor, 1.0);
+    float4 baseColorTex = sampleBaseColor(gTextures, pbrInfo.material.metallicRoughness, pbrInfo.baseColorUV);
     float3 baseColor = baseColorTex.rgb;
 
     // glTF packs roughness in the G channel (green) and metallic in the B channel (blue)
