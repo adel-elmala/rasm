@@ -448,6 +448,10 @@ namespace rasm
 
     slang::TargetDesc ShaderCompiler::getTargetDesc(Target target)
     {
+        // The returned desc only points at these, so they must outlive this function.
+        static const slang::CompilerOptionEntry spirvOptions[] = {{slang::CompilerOptionName::EmitSpirvDirectly,
+                                                                   {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}}};
+
         slang::TargetDesc targetDesc = {};
 
         switch (target)
@@ -456,9 +460,7 @@ namespace rasm
             targetDesc.format = SLANG_SPIRV;
             targetDesc.profile = globalSession->findProfile("spirv_1_4");
             targetDesc.compilerOptionEntryCount = 1;
-            targetDesc.compilerOptionEntries = new slang::CompilerOptionEntry[1]{
-                {slang::CompilerOptionName::EmitSpirvDirectly,
-                 {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}}};
+            targetDesc.compilerOptionEntries = spirvOptions;
             break;
         case Target::MSL:
             targetDesc.format = SLANG_METAL;

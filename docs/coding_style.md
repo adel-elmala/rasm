@@ -134,7 +134,7 @@ Known deviations to migrate, rather than copy:
 ## 9. Shaders (Slang)
 
 - Entry points are `vertMain`, `fragMain` and (future) `compMain`, with `[shader("...")]` attributes.
-- One responsibility per module: data layout (`core.slang`), lighting and BRDF (`pbr.slang`), pass or entry shaders (`rasm.slang`).
+- One responsibility per module: data layout (`core.slang`), lighting and BRDF (`pbr.slang`), unlit shading (`unlit.slang`), pass or entry shaders (`rasm.slang`).
 - Shaders output **linear** color. sRGB encoding is done by the attachment format.
 - Texture access checks `hasTexture(index)` before sampling, and glTF default values apply when a texture is absent.
 - Keep backend-specific code (`spirv_asm`, `vk::` attributes, raw pointers) behind small helper functions in one module, so that other targets can provide alternatives (`D12`).
