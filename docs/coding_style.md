@@ -100,6 +100,7 @@ Known deviations to migrate, rather than copy:
   - live in `src/renderer/uberMaterialTypes.h` (or its successor) and are mirrored in `shaders/lib/core.slang`,
   - use only `uint32_t`, `int32_t`, `float`, `uint64_t`, `glm::vec2/3/4`, `glm::mat3/4` (scalar layout),
   - have a `static_assert` on `sizeof` and on every offset that a later field's correctness depends on,
+  - are listed in `validateRasmStructs` in `src/renderer/shaderCompiler.cpp`, which checks them against Slang reflection in debug builds,
   - change on both sides in the same commit.
 - Use fixed-width integer types (`uint32_t`, `uint64_t`) for anything stored, serialized or sent to the GPU. Use `size_t` for container sizes and byte counts on the CPU.
 - Prefer `std::vector` + index over node-based containers in hot paths. `unordered_map` is fine for lookup caches that are off the per-draw path.

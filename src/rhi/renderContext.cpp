@@ -5,6 +5,7 @@
 #include "rhi/vulkan/vulkanContext.h"
 
 #include "spdlog/spdlog.h"
+#include "tracy/Tracy.hpp"
 
 namespace rasm
 {
@@ -706,6 +707,8 @@ namespace rasm
 
     bool RenderContext::fillTexture(const TextureHandle &textureHandle, const void *data)
     {
+        ZoneScoped;
+
         assert(data != nullptr && "Data pointer cannot be null.");
         assert(textureHandle.isValid() && "Texture handle must be valid.");
 
@@ -866,6 +869,8 @@ namespace rasm
 
     bool RenderContext::waitForFence(FenceHandle fence, uint64_t timeout)
     {
+        ZoneScoped;
+
         switch (backend)
         {
         case Backend::VULKAN:
@@ -916,6 +921,8 @@ namespace rasm
 
     SwapchainStatus RenderContext::acquireNextImage(SemaphoreHandle signalSemaphore, uint64_t timeout, uint32_t &imageIndex)
     {
+        ZoneScoped;
+
         switch (backend)
         {
         case Backend::VULKAN:
@@ -1129,6 +1136,8 @@ namespace rasm
 
     bool RenderContext::submit(const CommandBufferHandle &commandBuffer, const std::vector<SemaphoreHandle> &waitSemaphores, const std::vector<SemaphoreHandle> &signalSemaphores, FenceHandle fence)
     {
+        ZoneScoped;
+
         switch (backend)
         {
         case Backend::VULKAN:
@@ -1184,6 +1193,8 @@ namespace rasm
 
     SwapchainStatus RenderContext::present(uint32_t imageIndex, SemaphoreHandle waitSemaphore)
     {
+        ZoneScoped;
+
         switch (backend)
         {
         case Backend::VULKAN:

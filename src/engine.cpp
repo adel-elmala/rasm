@@ -2,6 +2,7 @@
 #include "core/utils.h"
 
 #include "spdlog/spdlog.h"
+#include "tracy/Tracy.hpp"
 
 #include "stb_image.h"
 #include "stb_image_write.h"
@@ -279,6 +280,8 @@ namespace rasm
 
     PipelineHandle Engine::createPipeline(const std::string &name, const std::string &shaderSource)
     {
+        ZoneScoped;
+
         auto vertShader = shaderCompiler.compileFromString(shaderSource, name + ".vert.slang", "vertMain");
         auto fragShader = shaderCompiler.compileFromString(shaderSource, name + ".frag.slang", "fragMain");
 
@@ -318,6 +321,8 @@ namespace rasm
 
     bool Engine::beginFrame(CameraHandle camera)
     {
+        ZoneScoped;
+
         pollEvents(camera);
 
         // Nothing can be presented to a minimized or zero-sized window (B5).
@@ -363,6 +368,8 @@ namespace rasm
 
     void Engine::endFrame()
     {
+        ZoneScoped;
+
         auto &currentFrame = frameResources[frameCount];
 
         // Present needs the image in PRESENT_SRC, so a frame that only drew to render targets clears it.
@@ -388,6 +395,8 @@ namespace rasm
         }
 
         frameCount = (frameCount + 1) % MAX_FRAMES_IN_FLIGHT; // Toggle between 0 and 1 for double buffering
+
+        FrameMark;
     }
 
     void Engine::beginPass()
@@ -532,6 +541,8 @@ namespace rasm
 
     void Engine::render(SceneHandle scene, CameraHandle camera)
     {
+        ZoneScoped;
+
         if (!beginFrame(camera))
             return;
         beginPass();
@@ -542,6 +553,8 @@ namespace rasm
 
     void Engine::drawScene(SceneHandle scene, CameraHandle camera)
     {
+        ZoneScoped;
+
         const auto &preparedScene = prepareScene(scene);
 
         // An invalid or empty scene, or a failed preparation (which prepareScene logged and retries next
