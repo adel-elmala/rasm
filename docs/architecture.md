@@ -152,7 +152,7 @@ In `vertMain`:
 
 ### CPU/GPU struct contract
 
-The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `shaders/lib/core.slang` must match byte for byte under **scalar layout**. The C++ side `static_assert`s the sizes and key offsets (`SceneData` = 552 bytes, `Modeldata` = 188 bytes, …), and `rasm::Vertex` is asserted equal to `gfx::VertexFull`. When you change a struct, change both sides and the asserts. `ShaderCompiler::validateRasmStructs` could check the sizes against Slang reflection at runtime, but nothing calls it yet.
+The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `shaders/lib/core.slang` must match byte for byte under **scalar layout**. The C++ side `static_assert`s the sizes and key offsets (`SceneData` = 552 bytes, `Modeldata` = 188 bytes, …), and `rasm::Vertex` is asserted equal to `gfx::VertexFull`. Those asserts only pin the C++ side, so debug builds also run `validateRasmStructs` (`shaderCompiler.cpp`), which asserts each struct's size and field offsets against Slang reflection after linking. Read shader layouts by walking from `pc` through the pointers: `ProgramLayout::getTypeLayout` reports std140/std430 padding instead (`Modeldata` = 240 bytes). When you change a struct, change both sides, the asserts and the `validateRasmStructs` tables.
 
 ## 5. Materials and textures
 
