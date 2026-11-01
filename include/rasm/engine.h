@@ -111,7 +111,6 @@ namespace rasm {
         std::vector<SubGLTFRaw>        extractGLTFRaws(const tinygltf::Model &model, uint32_t meshIndex, const glm::mat4 &globalTransform, GltfImportCache &cache);
         std::vector<SubGLTFRaw>        traverseNodes(const tinygltf::Model &model, int nodeIndex, const glm::mat4 &parentTransform, GltfImportCache &cache);
         GLTFRaw                        processGLTF(const tinygltf::Model &model);
-        GLTFRaw                        processMesh(const Mesh &mesh);
 
     protected:
         bool                                                        createSwapchainResources();

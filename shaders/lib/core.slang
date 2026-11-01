@@ -126,6 +126,15 @@ bool hasTexture(uint textureIndex)
     return textureIndex != INVALID_TEXTURE_INDEX;
 }
 
+// glTF base color: factor * texture, or the factor alone when the material has no texture.
+float4 sampleBaseColor(Sampler2D gTextures[], MetallicRoughnessMaterial material, float2 uv)
+{
+    float4 color = float4(material.baseColorFactor, 1.0);
+    if (hasTexture(material.baseColorTextureIndex))
+        color *= gTextures[material.baseColorTextureIndex].Sample(uv);
+    return color;
+}
+
 // Pick the interpolated UV set a material texture asked for (glTF TEXCOORD_n). Sets we do not
 // carry yet fall back to TEXCOORD_0, mirroring the CPU-side fallback in loadMaterial.
 float2 selectUV(uint texCoordSet, float2 uv0, float2 uv1, float2 uv2)

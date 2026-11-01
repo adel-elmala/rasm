@@ -103,7 +103,6 @@ struct PBRInfo
 
 float4 PBR(Sampler2D gTextures[], PBRInfo pbrInfo)
 {
-    float3 baseColorFactor  = pbrInfo.material.metallicRoughness.baseColorFactor;
     float metallicFactor    = pbrInfo.material.metallicRoughness.metallicFactor;
     float roughnessFactor   = pbrInfo.material.metallicRoughness.roughnessFactor;
     float3 emissiveFactor   = pbrInfo.material.emissive.emissiveFactor;
@@ -112,10 +111,7 @@ float4 PBR(Sampler2D gTextures[], PBRInfo pbrInfo)
     // glTF defaults keep the render correct when a texture is absent: baseColor = factor only,
     // roughness/metallic = factors, occlusion = 1, emissive = 0, geometric normal.
 
-    uint baseColorIdx = pbrInfo.material.metallicRoughness.baseColorTextureIndex;
-    float4 baseColorTex = float4(baseColorFactor, 1.0);
-    if (hasTexture(baseColorIdx))
-        baseColorTex = gTextures[baseColorIdx].Sample(pbrInfo.baseColorUV) * float4(baseColorFactor, 1.0);
+    float4 baseColorTex = sampleBaseColor(gTextures, pbrInfo.material.metallicRoughness, pbrInfo.baseColorUV);
     float3 baseColor = baseColorTex.rgb;
 
     // glTF packs roughness in the G channel (green) and metallic in the B channel (blue)

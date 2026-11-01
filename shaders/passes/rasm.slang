@@ -64,10 +64,16 @@ Sampler2D gTextures[];
 [shader("fragment")]
 float4 fragMain(VSOutput input) : SV_TARGET
 {
-    Material material = pc.scene->modeldataPtr[input.drawID].material;
+    // A pointer, so the unlit path loads only the fields it reads.
+    Modeldata *model = pc.scene->modeldataPtr + input.drawID;
 
-    if (pc.scene->modeldataPtr[input.drawID].materialId == MaterialId.UNLIT)
-        return Unlit(gTextures, material, selectUV(material.metallicRoughness.baseColorTextureCoordinate, input.uv0, input.uv1, input.uv2));
+    if (model->materialId == MaterialId.UNLIT)
+    {
+        MetallicRoughnessMaterial metallicRoughness = model->material.metallicRoughness;
+        return Unlit(gTextures, metallicRoughness, selectUV(metallicRoughness.baseColorTextureCoordinate, input.uv0, input.uv1, input.uv2));
+    }
+
+    Material material = model->material;
 
     PBRInfo info = {};
     info.vPosition              = input.worldPosition;

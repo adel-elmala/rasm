@@ -111,8 +111,9 @@ Notes:
 
 `Engine::prepareScene` (`src/scene/scene.cpp`) runs once per scene, the first time that scene is rendered, and its result is cached in `Engine::preparedScenes`. It does the following:
 
-1. **Flattens the scene.** For every entity with a mesh, `processMesh` returns a list of `SubGLTFRaw`s: one per glTF primitive, or one for an OBJ. Each holds interleaved `Vertex` data, `uint32_t` indices, the node's world transform, and a material handle.
-2. **Allocates scene buffers.** All are host-visible and persistently mapped:
+1. **Flattens the scene.** For every entity with a mesh it builds a list of `SceneDraw`s: one per glTF primitive, or one for an OBJ. Each points at the interleaved `Vertex` data and `uint32_t` indices in the registry, so nothing is copied, and holds the node's world transform and a material handle. A mesh missing vertices or indices is skipped with a warning.
+2. **Builds the uber pipeline.** It compiles `shaders/passes/rasm.slang` (`vertMain`/`fragMain`) and creates a graphics pipeline with an empty vertex-input state (vertex pulling) and the bindless set layout.
+3. **Allocates scene buffers.** All are host-visible and persistently mapped:
 
    | Buffer | Usage | Content |
    |---|---|---|
@@ -121,12 +122,13 @@ Notes:
    | `megaModelDataBuffer[2]` | STORAGE | One `gfx::Modeldata` per draw: world matrix, normal matrix, material, material id. |
    | `drawInfoBuffer` | INDIRECT | One `gfx::DrawInfo` (`VkDrawIndexedIndirectCommand` layout) per draw. |
    | `sceneDataBuffer[2]` | STORAGE | One `gfx::SceneData` per frame slot. |
-3. **Writes draw records.** For each sub-mesh i it sets `DrawInfo{indexCount, 1, firstIndex = running index offset, vertexOffset = running vertex offset, 0}`. `Modeldata[i]` gets the entity transform × node transform, the converted `gfx::Material` and the `gfx::MaterialId`.
-4. **Builds the uber pipeline.** It compiles `shaders/passes/rasm.slang` (`vertMain`/`fragMain`) and creates a graphics pipeline with an empty vertex-input state (vertex pulling) and the bindless set layout.
+4. **Writes draw records.** For each sub-mesh i it sets `DrawInfo{indexCount, 1, firstIndex = running index offset, vertexOffset = running vertex offset, 0}`. `Modeldata[i]` gets the entity transform × node transform, the converted `gfx::Material` and the `gfx::MaterialId`.
 
 Every frame, `updateUniforms` rewrites only the matrix part of each `Modeldata` (`offsetof(Modeldata, material)` bytes) from the current entity transforms.
 
 A scene with no geometry returns an empty `PreparedScene` before any buffer is allocated. It is not cached, so entities added later are picked up. `render2` skips the draw when the prepared scene has no pipeline, and the frame presents the clear color.
+
+A failed preparation (out of VRAM, a shader error, a buffer that could not be created) also returns an empty, uncached `PreparedScene`. It logs the failure, destroys any buffers it had created, and retries on the next frame, so a shader fixed on disk is picked up while the application runs. Only a complete result is cached. The pipeline is built before the buffers so that a shader error, which repeats every frame, allocates nothing.
 
 ### GPU data chain
 
@@ -161,8 +163,8 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
   - the full mip chain is generated on the CPU with `stb_image_resize2`, sRGB-aware for sRGB formats;
   - every texture gets its own `VkSampler` (linear, repeat, 8× anisotropy).
 - **Color spaces.** Base color and emissive are uploaded as `R8G8B8A8_SRGB`. Normal, metallic-roughness and occlusion maps are uploaded as `R8G8B8A8_UNORM`.
-- `MaterialType` selects a shader source file for the legacy path: `BASIC` and `UNLIT` → `basic.slang`, `PBR` → `rasm.slang`, `SHADER` → a user-provided source.
-- The GPU-driven path ignores `Material::shader` and always uses the uber shader. To add a shading path, add a value to `gfx::MaterialId` and its mirror in `core.slang`, map it in `getGfxMaterialId` (`scene.cpp`), and branch on it in `fragMain`. Today's mapping is `BASIC` and `UNLIT` → `MaterialId::UNLIT` (base color only, no tone mapping) and `PBR` and `SHADER` → `MaterialId::PBR`.
+- `MaterialType` selects a shader source file for the legacy path: `BASIC` and `UNLIT` → `basic.slang`, `PBR` → `rasm.slang`, `SHADER` → a user-provided source. `basic.slang` outputs the base color factor times the first texture, or the factor alone when the material has no texture. Its `ShaderData` must match the struct that `render` writes.
+- The GPU-driven path ignores `Material::shader` and always uses the uber shader. To add a shading path, add a value to `gfx::MaterialId` and its mirror in `core.slang`, map it in `getGfxMaterialId` (`scene.cpp`), and branch on it in `fragMain`. Today's mapping is `UNLIT` → `MaterialId::UNLIT` (base color only, no tone mapping) and `BASIC`, `PBR` and `SHADER` → `MaterialId::PBR`, so `BASIC` is lit on this path and unlit on the legacy path.
 
 ## 6. Asset import
 
@@ -170,7 +172,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
   - **OBJ** (tinyobjloader) is de-indexed into one vertex per index. Y and V are flipped per vertex.
   - **glTF/GLB** (tinygltf) goes through `processGLTF`, which walks the default scene's node tree from a root transform of `scale(1, −1, 1)` (the Y flip). For each mesh node, `extractGLTFRaws` reads `POSITION`, `NORMAL`, `TANGENT` and `TEXCOORD_0..2` and the indices through one validated accessor reader. That reader handles strides, sparse accessors and quantized or normalized components. Strips and fans become triangle lists, primitives without indices get generated ones, and point and line primitives are skipped. Missing normals are computed as smooth normals, and in that case `TANGENT` is ignored, as the glTF spec requires. It calls `loadMaterial` for each primitive.
 - **Tangents and normal maps.** `Vertex::tangent` holds the glTF tangent with w = ±1, or w = 0 when the mesh has none. The vertex shader transforms it with the model matrix and multiplies w by the sign of the matrix's determinant, so mirroring transforms such as the root Y flip keep the bitangent right. `getNormalFromMap` uses the authored frame (B = cross(N, T)·w) when w ≠ 0. Otherwise it reconstructs a frame from UV derivatives, with B pointing toward decreasing v (glTF normal maps store +Y as up in the image).
-- `loadMaterial` maps a glTF PBR material to `rasm::Material`. Materials with `KHR_materials_unlit` become `MaterialType::UNLIT`. It expands images to RGBA8 and uploads each texture. `processGLTF` creates a `GltfImportCache` for each import and passes it down to `loadMaterial`. It caches materials by material index and textures by image index and color space, so primitives that share a material share one `MaterialHandle` and one set of bindless slots.
+- `loadMaterial` maps a glTF PBR material to `rasm::Material`. Materials with `KHR_materials_unlit` become `MaterialType::UNLIT`, and only their base color texture is uploaded. It expands images to RGBA8 and uploads each texture. `processGLTF` creates a `GltfImportCache` for each import and passes it down to `loadMaterial`. It caches materials by material index and textures by image index and color space, so primitives that share a material share one `MaterialHandle` and one set of bindless slots.
 - A primitive without a material uses its entity's material. `getMaterial` resolves an invalid handle to `defaultMaterial`, the glTF default material (white, metallic 1, roughness 1) created at startup.
 - The whole `tinygltf::Model`, including decoded images, is kept in the `Mesh` (`GLTFRaw::model`). CPU vertex data is never released.
 

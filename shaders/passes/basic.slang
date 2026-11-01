@@ -11,7 +11,10 @@ struct ShaderData
     float4x4 view;
     float4x4 model;
     uint32_t textureIndex;
+    float3 baseColorFactor;
 };
+
+static const uint INVALID_TEXTURE_INDEX = 0xFFFFFFFF;
 
 struct VSOutput
 {
@@ -51,6 +54,9 @@ Sampler2D gTextures[];
 [shader("fragment")]
 float4 fragMain(VSOutput input) : SV_TARGET
 {
-    float3 color = gTextures[pc.shaderDataPtr->textureIndex].Sample(input.UV).xyz;
+    float3 color = pc.shaderDataPtr->baseColorFactor;
+    uint textureIndex = pc.shaderDataPtr->textureIndex;
+    if (textureIndex != INVALID_TEXTURE_INDEX)
+        color *= gTextures[textureIndex].Sample(input.UV).xyz;
     return float4(color, 1.0);
 }

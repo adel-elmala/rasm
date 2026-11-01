@@ -158,7 +158,7 @@ Next steps, in order:
 
 *Fix:* create a default material at startup and resolve invalid handles to it.
 
-**B9 — `MaterialType::UNLIT` references a missing shader.** *Fixed 2026-10-31:* `gfx::Modeldata` now carries a `MaterialId` that `fragMain` branches on, so `UNLIT` is a path in the uber shader (`Unlit()` in `unlit.slang`). The legacy path uses `basic.slang` for it. glTF materials with `KHR_materials_unlit` import as `UNLIT`. The original finding follows.
+**B9 — `MaterialType::UNLIT` references a missing shader.** *Fixed 2026-10-31:* `gfx::Modeldata` now carries a `MaterialId` that `fragMain` branches on, so `UNLIT` is a path in the uber shader (`Unlit()` in `unlit.slang`). The legacy path uses `basic.slang` for it, which multiplies the first texture by the base color factor and handles a missing texture. glTF materials with `KHR_materials_unlit` import as `UNLIT` and upload only their base color texture. The original finding follows.
 `createMaterial(UNLIT)` reads `./shaders/passes/unlit.slang` ([material.cpp:64](../src/assets/material.cpp#L64)), which does not exist. The file read fails and later compilation fails.
 
 **B10 — The render-target path is broken.** *Confirmed.*
@@ -175,6 +175,8 @@ Next steps, in order:
 
 **B19 — The reconstructed tangent frame inverted the normal-map green channel.** *Fixed 2026-10-27:* `getNormalFromMap` now points the bitangent toward decreasing v (−dP/dv). glTF puts the UV origin at the image's top-left and normal maps store +Y as up in the image, so that is the direction of `cross(N, T) · w` for authored tangents. Before the fix, the derivative path aligned B with +dP/dv, so every normal map without `TANGENT` data was lit with Y flipped. This came to light when `TANGENT` import landed. On a test mesh with standard UVs, mirrored UVs and a mirroring node, and on the authored tangents of `coffee-room`, the two frames now agree (dot > 0.999). Before the fix they disagreed everywhere.
 
+**B20 — Shader dedup keys pointed at freed SPIR-V.** *Fixed 2026-11-01:* `RenderContext::createShader` now keeps its own copy of the SPIR-V in `shaderSources`, and the cache key points at that copy. The bug came from `B1`, which made shader equality compare the code instead of the pointer. `shaderDescCache` still stored the caller's pointer into a temporary blob, so every later lookup that reached `operator==` ran `memcmp` on freed memory. This crashed intermittently with an access violation in any application that compiled the same shader twice, such as one that prepared a second scene. In a debug build, 5 of 30 runs crashed before the fix and 0 of 60 after it.
+
 ### Low severity
 
 **B11** — *Fixed 2026-10-31:* `submit` builds one wait stage per wait semaphore. The original finding follows. `VulkanContext::submit` passes one `waitStages` entry while `waitSemaphoreCount = waitSemaphores.size()` ([vulkanContext.cpp:1120-1138](../src/rhi/vulkan/vulkanContext.cpp#L1120-L1138)). Waiting on more than one semaphore reads past the array. The bug is latent today, because callers pass 0 or 1 semaphores.
@@ -190,7 +192,7 @@ Next steps, in order:
 
 **B15** — *Fixed 2026-10-31:* `LightType::SPOT` is removed from the public enum. Real spot lights remain planned in the [development plan](development_plan.md). The original finding follows. `LightType::SPOT` is public ([light.h:15](../include/rasm/light.h#L15)), but the GPU light type has no spot variant. Spot lights are `static_cast` into value 2 and shaded as point lights.
 
-**B16** — *Fixed 2026-10-31:* `prepareScene` returns an empty, uncached `PreparedScene` when there is no geometry, so entities added later still appear. `render2` presents the cleared frame when the prepared scene has no pipeline. The original finding follows. For an empty scene, `prepareScene` requests zero-sized buffers. Creation fails, the result is not cached, and every frame retries and logs errors. Then `render2` binds an invalid pipeline ([scene.cpp:199-233](../src/scene/scene.cpp#L199-L233)).
+**B16** — *Fixed 2026-10-31:* `prepareScene` returns an empty, uncached `PreparedScene` when there is no geometry, so entities added later still appear. `render2` presents the cleared frame when the prepared scene has no pipeline. *Extended 2026-11-01:* a failed preparation logs the failure, destroys what it created and retries on the next frame, and only a complete result is cached. A mesh without vertices or indices is skipped with a warning. The original finding follows. For an empty scene, `prepareScene` requests zero-sized buffers. Creation fails, the result is not cached, and every frame retries and logs errors. Then `render2` binds an invalid pipeline ([scene.cpp:199-233](../src/scene/scene.cpp#L199-L233)).
 
 **B17** — *Fixed 2026-10-27:* `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` triggers recreation. `Window` has `pixelWidth`/`pixelHeight` (the swapchain's desired extent) next to the logical `width`/`height` used for mouse input. Depth textures, viewport, scissor and camera aspect come from the swapchain extent (`Swapchain::width`/`height`). The original finding follows. Resize uses `SDL_EVENT_WINDOW_RESIZED`, which reports logical size ([window.cpp:116-122](../src/platform/window.cpp#L116-L122)). The depth texture and viewport use `mainWindow` size, while the swapchain extent comes from the surface. On scaled or HiDPI displays they can disagree. Use `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` / `SDL_GetWindowSizeInPixels`, and size everything from the swapchain extent. *Likely.*
 
@@ -250,7 +252,7 @@ Use a right-handed Y-up world (glTF's convention) and do the Vulkan flip with a 
 **D11 — Assets and shaders are located through the working directory** (§1.3).
 
 **D12 — The shader code is Vulkan-only.**
-- `spirv_asm` for `DrawIndex` ([core.slang:52-60](../shaders/lib/core.slang#L52-L60)) is SPIR-V specific.
+- `spirv_asm` for `DrawIndex` ([core.slang:114-122](../shaders/lib/core.slang#L114-L122)) is SPIR-V specific.
 - The data model relies on raw pointers (`SceneData*`, `VertexFull*`) through buffer device address.
 - As far as I know, Slang pointer support is limited to SPIR-V, Metal and CUDA targets: HLSL/DXIL and WGSL have no raw pointers. Verify against the current Slang docs before you design around it.
 
@@ -284,7 +286,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 **P4 — Per-call overhead in `RenderContext`.** Every call hashes a handle and **copies** the backend struct, including a `ResourceDesc` with a `std::string` (e.g. `fillBuffer`, [renderContext.cpp:665](../src/rhi/renderContext.cpp#L665); `getBufferDeviceAddress`, [:740](../src/rhi/renderContext.cpp#L740)). Use index-based pools, return references, and cache device addresses.
 
 **P5 — Large by-value copies in the scene code.**
-- `processMesh` returns a `GLTFRaw` that contains the whole `tinygltf::Model` ([mesh.cpp:471](../src/assets/mesh.cpp#L471)).
+- `prepareScene` no longer copies meshes: `processMesh` is gone, and each `SceneDraw` points into the registry.
 - `uploadMesh` and `getMeshByteSize` copy whole `Mesh`es ([mesh.cpp:168](../src/assets/mesh.cpp#L168), [:484](../src/assets/mesh.cpp#L484)).
 - `RenderGraph::execute` and `compileScene` copy `Scene`, which holds 1,040 handles ([renderGraph.cpp:143](../src/renderer/renderGraph.cpp#L143), [scene.cpp:362](../src/scene/scene.cpp#L362)).
 
@@ -294,7 +296,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 
 **P8 — Shader and pipeline creation.** Shaders are compiled from source on every launch. There is no `VkPipelineCache` and no SPIR-V cache. A pipeline layout is created per pipeline even though all pipelines share the same set layout and push-constant range.
 
-**P9 — Shader detail.** `fragMain` copies all 8 lights and the material into a `PBRInfo` local ([rasm.slang:72-74](../shaders/passes/rasm.slang#L72-L74)). Read through the pointer, or pass indices, to keep register pressure down.
+**P9 — Shader detail.** `fragMain` copies all 8 lights and the material into a `PBRInfo` local ([rasm.slang:90-91](../shaders/passes/rasm.slang#L90-L91)). Read through the pointer, or pass indices, to keep register pressure down.
 
 ---
 

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "rasm/types.h"
+#include "rasm/entity.h"
 #include "rasm/mesh.h"
 
 #include <string>
@@ -32,6 +33,15 @@ namespace rasm {
         std::unordered_map<MaterialHandle, std::unordered_set<EntityHandle, HandleHash>, HandleHash> materialToMeshes;
         std::unordered_map<MaterialHandle, PipelineHandle, HandleHash>                               materialToPipeline;
         std::unordered_map<EntityHandle, BufferHandle, HandleHash>                                   meshData;
+    };
+
+    // One draw of a scene. The geometry stays in the registry, so preparing a scene copies no mesh data.
+    struct SceneDraw
+    {
+        const Entity*   entity;
+        const ObjRaw*   geometry;
+        glm::mat4       transform;
+        MaterialHandle  material;
     };
 
     struct PreparedScene

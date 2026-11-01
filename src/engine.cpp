@@ -29,6 +29,12 @@ namespace rasm
                 return ShaderCompiler::Target::SPIRV; // Default to SPIR-V
             }
         }
+
+        glm::vec3 getBaseColorFactor(const Material &material)
+        {
+            const auto albedo = static_cast<uint32_t>(PbrParam::ALBEDO);
+            return {material.params[albedo], material.params[albedo + 1], material.params[albedo + 2]};
+        }
     }
 
     Engine::Engine(const EngineConfig &config) : config(config)
@@ -549,7 +555,8 @@ namespace rasm
 
         auto preparedScene = prepareScene(scene);
 
-        // An empty scene (or a failed preparation) has no pipeline to bind; just present the cleared frame.
+        // An empty scene, or a failed preparation (which prepareScene logged and retries next frame), has
+        // no pipeline to bind; just present the cleared frame.
         if (!preparedScene.uberMaterialPipeline.isValid())
         {
             endPass();
@@ -622,6 +629,7 @@ namespace rasm
             glm::mat4 view;
             glm::mat4 model;
             uint32_t textureIndex;
+            glm::vec3 baseColorFactor;
         };
 
         ShaderData shaderData{};
@@ -640,6 +648,7 @@ namespace rasm
 
             auto mat = getMaterial(materialHandle);
             shaderData.textureIndex = getBindlessTextureIndex(mat.textures[0]); // TODO: handle cases where material has more than 1 texture
+            shaderData.baseColorFactor = getBaseColorFactor(mat);
 
             for (const auto &entityHandle : entitySet)
             {
@@ -685,6 +694,7 @@ namespace rasm
             glm::mat4 view;
             glm::mat4 model;
             uint32_t textureIndex;
+            glm::vec3 baseColorFactor;
         };
 
         ShaderData shaderData{};
@@ -703,6 +713,7 @@ namespace rasm
 
             auto mat = getMaterial(materialHandle);
             shaderData.textureIndex = getBindlessTextureIndex(mat.textures[0]); // TODO: handle cases where material has more than 1 texture
+            shaderData.baseColorFactor = getBaseColorFactor(mat);
 
             for (const auto &entityHandle : entitySet)
             {

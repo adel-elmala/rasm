@@ -185,12 +185,16 @@ namespace rasm
 
             mat.textures[static_cast<uint32_t>(PbrSlot::ALBEDO)] =
                 uploadTexture(material->pbrMetallicRoughness.baseColorTexture.index, true);
-            auto mr = uploadTexture(material->pbrMetallicRoughness.metallicRoughnessTexture.index, false);
-            mat.textures[static_cast<uint32_t>(PbrSlot::METALLIC)] = mr;
-            mat.textures[static_cast<uint32_t>(PbrSlot::ROUGHNESS)] = mr;
-            mat.textures[static_cast<uint32_t>(PbrSlot::NORMAL)] = uploadTexture(material->normalTexture.index, false);
-            mat.textures[static_cast<uint32_t>(PbrSlot::OCCLUSION)] = uploadTexture(material->occlusionTexture.index, false);
-            mat.textures[static_cast<uint32_t>(PbrSlot::EMISSIVE)] = uploadTexture(material->emissiveTexture.index, true);
+            // Unlit shading reads only the base color; the PBR textures are a fallback for viewers without the extension.
+            if (mat.type != MaterialType::UNLIT)
+            {
+                auto mr = uploadTexture(material->pbrMetallicRoughness.metallicRoughnessTexture.index, false);
+                mat.textures[static_cast<uint32_t>(PbrSlot::METALLIC)] = mr;
+                mat.textures[static_cast<uint32_t>(PbrSlot::ROUGHNESS)] = mr;
+                mat.textures[static_cast<uint32_t>(PbrSlot::NORMAL)] = uploadTexture(material->normalTexture.index, false);
+                mat.textures[static_cast<uint32_t>(PbrSlot::OCCLUSION)] = uploadTexture(material->occlusionTexture.index, false);
+                mat.textures[static_cast<uint32_t>(PbrSlot::EMISSIVE)] = uploadTexture(material->emissiveTexture.index, true);
+            }
             mat.params[static_cast<uint32_t>(PbrParam::NORMAL_SCALE)] = material->normalTexture.scale;
             mat.params[static_cast<uint32_t>(PbrParam::OCCLUSION_STRENGTH)] = material->occlusionTexture.strength;
             for (uint32_t i = 0; i < 3; ++i)

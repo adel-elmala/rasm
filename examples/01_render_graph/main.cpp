@@ -104,11 +104,13 @@ int main()
                 glm::mat4 view;
                 glm::mat4 model;
                 uint32_t textureIndex;
+                glm::vec3 baseColorFactor; // basic.slang multiplies the texture by this
             };
 
             ShaderData shaderData{};
             shaderData.projection = engine.getProjectionMatrix(camera);
             shaderData.view = engine.getViewMatrix(camera);
+            shaderData.baseColorFactor = glm::vec3(1.0f);
 
             auto shaderDataBufferAddress = ctx.getBufferDeviceAddress(shaderDataBuffer);
 
