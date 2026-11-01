@@ -58,7 +58,7 @@ cmake --build --preset x64-debug
 other presets are also available, check `cmakepresets.json`.
 
 ### 3. Run
-Examples executables can be found in `/build` folder under the `x64-debug` preset folder, in `examples/`. They can run from any directory. Each build copies `shaders/` next to them, so run `cmake --build` after editing a shader:
+Examples executables can be found in `/build` folder under the `x64-debug` preset folder, in `examples/`. They can run from any directory, and read `shaders/` and `assets/` from the repo, so a shader edit shows up the next time an example starts:
 
 ```
 .\build\x64-debug\examples\00_hello_scene.exe
@@ -118,7 +118,7 @@ cmake --build --preset macOs
 other presets are also available, check `cmakepresets.json`.
 
 ### 3. Run
-Examples executables can be found in `/build` folder under the `macOS` preset folder, in `examples/`. They can run from any directory. Each build copies `shaders/` next to them, so run `cmake --build` after editing a shader:
+Examples executables can be found in `/build` folder under the `macOS` preset folder, in `examples/`. They can run from any directory, and read `shaders/` and `assets/` from the repo, so a shader edit shows up the next time an example starts:
 
 ```
 ./build/macOS/examples/00_hello_scene
@@ -140,7 +140,7 @@ Pass `-DRASM_BUILD_TESTS=OFF` to leave them out.
 
 ## Using RASM from another project
 
-`cmake --install` copies the library, public headers and shaders to `install/` in the repo. Debug and Release share that prefix, so install both if the project builds both:
+`cmake --install` copies the library, public headers and shaders to `install/` in the repo. Debug and Release share that prefix, so install both if the project builds both. A project building `RelWithDebInfo` or `MinSizeRel` links the Release library:
 
 ```
 cmake --install build/x64-debug
@@ -155,7 +155,14 @@ target_link_libraries(my_app PRIVATE rasm::rasm)
 ```
 
 - RASM is a static library, so the project also needs RASM's link dependencies: Vulkan SDK, vk-bootstrap, VulkanMemoryAllocator, glm, SDL3, Tracy, spdlog, tinyobjloader and Slang. With vcpkg, add `vk-bootstrap`, `vulkan-memory-allocator`, `glm`, `sdl3` with the `vulkan` feature, `tracy` with the `on-demand` feature, `spdlog`, `tinyobjloader` and `shader-slang` to its manifest.
-- Shaders are compiled at runtime, so the application needs them when it ships. By default the engine looks in a `shaders/` folder next to the executable, so copy `share/rasm/shaders` from the install prefix there. To keep them elsewhere, set `EngineConfig::shaderDir`.
+- Shaders are compiled at runtime, so the application needs them when it ships. By default the engine looks in a `shaders/` folder next to the executable. `find_package(rasm)` sets `rasm_SHADER_DIR` to the folder holding them, so a build step can copy them there:
+
+  ```cmake
+  add_custom_command(TARGET my_app POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory "${rasm_SHADER_DIR}" "$<TARGET_FILE_DIR:my_app>/shaders")
+  ```
+
+  To keep them elsewhere, set `EngineConfig::shaderDir`.
 - Set `EngineConfig::assetRoot` to have relative `loadMesh` and `loadTexture` paths resolve against a folder of your choice. A relative `shaderDir` or `assetRoot` is resolved against the executable's directory.
 - To use a build tree without installing, set `rasm_DIR` to it, for example `-Drasm_DIR=<repo>/build/x64-debug`.
 - Pass `-DRASM_INSTALL=OFF` to skip the install rules, which is the default when RASM is added with `add_subdirectory`.

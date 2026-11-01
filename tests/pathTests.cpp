@@ -44,6 +44,12 @@ namespace
         file << "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
     }
 
+    std::string toUtf8(const fs::path &path)
+    {
+        const std::u8string text = path.generic_u8string();
+        return std::string(reinterpret_cast<const char *>(text.c_str()), text.size());
+    }
+
     fs::path defaultShaderDir()
     {
         rasm::Engine engine(rasm::EngineConfig{});
@@ -51,9 +57,9 @@ namespace
     }
 }
 
-TEST_CASE("shaders default to a folder beside the executable")
+TEST_CASE("the default shader directory resolves against the executable")
 {
-    CHECK(defaultShaderDir() == fs::path(RASM_TEST_EXECUTABLE_DIR) / "shaders");
+    CHECK(defaultShaderDir() == (fs::path(RASM_TEST_EXECUTABLE_DIR) / RASM_TEST_DEFAULT_SHADER_DIR).lexically_normal());
 }
 
 TEST_CASE("the default shader directory ignores the working directory")
@@ -157,4 +163,27 @@ TEST_CASE("relative and absolute paths to one file share a mesh")
 
     REQUIRE(relative.isValid());
     CHECK(relative == absolute);
+}
+
+TEST_CASE("meshes load from a folder with a non-Latin name")
+{
+    ScopedTempDir temp;
+    const fs::path root = temp.dir / u8"مشاريع";
+    fs::create_directories(root);
+    writeTriangleObj(root / "triangle.obj");
+
+    rasm::EngineConfig config;
+    config.assetRoot = toUtf8(root);
+    rasm::Engine engine(config);
+
+    CHECK(engine.loadMesh("triangle.obj").isValid());
+}
+
+TEST_CASE("a path that is not valid UTF-8 does not throw")
+{
+    rasm::EngineConfig config;
+    config.assetRoot = "caf\xE9";
+    config.shaderDir = "caf\xE9";
+
+    CHECK_NOTHROW(rasm::Engine(config).resolveAssetPath("caf\xE9.obj"));
 }

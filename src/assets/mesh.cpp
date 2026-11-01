@@ -1,5 +1,6 @@
 #include "rasm/mesh.h"
 #include "rasm/engine.h"
+#include "platform/paths.h"
 
 #include "spdlog/spdlog.h"
 
@@ -15,6 +16,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cassert>
+#include <fstream>
 #include <iterator>
 #include <vector>
 
@@ -307,6 +309,13 @@ namespace
 
         return transform;
     }
+
+    // tinyobj leaves this to the reader: a corner without the attribute has index -1, and a face can name
+    // elements the file never defines (bunny.obj has "f 1/1/1" and no vn lines).
+    bool hasObjAttribute(const std::vector<tinyobj::real_t> &values, int index, size_t components)
+    {
+        return index >= 0 && (static_cast<size_t>(index) + 1) * components <= values.size();
+    }
 }
 
 namespace rasm
@@ -400,7 +409,9 @@ namespace rasm
             std::vector<tinyobj::shape_t> shapes;
             std::vector<tinyobj::material_t> materials;
 
-            if (!tinyobj::LoadObj(&attrib, &shapes, &materials, nullptr, nullptr, path.c_str()))
+            // tinyobj opens a file name with the ANSI code page, so it gets a stream instead.
+            std::ifstream file(pathFromUtf8(path));
+            if (!file.is_open() || !tinyobj::LoadObj(&attrib, &shapes, &materials, nullptr, nullptr, &file))
             {
                 spdlog::error("Failed to load OBJ model: {}", path);
                 return MeshHandle{};
@@ -422,9 +433,9 @@ namespace rasm
                     Vertex v = {};
 
                     v.pos = {attrib.vertices[index.vertex_index * 3], -attrib.vertices[index.vertex_index * 3 + 1], attrib.vertices[index.vertex_index * 3 + 2]};
-                    if (attrib.normals.size() > 0)
+                    if (hasObjAttribute(attrib.normals, index.normal_index, 3))
                         v.normal = {attrib.normals[index.normal_index * 3], -attrib.normals[index.normal_index * 3 + 1], attrib.normals[index.normal_index * 3 + 2]};
-                    if (attrib.texcoords.size() > 0)
+                    if (hasObjAttribute(attrib.texcoords, index.texcoord_index, 2))
                         v.uv[0] = {attrib.texcoords[index.texcoord_index * 2], 1.0 - attrib.texcoords[index.texcoord_index * 2 + 1]};
 
                     outVertices.push_back(v);

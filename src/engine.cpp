@@ -178,9 +178,10 @@ namespace rasm
 
     std::string Engine::resolveAssetPath(const std::string &path) const
     {
+        // Every loader expects UTF-8, whichever encoding the path arrived in.
         if (config.assetRoot.empty())
         {
-            return path;
+            return pathToUtf8(pathFromUtf8(path));
         }
         return pathToUtf8((pathFromUtf8(config.assetRoot) / pathFromUtf8(path)).lexically_normal());
     }

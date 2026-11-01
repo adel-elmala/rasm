@@ -12,7 +12,8 @@ int main()
         .windowHeight = 480,
         .enableValidation = true,
         .preferredBackend = rasm::Backend::VULKAN,
-        .assetRoot = RASM_EXAMPLE_ASSET_ROOT
+        .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
+        .shaderDir = RASM_EXAMPLE_SHADER_DIR
 
     };
 

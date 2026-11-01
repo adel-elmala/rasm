@@ -124,6 +124,8 @@ namespace rasm
         if (sortedIndices.size() != passes.size())
         {
             spdlog::error("Frame Graph contains a cycle!");
+            // execute() keeps running frames so the window stays responsive, but they draw no passes.
+            executionOrder.clear();
             compiled = false;
             return;
         }

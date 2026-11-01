@@ -8,7 +8,8 @@ int main()
         .windowHeight = 1080,
         .enableValidation = true,
         .preferredBackend = rasm::Backend::VULKAN,
-        .assetRoot = RASM_EXAMPLE_ASSET_ROOT};
+        .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
+        .shaderDir = RASM_EXAMPLE_SHADER_DIR};
 
     rasm::Engine engine(config);
     if (!engine.running())

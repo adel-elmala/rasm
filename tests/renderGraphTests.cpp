@@ -162,6 +162,21 @@ TEST_CASE("a cycle fails to compile")
     CHECK(graph.order().empty());
 }
 
+TEST_CASE("a cycle added after compiling drops the old order")
+{
+    TestGraph graph;
+    graph.addTexturePass({TEXTURE_B}, {TEXTURE_A});
+    graph.compile();
+    REQUIRE(graph.isCompiled());
+    REQUIRE_FALSE(graph.order().empty());
+
+    graph.addTexturePass({TEXTURE_A}, {TEXTURE_B});
+    graph.compile();
+
+    CHECK_FALSE(graph.isCompiled());
+    CHECK(graph.order().empty());
+}
+
 TEST_CASE("adding a pass after compiling triggers a new sort")
 {
     TestGraph graph;

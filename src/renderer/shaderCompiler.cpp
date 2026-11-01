@@ -214,8 +214,9 @@ namespace rasm
     bool ShaderCompiler::initialize(Target target, const std::string &shaderDir)
     {
         const std::filesystem::path libDir = pathFromUtf8(shaderDir) / "lib";
+        const std::filesystem::path uberShader = pathFromUtf8(shaderDir) / "passes/rasm.slang";
         std::error_code errorCode;
-        if (!std::filesystem::is_directory(libDir, errorCode))
+        if (!std::filesystem::is_directory(libDir, errorCode) || !std::filesystem::is_regular_file(uberShader, errorCode))
         {
             spdlog::error("Shaders not found in {}. Copy them there, or set EngineConfig::shaderDir.", shaderDir);
             return false;
