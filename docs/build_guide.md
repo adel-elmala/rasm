@@ -125,3 +125,16 @@ Examples executables can be found in `/build` folder under the `macOS` preset fo
 ./build/macOS/examples/01_render_graph
 ./build/macOS/examples/02_gltf
 ```
+
+## Profiling with Tracy
+
+Every build is instrumented with [Tracy](https://github.com/wolfpld/tracy) in on-demand mode: nothing is recorded until a profiler connects, so an unprofiled run does not buffer events. Zones from before the connection are lost, so start the profiler first to see startup work such as `prepareScene`, `createPipeline` and `fillTexture`.
+
+The profiler must be the same version as the client that vcpkg installed (0.13.1 today), or it refuses the connection. Use the matching Tracy release, or build it from the port's `gui-tools` feature. For a capture without the GUI, the `cli-tools` feature builds `tracy-capture` and `tracy-csvexport`:
+
+```
+tracy-capture -a 127.0.0.1 -o trace.tracy -f -s 8
+tracy-csvexport trace.tracy
+```
+
+While an engine process runs, Tracy listens on TCP port 8086 on all network interfaces and announces itself by UDP broadcast, in Release builds too. Windows may ask for a firewall exception the first time.

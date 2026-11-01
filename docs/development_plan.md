@@ -39,7 +39,7 @@ Goal: fix correctness bugs before building anything on top.
 - [x] Implement `UNLIT` through a per-model material id in the uber shader. Delete the `loadMaterials` declaration and the spot-light enum value (`B9`, `B14`, `B15`). Make empty scenes work (`B16`). Fix `submit` wait stages (`B11`) and the Slang options leak (`B12`) (done 2026-10-31).
 - [x] Remove the legacy path (`render`/`compileScene`/offscreen frame) and port `01_render_graph` to the GPU-driven path with a fixed render-target flow (`D10`, `B10`, done 2026-11-01).
 - [x] Call `validateRasmStructs` in debug builds, checking the shader layouts behind the `pc` pointers (`C6`, done 2026-11-01).
-- [ ] Add Tracy frame marks and zones for frame, prepare, upload and submit (`D16`).
+- [x] Add Tracy frame marks and zones for frame, prepare, upload and submit, with the client in on-demand mode (`D16`, done 2026-11-01).
 
 **Exit criteria:** all examples run validation-clean in Debug and Release (with `enableValidation = false`), survive resize and minimize, and a model with 100+ primitives sharing materials loads within the limits.
 

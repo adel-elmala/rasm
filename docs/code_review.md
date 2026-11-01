@@ -266,7 +266,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 
 **D15 — Hard-coded limits** are spread across headers (see [architecture.md §10](architecture.md#10-compile-time-limits)). Move them into `EngineConfig`, or grow the containers dynamically. Size GPU tables from the config.
 
-**D16 — Profiling.** Tracy is linked publicly, but there are no zones, no frame marks and no GPU timestamps. Also, the VRAM check in `prepareScene` compares host-visible allocations against the device-local budget.
+**D16 — Profiling.** *Partly resolved:* the frame loop, `prepareScene`, uploads, submit and present now have Tracy zones and a frame mark, with the client in on-demand mode. Still open: Tracy is linked publicly, there are no GPU timestamps, nothing turns Tracy off (every build listens on TCP 8086 on all interfaces, which a shipped game must not do), and the VRAM check in `prepareScene` compares host-visible allocations against the device-local budget.
 
 **D17 — No tests and no CI.** Pure-CPU pieces such as handle pools, desc hashing, glTF import, camera math and render-graph sorting are easy to unit-test. Rendering can be covered with headless golden-image tests once offscreen rendering exists.
 
