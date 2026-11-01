@@ -13,6 +13,7 @@
 
 namespace rasm
 {
+    // clang-format off
     struct RenderContext::Impl
     {
         gfx::VulkanContext                                                                          vulkanContext = {};
@@ -40,6 +41,7 @@ namespace rasm
 
         uint32_t                                                                                    nextBindlessTextureIndex = 0;
     };
+    // clang-format on
 
     RenderContext::RenderContext(Engine *owner) : engine(owner), impl(std::make_unique<Impl>())
     {

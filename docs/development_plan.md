@@ -54,7 +54,8 @@ Goal: the structural changes that every later feature depends on. They get much 
 - [x] Put the `*_IMPLEMENTATION` defines in one translation unit, `src/thirdparty_impl.cpp` (`C10`).
 - [x] Install and export targets (`find_package(rasm)`). Add `RASM_BUILD_TESTS` together with the first tests (done 2026-11-01).
 - [x] Locate assets and shaders through configuration: `EngineConfig::assetRoot`, a `RASM_SHADER_DIR` default, and shaders copied next to the binaries (`D11`, done 2026-11-01).
-- [ ] Commit a `.clang-format` and normalize formatting in a dedicated commit (`C1`, `C2`).
+- [x] Commit a `.clang-format` and normalize formatting in a dedicated commit (`C2`, done 2026-11-01).
+- [ ] Apply the naming fixes in their own commit: `registery`, `metallicRoughtness`, `compiledShader`, the snake_case `VulkanContext` members, the PascalCase GPU enums and `RenderGraph::CreateTexture` (`C1`).
 
 ### 1.2 RHI
 - [ ] Define a backend-neutral device interface: device, buffer, texture, sampler, pipeline, command list, queue, swapchain, fence/timeline. Move all `Vk*` code behind it (`D1`).

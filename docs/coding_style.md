@@ -76,19 +76,10 @@ Known deviations to migrate, rather than copy:
 ## 4. Formatting
 
 - 4 spaces of indentation, no tabs. Allman braces, where the opening brace goes on its own line.
-- **Aligned declarations in headers.** Headers that declare large APIs or structs wrap their body in `// clang-format off` / `// clang-format on` and align return types, names, member types and default values in columns (see `engine.h`, `renderContext.h`, `vulkanTypes.h`). Keep that alignment when you add lines.
-- `.cpp` files are formatted with clang-format. The repo has no `.clang-format` yet. Until one is committed, match the surrounding code. A starting point that matches the current `.cpp` style:
-
-  ```yaml
-  BasedOnStyle: Microsoft      # 4-space indent, Allman braces
-  ColumnLimit: 160
-  AccessModifierOffset: -4
-  NamespaceIndentation: All
-  PointerAlignment: Right
-  SortIncludes: Never          # include order is semantic, see §3
-  AllowShortFunctionsOnASingleLine: Inline
-  ```
-- Keep lines readable at about 160 columns. Long `spdlog` messages and designated initializers may exceed this.
+- **Aligned declarations in headers.** Every header, public or private and however small, wraps its whole content in `// clang-format off` / `// clang-format on`, starting on the first line, and aligns return types, names, member types and default values in columns (see `engine.h`, `renderContext.h`, `vulkanTypes.h`). Keep that alignment when you add lines. References sit on the type: `const std::string& path`.
+- Run `clang-format -i <file>` on `.cpp` files you change. The rules are in [.clang-format](../.clang-format), and it leaves `// clang-format off` regions alone, so use those for hand-aligned blocks in `.cpp` files too (see `RenderContext::Impl`).
+- The formatter has no column limit, so it keeps your line breaks. Keep lines readable at about 160 columns yourself. Long `spdlog` messages and designated initializers may exceed this.
+- Put one field per line in a designated initializer when it doesn't fit comfortably on one line. Multi-line lambdas take their brace on the next line.
 
 ## 5. Types and data
 

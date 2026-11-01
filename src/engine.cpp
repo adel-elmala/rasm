@@ -619,7 +619,7 @@ namespace rasm
                 LightHandle sceneLight = sceneRef.lights[i];
                 Light sceneLightData = registery.lights[sceneLight.index];
 
-                gfx::Light light {};
+                gfx::Light light{};
                 light.position = sceneLightData.position;
                 light.direction = sceneLightData.direction;
                 light.color = sceneLightData.color;
@@ -661,7 +661,7 @@ namespace rasm
         return config;
     }
 
-    const Window& Engine::getMainWindow() const
+    const Window &Engine::getMainWindow() const
     {
         return mainWindow;
     }

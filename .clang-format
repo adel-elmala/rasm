@@ -1,0 +1,20 @@
+BasedOnStyle: Microsoft
+BreakBeforeBraces: Allman
+AccessModifierOffset: -4
+NamespaceIndentation: All
+PointerAlignment: Right
+AllowShortFunctionsOnASingleLine: All
+
+# Keeps hand-placed line breaks, such as one field per line in designated initializers. A limit would rejoin them.
+ColumnLimit: 0
+
+# Include order is semantic, see docs/coding_style.md section 3.
+SortIncludes: Never
+
+# Formatting must only ever change whitespace.
+FixNamespaceComments: false
+BreakStringLiterals: false
+ReflowComments: Never
+
+# Keeps each file's line endings, since git's autocrlf gives Windows checkouts CRLF.
+LineEnding: DeriveLF

@@ -201,10 +201,11 @@ namespace rasm
         registery.cameras[handle.index] = Camera{
             .projection = projection,
             .controller = CameraController{.type = CameraController::Type::TRACK_BALL,
-                                           .trackBall = {.radius = radius,
-                                                         .center = transform.position + forward * radius,
-                                                         .orbitSensitivity = 1.0f,
-                                                        }},
+                                           .trackBall = {
+                                               .radius = radius,
+                                               .center = transform.position + forward * radius,
+                                               .orbitSensitivity = 1.0f,
+                                           }},
             .transform = transform,
             .targetTransform = transform,
         };

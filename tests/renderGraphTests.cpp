@@ -104,7 +104,11 @@ TEST_CASE("buffers and render targets create edges too")
     const rasm::RenderTargetHandle renderTarget{1, 1};
 
     TestGraph graph;
-    graph.addPass("present", [&](rasm::PassBuilder &builder) { builder.read(renderTarget); }, [](rasm::RenderContext &) {});
+    graph.addPass(
+        "present",
+        [&](rasm::PassBuilder &builder)
+        { builder.read(renderTarget); },
+        [](rasm::RenderContext &) {});
     graph.addPass(
         "draw",
         [&](rasm::PassBuilder &builder)
@@ -113,7 +117,11 @@ TEST_CASE("buffers and render targets create edges too")
             builder.write(renderTarget);
         },
         [](rasm::RenderContext &) {});
-    graph.addPass("cull", [&](rasm::PassBuilder &builder) { builder.write(buffer); }, [](rasm::RenderContext &) {});
+    graph.addPass(
+        "cull",
+        [&](rasm::PassBuilder &builder)
+        { builder.write(buffer); },
+        [](rasm::RenderContext &) {});
 
     graph.compile();
 

@@ -1,3 +1,4 @@
+// clang-format off
 #pragma once
 
 #include <filesystem>
@@ -5,8 +6,9 @@
 
 namespace rasm
 {
-    std::filesystem::path   pathFromUtf8(const std::string &text);
-    std::string             pathToUtf8(const std::filesystem::path &path);
+    std::filesystem::path   pathFromUtf8(const std::string& text);
+    std::string             pathToUtf8(const std::filesystem::path& path);
     std::filesystem::path   getExecutableDir();
-    std::string             resolveFromExecutableDir(const std::string &path);
+    std::string             resolveFromExecutableDir(const std::string& path);
 }
+// clang-format on

@@ -22,6 +22,7 @@ namespace rasm
         // Uber-material defaults for hand-made materials (loadMaterial fills these from the glTF
         // file instead): white base color so the albedo texture is not multiplied by zero,
         // non-metallic and fully rough surface.
+        // clang-format off
         material.params[static_cast<uint32_t>(PbrParam::ALBEDO)]                = 1.0f;
         material.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 1]            = 1.0f;
         material.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 2]            = 1.0f;
@@ -29,6 +30,7 @@ namespace rasm
         material.params[static_cast<uint32_t>(PbrParam::ROUGHNESS)]             = 1.0f;
         material.params[static_cast<uint32_t>(PbrParam::NORMAL_SCALE)]          = 1.0f;
         material.params[static_cast<uint32_t>(PbrParam::OCCLUSION_STRENGTH)]    = 1.0f;
+        // clang-format on
         if (!textures.empty())
         {
             for (uint32_t i = 0; i < MAX_TEXTURE_SLOTS && i < textures.size(); ++i)

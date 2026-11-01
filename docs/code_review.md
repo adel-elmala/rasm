@@ -305,7 +305,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 ## 5. Code health
 
 - **C1 — Naming inconsistencies.** `registery`, `metallicRoughtness`, `compiledShader`, the snake_case `VulkanContext` members, PascalCase GPU enums, and `RenderGraph::CreateTexture` beside `PassBuilder::createTexture`. See the [coding style](coding_style.md#2-naming).
-- **C2 — Formatting.** `scene.cpp` uses 2-space indentation while everything else uses 4, and there is no `.clang-format` in the repo.
+- **C2 — Formatting.** *Fixed 2026-11-01:* the repo has a `.clang-format` and all C++ files follow it. It sets no column limit, because a limit collapsed hand-placed line breaks and changed about 500 extra lines. The original finding follows. `scene.cpp` uses 2-space indentation while everything else uses 4, and there is no `.clang-format` in the repo.
 - **C3 — Dead or placeholder code.**
   - `setUniform` (a no-op).
   - The glTF branch of `getMeshByteSize`.

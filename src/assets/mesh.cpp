@@ -550,7 +550,8 @@ namespace rasm
                     sourceIndices[i] = static_cast<uint32_t>(i);
             }
 
-            auto outOfRange = std::find_if(sourceIndices.begin(), sourceIndices.end(), [vertexCount](uint32_t index) { return index >= vertexCount; });
+            auto outOfRange = std::find_if(sourceIndices.begin(), sourceIndices.end(), [vertexCount](uint32_t index)
+                                           { return index >= vertexCount; });
             if (outOfRange != sourceIndices.end())
             {
                 spdlog::warn("glTF {}: skipping primitive with index {} out of range for {} vertices.", primitiveName, *outOfRange, vertexCount);

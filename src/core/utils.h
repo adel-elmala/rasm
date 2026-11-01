@@ -1,3 +1,4 @@
+// clang-format off
 #pragma once
 
 #include "rasm/camera.h"
@@ -8,6 +9,7 @@
 
 namespace rasm
 {
-    glm::mat4 getProjectionMatrix(CameraProjection projection);
+    glm::mat4   getProjectionMatrix(CameraProjection projection);
     std::string readFile(const std::filesystem::path& path);
 }
+// clang-format on
