@@ -2,6 +2,7 @@
 #include "rasm/engine.h"
 
 #include "spdlog/spdlog.h"
+#include "tracy/Tracy.hpp"
 
 #include <unordered_map>
 #include <queue>
@@ -135,6 +136,8 @@ namespace rasm
 
     void RenderGraph::execute()
     {
+        ZoneScoped;
+
         if (!compiled)
             compile();
 

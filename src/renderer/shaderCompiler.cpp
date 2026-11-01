@@ -9,6 +9,9 @@
 #include "spdlog/spdlog.h"
 
 #include <array>
+#include <cassert>
+#include <cstddef>
+#include <cstring>
 #include <fstream>
 #include <string>
 #include <filesystem>
@@ -39,99 +42,171 @@ namespace rasm
             return buffer.str();
         }
 
-        struct StructInfo
+        struct FieldOffset
         {
-            std::string name;
-            std::vector<StructInfo> members;
-            size_t size = 0;
-            int32_t alignment = 0;
-            size_t offset = 0;
+            const char *name;
+            size_t offset;
         };
 
-        std::optional<StructInfo> getStructInfo(Slang::ComPtr<slang::IComponentType> program, const std::string &name)
+        slang::VariableLayoutReflection *findField(slang::TypeLayoutReflection *structLayout, const char *name)
         {
-            auto programLayout = program->getLayout();
+            for (unsigned int i = 0; i < structLayout->getFieldCount(); ++i)
+            {
+                auto field = structLayout->getFieldByIndex(i);
+                if (std::strcmp(field->getName(), name) == 0)
+                {
+                    return field;
+                }
+            }
 
-            auto structReflection = programLayout->findTypeByName(name.c_str());
-            if (!structReflection)
+            return nullptr;
+        }
+
+        // The struct a field holds, looking through a pointer or an array.
+        slang::TypeLayoutReflection *fieldStruct(slang::TypeLayoutReflection *structLayout, const char *name)
+        {
+            auto field = structLayout ? findField(structLayout, name) : nullptr;
+            if (!field)
+            {
+                return nullptr;
+            }
+
+            auto fieldType = field->getTypeLayout();
+            return fieldType->getKind() == slang::TypeReflection::Kind::Struct ? fieldType : fieldType->getElementTypeLayout();
+        }
+
+        bool validateStruct(slang::TypeLayoutReflection *structLayout, const char *name, size_t expectedSize, const std::vector<FieldOffset> &expectedFields)
+        {
+            if (!structLayout)
             {
                 spdlog::error("Struct {} not found in shader program.", name);
-                return std::nullopt;
+                return false;
             }
 
-            auto structLayout = programLayout->getTypeLayout(structReflection, slang::LayoutRules::DefaultStructuredBuffer);
+            bool valid = true;
 
-            auto structInfo = StructInfo{};
-            structInfo.name = name;
-
-            // Use getStride() if this struct is going to be used in arrays/buffers
-            // to account for trailing layout/alignment padding.
-            structInfo.size = structLayout->getSize();
-
-            if (structLayout && structLayout->getKind() == slang::TypeReflection::Kind::Struct)
+            if (structLayout->getSize() != expectedSize)
             {
-                auto nFields = structLayout->getFieldCount();
-                for (size_t i = 0; i < nFields; ++i)
+                spdlog::error("Size mismatch for {}: C++ {}, shader {}", name, expectedSize, structLayout->getSize());
+                valid = false;
+            }
+
+            for (const auto &expected : expectedFields)
+            {
+                auto field = findField(structLayout, expected.name);
+                if (!field)
                 {
-                    auto field = structLayout->getFieldByIndex(static_cast<unsigned int>(i));
-                    auto fieldName = field->getName();
+                    spdlog::error("Field {}.{} not found in shader program.", name, expected.name);
+                    valid = false;
+                    continue;
+                }
 
-                    // Explicitly query uniform byte offset
-                    auto fieldOffset = field->getOffset(slang::ParameterCategory::Uniform);
-
-                    auto fieldType = field->getTypeLayout();
-                    auto fieldAlignment = fieldType->getAlignment();
-                    auto fieldSize = fieldType->getSize();
-
-                    structInfo.members.push_back(StructInfo{
-                        .name = fieldName ? fieldName : "",
-                        .size = fieldSize,
-                        .alignment = fieldAlignment,
-                        .offset = fieldOffset});
+                auto offset = field->getOffset(slang::ParameterCategory::Uniform);
+                if (offset != expected.offset)
+                {
+                    spdlog::error("Offset mismatch for {}.{}: C++ {}, shader {}", name, expected.name, expected.offset, offset);
+                    valid = false;
                 }
             }
 
-            return structInfo;
+            return valid;
         }
 
-        void printStructInfo(const StructInfo &structInfo)
+        // Walks pc -> scene -> pointers because only that reports the layout the shaders read. ProgramLayout::getTypeLayout
+        // has no LayoutRules value for data behind a pointer, so it adds std140/std430 padding (Modeldata is 240 there, not 188).
+        bool validateRasmStructs(slang::ProgramLayout *programLayout)
         {
-            spdlog::info("Struct: {} (size: {}, alignment: {})", structInfo.name, structInfo.size, structInfo.alignment);
-            for (const auto &member : structInfo.members)
+            slang::TypeLayoutReflection *pushConstants = nullptr;
+            for (unsigned int i = 0; i < programLayout->getParameterCount(); ++i)
             {
-                spdlog::info("  Member: {} (size: {}, alignment: {}, offset: {})", member.name, member.size, member.alignment, member.offset);
+                auto parameter = programLayout->getParameterByIndex(i);
+                if (std::strcmp(parameter->getName(), "pc") == 0)
+                {
+                    pushConstants = parameter->getTypeLayout()->getElementTypeLayout();
+                }
             }
-        }
 
-        void validateRasmStructs(Slang::ComPtr<slang::IComponentType> program)
-        {
-            auto validate = [&program](std::string structName, size_t expectedSize)
+            // Custom pipelines bring their own push constants and do not share core.slang.
+            auto scene = fieldStruct(pushConstants, "scene");
+            if (!scene || std::strcmp(scene->getName(), "SceneData") != 0)
             {
-                auto si = getStructInfo(program, structName);
-                if (!si)
-                {
-                    spdlog::error("Failed to get struct info for {}", structName);
-                    return;
-                }
+                return true;
+            }
 
-                if (si->size != expectedSize)
-                {
-                    spdlog::error("Size mismatch for {}: expected {}, got {}", structName, expectedSize, si->size);
-                    printStructInfo(*si);
-                }
-            };
+            auto modeldata = fieldStruct(scene, "modeldataPtr");
+            auto material = fieldStruct(modeldata, "material");
 
-            validate("VertexFull", sizeof(gfx::VertexFull));
-            validate("VertexPosOnly", sizeof(gfx::VertexPosOnly));
-            validate("DrawInfo", sizeof(gfx::DrawInfo));
-            validate("Modeldata", sizeof(gfx::Modeldata));
-            validate("SceneData", sizeof(gfx::SceneData));
-            validate("Light", sizeof(gfx::Light));
-            validate("MetallicRoughnessMaterial", sizeof(gfx::MetallicRoughnessMaterial));
-            validate("NormalMaterial", sizeof(gfx::NormalMaterial));
-            validate("OcclusionMaterial", sizeof(gfx::OcclusionMaterial));
-            validate("EmissiveMaterial", sizeof(gfx::EmissiveMaterial));
-            validate("Material", sizeof(gfx::Material));
+            bool valid = true;
+
+            valid &= validateStruct(scene, "SceneData", sizeof(gfx::SceneData),
+                                    {{"projection", offsetof(gfx::SceneData, projection)},
+                                     {"view", offsetof(gfx::SceneData, view)},
+                                     {"cameraWorldPosition", offsetof(gfx::SceneData, cameraWorldPosition)},
+                                     {"numLights", offsetof(gfx::SceneData, numLights)},
+                                     {"lights", offsetof(gfx::SceneData, lights)},
+                                     {"vertsPtr", offsetof(gfx::SceneData, vertsPtr)},
+                                     {"drawInfoPtr", offsetof(gfx::SceneData, drawInfoPtr)},
+                                     {"modeldataPtr", offsetof(gfx::SceneData, modeldataPtr)}});
+
+            valid &= validateStruct(fieldStruct(scene, "lights"), "Light", sizeof(gfx::Light),
+                                    {{"position", offsetof(gfx::Light, position)},
+                                     {"intensity", offsetof(gfx::Light, intensity)},
+                                     {"color", offsetof(gfx::Light, color)},
+                                     {"range", offsetof(gfx::Light, range)},
+                                     {"direction", offsetof(gfx::Light, direction)},
+                                     {"type", offsetof(gfx::Light, type)}});
+
+            valid &= validateStruct(fieldStruct(scene, "vertsPtr"), "VertexFull", sizeof(gfx::VertexFull),
+                                    {{"pos", offsetof(gfx::VertexFull, pos)},
+                                     {"normal", offsetof(gfx::VertexFull, normal)},
+                                     {"uv", offsetof(gfx::VertexFull, uv)},
+                                     {"tangent", offsetof(gfx::VertexFull, tangent)}});
+
+            valid &= validateStruct(fieldStruct(scene, "drawInfoPtr"), "DrawInfo", sizeof(gfx::DrawInfo),
+                                    {{"indexCount", offsetof(gfx::DrawInfo, indexCount)},
+                                     {"instanceCount", offsetof(gfx::DrawInfo, instanceCount)},
+                                     {"firstIndex", offsetof(gfx::DrawInfo, firstIndex)},
+                                     {"vertexOffset", offsetof(gfx::DrawInfo, vertexOffset)},
+                                     {"firstInstance", offsetof(gfx::DrawInfo, firstInstance)}});
+
+            valid &= validateStruct(modeldata, "Modeldata", sizeof(gfx::Modeldata),
+                                    {{"worldMatrix", offsetof(gfx::Modeldata, worldMatrix)},
+                                     {"normalMatrix", offsetof(gfx::Modeldata, normalMatrix)},
+                                     {"material", offsetof(gfx::Modeldata, material)},
+                                     {"vertFormat", offsetof(gfx::Modeldata, vertFormat)},
+                                     {"materialId", offsetof(gfx::Modeldata, materialId)}});
+
+            valid &= validateStruct(material, "Material", sizeof(gfx::Material),
+                                    {{"metallicRoughness", offsetof(gfx::Material, pbr)},
+                                     {"normal", offsetof(gfx::Material, normal)},
+                                     {"occlusion", offsetof(gfx::Material, occlusion)},
+                                     {"emissive", offsetof(gfx::Material, emissive)}});
+
+            valid &= validateStruct(fieldStruct(material, "metallicRoughness"), "MetallicRoughnessMaterial", sizeof(gfx::MetallicRoughnessMaterial),
+                                    {{"baseColorFactor", offsetof(gfx::MetallicRoughnessMaterial, baseColorFactor)},
+                                     {"baseColorTextureIndex", offsetof(gfx::MetallicRoughnessMaterial, baseColorTextureIndex)},
+                                     {"baseColorTextureCoordinate", offsetof(gfx::MetallicRoughnessMaterial, baseColorTextureCoordinate)},
+                                     {"metallicRoughnessTextureIndex", offsetof(gfx::MetallicRoughnessMaterial, metallicRoughnessTextureIndex)},
+                                     {"metallicRoughtnessTextureCoordinate", offsetof(gfx::MetallicRoughnessMaterial, metallicRoughtnessTextureCoordinate)},
+                                     {"metallicFactor", offsetof(gfx::MetallicRoughnessMaterial, metallicFactor)},
+                                     {"roughnessFactor", offsetof(gfx::MetallicRoughnessMaterial, roughnessFactor)}});
+
+            valid &= validateStruct(fieldStruct(material, "normal"), "NormalMaterial", sizeof(gfx::NormalMaterial),
+                                    {{"normalTextureIndex", offsetof(gfx::NormalMaterial, normalTextureIndex)},
+                                     {"normalTextureCoordinate", offsetof(gfx::NormalMaterial, normalTextureCoordinate)},
+                                     {"scale", offsetof(gfx::NormalMaterial, scale)}});
+
+            valid &= validateStruct(fieldStruct(material, "occlusion"), "OcclusionMaterial", sizeof(gfx::OcclusionMaterial),
+                                    {{"occlusionTextureIndex", offsetof(gfx::OcclusionMaterial, occlusionTextureIndex)},
+                                     {"occlusionTextureCoordinate", offsetof(gfx::OcclusionMaterial, occlusionTextureCoordinate)},
+                                     {"strength", offsetof(gfx::OcclusionMaterial, strength)}});
+
+            valid &= validateStruct(fieldStruct(material, "emissive"), "EmissiveMaterial", sizeof(gfx::EmissiveMaterial),
+                                    {{"emissiveTextureIndex", offsetof(gfx::EmissiveMaterial, emissiveTextureIndex)},
+                                     {"emissiveTextureCoordinate", offsetof(gfx::EmissiveMaterial, emissiveTextureCoordinate)},
+                                     {"emissiveFactor", offsetof(gfx::EmissiveMaterial, emissiveFactor)}});
+
+            return valid;
         }
     }
 
@@ -269,6 +344,8 @@ namespace rasm
                 return {};
             }
         }
+
+        assert(validateRasmStructs(linkedProgram->getLayout()) && "C++ structs must match shaders/lib/core.slang");
 
         constexpr SlangInt targetIndex = 0;
 

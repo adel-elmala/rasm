@@ -4,6 +4,8 @@
 #include "core/utils.h"
 #include "rhi/vulkan/vulkanTypes.h"
 
+#include "tracy/Tracy.hpp"
+
 #include <cstddef>
 #include <cstdlib>
 #include <variant>
@@ -190,6 +192,9 @@ namespace rasm
       return cachedScene->second;
     }
 
+    // Below the cache lookup, which runs every frame: this zone marks real preparations.
+    ZoneScoped;
+
     auto &sceneRef = registery.scenes[scene.index];
 
     // find all meshes associated with the entities in the scene and compute the total byte size required for them.
@@ -303,6 +308,8 @@ namespace rasm
     uint32_t IndexOffset = 0;
     uint32_t VertexOffset = 0;
 
+    ZoneNamedN(uploadZone, "uploadScene", true);
+
     for (const auto &draw : sceneDraws)
     {
       auto nVertices = draw.geometry->vertices.size();
@@ -362,6 +369,8 @@ namespace rasm
 
   void Engine::updateUniforms(const PreparedScene &preparedScene)
   {
+    ZoneScoped;
+
     size_t modelBufferOffset = 0;
 
     for (const auto &[EntityHandle, gltfTransform] : preparedScene.modelUniforms)

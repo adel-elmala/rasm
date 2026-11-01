@@ -266,7 +266,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 
 **D15 — Hard-coded limits** are spread across headers (see [architecture.md §10](architecture.md#10-compile-time-limits)). Move them into `EngineConfig`, or grow the containers dynamically. Size GPU tables from the config.
 
-**D16 — Profiling.** Tracy is linked publicly, but there are no zones, no frame marks and no GPU timestamps. Also, the VRAM check in `prepareScene` compares host-visible allocations against the device-local budget.
+**D16 — Profiling.** *Partly resolved:* the frame loop, `prepareScene`, uploads, submit and present now have Tracy zones and a frame mark, with the client in on-demand mode. Still open: Tracy is linked publicly, there are no GPU timestamps, nothing turns Tracy off (every build listens on TCP 8086 on all interfaces, which a shipped game must not do), and the VRAM check in `prepareScene` compares host-visible allocations against the device-local budget.
 
 **D17 — No tests and no CI.** Pure-CPU pieces such as handle pools, desc hashing, glTF import, camera math and render-graph sorting are easy to unit-test. Rendering can be covered with headless golden-image tests once offscreen rendering exists.
 
@@ -315,7 +315,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
   - The model-matrix composition appears twice, in `prepareScene` and `updateUniforms`; `Transform` should have a `toMatrix()` instead.
   - The glTF index-reading loop appears twice.
 - **C5 — Copies instead of references.** `auto mesh = registery.meshes[...]`, `auto entity = ...`, `auto _scene = ...`.
-- **C6 — An unused check.** `validateRasmStructs` exists but is never called. Call it after compiling the uber shader in debug builds.
+- **C6 — An unused check.** *Resolved:* `validateRasmStructs` was never called because its sizes did not match. It asked `ProgramLayout::getTypeLayout` for the layout, and no `LayoutRules` value selects the layout of data behind a pointer, so it reported std140/std430 padding (`Modeldata` 240 bytes instead of 188). It now walks `pc` -> `scene` -> the pointer fields, which agrees with the `Offset` decorations in the SPIR-V, and asserts sizes and field offsets after linking any shader that uses `SceneData`.
 - **C7 — A misplaced define.** *Resolved in the folder-layout change:* the ineffective `VMA_VULKAN_VERSION` define (it came after `vk_mem_alloc.h` was already included) was dropped. VMA's default, derived from the Vulkan headers, is the same 1004000 for every translation unit. If you ever need to pin it, set it in CMake.
 - **C8 — Header-level objects.** `const static std::unordered_set<std::string>` lives in `types.h`, which makes one copy per translation unit and runs static initializers. Make it `inline constexpr` arrays or move it into the `.cpp`.
 - **C9 — A fragile material layout.** `Material::params` is a flat `float[]` indexed by hand-maintained `PbrParam` offsets, and `name` is a `const char*`. Use a typed `PbrMaterialParams` struct instead.
