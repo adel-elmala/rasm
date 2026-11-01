@@ -32,7 +32,7 @@ flowchart TD
 | Render context | `src/rhi/renderContext.cpp` | Backend-agnostic(ish) API over handles; owns the handle → backend-object maps and the creation-dedup caches. |
 | Vulkan backend | `src/rhi/vulkan/` | `VulkanContext`: instance/device/swapchain setup, VMA allocations, pipelines, barriers, submission. `vulkanTypes.h`: Vulkan handle structs. |
 | Third-party implementations | `src/thirdparty_impl.cpp` | The single translation unit with the `*_IMPLEMENTATION` defines (stb, tinygltf, tinyobjloader, VMA). |
-| Shaders | `shaders/lib/`, `shaders/passes/` | `lib/`: shared modules: GPU structs (`core.slang`), PBR BRDF (`pbr.slang`). `passes/`: entry shaders: the uber shader (`rasm.slang`) and the legacy shader (`basic.slang`). |
+| Shaders | `shaders/lib/`, `shaders/passes/` | `lib/`: shared modules: GPU structs (`core.slang`), PBR BRDF (`pbr.slang`), unlit shading (`unlit.slang`). `passes/`: entry shaders: the uber shader (`rasm.slang`) and the legacy shader (`basic.slang`). |
 
 `src/` is currently also a *public* include directory, because public headers still include private ones (`renderer/shaderCompiler.h`, `renderer/uberMaterialTypes.h`, `rhi/vulkan/*`). Removing that is `D2`.
 
@@ -118,13 +118,15 @@ Notes:
    |---|---|---|
    | `megaVertexBuffer` | STORAGE | All `Vertex`es of every sub-mesh, back to back. |
    | `megaIndexBuffer` | INDEX | All indices, *local* to their sub-mesh. |
-   | `megaModelDataBuffer[2]` | STORAGE | One `gfx::Modeldata` per draw: world matrix, normal matrix, material. |
+   | `megaModelDataBuffer[2]` | STORAGE | One `gfx::Modeldata` per draw: world matrix, normal matrix, material, material id. |
    | `drawInfoBuffer` | INDIRECT | One `gfx::DrawInfo` (`VkDrawIndexedIndirectCommand` layout) per draw. |
    | `sceneDataBuffer[2]` | STORAGE | One `gfx::SceneData` per frame slot. |
-3. **Writes draw records.** For each sub-mesh i it sets `DrawInfo{indexCount, 1, firstIndex = running index offset, vertexOffset = running vertex offset, 0}`. `Modeldata[i]` gets the entity transform × node transform and the converted `gfx::Material`.
+3. **Writes draw records.** For each sub-mesh i it sets `DrawInfo{indexCount, 1, firstIndex = running index offset, vertexOffset = running vertex offset, 0}`. `Modeldata[i]` gets the entity transform × node transform, the converted `gfx::Material` and the `gfx::MaterialId`.
 4. **Builds the uber pipeline.** It compiles `shaders/passes/rasm.slang` (`vertMain`/`fragMain`) and creates a graphics pipeline with an empty vertex-input state (vertex pulling) and the bindless set layout.
 
 Every frame, `updateUniforms` rewrites only the matrix part of each `Modeldata` (`offsetof(Modeldata, material)` bytes) from the current entity transforms.
+
+A scene with no geometry returns an empty `PreparedScene` before any buffer is allocated. It is not cached, so entities added later are picked up. `render2` skips the draw when the prepared scene has no pipeline, and the frame presents the clear color.
 
 ### GPU data chain
 
@@ -133,18 +135,18 @@ flowchart LR
     PC["push constant<br/>SceneData* (8 bytes)"] --> SD["SceneData<br/>projection, view, camera pos,<br/>numLights, lights[8]"]
     SD -- vertsPtr --> V["VertexFull[]<br/>(mega vertex buffer)"]
     SD -- drawInfoPtr --> DI["DrawInfo[]"]
-    SD -- modeldataPtr --> MD["Modeldata[]<br/>world, normal matrix, Material"]
+    SD -- modeldataPtr --> MD["Modeldata[]<br/>world, normal matrix, Material, MaterialId"]
     MD -- texture indices --> T["gTextures[] (set 0, binding 0)<br/>bindless Sampler2D array"]
 ```
 
 In `vertMain`:
 - `drawID` comes from the SPIR-V `DrawIndex` built-in, read with `spirv_asm` in `core.slang`.
 - Slang lowers `SV_VertexID` to `VertexIndex − BaseVertex`, so the shader adds `drawInfoPtr[drawID].vertexOffset` back before indexing `vertsPtr`.
-- `fragMain` reads `Modeldata[drawID].material` and calls `PBR()` in `pbr.slang`.
+- `fragMain` reads `Modeldata[drawID]` and branches on its `materialId`: `MaterialId.UNLIT` calls `Unlit()` in `unlit.slang`, and everything else calls `PBR()` in `pbr.slang`.
 
 ### CPU/GPU struct contract
 
-The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `shaders/lib/core.slang` and `pbr.slang` must match byte for byte under **scalar layout**. The C++ side `static_assert`s the sizes and key offsets (`SceneData` = 552 bytes, `Modeldata` = 184 bytes, …), and `rasm::Vertex` is asserted equal to `gfx::VertexFull`. When you change a struct, change both sides and the asserts. `ShaderCompiler::validateRasmStructs` could check the sizes against Slang reflection at runtime, but nothing calls it yet.
+The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `shaders/lib/core.slang` must match byte for byte under **scalar layout**. The C++ side `static_assert`s the sizes and key offsets (`SceneData` = 552 bytes, `Modeldata` = 188 bytes, …), and `rasm::Vertex` is asserted equal to `gfx::VertexFull`. When you change a struct, change both sides and the asserts. `ShaderCompiler::validateRasmStructs` could check the sizes against Slang reflection at runtime, but nothing calls it yet.
 
 ## 5. Materials and textures
 
@@ -159,7 +161,8 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
   - the full mip chain is generated on the CPU with `stb_image_resize2`, sRGB-aware for sRGB formats;
   - every texture gets its own `VkSampler` (linear, repeat, 8× anisotropy).
 - **Color spaces.** Base color and emissive are uploaded as `R8G8B8A8_SRGB`. Normal, metallic-roughness and occlusion maps are uploaded as `R8G8B8A8_UNORM`.
-- `MaterialType` selects a shader source file for the legacy path: `BASIC` → `basic.slang`, `PBR` → `rasm.slang`, `UNLIT` → `unlit.slang` (missing, `B9`), `SHADER` → a user-provided source. The GPU-driven path ignores `Material::shader` and always uses the uber shader.
+- `MaterialType` selects a shader source file for the legacy path: `BASIC` and `UNLIT` → `basic.slang`, `PBR` → `rasm.slang`, `SHADER` → a user-provided source.
+- The GPU-driven path ignores `Material::shader` and always uses the uber shader. To add a shading path, add a value to `gfx::MaterialId` and its mirror in `core.slang`, map it in `getGfxMaterialId` (`scene.cpp`), and branch on it in `fragMain`. Today's mapping is `BASIC` and `UNLIT` → `MaterialId::UNLIT` (base color only, no tone mapping) and `PBR` and `SHADER` → `MaterialId::PBR`.
 
 ## 6. Asset import
 
@@ -167,7 +170,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
   - **OBJ** (tinyobjloader) is de-indexed into one vertex per index. Y and V are flipped per vertex.
   - **glTF/GLB** (tinygltf) goes through `processGLTF`, which walks the default scene's node tree from a root transform of `scale(1, −1, 1)` (the Y flip). For each mesh node, `extractGLTFRaws` reads `POSITION`, `NORMAL`, `TANGENT` and `TEXCOORD_0..2` and the indices through one validated accessor reader. That reader handles strides, sparse accessors and quantized or normalized components. Strips and fans become triangle lists, primitives without indices get generated ones, and point and line primitives are skipped. Missing normals are computed as smooth normals, and in that case `TANGENT` is ignored, as the glTF spec requires. It calls `loadMaterial` for each primitive.
 - **Tangents and normal maps.** `Vertex::tangent` holds the glTF tangent with w = ±1, or w = 0 when the mesh has none. The vertex shader transforms it with the model matrix and multiplies w by the sign of the matrix's determinant, so mirroring transforms such as the root Y flip keep the bitangent right. `getNormalFromMap` uses the authored frame (B = cross(N, T)·w) when w ≠ 0. Otherwise it reconstructs a frame from UV derivatives, with B pointing toward decreasing v (glTF normal maps store +Y as up in the image).
-- `loadMaterial` maps a glTF PBR material to `rasm::Material`. It expands images to RGBA8 and uploads each texture. `processGLTF` creates a `GltfImportCache` for each import and passes it down to `loadMaterial`. It caches materials by material index and textures by image index and color space, so primitives that share a material share one `MaterialHandle` and one set of bindless slots.
+- `loadMaterial` maps a glTF PBR material to `rasm::Material`. Materials with `KHR_materials_unlit` become `MaterialType::UNLIT`. It expands images to RGBA8 and uploads each texture. `processGLTF` creates a `GltfImportCache` for each import and passes it down to `loadMaterial`. It caches materials by material index and textures by image index and color space, so primitives that share a material share one `MaterialHandle` and one set of bindless slots.
 - A primitive without a material uses its entity's material. `getMaterial` resolves an invalid handle to `defaultMaterial`, the glTF default material (white, metallic 1, roughness 1) created at startup.
 - The whole `tinygltf::Model`, including decoded images, is kept in the `Mesh` (`GLTFRaw::model`). CPU vertex data is never released.
 

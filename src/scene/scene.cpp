@@ -10,6 +10,21 @@
 
 namespace rasm
 {
+  namespace
+  {
+    gfx::MaterialId getGfxMaterialId(MaterialType type)
+    {
+      switch (type)
+      {
+      case MaterialType::BASIC: // basic.slang is a plain, unlit texture lookup
+      case MaterialType::UNLIT:
+        return gfx::MaterialId::UNLIT;
+      default: // The uber shader cannot run a custom SHADER, so it falls back to PBR.
+        return gfx::MaterialId::PBR;
+      }
+    }
+  }
+
   // The mega vertex buffer is written with Vertex and read in the shader as gfx::VertexFull
   // (scalar layout); the two must not drift apart.
   static_assert(sizeof(Vertex) == sizeof(gfx::VertexFull), "Vertex must match the shader's VertexFull");
@@ -165,6 +180,10 @@ namespace rasm
       }
     }
 
+    // Nothing to draw: zero-sized buffers are invalid, and staying uncached lets entities added later show up.
+    if (totalVertexBufferSize == 0 || totalIndexBufferSize == 0)
+      return PreparedScene{};
+
     // allocate one mega vertex-buffer and index-buffer to hold all the mesh data for the scene.
     queryMemoryStats();
     if (profiler.gpu_memory_stats.vram_usage + totalVertexBufferSize + totalIndexBufferSize > profiler.gpu_memory_stats.vram_budget)
@@ -275,7 +294,9 @@ namespace rasm
         modelData.vertFormat = gfx::VertexFormat::Full;
         // Primitives without a material use the entity's; getMaterial resolves an invalid one to the default material.
         auto material = subGLTF.material.isValid() ? subGLTF.material : sceneEntity.material;
-        modelData.material = convertToGfxMaterial(getMaterial(material));
+        const auto &materialRef = getMaterial(material);
+        modelData.material = convertToGfxMaterial(materialRef);
+        modelData.materialId = getGfxMaterialId(materialRef.type);
 
         for (auto buffer : preparedScene.megaModelDataBuffer)
           ctx.fillBuffer(buffer, &modelData, sizeof(modelData), modelBufferOffset);

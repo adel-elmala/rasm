@@ -60,8 +60,9 @@ namespace rasm
             material.shader = createShader(readFile("./shaders/passes/rasm.slang"));
             break;
         case MaterialType::UNLIT:
+            // render2 shades it with the uber shader's Unlit path; basic.slang is the legacy path's equivalent.
             material.name = "unlit";
-            material.shader = createShader(readFile("./shaders/passes/unlit.slang"));
+            material.shader = createShader(readFile("./shaders/passes/basic.slang"));
             break;
         case MaterialType::SHADER:
             material.name = "shader";
@@ -77,31 +78,6 @@ namespace rasm
 
         return handle;
     }
-
-#if 0 
-    std::vector<MaterialHandle> Engine::loadMaterials(MeshHandle meshHandle)
-    {
-        if (!meshHandle.isValid() || meshHandle.index >= registery.meshes.size())
-            return {}; 
-
-        const auto &mesh = registery.meshes[meshHandle.index];
-        if (mesh.type != Mesh::MeshType::GLTF)
-        {
-            spdlog::warn("Mesh is not of type GLTF.");
-            return {};
-        }
-
-        const auto &GLTFraw = std::get<GLTFRaw>(mesh.data);
-
-        std::vector<MaterialHandle> handles;
-        GltfImportCache cache;
-        for (int i = 0; i < GLTFraw.subGltfRaws.size(); ++i)
-        {
-            handles.push_back(loadMaterial(GLTFraw.model, i, cache));
-        }
-        return handles;
-    }
-#endif
 
     MaterialHandle Engine::loadMaterial(const tinygltf::Model &model, int materialIndex, GltfImportCache &cache)
     {
@@ -122,6 +98,9 @@ namespace rasm
         auto mat = Material{.handle = handle, .type = MaterialType::PBR, .textures = {}, .shader = {}};
 
         const tinygltf::Material *material = &model.materials[materialIndex];
+
+        if (material->extensions.count("KHR_materials_unlit") != 0)
+            mat.type = MaterialType::UNLIT;
 
         // glTF lets each texture pick its own TEXCOORD_n set. The vertex data carries
         // MAX_VERTEX_UV_SETS sets; anything beyond that is out of our support for now.

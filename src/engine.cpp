@@ -549,6 +549,14 @@ namespace rasm
 
         auto preparedScene = prepareScene(scene);
 
+        // An empty scene (or a failed preparation) has no pipeline to bind; just present the cleared frame.
+        if (!preparedScene.uberMaterialPipeline.isValid())
+        {
+            endPass();
+            endFrame();
+            return;
+        }
+
         auto &currentFrame = frameResources[frameCount];
         auto commandBuffer = currentFrame.commandBuffer;
 

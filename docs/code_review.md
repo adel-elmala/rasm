@@ -40,7 +40,7 @@ src/
     vulkan/                     vulkanContext.{h,cpp}, vulkanTypes.h
   thirdparty_impl.cpp           the only *_IMPLEMENTATION defines
 shaders/
-  lib/                          core.slang (GPU structs), pbr.slang
+  lib/                          core.slang (GPU structs), pbr.slang, unlit.slang
   passes/                       basic.slang, rasm.slang
 examples/
   CMakeLists.txt
@@ -158,7 +158,7 @@ Next steps, in order:
 
 *Fix:* create a default material at startup and resolve invalid handles to it.
 
-**B9 — `MaterialType::UNLIT` references a missing shader.** *Confirmed.*
+**B9 — `MaterialType::UNLIT` references a missing shader.** *Fixed 2026-10-31:* `gfx::Modeldata` now carries a `MaterialId` that `fragMain` branches on, so `UNLIT` is a path in the uber shader (`Unlit()` in `unlit.slang`). The legacy path uses `basic.slang` for it. glTF materials with `KHR_materials_unlit` import as `UNLIT`. The original finding follows.
 `createMaterial(UNLIT)` reads `./shaders/passes/unlit.slang` ([material.cpp:64](../src/assets/material.cpp#L64)), which does not exist. The file read fails and later compilation fails.
 
 **B10 — The render-target path is broken.** *Confirmed.*
@@ -177,20 +177,20 @@ Next steps, in order:
 
 ### Low severity
 
-**B11** — `VulkanContext::submit` passes one `waitStages` entry while `waitSemaphoreCount = waitSemaphores.size()` ([vulkanContext.cpp:1120-1138](../src/rhi/vulkan/vulkanContext.cpp#L1120-L1138)). Waiting on more than one semaphore reads past the array. The bug is latent today, because callers pass 0 or 1 semaphores.
+**B11** — *Fixed 2026-10-31:* `submit` builds one wait stage per wait semaphore. The original finding follows. `VulkanContext::submit` passes one `waitStages` entry while `waitSemaphoreCount = waitSemaphores.size()` ([vulkanContext.cpp:1120-1138](../src/rhi/vulkan/vulkanContext.cpp#L1120-L1138)). Waiting on more than one semaphore reads past the array. The bug is latent today, because callers pass 0 or 1 semaphores.
 
-**B12** — `ShaderCompiler::getTargetDesc` allocates `new slang::CompilerOptionEntry[1]` and never frees it ([shaderCompiler.cpp:456-458](../src/renderer/shaderCompiler.cpp#L456-L458)).
+**B12** — *Fixed 2026-10-31:* the SPIR-V options are now a static array. The original finding follows. `ShaderCompiler::getTargetDesc` allocates `new slang::CompilerOptionEntry[1]` and never frees it ([shaderCompiler.cpp:456-458](../src/renderer/shaderCompiler.cpp#L456-L458)).
 
 **B13** — Handle indices are consumed before validation and are never reused.
 - `loadMesh` takes a handle before parsing the file ([mesh.cpp:58](../src/assets/mesh.cpp#L58)), so failed loads burn slots.
 - With `MAX_MESHES = 8` and indices starting at 1, only 7 meshes can be loaded in total.
 - `MAX_LIGHTS = 8` and `MAX_CAMERAS = 8` are global, not per scene.
 
-**B14** — `Engine::loadMaterials` is declared ([engine.h:56](../include/rasm/engine.h#L56)), but its definition is under `#if 0` ([material.cpp:81-103](../src/assets/material.cpp#L81-L103)), so calling it is a link error.
+**B14** — *Fixed 2026-10-31:* the declaration and the `#if 0` definition are deleted. The original finding follows. `Engine::loadMaterials` is declared ([engine.h:56](../include/rasm/engine.h#L56)), but its definition is under `#if 0` ([material.cpp:81-103](../src/assets/material.cpp#L81-L103)), so calling it is a link error.
 
-**B15** — `LightType::SPOT` is public ([light.h:15](../include/rasm/light.h#L15)), but the GPU light type has no spot variant. Spot lights are `static_cast` into value 2 and shaded as point lights.
+**B15** — *Fixed 2026-10-31:* `LightType::SPOT` is removed from the public enum. Real spot lights remain planned in the [development plan](development_plan.md). The original finding follows. `LightType::SPOT` is public ([light.h:15](../include/rasm/light.h#L15)), but the GPU light type has no spot variant. Spot lights are `static_cast` into value 2 and shaded as point lights.
 
-**B16** — For an empty scene, `prepareScene` requests zero-sized buffers. Creation fails, the result is not cached, and every frame retries and logs errors. Then `render2` binds an invalid pipeline ([scene.cpp:199-233](../src/scene/scene.cpp#L199-L233)).
+**B16** — *Fixed 2026-10-31:* `prepareScene` returns an empty, uncached `PreparedScene` when there is no geometry, so entities added later still appear. `render2` presents the cleared frame when the prepared scene has no pipeline. The original finding follows. For an empty scene, `prepareScene` requests zero-sized buffers. Creation fails, the result is not cached, and every frame retries and logs errors. Then `render2` binds an invalid pipeline ([scene.cpp:199-233](../src/scene/scene.cpp#L199-L233)).
 
 **B17** — *Fixed 2026-10-27:* `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` triggers recreation. `Window` has `pixelWidth`/`pixelHeight` (the swapchain's desired extent) next to the logical `width`/`height` used for mouse input. Depth textures, viewport, scissor and camera aspect come from the swapchain extent (`Swapchain::width`/`height`). The original finding follows. Resize uses `SDL_EVENT_WINDOW_RESIZED`, which reports logical size ([window.cpp:116-122](../src/platform/window.cpp#L116-L122)). The depth texture and viewport use `mainWindow` size, while the swapchain extent comes from the surface. On scaled or HiDPI displays they can disagree. Use `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` / `SDL_GetWindowSizeInPixels`, and size everything from the swapchain extent. *Likely.*
 
@@ -304,7 +304,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 - **C2 — Formatting.** `scene.cpp` uses 2-space indentation while everything else uses 4, and there is no `.clang-format` in the repo.
 - **C3 — Dead or placeholder code.**
   - `setUniform` (a no-op), `render(scene, camera, renderTarget)`, `begin/endOffscreenFrame`, `CompiledScene`.
-  - `#if 0 loadMaterials`, the empty mesh loop in `~Engine`, the glTF branch of `getMeshByteSize`.
+  - The empty mesh loop in `~Engine`, the glTF branch of `getMeshByteSize`.
   - `VertexFormat::PosOnly`, `MAX_DESCRIPTOR_TYPES`, `compile-shaders.bat`.
   - The "Future API sketch (not implemented yet)" header in `01_render_graph`, which is out of date.
 - **C4 — Duplication.**

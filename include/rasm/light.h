@@ -11,8 +11,7 @@ namespace rasm
     enum class LightType
     {
         DIRECTIONAL,
-        POINT,
-        SPOT
+        POINT
     };
     
     struct Light 

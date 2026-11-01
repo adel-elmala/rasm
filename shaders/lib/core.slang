@@ -1,9 +1,14 @@
 // clang-format off
 #pragma once
 
-#include "pbr.slang"
+// Constants
+static const uint   MAX_LIGHTS          = 8;
+static const uint   INVALID_TEXTURE_INDEX = 0xFFFFFFFF;
 
 enum VertexFormat : uint32_t { Full, PosOnly };
+
+// Selects how fragMain shades a model. Must match rasm::gfx::MaterialId.
+enum class MaterialId : uint32_t { PBR, UNLIT };
 
 // Must match rasm::Vertex / rasm::gfx::VertexFull (scalar layout). Unused UV sets are zero.
 // tangent.w is the bitangent sign (±1), or 0 when the mesh has no tangents.
@@ -21,12 +26,68 @@ struct DrawInfo
     uint32_t        firstInstance;
 };
 
+enum LightType : uint32_t { Directional , Point };
+
+// Must match rasm::gfx::Light exactly (scalar layout): the lights array sits between numLights and
+// the buffer device addresses in SceneData, so any size drift shifts vertsPtr/drawInfoPtr/
+// modeldataPtr and the shader dereferences a garbage address (device lost).
+struct Light
+{
+    float3      position;
+    float       intensity;
+    float3      color;
+    float       range;      // Only used for point lights
+    float3      direction;  // Only used for directional lights
+    LightType   type;
+};
+
+struct MetallicRoughnessMaterial
+{
+    float3      baseColorFactor;
+    uint32_t    baseColorTextureIndex;
+    uint32_t    baseColorTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
+    uint32_t    metallicRoughnessTextureIndex;
+    uint32_t    metallicRoughtnessTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
+    float       metallicFactor;
+    float       roughnessFactor;
+};
+
+struct NormalMaterial
+{
+    uint32_t    normalTextureIndex;
+    uint32_t    normalTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
+    float       scale;
+};
+
+struct OcclusionMaterial
+{
+    uint32_t    occlusionTextureIndex;
+    uint32_t    occlusionTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
+    float       strength;
+};
+
+struct EmissiveMaterial
+{
+    uint32_t    emissiveTextureIndex;
+    uint32_t    emissiveTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
+    float3      emissiveFactor;
+};
+
+struct Material
+{
+    MetallicRoughnessMaterial   metallicRoughness;
+    NormalMaterial              normal;
+    OcclusionMaterial           occlusion;
+    EmissiveMaterial            emissive;
+};
+
 struct Modeldata
 {
     float4x4        worldMatrix;
     float3x3        normalMatrix;
     Material        material;
     VertexFormat    vertFormat;
+    MaterialId      materialId;
 };
 
 struct SceneData
@@ -58,6 +119,11 @@ uint getDrawIndex()
         OpCapability DrawParameters;
         result:$$uint = OpLoad builtin(DrawIndex:uint);
     };
+}
+
+bool hasTexture(uint textureIndex)
+{
+    return textureIndex != INVALID_TEXTURE_INDEX;
 }
 
 // Pick the interpolated UV set a material texture asked for (glTF TEXCOORD_n). Sets we do not

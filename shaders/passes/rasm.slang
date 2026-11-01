@@ -1,6 +1,7 @@
 // clang-format off
-#include "pbr.slang"
 #include "core.slang"
+#include "pbr.slang"
+#include "unlit.slang"
 
 struct VSInput
 {
@@ -64,6 +65,9 @@ Sampler2D gTextures[];
 float4 fragMain(VSOutput input) : SV_TARGET
 {
     Material material = pc.scene->modeldataPtr[input.drawID].material;
+
+    if (pc.scene->modeldataPtr[input.drawID].materialId == MaterialId.UNLIT)
+        return Unlit(gTextures, material, selectUV(material.metallicRoughness.baseColorTextureCoordinate, input.uv0, input.uv1, input.uv2));
 
     PBRInfo info = {};
     info.vPosition              = input.worldPosition;
