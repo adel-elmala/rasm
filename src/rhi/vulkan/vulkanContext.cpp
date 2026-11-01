@@ -318,14 +318,10 @@ namespace rasm::gfx
 
             switch (usage)
             {
-            case BufferUsage::VERTEX:
-                return flags | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
             case BufferUsage::INDEX:
                 return flags | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
             case BufferUsage::INDIRECT:
                 return flags | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
-            case BufferUsage::VERTEXINDEX:
-                return flags | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
             case BufferUsage::UNIFORM:
                 return flags | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
             case BufferUsage::STORAGE:
@@ -463,8 +459,6 @@ namespace rasm::gfx
                 return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
             case TextureUsage::SAMPLED_COLOR_ATTACHMENT:
                 return VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-            case TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT:
-                return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
             case TextureUsage::TRANSIENT_ATTACHMENT:
                 return VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
             case TextureUsage::INPUT_ATTACHMENT:
@@ -484,9 +478,6 @@ namespace rasm::gfx
                 return VK_IMAGE_ASPECT_COLOR_BIT;
             case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
                 return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-            case TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT:
-                // sampled views may only reference a single aspect
-                return VK_IMAGE_ASPECT_DEPTH_BIT;
             default:
                 return 0;
             }
@@ -867,8 +858,7 @@ namespace rasm::gfx
         // create a sampler for the texture
         VkSampler sampler = VK_NULL_HANDLE;
         if (desc.texture.usage == TextureUsage::SAMPLED ||
-            desc.texture.usage == TextureUsage::SAMPLED_COLOR_ATTACHMENT ||
-            desc.texture.usage == TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT)
+            desc.texture.usage == TextureUsage::SAMPLED_COLOR_ATTACHMENT)
         {
 
             VkSamplerCreateInfo samplerInfo = {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -949,33 +939,10 @@ namespace rasm::gfx
             return {};
         }
 
-        auto vertexPulling = desc.pipeline.vertexInputLayout.vertexPulling;
-
-        VkVertexInputBindingDescription vertexBinding{
-            .binding = desc.pipeline.vertexInputLayout.binding,
-            .stride = desc.pipeline.vertexInputLayout.stride,
-            .inputRate = desc.pipeline.vertexInputLayout.perInstance ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX};
-
-        std::vector<VkVertexInputAttributeDescription> vertexAttributes;
-        for (const auto &attr : desc.pipeline.vertexInputLayout.attributes)
-        {
-            if (!attr.used)
-                continue;
-
-            vertexAttributes.push_back({.location = attr.location,
-                                        .binding = attr.binding,
-                                        .format = _to_vk_format(attr.format),
-                                        .offset = attr.offset});
-        }
-
         // With vertex pulling the shader fetches vertices itself, so use an empty vertex input state.
         // This is core Vulkan and avoids VK_EXT_vertex_input_dynamic_state, which MoltenVK doesn't support.
         VkPipelineVertexInputStateCreateInfo vertexInputInfo = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-            .vertexBindingDescriptionCount = vertexPulling ? 0u : 1u,
-            .pVertexBindingDescriptions = vertexPulling ? nullptr : &vertexBinding,
-            .vertexAttributeDescriptionCount = vertexPulling ? 0u : static_cast<uint32_t>(vertexAttributes.size()),
-            .pVertexAttributeDescriptions = vertexPulling ? nullptr : vertexAttributes.data()};
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
 
         VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -1436,51 +1403,70 @@ namespace rasm::gfx
             }
         };
 
-        oldLayout = usageToLayout(oldUsage);
-        newLayout = usageToLayout(newUsage);
+        // What the barrier waits for depends only on how the image was used before.
+        auto getSrcScope = [](TextureUsage oldUsage, VkAccessFlags2 &srcAccessMask, VkPipelineStageFlags2 &srcStageMask)
+        {
+            switch (oldUsage)
+            {
+            case TextureUsage::UNKNOWN:
+                // The contents are discarded, but the last use still has to finish, and it could be any of these.
+                // The color output stage also chains the barrier to the acquire semaphore of a swapchain image.
+                srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR |
+                               VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                return true;
+            case TextureUsage::COLOR_ATTACHMENT:
+                srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                return true;
+            case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
+                srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR;
+                srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                return true;
+            case TextureUsage::SAMPLED:
+                // Reads make nothing available, so only their stage is waited on.
+                srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                srcAccessMask = VK_ACCESS_2_NONE;
+                return true;
+            default:
+                spdlog::error("Unsupported old texture usage for layout transition.");
+                return false;
+            }
+        };
 
-        auto getAccessMaskAndStage = [](TextureUsage newUsage, VkAccessFlags2 &srcAccessMask, VkAccessFlags2 &dstAccessMask, VkPipelineStageFlags2 &srcStageMask, VkPipelineStageFlags2 &dstStageMask)
+        auto getDstScope = [](TextureUsage newUsage, VkAccessFlags2 &dstAccessMask, VkPipelineStageFlags2 &dstStageMask)
         {
             switch (newUsage)
             {
             case TextureUsage::COLOR_ATTACHMENT:
-                srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
                 dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-
-                srcAccessMask = VK_ACCESS_2_NONE;
                 dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                break;
+                return true;
             case TextureUsage::PRESENT_SRC:
-                srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
                 dstStageMask = VK_PIPELINE_STAGE_2_NONE;
-
-                srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
                 dstAccessMask = VK_ACCESS_2_NONE;
-                break;
+                return true;
             case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
-                srcStageMask = VK_PIPELINE_STAGE_2_NONE;
                 dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR;
-
-                srcAccessMask = VK_ACCESS_2_NONE;
                 dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                break;
+                return true;
             case TextureUsage::SAMPLED:
-                srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
                 dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-
-                srcAccessMask = VK_ACCESS_2_NONE;
                 dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                break;
+                return true;
             default:
                 spdlog::error("Unsupported new texture usage for layout transition.");
-                break;
+                return false;
             }
         };
 
-        getAccessMaskAndStage(newUsage, srcAccessMask, dstAccessMask, srcStageMask, dstStageMask);
+        if (!getSrcScope(oldUsage, srcAccessMask, srcStageMask) || !getDstScope(newUsage, dstAccessMask, dstStageMask))
+            return false;
 
-        VkImageAspectFlags aspectMask = (image.desc.texture.usage == TextureUsage::DEPTH_STENCIL_ATTACHMENT ||
-                                         image.desc.texture.usage == TextureUsage::SAMPLED_DEPTH_STENCIL_ATTACHMENT)
+        oldLayout = usageToLayout(oldUsage);
+        newLayout = usageToLayout(newUsage);
+
+        VkImageAspectFlags aspectMask = image.desc.texture.usage == TextureUsage::DEPTH_STENCIL_ATTACHMENT
                                             ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
                                             : VK_IMAGE_ASPECT_COLOR_BIT;
         VkImageMemoryBarrier2 barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
@@ -1541,7 +1527,7 @@ namespace rasm::gfx
         return true;
     }
 
-    bool VulkanContext::beginRendering(const CommandBufferVKHandle &commandBuffer, const TextureVKHandle &colorAttachment, const TextureVKHandle &depthAttachment)
+    bool VulkanContext::beginRendering(const CommandBufferVKHandle &commandBuffer, const TextureVKHandle &colorAttachment, const TextureVKHandle &depthAttachment, const glm::vec4 &clearColor)
     {
         // begin dynamic rendering
         VkRenderingAttachmentInfo colorAttachmentInfo{
@@ -1550,7 +1536,7 @@ namespace rasm::gfx
             .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue{.color{0.018f, 0.018f, 0.018f, 1.0f}}};
+            .clearValue{.color{clearColor.r, clearColor.g, clearColor.b, clearColor.a}}};
 
         VkRenderingAttachmentInfo depthAttachmentInfo{
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -1717,13 +1703,6 @@ namespace rasm::gfx
     void VulkanContext::bindPipeline(const CommandBufferVKHandle &commandBuffer, const PipelineVKHandle &pipeline)
     {
         vkCmdBindPipeline(commandBuffer.commandBuffer, pipeline.desc.type == ResourceType::GRAPHICS_PIPELINE ? VK_PIPELINE_BIND_POINT_GRAPHICS : VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
-    }
-
-    void VulkanContext::bindVertexBuffer(const CommandBufferVKHandle &commandBuffer, const BufferVKHandle &buffer, uint64_t offset, uint32_t binding)
-    {
-        VkBuffer vertexBuffers[] = {buffer.buffer};
-        VkDeviceSize offsets[] = {offset};
-        vkCmdBindVertexBuffers(commandBuffer.commandBuffer, binding, 1, vertexBuffers, offsets);
     }
 
     void VulkanContext::bindIndexBuffer(const CommandBufferVKHandle &commandBuffer, const BufferVKHandle &buffer, uint64_t offset, Format indexType)

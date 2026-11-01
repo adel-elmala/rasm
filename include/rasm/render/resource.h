@@ -21,7 +21,6 @@ namespace rasm
         COLOR_ATTACHMENT,
         DEPTH_STENCIL_ATTACHMENT,
         SAMPLED_COLOR_ATTACHMENT,
-        SAMPLED_DEPTH_STENCIL_ATTACHMENT,
         TRANSIENT_ATTACHMENT,
         INPUT_ATTACHMENT,
         PRESENT_SRC,
@@ -30,10 +29,8 @@ namespace rasm
 
     enum class BufferUsage
     {
-        VERTEX,
         INDEX,
         INDIRECT,
-        VERTEXINDEX,
         UNIFORM,
         STORAGE,
         DEVICE_ADDRESS,
@@ -81,21 +78,6 @@ namespace rasm
                 BufferUsage     usage;
                 uint64_t        size;
                 uint64_t        deviceAddress;
-                uint64_t        offset; // Offset within the buffer for index data if using a combined vertex/index buffer.
-                union {
-                    struct {
-                        uint64_t        indexCount;
-                        uint64_t        vertexCount;
-                    } vertexIndexBuffer;
-
-                    struct {
-                        uint64_t        vertexCount;
-                    } vertexBuffer;
-
-                    struct {
-                        uint64_t        indexCount;
-                    } indexBuffer;
-                };
             } buffer;
 
             // Shader-specific data
@@ -111,7 +93,6 @@ namespace rasm
             {
                 ShaderHandle                vertexShader;
                 ShaderHandle                fragmentShader;
-                VertexInputLayout           vertexInputLayout;
                 DescriptorSetLayoutHandle   descriptorSetLayout;
                 PrimitiveTopology           topology;
                 Format                      colorAttachmentFormat;
@@ -124,6 +105,7 @@ namespace rasm
                 uint32_t height;
                 Format colorFormat;
                 Format depthFormat;
+                glm::vec4 clearColor; // linear; every pass that writes the target starts from this
             } renderTarget;
 
             struct 
@@ -160,10 +142,7 @@ namespace rasm
                        texture.usage == other.texture.usage;
             case ResourceType::BUFFER:
                 return buffer.size == other.buffer.size &&
-                       buffer.usage == other.buffer.usage &&
-                       buffer.offset == other.buffer.offset &&
-                       buffer.vertexIndexBuffer.indexCount == other.buffer.vertexIndexBuffer.indexCount &&
-                       buffer.vertexIndexBuffer.vertexCount == other.buffer.vertexIndexBuffer.vertexCount;
+                       buffer.usage == other.buffer.usage;
             case ResourceType::SHADER:
                 // Compare the code itself: callers pass pointers into temporary SPIR-V blobs.
                 return shader.shaderType == other.shader.shaderType &&
@@ -173,7 +152,6 @@ namespace rasm
             case ResourceType::COMPUTE_PIPELINE:
                 return pipeline.vertexShader == other.pipeline.vertexShader &&
                        pipeline.fragmentShader == other.pipeline.fragmentShader &&
-                       pipeline.vertexInputLayout == other.pipeline.vertexInputLayout &&
                        pipeline.descriptorSetLayout == other.pipeline.descriptorSetLayout &&
                        pipeline.topology == other.pipeline.topology &&
                        pipeline.colorAttachmentFormat == other.pipeline.colorAttachmentFormat &&
@@ -182,7 +160,8 @@ namespace rasm
                 return renderTarget.width == other.renderTarget.width &&
                        renderTarget.height == other.renderTarget.height &&
                        renderTarget.colorFormat == other.renderTarget.colorFormat &&
-                       renderTarget.depthFormat == other.renderTarget.depthFormat;
+                       renderTarget.depthFormat == other.renderTarget.depthFormat &&
+                       renderTarget.clearColor == other.renderTarget.clearColor;
             case ResourceType::BINDLESS_DESCRIPTOR_SET_LAYOUT:
                 return bindlessDescriptorSetLayout.stage == other.bindlessDescriptorSetLayout.stage &&
                        bindlessDescriptorSetLayout.count == other.bindlessDescriptorSetLayout.count &&
@@ -236,10 +215,7 @@ namespace rasm
             case ResourceType::BUFFER:
                 return std::hash<std::string>()(desc.name) ^
                        std::hash<uint64_t>()(desc.buffer.size) ^
-                       std::hash<uint64_t>()(desc.buffer.offset) ^
-                       std::hash<uint64_t>()(static_cast<uint64_t>(desc.buffer.usage)) ^
-                       std::hash<uint64_t>()(desc.buffer.vertexIndexBuffer.indexCount) ^
-                       std::hash<uint64_t>()(desc.buffer.vertexIndexBuffer.vertexCount);
+                       std::hash<uint64_t>()(static_cast<uint64_t>(desc.buffer.usage));
             case ResourceType::SHADER:
                 return std::hash<std::string>()(desc.name) ^
                        std::hash<std::string_view>()(std::string_view(desc.shader.source, desc.shader.sourceSize)) ^

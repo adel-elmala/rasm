@@ -58,7 +58,6 @@ namespace rasm
             void                                       removeDescriptorPool(const DescriptorPoolVKHandle& descriptorPool);
             void                                       removeDescriptorSetLayout(const DescriptorSetLayoutVKHandle& descriptorSetLayout);
             void                                       bindPipeline(const CommandBufferVKHandle& commandBuffer, const PipelineVKHandle& pipeline);
-            void                                       bindVertexBuffer(const CommandBufferVKHandle& commandBuffer, const BufferVKHandle& buffer, uint64_t offset, uint32_t binding = 0);
             void                                       bindIndexBuffer(const CommandBufferVKHandle& commandBuffer, const BufferVKHandle& buffer, uint64_t offset, Format indexType);
             void                                       bindDescriptorSet(const CommandBufferVKHandle& commandBuffer, const PipelineVKHandle& pipeline, const DescriptorSetVKHandle& descriptorSet, uint32_t setIndex = 0);
             void                                       setUniform(const CommandBufferVKHandle& commandBuffer, const std::string& name, const void* data, size_t size);
@@ -73,7 +72,7 @@ namespace rasm
             bool                                       beginCommandBuffer(const CommandBufferVKHandle& commandBuffer);
             bool                                       endCommandBuffer(const CommandBufferVKHandle& commandBuffer);
             bool                                       transitionImageLayout(const CommandBufferVKHandle& commandBuffer, const TextureVKHandle& texture, const TextureUsage& oldUsage, const TextureUsage& newUsage);
-            bool                                       beginRendering(const CommandBufferVKHandle& commandBuffer, const TextureVKHandle& colorAttachment, const TextureVKHandle& depthAttachment);
+            bool                                       beginRendering(const CommandBufferVKHandle& commandBuffer, const TextureVKHandle& colorAttachment, const TextureVKHandle& depthAttachment, const glm::vec4& clearColor);
             bool                                       endRendering(const CommandBufferVKHandle& commandBuffer);
             bool                                       setViewport(const CommandBufferVKHandle& commandBuffer, float x, float y, float width, float height, float minDepth = 0.0f, float maxDepth = 1.0f);
             bool                                       setScissor(const CommandBufferVKHandle& commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height);

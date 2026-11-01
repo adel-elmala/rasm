@@ -6,7 +6,6 @@
 #include "rasm/mesh.h"
 
 #include <string>
-#include <unordered_map>
 
 namespace rasm {
 
@@ -14,6 +13,7 @@ namespace rasm {
     constexpr int MAX_CAMERAS_PER_SCENE = 8;
     constexpr int MAX_LIGHTS_PER_SCENE = 8;
     constexpr int MAX_SCENES = 16;
+    constexpr uint32_t MAX_SCENE_DRAWS_PER_FRAME = 8;
 
     struct Scene
     {
@@ -26,13 +26,6 @@ namespace rasm {
 
         LightHandle lights[MAX_LIGHTS_PER_SCENE];
         size_t lightCount = 0;
-    };
-
-    struct CompiledScene
-    {
-        std::unordered_map<MaterialHandle, std::unordered_set<EntityHandle, HandleHash>, HandleHash> materialToMeshes;
-        std::unordered_map<MaterialHandle, PipelineHandle, HandleHash>                               materialToPipeline;
-        std::unordered_map<EntityHandle, BufferHandle, HandleHash>                                   meshData;
     };
 
     // One draw of a scene. The geometry stays in the registry, so preparing a scene copies no mesh data.
@@ -50,7 +43,7 @@ namespace rasm {
         BufferHandle                                       megaIndexBuffer;
         BufferHandle                                       megaModelDataBuffer[MAX_FRAMES_IN_FLIGHT];
         BufferHandle                                       drawInfoBuffer;
-        BufferHandle                                       sceneDataBuffer[MAX_FRAMES_IN_FLIGHT];
+        BufferHandle                                       sceneDataBuffer[MAX_FRAMES_IN_FLIGHT]; // one SceneData per drawScene of a frame
         PipelineHandle                                     uberMaterialPipeline;
         std::vector<std::pair<EntityHandle, glm::mat4>>    modelUniforms;
         uint32_t                                           drawInfoCount;

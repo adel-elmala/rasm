@@ -443,50 +443,6 @@ namespace rasm
         return loadMesh(path);
     }
 
-    BufferHandle Engine::uploadMesh(const MeshHandle &handle)
-    {
-        // TODO: remove mesh from meshData after uploading to GPU.
-        if (!handle.isValid() || handle.index >= registery.meshes.size())
-        {
-            spdlog::error("Mesh handle not found for upload.");
-            return BufferHandle{};
-        }
-
-        auto mesh = registery.meshes[handle.index];
-
-        if (mesh.type == Mesh::MeshType::GLTF)
-        {
-            // In a real implementation, this is where we'd upload the GLTF mesh data to the GPU.
-            spdlog::info("Uploading GLTF mesh with handle: {}", handle.index);
-        }
-        else if (mesh.type == Mesh::MeshType::OBJ)
-        {
-            auto &objRaw = std::get<ObjRaw>(mesh.data);
-
-            auto bufferDesc = ResourceDesc{};
-            bufferDesc.name = "OBJ Vertex + index Buffer";
-            bufferDesc.type = ResourceType::BUFFER;
-            bufferDesc.buffer.usage = BufferUsage::VERTEXINDEX;
-            bufferDesc.buffer.size = objRaw.vertices.size() * sizeof(Vertex) + objRaw.indices.size() * sizeof(uint32_t);
-            bufferDesc.buffer.vertexIndexBuffer.indexCount = objRaw.indices.size();
-            bufferDesc.buffer.vertexIndexBuffer.vertexCount = objRaw.vertices.size();
-            bufferDesc.buffer.offset = objRaw.vertices.size() * sizeof(Vertex);
-
-            auto bufferHandle = ctx.createBuffer(bufferDesc);
-
-            ctx.fillBuffer(bufferHandle, objRaw.vertices.data(), objRaw.vertices.size() * sizeof(Vertex), 0);
-            ctx.fillBuffer(bufferHandle, objRaw.indices.data(), objRaw.indices.size() * sizeof(uint32_t), objRaw.vertices.size() * sizeof(Vertex));
-            return bufferHandle;
-        }
-        else
-        {
-            spdlog::error("Unknown mesh type for upload.");
-            return BufferHandle{};
-        }
-
-        return BufferHandle{};
-    }
-
     std::vector<SubGLTFRaw> Engine::extractGLTFRaws(const tinygltf::Model &model, uint32_t meshIndex, const glm::mat4 &globalTransform, GltfImportCache &cache)
     {
         std::vector<SubGLTFRaw> subGltfs;
