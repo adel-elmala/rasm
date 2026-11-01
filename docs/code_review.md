@@ -62,8 +62,8 @@ docs/
    - `assets/material.cpp` holds both the material API and glTF texture import;
    - `engine.cpp` (frame loop) still sits at the root of `src/`.
 3. **Shaders are found through the working directory (`D11`).** Paths are cwd-relative (`./shaders/passes/...` in `material.cpp`/`scene.cpp`, `cwd/shaders/lib` in `shaderCompiler.cpp`), so the examples only work when run from the repo root (not from the build directory, an IDE, or an installed app).
-4. **No install/export.** There is no `install()`/`export()`, so `find_package(rasm)` does not work.
-5. **No `tests/` and no CI** (plan phase 1.5).
+4. **No install/export.** *Fixed 2026-11-01:* `cmake/RasmInstall.cmake` installs the library, public headers and shaders and exports `rasm::rasm`, so `find_package(rasm)` works from an install tree or a build tree. The original finding follows. There is no `install()`/`export()`, so `find_package(rasm)` does not work.
+5. **No `tests/` and no CI** (plan phase 1.5). *Partly resolved 2026-11-01:* `tests/` has a doctest target run through CTest. CI is still missing.
 6. **Binary assets live in plain git.** The glTF/OBJ sample models are committed directly, so the clone grows with every asset added.
 
 ### What is left of the target layout
@@ -91,7 +91,7 @@ assets/                         keep small; large models via Git LFS or a downlo
 Next steps, in order:
 - Make the shader path configurable (`D11`): a `RASM_SHADER_DIR` compile definition and an `EngineConfig::assetRoot`, plus a post-build copy of `shaders/` next to the binaries.
 - Keep moving code incrementally: move a file only while you are working on it, and change the CMake lists in the same commit.
-- Add `install()`/`export()` and a `tests/` target alongside CI (phase 1.5).
+- Add CI that builds the presets and runs `rasm_tests` (phase 1.5).
 
 ---
 
@@ -177,6 +177,8 @@ Next steps, in order:
 **B20 — Shader dedup keys pointed at freed SPIR-V.** *Fixed 2026-11-01:* `RenderContext::createShader` now keeps its own copy of the SPIR-V in `shaderSources`, and the cache key points at that copy. The bug came from `B1`, which made shader equality compare the code instead of the pointer. `shaderDescCache` still stored the caller's pointer into a temporary blob, so every later lookup that reached `operator==` ran `memcmp` on freed memory. This crashed intermittently with an access violation in any application that compiled the same shader twice, such as one that prepared a second scene. In a debug build, 5 of 30 runs crashed before the fix and 0 of 60 after it.
 
 **B21 — Non-FIFO present modes crash `vkDestroyDevice` on NVIDIA.** *Worked around 2026-11-01; root cause unknown:* both swapchain builders now request `VK_PRESENT_MODE_FIFO_KHR`, so the frame rate is capped at the display's refresh rate. With vk-bootstrap's default of MAILBOX, closing a window that fills the screen raised an access violation inside `nvoglv64.dll` (driver 610.296, RTX 3060) during `vkDestroyDevice`. It depends on the window size, not on the example or on render targets: `00_hello_scene` crashes at 1920x1080 on a 1920x1080 display, and `01_render_graph` does not crash at 720x480. IMMEDIATE crashes too, and so does MAILBOX capped to about 60 fps, so it is not a frame-rate problem. Waiting 500 ms before teardown, destroying the swapchain before the semaphores, skipping the startup swapchain recreation and disabling validation do not help, and validation reports nothing. FIFO gave 0 crashes in 30 runs, against 40–100% per batch with the others. `vkcube` does not crash in any present mode at the same size, so the engine does something it does not, and that difference has not been found. The trigger is NVIDIA's overlay: with it turned off in the NVIDIA App, MAILBOX at 1920x1080 gave 0 crashes in 16 runs. `nvspcap64.dll` (NVIDIA's capture hook) stays loaded either way, but the overlay processes do not run. Keep FIFO while the overlay can be on, because it is on by default for many users, and revisit this before adding a way to turn vsync off.
+
+**B22 — `Transform::rotate` did nothing on a default transform.** *Fixed 2026-11-01:* `Transform::rotation` now defaults to `glm::identity<glm::quat>()`. It used `glm::quat()`, which value-initializes to all zeros, not to identity. A zero quaternion passes for identity in `q * v` and `mat4_cast`, so nothing looked wrong, but any composition stays zero. Every entity or camera that didn't set a rotation was affected: the spin calls in `00_hello_scene` and `02_gltf` were no-ops, and the first trackball drag of such a camera was lost. Those objects now spin.
 
 ### Low severity
 
@@ -267,7 +269,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 
 **D16 — Profiling.** *Partly resolved:* the frame loop, `prepareScene`, uploads, submit and present now have Tracy zones and a frame mark, with the client in on-demand mode. Still open: Tracy is linked publicly, there are no GPU timestamps, nothing turns Tracy off (every build listens on TCP 8086 on all interfaces, which a shipped game must not do), and the VRAM check in `prepareScene` compares host-visible allocations against the device-local budget.
 
-**D17 — No tests and no CI.** Pure-CPU pieces such as handle pools, desc hashing, glTF import, camera math and render-graph sorting are easy to unit-test. Rendering can be covered with headless golden-image tests once offscreen rendering exists.
+**D17 — No tests and no CI.** *Partly resolved 2026-11-01:* `rasm_tests` covers handles, descriptor equality and hashing, render-graph sorting, transforms and camera math. It found `B22` on its first run. glTF import, CI and image tests are still open. Pure-CPU pieces such as handle pools, desc hashing, glTF import, camera math and render-graph sorting are easy to unit-test. Rendering can be covered with headless golden-image tests once offscreen rendering exists.
 
 ---
 

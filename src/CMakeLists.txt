@@ -34,6 +34,11 @@ find_package(slang CONFIG REQUIRED)
 add_library(rasm STATIC ${RASM_SRC})
 add_library(rasm::rasm ALIAS rasm)
 
+# Debug and Release share one install prefix, and their libraries can't be swapped: the Windows runtimes differ.
+set_target_properties(rasm PROPERTIES DEBUG_POSTFIX "d")
+
+target_compile_features(rasm PUBLIC cxx_std_20)
+
 target_link_libraries(rasm PUBLIC glm::glm)
 target_link_libraries(rasm PRIVATE Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator)
 target_link_libraries(rasm PRIVATE vk-bootstrap::vk-bootstrap)
@@ -47,7 +52,7 @@ target_link_libraries(rasm PRIVATE SDL3::SDL3)
 # includes glm sees the same definitions (ODR) and gets a Vulkan [0, 1] clip-space depth range.
 target_compile_definitions(rasm PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE)
 
-target_include_directories(rasm PUBLIC "${PROJECT_SOURCE_DIR}/include")
+target_include_directories(rasm PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>" "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 target_include_directories(rasm PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" ${Stb_INCLUDE_DIR} ${TINYGLTF_INCLUDE_DIRS} ${Vulkan_INCLUDE_DIRS})
 
 if (RASM_ENABLE_AVX2)

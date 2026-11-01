@@ -126,6 +126,39 @@ Examples executables can be found in `/build` folder under the `macOS` preset fo
 ./build/macOS/examples/02_gltf
 ```
 
+## Unit tests
+
+The tests use [doctest](https://github.com/doctest/doctest) and need no GPU. Run them with the same preset you built:
+
+```
+ctest --preset x64-debug
+```
+
+To see the test output, or to run a subset, run the executable directly, for example `.\build\x64-debug\tests\rasm_tests.exe -tc="*trackball*"`. The tests that build an `Engine` log an expected `Window dimensions must be positive` error, because that is how they skip the window and GPU setup.
+
+Pass `-DRASM_BUILD_TESTS=OFF` to leave them out.
+
+## Using RASM from another project
+
+`cmake --install` copies the library, public headers and shaders to `install/` in the repo. Debug and Release share that prefix, so install both if the project builds both:
+
+```
+cmake --install build/x64-debug
+cmake --install build/x64-release
+```
+
+Then point the other project's `CMAKE_PREFIX_PATH` at that prefix:
+
+```cmake
+find_package(rasm 0.1 CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE rasm::rasm)
+```
+
+- RASM is a static library, so the project also needs RASM's link dependencies: Vulkan SDK, vk-bootstrap, VulkanMemoryAllocator, glm, SDL3, Tracy, spdlog, tinyobjloader and Slang. With vcpkg, add `vk-bootstrap`, `vulkan-memory-allocator`, `glm`, `sdl3` with the `vulkan` feature, `tracy` with the `on-demand` feature, `spdlog`, `tinyobjloader` and `shader-slang` to its manifest.
+- Shaders are compiled at runtime and found through the working directory (`D11`), so the application must run from a directory that contains a `shaders/` folder. Copy `share/rasm/shaders` from the install prefix.
+- To use a build tree without installing, set `rasm_DIR` to it, for example `-Drasm_DIR=<repo>/build/x64-debug`.
+- Pass `-DRASM_INSTALL=OFF` to skip the install rules, which is the default when RASM is added with `add_subdirectory`.
+
 ## Profiling with Tracy
 
 Every build is instrumented with [Tracy](https://github.com/wolfpld/tracy) in on-demand mode: nothing is recorded until a profiler connects, so an unprofiled run does not buffer events. Zones from before the connection are lost, so start the profiler first to see startup work such as `prepareScene`, `createPipeline` and `fillTexture`.

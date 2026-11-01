@@ -6,6 +6,7 @@
             "hidden": true,
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build/${presetName}",
+            "installDir": "${sourceDir}/install",
             "cacheVariables": {
                 "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
                 "CMAKE_CXX_COMPILER": "clang++"
@@ -96,6 +97,41 @@
         },
         {
             "name": "macOS-Xcode",
+            "configurePreset": "macOS-Xcode",
+            "configuration": "Debug"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "test-base",
+            "hidden": true,
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "x64-debug",
+            "inherits": "test-base",
+            "configurePreset": "x64-debug"
+        },
+        {
+            "name": "x64-release",
+            "inherits": "test-base",
+            "configurePreset": "x64-release"
+        },
+        {
+            "name": "macOS",
+            "inherits": "test-base",
+            "configurePreset": "macOS"
+        },
+        {
+            "name": "macOS-release",
+            "inherits": "test-base",
+            "configurePreset": "macOS-release"
+        },
+        {
+            "name": "macOS-Xcode",
+            "inherits": "test-base",
             "configurePreset": "macOS-Xcode",
             "configuration": "Debug"
         }

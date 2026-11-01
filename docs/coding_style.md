@@ -69,6 +69,7 @@ Known deviations to migrate, rather than copy:
   | Shared shader modules | `shaders/lib/` |
   | Pass and entry shaders | `shaders/passes/` |
   | A new example | `examples/NN_name/main.cpp`, plus one `rasm_add_example(NN_name)` line in `examples/CMakeLists.txt` |
+  | Unit tests | `tests/<subject>Tests.cpp`, added to `rasm_tests` in `tests/CMakeLists.txt` |
 - Single-header library implementations (`STB_IMAGE_IMPLEMENTATION`, `TINYGLTF_IMPLEMENTATION`, `VMA_IMPLEMENTATION`, …) are defined only in `src/thirdparty_impl.cpp`. Mind the include order documented there.
 - Library configuration macros that change behaviour (`GLM_FORCE_DEPTH_ZERO_TO_ONE`, `VMA_VULKAN_VERSION`) are set **once, in CMake**, with `target_compile_definitions`. Never set them in a `.cpp` file: a define placed after a header has already been included has no effect (see `B2`).
 
