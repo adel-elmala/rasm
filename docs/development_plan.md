@@ -52,9 +52,10 @@ Goal: the structural changes that every later feature depends on. They get much 
 - [x] Restructure the source tree into `core/`, `platform/`, `assets/`, `scene/`, `renderer/`, `rhi/vulkan/`, and shaders into `lib/` and `passes/` (review §1, done 2026-10-26).
 - [x] CMake: `src/` and `examples/` subdirectories, the `rasm` target with alias `rasm::rasm`, the `RASM_BUILD_EXAMPLES` option, and the `rasm_add_example()` helper.
 - [x] Put the `*_IMPLEMENTATION` defines in one translation unit, `src/thirdparty_impl.cpp` (`C10`).
-- [ ] Install and export targets (`find_package(rasm)`). Add `RASM_BUILD_TESTS` together with the first tests.
-- [ ] Locate assets and shaders through configuration: `EngineConfig::assetRoot`, a `RASM_SHADER_DIR` default, and shaders copied next to the binaries (`D11`).
-- [ ] Commit a `.clang-format` and normalize formatting in a dedicated commit (`C1`, `C2`).
+- [x] Install and export targets (`find_package(rasm)`). Add `RASM_BUILD_TESTS` together with the first tests (done 2026-11-01).
+- [x] Locate assets and shaders through configuration: `EngineConfig::assetRoot`, `EngineConfig::shaderDir` with a `RASM_SHADER_DIR` default beside the executable (`D11`, done 2026-11-01).
+- [x] Commit a `.clang-format` and normalize formatting in a dedicated commit (`C2`, done 2026-11-01).
+- [x] Apply the naming fixes in their own commit: `registery`, `metallicRoughtness`, `compiledShader`, the snake_case `VulkanContext` members, the PascalCase GPU enums and `RenderGraph::CreateTexture` (`C1`, done 2026-11-01).
 
 ### 1.2 RHI
 - [ ] Define a backend-neutral device interface: device, buffer, texture, sampler, pipeline, command list, queue, swapchain, fence/timeline. Move all `Vk*` code behind it (`D1`).
@@ -73,7 +74,7 @@ Goal: the structural changes that every later feature depends on. They get much 
 - [ ] Use reversed-Z with an infinite far plane by default. The depth format becomes `D32_SFLOAT`, without stencil unless it is requested.
 
 ### 1.5 Quality
-- [ ] Add a unit-test target covering handle pools, descriptor hashing, render-graph sorting, glTF import and camera math (`D17`).
+- [ ] Extend `rasm_tests` to glTF import and to the handle pools once they exist. Handles, descriptor equality and hashing, render-graph sorting, transforms and camera math are covered (`D17`).
 - [ ] Set up CI: build Windows and macOS presets on every PR, and run unit tests. Add image tests once headless rendering exists (phase 4).
 
 **Exit criteria:** examples build against `rasm::rasm` from an install tree, using only public headers. Core code contains no `Vk*` identifiers. Objects can be created and destroyed at runtime without leaks under validation.

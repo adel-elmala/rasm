@@ -4,7 +4,7 @@
 #include "core.slang"
 
 // Base color only (KHR_materials_unlit). Not tone mapped, so authored colors reach the display unchanged.
-float4 Unlit(Sampler2D gTextures[], MetallicRoughnessMaterial material, float2 baseColorUV)
+float4 shadeUnlit(Sampler2D gTextures[], MetallicRoughnessMaterial material, float2 baseColorUV)
 {
     return sampleBaseColor(gTextures, material, baseColorUV);
 }

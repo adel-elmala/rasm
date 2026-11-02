@@ -17,6 +17,7 @@
         "spdlog",
         "tinygltf",
         "tinyobjloader",
-        "shader-slang"
+        "shader-slang",
+        "doctest"
     ]
 }

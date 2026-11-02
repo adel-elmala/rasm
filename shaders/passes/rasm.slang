@@ -70,7 +70,7 @@ float4 fragMain(VSOutput input) : SV_TARGET
     if (model->materialId == MaterialId.UNLIT)
     {
         MetallicRoughnessMaterial metallicRoughness = model->material.metallicRoughness;
-        return Unlit(gTextures, metallicRoughness, selectUV(metallicRoughness.baseColorTextureCoordinate, input.uv0, input.uv1, input.uv2));
+        return shadeUnlit(gTextures, metallicRoughness, selectUV(metallicRoughness.baseColorTextureCoordinate, input.uv0, input.uv1, input.uv2));
     }
 
     Material material = model->material;
@@ -82,7 +82,7 @@ float4 fragMain(VSOutput input) : SV_TARGET
     info.cameraPosition         = input.worldCameraPosition;
     // Each texture samples the UV set the glTF material asked for.
     info.baseColorUV            = selectUV(material.metallicRoughness.baseColorTextureCoordinate, input.uv0, input.uv1, input.uv2);
-    info.metallicRoughnessUV    = selectUV(material.metallicRoughness.metallicRoughtnessTextureCoordinate, input.uv0, input.uv1, input.uv2);
+    info.metallicRoughnessUV    = selectUV(material.metallicRoughness.metallicRoughnessTextureCoordinate, input.uv0, input.uv1, input.uv2);
     info.normalUV               = selectUV(material.normal.normalTextureCoordinate, input.uv0, input.uv1, input.uv2);
     info.occlusionUV            = selectUV(material.occlusion.occlusionTextureCoordinate, input.uv0, input.uv1, input.uv2);
     info.emissiveUV             = selectUV(material.emissive.emissiveTextureCoordinate, input.uv0, input.uv1, input.uv2);
@@ -90,7 +90,7 @@ float4 fragMain(VSOutput input) : SV_TARGET
     info.lights                 = pc.scene->lights;
     info.material               = material;
 
-    return PBR(gTextures, info);
+    return shadePBR(gTextures, info);
 }
 
 // clang-format on

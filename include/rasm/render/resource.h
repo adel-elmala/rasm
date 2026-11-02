@@ -62,7 +62,8 @@ namespace rasm
         std::string name;
         ResourceType type = {};
 
-        union {
+        union
+        {
             // Texture-specific data
             struct
             {
@@ -108,7 +109,7 @@ namespace rasm
                 glm::vec4 clearColor; // linear; every pass that writes the target starts from this
             } renderTarget;
 
-            struct 
+            struct
             {
                 ShaderType stage;
                 uint32_t count;

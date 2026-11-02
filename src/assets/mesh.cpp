@@ -1,5 +1,6 @@
 #include "rasm/mesh.h"
 #include "rasm/engine.h"
+#include "platform/paths.h"
 
 #include "spdlog/spdlog.h"
 
@@ -15,6 +16,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cassert>
+#include <fstream>
 #include <iterator>
 #include <vector>
 
@@ -307,6 +309,13 @@ namespace
 
         return transform;
     }
+
+    // tinyobj leaves this to the reader: a corner without the attribute has index -1, and a face can name
+    // elements the file never defines (bunny.obj has "f 1/1/1" and no vn lines).
+    bool hasObjAttribute(const std::vector<tinyobj::real_t> &values, int index, size_t components)
+    {
+        return index >= 0 && (static_cast<size_t>(index) + 1) * components <= values.size();
+    }
 }
 
 namespace rasm
@@ -328,18 +337,20 @@ namespace rasm
         mesh.type = Mesh::MeshType::OBJ;
         mesh.data = std::move(objRaw);
 
-        registery.meshes.resize(handle.index + 1);
-        registery.meshes[handle.index] = std::move(mesh);
+        registry.meshes.resize(handle.index + 1);
+        registry.meshes[handle.index] = std::move(mesh);
 
         return handle;
     }
 
-    MeshHandle Engine::loadMesh(const std::string &path)
+    MeshHandle Engine::loadMesh(const std::string &assetPath)
     {
+        const std::string path = resolveAssetPath(assetPath);
+
         // find if the mesh is already loaded, if so return existing handle
-        if (registery.loadedMeshes.find(path) != registery.loadedMeshes.end())
+        if (registry.loadedMeshes.find(path) != registry.loadedMeshes.end())
         {
-            return registery.loadedMeshes[path];
+            return registry.loadedMeshes[path];
         }
 
         // find if the model extension is supported, if not return invalid handle
@@ -398,7 +409,9 @@ namespace rasm
             std::vector<tinyobj::shape_t> shapes;
             std::vector<tinyobj::material_t> materials;
 
-            if (!tinyobj::LoadObj(&attrib, &shapes, &materials, nullptr, nullptr, path.c_str()))
+            // tinyobj opens a file name with the ANSI code page, so it gets a stream instead.
+            std::ifstream file(pathFromUtf8(path));
+            if (!file.is_open() || !tinyobj::LoadObj(&attrib, &shapes, &materials, nullptr, nullptr, &file))
             {
                 spdlog::error("Failed to load OBJ model: {}", path);
                 return MeshHandle{};
@@ -410,8 +423,8 @@ namespace rasm
             }
 
             // Load vertex and index data
-            std::vector<Vertex> out_vertices;
-            std::vector<uint32_t> out_indices;
+            std::vector<Vertex> outVertices;
+            std::vector<uint32_t> outIndices;
 
             for (const auto &shape : shapes)
             {
@@ -420,28 +433,28 @@ namespace rasm
                     Vertex v = {};
 
                     v.pos = {attrib.vertices[index.vertex_index * 3], -attrib.vertices[index.vertex_index * 3 + 1], attrib.vertices[index.vertex_index * 3 + 2]};
-                    if (attrib.normals.size() > 0)
+                    if (hasObjAttribute(attrib.normals, index.normal_index, 3))
                         v.normal = {attrib.normals[index.normal_index * 3], -attrib.normals[index.normal_index * 3 + 1], attrib.normals[index.normal_index * 3 + 2]};
-                    if (attrib.texcoords.size() > 0)
+                    if (hasObjAttribute(attrib.texcoords, index.texcoord_index, 2))
                         v.uv[0] = {attrib.texcoords[index.texcoord_index * 2], 1.0 - attrib.texcoords[index.texcoord_index * 2 + 1]};
 
-                    out_vertices.push_back(v);
-                    out_indices.push_back(static_cast<uint32_t>(out_indices.size()));
+                    outVertices.push_back(v);
+                    outIndices.push_back(static_cast<uint32_t>(outIndices.size()));
                 }
             }
 
             ObjRaw objRaw{};
-            objRaw.vertices = std::move(out_vertices);
-            objRaw.indices = std::move(out_indices);
+            objRaw.vertices = std::move(outVertices);
+            objRaw.indices = std::move(outIndices);
 
             mesh.type = Mesh::MeshType::OBJ;
             mesh.data = std::move(objRaw);
         }
 
-        registery.loadedMeshes[path] = handle;
+        registry.loadedMeshes[path] = handle;
 
-        registery.meshes.resize(handle.index + 1);
-        registery.meshes[handle.index] = std::move(mesh);
+        registry.meshes.resize(handle.index + 1);
+        registry.meshes[handle.index] = std::move(mesh);
 
         return handle;
     }
@@ -548,7 +561,8 @@ namespace rasm
                     sourceIndices[i] = static_cast<uint32_t>(i);
             }
 
-            auto outOfRange = std::find_if(sourceIndices.begin(), sourceIndices.end(), [vertexCount](uint32_t index) { return index >= vertexCount; });
+            auto outOfRange = std::find_if(sourceIndices.begin(), sourceIndices.end(), [vertexCount](uint32_t index)
+                                           { return index >= vertexCount; });
             if (outOfRange != sourceIndices.end())
             {
                 spdlog::warn("glTF {}: skipping primitive with index {} out of range for {} vertices.", primitiveName, *outOfRange, vertexCount);
@@ -672,13 +686,13 @@ namespace rasm
 
     MeshSize Engine::getMeshByteSize(const MeshHandle &handle) const
     {
-        if (!handle.isValid() || handle.index >= registery.meshes.size())
+        if (!handle.isValid() || handle.index >= registry.meshes.size())
         {
             spdlog::error("Mesh handle not found for getting byte size.");
             return {};
         }
 
-        auto mesh = registery.meshes[handle.index];
+        auto mesh = registry.meshes[handle.index];
 
         MeshSize meshSize{};
 

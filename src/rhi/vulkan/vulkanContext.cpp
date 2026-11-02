@@ -18,25 +18,25 @@ namespace rasm::gfx
         // clang-format off
 
         // Private helper functions for Vulkan setup and management.
-        vkb::Result<vkb::Instance>          _init_instance(const char* app_name, bool enable_validation_layers, bool& debug_utils_enabled);
-        vkb::Result<vkb::PhysicalDevice>    _init_physical_device(const vkb::Instance& vkb_instance, VkSurfaceKHR surface);
-        vkb::Result<vkb::Device>            _init_logical_device(const vkb::PhysicalDevice& physical_device);
-        vkb::Result<VkQueue>                _init_queue(const vkb::Device& device, vkb::QueueType type);
-        vkb::Result<uint32_t>               _get_queue_index(const vkb::Device& device, vkb::QueueType type);
-        vkb::Result<VkSurfaceKHR>           _init_surface(const vkb::Instance& instance, Engine* engine);
-        vkb::Result<vkb::Swapchain>         _init_swapchain(const vkb::Device& device, VkExtent2D desired_extent);
-        vkb::Result<vkb::Swapchain>         _recreate_swapchain(const vkb::Device& device, SwapchainVKHandle& old_swapchain, VkExtent2D desired_extent);
-        SwapchainStatus                     _to_swapchain_status(VkResult result);
-        VkBufferUsageFlags                  _to_vk_buffer_usage_flags(BufferUsage usage);
-        VkImageUsageFlags                   _to_vk_image_usage_flags(TextureUsage usage);
-        VkFormat                            _to_vk_format(Format format);
-        Format                              _to_format(VkFormat format);
-        VkIndexType                         _to_vk_index_type(Format format);
-        VkPrimitiveTopology                 _to_vk_topology(PrimitiveTopology topology);
-        VkShaderStageFlags                  _to_vk_shader_stage_flags(ShaderType stage);
-        VkImageAspectFlags                  _to_vk_aspect_mask(TextureUsage usage);
-        VkDescriptorType                    _to_vk_descriptor_type(ResourceType type);
-        const char* _to_vk_result_string(VkResult result);
+        vkb::Result<vkb::Instance>          initInstance(const char* appName, bool enableValidationLayers, bool& debugUtilsEnabled);
+        vkb::Result<vkb::PhysicalDevice>    initPhysicalDevice(const vkb::Instance& vkbInstance, VkSurfaceKHR surface);
+        vkb::Result<vkb::Device>            initLogicalDevice(const vkb::PhysicalDevice& physicalDevice);
+        vkb::Result<VkQueue>                initQueue(const vkb::Device& device, vkb::QueueType type);
+        vkb::Result<uint32_t>               getQueueIndex(const vkb::Device& device, vkb::QueueType type);
+        vkb::Result<VkSurfaceKHR>           initSurface(const vkb::Instance& instance, Engine* engine);
+        vkb::Result<vkb::Swapchain>         initSwapchain(const vkb::Device& device, VkExtent2D desiredExtent);
+        vkb::Result<vkb::Swapchain>         rebuildSwapchain(const vkb::Device& device, SwapchainVKHandle& oldSwapchain, VkExtent2D desiredExtent);
+        SwapchainStatus                     toSwapchainStatus(VkResult result);
+        VkBufferUsageFlags                  toVkBufferUsageFlags(BufferUsage usage);
+        VkImageUsageFlags                   toVkImageUsageFlags(TextureUsage usage);
+        VkFormat                            toVkFormat(Format format);
+        Format                              toFormat(VkFormat format);
+        VkIndexType                         toVkIndexType(Format format);
+        VkPrimitiveTopology                 toVkTopology(PrimitiveTopology topology);
+        VkShaderStageFlags                  toVkShaderStageFlags(ShaderType stage);
+        VkImageAspectFlags                  toVkAspectMask(TextureUsage usage);
+        VkDescriptorType                    toVkDescriptorType(ResourceType type);
+        const char* toVkResultString(VkResult result);
 
         // clang-format on
 
@@ -55,68 +55,68 @@ namespace rasm::gfx
             return rasterizer;
         }
 
-        vkb::Result<vkb::Instance> _init_instance(const char *app_name, bool enable_validation_layers, bool &debug_utils_enabled)
+        vkb::Result<vkb::Instance> initInstance(const char *appName, bool enableValidationLayers, bool &debugUtilsEnabled)
         {
-            debug_utils_enabled = false;
+            debugUtilsEnabled = false;
 
-            vkb::InstanceBuilder instance_builder;
+            vkb::InstanceBuilder instanceBuilder;
 
-            auto system_info_ret = vkb::SystemInfo::get_system_info();
-            if (!system_info_ret)
+            auto systemInfoRet = vkb::SystemInfo::get_system_info();
+            if (!systemInfoRet)
             {
-                spdlog::error("Failed to get system info. Error: {}", system_info_ret.error().message());
-                return vkb::Result<vkb::Instance>{system_info_ret.error()};
+                spdlog::error("Failed to get system info. Error: {}", systemInfoRet.error().message());
+                return vkb::Result<vkb::Instance>{systemInfoRet.error()};
             }
 
-            auto system_info = system_info_ret.value();
+            auto systemInfo = systemInfoRet.value();
 
             // check for a layer
-            // if (system_info.is_layer_available("VK_LAYER_LUNARG_api_dump"))
+            // if (systemInfo.is_layer_available("VK_LAYER_LUNARG_api_dump"))
             // {
-            //     instance_builder.enable_layer("VK_LAYER_LUNARG_api_dump");
+            //     instanceBuilder.enable_layer("VK_LAYER_LUNARG_api_dump");
             // }
 
             // Debug utils is cheap, so enable it whenever it is available: object names show up in
             // RenderDoc / Nsight even without validation (B3).
-            if (system_info.debug_utils_available)
+            if (systemInfo.debug_utils_available)
             {
-                instance_builder.enable_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-                debug_utils_enabled = true;
+                instanceBuilder.enable_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+                debugUtilsEnabled = true;
             }
 
-            if (enable_validation_layers && system_info.validation_layers_available)
+            if (enableValidationLayers && systemInfo.validation_layers_available)
             {
-                instance_builder.enable_validation_layers();
+                instanceBuilder.enable_validation_layers();
 
                 // Validation needs to send errors via a callback, have vk-bootstrap do it
-                if (debug_utils_enabled)
-                    instance_builder.use_default_debug_messenger();
+                if (debugUtilsEnabled)
+                    instanceBuilder.use_default_debug_messenger();
             }
 
             // instance level extension
-            // if (system_info.is_extension_available("VK_KHR_get_physical_device_properties2"))
+            // if (systemInfo.is_extension_available("VK_KHR_get_physical_device_properties2"))
             // {
-            //     instance_builder.enable_extension("VK_KHR_get_physical_device_properties2");
+            //     instanceBuilder.enable_extension("VK_KHR_get_physical_device_properties2");
             // }
 
-            auto instance_ret = instance_builder
-                                    .set_app_name(app_name ? app_name : "rasm_app")
-                                    .set_engine_name("rasm")
-                                    .require_api_version(1, 4, 0)
-                                    .set_minimum_instance_version(1, 3, 0)
-                                    .build();
+            auto instanceRet = instanceBuilder
+                                   .set_app_name(appName ? appName : "rasm_app")
+                                   .set_engine_name("rasm")
+                                   .require_api_version(1, 4, 0)
+                                   .set_minimum_instance_version(1, 3, 0)
+                                   .build();
 
-            if (!instance_ret)
+            if (!instanceRet)
             {
-                spdlog::error("Failed to create Vulkan instance. Error: {}", instance_ret.error().message());
+                spdlog::error("Failed to create Vulkan instance. Error: {}", instanceRet.error().message());
             }
 
-            return instance_ret;
+            return instanceRet;
         }
 
-        vkb::Result<vkb::PhysicalDevice> _init_physical_device(const vkb::Instance &vkb_instance, VkSurfaceKHR surface)
+        vkb::Result<vkb::PhysicalDevice> initPhysicalDevice(const vkb::Instance &vkbInstance, VkSurfaceKHR surface)
         {
-            vkb::PhysicalDeviceSelector phys_device_selector(vkb_instance);
+            vkb::PhysicalDeviceSelector physDeviceSelector(vkbInstance);
 
             VkPhysicalDeviceVulkan11Features enabledVk11Features{
                 .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
@@ -158,91 +158,91 @@ namespace rasm::gfx
             };
 
             // select() grabs a PhysicalDevice, By default, this will prefer a discrete GPU.
-            auto physical_device_selector_return = phys_device_selector
-                                                       .set_surface(surface)
-                                                       .set_required_features_14(enabledVk14Features)               // Enable the 1.4 core feature
-                                                       .set_required_features_13(enabledVk13Features)               // Enable the 1.3 core feature
-                                                       .set_required_features_12(enabledVk12Features)               // Enable the 1.2 core feature
-                                                       .set_required_features_11(enabledVk11Features)               // Enable the 1.1 core feature
-                                                       .set_required_features(enabledVk10Features)                  // Enable the 1.0 core feature
-                                                       .add_required_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME)     // Enable swapchain extension
-                                                       .add_required_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) // Enable memory budget extension
-                                                       .select();
+            auto physicalDeviceSelectorReturn = physDeviceSelector
+                                                    .set_surface(surface)
+                                                    .set_required_features_14(enabledVk14Features)               // Enable the 1.4 core feature
+                                                    .set_required_features_13(enabledVk13Features)               // Enable the 1.3 core feature
+                                                    .set_required_features_12(enabledVk12Features)               // Enable the 1.2 core feature
+                                                    .set_required_features_11(enabledVk11Features)               // Enable the 1.1 core feature
+                                                    .set_required_features(enabledVk10Features)                  // Enable the 1.0 core feature
+                                                    .add_required_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME)     // Enable swapchain extension
+                                                    .add_required_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) // Enable memory budget extension
+                                                    .select();
 
-            if (!physical_device_selector_return)
+            if (!physicalDeviceSelectorReturn)
             {
                 // If no suitable devices were found, detailed_failure_reasons() will contain a list of reasons why.
-                if (physical_device_selector_return.error() == vkb::PhysicalDeviceError::no_suitable_device)
+                if (physicalDeviceSelectorReturn.error() == vkb::PhysicalDeviceError::no_suitable_device)
                 {
-                    const auto &detailed_reasons = physical_device_selector_return.detailed_failure_reasons();
-                    if (!detailed_reasons.empty())
+                    const auto &detailedReasons = physicalDeviceSelectorReturn.detailed_failure_reasons();
+                    if (!detailedReasons.empty())
                     {
                         spdlog::error("GPU Selection failure reasons:\n");
-                        for (const std::string &reason : detailed_reasons)
+                        for (const std::string &reason : detailedReasons)
                         {
                             spdlog::error("{}", reason);
                         }
                     }
                 }
-                return physical_device_selector_return;
+                return physicalDeviceSelectorReturn;
             }
 
-            auto physical_device = physical_device_selector_return.value();
+            auto physicalDevice = physicalDeviceSelectorReturn.value();
             spdlog::info(
                 "Selected GPU information:\n"
                 "\t\t\t\t\tname: {} -- type: {} --  memory: {} MB\n"
                 "\t\t\t\t\tdriver version: {}.{}.{} --  API version: {}.{}.{}",
-                physical_device.properties.deviceName,
-                physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? "Discrete" : physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? "Integrated"
-                                                                                                         : physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU      ? "Virtual"
-                                                                                                         : physical_device.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU              ? "CPU"
-                                                                                                                                                                                             : "Other",
-                physical_device.memory_properties.memoryHeaps[0].size / (1024 * 1024),
-                VK_VERSION_MAJOR(physical_device.properties.driverVersion),
-                VK_VERSION_MINOR(physical_device.properties.driverVersion),
-                VK_VERSION_PATCH(physical_device.properties.driverVersion),
-                VK_VERSION_MAJOR(physical_device.properties.apiVersion),
-                VK_VERSION_MINOR(physical_device.properties.apiVersion),
-                VK_VERSION_PATCH(physical_device.properties.apiVersion));
+                physicalDevice.properties.deviceName,
+                physicalDevice.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? "Discrete" : physicalDevice.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? "Integrated"
+                                                                                                        : physicalDevice.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU      ? "Virtual"
+                                                                                                        : physicalDevice.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU              ? "CPU"
+                                                                                                                                                                                           : "Other",
+                physicalDevice.memory_properties.memoryHeaps[0].size / (1024 * 1024),
+                VK_VERSION_MAJOR(physicalDevice.properties.driverVersion),
+                VK_VERSION_MINOR(physicalDevice.properties.driverVersion),
+                VK_VERSION_PATCH(physicalDevice.properties.driverVersion),
+                VK_VERSION_MAJOR(physicalDevice.properties.apiVersion),
+                VK_VERSION_MINOR(physicalDevice.properties.apiVersion),
+                VK_VERSION_PATCH(physicalDevice.properties.apiVersion));
 
-            return physical_device_selector_return;
+            return physicalDeviceSelectorReturn;
         }
 
-        vkb::Result<vkb::Device> _init_logical_device(const vkb::PhysicalDevice &physical_device)
+        vkb::Result<vkb::Device> initLogicalDevice(const vkb::PhysicalDevice &physicalDevice)
         {
-            vkb::DeviceBuilder device_builder{physical_device};
+            vkb::DeviceBuilder deviceBuilder{physicalDevice};
 
-            auto dev_ret = device_builder.build();
+            auto devRet = deviceBuilder.build();
 
-            if (!dev_ret)
+            if (!devRet)
             {
-                spdlog::error("Failed to create logical device. Error: {}", dev_ret.error().message());
+                spdlog::error("Failed to create logical device. Error: {}", devRet.error().message());
             }
 
-            return dev_ret;
+            return devRet;
         }
 
-        vkb::Result<VkQueue> _init_queue(const vkb::Device &device, vkb::QueueType type)
+        vkb::Result<VkQueue> initQueue(const vkb::Device &device, vkb::QueueType type)
         {
-            auto queue_ret = device.get_queue(type);
-            if (!queue_ret)
+            auto queueRet = device.get_queue(type);
+            if (!queueRet)
             {
-                spdlog::error("Failed to get queue. Error: {}", queue_ret.error().message());
+                spdlog::error("Failed to get queue. Error: {}", queueRet.error().message());
             }
-            return queue_ret;
+            return queueRet;
         }
 
-        vkb::Result<uint32_t> _get_queue_index(const vkb::Device &device, vkb::QueueType type)
+        vkb::Result<uint32_t> getQueueIndex(const vkb::Device &device, vkb::QueueType type)
         {
-            auto queue_index_ret = device.get_queue_index(type);
-            if (!queue_index_ret)
+            auto queueIndexRet = device.get_queue_index(type);
+            if (!queueIndexRet)
             {
-                spdlog::error("Failed to get queue index. Error: {}", queue_index_ret.error().message());
+                spdlog::error("Failed to get queue index. Error: {}", queueIndexRet.error().message());
             }
-            return queue_index_ret;
+            return queueIndexRet;
         }
 
-        vkb::Result<VkSurfaceKHR> _init_surface(const vkb::Instance &instance, Engine *engine)
+        vkb::Result<VkSurfaceKHR> initSurface(const vkb::Instance &instance, Engine *engine)
         {
             VkSurfaceKHR surface = VK_NULL_HANDLE;
             if (!createWindowSurface(engine->getMainWindow(), instance.instance, &surface))
@@ -252,47 +252,47 @@ namespace rasm::gfx
         }
 
         // FIFO, because with NVIDIA's overlay on, the other present modes crash vkDestroyDevice when the window fills the screen (B21).
-        vkb::Result<vkb::Swapchain> _init_swapchain(const vkb::Device &device, VkExtent2D desired_extent)
+        vkb::Result<vkb::Swapchain> initSwapchain(const vkb::Device &device, VkExtent2D desiredExtent)
         {
-            vkb::SwapchainBuilder swapchain_builder{device};
-            auto swap_ret = swapchain_builder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-                                .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
-                                .set_desired_extent(desired_extent.width, desired_extent.height)
-                                .build();
-            if (!swap_ret)
+            vkb::SwapchainBuilder swapchainBuilder{device};
+            auto swapRet = swapchainBuilder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+                               .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+                               .set_desired_extent(desiredExtent.width, desiredExtent.height)
+                               .build();
+            if (!swapRet)
             {
-                spdlog::error("Failed to create swapchain. Error: {}", swap_ret.error().message());
+                spdlog::error("Failed to create swapchain. Error: {}", swapRet.error().message());
             }
-            return swap_ret;
+            return swapRet;
         }
 
         // The caller must make sure the device is idle.
-        vkb::Result<vkb::Swapchain> _recreate_swapchain(const vkb::Device &device, SwapchainVKHandle &old_swapchain, VkExtent2D desired_extent)
+        vkb::Result<vkb::Swapchain> rebuildSwapchain(const vkb::Device &device, SwapchainVKHandle &oldSwapchain, VkExtent2D desiredExtent)
         {
-            vkb::SwapchainBuilder swapchain_builder{device};
-            auto swap_ret = swapchain_builder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-                                .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
-                                .set_desired_extent(desired_extent.width, desired_extent.height)
-                                .set_old_swapchain(old_swapchain.swapchain)
-                                .build();
-            if (!swap_ret)
+            vkb::SwapchainBuilder swapchainBuilder{device};
+            auto swapRet = swapchainBuilder.set_desired_format({VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
+                               .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+                               .set_desired_extent(desiredExtent.width, desiredExtent.height)
+                               .set_old_swapchain(oldSwapchain.swapchain)
+                               .build();
+            if (!swapRet)
             {
-                spdlog::error("Failed to recreate swapchain. Error: {}", swap_ret.error().message());
+                spdlog::error("Failed to recreate swapchain. Error: {}", swapRet.error().message());
             }
 
             // Passing it as oldSwapchain retired the old swapchain, even if creation failed, so it is
             // destroyed either way.
-            for (const auto &image : old_swapchain.images)
+            for (const auto &image : oldSwapchain.images)
             {
                 vkDestroyImageView(device.device, image.view, nullptr);
             }
-            if (old_swapchain.swapchain.swapchain != VK_NULL_HANDLE)
-                vkb::destroy_swapchain(old_swapchain.swapchain);
+            if (oldSwapchain.swapchain.swapchain != VK_NULL_HANDLE)
+                vkb::destroy_swapchain(oldSwapchain.swapchain);
 
-            return swap_ret;
+            return swapRet;
         }
 
-        SwapchainStatus _to_swapchain_status(VkResult result)
+        SwapchainStatus toSwapchainStatus(VkResult result)
         {
             switch (result)
             {
@@ -307,7 +307,7 @@ namespace rasm::gfx
             }
         }
 
-        VkBufferUsageFlags _to_vk_buffer_usage_flags(BufferUsage usage)
+        VkBufferUsageFlags toVkBufferUsageFlags(BufferUsage usage)
         {
             // Every buffer is created with the device-address bit so that its GPU address can be
             // handed to shaders through push constants / other buffers regardless of its primary usage.
@@ -330,7 +330,7 @@ namespace rasm::gfx
             }
         }
 
-        VkShaderStageFlags _to_vk_shader_stage_flags(ShaderType stage)
+        VkShaderStageFlags toVkShaderStageFlags(ShaderType stage)
         {
             switch (stage)
             {
@@ -347,7 +347,7 @@ namespace rasm::gfx
             }
         }
 
-        VkPrimitiveTopology _to_vk_topology(PrimitiveTopology topology)
+        VkPrimitiveTopology toVkTopology(PrimitiveTopology topology)
         {
             switch (topology)
             {
@@ -366,7 +366,7 @@ namespace rasm::gfx
             }
         }
 
-        VkFormat _to_vk_format(Format format)
+        VkFormat toVkFormat(Format format)
         {
             switch (format)
             {
@@ -397,7 +397,7 @@ namespace rasm::gfx
             }
         }
 
-        VkIndexType _to_vk_index_type(Format format)
+        VkIndexType toVkIndexType(Format format)
         {
             switch (format)
             {
@@ -410,7 +410,7 @@ namespace rasm::gfx
             }
         }
 
-        Format _to_format(VkFormat vkFormat)
+        Format toFormat(VkFormat vkFormat)
         {
             switch (vkFormat)
             {
@@ -437,7 +437,7 @@ namespace rasm::gfx
             }
         }
 
-        VkImageUsageFlags _to_vk_image_usage_flags(TextureUsage usage)
+        VkImageUsageFlags toVkImageUsageFlags(TextureUsage usage)
         {
             switch (usage)
             {
@@ -465,7 +465,7 @@ namespace rasm::gfx
             }
         }
 
-        VkImageAspectFlags _to_vk_aspect_mask(TextureUsage usage)
+        VkImageAspectFlags toVkAspectMask(TextureUsage usage)
         {
             switch (usage)
             {
@@ -480,7 +480,7 @@ namespace rasm::gfx
             }
         }
 
-        VkDescriptorType _to_vk_descriptor_type(ResourceType type)
+        VkDescriptorType toVkDescriptorType(ResourceType type)
         {
             switch (type)
             {
@@ -495,7 +495,7 @@ namespace rasm::gfx
             }
         }
 
-        const char *_to_vk_result_string(VkResult result)
+        const char *toVkResultString(VkResult result)
         {
             switch (result)
             {
@@ -559,61 +559,61 @@ namespace rasm::gfx
         auto config = engine->getConfig();
 
         // create Vulkan instance
-        auto vkb_instance = _init_instance(config.appName.c_str(), config.enableValidation, this->debug_utils_enabled);
+        auto vkbInstance = initInstance(config.appName.c_str(), config.enableValidation, this->debugUtilsEnabled);
 
-        if (!vkb_instance)
+        if (!vkbInstance)
             return false;
 
-        this->instance = vkb_instance.value();
+        this->instance = vkbInstance.value();
 
         // create surface
-        auto vkb_surface = _init_surface(vkb_instance.value(), engine);
-        if (!vkb_surface)
+        auto vkbSurface = initSurface(vkbInstance.value(), engine);
+        if (!vkbSurface)
             return false;
 
-        this->surface = vkb_surface.value();
+        this->surface = vkbSurface.value();
 
         // select physical device
-        auto vkb_physical_device = _init_physical_device(vkb_instance.value(), this->surface);
+        auto vkbPhysicalDevice = initPhysicalDevice(vkbInstance.value(), this->surface);
 
-        if (!vkb_physical_device)
+        if (!vkbPhysicalDevice)
             return false;
 
-        this->physical_device = vkb_physical_device.value();
+        this->physicalDevice = vkbPhysicalDevice.value();
 
         // create logical device
-        auto vkb_device = _init_logical_device(vkb_physical_device.value());
+        auto vkbDevice = initLogicalDevice(vkbPhysicalDevice.value());
 
-        if (!vkb_device)
+        if (!vkbDevice)
             return false;
 
-        this->device = vkb_device.value();
+        this->device = vkbDevice.value();
 
         // Create the dispatch table
-        this->dispatch_table = this->device.make_table();
+        this->dispatchTable = this->device.make_table();
 
         // get graphics queue
-        auto vkb_queue = _init_queue(vkb_device.value(), vkb::QueueType::graphics);
+        auto vkbQueue = initQueue(vkbDevice.value(), vkb::QueueType::graphics);
 
-        if (!vkb_queue)
+        if (!vkbQueue)
             return false;
-        this->graphics_queue = vkb_queue.value();
+        this->graphicsQueue = vkbQueue.value();
 
         // get graphics queue family index
-        auto graphics_queue_index_result = _get_queue_index(vkb_device.value(), vkb::QueueType::graphics);
+        auto graphicsQueueIndexResult = getQueueIndex(vkbDevice.value(), vkb::QueueType::graphics);
 
-        if (!graphics_queue_index_result)
+        if (!graphicsQueueIndexResult)
             return false;
 
-        this->graphics_queue_family_index = graphics_queue_index_result.value();
+        this->graphicsQueueFamilyIndex = graphicsQueueIndexResult.value();
 
         // create swapchain
-        auto vkb_swapchain = _init_swapchain(vkb_device.value(), getDesiredSwapchainExtent());
+        auto vkbSwapchain = initSwapchain(vkbDevice.value(), getDesiredSwapchainExtent());
 
-        if (!vkb_swapchain)
+        if (!vkbSwapchain)
             return false;
 
-        this->swapchain.swapchain = vkb_swapchain.value();
+        this->swapchain.swapchain = vkbSwapchain.value();
         if (!loadSwapchainImages())
             return false;
 
@@ -627,7 +627,7 @@ namespace rasm::gfx
         VmaAllocatorCreateInfo allocatorCreateInfo = {};
         allocatorCreateInfo.flags = VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT | VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
         allocatorCreateInfo.vulkanApiVersion = VK_API_VERSION_1_4;
-        allocatorCreateInfo.physicalDevice = physical_device.physical_device;
+        allocatorCreateInfo.physicalDevice = physicalDevice.physical_device;
         allocatorCreateInfo.device = device.device;
         allocatorCreateInfo.instance = instance.instance;
         allocatorCreateInfo.pVulkanFunctions = &vkFunctions;
@@ -665,9 +665,9 @@ namespace rasm::gfx
         if (instance.instance != VK_NULL_HANDLE)
             vkb::destroy_instance(instance);
         instance = {};
-        physical_device = {};
-        dispatch_table = {};
-        graphics_queue = VK_NULL_HANDLE;
+        physicalDevice = {};
+        dispatchTable = {};
+        graphicsQueue = VK_NULL_HANDLE;
     }
 
     void VulkanContext::waitIdle()
@@ -682,7 +682,7 @@ namespace rasm::gfx
 
         VkBufferCreateInfo bufferInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bufferInfo.size = desc.buffer.size;
-        bufferInfo.usage = _to_vk_buffer_usage_flags(desc.buffer.usage);
+        bufferInfo.usage = toVkBufferUsageFlags(desc.buffer.usage);
 
         VmaAllocationCreateInfo allocCI = {};
         allocCI.usage = VMA_MEMORY_USAGE_AUTO;
@@ -696,7 +696,7 @@ namespace rasm::gfx
 
         if (result != VK_SUCCESS)
         {
-            spdlog::error("Failed to create buffer. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to create buffer. Error: {}", toVkResultString(result));
             return {};
         }
 
@@ -729,7 +729,7 @@ namespace rasm::gfx
         auto result = vkTransitionImageLayout(device, 1, &transitionDstInfo);
         if (result != VK_SUCCESS)
         {
-            spdlog::error("Failed to transition image layout. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to transition image layout. Error: {}", toVkResultString(result));
             return;
         }
 
@@ -781,7 +781,7 @@ namespace rasm::gfx
         result = vkCopyMemoryToImage(device, &copyInfo);
         if (result != VK_SUCCESS)
         {
-            spdlog::error("Failed to copy memory to image. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to copy memory to image. Error: {}", toVkResultString(result));
             return;
         }
     }
@@ -791,7 +791,7 @@ namespace rasm::gfx
         assert(desc.type == ResourceType::TEXTURE);
 
         // Drivers may accept an oversized image instead of failing, so this can't be left to vmaCreateImage.
-        const uint32_t maxExtent = physical_device.properties.limits.maxImageDimension2D;
+        const uint32_t maxExtent = physicalDevice.properties.limits.maxImageDimension2D;
         if (desc.texture.width > maxExtent || desc.texture.height > maxExtent)
         {
             spdlog::error("Texture '{}' is {}x{}, the device limit is {}.", desc.name, desc.texture.width, desc.texture.height, maxExtent);
@@ -816,10 +816,10 @@ namespace rasm::gfx
         }
         imageInfo.mipLevels = mipLevels;
         imageInfo.arrayLayers = 1;
-        imageInfo.format = _to_vk_format(desc.texture.format);
+        imageInfo.format = toVkFormat(desc.texture.format);
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        imageInfo.usage = _to_vk_image_usage_flags(desc.texture.usage);
+        imageInfo.usage = toVkImageUsageFlags(desc.texture.usage);
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -839,15 +839,15 @@ namespace rasm::gfx
 
         if (result != VK_SUCCESS)
         {
-            spdlog::error("Failed to create image. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to create image. Error: {}", toVkResultString(result));
             return {};
         }
 
         VkImageViewCreateInfo viewInfo = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         viewInfo.image = image;
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = _to_vk_format(desc.texture.format);
-        viewInfo.subresourceRange.aspectMask = _to_vk_aspect_mask(desc.texture.usage);
+        viewInfo.format = toVkFormat(desc.texture.format);
+        viewInfo.subresourceRange.aspectMask = toVkAspectMask(desc.texture.usage);
         viewInfo.subresourceRange.levelCount = mipLevels;
         viewInfo.subresourceRange.layerCount = 1;
 
@@ -855,7 +855,7 @@ namespace rasm::gfx
         result = vkCreateImageView(this->device.device, &viewInfo, nullptr, &imageView);
         if (result != VK_SUCCESS)
         {
-            spdlog::error("Failed to create image view. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to create image view. Error: {}", toVkResultString(result));
             vmaDestroyImage(this->allocator, image, allocation);
             return {};
         }
@@ -873,7 +873,7 @@ namespace rasm::gfx
             samplerInfo.maxLod = static_cast<float>(mipLevels - 1);
             // Anisotropy is already required when selecting the physical device.
             VkPhysicalDeviceProperties properties{};
-            vkGetPhysicalDeviceProperties(physical_device, &properties);
+            vkGetPhysicalDeviceProperties(physicalDevice, &properties);
             samplerInfo.anisotropyEnable = VK_TRUE;
             samplerInfo.maxAnisotropy = std::min(8.0f, properties.limits.maxSamplerAnisotropy);
             samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
@@ -883,7 +883,7 @@ namespace rasm::gfx
             result = vkCreateSampler(this->device.device, &samplerInfo, nullptr, &sampler);
             if (result != VK_SUCCESS)
             {
-                spdlog::error("Failed to create sampler. Error: {}", _to_vk_result_string(result));
+                spdlog::error("Failed to create sampler. Error: {}", toVkResultString(result));
                 vkDestroyImageView(this->device.device, imageView, nullptr);
                 vmaDestroyImage(this->allocator, image, allocation);
                 return {};
@@ -910,7 +910,7 @@ namespace rasm::gfx
 
         if (result != VK_SUCCESS)
         {
-            spdlog::error("Failed to create shader module. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to create shader module. Error: {}", toVkResultString(result));
             return {};
         }
 
@@ -940,7 +940,7 @@ namespace rasm::gfx
 
         if (result != VK_SUCCESS)
         {
-            spdlog::error("Failed to create pipeline layout. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to create pipeline layout. Error: {}", toVkResultString(result));
             return {};
         }
 
@@ -951,7 +951,7 @@ namespace rasm::gfx
 
         VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-            .topology = _to_vk_topology(desc.pipeline.topology),
+            .topology = toVkTopology(desc.pipeline.topology),
         };
 
         VkPipelineShaderStageCreateInfo shaderStages[] = {
@@ -974,12 +974,12 @@ namespace rasm::gfx
             .scissorCount = 1,
         };
 
-        std::vector<VkDynamicState> dynamic_states = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        std::vector<VkDynamicState> dynamicStates = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
 
         VkPipelineDynamicStateCreateInfo dynamicStateInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-            .dynamicStateCount = static_cast<uint32_t>(dynamic_states.size()),
-            .pDynamicStates = dynamic_states.data(),
+            .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
+            .pDynamicStates = dynamicStates.data(),
         };
 
         VkPipelineDepthStencilStateCreateInfo depthStencilInfo = {
@@ -993,8 +993,8 @@ namespace rasm::gfx
         // Dynamic rendering: describe the formats used by this pipeline.
         // NOTE: These formats must match the actual color and depth attachments
         // used when beginning dynamic rendering.
-        VkFormat colorAttachmentFormat = _to_vk_format(desc.pipeline.colorAttachmentFormat);
-        VkFormat depthAttachmentFormat = _to_vk_format(desc.pipeline.depthStencilAttachmentFormat);
+        VkFormat colorAttachmentFormat = toVkFormat(desc.pipeline.colorAttachmentFormat);
+        VkFormat depthAttachmentFormat = toVkFormat(desc.pipeline.depthStencilAttachmentFormat);
         // combined depth/stencil formats must declare the stencil aspect too (Metal validation asserts otherwise).
         bool hasStencil = depthAttachmentFormat == VK_FORMAT_D24_UNORM_S8_UINT ||
                           depthAttachmentFormat == VK_FORMAT_D32_SFLOAT_S8_UINT;
@@ -1052,7 +1052,7 @@ namespace rasm::gfx
 
         if (result != VK_SUCCESS)
         {
-            spdlog::error("Failed to create graphics pipeline. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to create graphics pipeline. Error: {}", toVkResultString(result));
             vkDestroyPipelineLayout(this->device.device, pipelineLayout, nullptr);
             return {};
         }
@@ -1067,14 +1067,14 @@ namespace rasm::gfx
     {
         VkCommandPoolCreateInfo poolInfo = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
         poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        poolInfo.queueFamilyIndex = this->graphics_queue_family_index;
+        poolInfo.queueFamilyIndex = this->graphicsQueueFamilyIndex;
 
         VkCommandPool commandPool;
         auto result = vkCreateCommandPool(this->device.device, &poolInfo, nullptr, &commandPool);
 
         if (result != VK_SUCCESS)
         {
-            spdlog::error("Failed to create command pool. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to create command pool. Error: {}", toVkResultString(result));
             return {};
         }
 
@@ -1094,7 +1094,7 @@ namespace rasm::gfx
 
         if (result != VK_SUCCESS)
         {
-            spdlog::error("Failed to allocate command buffer. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to allocate command buffer. Error: {}", toVkResultString(result));
             return {};
         }
 
@@ -1119,7 +1119,7 @@ namespace rasm::gfx
 
         if (result != VK_SUCCESS)
         {
-            spdlog::error("Failed to create semaphore. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to create semaphore. Error: {}", toVkResultString(result));
             return {};
         }
 
@@ -1137,7 +1137,7 @@ namespace rasm::gfx
 
         if (result != VK_SUCCESS)
         {
-            spdlog::error("Failed to create fence. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to create fence. Error: {}", toVkResultString(result));
             return {};
         }
 
@@ -1161,9 +1161,9 @@ namespace rasm::gfx
 
         VkDescriptorSetLayoutBinding samplerLayoutBinding = {};
         samplerLayoutBinding.binding = 0;
-        samplerLayoutBinding.descriptorType = _to_vk_descriptor_type(desc.bindlessDescriptorSetLayout.type);
+        samplerLayoutBinding.descriptorType = toVkDescriptorType(desc.bindlessDescriptorSetLayout.type);
         samplerLayoutBinding.descriptorCount = desc.bindlessDescriptorSetLayout.count;
-        samplerLayoutBinding.stageFlags = _to_vk_shader_stage_flags(desc.bindlessDescriptorSetLayout.stage);
+        samplerLayoutBinding.stageFlags = toVkShaderStageFlags(desc.bindlessDescriptorSetLayout.stage);
 
         VkDescriptorSetLayoutCreateInfo layoutInfo = {};
         layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -1192,7 +1192,7 @@ namespace rasm::gfx
         for (const auto &poolSize : desc.descriptorPool.descriptorType)
         {
             VkDescriptorPoolSize vkPoolSize = {};
-            vkPoolSize.type = _to_vk_descriptor_type(poolSize.descriptorType);
+            vkPoolSize.type = toVkDescriptorType(poolSize.descriptorType);
             vkPoolSize.descriptorCount = poolSize.descriptorCount;
             poolSizes.push_back(vkPoolSize);
         }
@@ -1251,7 +1251,7 @@ namespace rasm::gfx
 
     Format VulkanContext::getSwapchainImageFormat()
     {
-        return _to_format(swapchain.swapchain.image_format);
+        return toFormat(swapchain.swapchain.image_format);
     }
 
     glm::uvec2 VulkanContext::getSwapchainExtent()
@@ -1266,24 +1266,24 @@ namespace rasm::gfx
         // A minimized window has a 0x0 surface, and no swapchain can be created for it. Keep the
         // old swapchain until the surface has pixels again (B5).
         VkSurfaceCapabilitiesKHR capabilities{};
-        auto capsResult = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device.physical_device, surface, &capabilities);
+        auto capsResult = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice.physical_device, surface, &capabilities);
         if (capsResult != VK_SUCCESS)
         {
-            spdlog::error("Failed to query surface capabilities. Error: {}", _to_vk_result_string(capsResult));
+            spdlog::error("Failed to query surface capabilities. Error: {}", toVkResultString(capsResult));
             return SwapchainStatus::FAILURE;
         }
         if (capabilities.currentExtent.width == 0 || capabilities.currentExtent.height == 0)
             return SwapchainStatus::OUT_OF_DATE;
 
-        auto swapchain_ret = _recreate_swapchain(this->device, this->swapchain, getDesiredSwapchainExtent());
+        auto swapchainRet = rebuildSwapchain(this->device, this->swapchain, getDesiredSwapchainExtent());
 
         // The old swapchain is retired and destroyed even when creation fails. Without a swapchain,
         // acquire reports OUT_OF_DATE so the caller keeps trying to recreate it.
         this->swapchain = {};
-        if (!swapchain_ret)
+        if (!swapchainRet)
             return SwapchainStatus::FAILURE;
 
-        this->swapchain.swapchain = swapchain_ret.value();
+        this->swapchain.swapchain = swapchainRet.value();
         if (!loadSwapchainImages())
         {
             for (const auto &image : swapchain.images)
@@ -1298,7 +1298,7 @@ namespace rasm::gfx
 
     bool VulkanContext::loadSwapchainImages()
     {
-        this->swapchain.imageFormat = _to_format(swapchain.swapchain.image_format);
+        this->swapchain.imageFormat = toFormat(swapchain.swapchain.image_format);
         this->swapchain.imageCount = swapchain.swapchain.image_count;
         this->swapchain.images.clear();
 
@@ -1349,7 +1349,7 @@ namespace rasm::gfx
         // VMA may choose non-coherent host-visible memory; coherent allocations make this a no-op.
         auto result = vmaFlushAllocation(allocator, buffer.allocation, offset, size);
         if (result != VK_SUCCESS)
-            spdlog::error("Failed to flush buffer memory: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to flush buffer memory: {}", toVkResultString(result));
     }
 
     void VulkanContext::updateBindlessDescriptorSet(const DescriptorSetVKHandle &bindlessSet, const TextureVKHandle &texture, uint32_t slot)
@@ -1493,10 +1493,10 @@ namespace rasm::gfx
 
     bool VulkanContext::beginCommandBuffer(const CommandBufferVKHandle &commandBuffer)
     {
-        auto reset_result = vkResetCommandBuffer(commandBuffer.commandBuffer, 0);
-        if (reset_result != VK_SUCCESS)
+        auto resetResult = vkResetCommandBuffer(commandBuffer.commandBuffer, 0);
+        if (resetResult != VK_SUCCESS)
         {
-            spdlog::error("Failed to reset command buffer. Error: {}", _to_vk_result_string(reset_result));
+            spdlog::error("Failed to reset command buffer. Error: {}", toVkResultString(resetResult));
             return false;
         }
 
@@ -1505,10 +1505,10 @@ namespace rasm::gfx
             .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
         };
 
-        auto begin_result = vkBeginCommandBuffer(commandBuffer.commandBuffer, &beginInfo);
-        if (begin_result != VK_SUCCESS)
+        auto beginResult = vkBeginCommandBuffer(commandBuffer.commandBuffer, &beginInfo);
+        if (beginResult != VK_SUCCESS)
         {
-            spdlog::error("Failed to begin command buffer. Error: {}", _to_vk_result_string(begin_result));
+            spdlog::error("Failed to begin command buffer. Error: {}", toVkResultString(beginResult));
             return false;
         }
         return true;
@@ -1519,7 +1519,7 @@ namespace rasm::gfx
         auto result = vkEndCommandBuffer(commandBuffer.commandBuffer);
         if (result != VK_SUCCESS)
         {
-            spdlog::error("Failed to end command buffer. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to end command buffer. Error: {}", toVkResultString(result));
             return false;
         }
         return true;
@@ -1621,10 +1621,10 @@ namespace rasm::gfx
             .signalSemaphoreCount = static_cast<uint32_t>(signalVkSemaphores.size()),
             .pSignalSemaphores = signalVkSemaphores.data()};
 
-        auto result = vkQueueSubmit(this->graphics_queue, 1, &submitInfo, fence.fence);
+        auto result = vkQueueSubmit(this->graphicsQueue, 1, &submitInfo, fence.fence);
         if (result != VK_SUCCESS)
         {
-            spdlog::error("Failed to submit command buffer. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to submit command buffer. Error: {}", toVkResultString(result));
             return false;
         }
         return true;
@@ -1642,10 +1642,10 @@ namespace rasm::gfx
             .pSwapchains = &this->swapchain.swapchain.swapchain,
             .pImageIndices = &imageIndex};
 
-        auto result = vkQueuePresentKHR(this->graphics_queue, &presentInfo);
-        auto status = _to_swapchain_status(result);
+        auto result = vkQueuePresentKHR(this->graphicsQueue, &presentInfo);
+        auto status = toSwapchainStatus(result);
         if (status == SwapchainStatus::FAILURE)
-            spdlog::error("Failed to present swapchain image. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to present swapchain image. Error: {}", toVkResultString(result));
         return status;
     }
 
@@ -1705,7 +1705,7 @@ namespace rasm::gfx
 
     void VulkanContext::bindIndexBuffer(const CommandBufferVKHandle &commandBuffer, const BufferVKHandle &buffer, uint64_t offset, Format indexType)
     {
-        auto vkIndexType = _to_vk_index_type(indexType);
+        auto vkIndexType = toVkIndexType(indexType);
         vkCmdBindIndexBuffer(commandBuffer.commandBuffer, buffer.buffer, offset, vkIndexType);
     }
 
@@ -1723,7 +1723,7 @@ namespace rasm::gfx
 
     void VulkanContext::pushConstants(const CommandBufferVKHandle &commandBuffer, const PipelineVKHandle &pipeline, ShaderType stage, const void *data, uint32_t size, uint32_t offset)
     {
-        auto stageFlags = _to_vk_shader_stage_flags(stage);
+        auto stageFlags = toVkShaderStageFlags(stage);
         vkCmdPushConstants(commandBuffer.commandBuffer, pipeline.layout, stageFlags, offset, size, data);
     }
 
@@ -1755,7 +1755,7 @@ namespace rasm::gfx
         auto result = vkWaitForFences(this->device.device, 1, &fence.fence, VK_TRUE, timeout);
         if (result != VK_SUCCESS)
         {
-            spdlog::error("Failed to wait for fence. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to wait for fence. Error: {}", toVkResultString(result));
             return false;
         }
         return true;
@@ -1766,7 +1766,7 @@ namespace rasm::gfx
         auto result = vkResetFences(this->device.device, 1, &fence.fence);
         if (result != VK_SUCCESS)
         {
-            spdlog::error("Failed to reset fence. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to reset fence. Error: {}", toVkResultString(result));
             return false;
         }
         return true;
@@ -1778,9 +1778,9 @@ namespace rasm::gfx
             return SwapchainStatus::OUT_OF_DATE;
 
         auto result = vkAcquireNextImageKHR(this->device.device, this->swapchain.swapchain, timeout, semaphore.semaphore, VK_NULL_HANDLE, &imageIndex);
-        auto status = _to_swapchain_status(result);
+        auto status = toSwapchainStatus(result);
         if (status == SwapchainStatus::FAILURE)
-            spdlog::error("Failed to acquire next image. Error: {}", _to_vk_result_string(result));
+            spdlog::error("Failed to acquire next image. Error: {}", toVkResultString(result));
         return status;
     }
 
@@ -1796,7 +1796,7 @@ namespace rasm::gfx
         memoryProperties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
         memoryProperties2.pNext = &budgetProperties;
 
-        vkGetPhysicalDeviceMemoryProperties2(physical_device, &memoryProperties2);
+        vkGetPhysicalDeviceMemoryProperties2(physicalDevice, &memoryProperties2);
 
         for (uint32_t i = 0; i < memoryProperties2.memoryProperties.memoryHeapCount; ++i)
         {
@@ -1809,13 +1809,13 @@ namespace rasm::gfx
 
             if (isDeviceLocal)
             {
-                vramStats.vram_budget += budget;
-                vramStats.vram_usage += usage;
+                vramStats.vramBudget += budget;
+                vramStats.vramUsage += usage;
             }
             else
             {
-                vramStats.host_budget += budget;
-                vramStats.host_usage += usage;
+                vramStats.hostBudget += budget;
+                vramStats.hostUsage += usage;
             }
         }
 
@@ -1825,7 +1825,7 @@ namespace rasm::gfx
     void VulkanContext::setObjectName(VkObjectType type, uint64_t handle, const std::string &name)
     {
         // Skip naming when the extension is not enabled; the function pointer is null or invalid then (B3)
-        if (!this->debug_utils_enabled || !this->dispatch_table.fp_vkSetDebugUtilsObjectNameEXT || name.empty())
+        if (!this->debugUtilsEnabled || !this->dispatchTable.fp_vkSetDebugUtilsObjectNameEXT || name.empty())
             return;
 
         VkDebugUtilsObjectNameInfoEXT nameInfo = {VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT};
@@ -1833,7 +1833,7 @@ namespace rasm::gfx
         nameInfo.objectHandle = handle;
         nameInfo.pObjectName = name.c_str();
 
-        this->dispatch_table.setDebugUtilsObjectNameEXT(&nameInfo);
+        this->dispatchTable.setDebugUtilsObjectNameEXT(&nameInfo);
     }
 
 }

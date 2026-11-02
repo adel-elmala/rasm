@@ -5,7 +5,7 @@
 static const uint   MAX_LIGHTS          = 8;
 static const uint   INVALID_TEXTURE_INDEX = 0xFFFFFFFF;
 
-enum VertexFormat : uint32_t { Full, PosOnly };
+enum class VertexFormat : uint32_t { FULL, POS_ONLY };
 
 // Selects how fragMain shades a model. Must match rasm::gfx::MaterialId.
 enum class MaterialId : uint32_t { PBR, UNLIT };
@@ -26,7 +26,7 @@ struct DrawInfo
     uint32_t        firstInstance;
 };
 
-enum LightType : uint32_t { Directional , Point };
+enum class LightType : uint32_t { DIRECTIONAL, POINT };
 
 // Must match rasm::gfx::Light exactly (scalar layout): the lights array sits between numLights and
 // the buffer device addresses in SceneData, so any size drift shifts vertsPtr/drawInfoPtr/
@@ -47,7 +47,7 @@ struct MetallicRoughnessMaterial
     uint32_t    baseColorTextureIndex;
     uint32_t    baseColorTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
     uint32_t    metallicRoughnessTextureIndex;
-    uint32_t    metallicRoughtnessTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
+    uint32_t    metallicRoughnessTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
     float       metallicFactor;
     float       roughnessFactor;
 };

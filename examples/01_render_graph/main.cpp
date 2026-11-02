@@ -7,7 +7,9 @@ int main()
         .windowWidth = 1920,
         .windowHeight = 1080,
         .enableValidation = true,
-        .preferredBackend = rasm::Backend::VULKAN};
+        .preferredBackend = rasm::Backend::VULKAN,
+        .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
+        .shaderDir = RASM_EXAMPLE_SHADER_DIR};
 
     rasm::Engine engine(config);
     if (!engine.running())
@@ -37,9 +39,9 @@ int main()
                                                          .orbitSensitivity = 1.0f},
                                            .easingSpeed = 6.0f});
     // Load resources
-    rasm::MeshHandle bunnyMesh = engine.loadMesh("assets/models/obj/bunny/bunny.obj");
+    rasm::MeshHandle bunnyMesh = engine.loadMesh("models/obj/bunny/bunny.obj");
 
-    rasm::TextureHandle albedoTexture = engine.loadTexture("assets/models/obj/bunny/bunny-atlas.jpg");
+    rasm::TextureHandle albedoTexture = engine.loadTexture("models/obj/bunny/bunny-atlas.jpg");
 
     if (!bunnyMesh.isValid() || !albedoTexture.isValid())
     {

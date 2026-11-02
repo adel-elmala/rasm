@@ -11,7 +11,9 @@ int main()
         .windowWidth = 720,
         .windowHeight = 480,
         .enableValidation = true,
-        .preferredBackend = rasm::Backend::VULKAN
+        .preferredBackend = rasm::Backend::VULKAN,
+        .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
+        .shaderDir = RASM_EXAMPLE_SHADER_DIR
 
     };
 
@@ -23,9 +25,9 @@ int main()
     rasm::SceneHandle scene = engine.createScene();
 
     // Load resources
-    rasm::MeshHandle potteryGLTF = engine.loadGLTF("assets/models/gltf/ancient_egyptian_pottery/scene.gltf");
-    rasm::MeshHandle characterGLTF = engine.loadGLTF("assets/models/gltf/cartoon-character/source/model.glb");
-    rasm::MeshHandle roomGLTF = engine.loadGLTF("assets/models/gltf/coffee-room/scene.gltf");
+    rasm::MeshHandle potteryGLTF = engine.loadGLTF("models/gltf/ancient_egyptian_pottery/scene.gltf");
+    rasm::MeshHandle characterGLTF = engine.loadGLTF("models/gltf/cartoon-character/source/model.glb");
+    rasm::MeshHandle roomGLTF = engine.loadGLTF("models/gltf/coffee-room/scene.gltf");
 
     if (!potteryGLTF.isValid() || !characterGLTF.isValid() || !roomGLTF.isValid())
     {
