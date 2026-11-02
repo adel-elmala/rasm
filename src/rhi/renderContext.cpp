@@ -1,551 +1,406 @@
+#include "rasm/render/renderContext.h"
+#include "rasm/engine.h"
+#include "rhi/device.h"
+
+#include "spdlog/spdlog.h"
+#include "tracy/Tracy.hpp"
+
 #include <algorithm>
 #include <cassert>
 #include <deque>
 #include <string>
 #include <unordered_map>
 
-#include "rasm/engine.h"
-#include "rasm/render/renderContext.h"
-#include "rhi/vulkan/vulkanContext.h"
-
-#include "spdlog/spdlog.h"
-#include "tracy/Tracy.hpp"
-
 namespace rasm
 {
+    namespace
+    {
+        // Invalid use of the public API: stop in the debugger in debug builds, fail the call with an error in release.
+        bool checkArgument(bool valid, const char *caller, const char *message)
+        {
+            if (valid)
+                return true;
+            spdlog::error("{}: {}", caller, message);
+            assert(false && "Invalid RenderContext argument, see the log.");
+            return false;
+        }
+
+        rhi::Buffer *lookup(const std::unordered_map<BufferHandle, rhi::Buffer *, HandleHash> &objects, const BufferHandle &handle, const char *caller)
+        {
+            auto it = objects.find(handle);
+            if (it == objects.end())
+            {
+                spdlog::error("{}: buffer handle not found.", caller);
+                return nullptr;
+            }
+            return it->second;
+        }
+
+        rhi::Texture *lookup(const std::unordered_map<TextureHandle, rhi::Texture *, HandleHash> &objects, const TextureHandle &handle, const char *caller)
+        {
+            auto it = objects.find(handle);
+            if (it == objects.end())
+            {
+                spdlog::error("{}: texture handle not found.", caller);
+                return nullptr;
+            }
+            return it->second;
+        }
+
+        rhi::Shader *lookup(const std::unordered_map<ShaderHandle, rhi::Shader *, HandleHash> &objects, const ShaderHandle &handle, const char *caller)
+        {
+            auto it = objects.find(handle);
+            if (it == objects.end())
+            {
+                spdlog::error("{}: shader handle not found.", caller);
+                return nullptr;
+            }
+            return it->second;
+        }
+
+        rhi::Pipeline *lookup(const std::unordered_map<PipelineHandle, rhi::Pipeline *, HandleHash> &objects, const PipelineHandle &handle, const char *caller)
+        {
+            auto it = objects.find(handle);
+            if (it == objects.end())
+            {
+                spdlog::error("{}: pipeline handle not found.", caller);
+                return nullptr;
+            }
+            return it->second;
+        }
+
+        rhi::CommandBuffer *lookup(const std::unordered_map<CommandBufferHandle, rhi::CommandBuffer *, HandleHash> &objects, const CommandBufferHandle &handle, const char *caller)
+        {
+            auto it = objects.find(handle);
+            if (it == objects.end())
+            {
+                spdlog::error("{}: command buffer handle not found.", caller);
+                return nullptr;
+            }
+            return it->second;
+        }
+
+        rhi::Fence *lookup(const std::unordered_map<FenceHandle, rhi::Fence *, HandleHash> &objects, const FenceHandle &handle, const char *caller)
+        {
+            auto it = objects.find(handle);
+            if (it == objects.end())
+            {
+                spdlog::error("{}: fence handle not found.", caller);
+                return nullptr;
+            }
+            return it->second;
+        }
+
+        rhi::DescriptorSetLayout *lookup(const std::unordered_map<DescriptorSetLayoutHandle, rhi::DescriptorSetLayout *, HandleHash> &objects, const DescriptorSetLayoutHandle &handle, const char *caller)
+        {
+            auto it = objects.find(handle);
+            if (it == objects.end())
+            {
+                spdlog::error("{}: descriptor set layout handle not found.", caller);
+                return nullptr;
+            }
+            return it->second;
+        }
+
+        rhi::DescriptorPool *lookup(const std::unordered_map<DescriptorPoolHandle, rhi::DescriptorPool *, HandleHash> &objects, const DescriptorPoolHandle &handle, const char *caller)
+        {
+            auto it = objects.find(handle);
+            if (it == objects.end())
+            {
+                spdlog::error("{}: descriptor pool handle not found.", caller);
+                return nullptr;
+            }
+            return it->second;
+        }
+
+        rhi::DescriptorSet *lookup(const std::unordered_map<DescriptorSetHandle, rhi::DescriptorSet *, HandleHash> &objects, const DescriptorSetHandle &handle, const char *caller)
+        {
+            auto it = objects.find(handle);
+            if (it == objects.end())
+            {
+                spdlog::error("{}: descriptor set handle not found.", caller);
+                return nullptr;
+            }
+            return it->second;
+        }
+    }
+
     // clang-format off
     struct RenderContext::Impl
     {
-        gfx::VulkanContext                                                                          vulkanContext = {};
-        // TODO: make the cache non-vulkan specific.
-        std::unordered_map<BufferHandle, gfx::BufferVKHandle, HandleHash>                           bufferCache;
-        std::unordered_map<TextureHandle, gfx::TextureVKHandle, HandleHash>                         textureCache;
-        std::unordered_map<TextureHandle, gfx::TextureVKHandle, HandleHash>                         swapchainImageCache;
-        std::unordered_map<ShaderHandle, gfx::ShaderVKHandle, HandleHash>                           shaderCache;
-        std::unordered_map<PipelineHandle, gfx::PipelineVKHandle, HandleHash>                       pipelineCache;
-        std::unordered_map<CommandPoolHandle, gfx::CommandPoolVKHandle, HandleHash>                 commandPoolCache;
-        std::unordered_map<CommandBufferHandle, gfx::CommandBufferVKHandle, HandleHash>             commandBufferCache;
-        std::unordered_map<SemaphoreHandle, gfx::SemaphoreVKHandle, HandleHash>                     semaphoreCache;
-        std::unordered_map<FenceHandle, gfx::FenceVKHandle, HandleHash>                             fenceCache;
-        std::unordered_map<RenderTargetHandle, RenderTarget, HandleHash>                            renderTargetCache;
-        std::unordered_map<DescriptorSetLayoutHandle, gfx::DescriptorSetLayoutVKHandle, HandleHash> descriptorSetLayoutCache;
-        std::unordered_map<DescriptorPoolHandle, gfx::DescriptorPoolVKHandle, HandleHash>           descriptorPoolCache;
-        std::unordered_map<DescriptorSetHandle, gfx::DescriptorSetVKHandle, HandleHash>             descriptorSetCache;
+        std::unique_ptr<rhi::Device>                                                            device;
+        rhi::Swapchain*                                                                         swapchain       = nullptr;
+        rhi::Sampler*                                                                           defaultSampler  = nullptr;
+        std::vector<TextureHandle>                                                              swapchainImages;  // also in textures, but owned by the swapchain
+
+        std::unordered_map<BufferHandle, rhi::Buffer*, HandleHash>                              buffers;
+        std::unordered_map<TextureHandle, rhi::Texture*, HandleHash>                            textures;
+        std::unordered_map<ShaderHandle, rhi::Shader*, HandleHash>                              shaders;
+        std::unordered_map<PipelineHandle, rhi::Pipeline*, HandleHash>                          pipelines;
+        std::unordered_map<CommandBufferHandle, rhi::CommandBuffer*, HandleHash>                commandBuffers;
+        std::unordered_map<FenceHandle, rhi::Fence*, HandleHash>                                fences;
+        std::unordered_map<DescriptorSetLayoutHandle, rhi::DescriptorSetLayout*, HandleHash>    descriptorSetLayouts;
+        std::unordered_map<DescriptorPoolHandle, rhi::DescriptorPool*, HandleHash>              descriptorPools;
+        std::unordered_map<DescriptorSetHandle, rhi::DescriptorSet*, HandleHash>                descriptorSets;
+        std::unordered_map<RenderTargetHandle, RenderTarget, HandleHash>                        renderTargets;
 
         // Dedup caches, only for immutable objects keyed on their full state. Mutable resources
         // (buffers, textures, descriptor pools/sets) are always created fresh (B1).
-        std::unordered_map<ResourceDesc, ShaderHandle, ResourceDescHash>                            shaderDescCache;
-        std::deque<std::string>                                                                     shaderSources;  // SPIR-V the shaderDescCache keys point at; a deque keeps those pointers stable
-        std::unordered_map<ResourceDesc, PipelineHandle, ResourceDescHash>                          pipelineDescCache;
-        std::unordered_map<ResourceDesc, DescriptorSetLayoutHandle, ResourceDescHash>               descriptorSetLayoutDescCache;
+        std::unordered_map<ResourceDesc, ShaderHandle, ResourceDescHash>                        shaderDescCache;
+        std::deque<std::string>                                                                 shaderSources;  // SPIR-V the shaderDescCache keys point at; a deque keeps those pointers stable
+        std::unordered_map<ResourceDesc, PipelineHandle, ResourceDescHash>                      pipelineDescCache;
+        std::unordered_map<ResourceDesc, DescriptorSetLayoutHandle, ResourceDescHash>           descriptorSetLayoutDescCache;
 
-        uint32_t                                                                                    nextBindlessTextureIndex = 0;
+        uint32_t                                                                                nextBindlessTextureIndex = 0;
+
+        void registerSwapchainImages(HandleManager& handleManager)
+        {
+            for (uint32_t i = 0; i < swapchain->getImageCount(); ++i)
+            {
+                auto handle = handleManager.getNextTextureHandle();
+                textures[handle] = swapchain->getImage(i);
+                swapchainImages.push_back(handle);
+            }
+        }
+
+        void unregisterSwapchainImages()
+        {
+            for (const auto& handle : swapchainImages)
+                textures.erase(handle);
+            swapchainImages.clear();
+        }
     };
     // clang-format on
 
-    RenderContext::RenderContext(Engine *owner) : engine(owner), impl(std::make_unique<Impl>())
-    {
-        impl->bufferCache.reserve(25);   // Pre-allocate for 25 buffers
-        impl->textureCache.reserve(25);  // Pre-allocate for 25 textures
-        impl->shaderCache.reserve(25);   // Pre-allocate for 25 shaders
-        impl->pipelineCache.reserve(25); // Pre-allocate for 25 pipelines
-    }
+    RenderContext::RenderContext(Engine *owner) : engine(owner), impl(std::make_unique<Impl>()) {}
 
     RenderContext::~RenderContext() = default;
 
     bool RenderContext::initialize(Backend backend)
     {
-        this->backend = backend;
+        const auto config = engine->getConfig();
+        const auto &window = engine->getMainWindow();
 
-        switch (backend)
+        impl->device = rhi::createDevice(backend, {.appName = config.appName, .window = &window, .enableValidation = config.enableValidation});
+        if (!impl->device)
+            return false;
+
+        impl->swapchain = impl->device->createSwapchain({.width = window.pixelWidth, .height = window.pixelHeight});
+        if (!impl->swapchain)
         {
-        case Backend::VULKAN:
-            impl->vulkanContext = gfx::VulkanContext(engine);
-            if (!impl->vulkanContext.initialize())
-            {
-                spdlog::error("Failed to initialize Vulkan context.");
-                return false;
-            }
-            return true;
-        case Backend::DX12:
-            spdlog::error("DirectX 12 backend is not implemented yet.");
-            return false;
-        case Backend::METAL:
-            spdlog::error("Metal backend is not implemented yet.");
-            return false;
-        default:
-            spdlog::error("Unsupported backend.");
+            spdlog::error("Failed to create the swapchain.");
             return false;
         }
+        impl->registerSwapchainImages(engine->handleManager);
+
+        // Every bindless texture is sampled through this one sampler.
+        impl->defaultSampler = impl->device->createSampler({.name = "Default Sampler", .maxAnisotropy = 8.0f});
+        if (!impl->defaultSampler)
+            return false;
+
+        return true;
     }
 
     void RenderContext::cleanup()
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            impl->vulkanContext.waitIdle(); // Ensure the device is idle before cleanup
+        if (!impl->device)
+            return;
 
-            for (const auto &[handle, descriptorSetLayout] : impl->descriptorSetLayoutCache)
-            {
-                impl->vulkanContext.removeDescriptorSetLayout(descriptorSetLayout);
-            }
+        auto &device = *impl->device;
+        device.waitIdle();
 
-            for (const auto &[handle, descriptorPool] : impl->descriptorPoolCache)
-            {
-                impl->vulkanContext.removeDescriptorPool(descriptorPool);
-            }
+        for (const auto &[handle, descriptorSet] : impl->descriptorSets)
+            device.destroyDescriptorSet(descriptorSet);
+        for (const auto &[handle, pool] : impl->descriptorPools)
+            device.destroyDescriptorPool(pool);
+        for (const auto &[handle, layout] : impl->descriptorSetLayouts)
+            device.destroyDescriptorSetLayout(layout);
+        for (const auto &[handle, rhiCommandBuffer] : impl->commandBuffers)
+            device.destroyCommandBuffer(rhiCommandBuffer);
+        for (const auto &[handle, fence] : impl->fences)
+            device.destroyFence(fence);
+        for (const auto &[handle, buffer] : impl->buffers)
+            device.destroyBuffer(buffer);
+        impl->unregisterSwapchainImages();
+        for (const auto &[handle, texture] : impl->textures)
+            device.destroyTexture(texture);
+        for (const auto &[handle, pipeline] : impl->pipelines)
+            device.destroyPipeline(pipeline);
+        for (const auto &[handle, shader] : impl->shaders)
+            device.destroyShader(shader);
+        if (impl->defaultSampler)
+            device.destroySampler(impl->defaultSampler);
+        if (impl->swapchain)
+            device.destroySwapchain(impl->swapchain);
 
-            for (const auto &[handle, commandPool] : impl->commandPoolCache)
-            {
-                impl->vulkanContext.removeCommandPool(commandPool);
-            }
-
-            for (const auto &[handle, fence] : impl->fenceCache)
-            {
-                impl->vulkanContext.removeFence(fence);
-            }
-
-            for (const auto &[handle, semaphore] : impl->semaphoreCache)
-            {
-                impl->vulkanContext.removeSemaphore(semaphore);
-            }
-
-            for (const auto &[handle, buffer] : impl->bufferCache)
-            {
-                impl->vulkanContext.removeBuffer(buffer);
-            }
-
-            for (const auto &[handle, texture] : impl->textureCache)
-            {
-                if (impl->swapchainImageCache.find(handle) == impl->swapchainImageCache.end()) // Only remove non-swapchain textures
-                {
-                    impl->vulkanContext.removeTexture(texture);
-                }
-            }
-
-            for (const auto &[handle, shader] : impl->shaderCache)
-            {
-                impl->vulkanContext.removeShader(shader);
-            }
-
-            for (const auto &[handle, pipeline] : impl->pipelineCache)
-            {
-                impl->vulkanContext.removePipeline(pipeline);
-            }
-            impl->vulkanContext.cleanup();
-            impl->bufferCache.clear();
-            impl->textureCache.clear();
-            impl->shaderCache.clear();
-            impl->pipelineCache.clear();
-            impl->commandPoolCache.clear();
-            impl->commandBufferCache.clear();
-            impl->fenceCache.clear();
-            impl->semaphoreCache.clear();
-            impl->descriptorSetLayoutCache.clear();
-            impl->descriptorPoolCache.clear();
-            impl->descriptorSetCache.clear();
-            impl->swapchainImageCache.clear();
-            impl->renderTargetCache.clear();
-            impl->shaderDescCache.clear();
-            impl->shaderSources.clear();
-            impl->pipelineDescCache.clear();
-            impl->descriptorSetLayoutDescCache.clear();
-            impl->nextBindlessTextureIndex = 0;
-            break;
-        }
-        case Backend::DX12:
-            break;
-        case Backend::METAL:
-            break;
-        default:
-            spdlog::error("Unsupported backend during cleanup.");
-            break;
-        }
+        impl = std::make_unique<Impl>();
     }
 
     BufferHandle RenderContext::createBuffer(ResourceDesc desc)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto buffer = impl->vulkanContext.createBuffer(desc);
-            if (!buffer)
-            {
-                spdlog::error("Failed to create Vulkan buffer.");
-                return {};
-            }
-            BufferHandle handle = engine->handleManager.getNextBufferHandle();
-            buffer->handle = handle;
+        if (!checkArgument(desc.type == ResourceType::BUFFER, __func__, "desc.type must be BUFFER."))
+            return {};
 
-            impl->bufferCache[handle] = buffer.value();
-            return handle;
-        }
-        case Backend::DX12:
-            return {}; // Placeholder
-        case Backend::METAL:
-            return {}; // Placeholder
-        default:
-            spdlog::error("Unsupported backend during buffer creation.");
-            return {}; // Placeholder
-        }
+        auto *buffer = impl->device->createBuffer(desc);
+        if (!buffer)
+            return {};
+
+        BufferHandle handle = engine->handleManager.getNextBufferHandle();
+        impl->buffers[handle] = buffer;
+        return handle;
     }
 
     TextureHandle RenderContext::createTexture(ResourceDesc desc)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto texture = impl->vulkanContext.createTexture(desc);
-            if (!texture)
-            {
-                spdlog::error("Failed to create Vulkan texture.");
-                return {};
-            }
-            TextureHandle handle = engine->handleManager.getNextTextureHandle();
-            texture->handle = handle;
-            impl->textureCache[handle] = texture.value();
-            return handle;
-        }
-        case Backend::DX12:
+        if (!checkArgument(desc.type == ResourceType::TEXTURE, __func__, "desc.type must be TEXTURE."))
             return {};
-        case Backend::METAL:
+
+        auto *texture = impl->device->createTexture(desc);
+        if (!texture)
             return {};
-        default:
-            spdlog::error("Unsupported backend during texture creation.");
-            return {};
-        }
+
+        TextureHandle handle = engine->handleManager.getNextTextureHandle();
+        impl->textures[handle] = texture;
+        return handle;
     }
 
     ShaderHandle RenderContext::createShader(ResourceDesc desc)
     {
+        if (!checkArgument(desc.type == ResourceType::SHADER, __func__, "desc.type must be SHADER.") ||
+            !checkArgument(desc.shader.source != nullptr && desc.shader.sourceSize > 0, __func__, "the shader has no source."))
+            return {};
+
         auto cachedIt = impl->shaderDescCache.find(desc);
         if (cachedIt != impl->shaderDescCache.end())
-        {
             return cachedIt->second;
-        }
 
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto shader = impl->vulkanContext.createShader(desc);
-            if (!shader)
-            {
-                spdlog::error("Failed to create Vulkan shader.");
-                return {};
-            }
-            ShaderHandle handle = engine->handleManager.getNextShaderHandle();
-            shader->handle = handle;
-
-            // Callers pass temporary SPIR-V, but the cache key is compared by content on every later lookup.
-            impl->shaderSources.emplace_back(desc.shader.source, desc.shader.sourceSize);
-            desc.shader.source = impl->shaderSources.back().data();
-            shader->desc.shader.source = desc.shader.source;
-
-            impl->shaderCache[handle] = shader.value();
-            impl->shaderDescCache[desc] = handle;
-
-            return handle;
-        }
-        case Backend::DX12:
+        auto *shader = impl->device->createShader(desc);
+        if (!shader)
             return {};
-        case Backend::METAL:
-            return {};
-        default:
-            spdlog::error("Unsupported backend during shader creation.");
-            return {};
-        }
+
+        ShaderHandle handle = engine->handleManager.getNextShaderHandle();
+
+        // Callers pass temporary SPIR-V, but the cache key is compared by content on every later lookup.
+        impl->shaderSources.emplace_back(desc.shader.source, desc.shader.sourceSize);
+        desc.shader.source = impl->shaderSources.back().data();
+        shader->desc.shader.source = desc.shader.source;
+
+        impl->shaders[handle] = shader;
+        impl->shaderDescCache[desc] = handle;
+        return handle;
     }
 
     PipelineHandle RenderContext::createPipeline(ResourceDesc desc)
     {
-        assert(desc.type == ResourceType::GRAPHICS_PIPELINE || desc.type == ResourceType::COMPUTE_PIPELINE);
+        if (!checkArgument(desc.type == ResourceType::GRAPHICS_PIPELINE || desc.type == ResourceType::COMPUTE_PIPELINE, __func__, "desc.type must be GRAPHICS_PIPELINE or COMPUTE_PIPELINE."))
+            return {};
 
         auto cachedIt = impl->pipelineDescCache.find(desc);
         if (cachedIt != impl->pipelineDescCache.end())
-        {
             return cachedIt->second;
-        }
 
-        switch (backend)
+        // TODO: compute pipelines (phase 2).
+        if (desc.type != ResourceType::GRAPHICS_PIPELINE)
         {
-        case Backend::VULKAN:
-        {
-            // TODO: only graphics pipelines are supported in this implementation, need to add compute pipeline support later.
-            if (desc.type != ResourceType::GRAPHICS_PIPELINE)
-            {
-                spdlog::error("Only graphics pipelines are supported in this implementation.");
-                return {};
-            }
-
-            auto vertexIt = impl->shaderCache.find(desc.pipeline.vertexShader);
-            auto fragmentIt = impl->shaderCache.find(desc.pipeline.fragmentShader);
-            auto bindlessLayoutIt = impl->descriptorSetLayoutCache.find(desc.pipeline.descriptorSetLayout);
-            if (vertexIt == impl->shaderCache.end() || fragmentIt == impl->shaderCache.end() || bindlessLayoutIt == impl->descriptorSetLayoutCache.end())
-            {
-                spdlog::error("Shader or descriptor set layout handle not found in cache during pipeline creation.");
-                return {};
-            }
-
-            auto pipeline = impl->vulkanContext.createGraphicsPipeline(desc, vertexIt->second, fragmentIt->second, bindlessLayoutIt->second);
-            if (!pipeline)
-            {
-                spdlog::error("Failed to create Vulkan pipeline.");
-                return {};
-            }
-            PipelineHandle handle = engine->handleManager.getNextPipelineHandle();
-            pipeline->handle = handle;
-
-            impl->pipelineCache[handle] = pipeline.value();
-            impl->pipelineDescCache[desc] = handle;
-            return handle;
-        }
-        case Backend::DX12:
-            return {};
-        case Backend::METAL:
-            return {};
-        default:
-            spdlog::error("Unsupported backend during pipeline creation.");
+            spdlog::error("Only graphics pipelines are supported.");
             return {};
         }
+
+        auto *vertexShader = lookup(impl->shaders, desc.pipeline.vertexShader, __func__);
+        auto *fragmentShader = lookup(impl->shaders, desc.pipeline.fragmentShader, __func__);
+        auto *layout = lookup(impl->descriptorSetLayouts, desc.pipeline.descriptorSetLayout, __func__);
+        if (!vertexShader || !fragmentShader || !layout)
+            return {};
+
+        auto *pipeline = impl->device->createGraphicsPipeline(desc, vertexShader, fragmentShader, layout);
+        if (!pipeline)
+            return {};
+
+        PipelineHandle handle = engine->handleManager.getNextPipelineHandle();
+        impl->pipelines[handle] = pipeline;
+        impl->pipelineDescCache[desc] = handle;
+        return handle;
     }
 
     DescriptorSetLayoutHandle RenderContext::createBindlessDescriptorSetLayout(ResourceDesc desc)
     {
-        assert(desc.type == ResourceType::BINDLESS_DESCRIPTOR_SET_LAYOUT);
+        if (!checkArgument(desc.type == ResourceType::BINDLESS_DESCRIPTOR_SET_LAYOUT, __func__, "desc.type must be BINDLESS_DESCRIPTOR_SET_LAYOUT."))
+            return {};
 
         auto cachedIt = impl->descriptorSetLayoutDescCache.find(desc);
         if (cachedIt != impl->descriptorSetLayoutDescCache.end())
-        {
             return cachedIt->second;
-        }
 
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto layout = impl->vulkanContext.createBindlessDescriptorSetLayout(desc);
-            if (!layout)
-            {
-                spdlog::error("Failed to create Vulkan bindless descriptor set layout.");
-                return {};
-            }
-            DescriptorSetLayoutHandle handle = engine->handleManager.getNextDescriptorSetLayoutHandle();
-            layout->handle = handle;
-
-            impl->descriptorSetLayoutCache[handle] = layout.value();
-            impl->descriptorSetLayoutDescCache[desc] = handle;
-
-            return handle;
-        }
-        case Backend::DX12:
-        case Backend::METAL:
-        default:
-            spdlog::error("Unsupported backend during bindless descriptor set layout creation.");
+        auto *layout = impl->device->createBindlessDescriptorSetLayout(desc);
+        if (!layout)
             return {};
-        }
+
+        DescriptorSetLayoutHandle handle = engine->handleManager.getNextDescriptorSetLayoutHandle();
+        impl->descriptorSetLayouts[handle] = layout;
+        impl->descriptorSetLayoutDescCache[desc] = handle;
+        return handle;
     }
 
     DescriptorPoolHandle RenderContext::createDescriptorPool(ResourceDesc desc)
     {
-        assert(desc.type == ResourceType::DESCRIPTOR_POOL);
-
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto pool = impl->vulkanContext.createDescriptorPool(desc);
-            if (!pool)
-            {
-                spdlog::error("Failed to create Vulkan descriptor pool.");
-                return {};
-            }
-            DescriptorPoolHandle handle = engine->handleManager.getNextDescriptorPoolHandle();
-            pool->handle = handle;
-
-            impl->descriptorPoolCache[handle] = pool.value();
-
-            return handle;
-        }
-        case Backend::DX12:
-        case Backend::METAL:
-        default:
-            spdlog::error("Unsupported backend during descriptor pool creation.");
+        if (!checkArgument(desc.type == ResourceType::DESCRIPTOR_POOL, __func__, "desc.type must be DESCRIPTOR_POOL."))
             return {};
-        }
+
+        auto *pool = impl->device->createDescriptorPool(desc);
+        if (!pool)
+            return {};
+
+        DescriptorPoolHandle handle = engine->handleManager.getNextDescriptorPoolHandle();
+        impl->descriptorPools[handle] = pool;
+        return handle;
     }
 
     DescriptorSetHandle RenderContext::allocateDescriptorSet(ResourceDesc desc, const DescriptorPoolHandle &pool, const DescriptorSetLayoutHandle &layout)
     {
-        assert(desc.type == ResourceType::DESCRIPTOR_SET);
-
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto poolIt = impl->descriptorPoolCache.find(pool);
-            auto layoutIt = impl->descriptorSetLayoutCache.find(layout);
-            if (poolIt == impl->descriptorPoolCache.end() || layoutIt == impl->descriptorSetLayoutCache.end())
-            {
-                spdlog::error("Descriptor pool or layout handle not found in cache during descriptor set allocation.");
-                return {};
-            }
-
-            auto descriptorSet = impl->vulkanContext.allocateDescriptorSet(desc, poolIt->second, layoutIt->second);
-            if (!descriptorSet)
-            {
-                spdlog::error("Failed to allocate Vulkan descriptor set.");
-                return {};
-            }
-            DescriptorSetHandle handle = engine->handleManager.getNextDescriptorSetHandle();
-            descriptorSet->handle = handle;
-
-            impl->descriptorSetCache[handle] = descriptorSet.value();
-
-            return handle;
-        }
-        case Backend::DX12:
-        case Backend::METAL:
-        default:
-            spdlog::error("Unsupported backend during descriptor set allocation.");
+        if (!checkArgument(desc.type == ResourceType::DESCRIPTOR_SET, __func__, "desc.type must be DESCRIPTOR_SET."))
             return {};
-        }
+
+        auto *rhiPool = lookup(impl->descriptorPools, pool, __func__);
+        auto *rhiLayout = lookup(impl->descriptorSetLayouts, layout, __func__);
+        if (!rhiPool || !rhiLayout)
+            return {};
+
+        auto *descriptorSet = impl->device->allocateDescriptorSet(desc, rhiPool, rhiLayout);
+        if (!descriptorSet)
+            return {};
+
+        DescriptorSetHandle handle = engine->handleManager.getNextDescriptorSetHandle();
+        impl->descriptorSets[handle] = descriptorSet;
+        return handle;
     }
 
-    CommandPoolHandle RenderContext::createCommandPool()
+    CommandBufferHandle RenderContext::createCommandBuffer(const std::string &name)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto commandPool = impl->vulkanContext.createCommandPool();
-            if (!commandPool)
-            {
-                spdlog::error("Failed to create Vulkan command pool.");
-                return {};
-            }
-
-            CommandPoolHandle handle = engine->handleManager.getNextCommandPoolHandle();
-            commandPool->handle = handle;
-
-            impl->commandPoolCache[handle] = commandPool.value();
-
-            return handle;
-        }
-        case Backend::DX12:
+        auto *rhiCommandBuffer = impl->device->createCommandBuffer(rhi::QueueType::GRAPHICS, name);
+        if (!rhiCommandBuffer)
             return {};
-        case Backend::METAL:
-            return {};
-        default:
-            spdlog::error("Unsupported backend during command pool creation.");
-            return {};
-        }
+
+        CommandBufferHandle handle = engine->handleManager.getNextCommandBufferHandle();
+        impl->commandBuffers[handle] = rhiCommandBuffer;
+        return handle;
     }
 
-    CommandBufferHandle RenderContext::createCommandBuffer(const CommandPoolHandle &commandPool)
+    FenceHandle RenderContext::createFence(const std::string &name, uint64_t initialValue)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto it = impl->commandPoolCache.find(commandPool);
-            if (it == impl->commandPoolCache.end())
-            {
-                spdlog::error("Failed to create Vulkan command buffer: command pool handle not found.");
-                return {};
-            }
-
-            auto commandBuffer = impl->vulkanContext.createCommandBuffer(it->second);
-            if (!commandBuffer)
-            {
-                spdlog::error("Failed to create Vulkan command buffer.");
-                return {};
-            }
-
-            CommandBufferHandle handle = engine->handleManager.getNextCommandBufferHandle();
-            commandBuffer->handle = handle;
-
-            impl->commandBufferCache[handle] = commandBuffer.value();
-
-            return handle;
-        }
-        case Backend::DX12:
+        auto *fence = impl->device->createFence(initialValue, name);
+        if (!fence)
             return {};
-        case Backend::METAL:
-            return {};
-        default:
-            spdlog::error("Unsupported backend during command buffer creation.");
-            return {};
-        }
-    }
 
-    SemaphoreHandle RenderContext::createSemaphore(bool timeline, uint64_t initialValue)
-    {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto semaphore = impl->vulkanContext.createSemaphore(timeline, initialValue);
-            if (!semaphore)
-            {
-                spdlog::error("Failed to create Vulkan semaphore.");
-                return {};
-            }
-
-            SemaphoreHandle handle = engine->handleManager.getNextSemaphoreHandle();
-            semaphore->handle = handle; // Semaphores might not need a handle in the same way as buffers/textures
-
-            // Optionally store in a cache if you want to manage semaphores similarly
-            impl->semaphoreCache[handle] = semaphore.value();
-
-            return handle;
-        }
-        case Backend::DX12:
-            return {};
-        case Backend::METAL:
-            return {};
-        default:
-            spdlog::error("Unsupported backend during semaphore creation.");
-            return {};
-        }
-    }
-
-    FenceHandle RenderContext::createFence(bool signaled)
-    {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto fence = impl->vulkanContext.createFence(signaled);
-            if (!fence)
-            {
-                spdlog::error("Failed to create Vulkan fence.");
-                return {};
-            }
-
-            FenceHandle handle = engine->handleManager.getNextFenceHandle();
-            fence->handle = handle; // Fences might not need a handle in the same way as buffers/textures
-
-            impl->fenceCache[handle] = fence.value();
-
-            return handle;
-        }
-        case Backend::DX12:
-            return {};
-        case Backend::METAL:
-            return {};
-        default:
-            spdlog::error("Unsupported backend during fence creation.");
-            return {};
-        }
+        FenceHandle handle = engine->handleManager.getNextFenceHandle();
+        impl->fences[handle] = fence;
+        return handle;
     }
 
     RenderTargetHandle RenderContext::createRenderTarget(const ResourceDesc &desc)
     {
+        if (!checkArgument(desc.type == ResourceType::RENDER_TARGET, __func__, "desc.type must be RENDER_TARGET."))
+            return {};
+
         ResourceDesc colorDesc{};
         colorDesc.type = ResourceType::TEXTURE;
         colorDesc.name = desc.name + " Color Texture";
@@ -608,17 +463,16 @@ namespace rasm
         }
 
         RenderTargetHandle rtHandle = engine->handleManager.getNextRenderTargetHandle();
-        impl->renderTargetCache[rtHandle] = rt;
-
+        impl->renderTargets[rtHandle] = rt;
         return rtHandle;
     }
 
     const RenderTarget &RenderContext::getRenderTarget(const RenderTargetHandle &handle)
     {
-        auto it = impl->renderTargetCache.find(handle);
-        if (it == impl->renderTargetCache.end())
+        auto it = impl->renderTargets.find(handle);
+        if (it == impl->renderTargets.end())
         {
-            spdlog::error("Render target handle not found in cache.");
+            spdlog::error("Render target handle not found.");
             static RenderTarget emptyRenderTarget{};
             return emptyRenderTarget;
         }
@@ -627,268 +481,96 @@ namespace rasm
 
     void RenderContext::destroyTexture(const TextureHandle &texture)
     {
-        switch (backend)
+        if (std::find(impl->swapchainImages.begin(), impl->swapchainImages.end(), texture) != impl->swapchainImages.end())
         {
-        case Backend::VULKAN:
-        {
-            auto it = impl->textureCache.find(texture);
-            if (it == impl->textureCache.end())
-            {
-                spdlog::error("Texture handle not found in cache during destroyTexture.");
-                return;
-            }
-            impl->vulkanContext.removeTexture(it->second);
-            impl->textureCache.erase(it);
-            break;
+            spdlog::error("Swapchain images belong to the swapchain and can't be destroyed.");
+            return;
         }
-        case Backend::DX12:
-        case Backend::METAL:
-            break;
-        default:
-            spdlog::error("Unsupported backend during texture destruction.");
-            break;
-        }
+
+        auto *rhiTexture = lookup(impl->textures, texture, __func__);
+        if (!rhiTexture)
+            return;
+        impl->device->destroyTexture(rhiTexture);
+        impl->textures.erase(texture);
     }
 
     void RenderContext::destroyBuffer(const BufferHandle &buffer)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto it = impl->bufferCache.find(buffer);
-            if (it == impl->bufferCache.end())
-            {
-                spdlog::error("Buffer handle not found in cache during destroyBuffer.");
-                return;
-            }
-            impl->vulkanContext.removeBuffer(it->second);
-            impl->bufferCache.erase(it);
-            break;
-        }
-        case Backend::DX12:
-        case Backend::METAL:
-            break;
-        default:
-            spdlog::error("Unsupported backend during buffer destruction.");
-            break;
-        }
-    }
-
-    void RenderContext::destroySemaphore(const SemaphoreHandle &semaphore)
-    {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto it = impl->semaphoreCache.find(semaphore);
-            if (it == impl->semaphoreCache.end())
-            {
-                spdlog::error("Semaphore handle not found in cache during destroySemaphore.");
-                return;
-            }
-            impl->vulkanContext.removeSemaphore(it->second);
-            impl->semaphoreCache.erase(it);
-            break;
-        }
-        case Backend::DX12:
-            // Implement DX12 semaphore destruction if needed
-            break;
-        case Backend::METAL:
-            // Implement Metal semaphore destruction if needed
-            break;
-        default:
-            spdlog::error("Unsupported backend during semaphore destruction.");
-            break;
-        }
+        auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
+        if (!rhiBuffer)
+            return;
+        impl->device->destroyBuffer(rhiBuffer);
+        impl->buffers.erase(buffer);
     }
 
     std::vector<TextureHandle> RenderContext::getSwapchainImages()
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto images = impl->vulkanContext.getSwapchainImages();
-            std::vector<TextureHandle> handles;
-            for (auto &image : images)
-            {
-                auto handle = engine->handleManager.getNextTextureHandle();
-                image.handle = handle;
-                impl->textureCache[handle] = image;
-                impl->swapchainImageCache[handle] = image; // Store in swapchain-specific cache
-                handles.push_back(handle);
-            }
-            return handles;
-        }
-        case Backend::DX12:
-            return {};
-        case Backend::METAL:
-            return {};
-        default:
-            spdlog::error("Unsupported backend during swapchain image retrieval.");
-            return {};
-        }
-    }
-
-    bool RenderContext::fillBuffer(const BufferHandle &buffer, const void *data, size_t size, size_t offset)
-    {
-        assert(data != nullptr && "Data pointer cannot be null.");
-        assert(size > 0 && "Size must be greater than zero.");
-        assert(offset >= 0 && "Offset must be non-negative.");
-        assert(buffer.isValid() && "Buffer handle must be valid.");
-
-        auto it = impl->bufferCache.find(buffer);
-        if (it == impl->bufferCache.end())
-        {
-            spdlog::error("Buffer handle not found in cache during fillBuffer.");
-            return false;
-        }
-
-        auto gpuBuffer = it->second;
-
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            impl->vulkanContext.fillBuffer(gpuBuffer, data, size, offset);
-            return true;
-        }
-        case Backend::DX12:
-            return false;
-        case Backend::METAL:
-            return false;
-        default:
-            spdlog::error("Unsupported backend during fillBuffer.");
-            return false;
-        }
-    }
-
-    bool RenderContext::fillTexture(const TextureHandle &textureHandle, const void *data)
-    {
-        ZoneScoped;
-
-        assert(data != nullptr && "Data pointer cannot be null.");
-        assert(textureHandle.isValid() && "Texture handle must be valid.");
-
-        auto it = impl->textureCache.find(textureHandle);
-        if (it == impl->textureCache.end())
-        {
-            spdlog::error("Texture handle not found in cache during fillTexture.");
-            return false;
-        }
-
-        auto gpuTexture = it->second;
-
-        switch (backend)
-        {
-        case Backend::VULKAN:
-            impl->vulkanContext.fillTexture(gpuTexture, data);
-            return true;
-        case Backend::DX12:
-            spdlog::error("DirectX 12 backend is not implemented yet for fillTexture.");
-            return false;
-        case Backend::METAL:
-            spdlog::error("Metal backend is not implemented yet for fillTexture.");
-            return false;
-        default:
-            spdlog::error("Unsupported backend during fillTexture.");
-            return false;
-        }
+        return impl->swapchainImages;
     }
 
     Format RenderContext::getSwapchainImageFormat()
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-            return impl->vulkanContext.getSwapchainImageFormat();
-        case Backend::DX12:
-            return Format::UNKNOWN;
-        case Backend::METAL:
-            return Format::UNKNOWN;
-        default:
-            spdlog::error("Unsupported backend during swapchain image format retrieval.");
-            return Format::UNKNOWN;
-        }
+        return impl->swapchain->getFormat();
     }
 
     glm::uvec2 RenderContext::getSwapchainExtent()
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-            return impl->vulkanContext.getSwapchainExtent();
-        case Backend::DX12:
-            return {};
-        case Backend::METAL:
-            return {};
-        default:
-            spdlog::error("Unsupported backend during swapchain extent retrieval.");
-            return {};
-        }
+        return impl->swapchain->getExtent();
+    }
+
+    bool RenderContext::fillBuffer(const BufferHandle &buffer, const void *data, size_t size, size_t offset)
+    {
+        if (!checkArgument(data != nullptr && size > 0, __func__, "data must be non-null and size greater than zero."))
+            return false;
+
+        auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
+        if (!rhiBuffer)
+            return false;
+        return impl->device->fillBuffer(rhiBuffer, data, size, offset);
+    }
+
+    bool RenderContext::fillTexture(const TextureHandle &texture, const void *data)
+    {
+        ZoneScoped;
+
+        if (!checkArgument(data != nullptr, __func__, "data must be non-null."))
+            return false;
+
+        auto *rhiTexture = lookup(impl->textures, texture, __func__);
+        if (!rhiTexture)
+            return false;
+        return impl->device->fillTexture(rhiTexture, data);
     }
 
     uint64_t RenderContext::getBufferDeviceAddress(const BufferHandle &buffer)
     {
-        auto it = impl->bufferCache.find(buffer);
-        if (it == impl->bufferCache.end())
+        auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
+        if (!rhiBuffer)
+            return 0;
+
+        if (rhiBuffer->deviceAddress == 0)
         {
-            spdlog::error("Buffer handle not found in cache during getBufferDeviceAddress.");
+            spdlog::error("Buffer '{}' has no device address.", rhiBuffer->desc.name);
             return 0;
         }
-
-        auto gpuBuffer = it->second;
-
-        if (gpuBuffer.desc.type != ResourceType::BUFFER)
-        {
-            spdlog::error("Handle is not a buffer during getBufferDeviceAddress.");
-            return 0;
-        }
-
-        if (gpuBuffer.desc.buffer.deviceAddress == 0)
-        {
-            spdlog::error("Buffer '{}' has no device address.", gpuBuffer.desc.name);
-            return 0;
-        }
-
-        return gpuBuffer.desc.buffer.deviceAddress;
+        return rhiBuffer->deviceAddress;
     }
 
     ResourceDesc RenderContext::getResourceDesc(const BufferHandle &buffer)
     {
-        auto it = impl->bufferCache.find(buffer);
-        if (it == impl->bufferCache.end())
-        {
-            spdlog::error("Buffer handle not found in cache during getResourceDesc.");
-            return {};
-        }
-        return it->second.desc;
+        auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
+        return rhiBuffer ? rhiBuffer->desc : ResourceDesc{};
     }
 
     ResourceDesc RenderContext::getResourceDesc(const TextureHandle &texture)
     {
-        auto it = impl->textureCache.find(texture);
-        if (it == impl->textureCache.end())
-        {
-            spdlog::error("Texture handle not found in cache during getResourceDesc.");
-            return {};
-        }
-        return it->second.desc;
+        auto *rhiTexture = lookup(impl->textures, texture, __func__);
+        return rhiTexture ? rhiTexture->desc : ResourceDesc{};
     }
 
     VRAMStats RenderContext::queryVRAMStats()
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-            return impl->vulkanContext.queryVRAMStats();
-        case Backend::DX12:
-        case Backend::METAL:
-        default:
-            spdlog::error("Unsupported backend during VRAM stats query.");
-            return {};
-        }
+        return impl->device->queryVRAMStats();
     }
 
     uint32_t RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot)
@@ -899,653 +581,199 @@ namespace rasm
             return UINT32_MAX;
         }
 
-        auto bindlessIt = impl->descriptorSetCache.find(bindlessSet);
-        auto textureIt = impl->textureCache.find(texture);
-        if (bindlessIt == impl->descriptorSetCache.end())
-        {
-            spdlog::error("Bindless descriptor set handle not found in cache during updateBindlessDescriptorSet.");
+        auto *descriptorSet = lookup(impl->descriptorSets, bindlessSet, __func__);
+        auto *rhiTexture = lookup(impl->textures, texture, __func__);
+        if (!descriptorSet || !rhiTexture)
             return UINT32_MAX;
-        }
-        if (textureIt == impl->textureCache.end())
-        {
-            spdlog::error("Texture handle not found in cache during updateBindlessDescriptorSet.");
-            return UINT32_MAX;
-        }
 
         const uint32_t targetSlot = slot == MAX_BINDLESS_TEXTURES ? impl->nextBindlessTextureIndex : slot;
-
-        switch (backend)
-        {
-        case Backend::VULKAN:
-            impl->vulkanContext.updateBindlessDescriptorSet(bindlessIt->second, textureIt->second, targetSlot);
-            break;
-        case Backend::DX12:
-        case Backend::METAL:
-        default:
-            spdlog::error("Unsupported backend during bindless descriptor set update.");
-            return UINT32_MAX;
-        }
+        impl->device->updateBindlessTexture(descriptorSet, targetSlot, rhiTexture, impl->defaultSampler);
 
         // Explicit slots count too: automatic allocation must never land on one of them.
         impl->nextBindlessTextureIndex = std::max(impl->nextBindlessTextureIndex, targetSlot + 1);
         return targetSlot;
     }
 
-    bool RenderContext::waitForFence(FenceHandle fence, uint64_t timeout)
+    bool RenderContext::waitForFence(FenceHandle fence, uint64_t value, uint64_t timeout)
     {
         ZoneScoped;
 
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto it = impl->fenceCache.find(fence);
-            if (it == impl->fenceCache.end())
-            {
-                spdlog::error("Fence handle not found in cache during waitForFence.");
-                return false;
-            }
-            auto fenceVKHandle = it->second;
-            return impl->vulkanContext.waitForFence(fenceVKHandle, timeout);
-        }
-        case Backend::DX12:
+        auto *rhiFence = lookup(impl->fences, fence, __func__);
+        if (!rhiFence)
             return false;
-        case Backend::METAL:
-            return false;
-        default:
-            spdlog::error("Unsupported backend during fence wait.");
-            return false;
-        }
+        return impl->device->waitForFence(rhiFence, value, timeout);
     }
 
-    bool RenderContext::resetFence(FenceHandle fence)
-    {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto it = impl->fenceCache.find(fence);
-            if (it == impl->fenceCache.end())
-            {
-                spdlog::error("Fence handle not found in cache during resetFence.");
-                return false;
-            }
-            auto fenceVKHandle = it->second;
-            return impl->vulkanContext.resetFence(fenceVKHandle);
-        }
-        case Backend::DX12:
-            return false;
-        case Backend::METAL:
-            return false;
-        default:
-            spdlog::error("Unsupported backend during fence reset.");
-            return false;
-        }
-    }
-
-    SwapchainStatus RenderContext::acquireNextImage(SemaphoreHandle signalSemaphore, uint64_t timeout, uint32_t &imageIndex)
+    SwapchainStatus RenderContext::acquireNextImage(uint32_t &imageIndex)
     {
         ZoneScoped;
 
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto it = impl->semaphoreCache.find(signalSemaphore);
-            if (it == impl->semaphoreCache.end())
-            {
-                spdlog::error("Semaphore handle not found in cache during acquireNextImage.");
-                return SwapchainStatus::FAILURE;
-            }
-            auto semaphoreVKHandle = it->second;
-            return impl->vulkanContext.acquireNextImage(semaphoreVKHandle, timeout, imageIndex);
-        }
-        case Backend::DX12:
-            return SwapchainStatus::FAILURE;
-        case Backend::METAL:
-            return SwapchainStatus::FAILURE;
-        default:
-            spdlog::error("Unsupported backend during image acquisition.");
-            return SwapchainStatus::FAILURE;
-        }
+        return impl->swapchain->acquireNextImage(imageIndex);
     }
 
     bool RenderContext::beginCommandBuffer(const CommandBufferHandle &commandBuffer)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto it = impl->commandBufferCache.find(commandBuffer);
-            if (it == impl->commandBufferCache.end())
-            {
-                spdlog::error("Command buffer handle not found in cache during beginCommandBuffer.");
-                return false;
-            }
-            return impl->vulkanContext.beginCommandBuffer(it->second);
-        }
-        case Backend::DX12:
-            return false;
-        case Backend::METAL:
-            return false;
-        default:
-            spdlog::error("Unsupported backend during beginCommandBuffer.");
-            return false;
-        }
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        return rhiCommandBuffer && rhiCommandBuffer->begin();
     }
 
     bool RenderContext::endCommandBuffer(const CommandBufferHandle &commandBuffer)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto it = impl->commandBufferCache.find(commandBuffer);
-            if (it == impl->commandBufferCache.end())
-            {
-                spdlog::error("Command buffer handle not found in cache during endCommandBuffer.");
-                return false;
-            }
-            return impl->vulkanContext.endCommandBuffer(it->second);
-        }
-        case Backend::DX12:
-            return false;
-        case Backend::METAL:
-            return false;
-        default:
-            spdlog::error("Unsupported backend during endCommandBuffer.");
-            return false;
-        }
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        return rhiCommandBuffer && rhiCommandBuffer->end();
     }
 
     bool RenderContext::transitionImageLayout(const CommandBufferHandle &commandBuffer, TextureHandle texture, TextureUsage oldUsage, TextureUsage newUsage)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
-            auto textureIt = impl->textureCache.find(texture);
-            if (commandBufferIt == impl->commandBufferCache.end())
-            {
-                spdlog::error("Command buffer handle not found in cache during transitionImageLayout.");
-                return false;
-            }
-            if (textureIt == impl->textureCache.end())
-            {
-                spdlog::error("Texture handle not found in cache during transitionImageLayout.");
-                return false;
-            }
-
-            return impl->vulkanContext.transitionImageLayout(commandBufferIt->second, textureIt->second, oldUsage, newUsage);
-        }
-        case Backend::DX12:
-            return false;
-        case Backend::METAL:
-            return false;
-        default:
-            spdlog::error("Unsupported backend during image layout transition.");
-            return false;
-        }
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        auto *rhiTexture = lookup(impl->textures, texture, __func__);
+        return rhiCommandBuffer && rhiTexture && rhiCommandBuffer->transitionTexture(rhiTexture, oldUsage, newUsage);
     }
 
     bool RenderContext::beginRendering(const CommandBufferHandle &commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment, const glm::vec4 &clearColor)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto colorIt = impl->textureCache.find(colorAttachment);
-            auto depthIt = impl->textureCache.find(depthAttachment);
-            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == impl->commandBufferCache.end())
-            {
-                spdlog::error("Command buffer handle not found in cache during beginRendering.");
-                return false;
-            }
-            if (colorIt == impl->textureCache.end())
-            {
-                spdlog::error("Color attachment texture handle not found in cache during beginRendering.");
-                return false;
-            }
-            if (depthIt == impl->textureCache.end())
-            {
-                spdlog::error("Depth attachment texture handle not found in cache during beginRendering.");
-                return false;
-            }
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        auto *color = lookup(impl->textures, colorAttachment, __func__);
+        auto *depth = lookup(impl->textures, depthAttachment, __func__);
+        if (!rhiCommandBuffer || !color || !depth)
+            return false;
 
-            return impl->vulkanContext.beginRendering(commandBufferIt->second, colorIt->second, depthIt->second, clearColor);
-        }
-        case Backend::DX12:
-            return false;
-        case Backend::METAL:
-            return false;
-        default:
-            spdlog::error("Unsupported backend during beginRendering.");
-            return false;
-        }
+        rhiCommandBuffer->beginRendering(color, depth, clearColor);
+        return true;
     }
 
     bool RenderContext::endRendering(const CommandBufferHandle &commandBuffer)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == impl->commandBufferCache.end())
-            {
-                spdlog::error("Command buffer handle not found in cache during endRendering.");
-                return false;
-            }
-            return impl->vulkanContext.endRendering(commandBufferIt->second);
-        }
-        case Backend::DX12:
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        if (!rhiCommandBuffer)
             return false;
-        case Backend::METAL:
-            return false;
-        default:
-            spdlog::error("Unsupported backend during endRendering.");
-            return false;
-        }
+
+        rhiCommandBuffer->endRendering();
+        return true;
     }
 
     bool RenderContext::setViewport(const CommandBufferHandle &commandBuffer, float x, float y, float width, float height, float minDepth, float maxDepth)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == impl->commandBufferCache.end())
-            {
-                spdlog::error("Command buffer handle not found in cache during setViewport.");
-                return false;
-            }
-            return impl->vulkanContext.setViewport(commandBufferIt->second, x, y, width, height, minDepth, maxDepth);
-        }
-        case Backend::DX12:
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        if (!rhiCommandBuffer)
             return false;
-        case Backend::METAL:
-            return false;
-        default:
-            spdlog::error("Unsupported backend during setViewport.");
-            return false;
-        }
+
+        rhiCommandBuffer->setViewport(x, y, width, height, minDepth, maxDepth);
+        return true;
     }
 
     bool RenderContext::setScissor(const CommandBufferHandle &commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == impl->commandBufferCache.end())
-            {
-                spdlog::error("Command buffer handle not found in cache during setScissor.");
-                return false;
-            }
-            return impl->vulkanContext.setScissor(commandBufferIt->second, x, y, width, height);
-        }
-        case Backend::DX12:
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        if (!rhiCommandBuffer)
             return false;
-        case Backend::METAL:
-            return false;
-        default:
-            spdlog::error("Unsupported backend during setScissor.");
-            return false;
-        }
+
+        rhiCommandBuffer->setScissor(x, y, width, height);
+        return true;
     }
 
-    bool RenderContext::submit(const CommandBufferHandle &commandBuffer, const std::vector<SemaphoreHandle> &waitSemaphores, const std::vector<SemaphoreHandle> &signalSemaphores, FenceHandle fence)
+    bool RenderContext::submit(const CommandBufferHandle &commandBuffer, FenceHandle signalFence, uint64_t signalValue, bool presentsSwapchainImage)
     {
         ZoneScoped;
 
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == impl->commandBufferCache.end())
-            {
-                spdlog::error("Command buffer handle not found in cache during submit.");
-                return false;
-            }
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        if (!rhiCommandBuffer)
+            return false;
 
-            std::vector<gfx::SemaphoreVKHandle> waitSemaphoresVK;
-            for (const auto &sem : waitSemaphores)
-            {
-                auto it = impl->semaphoreCache.find(sem);
-                if (it == impl->semaphoreCache.end())
-                {
-                    spdlog::error("Wait semaphore handle not found in cache during submit.");
-                    return false;
-                }
-                waitSemaphoresVK.push_back(it->second);
-            }
-            std::vector<gfx::SemaphoreVKHandle> signalSemaphoresVK;
-            for (const auto &sem : signalSemaphores)
-            {
-                auto it = impl->semaphoreCache.find(sem);
-                if (it == impl->semaphoreCache.end())
-                {
-                    spdlog::error("Signal semaphore handle not found in cache during submit.");
-                    return false;
-                }
-                signalSemaphoresVK.push_back(it->second);
-            }
-
-            auto it = impl->fenceCache.find(fence);
-            if (it == impl->fenceCache.end())
-            {
-                spdlog::error("Fence handle not found in cache during submit.");
+        rhi::Fence *fence = nullptr;
+        if (signalFence.isValid())
+        {
+            fence = lookup(impl->fences, signalFence, __func__);
+            if (!fence)
                 return false;
-            }
-            auto fenceVK = it->second;
-            return impl->vulkanContext.submit(commandBufferIt->second, waitSemaphoresVK, signalSemaphoresVK, fenceVK);
         }
-        case Backend::DX12:
-            return false;
-        case Backend::METAL:
-            return false;
-        default:
-            spdlog::error("Unsupported backend during submit.");
-            return false;
-        }
+
+        rhi::CommandBuffer *commandBuffers[] = {rhiCommandBuffer};
+        rhi::SubmitDesc submitDesc = {
+            .commandBuffers = commandBuffers,
+            .swapchain = presentsSwapchainImage ? impl->swapchain : nullptr,
+            .signalFence = fence,
+            .signalValue = signalValue,
+        };
+        return impl->device->getQueue(rhi::QueueType::GRAPHICS)->submit(submitDesc);
     }
 
-    SwapchainStatus RenderContext::present(uint32_t imageIndex, SemaphoreHandle waitSemaphore)
+    SwapchainStatus RenderContext::present()
     {
         ZoneScoped;
 
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto semIt = impl->semaphoreCache.find(waitSemaphore);
-            if (semIt == impl->semaphoreCache.end())
-            {
-                spdlog::error("Wait semaphore handle not found in cache during present.");
-                return SwapchainStatus::FAILURE;
-            }
-            return impl->vulkanContext.present(imageIndex, semIt->second);
-        }
-        case Backend::DX12:
-            return SwapchainStatus::FAILURE;
-        case Backend::METAL:
-            return SwapchainStatus::FAILURE;
-        default:
-            spdlog::error("Unsupported backend during present.");
-            return SwapchainStatus::FAILURE;
-        }
+        return impl->swapchain->present();
     }
 
     SwapchainStatus RenderContext::recreateSwapchain()
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto status = impl->vulkanContext.recreateSwapchain();
-            if (status == SwapchainStatus::FAILURE)
-                spdlog::error("Failed to recreate Vulkan swapchain.");
+        const auto &window = engine->getMainWindow();
+        auto status = impl->swapchain->resize(window.pixelWidth, window.pixelHeight);
+        if (status == SwapchainStatus::FAILURE)
+            spdlog::error("Failed to recreate the swapchain.");
 
-            // OUT_OF_DATE means the old swapchain was kept. Otherwise its images are gone, so drop
-            // their handles (B5).
-            if (status != SwapchainStatus::OUT_OF_DATE)
-            {
-                for (const auto &[handle, image] : impl->swapchainImageCache)
-                    impl->textureCache.erase(handle);
-                impl->swapchainImageCache.clear();
-            }
-            return status;
+        // Only a success replaces the images. A failure either kept the old swapchain or left none,
+        // and in the latter case its handles must go too (B5).
+        if (status == SwapchainStatus::OK || impl->swapchain->getImageCount() == 0)
+        {
+            impl->unregisterSwapchainImages();
+            impl->registerSwapchainImages(engine->handleManager);
         }
-        case Backend::DX12:
-            return SwapchainStatus::FAILURE;
-        case Backend::METAL:
-            return SwapchainStatus::FAILURE;
-        default:
-            spdlog::error("Unsupported backend during swapchain recreation.");
-            return SwapchainStatus::FAILURE;
-        }
+        return status;
     }
 
     void RenderContext::bindPipeline(const CommandBufferHandle &commandBuffer, const PipelineHandle &pipeline)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto pipelineIt = impl->pipelineCache.find(pipeline);
-            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
-            if (pipelineIt == impl->pipelineCache.end())
-            {
-                spdlog::error("Pipeline handle not found in cache during binding.");
-                return;
-            }
-            if (commandBufferIt == impl->commandBufferCache.end())
-            {
-                spdlog::error("Command buffer handle not found in cache during binding.");
-                return;
-            }
-
-            impl->vulkanContext.bindPipeline(commandBufferIt->second, pipelineIt->second);
-            break;
-        }
-        case Backend::DX12:
-            break;
-        case Backend::METAL:
-            break;
-        default:
-            spdlog::error("Unsupported backend during pipeline binding.");
-            break;
-        }
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        auto *rhiPipeline = lookup(impl->pipelines, pipeline, __func__);
+        if (rhiCommandBuffer && rhiPipeline)
+            rhiCommandBuffer->bindPipeline(rhiPipeline);
     }
 
     void RenderContext::bindIndexBuffer(const CommandBufferHandle &commandBuffer, const BufferHandle &buffer, uint64_t offset, Format indexType)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto bufferIt = impl->bufferCache.find(buffer);
-            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
-            if (bufferIt == impl->bufferCache.end())
-            {
-                spdlog::error("Buffer handle not found in cache during index buffer binding.");
-                return;
-            }
-            if (commandBufferIt == impl->commandBufferCache.end())
-            {
-                spdlog::error("Command buffer handle not found in cache during index buffer binding.");
-                return;
-            }
-
-            impl->vulkanContext.bindIndexBuffer(commandBufferIt->second, bufferIt->second, offset, indexType);
-            break;
-        }
-        case Backend::DX12:
-            break;
-        case Backend::METAL:
-            break;
-        default:
-            spdlog::error("Unsupported backend during index buffer binding.");
-            break;
-        }
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
+        if (rhiCommandBuffer && rhiBuffer)
+            rhiCommandBuffer->bindIndexBuffer(rhiBuffer, offset, indexType);
     }
 
     void RenderContext::bindDescriptorSet(const CommandBufferHandle &commandBuffer, const PipelineHandle &pipeline, const DescriptorSetHandle &descriptorSet, uint32_t setIndex)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
-            auto pipelineIt = impl->pipelineCache.find(pipeline);
-            auto descriptorSetIt = impl->descriptorSetCache.find(descriptorSet);
-            if (commandBufferIt == impl->commandBufferCache.end())
-            {
-                spdlog::error("Command buffer handle not found in cache during descriptor set binding.");
-                return;
-            }
-            if (pipelineIt == impl->pipelineCache.end())
-            {
-                spdlog::error("Pipeline handle not found in cache during descriptor set binding.");
-                return;
-            }
-            if (descriptorSetIt == impl->descriptorSetCache.end())
-            {
-                spdlog::error("Descriptor set handle not found in cache during descriptor set binding.");
-                return;
-            }
-
-            impl->vulkanContext.bindDescriptorSet(commandBufferIt->second, pipelineIt->second, descriptorSetIt->second, setIndex);
-            break;
-        }
-        case Backend::DX12:
-        case Backend::METAL:
-        default:
-            spdlog::error("Unsupported backend during descriptor set binding.");
-            break;
-        }
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        auto *rhiPipeline = lookup(impl->pipelines, pipeline, __func__);
+        auto *rhiDescriptorSet = lookup(impl->descriptorSets, descriptorSet, __func__);
+        if (rhiCommandBuffer && rhiPipeline && rhiDescriptorSet)
+            rhiCommandBuffer->bindDescriptorSet(rhiPipeline, rhiDescriptorSet, setIndex);
     }
 
     void RenderContext::pushConstants(const CommandBufferHandle &commandBuffer, const PipelineHandle &pipeline, ShaderType stage, const void *data, uint32_t size, uint32_t offset)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
-            auto pipelineIt = impl->pipelineCache.find(pipeline);
-            if (commandBufferIt == impl->commandBufferCache.end())
-            {
-                spdlog::error("Command buffer handle not found in cache during push constants.");
-                return;
-            }
-            if (pipelineIt == impl->pipelineCache.end())
-            {
-                spdlog::error("Pipeline handle not found in cache during push constants.");
-                return;
-            }
-
-            impl->vulkanContext.pushConstants(commandBufferIt->second, pipelineIt->second, stage, data, size, offset);
-            break;
-        }
-        case Backend::DX12:
-            break;
-        case Backend::METAL:
-            break;
-        default:
-            spdlog::error("Unsupported backend during push constants.");
-            break;
-        }
-    }
-
-    void RenderContext::setUniform(const CommandBufferHandle &commandBuffer, const std::string &name, const void *data, size_t size)
-    {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == impl->commandBufferCache.end())
-            {
-                spdlog::error("Command buffer handle not found in cache during uniform setting.");
-                return;
-            }
-            impl->vulkanContext.setUniform(commandBufferIt->second, name, data, size);
-            break;
-        }
-        case Backend::DX12:
-            break;
-        case Backend::METAL:
-            break;
-        default:
-            spdlog::error("Unsupported backend during uniform setting.");
-            break;
-        }
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        auto *rhiPipeline = lookup(impl->pipelines, pipeline, __func__);
+        if (rhiCommandBuffer && rhiPipeline)
+            rhiCommandBuffer->pushConstants(rhiPipeline, stage, data, size, offset);
     }
 
     void RenderContext::draw(const CommandBufferHandle &commandBuffer, uint32_t vertexCount, uint32_t instanceCount)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == impl->commandBufferCache.end())
-            {
-                spdlog::error("Command buffer handle not found in cache during draw call.");
-                return;
-            }
-            impl->vulkanContext.draw(commandBufferIt->second, vertexCount, instanceCount);
-            break;
-        }
-        case Backend::DX12:
-            break;
-        case Backend::METAL:
-            break;
-        default:
-            spdlog::error("Unsupported backend during draw call.");
-            break;
-        }
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        if (rhiCommandBuffer)
+            rhiCommandBuffer->draw(vertexCount, instanceCount);
     }
 
     void RenderContext::drawIndexed(const CommandBufferHandle &commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint32_t vertexOffset, uint32_t firstIndex, uint32_t firstInstance)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == impl->commandBufferCache.end())
-            {
-                spdlog::error("Command buffer handle not found in cache during indexed draw call.");
-                return;
-            }
-            impl->vulkanContext.drawIndexed(commandBufferIt->second, indexCount, instanceCount, vertexOffset, firstIndex, firstInstance);
-            break;
-        }
-        case Backend::DX12:
-            break;
-        case Backend::METAL:
-            break;
-        default:
-            spdlog::error("Unsupported backend during indexed draw call.");
-            break;
-        }
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        if (rhiCommandBuffer)
+            rhiCommandBuffer->drawIndexed(indexCount, instanceCount, vertexOffset, firstIndex, firstInstance);
     }
 
     void RenderContext::drawIndexedIndirect(const CommandBufferHandle &commandBuffer, const BufferHandle &drawInfoBuffer, uint32_t offset, uint32_t drawCount, uint32_t stride)
     {
-        switch (backend)
-        {
-        case Backend::VULKAN:
-        {
-            auto commandBufferIt = impl->commandBufferCache.find(commandBuffer);
-            if (commandBufferIt == impl->commandBufferCache.end())
-            {
-                spdlog::error("Command buffer handle not found in cache during indexed indirect draw call.");
-                return;
-            }
-            auto drawInfoBufferIt = impl->bufferCache.find(drawInfoBuffer);
-            if (drawInfoBufferIt == impl->bufferCache.end())
-            {
-                spdlog::error("Draw info buffer handle not found in cache during indexed indirect draw call.");
-                return;
-            }
-            impl->vulkanContext.drawIndexedIndirect(commandBufferIt->second, drawInfoBufferIt->second, offset, drawCount, stride);
-            break;
-        }
-        case Backend::DX12:
-            break;
-        case Backend::METAL:
-            break;
-
-        default:
-            break;
-        }
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        auto *rhiBuffer = lookup(impl->buffers, drawInfoBuffer, __func__);
+        if (rhiCommandBuffer && rhiBuffer)
+            rhiCommandBuffer->drawIndexedIndirect(rhiBuffer, offset, drawCount, stride);
     }
 }

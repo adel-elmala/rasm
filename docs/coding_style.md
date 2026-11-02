@@ -52,7 +52,7 @@ Deliberate exceptions:
   4. standard library headers.
 - Include paths:
   - public headers as `"rasm/xyz.h"` or `"rasm/render/xyz.h"`,
-  - private headers relative to `src/`, e.g. `"core/utils.h"`, `"renderer/shaderCompiler.h"`, `"rhi/vulkan/vulkanContext.h"`.
+  - private headers relative to `src/`, e.g. `"core/utils.h"`, `"renderer/shaderCompiler.h"`, `"rhi/vulkan/vulkanDevice.h"`.
 - Where new code goes:
 
   | Kind of code | Directory |
@@ -99,7 +99,9 @@ Deliberate exceptions:
 ## 6. Error handling and logging
 
 - **Recoverable runtime failures** (missing file, unsupported format, allocation failure, Vulkan error) are logged with `spdlog::error` and the function returns an invalid handle, `false`, an empty `std::optional`, or a default value. The caller checks the result, and a `bool`/`optional` return must not be silently ignored (add `[[nodiscard]]`).
-- **Programmer errors** (wrong `ResourceType` passed, out-of-range index into an internal array) use `assert`.
+- **Programmer errors** (wrong `ResourceType` passed, null data pointer, out-of-range index into an internal array):
+  - At the public API (`RenderContext`, the layer every application call goes through), check them in every build: `checkArgument` in `renderContext.cpp` logs with `spdlog::error`, asserts so a debug build stops at the call, and the function returns an invalid handle or `false`.
+  - Inside the engine (RHI backends, internal arrays) they use plain `assert`: only engine code reaches them, after the public layer validated its input.
 - Log levels:
   - `error`: an operation failed.
   - `warn`: degraded but continuing (limit reached, fallback used).
@@ -116,7 +118,8 @@ Deliberate exceptions:
 
 ## 8. Vulkan and backend code
 
-- All Vulkan calls live under the backend (`src/rhi/vulkan/`). Code outside `src/rhi/` never includes `vulkan.h` or uses `Vk*` types.
+- All Vulkan calls live under the backend (`src/rhi/vulkan/`). Only the backend and `src/rhi/device.cpp` include its headers: the rest of the engine, `RenderContext` included, talks to `rhi::Device` ([architecture.md §12](architecture.md#12-rhi)). The one exception is the Vulkan surface hook in `src/platform/`, until `D7`.
+- New GPU functionality goes into `src/rhi/device.h` in terms that every planned backend (Vulkan, D3D12, Metal, WebGPU) can implement, never as a Vulkan-only path above the RHI.
 - Use synchronization2 (`vkCmdPipelineBarrier2`, `VkDependencyInfo`) and dynamic rendering. Do not introduce render passes or framebuffers.
 - Every created object gets a debug name, which is a no-op when debug utils is unavailable.
 - Check every `VkResult`. Swapchain functions must handle `VK_SUBOPTIMAL_KHR` and `VK_ERROR_OUT_OF_DATE_KHR` explicitly.

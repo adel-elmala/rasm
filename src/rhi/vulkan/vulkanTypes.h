@@ -1,108 +1,64 @@
 // clang-format off
 #pragma once
 
-#include "VkBootstrap.h"
+#include "rhi/device.h"
+
 #include "vk_mem_alloc.h"
 
-#include "rasm/types.h"
-#include "rasm/render/resource.h"
+#include <cstdint>
 
-#include <cstddef>
-#include <vector>
-
-namespace rasm::gfx
+namespace rasm::rhi
 {
-    struct BufferVKHandle
+    struct VulkanBuffer : Buffer
     {
-        ResourceDesc        desc;
-        BufferHandle        handle;
-        VkBuffer            buffer;
-        VmaAllocation       allocation;
-        VmaAllocationInfo   allocationInfo;
+        VkBuffer                buffer          = VK_NULL_HANDLE;
+        VmaAllocation           allocation      = nullptr;
+        void*                   mappedData      = nullptr;
     };
 
-    struct TextureVKHandle
+    struct VulkanTexture : Texture
     {
-        ResourceDesc    desc;
-        TextureHandle   handle;
-        VkImage         image;
-        VkImageView     view;
-        VkSampler       sampler;
-        VmaAllocation   allocation;
-        uint32_t        mipLevels = 1;
+        VkImage                 image           = VK_NULL_HANDLE;
+        VkImageView             view            = VK_NULL_HANDLE;
+        VmaAllocation           allocation      = nullptr;
+        uint32_t                mipLevels       = 1;
     };
 
-    struct ShaderVKHandle
+    struct VulkanSampler : Sampler
     {
-        ResourceDesc     desc;
-        ShaderHandle     handle;
-        VkShaderModule   module;
+        VkSampler               sampler         = VK_NULL_HANDLE;
     };
 
-    struct PipelineVKHandle
+    struct VulkanShader : Shader
     {
-        ResourceDesc     desc;
-        PipelineHandle   handle;
-        VkPipeline       pipeline;
-        VkPipelineLayout layout;
+        VkShaderModule          module          = VK_NULL_HANDLE;
     };
 
-    struct CommandPoolVKHandle
+    struct VulkanPipeline : Pipeline
     {
-        CommandPoolHandle   handle;
-        VkCommandPool       commandPool;
+        VkPipeline              pipeline        = VK_NULL_HANDLE;
+        VkPipelineLayout        layout          = VK_NULL_HANDLE;
+        VkPipelineBindPoint     bindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
     };
 
-    struct CommandBufferVKHandle
+    struct VulkanDescriptorSetLayout : DescriptorSetLayout
     {
-        CommandBufferHandle handle;
-        VkCommandBuffer     commandBuffer;
+        VkDescriptorSetLayout   layout          = VK_NULL_HANDLE;
     };
 
-    struct SemaphoreVKHandle
+    struct VulkanDescriptorPool : DescriptorPool
     {
-        enum class Type { BINARY, TIMELINE } type;
-        SemaphoreHandle     handle;
-        VkSemaphore         semaphore;
+        VkDescriptorPool        pool            = VK_NULL_HANDLE;
     };
 
-    struct FenceVKHandle
+    struct VulkanDescriptorSet : DescriptorSet
     {
-        FenceHandle        handle;
-        VkFence            fence;
+        VkDescriptorSet         set             = VK_NULL_HANDLE;
     };
 
-    struct SwapchainVKHandle
+    struct VulkanFence : Fence
     {
-        SwapchainHandle                 handle;
-        vkb::Swapchain                  swapchain;
-        std::vector<TextureVKHandle>    images;
-        Format                          imageFormat;
-        uint32_t                        imageCount;
+        VkSemaphore             semaphore       = VK_NULL_HANDLE;
     };
-
-    struct DescriptorSetLayoutVKHandle
-    {
-        ResourceDesc                desc;
-        DescriptorSetLayoutHandle   handle;
-        VkDescriptorSetLayout       layout;
-    };
-
-    struct DescriptorPoolVKHandle
-    {
-        ResourceDesc                 desc;
-        DescriptorPoolHandle         handle;
-        VkDescriptorPool             pool;
-    };
-
-    struct DescriptorSetVKHandle
-    {
-        ResourceDesc                 desc;
-        DescriptorSetHandle          handle;
-        DescriptorPoolVKHandle       pool;
-        DescriptorSetLayoutVKHandle  layout;
-        VkDescriptorSet              set;
-    };
-
 }
 // clang-format on

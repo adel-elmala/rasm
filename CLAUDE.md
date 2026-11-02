@@ -37,7 +37,7 @@ cmake --install build\x64-debug                        # into install/, for find
 - `include/rasm/` is the public API, with the low-level API in `include/rasm/render/`.
 - `src/` is private: `core/`, `platform/`, `assets/`, `scene/`, `renderer/`, `rhi/` (+ `rhi/vulkan/`). `src/thirdparty_impl.cpp` is the only file that defines `*_IMPLEMENTATION` macros.
 - `tests/` links `rasm::rasm` like any application, so it only sees the public API.
-- Private headers are included relative to `src/` (e.g. `"rhi/vulkan/vulkanContext.h"`). `src/` is a PRIVATE include directory, so public headers can't include private ones; forward-declare, or use a private `Impl` like `RenderContext` does.
+- Private headers are included relative to `src/` (e.g. `"rhi/vulkan/vulkanDevice.h"`). `src/` is a PRIVATE include directory, so public headers can't include private ones; forward-declare, or use a private `Impl` like `RenderContext` does.
 
 ## Code rules
 

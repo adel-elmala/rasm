@@ -31,9 +31,7 @@ namespace rasm
     struct TextureTag;
     struct MaterialTag;
     struct PipelineTag;
-    struct CommandPoolTag;
     struct CommandBufferTag;
-    struct SemaphoreTag;
     struct FenceTag;
     struct SwapchainTag;
     struct ShaderTag;
@@ -53,9 +51,7 @@ namespace rasm
     using TextureHandle             = Handle<TextureTag>;
     using MaterialHandle            = Handle<MaterialTag>;
     using PipelineHandle            = Handle<PipelineTag>;
-    using CommandPoolHandle         = Handle<CommandPoolTag>;
     using CommandBufferHandle       = Handle<CommandBufferTag>;
-    using SemaphoreHandle           = Handle<SemaphoreTag>;
     using FenceHandle               = Handle<FenceTag>;
     using SwapchainHandle           = Handle<SwapchainTag>;
     using ShaderHandle              = Handle<ShaderTag>;
@@ -81,9 +77,7 @@ namespace rasm
         uint64_t buffer                 = 1;
         uint64_t pipeline               = 1;
         uint64_t shader                 = 1;
-        uint64_t commandPool            = 1;
         uint64_t commandBuffer          = 1;
-        uint64_t semaphore              = 1;
         uint64_t fence                  = 1;
         uint64_t swapchain              = 1;
         uint64_t renderTarget           = 1;
@@ -106,9 +100,7 @@ namespace rasm
         BufferHandle                getNextBufferHandle();
         TextureHandle               getNextTextureHandle();
         PipelineHandle              getNextPipelineHandle();
-        CommandPoolHandle           getNextCommandPoolHandle();
         CommandBufferHandle         getNextCommandBufferHandle();
-        SemaphoreHandle             getNextSemaphoreHandle();
         FenceHandle                 getNextFenceHandle();
         SwapchainHandle             getNextSwapchainHandle();
         RenderTargetHandle          getNextRenderTargetHandle();

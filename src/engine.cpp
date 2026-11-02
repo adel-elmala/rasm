@@ -29,6 +29,8 @@ namespace rasm
                 return ShaderCompiler::Target::HLSL;
             case Backend::METAL:
                 return ShaderCompiler::Target::MSL;
+            case Backend::WEBGPU:
+                return ShaderCompiler::Target::WGSL;
             default:
                 spdlog::error("Unsupported backend for shader compilation.");
                 return ShaderCompiler::Target::SPIRV; // Default to SPIR-V
@@ -67,36 +69,25 @@ namespace rasm
             return;
         }
 
-        // Initialize frame resources for double buffering
+        // Each frame submit signals the next value; a slot is free again once its last value is reached.
+        frameFence = ctx.createFence("Frame Fence");
+        if (!frameFence.isValid())
+        {
+            spdlog::error("Failed to create the frame fence.");
+            return;
+        }
+
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
-            frameResources[i].commandPool = ctx.createCommandPool();
-            if (!frameResources[i].commandPool.isValid())
-            {
-                spdlog::error("Failed to create command pool for frame {}", i);
-                return;
-            }
-            frameResources[i].commandBuffer = ctx.createCommandBuffer(frameResources[i].commandPool);
+            frameResources[i].commandBuffer = ctx.createCommandBuffer("Frame Command Buffer " + std::to_string(i));
             if (!frameResources[i].commandBuffer.isValid())
             {
                 spdlog::error("Failed to create command buffer for frame {}", i);
                 return;
             }
-            frameResources[i].readyToDrawSemaphore = ctx.createSemaphore();
-            if (!frameResources[i].readyToDrawSemaphore.isValid())
-            {
-                spdlog::error("Failed to create ready-to-draw semaphore for frame {}", i);
-                return;
-            }
-            frameResources[i].inFlightFence = ctx.createFence(true);
-            if (!frameResources[i].inFlightFence.isValid())
-            {
-                spdlog::error("Failed to create in-flight fence for frame {}", i);
-                return;
-            }
         }
 
-        // Swapchain images, present semaphores and depth textures
+        // Swapchain images and depth textures
         if (!createSwapchainResources())
             return;
 
@@ -254,34 +245,16 @@ namespace rasm
 
     TextureHandle Engine::createTexture(const ResourceDesc &desc)
     {
-        if (desc.type != ResourceType::TEXTURE)
-        {
-            spdlog::error("Invalid resource type for createTexture.");
-            return TextureHandle{};
-        }
-
         return ctx.createTexture(desc);
     }
 
     BufferHandle Engine::createBuffer(const ResourceDesc &desc)
     {
-        if (desc.type != ResourceType::BUFFER)
-        {
-            spdlog::error("Invalid resource type for createBuffer.");
-            return BufferHandle{};
-        }
-
         return ctx.createBuffer(desc);
     }
 
     RenderTargetHandle Engine::createRenderTarget(const ResourceDesc &desc)
     {
-        if (desc.type != ResourceType::RENDER_TARGET)
-        {
-            spdlog::error("Invalid resource type for createRenderTarget.");
-            return RenderTargetHandle{};
-        }
-
         return ctx.createRenderTarget(desc);
     }
 
@@ -350,16 +323,15 @@ namespace rasm
                 return false;
         }
 
-        // wait for the gpu to finish rendering the previous frame in this slot
+        // Wait for the GPU to finish the previous frame in this slot before its command buffer is reused.
         auto &currentFrame = frameResources[frameCount];
-        if (!ctx.waitForFence(currentFrame.inFlightFence))
+        if (!ctx.waitForFence(frameFence, currentFrame.fenceValue))
             return false;
 
-        // acquire the next image from the swapchain (B4)
-        auto status = ctx.acquireNextImage(currentFrame.readyToDrawSemaphore, UINT64_MAX, imageIdx);
+        // B4
+        auto status = ctx.acquireNextImage(imageIdx);
         if (status == SwapchainStatus::OUT_OF_DATE)
         {
-            // The semaphore was not signaled; skip the frame and recreate next time.
             swapchainOutOfDate = true;
             return false;
         }
@@ -367,9 +339,6 @@ namespace rasm
             return false;
         if (status == SwapchainStatus::SUBOPTIMAL)
             swapchainOutOfDate = true; // The image is acquired and still usable; recreate after this frame.
-
-        // Reset only once work will be submitted, so a skipped frame leaves the fence signaled.
-        ctx.resetFence(currentFrame.inFlightFence);
 
         swapchainRendered = false;
         sceneDrawCount = 0;
@@ -397,12 +366,16 @@ namespace rasm
 
         ctx.endCommandBuffer(currentFrame.commandBuffer);
 
-        if (ctx.submit(currentFrame.commandBuffer,
-                       {currentFrame.readyToDrawSemaphore},
-                       {swapchain.readyToPresentSemaphores[imageIdx]},
-                       currentFrame.inFlightFence))
+        // The slot only takes the new value once a submit will signal it; a value nothing signals would block
+        // the next wait on this slot forever. After a failed submit the swapchain keeps the image acquired,
+        // and the next acquire hands it out again.
+        const uint64_t signalValue = frameFenceValue + 1;
+        if (ctx.submit(currentFrame.commandBuffer, frameFence, signalValue, true))
         {
-            auto status = ctx.present(imageIdx, swapchain.readyToPresentSemaphores[imageIdx]);
+            frameFenceValue = signalValue;
+            currentFrame.fenceValue = signalValue;
+
+            auto status = ctx.present();
             if (status == SwapchainStatus::SUBOPTIMAL || status == SwapchainStatus::OUT_OF_DATE)
                 swapchainOutOfDate = true;
         }
@@ -484,12 +457,10 @@ namespace rasm
     bool Engine::recreateSwapchain()
     {
         auto status = ctx.recreateSwapchain();
-        if (status == SwapchainStatus::OUT_OF_DATE)
-            return false; // The surface is 0x0; the old swapchain and its resources are kept.
         if (status != SwapchainStatus::OK)
         {
-            // The old swapchain is gone, so are its image handles.
-            swapchain.imageHandles.clear();
+            // A 0x0 surface keeps the old swapchain, while a failure may have destroyed it with its images.
+            swapchain.imageHandles = ctx.getSwapchainImages();
             return false;
         }
         if (!createSwapchainResources())
@@ -509,23 +480,6 @@ namespace rasm
         auto extent = ctx.getSwapchainExtent();
         swapchain.width = extent.x;
         swapchain.height = extent.y;
-
-        for (auto &semaphore : swapchain.readyToPresentSemaphores)
-        {
-            ctx.destroySemaphore(semaphore);
-        }
-        swapchain.readyToPresentSemaphores.clear();
-
-        for (size_t i = 0; i < swapchain.imageHandles.size(); ++i)
-        {
-            auto semaphore = ctx.createSemaphore();
-            if (!semaphore.isValid())
-            {
-                spdlog::error("Failed to create ready-to-present semaphore for swapchain image {}", i);
-                return false;
-            }
-            swapchain.readyToPresentSemaphores.push_back(semaphore);
-        }
 
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {

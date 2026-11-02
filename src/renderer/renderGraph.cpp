@@ -194,34 +194,16 @@ namespace rasm
 
     TextureHandle PassBuilder::createTexture(ResourceDesc desc)
     {
-        if (desc.type != ResourceType::TEXTURE)
-        {
-            spdlog::error("Attempted to create a texture with a non-texture resource description.");
-            return TextureHandle{};
-        }
-
         return graph.createTexture(desc);
     }
 
     BufferHandle PassBuilder::createBuffer(ResourceDesc desc)
     {
-        if (desc.type != ResourceType::BUFFER)
-        {
-            spdlog::error("Attempted to create a buffer with a non-buffer resource description.");
-            return BufferHandle{};
-        }
-
         return graph.createBuffer(desc);
     }
 
     RenderTargetHandle PassBuilder::createRenderTarget(ResourceDesc desc)
     {
-        if (desc.type != ResourceType::RENDER_TARGET)
-        {
-            spdlog::error("Attempted to create a render target with a non-render target resource description.");
-            return RenderTargetHandle{};
-        }
-
         return graph.createRenderTarget(desc);
     }
 

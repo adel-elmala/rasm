@@ -78,7 +78,6 @@ namespace rasm
             {
                 BufferUsage     usage;
                 uint64_t        size;
-                uint64_t        deviceAddress;
             } buffer;
 
             // Shader-specific data

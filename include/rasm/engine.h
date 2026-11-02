@@ -120,6 +120,8 @@ namespace rasm
         EngineConfig                                                config                                  = {};
         Profiler                                                    profiler                                = {};
         FrameResources                                              frameResources[MAX_FRAMES_IN_FLIGHT]    = {}; // Double buffering
+        FenceHandle                                                 frameFence                              = {};
+        uint64_t                                                    frameFenceValue                         = 0;  // last value a frame submit signaled
         Swapchain                                                   swapchain                               = {};
         TextureHandle                                               depthTexture                            = {};
         std::unordered_map<SceneHandle, PreparedScene, HandleHash>  preparedScenes                          = {};
