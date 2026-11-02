@@ -41,9 +41,9 @@ namespace rasm
     {
     public:
                                 PassBuilder(RenderGraph& g, uint32_t passIdx) : graph(g), currentPass(passIdx) {}
-        TextureHandle           createTexture(ResourceDesc desc);
-        BufferHandle            createBuffer(ResourceDesc desc);
-        RenderTargetHandle      createRenderTarget(ResourceDesc desc);
+        TextureHandle           createTexture(const TextureDesc& desc);
+        BufferHandle            createBuffer(const BufferDesc& desc);
+        RenderTargetHandle      createRenderTarget(const RenderTargetDesc& desc);
         void                    read(TextureHandle handle);
         void                    read(BufferHandle handle);
         void                    read(RenderTargetHandle handle);
@@ -71,9 +71,9 @@ namespace rasm
 
     protected:
         void                analyzeDependencies();
-        TextureHandle       createTexture(ResourceDesc desc);
-        BufferHandle        createBuffer(ResourceDesc desc);
-        RenderTargetHandle  createRenderTarget(ResourceDesc desc);
+        TextureHandle       createTexture(const TextureDesc& desc);
+        BufferHandle        createBuffer(const BufferDesc& desc);
+        RenderTargetHandle  createRenderTarget(const RenderTargetDesc& desc);
         void                read(uint32_t passIdx, TextureHandle h);
         void                read(uint32_t passIdx, BufferHandle h);
         void                read(uint32_t passIdx, RenderTargetHandle h);

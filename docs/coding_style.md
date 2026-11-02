@@ -83,9 +83,9 @@ Deliberate exceptions:
 
 - **Handles, not pointers, cross the public API.** Create through `Engine`, refer through `XxxHandle`, and check with `isValid()`. Never hand out raw pointers or references to registry storage: they are invalidated when the vector grows.
 - **Descriptors.**
-  - Resource creation takes a descriptor struct (`ResourceDesc`) that is zero-initialized and filled with designated initializers or field assignment.
-  - Descriptor structs must be value-initialized to zero. Unions must not be left indeterminate (`B18`).
-  - Put fields in a descriptor only when they are compared and hashed. Anything that affects the created object must take part in equality.
+  - Resource creation takes a typed descriptor (`BufferDesc`, `TextureDesc`, `PipelineDesc`, …), filled with designated initializers or field assignment.
+  - A descriptor is an aggregate with a default member initializer on every field that isn't a class type, and a defaulted `operator==`. No unions (`B18`, `D5`).
+  - Put fields in a descriptor only when they affect the created object. A deduplicated descriptor's hash in `src/rhi/resource.cpp` must fold every field with `hashCombine`.
 - **GPU-visible structs** (anything a shader reads through a pointer or a buffer):
   - live in `src/renderer/uberMaterialTypes.h` (or its successor) and are mirrored in `shaders/lib/core.slang`,
   - use only `uint32_t`, `int32_t`, `float`, `uint64_t`, `glm::vec2/3/4`, `glm::mat3/4` (scalar layout),
@@ -99,7 +99,7 @@ Deliberate exceptions:
 ## 6. Error handling and logging
 
 - **Recoverable runtime failures** (missing file, unsupported format, allocation failure, Vulkan error) are logged with `spdlog::error` and the function returns an invalid handle, `false`, an empty `std::optional`, or a default value. The caller checks the result, and a `bool`/`optional` return must not be silently ignored (add `[[nodiscard]]`).
-- **Programmer errors** (wrong `ResourceType` passed, null data pointer, out-of-range index into an internal array):
+- **Programmer errors** (null data pointer, empty shader code, out-of-range index into an internal array):
   - At the public API (`RenderContext`, the layer every application call goes through), check them in every build: `checkArgument` in `renderContext.cpp` logs with `spdlog::error`, asserts so a debug build stops at the call, and the function returns an invalid handle or `false`.
   - Inside the engine (RHI backends, internal arrays) they use plain `assert`: only engine code reaches them, after the public layer validated its input.
 - Log levels:

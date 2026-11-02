@@ -152,14 +152,11 @@ namespace rasm
                     if (image.component == 2 || image.component == 4)
                         rgba[i * 4 + 3] = src[image.component - 1];
                 }
-                ResourceDesc desc{};
-                desc.name = image.uri.empty() ? "glTF image " + std::to_string(source) : image.uri;
-                desc.type = ResourceType::TEXTURE;
-                desc.texture.width = image.width;
-                desc.texture.height = image.height;
-                desc.texture.format = srgb ? Format::R8G8B8A8_SRGB : Format::R8G8B8A8_UNORM;
-                desc.texture.usage = TextureUsage::SAMPLED;
-                auto texture = createTexture(desc);
+                auto texture = createTexture({.name = image.uri.empty() ? "glTF image " + std::to_string(source) : image.uri,
+                                              .width = static_cast<uint32_t>(image.width),
+                                              .height = static_cast<uint32_t>(image.height),
+                                              .format = srgb ? Format::R8G8B8A8_SRGB : Format::R8G8B8A8_UNORM,
+                                              .usage = TextureUsage::SAMPLED});
                 if (!texture.isValid() || !ctx.fillTexture(texture, rgba.data()))
                     return {};
                 addBindlessTexture(bindlessDescriptorSet, texture);

@@ -17,6 +17,7 @@ set(RASM_SRC
             "renderer/shaderCompiler.cpp"
             "rhi/device.cpp"
             "rhi/renderContext.cpp"
+            "rhi/resource.cpp"
             "rhi/vulkan/vulkanCommandBuffer.cpp"
             "rhi/vulkan/vulkanDevice.cpp"
             "rhi/vulkan/vulkanSwapchain.cpp"

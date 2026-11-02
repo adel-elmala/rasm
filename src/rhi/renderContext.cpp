@@ -7,7 +7,6 @@
 
 #include <algorithm>
 #include <cassert>
-#include <deque>
 #include <string>
 #include <unordered_map>
 
@@ -128,30 +127,29 @@ namespace rasm
     // clang-format off
     struct RenderContext::Impl
     {
-        std::unique_ptr<rhi::Device>                                                            device;
-        rhi::Swapchain*                                                                         swapchain       = nullptr;
-        rhi::Sampler*                                                                           defaultSampler  = nullptr;
-        std::vector<TextureHandle>                                                              swapchainImages;  // also in textures, but owned by the swapchain
+        std::unique_ptr<rhi::Device>                                                                                            device;
+        rhi::Swapchain*                                                                                                         swapchain       = nullptr;
+        rhi::Sampler*                                                                                                           defaultSampler  = nullptr;
+        std::vector<TextureHandle>                                                                                              swapchainImages;  // also in textures, but owned by the swapchain
 
-        std::unordered_map<BufferHandle, rhi::Buffer*, HandleHash>                              buffers;
-        std::unordered_map<TextureHandle, rhi::Texture*, HandleHash>                            textures;
-        std::unordered_map<ShaderHandle, rhi::Shader*, HandleHash>                              shaders;
-        std::unordered_map<PipelineHandle, rhi::Pipeline*, HandleHash>                          pipelines;
-        std::unordered_map<CommandBufferHandle, rhi::CommandBuffer*, HandleHash>                commandBuffers;
-        std::unordered_map<FenceHandle, rhi::Fence*, HandleHash>                                fences;
-        std::unordered_map<DescriptorSetLayoutHandle, rhi::DescriptorSetLayout*, HandleHash>    descriptorSetLayouts;
-        std::unordered_map<DescriptorPoolHandle, rhi::DescriptorPool*, HandleHash>              descriptorPools;
-        std::unordered_map<DescriptorSetHandle, rhi::DescriptorSet*, HandleHash>                descriptorSets;
-        std::unordered_map<RenderTargetHandle, RenderTarget, HandleHash>                        renderTargets;
+        std::unordered_map<BufferHandle, rhi::Buffer*, HandleHash>                                                              buffers;
+        std::unordered_map<TextureHandle, rhi::Texture*, HandleHash>                                                            textures;
+        std::unordered_map<ShaderHandle, rhi::Shader*, HandleHash>                                                              shaders;
+        std::unordered_map<PipelineHandle, rhi::Pipeline*, HandleHash>                                                          pipelines;
+        std::unordered_map<CommandBufferHandle, rhi::CommandBuffer*, HandleHash>                                                commandBuffers;
+        std::unordered_map<FenceHandle, rhi::Fence*, HandleHash>                                                                fences;
+        std::unordered_map<DescriptorSetLayoutHandle, rhi::DescriptorSetLayout*, HandleHash>                                    descriptorSetLayouts;
+        std::unordered_map<DescriptorPoolHandle, rhi::DescriptorPool*, HandleHash>                                              descriptorPools;
+        std::unordered_map<DescriptorSetHandle, rhi::DescriptorSet*, HandleHash>                                                descriptorSets;
+        std::unordered_map<RenderTargetHandle, RenderTarget, HandleHash>                                                        renderTargets;
 
         // Dedup caches, only for immutable objects keyed on their full state. Mutable resources
         // (buffers, textures, descriptor pools/sets) are always created fresh (B1).
-        std::unordered_map<ResourceDesc, ShaderHandle, ResourceDescHash>                        shaderDescCache;
-        std::deque<std::string>                                                                 shaderSources;  // SPIR-V the shaderDescCache keys point at; a deque keeps those pointers stable
-        std::unordered_map<ResourceDesc, PipelineHandle, ResourceDescHash>                      pipelineDescCache;
-        std::unordered_map<ResourceDesc, DescriptorSetLayoutHandle, ResourceDescHash>           descriptorSetLayoutDescCache;
+        std::unordered_map<ShaderDesc, ShaderHandle, ShaderDescHash>                                                            shaderDescCache;
+        std::unordered_map<PipelineDesc, PipelineHandle, PipelineDescHash>                                                      pipelineDescCache;
+        std::unordered_map<BindlessDescriptorSetLayoutDesc, DescriptorSetLayoutHandle, BindlessDescriptorSetLayoutDescHash>     descriptorSetLayoutDescCache;
 
-        uint32_t                                                                                nextBindlessTextureIndex = 0;
+        uint32_t                                                                                                                nextBindlessTextureIndex = 0;
 
         void registerSwapchainImages(HandleManager& handleManager)
         {
@@ -236,11 +234,8 @@ namespace rasm
         impl = std::make_unique<Impl>();
     }
 
-    BufferHandle RenderContext::createBuffer(ResourceDesc desc)
+    BufferHandle RenderContext::createBuffer(const BufferDesc &desc)
     {
-        if (!checkArgument(desc.type == ResourceType::BUFFER, __func__, "desc.type must be BUFFER."))
-            return {};
-
         auto *buffer = impl->device->createBuffer(desc);
         if (!buffer)
             return {};
@@ -250,11 +245,8 @@ namespace rasm
         return handle;
     }
 
-    TextureHandle RenderContext::createTexture(ResourceDesc desc)
+    TextureHandle RenderContext::createTexture(const TextureDesc &desc)
     {
-        if (!checkArgument(desc.type == ResourceType::TEXTURE, __func__, "desc.type must be TEXTURE."))
-            return {};
-
         auto *texture = impl->device->createTexture(desc);
         if (!texture)
             return {};
@@ -264,10 +256,9 @@ namespace rasm
         return handle;
     }
 
-    ShaderHandle RenderContext::createShader(ResourceDesc desc)
+    ShaderHandle RenderContext::createShader(const ShaderDesc &desc)
     {
-        if (!checkArgument(desc.type == ResourceType::SHADER, __func__, "desc.type must be SHADER.") ||
-            !checkArgument(desc.shader.source != nullptr && desc.shader.sourceSize > 0, __func__, "the shader has no source."))
+        if (!checkArgument(!desc.code.empty(), __func__, "the shader has no code."))
             return {};
 
         auto cachedIt = impl->shaderDescCache.find(desc);
@@ -279,36 +270,20 @@ namespace rasm
             return {};
 
         ShaderHandle handle = engine->handleManager.getNextShaderHandle();
-
-        // Callers pass temporary SPIR-V, but the cache key is compared by content on every later lookup.
-        impl->shaderSources.emplace_back(desc.shader.source, desc.shader.sourceSize);
-        desc.shader.source = impl->shaderSources.back().data();
-        shader->desc.shader.source = desc.shader.source;
-
         impl->shaders[handle] = shader;
         impl->shaderDescCache[desc] = handle;
         return handle;
     }
 
-    PipelineHandle RenderContext::createPipeline(ResourceDesc desc)
+    PipelineHandle RenderContext::createPipeline(const PipelineDesc &desc)
     {
-        if (!checkArgument(desc.type == ResourceType::GRAPHICS_PIPELINE || desc.type == ResourceType::COMPUTE_PIPELINE, __func__, "desc.type must be GRAPHICS_PIPELINE or COMPUTE_PIPELINE."))
-            return {};
-
         auto cachedIt = impl->pipelineDescCache.find(desc);
         if (cachedIt != impl->pipelineDescCache.end())
             return cachedIt->second;
 
-        // TODO: compute pipelines (phase 2).
-        if (desc.type != ResourceType::GRAPHICS_PIPELINE)
-        {
-            spdlog::error("Only graphics pipelines are supported.");
-            return {};
-        }
-
-        auto *vertexShader = lookup(impl->shaders, desc.pipeline.vertexShader, __func__);
-        auto *fragmentShader = lookup(impl->shaders, desc.pipeline.fragmentShader, __func__);
-        auto *layout = lookup(impl->descriptorSetLayouts, desc.pipeline.descriptorSetLayout, __func__);
+        auto *vertexShader = lookup(impl->shaders, desc.vertexShader, __func__);
+        auto *fragmentShader = lookup(impl->shaders, desc.fragmentShader, __func__);
+        auto *layout = lookup(impl->descriptorSetLayouts, desc.descriptorSetLayout, __func__);
         if (!vertexShader || !fragmentShader || !layout)
             return {};
 
@@ -322,11 +297,8 @@ namespace rasm
         return handle;
     }
 
-    DescriptorSetLayoutHandle RenderContext::createBindlessDescriptorSetLayout(ResourceDesc desc)
+    DescriptorSetLayoutHandle RenderContext::createBindlessDescriptorSetLayout(const BindlessDescriptorSetLayoutDesc &desc)
     {
-        if (!checkArgument(desc.type == ResourceType::BINDLESS_DESCRIPTOR_SET_LAYOUT, __func__, "desc.type must be BINDLESS_DESCRIPTOR_SET_LAYOUT."))
-            return {};
-
         auto cachedIt = impl->descriptorSetLayoutDescCache.find(desc);
         if (cachedIt != impl->descriptorSetLayoutDescCache.end())
             return cachedIt->second;
@@ -341,11 +313,8 @@ namespace rasm
         return handle;
     }
 
-    DescriptorPoolHandle RenderContext::createDescriptorPool(ResourceDesc desc)
+    DescriptorPoolHandle RenderContext::createDescriptorPool(const DescriptorPoolDesc &desc)
     {
-        if (!checkArgument(desc.type == ResourceType::DESCRIPTOR_POOL, __func__, "desc.type must be DESCRIPTOR_POOL."))
-            return {};
-
         auto *pool = impl->device->createDescriptorPool(desc);
         if (!pool)
             return {};
@@ -355,17 +324,14 @@ namespace rasm
         return handle;
     }
 
-    DescriptorSetHandle RenderContext::allocateDescriptorSet(ResourceDesc desc, const DescriptorPoolHandle &pool, const DescriptorSetLayoutHandle &layout)
+    DescriptorSetHandle RenderContext::allocateDescriptorSet(const std::string &name, const DescriptorPoolHandle &pool, const DescriptorSetLayoutHandle &layout)
     {
-        if (!checkArgument(desc.type == ResourceType::DESCRIPTOR_SET, __func__, "desc.type must be DESCRIPTOR_SET."))
-            return {};
-
         auto *rhiPool = lookup(impl->descriptorPools, pool, __func__);
         auto *rhiLayout = lookup(impl->descriptorSetLayouts, layout, __func__);
         if (!rhiPool || !rhiLayout)
             return {};
 
-        auto *descriptorSet = impl->device->allocateDescriptorSet(desc, rhiPool, rhiLayout);
+        auto *descriptorSet = impl->device->allocateDescriptorSet(name, rhiPool, rhiLayout);
         if (!descriptorSet)
             return {};
 
@@ -396,34 +362,29 @@ namespace rasm
         return handle;
     }
 
-    RenderTargetHandle RenderContext::createRenderTarget(const ResourceDesc &desc)
+    RenderTargetHandle RenderContext::createRenderTarget(const RenderTargetDesc &desc)
     {
-        if (!checkArgument(desc.type == ResourceType::RENDER_TARGET, __func__, "desc.type must be RENDER_TARGET."))
-            return {};
+        const TextureDesc colorDesc = {
+            .name = desc.name + " Color Texture",
+            .width = desc.width,
+            .height = desc.height,
+            .format = desc.colorFormat,
+            .usage = TextureUsage::SAMPLED_COLOR_ATTACHMENT};
 
-        ResourceDesc colorDesc{};
-        colorDesc.type = ResourceType::TEXTURE;
-        colorDesc.name = desc.name + " Color Texture";
-        colorDesc.texture.width = desc.renderTarget.width;
-        colorDesc.texture.height = desc.renderTarget.height;
-        colorDesc.texture.format = desc.renderTarget.colorFormat;
-        colorDesc.texture.usage = TextureUsage::SAMPLED_COLOR_ATTACHMENT;
-
-        ResourceDesc depthDesc{};
-        depthDesc.type = ResourceType::TEXTURE;
-        depthDesc.name = desc.name + " Depth Texture";
-        depthDesc.texture.width = desc.renderTarget.width;
-        depthDesc.texture.height = desc.renderTarget.height;
-        depthDesc.texture.format = desc.renderTarget.depthFormat;
-        depthDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
+        const TextureDesc depthDesc = {
+            .name = desc.name + " Depth Texture",
+            .width = desc.width,
+            .height = desc.height,
+            .format = desc.depthFormat,
+            .usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT};
 
         RenderTarget rt = {
             .attachments = {},
-            .width = desc.renderTarget.width,
-            .height = desc.renderTarget.height,
-            .colorFormat = desc.renderTarget.colorFormat,
-            .depthFormat = desc.renderTarget.depthFormat,
-            .clearColor = desc.renderTarget.clearColor};
+            .width = desc.width,
+            .height = desc.height,
+            .colorFormat = desc.colorFormat,
+            .depthFormat = desc.depthFormat,
+            .clearColor = desc.clearColor};
 
         auto destroyAttachments = [&]()
         {
@@ -556,16 +517,16 @@ namespace rasm
         return rhiBuffer->deviceAddress;
     }
 
-    ResourceDesc RenderContext::getResourceDesc(const BufferHandle &buffer)
+    BufferDesc RenderContext::getBufferDesc(const BufferHandle &buffer)
     {
         auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
-        return rhiBuffer ? rhiBuffer->desc : ResourceDesc{};
+        return rhiBuffer ? rhiBuffer->desc : BufferDesc{};
     }
 
-    ResourceDesc RenderContext::getResourceDesc(const TextureHandle &texture)
+    TextureDesc RenderContext::getTextureDesc(const TextureHandle &texture)
     {
         auto *rhiTexture = lookup(impl->textures, texture, __func__);
-        return rhiTexture ? rhiTexture->desc : ResourceDesc{};
+        return rhiTexture ? rhiTexture->desc : TextureDesc{};
     }
 
     VRAMStats RenderContext::queryVRAMStats()

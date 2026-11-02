@@ -59,7 +59,7 @@ Goal: the structural changes that every later feature depends on. They get much 
 
 ### 1.2 RHI
 - [x] Define a backend-neutral device interface: device, buffer, texture, sampler, pipeline, command buffer, queue, swapchain, fence/timeline. Move all `Vk*` code behind it (`D1`, done 2026-11-02). The platform's Vulkan surface hook remains until `D7`.
-- [ ] Use typed descriptors (`BufferDesc`, `TextureDesc`, `PipelineDesc`, …) with defaulted equality and a real hash combine (`D5`).
+- [x] Use typed descriptors (`BufferDesc`, `TextureDesc`, `PipelineDesc`, …) with defaulted equality and a real hash combine (`D5`, done 2026-11-02).
 - [ ] Store objects in generational pools. Make `destroy*` APIs available for every object, with destruction deferred until the GPU has finished the frames that use them (`D4`, `P4`).
 - [ ] Use a single shared pipeline layout (the bindless set + push-constant range), a `VkPipelineCache` persisted to disk, and an on-disk SPIR-V cache keyed by source hash (`P8`).
 

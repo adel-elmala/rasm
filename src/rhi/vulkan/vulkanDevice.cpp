@@ -244,15 +244,15 @@ namespace rasm::rhi
             }
         }
 
-        VkDescriptorType toVkDescriptorType(ResourceType type)
+        VkDescriptorType toVkDescriptorType(DescriptorType type)
         {
             switch (type)
             {
-            case ResourceType::BUFFER:
+            case DescriptorType::UNIFORM_BUFFER:
                 return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            case ResourceType::SAMPLER:
+            case DescriptorType::SAMPLER:
                 return VK_DESCRIPTOR_TYPE_SAMPLER;
-            case ResourceType::TEXTURE:
+            case DescriptorType::COMBINED_IMAGE_SAMPLER:
                 return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             default:
                 return VK_DESCRIPTOR_TYPE_MAX_ENUM;
@@ -435,13 +435,11 @@ namespace rasm::rhi
         return true;
     }
 
-    Buffer *VulkanDevice::createBuffer(const ResourceDesc &desc)
+    Buffer *VulkanDevice::createBuffer(const BufferDesc &desc)
     {
-        assert(desc.type == ResourceType::BUFFER);
-
         VkBufferCreateInfo bufferInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        bufferInfo.size = desc.buffer.size;
-        bufferInfo.usage = toVkBufferUsageFlags(desc.buffer.usage);
+        bufferInfo.size = desc.size;
+        bufferInfo.usage = toVkBufferUsageFlags(desc.usage);
 
         VmaAllocationCreateInfo allocCI = {};
         allocCI.usage = VMA_MEMORY_USAGE_AUTO;
@@ -469,41 +467,39 @@ namespace rasm::rhi
         return buffer;
     }
 
-    Texture *VulkanDevice::createTexture(const ResourceDesc &desc)
+    Texture *VulkanDevice::createTexture(const TextureDesc &desc)
     {
-        assert(desc.type == ResourceType::TEXTURE);
-
         // Drivers may accept an oversized image instead of failing, so this can't be left to vmaCreateImage.
         const uint32_t maxExtent = physicalDevice.properties.limits.maxImageDimension2D;
-        if (desc.texture.width > maxExtent || desc.texture.height > maxExtent)
+        if (desc.width > maxExtent || desc.height > maxExtent)
         {
-            spdlog::error("Texture '{}' is {}x{}, the device limit is {}.", desc.name, desc.texture.width, desc.texture.height, maxExtent);
+            spdlog::error("Texture '{}' is {}x{}, the device limit is {}.", desc.name, desc.width, desc.height, maxExtent);
             return nullptr;
         }
 
         // Only sampled RGBA8 images use this upload/generation path. Render targets and
         // other formats retain a single level.
         uint32_t mipLevels = 1;
-        if (desc.texture.usage == TextureUsage::SAMPLED &&
-            (desc.texture.format == Format::R8G8B8A8_UNORM || desc.texture.format == Format::R8G8B8A8_SRGB ||
-             desc.texture.format == Format::B8G8R8A8_SRGB))
+        if (desc.usage == TextureUsage::SAMPLED &&
+            (desc.format == Format::R8G8B8A8_UNORM || desc.format == Format::R8G8B8A8_SRGB ||
+             desc.format == Format::B8G8R8A8_SRGB))
         {
-            for (uint32_t size = std::max(desc.texture.width, desc.texture.height); size > 1; size /= 2)
+            for (uint32_t size = std::max(desc.width, desc.height); size > 1; size /= 2)
                 ++mipLevels;
         }
 
         // TODO: check if the format is supported by the device, and if not, find a compatible one
         VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
-        imageInfo.extent.width = desc.texture.width;
-        imageInfo.extent.height = desc.texture.height;
+        imageInfo.extent.width = desc.width;
+        imageInfo.extent.height = desc.height;
         imageInfo.extent.depth = 1;
         imageInfo.mipLevels = mipLevels;
         imageInfo.arrayLayers = 1;
-        imageInfo.format = toVkFormat(desc.texture.format);
+        imageInfo.format = toVkFormat(desc.format);
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        imageInfo.usage = toVkImageUsageFlags(desc.texture.usage);
+        imageInfo.usage = toVkImageUsageFlags(desc.usage);
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -511,7 +507,7 @@ namespace rasm::rhi
         allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
         allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
 
-        if (desc.texture.usage == TextureUsage::SAMPLED)
+        if (desc.usage == TextureUsage::SAMPLED)
         {
             allocInfo.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                                VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
@@ -533,7 +529,7 @@ namespace rasm::rhi
         viewInfo.image = texture->image;
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
         viewInfo.format = imageInfo.format;
-        viewInfo.subresourceRange.aspectMask = toVkAspectMask(desc.texture.usage);
+        viewInfo.subresourceRange.aspectMask = toVkAspectMask(desc.usage);
         viewInfo.subresourceRange.levelCount = mipLevels;
         viewInfo.subresourceRange.layerCount = 1;
 
@@ -583,13 +579,11 @@ namespace rasm::rhi
         return sampler;
     }
 
-    Shader *VulkanDevice::createShader(const ResourceDesc &desc)
+    Shader *VulkanDevice::createShader(const ShaderDesc &desc)
     {
-        assert(desc.type == ResourceType::SHADER);
-
         VkShaderModuleCreateInfo shaderModuleInfo = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        shaderModuleInfo.codeSize = desc.shader.sourceSize;
-        shaderModuleInfo.pCode = reinterpret_cast<const uint32_t *>(desc.shader.source);
+        shaderModuleInfo.codeSize = desc.code.size();
+        shaderModuleInfo.pCode = reinterpret_cast<const uint32_t *>(desc.code.data());
 
         auto *shader = new VulkanShader();
         shader->desc = desc;
@@ -606,10 +600,8 @@ namespace rasm::rhi
         return shader;
     }
 
-    Pipeline *VulkanDevice::createGraphicsPipeline(const ResourceDesc &desc, Shader *vertexShader, Shader *fragmentShader, DescriptorSetLayout *layout)
+    Pipeline *VulkanDevice::createGraphicsPipeline(const PipelineDesc &desc, Shader *vertexShader, Shader *fragmentShader, DescriptorSetLayout *layout)
     {
-        assert(desc.type == ResourceType::GRAPHICS_PIPELINE);
-
         VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .size = sizeof(VkDeviceAddress)};
@@ -638,7 +630,7 @@ namespace rasm::rhi
 
         VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-            .topology = toVkTopology(desc.pipeline.topology),
+            .topology = toVkTopology(desc.topology),
         };
 
         VkPipelineShaderStageCreateInfo shaderStages[] = {
@@ -678,8 +670,8 @@ namespace rasm::rhi
             .stencilTestEnable = VK_FALSE};
 
         // Dynamic rendering: these formats must match the attachments passed to beginRendering.
-        VkFormat colorAttachmentFormat = toVkFormat(desc.pipeline.colorAttachmentFormat);
-        VkFormat depthAttachmentFormat = toVkFormat(desc.pipeline.depthStencilAttachmentFormat);
+        VkFormat colorAttachmentFormat = toVkFormat(desc.colorAttachmentFormat);
+        VkFormat depthAttachmentFormat = toVkFormat(desc.depthStencilAttachmentFormat);
 
         // Combined depth/stencil formats must declare the stencil aspect too (Metal validation asserts otherwise).
         VkPipelineRenderingCreateInfo pipelineRenderingInfo{
@@ -687,7 +679,7 @@ namespace rasm::rhi
             .colorAttachmentCount = 1,
             .pColorAttachmentFormats = &colorAttachmentFormat,
             .depthAttachmentFormat = depthAttachmentFormat,
-            .stencilAttachmentFormat = hasStencil(desc.pipeline.depthStencilAttachmentFormat) ? depthAttachmentFormat : VK_FORMAT_UNDEFINED,
+            .stencilAttachmentFormat = hasStencil(desc.depthStencilAttachmentFormat) ? depthAttachmentFormat : VK_FORMAT_UNDEFINED,
         };
 
         VkPipelineColorBlendAttachmentState colorBlendAttachment = {
@@ -755,10 +747,8 @@ namespace rasm::rhi
         return pipeline;
     }
 
-    DescriptorSetLayout *VulkanDevice::createBindlessDescriptorSetLayout(const ResourceDesc &desc)
+    DescriptorSetLayout *VulkanDevice::createBindlessDescriptorSetLayout(const BindlessDescriptorSetLayoutDesc &desc)
     {
-        assert(desc.type == ResourceType::BINDLESS_DESCRIPTOR_SET_LAYOUT);
-
         // Allow updating after binding, and allow empty slots in our giant array
         VkDescriptorBindingFlags bindlessFlags =
             VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
@@ -771,9 +761,9 @@ namespace rasm::rhi
 
         VkDescriptorSetLayoutBinding samplerLayoutBinding = {};
         samplerLayoutBinding.binding = 0;
-        samplerLayoutBinding.descriptorType = toVkDescriptorType(desc.bindlessDescriptorSetLayout.type);
-        samplerLayoutBinding.descriptorCount = desc.bindlessDescriptorSetLayout.count;
-        samplerLayoutBinding.stageFlags = toVkShaderStageFlags(desc.bindlessDescriptorSetLayout.stage);
+        samplerLayoutBinding.descriptorType = toVkDescriptorType(desc.type);
+        samplerLayoutBinding.descriptorCount = desc.count;
+        samplerLayoutBinding.stageFlags = toVkShaderStageFlags(desc.stage);
 
         VkDescriptorSetLayoutCreateInfo layoutInfo = {};
         layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -797,16 +787,14 @@ namespace rasm::rhi
         return layout;
     }
 
-    DescriptorPool *VulkanDevice::createDescriptorPool(const ResourceDesc &desc)
+    DescriptorPool *VulkanDevice::createDescriptorPool(const DescriptorPoolDesc &desc)
     {
-        assert(desc.type == ResourceType::DESCRIPTOR_POOL);
-
         std::vector<VkDescriptorPoolSize> poolSizes;
-        for (const auto &poolSize : desc.descriptorPool.descriptorType)
+        for (const auto &poolSize : desc.sizes)
         {
             VkDescriptorPoolSize vkPoolSize = {};
-            vkPoolSize.type = toVkDescriptorType(poolSize.descriptorType);
-            vkPoolSize.descriptorCount = poolSize.descriptorCount;
+            vkPoolSize.type = toVkDescriptorType(poolSize.type);
+            vkPoolSize.descriptorCount = poolSize.count;
             poolSizes.push_back(vkPoolSize);
         }
 
@@ -814,7 +802,7 @@ namespace rasm::rhi
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
         poolInfo.pPoolSizes = poolSizes.data();
-        poolInfo.maxSets = desc.descriptorPool.maxSets;
+        poolInfo.maxSets = desc.maxSets;
         poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
 
         auto *pool = new VulkanDescriptorPool();
@@ -832,12 +820,10 @@ namespace rasm::rhi
         return pool;
     }
 
-    DescriptorSet *VulkanDevice::allocateDescriptorSet(const ResourceDesc &desc, DescriptorPool *pool, DescriptorSetLayout *layout)
+    DescriptorSet *VulkanDevice::allocateDescriptorSet(const std::string &name, DescriptorPool *pool, DescriptorSetLayout *layout)
     {
-        assert(desc.type == ResourceType::DESCRIPTOR_SET);
-
         auto *vkLayout = static_cast<VulkanDescriptorSetLayout *>(layout);
-        uint32_t variableDescCount = vkLayout->desc.bindlessDescriptorSetLayout.count;
+        uint32_t variableDescCount = vkLayout->desc.count;
 
         VkDescriptorSetVariableDescriptorCountAllocateInfo variableDescCountAI{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO,
@@ -852,7 +838,7 @@ namespace rasm::rhi
             .pSetLayouts = &vkLayout->layout};
 
         auto *descriptorSet = new VulkanDescriptorSet();
-        descriptorSet->desc = desc;
+        descriptorSet->name = name;
 
         auto result = vkAllocateDescriptorSets(device.device, &allocInfo, &descriptorSet->set);
         if (result != VK_SUCCESS)
@@ -862,7 +848,7 @@ namespace rasm::rhi
             return nullptr;
         }
 
-        setObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET, reinterpret_cast<uint64_t>(descriptorSet->set), desc.name);
+        setObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET, reinterpret_cast<uint64_t>(descriptorSet->set), name);
         return descriptorSet;
     }
 
@@ -998,7 +984,7 @@ namespace rasm::rhi
     bool VulkanDevice::fillBuffer(Buffer *buffer, const void *data, size_t size, size_t offset)
     {
         auto *vkBuffer = static_cast<VulkanBuffer *>(buffer);
-        assert(offset + size <= vkBuffer->desc.buffer.size);
+        assert(offset + size <= vkBuffer->desc.size);
         assert(vkBuffer->mappedData != nullptr);
 
         std::memcpy(static_cast<uint8_t *>(vkBuffer->mappedData) + offset, data, size);
@@ -1015,7 +1001,7 @@ namespace rasm::rhi
     bool VulkanDevice::fillTexture(Texture *texture, const void *data)
     {
         auto *vkTexture = static_cast<VulkanTexture *>(texture);
-        assert(texture->desc.type == ResourceType::TEXTURE && texture->desc.texture.usage == TextureUsage::SAMPLED);
+        assert(texture->desc.usage == TextureUsage::SAMPLED);
 
         // Transition from UNDEFINED to SHADER_READ directly on the CPU (VK_EXT_host_image_copy).
         VkHostImageLayoutTransitionInfo transitionInfo = {};
@@ -1042,8 +1028,8 @@ namespace rasm::rhi
         std::vector<std::vector<unsigned char>> mipData(vkTexture->mipLevels - 1);
         std::vector<VkMemoryToImageCopy> regions(vkTexture->mipLevels);
         const auto *pixels = static_cast<const unsigned char *>(data);
-        uint32_t width = texture->desc.texture.width;
-        uint32_t height = texture->desc.texture.height;
+        uint32_t width = texture->desc.width;
+        uint32_t height = texture->desc.height;
         for (uint32_t level = 0; level < vkTexture->mipLevels; ++level)
         {
             auto &region = regions[level];
@@ -1058,8 +1044,8 @@ namespace rasm::rhi
                 auto &next = mipData[level];
                 next.resize(static_cast<size_t>(nextWidth) * nextHeight * 4);
                 unsigned char *resized = nullptr;
-                if (texture->desc.texture.format == Format::R8G8B8A8_SRGB ||
-                    texture->desc.texture.format == Format::B8G8R8A8_SRGB)
+                if (texture->desc.format == Format::R8G8B8A8_SRGB ||
+                    texture->desc.format == Format::B8G8R8A8_SRGB)
                     resized = stbir_resize_uint8_srgb(pixels, width, height, 0, next.data(), nextWidth, nextHeight, 0, STBIR_RGBA);
                 else
                     resized = stbir_resize_uint8_linear(pixels, width, height, 0, next.data(), nextWidth, nextHeight, 0, STBIR_4CHANNEL);

@@ -218,7 +218,7 @@ Next steps, in order:
 - Handles are never invalidated (`generation` is always 1, [handle.cpp](../src/core/handle.cpp)), so use-after-free can't be detected.
 - Streaming (map tiles, game levels) needs generational handles, deferred destruction tied to frame fences, and free-list reuse of registry slots and bindless slots.
 
-**D5 — `ResourceDesc` is fragile.**
+**D5 — `ResourceDesc` is fragile.** *Fixed 2026-11-02:* `ResourceDesc` and `ResourceType` are gone. `rasm/render/resource.h` has one aggregate per resource (`BufferDesc`, `TextureDesc`, `ShaderDesc`, `PipelineDesc`, `RenderTargetDesc`, `BindlessDescriptorSetLayoutDesc`, `DescriptorPoolDesc`), each with a defaulted `operator==`. `ShaderDesc` owns its SPIR-V, so the pointer-pinning `shaderSources` deque in `RenderContext` is gone. The dedup hashes and `HandleHash` combine fields with `hashCombine`. See [architecture.md](architecture.md). The original finding follows.
 - It is a hand-maintained tagged union with a `std::string`, plus manual `==`/hash.
 - Equality ignores fields that matter: pipeline equality ignores vertex layout, attachment formats and the descriptor layout, so two pipelines that differ only in color format alias each other.
 - The hash XORs component hashes, so collisions are common (`a^b == b^a`, `x^x == 0`).

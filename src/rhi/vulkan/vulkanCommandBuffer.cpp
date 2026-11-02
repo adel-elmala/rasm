@@ -193,7 +193,7 @@ namespace rasm::rhi
                                          .newLayout = toVkImageLayout(newUsage),
                                          .image = vkTexture->image,
                                          .subresourceRange = {
-                                             .aspectMask = toVkAspectMask(texture->desc.texture.usage),
+                                             .aspectMask = toVkAspectMask(texture->desc.usage),
                                              .baseMipLevel = 0,
                                              .levelCount = vkTexture->mipLevels,
                                              .baseArrayLayer = 0,
@@ -234,13 +234,13 @@ namespace rasm::rhi
             .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
             .renderArea{
                 .extent{
-                    .width = color->desc.texture.width,
-                    .height = color->desc.texture.height}},
+                    .width = color->desc.width,
+                    .height = color->desc.height}},
             .layerCount = 1,
             .colorAttachmentCount = 1,
             .pColorAttachments = &colorAttachmentInfo,
             .pDepthAttachment = &depthAttachmentInfo,
-            .pStencilAttachment = hasStencil(depth->desc.texture.format) ? &depthAttachmentInfo : nullptr};
+            .pStencilAttachment = hasStencil(depth->desc.format) ? &depthAttachmentInfo : nullptr};
 
         vkCmdBeginRendering(commandBuffer, &renderingInfo);
     }

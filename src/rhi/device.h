@@ -61,43 +61,43 @@ namespace rasm::rhi
 
     struct Buffer
     {
-        ResourceDesc    desc;
-        uint64_t        deviceAddress       = 0;
+        BufferDesc                          desc;
+        uint64_t                            deviceAddress       = 0;
     };
 
     struct Texture
     {
-        ResourceDesc    desc;
+        TextureDesc                         desc;
     };
 
     struct Sampler
     {
-        SamplerDesc     desc;
+        SamplerDesc                         desc;
     };
 
     struct Shader
     {
-        ResourceDesc    desc;
+        ShaderDesc                          desc;
     };
 
     struct Pipeline
     {
-        ResourceDesc    desc;
+        PipelineDesc                        desc;
     };
 
     struct DescriptorSetLayout
     {
-        ResourceDesc    desc;
+        BindlessDescriptorSetLayoutDesc     desc;
     };
 
     struct DescriptorPool
     {
-        ResourceDesc    desc;
+        DescriptorPoolDesc                  desc;
     };
 
     struct DescriptorSet
     {
-        ResourceDesc    desc;
+        std::string                         name;
     };
 
     struct Fence
@@ -156,14 +156,14 @@ namespace rasm::rhi
     {
     public:
         virtual                         ~Device() = default;
-        virtual Buffer*                 createBuffer(const ResourceDesc& desc) = 0;
-        virtual Texture*                createTexture(const ResourceDesc& desc) = 0;
+        virtual Buffer*                 createBuffer(const BufferDesc& desc) = 0;
+        virtual Texture*                createTexture(const TextureDesc& desc) = 0;
         virtual Sampler*                createSampler(const SamplerDesc& desc) = 0;
-        virtual Shader*                 createShader(const ResourceDesc& desc) = 0;
-        virtual Pipeline*               createGraphicsPipeline(const ResourceDesc& desc, Shader* vertexShader, Shader* fragmentShader, DescriptorSetLayout* layout) = 0;
-        virtual DescriptorSetLayout*    createBindlessDescriptorSetLayout(const ResourceDesc& desc) = 0;
-        virtual DescriptorPool*         createDescriptorPool(const ResourceDesc& desc) = 0;
-        virtual DescriptorSet*          allocateDescriptorSet(const ResourceDesc& desc, DescriptorPool* pool, DescriptorSetLayout* layout) = 0;
+        virtual Shader*                 createShader(const ShaderDesc& desc) = 0;
+        virtual Pipeline*               createGraphicsPipeline(const PipelineDesc& desc, Shader* vertexShader, Shader* fragmentShader, DescriptorSetLayout* layout) = 0;
+        virtual DescriptorSetLayout*    createBindlessDescriptorSetLayout(const BindlessDescriptorSetLayoutDesc& desc) = 0;
+        virtual DescriptorPool*         createDescriptorPool(const DescriptorPoolDesc& desc) = 0;
+        virtual DescriptorSet*          allocateDescriptorSet(const std::string& name, DescriptorPool* pool, DescriptorSetLayout* layout) = 0;
         virtual CommandBuffer*          createCommandBuffer(QueueType queueType, const std::string& name) = 0;
         virtual Fence*                  createFence(uint64_t initialValue, const std::string& name) = 0;
         virtual Swapchain*              createSwapchain(const SwapchainDesc& desc) = 0;

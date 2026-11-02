@@ -120,12 +120,11 @@ namespace rasm::rhi
             auto &image = images[i];
             image.image = vkImages[i];
             image.view = vkViews[i];
-            image.desc.type = ResourceType::TEXTURE;
             image.desc.name = "Swapchain Image " + std::to_string(i);
-            image.desc.texture.width = swapchain.extent.width;
-            image.desc.texture.height = swapchain.extent.height;
-            image.desc.texture.format = toFormat(swapchain.image_format);
-            image.desc.texture.usage = TextureUsage::COLOR_ATTACHMENT;
+            image.desc.width = swapchain.extent.width;
+            image.desc.height = swapchain.extent.height;
+            image.desc.format = toFormat(swapchain.image_format);
+            image.desc.usage = TextureUsage::COLOR_ATTACHMENT;
             device.setObjectName(VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<uint64_t>(image.view), image.desc.name);
         }
 

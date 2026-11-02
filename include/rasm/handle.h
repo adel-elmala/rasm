@@ -1,11 +1,17 @@
 // clang-format off
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 namespace rasm
 {
+    inline std::size_t hashCombine(std::size_t seed, std::size_t value)
+    {
+        return seed ^ (value + static_cast<std::size_t>(0x9e3779b97f4a7c15ULL) + (seed << 6) + (seed >> 2));
+    }
 
     template <typename Tag>
     struct Handle
@@ -22,7 +28,7 @@ namespace rasm
         template <typename Tag>
         std::size_t operator()(const Handle<Tag>& handle) const
         {
-            return std::hash<uint64_t>()(handle.index) ^ (std::hash<uint64_t>()(handle.generation) << 1);
+            return hashCombine(std::hash<uint64_t>()(handle.index), std::hash<uint64_t>()(handle.generation));
         }
     };
 

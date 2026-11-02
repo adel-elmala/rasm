@@ -53,9 +53,9 @@ namespace rasm
         // Color images default to sRGB; pass R8G8B8A8_UNORM for normal/MR/AO data.
         TextureHandle               loadTexture(const std::string& path, Format format = Format::R8G8B8A8_SRGB);
         MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {});
-        TextureHandle               createTexture(const ResourceDesc& desc);
-        BufferHandle                createBuffer(const ResourceDesc& desc);
-        RenderTargetHandle          createRenderTarget(const ResourceDesc& desc);
+        TextureHandle               createTexture(const TextureDesc& desc);
+        BufferHandle                createBuffer(const BufferDesc& desc);
+        RenderTargetHandle          createRenderTarget(const RenderTargetDesc& desc);
         RenderGraph                 createRenderGraph();
         // Compiles Slang source with vertMain and fragMain entry points. The pipeline has no vertex input and
         // renders to the swapchain's color format with D32_SFLOAT_S8_UINT depth, and returns invalid on failure.

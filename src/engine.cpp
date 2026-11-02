@@ -99,41 +99,26 @@ namespace rasm
         }
 
         // Create bindless texture descriptor set layout, pool, and set
-        ResourceDesc bindlessLayoutDesc{};
-        bindlessLayoutDesc.type = ResourceType::BINDLESS_DESCRIPTOR_SET_LAYOUT;
-        bindlessLayoutDesc.name = "BindlessDescriptorSetLayout";
-        bindlessLayoutDesc.bindlessDescriptorSetLayout.stage = ShaderType::FRAGMENT;
-        bindlessLayoutDesc.bindlessDescriptorSetLayout.count = MAX_BINDLESS_TEXTURES;
-        bindlessLayoutDesc.bindlessDescriptorSetLayout.type = ResourceType::TEXTURE;
-
-        bindlessDescriptorSetLayout = ctx.createBindlessDescriptorSetLayout(bindlessLayoutDesc);
+        bindlessDescriptorSetLayout = ctx.createBindlessDescriptorSetLayout({.name = "BindlessDescriptorSetLayout",
+                                                                             .stage = ShaderType::FRAGMENT,
+                                                                             .count = MAX_BINDLESS_TEXTURES,
+                                                                             .type = DescriptorType::COMBINED_IMAGE_SAMPLER});
         if (!bindlessDescriptorSetLayout.isValid())
         {
             spdlog::error("Failed to create bindless descriptor set layout.");
             return;
         }
 
-        ResourceDesc bindlessPoolDesc{};
-        bindlessPoolDesc.type = ResourceType::DESCRIPTOR_POOL;
-        bindlessPoolDesc.name = "BindlessDescriptorPool";
-        bindlessPoolDesc.descriptorPool.descriptorType[0].descriptorType = ResourceType::TEXTURE;
-        bindlessPoolDesc.descriptorPool.descriptorType[0].descriptorCount = MAX_BINDLESS_TEXTURES;
-        bindlessPoolDesc.descriptorPool.maxSets = 1;
-
-        bindlessDescriptorPool = ctx.createDescriptorPool(bindlessPoolDesc);
+        bindlessDescriptorPool = ctx.createDescriptorPool({.name = "BindlessDescriptorPool",
+                                                           .sizes = {{.type = DescriptorType::COMBINED_IMAGE_SAMPLER, .count = MAX_BINDLESS_TEXTURES}},
+                                                           .maxSets = 1});
         if (!bindlessDescriptorPool.isValid())
         {
             spdlog::error("Failed to create bindless descriptor pool.");
             return;
         }
 
-        ResourceDesc bindlessSetDesc{};
-        bindlessSetDesc.type = ResourceType::DESCRIPTOR_SET;
-        bindlessSetDesc.name = "BindlessDescriptorSet";
-        bindlessSetDesc.descriptorSet.pool = bindlessDescriptorPool;
-        bindlessSetDesc.descriptorSet.layout = bindlessDescriptorSetLayout;
-
-        bindlessDescriptorSet = ctx.allocateDescriptorSet(bindlessSetDesc, bindlessDescriptorPool, bindlessDescriptorSetLayout);
+        bindlessDescriptorSet = ctx.allocateDescriptorSet("BindlessDescriptorSet", bindlessDescriptorPool, bindlessDescriptorSetLayout);
         if (!bindlessDescriptorSet.isValid())
         {
             spdlog::error("Failed to allocate bindless descriptor set.");
@@ -214,15 +199,7 @@ namespace rasm
         tex.channels = 4;
         tex.data = data;
 
-        auto textureDesc = ResourceDesc{};
-        textureDesc.name = path;
-        textureDesc.type = ResourceType::TEXTURE;
-        textureDesc.texture.width = width;
-        textureDesc.texture.height = height;
-        textureDesc.texture.format = format;
-        textureDesc.texture.usage = TextureUsage::SAMPLED;
-
-        auto textureHandle = ctx.createTexture(textureDesc);
+        auto textureHandle = ctx.createTexture({.name = path, .width = static_cast<uint32_t>(width), .height = static_cast<uint32_t>(height), .format = format, .usage = TextureUsage::SAMPLED});
         if (!textureHandle.isValid())
         {
             spdlog::error("Failed to create texture: {}", path);
@@ -243,17 +220,17 @@ namespace rasm
         return textureHandle;
     }
 
-    TextureHandle Engine::createTexture(const ResourceDesc &desc)
+    TextureHandle Engine::createTexture(const TextureDesc &desc)
     {
         return ctx.createTexture(desc);
     }
 
-    BufferHandle Engine::createBuffer(const ResourceDesc &desc)
+    BufferHandle Engine::createBuffer(const BufferDesc &desc)
     {
         return ctx.createBuffer(desc);
     }
 
-    RenderTargetHandle Engine::createRenderTarget(const ResourceDesc &desc)
+    RenderTargetHandle Engine::createRenderTarget(const RenderTargetDesc &desc)
     {
         return ctx.createRenderTarget(desc);
     }
@@ -277,32 +254,13 @@ namespace rasm
             return {};
         }
 
-        auto pipelineDesc = ResourceDesc{};
-        pipelineDesc.type = ResourceType::GRAPHICS_PIPELINE;
-        pipelineDesc.name = "Pipeline for " + name;
-
-        auto shaderDesc = ResourceDesc{};
-        shaderDesc.type = ResourceType::SHADER;
-        shaderDesc.shader.shaderType = ShaderType::VERTEX;
-        shaderDesc.shader.sourceSize = vertShader.code.size();
-        shaderDesc.shader.source = reinterpret_cast<const char *>(vertShader.code.data());
-
-        pipelineDesc.pipeline.vertexShader = ctx.createShader(shaderDesc);
-
-        shaderDesc.shader.shaderType = ShaderType::FRAGMENT;
-        shaderDesc.shader.sourceSize = fragShader.code.size();
-        shaderDesc.shader.source = reinterpret_cast<const char *>(fragShader.code.data());
-
-        pipelineDesc.pipeline.fragmentShader = ctx.createShader(shaderDesc);
-
-        pipelineDesc.pipeline.topology = PrimitiveTopology::TRIANGLE_LIST;
-
-        pipelineDesc.pipeline.colorAttachmentFormat = ctx.getSwapchainImageFormat();
-        pipelineDesc.pipeline.depthStencilAttachmentFormat = DEPTH_FORMAT;
-
-        pipelineDesc.pipeline.descriptorSetLayout = bindlessDescriptorSetLayout;
-
-        return ctx.createPipeline(pipelineDesc);
+        return ctx.createPipeline({.name = "Pipeline for " + name,
+                                   .vertexShader = ctx.createShader({.name = name + ".vert", .type = ShaderType::VERTEX, .code = std::move(vertShader.code)}),
+                                   .fragmentShader = ctx.createShader({.name = name + ".frag", .type = ShaderType::FRAGMENT, .code = std::move(fragShader.code)}),
+                                   .descriptorSetLayout = bindlessDescriptorSetLayout,
+                                   .topology = PrimitiveTopology::TRIANGLE_LIST,
+                                   .colorAttachmentFormat = ctx.getSwapchainImageFormat(),
+                                   .depthStencilAttachmentFormat = DEPTH_FORMAT});
     }
 
     bool Engine::beginFrame(CameraHandle camera)
@@ -483,13 +441,11 @@ namespace rasm
 
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
-            auto depthTextureDesc = ResourceDesc{};
-            depthTextureDesc.type = ResourceType::TEXTURE;
-            depthTextureDesc.name = "DepthTexture for Frame " + std::to_string(i);
-            depthTextureDesc.texture.width = swapchain.width;
-            depthTextureDesc.texture.height = swapchain.height;
-            depthTextureDesc.texture.format = DEPTH_FORMAT;
-            depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
+            const TextureDesc depthTextureDesc = {.name = "DepthTexture for Frame " + std::to_string(i),
+                                                  .width = swapchain.width,
+                                                  .height = swapchain.height,
+                                                  .format = DEPTH_FORMAT,
+                                                  .usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT};
 
             // The device is idle, so the old texture is unused.
             if (frameResources[i].depthTexture.isValid())

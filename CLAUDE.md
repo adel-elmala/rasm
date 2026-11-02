@@ -47,7 +47,7 @@ cmake --install build\x64-debug                        # into install/, for find
 ## Invariants that are easy to break
 
 - C++ structs in `src/renderer/uberMaterialTypes.h` must match `shaders/lib/core.slang` byte-for-byte (scalar layout); update both sides, the `static_assert`s and the `validateRasmStructs` tables in `src/renderer/shaderCompiler.cpp` together.
-- `RenderContext::createBuffer`/`createTexture` always create a new resource (no dedup since `B1`) — cache at the asset level if you want sharing, and destroy what you replace. Shaders, pipelines and descriptor set layouts are still deduplicated, so any new field in their `ResourceDesc` must be added to `operator==`.
+- `RenderContext::createBuffer`/`createTexture` always create a new resource (no dedup since `B1`) — cache at the asset level if you want sharing, and destroy what you replace. Shaders, pipelines and descriptor set layouts are still deduplicated: their descriptors (`ShaderDesc`, `PipelineDesc`, `BindlessDescriptorSetLayoutDesc`) compare every field through a defaulted `operator==`, but a new field must also be added to the matching hash in `src/rhi/resource.cpp`.
 - `frameCount` is the frame-in-flight slot (0/1); per-frame mutable buffers are indexed by it.
 - `prepareScene` is cached per scene after the first `render`; only transforms update afterwards.
 - Normal/metallic-roughness/AO textures must be `R8G8B8A8_UNORM`; color/emissive `R8G8B8A8_SRGB`. Shaders output linear color.
