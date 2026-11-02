@@ -5,7 +5,7 @@ These rules describe how RASM code is written. Most of them are what the code al
 ## 1. Language and toolchain
 
 - **C++20**, no compiler extensions (`CMAKE_CXX_EXTENSIONS OFF`). The reference compilers are Clang on Windows and Apple Clang on macOS, and the code must also build with MSVC and GCC.
-- Use C++20 where it clarifies code: designated initializers for descriptors and config structs (already used widely), `std::span`, `constexpr`, `enum class`, `[[nodiscard]]`.
+- Use C++20 where it clarifies code: designated initializers for descriptors and config structs (already used widely), `constexpr`, `enum class`, `[[nodiscard]]`.
 - No exceptions in engine code. Third-party exceptions (e.g. from tinygltf) are caught at the call site.
 - No RTTI-dependent designs (`dynamic_cast`, `typeid`).
 - No templates in engine code: no function, class, variable or lambda templates (including `auto` lambda parameters). Write concrete functions per type. Using std and third-party templates (`std::vector`, `std::span`) is fine. The only exception is `Handle<Tag>` in `include/rasm/handle.h`.
