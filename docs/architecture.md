@@ -14,27 +14,29 @@ flowchart TD
     Engine --> Platform["Window + input<br/>window.cpp (SDL3)"]
     Engine --> SC["ShaderCompiler<br/>(Slang API → SPIR-V)"]
     Engine --> RG["RenderGraph<br/>(pass ordering only)"]
-    Engine --> RC["RenderContext<br/>(handle → backend object maps)"]
+    Engine --> RC["RenderContext<br/>(handle → rhi object tables)"]
     RG --> RC
-    RC --> VK["gfx::VulkanContext<br/>vk-bootstrap + VMA"]
+    RC --> DEV["rhi::Device<br/>(backend-neutral interface)"]
+    DEV --> VK["rhi::VulkanDevice<br/>vk-bootstrap + VMA"]
     VK --> GPU[(GPU)]
 ```
 
 | Layer | Files | Responsibility |
 |---|---|---|
-| Public API | `include/rasm/` (`rasm.h`, `engine.h`, …) and `include/rasm/render/` (`renderGraph.h`, `renderContext.h`, `resource.h`) | Single facade class `Engine`; everything is created through it and referenced by handles. The low-level API (render graph, `RenderContext`, `ResourceDesc`) lives in `render/`. |
+| Public API | `include/rasm/` (`rasm.h`, `engine.h`, …) and `include/rasm/render/` (`renderGraph.h`, `renderContext.h`, `resource.h`) | Single facade class `Engine`; everything is created through it and referenced by handles. The low-level API (render graph, `RenderContext`, the resource descriptors) lives in `render/`. |
 | Engine | `src/engine.cpp` | Construction, frame loop (`beginFrame`/`render`/`endFrame`), texture loading. |
 | Core utilities | `src/core/` | Handle manager, profiler, file reading. |
 | Platform | `src/platform/window.cpp` | SDL3 window, event polling and camera input. |
 | Assets | `src/assets/` | glTF/OBJ import (`mesh.cpp`), materials and glTF material/texture import (`material.cpp`). |
 | Scene | `src/scene/` | Scenes, entities, cameras, lights, transforms; scene preparation for rendering (`scene.cpp`). |
 | Renderer | `src/renderer/` | Render graph, Slang shader compiler, GPU struct definitions (`uberMaterialTypes.h`). |
-| Render context | `src/rhi/renderContext.cpp` | Backend-agnostic(ish) API over handles; owns the handle → backend-object maps and the creation-dedup caches. |
-| Vulkan backend | `src/rhi/vulkan/` | `VulkanContext`: instance/device/swapchain setup, VMA allocations, pipelines, barriers, submission. `vulkanTypes.h`: Vulkan handle structs. |
+| Render context | `src/rhi/renderContext.cpp` | Backend-neutral API over handles; owns the handle → `rhi::` object tables, the creation-dedup caches and render targets. |
+| RHI | `src/rhi/device.h` | The backend-neutral GPU interface: `Device`, `CommandBuffer`, `Queue`, `Swapchain` and the resource objects (§12). |
+| Vulkan backend | `src/rhi/vulkan/` | `VulkanDevice` (instance, device, VMA, resource creation), `VulkanCommandBuffer` (recording, barriers), `VulkanSwapchain` (surface swapchain and its semaphores), `VulkanQueue` (submission). `vulkanTypes.h`: the Vulkan objects behind each `rhi::` struct. |
 | Third-party implementations | `src/thirdparty_impl.cpp` | The single translation unit with the `*_IMPLEMENTATION` defines (stb, tinygltf, tinyobjloader, VMA). |
 | Shaders | `shaders/lib/`, `shaders/passes/` | `lib/`: shared modules: GPU structs (`core.slang`), PBR BRDF (`pbr.slang`), unlit shading (`unlit.slang`). `passes/`: entry shaders: the uber shader (`rasm.slang`). |
 
-Applications compile against `include/rasm/` and glm only. `src/`, the backend libraries and the tinygltf/stb include paths are PRIVATE to the `rasm` target, and static linking still pulls the libraries in. `RenderContext` keeps its Vulkan state in a private `RenderContext::Impl`, defined in `src/rhi/renderContext.cpp`. `Engine` holds `ShaderCompiler` through a forward declaration.
+Applications compile against `include/rasm/` and glm only. `src/`, the backend libraries and the tinygltf/stb include paths are PRIVATE to the `rasm` target, and static linking still pulls the libraries in. `RenderContext` keeps its `rhi::Device` and object tables in a private `RenderContext::Impl`, defined in `src/rhi/renderContext.cpp`. `Engine` holds `ShaderCompiler` through a forward declaration.
 
 ## 2. Object model: handles and registries
 
@@ -43,31 +45,32 @@ Applications compile against `include/rasm/` and glm only. `src/`, the backend l
 There are two kinds of handle owner:
 
 - **CPU-side objects** live in `Engine::registry` (a private struct of `std::vector`s) and are indexed directly by `handle.index`. These are `Entity`, `Mesh`, `Material`, `Camera`, `Light` and `Scene`. Slot 0 is an unused default-constructed element. Each `create*` checks `index` against a compile-time `MAX_*` constant.
-- **GPU objects** live in `RenderContext`. Each type has an `unordered_map<Handle, gfx::XxxVKHandle>` cache (`bufferCache`, `textureCache`, `pipelineCache`, …). The backend structs (`src/rhi/vulkan/vulkanTypes.h`) carry the raw Vulkan objects plus a copy of the `ResourceDesc` they were created from.
+- **GPU objects** live in `RenderContext`. Each type has an `unordered_map<Handle, rhi::Xxx*>` table (`buffers`, `textures`, `pipelines`, `commandBuffers`, …) pointing at objects the `rhi::Device` created. Each `rhi::` struct carries a copy of the descriptor it was created from, and the backend derives from it to add its native objects (§12).
 
-**`ResourceDesc`** (`rasm/render/resource.h`) is the one creation descriptor for every GPU resource. It is a tagged union of `texture`, `buffer`, `shader`, `pipeline`, `renderTarget`, `bindlessDescriptorSetLayout`, `descriptorPool` and `descriptorSet`, with a `std::string name`. The constructor zeroes the whole union, so fields a caller leaves unset are 0 (fixed `B18`). It has a hand-written `operator==` and `ResourceDescHash`.
+**Descriptors** (`rasm/render/resource.h`). Each GPU resource has its own creation descriptor: `BufferDesc`, `TextureDesc`, `ShaderDesc`, `PipelineDesc`, `RenderTargetDesc`, `BindlessDescriptorSetLayoutDesc` and `DescriptorPoolDesc` (fixed `D5`). Each is an aggregate with a `std::string name` and default member initializers, so it is filled with designated initializers and a field left unset has a defined value. Each has a defaulted `operator==`, so every field takes part in equality. Passing the wrong kind of descriptor is a compile error. `ShaderDesc` owns its SPIR-V (`std::vector<uint8_t> code`). Descriptor sets, command buffers and fences only take a name. `DescriptorType` names the descriptor kind of a layout or pool.
 
-**Creation dedup.** Only immutable objects are deduplicated: `createShader`, `createPipeline` and `createBindlessDescriptorSetLayout` first look the desc up in a `*DescCache` (`unordered_map<ResourceDesc, Handle>`) and return the existing handle for an equal desc. Equality covers the full state: shader equality compares the SPIR-V bytes, and pipeline equality compares shaders, descriptor set layout, topology and attachment formats. Buffers, textures, descriptor pools and descriptor sets are mutable, so every `create*`/`allocate*` call makes a new object (fixed `B1`). Callers that want sharing cache at the asset level: `loadTexture` caches by path and format, and glTF import caches per model by image index and color space.
+**Creation dedup.** Only immutable objects are deduplicated: `createShader`, `createPipeline` and `createBindlessDescriptorSetLayout` first look the desc up in a `*DescCache` (`unordered_map<XxxDesc, Handle, XxxDescHash>`) and return the existing handle for an equal desc. Equality is the defaulted one, so it covers every field, including the name and the SPIR-V bytes. The hashes (`ShaderDescHash`, `PipelineDescHash`, `BindlessDescriptorSetLayoutDescHash`, defined in `src/rhi/resource.cpp`) fold the fields with `hashCombine` from `rasm/handle.h`, which is order-sensitive, unlike the old XOR. `HandleHash` uses it too. Buffers, textures, descriptor pools and descriptor sets are mutable, so every `create*`/`allocate*` call makes a new object (fixed `B1`). Callers that want sharing cache at the asset level: `loadTexture` caches by path and format, and glTF import caches per model by image index and color space.
 
 ## 3. Engine lifetime and the frame loop
 
 ### Construction (`Engine::Engine`, `src/engine.cpp`)
 1. Create the SDL3 window (`createWindow`).
-2. `RenderContext::initialize` creates a `VulkanContext`, which:
+2. `RenderContext::initialize` calls `rhi::createDevice` for `EngineConfig::preferredBackend`. For Vulkan, `VulkanDevice::initialize`:
    - creates the instance (validation optional),
    - creates the surface from the main window (`createWindowSurface` in `src/platform/`, which wraps `SDL_Vulkan_CreateSurface`),
    - selects a physical device with the required features (below),
-   - creates the device, graphics queue, swapchain (`B8G8R8A8_SRGB`) and VMA allocator.
-3. Create per-frame resources for `MAX_FRAMES_IN_FLIGHT = 2` slots: a command pool and buffer, an image-acquired semaphore, an in-flight fence (created signaled), and a depth texture (`D32_SFLOAT_S8_UINT`).
-4. Create one render-finished semaphore per swapchain image.
-5. Initialize the Slang session (SPIR-V 1.4, scalar layout, column-major matrices, search path `lib/` under `EngineConfig::shaderDir`). A missing folder fails here, so a wrong path stops startup instead of failing every frame.
-6. Create the single bindless descriptor set: layout, pool and set. It is binding 0 of set 0, an array of 1024 `COMBINED_IMAGE_SAMPLER`s with `UPDATE_AFTER_BIND | PARTIALLY_BOUND`.
-7. `isRunning = true`. Any failure returns early and leaves `running() == false`.
+   - creates the device, graphics queue and VMA allocator.
+
+   It then creates the swapchain (`B8G8R8A8_SRGB`), registers its images as texture handles, and creates the default sampler.
+3. Create the frame fence (a timeline) and, for each of the `MAX_FRAMES_IN_FLIGHT = 2` slots, a command buffer and a depth texture (`D32_SFLOAT_S8_UINT`).
+4. Initialize the Slang session (SPIR-V 1.4, scalar layout, column-major matrices, search path `lib/` under `EngineConfig::shaderDir`). A missing folder fails here, so a wrong path stops startup instead of failing every frame.
+5. Create the single bindless descriptor set: layout, pool and set. It is binding 0 of set 0, an array of 1024 `COMBINED_IMAGE_SAMPLER`s with `UPDATE_AFTER_BIND | PARTIALLY_BOUND`.
+6. `isRunning = true`. Any failure returns early and leaves `running() == false`.
 
 **Required Vulkan features**: API 1.4.
 - 1.0: `multiDrawIndirect`, `samplerAnisotropy`, `shaderInt64`.
 - 1.1: `shaderDrawParameters`.
-- 1.2: descriptor indexing (runtime arrays, partially bound, update-after-bind, variable count, non-uniform sampled image indexing), `bufferDeviceAddress`, `scalarBlockLayout`, `shaderInt8`, `storagePushConstant8`.
+- 1.2: descriptor indexing (runtime arrays, partially bound, update-after-bind, variable count, non-uniform sampled image indexing), `bufferDeviceAddress`, `scalarBlockLayout`, `timelineSemaphore`, `shaderInt8`, `storagePushConstant8`.
 - 1.3: `dynamicRendering`, `synchronization2`.
 - 1.4: `hostImageCopy`.
 - Extensions: `VK_KHR_swapchain`, `VK_EXT_memory_budget`.
@@ -78,14 +81,14 @@ There are two kinds of handle owner:
 sequenceDiagram
     participant App
     participant E as Engine
-    participant C as RenderContext/Vulkan
+    participant C as RenderContext/rhi
     App->>E: render(scene, camera)
     E->>E: pollEvents(camera) → SDL events, camera controller, deltaTime
     E->>E: skip frame if minimized / 0×0
     E->>C: recreateSwapchain() if resized or out of date (skip frame if it fails)
-    E->>C: wait inFlightFence[frame]
-    E->>C: acquireNextImage(imageAcquired[frame]) (skip frame on OUT_OF_DATE)
-    E->>C: reset inFlightFence[frame], begin command buffer
+    E->>C: waitForFence(frameFence, frameResources[frame].fenceValue)
+    E->>C: acquireNextImage (skip frame on OUT_OF_DATE)
+    E->>C: begin command buffer
     E->>C: beginPass: barriers (swapchain→COLOR_ATTACHMENT, depth→DEPTH), beginRendering (CLEAR), viewport/scissor
     E->>E: prepareScene(scene) (cached after first call)
     E->>C: bind uber pipeline
@@ -95,7 +98,7 @@ sequenceDiagram
     E->>C: push constant = address of that slot
     E->>C: drawIndexedIndirect(drawInfoBuffer, drawInfoCount)
     E->>C: endPass: endRendering, swapchain→PRESENT_SRC
-    E->>C: submit (wait imageAcquired, signal renderFinished[image], fence)
+    E->>C: submit (waits for the acquired image, signals frameFence = ++frameFenceValue)
     E->>C: present (SUBOPTIMAL / OUT_OF_DATE → recreate next frame)
     E->>E: frameCount = (frameCount + 1) % 2
 ```
@@ -103,7 +106,8 @@ sequenceDiagram
 Notes:
 - `frameCount` is the frame-in-flight **slot index** (0 or 1), not a running frame counter.
 - Input handling, delta-time measurement and the camera controller run inside `beginFrame`. The caller passes the camera that should receive input.
-- `beginFrame` returns `false` when the frame is skipped. The caller then records nothing and does not call `endFrame`. A skipped frame leaves the fence signaled.
+- `beginFrame` returns `false` when the frame is skipped. The caller then records nothing and does not call `endFrame`.
+- Frame pacing uses one timeline fence, `Engine::frameFence`. Every frame submit signals the next value (`frameFenceValue + 1`), and the slot remembers it in `FrameResources::fenceValue`. Before reusing a slot, `beginFrame` waits for that value. A slot takes the new value only when the submit succeeds, because waiting for a value nothing signals would block forever. Nothing is reset, so a skipped frame needs no cleanup.
 - Every frame presents, and present needs the image in `PRESENT_SRC_KHR`. A frame that only draws to render targets gets an empty swapchain pass in `endFrame`, so it presents the clear color. There is no offscreen-only frame yet (`D7`).
 - Acquire, present and `recreateSwapchain` return `SwapchainStatus` (`OK`, `SUBOPTIMAL`, `OUT_OF_DATE`, `FAILURE`). `SUBOPTIMAL` from acquire still renders the frame, because the image was acquired and its semaphore will be signaled. `Engine::swapchainOutOfDate` schedules recreation.
 - Swapchain-sized resources (depth textures, viewport, camera aspect) use the swapchain extent in pixels (`Swapchain::width`/`height`). `Window::width`/`height` are logical and are only used for mouse input.
@@ -162,10 +166,10 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
   - a flat `float params[]` indexed by `PbrParam` offsets (albedo is 3 floats at offset 0, metallic is at 3, …).
 - `convertToGfxMaterial` (`scene.cpp`) turns it into the GPU `gfx::Material`. Texture handles are replaced by bindless slot indices, and `INVALID_TEXTURE_INDEX` (0xFFFFFFFF) means "no texture".
 - **Bindless slots.** `Engine::addBindlessTexture` → `RenderContext::updateBindlessDescriptorSet` writes the texture into the next free slot (`nextBindlessTextureIndex++`), or into a slot the caller names, which also moves `nextBindlessTextureIndex` past it. The slot is remembered in `registry.bindlessTextureIndexMap`. Automatic allocation never reuses a slot; naming a slot that is already taken replaces its descriptor.
-- **Texture upload.** This is `VulkanContext::fillTexture`:
+- **Texture upload.** This is `VulkanDevice::fillTexture`:
   - the image is transitioned on the host and filled with `VK_EXT_host_image_copy` (core in 1.4), so no command buffer or staging buffer is involved;
-  - the full mip chain is generated on the CPU with `stb_image_resize2`, sRGB-aware for sRGB formats;
-  - every texture gets its own `VkSampler` (linear, repeat, 8× anisotropy).
+  - the full mip chain is generated on the CPU with `stb_image_resize2`, sRGB-aware for sRGB formats.
+- **Sampling.** Every bindless texture, render target color attachments included, is written with the one default sampler that `RenderContext::initialize` creates (linear, repeat, 8× anisotropy, no LOD clamp, so it serves any mip count).
 - **Color spaces.** Base color and emissive are uploaded as `R8G8B8A8_SRGB`. Normal, metallic-roughness and occlusion maps are uploaded as `R8G8B8A8_UNORM`.
 - Every material uses the uber shader. To add a shading path, add a value to `gfx::MaterialId` and its mirror in `core.slang`, map it in `getGfxMaterialId` (`scene.cpp`), and branch on it in `fragMain`. Today's mapping is `UNLIT` → `MaterialId::UNLIT` (base color only, no tone mapping) and `PBR` → `MaterialId::PBR`.
 
@@ -229,3 +233,32 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - **Coordinate system.** The engine works in a Y-down world: imported geometry is mirrored in Y (`D8`), and back-face culling is disabled. Light directions and camera transforms are expressed in that mirrored space.
 - **Depth.** `D32_SFLOAT_S8_UINT`, cleared to 1.0, compare `LESS_OR_EQUAL`.
 - **Output.** The PBR shader applies Reinhard tone mapping. The sRGB swapchain format does the gamma encoding, so shaders must output linear color.
+
+## 12. RHI
+
+`src/rhi/device.h` is the boundary between the engine and a graphics API. Code above it (`RenderContext`, and through it `Engine`) never sees a native type, and each backend implements it under `src/rhi/<backend>/`. Vulkan is the only implementation today.
+
+**Objects.**
+- `rhi::createDevice(Backend, DeviceDesc)` picks the implementation for `EngineConfig::preferredBackend`. `DX12`, `METAL` and `WEBGPU` log that they are not implemented and return null.
+- Resources are plain structs (`Buffer`, `Texture`, `Sampler`, `Shader`, `Pipeline`, `DescriptorSetLayout`, `DescriptorPool`, `DescriptorSet`, `Fence`) that hold their neutral description. A backend derives from each (`VulkanBuffer : Buffer`) and adds its native objects. An object passed to a device always came from that device, so the backend `static_cast`s it to its own type. `CommandBuffer`, `Queue` and `Swapchain` are interfaces with virtual functions.
+- `create*` logs a failure and returns null. `destroy*` releases at once, so the caller must know the GPU is done with the object: today that means the device is idle or a fence wait covered it. Deferred destruction is `D4`. Swapchain images belong to the swapchain, and `RenderContext::destroyTexture` refuses them.
+- `RenderContext` maps handles to these pointers and adds what no API provides per object: handle allocation, dedup of shaders, pipelines and layouts, render targets, bindless slot allocation and the default sampler.
+
+**Command buffers.** Each frame slot records one command buffer. `begin` resets it, so the GPU must have finished its previous submission, which the frame fence wait guarantees. On Vulkan each command buffer owns a command pool, and `begin` resets the pool. Barriers are `TextureUsage` transitions (§9).
+
+**Fences are timelines.** A submit signals a 64-bit value and `waitForFence(fence, value)` blocks until the GPU has reached it. Values only grow and are never reset. This maps to Vulkan timeline semaphores, `ID3D12Fence` and `MTLSharedEvent`, and on WebGPU to counting `onSubmittedWorkDone` callbacks.
+
+**Swapchain.** `acquireNextImage`, `present` and `resize` return `SwapchainStatus`. The swapchain owns whatever synchronizes it with the queue, so no semaphore crosses the interface: a `SubmitDesc` with `swapchain` set waits for the image of the last acquire and makes the next `present` wait for that submit.
+- The swapchain enforces acquire → submit → present. A submit that names the swapchain without an image acquired since the last such submit fails, and so does a present without such a submit. Acquiring again while the last image is still unsubmitted (e.g. its submit failed) returns that image again rather than acquiring another, and acquiring while the last submitted image is unpresented fails.
+- Vulkan keeps one acquire semaphore per frame in flight and uses them in turn. Every presenting submit also signals a timeline semaphore the swapchain owns, and acquire waits until the submit that last waited on a semaphore has finished before reusing it, so correctness doesn't depend on the caller's frame pacing.
+- Vulkan keeps one present semaphore per image: an image is acquired again only after its present finished. They survive `resize`, because the presentation engine may still wait on one after the device is idle; a larger new swapchain only adds semaphores.
+- `resize` returns `OUT_OF_DATE` on a 0×0 surface and `FAILURE` if the surface query fails, and both keep the old swapchain. Otherwise it consumes any pending acquire or present signal with a wait-only submit, waits for the device to be idle and replaces the images. `RenderContext::recreateSwapchain` re-registers the image handles when the images changed, so earlier `getSwapchainImages` handles are invalid then; `getSwapchainImages` returns a copy. If building the new swapchain fails there are no images, and acquire reports `OUT_OF_DATE` until a resize succeeds.
+- The swapchain presents to the window the device was created for (`DeviceDesc::window`).
+
+**Queues.** There is one graphics queue (`QueueType::GRAPHICS`). Transfer and async-compute queues are `D13`. Vulkan submits with `vkQueueSubmit2` and waits for the acquired image at `COLOR_ATTACHMENT_OUTPUT`, the stage the barrier out of `UNKNOWN` also waits for.
+
+**Adding a backend.**
+1. Implement `Device`, `CommandBuffer`, `Queue` and `Swapchain`, and derive the resource structs, under `src/rhi/<backend>/`.
+2. Add a case to the switch in `src/rhi/device.cpp`, the sources to `RASM_SRC`, and the libraries to `src/CMakeLists.txt` and `cmake/rasmConfig.cmake.in`.
+3. The shader target follows the backend (`getShaderCompilerTarget` in `engine.cpp`: MSL, HLSL or WGSL). The shaders still read buffers through device addresses and `spirv_asm`, so D3D12 and WebGPU need the binding work in `D12` first, and WebGPU also the Tier B path of the development plan.
+4. `createWindowSurface` in `src/platform/` is Vulkan-specific, because it takes a `VkInstance`. Each backend needs its own platform hook (an `HWND` for D3D12, a `CAMetalLayer` for Metal, a surface for WebGPU) until `D7` puts native window handles in `DeviceDesc`.

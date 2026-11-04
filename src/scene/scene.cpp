@@ -289,17 +289,16 @@ namespace rasm
         }
 
         // Allocate the vertex and index buffers for the scene.
-        auto bufferDesc = ResourceDesc{};
+        BufferDesc bufferDesc;
         bufferDesc.name = "Mega Vertex Buffer";
-        bufferDesc.type = ResourceType::BUFFER;
-        bufferDesc.buffer.usage = BufferUsage::STORAGE;
-        bufferDesc.buffer.size = totalVertexBufferSize;
+        bufferDesc.usage = BufferUsage::STORAGE;
+        bufferDesc.size = totalVertexBufferSize;
 
         preparedScene.megaVertexBuffer = ctx.createBuffer(bufferDesc);
 
         bufferDesc.name = "Mega Index Buffer";
-        bufferDesc.buffer.usage = BufferUsage::INDEX;
-        bufferDesc.buffer.size = totalIndexBufferSize;
+        bufferDesc.usage = BufferUsage::INDEX;
+        bufferDesc.size = totalIndexBufferSize;
 
         preparedScene.megaIndexBuffer = ctx.createBuffer(bufferDesc);
 
@@ -311,8 +310,8 @@ namespace rasm
 
         // allocate mega-model buffer and draw info buffer for the scene.
         bufferDesc.name = "Mega Model data Buffer";
-        bufferDesc.buffer.usage = BufferUsage::STORAGE;
-        bufferDesc.buffer.size = sceneDraws.size() * sizeof(gfx::Modeldata);
+        bufferDesc.usage = BufferUsage::STORAGE;
+        bufferDesc.size = sceneDraws.size() * sizeof(gfx::Modeldata);
         // Mutable uniforms belong to a frame slot; other slots may still be executing on the GPU.
         for (auto &buffer : preparedScene.megaModelDataBuffer)
         {
@@ -322,8 +321,8 @@ namespace rasm
         }
 
         bufferDesc.name = "Draw Info Buffer";
-        bufferDesc.buffer.usage = BufferUsage::INDIRECT;
-        bufferDesc.buffer.size = sceneDraws.size() * sizeof(gfx::DrawInfo);
+        bufferDesc.usage = BufferUsage::INDIRECT;
+        bufferDesc.size = sceneDraws.size() * sizeof(gfx::DrawInfo);
 
         preparedScene.drawInfoBuffer = ctx.createBuffer(bufferDesc);
 
@@ -335,8 +334,8 @@ namespace rasm
 
         // create sceneData buffer for the scene.
         bufferDesc.name = "Scene Data Buffer";
-        bufferDesc.buffer.usage = BufferUsage::STORAGE;
-        bufferDesc.buffer.size = MAX_SCENE_DRAWS_PER_FRAME * sizeof(gfx::SceneData);
+        bufferDesc.usage = BufferUsage::STORAGE;
+        bufferDesc.size = MAX_SCENE_DRAWS_PER_FRAME * sizeof(gfx::SceneData);
 
         for (auto &buffer : preparedScene.sceneDataBuffer)
         {

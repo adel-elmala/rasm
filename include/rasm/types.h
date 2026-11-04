@@ -27,7 +27,8 @@ namespace rasm
     {
         VULKAN,
         DX12,
-        METAL
+        METAL,
+        WEBGPU
     };
 
     enum class Format
@@ -86,17 +87,14 @@ namespace rasm
 
     struct FrameResources
     {
-        CommandPoolHandle   commandPool;
         CommandBufferHandle commandBuffer;
-        SemaphoreHandle     readyToDrawSemaphore;
-        FenceHandle         inFlightFence;
         TextureHandle       depthTexture;
+        uint64_t            fenceValue      = 0; // frameFence value the slot's last submit signals
     };
 
     struct Swapchain
     {
         std::vector<TextureHandle>      imageHandles;
-        std::vector<SemaphoreHandle>    readyToPresentSemaphores;
         Format                          imageFormat;
         uint32_t                        width   = 0; // swapchain extent in pixels
         uint32_t                        height  = 0;

@@ -36,8 +36,8 @@ src/
   assets/                       material.cpp (incl. glTF material/texture import), mesh.cpp (glTF + OBJ)
   scene/                        scene (incl. prepareScene), entity, transform, camera, light
   renderer/                     renderGraph, shaderCompiler, uberMaterialTypes.h (shader ABI)
-  rhi/                          renderContext.cpp (backend switch)
-    vulkan/                     vulkanContext.{h,cpp}, vulkanTypes.h
+  rhi/                          device.h (backend-neutral interface), renderContext.cpp (handle tables)
+    vulkan/                     vulkanDevice, vulkanCommandBuffer, vulkanSwapchain, vulkanTypes.h, vulkanUtils
   thirdparty_impl.cpp           the only *_IMPLEMENTATION defines
 shaders/
   lib/                          core.slang (GPU structs), pbr.slang, unlit.slang
@@ -202,8 +202,8 @@ Next steps, in order:
 
 ## 3. Design and architecture
 
-**D1 — The backend abstraction does not scale.** Every `RenderContext` method is a `switch (backend)` with empty DX12/Metal branches (≈1,300 lines, mostly boilerplate). Replace it with an RHI interface:
-- a small set of objects (`Device`, `Buffer`, `Texture`, `Sampler`, `Pipeline`, `CommandList`, `Queue`, `Swapchain`, `Fence`/timeline),
+**D1 — The backend abstraction does not scale.** *Fixed 2026-11-02:* `src/rhi/device.h` defines a virtual interface (`Device`, `CommandBuffer`, `Queue`, `Swapchain`, and the `Buffer`, `Texture`, `Sampler`, `Shader`, `Pipeline`, descriptor and `Fence` objects), and `src/rhi/vulkan/` implements it. `RenderContext` has no `switch (backend)` left: it maps handles to `rhi::` objects and keeps the dedup caches and render targets. Fences are timelines, and the swapchain owns its acquire and present semaphores, so no binary semaphore or command pool crosses the interface. `vulkanContext.*` is gone, and the only `Vk*` type outside `src/rhi/` is the `createWindowSurface` hook in `src/platform/`, which waits for `D7`. The generational pools in the last bullet are left to `D4`, as the development plan schedules them. See [architecture.md §12](architecture.md#12-rhi). The original finding follows. Every `RenderContext` method is a `switch (backend)` with empty DX12/Metal branches (≈1,300 lines, mostly boilerplate). Replace it with an RHI interface:
+- a small set of objects (`Device`, `Buffer`, `Texture`, `Sampler`, `Pipeline`, `CommandBuffer`, `Queue`, `Swapchain`, `Fence`/timeline),
 - either a virtual interface or a compile-time backend selection,
 - a pool per object type with generational handles.
 
@@ -218,7 +218,7 @@ Next steps, in order:
 - Handles are never invalidated (`generation` is always 1, [handle.cpp](../src/core/handle.cpp)), so use-after-free can't be detected.
 - Streaming (map tiles, game levels) needs generational handles, deferred destruction tied to frame fences, and free-list reuse of registry slots and bindless slots.
 
-**D5 — `ResourceDesc` is fragile.**
+**D5 — `ResourceDesc` is fragile.** *Fixed 2026-11-02:* `ResourceDesc` and `ResourceType` are gone. `rasm/render/resource.h` has one aggregate per resource (`BufferDesc`, `TextureDesc`, `ShaderDesc`, `PipelineDesc`, `RenderTargetDesc`, `BindlessDescriptorSetLayoutDesc`, `DescriptorPoolDesc`), each with a defaulted `operator==`. `ShaderDesc` owns its SPIR-V, so the pointer-pinning `shaderSources` deque in `RenderContext` is gone. The dedup hashes and `HandleHash` combine fields with `hashCombine`. See [architecture.md](architecture.md). The original finding follows.
 - It is a hand-maintained tagged union with a `std::string`, plus manual `==`/hash.
 - Equality ignores fields that matter: pipeline equality ignores vertex layout, attachment formats and the descriptor layout, so two pipelines that differ only in color format alias each other.
 - The hash XORs component hashes, so collisions are common (`a^b == b^a`, `x^x == 0`).
@@ -260,7 +260,7 @@ Use a right-handed Y-up world (glTF's convention) and do the Vulkan flip with a 
 
 Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction, either bindless `StructuredBuffer` indices or explicitly bound storage buffers, and route draw-ID access through a helper that each target implements.
 
-**D13 — Queues and synchronization.** There is only one graphics queue: no transfer or async-compute queue. `createCommandPool` takes no queue type for that reason; add one together with a submit path for the new queue. Timeline semaphores are supported by `createSemaphore` but unused. Uploads are synchronous on the main thread.
+**D13 — Queues and synchronization.** There is only one graphics queue: no transfer or async-compute queue. `rhi::QueueType` has only `GRAPHICS`; add the new queue types there, with their queues in each backend and a queue choice in `RenderContext::createCommandBuffer` and `submit`. Frame pacing uses a timeline fence since `D1`, but a `SubmitDesc` can only signal one, not wait on one, which cross-queue work needs. Uploads are synchronous on the main thread.
 
 **D14 — Error handling is inconsistent.** Many `bool` results are ignored (`beginCommandBuffer`, `submit`, `fillBuffer`). Some runtime errors are `assert`s.
 
@@ -279,13 +279,13 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 **P2 — Texture path.**
 - Images are created with `HOST_ACCESS_*` allocation flags ([vulkanContext.cpp:347-351](../src/rhi/vulkan/vulkanContext.cpp#L347-L351)), which can push them into host-visible memory.
 - Each image gets a dedicated allocation, and mips are generated on the CPU on the main thread.
-- Each texture creates its own `VkSampler` and calls `vkGetPhysicalDeviceProperties` ([vulkanContext.cpp:381-409](../src/rhi/vulkan/vulkanContext.cpp#L381-L409)). Drivers often cap samplers at about 4000, so use a handful of shared samplers.
+- *Fixed 2026-11-02 (`D1`):* every bindless texture uses one default sampler. Originally each texture created its own `VkSampler` and called `vkGetPhysicalDeviceProperties`. Drivers often cap samplers at about 4000, so use a handful of shared samplers.
 - Host image copy also requires the `hostImageCopy` feature, which narrows hardware support; keep a staging-buffer fallback.
 - Longer term, support GPU-compressed textures (KTX2 + BCn/ASTC), which matters for map tiles and game content.
 
 **P3 — No instancing.** Each entity copies its mesh into the mega buffer. `00_hello_scene` uploads the bunny three times ([scene.cpp:143-165](../src/scene/scene.cpp#L143-L165)). Separate *geometry* (uploaded once per mesh) from *instances* (transform + material + mesh-range index).
 
-**P4 — Per-call overhead in `RenderContext`.** Every call hashes a handle and **copies** the backend struct, including a `ResourceDesc` with a `std::string` (e.g. `fillBuffer`, [renderContext.cpp:665](../src/rhi/renderContext.cpp#L665); `getBufferDeviceAddress`, [:740](../src/rhi/renderContext.cpp#L740)). Use index-based pools, return references, and cache device addresses.
+**P4 — Per-call overhead in `RenderContext`.** *Partly fixed 2026-11-02 (`D1`):* the tables hold pointers to `rhi::` objects, so a lookup copies nothing and device addresses are stored on `rhi::Buffer`. Every call still hashes its handles, until the index-based pools of `D4`. The original finding follows. Every call hashes a handle and **copies** the backend struct, including a `ResourceDesc` with a `std::string` (e.g. `fillBuffer`, [renderContext.cpp:665](../src/rhi/renderContext.cpp#L665); `getBufferDeviceAddress`, [:740](../src/rhi/renderContext.cpp#L740)). Use index-based pools, return references, and cache device addresses.
 
 **P5 — Large by-value copies in the scene code.**
 - `prepareScene` no longer copies meshes: `processMesh` is gone, and each `SceneDraw` points into the registry. It returns a const reference to the cached entry, so `drawScene` copies nothing.

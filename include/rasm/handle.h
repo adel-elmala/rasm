@@ -1,11 +1,17 @@
 // clang-format off
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 namespace rasm
 {
+    inline std::size_t hashCombine(std::size_t seed, std::size_t value)
+    {
+        return seed ^ (value + static_cast<std::size_t>(0x9e3779b97f4a7c15ULL) + (seed << 6) + (seed >> 2));
+    }
 
     template <typename Tag>
     struct Handle
@@ -22,7 +28,7 @@ namespace rasm
         template <typename Tag>
         std::size_t operator()(const Handle<Tag>& handle) const
         {
-            return std::hash<uint64_t>()(handle.index) ^ (std::hash<uint64_t>()(handle.generation) << 1);
+            return hashCombine(std::hash<uint64_t>()(handle.index), std::hash<uint64_t>()(handle.generation));
         }
     };
 
@@ -31,9 +37,7 @@ namespace rasm
     struct TextureTag;
     struct MaterialTag;
     struct PipelineTag;
-    struct CommandPoolTag;
     struct CommandBufferTag;
-    struct SemaphoreTag;
     struct FenceTag;
     struct SwapchainTag;
     struct ShaderTag;
@@ -53,9 +57,7 @@ namespace rasm
     using TextureHandle             = Handle<TextureTag>;
     using MaterialHandle            = Handle<MaterialTag>;
     using PipelineHandle            = Handle<PipelineTag>;
-    using CommandPoolHandle         = Handle<CommandPoolTag>;
     using CommandBufferHandle       = Handle<CommandBufferTag>;
-    using SemaphoreHandle           = Handle<SemaphoreTag>;
     using FenceHandle               = Handle<FenceTag>;
     using SwapchainHandle           = Handle<SwapchainTag>;
     using ShaderHandle              = Handle<ShaderTag>;
@@ -81,9 +83,7 @@ namespace rasm
         uint64_t buffer                 = 1;
         uint64_t pipeline               = 1;
         uint64_t shader                 = 1;
-        uint64_t commandPool            = 1;
         uint64_t commandBuffer          = 1;
-        uint64_t semaphore              = 1;
         uint64_t fence                  = 1;
         uint64_t swapchain              = 1;
         uint64_t renderTarget           = 1;
@@ -106,9 +106,7 @@ namespace rasm
         BufferHandle                getNextBufferHandle();
         TextureHandle               getNextTextureHandle();
         PipelineHandle              getNextPipelineHandle();
-        CommandPoolHandle           getNextCommandPoolHandle();
         CommandBufferHandle         getNextCommandBufferHandle();
-        SemaphoreHandle             getNextSemaphoreHandle();
         FenceHandle                 getNextFenceHandle();
         SwapchainHandle             getNextSwapchainHandle();
         RenderTargetHandle          getNextRenderTargetHandle();

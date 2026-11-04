@@ -413,6 +413,9 @@ namespace rasm
             targetDesc.format = SLANG_GLSL;
             targetDesc.profile = globalSession->findProfile("glsl_4_5");
             break;
+        case Target::WGSL:
+            targetDesc.format = SLANG_WGSL;
+            break;
         default:
             spdlog::error("Unsupported shader target.");
             break;

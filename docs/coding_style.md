@@ -5,7 +5,7 @@ These rules describe how RASM code is written. Most of them are what the code al
 ## 1. Language and toolchain
 
 - **C++20**, no compiler extensions (`CMAKE_CXX_EXTENSIONS OFF`). The reference compilers are Clang on Windows and Apple Clang on macOS, and the code must also build with MSVC and GCC.
-- Use C++20 where it clarifies code: designated initializers for descriptors and config structs (already used widely), `std::span`, `constexpr`, `enum class`, `[[nodiscard]]`.
+- Use C++20 where it clarifies code: designated initializers for descriptors and config structs (already used widely), `constexpr`, `enum class`, `[[nodiscard]]`.
 - No exceptions in engine code. Third-party exceptions (e.g. from tinygltf) are caught at the call site.
 - No RTTI-dependent designs (`dynamic_cast`, `typeid`).
 - No templates in engine code: no function, class, variable or lambda templates (including `auto` lambda parameters). Write concrete functions per type. Using std and third-party templates (`std::vector`, `std::span`) is fine. The only exception is `Handle<Tag>` in `include/rasm/handle.h`.
@@ -52,7 +52,7 @@ Deliberate exceptions:
   4. standard library headers.
 - Include paths:
   - public headers as `"rasm/xyz.h"` or `"rasm/render/xyz.h"`,
-  - private headers relative to `src/`, e.g. `"core/utils.h"`, `"renderer/shaderCompiler.h"`, `"rhi/vulkan/vulkanContext.h"`.
+  - private headers relative to `src/`, e.g. `"core/utils.h"`, `"renderer/shaderCompiler.h"`, `"rhi/vulkan/vulkanDevice.h"`.
 - Where new code goes:
 
   | Kind of code | Directory |
@@ -83,9 +83,9 @@ Deliberate exceptions:
 
 - **Handles, not pointers, cross the public API.** Create through `Engine`, refer through `XxxHandle`, and check with `isValid()`. Never hand out raw pointers or references to registry storage: they are invalidated when the vector grows.
 - **Descriptors.**
-  - Resource creation takes a descriptor struct (`ResourceDesc`) that is zero-initialized and filled with designated initializers or field assignment.
-  - Descriptor structs must be value-initialized to zero. Unions must not be left indeterminate (`B18`).
-  - Put fields in a descriptor only when they are compared and hashed. Anything that affects the created object must take part in equality.
+  - Resource creation takes a typed descriptor (`BufferDesc`, `TextureDesc`, `PipelineDesc`, …), filled with designated initializers or field assignment.
+  - A descriptor is an aggregate with a default member initializer on every field that isn't a class type, and a defaulted `operator==`. No unions (`B18`, `D5`).
+  - Put fields in a descriptor only when they affect the created object. A deduplicated descriptor's hash in `src/rhi/resource.cpp` must fold every field with `hashCombine`.
 - **GPU-visible structs** (anything a shader reads through a pointer or a buffer):
   - live in `src/renderer/uberMaterialTypes.h` (or its successor) and are mirrored in `shaders/lib/core.slang`,
   - use only `uint32_t`, `int32_t`, `float`, `uint64_t`, `glm::vec2/3/4`, `glm::mat3/4` (scalar layout),
@@ -99,7 +99,9 @@ Deliberate exceptions:
 ## 6. Error handling and logging
 
 - **Recoverable runtime failures** (missing file, unsupported format, allocation failure, Vulkan error) are logged with `spdlog::error` and the function returns an invalid handle, `false`, an empty `std::optional`, or a default value. The caller checks the result, and a `bool`/`optional` return must not be silently ignored (add `[[nodiscard]]`).
-- **Programmer errors** (wrong `ResourceType` passed, out-of-range index into an internal array) use `assert`.
+- **Programmer errors** (null data pointer, empty shader code, out-of-range index into an internal array):
+  - At the public API (`RenderContext`, the layer every application call goes through), check them in every build: `checkArgument` in `renderContext.cpp` logs with `spdlog::error`, asserts so a debug build stops at the call, and the function returns an invalid handle or `false`.
+  - Inside the engine (RHI backends, internal arrays) they use plain `assert`: only engine code reaches them, after the public layer validated its input.
 - Log levels:
   - `error`: an operation failed.
   - `warn`: degraded but continuing (limit reached, fallback used).
@@ -116,7 +118,8 @@ Deliberate exceptions:
 
 ## 8. Vulkan and backend code
 
-- All Vulkan calls live under the backend (`src/rhi/vulkan/`). Code outside `src/rhi/` never includes `vulkan.h` or uses `Vk*` types.
+- All Vulkan calls live under the backend (`src/rhi/vulkan/`). Only the backend and `src/rhi/device.cpp` include its headers: the rest of the engine, `RenderContext` included, talks to `rhi::Device` ([architecture.md §12](architecture.md#12-rhi)). The one exception is the Vulkan surface hook in `src/platform/`, until `D7`.
+- New GPU functionality goes into `src/rhi/device.h` in terms that every planned backend (Vulkan, D3D12, Metal, WebGPU) can implement, never as a Vulkan-only path above the RHI.
 - Use synchronization2 (`vkCmdPipelineBarrier2`, `VkDependencyInfo`) and dynamic rendering. Do not introduce render passes or framebuffers.
 - Every created object gets a debug name, which is a no-op when debug utils is unavailable.
 - Check every `VkResult`. Swapchain functions must handle `VK_SUBOPTIMAL_KHR` and `VK_ERROR_OUT_OF_DATE_KHR` explicitly.
