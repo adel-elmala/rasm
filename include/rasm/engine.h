@@ -56,7 +56,7 @@ namespace rasm
         bool                        isLoaded(MeshHandle mesh) const;
         bool                        isLoaded(TextureHandle texture) const;
         void                        waitForLoads();
-        MaterialHandle             createMaterial(MaterialType type, std::vector<TextureHandle> textures = {});
+        MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {});
         TextureHandle               createTexture(const TextureDesc& desc);
         BufferHandle                createBuffer(const BufferDesc& desc);
         RenderTargetHandle          createRenderTarget(const RenderTargetDesc& desc);
@@ -166,13 +166,14 @@ namespace rasm
         };
 
         MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
+        bool                        geometryFits(size_t vertexCount, size_t indexCount) const;
         bool                        uploadGeometry(const ObjRaw& raw, MeshGeometry& geometry);
         void                        finishMeshLoad(PendingMeshLoad& load);
         void                        finishTextureLoad(PendingTextureLoad& load);
         void                        finishLoads(bool wait);
 
-        std::vector<PendingMeshLoad>        pendingMeshes;
-        std::vector<PendingTextureLoad>     pendingTextures;
+        std::vector<PendingMeshLoad>                                            pendingMeshes;
+        std::unordered_map<TextureHandle, PendingTextureLoad, HandleHash>       pendingTextures;
 
         struct Registry
         {

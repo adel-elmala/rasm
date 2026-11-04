@@ -580,22 +580,54 @@ TEST_CASE_FIXTURE(UploadFixture, "cancelling forgets the written range, so writi
     CHECK(holds(dst, 0, data));
 }
 
-TEST_CASE_FIXTURE(UploadFixture, "a failed submit drops its batch and later uploads still work")
+TEST_CASE_FIXTURE(UploadFixture, "cancelling waits for copies already submitted to the buffer")
 {
     auto *a = createDeviceLocal(64);
     auto *b = createDeviceLocal(64);
+
+    REQUIRE(upload(a, makeBytes(64, 26), 0));
+    REQUIRE(uploads.flush());
+    REQUIRE(upload(b, makeBytes(64, 27), 0));
+    REQUIRE(uploads.flush());
+    CHECK(device.queue.executed == 0);
+
+    uploads.cancelUploads(a);
+    CHECK(device.blockingWaits == 1);
+    CHECK(device.queue.executed == 1);
+    device.destroyBuffer(a);
+}
+
+TEST_CASE_FIXTURE(UploadFixture, "cancelling a buffer with no submitted copies does not wait")
+{
+    auto *a = createDeviceLocal(64);
+    auto *b = createDeviceLocal(64);
+
+    REQUIRE(upload(b, makeBytes(64, 28), 0));
+    REQUIRE(uploads.flush());
+
+    uploads.cancelUploads(a);
+    CHECK(device.blockingWaits == 0);
+    device.destroyBuffer(a);
+}
+
+TEST_CASE_FIXTURE(UploadFixture, "a failed submit keeps its batch, and the next flush sends it")
+{
+    auto *a = createDeviceLocal(64);
+    auto *b = createDeviceLocal(64);
+    const auto dataA = makeBytes(64, 25);
     const auto dataB = makeBytes(64, 24);
 
-    REQUIRE(upload(a, makeBytes(64, 25), 0));
+    REQUIRE(upload(a, dataA, 0));
     device.queue.failNextSubmit = true;
     CHECK_FALSE(uploads.flush());
     CHECK(device.queue.submissions.empty());
-    CHECK(uploads.flush());
 
     REQUIRE(upload(b, dataB, 0));
     REQUIRE(uploads.flush());
+    REQUIRE(device.queue.submissions.size() == 1);
+    CHECK(device.queue.submissions[0].copies.size() == 2);
     device.finishGpuWork();
 
-    CHECK(holds(a, 0, std::vector<uint8_t>(64, 0)));
+    CHECK(holds(a, 0, dataA));
     CHECK(holds(b, 0, dataB));
 }

@@ -23,6 +23,8 @@ namespace rasm
     {
         constexpr Format DEPTH_FORMAT = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
         constexpr glm::vec4 SWAPCHAIN_CLEAR_COLOR(0.018f, 0.018f, 0.018f, 1.0f);
+        // Main-thread time a frame spends finishing loads. The load that crosses it still finishes.
+        constexpr std::chrono::milliseconds LOAD_BUDGET(4);
 
         ShaderCompiler::Target getShaderCompilerTarget(rasm::Backend backend)
         {
@@ -115,9 +117,15 @@ namespace rasm
             return;
         }
 
-        // Every mesh lives in these two buffers, so its CPU copy can go after upload (P6).
-        geometryVertexBuffer = ctx.createBuffer({.name = "Geometry Vertex Pool", .usage = BufferUsage::STORAGE, .size = MAX_GEOMETRY_VERTICES * sizeof(Vertex)});
-        geometryIndexBuffer = ctx.createBuffer({.name = "Geometry Index Pool", .usage = BufferUsage::INDEX, .size = MAX_GEOMETRY_INDICES * sizeof(uint32_t)});
+        // Every mesh lives in these two buffers, so its CPU copy can go after upload (P6). Their size is
+        // fixed for the engine's lifetime, so apps size them through EngineConfig.
+        if (this->config.geometryPoolVertices == 0 || this->config.geometryPoolIndices == 0)
+        {
+            spdlog::error("The geometry pool needs room for at least one vertex and one index.");
+            return;
+        }
+        geometryVertexBuffer = ctx.createBuffer({.name = "Geometry Vertex Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(this->config.geometryPoolVertices) * sizeof(Vertex)});
+        geometryIndexBuffer = ctx.createBuffer({.name = "Geometry Index Pool", .usage = BufferUsage::INDEX, .size = static_cast<uint64_t>(this->config.geometryPoolIndices) * sizeof(uint32_t)});
         if (!geometryVertexBuffer.isValid() || !geometryIndexBuffer.isValid())
         {
             spdlog::error("Failed to create the geometry pool.");
@@ -167,7 +175,7 @@ namespace rasm
     Engine::~Engine()
     {
         // Mesh results free themselves; decoded pixels are a plain stbi pointer.
-        for (auto &load : pendingTextures)
+        for (auto &[handle, load] : pendingTextures)
             stbi_image_free(load.result.get().data);
 
         ctx.cleanup();
@@ -224,16 +232,13 @@ namespace rasm
         }
 
         registry.loadedTextures[cacheKey] = textureHandle;
-        pendingTextures.push_back({textureHandle, path, std::async(std::launch::async, decodeTexture, path)});
+        pendingTextures.emplace(textureHandle, PendingTextureLoad{textureHandle, path, std::async(std::launch::async, decodeTexture, path)});
         return textureHandle;
     }
 
     bool Engine::isLoaded(TextureHandle texture) const
     {
-        if (!texture.isValid())
-            return false;
-        return std::none_of(pendingTextures.begin(), pendingTextures.end(), [texture](const PendingTextureLoad &load)
-                            { return load.handle == texture; });
+        return texture.isValid() && !pendingTextures.contains(texture);
     }
 
     void Engine::waitForLoads()
@@ -247,6 +252,13 @@ namespace rasm
 
         TextureRaw raw = load.result.get();
         const TextureDesc desc = ctx.getTextureDesc(load.handle);
+
+        // The app destroyed the texture while it decoded, so there is nothing to fill.
+        if (desc.width == 0 || desc.height == 0)
+        {
+            stbi_image_free(raw.data);
+            return;
+        }
 
         // A material may already sample the texture, so a failed decode leaves it white instead of undefined.
         if (!raw.data || raw.width != desc.width || raw.height != desc.height)
@@ -266,20 +278,25 @@ namespace rasm
 
     // Runs at the start of a frame, before anything binds the bindless set or the geometry pool, so
     // what it writes is in place for this frame's draws and its uploads go out with this frame's submit.
+    // Without wait it stops at LOAD_BUDGET, so loads that finish together spread over several frames.
     void Engine::finishLoads(bool wait)
     {
-        for (size_t i = 0; i < pendingTextures.size();)
+        const auto deadline = std::chrono::steady_clock::now() + LOAD_BUDGET;
+        auto overBudget = [wait, deadline]()
+        { return !wait && std::chrono::steady_clock::now() >= deadline; };
+
+        for (auto it = pendingTextures.begin(); it != pendingTextures.end() && !overBudget();)
         {
-            if (!wait && pendingTextures[i].result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            if (!wait && it->second.result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
             {
-                ++i;
+                ++it;
                 continue;
             }
-            finishTextureLoad(pendingTextures[i]);
-            pendingTextures.erase(pendingTextures.begin() + i);
+            finishTextureLoad(it->second);
+            it = pendingTextures.erase(it);
         }
 
-        for (size_t i = 0; i < pendingMeshes.size();)
+        for (size_t i = 0; i < pendingMeshes.size() && !overBudget();)
         {
             if (!wait && pendingMeshes[i].result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
             {

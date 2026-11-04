@@ -687,7 +687,7 @@ namespace rasm
         }
 
         // Uploads go first on the same queue, so this submit sees their data. A failed batch is logged and
-        // dropped; the frame still goes out so the swapchain keeps moving.
+        // retried with the next submit; the frame still goes out so the swapchain keeps moving.
         impl->uploads.flush();
 
         rhi::CommandBuffer *commandBuffers[] = {rhiCommandBuffer};

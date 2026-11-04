@@ -21,9 +21,10 @@ namespace rasm::rhi
     private:
         struct Batch
         {
-            CommandBuffer*          commandBuffer       = nullptr;
-            uint64_t                fenceValue          = 0;
-            uint64_t                ringEnd             = 0;
+            CommandBuffer*                  commandBuffer       = nullptr;
+            uint64_t                        fenceValue          = 0;
+            uint64_t                        ringEnd             = 0;
+            std::vector<const Buffer*>      buffers;            // written by the last submit, for cancelUploads
         };
 
         struct WrittenRange

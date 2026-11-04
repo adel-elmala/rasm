@@ -166,22 +166,30 @@ namespace rasm
                 size_t pixels = static_cast<size_t>(image.width) * image.height;
                 if (image.image.size() < pixels * image.component)
                     return {};
-                std::vector<unsigned char> rgba(pixels * 4, 255);
-                for (size_t i = 0; i < pixels; ++i)
+                // tinygltf decodes images to RGBA on the worker thread, so the copy below is only for
+                // an image that kept fewer channels.
+                const unsigned char *rgbaData = image.image.data();
+                std::vector<unsigned char> rgba;
+                if (image.component != 4)
                 {
-                    const auto *src = image.image.data() + i * image.component;
-                    rgba[i * 4] = src[0];
-                    rgba[i * 4 + 1] = image.component >= 3 ? src[1] : src[0];
-                    rgba[i * 4 + 2] = image.component >= 3 ? src[2] : src[0];
-                    if (image.component == 2 || image.component == 4)
-                        rgba[i * 4 + 3] = src[image.component - 1];
+                    rgba.assign(pixels * 4, 255);
+                    for (size_t i = 0; i < pixels; ++i)
+                    {
+                        const auto *src = image.image.data() + i * image.component;
+                        rgba[i * 4] = src[0];
+                        rgba[i * 4 + 1] = image.component >= 3 ? src[1] : src[0];
+                        rgba[i * 4 + 2] = image.component >= 3 ? src[2] : src[0];
+                        if (image.component == 2)
+                            rgba[i * 4 + 3] = src[1];
+                    }
+                    rgbaData = rgba.data();
                 }
                 auto texture = createTexture({.name = image.uri.empty() ? "glTF image " + std::to_string(source) : image.uri,
                                               .width = static_cast<uint32_t>(image.width),
                                               .height = static_cast<uint32_t>(image.height),
                                               .format = srgb ? Format::R8G8B8A8_SRGB : Format::R8G8B8A8_UNORM,
                                               .usage = TextureUsage::SAMPLED});
-                if (!texture.isValid() || !ctx.fillTexture(texture, rgba.data()))
+                if (!texture.isValid() || !ctx.fillTexture(texture, rgbaData))
                     return {};
                 addBindlessTexture(bindlessDescriptorSet, texture, sampler);
                 cache.imageTextures[cacheKey] = texture;

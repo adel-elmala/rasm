@@ -17,8 +17,6 @@ namespace rasm
 
     constexpr uint32_t MAX_MESHES              = 8;
     constexpr uint32_t MAX_VERTEX_UV_SETS      = 3;
-    constexpr uint32_t MAX_GEOMETRY_VERTICES   = 1u << 21;
-    constexpr uint32_t MAX_GEOMETRY_INDICES    = 1u << 23;
 
     struct Vertex
     {

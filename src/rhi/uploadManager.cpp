@@ -114,29 +114,40 @@ namespace rasm::rhi
             submitted = device->getQueue(QueueType::GRAPHICS)->submit({.commandBuffers = commandBuffers, .commandBufferCount = 1, .signalFence = fence, .signalValue = submittedValue + 1});
         }
 
-        // A failed batch is dropped. Its ring space is freed with the next batch that completes.
-        pendingCopies.clear();
-        pendingRanges.clear();
+        // A failed batch stays pending and goes out with the next flush: the caller was already told its
+        // data is on the way. Its staging bytes are safe, since only a completed batch frees ring space.
         if (!submitted)
         {
-            spdlog::error("Failed to submit the pending buffer uploads.");
+            spdlog::error("Failed to submit the pending buffer uploads; the next flush retries them.");
             return false;
         }
 
         batch.fenceValue = ++submittedValue;
         batch.ringEnd = head;
+        batch.buffers.clear();
+        for (const auto &range : pendingRanges)
+            batch.buffers.push_back(range.dst);
+        pendingCopies.clear();
+        pendingRanges.clear();
         currentBatch = (currentBatch + 1) % 2;
         return true;
     }
 
-    // The buffer is about to be destroyed: its copies must not run. Submitted copies are covered by the
-    // caller's promise that the GPU no longer uses the buffer.
+    // The buffer is about to be destroyed: its pending copies must not run, and submitted ones must finish.
+    // Only the two batches can still be in flight, since flush waits for a batch before reusing it.
     void UploadManager::cancelUploads(const Buffer *buffer)
     {
         std::erase_if(pendingCopies, [buffer](const BufferCopy &copy)
                       { return copy.dst == buffer; });
         std::erase_if(pendingRanges, [buffer](const WrittenRange &range)
                       { return range.dst == buffer; });
+
+        for (const auto &batch : batches)
+        {
+            if (std::find(batch.buffers.begin(), batch.buffers.end(), buffer) != batch.buffers.end() &&
+                !device->waitForFence(fence, batch.fenceValue, UINT64_MAX))
+                spdlog::error("Failed to wait for the uploads to a buffer that is being destroyed.");
+        }
     }
 
     // head and tail count bytes since the start and never wrap: head - tail bytes are in use, and

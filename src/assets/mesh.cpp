@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cassert>
+#include <filesystem>
 #include <fstream>
 #include <future>
 #include <iterator>
@@ -649,10 +650,13 @@ namespace rasm
     {
         const std::string path = resolveAssetPath(assetPath);
 
-        // find if the mesh is already loaded, if so return existing handle
+        // A path that failed to load keeps its handle, and loading it again retries on that handle.
+        MeshHandle handle;
         if (auto it = registry.loadedMeshes.find(path); it != registry.loadedMeshes.end())
         {
-            return it->second;
+            if (registry.meshes[it->second.index].state != MeshState::FAILED)
+                return it->second;
+            handle = it->second;
         }
 
         // find if the model extension is supported, if not return invalid handle
@@ -663,15 +667,25 @@ namespace rasm
             return MeshHandle{};
         }
 
-        auto handle = handleManager.getNextMeshHandle();
-        if (handle.index >= MAX_MESHES)
+        // A missing file is reported here, as an invalid handle. A file that does not parse fails the mesh later.
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(pathFromUtf8(path), error))
         {
-            spdlog::warn("Exceeded maximum number of meshes.");
+            spdlog::error("Mesh file not found: {}", path);
             return MeshHandle{};
         }
 
-        registry.loadedMeshes[path] = handle;
-        registry.meshes.resize(handle.index + 1);
+        if (!handle.isValid())
+        {
+            handle = handleManager.getNextMeshHandle();
+            if (handle.index >= MAX_MESHES)
+            {
+                spdlog::warn("Exceeded maximum number of meshes.");
+                return MeshHandle{};
+            }
+            registry.loadedMeshes[path] = handle;
+            registry.meshes.resize(handle.index + 1);
+        }
         registry.meshes[handle.index] = Mesh{};
 
         // The worker reads and decodes the file; beginFrame uploads the result (finishLoads).
@@ -693,12 +707,8 @@ namespace rasm
     // Appends to the engine-wide geometry pool. Nothing is ever freed from it: meshes are not destroyed yet (D4).
     bool Engine::uploadGeometry(const ObjRaw &raw, MeshGeometry &geometry)
     {
-        if (raw.vertices.size() > MAX_GEOMETRY_VERTICES - geometryVertexCount || raw.indices.size() > MAX_GEOMETRY_INDICES - geometryIndexCount)
-        {
-            spdlog::error("The geometry pool is full: {} vertices and {} indices do not fit ({}/{} vertices and {}/{} indices in use).",
-                          raw.vertices.size(), raw.indices.size(), geometryVertexCount, MAX_GEOMETRY_VERTICES, geometryIndexCount, MAX_GEOMETRY_INDICES);
+        if (!geometryFits(raw.vertices.size(), raw.indices.size()))
             return false;
-        }
 
         geometry = {.firstVertex = geometryVertexCount,
                     .vertexCount = static_cast<uint32_t>(raw.vertices.size()),
@@ -726,6 +736,21 @@ namespace rasm
         if (!raw.loaded)
             return;
 
+        // The whole mesh must fit before anything is created: nothing is freed from the pool, so a mesh failing
+        // halfway would leak the geometry, materials and bindless slots of its first sub-meshes.
+        size_t vertexCount = 0;
+        size_t indexCount = 0;
+        for (const auto &sub : raw.subGltfRaws)
+        {
+            vertexCount += sub.objRaw.vertices.size();
+            indexCount += sub.objRaw.indices.size();
+        }
+        if (!geometryFits(vertexCount, indexCount))
+        {
+            spdlog::error("Failed to upload mesh: {}", load.path);
+            return;
+        }
+
         GltfImportCache cache;
         for (const auto &sub : raw.subGltfRaws)
         {
@@ -743,7 +768,17 @@ namespace rasm
 
         mesh.state = MeshState::READY;
         spdlog::info("Loaded mesh {}: {} sub-meshes, geometry pool at {}/{} vertices and {}/{} indices.",
-                     load.path, mesh.subMeshes.size(), geometryVertexCount, MAX_GEOMETRY_VERTICES, geometryIndexCount, MAX_GEOMETRY_INDICES);
+                     load.path, mesh.subMeshes.size(), geometryVertexCount, config.geometryPoolVertices, geometryIndexCount, config.geometryPoolIndices);
+    }
+
+    bool Engine::geometryFits(size_t vertexCount, size_t indexCount) const
+    {
+        if (vertexCount <= config.geometryPoolVertices - geometryVertexCount && indexCount <= config.geometryPoolIndices - geometryIndexCount)
+            return true;
+        spdlog::error("The geometry pool is full: {} vertices and {} indices do not fit ({}/{} vertices and {}/{} indices in use). "
+                      "EngineConfig::geometryPoolVertices and geometryPoolIndices set its size.",
+                      vertexCount, indexCount, geometryVertexCount, config.geometryPoolVertices, geometryIndexCount, config.geometryPoolIndices);
+        return false;
     }
 
     MeshSize Engine::getMeshByteSize(const MeshHandle &handle) const

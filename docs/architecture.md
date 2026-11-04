@@ -64,7 +64,7 @@ There are two kinds of handle owner:
    It then creates the swapchain (`B8G8R8A8_SRGB`), registers its images as texture handles, and creates the shared sampler set.
 3. Create the frame fence (a timeline) and, for each of the `MAX_FRAMES_IN_FLIGHT = 2` slots, a command buffer and a depth texture (`D32_SFLOAT_S8_UINT`).
 4. Initialize the Slang session (SPIR-V 1.4, scalar layout, column-major matrices, search path `lib/` under `EngineConfig::shaderDir`). A missing folder fails here, so a wrong path stops startup instead of failing every frame.
-5. Create the geometry pool: one device-local vertex buffer of `MAX_GEOMETRY_VERTICES` `Vertex`es (STORAGE, read through its device address) and one index buffer of `MAX_GEOMETRY_INDICES` `uint32_t`s. Every mesh lives in these two buffers (§6).
+5. Create the geometry pool: one device-local vertex buffer of `EngineConfig::geometryPoolVertices` `Vertex`es (STORAGE, read through its device address) and one index buffer of `EngineConfig::geometryPoolIndices` `uint32_t`s. Every mesh lives in these two buffers (§6). Their size is fixed for the engine's lifetime, so an app that draws little can make them smaller and one with big scenes larger.
 6. Create the single bindless descriptor set: layout, pool and set. It is binding 0 of set 0, an array of 1024 `COMBINED_IMAGE_SAMPLER`s with `UPDATE_AFTER_BIND | PARTIALLY_BOUND`.
 7. `isRunning = true`. Any failure returns early and leaves `running() == false`.
 
@@ -188,19 +188,21 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
    meshes: materials, textures, geometry → pool, state READY
    textures: fillTexture
    CPU data freed
+   stops after LOAD_BUDGET (4 ms) per frame
 ```
 
 - The worker never touches the engine. Everything that creates GPU objects or writes the registry runs on the main thread in `finishLoads`, at the start of `beginFrame`, before anything binds the bindless set or the geometry pool. The bindless set has `UPDATE_AFTER_BIND`, so new slots can be written while the previous frame is still on the GPU, and geometry uploads go out with the frame's submit (§12).
-- `isLoaded(mesh)` is true once a mesh is `READY`, and false while it is `LOADING` or after it `FAILED`. `isLoaded(texture)` is true once its pixels are in. `waitForLoads()` blocks until every pending load is finished.
+- `finishLoads` stops once it has spent `LOAD_BUDGET` (4 ms) in a frame, and the load that crosses the budget still finishes, so loads that end together spread over several frames. A single big glTF still finishes in one frame: the mip chain of every texture is generated on the main thread inside `fillTexture`. `waitForLoads` has no budget.
+- `isLoaded(mesh)` is true once a mesh is `READY`, and false while it is `LOADING` or after it `FAILED`. `isLoaded(texture)` is true once its pixels are in (a lookup in `pendingTextures`, which is keyed by handle). `waitForLoads()` blocks until every pending load is finished.
 - A scene waits for all of its assets (§4), so nothing is drawn half-loaded and no scene buffer is rebuilt while the GPU may use it (`D4`).
-- An error found before the worker starts (unsupported extension, out of handles, unreadable texture header) returns an invalid handle. A mesh that fails later is `FAILED` and draws nothing. A texture whose decode fails after its header was read stays white, because a material may already point at it.
+- An error found before the worker starts (unsupported extension, missing mesh file, out of handles, unreadable texture header) returns an invalid handle and caches nothing. A mesh that fails later is `FAILED` and draws nothing; `loadMesh` on its path again retries the load on the same handle. A texture whose decode fails after its header was read stays white, because a material may already point at it. A texture destroyed while it decodes is skipped.
 - **What stays in memory.** After `finishLoads`, the CPU vertex and index arrays, the `tinygltf::Model` and the decoded pixels are freed. The worker already drops the glTF buffers once every accessor is read. A mesh keeps only its `SubMesh` list: a `MeshGeometry` range in the pool, a node transform and a material.
-- **Geometry pool.** `uploadGeometry` appends each sub-mesh to the pool with a bump allocator: `firstVertex`/`firstIndex` are where it starts. Nothing is freed from the pool, because meshes are never destroyed yet (`D4`). A sub-mesh that does not fit logs the pool usage and fails its mesh. `createMesh` uploads straight away and returns a `READY` mesh.
+- **Geometry pool.** `uploadGeometry` appends each sub-mesh to the pool with a bump allocator: `firstVertex`/`firstIndex` are where it starts. Nothing is freed from the pool, because meshes are never destroyed yet (`D4`). `finishMeshLoad` checks that the whole mesh fits before it creates anything, so a mesh that does not fit logs the pool usage and fails without using pool space, materials or bindless slots. `createMesh` uploads straight away and returns a `READY` mesh.
 - `Engine::loadMesh(path)` dispatches on the file extension and caches by resolved path in `registry.loadedMeshes`, so a relative and an absolute path to one file share a mesh.
   - **OBJ** (tinyobjloader) is de-indexed into one vertex per index. Y and V are flipped per vertex.
   - **glTF/GLB** (tinygltf) goes through `processGLTF`, which walks the default scene's node tree from a root transform of `scale(1, −1, 1)` (the Y flip). The walk uses an explicit stack and imports each node once, skipping out-of-range references and any node reached a second time (a cycle, or a node with two parents, which glTF forbids). For each mesh node, `extractGLTFRaws` reads `POSITION`, `NORMAL`, `TANGENT` and `TEXCOORD_0..2` and the indices through one validated accessor reader. That reader handles strides, sparse accessors and quantized or normalized components. Strips and fans become triangle lists, primitives without indices get generated ones, and point and line primitives are skipped. Missing normals are computed as smooth normals, and in that case `TANGENT` is ignored, as the glTF spec requires. Each primitive keeps its glTF material index, and `finishMeshLoad` calls `loadMaterial` for it on the main thread.
 - **Tangents and normal maps.** `Vertex::tangent` holds the glTF tangent with w = ±1, or w = 0 when the mesh has none. The vertex shader transforms it with the model matrix and multiplies w by the sign of the matrix's determinant, so mirroring transforms such as the root Y flip keep the bitangent right. `getNormalFromMap` uses the authored frame (B = cross(N, T)·w) when w ≠ 0. Otherwise it reconstructs a frame from UV derivatives, with B pointing toward decreasing v (glTF normal maps store +Y as up in the image).
-- `loadMaterial` maps a glTF PBR material to `rasm::Material`. Materials with `KHR_materials_unlit` become `MaterialType::UNLIT`, and only their base color texture is uploaded. It expands images to RGBA8 and uploads each texture. `finishMeshLoad` creates a `GltfImportCache` for each import and passes it to `loadMaterial`. It caches materials by material index and textures by image index and color space, so primitives that share a material share one `MaterialHandle` and one set of bindless slots.
+- `loadMaterial` maps a glTF PBR material to `rasm::Material`. Materials with `KHR_materials_unlit` become `MaterialType::UNLIT`, and only their base color texture is uploaded. tinygltf decodes images to RGBA8 on the worker, and `loadMaterial` expands only an image with fewer channels before it uploads each texture. `finishMeshLoad` creates a `GltfImportCache` for each import and passes it to `loadMaterial`. It caches materials by material index and textures by image index and color space, so primitives that share a material share one `MaterialHandle` and one set of bindless slots.
 - A primitive without a material uses its entity's material. `getMaterial` resolves an invalid handle to `defaultMaterial`, the glTF default material (white, metallic 1, roughness 1) created at startup.
 
 ## 7. Shader compilation
@@ -242,7 +244,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 | `MAX_SCENES` | 16 | `rasm/scene.h` |
 | `MAX_SCENE_DRAWS_PER_FRAME` | 8 | `rasm/scene.h` |
 | `MAX_VERTEX_UV_SETS` | 3 | `rasm/mesh.h` (mirrored in `core.slang`) |
-| `MAX_GEOMETRY_VERTICES` / `MAX_GEOMETRY_INDICES` | 2²¹ (128 MiB) / 2²³ (32 MiB) | `rasm/mesh.h` |
+| `EngineConfig::geometryPoolVertices` / `geometryPoolIndices` (defaults) | 2²¹ (128 MiB) / 2²³ (32 MiB) | `rasm/types.h` |
 
 ## 11. Conventions that cross files
 
@@ -280,7 +282,8 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - The data is copied into a 64 MB host-visible staging ring and a `BufferCopy` is recorded. Writes over 16 MB are split into chunks. Back-to-back copies into the same buffer merge into one.
 - `RenderContext::submit` flushes the pending copies first: one command buffer that calls `CommandBuffer::copyBuffers`, submitted on the graphics queue, signalling the upload fence. The barriers inside `copyBuffers` order the copies after earlier submissions and before later ones on the same queue, so the frame submit needs no semaphore wait.
 - Two upload command buffers alternate. Ring space is freed once the upload fence passes the batch that used it (`Device::getFenceValue`, which doesn't block). A full ring flushes and waits for every copy.
-- The data reaches the buffer with the next submit, not at once. Destroying a buffer drops its pending copies.
+- The data reaches the buffer with the next submit, not at once. Destroying a buffer drops its pending copies and waits for submitted copies into it, which a mid-frame flush (full ring, overlap) can leave in flight.
+- A batch whose flush fails stays pending and goes out with the next flush, since `fillBuffer` already returned true for it.
 - Copies in one batch have no barriers between them, so a write that overlaps a range already written in the batch starts a new batch.
 
 **Queues.** There is one graphics queue (`QueueType::GRAPHICS`), used for frames and uploads. Transfer and async-compute queues are `D13`. Vulkan submits with `vkQueueSubmit2` and waits for the acquired image at `COLOR_ATTACHMENT_OUTPUT`, the stage the barrier out of `UNKNOWN` also waits for.
