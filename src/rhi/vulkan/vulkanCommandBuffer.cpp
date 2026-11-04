@@ -309,6 +309,36 @@ namespace rasm::rhi
         vkCmdDrawIndexedIndirect(commandBuffer, static_cast<VulkanBuffer *>(buffer)->buffer, offset, drawCount, stride);
     }
 
+    void VulkanCommandBuffer::copyBuffers(Buffer *src, const BufferCopy *copies, uint32_t copyCount)
+    {
+        // The copies may overwrite data that earlier submissions on this queue still read or write, and any
+        // later command may read the result. Earlier submissions are in the first barrier's scope, later
+        // ones in the second's, so the same queue needs no semaphore.
+        VkMemoryBarrier2 before = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                                   .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                   .srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT,
+                                   .dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
+                                   .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT};
+        VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &before};
+        vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+
+        auto srcBuffer = static_cast<VulkanBuffer *>(src)->buffer;
+        for (uint32_t i = 0; i < copyCount; ++i)
+        {
+            const auto &copy = copies[i];
+            VkBufferCopy region = {.srcOffset = copy.srcOffset, .dstOffset = copy.dstOffset, .size = copy.size};
+            vkCmdCopyBuffer(commandBuffer, srcBuffer, static_cast<VulkanBuffer *>(copy.dst)->buffer, 1, &region);
+        }
+
+        VkMemoryBarrier2 after = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                                  .srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
+                                  .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                  .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                  .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT};
+        dependencyInfo.pMemoryBarriers = &after;
+        vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+    }
+
     VkCommandBuffer VulkanCommandBuffer::getVkCommandBuffer() const
     {
         return commandBuffer;

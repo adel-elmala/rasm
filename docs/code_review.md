@@ -260,13 +260,13 @@ Use a right-handed Y-up world (glTF's convention) and do the Vulkan flip with a 
 
 Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction, either bindless `StructuredBuffer` indices or explicitly bound storage buffers, and route draw-ID access through a helper that each target implements.
 
-**D13 — Queues and synchronization.** There is only one graphics queue: no transfer or async-compute queue. `rhi::QueueType` has only `GRAPHICS`; add the new queue types there, with their queues in each backend and a queue choice in `RenderContext::createCommandBuffer` and `submit`. Frame pacing uses a timeline fence since `D1`, but a `SubmitDesc` can only signal one, not wait on one, which cross-queue work needs. Uploads are synchronous on the main thread.
+**D13 — Queues and synchronization.** There is only one graphics queue: no transfer or async-compute queue. `rhi::QueueType` has only `GRAPHICS`; add the new queue types there, with their queues in each backend and a queue choice in `RenderContext::createCommandBuffer` and `submit`. Frame pacing uses a timeline fence since `D1`, but a `SubmitDesc` can only signal one, not wait on one, which cross-queue work needs. Since `P1`, buffer uploads are batched through a staging ring and submitted on the graphics queue before the frame, but they are still recorded on the main thread.
 
 **D14 — Error handling is inconsistent.** Many `bool` results are ignored (`beginCommandBuffer`, `submit`, `fillBuffer`). Some runtime errors are `assert`s.
 
 **D15 — Hard-coded limits** are spread across headers (see [architecture.md §10](architecture.md#10-compile-time-limits)). Move them into `EngineConfig`, or grow the containers dynamically. Size GPU tables from the config.
 
-**D16 — Profiling.** *Partly resolved:* the frame loop, `prepareScene`, uploads, submit and present now have Tracy zones and a frame mark, with the client in on-demand mode. Still open: Tracy is linked publicly, there are no GPU timestamps, nothing turns Tracy off (every build listens on TCP 8086 on all interfaces, which a shipped game must not do), and the VRAM check in `prepareScene` compares host-visible allocations against the device-local budget.
+**D16 — Profiling.** *Partly resolved:* the frame loop, `prepareScene`, uploads, submit and present now have Tracy zones and a frame mark, with the client in on-demand mode. Still open: Tracy is linked publicly, there are no GPU timestamps, and nothing turns Tracy off (every build listens on TCP 8086 on all interfaces, which a shipped game must not do). The VRAM check in `prepareScene` compared host-visible allocations against the device-local budget until `P1` moved the mega buffers to device-local memory.
 
 **D17 — No tests and no CI.** *Partly resolved 2026-11-01:* `rasm_tests` covers handles, descriptor equality and hashing, render-graph sorting, transforms and camera math. It found `B22` on its first run. glTF import, CI and image tests are still open. Pure-CPU pieces such as handle pools, desc hashing, glTF import, camera math and render-graph sorting are easy to unit-test. Rendering can be covered with headless golden-image tests once offscreen rendering exists.
 
@@ -274,7 +274,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 
 ## 4. Performance
 
-**P1 — Every buffer is host-visible and mapped** (`HOST_ACCESS_SEQUENTIAL_WRITE | MAPPED`, [vulkanContext.cpp:205-208](../src/rhi/vulkan/vulkanContext.cpp#L205-L208)). On discrete GPUs without ReBAR, the mega vertex and index buffers end up in system RAM and every vertex fetch crosses PCIe. Static data should go to device-local memory through staging (or `ALLOW_TRANSFER_INSTEAD`). Keep host-visible memory for per-frame data only.
+**P1 — Every buffer is host-visible and mapped.** *Fixed 2026-11-04:* only buffers with `BufferDesc::hostVisible` (the per-frame model and scene data) are forced into host-visible memory. Other buffers are device-local, use `ALLOW_TRANSFER_INSTEAD` so they stay mapped where device-local memory is host-visible, and are otherwise filled through `rhi::UploadManager`: a staging ring with batched copies and timeline-fence completion ([architecture.md §12](architecture.md#12-rhi)). The original finding follows. (`HOST_ACCESS_SEQUENTIAL_WRITE | MAPPED`, [vulkanContext.cpp:205-208](../src/rhi/vulkan/vulkanContext.cpp#L205-L208)). On discrete GPUs without ReBAR, the mega vertex and index buffers end up in system RAM and every vertex fetch crosses PCIe. Static data should go to device-local memory through staging (or `ALLOW_TRANSFER_INSTEAD`). Keep host-visible memory for per-frame data only.
 
 **P2 — Texture path.**
 - Images are created with `HOST_ACCESS_*` allocation flags ([vulkanContext.cpp:347-351](../src/rhi/vulkan/vulkanContext.cpp#L347-L351)), which can push them into host-visible memory.

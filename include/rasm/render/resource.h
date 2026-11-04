@@ -46,6 +46,7 @@ namespace rasm
         std::string                 name;
         BufferUsage                 usage                           = BufferUsage::STORAGE;
         uint64_t                    size                            = 0;
+        bool                        hostVisible                     = false;
 
         bool                        operator==(const BufferDesc&) const = default;
     };

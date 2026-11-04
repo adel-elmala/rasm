@@ -312,6 +312,7 @@ namespace rasm
         bufferDesc.name = "Mega Model data Buffer";
         bufferDesc.usage = BufferUsage::STORAGE;
         bufferDesc.size = sceneDraws.size() * sizeof(gfx::Modeldata);
+        bufferDesc.hostVisible = true;
         // Mutable uniforms belong to a frame slot; other slots may still be executing on the GPU.
         for (auto &buffer : preparedScene.megaModelDataBuffer)
         {
@@ -323,6 +324,7 @@ namespace rasm
         bufferDesc.name = "Draw Info Buffer";
         bufferDesc.usage = BufferUsage::INDIRECT;
         bufferDesc.size = sceneDraws.size() * sizeof(gfx::DrawInfo);
+        bufferDesc.hostVisible = false;
 
         preparedScene.drawInfoBuffer = ctx.createBuffer(bufferDesc);
 
@@ -336,6 +338,7 @@ namespace rasm
         bufferDesc.name = "Scene Data Buffer";
         bufferDesc.usage = BufferUsage::STORAGE;
         bufferDesc.size = MAX_SCENE_DRAWS_PER_FRAME * sizeof(gfx::SceneData);
+        bufferDesc.hostVisible = true;
 
         for (auto &buffer : preparedScene.sceneDataBuffer)
         {

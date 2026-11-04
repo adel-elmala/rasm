@@ -1,6 +1,7 @@
 #include "rasm/render/renderContext.h"
 #include "rasm/engine.h"
 #include "rhi/device.h"
+#include "rhi/uploadManager.h"
 
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
@@ -130,6 +131,7 @@ namespace rasm
         std::unique_ptr<rhi::Device>                                                                                            device;
         rhi::Swapchain*                                                                                                         swapchain       = nullptr;
         rhi::Sampler*                                                                                                           defaultSampler  = nullptr;
+        rhi::UploadManager                                                                                                      uploads;
         std::vector<TextureHandle>                                                                                              swapchainImages;  // also in textures, but owned by the swapchain
 
         std::unordered_map<BufferHandle, rhi::Buffer*, HandleHash>                                                              buffers;
@@ -183,6 +185,9 @@ namespace rasm
         if (!impl->device)
             return false;
 
+        if (!impl->uploads.initialize(*impl->device))
+            return false;
+
         impl->swapchain = impl->device->createSwapchain({.width = window.pixelWidth, .height = window.pixelHeight});
         if (!impl->swapchain)
         {
@@ -207,6 +212,7 @@ namespace rasm
         auto &device = *impl->device;
         device.waitIdle();
 
+        impl->uploads.cleanup();
         for (const auto &[handle, descriptorSet] : impl->descriptorSets)
             device.destroyDescriptorSet(descriptorSet);
         for (const auto &[handle, pool] : impl->descriptorPools)
@@ -460,6 +466,7 @@ namespace rasm
         auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
         if (!rhiBuffer)
             return;
+        impl->uploads.cancelUploads(rhiBuffer);
         impl->device->destroyBuffer(rhiBuffer);
         impl->buffers.erase(buffer);
     }
@@ -485,9 +492,13 @@ namespace rasm
             return false;
 
         auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
-        if (!rhiBuffer)
+        if (!rhiBuffer || !checkArgument(offset + size <= rhiBuffer->desc.size, __func__, "the range is outside the buffer."))
             return false;
-        return impl->device->fillBuffer(rhiBuffer, data, size, offset);
+
+        // Unmapped buffers are device-local: the data reaches them with the next submit (P1).
+        if (rhiBuffer->mapped)
+            return impl->device->fillBuffer(rhiBuffer, data, size, offset);
+        return impl->uploads.upload(rhiBuffer, data, size, offset);
     }
 
     bool RenderContext::fillTexture(const TextureHandle &texture, const void *data)
@@ -649,9 +660,14 @@ namespace rasm
                 return false;
         }
 
+        // Uploads go first on the same queue, so this submit sees their data. A failed batch is logged and
+        // dropped; the frame still goes out so the swapchain keeps moving.
+        impl->uploads.flush();
+
         rhi::CommandBuffer *commandBuffers[] = {rhiCommandBuffer};
         rhi::SubmitDesc submitDesc = {
             .commandBuffers = commandBuffers,
+            .commandBufferCount = 1,
             .swapchain = presentsSwapchainImage ? impl->swapchain : nullptr,
             .signalFence = fence,
             .signalValue = signalValue,

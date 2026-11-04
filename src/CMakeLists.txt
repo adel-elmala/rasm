@@ -18,6 +18,7 @@ set(RASM_SRC
             "rhi/device.cpp"
             "rhi/renderContext.cpp"
             "rhi/resource.cpp"
+            "rhi/uploadManager.cpp"
             "rhi/vulkan/vulkanCommandBuffer.cpp"
             "rhi/vulkan/vulkanDevice.cpp"
             "rhi/vulkan/vulkanSwapchain.cpp"

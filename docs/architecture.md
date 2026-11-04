@@ -120,7 +120,7 @@ Notes:
 
 1. **Flattens the scene.** For every entity with a mesh it builds a list of `SceneDraw`s: one per glTF primitive, or one for an OBJ. Each points at the interleaved `Vertex` data and `uint32_t` indices in the registry, so nothing is copied, and holds the node's world transform and a material handle. A mesh missing vertices or indices is skipped with a warning.
 2. **Builds the uber pipeline.** `Engine::createPipeline` compiles `shaders/passes/rasm.slang` (`vertMain`/`fragMain`) and creates a graphics pipeline with an empty vertex-input state (vertex pulling) and the bindless set layout. The pipeline has the swapchain's color format and `D32_SFLOAT_S8_UINT` depth, so a render target that `drawScene` draws into must use the same formats. For any other target `drawScene` logs an error and skips the draw.
-3. **Allocates scene buffers.** All are host-visible and persistently mapped:
+3. **Allocates scene buffers.** `megaModelDataBuffer` and `sceneDataBuffer`, which the CPU rewrites every frame, are `hostVisible`. The others are device-local and filled through the upload manager (§12, `P1`):
 
    | Buffer | Usage | Content |
    |---|---|---|
@@ -255,7 +255,14 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - `resize` returns `OUT_OF_DATE` on a 0×0 surface and `FAILURE` if the surface query fails, and both keep the old swapchain. Otherwise it consumes any pending acquire or present signal with a wait-only submit, waits for the device to be idle and replaces the images. `RenderContext::recreateSwapchain` re-registers the image handles when the images changed, so earlier `getSwapchainImages` handles are invalid then; `getSwapchainImages` returns a copy. If building the new swapchain fails there are no images, and acquire reports `OUT_OF_DATE` until a resize succeeds.
 - The swapchain presents to the window the device was created for (`DeviceDesc::window`).
 
-**Queues.** There is one graphics queue (`QueueType::GRAPHICS`). Transfer and async-compute queues are `D13`. Vulkan submits with `vkQueueSubmit2` and waits for the acquired image at `COLOR_ATTACHMENT_OUTPUT`, the stage the barrier out of `UNKNOWN` also waits for.
+**Buffers and uploads (`P1`).** `BufferDesc::hostVisible` marks data the CPU rewrites every frame. Such a buffer is always mapped, and `fillBuffer` writes it at once. Any other buffer is device-local. VMA maps it too when that memory is also host-visible (ReBAR, integrated GPUs, Apple), and then `fillBuffer` is a plain write as well. Otherwise `Buffer::mapped` is false, and `RenderContext::fillBuffer` hands the data to `rhi::UploadManager` (`src/rhi/uploadManager.cpp`):
+- The data is copied into a 64 MB host-visible staging ring and a `BufferCopy` is recorded. Writes over 16 MB are split into chunks. Back-to-back copies into the same buffer merge into one.
+- `RenderContext::submit` flushes the pending copies first: one command buffer that calls `CommandBuffer::copyBuffers`, submitted on the graphics queue, signalling the upload fence. The barriers inside `copyBuffers` order the copies after earlier submissions and before later ones on the same queue, so the frame submit needs no semaphore wait.
+- Two upload command buffers alternate. Ring space is freed once the upload fence passes the batch that used it (`Device::getFenceValue`, which doesn't block). A full ring flushes and waits for every copy.
+- The data reaches the buffer with the next submit, not at once. Destroying a buffer drops its pending copies.
+- Copies in one batch have no barriers between them, so a write that overlaps a range already written in the batch starts a new batch.
+
+**Queues.** There is one graphics queue (`QueueType::GRAPHICS`), used for frames and uploads. Transfer and async-compute queues are `D13`. Vulkan submits with `vkQueueSubmit2` and waits for the acquired image at `COLOR_ATTACHMENT_OUTPUT`, the stage the barrier out of `UNKNOWN` also waits for.
 
 **Adding a backend.**
 1. Implement `Device`, `CommandBuffer`, `Queue` and `Swapchain`, and derive the resource structs, under `src/rhi/<backend>/`.

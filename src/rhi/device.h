@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <span>
 #include <string>
 
 namespace rasm
@@ -63,6 +62,15 @@ namespace rasm::rhi
     {
         BufferDesc                          desc;
         uint64_t                            deviceAddress       = 0;
+        bool                                mapped              = false;
+    };
+
+    struct BufferCopy
+    {
+        Buffer*                             dst                 = nullptr;
+        uint64_t                            srcOffset           = 0;
+        uint64_t                            dstOffset           = 0;
+        uint64_t                            size                = 0;
     };
 
     struct Texture
@@ -122,6 +130,7 @@ namespace rasm::rhi
         virtual void                draw(uint32_t vertexCount, uint32_t instanceCount) = 0;
         virtual void                drawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t vertexOffset, uint32_t firstIndex, uint32_t firstInstance) = 0;
         virtual void                drawIndexedIndirect(Buffer* buffer, uint64_t offset, uint32_t drawCount, uint32_t stride) = 0;
+        virtual void                copyBuffers(Buffer* src, const BufferCopy* copies, uint32_t copyCount) = 0;
     };
 
     class Swapchain
@@ -139,10 +148,11 @@ namespace rasm::rhi
 
     struct SubmitDesc
     {
-        std::span<CommandBuffer* const> commandBuffers;
-        Swapchain*                      swapchain       = nullptr;
-        Fence*                          signalFence     = nullptr;
-        uint64_t                        signalValue     = 0;
+        CommandBuffer* const*           commandBuffers      = nullptr;
+        uint32_t                        commandBufferCount  = 0;
+        Swapchain*                      swapchain           = nullptr;
+        Fence*                          signalFence         = nullptr;
+        uint64_t                        signalValue         = 0;
     };
 
     class Queue
@@ -183,6 +193,7 @@ namespace rasm::rhi
         virtual bool                    fillTexture(Texture* texture, const void* data) = 0;
         virtual void                    updateBindlessTexture(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, Sampler* sampler) = 0;
         virtual bool                    waitForFence(Fence* fence, uint64_t value, uint64_t timeout) = 0;
+        virtual uint64_t                getFenceValue(Fence* fence) = 0;
         virtual VRAMStats               queryVRAMStats() = 0;
         virtual void                    waitIdle() = 0;
     };

@@ -178,7 +178,8 @@ namespace rasm::rhi
         {
             // Every buffer is created with the device-address bit so that its GPU address can be
             // handed to shaders through push constants / other buffers regardless of its primary usage.
-            VkBufferUsageFlags flags = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+            // The transfer bits let any buffer be a staging source or a copy destination.
+            VkBufferUsageFlags flags = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
             switch (usage)
             {
@@ -283,18 +284,18 @@ namespace rasm::rhi
 
     bool VulkanQueue::submit(const SubmitDesc &desc)
     {
-        if (desc.commandBuffers.size() > MAX_SUBMIT_COMMAND_BUFFERS)
+        if (desc.commandBufferCount > MAX_SUBMIT_COMMAND_BUFFERS)
         {
-            spdlog::error("A submit takes at most {} command buffers, got {}.", MAX_SUBMIT_COMMAND_BUFFERS, desc.commandBuffers.size());
+            spdlog::error("A submit takes at most {} command buffers, got {}.", MAX_SUBMIT_COMMAND_BUFFERS, desc.commandBufferCount);
             return false;
         }
 
         VkCommandBufferSubmitInfo submitInfos[MAX_SUBMIT_COMMAND_BUFFERS] = {};
-        uint32_t commandBufferCount = 0;
-        for (auto *commandBuffer : desc.commandBuffers)
+        const uint32_t commandBufferCount = desc.commandBufferCount;
+        for (uint32_t i = 0; i < commandBufferCount; ++i)
         {
-            submitInfos[commandBufferCount++] = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
-                                                 .commandBuffer = static_cast<VulkanCommandBuffer *>(commandBuffer)->getVkCommandBuffer()};
+            submitInfos[i] = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+                              .commandBuffer = static_cast<VulkanCommandBuffer *>(desc.commandBuffers[i])->getVkCommandBuffer()};
         }
 
         VkSemaphoreSubmitInfo waits[1] = {};
@@ -441,10 +442,14 @@ namespace rasm::rhi
         bufferInfo.size = desc.size;
         bufferInfo.usage = toVkBufferUsageFlags(desc.usage);
 
+        // P1: buffers that aren't hostVisible prefer device-local memory, and are mapped only when that memory is
+        // also host-visible (ReBAR, integrated GPUs). Otherwise pMappedData stays null and they are filled by staging.
         VmaAllocationCreateInfo allocCI = {};
         allocCI.usage = VMA_MEMORY_USAGE_AUTO;
         allocCI.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                         VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        if (!desc.hostVisible)
+            allocCI.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
 
         auto *buffer = new VulkanBuffer();
         buffer->desc = desc;
@@ -458,6 +463,7 @@ namespace rasm::rhi
             return nullptr;
         }
         buffer->mappedData = allocInfo.pMappedData;
+        buffer->mapped = buffer->mappedData != nullptr;
 
         VkBufferDeviceAddressInfo bufferAddressInfo = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
         bufferAddressInfo.buffer = buffer->buffer;
@@ -1113,6 +1119,15 @@ namespace rasm::rhi
             return false;
         }
         return true;
+    }
+
+    uint64_t VulkanDevice::getFenceValue(Fence *fence)
+    {
+        uint64_t value = 0;
+        auto result = vkGetSemaphoreCounterValue(device.device, static_cast<VulkanFence *>(fence)->semaphore, &value);
+        if (result != VK_SUCCESS)
+            spdlog::error("Failed to read fence value. Error: {}", toVkResultString(result));
+        return value;
     }
 
     VRAMStats VulkanDevice::queryVRAMStats()
