@@ -178,4 +178,6 @@ tracy-capture -a 127.0.0.1 -o trace.tracy -f -s 8
 tracy-csvexport trace.tracy
 ```
 
+`python .claude/skills/tracy-profile/scripts/tracy.py setup` builds both into `build/tracy-tools/` from the same vcpkg checkout, so their version always matches the client. The same script also captures an example and summarizes the trace.
+
 While an engine process runs, Tracy listens on TCP port 8086 on all network interfaces and announces itself by UDP broadcast, in Release builds too. Windows may ask for a firewall exception the first time.
