@@ -4,7 +4,7 @@ This document describes how RASM is built **today** (branch `feat/pbr`, Oct 2026
 
 ## 1. Overview
 
-RASM is a C++20 rendering engine with a single implemented backend (Vulkan 1.4). It is built as a static library (`rasm`, alias `rasm::rasm`) and driven by small example programs. Its rendering core is *GPU-driven*: the whole scene is drawn with one `vkCmdDrawIndexedIndirect` call. Vertices are pulled from one engine-wide geometry pool through buffer device addresses, textures are accessed through one bindless descriptor array, and the only per-draw binding is a 64-bit push constant.
+RASM is a C++20 rendering engine with a single implemented backend (Vulkan 1.4). It is built as a static library (`rasm`, alias `rasm::rasm`) and driven by small example programs. Its rendering core is *GPU-driven*: the whole scene is drawn with one `vkCmdDrawIndexedIndirect` call per cull mode (at most three). Vertices are pulled from one engine-wide geometry pool through buffer device addresses, textures are accessed through one bindless descriptor array, and the only per-draw binding is a 16-byte push constant.
 
 ```mermaid
 flowchart TD
@@ -93,12 +93,14 @@ sequenceDiagram
     E->>C: begin command buffer
     E->>C: beginPass: barriers (swapchain→COLOR_ATTACHMENT, depth→DEPTH), beginRendering (CLEAR), viewport/scissor
     E->>E: prepareScene(scene) (cached after first call)
-    E->>C: bind uber pipeline
     E->>C: write the call's slot of SceneData[frame] (camera, lights, buffer addresses)
     E->>C: updateUniforms → rewrite Modeldata[frame] transforms
-    E->>C: bind bindless set, bind the geometry pool's index buffer
-    E->>C: push constant = address of that slot
-    E->>C: drawIndexedIndirect(drawInfoBuffer, drawInfoCount)
+    E->>C: bind the geometry pool's index buffer
+    loop each cull mode with draws (NONE, FRONT, BACK)
+        E->>C: bind its uber pipeline and the bindless set
+        E->>C: push constant = {address of that slot, firstDraw}
+        E->>C: drawIndexedIndirect(drawInfoBuffer + firstDraw, drawInfoCounts[mode])
+    end
     E->>C: endPass: endRendering, swapchain→PRESENT_SRC
     E->>C: submit (waits for the acquired image, signals frameFence = ++frameFenceValue)
     E->>C: present (SUBOPTIMAL / OUT_OF_DATE → recreate next frame)
@@ -120,8 +122,8 @@ Notes:
 
 `Engine::render` records one pass with `Engine::drawScene`, which render graph passes can call directly. `Engine::prepareScene` (`src/scene/scene.cpp`) runs once per scene, the first time that scene is rendered, and its result is cached in `Engine::preparedScenes`. It does the following:
 
-1. **Flattens the scene.** For every entity with a mesh it builds a list of `SceneDraw`s, one per `SubMesh`: one per glTF primitive, or one for an OBJ. Each holds the sub-mesh's `MeshGeometry` (its range in the geometry pool), the node's world transform and a material handle. A mesh missing vertices or indices is skipped with a warning. If any of the scene's meshes, or a texture of an entity's material, is still loading, it returns an empty `PreparedScene` and caches nothing, so the scene is prepared once, when everything is in place. A mesh that failed to load draws nothing.
-2. **Builds the uber pipeline.** `Engine::createPipeline` compiles `shaders/passes/rasm.slang` (`vertMain`/`fragMain`) and creates a graphics pipeline with an empty vertex-input state (vertex pulling) and the bindless set layout. The pipeline has the swapchain's color format and `D32_SFLOAT_S8_UINT` depth, so a render target that `drawScene` draws into must use the same formats. For any other target `drawScene` logs an error and skips the draw.
+1. **Flattens the scene.** For every entity with a mesh it builds a list of `SceneDraw`s, one per `SubMesh`: one per glTF primitive, or one for an OBJ. Each holds the sub-mesh's `MeshGeometry` (its range in the geometry pool), the node's world transform, a material handle and a `CullMode`. A double-sided material gets `NONE`. Otherwise the cull mode is `BACK`, or `FRONT` when the entity × node transform has a negative determinant (a mirror turns the front faces clockwise, as glTF specifies). The draws are then stable-sorted by cull mode. The sign is taken at preparation: a transform that later changes the sign keeps its old cull mode. A mesh missing vertices or indices is skipped with a warning. If any of the scene's meshes, or a texture of an entity's material, is still loading, it returns an empty `PreparedScene` and caches nothing, so the scene is prepared once, when everything is in place. A mesh that failed to load draws nothing.
+2. **Builds the uber pipelines.** `Engine::createPipeline` compiles `shaders/passes/rasm.slang` (`vertMain`/`fragMain`) and creates a graphics pipeline with an empty vertex-input state (vertex pulling) and the bindless set layout. Its `PipelineDesc` (from `RenderContext::getPipelineDesc`) is copied once per `CullMode`, so `uberMaterialPipelines[mode]` share the shaders and differ only in culling. The pipeline has the swapchain's color format and `D32_SFLOAT_S8_UINT` depth, so a render target that `drawScene` draws into must use the same formats. For any other target `drawScene` logs an error and skips the draw.
 3. **Allocates scene buffers.** Geometry is not copied: it is already in the geometry pool. `megaModelDataBuffer` and `sceneDataBuffer`, which the CPU rewrites every frame, are `hostVisible`. `drawInfoBuffer` is device-local and filled through the upload manager (§12, `P1`):
 
    | Buffer | Usage | Content |
@@ -129,7 +131,7 @@ Notes:
    | `megaModelDataBuffer[2]` | STORAGE | One `gfx::Modeldata` per draw: world matrix, normal matrix, material, material id. |
    | `drawInfoBuffer` | INDIRECT | One `gfx::DrawInfo` (`VkDrawIndexedIndirectCommand` layout) per draw. |
    | `sceneDataBuffer[2]` | STORAGE | `MAX_SCENE_DRAWS_PER_FRAME` `gfx::SceneData`s per frame slot. |
-4. **Writes draw records.** For each sub-mesh i it sets `DrawInfo{indexCount, 1, firstIndex, vertexOffset = firstVertex, 0}` from its `MeshGeometry`. Indices in the pool are *local* to their sub-mesh, so `vertexOffset` moves them to the sub-mesh's vertices. `Modeldata[i]` gets the entity transform × node transform, the converted `gfx::Material` and the `gfx::MaterialId`.
+4. **Writes draw records.** For each sub-mesh i, in cull-mode order, it sets `DrawInfo{indexCount, 1, firstIndex, vertexOffset = firstVertex, 0}` from its `MeshGeometry`. Indices in the pool are *local* to their sub-mesh, so `vertexOffset` moves them to the sub-mesh's vertices. `Modeldata[i]` gets the entity transform × node transform, the converted `gfx::Material` and the `gfx::MaterialId`. `drawInfoCounts[mode]` counts the draws of each cull mode.
 
 Every frame, `updateUniforms` rewrites only the matrix part of each `Modeldata` (`offsetof(Modeldata, material)` bytes) from the current entity transforms.
 
@@ -143,7 +145,7 @@ A failed preparation (a shader error, a buffer that could not be created) also r
 
 ```mermaid
 flowchart LR
-    PC["push constant<br/>SceneData* (8 bytes)"] --> SD["SceneData<br/>projection, view, camera pos,<br/>numLights, lights[8]"]
+    PC["push constant<br/>SceneData*, firstDraw (16 bytes)"] --> SD["SceneData<br/>projection, view, camera pos,<br/>numLights, lights[8]"]
     SD -- vertsPtr --> V["VertexFull[]<br/>(geometry pool)"]
     SD -- drawInfoPtr --> DI["DrawInfo[]"]
     SD -- modeldataPtr --> MD["Modeldata[]<br/>world, normal matrix, Material, MaterialId"]
@@ -151,7 +153,7 @@ flowchart LR
 ```
 
 In `vertMain`:
-- `drawID` comes from the SPIR-V `DrawIndex` built-in, read with `spirv_asm` in `core.slang`.
+- `drawID` is the SPIR-V `DrawIndex` built-in, read with `spirv_asm` in `core.slang`, plus `pc.firstDraw`. `DrawIndex` restarts at 0 in each indirect call, so `firstDraw` is the index of the call's first draw in the scene.
 - Slang lowers `SV_VertexID` to `VertexIndex − BaseVertex`, so the shader adds `drawInfoPtr[drawID].vertexOffset` back before indexing `vertsPtr`.
 - `fragMain` reads `Modeldata[drawID]` and branches on its `materialId`: `MaterialId.UNLIT` calls `Unlit()` in `unlit.slang`, and everything else calls `PBR()` in `pbr.slang`.
 
@@ -199,9 +201,9 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - **What stays in memory.** After `finishLoads`, the CPU vertex and index arrays, the `tinygltf::Model` and the decoded pixels are freed. The worker already drops the glTF buffers once every accessor is read. A mesh keeps only its `SubMesh` list: a `MeshGeometry` range in the pool, a node transform and a material.
 - **Geometry pool.** `uploadGeometry` appends each sub-mesh to the pool with a bump allocator: `firstVertex`/`firstIndex` are where it starts. Nothing is freed from the pool, because meshes are never destroyed yet (`D4`). `finishMeshLoad` checks that the whole mesh fits before it creates anything, so a mesh that does not fit logs the pool usage and fails without using pool space, materials or bindless slots. `createMesh` uploads straight away and returns a `READY` mesh.
 - `Engine::loadMesh(path)` dispatches on the file extension and caches by resolved path in `registry.loadedMeshes`, so a relative and an absolute path to one file share a mesh.
-  - **OBJ** (tinyobjloader) is de-indexed into one vertex per index. Y and V are flipped per vertex.
-  - **glTF/GLB** (tinygltf) goes through `processGLTF`, which walks the default scene's node tree from a root transform of `scale(1, −1, 1)` (the Y flip). The walk uses an explicit stack and imports each node once, skipping out-of-range references and any node reached a second time (a cycle, or a node with two parents, which glTF forbids). For each mesh node, `extractGLTFRaws` reads `POSITION`, `NORMAL`, `TANGENT` and `TEXCOORD_0..2` and the indices through one validated accessor reader. That reader handles strides, sparse accessors and quantized or normalized components. Strips and fans become triangle lists, primitives without indices get generated ones, and point and line primitives are skipped. Missing normals are computed as smooth normals, and in that case `TANGENT` is ignored, as the glTF spec requires. Each primitive keeps its glTF material index, and `finishMeshLoad` calls `loadMaterial` for it on the main thread.
-- **Tangents and normal maps.** `Vertex::tangent` holds the glTF tangent with w = ±1, or w = 0 when the mesh has none. The vertex shader transforms it with the model matrix and multiplies w by the sign of the matrix's determinant, so mirroring transforms such as the root Y flip keep the bitangent right. `getNormalFromMap` uses the authored frame (B = cross(N, T)·w) when w ≠ 0. Otherwise it reconstructs a frame from UV derivatives, with B pointing toward decreasing v (glTF normal maps store +Y as up in the image).
+  - **OBJ** (tinyobjloader) is de-indexed into one vertex per index. V is flipped per vertex, because OBJ puts the UV origin at the bottom-left.
+  - **glTF/GLB** (tinygltf) goes through `processGLTF`, which walks the default scene's node tree from an identity root transform (glTF is right-handed Y-up, like the engine). The walk uses an explicit stack and imports each node once, skipping out-of-range references and any node reached a second time (a cycle, or a node with two parents, which glTF forbids). For each mesh node, `extractGLTFRaws` reads `POSITION`, `NORMAL`, `TANGENT` and `TEXCOORD_0..2` and the indices through one validated accessor reader. That reader handles strides, sparse accessors and quantized or normalized components. Strips and fans become triangle lists, primitives without indices get generated ones, and point and line primitives are skipped. Missing normals are computed as smooth normals, and in that case `TANGENT` is ignored, as the glTF spec requires. Each primitive keeps its glTF material index, and `finishMeshLoad` calls `loadMaterial` for it on the main thread.
+- **Tangents and normal maps.** `Vertex::tangent` holds the glTF tangent with w = ±1, or w = 0 when the mesh has none. The vertex shader transforms it with the model matrix and multiplies w by the sign of the matrix's determinant, so mirroring transforms such as a negative node scale keep the bitangent right. `getNormalFromMap` uses the authored frame (B = cross(N, T)·w) when w ≠ 0. Otherwise it reconstructs a frame from UV derivatives, with B pointing toward decreasing v (glTF normal maps store +Y as up in the image).
 - `loadMaterial` maps a glTF PBR material to `rasm::Material`. Materials with `KHR_materials_unlit` become `MaterialType::UNLIT`, and only their base color texture is uploaded. tinygltf decodes images to RGBA8 on the worker, and `loadMaterial` expands only an image with fewer channels before it uploads each texture. `finishMeshLoad` creates a `GltfImportCache` for each import and passes it to `loadMaterial`. It caches materials by material index and textures by image index and color space, so primitives that share a material share one `MaterialHandle` and one set of bindless slots.
 - A primitive without a material uses its entity's material. `getMaterial` resolves an invalid handle to `defaultMaterial`, the glTF default material (white, metallic 1, roughness 1) created at startup.
 
@@ -253,7 +255,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
   - `EngineConfig::assetRoot` is the folder that relative paths passed to `loadMesh`, `loadGLTF` and `loadTexture` resolve against. Absolute paths ignore it. When empty, paths are opened as given, which means relative to the working directory.
   - A relative `shaderDir` or `assetRoot` resolves against the executable's directory, and `getConfig()` returns the absolute result. `resolveAssetPath` gives the path a load would open.
   - Paths are UTF-8. `src/platform/paths.h` converts them, because `std::filesystem::path` otherwise assumes the Windows ANSI code page. A string that isn't valid UTF-8 is read in that code page instead, which is what `path::string()` returns. `resolveAssetPath` always returns UTF-8, and stb_image (through `STBI_WINDOWS_UTF8`), tinygltf and the `std::ifstream` that `loadMesh` gives tinyobjloader all open it as such.
-- **Coordinate system.** The engine works in a Y-down world: imported geometry is mirrored in Y (`D8`), and back-face culling is disabled. Light directions and camera transforms are expressed in that mirrored space.
+- **Coordinate system.** The world is right-handed and Y-up, like glTF (`D8`). Cameras look down −Z, and clip space is Y-up on every backend. The Vulkan backend flips Y with a negative-height viewport inside `setViewport`, so callers pass a normal rectangle. Front faces are counter-clockwise. Single-sided materials are back-face culled, double-sided ones are not, and their back faces are lit with the reversed normal (`PBRInfo::backFace`). Mouse positions reach the camera controllers in Y-up NDC.
 - **Depth.** `D32_SFLOAT_S8_UINT`, cleared to 1.0, compare `LESS_OR_EQUAL`.
 - **Output.** The PBR shader applies Reinhard tone mapping. The sRGB swapchain format does the gamma encoding, so shaders must output linear color.
 

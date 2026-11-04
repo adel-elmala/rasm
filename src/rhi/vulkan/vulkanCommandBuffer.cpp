@@ -252,11 +252,12 @@ namespace rasm::rhi
 
     void VulkanCommandBuffer::setViewport(float x, float y, float width, float height, float minDepth, float maxDepth)
     {
+        // RASM clip space is Y-up, Vulkan's is Y-down. A negative height starting at the bottom edge flips it (D8).
         VkViewport viewport = {
             .x = x,
-            .y = y,
+            .y = y + height,
             .width = width,
-            .height = height,
+            .height = -height,
             .minDepth = minDepth,
             .maxDepth = maxDepth};
 

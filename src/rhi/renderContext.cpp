@@ -563,6 +563,12 @@ namespace rasm
         return rhiTexture ? rhiTexture->desc : TextureDesc{};
     }
 
+    PipelineDesc RenderContext::getPipelineDesc(const PipelineHandle &pipeline)
+    {
+        auto *rhiPipeline = lookup(impl->pipelines, pipeline, __func__);
+        return rhiPipeline ? rhiPipeline->desc : PipelineDesc{};
+    }
+
     VRAMStats RenderContext::queryVRAMStats()
     {
         return impl->device->queryVRAMStats();

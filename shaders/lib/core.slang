@@ -102,23 +102,27 @@ struct SceneData
     Modeldata*          modeldataPtr;
 };
 
+// Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's Modeldata.
 struct PushConstants
 {
     SceneData* scene;
+    uint32_t   firstDraw;
+    uint32_t   padding;
 };
 
 [[vk::push_constant]]
 ConstantBuffer<PushConstants> pc;
 
-// Define a function to pull the native Vulkan DrawIndex built-in
+// The draw's index in the scene: the native Vulkan DrawIndex built-in plus the indirect call's first draw.
 uint getDrawIndex()
 {
-    return spirv_asm
+    uint drawIndex = spirv_asm
     {
         OpExtension "SPV_KHR_shader_draw_parameters";
         OpCapability DrawParameters;
         result:$$uint = OpLoad builtin(DrawIndex:uint);
     };
+    return drawIndex + pc.firstDraw;
 }
 
 bool hasTexture(uint textureIndex)

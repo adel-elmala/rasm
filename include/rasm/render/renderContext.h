@@ -38,6 +38,7 @@ namespace rasm
         uint64_t                            getBufferDeviceAddress(const BufferHandle& buffer);
         BufferDesc                          getBufferDesc(const BufferHandle& buffer);
         TextureDesc                         getTextureDesc(const TextureHandle& texture);
+        PipelineDesc                        getPipelineDesc(const PipelineHandle& pipeline);
         VRAMStats                           queryVRAMStats();
         uint32_t                            updateBindlessDescriptorSet(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, SamplerType sampler = SamplerType::LINEAR_REPEAT, uint32_t slot = MAX_BINDLESS_TEXTURES);
         bool                                waitForFence(FenceHandle fence, uint64_t value, uint64_t timeout = UINT64_MAX);

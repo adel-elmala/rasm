@@ -65,6 +65,15 @@ namespace rasm
         LINE_STRIP,
     };
 
+    // Front faces are counter-clockwise on screen (glTF, D8).
+    enum class CullMode
+    {
+        NONE,
+        FRONT,
+        BACK,
+        COUNT
+    };
+
     // Result of acquire, present and swapchain recreation.
     enum class SwapchainStatus
     {

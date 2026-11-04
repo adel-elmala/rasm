@@ -27,6 +27,7 @@ namespace rasm
         hash = hashCombine(hash, HandleHash()(desc.fragmentShader));
         hash = hashCombine(hash, HandleHash()(desc.descriptorSetLayout));
         hash = hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.topology)));
+        hash = hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.cullMode)));
         hash = hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.colorAttachmentFormat)));
         return hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.depthStencilAttachmentFormat)));
     }

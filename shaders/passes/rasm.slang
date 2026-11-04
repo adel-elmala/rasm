@@ -22,6 +22,7 @@ struct VSOutput
     float2 uv2            : TEXCOORD2;
     float3 worldCameraPosition : TEXCOORD3;
     nointerpolation uint drawID;
+    nointerpolation float handedness;   // -1 when the model matrix mirrors the mesh
 };
 
 [shader("vertex")]
@@ -45,7 +46,7 @@ VSOutput vertMain(VSInput input)
     if (dot(output.worldNormal, output.worldNormal) < 1e-12) output.worldNormal = float3(0.0, 0.0, 1.0);
     output.worldNormal          = normalize(output.worldNormal);
     // Tangents lie in the surface, so they transform with the model matrix, not the normal matrix. A mirroring
-    // transform (negative determinant, e.g. the glTF root Y flip) reverses cross(N, T), so fold its sign into w.
+    // transform (negative determinant, e.g. a negative glTF node scale) reverses cross(N, T), so fold its sign into w.
     float3x3 modelMat3          = (float3x3)modelMat;
     float handedness            = determinant(modelMat3) < 0.0 ? -1.0 : 1.0;
     output.worldTangent         = float4(mul(modelMat3, vert.tangent.xyz), vert.tangent.w * handedness);
@@ -54,6 +55,7 @@ VSOutput vertMain(VSInput input)
     output.uv1                  = vert.uv[1];
     output.uv2                  = vert.uv[2];
     output.drawID               = drawID;
+    output.handedness           = handedness;
 
     return output;
 }
@@ -62,7 +64,7 @@ VSOutput vertMain(VSInput input)
 Sampler2D gTextures[];
 
 [shader("fragment")]
-float4 fragMain(VSOutput input) : SV_TARGET
+float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
 {
     // A pointer, so the unlit path loads only the fields it reads.
     Modeldata *model = pc.scene->modeldataPtr + input.drawID;
@@ -80,6 +82,9 @@ float4 fragMain(VSOutput input) : SV_TARGET
     info.vNormal                = input.worldNormal;
     info.vTangent               = input.worldTangent;
     info.cameraPosition         = input.worldCameraPosition;
+    // Only double-sided draws show back faces (D8). A mirroring transform turns the authored front faces
+    // clockwise, so it swaps which side the rasterizer calls front.
+    info.backFace               = isFrontFace == (input.handedness < 0.0);
     // Each texture samples the UV set the glTF material asked for.
     info.baseColorUV            = selectUV(material.metallicRoughness.baseColorTextureCoordinate, input.uv0, input.uv1, input.uv2);
     info.metallicRoughnessUV    = selectUV(material.metallicRoughness.metallicRoughnessTextureCoordinate, input.uv0, input.uv1, input.uv2);

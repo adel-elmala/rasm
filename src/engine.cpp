@@ -571,7 +571,7 @@ namespace rasm
 
         // An invalid or empty scene, or a failed preparation (which prepareScene logged and retries next
         // frame), has no pipeline to bind; the pass keeps its cleared attachments.
-        if (!preparedScene.uberMaterialPipeline.isValid())
+        if (!preparedScene.uberMaterialPipelines[0].isValid())
             return;
 
         uint32_t width = swapchain.width;
@@ -607,7 +607,6 @@ namespace rasm
         auto projection = getProjectionMatrix(camera, static_cast<float>(width) / static_cast<float>(height));
         auto view = getViewMatrix(camera);
 
-        ctx.bindPipeline(commandBuffer, preparedScene.uberMaterialPipeline);
         {
             gfx::SceneData sceneData{};
             sceneData.projection = projection;
@@ -637,12 +636,24 @@ namespace rasm
 
             updateUniforms(preparedScene);
 
-            ctx.bindDescriptorSet(commandBuffer, preparedScene.uberMaterialPipeline, bindlessDescriptorSet, 0);
             ctx.bindIndexBuffer(commandBuffer, geometryIndexBuffer, 0, Format::U32_UINT);
 
-            auto sceneDataBufferPtr = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer[frameCount]) + sceneDataOffset;
-            ctx.pushConstants(commandBuffer, preparedScene.uberMaterialPipeline, ShaderType::VERTEX_FRAGMENT, &sceneDataBufferPtr, sizeof(uint64_t), 0);
-            ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, 0, preparedScene.drawInfoCount, sizeof(gfx::DrawInfo));
+            // One indirect draw per cull mode; the draws are grouped by cull mode in enum order (D8).
+            gfx::PushConstants pushConstants{};
+            pushConstants.scene = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer[frameCount]) + sceneDataOffset;
+            for (uint32_t i = 0; i < CULL_MODE_COUNT; ++i)
+            {
+                const uint32_t drawCount = preparedScene.drawInfoCounts[i];
+                if (drawCount == 0)
+                    continue;
+
+                const auto pipeline = preparedScene.uberMaterialPipelines[i];
+                ctx.bindPipeline(commandBuffer, pipeline);
+                ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
+                ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+                ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, pushConstants.firstDraw * sizeof(gfx::DrawInfo), drawCount, sizeof(gfx::DrawInfo));
+                pushConstants.firstDraw += drawCount;
+            }
         }
     }
 

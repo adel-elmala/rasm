@@ -139,6 +139,11 @@ namespace rasm
 
             bool valid = true;
 
+            valid &= validateStruct(pushConstants, "PushConstants", sizeof(gfx::PushConstants),
+                                    {{"scene", offsetof(gfx::PushConstants, scene)},
+                                     {"firstDraw", offsetof(gfx::PushConstants, firstDraw)},
+                                     {"padding", offsetof(gfx::PushConstants, padding)}});
+
             valid &= validateStruct(scene, "SceneData", sizeof(gfx::SceneData),
                                     {{"projection", offsetof(gfx::SceneData, projection)},
                                      {"view", offsetof(gfx::SceneData, view)},

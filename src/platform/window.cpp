@@ -20,7 +20,8 @@ namespace rasm
         {
             float minDim = static_cast<float>(std::min(window.width, window.height));
             float x = (2.0f * screenPos.x - static_cast<float>(window.width)) / minDim;
-            float y = (2.0f * screenPos.y - static_cast<float>(window.height)) / minDim;
+            // Screen y grows downward; NDC y grows upward like the camera's +Y (D8).
+            float y = (static_cast<float>(window.height) - 2.0f * screenPos.y) / minDim;
             return glm::vec2(x, y);
         }
     }

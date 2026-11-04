@@ -107,6 +107,7 @@ namespace rasm
 
         if (material->extensions.count("KHR_materials_unlit") != 0)
             mat.type = MaterialType::UNLIT;
+        mat.doubleSided = material->doubleSided;
 
         // glTF lets each texture pick its own TEXCOORD_n set. The vertex data carries
         // MAX_VERTEX_UV_SETS sets; anything beyond that is out of our support for now.

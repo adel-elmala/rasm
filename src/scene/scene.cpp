@@ -8,6 +8,7 @@
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdlib>
 
@@ -82,6 +83,16 @@ namespace rasm
                 }
                 draws.push_back({&entity, subMesh.geometry, subMesh.transform, subMesh.material});
             }
+        }
+
+        // glTF: a transform with a negative determinant mirrors the mesh, so its front faces turn clockwise (D8).
+        // det(T * R * S * M) = sx * sy * sz * det(M). The sign is fixed at preparation, like the draw order.
+        CullMode getCullMode(const Material &material, const Transform &transform, const glm::mat4 &meshTransform)
+        {
+            if (material.doubleSided)
+                return CullMode::NONE;
+            const float determinant = transform.scale.x * transform.scale.y * transform.scale.z * glm::determinant(glm::mat3(meshTransform));
+            return determinant < 0.0f ? CullMode::FRONT : CullMode::BACK;
         }
 
         // A failed preparation is not cached, so anything it created so far would leak on every retry.
@@ -260,13 +271,31 @@ namespace rasm
         if (sceneDraws.empty())
             return EMPTY_PREPARED_SCENE;
 
-        // create a pipeline for the UberMaterial. A failed preparation retries every frame, so this comes
-        // before the buffers: a shader error must not allocate and fill them each time.
-        preparedScene.uberMaterialPipeline = createPipeline("rasm", readFile(pathFromUtf8(config.shaderDir) / "passes/rasm.slang"));
-
-        if (!preparedScene.uberMaterialPipeline.isValid())
+        // Each cull mode is one pipeline and one indirect draw, so the draws are grouped by it.
+        for (auto &draw : sceneDraws)
         {
-            spdlog::error("Failed to create the uber material pipeline for the scene.");
+            const auto &material = getMaterial(draw.material.isValid() ? draw.material : draw.entity->material);
+            draw.cullMode = getCullMode(material, draw.entity->transform, draw.transform);
+        }
+        std::stable_sort(sceneDraws.begin(), sceneDraws.end(), [](const SceneDraw &a, const SceneDraw &b)
+                         { return a.cullMode < b.cullMode; });
+
+        // create the UberMaterial pipelines. A failed preparation retries every frame, so this comes
+        // before the buffers: a shader error must not allocate and fill them each time.
+        // The shaders are compiled once; the other cull modes copy the first pipeline's desc.
+        auto pipeline = createPipeline("rasm", readFile(pathFromUtf8(config.shaderDir) / "passes/rasm.slang"));
+        for (uint32_t i = 0; i < CULL_MODE_COUNT && pipeline.isValid(); ++i)
+        {
+            auto pipelineDesc = ctx.getPipelineDesc(pipeline);
+            pipelineDesc.cullMode = static_cast<CullMode>(i);
+            preparedScene.uberMaterialPipelines[i] = ctx.createPipeline(pipelineDesc);
+            if (!preparedScene.uberMaterialPipelines[i].isValid())
+                pipeline = {};
+        }
+
+        if (!pipeline.isValid())
+        {
+            spdlog::error("Failed to create the uber material pipelines for the scene.");
             return EMPTY_PREPARED_SCENE;
         }
 
@@ -352,6 +381,7 @@ namespace rasm
 
             ctx.fillBuffer(preparedScene.drawInfoBuffer, &drawInfo, sizeof(drawInfo), drawInfoBufferOffset);
             drawInfoBufferOffset += sizeof(drawInfo);
+            ++preparedScene.drawInfoCounts[static_cast<uint32_t>(draw.cullMode)];
         }
 
         preparedScene.drawInfoCount = sceneDraws.size();

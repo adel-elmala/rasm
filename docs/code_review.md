@@ -236,7 +236,7 @@ Next steps, in order:
 
 Needed: a platform layer the application can replace, creation from a native surface or window handle, an offscreen/headless mode, and camera controllers as optional helpers driven by the application.
 
-**D8 — Coordinate handedness is achieved by mirroring the world.**
+**D8 — Coordinate handedness is achieved by mirroring the world.** *Fixed 2026-11-04:* the world is right-handed Y-up. Import no longer mirrors glTF or OBJ geometry, and the Vulkan backend flips Y with a negative-height viewport in `setViewport`. Front faces are counter-clockwise. `PipelineDesc::cullMode` selects culling, and `prepareScene` groups draws into one pipeline and indirect draw per cull mode: `NONE` for glTF `doubleSided`, `BACK` otherwise, and `FRONT` under a mirroring transform. Double-sided back faces are lit with the reversed normal. The original finding follows.
 - glTF geometry gets a `scale(1,-1,1)` root ([mesh.cpp:452](../src/assets/mesh.cpp#L452)), and OBJ vertices are negated per vertex ([mesh.cpp:127-131](../src/assets/mesh.cpp#L127-L131)).
 - That mirrors the world: the determinant is negative and the triangle winding flips. Back-face culling is disabled to hide this ([vulkanContext.cpp:603-605](../src/rhi/vulkan/vulkanContext.cpp#L603-L605)).
 - User-specified positions and directions live in a Y-down world.

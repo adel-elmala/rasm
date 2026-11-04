@@ -217,6 +217,19 @@ namespace rasm::rhi
             }
         }
 
+        VkCullModeFlags toVkCullMode(CullMode cullMode)
+        {
+            switch (cullMode)
+            {
+            case CullMode::FRONT:
+                return VK_CULL_MODE_FRONT_BIT;
+            case CullMode::BACK:
+                return VK_CULL_MODE_BACK_BIT;
+            default:
+                return VK_CULL_MODE_NONE;
+            }
+        }
+
         VkImageUsageFlags toVkImageUsageFlags(TextureUsage usage)
         {
             switch (usage)
@@ -610,7 +623,7 @@ namespace rasm::rhi
     {
         VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            .size = sizeof(VkDeviceAddress)};
+            .size = 16}; // core.slang PushConstants: SceneData pointer + firstDraw, padded
 
         VkDescriptorSetLayout setLayouts[] = {static_cast<VulkanDescriptorSetLayout *>(layout)->layout};
 
@@ -709,8 +722,9 @@ namespace rasm::rhi
             .depthClampEnable = VK_FALSE,
             .rasterizerDiscardEnable = VK_FALSE,
             .polygonMode = VK_POLYGON_MODE_FILL,
-            .cullMode = VK_CULL_MODE_NONE,
-            .frontFace = VK_FRONT_FACE_CLOCKWISE,
+            .cullMode = toVkCullMode(desc.cullMode),
+            // Counter-clockwise in the Y-up clip space; the negative-height viewport keeps it so in framebuffer space.
+            .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
             .depthBiasEnable = VK_FALSE,
             .lineWidth = 1.0f};
 
