@@ -89,7 +89,6 @@ namespace rasm
         ShaderHandle                fragmentShader;
         DescriptorSetLayoutHandle   descriptorSetLayout;
         PrimitiveTopology           topology                        = PrimitiveTopology::TRIANGLE_LIST;
-        CullMode                    cullMode                        = CullMode::NONE;
         Format                      colorAttachmentFormat           = Format::UNKNOWN;
         Format                      depthStencilAttachmentFormat    = Format::UNKNOWN;
 

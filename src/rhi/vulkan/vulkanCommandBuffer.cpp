@@ -96,6 +96,19 @@ namespace rasm::rhi
                 return false;
             }
         }
+
+        VkCullModeFlags toVkCullMode(CullMode cullMode)
+        {
+            switch (cullMode)
+            {
+            case CullMode::FRONT:
+                return VK_CULL_MODE_FRONT_BIT;
+            case CullMode::BACK:
+                return VK_CULL_MODE_BACK_BIT;
+            default:
+                return VK_CULL_MODE_NONE;
+            }
+        }
     }
 
     VulkanCommandBuffer::VulkanCommandBuffer(VulkanDevice &device) : device(device) {}
@@ -271,6 +284,11 @@ namespace rasm::rhi
             .extent = {width, height}};
 
         vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+    }
+
+    void VulkanCommandBuffer::setCullMode(CullMode cullMode)
+    {
+        vkCmdSetCullMode(commandBuffer, toVkCullMode(cullMode));
     }
 
     void VulkanCommandBuffer::bindPipeline(Pipeline *pipeline)

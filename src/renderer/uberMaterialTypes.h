@@ -104,7 +104,6 @@ namespace rasm::gfx
         uint64_t         modeldataPtr;
     };
 
-    // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's Modeldata.
     struct PushConstants
     {
         uint64_t         scene;
@@ -128,7 +127,7 @@ namespace rasm::gfx
     static_assert(offsetof(SceneData, lights) == 144, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, vertsPtr) == 528, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, modeldataPtr) == 544, "SceneData must match the shader's scalar layout");
-    static_assert(sizeof(PushConstants) == 16, "PushConstants must match the shader and the Vulkan push-constant range");
+    static_assert(sizeof(PushConstants) == PUSH_CONSTANTS_SIZE, "PushConstants must fill the pipelines' push-constant range");
 
 
 } // namespace rasm::gfx

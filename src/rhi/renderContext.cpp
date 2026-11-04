@@ -563,12 +563,6 @@ namespace rasm
         return rhiTexture ? rhiTexture->desc : TextureDesc{};
     }
 
-    PipelineDesc RenderContext::getPipelineDesc(const PipelineHandle &pipeline)
-    {
-        auto *rhiPipeline = lookup(impl->pipelines, pipeline, __func__);
-        return rhiPipeline ? rhiPipeline->desc : PipelineDesc{};
-    }
-
     VRAMStats RenderContext::queryVRAMStats()
     {
         return impl->device->queryVRAMStats();
@@ -676,6 +670,16 @@ namespace rasm
         return true;
     }
 
+    bool RenderContext::setCullMode(const CommandBufferHandle &commandBuffer, CullMode cullMode)
+    {
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        if (!rhiCommandBuffer)
+            return false;
+
+        rhiCommandBuffer->setCullMode(cullMode);
+        return true;
+    }
+
     bool RenderContext::submit(const CommandBufferHandle &commandBuffer, FenceHandle signalFence, uint64_t signalValue, bool presentsSwapchainImage)
     {
         ZoneScoped;
@@ -758,6 +762,13 @@ namespace rasm
 
     void RenderContext::pushConstants(const CommandBufferHandle &commandBuffer, const PipelineHandle &pipeline, ShaderType stage, const void *data, uint32_t size, uint32_t offset)
     {
+        // Every pipeline's push-constant range is PUSH_CONSTANTS_SIZE bytes (C12).
+        if (offset + size > PUSH_CONSTANTS_SIZE)
+        {
+            spdlog::error("pushConstants: {} bytes at offset {} do not fit in the {}-byte range.", size, offset, PUSH_CONSTANTS_SIZE);
+            return;
+        }
+
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         auto *rhiPipeline = lookup(impl->pipelines, pipeline, __func__);
         if (rhiCommandBuffer && rhiPipeline)

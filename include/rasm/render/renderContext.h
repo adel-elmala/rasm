@@ -38,7 +38,6 @@ namespace rasm
         uint64_t                            getBufferDeviceAddress(const BufferHandle& buffer);
         BufferDesc                          getBufferDesc(const BufferHandle& buffer);
         TextureDesc                         getTextureDesc(const TextureHandle& texture);
-        PipelineDesc                        getPipelineDesc(const PipelineHandle& pipeline);
         VRAMStats                           queryVRAMStats();
         uint32_t                            updateBindlessDescriptorSet(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, SamplerType sampler = SamplerType::LINEAR_REPEAT, uint32_t slot = MAX_BINDLESS_TEXTURES);
         bool                                waitForFence(FenceHandle fence, uint64_t value, uint64_t timeout = UINT64_MAX);
@@ -53,6 +52,7 @@ namespace rasm
         bool                                endRendering(const CommandBufferHandle& commandBuffer);
         bool                                setViewport(const CommandBufferHandle& commandBuffer, float x, float y, float width, float height, float minDepth = 0.0f, float maxDepth = 1.0f);
         bool                                setScissor(const CommandBufferHandle& commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height);
+        bool                                setCullMode(const CommandBufferHandle& commandBuffer, CullMode cullMode);
         bool                                submit(const CommandBufferHandle& commandBuffer, FenceHandle signalFence, uint64_t signalValue, bool presentsSwapchainImage);
         [[nodiscard]] SwapchainStatus       present();
         void                                destroyTexture(const TextureHandle& texture);

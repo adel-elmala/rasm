@@ -16,6 +16,7 @@ namespace rasm
     constexpr uint32_t  MAX_FRAMES_IN_FLIGHT    = 2;
     constexpr uint32_t  MAX_DESCRIPTOR_TYPES    = 1;
     constexpr uint32_t  MAX_BINDLESS_TEXTURES   = 1024;
+    constexpr uint32_t  PUSH_CONSTANTS_SIZE     = 16;
     // Sentinel written by the CPU when a material slot has no texture bound; the shader must
     // never sample the bindless array with this index.
     constexpr uint32_t  INVALID_TEXTURE_INDEX   = 0xFFFFFFFF;
@@ -65,13 +66,11 @@ namespace rasm
         LINE_STRIP,
     };
 
-    // Front faces are counter-clockwise on screen (glTF, D8).
     enum class CullMode
     {
         NONE,
         FRONT,
         BACK,
-        COUNT
     };
 
     // Result of acquire, present and swapchain recreation.

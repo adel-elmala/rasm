@@ -82,15 +82,17 @@ namespace rasm
                                  entity.handle.index, subMesh.geometry.vertexCount, subMesh.geometry.indexCount);
                     continue;
                 }
-                draws.push_back({&entity, subMesh.geometry, subMesh.transform, subMesh.material});
+                // Primitives without a material use the entity's; getMaterial resolves an invalid one to the default material.
+                const auto material = subMesh.material.isValid() ? subMesh.material : entity.material;
+                draws.push_back({&entity, subMesh.geometry, subMesh.transform, material});
             }
         }
 
         // glTF: a transform with a negative determinant mirrors the mesh, so its front faces turn clockwise (D8).
-        // det(T * R * S * M) = sx * sy * sz * det(M). The sign is fixed at preparation, like the draw order.
-        CullMode getCullMode(const Material &material, const Transform &transform, const glm::mat4 &meshTransform)
+        // det(T * R * S * M) = sx * sy * sz * det(M).
+        CullMode getCullMode(bool doubleSided, const Transform &transform, const glm::mat4 &meshTransform)
         {
-            if (material.doubleSided)
+            if (doubleSided)
                 return CullMode::NONE;
             const float determinant = transform.scale.x * transform.scale.y * transform.scale.z * glm::determinant(glm::mat3(meshTransform));
             return determinant < 0.0f ? CullMode::FRONT : CullMode::BACK;
@@ -171,31 +173,19 @@ namespace rasm
         if (sceneDraws.empty())
             return EMPTY_PREPARED_SCENE;
 
-        // Each cull mode is one pipeline and one indirect draw, so the draws are grouped by it.
+        // drawScene issues one indirect draw per run of draws with the same cull mode, so the draws are grouped by it.
         for (auto &draw : sceneDraws)
-        {
-            const auto &material = getMaterial(draw.material.isValid() ? draw.material : draw.entity->material);
-            draw.cullMode = getCullMode(material, draw.entity->transform, draw.transform);
-        }
+            draw.cullMode = getCullMode(getMaterial(draw.material).doubleSided, draw.entity->transform, draw.transform);
         std::stable_sort(sceneDraws.begin(), sceneDraws.end(), [](const SceneDraw &a, const SceneDraw &b)
                          { return a.cullMode < b.cullMode; });
 
-        // create the UberMaterial pipelines. A failed preparation retries every frame, so this comes
+        // create a pipeline for the UberMaterial. A failed preparation retries every frame, so this comes
         // before the buffers: a shader error must not allocate and fill them each time.
-        // The shaders are compiled once; the other cull modes copy the first pipeline's desc.
-        auto pipeline = createPipeline("rasm", readFile(pathFromUtf8(config.shaderDir) / "passes/rasm.slang"));
-        for (uint32_t i = 0; i < CULL_MODE_COUNT && pipeline.isValid(); ++i)
-        {
-            auto pipelineDesc = ctx.getPipelineDesc(pipeline);
-            pipelineDesc.cullMode = static_cast<CullMode>(i);
-            preparedScene.uberMaterialPipelines[i] = ctx.createPipeline(pipelineDesc);
-            if (!preparedScene.uberMaterialPipelines[i].isValid())
-                pipeline = {};
-        }
+        preparedScene.uberMaterialPipeline = createPipeline("rasm", readFile(pathFromUtf8(config.shaderDir) / "passes/rasm.slang"));
 
-        if (!pipeline.isValid())
+        if (!preparedScene.uberMaterialPipeline.isValid())
         {
-            spdlog::error("Failed to create the uber material pipelines for the scene.");
+            spdlog::error("Failed to create the uber material pipeline for the scene.");
             return EMPTY_PREPARED_SCENE;
         }
 
@@ -255,15 +245,13 @@ namespace rasm
 
             model = model * draw.transform;
 
-            preparedScene.modelUniforms.push_back({draw.entity->handle, draw.transform});
+            const auto &materialRef = getMaterial(draw.material);
+            preparedScene.modelUniforms.push_back({draw.entity->handle, draw.transform, materialRef.doubleSided});
 
             gfx::Modeldata modelData{};
             modelData.worldMatrix = model;
             modelData.normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
             modelData.vertFormat = gfx::VertexFormat::FULL;
-            // Primitives without a material use the entity's; getMaterial resolves an invalid one to the default material.
-            auto material = draw.material.isValid() ? draw.material : draw.entity->material;
-            const auto &materialRef = getMaterial(material);
             modelData.material = convertToGfxMaterial(*this, materialRef);
             modelData.materialId = getGfxMaterialId(materialRef.type);
 
@@ -281,7 +269,6 @@ namespace rasm
 
             ctx.fillBuffer(preparedScene.drawInfoBuffer, &drawInfo, sizeof(drawInfo), drawInfoBufferOffset);
             drawInfoBufferOffset += sizeof(drawInfo);
-            ++preparedScene.drawInfoCounts[static_cast<uint32_t>(draw.cullMode)];
         }
 
         return preparedScenes.emplace(scene, std::move(preparedScene)).first->second;
@@ -293,15 +280,15 @@ namespace rasm
 
         size_t modelBufferOffset = 0;
 
-        for (const auto &[EntityHandle, gltfTransform] : preparedScene.modelUniforms)
+        for (const auto &modelUniform : preparedScene.modelUniforms)
         {
-            const auto &modelTransform = registry.entities[EntityHandle.index].transform;
+            const auto &modelTransform = registry.entities[modelUniform.entity.index].transform;
 
             auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
                          glm::mat4_cast(modelTransform.rotation) *
                          glm::scale(glm::mat4(1.0f), modelTransform.scale);
 
-            model = model * gltfTransform;
+            model = model * modelUniform.meshTransform;
 
             gfx::Modeldata modelData{};
             modelData.worldMatrix = model;
@@ -326,7 +313,7 @@ namespace rasm
 
         // An invalid or empty scene, or a failed preparation (which prepareScene logged and retries next
         // frame), has no pipeline to bind; the pass keeps its cleared attachments.
-        if (!preparedScene.uberMaterialPipelines[0].isValid())
+        if (!preparedScene.uberMaterialPipeline.isValid())
             return;
 
         uint32_t width = swapchain.width;
@@ -368,6 +355,7 @@ namespace rasm
         auto projection = getProjectionMatrix(camera, static_cast<float>(width) / static_cast<float>(height));
         auto view = getViewMatrix(camera);
 
+        ctx.bindPipeline(commandBuffer, preparedScene.uberMaterialPipeline);
         {
             gfx::SceneData sceneData{};
             sceneData.projection = projection;
@@ -398,24 +386,34 @@ namespace rasm
             if (!uniformsWritten)
                 updateUniforms(preparedScene);
 
+            ctx.bindDescriptorSet(commandBuffer, preparedScene.uberMaterialPipeline, bindlessDescriptorSet, 0);
             ctx.bindIndexBuffer(commandBuffer, geometryIndexBuffer, 0, Format::U32_UINT);
 
-            // One indirect draw per cull mode; the draws are grouped by cull mode in enum order (D8).
+            // The cull mode comes from the current transforms, since one can mirror an entity after preparation
+            // grouped the draws (D8). Each run of draws with the same cull mode is one indirect draw.
+            const auto &modelUniforms = preparedScene.modelUniforms;
+            auto cullModeOf = [&](uint32_t draw)
+            {
+                const auto &modelUniform = modelUniforms[draw];
+                return getCullMode(modelUniform.doubleSided, registry.entities[modelUniform.entity.index].transform, modelUniform.meshTransform);
+            };
+
             gfx::PushConstants pushConstants{};
             pushConstants.scene = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer[frameCount]) + sceneDataOffset;
-            for (uint32_t i = 0; i < CULL_MODE_COUNT; ++i)
+            const auto drawCount = static_cast<uint32_t>(modelUniforms.size());
+            while (pushConstants.firstDraw < drawCount)
             {
-                const uint32_t drawCount = preparedScene.drawInfoCounts[i];
-                if (drawCount == 0)
-                    continue;
+                const CullMode cullMode = cullModeOf(pushConstants.firstDraw);
+                uint32_t runEnd = pushConstants.firstDraw + 1;
+                while (runEnd < drawCount && cullModeOf(runEnd) == cullMode)
+                    ++runEnd;
 
-                const auto pipeline = preparedScene.uberMaterialPipelines[i];
-                ctx.bindPipeline(commandBuffer, pipeline);
-                ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
-                ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
-                ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, pushConstants.firstDraw * sizeof(gfx::DrawInfo), drawCount, sizeof(gfx::DrawInfo));
-                pushConstants.firstDraw += drawCount;
+                ctx.setCullMode(commandBuffer, cullMode);
+                ctx.pushConstants(commandBuffer, preparedScene.uberMaterialPipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+                ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, pushConstants.firstDraw * sizeof(gfx::DrawInfo), runEnd - pushConstants.firstDraw, sizeof(gfx::DrawInfo));
+                pushConstants.firstDraw = runEnd;
             }
+            ctx.setCullMode(commandBuffer, CullMode::NONE);
         }
     }
 }

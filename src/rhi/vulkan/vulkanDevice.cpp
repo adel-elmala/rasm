@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <iterator>
 #include <vector>
 
 namespace rasm::rhi
@@ -212,19 +213,6 @@ namespace rasm::rhi
                 return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
             default:
                 return VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
-            }
-        }
-
-        VkCullModeFlags toVkCullMode(CullMode cullMode)
-        {
-            switch (cullMode)
-            {
-            case CullMode::FRONT:
-                return VK_CULL_MODE_FRONT_BIT;
-            case CullMode::BACK:
-                return VK_CULL_MODE_BACK_BIT;
-            default:
-                return VK_CULL_MODE_NONE;
             }
         }
 
@@ -550,7 +538,7 @@ namespace rasm::rhi
     {
         VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            .size = 16}; // core.slang PushConstants: SceneData pointer + firstDraw, padded
+            .size = PUSH_CONSTANTS_SIZE};
 
         VkDescriptorSetLayout setLayouts[] = {static_cast<VulkanDescriptorSetLayout *>(layout)->layout};
 
@@ -599,11 +587,12 @@ namespace rasm::rhi
             .scissorCount = 1,
         };
 
-        VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        // Cull mode is core dynamic state since Vulkan 1.3, so one pipeline serves every cull mode (D8).
+        VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_CULL_MODE};
 
         VkPipelineDynamicStateCreateInfo dynamicStateInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-            .dynamicStateCount = 2,
+            .dynamicStateCount = static_cast<uint32_t>(std::size(dynamicStates)),
             .pDynamicStates = dynamicStates,
         };
 
@@ -649,7 +638,7 @@ namespace rasm::rhi
             .depthClampEnable = VK_FALSE,
             .rasterizerDiscardEnable = VK_FALSE,
             .polygonMode = VK_POLYGON_MODE_FILL,
-            .cullMode = toVkCullMode(desc.cullMode),
+            .cullMode = VK_CULL_MODE_NONE,
             // Counter-clockwise in the Y-up clip space; the negative-height viewport keeps it so in framebuffer space.
             .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
             .depthBiasEnable = VK_FALSE,

@@ -4,7 +4,7 @@ This document describes how RASM is built **today** (branch `feat/pbr`, Oct 2026
 
 ## 1. Overview
 
-RASM is a C++20 rendering engine with a single implemented backend (Vulkan 1.4). It is built as a static library (`rasm`, alias `rasm::rasm`) and driven by small example programs. Its rendering core is *GPU-driven*: the whole scene is drawn with one `vkCmdDrawIndexedIndirect` call per cull mode (at most three). Vertices are pulled from one engine-wide geometry pool through buffer device addresses, textures are accessed through one bindless descriptor array, and the only per-draw binding is a 16-byte push constant.
+RASM is a C++20 rendering engine with a single implemented backend (Vulkan 1.4). It is built as a static library (`rasm`, alias `rasm::rasm`) and driven by small example programs. Its rendering core is *GPU-driven*: the whole scene is drawn with one pipeline and one `vkCmdDrawIndexedIndirect` call per run of draws with the same cull mode (usually at most three). Vertices are pulled from one engine-wide geometry pool through buffer device addresses, textures are accessed through one bindless descriptor array, and the only per-draw binding is a 16-byte push constant.
 
 ```mermaid
 flowchart TD
@@ -91,16 +91,17 @@ sequenceDiagram
     E->>C: waitForFence(frameFence, frameResources[frame].fenceValue)
     E->>C: acquireNextImage (skip frame on OUT_OF_DATE)
     E->>C: begin command buffer
-    E->>C: beginPass: barriers (swapchain→COLOR_ATTACHMENT, depth→DEPTH), beginRendering (CLEAR), viewport/scissor
+    E->>C: beginPass: barriers (swapchain→COLOR_ATTACHMENT, depth→DEPTH), beginRendering (CLEAR), viewport/scissor, cull NONE
     E->>E: prepareScene(scene) (cached after first call)
     E->>C: write the call's slot of SceneData[frame] (camera, lights, buffer addresses)
     E->>C: updateUniforms → rewrite Modeldata[frame] transforms (first call per scene this frame)
-    E->>C: bind the geometry pool's index buffer
-    loop each cull mode with draws (NONE, FRONT, BACK)
-        E->>C: bind its uber pipeline and the bindless set
+    E->>C: bind the uber pipeline, the bindless set and the geometry pool's index buffer
+    loop each run of draws with the same current cull mode
+        E->>C: setCullMode(mode)
         E->>C: push constant = {address of that slot, firstDraw}
-        E->>C: drawIndexedIndirect(drawInfoBuffer + firstDraw, drawInfoCounts[mode])
+        E->>C: drawIndexedIndirect(drawInfoBuffer + firstDraw, run length)
     end
+    E->>C: setCullMode(NONE)
     E->>C: endPass: endRendering, swapchain→PRESENT_SRC
     E->>C: submit (waits for the acquired image, signals frameFence = ++frameFenceValue)
     E->>C: present (SUBOPTIMAL / OUT_OF_DATE → recreate next frame)
@@ -122,8 +123,8 @@ Notes:
 
 `Engine::render` records one pass with `Engine::drawScene`, which render graph passes can call directly. `Engine::prepareScene` (`src/renderer/gpuScene.cpp`) runs once per scene, the first time that scene is rendered, and its result is cached in `Engine::preparedScenes`. It does the following:
 
-1. **Flattens the scene.** For every entity with a mesh it builds a list of `SceneDraw`s, one per `SubMesh`: one per glTF primitive, or one for an OBJ. Each holds the sub-mesh's `MeshGeometry` (its range in the geometry pool), the node's world transform, a material handle and a `CullMode`. A double-sided material gets `NONE`. Otherwise the cull mode is `BACK`, or `FRONT` when the entity × node transform has a negative determinant (a mirror turns the front faces clockwise, as glTF specifies). The draws are then stable-sorted by cull mode. The sign is taken at preparation: a transform that later changes the sign keeps its old cull mode. A mesh missing vertices or indices is skipped with a warning. If any of the scene's meshes, or a texture of an entity's material, is still loading, it returns an empty `PreparedScene` and caches nothing, so the scene is prepared once, when everything is in place. A mesh that failed to load draws nothing.
-2. **Builds the uber pipelines.** `Engine::createPipeline` compiles `shaders/passes/rasm.slang` (`vertMain`/`fragMain`) and creates a graphics pipeline with an empty vertex-input state (vertex pulling) and the bindless set layout. Its `PipelineDesc` (from `RenderContext::getPipelineDesc`) is copied once per `CullMode`, so `uberMaterialPipelines[mode]` share the shaders and differ only in culling. The pipeline has the swapchain's color format and `D32_SFLOAT_S8_UINT` depth, so a render target that `drawScene` draws into must use the same formats. For any other target `drawScene` logs an error and skips the draw.
+1. **Flattens the scene.** For every entity with a mesh it builds a list of `SceneDraw`s, one per `SubMesh`: one per glTF primitive, or one for an OBJ. Each holds the sub-mesh's `MeshGeometry` (its range in the geometry pool), the node's world transform, its material (the primitive's, else the entity's) and a `CullMode`. A double-sided material gets `NONE`. Otherwise the cull mode is `BACK`, or `FRONT` when the entity × node transform has a negative determinant (a mirror turns the front faces clockwise, as glTF specifies). The draws are then stable-sorted by cull mode, so each mode is one run of draws. A mesh missing vertices or indices is skipped with a warning. If any of the scene's meshes, or a texture of an entity's material, is still loading, it returns an empty `PreparedScene` and caches nothing, so the scene is prepared once, when everything is in place. A mesh that failed to load draws nothing.
+2. **Builds the uber pipeline.** `Engine::createPipeline` compiles `shaders/passes/rasm.slang` (`vertMain`/`fragMain`) and creates a graphics pipeline with an empty vertex-input state (vertex pulling) and the bindless set layout. Cull mode is dynamic state on every pipeline, so this one pipeline serves all cull modes. The pipeline has the swapchain's color format and `D32_SFLOAT_S8_UINT` depth, so a render target that `drawScene` draws into must use the same formats. For any other target `drawScene` logs an error and skips the draw.
 3. **Allocates scene buffers.** Geometry is not copied: it is already in the geometry pool. `megaModelDataBuffer` and `sceneDataBuffer`, which the CPU rewrites every frame, are `hostVisible`. `drawInfoBuffer` is device-local and filled through the upload manager (§12, `P1`):
 
    | Buffer | Usage | Content |
@@ -131,9 +132,11 @@ Notes:
    | `megaModelDataBuffer[2]` | STORAGE | One `gfx::Modeldata` per draw: world matrix, normal matrix, material, material id. |
    | `drawInfoBuffer` | INDIRECT | One `gfx::DrawInfo` (`VkDrawIndexedIndirectCommand` layout) per draw. |
    | `sceneDataBuffer[2]` | STORAGE | `MAX_SCENE_DRAWS_PER_FRAME` `gfx::SceneData`s per frame slot. |
-4. **Writes draw records.** For each sub-mesh i, in cull-mode order, it sets `DrawInfo{indexCount, 1, firstIndex, vertexOffset = firstVertex, 0}` from its `MeshGeometry`. Indices in the pool are *local* to their sub-mesh, so `vertexOffset` moves them to the sub-mesh's vertices. `Modeldata[i]` gets the entity transform × node transform, the converted `gfx::Material` and the `gfx::MaterialId`. `drawInfoCounts[mode]` counts the draws of each cull mode.
+4. **Writes draw records.** For each sub-mesh i, in cull-mode order, it sets `DrawInfo{indexCount, 1, firstIndex, vertexOffset = firstVertex, 0}` from its `MeshGeometry`. Indices in the pool are *local* to their sub-mesh, so `vertexOffset` moves them to the sub-mesh's vertices. `Modeldata[i]` gets the entity transform × node transform, the converted `gfx::Material` and the `gfx::MaterialId`. `modelUniforms[i]` keeps the entity, the node transform and the material's `doubleSided` flag for the per-frame work.
 
 Every frame, `updateUniforms` rewrites only the matrix part of each `Modeldata` (`offsetof(Modeldata, material)` bytes) from the current entity transforms. It runs in the first `drawScene` call of each scene in a frame; later calls for that scene reuse the transforms already written.
+
+`drawScene` takes each draw's cull mode from the current entity transform, not from preparation, so a transform that starts or stops mirroring an entity stays correctly culled. Consecutive draws with the same mode are one `drawIndexedIndirect`. A draw whose mode changed after preparation splits its group's run, which costs one more indirect call but stays correct. `drawScene` sets the cull mode back to `NONE` when it is done, which is what `beginPass` sets for every other pipeline.
 
 The GPU reads `SceneData` after the whole frame is recorded, so each `drawScene` call of a frame writes its own slot of `sceneDataBuffer[frame]` and pushes that slot's address. That is what lets passes in one frame use different cameras. `Modeldata` has no slots: all the calls of a frame share the transforms it holds, so a transform changed between two calls shows up next frame. Past `MAX_SCENE_DRAWS_PER_FRAME` calls, or with an invalid camera, `drawScene` logs an error and skips the draw.
 
@@ -255,7 +258,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
   - `EngineConfig::assetRoot` is the folder that relative paths passed to `loadMesh`, `loadGLTF` and `loadTexture` resolve against. Absolute paths ignore it. When empty, paths are opened as given, which means relative to the working directory.
   - A relative `shaderDir` or `assetRoot` resolves against the executable's directory, and `getConfig()` returns the absolute result. `resolveAssetPath` gives the path a load would open.
   - Paths are UTF-8. `src/platform/paths.h` converts them, because `std::filesystem::path` otherwise assumes the Windows ANSI code page. A string that isn't valid UTF-8 is read in that code page instead, which is what `path::string()` returns. `resolveAssetPath` always returns UTF-8, and stb_image (through `STBI_WINDOWS_UTF8`), tinygltf and the `std::ifstream` that `loadMesh` gives tinyobjloader all open it as such.
-- **Coordinate system.** The world is right-handed and Y-up, like glTF (`D8`). Cameras look down −Z, and clip space is Y-up on every backend. The Vulkan backend flips Y with a negative-height viewport inside `setViewport`, so callers pass a normal rectangle. Front faces are counter-clockwise. Single-sided materials are back-face culled, double-sided ones are not, and their back faces are lit with the reversed normal (`PBRInfo::backFace`). Mouse positions reach the camera controllers in Y-up NDC.
+- **Coordinate system.** The world is right-handed and Y-up, like glTF (`D8`). Cameras look down −Z, and clip space is Y-up on every backend. The Vulkan backend flips Y with a negative-height viewport inside `setViewport`, so callers pass a normal rectangle. Front faces are counter-clockwise. Single-sided materials are back-face culled, double-sided ones are not (glTF `doubleSided`, or the `doubleSided` argument of `createMaterial`, which defaults to `false`), and their back faces are lit with the reversed normal (`PBRInfo::backFace`). Mouse positions reach the camera controllers in Y-up NDC.
 - **Depth.** `D32_SFLOAT_S8_UINT`, cleared to 1.0, compare `LESS_OR_EQUAL`.
 - **Output.** The PBR shader applies Reinhard tone mapping. The sRGB swapchain format does the gamma encoding, so shaders must output linear color.
 

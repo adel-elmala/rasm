@@ -7,7 +7,6 @@
 
 #include <cstddef>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace rasm
@@ -18,7 +17,6 @@ namespace rasm
     constexpr int MAX_LIGHTS_PER_SCENE = 8;
     constexpr int MAX_SCENES = 16;
     constexpr uint32_t MAX_SCENE_DRAWS_PER_FRAME = 8;
-    constexpr uint32_t CULL_MODE_COUNT = static_cast<uint32_t>(CullMode::COUNT);
 
     struct Scene
     {
@@ -42,14 +40,20 @@ namespace rasm
         CullMode        cullMode;
     };
 
+    struct ModelUniform
+    {
+        EntityHandle    entity;
+        glm::mat4       meshTransform;
+        bool            doubleSided;
+    };
+
     struct PreparedScene
     {
-        BufferHandle                                       megaModelDataBuffer[MAX_FRAMES_IN_FLIGHT];
-        BufferHandle                                       drawInfoBuffer;
-        BufferHandle                                       sceneDataBuffer[MAX_FRAMES_IN_FLIGHT]; // one SceneData per drawScene of a frame
-        PipelineHandle                                     uberMaterialPipelines[CULL_MODE_COUNT];
-        std::vector<std::pair<EntityHandle, glm::mat4>>    modelUniforms;
-        uint32_t                                           drawInfoCounts[CULL_MODE_COUNT];
+        BufferHandle                    megaModelDataBuffer[MAX_FRAMES_IN_FLIGHT];
+        BufferHandle                    drawInfoBuffer;
+        BufferHandle                    sceneDataBuffer[MAX_FRAMES_IN_FLIGHT]; // one SceneData per drawScene of a frame
+        PipelineHandle                  uberMaterialPipeline;
+        std::vector<ModelUniform>       modelUniforms;
     };
 
 }

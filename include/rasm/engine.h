@@ -56,7 +56,7 @@ namespace rasm
         bool                        isLoaded(MeshHandle mesh) const;
         bool                        isLoaded(TextureHandle texture) const;
         void                        waitForLoads();
-        MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {});
+        MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {}, bool doubleSided = false);
         TextureHandle               createTexture(const TextureDesc& desc);
         BufferHandle                createBuffer(const BufferDesc& desc);
         RenderTargetHandle          createRenderTarget(const RenderTargetDesc& desc);

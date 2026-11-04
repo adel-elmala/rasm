@@ -38,14 +38,14 @@ fails `validateRasmStructs` at startup (assert in `shaderCompiler.cpp`), before 
 
 ## RASM facts that help reading a capture
 
-- **One indirect draw per frame**: `vkCmdDrawIndexedIndirect(drawCount = N)` with stride 20 (`gfx::DrawInfo`: indexCount, instanceCount, firstIndex, vertexOffset, firstInstance). RenderDoc expands it into `Indirect sub-command[i]` events, one per sub-mesh.
-- **Push constants (8 bytes) = the GPU address of `SceneData`** for this frame slot. `rdc.py state` resolves it to `Scene Data Buffer + offset`.
+- **A few indirect draws per scene**: one `vkCmdSetCullMode` + `vkCmdDrawIndexedIndirect(offset = firstDraw × 20, drawCount = run length)` per run of draws with the same cull mode (usually NONE, FRONT, BACK, each only if used), stride 20 (`gfx::DrawInfo`: indexCount, instanceCount, firstIndex, vertexOffset, firstInstance). RenderDoc expands each into `Indirect sub-command[i]` events. **The draw's scene index is `firstDraw + i`**, not `i`: use it for `Modeldata` and `DrawInfo`.
+- **Push constants (16 bytes) = `{SceneData address, firstDraw, padding}`** for this frame slot. `rdc.py state` resolves the address to `Scene Data Buffer + offset`; `firstDraw` changes between the indirect calls.
 - **`SceneData` layout** (scalar, `src/renderer/uberMaterialTypes.h`): projection mat4 @0, view mat4 @64, cameraWorldPosition f32x3 @128, numLights u32 @140, lights[MAX_LIGHTS=8] × 48 B @144, vertsPtr @528, drawInfoPtr @536, modeldataPtr @544, size 552. The buffer holds several `SceneData`s back to back. Recheck this against the header if the struct changed.
 - **Pointer chain**: `vertsPtr` → `Geometry Vertex Pool` (`VertexFull`, 64 B), `drawInfoPtr` → `Draw Info Buffer`, `modeldataPtr` → `Mega Model data Buffer` (one per frame slot).
 - **Resources have debug names** (`Draw Info Buffer`, `Scene Data Buffer`, `DepthTexture for Frame 0`, `glTF image N`, texture file paths), so look them up by name.
 - **Bindless textures**: set 0 binding 0 array; the element index is the material's `*TextureIndex`.
 - **Two frames in flight**: per-frame buffers exist twice. Use the one the push constant / `SceneData` pointers name.
-- Depth is `D32_SFLOAT_S8_UINT`, `LessEqual`, cleared to 1. Cull mode is currently none.
+- Depth is `D32_SFLOAT_S8_UINT`, `LessEqual`, cleared to 1. Front face is counter-clockwise, in a Y-up clip space flipped by a negative-height viewport. Cull mode is dynamic: `NONE` for double-sided materials, `BACK`, or `FRONT` for a mirrored entity. A missing object with `backfaceCulled` in `pixel` history usually means wrong winding or a wrong `doubleSided`.
 
 ## Known quirks
 
