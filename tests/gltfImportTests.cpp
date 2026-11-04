@@ -1,10 +1,10 @@
-#include "assets/meshImport.h"
+#include "importMeshText.h"
 
 #include "doctest/doctest.h"
+#include "platform/paths.h"
 
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <string>
 #include <vector>
 
@@ -38,24 +38,12 @@ namespace
         return out;
     }
 
-    rasm::GLTFRaw importText(const std::string &json)
-    {
-        const std::filesystem::path path = std::filesystem::temp_directory_path() / "rasm_gltf_import_tests.gltf";
-        {
-            std::ofstream file(path);
-            file << json;
-        }
-        rasm::GLTFRaw raw = rasm::importMeshFile(path.string());
-
-        std::filesystem::remove(path);
-        return raw;
-    }
-
     // `rest` holds the accessors, meshes, nodes and scenes; the buffer is embedded as a data URI.
     rasm::GLTFRaw importGltf(const std::vector<unsigned char> &buffer, const std::string &views, const std::string &rest)
     {
-        return importText("{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":" + std::to_string(buffer.size()) +
-                          ",\"uri\":\"data:application/octet-stream;base64," + base64(buffer) + "\"}],\"bufferViews\":[" + views + "]," + rest + "}");
+        return importMeshText("{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":" + std::to_string(buffer.size()) +
+                                  ",\"uri\":\"data:application/octet-stream;base64," + base64(buffer) + "\"}],\"bufferViews\":[" + views + "]," + rest + "}",
+                              ".gltf");
     }
 
     rasm::GLTFRaw importTriangleMesh(const std::string &primitives)
@@ -194,6 +182,6 @@ TEST_CASE("glTF interleaved, quantized and sparse attributes decode to floats")
 
 TEST_CASE("a missing glTF file does not load")
 {
-    CHECK_FALSE(rasm::importMeshFile((std::filesystem::temp_directory_path() / "rasm_missing.gltf").string()).loaded);
-    CHECK_FALSE(importText("not json").loaded);
+    CHECK_FALSE(rasm::importMeshFile(rasm::pathToUtf8(std::filesystem::temp_directory_path() / "rasm_missing.gltf")).loaded);
+    CHECK_FALSE(importMeshText("not json", ".gltf").loaded);
 }

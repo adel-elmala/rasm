@@ -140,9 +140,9 @@ Pass `-DRASM_BUILD_TESTS=OFF` to leave them out.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on every pull request and every push to `main`. It builds the `x64-debug`, `x64-release`, `macOS` and `macOS-release` presets, examples included, and runs `ctest`. The runners have no GPU, so CI does not run the examples.
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`. It has one job per OS: Windows builds `x64-debug` then `x64-release`, macOS builds `macOS` then `macOS-release`, examples included, and each preset runs `ctest`. The runners have no GPU, so CI does not run the examples. It still installs the Vulkan runtime on Windows, because `rasm_tests.exe` loads `vulkan-1.dll`.
 
-vcpkg.json has no `builtin-baseline`, so the vcpkg commit picks the dependency versions. CI pins it in `VCPKG_COMMIT`. When you update your local vcpkg, put its commit (`git -C $VCPKG_ROOT rev-parse HEAD`) there too, so CI builds the same versions you do. Built packages are cached per OS and vcpkg commit, so a new commit makes the next run build all dependencies again.
+vcpkg.json has no `builtin-baseline`, so the vcpkg commit picks the dependency versions. CI pins it in `VCPKG_COMMIT`. When you update your local vcpkg, put its commit (`git -C $VCPKG_ROOT rev-parse HEAD`) there too, so CI builds the same versions you do. Built packages are cached per OS and vcpkg commit. A run restores the newest cache and saves a new one only when it built packages, for example after a runner toolchain update. A new vcpkg commit makes the next run build all dependencies again.
 
 ## Using RASM from another project
 
