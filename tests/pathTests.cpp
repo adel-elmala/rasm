@@ -1,4 +1,5 @@
 #include "rasm/engine.h"
+#include "assets/meshImport.h"
 
 #include "doctest/doctest.h"
 
@@ -147,7 +148,9 @@ TEST_CASE("meshes load through the asset root from any working directory")
     config.assetRoot = (temp.dir / "root").string();
     rasm::Engine engine(config);
 
+    // The test engine has no GPU, so the mesh never finishes loading: the import itself is checked directly.
     CHECK(engine.loadMesh("models/triangle.obj").isValid());
+    CHECK(rasm::importMeshFile(engine.resolveAssetPath("models/triangle.obj")).loaded);
 }
 
 TEST_CASE("relative and absolute paths to one file share a mesh")
@@ -176,6 +179,20 @@ TEST_CASE("meshes load from a folder with a non-Latin name")
     config.assetRoot = toUtf8(root);
     rasm::Engine engine(config);
 
+    CHECK(engine.loadMesh("triangle.obj").isValid());
+    CHECK(rasm::importMeshFile(engine.resolveAssetPath("triangle.obj")).loaded);
+}
+
+TEST_CASE("a missing mesh file gives an invalid handle, and loads once it exists")
+{
+    ScopedTempDir temp;
+    rasm::EngineConfig config;
+    config.assetRoot = temp.dir.string();
+    rasm::Engine engine(config);
+
+    CHECK_FALSE(engine.loadMesh("triangle.obj").isValid());
+
+    writeTriangleObj(temp.dir / "triangle.obj");
     CHECK(engine.loadMesh("triangle.obj").isValid());
 }
 

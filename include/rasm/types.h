@@ -27,7 +27,8 @@ namespace rasm
     {
         VULKAN,
         DX12,
-        METAL
+        METAL,
+        WEBGPU
     };
 
     enum class Format
@@ -75,28 +76,27 @@ namespace rasm
 
     struct EngineConfig
     {
-        std::string appName             = {};
-        int         windowWidth         = 0;
-        int         windowHeight        = 0;
-        bool        enableValidation    = false;
-        Backend     preferredBackend    = Backend::VULKAN;
-        std::string assetRoot           = {};
-        std::string shaderDir           = {};
+        std::string appName                 = {};
+        int         windowWidth             = 0;
+        int         windowHeight            = 0;
+        bool        enableValidation        = false;
+        Backend     preferredBackend        = Backend::VULKAN;
+        std::string assetRoot               = {};
+        std::string shaderDir               = {};
+        uint32_t    geometryPoolVertices    = 1u << 21; // 64 B each: 128 MiB
+        uint32_t    geometryPoolIndices     = 1u << 23; // 4 B each: 32 MiB
     };
 
     struct FrameResources
     {
-        CommandPoolHandle   commandPool;
         CommandBufferHandle commandBuffer;
-        SemaphoreHandle     readyToDrawSemaphore;
-        FenceHandle         inFlightFence;
         TextureHandle       depthTexture;
+        uint64_t            fenceValue      = 0; // frameFence value the slot's last submit signals
     };
 
     struct Swapchain
     {
         std::vector<TextureHandle>      imageHandles;
-        std::vector<SemaphoreHandle>    readyToPresentSemaphores;
         Format                          imageFormat;
         uint32_t                        width   = 0; // swapchain extent in pixels
         uint32_t                        height  = 0;
@@ -104,10 +104,9 @@ namespace rasm
 
     struct TextureRaw
     {
-        uint32_t        width;
-        uint32_t        height;
-        uint32_t        channels;
-        unsigned char*  data;
+        uint32_t        width   = 0;
+        uint32_t        height  = 0;
+        unsigned char*  data    = nullptr;
     };
 
     struct RenderTargetAttachments

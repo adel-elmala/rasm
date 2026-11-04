@@ -162,19 +162,19 @@ namespace rasm
         engine->endFrame();
     }
 
-    TextureHandle RenderGraph::createTexture(ResourceDesc desc)
+    TextureHandle RenderGraph::createTexture(const TextureDesc &desc)
     {
         auto handle = engine->createTexture(desc);
         return handle;
     }
 
-    BufferHandle RenderGraph::createBuffer(ResourceDesc desc)
+    BufferHandle RenderGraph::createBuffer(const BufferDesc &desc)
     {
         auto handle = engine->createBuffer(desc);
         return handle;
     }
 
-    RenderTargetHandle RenderGraph::createRenderTarget(ResourceDesc desc)
+    RenderTargetHandle RenderGraph::createRenderTarget(const RenderTargetDesc &desc)
     {
         auto handle = engine->createRenderTarget(desc);
         return handle;
@@ -192,36 +192,18 @@ namespace rasm
 
     void RenderGraph::write(uint32_t passIdx, RenderTargetHandle h) { passes[passIdx].outputRenderTarget = h; }
 
-    TextureHandle PassBuilder::createTexture(ResourceDesc desc)
+    TextureHandle PassBuilder::createTexture(const TextureDesc &desc)
     {
-        if (desc.type != ResourceType::TEXTURE)
-        {
-            spdlog::error("Attempted to create a texture with a non-texture resource description.");
-            return TextureHandle{};
-        }
-
         return graph.createTexture(desc);
     }
 
-    BufferHandle PassBuilder::createBuffer(ResourceDesc desc)
+    BufferHandle PassBuilder::createBuffer(const BufferDesc &desc)
     {
-        if (desc.type != ResourceType::BUFFER)
-        {
-            spdlog::error("Attempted to create a buffer with a non-buffer resource description.");
-            return BufferHandle{};
-        }
-
         return graph.createBuffer(desc);
     }
 
-    RenderTargetHandle PassBuilder::createRenderTarget(ResourceDesc desc)
+    RenderTargetHandle PassBuilder::createRenderTarget(const RenderTargetDesc &desc)
     {
-        if (desc.type != ResourceType::RENDER_TARGET)
-        {
-            spdlog::error("Attempted to create a render target with a non-render target resource description.");
-            return RenderTargetHandle{};
-        }
-
         return graph.createRenderTarget(desc);
     }
 

@@ -15,8 +15,14 @@ set(RASM_SRC
             "scene/transform.cpp"
             "renderer/renderGraph.cpp"
             "renderer/shaderCompiler.cpp"
+            "rhi/device.cpp"
             "rhi/renderContext.cpp"
-            "rhi/vulkan/vulkanContext.cpp"
+            "rhi/resource.cpp"
+            "rhi/uploadManager.cpp"
+            "rhi/vulkan/vulkanCommandBuffer.cpp"
+            "rhi/vulkan/vulkanDevice.cpp"
+            "rhi/vulkan/vulkanSwapchain.cpp"
+            "rhi/vulkan/vulkanUtils.cpp"
     )
 
 # required external libs

@@ -12,12 +12,19 @@
 
 #include "glm/glm.hpp"
 
+#include <algorithm>
+#include <chrono>
+#include <future>
+#include <vector>
+
 namespace rasm
 {
     namespace
     {
         constexpr Format DEPTH_FORMAT = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
         constexpr glm::vec4 SWAPCHAIN_CLEAR_COLOR(0.018f, 0.018f, 0.018f, 1.0f);
+        // Main-thread time a frame spends finishing loads. The load that crosses it still finishes.
+        constexpr std::chrono::milliseconds LOAD_BUDGET(4);
 
         ShaderCompiler::Target getShaderCompilerTarget(rasm::Backend backend)
         {
@@ -29,10 +36,24 @@ namespace rasm
                 return ShaderCompiler::Target::HLSL;
             case Backend::METAL:
                 return ShaderCompiler::Target::MSL;
+            case Backend::WEBGPU:
+                return ShaderCompiler::Target::WGSL;
             default:
                 spdlog::error("Unsupported backend for shader compilation.");
                 return ShaderCompiler::Target::SPIRV; // Default to SPIR-V
             }
+        }
+
+        // Runs on a worker thread: it must not touch the engine.
+        TextureRaw decodeTexture(const std::string &path)
+        {
+            ZoneScoped;
+
+            int width, height, nChannels;
+            unsigned char *data = stbi_load(path.c_str(), &width, &height, &nChannels, 4);
+            if (!data)
+                return {};
+            return {.width = static_cast<uint32_t>(width), .height = static_cast<uint32_t>(height), .data = data};
         }
     }
 
@@ -67,36 +88,25 @@ namespace rasm
             return;
         }
 
-        // Initialize frame resources for double buffering
+        // Each frame submit signals the next value; a slot is free again once its last value is reached.
+        frameFence = ctx.createFence("Frame Fence");
+        if (!frameFence.isValid())
+        {
+            spdlog::error("Failed to create the frame fence.");
+            return;
+        }
+
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
-            frameResources[i].commandPool = ctx.createCommandPool();
-            if (!frameResources[i].commandPool.isValid())
-            {
-                spdlog::error("Failed to create command pool for frame {}", i);
-                return;
-            }
-            frameResources[i].commandBuffer = ctx.createCommandBuffer(frameResources[i].commandPool);
+            frameResources[i].commandBuffer = ctx.createCommandBuffer("Frame Command Buffer " + std::to_string(i));
             if (!frameResources[i].commandBuffer.isValid())
             {
                 spdlog::error("Failed to create command buffer for frame {}", i);
                 return;
             }
-            frameResources[i].readyToDrawSemaphore = ctx.createSemaphore();
-            if (!frameResources[i].readyToDrawSemaphore.isValid())
-            {
-                spdlog::error("Failed to create ready-to-draw semaphore for frame {}", i);
-                return;
-            }
-            frameResources[i].inFlightFence = ctx.createFence(true);
-            if (!frameResources[i].inFlightFence.isValid())
-            {
-                spdlog::error("Failed to create in-flight fence for frame {}", i);
-                return;
-            }
         }
 
-        // Swapchain images, present semaphores and depth textures
+        // Swapchain images and depth textures
         if (!createSwapchainResources())
             return;
 
@@ -107,42 +117,42 @@ namespace rasm
             return;
         }
 
-        // Create bindless texture descriptor set layout, pool, and set
-        ResourceDesc bindlessLayoutDesc{};
-        bindlessLayoutDesc.type = ResourceType::BINDLESS_DESCRIPTOR_SET_LAYOUT;
-        bindlessLayoutDesc.name = "BindlessDescriptorSetLayout";
-        bindlessLayoutDesc.bindlessDescriptorSetLayout.stage = ShaderType::FRAGMENT;
-        bindlessLayoutDesc.bindlessDescriptorSetLayout.count = MAX_BINDLESS_TEXTURES;
-        bindlessLayoutDesc.bindlessDescriptorSetLayout.type = ResourceType::TEXTURE;
+        // Every mesh lives in these two buffers, so its CPU copy can go after upload (P6). Their size is
+        // fixed for the engine's lifetime, so apps size them through EngineConfig.
+        if (this->config.geometryPoolVertices == 0 || this->config.geometryPoolIndices == 0)
+        {
+            spdlog::error("The geometry pool needs room for at least one vertex and one index.");
+            return;
+        }
+        geometryVertexBuffer = ctx.createBuffer({.name = "Geometry Vertex Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(this->config.geometryPoolVertices) * sizeof(Vertex)});
+        geometryIndexBuffer = ctx.createBuffer({.name = "Geometry Index Pool", .usage = BufferUsage::INDEX, .size = static_cast<uint64_t>(this->config.geometryPoolIndices) * sizeof(uint32_t)});
+        if (!geometryVertexBuffer.isValid() || !geometryIndexBuffer.isValid())
+        {
+            spdlog::error("Failed to create the geometry pool.");
+            return;
+        }
 
-        bindlessDescriptorSetLayout = ctx.createBindlessDescriptorSetLayout(bindlessLayoutDesc);
+        // Create bindless texture descriptor set layout, pool, and set
+        bindlessDescriptorSetLayout = ctx.createBindlessDescriptorSetLayout({.name = "BindlessDescriptorSetLayout",
+                                                                             .stage = ShaderType::FRAGMENT,
+                                                                             .count = MAX_BINDLESS_TEXTURES,
+                                                                             .type = DescriptorType::COMBINED_IMAGE_SAMPLER});
         if (!bindlessDescriptorSetLayout.isValid())
         {
             spdlog::error("Failed to create bindless descriptor set layout.");
             return;
         }
 
-        ResourceDesc bindlessPoolDesc{};
-        bindlessPoolDesc.type = ResourceType::DESCRIPTOR_POOL;
-        bindlessPoolDesc.name = "BindlessDescriptorPool";
-        bindlessPoolDesc.descriptorPool.descriptorType[0].descriptorType = ResourceType::TEXTURE;
-        bindlessPoolDesc.descriptorPool.descriptorType[0].descriptorCount = MAX_BINDLESS_TEXTURES;
-        bindlessPoolDesc.descriptorPool.maxSets = 1;
-
-        bindlessDescriptorPool = ctx.createDescriptorPool(bindlessPoolDesc);
+        bindlessDescriptorPool = ctx.createDescriptorPool({.name = "BindlessDescriptorPool",
+                                                           .sizes = {{.type = DescriptorType::COMBINED_IMAGE_SAMPLER, .count = MAX_BINDLESS_TEXTURES}},
+                                                           .maxSets = 1});
         if (!bindlessDescriptorPool.isValid())
         {
             spdlog::error("Failed to create bindless descriptor pool.");
             return;
         }
 
-        ResourceDesc bindlessSetDesc{};
-        bindlessSetDesc.type = ResourceType::DESCRIPTOR_SET;
-        bindlessSetDesc.name = "BindlessDescriptorSet";
-        bindlessSetDesc.descriptorSet.pool = bindlessDescriptorPool;
-        bindlessSetDesc.descriptorSet.layout = bindlessDescriptorSetLayout;
-
-        bindlessDescriptorSet = ctx.allocateDescriptorSet(bindlessSetDesc, bindlessDescriptorPool, bindlessDescriptorSetLayout);
+        bindlessDescriptorSet = ctx.allocateDescriptorSet("BindlessDescriptorSet", bindlessDescriptorPool, bindlessDescriptorSetLayout);
         if (!bindlessDescriptorSet.isValid())
         {
             spdlog::error("Failed to allocate bindless descriptor set.");
@@ -164,11 +174,9 @@ namespace rasm
 
     Engine::~Engine()
     {
-        // Clean up resources, free memory, etc.
-        for (auto &[handle, tex] : registry.textureData)
-        {
-            stbi_image_free(tex.data);
-        }
+        // Mesh results free themselves; decoded pixels are a plain stbi pointer.
+        for (auto &[handle, load] : pendingTextures)
+            stbi_image_free(load.result.get().data);
 
         ctx.cleanup();
 
@@ -208,80 +216,110 @@ namespace rasm
             return TextureHandle{};
         }
 
+        // Only the header is read here, so the texture exists (and can go into a material) before its pixels do.
         int width, height, nChannels;
-        unsigned char *data = stbi_load(path.c_str(), &width, &height, &nChannels, 4);
-
-        if (!data)
+        if (!stbi_info(path.c_str(), &width, &height, &nChannels))
         {
             spdlog::error("Failed to load texture: {}", path);
             return TextureHandle{};
         }
 
-        TextureRaw tex{};
-        tex.width = width;
-        tex.height = height;
-        tex.channels = 4;
-        tex.data = data;
-
-        auto textureDesc = ResourceDesc{};
-        textureDesc.name = path;
-        textureDesc.type = ResourceType::TEXTURE;
-        textureDesc.texture.width = width;
-        textureDesc.texture.height = height;
-        textureDesc.texture.format = format;
-        textureDesc.texture.usage = TextureUsage::SAMPLED;
-
-        auto textureHandle = ctx.createTexture(textureDesc);
+        auto textureHandle = ctx.createTexture({.name = path, .width = static_cast<uint32_t>(width), .height = static_cast<uint32_t>(height), .format = format, .usage = TextureUsage::SAMPLED});
         if (!textureHandle.isValid())
         {
             spdlog::error("Failed to create texture: {}", path);
-            stbi_image_free(data);
-            return TextureHandle{};
-        }
-        if (!ctx.fillTexture(textureHandle, data))
-        {
-            spdlog::error("Failed to fill texture: {}", path);
-            ctx.destroyTexture(textureHandle);
-            stbi_image_free(data);
             return TextureHandle{};
         }
 
         registry.loadedTextures[cacheKey] = textureHandle;
-        registry.textureData.insert({textureHandle, std::move(tex)});
-
+        pendingTextures.emplace(textureHandle, PendingTextureLoad{textureHandle, path, std::async(std::launch::async, decodeTexture, path)});
         return textureHandle;
     }
 
-    TextureHandle Engine::createTexture(const ResourceDesc &desc)
+    bool Engine::isLoaded(TextureHandle texture) const
     {
-        if (desc.type != ResourceType::TEXTURE)
+        return texture.isValid() && !pendingTextures.contains(texture);
+    }
+
+    void Engine::waitForLoads()
+    {
+        finishLoads(true);
+    }
+
+    void Engine::finishTextureLoad(PendingTextureLoad &load)
+    {
+        ZoneScoped;
+
+        TextureRaw raw = load.result.get();
+        const TextureDesc desc = ctx.getTextureDesc(load.handle);
+
+        // The app destroyed the texture while it decoded, so there is nothing to fill.
+        if (desc.width == 0 || desc.height == 0)
         {
-            spdlog::error("Invalid resource type for createTexture.");
-            return TextureHandle{};
+            stbi_image_free(raw.data);
+            return;
         }
 
+        // A material may already sample the texture, so a failed decode leaves it white instead of undefined.
+        if (!raw.data || raw.width != desc.width || raw.height != desc.height)
+        {
+            spdlog::error("Failed to decode texture {}; it stays white.", load.path);
+            std::vector<unsigned char> white(static_cast<size_t>(desc.width) * desc.height * 4, 255);
+            ctx.fillTexture(load.handle, white.data());
+        }
+        else if (!ctx.fillTexture(load.handle, raw.data))
+        {
+            spdlog::error("Failed to fill texture: {}", load.path);
+        }
+
+        // fillTexture copies on the host (host image copy), so the pixels are not needed once it returns (P6).
+        stbi_image_free(raw.data);
+    }
+
+    // Runs at the start of a frame, before anything binds the bindless set or the geometry pool, so
+    // what it writes is in place for this frame's draws and its uploads go out with this frame's submit.
+    // Without wait it stops at LOAD_BUDGET, so loads that finish together spread over several frames.
+    void Engine::finishLoads(bool wait)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + LOAD_BUDGET;
+        auto overBudget = [wait, deadline]()
+        { return !wait && std::chrono::steady_clock::now() >= deadline; };
+
+        for (auto it = pendingTextures.begin(); it != pendingTextures.end() && !overBudget();)
+        {
+            if (!wait && it->second.result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            {
+                ++it;
+                continue;
+            }
+            finishTextureLoad(it->second);
+            it = pendingTextures.erase(it);
+        }
+
+        for (size_t i = 0; i < pendingMeshes.size() && !overBudget();)
+        {
+            if (!wait && pendingMeshes[i].result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            {
+                ++i;
+                continue;
+            }
+            finishMeshLoad(pendingMeshes[i]);
+            pendingMeshes.erase(pendingMeshes.begin() + i);
+        }
+    }
+
+    TextureHandle Engine::createTexture(const TextureDesc &desc)
+    {
         return ctx.createTexture(desc);
     }
 
-    BufferHandle Engine::createBuffer(const ResourceDesc &desc)
+    BufferHandle Engine::createBuffer(const BufferDesc &desc)
     {
-        if (desc.type != ResourceType::BUFFER)
-        {
-            spdlog::error("Invalid resource type for createBuffer.");
-            return BufferHandle{};
-        }
-
         return ctx.createBuffer(desc);
     }
 
-    RenderTargetHandle Engine::createRenderTarget(const ResourceDesc &desc)
+    RenderTargetHandle Engine::createRenderTarget(const RenderTargetDesc &desc)
     {
-        if (desc.type != ResourceType::RENDER_TARGET)
-        {
-            spdlog::error("Invalid resource type for createRenderTarget.");
-            return RenderTargetHandle{};
-        }
-
         return ctx.createRenderTarget(desc);
     }
 
@@ -304,32 +342,13 @@ namespace rasm
             return {};
         }
 
-        auto pipelineDesc = ResourceDesc{};
-        pipelineDesc.type = ResourceType::GRAPHICS_PIPELINE;
-        pipelineDesc.name = "Pipeline for " + name;
-
-        auto shaderDesc = ResourceDesc{};
-        shaderDesc.type = ResourceType::SHADER;
-        shaderDesc.shader.shaderType = ShaderType::VERTEX;
-        shaderDesc.shader.sourceSize = vertShader.code.size();
-        shaderDesc.shader.source = reinterpret_cast<const char *>(vertShader.code.data());
-
-        pipelineDesc.pipeline.vertexShader = ctx.createShader(shaderDesc);
-
-        shaderDesc.shader.shaderType = ShaderType::FRAGMENT;
-        shaderDesc.shader.sourceSize = fragShader.code.size();
-        shaderDesc.shader.source = reinterpret_cast<const char *>(fragShader.code.data());
-
-        pipelineDesc.pipeline.fragmentShader = ctx.createShader(shaderDesc);
-
-        pipelineDesc.pipeline.topology = PrimitiveTopology::TRIANGLE_LIST;
-
-        pipelineDesc.pipeline.colorAttachmentFormat = ctx.getSwapchainImageFormat();
-        pipelineDesc.pipeline.depthStencilAttachmentFormat = DEPTH_FORMAT;
-
-        pipelineDesc.pipeline.descriptorSetLayout = bindlessDescriptorSetLayout;
-
-        return ctx.createPipeline(pipelineDesc);
+        return ctx.createPipeline({.name = "Pipeline for " + name,
+                                   .vertexShader = ctx.createShader({.name = name + ".vert", .type = ShaderType::VERTEX, .code = std::move(vertShader.code)}),
+                                   .fragmentShader = ctx.createShader({.name = name + ".frag", .type = ShaderType::FRAGMENT, .code = std::move(fragShader.code)}),
+                                   .descriptorSetLayout = bindlessDescriptorSetLayout,
+                                   .topology = PrimitiveTopology::TRIANGLE_LIST,
+                                   .colorAttachmentFormat = ctx.getSwapchainImageFormat(),
+                                   .depthStencilAttachmentFormat = DEPTH_FORMAT});
     }
 
     bool Engine::beginFrame(CameraHandle camera)
@@ -337,6 +356,7 @@ namespace rasm
         ZoneScoped;
 
         pollEvents(camera);
+        finishLoads(false);
 
         // Nothing can be presented to a minimized or zero-sized window (B5).
         if (mainWindow.minimized || mainWindow.pixelWidth == 0 || mainWindow.pixelHeight == 0)
@@ -350,16 +370,15 @@ namespace rasm
                 return false;
         }
 
-        // wait for the gpu to finish rendering the previous frame in this slot
+        // Wait for the GPU to finish the previous frame in this slot before its command buffer is reused.
         auto &currentFrame = frameResources[frameCount];
-        if (!ctx.waitForFence(currentFrame.inFlightFence))
+        if (!ctx.waitForFence(frameFence, currentFrame.fenceValue))
             return false;
 
-        // acquire the next image from the swapchain (B4)
-        auto status = ctx.acquireNextImage(currentFrame.readyToDrawSemaphore, UINT64_MAX, imageIdx);
+        // B4
+        auto status = ctx.acquireNextImage(imageIdx);
         if (status == SwapchainStatus::OUT_OF_DATE)
         {
-            // The semaphore was not signaled; skip the frame and recreate next time.
             swapchainOutOfDate = true;
             return false;
         }
@@ -367,9 +386,6 @@ namespace rasm
             return false;
         if (status == SwapchainStatus::SUBOPTIMAL)
             swapchainOutOfDate = true; // The image is acquired and still usable; recreate after this frame.
-
-        // Reset only once work will be submitted, so a skipped frame leaves the fence signaled.
-        ctx.resetFence(currentFrame.inFlightFence);
 
         swapchainRendered = false;
         sceneDrawCount = 0;
@@ -397,12 +413,16 @@ namespace rasm
 
         ctx.endCommandBuffer(currentFrame.commandBuffer);
 
-        if (ctx.submit(currentFrame.commandBuffer,
-                       {currentFrame.readyToDrawSemaphore},
-                       {swapchain.readyToPresentSemaphores[imageIdx]},
-                       currentFrame.inFlightFence))
+        // The slot only takes the new value once a submit will signal it; a value nothing signals would block
+        // the next wait on this slot forever. After a failed submit the swapchain keeps the image acquired,
+        // and the next acquire hands it out again.
+        const uint64_t signalValue = frameFenceValue + 1;
+        if (ctx.submit(currentFrame.commandBuffer, frameFence, signalValue, true))
         {
-            auto status = ctx.present(imageIdx, swapchain.readyToPresentSemaphores[imageIdx]);
+            frameFenceValue = signalValue;
+            currentFrame.fenceValue = signalValue;
+
+            auto status = ctx.present();
             if (status == SwapchainStatus::SUBOPTIMAL || status == SwapchainStatus::OUT_OF_DATE)
                 swapchainOutOfDate = true;
         }
@@ -484,12 +504,10 @@ namespace rasm
     bool Engine::recreateSwapchain()
     {
         auto status = ctx.recreateSwapchain();
-        if (status == SwapchainStatus::OUT_OF_DATE)
-            return false; // The surface is 0x0; the old swapchain and its resources are kept.
         if (status != SwapchainStatus::OK)
         {
-            // The old swapchain is gone, so are its image handles.
-            swapchain.imageHandles.clear();
+            // A 0x0 surface keeps the old swapchain, while a failure may have destroyed it with its images.
+            swapchain.imageHandles = ctx.getSwapchainImages();
             return false;
         }
         if (!createSwapchainResources())
@@ -510,32 +528,13 @@ namespace rasm
         swapchain.width = extent.x;
         swapchain.height = extent.y;
 
-        for (auto &semaphore : swapchain.readyToPresentSemaphores)
-        {
-            ctx.destroySemaphore(semaphore);
-        }
-        swapchain.readyToPresentSemaphores.clear();
-
-        for (size_t i = 0; i < swapchain.imageHandles.size(); ++i)
-        {
-            auto semaphore = ctx.createSemaphore();
-            if (!semaphore.isValid())
-            {
-                spdlog::error("Failed to create ready-to-present semaphore for swapchain image {}", i);
-                return false;
-            }
-            swapchain.readyToPresentSemaphores.push_back(semaphore);
-        }
-
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
-            auto depthTextureDesc = ResourceDesc{};
-            depthTextureDesc.type = ResourceType::TEXTURE;
-            depthTextureDesc.name = "DepthTexture for Frame " + std::to_string(i);
-            depthTextureDesc.texture.width = swapchain.width;
-            depthTextureDesc.texture.height = swapchain.height;
-            depthTextureDesc.texture.format = DEPTH_FORMAT;
-            depthTextureDesc.texture.usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT;
+            const TextureDesc depthTextureDesc = {.name = "DepthTexture for Frame " + std::to_string(i),
+                                                  .width = swapchain.width,
+                                                  .height = swapchain.height,
+                                                  .format = DEPTH_FORMAT,
+                                                  .usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT};
 
             // The device is idle, so the old texture is unused.
             if (frameResources[i].depthTexture.isValid())
@@ -630,7 +629,7 @@ namespace rasm
 
                 sceneData.lights[i] = light;
             }
-            sceneData.vertsPtr = ctx.getBufferDeviceAddress(preparedScene.megaVertexBuffer);
+            sceneData.vertsPtr = ctx.getBufferDeviceAddress(geometryVertexBuffer);
             sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(preparedScene.drawInfoBuffer);
             sceneData.modeldataPtr = ctx.getBufferDeviceAddress(preparedScene.megaModelDataBuffer[frameCount]);
 
@@ -639,7 +638,7 @@ namespace rasm
             updateUniforms(preparedScene);
 
             ctx.bindDescriptorSet(commandBuffer, preparedScene.uberMaterialPipeline, bindlessDescriptorSet, 0);
-            ctx.bindIndexBuffer(commandBuffer, preparedScene.megaIndexBuffer, 0, Format::U32_UINT);
+            ctx.bindIndexBuffer(commandBuffer, geometryIndexBuffer, 0, Format::U32_UINT);
 
             auto sceneDataBufferPtr = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer[frameCount]) + sceneDataOffset;
             ctx.pushConstants(commandBuffer, preparedScene.uberMaterialPipeline, ShaderType::VERTEX_FRAGMENT, &sceneDataBufferPtr, sizeof(uint64_t), 0);
@@ -677,9 +676,9 @@ namespace rasm
         return bindlessDescriptorSet;
     }
 
-    uint32_t Engine::addBindlessTexture(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot)
+    uint32_t Engine::addBindlessTexture(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, SamplerType sampler, uint32_t slot)
     {
-        auto txtID = ctx.updateBindlessDescriptorSet(bindlessSet, texture, slot);
+        auto txtID = ctx.updateBindlessDescriptorSet(bindlessSet, texture, sampler, slot);
         if (txtID == UINT32_MAX)
         {
             spdlog::error("Failed to add bindless texture.");

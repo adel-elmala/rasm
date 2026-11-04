@@ -70,16 +70,14 @@ int main()
         "Forward",
         [&config, &rtHandle, &engine](rasm::PassBuilder &builder)
         {
-            auto rtDesc = rasm::ResourceDesc{};
-            rtDesc.name = "offscreen_rt";
-            rtDesc.type = rasm::ResourceType::RENDER_TARGET;
-            rtDesc.renderTarget.width = config.windowWidth;
-            rtDesc.renderTarget.height = config.windowHeight;
-            rtDesc.renderTarget.colorFormat = engine.getRenderContext().getSwapchainImageFormat();
-            rtDesc.renderTarget.depthFormat = rasm::Format::D32_SFLOAT_S8_UINT;
-            rtDesc.renderTarget.clearColor = glm::vec4(0.0f); // alpha 0 marks the background for the overlay
-
-            rtHandle = builder.createRenderTarget(rtDesc);
+            rtHandle = builder.createRenderTarget({
+                .name = "offscreen_rt",
+                .width = static_cast<uint32_t>(config.windowWidth),
+                .height = static_cast<uint32_t>(config.windowHeight),
+                .colorFormat = engine.getRenderContext().getSwapchainImageFormat(),
+                .depthFormat = rasm::Format::D32_SFLOAT_S8_UINT,
+                .clearColor = glm::vec4(0.0f), // alpha 0 marks the background for the overlay
+            });
             builder.write(rtHandle);
         },
 

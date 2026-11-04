@@ -27,19 +27,9 @@ namespace rasm
         return PipelineHandle{nextHandle.pipeline++, 1};
     }
 
-    CommandPoolHandle HandleManager::getNextCommandPoolHandle()
-    {
-        return CommandPoolHandle{nextHandle.commandPool++, 1};
-    }
-
     CommandBufferHandle HandleManager::getNextCommandBufferHandle()
     {
         return CommandBufferHandle{nextHandle.commandBuffer++, 1};
-    }
-
-    SemaphoreHandle HandleManager::getNextSemaphoreHandle()
-    {
-        return SemaphoreHandle{nextHandle.semaphore++, 1};
     }
 
     FenceHandle HandleManager::getNextFenceHandle()

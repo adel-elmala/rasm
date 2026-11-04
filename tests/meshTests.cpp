@@ -1,4 +1,4 @@
-#include "rasm/engine.h"
+#include "assets/meshImport.h"
 
 #include "doctest/doctest.h"
 
@@ -15,9 +15,7 @@ namespace
             std::ofstream file(path);
             file << contents;
         }
-        rasm::Engine engine(rasm::EngineConfig{});
-
-        const bool loaded = engine.loadMesh(path.string()).isValid();
+        const bool loaded = rasm::importMeshFile(path.string()).loaded;
 
         std::filesystem::remove(path);
         return loaded;

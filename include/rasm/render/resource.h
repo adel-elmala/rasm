@@ -3,15 +3,13 @@
 
 #include "rasm/types.h"
 
+#include <cstddef>
 #include <cstdint>
-#include <cstring>
-#include <memory>
 #include <string>
-#include <string_view>
+#include <vector>
 
 namespace rasm
 {
-
     enum class TextureUsage
     {
         TRANSFER_SRC,
@@ -36,225 +34,119 @@ namespace rasm
         DEVICE_ADDRESS,
     };
 
-    enum class ResourceType
+    enum class DescriptorType
     {
-        TEXTURE,
-        BUFFER,
-        SHADER,
+        UNIFORM_BUFFER,
         SAMPLER,
-        GRAPHICS_PIPELINE,
-        COMPUTE_PIPELINE,
-        RENDER_TARGET,
-        BINDLESS_DESCRIPTOR_SET_LAYOUT,
-        DESCRIPTOR_POOL,
-        DESCRIPTOR_SET,
-        // Add more types as needed
+        COMBINED_IMAGE_SAMPLER,
     };
 
-    struct DescriptorPoolSizeDesc
+    enum class SamplerType
     {
-        uint32_t descriptorCount;
-        ResourceType descriptorType;
+        LINEAR_REPEAT,
+        LINEAR_MIRRORED_REPEAT,
+        LINEAR_CLAMP,
+        NEAREST_REPEAT,
+        NEAREST_MIRRORED_REPEAT,
+        NEAREST_CLAMP,
+        COUNT,
     };
 
-    struct ResourceDesc
+    struct BufferDesc
     {
-        std::string name;
-        ResourceType type = {};
+        std::string                 name;
+        BufferUsage                 usage                           = BufferUsage::STORAGE;
+        uint64_t                    size                            = 0;
+        bool                        hostVisible                     = false;
 
-        union
-        {
-            // Texture-specific data
-            struct
-            {
-                uint32_t        width;
-                uint32_t        height;
-                Format          format;
-                TextureUsage    usage;
-            } texture;
-
-            // Buffer-specific data
-            struct
-            {
-                BufferUsage     usage;
-                uint64_t        size;
-                uint64_t        deviceAddress;
-            } buffer;
-
-            // Shader-specific data
-            struct
-            {
-                ShaderType      shaderType;
-                uint64_t        sourceSize;
-                const char *    source;
-            } shader;
-
-            // Pipeline-specific data
-            struct
-            {
-                ShaderHandle                vertexShader;
-                ShaderHandle                fragmentShader;
-                DescriptorSetLayoutHandle   descriptorSetLayout;
-                PrimitiveTopology           topology;
-                Format                      colorAttachmentFormat;
-                Format                      depthStencilAttachmentFormat;
-            } pipeline;
-
-            struct
-            {
-                uint32_t width;
-                uint32_t height;
-                Format colorFormat;
-                Format depthFormat;
-                glm::vec4 clearColor; // linear; every pass that writes the target starts from this
-            } renderTarget;
-
-            struct
-            {
-                ShaderType stage;
-                uint32_t count;
-                ResourceType type;
-            } bindlessDescriptorSetLayout;
-
-            struct
-            {
-                DescriptorPoolSizeDesc descriptorType[MAX_DESCRIPTOR_TYPES];
-                uint32_t maxSets;
-            } descriptorPool;
-
-            struct
-            {
-                DescriptorPoolHandle pool;
-                DescriptorSetLayoutHandle layout;
-            } descriptorSet;
-        };
-
-        bool operator==(const ResourceDesc& other) const
-        {
-            if (type != other.type || name != other.name)
-                return false;
-
-            switch (type)
-            {
-            case ResourceType::TEXTURE:
-                return texture.width == other.texture.width &&
-                       texture.height == other.texture.height &&
-                       texture.format == other.texture.format &&
-                       texture.usage == other.texture.usage;
-            case ResourceType::BUFFER:
-                return buffer.size == other.buffer.size &&
-                       buffer.usage == other.buffer.usage;
-            case ResourceType::SHADER:
-                // Compare the code itself: callers pass pointers into temporary SPIR-V blobs.
-                return shader.shaderType == other.shader.shaderType &&
-                       shader.sourceSize == other.shader.sourceSize &&
-                       (shader.sourceSize == 0 || std::memcmp(shader.source, other.shader.source, shader.sourceSize) == 0);
-            case ResourceType::GRAPHICS_PIPELINE:
-            case ResourceType::COMPUTE_PIPELINE:
-                return pipeline.vertexShader == other.pipeline.vertexShader &&
-                       pipeline.fragmentShader == other.pipeline.fragmentShader &&
-                       pipeline.descriptorSetLayout == other.pipeline.descriptorSetLayout &&
-                       pipeline.topology == other.pipeline.topology &&
-                       pipeline.colorAttachmentFormat == other.pipeline.colorAttachmentFormat &&
-                       pipeline.depthStencilAttachmentFormat == other.pipeline.depthStencilAttachmentFormat;
-            case ResourceType::RENDER_TARGET:
-                return renderTarget.width == other.renderTarget.width &&
-                       renderTarget.height == other.renderTarget.height &&
-                       renderTarget.colorFormat == other.renderTarget.colorFormat &&
-                       renderTarget.depthFormat == other.renderTarget.depthFormat &&
-                       renderTarget.clearColor == other.renderTarget.clearColor;
-            case ResourceType::BINDLESS_DESCRIPTOR_SET_LAYOUT:
-                return bindlessDescriptorSetLayout.stage == other.bindlessDescriptorSetLayout.stage &&
-                       bindlessDescriptorSetLayout.count == other.bindlessDescriptorSetLayout.count &&
-                       bindlessDescriptorSetLayout.type == other.bindlessDescriptorSetLayout.type;
-            case ResourceType::DESCRIPTOR_POOL:
-            {
-                auto equal = false;
-                for (uint32_t i = 0; i < MAX_DESCRIPTOR_TYPES; ++i)
-                {
-                    if (descriptorPool.descriptorType[i].descriptorType != other.descriptorPool.descriptorType[i].descriptorType ||
-                        descriptorPool.descriptorType[i].descriptorCount != other.descriptorPool.descriptorType[i].descriptorCount)
-                    {
-                        equal = false;
-                        break;
-                    }
-                    equal = true;
-                }
-                return equal && descriptorPool.maxSets == other.descriptorPool.maxSets;
-            }
-            case ResourceType::DESCRIPTOR_SET:
-                return descriptorSet.pool == other.descriptorSet.pool &&
-                       descriptorSet.layout == other.descriptorSet.layout;
-            default:
-                return false;
-            }
-        }
-
-        // The union has no default constructor (handles have member initializers), so zero its
-        // bytes here: fields a caller doesn't set must compare and hash deterministically (B18).
-        // The union is the last member, so it runs to the end of the object.
-        ResourceDesc()
-        {
-            auto* unionBegin = reinterpret_cast<unsigned char*>(&texture);
-            std::memset(unionBegin, 0, reinterpret_cast<unsigned char*>(this + 1) - unionBegin);
-        }
-        ~ResourceDesc() {}
+        bool                        operator==(const BufferDesc&) const = default;
     };
 
-    struct ResourceDescHash
+    struct TextureDesc
     {
-        std::size_t operator()(const ResourceDesc& desc) const
-        {
-            switch (desc.type)
-            {
-            case ResourceType::TEXTURE:
-                return std::hash<std::string>()(desc.name) ^
-                       std::hash<uint32_t>()(desc.texture.width) ^
-                       std::hash<uint32_t>()(desc.texture.height) ^
-                       std::hash<uint32_t>()(static_cast<uint32_t>(desc.texture.format)) ^
-                       std::hash<uint32_t>()(static_cast<uint32_t>(desc.texture.usage));
-            case ResourceType::BUFFER:
-                return std::hash<std::string>()(desc.name) ^
-                       std::hash<uint64_t>()(desc.buffer.size) ^
-                       std::hash<uint64_t>()(static_cast<uint64_t>(desc.buffer.usage));
-            case ResourceType::SHADER:
-                return std::hash<std::string>()(desc.name) ^
-                       std::hash<std::string_view>()(std::string_view(desc.shader.source, desc.shader.sourceSize)) ^
-                       std::hash<uint32_t>()(static_cast<uint32_t>(desc.shader.shaderType));
-            case ResourceType::GRAPHICS_PIPELINE:
-            case ResourceType::COMPUTE_PIPELINE:
-                return std::hash<std::string>()(desc.name) ^
-                       std::hash<uint64_t>()(static_cast<uint64_t>(desc.pipeline.vertexShader.index)) ^
-                       std::hash<uint64_t>()(static_cast<uint64_t>(desc.pipeline.fragmentShader.index)) ^
-                       std::hash<uint32_t>()(static_cast<uint32_t>(desc.pipeline.topology));
-            case ResourceType::RENDER_TARGET:
-                return std::hash<uint32_t>()(desc.renderTarget.width) ^
-                       std::hash<uint32_t>()(desc.renderTarget.height) ^
-                       std::hash<uint32_t>()(static_cast<uint32_t>(desc.renderTarget.colorFormat)) ^
-                       std::hash<uint32_t>()(static_cast<uint32_t>(desc.renderTarget.depthFormat));
-            case ResourceType::BINDLESS_DESCRIPTOR_SET_LAYOUT:
-                return std::hash<uint32_t>()(static_cast<uint32_t>(desc.bindlessDescriptorSetLayout.stage)) ^
-                       std::hash<uint32_t>()(desc.bindlessDescriptorSetLayout.count) ^
-                       std::hash<uint32_t>()(static_cast<uint32_t>(desc.bindlessDescriptorSetLayout.type));
-            case ResourceType::DESCRIPTOR_POOL:
-            {
-                auto hash = std::hash<uint32_t>()(desc.descriptorPool.maxSets);
-                for (uint32_t i = 0; i < MAX_DESCRIPTOR_TYPES; ++i)
-                {
-                    hash ^= std::hash<uint32_t>()(static_cast<uint32_t>(desc.descriptorPool.descriptorType[i].descriptorType)) ^
-                            std::hash<uint32_t>()(desc.descriptorPool.descriptorType[i].descriptorCount);
-                }
-                return hash;
-            }
-            case ResourceType::DESCRIPTOR_SET:
-                return std::hash<uint64_t>()(static_cast<uint64_t>(desc.descriptorSet.pool.index)) ^
-                       std::hash<uint64_t>()(static_cast<uint64_t>(desc.descriptorSet.layout.index));
-            default:
-                return 0;
-            }
-        }
+        std::string                 name;
+        uint32_t                    width                           = 0;
+        uint32_t                    height                          = 0;
+        Format                      format                          = Format::UNKNOWN;
+        TextureUsage                usage                           = TextureUsage::SAMPLED;
+
+        bool                        operator==(const TextureDesc&) const = default;
     };
 
-} // namespace rasm
+    struct ShaderDesc
+    {
+        std::string                 name;
+        ShaderType                  type                            = ShaderType::VERTEX;
+        std::vector<uint8_t>        code;
 
+        bool                        operator==(const ShaderDesc&) const = default;
+    };
+
+    struct PipelineDesc
+    {
+        std::string                 name;
+        ShaderHandle                vertexShader;
+        ShaderHandle                fragmentShader;
+        DescriptorSetLayoutHandle   descriptorSetLayout;
+        PrimitiveTopology           topology                        = PrimitiveTopology::TRIANGLE_LIST;
+        Format                      colorAttachmentFormat           = Format::UNKNOWN;
+        Format                      depthStencilAttachmentFormat    = Format::UNKNOWN;
+
+        bool                        operator==(const PipelineDesc&) const = default;
+    };
+
+    struct RenderTargetDesc
+    {
+        std::string                 name;
+        uint32_t                    width                           = 0;
+        uint32_t                    height                          = 0;
+        Format                      colorFormat                     = Format::UNKNOWN;
+        Format                      depthFormat                     = Format::UNKNOWN;
+        glm::vec4                   clearColor                      = glm::vec4(0.0f); // linear; every pass that writes the target starts from this
+
+        bool                        operator==(const RenderTargetDesc&) const = default;
+    };
+
+    struct BindlessDescriptorSetLayoutDesc
+    {
+        std::string                 name;
+        ShaderType                  stage                           = ShaderType::FRAGMENT;
+        uint32_t                    count                           = 0;
+        DescriptorType              type                            = DescriptorType::COMBINED_IMAGE_SAMPLER;
+
+        bool                        operator==(const BindlessDescriptorSetLayoutDesc&) const = default;
+    };
+
+    struct DescriptorPoolSize
+    {
+        DescriptorType              type                            = DescriptorType::COMBINED_IMAGE_SAMPLER;
+        uint32_t                    count                           = 0;
+
+        bool                        operator==(const DescriptorPoolSize&) const = default;
+    };
+
+    struct DescriptorPoolDesc
+    {
+        std::string                 name;
+        DescriptorPoolSize          sizes[MAX_DESCRIPTOR_TYPES]     = {};
+        uint32_t                    maxSets                         = 0;
+
+        bool                        operator==(const DescriptorPoolDesc&) const = default;
+    };
+
+    struct ShaderDescHash
+    {
+        std::size_t                 operator()(const ShaderDesc& desc) const;
+    };
+
+    struct PipelineDescHash
+    {
+        std::size_t                 operator()(const PipelineDesc& desc) const;
+    };
+
+    struct BindlessDescriptorSetLayoutDescHash
+    {
+        std::size_t                 operator()(const BindlessDescriptorSetLayoutDesc& desc) const;
+    };
+}
 // clang-format on

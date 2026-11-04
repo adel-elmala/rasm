@@ -58,15 +58,16 @@ Goal: the structural changes that every later feature depends on. They get much 
 - [x] Apply the naming fixes in their own commit: `registery`, `metallicRoughtness`, `compiledShader`, the snake_case `VulkanContext` members, the PascalCase GPU enums and `RenderGraph::CreateTexture` (`C1`, done 2026-11-01).
 
 ### 1.2 RHI
-- [ ] Define a backend-neutral device interface: device, buffer, texture, sampler, pipeline, command list, queue, swapchain, fence/timeline. Move all `Vk*` code behind it (`D1`).
-- [ ] Use typed descriptors (`BufferDesc`, `TextureDesc`, `PipelineDesc`, …) with defaulted equality and a real hash combine (`D5`).
+- [x] Define a backend-neutral device interface: device, buffer, texture, sampler, pipeline, command buffer, queue, swapchain, fence/timeline. Move all `Vk*` code behind it (`D1`, done 2026-11-02). The platform's Vulkan surface hook remains until `D7`.
+- [x] Use typed descriptors (`BufferDesc`, `TextureDesc`, `PipelineDesc`, …) with defaulted equality and a real hash combine (`D5`, done 2026-11-02).
 - [ ] Store objects in generational pools. Make `destroy*` APIs available for every object, with destruction deferred until the GPU has finished the frames that use them (`D4`, `P4`).
 - [ ] Use a single shared pipeline layout (the bindless set + push-constant range), a `VkPipelineCache` persisted to disk, and an on-disk SPIR-V cache keyed by source hash (`P8`).
 
 ### 1.3 Memory and uploads
-- [ ] Keep static data in device-local memory. Add an upload manager with a staging ring buffer, batched copies, an optional dedicated transfer queue, and timeline-semaphore completion (`P1`, `D13`).
-- [ ] Texture upload: use host image copy when it is supported, otherwise staging. Generate mips on the GPU or with a worker thread. Use a small shared sampler set (`P2`).
-- [ ] Load assets asynchronously on worker threads, and release CPU-side asset data after upload (`P6`).
+- [x] Keep static data in device-local memory. Add an upload manager with a staging ring buffer, batched copies and timeline-semaphore completion (`P1`, done 2026-11-04).
+- [ ] Optional dedicated transfer queue for uploads, with semaphore waits in `SubmitDesc` and queue-family ownership transfers. It pays off once loading is asynchronous (`D13`, `P6`).
+- [ ] Texture upload: use host image copy when it is supported, otherwise staging. Generate mips on the GPU or with a worker thread. Use a small shared sampler set (done 2026-11-04) (`P2`).
+- [x] Load assets asynchronously on worker threads, and release CPU-side asset data after upload (`P6`, done 2026-11-04).
 - [ ] Custom allocators: per-frame linear allocators for transient CPU data, pool allocators for registries. (Original item 4; scope these to measured hot spots.)
 
 ### 1.4 Conventions

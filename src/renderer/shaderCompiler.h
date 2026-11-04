@@ -19,7 +19,8 @@ namespace rasm
             SPIRV,
             MSL,
             HLSL,
-            GLSL
+            GLSL,
+            WGSL
         };
 
         struct CompiledShader

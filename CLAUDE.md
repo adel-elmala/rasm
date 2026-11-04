@@ -36,18 +36,19 @@ cmake --install build\x64-debug                        # into install/, for find
 
 - `include/rasm/` is the public API, with the low-level API in `include/rasm/render/`.
 - `src/` is private: `core/`, `platform/`, `assets/`, `scene/`, `renderer/`, `rhi/` (+ `rhi/vulkan/`). `src/thirdparty_impl.cpp` is the only file that defines `*_IMPLEMENTATION` macros.
-- `tests/` links `rasm::rasm` like any application, so it only sees the public API.
-- Private headers are included relative to `src/` (e.g. `"rhi/vulkan/vulkanContext.h"`). `src/` is a PRIVATE include directory, so public headers can't include private ones; forward-declare, or use a private `Impl` like `RenderContext` does.
+- `tests/` links `rasm::rasm` like any application. It also has `src/` on its include path, only to test private classes against a fake `rhi::Device` (see `tests/uploadManagerTests.cpp`).
+- Private headers are included relative to `src/` (e.g. `"rhi/vulkan/vulkanDevice.h"`). `src/` is a PRIVATE include directory, so public headers can't include private ones; forward-declare, or use a private `Impl` like `RenderContext` does.
 
 ## Code rules
 
+- Keep it simple and direct. Solve the problem in front of you with the least code and structure that does it: no new classes, files, layers or helper abstractions unless the task asks for them, and no generality for cases that don't exist yet. Prefer extending the existing code over restructuring it. When a refactor or a new abstraction seems worth it, propose it in a sentence and wait for a yes before writing it.
 - No templates in RASM code: no function, class, variable or lambda templates (`template <...>`, `auto` parameters in lambdas). Write concrete overloads or functions per type instead. Using third-party/std templates (`std::vector`, `std::unordered_map`) is fine. The only exception is `Handle<Tag>` in `include/rasm/handle.h`.
 - File-local helpers (functions, structs) go in one unnamed namespace at the top of the `.cpp` file: right after the includes, or as the first thing inside `namespace rasm` / `rasm::gfx` when the helpers use engine types. Never open a second unnamed namespace or define helpers between functions further down.
 
 ## Invariants that are easy to break
 
 - C++ structs in `src/renderer/uberMaterialTypes.h` must match `shaders/lib/core.slang` byte-for-byte (scalar layout); update both sides, the `static_assert`s and the `validateRasmStructs` tables in `src/renderer/shaderCompiler.cpp` together.
-- `RenderContext::createBuffer`/`createTexture` always create a new resource (no dedup since `B1`) — cache at the asset level if you want sharing, and destroy what you replace. Shaders, pipelines and descriptor set layouts are still deduplicated, so any new field in their `ResourceDesc` must be added to `operator==`.
+- `RenderContext::createBuffer`/`createTexture` always create a new resource (no dedup since `B1`) — cache at the asset level if you want sharing, and destroy what you replace. Shaders, pipelines and descriptor set layouts are still deduplicated: their descriptors (`ShaderDesc`, `PipelineDesc`, `BindlessDescriptorSetLayoutDesc`) compare every field through a defaulted `operator==`, but a new field must also be added to the matching hash in `src/rhi/resource.cpp`.
 - `frameCount` is the frame-in-flight slot (0/1); per-frame mutable buffers are indexed by it.
 - `prepareScene` is cached per scene after the first `render`; only transforms update afterwards.
 - Normal/metallic-roughness/AO textures must be `R8G8B8A8_UNORM`; color/emissive `R8G8B8A8_SRGB`. Shaders output linear color.
