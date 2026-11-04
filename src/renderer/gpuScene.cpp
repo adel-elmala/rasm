@@ -328,7 +328,7 @@ namespace rasm
             // The pipeline's formats must match the attachments' for the draw to be defined.
             if (renderTargetData.colorFormat != swapchain.imageFormat || renderTargetData.depthFormat != DEPTH_FORMAT)
             {
-                spdlog::error("drawScene needs a render target with the swapchain's color format and D32_SFLOAT_S8_UINT depth.");
+                spdlog::error("drawScene needs a render target with the swapchain's color format and D32_SFLOAT depth.");
                 return;
             }
         }

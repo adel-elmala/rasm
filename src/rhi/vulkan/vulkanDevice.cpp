@@ -463,7 +463,7 @@ namespace rasm::rhi
         viewInfo.image = texture->image;
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
         viewInfo.format = imageInfo.format;
-        viewInfo.subresourceRange.aspectMask = toVkAspectMask(desc.usage);
+        viewInfo.subresourceRange.aspectMask = toVkAspectMask(desc.format);
         viewInfo.subresourceRange.levelCount = mipLevels;
         viewInfo.subresourceRange.layerCount = 1;
 
@@ -600,7 +600,7 @@ namespace rasm::rhi
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             .depthTestEnable = VK_TRUE,
             .depthWriteEnable = VK_TRUE,
-            .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+            .depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL, // reversed-Z: nearer is larger; pairs with the 0 clear in VulkanCommandBuffer::beginRendering
             .depthBoundsTestEnable = VK_FALSE,
             .stencilTestEnable = VK_FALSE};
 

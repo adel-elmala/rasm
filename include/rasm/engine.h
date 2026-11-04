@@ -62,7 +62,8 @@ namespace rasm
         RenderTargetHandle          createRenderTarget(const RenderTargetDesc& desc);
         RenderGraph                 createRenderGraph();
         // Compiles Slang source with vertMain and fragMain entry points. The pipeline has no vertex input and
-        // renders to the swapchain's color format with D32_SFLOAT_S8_UINT depth, and returns invalid on failure.
+        // renders to the swapchain's color format with D32_SFLOAT depth (reversed-Z, compare GREATER_OR_EQUAL), and
+        // returns invalid on failure.
         // The name is a label, so two pipelines can share one.
         PipelineHandle              createPipeline(const std::string& name, const std::string& shaderSource);
         const Material&             getMaterial(const MaterialHandle& handle);
@@ -90,7 +91,7 @@ namespace rasm
         void                        render(SceneHandle scene, CameraHandle camera);
         // Records a scene into the current pass, for render graph passes, with the camera fitted to the pass's
         // aspect ratio. A frame can make MAX_SCENE_DRAWS_PER_FRAME calls. A render target must use the swapchain's
-        // color format and D32_SFLOAT_S8_UINT depth, which are the formats of the scene's pipeline; drawing into
+        // color format and D32_SFLOAT depth, which are the formats of the scene's pipeline; drawing into
         // any other logs an error and leaves the pass cleared.
         void                        drawScene(SceneHandle scene, CameraHandle camera);
         bool                        running() const;
@@ -152,7 +153,7 @@ namespace rasm
         bool                                                        swapchainRendered                       = false; // a pass rendered to the swapchain this frame
 
     private:
-        static constexpr Format     DEPTH_FORMAT    = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
+        static constexpr Format     DEPTH_FORMAT    = Format::D32_SFLOAT;
 
         struct PendingMeshLoad
         {
