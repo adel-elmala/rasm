@@ -93,6 +93,22 @@ def check_links():
     return problems
 
 
+def links_into(changed):
+    """Live links whose target file this change edited: line numbers may have shifted without going past the end."""
+    out = []
+    pat = re.compile(r"\]\(((?:\.\./|\./)?[^)#\s]+)#L(\d+)(?:-L(\d+))?\)")
+    for doc in DOCS:
+        base = os.path.dirname(doc)
+        for n, line, historical in doc_lines(doc):
+            if historical:
+                continue
+            for m in pat.finditer(re.sub(r"`[^`]*`", "", line)):
+                target = rel(os.path.normpath(os.path.join(base, m.group(1))))
+                if target in changed and os.path.exists(os.path.join(REPO, target)):
+                    out.append("%s:%d  %s#L%s%s" % (rel(doc), n, target, m.group(2), "-L" + m.group(3) if m.group(3) else ""))
+    return out
+
+
 def check_paths():
     problems = []
     pat = re.compile(r"`((?:%s)/[A-Za-z0-9_./\-]+)`" % "|".join(CODE_DIRS))
@@ -170,6 +186,10 @@ def main(args):
     for f in changed:
         print("   " + f)
     code = code_text()
+    shifted = links_into(set(changed) - {rel(d) for d in DOCS})
+    print("\n2b. links into files this change edited (check the lines still match): %d" % len(shifted))
+    for s in shifted:
+        print("   " + s)
     sections = [("2. broken code links", check_links()), ("3. missing paths", check_paths()),
                 ("4. docs mentioning removed names", stale_mentions(removed_names(diff, code)))]
     for title, items in sections:

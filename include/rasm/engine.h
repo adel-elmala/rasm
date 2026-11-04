@@ -151,6 +151,8 @@ namespace rasm
         bool                                                        swapchainRendered                       = false; // a pass rendered to the swapchain this frame
 
     private:
+        static constexpr Format     DEPTH_FORMAT    = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
+
         struct PendingMeshLoad
         {
             MeshHandle                  handle;

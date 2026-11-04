@@ -54,7 +54,7 @@ Put traces in the scratchpad directory. `zones`/`frames` cache CSVs next to the 
 ## Adding zones
 
 - `#include "tracy/Tracy.hpp"` in the `.cpp` only. Public headers must not include Tracy (see `docs/coding_style.md`).
-- `ZoneScoped;` as the first line of a function. For a block inside a function, use a named zone: `ZoneNamedN(uploadZone, "uploadScene", true);` (see `src/scene/scene.cpp`).
+- `ZoneScoped;` as the first line of a function. For a block inside a function, use a named zone: `ZoneNamedN(uploadZone, "uploadScene", true);` (see `src/renderer/gpuScene.cpp`).
 - Don't put zones in functions that run per primitive or per object every frame (e.g. `fillBuffer`). Put one zone around the loop instead (`architecture.md` explains this).
 - `FrameMark` lives only in `Engine::endFrame`. Don't add more.
 - Update the zone list in `docs/architecture.md` (frame loop section) when zones change meaningfully.

@@ -27,7 +27,8 @@ python .claude/skills/finish-task/scripts/doccheck.py [--base main]
 | Section | Means | Action |
 |---|---|---|
 | 1. changed files | everything this branch touched | input for steps 2 and 4 |
-| 2. broken code links | `[x](../src/a.cpp#L10)` to a missing file or past the end | fix links this change broke. Shifted line numbers can't be detected, so recheck links into files you edited. |
+| 2b. links into edited files | open-entry links whose target file this change edited | open each one and check the lines still show what the text describes. Line shifts are invisible otherwise. |
+| 2. broken code links | `[x](../src/a.cpp#L10)` to a missing file or past the end | fix links this change broke |
 | 3. missing paths | backticked `src/...` paths that don't exist | fix |
 | 4. removed names | names this change deleted that docs still mention | update the doc, or leave it if it's history |
 | 5. review IDs | IDs in the branch's commits or diff, with review and plan status | make both docs agree with what was done |
