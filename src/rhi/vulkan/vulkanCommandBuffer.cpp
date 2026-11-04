@@ -206,7 +206,7 @@ namespace rasm::rhi
                                          .newLayout = toVkImageLayout(newUsage),
                                          .image = vkTexture->image,
                                          .subresourceRange = {
-                                             .aspectMask = toVkAspectMask(texture->desc.usage, texture->desc.format),
+                                             .aspectMask = toVkAspectMask(texture->desc.format),
                                              .baseMipLevel = 0,
                                              .levelCount = vkTexture->mipLevels,
                                              .baseArrayLayer = 0,
@@ -240,7 +240,7 @@ namespace rasm::rhi
             .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            // Reversed-Z: the far plane is depth 0.
+            // Reversed-Z: the far plane is depth 0. Pairs with the GREATER_OR_EQUAL compare in createGraphicsPipeline.
             .clearValue = {.depthStencil = {0.0f, 0}}};
 
         // Must match the pipeline's stencilAttachmentFormat (see createGraphicsPipeline).

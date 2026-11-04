@@ -172,6 +172,11 @@ namespace rasm
 
         uint32_t                                                                                                                nextBindlessTextureIndex = 0;
 
+        // The current pass's attachment formats. A pipeline must match them for its draws to be defined.
+        Format                                                                                                                  passColorFormat = Format::UNKNOWN;
+        Format                                                                                                                  passDepthFormat = Format::UNKNOWN;
+        bool                                                                                                                    skipDraws       = false; // a mismatched pipeline was rejected
+
         void registerSwapchainImages(HandleManager& handleManager)
         {
             for (uint32_t i = 0; i < swapchain->getImageCount(); ++i)
@@ -637,6 +642,9 @@ namespace rasm
             return false;
 
         rhiCommandBuffer->beginRendering(color, depth, clearColor);
+        impl->passColorFormat = color->desc.format;
+        impl->passDepthFormat = depth->desc.format;
+        impl->skipDraws = false;
         return true;
     }
 
@@ -739,8 +747,19 @@ namespace rasm
     {
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         auto *rhiPipeline = lookup(impl->pipelines, pipeline, __func__);
-        if (rhiCommandBuffer && rhiPipeline)
-            rhiCommandBuffer->bindPipeline(rhiPipeline);
+        if (!rhiCommandBuffer || !rhiPipeline)
+            return;
+
+        const auto &desc = rhiPipeline->desc;
+        if (desc.colorAttachmentFormat != impl->passColorFormat || desc.depthStencilAttachmentFormat != impl->passDepthFormat)
+        {
+            spdlog::error("Pipeline '{}' does not match the formats of the pass's attachments, so its draws are skipped.", desc.name);
+            impl->skipDraws = true;
+            return;
+        }
+
+        rhiCommandBuffer->bindPipeline(rhiPipeline);
+        impl->skipDraws = false;
     }
 
     void RenderContext::bindIndexBuffer(const CommandBufferHandle &commandBuffer, const BufferHandle &buffer, uint64_t offset, Format indexType)
@@ -778,14 +797,14 @@ namespace rasm
     void RenderContext::draw(const CommandBufferHandle &commandBuffer, uint32_t vertexCount, uint32_t instanceCount)
     {
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
-        if (rhiCommandBuffer)
+        if (!impl->skipDraws && rhiCommandBuffer)
             rhiCommandBuffer->draw(vertexCount, instanceCount);
     }
 
     void RenderContext::drawIndexed(const CommandBufferHandle &commandBuffer, uint32_t indexCount, uint32_t instanceCount, uint32_t vertexOffset, uint32_t firstIndex, uint32_t firstInstance)
     {
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
-        if (rhiCommandBuffer)
+        if (!impl->skipDraws && rhiCommandBuffer)
             rhiCommandBuffer->drawIndexed(indexCount, instanceCount, vertexOffset, firstIndex, firstInstance);
     }
 
@@ -793,7 +812,7 @@ namespace rasm
     {
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         auto *rhiBuffer = lookup(impl->buffers, drawInfoBuffer, __func__);
-        if (rhiCommandBuffer && rhiBuffer)
+        if (!impl->skipDraws && rhiCommandBuffer && rhiBuffer)
             rhiCommandBuffer->drawIndexedIndirect(rhiBuffer, offset, drawCount, stride);
     }
 }

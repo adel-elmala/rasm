@@ -29,7 +29,7 @@ namespace rasm
             float fovY;
             float aspect;
             float nearZ;
-            float farZ;     // 0 or infinity = infinite far plane
+            float farZ;
         };
 
         struct Orthographic

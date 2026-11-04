@@ -25,7 +25,7 @@ is the working reference (forward pass into a render target, then an overlay pas
 | Push constants | **16 bytes total** (`PUSH_CONSTANTS_SIZE`), `ShaderType::VERTEX_FRAGMENT` | `VulkanDevice::createGraphicsPipeline`; `RenderContext::pushConstants` rejects more |
 | Entry points | `vertMain` + `fragMain` in **one source string** | `Engine::createPipeline` |
 | Attachments | 1 color (swapchain format) + `D32_SFLOAT` (reversed-Z) | `Engine::createPipeline` |
-| Fixed state | depth test + write `GREATER_OR_EQUAL` (reversed-Z, cleared to 0), no blending, triangle list, no vertex input, front face counter-clockwise | `createGraphicsPipeline` |
+| Fixed state | depth test + write `GREATER_OR_EQUAL` (reversed-Z, cleared to 0: a pass that writes its own depth puts the far plane at 0, not `z = w`), no blending, triangle list, no vertex input, front face counter-clockwise | `createGraphicsPipeline` |
 | Cull mode | dynamic: `beginPass` sets `NONE`, `ctx.setCullMode(commandBuffer, CullMode::BACK)` changes it for the pass | `VulkanCommandBuffer::setCullMode` |
 | Every pass **clears** its target | two passes can't accumulate into one target | `VulkanCommandBuffer::beginRendering`, review §3 |
 | Readable outputs | only the **color** of an earlier render target, through its bindless index. Depth isn't stored. | `Engine::endPass` |

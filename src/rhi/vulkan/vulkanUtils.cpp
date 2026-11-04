@@ -81,13 +81,18 @@ namespace rasm::rhi
         }
     }
 
-    VkImageAspectFlags toVkAspectMask(TextureUsage usage, Format format)
+    VkImageAspectFlags toVkAspectMask(Format format)
     {
-        if (usage != TextureUsage::DEPTH_STENCIL_ATTACHMENT)
-            return VK_IMAGE_ASPECT_COLOR_BIT;
-        if (hasStencil(format))
+        switch (format)
+        {
+        case Format::D32_SFLOAT:
+            return VK_IMAGE_ASPECT_DEPTH_BIT;
+        case Format::D24_UNORM_S8_UINT:
+        case Format::D32_SFLOAT_S8_UINT:
             return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-        return VK_IMAGE_ASPECT_DEPTH_BIT;
+        default:
+            return VK_IMAGE_ASPECT_COLOR_BIT;
+        }
     }
 
     const char *toVkResultString(VkResult result)

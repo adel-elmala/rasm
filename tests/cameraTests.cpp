@@ -3,6 +3,7 @@
 #include "doctest/doctest.h"
 
 #include <cmath>
+#include <limits>
 
 namespace
 {
@@ -88,6 +89,63 @@ TEST_CASE("an infinite perspective projection approaches depth 0 and never reach
     CHECK(projectedDepth(matrix, -10.0f * NEAR_Z) == doctest::Approx(0.1f).epsilon(TOLERANCE));
     CHECK(projectedDepth(matrix, -1.0e6f) > 0.0f);
     CHECK(projectedDepth(matrix, -1.0e6f) < 1.0e-6f);
+}
+
+TEST_CASE("a farZ of infinity is the same infinite projection as 0")
+{
+    rasm::Engine engine(headlessConfig());
+    auto zeroFar = perspective();
+    zeroFar.perspective.farZ = 0.0f;
+    auto infiniteFar = perspective();
+    infiniteFar.perspective.farZ = std::numeric_limits<float>::infinity();
+
+    CHECK(engine.getProjectionMatrix(engine.createCamera(infiniteFar, rasm::Transform{})) ==
+          engine.getProjectionMatrix(engine.createCamera(zeroFar, rasm::Transform{})));
+}
+
+TEST_CASE("a perspective camera with a bad near or far plane is rejected")
+{
+    rasm::Engine engine(headlessConfig());
+    const float badNear[] = {0.0f, -1.0f, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()};
+    const float badFar[] = {NEAR_Z * 0.5f, NEAR_Z, -FAR_Z, -std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()};
+
+    for (float nearZ : badNear)
+    {
+        auto projection = perspective();
+        projection.perspective.nearZ = nearZ;
+        CHECK_FALSE(engine.createCamera(projection, rasm::Transform{}).isValid());
+    }
+    for (float farZ : badFar)
+    {
+        auto projection = perspective();
+        projection.perspective.farZ = farZ;
+        CHECK_FALSE(engine.createCamera(projection, rasm::Transform{}).isValid());
+    }
+}
+
+TEST_CASE("an orthographic camera without a finite far plane past the near plane is rejected")
+{
+    rasm::Engine engine(headlessConfig());
+    const float badFar[] = {0.0f, NEAR_Z, std::numeric_limits<float>::infinity()};
+
+    for (float farZ : badFar)
+    {
+        rasm::CameraProjection projection{.type = rasm::CameraProjection::Type::ORTHOGRAPHIC,
+                                          .orthographic = {.left = -2.0f, .right = 2.0f, .bottom = -1.0f, .top = 1.0f, .nearZ = NEAR_Z, .farZ = farZ}};
+        CHECK_FALSE(engine.createCamera(projection, rasm::Transform{}).isValid());
+    }
+}
+
+TEST_CASE("setCameraProjection keeps the old projection when the new one is rejected")
+{
+    rasm::Engine engine(headlessConfig());
+    auto camera = engine.createCamera(perspective(), rasm::Transform{});
+    auto projection = perspective();
+    projection.perspective.nearZ = 0.0f;
+
+    engine.setCameraProjection(camera, projection);
+
+    CHECK(engine.getCameraProjection(camera).perspective.nearZ == doctest::Approx(NEAR_Z));
 }
 
 TEST_CASE("orthographic projection maps depth to reversed [1, 0]")
