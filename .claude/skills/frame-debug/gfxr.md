@@ -22,7 +22,7 @@ python $G capture build/x64-debug/examples/02_gltf.exe --frame 60 --out-dir <scr
 ## Limits
 
 - Only **descriptor-bound** resources are dumped. Buffers reached through buffer device addresses (RASM's `SceneData`, vertex pool, draw info, model data) are not. Use RenderDoc for those, or grep the `.jsonl` for the upload (`InitBufferCommand` / `vkCmdCopyBuffer`).
-- Depth PNGs are hard to read when depth is close to 1 (most pixels look white). RenderDoc's `targets` stretches the range.
+- Depth PNGs are hard to read with reversed-Z, where far depth is close to 0 (most pixels look black). RenderDoc's `targets` stretches the range.
 - `--before` zeroes the reported indirect params (GFXR quirk). Run without it for the args.
 - The `--dump-resources` text in `gfxrecon-replay --help` describes D3D12. For Vulkan the argument is a JSON config, which `dump` writes for you (`dump_config.json` in the out dir).
 

@@ -42,6 +42,7 @@ namespace rasm
         R32G32B32_SFLOAT,
         R32G32B32A32_SFLOAT,
         D24_UNORM_S8_UINT,
+        D32_SFLOAT,
         D32_SFLOAT_S8_UINT,
         R32G32_SFLOAT,
         U16_UINT,

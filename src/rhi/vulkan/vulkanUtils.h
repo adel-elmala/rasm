@@ -11,7 +11,7 @@ namespace rasm::rhi
     VkFormat            toVkFormat(Format format);
     Format              toFormat(VkFormat format);
     VkShaderStageFlags  toVkShaderStageFlags(ShaderType stage);
-    VkImageAspectFlags  toVkAspectMask(TextureUsage usage);
+    VkImageAspectFlags  toVkAspectMask(Format format);
     const char*         toVkResultString(VkResult result);
     bool                hasStencil(Format format);
 }

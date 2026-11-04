@@ -4,6 +4,7 @@
 #include "spdlog/spdlog.h"
 
 #include <cmath>
+#include <limits>
 
 namespace rasm
 {
@@ -169,21 +170,70 @@ namespace rasm
             }
         }
 
-        glm::mat4 toProjectionMatrix(const CameraProjection &projection)
+        bool hasInfiniteFar(const CameraProjection::Perspective &perspective)
+        {
+            return perspective.farZ == 0.0f || perspective.farZ == std::numeric_limits<float>::infinity();
+        }
+
+        // The checks are written so that NaN fails them.
+        bool isValidProjection(const CameraProjection &projection)
         {
             if (projection.type == CameraProjection::Type::PERSPECTIVE)
             {
-                return glm::perspective(glm::radians(projection.perspective.fovY), projection.perspective.aspect, projection.perspective.nearZ, projection.perspective.farZ);
+                const auto &perspective = projection.perspective;
+                if (!(perspective.nearZ > 0.0f) || std::isinf(perspective.nearZ))
+                {
+                    spdlog::error("A perspective camera needs a finite nearZ greater than 0, got {}.", perspective.nearZ);
+                    return false;
+                }
+                if (!hasInfiniteFar(perspective) && !(perspective.farZ > perspective.nearZ))
+                {
+                    spdlog::error("A perspective camera needs farZ greater than nearZ, or 0 or infinity for an infinite far plane, got {}.", perspective.farZ);
+                    return false;
+                }
+                return true;
             }
-            else
+
+            const auto &orthographic = projection.orthographic;
+            if (!(orthographic.farZ > orthographic.nearZ) || std::isinf(orthographic.nearZ) || std::isinf(orthographic.farZ))
             {
-                return glm::ortho(projection.orthographic.left, projection.orthographic.right, projection.orthographic.bottom, projection.orthographic.top, projection.orthographic.nearZ, projection.orthographic.farZ);
+                spdlog::error("An orthographic camera needs finite nearZ and farZ with farZ greater than nearZ, got {} and {}.", orthographic.nearZ, orthographic.farZ);
+                return false;
             }
+            return true;
+        }
+
+        // Reversed-Z: the near plane maps to depth 1 and the far plane to 0. Passing far as glm's near and near as
+        // its far gives exactly that. glm has no reversed infinite projection, so that one is written by hand.
+        glm::mat4 toProjectionMatrix(const CameraProjection &projection)
+        {
+            if (projection.type == CameraProjection::Type::ORTHOGRAPHIC)
+            {
+                const auto &orthographic = projection.orthographic;
+                return glm::ortho(orthographic.left, orthographic.right, orthographic.bottom, orthographic.top, orthographic.farZ, orthographic.nearZ);
+            }
+
+            const auto &perspective = projection.perspective;
+            const float fovY = glm::radians(perspective.fovY);
+            if (!hasInfiniteFar(perspective))
+                return glm::perspective(fovY, perspective.aspect, perspective.farZ, perspective.nearZ);
+
+            // depth = nearZ / -viewZ
+            const float focalLength = 1.0f / std::tan(fovY * 0.5f);
+            glm::mat4 matrix(0.0f);
+            matrix[0][0] = focalLength / perspective.aspect;
+            matrix[1][1] = focalLength;
+            matrix[2][3] = -1.0f;
+            matrix[3][2] = perspective.nearZ;
+            return matrix;
         }
     }
 
     CameraHandle Engine::createCamera(CameraProjection projection, Transform transform)
     {
+        if (!isValidProjection(projection))
+            return {};
+
         auto handle = handleManager.getNextCameraHandle();
         if (handle.index >= MAX_CAMERAS)
         {
@@ -233,6 +283,8 @@ namespace rasm
             spdlog::error("Invalid camera handle.");
             return;
         }
+        if (!isValidProjection(projection))
+            return;
 
         registry.cameras[camera.index].projection = projection;
     }
