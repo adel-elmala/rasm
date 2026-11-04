@@ -33,11 +33,13 @@ src/
   engine.cpp                    frame loop (not yet split into renderer/)
   core/                         handle, profiler, utils
   platform/                     window.cpp (SDL3 window + input)
-  assets/                       material.cpp (incl. glTF material/texture import), mesh.cpp (glTF + OBJ)
-  scene/                        scene (incl. prepareScene), entity, transform, camera, light
-  renderer/                     renderGraph, shaderCompiler, uberMaterialTypes.h (shader ABI)
+  assets/                       material.cpp (incl. glTF material import), mesh.cpp (mesh API, async loads),
+                                  meshImport (glTF + OBJ parsing), texture.cpp (texture loads)
+  scene/                        scene, entity, transform, camera, light
+  renderer/                     gpuScene.cpp (prepareScene, drawScene), renderGraph, shaderCompiler,
+                                  uberMaterialTypes.h (shader ABI)
   rhi/                          device.h (backend-neutral interface), renderContext.cpp (handle tables)
-    vulkan/                     vulkanDevice, vulkanCommandBuffer, vulkanSwapchain, vulkanTypes.h, vulkanUtils
+    vulkan/                     vulkanDevice, vulkanCommandBuffer, vulkanQueue, vulkanSwapchain, vulkanTypes.h, vulkanUtils
   thirdparty_impl.cpp           the only *_IMPLEMENTATION defines
 shaders/
   lib/                          core.slang (GPU structs), pbr.slang, unlit.slang
@@ -57,10 +59,9 @@ docs/
    - `types.h` and `mesh.h` include `tiny_gltf.h`, `window.h` includes `vulkan/vulkan.h`, and `render/renderGraph.h` includes `spdlog/spdlog.h`.
    - Because of this, `src/` is temporarily a PUBLIC include directory, and Vulkan, VMA, vk-bootstrap, Slang, glm, Tracy, spdlog and the tinygltf/stb include paths are all linked PUBLIC. Applications still compile against the whole backend.
    - This keeps compiles slow, makes the backend impossible to swap, and blocks a stable API/ABI.
-2. **Some files still mix concerns.**
-   - `scene/scene.cpp` holds `prepareScene` and pipeline creation (renderer logic);
-   - `assets/material.cpp` holds both the material API and glTF texture import;
-   - `engine.cpp` (frame loop) still sits at the root of `src/`.
+2. **Some files still mix concerns.** *Partly fixed 2026-11-04:* `prepareScene` and `drawScene` moved to `renderer/gpuScene.cpp`, glTF/OBJ parsing to `assets/meshImport.cpp`, texture loading to `assets/texture.cpp`, and `VulkanQueue` to its own pair. Still open:
+   - `assets/material.cpp` holds both the material API and glTF material import;
+   - `engine.cpp` (frame loop and pipeline creation) still sits at the root of `src/`.
 3. **Shaders are found through the working directory (`D11`).** *Fixed 2026-11-01:* shaders load from `EngineConfig::shaderDir`, by default a `shaders/` folder beside the executable, and `EngineConfig::assetRoot` locates assets. The original finding follows. Paths are cwd-relative (`./shaders/passes/...` in `material.cpp`/`scene.cpp`, `cwd/shaders/lib` in `shaderCompiler.cpp`), so the examples only work when run from the repo root (not from the build directory, an IDE, or an installed app).
 4. **No install/export.** *Fixed 2026-11-01:* `cmake/RasmInstall.cmake` installs the library, public headers and shaders and exports `rasm::rasm`, so `find_package(rasm)` works from an install tree or a build tree. The original finding follows. There is no `install()`/`export()`, so `find_package(rasm)` does not work.
 5. **No `tests/` and no CI** (plan phase 1.5). *Partly resolved 2026-11-01:* `tests/` has a doctest target run through CTest. CI is still missing.
@@ -75,7 +76,7 @@ include/rasm/                   PUBLIC API ONLY — no third-party or src/ heade
   config.h                      EngineConfig incl. assetRoot / shader dir
   render/rhi.h                  device-agnostic types replacing the Vk structs in RenderContext::Impl (D1)
 src/
-  renderer/                     + frame loop from engine.cpp, prepareScene/GPU scene from scene.cpp,
+  renderer/                     + frame loop and pipeline creation from engine.cpp,
                                   passes (forward, culling, shadow, post)
   assets/gltf/ obj/ image/      split loaders out of material.cpp / mesh.cpp
   rhi/metal/ d3d12/ webgpu/     future backends
@@ -186,7 +187,7 @@ Next steps, in order:
 **B12** — *Fixed 2026-10-31:* the SPIR-V options are now a static array. The original finding follows. `ShaderCompiler::getTargetDesc` allocates `new slang::CompilerOptionEntry[1]` and never frees it ([shaderCompiler.cpp:456-458](../src/renderer/shaderCompiler.cpp#L456-L458)).
 
 **B13** — Handle indices are consumed before validation and are never reused.
-- `loadMesh` takes a handle before parsing the file ([mesh.cpp:58](../src/assets/mesh.cpp#L58)), so failed loads burn slots.
+- `loadMesh` takes a handle before parsing the file ([mesh.cpp:67](../src/assets/mesh.cpp#L67)), so failed loads burn slots.
 - With `MAX_MESHES = 8` and indices starting at 1, only 7 meshes can be loaded in total.
 - `MAX_LIGHTS = 8` and `MAX_CAMERAS = 8` are global, not per scene.
 
@@ -198,7 +199,7 @@ Next steps, in order:
 
 **B17** — *Fixed 2026-10-27:* `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` triggers recreation. `Window` has `pixelWidth`/`pixelHeight` (the swapchain's desired extent) next to the logical `width`/`height` used for mouse input. Depth textures, viewport, scissor and camera aspect come from the swapchain extent (`Swapchain::width`/`height`). The original finding follows. Resize uses `SDL_EVENT_WINDOW_RESIZED`, which reports logical size ([window.cpp:116-122](../src/platform/window.cpp#L116-L122)). The depth texture and viewport use `mainWindow` size, while the swapchain extent comes from the surface. On scaled or HiDPI displays they can disagree. Use `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` / `SDL_GetWindowSizeInPixels`, and size everything from the swapchain extent. *Likely.*
 
-**B23 — The CPU/GPU struct check only runs in debug builds.** `validateRasmStructs` is called inside `assert(...)` ([shaderCompiler.cpp:355](../src/renderer/shaderCompiler.cpp#L355)), so with `NDEBUG` the call is compiled out. A Release build with mismatched structs starts normally and the GPU reads shifted data, or hits a device lost when a pointer field moves. Call it unconditionally, log the mismatch and fail the shader or pipeline creation. The check runs once per linked program, so it costs nothing at runtime. *Confirmed.*
+**B23 — The CPU/GPU struct check only runs in debug builds.** `validateRasmStructs` is called inside `assert(...)` ([shaderCompiler.cpp:358](../src/renderer/shaderCompiler.cpp#L358)), so with `NDEBUG` the call is compiled out. A Release build with mismatched structs starts normally and the GPU reads shifted data, or hits a device lost when a pointer field moves. Call it unconditionally, log the mismatch and fail the shader or pipeline creation. The check runs once per linked program, so it costs nothing at runtime. *Confirmed.*
 
 ---
 
@@ -209,9 +210,10 @@ Next steps, in order:
 - either a virtual interface or a compile-time backend selection,
 - a pool per object type with generational handles.
 
-**D2 — The public API leaks its implementation.** *Mostly fixed 2026-11-01:* the header split is done (see §1.1). `createSurfaceVk` became the private `createWindowSurface` in `src/platform/`, so the backend does not depend on SDL, `convertToGfxMaterial` is a helper in `scene.cpp`, and the glTF import functions are private. Still open:
+**D2 — The public API leaks its implementation.** *Mostly fixed 2026-11-01:* the header split is done (see §1.1). `createSurfaceVk` became the private `createWindowSurface` in `src/platform/`, so the backend does not depend on SDL, `convertToGfxMaterial` is a helper in `gpuScene.cpp`, and the glTF import functions are private. Still open:
 - `Engine` keeps a large public surface that mixes the high-level API with lower-level calls such as `updateUniforms`, `addBindlessTexture`, `createWindow` and `pollEvents`.
 - `RenderGraph` and `RenderContext` are friends of `Engine`.
+- Import and renderer internals are public types: `ObjRaw`, `SubGLTFRaw`, `GLTFRaw` (with its `tinygltf::Model`) and `GltfImportCache` in [mesh.h](../include/rasm/mesh.h), `SceneDraw` and `PreparedScene` in [scene.h](../include/rasm/scene.h). Applications never use them, but `Engine` holds them by value (`std::future<GLTFRaw>` in `PendingMeshLoad`, the `preparedScenes` map), so `engine.h` needs their full definitions. Moving them to private headers needs the private-`Impl` approach `RenderContext` uses, which is part of `D3`.
 
 **D3 — `Engine` is a god object.** It owns the window, input, assets, scene registry, cameras, the frame loop and the renderer. Split it into subsystems that `Engine` composes: `Platform`, `AssetManager`, `Scene`, `Renderer`, `rhi::Device`. Then integrators can use only the pieces they need, for example the renderer with their own window and asset pipeline.
 
@@ -226,7 +228,7 @@ Next steps, in order:
 - The hash XORs component hashes, so collisions are common (`a^b == b^a`, `x^x == 0`).
 - Prefer distinct `BufferDesc`, `TextureDesc`, `PipelineDesc`, … structs with defaulted `operator==` and a proper hash combine.
 
-**D6 — Scene preparation is all-or-nothing.** `prepareScene` is cached forever ([scene.cpp:129-132](../src/scene/scene.cpp#L129-L132)). Entities, meshes and materials added, removed or edited after the first frame are ignored; only transforms update. A GPU scene needs incremental updates:
+**D6 — Scene preparation is all-or-nothing.** `prepareScene` is cached forever ([gpuScene.cpp:121-124](../src/renderer/gpuScene.cpp#L121-L124)). Entities, meshes and materials added, removed or edited after the first frame are ignored; only transforms update. A GPU scene needs incremental updates:
 - slot allocation inside persistent mega buffers,
 - dirty tracking with per-frame upload of the changed ranges,
 - material and instance tables separate from geometry.
@@ -238,9 +240,9 @@ Next steps, in order:
 
 Needed: a platform layer the application can replace, creation from a native surface or window handle, an offscreen/headless mode, and camera controllers as optional helpers driven by the application.
 
-**D8 — Coordinate handedness is achieved by mirroring the world.**
-- glTF geometry gets a `scale(1,-1,1)` root ([mesh.cpp:452](../src/assets/mesh.cpp#L452)), and OBJ vertices are negated per vertex ([mesh.cpp:127-131](../src/assets/mesh.cpp#L127-L131)).
-- That mirrors the world: the determinant is negative and the triangle winding flips. Back-face culling is disabled to hide this ([vulkanDevice.cpp:712-713](../src/rhi/vulkan/vulkanDevice.cpp#L712-L713)).
+**D8 — Coordinate handedness is achieved by mirroring the world.** *Fixed 2026-11-04:* the world is right-handed Y-up. Import no longer mirrors glTF or OBJ geometry, and the Vulkan backend flips Y with a negative-height viewport in `setViewport`. Front faces are counter-clockwise. Cull mode is dynamic pipeline state (`RenderContext::setCullMode`), so the uber pipeline stays one pipeline. `prepareScene` groups the draws by cull mode, and `drawScene` issues one indirect draw per run of equal modes taken from the current transforms: `NONE` for double-sided materials (glTF `doubleSided`, or `createMaterial(..., doubleSided)`), `BACK` otherwise, and `FRONT` under a mirroring transform. Double-sided back faces are lit with the reversed normal. The original finding follows.
+- glTF geometry gets a `scale(1,-1,1)` root ([meshImport.cpp:533](../src/assets/meshImport.cpp#L533)), and OBJ vertices are negated per vertex ([meshImport.cpp:599-601](../src/assets/meshImport.cpp#L599-L601)).
+- That mirrors the world: the determinant is negative and the triangle winding flips. Back-face culling is disabled to hide this ([vulkanDevice.cpp:639-640](../src/rhi/vulkan/vulkanDevice.cpp#L639-L640)).
 - User-specified positions and directions live in a Y-down world.
 
 Use a right-handed Y-up world (glTF's convention) and do the Vulkan flip with a negative-height viewport (core since 1.1) or in the projection. Then enable culling and honor glTF `doubleSided`.
@@ -279,13 +281,13 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 **P1 — Every buffer is host-visible and mapped.** *Fixed 2026-11-04:* only buffers with `BufferDesc::hostVisible` (the per-frame model and scene data) are forced into host-visible memory. Other buffers are device-local, use `ALLOW_TRANSFER_INSTEAD` so they stay mapped where device-local memory is host-visible, and are otherwise filled through `rhi::UploadManager`: a staging ring with batched copies and timeline-fence completion ([architecture.md §12](architecture.md#12-rhi)). The original finding follows. (`HOST_ACCESS_SEQUENTIAL_WRITE | MAPPED`, [vulkanContext.cpp:205-208](../src/rhi/vulkan/vulkanContext.cpp#L205-L208)). On discrete GPUs without ReBAR, the mega vertex and index buffers end up in system RAM and every vertex fetch crosses PCIe. Static data should go to device-local memory through staging (or `ALLOW_TRANSFER_INSTEAD`). Keep host-visible memory for per-frame data only.
 
 **P2 — Texture path.**
-- Sampled images are created with `HOST_ACCESS_*` allocation flags for host image copy ([vulkanDevice.cpp:516-520](../src/rhi/vulkan/vulkanDevice.cpp#L516-L520)), which can push them into host-visible memory.
+- Sampled images are created with `HOST_ACCESS_*` allocation flags for host image copy ([vulkanDevice.cpp:443-447](../src/rhi/vulkan/vulkanDevice.cpp#L443-L447)), which can push them into host-visible memory.
 - Each image gets a dedicated allocation, and mips are generated on the CPU on the main thread.
 - *Fixed 2026-11-02 (`D1`), 2026-11-04:* bindless textures share a fixed set of six samplers (`SamplerType`), picked per slot; glTF textures map their sampler onto it. Originally each texture created its own `VkSampler` and called `vkGetPhysicalDeviceProperties`. Drivers often cap samplers at about 4000, so use a handful of shared samplers.
 - Host image copy also requires the `hostImageCopy` feature, which narrows hardware support; keep a staging-buffer fallback.
 - Longer term, support GPU-compressed textures (KTX2 + BCn/ASTC), which matters for map tiles and game content.
 
-**P3 — No instancing.** Each entity copies its mesh into the mega buffer. `00_hello_scene` uploads the bunny three times ([scene.cpp:143-165](../src/scene/scene.cpp#L143-L165)). Separate *geometry* (uploaded once per mesh) from *instances* (transform + material + mesh-range index).
+**P3 — No instancing.** Each entity copies its mesh into the mega buffer. `00_hello_scene` uploads the bunny three times ([gpuScene.cpp:134-157](../src/renderer/gpuScene.cpp#L134-L157)). Separate *geometry* (uploaded once per mesh) from *instances* (transform + material + mesh-range index).
 
 **P4 — Per-call overhead in `RenderContext`.** *Partly fixed 2026-11-02 (`D1`):* the tables hold pointers to `rhi::` objects, so a lookup copies nothing and device addresses are stored on `rhi::Buffer`. Every call still hashes its handles, until the index-based pools of `D4`. The original finding follows. Every call hashes a handle and **copies** the backend struct, including a `ResourceDesc` with a `std::string` (e.g. `fillBuffer`, [renderContext.cpp:665](../src/rhi/renderContext.cpp#L665); `getBufferDeviceAddress`, [:740](../src/rhi/renderContext.cpp#L740)). Use index-based pools, return references, and cache device addresses.
 
@@ -322,8 +324,8 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 - **C8 — Header-level objects.** `const static std::unordered_set<std::string>` lives in `types.h`, which makes one copy per translation unit and runs static initializers. Make it `inline constexpr` arrays or move it into the `.cpp`.
 - **C9 — A fragile material layout.** `Material::params` is a flat `float[]` indexed by hand-maintained `PbrParam` offsets, and `name` is a `const char*`. Use a typed `PbrMaterialParams` struct instead.
 - **C10 — Single-header implementations are spread out.** *Resolved in the folder-layout change:* all `*_IMPLEMENTATION` defines now live in [src/thirdparty_impl.cpp](../src/thirdparty_impl.cpp).
-- **C11 — The struct check compares layout, not types.** `validateStruct` checks each struct's size and field offsets ([shaderCompiler.cpp:79-114](../src/renderer/shaderCompiler.cpp#L79-L114)). A `uint32_t` on one side and a `float` on the other, or two swapped fields of the same size, pass and the shader reads garbage. Compare the field's scalar type and element count from the reflection (`getType()->getScalarType()`, `getElementCount()`) against the C++ side in the same table.
-- **C12 — The push-constant size is written in three places and never checked.** `PushConstants` in [core.slang:105-108](../shaders/lib/core.slang#L105-L108) is one pointer, the pipeline layout's range is `sizeof(VkDeviceAddress)` ([vulkanDevice.cpp:611-613](../src/rhi/vulkan/vulkanDevice.cpp#L611-L613)), and `drawScene` pushes `sizeof(uint64_t)` ([engine.cpp:644](../src/engine.cpp#L644)). `validateRasmStructs` reads through `pc` but does not check its size. Mirror `PushConstants` in `uberMaterialTypes.h`, use its `sizeof` in both places, and add it to the check. The shared pipeline layout planned in `P8` is the natural home for the range.
+- **C11 — The struct check compares layout, not types.** `validateStruct` checks each struct's size and field offsets ([shaderCompiler.cpp:82-117](../src/renderer/shaderCompiler.cpp#L82-L117)). A `uint32_t` on one side and a `float` on the other, or two swapped fields of the same size, pass and the shader reads garbage. Compare the field's scalar type and element count from the reflection (`getType()->getScalarType()`, `getElementCount()`) against the C++ side in the same table.
+- **C12 — The push-constant size is written in three places and never checked.** *Fixed 2026-11-04:* `gfx::PushConstants` mirrors the Slang struct and is in `validateRasmStructs`. Every pipeline layout's range is `PUSH_CONSTANTS_SIZE` (16, `include/rasm/types.h`), a `static_assert` ties `sizeof(gfx::PushConstants)` to it, `drawScene` pushes `sizeof(pushConstants)`, and `RenderContext::pushConstants` rejects a push past the range. The shared layout of `P8` is still open. The original finding follows. `PushConstants` in [core.slang:105-108](../shaders/lib/core.slang#L105-L108) is one pointer, the pipeline layout's range is `sizeof(VkDeviceAddress)` ([vulkanDevice.cpp:538-540](../src/rhi/vulkan/vulkanDevice.cpp#L538-L540)), and `drawScene` pushes `sizeof(uint64_t)` ([gpuScene.cpp:378](../src/renderer/gpuScene.cpp#L378)). `validateRasmStructs` reads through `pc` but does not check its size. Mirror `PushConstants` in `uberMaterialTypes.h`, use its `sizeof` in both places, and add it to the check. The shared pipeline layout planned in `P8` is the natural home for the range.
 
 ---
 
@@ -331,7 +333,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 
 These are worth keeping as the engine evolves:
 - **Modern Vulkan baseline:** dynamic rendering, synchronization2, per-image render-finished semaphores (the correct modern pattern), VMA with budget tracking, vk-bootstrap.
-- **A GPU-driven core:** one indirect draw, vertex pulling, bindless textures, and BDA through a single 8-byte push constant.
+- **A GPU-driven core:** one pipeline and a few indirect draws per scene, vertex pulling, bindless textures, and BDA through a single 16-byte push constant.
 - **A careful CPU/GPU layout contract:** scalar layout with `static_assert`s and comments explaining the failure mode.
 - **Correct color handling:** sRGB versus linear texture formats, sRGB-aware mip generation, and linear shading with sRGB output.
 - **A solid PBR core:** a Filament-style BRDF, UV-derivative tangent frames that handle mirrored UVs, and per-texture UV sets.

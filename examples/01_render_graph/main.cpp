@@ -107,7 +107,8 @@ int main()
         {
             VSOutput output;
             output.UV = float2((vertexID << 1) & 2, vertexID & 2);
-            output.Pos = float4(output.UV * 2.0 - 1.0, 0.0, 1.0);
+            // Clip space is Y-up and UV v = 0 is the image's top row.
+            output.Pos = float4(output.UV.x * 2.0 - 1.0, 1.0 - output.UV.y * 2.0, 0.0, 1.0);
 
             return output;
         }

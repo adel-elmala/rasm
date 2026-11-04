@@ -123,6 +123,7 @@ namespace rasm::rhi
         virtual void                endRendering() = 0;
         virtual void                setViewport(float x, float y, float width, float height, float minDepth, float maxDepth) = 0;
         virtual void                setScissor(int32_t x, int32_t y, uint32_t width, uint32_t height) = 0;
+        virtual void                setCullMode(CullMode cullMode) = 0;
         virtual void                bindPipeline(Pipeline* pipeline) = 0;
         virtual void                bindIndexBuffer(Buffer* buffer, uint64_t offset, Format indexType) = 0;
         virtual void                bindDescriptorSet(Pipeline* pipeline, DescriptorSet* descriptorSet, uint32_t setIndex) = 0;

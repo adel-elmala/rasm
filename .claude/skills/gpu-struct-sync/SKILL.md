@@ -18,9 +18,9 @@ pointer field moves.
 | 3 | `static_assert`s at the end of `uberMaterialTypes.h` | `sizeof` and every offset after the change point that matters: arrays, pointers, the last field. |
 | 4 | `validateRasmStructs` in `src/renderer/shaderCompiler.cpp` | One row per field: `{"<slang name>", offsetof(gfx::X, <c++ name>)}`. A **new struct** needs its own `validateStruct(...)` call, reached through `fieldStruct(...)` from `pc → scene → pointer/field`. |
 | 5 | Shared constants and enums | `MAX_LIGHTS` (`include/rasm/light.h`), `MAX_VERTEX_UV_SETS` (`include/rasm/mesh.h`), `VertexFormat`, `MaterialId`, `LightType`: same values in `core.slang`. |
-| 6 | `VertexFull` only | `rasm::Vertex` in `include/rasm/mesh.h` and the `static_assert`s in `src/scene/scene.cpp`. |
-| 7 | `PushConstants` only | Not in `validateRasmStructs` (`C12`). Update the `VkPushConstantRange` size in `VulkanDevice::createGraphicsPipeline` and the `ctx.pushConstants(...)` size in `Engine::drawScene` (`engine.cpp`). |
-| 8 | CPU writers | `engine.cpp` `drawScene` (`SceneData`, `Light`). `scene.cpp`: `convertToGfxMaterial` (`Material`), `Modeldata` and `DrawInfo` filling in the upload loop. Fill the new field. Zero-init (`{}`) hides a forgotten one. |
+| 6 | `VertexFull` only | `rasm::Vertex` in `include/rasm/mesh.h` and the `static_assert`s in `src/renderer/gpuScene.cpp`. |
+| 7 | `PushConstants` only | Its size must stay `PUSH_CONSTANTS_SIZE` (`include/rasm/types.h`), the range of every pipeline layout and the limit `RenderContext::pushConstants` checks. Growing it means raising that constant, and the `new-pass` skill's limits table. |
+| 8 | CPU writers | All in `src/renderer/gpuScene.cpp`: `drawScene` (`SceneData`, `Light`), `convertToGfxMaterial` (`Material`), `Modeldata` and `DrawInfo` filling in the upload loop. Fill the new field. Zero-init (`{}`) hides a forgotten one. |
 | 9 | GPU readers | `shaders/passes/rasm.slang`, `shaders/lib/pbr.slang`, `shaders/lib/unlit.slang`. |
 | 10 | Docs that quote numbers | `docs/architecture.md` (sizes in the struct contract section), `.claude/skills/frame-debug/SKILL.md` (`SceneData` offsets). |
 

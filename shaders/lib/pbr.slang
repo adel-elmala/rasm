@@ -91,6 +91,7 @@ struct PBRInfo
     float3      vNormal;             // world normal
     float4      vTangent;            // world tangent, w = bitangent sign (0 when the mesh has no tangents)
     float3      cameraPosition;      // world camera position
+    bool        backFace;            // the fragment is on the back of a double-sided surface
     float2      baseColorUV;         // UV coordinates for the base color texture
     float2      metallicRoughnessUV; // UV coordinates for the metallic-roughness texture
     float2      normalUV;            // UV coordinates for the normal map
@@ -145,6 +146,9 @@ float4 shadePBR(Sampler2D gTextures[], PBRInfo pbrInfo)
     if (hasTexture(normalIdx))
         n = getNormalFromMap(gTextures[normalIdx], pbrInfo.normalUV, pbrInfo.vPosition, pbrInfo.vNormal, pbrInfo.vTangent, pbrInfo.material.normal.scale);
     n = normalize(n);
+    // glTF: a double-sided back face is lit with the reversed normal (the front's T, B and N all negated).
+    if (pbrInfo.backFace)
+        n = -n;
 
     float3 v    = normalize(pbrInfo.cameraPosition - pbrInfo.vPosition);
     float  NoV  = max(dot(n, v), 1e-5);

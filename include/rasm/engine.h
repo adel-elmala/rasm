@@ -56,7 +56,7 @@ namespace rasm
         bool                        isLoaded(MeshHandle mesh) const;
         bool                        isLoaded(TextureHandle texture) const;
         void                        waitForLoads();
-        MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {});
+        MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {}, bool doubleSided = false);
         TextureHandle               createTexture(const TextureDesc& desc);
         BufferHandle                createBuffer(const BufferDesc& desc);
         RenderTargetHandle          createRenderTarget(const RenderTargetDesc& desc);
@@ -146,11 +146,14 @@ namespace rasm
         uint64_t                                                    frameCount                              = 0;
         uint32_t                                                    imageIdx                                = 0;
         uint32_t                                                    sceneDrawCount                          = 0; // drawScene calls this frame
+        SceneHandle                                                 drawnScenes[MAX_SCENE_DRAWS_PER_FRAME]  = {}; // the scene of each drawScene call this frame
         bool                                                        isRunning                               = false;
         bool                                                        swapchainOutOfDate                      = false;
         bool                                                        swapchainRendered                       = false; // a pass rendered to the swapchain this frame
 
     private:
+        static constexpr Format     DEPTH_FORMAT    = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
+
         struct PendingMeshLoad
         {
             MeshHandle                  handle;

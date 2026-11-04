@@ -21,6 +21,15 @@ namespace rasm
 {
     namespace
     {
+        struct FieldOffset
+        {
+            const char *name;
+            size_t offset;
+        };
+    }
+
+    namespace
+    {
         void diagnoseIfNeeded(slang::IBlob *diagnosticsBlob)
         {
             if (diagnosticsBlob != nullptr)
@@ -42,12 +51,6 @@ namespace rasm
             buffer << file.rdbuf();
             return buffer.str();
         }
-
-        struct FieldOffset
-        {
-            const char *name;
-            size_t offset;
-        };
 
         slang::VariableLayoutReflection *findField(slang::TypeLayoutReflection *structLayout, const char *name)
         {
@@ -138,6 +141,11 @@ namespace rasm
             auto material = fieldStruct(modeldata, "material");
 
             bool valid = true;
+
+            valid &= validateStruct(pushConstants, "PushConstants", sizeof(gfx::PushConstants),
+                                    {{"scene", offsetof(gfx::PushConstants, scene)},
+                                     {"firstDraw", offsetof(gfx::PushConstants, firstDraw)},
+                                     {"padding", offsetof(gfx::PushConstants, padding)}});
 
             valid &= validateStruct(scene, "SceneData", sizeof(gfx::SceneData),
                                     {{"projection", offsetof(gfx::SceneData, projection)},

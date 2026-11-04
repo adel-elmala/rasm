@@ -104,6 +104,13 @@ namespace rasm::gfx
         uint64_t         modeldataPtr;
     };
 
+    struct PushConstants
+    {
+        uint64_t         scene;
+        uint32_t         firstDraw;
+        uint32_t         padding;
+    };
+
     // These structs are read by shaders/passes/rasm.slang through buffer-device-address pointers,
     // compiled with GLSL scalar layout. Any drift here silently corrupts the GPU reads (a wrong
     // vertsPtr/modeldataPtr turns into a device lost on the first draw).
@@ -120,6 +127,7 @@ namespace rasm::gfx
     static_assert(offsetof(SceneData, lights) == 144, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, vertsPtr) == 528, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, modeldataPtr) == 544, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(PushConstants) == PUSH_CONSTANTS_SIZE, "PushConstants must fill the pipelines' push-constant range");
 
 
 } // namespace rasm::gfx

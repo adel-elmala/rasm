@@ -10,14 +10,13 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <iterator>
 #include <vector>
 
 namespace rasm::rhi
 {
     namespace
     {
-        constexpr uint32_t MAX_SUBMIT_COMMAND_BUFFERS = 8;
-
         vkb::Result<vkb::Instance> initInstance(const DeviceDesc &desc, bool &debugUtilsEnabled)
         {
             debugUtilsEnabled = false;
@@ -280,77 +279,6 @@ namespace rasm::rhi
         }
     }
 
-    VulkanQueue::VulkanQueue(VkQueue queue, uint32_t familyIndex) : queue(queue), familyIndex(familyIndex) {}
-
-    bool VulkanQueue::submit(const SubmitDesc &desc)
-    {
-        if (desc.commandBufferCount > MAX_SUBMIT_COMMAND_BUFFERS)
-        {
-            spdlog::error("A submit takes at most {} command buffers, got {}.", MAX_SUBMIT_COMMAND_BUFFERS, desc.commandBufferCount);
-            return false;
-        }
-
-        VkCommandBufferSubmitInfo submitInfos[MAX_SUBMIT_COMMAND_BUFFERS] = {};
-        const uint32_t commandBufferCount = desc.commandBufferCount;
-        for (uint32_t i = 0; i < commandBufferCount; ++i)
-        {
-            submitInfos[i] = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
-                              .commandBuffer = static_cast<VulkanCommandBuffer *>(desc.commandBuffers[i])->getVkCommandBuffer()};
-        }
-
-        VkSemaphoreSubmitInfo waits[1] = {};
-        VkSemaphoreSubmitInfo signals[3] = {};
-        uint32_t waitCount = 0;
-        uint32_t signalCount = 0;
-
-        auto *swapchain = static_cast<VulkanSwapchain *>(desc.swapchain);
-        if (swapchain != nullptr)
-        {
-            if (!swapchain->getSubmitSemaphores(waits[waitCount], signals[signalCount], signals[signalCount + 1]))
-                return false;
-            waitCount += 1;
-            signalCount += 2;
-        }
-
-        if (desc.signalFence != nullptr)
-        {
-            signals[signalCount++] = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                                      .semaphore = static_cast<VulkanFence *>(desc.signalFence)->semaphore,
-                                      .value = desc.signalValue,
-                                      .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
-        }
-
-        VkSubmitInfo2 submitInfo = {
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-            .waitSemaphoreInfoCount = waitCount,
-            .pWaitSemaphoreInfos = waits,
-            .commandBufferInfoCount = commandBufferCount,
-            .pCommandBufferInfos = submitInfos,
-            .signalSemaphoreInfoCount = signalCount,
-            .pSignalSemaphoreInfos = signals};
-
-        // A failed submit leaves every semaphore as it was, so the swapchain only moves on after a success.
-        auto result = vkQueueSubmit2(queue, 1, &submitInfo, VK_NULL_HANDLE);
-        if (result != VK_SUCCESS)
-        {
-            spdlog::error("Failed to submit command buffer. Error: {}", toVkResultString(result));
-            return false;
-        }
-        if (swapchain != nullptr)
-            swapchain->onSubmitted();
-        return true;
-    }
-
-    VkQueue VulkanQueue::getVkQueue() const
-    {
-        return queue;
-    }
-
-    uint32_t VulkanQueue::getFamilyIndex() const
-    {
-        return familyIndex;
-    }
-
     std::unique_ptr<Device> createVulkanDevice(const DeviceDesc &desc)
     {
         auto device = std::make_unique<VulkanDevice>();
@@ -610,7 +538,7 @@ namespace rasm::rhi
     {
         VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            .size = sizeof(VkDeviceAddress)};
+            .size = PUSH_CONSTANTS_SIZE};
 
         VkDescriptorSetLayout setLayouts[] = {static_cast<VulkanDescriptorSetLayout *>(layout)->layout};
 
@@ -659,11 +587,12 @@ namespace rasm::rhi
             .scissorCount = 1,
         };
 
-        VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        // Cull mode is core dynamic state since Vulkan 1.3, so one pipeline serves every cull mode (D8).
+        VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_CULL_MODE};
 
         VkPipelineDynamicStateCreateInfo dynamicStateInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-            .dynamicStateCount = 2,
+            .dynamicStateCount = static_cast<uint32_t>(std::size(dynamicStates)),
             .pDynamicStates = dynamicStates,
         };
 
@@ -710,7 +639,8 @@ namespace rasm::rhi
             .rasterizerDiscardEnable = VK_FALSE,
             .polygonMode = VK_POLYGON_MODE_FILL,
             .cullMode = VK_CULL_MODE_NONE,
-            .frontFace = VK_FRONT_FACE_CLOCKWISE,
+            // Counter-clockwise in the Y-up clip space; the negative-height viewport keeps it so in framebuffer space.
+            .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
             .depthBiasEnable = VK_FALSE,
             .lineWidth = 1.0f};
 
