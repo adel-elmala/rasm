@@ -6,16 +6,19 @@
 #include "rasm/material.h"
 
 #include <cstdint>
-#include <variant>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
+namespace tinygltf { class Model; }
 
 namespace rasm
 {
 
     constexpr uint32_t MAX_MESHES              = 8;
     constexpr uint32_t MAX_VERTEX_UV_SETS      = 3;
+    constexpr uint32_t MAX_GEOMETRY_VERTICES   = 1u << 21;
+    constexpr uint32_t MAX_GEOMETRY_INDICES    = 1u << 23;
 
     struct Vertex
     {
@@ -35,23 +38,42 @@ namespace rasm
     {
         ObjRaw              objRaw;
         glm::mat4           transform;
-        MaterialHandle      material;
+        int                 materialIndex;
     };
 
     struct GLTFRaw
     {
-        std::vector<SubGLTFRaw> subGltfRaws;
+        std::vector<SubGLTFRaw>             subGltfRaws;
+        std::shared_ptr<tinygltf::Model>    model;
+        bool                                loaded          = false;
+    };
+
+    enum class MeshState
+    {
+        LOADING,
+        READY,
+        FAILED,
+    };
+
+    struct MeshGeometry
+    {
+        uint32_t            firstVertex     = 0;
+        uint32_t            vertexCount     = 0;
+        uint32_t            firstIndex      = 0;
+        uint32_t            indexCount      = 0;
+    };
+
+    struct SubMesh
+    {
+        MeshGeometry        geometry;
+        glm::mat4           transform;
+        MaterialHandle      material;
     };
 
     struct Mesh
     {
-        enum class MeshType
-        {
-            GLTF,
-            OBJ
-        };
-        MeshType type;
-        std::variant<GLTFRaw, ObjRaw> data;
+        MeshState               state       = MeshState::LOADING;
+        std::vector<SubMesh>    subMeshes;
     };
 
     struct MeshSize

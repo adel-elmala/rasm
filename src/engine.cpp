@@ -12,6 +12,11 @@
 
 #include "glm/glm.hpp"
 
+#include <algorithm>
+#include <chrono>
+#include <future>
+#include <vector>
+
 namespace rasm
 {
     namespace
@@ -35,6 +40,18 @@ namespace rasm
                 spdlog::error("Unsupported backend for shader compilation.");
                 return ShaderCompiler::Target::SPIRV; // Default to SPIR-V
             }
+        }
+
+        // Runs on a worker thread: it must not touch the engine.
+        TextureRaw decodeTexture(const std::string &path)
+        {
+            ZoneScoped;
+
+            int width, height, nChannels;
+            unsigned char *data = stbi_load(path.c_str(), &width, &height, &nChannels, 4);
+            if (!data)
+                return {};
+            return {.width = static_cast<uint32_t>(width), .height = static_cast<uint32_t>(height), .data = data};
         }
     }
 
@@ -98,6 +115,15 @@ namespace rasm
             return;
         }
 
+        // Every mesh lives in these two buffers, so its CPU copy can go after upload (P6).
+        geometryVertexBuffer = ctx.createBuffer({.name = "Geometry Vertex Pool", .usage = BufferUsage::STORAGE, .size = MAX_GEOMETRY_VERTICES * sizeof(Vertex)});
+        geometryIndexBuffer = ctx.createBuffer({.name = "Geometry Index Pool", .usage = BufferUsage::INDEX, .size = MAX_GEOMETRY_INDICES * sizeof(uint32_t)});
+        if (!geometryVertexBuffer.isValid() || !geometryIndexBuffer.isValid())
+        {
+            spdlog::error("Failed to create the geometry pool.");
+            return;
+        }
+
         // Create bindless texture descriptor set layout, pool, and set
         bindlessDescriptorSetLayout = ctx.createBindlessDescriptorSetLayout({.name = "BindlessDescriptorSetLayout",
                                                                              .stage = ShaderType::FRAGMENT,
@@ -140,11 +166,9 @@ namespace rasm
 
     Engine::~Engine()
     {
-        // Clean up resources, free memory, etc.
-        for (auto &[handle, tex] : registry.textureData)
-        {
-            stbi_image_free(tex.data);
-        }
+        // Mesh results free themselves; decoded pixels are a plain stbi pointer.
+        for (auto &load : pendingTextures)
+            stbi_image_free(load.result.get().data);
 
         ctx.cleanup();
 
@@ -184,40 +208,87 @@ namespace rasm
             return TextureHandle{};
         }
 
+        // Only the header is read here, so the texture exists (and can go into a material) before its pixels do.
         int width, height, nChannels;
-        unsigned char *data = stbi_load(path.c_str(), &width, &height, &nChannels, 4);
-
-        if (!data)
+        if (!stbi_info(path.c_str(), &width, &height, &nChannels))
         {
             spdlog::error("Failed to load texture: {}", path);
             return TextureHandle{};
         }
 
-        TextureRaw tex{};
-        tex.width = width;
-        tex.height = height;
-        tex.channels = 4;
-        tex.data = data;
-
         auto textureHandle = ctx.createTexture({.name = path, .width = static_cast<uint32_t>(width), .height = static_cast<uint32_t>(height), .format = format, .usage = TextureUsage::SAMPLED});
         if (!textureHandle.isValid())
         {
             spdlog::error("Failed to create texture: {}", path);
-            stbi_image_free(data);
-            return TextureHandle{};
-        }
-        if (!ctx.fillTexture(textureHandle, data))
-        {
-            spdlog::error("Failed to fill texture: {}", path);
-            ctx.destroyTexture(textureHandle);
-            stbi_image_free(data);
             return TextureHandle{};
         }
 
         registry.loadedTextures[cacheKey] = textureHandle;
-        registry.textureData.insert({textureHandle, std::move(tex)});
-
+        pendingTextures.push_back({textureHandle, path, std::async(std::launch::async, decodeTexture, path)});
         return textureHandle;
+    }
+
+    bool Engine::isLoaded(TextureHandle texture) const
+    {
+        if (!texture.isValid())
+            return false;
+        return std::none_of(pendingTextures.begin(), pendingTextures.end(), [texture](const PendingTextureLoad &load)
+                            { return load.handle == texture; });
+    }
+
+    void Engine::waitForLoads()
+    {
+        finishLoads(true);
+    }
+
+    void Engine::finishTextureLoad(PendingTextureLoad &load)
+    {
+        ZoneScoped;
+
+        TextureRaw raw = load.result.get();
+        const TextureDesc desc = ctx.getTextureDesc(load.handle);
+
+        // A material may already sample the texture, so a failed decode leaves it white instead of undefined.
+        if (!raw.data || raw.width != desc.width || raw.height != desc.height)
+        {
+            spdlog::error("Failed to decode texture {}; it stays white.", load.path);
+            std::vector<unsigned char> white(static_cast<size_t>(desc.width) * desc.height * 4, 255);
+            ctx.fillTexture(load.handle, white.data());
+        }
+        else if (!ctx.fillTexture(load.handle, raw.data))
+        {
+            spdlog::error("Failed to fill texture: {}", load.path);
+        }
+
+        // fillTexture copies on the host (host image copy), so the pixels are not needed once it returns (P6).
+        stbi_image_free(raw.data);
+    }
+
+    // Runs at the start of a frame, before anything binds the bindless set or the geometry pool, so
+    // what it writes is in place for this frame's draws and its uploads go out with this frame's submit.
+    void Engine::finishLoads(bool wait)
+    {
+        for (size_t i = 0; i < pendingTextures.size();)
+        {
+            if (!wait && pendingTextures[i].result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            {
+                ++i;
+                continue;
+            }
+            finishTextureLoad(pendingTextures[i]);
+            pendingTextures.erase(pendingTextures.begin() + i);
+        }
+
+        for (size_t i = 0; i < pendingMeshes.size();)
+        {
+            if (!wait && pendingMeshes[i].result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            {
+                ++i;
+                continue;
+            }
+            finishMeshLoad(pendingMeshes[i]);
+            pendingMeshes.erase(pendingMeshes.begin() + i);
+        }
     }
 
     TextureHandle Engine::createTexture(const TextureDesc &desc)
@@ -268,6 +339,7 @@ namespace rasm
         ZoneScoped;
 
         pollEvents(camera);
+        finishLoads(false);
 
         // Nothing can be presented to a minimized or zero-sized window (B5).
         if (mainWindow.minimized || mainWindow.pixelWidth == 0 || mainWindow.pixelHeight == 0)
@@ -540,7 +612,7 @@ namespace rasm
 
                 sceneData.lights[i] = light;
             }
-            sceneData.vertsPtr = ctx.getBufferDeviceAddress(preparedScene.megaVertexBuffer);
+            sceneData.vertsPtr = ctx.getBufferDeviceAddress(geometryVertexBuffer);
             sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(preparedScene.drawInfoBuffer);
             sceneData.modeldataPtr = ctx.getBufferDeviceAddress(preparedScene.megaModelDataBuffer[frameCount]);
 
@@ -549,7 +621,7 @@ namespace rasm
             updateUniforms(preparedScene);
 
             ctx.bindDescriptorSet(commandBuffer, preparedScene.uberMaterialPipeline, bindlessDescriptorSet, 0);
-            ctx.bindIndexBuffer(commandBuffer, preparedScene.megaIndexBuffer, 0, Format::U32_UINT);
+            ctx.bindIndexBuffer(commandBuffer, geometryIndexBuffer, 0, Format::U32_UINT);
 
             auto sceneDataBufferPtr = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer[frameCount]) + sceneDataOffset;
             ctx.pushConstants(commandBuffer, preparedScene.uberMaterialPipeline, ShaderType::VERTEX_FRAGMENT, &sceneDataBufferPtr, sizeof(uint64_t), 0);

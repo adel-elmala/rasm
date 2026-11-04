@@ -102,10 +102,9 @@ namespace rasm
 
     struct TextureRaw
     {
-        uint32_t        width;
-        uint32_t        height;
-        uint32_t        channels;
-        unsigned char*  data;
+        uint32_t        width   = 0;
+        uint32_t        height  = 0;
+        unsigned char*  data    = nullptr;
     };
 
     struct RenderTargetAttachments

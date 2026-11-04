@@ -289,10 +289,10 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 
 **P5 — Large by-value copies in the scene code.**
 - `prepareScene` no longer copies meshes: `processMesh` is gone, and each `SceneDraw` points into the registry. It returns a const reference to the cached entry, so `drawScene` copies nothing.
-- `getMeshByteSize` copies a whole `Mesh`.
+- *Fixed 2026-11-04:* `getMeshByteSize` copied a whole `Mesh`; it now sums the sub-mesh ranges by reference.
 - `RenderGraph::execute` copies `Scene`, which holds 1,040 handles ([renderGraph.cpp:143](../src/renderer/renderGraph.cpp#L143)).
 
-**P6 — CPU memory retention.** *Partly fixed 2026-11-01:* `GLTFRaw` no longer keeps a copy of the `tinygltf::Model`, so the decoded glTF images are freed after import. CPU vertex and index arrays and the `stbi` pixel data for every `loadTexture` still stay resident for the engine's lifetime.
+**P6 — CPU memory retention.** *Fixed 2026-11-04:* meshes live in an engine-wide geometry pool (one vertex and one index buffer), uploaded when their load finishes, and keep only their pool ranges. The CPU vertex and index arrays, the `tinygltf::Model` and the `stbi` pixels are freed right after upload. Files are read and decoded on worker threads (`std::async`), and the main thread uploads the results at the start of a frame. A scene is prepared once all its assets are loaded. *Partly fixed 2026-11-01:* `GLTFRaw` no longer kept a copy of the `tinygltf::Model`. The original finding: CPU vertex and index arrays and the `stbi` pixel data for every `loadTexture` stayed resident for the engine's lifetime.
 
 **P7 — Per-frame CPU work grows with draw count.** `updateUniforms` recomputes and uploads every model and normal matrix every frame, with no dirty tracking. That is fine now, but it becomes the bottleneck at 10⁴–10⁵ instances. Plan for dirty ranges and, later, GPU-side transform computation.
 
@@ -308,7 +308,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 - **C2 — Formatting.** *Fixed 2026-11-01:* the repo has a `.clang-format` and all C++ files follow it. It sets no column limit, because a limit collapsed hand-placed line breaks and changed about 500 extra lines. The original finding follows. `scene.cpp` uses 2-space indentation while everything else uses 4, and there is no `.clang-format` in the repo.
 - **C3 — Dead or placeholder code.**
   - `setUniform` (a no-op).
-  - The glTF branch of `getMeshByteSize`.
+  - *Fixed 2026-11-04:* the glTF branch of `getMeshByteSize` (every mesh is now a list of sub-meshes).
   - `VertexFormat::POS_ONLY`, `MAX_DESCRIPTOR_TYPES`, `compile-shaders.bat`.
 - **C4 — Duplication.**
   - `readFile` and `loadFileToString`.

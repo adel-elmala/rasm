@@ -14,6 +14,7 @@
 #include "rasm/render/renderContext.h"
 
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -52,7 +53,10 @@ namespace rasm
         MeshHandle                  loadGLTF(const std::string& path);
         // Color images default to sRGB; pass R8G8B8A8_UNORM for normal/MR/AO data.
         TextureHandle               loadTexture(const std::string& path, Format format = Format::R8G8B8A8_SRGB);
-        MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {});
+        bool                        isLoaded(MeshHandle mesh) const;
+        bool                        isLoaded(TextureHandle texture) const;
+        void                        waitForLoads();
+        MaterialHandle             createMaterial(MaterialType type, std::vector<TextureHandle> textures = {});
         TextureHandle               createTexture(const TextureDesc& desc);
         BufferHandle                createBuffer(const BufferDesc& desc);
         RenderTargetHandle          createRenderTarget(const RenderTargetDesc& desc);
@@ -124,6 +128,10 @@ namespace rasm
         uint64_t                                                    frameFenceValue                         = 0;  // last value a frame submit signaled
         Swapchain                                                   swapchain                               = {};
         TextureHandle                                               depthTexture                            = {};
+        BufferHandle                                                geometryVertexBuffer                    = {};
+        BufferHandle                                                geometryIndexBuffer                     = {};
+        uint32_t                                                    geometryVertexCount                     = 0;
+        uint32_t                                                    geometryIndexCount                      = 0;
         std::unordered_map<SceneHandle, PreparedScene, HandleHash>  preparedScenes                          = {};
         RenderContext                                               ctx;
         std::unique_ptr<ShaderCompiler>                             shaderCompiler                          = {};
@@ -143,10 +151,28 @@ namespace rasm
         bool                                                        swapchainRendered                       = false; // a pass rendered to the swapchain this frame
 
     private:
+        struct PendingMeshLoad
+        {
+            MeshHandle                  handle;
+            std::string                 path;
+            std::future<GLTFRaw>        result;
+        };
+
+        struct PendingTextureLoad
+        {
+            TextureHandle               handle;
+            std::string                 path;
+            std::future<TextureRaw>     result;
+        };
+
         MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
-        std::vector<SubGLTFRaw>     extractGLTFRaws(const tinygltf::Model& model, uint32_t meshIndex, const glm::mat4& globalTransform, GltfImportCache& cache);
-        std::vector<SubGLTFRaw>     traverseNodes(const tinygltf::Model& model, const std::vector<int>& rootNodes, const glm::mat4& rootTransform, GltfImportCache& cache);
-        GLTFRaw                     processGLTF(const tinygltf::Model& model);
+        bool                        uploadGeometry(const ObjRaw& raw, MeshGeometry& geometry);
+        void                        finishMeshLoad(PendingMeshLoad& load);
+        void                        finishTextureLoad(PendingTextureLoad& load);
+        void                        finishLoads(bool wait);
+
+        std::vector<PendingMeshLoad>        pendingMeshes;
+        std::vector<PendingTextureLoad>     pendingTextures;
 
         struct Registry
         {
@@ -159,7 +185,6 @@ namespace rasm
 
             std::unordered_map<std::string, MeshHandle>                 loadedMeshes;
             std::unordered_map<std::string, TextureHandle>              loadedTextures;
-            std::unordered_map<TextureHandle, TextureRaw, HandleHash>   textureData;
             std::unordered_map<TextureHandle, uint32_t, HandleHash>     bindlessTextureIndexMap; // slot in the bindless descriptor set
         };
 
