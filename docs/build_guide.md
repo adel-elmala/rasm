@@ -138,6 +138,14 @@ To see the test output, or to run a subset, run the executable directly, for exa
 
 Pass `-DRASM_BUILD_TESTS=OFF` to leave them out.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`. It has one job per OS: Windows builds `x64-debug` then `x64-release`, macOS builds `macOS` then `macOS-release`, examples included, and each preset runs `ctest`. The runners have no GPU, so CI does not run the examples. It still installs the Vulkan runtime on Windows, because `rasm_tests.exe` loads `vulkan-1.dll`.
+
+vcpkg.json has no `builtin-baseline`, so the vcpkg commit picks the dependency versions. CI pins it in `VCPKG_COMMIT`. When you update your local vcpkg, put its commit (`git -C $VCPKG_ROOT rev-parse HEAD`) there too, so CI builds the same versions you do. Built packages are cached per OS and vcpkg commit. A run restores the newest cache and saves a new one only when it built packages, for example after a runner toolchain update. A new vcpkg commit makes the next run build all dependencies again.
+
+`ports/` holds overlay ports, which `vcpkg-configuration.json` puts in front of the vcpkg commit's ports. `ports/tinygltf` is vcpkg's 2.9.7 port with a new SHA512, because GitHub regenerated the `v2.9.7` archive. Delete it when `VCPKG_COMMIT` moves past microsoft/vcpkg#53226. That commit also updates tinygltf to 3.0.0.
+
 ## Using RASM from another project
 
 `cmake --install` copies the library, public headers and shaders to `install/` in the repo. Debug and Release share that prefix, so install both if the project builds both. A project building `RelWithDebInfo` or `MinSizeRel` links the Release library:

@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Only PR runs cancel older ones; every push to main gets a full run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # vcpkg.json has no builtin-baseline, so this commit picks every dependency version.
+  VCPKG_COMMIT: 4b77da7fed37817f124936239197833469f1b9a8
+
+jobs:
+  # One job per OS runs both presets: they share the vcpkg packages, so they are built and cached once.
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, debug: x64-debug, release: x64-release }
+          - { os: macos-latest, debug: macOS, release: macOS-release }
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: lukka/get-cmake@v4.4.5
+
+      # The tests need no GPU, but rasm_tests.exe still loads vulkan-1.dll, so the runtime is installed too.
+      - uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          install_runtime: true
+          cache: true
+          stripdown: true
+
+      - name: Put the Vulkan loader on PATH
+        if: runner.os == 'Windows'
+        run: |
+          runtime=$(cygpath -u "$VULKAN_SDK")/runtime/x64
+          test -f "$runtime/vulkan-1.dll"
+          cygpath -w "$runtime" >> "$GITHUB_PATH"
+
+      # clang++ finds the MSVC libraries and the Windows SDK through this environment.
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # The key never matches exactly, so the newest cache is restored and a new one is saved when packages were built.
+      - name: Restore vcpkg cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/vcpkg-cache
+          key: vcpkg-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ github.run_id }}
+          restore-keys: vcpkg-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-
+
+      # After msvc-dev-cmd, which points VCPKG_ROOT at the copy bundled with Visual Studio.
+      - name: Set up vcpkg
+        run: |
+          root="$HOME/vcpkg"
+          cache="$HOME/vcpkg-cache"
+          git init "$root"
+          git -C "$root" fetch --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_COMMIT"
+          git -C "$root" checkout FETCH_HEAD
+          mkdir -p "$cache"
+          echo "VCPKG_CACHE_FILES=$(find "$cache" -type f | wc -l | tr -d ' ')" >> "$GITHUB_ENV"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            "$root/bootstrap-vcpkg.bat" -disableMetrics
+            root=$(cygpath -m "$root")
+            cache=$(cygpath -m "$cache")
+          else
+            "$root/bootstrap-vcpkg.sh" -disableMetrics
+          fi
+          echo "VCPKG_ROOT=$root" >> "$GITHUB_ENV"
+          echo "VCPKG_BINARY_SOURCES=clear;files,$cache,readwrite" >> "$GITHUB_ENV"
+
+      - name: Configure ${{ matrix.debug }}
+        run: cmake --preset ${{ matrix.debug }}
+
+      - name: Build ${{ matrix.debug }}
+        run: cmake --build --preset ${{ matrix.debug }}
+
+      - name: Test ${{ matrix.debug }}
+        run: ctest --preset ${{ matrix.debug }}
+
+      # Release runs even when a debug step failed.
+      - name: Configure ${{ matrix.release }}
+        id: configure-release
+        if: ${{ !cancelled() }}
+        run: cmake --preset ${{ matrix.release }}
+
+      - name: Build ${{ matrix.release }}
+        id: build-release
+        if: ${{ !cancelled() && steps.configure-release.outcome == 'success' }}
+        run: cmake --build --preset ${{ matrix.release }}
+
+      - name: Test ${{ matrix.release }}
+        if: ${{ !cancelled() && steps.build-release.outcome == 'success' }}
+        run: ctest --preset ${{ matrix.release }}
+
+      - name: Check for new vcpkg packages
+        id: vcpkg-packages
+        if: ${{ !cancelled() }}
+        run: |
+          count=$(find "$HOME/vcpkg-cache" -type f | wc -l | tr -d ' ')
+          if [ "$count" != "$VCPKG_CACHE_FILES" ]; then echo "changed=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Save vcpkg cache
+        if: ${{ !cancelled() && steps.vcpkg-packages.outputs.changed == 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ~/vcpkg-cache
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
