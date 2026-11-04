@@ -169,15 +169,43 @@ namespace rasm
             }
         }
 
+        // Reversed-Z: the near plane maps to depth 1 and the far plane to 0, which spreads float precision evenly
+        // over distance. The entries are written directly, because deriving them from glm::perspective loses that precision.
         glm::mat4 toProjectionMatrix(const CameraProjection &projection)
         {
             if (projection.type == CameraProjection::Type::PERSPECTIVE)
             {
-                return glm::perspective(glm::radians(projection.perspective.fovY), projection.perspective.aspect, projection.perspective.nearZ, projection.perspective.farZ);
+                const auto &perspective = projection.perspective;
+                const float focalLength = 1.0f / std::tan(glm::radians(perspective.fovY) * 0.5f);
+                const float n = perspective.nearZ;
+                const float f = perspective.farZ;
+
+                glm::mat4 matrix(0.0f);
+                matrix[0][0] = focalLength / perspective.aspect;
+                matrix[1][1] = focalLength;
+                matrix[2][3] = -1.0f;
+                if (f == 0.0f || std::isinf(f))
+                {
+                    // Infinite far plane: depth = n / -viewZ.
+                    matrix[3][2] = n;
+                }
+                else
+                {
+                    matrix[2][2] = n / (f - n);
+                    matrix[3][2] = n * f / (f - n);
+                }
+                return matrix;
             }
             else
             {
-                return glm::ortho(projection.orthographic.left, projection.orthographic.right, projection.orthographic.bottom, projection.orthographic.top, projection.orthographic.nearZ, projection.orthographic.farZ);
+                const auto &orthographic = projection.orthographic;
+                const float n = orthographic.nearZ;
+                const float f = orthographic.farZ;
+
+                glm::mat4 matrix = glm::ortho(orthographic.left, orthographic.right, orthographic.bottom, orthographic.top, n, f);
+                matrix[2][2] = 1.0f / (f - n);
+                matrix[3][2] = f / (f - n);
+                return matrix;
             }
         }
     }

@@ -57,8 +57,7 @@ int main()
     rasm::CameraHandle camera = engine.createCamera(rasm::CameraProjection{.type = rasm::CameraProjection::Type::PERSPECTIVE,
                                                                            .perspective{.fovY = 45.0f,
                                                                                         .aspect = static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight),
-                                                                                        .nearZ = 0.1f,
-                                                                                        .farZ = 32.0f}},
+                                                                                        .nearZ = 0.1f}},
                                                     rasm::Transform{
                                                         glm::vec3(0.0f, 0.0f, 4.0f),       // position
                                                         glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation

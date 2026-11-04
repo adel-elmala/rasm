@@ -45,7 +45,7 @@ fails `validateRasmStructs` at startup (assert in `shaderCompiler.cpp`), before 
 - **Resources have debug names** (`Draw Info Buffer`, `Scene Data Buffer`, `DepthTexture for Frame 0`, `glTF image N`, texture file paths), so look them up by name.
 - **Bindless textures**: set 0 binding 0 array; the element index is the material's `*TextureIndex`.
 - **Two frames in flight**: per-frame buffers exist twice. Use the one the push constant / `SceneData` pointers name.
-- Depth is `D32_SFLOAT_S8_UINT`, `LessEqual`, cleared to 1. Front face is counter-clockwise, in a Y-up clip space flipped by a negative-height viewport. Cull mode is dynamic: `NONE` for double-sided materials, `BACK`, or `FRONT` for a mirrored entity. A missing object with `backfaceCulled` in `pixel` history usually means wrong winding or a wrong `doubleSided`.
+- Depth is reversed-Z: `D32_SFLOAT`, `GreaterEqual`, cleared to 0 (far), near plane at 1, infinite far plane by default. Front face is counter-clockwise, in a Y-up clip space flipped by a negative-height viewport. Cull mode is dynamic: `NONE` for double-sided materials, `BACK`, or `FRONT` for a mirrored entity. A missing object with `backfaceCulled` in `pixel` history usually means wrong winding or a wrong `doubleSided`.
 
 ## Known quirks
 

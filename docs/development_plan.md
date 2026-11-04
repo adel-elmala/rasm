@@ -72,7 +72,7 @@ Goal: the structural changes that every later feature depends on. They get much 
 
 ### 1.4 Conventions
 - [x] Use a right-handed Y-up world. Flip Y with a negative-height viewport, stop mirroring geometry, enable back-face culling, and honor glTF `doubleSided` (`D8`, done 2026-11-04).
-- [ ] Use reversed-Z with an infinite far plane by default. The depth format becomes `D32_SFLOAT`, without stencil unless it is requested.
+- [x] Use reversed-Z with an infinite far plane by default. The depth format becomes `D32_SFLOAT`, without stencil unless it is requested (done 2026-11-04).
 
 ### 1.5 Quality
 - [ ] Extend `rasm_tests` to glTF import and to the handle pools once they exist. Handles, descriptor equality and hashing, render-graph sorting, transforms and camera math are covered (`D17`).

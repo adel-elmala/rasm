@@ -16,6 +16,8 @@ namespace rasm::rhi
             return VK_FORMAT_R16G16B16A16_SFLOAT;
         case Format::D24_UNORM_S8_UINT:
             return VK_FORMAT_D24_UNORM_S8_UINT;
+        case Format::D32_SFLOAT:
+            return VK_FORMAT_D32_SFLOAT;
         case Format::D32_SFLOAT_S8_UINT:
             return VK_FORMAT_D32_SFLOAT_S8_UINT;
         case Format::R8G8B8A8_SRGB:
@@ -53,6 +55,8 @@ namespace rasm::rhi
             return Format::D24_UNORM_S8_UINT;
         case VK_FORMAT_R8G8B8_UNORM:
             return Format::R8G8B8_UNORM;
+        case VK_FORMAT_D32_SFLOAT:
+            return Format::D32_SFLOAT;
         case VK_FORMAT_D32_SFLOAT_S8_UINT:
             return Format::D32_SFLOAT_S8_UINT;
         default:
@@ -77,11 +81,13 @@ namespace rasm::rhi
         }
     }
 
-    VkImageAspectFlags toVkAspectMask(TextureUsage usage)
+    VkImageAspectFlags toVkAspectMask(TextureUsage usage, Format format)
     {
-        if (usage == TextureUsage::DEPTH_STENCIL_ATTACHMENT)
+        if (usage != TextureUsage::DEPTH_STENCIL_ATTACHMENT)
+            return VK_IMAGE_ASPECT_COLOR_BIT;
+        if (hasStencil(format))
             return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-        return VK_IMAGE_ASPECT_COLOR_BIT;
+        return VK_IMAGE_ASPECT_DEPTH_BIT;
     }
 
     const char *toVkResultString(VkResult result)
