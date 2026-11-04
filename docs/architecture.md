@@ -10,7 +10,7 @@ RASM is a C++20 rendering engine with a single implemented backend (Vulkan 1.4).
 flowchart TD
     App["Application (examples/)"] --> Engine["rasm::Engine<br/>(include/rasm/engine.h)"]
     Engine --> Registry["Registry<br/>entities, meshes, materials,<br/>cameras, lights, scenes"]
-    Engine --> Assets["Asset loading<br/>mesh.cpp (tinygltf, tinyobj)<br/>material.cpp, stb_image"]
+    Engine --> Assets["Asset loading<br/>meshImport.cpp (tinygltf, tinyobj)<br/>mesh.cpp, material.cpp<br/>texture.cpp (stb_image)"]
     Engine --> Platform["Window + input<br/>window.cpp (SDL3)"]
     Engine --> SC["ShaderCompiler<br/>(Slang API → SPIR-V)"]
     Engine --> RG["RenderGraph<br/>(pass ordering only)"]
@@ -24,15 +24,15 @@ flowchart TD
 | Layer | Files | Responsibility |
 |---|---|---|
 | Public API | `include/rasm/` (`rasm.h`, `engine.h`, …) and `include/rasm/render/` (`renderGraph.h`, `renderContext.h`, `resource.h`) | Single facade class `Engine`; everything is created through it and referenced by handles. The low-level API (render graph, `RenderContext`, the resource descriptors) lives in `render/`. |
-| Engine | `src/engine.cpp` | Construction, frame loop (`beginFrame`/`render`/`endFrame`), texture loading, finishing background loads. |
+| Engine | `src/engine.cpp` | Construction, frame loop (`beginFrame`/`render`/`endFrame`), swapchain recreation, finishing background loads within the frame's budget. |
 | Core utilities | `src/core/` | Handle manager, profiler, file reading. |
 | Platform | `src/platform/window.cpp` | SDL3 window, event polling and camera input. |
-| Assets | `src/assets/` | glTF/OBJ import and the geometry pool (`mesh.cpp`; `meshImport.h` exposes the worker-side import to tests), materials and glTF material/texture import (`material.cpp`). |
-| Scene | `src/scene/` | Scenes, entities, cameras, lights, transforms; scene preparation for rendering (`scene.cpp`). |
-| Renderer | `src/renderer/` | Render graph, Slang shader compiler, GPU struct definitions (`uberMaterialTypes.h`). |
+| Assets | `src/assets/` | glTF/OBJ import on the worker thread (`meshImport.h/.cpp`, also used by tests), meshes and the geometry pool (`mesh.cpp`), textures (`texture.cpp`), materials and glTF material/texture import (`material.cpp`). |
+| Scene | `src/scene/` | Scenes, entities, cameras, lights, transforms. |
+| Renderer | `src/renderer/` | The GPU-driven scene path (`gpuScene.cpp`: `prepareScene`, `updateUniforms`, `drawScene`), render graph, Slang shader compiler, GPU struct definitions (`uberMaterialTypes.h`). |
 | Render context | `src/rhi/renderContext.cpp` | Backend-neutral API over handles; owns the handle → `rhi::` object tables, the creation-dedup caches and render targets. |
 | RHI | `src/rhi/device.h` | The backend-neutral GPU interface: `Device`, `CommandBuffer`, `Queue`, `Swapchain` and the resource objects (§12). |
-| Vulkan backend | `src/rhi/vulkan/` | `VulkanDevice` (instance, device, VMA, resource creation), `VulkanCommandBuffer` (recording, barriers), `VulkanSwapchain` (surface swapchain and its semaphores), `VulkanQueue` (submission). `vulkanTypes.h`: the Vulkan objects behind each `rhi::` struct. |
+| Vulkan backend | `src/rhi/vulkan/` | `VulkanDevice` (instance, device, VMA, resource creation), `VulkanCommandBuffer` (recording, barriers), `VulkanSwapchain` (surface swapchain and its semaphores), `VulkanQueue` (submission), one `.h`/`.cpp` pair each. `vulkanTypes.h`: the Vulkan objects behind each `rhi::` struct. |
 | Third-party implementations | `src/thirdparty_impl.cpp` | The single translation unit with the `*_IMPLEMENTATION` defines (stb, tinygltf, tinyobjloader, VMA). |
 | Shaders | `shaders/lib/`, `shaders/passes/` | `lib/`: shared modules: GPU structs (`core.slang`), PBR BRDF (`pbr.slang`), unlit shading (`unlit.slang`). `passes/`: entry shaders: the uber shader (`rasm.slang`). |
 
@@ -94,7 +94,7 @@ sequenceDiagram
     E->>C: beginPass: barriers (swapchain→COLOR_ATTACHMENT, depth→DEPTH), beginRendering (CLEAR), viewport/scissor
     E->>E: prepareScene(scene) (cached after first call)
     E->>C: write the call's slot of SceneData[frame] (camera, lights, buffer addresses)
-    E->>C: updateUniforms → rewrite Modeldata[frame] transforms
+    E->>C: updateUniforms → rewrite Modeldata[frame] transforms (first call per scene this frame)
     E->>C: bind the geometry pool's index buffer
     loop each cull mode with draws (NONE, FRONT, BACK)
         E->>C: bind its uber pipeline and the bindless set
@@ -120,7 +120,7 @@ Notes:
 
 ## 4. The GPU-driven path: `prepareScene` + `drawScene`
 
-`Engine::render` records one pass with `Engine::drawScene`, which render graph passes can call directly. `Engine::prepareScene` (`src/scene/scene.cpp`) runs once per scene, the first time that scene is rendered, and its result is cached in `Engine::preparedScenes`. It does the following:
+`Engine::render` records one pass with `Engine::drawScene`, which render graph passes can call directly. `Engine::prepareScene` (`src/renderer/gpuScene.cpp`) runs once per scene, the first time that scene is rendered, and its result is cached in `Engine::preparedScenes`. It does the following:
 
 1. **Flattens the scene.** For every entity with a mesh it builds a list of `SceneDraw`s, one per `SubMesh`: one per glTF primitive, or one for an OBJ. Each holds the sub-mesh's `MeshGeometry` (its range in the geometry pool), the node's world transform, a material handle and a `CullMode`. A double-sided material gets `NONE`. Otherwise the cull mode is `BACK`, or `FRONT` when the entity × node transform has a negative determinant (a mirror turns the front faces clockwise, as glTF specifies). The draws are then stable-sorted by cull mode. The sign is taken at preparation: a transform that later changes the sign keeps its old cull mode. A mesh missing vertices or indices is skipped with a warning. If any of the scene's meshes, or a texture of an entity's material, is still loading, it returns an empty `PreparedScene` and caches nothing, so the scene is prepared once, when everything is in place. A mesh that failed to load draws nothing.
 2. **Builds the uber pipelines.** `Engine::createPipeline` compiles `shaders/passes/rasm.slang` (`vertMain`/`fragMain`) and creates a graphics pipeline with an empty vertex-input state (vertex pulling) and the bindless set layout. Its `PipelineDesc` (from `RenderContext::getPipelineDesc`) is copied once per `CullMode`, so `uberMaterialPipelines[mode]` share the shaders and differ only in culling. The pipeline has the swapchain's color format and `D32_SFLOAT_S8_UINT` depth, so a render target that `drawScene` draws into must use the same formats. For any other target `drawScene` logs an error and skips the draw.
@@ -133,9 +133,9 @@ Notes:
    | `sceneDataBuffer[2]` | STORAGE | `MAX_SCENE_DRAWS_PER_FRAME` `gfx::SceneData`s per frame slot. |
 4. **Writes draw records.** For each sub-mesh i, in cull-mode order, it sets `DrawInfo{indexCount, 1, firstIndex, vertexOffset = firstVertex, 0}` from its `MeshGeometry`. Indices in the pool are *local* to their sub-mesh, so `vertexOffset` moves them to the sub-mesh's vertices. `Modeldata[i]` gets the entity transform × node transform, the converted `gfx::Material` and the `gfx::MaterialId`. `drawInfoCounts[mode]` counts the draws of each cull mode.
 
-Every frame, `updateUniforms` rewrites only the matrix part of each `Modeldata` (`offsetof(Modeldata, material)` bytes) from the current entity transforms.
+Every frame, `updateUniforms` rewrites only the matrix part of each `Modeldata` (`offsetof(Modeldata, material)` bytes) from the current entity transforms. It runs in the first `drawScene` call of each scene in a frame; later calls for that scene reuse the transforms already written.
 
-The GPU reads `SceneData` after the whole frame is recorded, so each `drawScene` call of a frame writes its own slot of `sceneDataBuffer[frame]` and pushes that slot's address. That is what lets passes in one frame use different cameras. `Modeldata` has no slots: all the calls of a frame share the transforms it holds. Past `MAX_SCENE_DRAWS_PER_FRAME` calls, `drawScene` logs an error and skips the draw.
+The GPU reads `SceneData` after the whole frame is recorded, so each `drawScene` call of a frame writes its own slot of `sceneDataBuffer[frame]` and pushes that slot's address. That is what lets passes in one frame use different cameras. `Modeldata` has no slots: all the calls of a frame share the transforms it holds, so a transform changed between two calls shows up next frame. Past `MAX_SCENE_DRAWS_PER_FRAME` calls, or with an invalid camera, `drawScene` logs an error and skips the draw.
 
 `prepareScene` returns a const reference to the cached entry. For a scene with no geometry it returns an empty `PreparedScene` before any buffer is allocated and caches nothing, so entities added later are picked up. `drawScene` skips the draw when the prepared scene has no pipeline, so the pass keeps its clear color.
 
@@ -166,14 +166,14 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - `rasm::Material` (`rasm/material.h`) is a CPU-side record:
   - `textures[PbrSlot::COUNT]` and `texCoords[...]`,
   - a flat `float params[]` indexed by `PbrParam` offsets (albedo is 3 floats at offset 0, metallic is at 3, …).
-- `convertToGfxMaterial` (`scene.cpp`) turns it into the GPU `gfx::Material`. Texture handles are replaced by bindless slot indices, and `INVALID_TEXTURE_INDEX` (0xFFFFFFFF) means "no texture".
+- `convertToGfxMaterial` (`gpuScene.cpp`) turns it into the GPU `gfx::Material`. Texture handles are replaced by bindless slot indices, and `INVALID_TEXTURE_INDEX` (0xFFFFFFFF) means "no texture".
 - **Bindless slots.** `Engine::addBindlessTexture` → `RenderContext::updateBindlessDescriptorSet` writes the texture into the next free slot (`nextBindlessTextureIndex++`), or into a slot the caller names, which also moves `nextBindlessTextureIndex` past it. The slot is remembered in `registry.bindlessTextureIndexMap`. Automatic allocation never reuses a slot; naming a slot that is already taken replaces its descriptor.
 - **Texture upload.** `loadTexture` decodes on a worker (§6) and frees the pixels after the upload. The upload itself is `VulkanDevice::fillTexture`, on the main thread:
   - the image is transitioned on the host and filled with `VK_EXT_host_image_copy` (core in 1.4), so no command buffer or staging buffer is involved;
   - the full mip chain is generated on the CPU with `stb_image_resize2`, sRGB-aware for sRGB formats.
 - **Sampling.** `RenderContext::initialize` creates one sampler per `SamplerType`: linear or nearest, each with repeat, mirrored repeat or clamp (linear ones use 8× anisotropy; none clamps the LOD, so each serves any mip count). A bindless slot is written with the sampler passed to `addBindlessTexture`, `LINEAR_REPEAT` by default. glTF textures pick theirs from the glTF sampler (`wrapS` for both axes, `magFilter` for nearest or linear), and render target color attachments use `LINEAR_CLAMP`. A texture handle has one slot, so an image that two glTF samplers share is uploaded once per sampler.
 - **Color spaces.** Base color and emissive are uploaded as `R8G8B8A8_SRGB`. Normal, metallic-roughness and occlusion maps are uploaded as `R8G8B8A8_UNORM`.
-- Every material uses the uber shader. To add a shading path, add a value to `gfx::MaterialId` and its mirror in `core.slang`, map it in `getGfxMaterialId` (`scene.cpp`), and branch on it in `fragMain`. Today's mapping is `UNLIT` → `MaterialId::UNLIT` (base color only, no tone mapping) and `PBR` → `MaterialId::PBR`.
+- Every material uses the uber shader. To add a shading path, add a value to `gfx::MaterialId` and its mirror in `core.slang`, map it in `getGfxMaterialId` (`gpuScene.cpp`), and branch on it in `fragMain`. Today's mapping is `UNLIT` → `MaterialId::UNLIT` (base color only, no tone mapping) and `PBR` → `MaterialId::PBR`.
 
 ## 6. Asset import
 

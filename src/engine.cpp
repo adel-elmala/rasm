@@ -1,18 +1,14 @@
 #include "rasm/engine.h"
-#include "core/utils.h"
 #include "platform/paths.h"
 #include "renderer/shaderCompiler.h"
-#include "renderer/uberMaterialTypes.h"
 
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
 
 #include "stb_image.h"
-#include "stb_image_write.h"
 
 #include "glm/glm.hpp"
 
-#include <algorithm>
 #include <chrono>
 #include <future>
 #include <vector>
@@ -21,7 +17,6 @@ namespace rasm
 {
     namespace
     {
-        constexpr Format DEPTH_FORMAT = Format::D32_SFLOAT_S8_UINT; // TODO: check this format
         constexpr glm::vec4 SWAPCHAIN_CLEAR_COLOR(0.018f, 0.018f, 0.018f, 1.0f);
         // Main-thread time a frame spends finishing loads. The load that crosses it still finishes.
         constexpr std::chrono::milliseconds LOAD_BUDGET(4);
@@ -42,18 +37,6 @@ namespace rasm
                 spdlog::error("Unsupported backend for shader compilation.");
                 return ShaderCompiler::Target::SPIRV; // Default to SPIR-V
             }
-        }
-
-        // Runs on a worker thread: it must not touch the engine.
-        TextureRaw decodeTexture(const std::string &path)
-        {
-            ZoneScoped;
-
-            int width, height, nChannels;
-            unsigned char *data = stbi_load(path.c_str(), &width, &height, &nChannels, 4);
-            if (!data)
-                return {};
-            return {.width = static_cast<uint32_t>(width), .height = static_cast<uint32_t>(height), .data = data};
         }
     }
 
@@ -194,86 +177,9 @@ namespace rasm
         return pathToUtf8((pathFromUtf8(config.assetRoot) / pathFromUtf8(path)).lexically_normal());
     }
 
-    TextureHandle Engine::loadTexture(const std::string &assetPath, Format format)
-    {
-        if (format != Format::R8G8B8A8_SRGB && format != Format::R8G8B8A8_UNORM)
-        {
-            spdlog::error("loadTexture requires RGBA8 sRGB or UNORM format.");
-            return {};
-        }
-        const std::string path = resolveAssetPath(assetPath);
-        const auto cacheKey = path + "#" + std::to_string(static_cast<int>(format));
-        if (registry.loadedTextures.find(cacheKey) != registry.loadedTextures.end())
-        {
-            return registry.loadedTextures[cacheKey];
-        }
-
-        // find if the texture extension is supported, if not return invalid handle
-        auto extension = path.substr(path.find_last_of(".") + 1);
-        if (supportedTextureExtensions.find(extension) == supportedTextureExtensions.end())
-        {
-            spdlog::error("Unsupported texture format: {}", extension);
-            return TextureHandle{};
-        }
-
-        // Only the header is read here, so the texture exists (and can go into a material) before its pixels do.
-        int width, height, nChannels;
-        if (!stbi_info(path.c_str(), &width, &height, &nChannels))
-        {
-            spdlog::error("Failed to load texture: {}", path);
-            return TextureHandle{};
-        }
-
-        auto textureHandle = ctx.createTexture({.name = path, .width = static_cast<uint32_t>(width), .height = static_cast<uint32_t>(height), .format = format, .usage = TextureUsage::SAMPLED});
-        if (!textureHandle.isValid())
-        {
-            spdlog::error("Failed to create texture: {}", path);
-            return TextureHandle{};
-        }
-
-        registry.loadedTextures[cacheKey] = textureHandle;
-        pendingTextures.emplace(textureHandle, PendingTextureLoad{textureHandle, path, std::async(std::launch::async, decodeTexture, path)});
-        return textureHandle;
-    }
-
-    bool Engine::isLoaded(TextureHandle texture) const
-    {
-        return texture.isValid() && !pendingTextures.contains(texture);
-    }
-
     void Engine::waitForLoads()
     {
         finishLoads(true);
-    }
-
-    void Engine::finishTextureLoad(PendingTextureLoad &load)
-    {
-        ZoneScoped;
-
-        TextureRaw raw = load.result.get();
-        const TextureDesc desc = ctx.getTextureDesc(load.handle);
-
-        // The app destroyed the texture while it decoded, so there is nothing to fill.
-        if (desc.width == 0 || desc.height == 0)
-        {
-            stbi_image_free(raw.data);
-            return;
-        }
-
-        // A material may already sample the texture, so a failed decode leaves it white instead of undefined.
-        if (!raw.data || raw.width != desc.width || raw.height != desc.height)
-        {
-            spdlog::error("Failed to decode texture {}; it stays white.", load.path);
-            std::vector<unsigned char> white(static_cast<size_t>(desc.width) * desc.height * 4, 255);
-            ctx.fillTexture(load.handle, white.data());
-        }
-        else if (!ctx.fillTexture(load.handle, raw.data))
-        {
-            spdlog::error("Failed to fill texture: {}", load.path);
-        }
-
-        // fillTexture copies on the host (host image copy), so the pixels are not needed once it returns (P6).
-        stbi_image_free(raw.data);
     }
 
     // Runs at the start of a frame, before anything binds the bindless set or the geometry pool, so
@@ -561,100 +467,6 @@ namespace rasm
         drawScene(scene, camera);
         endPass();
         endFrame();
-    }
-
-    void Engine::drawScene(SceneHandle scene, CameraHandle camera)
-    {
-        ZoneScoped;
-
-        const auto &preparedScene = prepareScene(scene);
-
-        // An invalid or empty scene, or a failed preparation (which prepareScene logged and retries next
-        // frame), has no pipeline to bind; the pass keeps its cleared attachments.
-        if (!preparedScene.uberMaterialPipelines[0].isValid())
-            return;
-
-        uint32_t width = swapchain.width;
-        uint32_t height = swapchain.height;
-
-        if (currentRenderTarget.isValid())
-        {
-            const auto &renderTargetData = ctx.getRenderTarget(currentRenderTarget);
-            width = renderTargetData.width;
-            height = renderTargetData.height;
-
-            // The pipeline's formats must match the attachments' for the draw to be defined.
-            if (renderTargetData.colorFormat != swapchain.imageFormat || renderTargetData.depthFormat != DEPTH_FORMAT)
-            {
-                spdlog::error("drawScene needs a render target with the swapchain's color format and D32_SFLOAT_S8_UINT depth.");
-                return;
-            }
-        }
-
-        // The GPU reads SceneData after the whole frame is recorded, so every call needs its own slot.
-        if (sceneDrawCount >= MAX_SCENE_DRAWS_PER_FRAME)
-        {
-            spdlog::error("Exceeded maximum number of drawScene calls per frame.");
-            return;
-        }
-        const uint64_t sceneDataOffset = sceneDrawCount++ * sizeof(gfx::SceneData);
-
-        auto &sceneRef = registry.scenes[scene.index];
-        auto &currentFrame = frameResources[frameCount];
-        auto commandBuffer = currentFrame.commandBuffer;
-
-        auto &cameraRef = registry.cameras[camera.index];
-        auto projection = getProjectionMatrix(camera, static_cast<float>(width) / static_cast<float>(height));
-        auto view = getViewMatrix(camera);
-
-        {
-            gfx::SceneData sceneData{};
-            sceneData.projection = projection;
-            sceneData.view = view;
-            sceneData.cameraWorldPosition = cameraRef.transform.position;
-            sceneData.numLights = sceneRef.lightCount;
-            for (uint32_t i = 0; i < sceneRef.lightCount; ++i)
-            {
-                LightHandle sceneLight = sceneRef.lights[i];
-                Light sceneLightData = registry.lights[sceneLight.index];
-
-                gfx::Light light{};
-                light.position = sceneLightData.position;
-                light.direction = sceneLightData.direction;
-                light.color = sceneLightData.color;
-                light.intensity = sceneLightData.intensity;
-                light.range = sceneLightData.range;
-                light.type = static_cast<gfx::LightType>(sceneLightData.type);
-
-                sceneData.lights[i] = light;
-            }
-            sceneData.vertsPtr = ctx.getBufferDeviceAddress(geometryVertexBuffer);
-            sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(preparedScene.drawInfoBuffer);
-            sceneData.modeldataPtr = ctx.getBufferDeviceAddress(preparedScene.megaModelDataBuffer[frameCount]);
-
-            ctx.fillBuffer(preparedScene.sceneDataBuffer[frameCount], &sceneData, sizeof(sceneData), sceneDataOffset);
-
-            updateUniforms(preparedScene);
-
-            ctx.bindIndexBuffer(commandBuffer, geometryIndexBuffer, 0, Format::U32_UINT);
-
-            // One indirect draw per cull mode; the draws are grouped by cull mode in enum order (D8).
-            gfx::PushConstants pushConstants{};
-            pushConstants.scene = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer[frameCount]) + sceneDataOffset;
-            for (uint32_t i = 0; i < CULL_MODE_COUNT; ++i)
-            {
-                const uint32_t drawCount = preparedScene.drawInfoCounts[i];
-                if (drawCount == 0)
-                    continue;
-
-                const auto pipeline = preparedScene.uberMaterialPipelines[i];
-                ctx.bindPipeline(commandBuffer, pipeline);
-                ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
-                ctx.pushConstants(commandBuffer, pipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
-                ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, pushConstants.firstDraw * sizeof(gfx::DrawInfo), drawCount, sizeof(gfx::DrawInfo));
-                pushConstants.firstDraw += drawCount;
-            }
-        }
     }
 
     bool Engine::running() const

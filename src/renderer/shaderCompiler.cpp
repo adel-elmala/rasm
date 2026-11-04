@@ -21,6 +21,15 @@ namespace rasm
 {
     namespace
     {
+        struct FieldOffset
+        {
+            const char *name;
+            size_t offset;
+        };
+    }
+
+    namespace
+    {
         void diagnoseIfNeeded(slang::IBlob *diagnosticsBlob)
         {
             if (diagnosticsBlob != nullptr)
@@ -42,12 +51,6 @@ namespace rasm
             buffer << file.rdbuf();
             return buffer.str();
         }
-
-        struct FieldOffset
-        {
-            const char *name;
-            size_t offset;
-        };
 
         slang::VariableLayoutReflection *findField(slang::TypeLayoutReflection *structLayout, const char *name)
         {
