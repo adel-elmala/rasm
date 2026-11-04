@@ -1,0 +1,11 @@
+{
+    "name": "rasm-tracy-tools",
+    "version": "0.0.0",
+    "dependencies": [
+        {
+            "name": "tracy",
+            "default-features": false,
+            "features": ["cli-tools"]
+        }
+    ]
+}
