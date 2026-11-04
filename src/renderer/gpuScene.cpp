@@ -284,8 +284,6 @@ namespace rasm
             ++preparedScene.drawInfoCounts[static_cast<uint32_t>(draw.cullMode)];
         }
 
-        preparedScene.drawInfoCount = sceneDraws.size();
-
         return preparedScenes.emplace(scene, std::move(preparedScene)).first->second;
     }
 

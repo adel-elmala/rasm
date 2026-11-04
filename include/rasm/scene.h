@@ -47,10 +47,9 @@ namespace rasm
         BufferHandle                                       megaModelDataBuffer[MAX_FRAMES_IN_FLIGHT];
         BufferHandle                                       drawInfoBuffer;
         BufferHandle                                       sceneDataBuffer[MAX_FRAMES_IN_FLIGHT]; // one SceneData per drawScene of a frame
-        PipelineHandle                                     uberMaterialPipelines[CULL_MODE_COUNT]; // indexed by CullMode
+        PipelineHandle                                     uberMaterialPipelines[CULL_MODE_COUNT];
         std::vector<std::pair<EntityHandle, glm::mat4>>    modelUniforms;
-        uint32_t                                           drawInfoCounts[CULL_MODE_COUNT];        // draws are grouped by CullMode, in enum order
-        uint32_t                                           drawInfoCount;
+        uint32_t                                           drawInfoCounts[CULL_MODE_COUNT];
     };
 
 }
