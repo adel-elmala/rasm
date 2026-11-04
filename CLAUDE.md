@@ -26,11 +26,22 @@ cmake --install build\x64-debug                        # into install/, for find
 ```
 
 - Requires `VCPKG_ROOT`; presets use Ninja + `clang++`. Options: `-DRASM_ENABLE_AVX2=ON` (x86 only), `-DRASM_BUILD_EXAMPLES=OFF`, `-DRASM_BUILD_TESTS=OFF`, `-DRASM_INSTALL=OFF`, `-DRASM_SHADER_DIR=<path>`.
-- New `.cpp` files must be added to `RASM_SRC` in `src/CMakeLists.txt`. New examples go in `examples/NN_name/main.cpp` plus a `rasm_add_example(NN_name)` line in `examples/CMakeLists.txt`. New test files go in `tests/` and on the `rasm_tests` list in `tests/CMakeLists.txt`.
 - A new dependency linked to `rasm`, PUBLIC or PRIVATE, also needs a `find_dependency` line in `cmake/rasmConfig.cmake.in`: `rasm` is static, so consumers link it too.
 - Run `clang-format -i <file>` on `.cpp` files you change. It keeps line breaks (no column limit) and skips `// clang-format off` regions. Every header is wrapped in those guards and hand-aligned in columns, so new headers need them too (see `docs/coding_style.md` section 4).
 - `rasm_tests` (doctest, no GPU) covers CPU-side code only, and there is no lint config yet. Verify rendering changes by running the examples with `EngineConfig::enableValidation = true` — a change that adds validation messages is not done.
 - Shaders are compiled at runtime from `EngineConfig::shaderDir`, by default a `shaders/` folder beside the executable. Examples set `shaderDir` to the repo's `shaders/` and `assetRoot` to its `assets/`, so a shader edit shows up the next time an example starts, with no build. `tools/compile-shaders.bat` is only an offline compile check.
+
+## Adding files
+
+| Adding | Where | Also |
+|---|---|---|
+| A part (`.h` + `.cpp`) | camelCase names, in its layer's folder (`src/scene/`, `src/rhi/vulkan/`, ...). Public header in `include/rasm/` only if applications use it. | Add the `.cpp` to `RASM_SRC` in `src/CMakeLists.txt`, next to its folder's files. |
+| Any header | — | Whole file inside `// clang-format off` ... `// clang-format on`, then `#pragma once`, with declarations hand-aligned in columns (`docs/coding_style.md` section 4). |
+| An example | `examples/NN_name/main.cpp` | `rasm_add_example(NN_name)` in `examples/CMakeLists.txt`. Set `enableValidation = true`, `assetRoot = RASM_EXAMPLE_ASSET_ROOT`, `shaderDir = RASM_EXAMPLE_SHADER_DIR` like `02_gltf`. |
+| A test | `tests/<name>Tests.cpp` | Add it to the `rasm_tests` list in `tests/CMakeLists.txt`. |
+| A shader | `shaders/passes/` for pass entry points, `shaders/lib/` for shared modules | No build step. GPU structs go through `core.slang` (see Invariants). |
+
+Then run `clang-format -i` on the new `.cpp` files and build. CMake reconfigures by itself when a `CMakeLists.txt` changes.
 
 ## Layout
 
