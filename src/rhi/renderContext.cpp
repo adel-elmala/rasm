@@ -1,6 +1,7 @@
 #include "rasm/render/renderContext.h"
 #include "rasm/engine.h"
 #include "rhi/device.h"
+#include "rhi/uploadManager.h"
 
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
@@ -22,6 +23,25 @@ namespace rasm
             spdlog::error("{}: {}", caller, message);
             assert(false && "Invalid RenderContext argument, see the log.");
             return false;
+        }
+
+        rhi::SamplerDesc samplerDesc(SamplerType type)
+        {
+            switch (type)
+            {
+            case SamplerType::LINEAR_MIRRORED_REPEAT:
+                return {.name = "Linear Mirrored Repeat Sampler", .addressMode = rhi::AddressMode::MIRRORED_REPEAT, .maxAnisotropy = 8.0f};
+            case SamplerType::LINEAR_CLAMP:
+                return {.name = "Linear Clamp Sampler", .addressMode = rhi::AddressMode::CLAMP_TO_EDGE, .maxAnisotropy = 8.0f};
+            case SamplerType::NEAREST_REPEAT:
+                return {.name = "Nearest Repeat Sampler", .magFilter = rhi::Filter::NEAREST, .minFilter = rhi::Filter::NEAREST, .mipFilter = rhi::Filter::NEAREST};
+            case SamplerType::NEAREST_MIRRORED_REPEAT:
+                return {.name = "Nearest Mirrored Repeat Sampler", .magFilter = rhi::Filter::NEAREST, .minFilter = rhi::Filter::NEAREST, .mipFilter = rhi::Filter::NEAREST, .addressMode = rhi::AddressMode::MIRRORED_REPEAT};
+            case SamplerType::NEAREST_CLAMP:
+                return {.name = "Nearest Clamp Sampler", .magFilter = rhi::Filter::NEAREST, .minFilter = rhi::Filter::NEAREST, .mipFilter = rhi::Filter::NEAREST, .addressMode = rhi::AddressMode::CLAMP_TO_EDGE};
+            default:
+                return {.name = "Linear Repeat Sampler", .maxAnisotropy = 8.0f};
+            }
         }
 
         rhi::Buffer *lookup(const std::unordered_map<BufferHandle, rhi::Buffer *, HandleHash> &objects, const BufferHandle &handle, const char *caller)
@@ -129,7 +149,8 @@ namespace rasm
     {
         std::unique_ptr<rhi::Device>                                                                                            device;
         rhi::Swapchain*                                                                                                         swapchain       = nullptr;
-        rhi::Sampler*                                                                                                           defaultSampler  = nullptr;
+        rhi::Sampler*                                                                                                           samplers[static_cast<size_t>(SamplerType::COUNT)] = {};
+        rhi::UploadManager                                                                                                      uploads;
         std::vector<TextureHandle>                                                                                              swapchainImages;  // also in textures, but owned by the swapchain
 
         std::unordered_map<BufferHandle, rhi::Buffer*, HandleHash>                                                              buffers;
@@ -183,6 +204,9 @@ namespace rasm
         if (!impl->device)
             return false;
 
+        if (!impl->uploads.initialize(*impl->device))
+            return false;
+
         impl->swapchain = impl->device->createSwapchain({.width = window.pixelWidth, .height = window.pixelHeight});
         if (!impl->swapchain)
         {
@@ -191,10 +215,13 @@ namespace rasm
         }
         impl->registerSwapchainImages(engine->handleManager);
 
-        // Every bindless texture is sampled through this one sampler.
-        impl->defaultSampler = impl->device->createSampler({.name = "Default Sampler", .maxAnisotropy = 8.0f});
-        if (!impl->defaultSampler)
-            return false;
+        // A small fixed set shared by every bindless texture, instead of one sampler per texture (P2).
+        for (size_t i = 0; i < static_cast<size_t>(SamplerType::COUNT); ++i)
+        {
+            impl->samplers[i] = impl->device->createSampler(samplerDesc(static_cast<SamplerType>(i)));
+            if (!impl->samplers[i])
+                return false;
+        }
 
         return true;
     }
@@ -207,6 +234,7 @@ namespace rasm
         auto &device = *impl->device;
         device.waitIdle();
 
+        impl->uploads.cleanup();
         for (const auto &[handle, descriptorSet] : impl->descriptorSets)
             device.destroyDescriptorSet(descriptorSet);
         for (const auto &[handle, pool] : impl->descriptorPools)
@@ -226,8 +254,9 @@ namespace rasm
             device.destroyPipeline(pipeline);
         for (const auto &[handle, shader] : impl->shaders)
             device.destroyShader(shader);
-        if (impl->defaultSampler)
-            device.destroySampler(impl->defaultSampler);
+        for (auto *sampler : impl->samplers)
+            if (sampler)
+                device.destroySampler(sampler);
         if (impl->swapchain)
             device.destroySwapchain(impl->swapchain);
 
@@ -415,7 +444,7 @@ namespace rasm
         // Only once every attachment exists, so that a failed creation leaves the bindless set untouched.
         for (const auto &attachment : rt.attachments)
         {
-            if (engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.color) == UINT32_MAX)
+            if (engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.color, SamplerType::LINEAR_CLAMP) == UINT32_MAX)
             {
                 spdlog::error("Failed to make render target '{}' bindless.", desc.name);
                 destroyAttachments();
@@ -460,6 +489,7 @@ namespace rasm
         auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
         if (!rhiBuffer)
             return;
+        impl->uploads.cancelUploads(rhiBuffer);
         impl->device->destroyBuffer(rhiBuffer);
         impl->buffers.erase(buffer);
     }
@@ -485,9 +515,13 @@ namespace rasm
             return false;
 
         auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
-        if (!rhiBuffer)
+        if (!rhiBuffer || !checkArgument(offset + size <= rhiBuffer->desc.size, __func__, "the range is outside the buffer."))
             return false;
-        return impl->device->fillBuffer(rhiBuffer, data, size, offset);
+
+        // Unmapped buffers are device-local: the data reaches them with the next submit (P1).
+        if (rhiBuffer->mapped)
+            return impl->device->fillBuffer(rhiBuffer, data, size, offset);
+        return impl->uploads.upload(rhiBuffer, data, size, offset);
     }
 
     bool RenderContext::fillTexture(const TextureHandle &texture, const void *data)
@@ -534,8 +568,11 @@ namespace rasm
         return impl->device->queryVRAMStats();
     }
 
-    uint32_t RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot)
+    uint32_t RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, SamplerType sampler, uint32_t slot)
     {
+        if (!checkArgument(sampler < SamplerType::COUNT, __func__, "invalid sampler type."))
+            return UINT32_MAX;
+
         if (slot > MAX_BINDLESS_TEXTURES || (slot == MAX_BINDLESS_TEXTURES && impl->nextBindlessTextureIndex >= MAX_BINDLESS_TEXTURES))
         {
             spdlog::error("Slot index exceeds maximum bindless textures.");
@@ -548,7 +585,7 @@ namespace rasm
             return UINT32_MAX;
 
         const uint32_t targetSlot = slot == MAX_BINDLESS_TEXTURES ? impl->nextBindlessTextureIndex : slot;
-        impl->device->updateBindlessTexture(descriptorSet, targetSlot, rhiTexture, impl->defaultSampler);
+        impl->device->updateBindlessTexture(descriptorSet, targetSlot, rhiTexture, impl->samplers[static_cast<size_t>(sampler)]);
 
         // Explicit slots count too: automatic allocation must never land on one of them.
         impl->nextBindlessTextureIndex = std::max(impl->nextBindlessTextureIndex, targetSlot + 1);
@@ -649,9 +686,14 @@ namespace rasm
                 return false;
         }
 
+        // Uploads go first on the same queue, so this submit sees their data. A failed batch is logged and
+        // retried with the next submit; the frame still goes out so the swapchain keeps moving.
+        impl->uploads.flush();
+
         rhi::CommandBuffer *commandBuffers[] = {rhiCommandBuffer};
         rhi::SubmitDesc submitDesc = {
             .commandBuffers = commandBuffers,
+            .commandBufferCount = 1,
             .swapchain = presentsSwapchainImage ? impl->swapchain : nullptr,
             .signalFence = fence,
             .signalValue = signalValue,

@@ -76,13 +76,15 @@ namespace rasm
 
     struct EngineConfig
     {
-        std::string appName             = {};
-        int         windowWidth         = 0;
-        int         windowHeight        = 0;
-        bool        enableValidation    = false;
-        Backend     preferredBackend    = Backend::VULKAN;
-        std::string assetRoot           = {};
-        std::string shaderDir           = {};
+        std::string appName                 = {};
+        int         windowWidth             = 0;
+        int         windowHeight            = 0;
+        bool        enableValidation        = false;
+        Backend     preferredBackend        = Backend::VULKAN;
+        std::string assetRoot               = {};
+        std::string shaderDir               = {};
+        uint32_t    geometryPoolVertices    = 1u << 21; // 64 B each: 128 MiB
+        uint32_t    geometryPoolIndices     = 1u << 23; // 4 B each: 32 MiB
     };
 
     struct FrameResources
@@ -102,10 +104,9 @@ namespace rasm
 
     struct TextureRaw
     {
-        uint32_t        width;
-        uint32_t        height;
-        uint32_t        channels;
-        unsigned char*  data;
+        uint32_t        width   = 0;
+        uint32_t        height  = 0;
+        unsigned char*  data    = nullptr;
     };
 
     struct RenderTargetAttachments

@@ -10,7 +10,6 @@
 
 #include <cstddef>
 #include <cstdlib>
-#include <variant>
 
 namespace rasm
 {
@@ -71,34 +70,24 @@ namespace rasm
             return gmat;
         }
 
-        void addSceneDraw(std::vector<SceneDraw> &draws, const Entity &entity, const ObjRaw &geometry, const glm::mat4 &transform, MaterialHandle material)
-        {
-            if (geometry.vertices.empty() || geometry.indices.empty())
-            {
-                spdlog::warn("Skipping a mesh of entity {}: it has {} vertices and {} indices, and drawing needs both.",
-                             entity.handle.index, geometry.vertices.size(), geometry.indices.size());
-                return;
-            }
-
-            draws.push_back({&entity, &geometry, transform, material});
-        }
-
         void addMeshDraws(std::vector<SceneDraw> &draws, const Entity &entity, const Mesh &mesh)
         {
-            if (mesh.type == Mesh::MeshType::OBJ)
+            for (const auto &subMesh : mesh.subMeshes)
             {
-                addSceneDraw(draws, entity, std::get<ObjRaw>(mesh.data), glm::mat4(1.0f), MaterialHandle{});
-                return;
+                if (subMesh.geometry.vertexCount == 0 || subMesh.geometry.indexCount == 0)
+                {
+                    spdlog::warn("Skipping a mesh of entity {}: it has {} vertices and {} indices, and drawing needs both.",
+                                 entity.handle.index, subMesh.geometry.vertexCount, subMesh.geometry.indexCount);
+                    continue;
+                }
+                draws.push_back({&entity, subMesh.geometry, subMesh.transform, subMesh.material});
             }
-
-            for (const auto &subGLTF : std::get<GLTFRaw>(mesh.data).subGltfRaws)
-                addSceneDraw(draws, entity, subGLTF.objRaw, subGLTF.transform, subGLTF.material);
         }
 
         // A failed preparation is not cached, so anything it created so far would leak on every retry.
         const PreparedScene &discardSceneBuffers(RenderContext &ctx, const PreparedScene &preparedScene)
         {
-            std::vector<BufferHandle> buffers = {preparedScene.megaVertexBuffer, preparedScene.megaIndexBuffer, preparedScene.drawInfoBuffer};
+            std::vector<BufferHandle> buffers = {preparedScene.drawInfoBuffer};
             buffers.insert(buffers.end(), std::begin(preparedScene.megaModelDataBuffer), std::end(preparedScene.megaModelDataBuffer));
             buffers.insert(buffers.end(), std::begin(preparedScene.sceneDataBuffer), std::end(preparedScene.sceneDataBuffer));
 
@@ -240,10 +229,6 @@ namespace rasm
 
         auto &sceneRef = registry.scenes[scene.index];
 
-        // find all meshes associated with the entities in the scene and compute the total byte size required for them.
-        uint64_t totalVertexBufferSize = 0;
-        uint64_t totalIndexBufferSize = 0;
-
         std::vector<SceneDraw> sceneDraws;
 
         for (auto entityHandle : sceneRef.entities)
@@ -253,30 +238,27 @@ namespace rasm
 
             const auto &entity = registry.entities[entityHandle.index];
 
+            // A scene waits for all of its assets, so it is prepared once and nothing in use is rebuilt (D4).
+            for (auto texture : getMaterial(entity.material).textures)
+            {
+                if (texture.isValid() && !isLoaded(texture))
+                    return EMPTY_PREPARED_SCENE;
+            }
+
             auto mesh = entity.mesh;
             if (!mesh.isValid())
                 continue;
 
-            addMeshDraws(sceneDraws, entity, registry.meshes[mesh.index]);
+            const auto &meshRef = registry.meshes[mesh.index];
+            if (meshRef.state == MeshState::LOADING)
+                return EMPTY_PREPARED_SCENE;
+
+            addMeshDraws(sceneDraws, entity, meshRef);
         }
 
         // Nothing to draw: zero-sized buffers are invalid, and staying uncached lets entities added later show up.
         if (sceneDraws.empty())
             return EMPTY_PREPARED_SCENE;
-
-        for (const auto &draw : sceneDraws)
-        {
-            totalVertexBufferSize += draw.geometry->vertices.size() * sizeof(Vertex);
-            totalIndexBufferSize += draw.geometry->indices.size() * sizeof(uint32_t);
-        }
-
-        // allocate one mega vertex-buffer and index-buffer to hold all the mesh data for the scene.
-        queryMemoryStats();
-        if (profiler.gpuMemoryStats.vramUsage + totalVertexBufferSize + totalIndexBufferSize > profiler.gpuMemoryStats.vramBudget)
-        {
-            spdlog::warn("Not enough VRAM to allocate buffers for the scene.");
-            return EMPTY_PREPARED_SCENE;
-        }
 
         // create a pipeline for the UberMaterial. A failed preparation retries every frame, so this comes
         // before the buffers: a shader error must not allocate and fill them each time.
@@ -288,30 +270,12 @@ namespace rasm
             return EMPTY_PREPARED_SCENE;
         }
 
-        // Allocate the vertex and index buffers for the scene.
-        BufferDesc bufferDesc;
-        bufferDesc.name = "Mega Vertex Buffer";
-        bufferDesc.usage = BufferUsage::STORAGE;
-        bufferDesc.size = totalVertexBufferSize;
-
-        preparedScene.megaVertexBuffer = ctx.createBuffer(bufferDesc);
-
-        bufferDesc.name = "Mega Index Buffer";
-        bufferDesc.usage = BufferUsage::INDEX;
-        bufferDesc.size = totalIndexBufferSize;
-
-        preparedScene.megaIndexBuffer = ctx.createBuffer(bufferDesc);
-
-        if (!preparedScene.megaVertexBuffer.isValid() || !preparedScene.megaIndexBuffer.isValid())
-        {
-            spdlog::error("Failed to create vertex or index buffer for the scene.");
-            return discardSceneBuffers(ctx, preparedScene);
-        }
-
         // allocate mega-model buffer and draw info buffer for the scene.
+        BufferDesc bufferDesc;
         bufferDesc.name = "Mega Model data Buffer";
         bufferDesc.usage = BufferUsage::STORAGE;
         bufferDesc.size = sceneDraws.size() * sizeof(gfx::Modeldata);
+        bufferDesc.hostVisible = true;
         // Mutable uniforms belong to a frame slot; other slots may still be executing on the GPU.
         for (auto &buffer : preparedScene.megaModelDataBuffer)
         {
@@ -323,6 +287,7 @@ namespace rasm
         bufferDesc.name = "Draw Info Buffer";
         bufferDesc.usage = BufferUsage::INDIRECT;
         bufferDesc.size = sceneDraws.size() * sizeof(gfx::DrawInfo);
+        bufferDesc.hostVisible = false;
 
         preparedScene.drawInfoBuffer = ctx.createBuffer(bufferDesc);
 
@@ -336,6 +301,7 @@ namespace rasm
         bufferDesc.name = "Scene Data Buffer";
         bufferDesc.usage = BufferUsage::STORAGE;
         bufferDesc.size = MAX_SCENE_DRAWS_PER_FRAME * sizeof(gfx::SceneData);
+        bufferDesc.hostVisible = true;
 
         for (auto &buffer : preparedScene.sceneDataBuffer)
         {
@@ -344,29 +310,13 @@ namespace rasm
                 return discardSceneBuffers(ctx, preparedScene);
         }
 
-        uint64_t vertexBufferOffset = 0;
-        uint64_t indexBufferOffset = 0;
         uint64_t modelBufferOffset = 0;
         uint64_t drawInfoBufferOffset = 0;
-
-        uint32_t indexOffset = 0;
-        uint32_t vertexOffset = 0;
 
         ZoneNamedN(uploadZone, "uploadScene", true);
 
         for (const auto &draw : sceneDraws)
         {
-            auto nVertices = draw.geometry->vertices.size();
-            auto nIndices = draw.geometry->indices.size();
-            auto vSize = nVertices * sizeof(gfx::VertexFull);
-            auto iSize = nIndices * sizeof(uint32_t);
-
-            ctx.fillBuffer(preparedScene.megaVertexBuffer, draw.geometry->vertices.data(), vSize, vertexBufferOffset);
-            ctx.fillBuffer(preparedScene.megaIndexBuffer, draw.geometry->indices.data(), iSize, indexBufferOffset);
-
-            vertexBufferOffset += vSize;
-            indexBufferOffset += iSize;
-
             // fill the model matrix buffer with the current entity's model matrix.
             auto modelTransform = draw.entity->transform;
 
@@ -393,17 +343,15 @@ namespace rasm
             modelBufferOffset += sizeof(modelData);
 
             auto drawInfo = gfx::DrawInfo{};
-            drawInfo.indexCount = nIndices;
+            // Indices are local to their sub-mesh; vertexOffset moves them to its place in the geometry pool.
+            drawInfo.indexCount = draw.geometry.indexCount;
             drawInfo.instanceCount = 1; // TODO: support multiple instances
-            drawInfo.firstIndex = indexOffset;
-            drawInfo.vertexOffset = vertexOffset;
+            drawInfo.firstIndex = draw.geometry.firstIndex;
+            drawInfo.vertexOffset = static_cast<int32_t>(draw.geometry.firstVertex);
             drawInfo.firstInstance = 0; // TODO: support multiple instances
 
             ctx.fillBuffer(preparedScene.drawInfoBuffer, &drawInfo, sizeof(drawInfo), drawInfoBufferOffset);
             drawInfoBufferOffset += sizeof(drawInfo);
-
-            indexOffset += nIndices;
-            vertexOffset += nVertices;
         }
 
         preparedScene.drawInfoCount = sceneDraws.size();

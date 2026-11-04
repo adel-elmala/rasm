@@ -64,9 +64,10 @@ Goal: the structural changes that every later feature depends on. They get much 
 - [ ] Use a single shared pipeline layout (the bindless set + push-constant range), a `VkPipelineCache` persisted to disk, and an on-disk SPIR-V cache keyed by source hash (`P8`).
 
 ### 1.3 Memory and uploads
-- [ ] Keep static data in device-local memory. Add an upload manager with a staging ring buffer, batched copies, an optional dedicated transfer queue, and timeline-semaphore completion (`P1`, `D13`).
-- [ ] Texture upload: use host image copy when it is supported, otherwise staging. Generate mips on the GPU or with a worker thread. Use a small shared sampler set (`P2`).
-- [ ] Load assets asynchronously on worker threads, and release CPU-side asset data after upload (`P6`).
+- [x] Keep static data in device-local memory. Add an upload manager with a staging ring buffer, batched copies and timeline-semaphore completion (`P1`, done 2026-11-04).
+- [ ] Optional dedicated transfer queue for uploads, with semaphore waits in `SubmitDesc` and queue-family ownership transfers. It pays off once loading is asynchronous (`D13`, `P6`).
+- [ ] Texture upload: use host image copy when it is supported, otherwise staging. Generate mips on the GPU or with a worker thread. Use a small shared sampler set (done 2026-11-04) (`P2`).
+- [x] Load assets asynchronously on worker threads, and release CPU-side asset data after upload (`P6`, done 2026-11-04).
 - [ ] Custom allocators: per-frame linear allocators for transient CPU data, pool allocators for registries. (Original item 4; scope these to measured hot spots.)
 
 ### 1.4 Conventions

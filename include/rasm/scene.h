@@ -32,19 +32,16 @@ namespace rasm
         size_t lightCount = 0;
     };
 
-    // One draw of a scene. The geometry stays in the registry, so preparing a scene copies no mesh data.
     struct SceneDraw
     {
         const Entity*   entity;
-        const ObjRaw*   geometry;
+        MeshGeometry    geometry;
         glm::mat4       transform;
         MaterialHandle  material;
     };
 
     struct PreparedScene
     {
-        BufferHandle                                       megaVertexBuffer;
-        BufferHandle                                       megaIndexBuffer;
         BufferHandle                                       megaModelDataBuffer[MAX_FRAMES_IN_FLIGHT];
         BufferHandle                                       drawInfoBuffer;
         BufferHandle                                       sceneDataBuffer[MAX_FRAMES_IN_FLIGHT]; // one SceneData per drawScene of a frame

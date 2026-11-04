@@ -260,13 +260,13 @@ Use a right-handed Y-up world (glTF's convention) and do the Vulkan flip with a 
 
 Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction, either bindless `StructuredBuffer` indices or explicitly bound storage buffers, and route draw-ID access through a helper that each target implements.
 
-**D13 — Queues and synchronization.** There is only one graphics queue: no transfer or async-compute queue. `rhi::QueueType` has only `GRAPHICS`; add the new queue types there, with their queues in each backend and a queue choice in `RenderContext::createCommandBuffer` and `submit`. Frame pacing uses a timeline fence since `D1`, but a `SubmitDesc` can only signal one, not wait on one, which cross-queue work needs. Uploads are synchronous on the main thread.
+**D13 — Queues and synchronization.** There is only one graphics queue: no transfer or async-compute queue. `rhi::QueueType` has only `GRAPHICS`; add the new queue types there, with their queues in each backend and a queue choice in `RenderContext::createCommandBuffer` and `submit`. Frame pacing uses a timeline fence since `D1`, but a `SubmitDesc` can only signal one, not wait on one, which cross-queue work needs. Since `P1`, buffer uploads are batched through a staging ring and submitted on the graphics queue before the frame, but they are still recorded on the main thread.
 
 **D14 — Error handling is inconsistent.** Many `bool` results are ignored (`beginCommandBuffer`, `submit`, `fillBuffer`). Some runtime errors are `assert`s.
 
 **D15 — Hard-coded limits** are spread across headers (see [architecture.md §10](architecture.md#10-compile-time-limits)). Move them into `EngineConfig`, or grow the containers dynamically. Size GPU tables from the config.
 
-**D16 — Profiling.** *Partly resolved:* the frame loop, `prepareScene`, uploads, submit and present now have Tracy zones and a frame mark, with the client in on-demand mode. Still open: Tracy is linked publicly, there are no GPU timestamps, nothing turns Tracy off (every build listens on TCP 8086 on all interfaces, which a shipped game must not do), and the VRAM check in `prepareScene` compares host-visible allocations against the device-local budget.
+**D16 — Profiling.** *Partly resolved:* the frame loop, `prepareScene`, uploads, submit and present now have Tracy zones and a frame mark, with the client in on-demand mode. Still open: Tracy is linked publicly, there are no GPU timestamps, and nothing turns Tracy off (every build listens on TCP 8086 on all interfaces, which a shipped game must not do). The VRAM check in `prepareScene` compared host-visible allocations against the device-local budget until `P1` moved the mega buffers to device-local memory.
 
 **D17 — No tests and no CI.** *Partly resolved 2026-11-01:* `rasm_tests` covers handles, descriptor equality and hashing, render-graph sorting, transforms and camera math. It found `B22` on its first run. glTF import, CI and image tests are still open. Pure-CPU pieces such as handle pools, desc hashing, glTF import, camera math and render-graph sorting are easy to unit-test. Rendering can be covered with headless golden-image tests once offscreen rendering exists.
 
@@ -274,12 +274,12 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 
 ## 4. Performance
 
-**P1 — Every buffer is host-visible and mapped** (`HOST_ACCESS_SEQUENTIAL_WRITE | MAPPED`, [vulkanContext.cpp:205-208](../src/rhi/vulkan/vulkanContext.cpp#L205-L208)). On discrete GPUs without ReBAR, the mega vertex and index buffers end up in system RAM and every vertex fetch crosses PCIe. Static data should go to device-local memory through staging (or `ALLOW_TRANSFER_INSTEAD`). Keep host-visible memory for per-frame data only.
+**P1 — Every buffer is host-visible and mapped.** *Fixed 2026-11-04:* only buffers with `BufferDesc::hostVisible` (the per-frame model and scene data) are forced into host-visible memory. Other buffers are device-local, use `ALLOW_TRANSFER_INSTEAD` so they stay mapped where device-local memory is host-visible, and are otherwise filled through `rhi::UploadManager`: a staging ring with batched copies and timeline-fence completion ([architecture.md §12](architecture.md#12-rhi)). The original finding follows. (`HOST_ACCESS_SEQUENTIAL_WRITE | MAPPED`, [vulkanContext.cpp:205-208](../src/rhi/vulkan/vulkanContext.cpp#L205-L208)). On discrete GPUs without ReBAR, the mega vertex and index buffers end up in system RAM and every vertex fetch crosses PCIe. Static data should go to device-local memory through staging (or `ALLOW_TRANSFER_INSTEAD`). Keep host-visible memory for per-frame data only.
 
 **P2 — Texture path.**
 - Images are created with `HOST_ACCESS_*` allocation flags ([vulkanContext.cpp:347-351](../src/rhi/vulkan/vulkanContext.cpp#L347-L351)), which can push them into host-visible memory.
 - Each image gets a dedicated allocation, and mips are generated on the CPU on the main thread.
-- *Fixed 2026-11-02 (`D1`):* every bindless texture uses one default sampler. Originally each texture created its own `VkSampler` and called `vkGetPhysicalDeviceProperties`. Drivers often cap samplers at about 4000, so use a handful of shared samplers.
+- *Fixed 2026-11-02 (`D1`), 2026-11-04:* bindless textures share a fixed set of six samplers (`SamplerType`), picked per slot; glTF textures map their sampler onto it. Originally each texture created its own `VkSampler` and called `vkGetPhysicalDeviceProperties`. Drivers often cap samplers at about 4000, so use a handful of shared samplers.
 - Host image copy also requires the `hostImageCopy` feature, which narrows hardware support; keep a staging-buffer fallback.
 - Longer term, support GPU-compressed textures (KTX2 + BCn/ASTC), which matters for map tiles and game content.
 
@@ -289,10 +289,10 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 
 **P5 — Large by-value copies in the scene code.**
 - `prepareScene` no longer copies meshes: `processMesh` is gone, and each `SceneDraw` points into the registry. It returns a const reference to the cached entry, so `drawScene` copies nothing.
-- `getMeshByteSize` copies a whole `Mesh`.
+- *Fixed 2026-11-04:* `getMeshByteSize` copied a whole `Mesh`; it now sums the sub-mesh ranges by reference.
 - `RenderGraph::execute` copies `Scene`, which holds 1,040 handles ([renderGraph.cpp:143](../src/renderer/renderGraph.cpp#L143)).
 
-**P6 — CPU memory retention.** *Partly fixed 2026-11-01:* `GLTFRaw` no longer keeps a copy of the `tinygltf::Model`, so the decoded glTF images are freed after import. CPU vertex and index arrays and the `stbi` pixel data for every `loadTexture` still stay resident for the engine's lifetime.
+**P6 — CPU memory retention.** *Fixed 2026-11-04:* meshes live in an engine-wide geometry pool (one vertex and one index buffer), uploaded when their load finishes, and keep only their pool ranges. The CPU vertex and index arrays, the `tinygltf::Model` and the `stbi` pixels are freed right after upload. Files are read and decoded on worker threads (`std::async`), and the main thread uploads the results at the start of a frame. A scene is prepared once all its assets are loaded. *Partly fixed 2026-11-01:* `GLTFRaw` no longer kept a copy of the `tinygltf::Model`. The original finding: CPU vertex and index arrays and the `stbi` pixel data for every `loadTexture` stayed resident for the engine's lifetime.
 
 **P7 — Per-frame CPU work grows with draw count.** `updateUniforms` recomputes and uploads every model and normal matrix every frame, with no dirty tracking. That is fine now, but it becomes the bottleneck at 10⁴–10⁵ instances. Plan for dirty ranges and, later, GPU-side transform computation.
 
@@ -308,7 +308,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 - **C2 — Formatting.** *Fixed 2026-11-01:* the repo has a `.clang-format` and all C++ files follow it. It sets no column limit, because a limit collapsed hand-placed line breaks and changed about 500 extra lines. The original finding follows. `scene.cpp` uses 2-space indentation while everything else uses 4, and there is no `.clang-format` in the repo.
 - **C3 — Dead or placeholder code.**
   - `setUniform` (a no-op).
-  - The glTF branch of `getMeshByteSize`.
+  - *Fixed 2026-11-04:* the glTF branch of `getMeshByteSize` (every mesh is now a list of sub-meshes).
   - `VertexFormat::POS_ONLY`, `MAX_DESCRIPTOR_TYPES`, `compile-shaders.bat`.
 - **C4 — Duplication.**
   - `readFile` and `loadFileToString`.

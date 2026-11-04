@@ -57,6 +57,7 @@ namespace rasm::rhi
         bool                        fillTexture(Texture* texture, const void* data) override;
         void                        updateBindlessTexture(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, Sampler* sampler) override;
         bool                        waitForFence(Fence* fence, uint64_t value, uint64_t timeout) override;
+        uint64_t                    getFenceValue(Fence* fence) override;
         VRAMStats                   queryVRAMStats() override;
         void                        waitIdle() override;
         VkDevice                    getVkDevice() const;
