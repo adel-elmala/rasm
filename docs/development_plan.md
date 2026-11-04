@@ -75,8 +75,8 @@ Goal: the structural changes that every later feature depends on. They get much 
 - [x] Use reversed-Z with an infinite far plane by default. The depth format becomes `D32_SFLOAT`, without stencil unless it is requested (done 2026-11-04).
 
 ### 1.5 Quality
-- [ ] Extend `rasm_tests` to glTF import and to the handle pools once they exist. Handles, descriptor equality and hashing, render-graph sorting, transforms and camera math are covered (`D17`).
-- [ ] Set up CI: build Windows and macOS presets on every PR, and run unit tests. Add image tests once headless rendering exists (phase 4).
+- [ ] Extend `rasm_tests` to glTF import (done 2026-11-04) and to the handle pools once they exist (`D4`). Handles, descriptor equality and hashing, render-graph sorting, transforms, camera math and glTF import are covered (`D17`).
+- [ ] Set up CI: build Windows and macOS presets on every PR, and run unit tests (`D17`, done 2026-11-04). Add image tests once headless rendering exists (phase 4).
 
 **Exit criteria:** examples build against `rasm::rasm` from an install tree, using only public headers. Core code contains no `Vk*` identifiers. Objects can be created and destroyed at runtime without leaks under validation.
 
