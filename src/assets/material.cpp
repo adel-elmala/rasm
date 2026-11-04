@@ -7,6 +7,28 @@
 
 namespace rasm
 {
+    namespace
+    {
+        // Maps a glTF sampler onto the shared set. wrapS picks the address mode for both axes, and magFilter
+        // picks nearest or linear for every filter.
+        SamplerType toSamplerType(const tinygltf::Model &model, int samplerIndex)
+        {
+            if (samplerIndex < 0 || samplerIndex >= static_cast<int>(model.samplers.size()))
+                return SamplerType::LINEAR_REPEAT;
+
+            const auto &sampler = model.samplers[samplerIndex];
+            const bool nearest = sampler.magFilter == TINYGLTF_TEXTURE_FILTER_NEAREST;
+            switch (sampler.wrapS)
+            {
+            case TINYGLTF_TEXTURE_WRAP_CLAMP_TO_EDGE:
+                return nearest ? SamplerType::NEAREST_CLAMP : SamplerType::LINEAR_CLAMP;
+            case TINYGLTF_TEXTURE_WRAP_MIRRORED_REPEAT:
+                return nearest ? SamplerType::NEAREST_MIRRORED_REPEAT : SamplerType::LINEAR_MIRRORED_REPEAT;
+            default:
+                return nearest ? SamplerType::NEAREST_REPEAT : SamplerType::LINEAR_REPEAT;
+            }
+        }
+    }
 
     MaterialHandle Engine::createMaterial(MaterialType type, std::vector<TextureHandle> textures)
     {
@@ -127,8 +149,10 @@ namespace rasm
                 if (source < 0 || source >= static_cast<int>(model.images.size()))
                     return {};
 
-                // Upload each (image, color space) once per model.
-                const uint64_t cacheKey = (static_cast<uint64_t>(source) << 1) | (srgb ? 1u : 0u);
+                // Upload each (image, color space, sampler) once per model. A texture handle has one bindless
+                // slot, so the rare image used with two samplers is uploaded twice.
+                const SamplerType sampler = toSamplerType(model, model.textures[textureIndex].sampler);
+                const uint64_t cacheKey = (static_cast<uint64_t>(source) << 4) | (static_cast<uint64_t>(sampler) << 1) | (srgb ? 1u : 0u);
                 if (auto it = cache.imageTextures.find(cacheKey); it != cache.imageTextures.end())
                     return it->second;
 
@@ -159,7 +183,7 @@ namespace rasm
                                               .usage = TextureUsage::SAMPLED});
                 if (!texture.isValid() || !ctx.fillTexture(texture, rgba.data()))
                     return {};
-                addBindlessTexture(bindlessDescriptorSet, texture);
+                addBindlessTexture(bindlessDescriptorSet, texture, sampler);
                 cache.imageTextures[cacheKey] = texture;
                 return texture;
             };

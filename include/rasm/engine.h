@@ -103,7 +103,7 @@ namespace rasm
         RenderContext&              getRenderContext();
         MeshSize                    getMeshByteSize(const MeshHandle& handle) const;
         void                        queryMemoryStats();
-        uint32_t                    addBindlessTexture(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, uint32_t slot = MAX_BINDLESS_TEXTURES);
+        uint32_t                    addBindlessTexture(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, SamplerType sampler = SamplerType::LINEAR_REPEAT, uint32_t slot = MAX_BINDLESS_TEXTURES);
         uint32_t                    getBindlessTextureIndex(const TextureHandle& texture);
         // The render target's color texture for the current frame slot, so fetch it every frame.
         TextureHandle               getRenderTargetTexture(const RenderTargetHandle& renderTarget);

@@ -587,9 +587,9 @@ namespace rasm
         return bindlessDescriptorSet;
     }
 
-    uint32_t Engine::addBindlessTexture(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot)
+    uint32_t Engine::addBindlessTexture(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, SamplerType sampler, uint32_t slot)
     {
-        auto txtID = ctx.updateBindlessDescriptorSet(bindlessSet, texture, slot);
+        auto txtID = ctx.updateBindlessDescriptorSet(bindlessSet, texture, sampler, slot);
         if (txtID == UINT32_MAX)
         {
             spdlog::error("Failed to add bindless texture.");

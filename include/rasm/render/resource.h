@@ -41,6 +41,17 @@ namespace rasm
         COMBINED_IMAGE_SAMPLER,
     };
 
+    enum class SamplerType
+    {
+        LINEAR_REPEAT,
+        LINEAR_MIRRORED_REPEAT,
+        LINEAR_CLAMP,
+        NEAREST_REPEAT,
+        NEAREST_MIRRORED_REPEAT,
+        NEAREST_CLAMP,
+        COUNT,
+    };
+
     struct BufferDesc
     {
         std::string                 name;

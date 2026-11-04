@@ -25,6 +25,25 @@ namespace rasm
             return false;
         }
 
+        rhi::SamplerDesc samplerDesc(SamplerType type)
+        {
+            switch (type)
+            {
+            case SamplerType::LINEAR_MIRRORED_REPEAT:
+                return {.name = "Linear Mirrored Repeat Sampler", .addressMode = rhi::AddressMode::MIRRORED_REPEAT, .maxAnisotropy = 8.0f};
+            case SamplerType::LINEAR_CLAMP:
+                return {.name = "Linear Clamp Sampler", .addressMode = rhi::AddressMode::CLAMP_TO_EDGE, .maxAnisotropy = 8.0f};
+            case SamplerType::NEAREST_REPEAT:
+                return {.name = "Nearest Repeat Sampler", .magFilter = rhi::Filter::NEAREST, .minFilter = rhi::Filter::NEAREST, .mipFilter = rhi::Filter::NEAREST};
+            case SamplerType::NEAREST_MIRRORED_REPEAT:
+                return {.name = "Nearest Mirrored Repeat Sampler", .magFilter = rhi::Filter::NEAREST, .minFilter = rhi::Filter::NEAREST, .mipFilter = rhi::Filter::NEAREST, .addressMode = rhi::AddressMode::MIRRORED_REPEAT};
+            case SamplerType::NEAREST_CLAMP:
+                return {.name = "Nearest Clamp Sampler", .magFilter = rhi::Filter::NEAREST, .minFilter = rhi::Filter::NEAREST, .mipFilter = rhi::Filter::NEAREST, .addressMode = rhi::AddressMode::CLAMP_TO_EDGE};
+            default:
+                return {.name = "Linear Repeat Sampler", .maxAnisotropy = 8.0f};
+            }
+        }
+
         rhi::Buffer *lookup(const std::unordered_map<BufferHandle, rhi::Buffer *, HandleHash> &objects, const BufferHandle &handle, const char *caller)
         {
             auto it = objects.find(handle);
@@ -130,7 +149,7 @@ namespace rasm
     {
         std::unique_ptr<rhi::Device>                                                                                            device;
         rhi::Swapchain*                                                                                                         swapchain       = nullptr;
-        rhi::Sampler*                                                                                                           defaultSampler  = nullptr;
+        rhi::Sampler*                                                                                                           samplers[static_cast<size_t>(SamplerType::COUNT)] = {};
         rhi::UploadManager                                                                                                      uploads;
         std::vector<TextureHandle>                                                                                              swapchainImages;  // also in textures, but owned by the swapchain
 
@@ -196,10 +215,13 @@ namespace rasm
         }
         impl->registerSwapchainImages(engine->handleManager);
 
-        // Every bindless texture is sampled through this one sampler.
-        impl->defaultSampler = impl->device->createSampler({.name = "Default Sampler", .maxAnisotropy = 8.0f});
-        if (!impl->defaultSampler)
-            return false;
+        // A small fixed set shared by every bindless texture, instead of one sampler per texture (P2).
+        for (size_t i = 0; i < static_cast<size_t>(SamplerType::COUNT); ++i)
+        {
+            impl->samplers[i] = impl->device->createSampler(samplerDesc(static_cast<SamplerType>(i)));
+            if (!impl->samplers[i])
+                return false;
+        }
 
         return true;
     }
@@ -232,8 +254,9 @@ namespace rasm
             device.destroyPipeline(pipeline);
         for (const auto &[handle, shader] : impl->shaders)
             device.destroyShader(shader);
-        if (impl->defaultSampler)
-            device.destroySampler(impl->defaultSampler);
+        for (auto *sampler : impl->samplers)
+            if (sampler)
+                device.destroySampler(sampler);
         if (impl->swapchain)
             device.destroySwapchain(impl->swapchain);
 
@@ -421,7 +444,7 @@ namespace rasm
         // Only once every attachment exists, so that a failed creation leaves the bindless set untouched.
         for (const auto &attachment : rt.attachments)
         {
-            if (engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.color) == UINT32_MAX)
+            if (engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.color, SamplerType::LINEAR_CLAMP) == UINT32_MAX)
             {
                 spdlog::error("Failed to make render target '{}' bindless.", desc.name);
                 destroyAttachments();
@@ -545,8 +568,11 @@ namespace rasm
         return impl->device->queryVRAMStats();
     }
 
-    uint32_t RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, uint32_t slot)
+    uint32_t RenderContext::updateBindlessDescriptorSet(const DescriptorSetHandle &bindlessSet, const TextureHandle &texture, SamplerType sampler, uint32_t slot)
     {
+        if (!checkArgument(sampler < SamplerType::COUNT, __func__, "invalid sampler type."))
+            return UINT32_MAX;
+
         if (slot > MAX_BINDLESS_TEXTURES || (slot == MAX_BINDLESS_TEXTURES && impl->nextBindlessTextureIndex >= MAX_BINDLESS_TEXTURES))
         {
             spdlog::error("Slot index exceeds maximum bindless textures.");
@@ -559,7 +585,7 @@ namespace rasm
             return UINT32_MAX;
 
         const uint32_t targetSlot = slot == MAX_BINDLESS_TEXTURES ? impl->nextBindlessTextureIndex : slot;
-        impl->device->updateBindlessTexture(descriptorSet, targetSlot, rhiTexture, impl->defaultSampler);
+        impl->device->updateBindlessTexture(descriptorSet, targetSlot, rhiTexture, impl->samplers[static_cast<size_t>(sampler)]);
 
         // Explicit slots count too: automatic allocation must never land on one of them.
         impl->nextBindlessTextureIndex = std::max(impl->nextBindlessTextureIndex, targetSlot + 1);
