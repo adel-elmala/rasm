@@ -22,10 +22,11 @@ is the working reference (forward pass into a render target, then an overlay pas
 
 | Limit | Value | Where |
 |---|---|---|
-| Push constants | **8 bytes total**, `ShaderType::VERTEX_FRAGMENT` | range = `sizeof(VkDeviceAddress)`, `VulkanDevice::createGraphicsPipeline` (`C12`) |
+| Push constants | **16 bytes total** (`PUSH_CONSTANTS_SIZE`), `ShaderType::VERTEX_FRAGMENT` | `VulkanDevice::createGraphicsPipeline`; `RenderContext::pushConstants` rejects more |
 | Entry points | `vertMain` + `fragMain` in **one source string** | `Engine::createPipeline` |
 | Attachments | 1 color (swapchain format) + `D32_SFLOAT_S8_UINT` | `Engine::createPipeline` |
-| Fixed state | depth test + write `LESS_OR_EQUAL`, no blending, cull none, triangle list, no vertex input | `createGraphicsPipeline` |
+| Fixed state | depth test + write `LESS_OR_EQUAL`, no blending, triangle list, no vertex input, front face counter-clockwise | `createGraphicsPipeline` |
+| Cull mode | dynamic: `beginPass` sets `NONE`, `ctx.setCullMode(commandBuffer, CullMode::BACK)` changes it for the pass | `VulkanCommandBuffer::setCullMode` |
 | Every pass **clears** its target | two passes can't accumulate into one target | `VulkanCommandBuffer::beginRendering`, review §3 |
 | Readable outputs | only the **color** of an earlier render target, through its bindless index. Depth isn't stored. | `Engine::endPass` |
 | Ordering | from `builder.read`/`write` only, topologically sorted. No automatic barriers beyond the render target begin/end transitions | `RenderGraph::compile` |
@@ -39,7 +40,7 @@ RHI/engine change: propose it in a sentence and wait (CLAUDE.md).
 Shader in `shaders/passes/<name>.slang` (picked up at startup, no build):
 
 ```slang
-struct PushConstants { uint sourceIndex; float strength; };   // ≤ 8 bytes
+struct PushConstants { uint sourceIndex; float strength; };   // ≤ 16 bytes
 [[vk::push_constant]] ConstantBuffer<PushConstants> pc;
 [[vk::binding(0, 0)]] Sampler2D gTextures[];
 
@@ -50,7 +51,7 @@ VSOutput vertMain(uint vertexID : SV_VertexID)
 {
     VSOutput o;
     o.uv = float2((vertexID << 1) & 2, vertexID & 2);   // one triangle covers the screen
-    o.pos = float4(o.uv * 2.0 - 1.0, 0.0, 1.0);
+    o.pos = float4(o.uv.x * 2.0 - 1.0, 1.0 - o.uv.y * 2.0, 0.0, 1.0);   // clip space is Y-up, uv v = 0 is the top row
     return o;
 }
 
@@ -93,7 +94,7 @@ graph.addPass(
 
 - Look up the bindless index **inside** `execute`: each frame slot has its own attachment.
 - The scene target needs `clearColor` and the swapchain format. Copy `examples/01_render_graph`.
-- **More than 8 bytes of parameters**: put them in a `BufferDesc{.usage = STORAGE, .hostVisible = true}` buffer, `ctx.fillBuffer(...)`, push `ctx.getBufferDeviceAddress(buffer)` (8 bytes), and read it through a pointer in Slang (`MyParams* params;`), like `SceneData`. Parameters that change every frame need one buffer per frame slot, but the app can't see the slot index yet, so fill once or propose exposing it.
+- **More than 16 bytes of parameters**: put them in a `BufferDesc{.usage = STORAGE, .hostVisible = true}` buffer, `ctx.fillBuffer(...)`, push `ctx.getBufferDeviceAddress(buffer)` (8 bytes), and read it through a pointer in Slang (`MyParams* params;`), like `SceneData`. Parameters that change every frame need one buffer per frame slot, but the app can't see the slot index yet, so fill once or propose exposing it.
 - Shader structs shared with C++ through a pointer follow the `gpu-struct-sync` layout rules.
 
 ## 4. Where the code goes

@@ -528,11 +528,8 @@ namespace rasm
 
             const tinygltf::Scene &scene = model.scenes[sceneIndex];
 
-            // Root transform flips Y into the engine's Vulkan clip-space convention (Y down), matching what the
-            // OBJ loader does per-vertex. Applied on the left so it acts after the glTF node hierarchy.
-            const glm::mat4 rootTransform = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, 1.0f));
-
-            return traverseNodes(model, scene.nodes, rootTransform);
+            // glTF is right-handed Y-up like the engine, so the hierarchy needs no root transform (D8).
+            return traverseNodes(model, scene.nodes, glm::mat4(1.0f));
         }
 
         GLTFRaw importGltf(const std::string &path, bool binary)
@@ -596,9 +593,10 @@ namespace rasm
                 {
                     Vertex v = {};
 
-                    v.pos = {attrib.vertices[index.vertex_index * 3], -attrib.vertices[index.vertex_index * 3 + 1], attrib.vertices[index.vertex_index * 3 + 2]};
+                    v.pos = {attrib.vertices[index.vertex_index * 3], attrib.vertices[index.vertex_index * 3 + 1], attrib.vertices[index.vertex_index * 3 + 2]};
                     if (hasObjAttribute(attrib.normals, index.normal_index, 3))
-                        v.normal = {attrib.normals[index.normal_index * 3], -attrib.normals[index.normal_index * 3 + 1], attrib.normals[index.normal_index * 3 + 2]};
+                        v.normal = {attrib.normals[index.normal_index * 3], attrib.normals[index.normal_index * 3 + 1], attrib.normals[index.normal_index * 3 + 2]};
+                    // OBJ puts the UV origin at the image's bottom-left; textures start at the top-left.
                     if (hasObjAttribute(attrib.texcoords, index.texcoord_index, 2))
                         v.uv[0] = {attrib.texcoords[index.texcoord_index * 2], 1.0 - attrib.texcoords[index.texcoord_index * 2 + 1]};
 

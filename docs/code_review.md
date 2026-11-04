@@ -240,7 +240,7 @@ Next steps, in order:
 
 Needed: a platform layer the application can replace, creation from a native surface or window handle, an offscreen/headless mode, and camera controllers as optional helpers driven by the application.
 
-**D8 — Coordinate handedness is achieved by mirroring the world.**
+**D8 — Coordinate handedness is achieved by mirroring the world.** *Fixed 2026-11-04:* the world is right-handed Y-up. Import no longer mirrors glTF or OBJ geometry, and the Vulkan backend flips Y with a negative-height viewport in `setViewport`. Front faces are counter-clockwise. Cull mode is dynamic pipeline state (`RenderContext::setCullMode`), so the uber pipeline stays one pipeline. `prepareScene` groups the draws by cull mode, and `drawScene` issues one indirect draw per run of equal modes taken from the current transforms: `NONE` for double-sided materials (glTF `doubleSided`, or `createMaterial(..., doubleSided)`), `BACK` otherwise, and `FRONT` under a mirroring transform. Double-sided back faces are lit with the reversed normal. The original finding follows.
 - glTF geometry gets a `scale(1,-1,1)` root ([meshImport.cpp:533](../src/assets/meshImport.cpp#L533)), and OBJ vertices are negated per vertex ([meshImport.cpp:599-601](../src/assets/meshImport.cpp#L599-L601)).
 - That mirrors the world: the determinant is negative and the triangle winding flips. Back-face culling is disabled to hide this ([vulkanDevice.cpp:639-640](../src/rhi/vulkan/vulkanDevice.cpp#L639-L640)).
 - User-specified positions and directions live in a Y-down world.
@@ -325,7 +325,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 - **C9 — A fragile material layout.** `Material::params` is a flat `float[]` indexed by hand-maintained `PbrParam` offsets, and `name` is a `const char*`. Use a typed `PbrMaterialParams` struct instead.
 - **C10 — Single-header implementations are spread out.** *Resolved in the folder-layout change:* all `*_IMPLEMENTATION` defines now live in [src/thirdparty_impl.cpp](../src/thirdparty_impl.cpp).
 - **C11 — The struct check compares layout, not types.** `validateStruct` checks each struct's size and field offsets ([shaderCompiler.cpp:82-117](../src/renderer/shaderCompiler.cpp#L82-L117)). A `uint32_t` on one side and a `float` on the other, or two swapped fields of the same size, pass and the shader reads garbage. Compare the field's scalar type and element count from the reflection (`getType()->getScalarType()`, `getElementCount()`) against the C++ side in the same table.
-- **C12 — The push-constant size is written in three places and never checked.** `PushConstants` in [core.slang:105-108](../shaders/lib/core.slang#L105-L108) is one pointer, the pipeline layout's range is `sizeof(VkDeviceAddress)` ([vulkanDevice.cpp:538-540](../src/rhi/vulkan/vulkanDevice.cpp#L538-L540)), and `drawScene` pushes `sizeof(uint64_t)` ([gpuScene.cpp:378](../src/renderer/gpuScene.cpp#L378)). `validateRasmStructs` reads through `pc` but does not check its size. Mirror `PushConstants` in `uberMaterialTypes.h`, use its `sizeof` in both places, and add it to the check. The shared pipeline layout planned in `P8` is the natural home for the range.
+- **C12 — The push-constant size is written in three places and never checked.** *Fixed 2026-11-04:* `gfx::PushConstants` mirrors the Slang struct and is in `validateRasmStructs`. Every pipeline layout's range is `PUSH_CONSTANTS_SIZE` (16, `include/rasm/types.h`), a `static_assert` ties `sizeof(gfx::PushConstants)` to it, `drawScene` pushes `sizeof(pushConstants)`, and `RenderContext::pushConstants` rejects a push past the range. The shared layout of `P8` is still open. The original finding follows. `PushConstants` in [core.slang:105-108](../shaders/lib/core.slang#L105-L108) is one pointer, the pipeline layout's range is `sizeof(VkDeviceAddress)` ([vulkanDevice.cpp:538-540](../src/rhi/vulkan/vulkanDevice.cpp#L538-L540)), and `drawScene` pushes `sizeof(uint64_t)` ([gpuScene.cpp:378](../src/renderer/gpuScene.cpp#L378)). `validateRasmStructs` reads through `pc` but does not check its size. Mirror `PushConstants` in `uberMaterialTypes.h`, use its `sizeof` in both places, and add it to the check. The shared pipeline layout planned in `P8` is the natural home for the range.
 
 ---
 
@@ -333,7 +333,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 
 These are worth keeping as the engine evolves:
 - **Modern Vulkan baseline:** dynamic rendering, synchronization2, per-image render-finished semaphores (the correct modern pattern), VMA with budget tracking, vk-bootstrap.
-- **A GPU-driven core:** one indirect draw, vertex pulling, bindless textures, and BDA through a single 8-byte push constant.
+- **A GPU-driven core:** one pipeline and a few indirect draws per scene, vertex pulling, bindless textures, and BDA through a single 16-byte push constant.
 - **A careful CPU/GPU layout contract:** scalar layout with `static_assert`s and comments explaining the failure mode.
 - **Correct color handling:** sRGB versus linear texture formats, sRGB-aware mip generation, and linear shading with sRGB output.
 - **A solid PBR core:** a Filament-style BRDF, UV-derivative tangent frames that handle mirrored UVs, and per-texture UV sets.

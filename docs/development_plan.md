@@ -71,7 +71,7 @@ Goal: the structural changes that every later feature depends on. They get much 
 - [ ] Custom allocators: per-frame linear allocators for transient CPU data, pool allocators for registries. (Original item 4; scope these to measured hot spots.)
 
 ### 1.4 Conventions
-- [ ] Use a right-handed Y-up world. Flip Y with a negative-height viewport, stop mirroring geometry, enable back-face culling, and honor glTF `doubleSided` (`D8`).
+- [x] Use a right-handed Y-up world. Flip Y with a negative-height viewport, stop mirroring geometry, enable back-face culling, and honor glTF `doubleSided` (`D8`, done 2026-11-04).
 - [ ] Use reversed-Z with an infinite far plane by default. The depth format becomes `D32_SFLOAT`, without stencil unless it is requested.
 
 ### 1.5 Quality

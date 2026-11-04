@@ -43,6 +43,7 @@ namespace
         void endRendering() override {}
         void setViewport(float, float, float, float, float, float) override {}
         void setScissor(int32_t, int32_t, uint32_t, uint32_t) override {}
+        void setCullMode(CullMode) override {}
         void bindPipeline(Pipeline *) override {}
         void bindIndexBuffer(Buffer *, uint64_t, Format) override {}
         void bindDescriptorSet(Pipeline *, DescriptorSet *, uint32_t) override {}

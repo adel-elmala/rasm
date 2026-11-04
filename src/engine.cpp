@@ -366,6 +366,8 @@ namespace rasm
         // begin dynamic rendering
         ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
         ctx.setScissor(currentFrame.commandBuffer, 0, 0, width, height);
+        // Every pipeline takes its cull mode from the command buffer; drawScene changes it and restores this.
+        ctx.setCullMode(currentFrame.commandBuffer, CullMode::NONE);
     }
 
     void Engine::endPass()

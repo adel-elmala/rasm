@@ -8,6 +8,7 @@
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <iterator>
 #include <vector>
@@ -81,8 +82,20 @@ namespace rasm
                                  entity.handle.index, subMesh.geometry.vertexCount, subMesh.geometry.indexCount);
                     continue;
                 }
-                draws.push_back({&entity, subMesh.geometry, subMesh.transform, subMesh.material});
+                // Primitives without a material use the entity's; getMaterial resolves an invalid one to the default material.
+                const auto material = subMesh.material.isValid() ? subMesh.material : entity.material;
+                draws.push_back({&entity, subMesh.geometry, subMesh.transform, material});
             }
+        }
+
+        // glTF: a transform with a negative determinant mirrors the mesh, so its front faces turn clockwise (D8).
+        // det(T * R * S * M) = sx * sy * sz * det(M).
+        CullMode getCullMode(bool doubleSided, const Transform &transform, const glm::mat4 &meshTransform)
+        {
+            if (doubleSided)
+                return CullMode::NONE;
+            const float determinant = transform.scale.x * transform.scale.y * transform.scale.z * glm::determinant(glm::mat3(meshTransform));
+            return determinant < 0.0f ? CullMode::FRONT : CullMode::BACK;
         }
 
         // A failed preparation is not cached, so anything it created so far would leak on every retry.
@@ -160,6 +173,12 @@ namespace rasm
         if (sceneDraws.empty())
             return EMPTY_PREPARED_SCENE;
 
+        // drawScene issues one indirect draw per run of draws with the same cull mode, so the draws are grouped by it.
+        for (auto &draw : sceneDraws)
+            draw.cullMode = getCullMode(getMaterial(draw.material).doubleSided, draw.entity->transform, draw.transform);
+        std::stable_sort(sceneDraws.begin(), sceneDraws.end(), [](const SceneDraw &a, const SceneDraw &b)
+                         { return a.cullMode < b.cullMode; });
+
         // create a pipeline for the UberMaterial. A failed preparation retries every frame, so this comes
         // before the buffers: a shader error must not allocate and fill them each time.
         preparedScene.uberMaterialPipeline = createPipeline("rasm", readFile(pathFromUtf8(config.shaderDir) / "passes/rasm.slang"));
@@ -226,15 +245,13 @@ namespace rasm
 
             model = model * draw.transform;
 
-            preparedScene.modelUniforms.push_back({draw.entity->handle, draw.transform});
+            const auto &materialRef = getMaterial(draw.material);
+            preparedScene.modelUniforms.push_back({draw.entity->handle, draw.transform, materialRef.doubleSided});
 
             gfx::Modeldata modelData{};
             modelData.worldMatrix = model;
             modelData.normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
             modelData.vertFormat = gfx::VertexFormat::FULL;
-            // Primitives without a material use the entity's; getMaterial resolves an invalid one to the default material.
-            auto material = draw.material.isValid() ? draw.material : draw.entity->material;
-            const auto &materialRef = getMaterial(material);
             modelData.material = convertToGfxMaterial(*this, materialRef);
             modelData.materialId = getGfxMaterialId(materialRef.type);
 
@@ -254,8 +271,6 @@ namespace rasm
             drawInfoBufferOffset += sizeof(drawInfo);
         }
 
-        preparedScene.drawInfoCount = sceneDraws.size();
-
         return preparedScenes.emplace(scene, std::move(preparedScene)).first->second;
     }
 
@@ -265,15 +280,15 @@ namespace rasm
 
         size_t modelBufferOffset = 0;
 
-        for (const auto &[EntityHandle, gltfTransform] : preparedScene.modelUniforms)
+        for (const auto &modelUniform : preparedScene.modelUniforms)
         {
-            const auto &modelTransform = registry.entities[EntityHandle.index].transform;
+            const auto &modelTransform = registry.entities[modelUniform.entity.index].transform;
 
             auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
                          glm::mat4_cast(modelTransform.rotation) *
                          glm::scale(glm::mat4(1.0f), modelTransform.scale);
 
-            model = model * gltfTransform;
+            model = model * modelUniform.meshTransform;
 
             gfx::Modeldata modelData{};
             modelData.worldMatrix = model;
@@ -374,9 +389,31 @@ namespace rasm
             ctx.bindDescriptorSet(commandBuffer, preparedScene.uberMaterialPipeline, bindlessDescriptorSet, 0);
             ctx.bindIndexBuffer(commandBuffer, geometryIndexBuffer, 0, Format::U32_UINT);
 
-            auto sceneDataBufferPtr = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer[frameCount]) + sceneDataOffset;
-            ctx.pushConstants(commandBuffer, preparedScene.uberMaterialPipeline, ShaderType::VERTEX_FRAGMENT, &sceneDataBufferPtr, sizeof(uint64_t), 0);
-            ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, 0, preparedScene.drawInfoCount, sizeof(gfx::DrawInfo));
+            // The cull mode comes from the current transforms, since one can mirror an entity after preparation
+            // grouped the draws (D8). Each run of draws with the same cull mode is one indirect draw.
+            const auto &modelUniforms = preparedScene.modelUniforms;
+            auto cullModeOf = [&](uint32_t draw)
+            {
+                const auto &modelUniform = modelUniforms[draw];
+                return getCullMode(modelUniform.doubleSided, registry.entities[modelUniform.entity.index].transform, modelUniform.meshTransform);
+            };
+
+            gfx::PushConstants pushConstants{};
+            pushConstants.scene = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer[frameCount]) + sceneDataOffset;
+            const auto drawCount = static_cast<uint32_t>(modelUniforms.size());
+            while (pushConstants.firstDraw < drawCount)
+            {
+                const CullMode cullMode = cullModeOf(pushConstants.firstDraw);
+                uint32_t runEnd = pushConstants.firstDraw + 1;
+                while (runEnd < drawCount && cullModeOf(runEnd) == cullMode)
+                    ++runEnd;
+
+                ctx.setCullMode(commandBuffer, cullMode);
+                ctx.pushConstants(commandBuffer, preparedScene.uberMaterialPipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+                ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, pushConstants.firstDraw * sizeof(gfx::DrawInfo), runEnd - pushConstants.firstDraw, sizeof(gfx::DrawInfo));
+                pushConstants.firstDraw = runEnd;
+            }
+            ctx.setCullMode(commandBuffer, CullMode::NONE);
         }
     }
 }

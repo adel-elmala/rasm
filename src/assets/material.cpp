@@ -30,7 +30,7 @@ namespace rasm
         }
     }
 
-    MaterialHandle Engine::createMaterial(MaterialType type, std::vector<TextureHandle> textures)
+    MaterialHandle Engine::createMaterial(MaterialType type, std::vector<TextureHandle> textures, bool doubleSided)
     {
         MaterialHandle handle = handleManager.getNextMaterialHandle();
         if (handle.index >= MAX_MATERIALS)
@@ -39,7 +39,7 @@ namespace rasm
             return {};
         }
 
-        auto material = Material{.handle = handle, .type = type, .textures = {}};
+        auto material = Material{.handle = handle, .type = type, .textures = {}, .doubleSided = doubleSided};
 
         // Uber-material defaults for hand-made materials (loadMaterial fills these from the glTF
         // file instead): white base color so the albedo texture is not multiplied by zero,
@@ -107,6 +107,7 @@ namespace rasm
 
         if (material->extensions.count("KHR_materials_unlit") != 0)
             mat.type = MaterialType::UNLIT;
+        mat.doubleSided = material->doubleSided;
 
         // glTF lets each texture pick its own TEXCOORD_n set. The vertex data carries
         // MAX_VERTEX_UV_SETS sets; anything beyond that is out of our support for now.
