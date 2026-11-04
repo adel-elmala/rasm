@@ -95,7 +95,7 @@ sequenceDiagram
     E->>E: prepareScene(scene) (cached after first call)
     E->>C: bind uber pipeline
     E->>C: write the call's slot of SceneData[frame] (camera, lights, buffer addresses)
-    E->>C: updateUniforms → rewrite Modeldata[frame] transforms
+    E->>C: updateUniforms → rewrite Modeldata[frame] transforms (first call per scene this frame)
     E->>C: bind bindless set, bind the geometry pool's index buffer
     E->>C: push constant = address of that slot
     E->>C: drawIndexedIndirect(drawInfoBuffer, drawInfoCount)
@@ -131,9 +131,9 @@ Notes:
    | `sceneDataBuffer[2]` | STORAGE | `MAX_SCENE_DRAWS_PER_FRAME` `gfx::SceneData`s per frame slot. |
 4. **Writes draw records.** For each sub-mesh i it sets `DrawInfo{indexCount, 1, firstIndex, vertexOffset = firstVertex, 0}` from its `MeshGeometry`. Indices in the pool are *local* to their sub-mesh, so `vertexOffset` moves them to the sub-mesh's vertices. `Modeldata[i]` gets the entity transform × node transform, the converted `gfx::Material` and the `gfx::MaterialId`.
 
-Every frame, `updateUniforms` rewrites only the matrix part of each `Modeldata` (`offsetof(Modeldata, material)` bytes) from the current entity transforms.
+Every frame, `updateUniforms` rewrites only the matrix part of each `Modeldata` (`offsetof(Modeldata, material)` bytes) from the current entity transforms. It runs in the first `drawScene` call of each scene in a frame; later calls for that scene reuse the transforms already written.
 
-The GPU reads `SceneData` after the whole frame is recorded, so each `drawScene` call of a frame writes its own slot of `sceneDataBuffer[frame]` and pushes that slot's address. That is what lets passes in one frame use different cameras. `Modeldata` has no slots: all the calls of a frame share the transforms it holds. Past `MAX_SCENE_DRAWS_PER_FRAME` calls, `drawScene` logs an error and skips the draw.
+The GPU reads `SceneData` after the whole frame is recorded, so each `drawScene` call of a frame writes its own slot of `sceneDataBuffer[frame]` and pushes that slot's address. That is what lets passes in one frame use different cameras. `Modeldata` has no slots: all the calls of a frame share the transforms it holds, so a transform changed between two calls shows up next frame. Past `MAX_SCENE_DRAWS_PER_FRAME` calls, or with an invalid camera, `drawScene` logs an error and skips the draw.
 
 `prepareScene` returns a const reference to the cached entry. For a scene with no geometry it returns an empty `PreparedScene` before any buffer is allocated and caches nothing, so entities added later are picked up. `drawScene` skips the draw when the prepared scene has no pipeline, so the pass keeps its clear color.
 

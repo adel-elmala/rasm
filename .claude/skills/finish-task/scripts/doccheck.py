@@ -5,6 +5,7 @@
 Reports:
   1. files changed since the merge-base with --base (committed, uncommitted and untracked)
   2. code links in docs ([x](../src/a.cpp#L10-L20)) to missing files or lines past the end
+  2b. live code links with line numbers into files the change edited, whose lines may have shifted
   3. backticked repo paths (`src/...`, `shaders/...`) that do not exist
   4. names removed by the change that the docs still mention
   5. review IDs (B1, D4, ...) named by the branch's commits or diff, with their status in
@@ -24,6 +25,7 @@ CODE_DIRS = ("src", "include", "shaders", "tests", "examples", "cmake", "tools")
 DOCS = sorted(glob.glob(os.path.join(REPO, "docs", "*.md"))) + [os.path.join(REPO, "CLAUDE.md")] + \
     sorted(glob.glob(os.path.join(REPO, ".claude", "skills", "**", "*.md"), recursive=True))
 ID_RE = re.compile(r"\b([BDPC][0-9]{1,3})\b")
+LINK_RE = re.compile(r"\]\(((?:\.\./|\./)?[^)#\s]+\.(?:h|hpp|cpp|slang|txt|cmake|md|json|in|bat))(?:#L(\d+)(?:-L(\d+))?)?\)")
 DONE_RE = re.compile(r"\*(Fixed|Resolved|Partly fixed|Partly resolved|Mostly fixed|Mostly resolved|Worked around|Extended)")
 
 
@@ -76,12 +78,11 @@ def doc_lines(path):
 
 def check_links():
     problems = []
-    pat = re.compile(r"\]\(((?:\.\./|\./)?[^)#\s]+\.(?:h|hpp|cpp|slang|txt|cmake|md|json|in|bat))(?:#L(\d+)(?:-L(\d+))?)?\)")
     for doc in DOCS:
         base = os.path.dirname(doc)
         for n, line, historical in doc_lines(doc):
             tag = " (historical)" if historical else ""
-            for m in pat.finditer(re.sub(r"`[^`]*`", "", line)):
+            for m in LINK_RE.finditer(re.sub(r"`[^`]*`", "", line)):
                 target = os.path.normpath(os.path.join(base, m.group(1)))
                 if not os.path.exists(target):
                     problems.append("%s:%d  missing file %s%s" % (rel(doc), n, m.group(1), tag))
@@ -96,13 +97,14 @@ def check_links():
 def links_into(changed):
     """Live links whose target file this change edited: line numbers may have shifted without going past the end."""
     out = []
-    pat = re.compile(r"\]\(((?:\.\./|\./)?[^)#\s]+)#L(\d+)(?:-L(\d+))?\)")
     for doc in DOCS:
         base = os.path.dirname(doc)
         for n, line, historical in doc_lines(doc):
             if historical:
                 continue
-            for m in pat.finditer(re.sub(r"`[^`]*`", "", line)):
+            for m in LINK_RE.finditer(re.sub(r"`[^`]*`", "", line)):
+                if not m.group(2):
+                    continue
                 target = rel(os.path.normpath(os.path.join(base, m.group(1))))
                 if target in changed and os.path.exists(os.path.join(REPO, target)):
                     out.append("%s:%d  %s#L%s%s" % (rel(doc), n, target, m.group(2), "-L" + m.group(3) if m.group(3) else ""))
@@ -172,6 +174,13 @@ def id_status(ids):
     return out
 
 
+def report(title, items):
+    live = [p for p in items if not p.endswith("(historical)")]
+    print("\n%s: %d (+%d historical)" % (title, len(live), len(items) - len(live)))
+    for p in live + [p for p in items if p.endswith("(historical)")]:
+        print("   " + p)
+
+
 def main(args):
     base_ref = args[args.index("--base") + 1] if "--base" in args else "main"
     base = git("merge-base", "HEAD", base_ref).strip() or "HEAD"
@@ -186,17 +195,13 @@ def main(args):
     for f in changed:
         print("   " + f)
     code = code_text()
+    report("2. broken code links", check_links())
     shifted = links_into(set(changed) - {rel(d) for d in DOCS})
     print("\n2b. links into files this change edited (check the lines still match): %d" % len(shifted))
     for s in shifted:
         print("   " + s)
-    sections = [("2. broken code links", check_links()), ("3. missing paths", check_paths()),
-                ("4. docs mentioning removed names", stale_mentions(removed_names(diff, code)))]
-    for title, items in sections:
-        live = [p for p in items if not p.endswith("(historical)")]
-        print("\n%s: %d (+%d historical)" % (title, len(live), len(items) - len(live)))
-        for p in live + [p for p in items if p.endswith("(historical)")]:
-            print("   " + p)
+    report("3. missing paths", check_paths())
+    report("4. docs mentioning removed names", stale_mentions(removed_names(diff, code)))
     ids = set(ID_RE.findall(log))
     for line in diff.splitlines():
         if line.startswith(("+", "-")) and not line.startswith(("+++", "---")):

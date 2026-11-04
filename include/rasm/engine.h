@@ -146,6 +146,7 @@ namespace rasm
         uint64_t                                                    frameCount                              = 0;
         uint32_t                                                    imageIdx                                = 0;
         uint32_t                                                    sceneDrawCount                          = 0; // drawScene calls this frame
+        SceneHandle                                                 drawnScenes[MAX_SCENE_DRAWS_PER_FRAME]  = {}; // the scene of each drawScene call this frame
         bool                                                        isRunning                               = false;
         bool                                                        swapchainOutOfDate                      = false;
         bool                                                        swapchainRendered                       = false; // a pass rendered to the swapchain this frame

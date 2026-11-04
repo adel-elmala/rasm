@@ -267,8 +267,7 @@ namespace rasm
 
         for (const auto &[EntityHandle, gltfTransform] : preparedScene.modelUniforms)
         {
-            auto entity = registry.entities[EntityHandle.index];
-            auto modelTransform = entity.transform;
+            const auto &modelTransform = registry.entities[EntityHandle.index].transform;
 
             auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
                          glm::mat4_cast(modelTransform.rotation) *
@@ -288,6 +287,12 @@ namespace rasm
     void Engine::drawScene(SceneHandle scene, CameraHandle camera)
     {
         ZoneScoped;
+
+        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        {
+            spdlog::error("drawScene needs a valid camera handle.");
+            return;
+        }
 
         const auto &preparedScene = prepareScene(scene);
 
@@ -319,6 +324,12 @@ namespace rasm
             spdlog::error("Exceeded maximum number of drawScene calls per frame.");
             return;
         }
+        // Modeldata has one slot per frame, so a scene drawn by several passes needs its uniforms written once.
+        bool uniformsWritten = false;
+        for (uint32_t i = 0; i < sceneDrawCount; ++i)
+            uniformsWritten = uniformsWritten || drawnScenes[i] == scene;
+
+        drawnScenes[sceneDrawCount] = scene;
         const uint64_t sceneDataOffset = sceneDrawCount++ * sizeof(gfx::SceneData);
 
         auto &sceneRef = registry.scenes[scene.index];
@@ -357,7 +368,8 @@ namespace rasm
 
             ctx.fillBuffer(preparedScene.sceneDataBuffer[frameCount], &sceneData, sizeof(sceneData), sceneDataOffset);
 
-            updateUniforms(preparedScene);
+            if (!uniformsWritten)
+                updateUniforms(preparedScene);
 
             ctx.bindDescriptorSet(commandBuffer, preparedScene.uberMaterialPipeline, bindlessDescriptorSet, 0);
             ctx.bindIndexBuffer(commandBuffer, geometryIndexBuffer, 0, Format::U32_UINT);
