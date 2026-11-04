@@ -198,6 +198,8 @@ Next steps, in order:
 
 **B17** — *Fixed 2026-10-27:* `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` triggers recreation. `Window` has `pixelWidth`/`pixelHeight` (the swapchain's desired extent) next to the logical `width`/`height` used for mouse input. Depth textures, viewport, scissor and camera aspect come from the swapchain extent (`Swapchain::width`/`height`). The original finding follows. Resize uses `SDL_EVENT_WINDOW_RESIZED`, which reports logical size ([window.cpp:116-122](../src/platform/window.cpp#L116-L122)). The depth texture and viewport use `mainWindow` size, while the swapchain extent comes from the surface. On scaled or HiDPI displays they can disagree. Use `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` / `SDL_GetWindowSizeInPixels`, and size everything from the swapchain extent. *Likely.*
 
+**B23 — The CPU/GPU struct check only runs in debug builds.** `validateRasmStructs` is called inside `assert(...)` ([shaderCompiler.cpp:355](../src/renderer/shaderCompiler.cpp#L355)), so with `NDEBUG` the call is compiled out. A Release build with mismatched structs starts normally and the GPU reads shifted data, or hits a device lost when a pointer field moves. Call it unconditionally, log the mismatch and fail the shader or pipeline creation. The check runs once per linked program, so it costs nothing at runtime. *Confirmed.*
+
 ---
 
 ## 3. Design and architecture
@@ -238,7 +240,7 @@ Needed: a platform layer the application can replace, creation from a native sur
 
 **D8 — Coordinate handedness is achieved by mirroring the world.**
 - glTF geometry gets a `scale(1,-1,1)` root ([mesh.cpp:452](../src/assets/mesh.cpp#L452)), and OBJ vertices are negated per vertex ([mesh.cpp:127-131](../src/assets/mesh.cpp#L127-L131)).
-- That mirrors the world: the determinant is negative and the triangle winding flips. Back-face culling is disabled to hide this ([vulkanContext.cpp:603-605](../src/rhi/vulkan/vulkanContext.cpp#L603-L605)).
+- That mirrors the world: the determinant is negative and the triangle winding flips. Back-face culling is disabled to hide this ([vulkanDevice.cpp:712-713](../src/rhi/vulkan/vulkanDevice.cpp#L712-L713)).
 - User-specified positions and directions live in a Y-down world.
 
 Use a right-handed Y-up world (glTF's convention) and do the Vulkan flip with a negative-height viewport (core since 1.1) or in the projection. Then enable culling and honor glTF `doubleSided`.
@@ -246,7 +248,7 @@ Use a right-handed Y-up world (glTF's convention) and do the Vulkan flip with a 
 **D9 — The render graph only sorts.**
 - It does not track resource state, so barriers and layout transitions are left to the passes or missing (B10).
 - It has no transient allocation or aliasing.
-- Each pass starts its own rendering scope with `CLEAR` ([vulkanContext.cpp:1056](../src/rhi/vulkan/vulkanContext.cpp#L1056)), so two passes that target the swapchain overwrite each other.
+- Each pass starts its own rendering scope with `CLEAR` ([vulkanCommandBuffer.cpp:220-228](../src/rhi/vulkan/vulkanCommandBuffer.cpp#L220-L228)), so two passes that target the swapchain overwrite each other.
 - The camera is hardcoded to `scene.cameras[0]`, and `Engine::render` doesn't use the graph at all.
 
 **D10 — There are two rendering paths.** *Fixed 2026-11-01:* the legacy path is gone, with `render2` renamed to `render`. `01_render_graph` draws through `Engine::drawScene` and `Engine::createPipeline`. The removal also took out what only the legacy path used: `basic.slang`, `MaterialType::BASIC` and `SHADER`, `Material::shader`, `Engine::createShader`, `uploadMesh`, the per-frame shader data buffer, the vertex-input reflection in `ShaderCompiler`, `VertexInputLayout`, `BufferUsage::VERTEX` and `VERTEXINDEX`, the vertex and index fields of the buffer desc, `bindVertexBuffer` and `SAMPLED_DEPTH_STENCIL_ATTACHMENT`. With `drawScene` public, each call has its own `SceneData` slot, fits the camera to the pass's aspect ratio, and refuses a render target with other formats than the scene's pipeline. A frame that never renders to the swapchain clears it in `endFrame`, because it is presented anyway. The original finding follows. `render`/`compileScene` (the legacy per-entity path) and `render2`/`prepareScene` (GPU-driven) coexist, together with `begin/endOffscreenFrame`, which is marked "TODO: delete". Pick the GPU-driven path, port `01_render_graph` to it, and delete the rest.
@@ -277,7 +279,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 **P1 — Every buffer is host-visible and mapped.** *Fixed 2026-11-04:* only buffers with `BufferDesc::hostVisible` (the per-frame model and scene data) are forced into host-visible memory. Other buffers are device-local, use `ALLOW_TRANSFER_INSTEAD` so they stay mapped where device-local memory is host-visible, and are otherwise filled through `rhi::UploadManager`: a staging ring with batched copies and timeline-fence completion ([architecture.md §12](architecture.md#12-rhi)). The original finding follows. (`HOST_ACCESS_SEQUENTIAL_WRITE | MAPPED`, [vulkanContext.cpp:205-208](../src/rhi/vulkan/vulkanContext.cpp#L205-L208)). On discrete GPUs without ReBAR, the mega vertex and index buffers end up in system RAM and every vertex fetch crosses PCIe. Static data should go to device-local memory through staging (or `ALLOW_TRANSFER_INSTEAD`). Keep host-visible memory for per-frame data only.
 
 **P2 — Texture path.**
-- Images are created with `HOST_ACCESS_*` allocation flags ([vulkanContext.cpp:347-351](../src/rhi/vulkan/vulkanContext.cpp#L347-L351)), which can push them into host-visible memory.
+- Sampled images are created with `HOST_ACCESS_*` allocation flags for host image copy ([vulkanDevice.cpp:516-520](../src/rhi/vulkan/vulkanDevice.cpp#L516-L520)), which can push them into host-visible memory.
 - Each image gets a dedicated allocation, and mips are generated on the CPU on the main thread.
 - *Fixed 2026-11-02 (`D1`), 2026-11-04:* bindless textures share a fixed set of six samplers (`SamplerType`), picked per slot; glTF textures map their sampler onto it. Originally each texture created its own `VkSampler` and called `vkGetPhysicalDeviceProperties`. Drivers often cap samplers at about 4000, so use a handful of shared samplers.
 - Host image copy also requires the `hostImageCopy` feature, which narrows hardware support; keep a staging-buffer fallback.
@@ -307,7 +309,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 - **C1 — Naming inconsistencies.** *Fixed 2026-11-01:* these names are gone, along with the rest of the snake_case in `vulkanContext.cpp` and its `_init_*` and `_to_*` free functions. `gfx::VertexFormat` and `gfx::LightType` are now `enum class` with UPPER_SNAKE values on both the C++ and Slang sides. The fields in `rasm/profiler.h` and the remaining odd locals followed, and a `readability-identifier-naming` run of clang-tidy over every source file now reports nothing but `supportedMeshExtensions` and `supportedTextureExtensions`, which are runtime sets and rightly camelCase. The exceptions are listed in the [coding style](coding_style.md#2-naming). The original finding follows. `registery`, `metallicRoughtness`, `compiledShader`, the snake_case `VulkanContext` members, PascalCase GPU enums, and `RenderGraph::CreateTexture` beside `PassBuilder::createTexture`.
 - **C2 — Formatting.** *Fixed 2026-11-01:* the repo has a `.clang-format` and all C++ files follow it. It sets no column limit, because a limit collapsed hand-placed line breaks and changed about 500 extra lines. The original finding follows. `scene.cpp` uses 2-space indentation while everything else uses 4, and there is no `.clang-format` in the repo.
 - **C3 — Dead or placeholder code.**
-  - `setUniform` (a no-op).
+  - *Fixed 2026-11-04:* `setUniform` (a no-op) was removed with the backend-neutral device interface (`D1`).
   - *Fixed 2026-11-04:* the glTF branch of `getMeshByteSize` (every mesh is now a list of sub-meshes).
   - `VertexFormat::POS_ONLY`, `MAX_DESCRIPTOR_TYPES`, `compile-shaders.bat`.
 - **C4 — Duplication.**
@@ -320,6 +322,8 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 - **C8 — Header-level objects.** `const static std::unordered_set<std::string>` lives in `types.h`, which makes one copy per translation unit and runs static initializers. Make it `inline constexpr` arrays or move it into the `.cpp`.
 - **C9 — A fragile material layout.** `Material::params` is a flat `float[]` indexed by hand-maintained `PbrParam` offsets, and `name` is a `const char*`. Use a typed `PbrMaterialParams` struct instead.
 - **C10 — Single-header implementations are spread out.** *Resolved in the folder-layout change:* all `*_IMPLEMENTATION` defines now live in [src/thirdparty_impl.cpp](../src/thirdparty_impl.cpp).
+- **C11 — The struct check compares layout, not types.** `validateStruct` checks each struct's size and field offsets ([shaderCompiler.cpp:79-114](../src/renderer/shaderCompiler.cpp#L79-L114)). A `uint32_t` on one side and a `float` on the other, or two swapped fields of the same size, pass and the shader reads garbage. Compare the field's scalar type and element count from the reflection (`getType()->getScalarType()`, `getElementCount()`) against the C++ side in the same table.
+- **C12 — The push-constant size is written in three places and never checked.** `PushConstants` in [core.slang:105-108](../shaders/lib/core.slang#L105-L108) is one pointer, the pipeline layout's range is `sizeof(VkDeviceAddress)` ([vulkanDevice.cpp:611-613](../src/rhi/vulkan/vulkanDevice.cpp#L611-L613)), and `drawScene` pushes `sizeof(uint64_t)` ([engine.cpp:644](../src/engine.cpp#L644)). `validateRasmStructs` reads through `pc` but does not check its size. Mirror `PushConstants` in `uberMaterialTypes.h`, use its `sizeof` in both places, and add it to the check. The shared pipeline layout planned in `P8` is the natural home for the range.
 
 ---
 

@@ -9,7 +9,8 @@ These rules describe how RASM code is written. Most of them are what the code al
 - No exceptions in engine code. Third-party exceptions (e.g. from tinygltf) are caught at the call site.
 - No RTTI-dependent designs (`dynamic_cast`, `typeid`).
 - No templates in engine code: no function, class, variable or lambda templates (including `auto` lambda parameters). Write concrete functions per type. Using std and third-party templates (`std::vector`, `std::unordered_map`) is fine, except `std::span`: pass a pointer and a count instead. The only exception is `Handle<Tag>` in `include/rasm/handle.h`.
-- File-local helpers (functions, structs) go in one unnamed namespace at the top of the `.cpp` file: right after the includes, or as the first thing inside `namespace rasm` / `rasm::gfx` when the helpers use engine types. Never open a second unnamed namespace or define helpers between functions further down.
+- File-local helpers (types used by only that `.cpp`, and functions) go in unnamed namespaces at the top of the `.cpp` file: right after the includes, or as the first thing inside `namespace rasm` / `rasm::gfx` when the helpers use engine types. Types come first. Prefer one unnamed namespace for types followed by a second one for helper functions. Never define helpers between functions further down.
+- One `.h`/`.cpp` pair per logical part, each with one job. New functionality that is its own part gets a new pair, and types shared between files go in headers.
 - Shaders are **Slang**. Prefer `import` modules over `#include` for new shader code.
 
 ## 2. Naming
