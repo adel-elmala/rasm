@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # vcpkg.json has no builtin-baseline, so this commit picks every dependency version.
+  VCPKG_COMMIT: 4b77da7fed37817f124936239197833469f1b9a8
+
+jobs:
+  build:
+    name: ${{ matrix.preset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, preset: x64-debug }
+          - { os: windows-latest, preset: x64-release }
+          - { os: macos-latest, preset: macOS }
+          - { os: macos-latest, preset: macOS-release }
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: lukka/get-cmake@latest
+
+      # The headers and loader are enough to build; the tests need no GPU.
+      - uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          install_runtime: false
+          cache: true
+          stripdown: true
+
+      # clang++ finds the MSVC libraries and the Windows SDK through this environment.
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # After msvc-dev-cmd, which points VCPKG_ROOT at the copy bundled with Visual Studio.
+      - name: Set up vcpkg
+        run: |
+          root="$HOME/vcpkg"
+          cache="$HOME/vcpkg-cache"
+          git init "$root"
+          git -C "$root" fetch --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_COMMIT"
+          git -C "$root" checkout FETCH_HEAD
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            "$root/bootstrap-vcpkg.bat" -disableMetrics
+            root=$(cygpath -m "$root")
+            cache=$(cygpath -m "$cache")
+          else
+            "$root/bootstrap-vcpkg.sh" -disableMetrics
+          fi
+          mkdir -p "$cache"
+          echo "VCPKG_ROOT=$root" >> "$GITHUB_ENV"
+          echo "VCPKG_BINARY_SOURCES=clear;files,$cache,readwrite" >> "$GITHUB_ENV"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/vcpkg-cache
+          key: vcpkg-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}

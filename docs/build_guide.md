@@ -138,6 +138,12 @@ To see the test output, or to run a subset, run the executable directly, for exa
 
 Pass `-DRASM_BUILD_TESTS=OFF` to leave them out.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`. It builds the `x64-debug`, `x64-release`, `macOS` and `macOS-release` presets, examples included, and runs `ctest`. The runners have no GPU, so CI does not run the examples.
+
+vcpkg.json has no `builtin-baseline`, so the vcpkg commit picks the dependency versions. CI pins it in `VCPKG_COMMIT`. When you update your local vcpkg, put its commit (`git -C $VCPKG_ROOT rev-parse HEAD`) there too, so CI builds the same versions you do. Built packages are cached per OS and vcpkg commit, so a new commit makes the next run build all dependencies again.
+
 ## Using RASM from another project
 
 `cmake --install` copies the library, public headers and shaders to `install/` in the repo. Debug and Release share that prefix, so install both if the project builds both. A project building `RelWithDebInfo` or `MinSizeRel` links the Release library:
