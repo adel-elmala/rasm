@@ -41,9 +41,10 @@ cmake --install build\x64-debug                        # into install/, for find
 
 ## Code rules
 
-- Keep it simple and direct. Solve the problem in front of you with the least code and structure that does it: no new classes, files, layers or helper abstractions unless the task asks for them, and no generality for cases that don't exist yet. Prefer extending the existing code over restructuring it. When a refactor or a new abstraction seems worth it, propose it in a sentence and wait for a yes before writing it.
+- Keep it simple and direct. Solve the problem in front of you with the least code that does it: no extra layers, helper abstractions or generality for cases that don't exist yet. When a refactor or a new abstraction seems worth it, propose it in a sentence and wait for a yes before writing it.
+- One `.h`/`.cpp` pair per logical part (camera, mesh, entity, renderContext, ...), each with one job that doesn't leak into other files. New functionality that is its own part (e.g. a glTF importer, a texture loader) gets a new pair. Don't grow an unrelated file with it. Types shared between files go in headers.
 - No templates in RASM code: no function, class, variable or lambda templates (`template <...>`, `auto` parameters in lambdas). Write concrete overloads or functions per type instead. Using third-party/std templates (`std::vector`, `std::unordered_map`) is fine. The only exception is `Handle<Tag>` in `include/rasm/handle.h`.
-- File-local helpers (functions, structs) go in one unnamed namespace at the top of the `.cpp` file: right after the includes, or as the first thing inside `namespace rasm` / `rasm::gfx` when the helpers use engine types. Never open a second unnamed namespace or define helpers between functions further down.
+- File-local helpers (types used by only that `.cpp`, and functions) go in unnamed namespaces at the top of the `.cpp` file: right after the includes, or as the first thing inside `namespace rasm` / `rasm::gfx` when the helpers use engine types. Types come first. Prefer one unnamed namespace for types followed by a second one for helper functions. Never define helpers between functions further down.
 
 ## Invariants that are easy to break
 
