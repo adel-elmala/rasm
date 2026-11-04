@@ -198,6 +198,8 @@ Next steps, in order:
 
 **B17** — *Fixed 2026-10-27:* `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` triggers recreation. `Window` has `pixelWidth`/`pixelHeight` (the swapchain's desired extent) next to the logical `width`/`height` used for mouse input. Depth textures, viewport, scissor and camera aspect come from the swapchain extent (`Swapchain::width`/`height`). The original finding follows. Resize uses `SDL_EVENT_WINDOW_RESIZED`, which reports logical size ([window.cpp:116-122](../src/platform/window.cpp#L116-L122)). The depth texture and viewport use `mainWindow` size, while the swapchain extent comes from the surface. On scaled or HiDPI displays they can disagree. Use `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` / `SDL_GetWindowSizeInPixels`, and size everything from the swapchain extent. *Likely.*
 
+**B23 — The CPU/GPU struct check only runs in debug builds.** `validateRasmStructs` is called inside `assert(...)` ([shaderCompiler.cpp:355](../src/renderer/shaderCompiler.cpp#L355)), so with `NDEBUG` the call is compiled out. A Release build with mismatched structs starts normally and the GPU reads shifted data, or hits a device lost when a pointer field moves. Call it unconditionally, log the mismatch and fail the shader or pipeline creation. The check runs once per linked program, so it costs nothing at runtime. *Confirmed.*
+
 ---
 
 ## 3. Design and architecture
@@ -320,6 +322,8 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 - **C8 — Header-level objects.** `const static std::unordered_set<std::string>` lives in `types.h`, which makes one copy per translation unit and runs static initializers. Make it `inline constexpr` arrays or move it into the `.cpp`.
 - **C9 — A fragile material layout.** `Material::params` is a flat `float[]` indexed by hand-maintained `PbrParam` offsets, and `name` is a `const char*`. Use a typed `PbrMaterialParams` struct instead.
 - **C10 — Single-header implementations are spread out.** *Resolved in the folder-layout change:* all `*_IMPLEMENTATION` defines now live in [src/thirdparty_impl.cpp](../src/thirdparty_impl.cpp).
+- **C11 — The struct check compares layout, not types.** `validateStruct` checks each struct's size and field offsets ([shaderCompiler.cpp:79-114](../src/renderer/shaderCompiler.cpp#L79-L114)). A `uint32_t` on one side and a `float` on the other, or two swapped fields of the same size, pass and the shader reads garbage. Compare the field's scalar type and element count from the reflection (`getType()->getScalarType()`, `getElementCount()`) against the C++ side in the same table.
+- **C12 — The push-constant size is written in three places and never checked.** `PushConstants` in [core.slang:105-108](../shaders/lib/core.slang#L105-L108) is one pointer, the pipeline layout's range is `sizeof(VkDeviceAddress)` ([vulkanDevice.cpp:611-613](../src/rhi/vulkan/vulkanDevice.cpp#L611-L613)), and `drawScene` pushes `sizeof(uint64_t)` ([engine.cpp:644](../src/engine.cpp#L644)). `validateRasmStructs` reads through `pc` but does not check its size. Mirror `PushConstants` in `uberMaterialTypes.h`, use its `sizeof` in both places, and add it to the check. The shared pipeline layout planned in `P8` is the natural home for the range.
 
 ---
 
