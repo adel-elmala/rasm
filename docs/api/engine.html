@@ -289,7 +289,7 @@ if (!engine.running())
       <dt>camera</dt><dd>The view. Invalid: logs an error and draws nothing.</dd>
     </dl>
     <p>Draws nothing, with no error, while the scene is empty or all its entities still load: the pass keeps its clear color.</p>
-    <p>The GPU culls the draws first: those outside the camera's view are skipped. With <code>EngineConfig::occlusionCulling</code> it draws in two parts. First come the draws that were visible last time. Then it ends the pass, builds a Hi-Z from their depth, tests the other draws against it, starts the pass again with its color and depth kept, and draws the ones it found visible. What you drew before <code>drawScene</code> in the same pass is kept. See <a href="../guides/culling.html#occlusion">occlusion culling</a>.</p>
+    <p>The GPU culls the draws first: those outside the camera's view are skipped. With <code>EngineConfig::occlusionCulling</code> it draws in two parts. First come the draws that were visible last time. Then it ends the pass, builds a Hi-Z from their depth, tests the other draws against it, starts the pass again with its color and depth kept, and draws the ones it found visible. What you drew before <code>drawScene</code> in the same pass is kept. A viewport smaller than the pass (<code>RenderContext::setViewport</code>) turns occlusion culling off for that call. See <a href="../guides/culling.html#occlusion">occlusion culling</a>.</p>
     <div class="table-wrap">
     <table>
       <tr><th>Rule</th><th>What happens otherwise</th></tr>

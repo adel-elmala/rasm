@@ -52,9 +52,10 @@ namespace rasm
         void                                writeTimestamp(const CommandBufferHandle& commandBuffer, const QueryPoolHandle& pool, uint32_t index);
         bool                                fillTexture(const TextureHandle& texture, const void* data);
         [[nodiscard]] SwapchainStatus       recreateSwapchain();
-        bool                                beginRendering(const CommandBufferHandle& commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment, const glm::vec4& clearColor, bool load = false);
+        bool                                beginRendering(const CommandBufferHandle& commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment, const glm::vec4& clearColor, bool load = false, bool storeDepth = false);
         bool                                endRendering(const CommandBufferHandle& commandBuffer);
         bool                                setViewport(const CommandBufferHandle& commandBuffer, float x, float y, float width, float height, float minDepth = 0.0f, float maxDepth = 1.0f);
+        const Viewport&                     getViewport() const;
         bool                                setScissor(const CommandBufferHandle& commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height);
         bool                                setCullMode(const CommandBufferHandle& commandBuffer, CullMode cullMode);
         bool                                submit(const CommandBufferHandle* commandBuffers, uint32_t commandBufferCount, FenceHandle signalFence, uint64_t signalValue, bool presentsSwapchainImage);

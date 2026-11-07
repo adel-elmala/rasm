@@ -646,7 +646,7 @@
   <li><b>The next <code>beginFrame</code> recreates.</b> It calls <code>Engine::recreateSwapchain</code>, which calls <code>RenderContext::recreateSwapchain</code>.</li>
   <li><b>The swapchain is rebuilt.</b> A 0 × 0 surface returns <code>OUT_OF_DATE</code> and keeps the old swapchain. Otherwise it releases pending semaphores, waits until the device is idle, and builds the new swapchain.</li>
   <li><b>Image handles change.</b> The old swapchain image handles are dropped and new ones are registered. Handles from an earlier <code>getSwapchainImages</code> are no longer valid.</li>
-  <li><b>Sizes follow.</b> <code>createSwapchainResources</code> recreates both depth textures at the new size and calls <code>updateCameraAspectRatio</code>. The device is idle, so the old depth textures can be destroyed at once. For occlusion culling, <code>drawScene</code> puts each new depth texture into the bindless slot of the old one (<code>GpuScene::swapchainDepthSlots</code>).</li>
+  <li><b>Sizes follow.</b> <code>createSwapchainResources</code> recreates both depth textures at the new size and calls <code>updateCameraAspectRatio</code>. The device is idle, so the old depth textures can be destroyed at once. With occlusion culling, it puts each new depth texture into the bindless slot of the old one, where <code>drawScene</code> samples it.</li>
 </ol>
 
 <p>Everything swapchain-sized uses the swapchain extent in pixels. <code>Window::width</code> and <code>height</code> are the logical size, used only for the mouse. They differ on HiDPI screens.</p>

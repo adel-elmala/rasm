@@ -208,7 +208,7 @@ namespace rasm
         void                        rebuildDrawList(SceneHandle scene);
         void                        uploadDrawList(SceneDrawList& drawList);
         bool                        recordCulling(bool& recorded);
-        void                        recordOcclusionCulling(uint64_t sceneDataAddress, uint32_t call, TextureHandle colorTexture, TextureHandle depthTexture, uint32_t width, uint32_t height);
+        void                        recordOcclusionCulling(uint64_t sceneDataAddress, uint32_t call, TextureHandle colorTexture, TextureHandle depthTexture, uint32_t width, uint32_t height, uint32_t levelCount);
         void                        createFrameStats();
         void                        updateFrameStats();
         uint32_t                    beginCullingTimer(const CommandBufferHandle& commandBuffer);

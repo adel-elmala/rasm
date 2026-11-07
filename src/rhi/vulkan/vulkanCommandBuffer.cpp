@@ -260,7 +260,7 @@ namespace rasm::rhi
         return true;
     }
 
-    void VulkanCommandBuffer::beginRendering(Texture *colorAttachment, Texture *depthAttachment, const glm::vec4 &clearColor, bool load)
+    void VulkanCommandBuffer::beginRendering(Texture *colorAttachment, Texture *depthAttachment, const glm::vec4 &clearColor, bool load, bool storeDepth)
     {
         auto *color = static_cast<VulkanTexture *>(colorAttachment);
         auto *depth = static_cast<VulkanTexture *>(depthAttachment);
@@ -279,8 +279,8 @@ namespace rasm::rhi
             .imageView = depth->view,
             .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
             .loadOp = loadOp,
-            // Stored: drawScene builds its Hi-Z from it in the middle of the pass.
-            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            // Stored only for a pass that drawScene may pause to build its Hi-Z from it.
+            .storeOp = storeDepth ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE,
             // Reversed-Z: the far plane is depth 0. Pairs with the GREATER_OR_EQUAL compare in createGraphicsPipeline.
             .clearValue = {.depthStencil = {0.0f, 0}}};
 

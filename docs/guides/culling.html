@@ -554,7 +554,7 @@
     <text x="20"  y="178" class="small">An odd size repeats its last row or column, so every pixel is under some texel (level 0's 3 rows → level 1's 2 rows).</text>
     <text x="20"  y="196" class="small">A level-L texel covers a square of 2^(L+1) pixels. hizMain reads level 0 from the depth texture, the others from the level before.</text>
   </svg>
-  <figcaption>The Hi-Z is a buffer of <code>float</code>s, all levels one after another (<code>hizPtr</code>). <code>getHizLevelCount</code> on the CPU and <code>getHizLevel0Size</code> in the shader agree on the sizes.</figcaption>
+  <figcaption>The Hi-Z is a buffer of <code>float</code>s, all levels one after another (<code>hizPtr</code>). <code>getHizLevelCount</code> on the CPU and <code>getHizLevel</code> in the shaders agree on the sizes.</figcaption>
 </figure>
 
 <h3>The test</h3>
@@ -621,14 +621,14 @@
     <p>The visibility flags are a guess from last time. Whatever the early cull skips, the late cull tests against the depth that is really there, and draws it if it is visible. A wrong guess costs time, never pixels.</p>
   </div>
   <div>
-    <h4>Shared flags</h4>
-    <p>There is one flag per instance row (<code>Visibility Buffer</code>, <code>EngineConfig::maxInstances</code> rows), shared by both frame slots and every call. Rows start at 0, so a new instance is drawn by the late cull first. Two cameras that draw one scene overwrite each other's flags: slower, still correct.</p>
+    <h4>Flags per call</h4>
+    <p>Each <code>drawScene</code> call of a frame has its own flags (<code>GpuScene::visibility</code>), one per instance row (<code>EngineConfig::maxInstances</code> rows), made the first time the call culls. Both frame slots share them, because the GPU runs the frames in order. Rows start at 0, so a new instance is drawn by the late cull first. A call should keep its camera from frame to frame; if two cameras swap call order, they read each other's flags: slower, still correct.</p>
   </div>
 </div>
 
 <div class="callout">
   <strong>The cost of the pause</strong>
-  <p>The pass ends after the early draws and begins again with <code>load</code>, so depth attachments are always stored. The Hi-Z build and the late cull get their own GPU timer, <code>"Hi-Z"</code>, in the <a href="stats-overlay.html">stats overlay</a>.</p>
+  <p>The pass ends after the early draws and begins again with <code>load</code>, so with occlusion culling on, <code>beginPass</code> stores depth (<code>storeDepth</code>) and the depth textures can be sampled. The Hi-Z build and the late cull get their own GPU timer, <code>"Hi-Z"</code>, in the <a href="stats-overlay.html">stats overlay</a>.</p>
 </div>
 
 <h2><span class="n">7</span>When culling is off</h2>
@@ -646,7 +646,7 @@
   </div>
 </div>
 
-<p>Occlusion culling falls back to frustum culling alone (<code>hizLevelCount</code> = 0, no late pass) when <code>EngineConfig::occlusionCulling</code> is false, when <code>hiz.slang</code> fails to compile, or when the depth texture gets no bindless slot or the Hi-Z buffer cannot be created. The image is the same either way; only the number of draws changes.</p>
+<p>Occlusion culling falls back to frustum culling alone (<code>hizLevelCount</code> = 0, no late pass) when <code>EngineConfig::occlusionCulling</code> is false, when <code>hiz.slang</code> fails to compile, when the depth texture has no bindless slot, when the visibility or Hi-Z buffer cannot be created, or when the viewport is not the whole pass with depth range 0 to 1 (<code>RenderContext::getViewport</code>): the Hi-Z covers the whole attachment, and the test maps NDC onto it. The image is the same either way; only the number of draws changes.</p>
 
 <h2><span class="n">8</span>Where it lives in code</h2>
 
@@ -660,7 +660,7 @@
   <tr><td>Visibility and Hi-Z buffers</td><td><code>GpuScene::visibility</code>, <code>GpuScene::hiz</code> in <code>src/renderer/gpuScene.h</code></td></tr>
   <tr><td>Submit order {cull, frame}</td><td><code>Engine::endFrame</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Frustum test</td><td><code>getWorldSphere</code>, <code>isInFrustum</code> in <code>shaders/lib/frustumCulling.slang</code></td></tr>
-  <tr><td>Occlusion test</td><td><code>isOccluded</code>, <code>getHizLevel0Size</code> in <code>shaders/lib/occlusionCulling.slang</code></td></tr>
+  <tr><td>Occlusion test</td><td><code>isOccluded</code>, <code>getHizLevel</code> in <code>shaders/lib/occlusionCulling.slang</code></td></tr>
   <tr><td>Count, pack (both phases)</td><td><code>countMain</code>, <code>writeMain</code>, <code>getCullGroup</code> in <code>shaders/passes/cull.slang</code></td></tr>
   <tr><td>Hi-Z build</td><td><code>hizMain</code> in <code>shaders/passes/hiz.slang</code></td></tr>
   <tr><td>Pointers it uses</td><td><code>SceneData</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
@@ -672,7 +672,7 @@
 <div class="callout rule">
   <strong>Keep these true</strong>
   <ul>
-    <li><code>CULL_GROUP_SIZE</code>, <code>CULL_EARLY</code> and <code>CULL_LATE</code> are in <code>cull.slang</code> and <code>gpuScene.cpp</code>; <code>HIZ_GROUP_SIZE</code> is in <code>hiz.slang</code> and <code>gpuScene.cpp</code>. Change both sides. So are the Hi-Z level sizes (<code>getHizLevelCount</code>, <code>getHizLevel0Size</code>).</li>
+    <li><code>CULL_GROUP_SIZE</code>, <code>CULL_EARLY</code> and <code>CULL_LATE</code> are in <code>cull.slang</code> and <code>gpuScene.cpp</code>; <code>HIZ_GROUP_SIZE</code> is in <code>hiz.slang</code> and <code>gpuScene.cpp</code>. Change both sides. So are the Hi-Z level sizes (<code>getHizLevelCount</code>, <code>getHizLevel</code>).</li>
     <li>Both tests must stay conservative. Removing a draw that is partly visible makes objects pop. Compare the image with <code>EngineConfig::occlusionCulling</code> on and off: it must not change.</li>
     <li>Do not record a dispatch inside a render pass. <code>RenderContext::dispatch</code> refuses it.</li>
     <li>A new pointer in <code>SceneData</code> is a CPU↔GPU struct change: follow <a href="shaders-structs.html">the struct contract</a>.</li>

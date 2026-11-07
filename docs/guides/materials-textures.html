@@ -263,7 +263,7 @@
 
 <ul>
   <li>When "next" reaches 1024, <code>updateBindlessDescriptorSet</code> logs <i>"Slot index exceeds maximum bindless textures."</i> and returns <code>UINT32_MAX</code>.</li>
-  <li>Who takes slots: <code>createMaterial</code> (each valid texture it gets), <code>updateMaterial</code> (only textures without a slot), <code>loadMaterial</code> (each uploaded glTF texture), and <code>createRenderTarget</code> (each color attachment, with <code>LINEAR_CLAMP</code>). With occlusion culling, <code>drawScene</code> also adds the pass's depth texture (<code>NEAREST_CLAMP</code>) the first time it culls with it. A swapchain depth texture replaced by a resize takes the old one's slot.</li>
+  <li>Who takes slots: <code>createMaterial</code> (each valid texture it gets), <code>updateMaterial</code> (only textures without a slot), <code>loadMaterial</code> (each uploaded glTF texture), and <code>createRenderTarget</code> (each color attachment, with <code>LINEAR_CLAMP</code>). With occlusion culling, the depth textures take slots too (<code>NEAREST_CLAMP</code>), for <code>drawScene</code>: <code>createRenderTarget</code> (each <code>D32_SFLOAT</code> depth attachment) and <code>createSwapchainResources</code> (one per frame slot; a depth texture replaced by a resize takes the old one's slot).</li>
   <li><code>loadTexture</code> does <b>not</b> take a slot. The texture gets one when a material uses it.</li>
 </ul>
 

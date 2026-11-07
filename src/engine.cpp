@@ -93,10 +93,6 @@ namespace rasm
             }
         }
 
-        // Swapchain images and depth textures
-        if (!createSwapchainResources())
-            return;
-
         auto shaderTarget = getShaderCompilerTarget(config.preferredBackend);
         if (!shaderCompiler->initialize(shaderTarget, this->config.shaderDir))
         {
@@ -134,6 +130,10 @@ namespace rasm
             spdlog::error("Failed to allocate bindless descriptor set.");
             return;
         }
+
+        // Swapchain images and depth textures. The depth textures go in the bindless set, so they come after it.
+        if (!createSwapchainResources())
+            return;
 
         // Its pipeline is built with the bindless layout, so it comes after it.
         if (!createStatsOverlay())
@@ -379,6 +379,8 @@ namespace rasm
         frameStats->passTimer = beginGpuTimer(currentFrame.commandBuffer, name);
         uint32_t width = swapchain.width;
         uint32_t height = swapchain.height;
+        // drawScene's occlusion culling pauses the pass and builds its Hi-Z from the depth drawn so far.
+        const bool storeDepth = config.occlusionCulling;
 
         if (currentRenderTarget.isValid())
         {
@@ -389,14 +391,14 @@ namespace rasm
             // transition render target images to be ready for rendering
             ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
             ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].depth, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
-            ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, renderTargetData.attachments[frameCount].depth, renderTargetData.clearColor);
+            ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, renderTargetData.attachments[frameCount].depth, renderTargetData.clearColor, false, storeDepth);
         }
         else
         {
             // transition swapchain image to be ready for rendering
             ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::UNKNOWN, TextureUsage::COLOR_ATTACHMENT);
             ctx.transitionImageLayout(currentFrame.commandBuffer, currentFrame.depthTexture, TextureUsage::UNKNOWN, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
-            ctx.beginRendering(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], currentFrame.depthTexture, SWAPCHAIN_CLEAR_COLOR);
+            ctx.beginRendering(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], currentFrame.depthTexture, SWAPCHAIN_CLEAR_COLOR, false, storeDepth);
         }
 
         // begin dynamic rendering
@@ -416,7 +418,7 @@ namespace rasm
         if (currentRenderTarget.isValid())
         {
             // Later passes sample the color attachment through the bindless set, whose descriptors promise
-            // this layout (B10). Depth is not stored, so it stays an attachment.
+            // this layout (B10). Depth stays an attachment: only drawScene's Hi-Z reads it, inside the pass.
             const auto &renderTargetData = ctx.getRenderTarget(currentRenderTarget);
             ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::COLOR_ATTACHMENT, TextureUsage::SAMPLED);
         }
@@ -471,11 +473,15 @@ namespace rasm
                                                   .width = swapchain.width,
                                                   .height = swapchain.height,
                                                   .format = DEPTH_FORMAT,
-                                                  .usage = TextureUsage::SAMPLED_DEPTH_ATTACHMENT};
+                                                  .usage = config.occlusionCulling ? TextureUsage::SAMPLED_DEPTH_ATTACHMENT : TextureUsage::DEPTH_STENCIL_ATTACHMENT};
 
-            // The device is idle, so the old texture is unused. drawScene puts the new one in the old one's bindless slot.
+            // The device is idle, so the old texture is unused, and the new one takes its bindless slot.
+            uint32_t depthSlot = MAX_BINDLESS_TEXTURES;
             if (frameResources[i].depthTexture.isValid())
             {
+                const uint32_t oldSlot = getBindlessTextureIndex(frameResources[i].depthTexture);
+                if (oldSlot != UINT32_MAX)
+                    depthSlot = oldSlot;
                 registry.bindlessTextureIndexMap.erase(frameResources[i].depthTexture);
                 ctx.destroyTexture(frameResources[i].depthTexture);
             }
@@ -485,6 +491,10 @@ namespace rasm
                 spdlog::error("Failed to create depth texture for frame {}", i);
                 return false;
             }
+
+            // drawScene's occlusion culling samples it. Without a slot that call is only frustum culled.
+            if (config.occlusionCulling)
+                addBindlessTexture(bindlessDescriptorSet, frameResources[i].depthTexture, SamplerType::NEAREST_CLAMP, depthSlot);
         }
 
         updateCameraAspectRatio(static_cast<float>(swapchain.width) / static_cast<float>(swapchain.height));

@@ -398,6 +398,21 @@ struct RenderTarget
   </div>
 </div>
 
+<div class="api" id="Viewport">
+  <pre class="sig">struct Viewport
+{
+    float x        = 0.0f;
+    float y        = 0.0f;
+    float width    = 0.0f;
+    float height   = 0.0f;
+    float minDepth = 0.0f;
+    float maxDepth = 1.0f;
+};</pre>
+  <div class="body">
+    <p>The last viewport set with <a href="low-level.html#setViewport">setViewport</a>, from <a href="low-level.html#getViewport">getViewport</a>. Pixels, with <code>x</code>, <code>y</code> at the top-left corner.</p>
+  </div>
+</div>
+
 <h2><span class="n">4</span>Constants and limits</h2>
 
 <p>All are <code>constexpr</code> in the public headers. Exceeding a <code>create</code> limit logs a warning or error and returns an invalid handle. Because handle indices start at 1 and are never reused, the limits on handle indices hold one object less than their value, and a failed create uses up an index too (B13).</p>

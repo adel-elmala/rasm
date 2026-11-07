@@ -18,19 +18,15 @@ void hizMain(uint3 threadId : SV_DispatchThreadID)
 {
     SceneData *scene    = pc.scene;
     uint level          = pc.argument;
-    uint2 sourceSize    = uint2(scene->viewportWidth, scene->viewportHeight);
-    uint2 size          = getHizLevel0Size(scene);
-    uint sourceOffset   = 0;
-    uint offset         = 0;
-    for (uint i = 0; i < level; ++i)
-    {
-        sourceOffset    = offset;
-        sourceSize      = size;
-        offset         += size.x * size.y;
-        size            = (size + 1) / 2;
-    }
+    uint2 size;
+    uint offset         = getHizLevel(scene, level, size);
     if (threadId.x >= size.x || threadId.y >= size.y)
         return;
+
+    uint2 sourceSize    = uint2(scene->viewportWidth, scene->viewportHeight);
+    uint sourceOffset   = 0;
+    if (level > 0)
+        sourceOffset    = getHizLevel(scene, level - 1, sourceSize);
 
     uint2 p0            = threadId.xy * 2;
     uint2 p1            = min(p0 + 1, sourceSize - 1);

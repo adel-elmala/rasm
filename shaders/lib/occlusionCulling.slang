@@ -7,9 +7,17 @@
 // Hi-Z level 0 is half the pass's size, rounded up, and each level halves the one before, down to 1x1. A texel
 // of level L holds the farthest depth (reversed-Z: the smallest) of the 2^(L+1)-pixel square it covers.
 // passes/hiz.slang builds it; getHizLevelCount in gpuScene.cpp counts the same levels.
-uint2 getHizLevel0Size(SceneData *scene)
+// Returns where the level starts in hizPtr, and its size.
+uint getHizLevel(SceneData *scene, uint level, out uint2 size)
 {
-    return (uint2(scene->viewportWidth, scene->viewportHeight) + 1) / 2;
+    size                = (uint2(scene->viewportWidth, scene->viewportHeight) + 1) / 2;
+    uint offset         = 0;
+    for (uint i = 0; i < level; ++i)
+    {
+        offset         += size.x * size.y;
+        size            = (size + 1) / 2;
+    }
+    return offset;
 }
 
 // The sphere is occluded when its nearest point is farther than the farthest depth in the pixels it covers.
@@ -43,17 +51,16 @@ bool isOccluded(SceneData *scene, Sphere sphere)
     // The first level where the rectangle covers at most 2x2 texels. The 1x1 top level always qualifies.
     uint2 texelMin      = uint2(pixelMin) >> 1;
     uint2 texelMax      = uint2(pixelMax) >> 1;
-    uint2 size          = getHizLevel0Size(scene);
-    uint offset         = 0;
-    for (uint level = 0; level + 1 < scene->hizLevelCount && (texelMax.x - texelMin.x > 1 || texelMax.y - texelMin.y > 1); ++level)
+    uint level          = 0;
+    while (level + 1 < scene->hizLevelCount && (texelMax.x - texelMin.x > 1 || texelMax.y - texelMin.y > 1))
     {
-        offset         += size.x * size.y;
-        size            = (size + 1) / 2;
+        ++level;
         texelMin      >>= 1;
         texelMax      >>= 1;
     }
 
-    float *texels       = scene->hizPtr + offset;
+    uint2 size;
+    float *texels       = scene->hizPtr + getHizLevel(scene, level, size);
     float farthest      = min(min(texels[texelMin.y * size.x + texelMin.x], texels[texelMin.y * size.x + texelMax.x]),
                               min(texels[texelMax.y * size.x + texelMin.x], texels[texelMax.y * size.x + texelMax.x]));
     return nearestDepth < farthest;

@@ -179,16 +179,6 @@ namespace rasm
                 return false;
             }
         }
-
-        // One flag per instance row, shared by both frame slots: the GPU runs the frames in order. Rows start
-        // unseen, so a new instance is drawn by the late pass first.
-        const std::vector<uint32_t> unseen(config.maxInstances, 0);
-        gpuScene->visibility = ctx.createBuffer({.name = "Visibility Buffer", .usage = BufferUsage::STORAGE, .size = unseen.size() * sizeof(uint32_t)});
-        if (!gpuScene->visibility.isValid() || !ctx.fillBuffer(gpuScene->visibility, unseen.data(), unseen.size() * sizeof(uint32_t)))
-        {
-            spdlog::error("Failed to create the visibility buffer.");
-            return false;
-        }
         return true;
     }
 
@@ -503,20 +493,23 @@ namespace rasm
             }
         }
         // Without the culling pipelines the scene is still drawn, only unculled, so a culling shader error does not blank it.
-        // Without the Hi-Z pipeline it is still frustum culled.
-        if (!gpuScene->cullCountPipeline.isValid() || !gpuScene->cullWritePipeline.isValid() || (config.occlusionCulling && !gpuScene->hizPipeline.isValid()))
+        if (!gpuScene->cullCountPipeline.isValid() || !gpuScene->cullWritePipeline.isValid())
         {
             const std::string cullSource = readFile(pathFromUtf8(config.shaderDir) / "passes/cull.slang");
             gpuScene->cullCountPipeline = createComputePipeline("cullCount", cullSource, "countMain");
             gpuScene->cullWritePipeline = createComputePipeline("cullWrite", cullSource, "writeMain");
-            if (config.occlusionCulling)
-                gpuScene->hizPipeline = createComputePipeline("hiz", readFile(pathFromUtf8(config.shaderDir) / "passes/hiz.slang"), "hizMain");
             if (!gpuScene->cullCountPipeline.isValid() || !gpuScene->cullWritePipeline.isValid())
                 spdlog::error("Failed to create the culling pipelines; the scene is drawn without culling.");
-            else if (config.occlusionCulling && !gpuScene->hizPipeline.isValid())
-                spdlog::error("Failed to create the Hi-Z pipeline; the scene is drawn without occlusion culling.");
         }
         const bool culled = gpuScene->cullCountPipeline.isValid() && gpuScene->cullWritePipeline.isValid();
+
+        // Without the Hi-Z pipeline it is still frustum culled.
+        if (culled && config.occlusionCulling && !gpuScene->hizPipeline.isValid())
+        {
+            gpuScene->hizPipeline = createComputePipeline("hiz", readFile(pathFromUtf8(config.shaderDir) / "passes/hiz.slang"), "hizMain");
+            if (!gpuScene->hizPipeline.isValid())
+                spdlog::error("Failed to create the Hi-Z pipeline; the scene is drawn without occlusion culling.");
+        }
 
         uint32_t width = swapchain.width;
         uint32_t height = swapchain.height;
@@ -573,19 +566,30 @@ namespace rasm
             }
         }
 
-        // Occlusion culling samples the pass's depth through the bindless set. The swapchain's depth textures are
-        // replaced on resize, and the new one takes the old one's slot.
+        // Occlusion culling samples the pass's depth, which is in the bindless set from its creation
+        // (createSwapchainResources, createRenderTarget). Its Hi-Z covers the whole attachment and its test maps
+        // NDC onto it, so another viewport or depth range only gets frustum culling.
         uint32_t hizLevelCount = 0;
-        uint32_t depthSlot = UINT32_MAX;
-        if (culled && config.occlusionCulling && gpuScene->hizPipeline.isValid())
+        const uint32_t depthSlot = getBindlessTextureIndex(depthTexture);
+        const Viewport &viewport = ctx.getViewport();
+        const bool fullViewport = viewport.x == 0.0f && viewport.y == 0.0f && viewport.width == static_cast<float>(width) &&
+                                  viewport.height == static_cast<float>(height) && viewport.minDepth == 0.0f && viewport.maxDepth == 1.0f;
+        if (culled && config.occlusionCulling && gpuScene->hizPipeline.isValid() && depthSlot != UINT32_MAX && fullViewport)
         {
-            depthSlot = getBindlessTextureIndex(depthTexture);
-            if (depthSlot == UINT32_MAX)
+            // The call's visibility, one flag per instance row, is kept across frames and shared by both frame
+            // slots: the GPU runs the frames in order. Rows start unseen, so a new instance is drawn late first.
+            BufferHandle &visibility = gpuScene->visibility[call];
+            if (!visibility.isValid())
             {
-                uint32_t &swapchainSlot = gpuScene->swapchainDepthSlots[frame];
-                depthSlot = addBindlessTexture(bindlessDescriptorSet, depthTexture, SamplerType::NEAREST_CLAMP, currentRenderTarget.isValid() ? MAX_BINDLESS_TEXTURES : swapchainSlot);
-                if (!currentRenderTarget.isValid() && depthSlot != UINT32_MAX)
-                    swapchainSlot = depthSlot;
+                const std::vector<uint32_t> unseen(config.maxInstances, 0);
+                visibility = ctx.createBuffer({.name = "Visibility Buffer", .usage = BufferUsage::STORAGE, .size = unseen.size() * sizeof(uint32_t)});
+                if (visibility.isValid() && !ctx.fillBuffer(visibility, unseen.data(), unseen.size() * sizeof(uint32_t)))
+                {
+                    ctx.destroyBuffer(visibility);
+                    visibility = {};
+                }
+                if (!visibility.isValid())
+                    spdlog::error("Failed to create a visibility buffer; the scene is drawn without occlusion culling.");
             }
 
             // The call's Hi-Z, grown like its visible draws.
@@ -593,7 +597,7 @@ namespace rasm
             const uint32_t levelCount = getHizLevelCount(width, height, texelCount);
             BufferHandle &hiz = gpuScene->hiz[frame][call];
             uint32_t &hizCapacity = gpuScene->hizCapacity[frame][call];
-            if (depthSlot != UINT32_MAX && hizCapacity < texelCount)
+            if (hizCapacity < texelCount)
             {
                 if (hiz.isValid())
                     ctx.destroyBuffer(hiz);
@@ -605,7 +609,7 @@ namespace rasm
                     hizCapacity = 0;
                 }
             }
-            if (depthSlot != UINT32_MAX && hiz.isValid())
+            if (visibility.isValid() && hiz.isValid())
                 hizLevelCount = levelCount;
         }
 
@@ -648,7 +652,7 @@ namespace rasm
         }
         if (hizLevelCount > 0)
         {
-            sceneData.visibilityPtr = ctx.getBufferDeviceAddress(gpuScene->visibility);
+            sceneData.visibilityPtr = ctx.getBufferDeviceAddress(gpuScene->visibility[call]);
             sceneData.hizPtr = ctx.getBufferDeviceAddress(gpuScene->hiz[frame][call]);
         }
         sceneData.drawCount = drawCount;
@@ -706,29 +710,26 @@ namespace rasm
         drawRuns();
         if (hizLevelCount > 0)
         {
-            recordOcclusionCulling(sceneDataAddress, call, colorTexture, depthTexture, width, height);
+            recordOcclusionCulling(sceneDataAddress, call, colorTexture, depthTexture, width, height, hizLevelCount);
             drawRuns();
         }
     }
 
     // The second half of occlusion culling, in the middle of the pass: the early draws left their depth, so the
     // pass is paused for the Hi-Z build and the late culling, then resumed with its attachments loaded.
-    void Engine::recordOcclusionCulling(uint64_t sceneDataAddress, uint32_t call, TextureHandle colorTexture, TextureHandle depthTexture, uint32_t width, uint32_t height)
+    void Engine::recordOcclusionCulling(uint64_t sceneDataAddress, uint32_t call, TextureHandle colorTexture, TextureHandle depthTexture, uint32_t width, uint32_t height, uint32_t levelCount)
     {
         const auto commandBuffer = frameResources[frameCount].commandBuffer;
         const uint32_t timer = beginGpuTimer(commandBuffer, "Hi-Z");
         ctx.endRendering(commandBuffer);
         ctx.transitionImageLayout(commandBuffer, depthTexture, TextureUsage::DEPTH_STENCIL_ATTACHMENT, TextureUsage::SAMPLED);
 
-        // The early draws are done with the lists the late culling rewrites, and the early culling's slots and
-        // an earlier call's visibility writes are visible.
+        // The early draws are done with the lists the late culling rewrites, and the early culling's slots are visible.
         ctx.memoryBarrier(commandBuffer, PipelineStage::GRAPHICS | PipelineStage::COMPUTE, PipelineStage::COMPUTE);
 
         gfx::PushConstants pushConstants{.scene = sceneDataAddress};
         ctx.bindPipeline(commandBuffer, gpuScene->hizPipeline);
         ctx.bindDescriptorSet(commandBuffer, gpuScene->hizPipeline, bindlessDescriptorSet, 0);
-        uint32_t texelCount = 0;
-        const uint32_t levelCount = getHizLevelCount(width, height, texelCount);
         uint32_t levelWidth = width;
         uint32_t levelHeight = height;
         for (uint32_t level = 0; level < levelCount; ++level)
@@ -755,7 +756,8 @@ namespace rasm
         ctx.transitionImageLayout(commandBuffer, depthTexture, TextureUsage::SAMPLED, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
         // The same layout: only orders the early draws' color writes before the load.
         ctx.transitionImageLayout(commandBuffer, colorTexture, TextureUsage::COLOR_ATTACHMENT, TextureUsage::COLOR_ATTACHMENT);
-        ctx.beginRendering(commandBuffer, colorTexture, depthTexture, glm::vec4(0.0f), true);
+        // Depth is stored again, for a later drawScene call in the same pass.
+        ctx.beginRendering(commandBuffer, colorTexture, depthTexture, glm::vec4(0.0f), true, true);
         endGpuTimer(commandBuffer, timer);
     }
 

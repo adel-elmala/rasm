@@ -213,7 +213,7 @@
   <tr><td><code>skipDraws</code></td><td><code>bindPipeline</code> with a missing pipeline, or one whose formats differ from the pass</td><td>draws are dropped until a matching pipeline is bound</td></tr>
 </table>
 </div>
-<p><code>beginRendering</code> clears color and depth, or keeps them when <code>load</code> is true (<code>VK_ATTACHMENT_LOAD_OP_LOAD</code>). Both attachments are always stored, because <code>drawScene</code> reads depth in the middle of a pass.</p>
+<p><code>beginRendering</code> clears color and depth, or keeps them when <code>load</code> is true (<code>VK_ATTACHMENT_LOAD_OP_LOAD</code>). Color is always stored. Depth is stored only with <code>storeDepth</code> (<code>VK_ATTACHMENT_STORE_OP_DONT_CARE</code> otherwise); <code>beginPass</code> sets it when <code>EngineConfig::occlusionCulling</code> is on, because <code>drawScene</code> then reads depth in the middle of a pass.</p>
 <p><code>pushConstants</code> must name <code>COMPUTE</code> for a compute pipeline and <code>VERTEX_FRAGMENT</code> for a graphics one, and fit in <code>PUSH_CONSTANTS_SIZE</code>. Binding a compute pipeline leaves the pass's graphics pipeline bound.</p>
 
 <h2><span class="n">3</span>Barriers: <code>memoryBarrier</code> and <code>PipelineStage</code></h2>

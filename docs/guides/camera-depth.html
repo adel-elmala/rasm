@@ -381,9 +381,9 @@
 <div class="table-wrap">
 <table>
   <tr><th>Setting</th><th>Value</th><th>Where</th></tr>
-  <tr><td>Format</td><td><code>D32_SFLOAT</code> (<code>DEPTH_FORMAT</code>), no stencil. One depth texture per frame slot, swapchain size in pixels. Usage <code>SAMPLED_DEPTH_ATTACHMENT</code>, so shaders can also read it.</td><td><code>createSwapchainResources</code></td></tr>
+  <tr><td>Format</td><td><code>D32_SFLOAT</code> (<code>DEPTH_FORMAT</code>), no stencil. One depth texture per frame slot, swapchain size in pixels. Usage <code>SAMPLED_DEPTH_ATTACHMENT</code> with <code>EngineConfig::occlusionCulling</code>, so shaders can also read it; <code>DEPTH_STENCIL_ATTACHMENT</code> without.</td><td><code>createSwapchainResources</code></td></tr>
   <tr><td>Clear</td><td>0.0, at the start of every pass. With <code>load</code> set, <code>beginRendering</code> keeps the old depth instead.</td><td><code>beginRendering</code></td></tr>
-  <tr><td>Store</td><td>always stored: <code>drawScene</code> pauses the pass and builds its Hi-Z from this depth (<a href="culling.html#occlusion">occlusion culling</a>)</td><td><code>beginRendering</code></td></tr>
+  <tr><td>Store</td><td>stored with <code>EngineConfig::occlusionCulling</code> (<code>storeDepth</code>): <code>drawScene</code> pauses the pass and builds its Hi-Z from this depth (<a href="culling.html#occlusion">occlusion culling</a>). Without it, not stored.</td><td><code>beginRendering</code></td></tr>
   <tr><td>Test, write</td><td>both on, compare <code>GREATER_OR_EQUAL</code>, for every graphics pipeline</td><td><code>createGraphicsPipeline</code></td></tr>
 </table>
 </div>

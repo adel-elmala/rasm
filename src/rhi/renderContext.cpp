@@ -192,6 +192,7 @@ namespace rasm
         bool                                                                                                                    skipDraws       = false; // a mismatched or missing pipeline was rejected
         bool                                                                                                                    computeBound    = false; // a compute pipeline is bound, so dispatches are defined
         bool                                                                                                                    insidePass      = false; // between beginRendering and endRendering, where draws are allowed and dispatches and barriers are not
+        Viewport                                                                                                                viewport;                // the last setViewport
 
         void registerSwapchainImages(HandleManager& handleManager)
         {
@@ -453,13 +454,14 @@ namespace rasm
             .format = desc.colorFormat,
             .usage = TextureUsage::SAMPLED_COLOR_ATTACHMENT};
 
+        // drawScene's occlusion culling samples D32 depth through the bindless set. A depth/stencil view can't be sampled.
+        const bool sampledDepth = engine->config.occlusionCulling && desc.depthFormat == Format::D32_SFLOAT;
         const TextureDesc depthDesc = {
             .name = desc.name + " Depth Texture",
             .width = desc.width,
             .height = desc.height,
             .format = desc.depthFormat,
-            // drawScene builds its Hi-Z from D32 depth. A depth/stencil view can't be sampled.
-            .usage = desc.depthFormat == Format::D32_SFLOAT ? TextureUsage::SAMPLED_DEPTH_ATTACHMENT : TextureUsage::DEPTH_STENCIL_ATTACHMENT};
+            .usage = sampledDepth ? TextureUsage::SAMPLED_DEPTH_ATTACHMENT : TextureUsage::DEPTH_STENCIL_ATTACHMENT};
 
         RenderTarget rt = {
             .attachments = {},
@@ -479,7 +481,10 @@ namespace rasm
                     destroyTexture(attachment.color);
                 }
                 if (attachment.depth.isValid())
+                {
+                    engine->registry.bindlessTextureIndexMap.erase(attachment.depth);
                     destroyTexture(attachment.depth);
+                }
             }
         };
 
@@ -498,7 +503,8 @@ namespace rasm
         // Only once every attachment exists, so that a failed creation leaves the bindless set untouched.
         for (const auto &attachment : rt.attachments)
         {
-            if (engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.color, SamplerType::LINEAR_CLAMP) == UINT32_MAX)
+            if (engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.color, SamplerType::LINEAR_CLAMP) == UINT32_MAX ||
+                (sampledDepth && engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.depth, SamplerType::NEAREST_CLAMP) == UINT32_MAX))
             {
                 spdlog::error("Failed to make render target '{}' bindless.", desc.name);
                 destroyAttachments();
@@ -721,7 +727,7 @@ namespace rasm
         return rhiCommandBuffer && rhiTexture && rhiCommandBuffer->transitionTexture(rhiTexture, oldUsage, newUsage);
     }
 
-    bool RenderContext::beginRendering(const CommandBufferHandle &commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment, const glm::vec4 &clearColor, bool load)
+    bool RenderContext::beginRendering(const CommandBufferHandle &commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment, const glm::vec4 &clearColor, bool load, bool storeDepth)
     {
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         auto *color = lookup(impl->textures, colorAttachment, __func__);
@@ -729,7 +735,7 @@ namespace rasm
         if (!rhiCommandBuffer || !color || !depth)
             return false;
 
-        rhiCommandBuffer->beginRendering(color, depth, clearColor, load);
+        rhiCommandBuffer->beginRendering(color, depth, clearColor, load, storeDepth);
         impl->passColorFormat = color->desc.format;
         impl->passDepthFormat = depth->desc.format;
         impl->skipDraws = false;
@@ -758,7 +764,13 @@ namespace rasm
             return false;
 
         rhiCommandBuffer->setViewport(x, y, width, height, minDepth, maxDepth);
+        impl->viewport = {.x = x, .y = y, .width = width, .height = height, .minDepth = minDepth, .maxDepth = maxDepth};
         return true;
+    }
+
+    const Viewport &RenderContext::getViewport() const
+    {
+        return impl->viewport;
     }
 
     bool RenderContext::setScissor(const CommandBufferHandle &commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height)
