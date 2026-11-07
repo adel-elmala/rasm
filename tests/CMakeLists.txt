@@ -6,6 +6,7 @@ add_executable(rasm_tests
             "main.cpp"
             "cameraTests.cpp"
             "gltfImportTests.cpp"
+            "gpuTableTests.cpp"
             "handleTests.cpp"
             "importMeshText.cpp"
             "meshTests.cpp"

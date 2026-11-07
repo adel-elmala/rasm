@@ -1,5 +1,6 @@
 #include "rasm/material.h"
 #include "rasm/engine.h"
+#include "renderer/gpuScene.h"
 
 #include "spdlog/spdlog.h"
 
@@ -27,6 +28,58 @@ namespace rasm
             default:
                 return nearest ? SamplerType::NEAREST_REPEAT : SamplerType::LINEAR_REPEAT;
             }
+        }
+
+        gfx::MaterialId getGfxMaterialId(MaterialType type)
+        {
+            switch (type)
+            {
+            case MaterialType::UNLIT:
+                return gfx::MaterialId::UNLIT;
+            default:
+                return gfx::MaterialId::PBR;
+            }
+        }
+
+        gfx::Material convertToGfxMaterial(Engine &engine, const Material &mat)
+        {
+            gfx::Material gmat{};
+
+            // base color (albedo)
+            gmat.pbr.baseColorFactor[0] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO)];
+            gmat.pbr.baseColorFactor[1] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 1];
+            gmat.pbr.baseColorFactor[2] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 2];
+
+            // glTF texCoord set per texture; the shader selects the matching interpolated UV set.
+            auto texCoordOf = [](uint32_t texCoord) -> uint32_t
+            { return texCoord < MAX_VERTEX_UV_SETS ? texCoord : 0u; };
+
+            gmat.pbr.baseColorTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::ALBEDO)]);
+            gmat.pbr.baseColorTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::ALBEDO)]);
+            gmat.pbr.metallicRoughnessTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::METALLIC)]);
+            gmat.pbr.metallicRoughnessTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::METALLIC)]);
+
+            gmat.pbr.metallicFactor = mat.params[static_cast<uint32_t>(PbrParam::METALLIC)];
+            gmat.pbr.roughnessFactor = mat.params[static_cast<uint32_t>(PbrParam::ROUGHNESS)];
+
+            // normal map
+            gmat.normal.normalTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::NORMAL)]);
+            gmat.normal.normalTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::NORMAL)]);
+            gmat.normal.scale = mat.params[static_cast<uint32_t>(PbrParam::NORMAL_SCALE)];
+
+            // occlusion map
+            gmat.occlusion.occlusionTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::OCCLUSION)]);
+            gmat.occlusion.occlusionTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::OCCLUSION)]);
+            gmat.occlusion.strength = mat.params[static_cast<uint32_t>(PbrParam::OCCLUSION_STRENGTH)];
+
+            // emissive map
+            gmat.emissive.emissiveTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::EMISSIVE)]);
+            gmat.emissive.emissiveTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::EMISSIVE)]);
+            gmat.emissive.emissiveFactor[0] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR)];
+            gmat.emissive.emissiveFactor[1] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + 1];
+            gmat.emissive.emissiveFactor[2] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + 2];
+
+            return gmat;
         }
     }
 
@@ -81,8 +134,47 @@ namespace rasm
 
         registry.materials.resize(handle.index + 1);
         registry.materials[handle.index] = material;
+        writeMaterialRow(handle);
 
         return handle;
+    }
+
+    void Engine::updateMaterial(MaterialHandle material, const Material &values)
+    {
+        if (!material.isValid() || material.index >= registry.materials.size())
+        {
+            spdlog::error("Invalid material handle for updating material.");
+            return;
+        }
+
+        for (auto texture : values.textures)
+        {
+            if (texture.isValid() && getBindlessTextureIndex(texture) == UINT32_MAX)
+                addBindlessTexture(bindlessDescriptorSet, texture);
+        }
+
+        Material &materialRef = registry.materials[material.index];
+        const bool doubleSidedChanged = materialRef.doubleSided != values.doubleSided;
+        materialRef = values;
+        materialRef.handle = material;
+        writeMaterialRow(material);
+
+        // doubleSided picks the cull mode of every instance that uses the material. This is rare, so all rows are rewritten.
+        if (doubleSidedChanged)
+        {
+            for (size_t i = 0; i < gpuScene->entityInstances.size(); ++i)
+            {
+                if (gpuScene->entityInstances[i].count > 0)
+                    writeInstanceRows(registry.entities[i].handle);
+            }
+        }
+    }
+
+    void Engine::writeMaterialRow(MaterialHandle material)
+    {
+        const Material &materialRef = registry.materials[material.index];
+        const gfx::MaterialData row{.material = convertToGfxMaterial(*this, materialRef), .materialId = getGfxMaterialId(materialRef.type)};
+        gpuScene->materials.setRow(static_cast<uint32_t>(material.index), &row);
     }
 
     MaterialHandle Engine::loadMaterial(const tinygltf::Model &model, int materialIndex, GltfImportCache &cache)
@@ -217,6 +309,7 @@ namespace rasm
 
         registry.materials.resize(handle.index + 1);
         registry.materials[handle.index] = mat;
+        writeMaterialRow(handle);
         cache.materials[materialIndex] = handle;
         return handle;
     }

@@ -8,7 +8,7 @@ RASM is an early-stage C++20 GPU-driven rendering engine (static lib target `ras
 
 ## Docs — read the relevant one before changing code
 
-- [docs/architecture.md](docs/architecture.md) — how the engine works today: handles/registries, `RenderContext` dedup caches, frame loop, the GPU-driven `prepareScene`/`render` path, CPU↔GPU struct contract, materials/bindless, asset import, render graph, limits.
+- [docs/architecture.md](docs/architecture.md) — how the engine works today: handles/registries, `RenderContext` dedup caches, frame loop, the GPU-driven path (GPU scene tables, `syncGpuScene`, `drawScene`), CPU↔GPU struct contract, materials/bindless, asset import, render graph, limits.
 - [docs/coding_style.md](docs/coding_style.md) — naming, headers, formatting (aligned `// clang-format off` headers), error handling, Vulkan and Slang rules.
 - [docs/code_review.md](docs/code_review.md) — known bugs/design issues with IDs (`B1`, `D4`, `P1`, `C3`, ...). Check it before "fixing" odd behaviour; reference IDs in commits.
 - [docs/development_plan.md](docs/development_plan.md) — phased roadmap; phase 0 (stabilization) comes first.
@@ -62,6 +62,6 @@ Then run `clang-format -i` on the new `.cpp` files and build. CMake reconfigures
 - C++ structs in `src/renderer/uberMaterialTypes.h` must match `shaders/lib/core.slang` byte-for-byte (scalar layout); update both sides, the `static_assert`s and the `validateRasmStructs` tables in `src/renderer/shaderCompiler.cpp` together.
 - `RenderContext::createBuffer`/`createTexture` always create a new resource (no dedup since `B1`) — cache at the asset level if you want sharing, and destroy what you replace. Shaders, pipelines and descriptor set layouts are still deduplicated: their descriptors (`ShaderDesc`, `PipelineDesc`, `BindlessDescriptorSetLayoutDesc`) compare every field through a defaulted `operator==`, but a new field must also be added to the matching hash in `src/rhi/resource.cpp`.
 - `frameCount` is the frame-in-flight slot (0/1); per-frame mutable buffers are indexed by it.
-- `prepareScene` is cached per scene after the first `render`; only transforms update afterwards.
+- GPU scene tables (instances, materials, draw lists) have one buffer per frame slot and are only written in `syncGpuScene`, after that slot's fence wait. Change rows through `GpuTable::setRow` (or mark a draw list for rebuild); never write a slot's buffer from anywhere else.
 - Normal/metallic-roughness/AO textures must be `R8G8B8A8_UNORM`; color/emissive `R8G8B8A8_SRGB`. Shaders output linear color.
 - Library config macros (`GLM_FORCE_*`, `VMA_*`) belong in CMake, not in a `.cpp` after headers were included.

@@ -1,5 +1,6 @@
 #include "rasm/engine.h"
 #include "platform/paths.h"
+#include "renderer/gpuScene.h"
 #include "renderer/shaderCompiler.h"
 
 #include "spdlog/spdlog.h"
@@ -40,7 +41,7 @@ namespace rasm
         }
     }
 
-    Engine::Engine(const EngineConfig &config) : config(config), ctx(this), shaderCompiler(std::make_unique<ShaderCompiler>())
+    Engine::Engine(const EngineConfig &config) : config(config), gpuScene(std::make_unique<GpuScene>()), ctx(this), shaderCompiler(std::make_unique<ShaderCompiler>())
     {
         // In a real implementation, this is where we'd initialize the window, graphics context, etc.
         spdlog::info("initializing engine with config: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
@@ -115,6 +116,9 @@ namespace rasm
             return;
         }
 
+        if (!createGpuScene())
+            return;
+
         // Create bindless texture descriptor set layout, pool, and set
         bindlessDescriptorSetLayout = ctx.createBindlessDescriptorSetLayout({.name = "BindlessDescriptorSetLayout",
                                                                              .stage = ShaderType::FRAGMENT,
@@ -149,8 +153,10 @@ namespace rasm
             spdlog::error("Failed to create the default material.");
             return;
         }
-        registry.materials[defaultMaterial.index].name = "default";
-        registry.materials[defaultMaterial.index].params[static_cast<uint32_t>(PbrParam::METALLIC)] = 1.0f;
+        Material defaultValues = getMaterial(defaultMaterial);
+        defaultValues.name = "default";
+        defaultValues.params[static_cast<uint32_t>(PbrParam::METALLIC)] = 1.0f;
+        updateMaterial(defaultMaterial, defaultValues);
 
         isRunning = true;
     }
@@ -200,6 +206,8 @@ namespace rasm
             }
             finishTextureLoad(it->second);
             it = pendingTextures.erase(it);
+            // Entities wait for their textures, so a scene may now draw more of them.
+            markDrawListsDirty();
         }
 
         for (size_t i = 0; i < pendingMeshes.size() && !overBudget();)
@@ -280,6 +288,9 @@ namespace rasm
         auto &currentFrame = frameResources[frameCount];
         if (!ctx.waitForFence(frameFence, currentFrame.fenceValue))
             return false;
+
+        // After the wait: it rewrites this slot's tables, which the slot's last frame read.
+        syncGpuScene();
 
         // B4
         auto status = ctx.acquireNextImage(imageIdx);

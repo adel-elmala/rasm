@@ -85,10 +85,10 @@ Goal: the structural changes that every later feature depends on. They get much 
 Goal: make RASM's core promise hold at scale.
 
 - [ ] **GPU scene tables** (`D6`, `P3`, `P7`):
-  - a persistent geometry pool (a sub-allocator inside mega vertex and index buffers, uploaded once per mesh),
-  - an instance table (transform, mesh index, material index, bounds) and a material table,
-  - per-frame upload of only the dirty ranges.
-- [ ] Separate *mesh* from *instance*, so entities that share a mesh share its geometry.
+  - a persistent geometry pool (a sub-allocator inside mega vertex and index buffers, uploaded once per mesh). The pool and a geometry table with per-sub-mesh bounds are done (2026-11-07). They are append-only: freeing and reusing ranges waits for the destroy APIs of `D4`.
+  - an instance table (transform, mesh index, material index, bounds) and a material table (done 2026-11-07; the bounds are in the geometry table),
+  - per-frame upload of only the dirty ranges (done 2026-11-07, example `03_instances`).
+- [x] Separate *mesh* from *instance*, so entities that share a mesh share its geometry (`P3`, done 2026-11-07).
 - [ ] Compute pipelines and compute passes in the RHI.
 - [ ] **GPU frustum culling**: a compute pass that writes a compacted draw list, followed by `vkCmdDrawIndexedIndirectCount`.
 - [ ] **Occlusion culling**: a two-pass hierarchical-Z scheme (draw what was visible last frame, build Hi-Z, cull and draw the rest).

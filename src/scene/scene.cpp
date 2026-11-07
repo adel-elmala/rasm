@@ -1,5 +1,6 @@
 #include "rasm/scene.h"
 #include "rasm/engine.h"
+#include "renderer/gpuScene.h"
 
 #include "spdlog/spdlog.h"
 
@@ -17,7 +18,6 @@ namespace rasm
 
         auto scene = Scene{.handle = id,
                            .entities = {},
-                           .entityCount = 0,
                            .cameras = {},
                            .cameraCount = 0,
                            .lights = {},
@@ -47,13 +47,14 @@ namespace rasm
 
         auto &sceneRef = registry.scenes[scene.index];
 
-        if (sceneRef.entityCount + 1 > MAX_ENTITIES_PER_SCENE)
+        if (sceneRef.entities.size() >= MAX_ENTITIES_PER_SCENE)
         {
             spdlog::warn("Exceeded maximum entities per scene.");
             return;
         }
 
-        sceneRef.entities[sceneRef.entityCount++] = entity;
+        sceneRef.entities.push_back(entity);
+        gpuScene->drawLists[scene.index].rebuild = true;
     }
 
     void Engine::addCameraToScene(SceneHandle scene, CameraHandle camera)

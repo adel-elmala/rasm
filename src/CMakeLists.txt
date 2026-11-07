@@ -16,6 +16,7 @@ set(RASM_SRC
             "scene/light.cpp"
             "scene/transform.cpp"
             "renderer/gpuScene.cpp"
+            "renderer/gpuTable.cpp"
             "renderer/renderGraph.cpp"
             "renderer/shaderCompiler.cpp"
             "rhi/device.cpp"

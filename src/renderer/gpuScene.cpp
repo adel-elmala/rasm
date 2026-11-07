@@ -1,3 +1,4 @@
+#include "renderer/gpuScene.h"
 #include "rasm/scene.h"
 #include "rasm/camera.h"
 #include "rasm/engine.h"
@@ -10,84 +11,12 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <iterator>
 #include <vector>
 
 namespace rasm
 {
     namespace
     {
-        // What prepareScene returns when there is nothing to draw. Its pipeline is invalid.
-        const PreparedScene EMPTY_PREPARED_SCENE{};
-
-        gfx::MaterialId getGfxMaterialId(MaterialType type)
-        {
-            switch (type)
-            {
-            case MaterialType::UNLIT:
-                return gfx::MaterialId::UNLIT;
-            default:
-                return gfx::MaterialId::PBR;
-            }
-        }
-
-        gfx::Material convertToGfxMaterial(Engine &engine, const Material &mat)
-        {
-            gfx::Material gmat{};
-
-            // base color (albedo)
-            gmat.pbr.baseColorFactor[0] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO)];
-            gmat.pbr.baseColorFactor[1] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 1];
-            gmat.pbr.baseColorFactor[2] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 2];
-
-            // glTF texCoord set per texture; the shader selects the matching interpolated UV set.
-            auto texCoordOf = [](uint32_t texCoord) -> uint32_t
-            { return texCoord < MAX_VERTEX_UV_SETS ? texCoord : 0u; };
-
-            gmat.pbr.baseColorTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::ALBEDO)]);
-            gmat.pbr.baseColorTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::ALBEDO)]);
-            gmat.pbr.metallicRoughnessTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::METALLIC)]);
-            gmat.pbr.metallicRoughnessTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::METALLIC)]);
-
-            gmat.pbr.metallicFactor = mat.params[static_cast<uint32_t>(PbrParam::METALLIC)];
-            gmat.pbr.roughnessFactor = mat.params[static_cast<uint32_t>(PbrParam::ROUGHNESS)];
-
-            // normal map
-            gmat.normal.normalTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::NORMAL)]);
-            gmat.normal.normalTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::NORMAL)]);
-            gmat.normal.scale = mat.params[static_cast<uint32_t>(PbrParam::NORMAL_SCALE)];
-
-            // occlusion map
-            gmat.occlusion.occlusionTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::OCCLUSION)]);
-            gmat.occlusion.occlusionTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::OCCLUSION)]);
-            gmat.occlusion.strength = mat.params[static_cast<uint32_t>(PbrParam::OCCLUSION_STRENGTH)];
-
-            // emissive map
-            gmat.emissive.emissiveTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::EMISSIVE)]);
-            gmat.emissive.emissiveTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::EMISSIVE)]);
-            gmat.emissive.emissiveFactor[0] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR)];
-            gmat.emissive.emissiveFactor[1] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + 1];
-            gmat.emissive.emissiveFactor[2] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + 2];
-
-            return gmat;
-        }
-
-        void addMeshDraws(std::vector<SceneDraw> &draws, const Entity &entity, const Mesh &mesh)
-        {
-            for (const auto &subMesh : mesh.subMeshes)
-            {
-                if (subMesh.geometry.vertexCount == 0 || subMesh.geometry.indexCount == 0)
-                {
-                    spdlog::warn("Skipping a mesh of entity {}: it has {} vertices and {} indices, and drawing needs both.",
-                                 entity.handle.index, subMesh.geometry.vertexCount, subMesh.geometry.indexCount);
-                    continue;
-                }
-                // Primitives without a material use the entity's; getMaterial resolves an invalid one to the default material.
-                const auto material = subMesh.material.isValid() ? subMesh.material : entity.material;
-                draws.push_back({&entity, subMesh.geometry, subMesh.transform, material});
-            }
-        }
-
         // glTF: a transform with a negative determinant mirrors the mesh, so its front faces turn clockwise (D8).
         // det(T * R * S * M) = sx * sy * sz * det(M).
         CullMode getCullMode(bool doubleSided, const Transform &transform, const glm::mat4 &meshTransform)
@@ -98,20 +27,21 @@ namespace rasm
             return determinant < 0.0f ? CullMode::FRONT : CullMode::BACK;
         }
 
-        // A failed preparation is not cached, so anything it created so far would leak on every retry.
-        const PreparedScene &discardSceneBuffers(RenderContext &ctx, const PreparedScene &preparedScene)
+        glm::mat4 getModelMatrix(const Transform &transform)
         {
-            std::vector<BufferHandle> buffers = {preparedScene.drawInfoBuffer};
-            buffers.insert(buffers.end(), std::begin(preparedScene.megaModelDataBuffer), std::end(preparedScene.megaModelDataBuffer));
-            buffers.insert(buffers.end(), std::begin(preparedScene.sceneDataBuffer), std::end(preparedScene.sceneDataBuffer));
+            return glm::translate(glm::mat4(1.0f), transform.position) *
+                   glm::mat4_cast(transform.rotation) *
+                   glm::scale(glm::mat4(1.0f), transform.scale);
+        }
 
-            for (auto buffer : buffers)
+        bool texturesLoaded(Engine &engine, MaterialHandle material)
+        {
+            for (auto texture : engine.getMaterial(material).textures)
             {
-                if (buffer.isValid())
-                    ctx.destroyBuffer(buffer);
+                if (texture.isValid() && !engine.isLoaded(texture))
+                    return false;
             }
-
-            return EMPTY_PREPARED_SCENE;
+            return true;
         }
     }
 
@@ -121,182 +51,216 @@ namespace rasm
     static_assert(offsetof(Vertex, uv) == offsetof(gfx::VertexFull, uv), "Vertex must match the shader's VertexFull");
     static_assert(offsetof(Vertex, tangent) == offsetof(gfx::VertexFull, tangent), "Vertex must match the shader's VertexFull");
 
-    const PreparedScene &Engine::prepareScene(SceneHandle scene)
+    bool Engine::createGpuScene()
     {
-        auto preparedScene = PreparedScene{};
-
-        if (!scene.isValid() || scene.index >= MAX_SCENES)
+        if (config.geometryPoolSubMeshes == 0)
         {
-            spdlog::error("Invalid scene handle for preparation.");
-            return EMPTY_PREPARED_SCENE;
+            spdlog::error("The geometry pool needs room for at least one sub-mesh.");
+            return false;
+        }
+        geometryTableBuffer = ctx.createBuffer({.name = "Geometry Table", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolSubMeshes) * sizeof(gfx::GeometryData)});
+
+        if (!geometryTableBuffer.isValid() ||
+            !gpuScene->instances.create(ctx, "Instance Table", sizeof(gfx::InstanceData), config.maxInstances) ||
+            !gpuScene->materials.create(ctx, "Material Table", sizeof(gfx::MaterialData), MAX_MATERIALS))
+        {
+            spdlog::error("Failed to create the GPU scene tables.");
+            return false;
         }
 
-        auto cachedScene = preparedScenes.find(scene);
-        if (cachedScene != preparedScenes.end())
+        // The CPU rewrites SceneData in every drawScene call, so it stays host-visible.
+        for (auto &buffer : gpuScene->sceneData)
         {
-            return cachedScene->second;
-        }
-
-        // Below the cache lookup, which runs every frame: this zone marks real preparations.
-        ZoneScoped;
-
-        auto &sceneRef = registry.scenes[scene.index];
-
-        std::vector<SceneDraw> sceneDraws;
-
-        for (auto entityHandle : sceneRef.entities)
-        {
-            if (!entityHandle.isValid())
-                continue;
-
-            const auto &entity = registry.entities[entityHandle.index];
-
-            // A scene waits for all of its assets, so it is prepared once and nothing in use is rebuilt (D4).
-            for (auto texture : getMaterial(entity.material).textures)
+            buffer = ctx.createBuffer({.name = "Scene Data Buffer", .usage = BufferUsage::STORAGE, .size = MAX_SCENE_DRAWS_PER_FRAME * sizeof(gfx::SceneData), .hostVisible = true});
+            if (!buffer.isValid())
             {
-                if (texture.isValid() && !isLoaded(texture))
-                    return EMPTY_PREPARED_SCENE;
+                spdlog::error("Failed to create the scene data buffer.");
+                return false;
             }
-
-            auto mesh = entity.mesh;
-            if (!mesh.isValid())
-                continue;
-
-            const auto &meshRef = registry.meshes[mesh.index];
-            if (meshRef.state == MeshState::LOADING)
-                return EMPTY_PREPARED_SCENE;
-
-            addMeshDraws(sceneDraws, entity, meshRef);
         }
-
-        // Nothing to draw: zero-sized buffers are invalid, and staying uncached lets entities added later show up.
-        if (sceneDraws.empty())
-            return EMPTY_PREPARED_SCENE;
-
-        // drawScene issues one indirect draw per run of draws with the same cull mode, so the draws are grouped by it.
-        for (auto &draw : sceneDraws)
-            draw.cullMode = getCullMode(getMaterial(draw.material).doubleSided, draw.entity->transform, draw.transform);
-        std::stable_sort(sceneDraws.begin(), sceneDraws.end(), [](const SceneDraw &a, const SceneDraw &b)
-                         { return a.cullMode < b.cullMode; });
-
-        // create a pipeline for the UberMaterial. A failed preparation retries every frame, so this comes
-        // before the buffers: a shader error must not allocate and fill them each time.
-        preparedScene.uberMaterialPipeline = createPipeline("rasm", readFile(pathFromUtf8(config.shaderDir) / "passes/rasm.slang"));
-
-        if (!preparedScene.uberMaterialPipeline.isValid())
-        {
-            spdlog::error("Failed to create the uber material pipeline for the scene.");
-            return EMPTY_PREPARED_SCENE;
-        }
-
-        // allocate mega-model buffer and draw info buffer for the scene.
-        BufferDesc bufferDesc;
-        bufferDesc.name = "Mega Model data Buffer";
-        bufferDesc.usage = BufferUsage::STORAGE;
-        bufferDesc.size = sceneDraws.size() * sizeof(gfx::Modeldata);
-        bufferDesc.hostVisible = true;
-        // Mutable uniforms belong to a frame slot; other slots may still be executing on the GPU.
-        for (auto &buffer : preparedScene.megaModelDataBuffer)
-        {
-            buffer = ctx.createBuffer(bufferDesc);
-            if (!buffer.isValid())
-                return discardSceneBuffers(ctx, preparedScene);
-        }
-
-        bufferDesc.name = "Draw Info Buffer";
-        bufferDesc.usage = BufferUsage::INDIRECT;
-        bufferDesc.size = sceneDraws.size() * sizeof(gfx::DrawInfo);
-        bufferDesc.hostVisible = false;
-
-        preparedScene.drawInfoBuffer = ctx.createBuffer(bufferDesc);
-
-        if (!preparedScene.drawInfoBuffer.isValid())
-        {
-            spdlog::error("Failed to create draw info buffer for the scene.");
-            return discardSceneBuffers(ctx, preparedScene);
-        }
-
-        // create sceneData buffer for the scene.
-        bufferDesc.name = "Scene Data Buffer";
-        bufferDesc.usage = BufferUsage::STORAGE;
-        bufferDesc.size = MAX_SCENE_DRAWS_PER_FRAME * sizeof(gfx::SceneData);
-        bufferDesc.hostVisible = true;
-
-        for (auto &buffer : preparedScene.sceneDataBuffer)
-        {
-            buffer = ctx.createBuffer(bufferDesc);
-            if (!buffer.isValid())
-                return discardSceneBuffers(ctx, preparedScene);
-        }
-
-        uint64_t modelBufferOffset = 0;
-        uint64_t drawInfoBufferOffset = 0;
-
-        ZoneNamedN(uploadZone, "uploadScene", true);
-
-        for (const auto &draw : sceneDraws)
-        {
-            // fill the model matrix buffer with the current entity's model matrix.
-            auto modelTransform = draw.entity->transform;
-
-            auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
-                         glm::mat4_cast(modelTransform.rotation) *
-                         glm::scale(glm::mat4(1.0f), modelTransform.scale);
-
-            model = model * draw.transform;
-
-            const auto &materialRef = getMaterial(draw.material);
-            preparedScene.modelUniforms.push_back({draw.entity->handle, draw.transform, materialRef.doubleSided});
-
-            gfx::Modeldata modelData{};
-            modelData.worldMatrix = model;
-            modelData.normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
-            modelData.vertFormat = gfx::VertexFormat::FULL;
-            modelData.material = convertToGfxMaterial(*this, materialRef);
-            modelData.materialId = getGfxMaterialId(materialRef.type);
-
-            for (auto buffer : preparedScene.megaModelDataBuffer)
-                ctx.fillBuffer(buffer, &modelData, sizeof(modelData), modelBufferOffset);
-            modelBufferOffset += sizeof(modelData);
-
-            auto drawInfo = gfx::DrawInfo{};
-            // Indices are local to their sub-mesh; vertexOffset moves them to its place in the geometry pool.
-            drawInfo.indexCount = draw.geometry.indexCount;
-            drawInfo.instanceCount = 1; // TODO: support multiple instances
-            drawInfo.firstIndex = draw.geometry.firstIndex;
-            drawInfo.vertexOffset = static_cast<int32_t>(draw.geometry.firstVertex);
-            drawInfo.firstInstance = 0; // TODO: support multiple instances
-
-            ctx.fillBuffer(preparedScene.drawInfoBuffer, &drawInfo, sizeof(drawInfo), drawInfoBufferOffset);
-            drawInfoBufferOffset += sizeof(drawInfo);
-        }
-
-        return preparedScenes.emplace(scene, std::move(preparedScene)).first->second;
+        return true;
     }
 
-    void Engine::updateUniforms(const PreparedScene &preparedScene)
+    // Runs once per frame, after the fence wait for this frame's slot, so the slot's buffers are free to rewrite.
+    // Its cost follows what changed, not how much the scenes hold (P7).
+    void Engine::syncGpuScene()
     {
         ZoneScoped;
 
-        size_t modelBufferOffset = 0;
-
-        for (const auto &modelUniform : preparedScene.modelUniforms)
+        auto &waiting = gpuScene->entitiesWaitingForMesh;
+        for (size_t i = 0; i < waiting.size();)
         {
-            const auto &modelTransform = registry.entities[modelUniform.entity.index].transform;
+            const EntityHandle entity = waiting[i];
+            const Entity &entityRef = registry.entities[entity.index];
+            if (!isLoaded(entityRef.mesh))
+            {
+                ++i;
+                continue;
+            }
 
-            auto model = glm::translate(glm::mat4(1.0f), modelTransform.position) *
-                         glm::mat4_cast(modelTransform.rotation) *
-                         glm::scale(glm::mat4(1.0f), modelTransform.scale);
+            const auto &subMeshes = registry.meshes[entityRef.mesh.index].subMeshes;
+            const auto rowCount = static_cast<uint32_t>(subMeshes.size());
+            if (rowCount > gpuScene->instances.capacity() - gpuScene->instanceCount)
+            {
+                spdlog::error("The instance table is full: entity {} needs {} rows ({}/{} in use). EngineConfig::maxInstances sets its size.",
+                              entity.index, rowCount, gpuScene->instanceCount, gpuScene->instances.capacity());
+            }
+            else
+            {
+                for (const auto &subMesh : subMeshes)
+                {
+                    if (subMesh.geometry.vertexCount == 0 || subMesh.geometry.indexCount == 0)
+                        spdlog::warn("Skipping a mesh of entity {}: it has {} vertices and {} indices, and drawing needs both.",
+                                     entity.index, subMesh.geometry.vertexCount, subMesh.geometry.indexCount);
+                }
 
-            model = model * modelUniform.meshTransform;
+                // Rows are never freed: entities are not destroyed yet (D4).
+                if (gpuScene->entityInstances.size() <= entity.index)
+                    gpuScene->entityInstances.resize(entity.index + 1);
+                gpuScene->entityInstances[entity.index] = {gpuScene->instanceCount, rowCount};
+                gpuScene->instanceCount += rowCount;
+                gpuScene->instanceCullModes.resize(gpuScene->instanceCount, CullMode::NONE);
+                writeInstanceRows(entity);
+                markDrawListsDirty();
+            }
 
-            gfx::Modeldata modelData{};
-            modelData.worldMatrix = model;
-            modelData.normalMatrix = glm::transpose(glm::inverse(glm::mat3(model)));
-
-            ctx.fillBuffer(preparedScene.megaModelDataBuffer[frameCount], &modelData, offsetof(gfx::Modeldata, material), modelBufferOffset);
-            modelBufferOffset += sizeof(modelData);
+            waiting[i] = waiting.back();
+            waiting.pop_back();
         }
+
+        for (uint32_t i = 0; i < MAX_SCENES && i < registry.scenes.size(); ++i)
+        {
+            if (gpuScene->drawLists[i].rebuild)
+                rebuildDrawList(registry.scenes[i].handle);
+        }
+
+        const auto frame = static_cast<uint32_t>(frameCount);
+        gpuScene->instances.upload(ctx, frame);
+        gpuScene->materials.upload(ctx, frame);
+        for (auto &drawList : gpuScene->drawLists)
+            uploadDrawList(drawList);
+    }
+
+    void Engine::writeInstanceRows(EntityHandle entity)
+    {
+        if (entity.index >= gpuScene->entityInstances.size())
+            return;
+        const InstanceRange range = gpuScene->entityInstances[entity.index];
+        if (range.count == 0)
+            return;
+
+        const Entity &entityRef = registry.entities[entity.index];
+        const Mesh &mesh = registry.meshes[entityRef.mesh.index];
+        const glm::mat4 entityMatrix = getModelMatrix(entityRef.transform);
+
+        bool cullModeChanged = false;
+        for (uint32_t i = 0; i < range.count; ++i)
+        {
+            const SubMesh &subMesh = mesh.subMeshes[i];
+            // Primitives without a material use the entity's; getMaterial resolves an invalid one to the default material.
+            const Material &material = getMaterial(subMesh.material.isValid() ? subMesh.material : entityRef.material);
+            const glm::mat4 model = entityMatrix * subMesh.transform;
+
+            const gfx::InstanceData row{.worldMatrix = model,
+                                        .normalMatrix = glm::transpose(glm::inverse(glm::mat3(model))),
+                                        .geometryIndex = subMesh.geometry.geometryIndex,
+                                        .materialIndex = static_cast<uint32_t>(material.handle.index)};
+            gpuScene->instances.setRow(range.first + i, &row);
+
+            // A transform can start or stop mirroring the entity, which moves its draws to another cull-mode run (D8).
+            const CullMode cullMode = getCullMode(material.doubleSided, entityRef.transform, subMesh.transform);
+            CullMode &storedCullMode = gpuScene->instanceCullModes[range.first + i];
+            cullModeChanged = cullModeChanged || storedCullMode != cullMode;
+            storedCullMode = cullMode;
+        }
+
+        if (cullModeChanged)
+            markDrawListsDirty();
+    }
+
+    void Engine::markDrawListsDirty()
+    {
+        for (auto &drawList : gpuScene->drawLists)
+            drawList.rebuild = true;
+    }
+
+    void Engine::rebuildDrawList(SceneHandle scene)
+    {
+        ZoneScoped;
+
+        auto &drawList = gpuScene->drawLists[scene.index];
+        drawList.rebuild = false;
+        drawList.draws.clear();
+        drawList.runs.clear();
+
+        for (auto entity : registry.scenes[scene.index].entities)
+        {
+            if (!entity.isValid() || entity.index >= gpuScene->entityInstances.size())
+                continue;
+            const InstanceRange range = gpuScene->entityInstances[entity.index];
+            const Entity &entityRef = registry.entities[entity.index];
+
+            // An entity waits for all of its assets, so nothing is drawn half-loaded.
+            if (range.count == 0 || !texturesLoaded(*this, entityRef.material))
+                continue;
+
+            const Mesh &mesh = registry.meshes[entityRef.mesh.index];
+            for (uint32_t i = 0; i < range.count; ++i)
+            {
+                const MeshGeometry &geometry = mesh.subMeshes[i].geometry;
+                if (geometry.vertexCount == 0 || geometry.indexCount == 0)
+                    continue;
+                // Indices are local to their sub-mesh; vertexOffset moves them to its place in the geometry pool.
+                drawList.draws.push_back({.indexCount = geometry.indexCount,
+                                          .instanceCount = 1,
+                                          .firstIndex = geometry.firstIndex,
+                                          .vertexOffset = static_cast<int32_t>(geometry.firstVertex),
+                                          .firstInstance = range.first + i});
+            }
+        }
+
+        // drawScene issues one indirect draw per run of draws with the same cull mode.
+        const auto &cullModes = gpuScene->instanceCullModes;
+        std::stable_sort(drawList.draws.begin(), drawList.draws.end(), [&](const gfx::DrawInfo &a, const gfx::DrawInfo &b)
+                         { return cullModes[a.firstInstance] < cullModes[b.firstInstance]; });
+        for (uint32_t i = 0; i < drawList.draws.size(); ++i)
+        {
+            const CullMode cullMode = cullModes[drawList.draws[i].firstInstance];
+            if (drawList.runs.empty() || drawList.runs.back().cullMode != cullMode)
+                drawList.runs.push_back({cullMode, i, 0});
+            ++drawList.runs.back().count;
+        }
+
+        drawList.staleSlots = static_cast<uint8_t>((1u << MAX_FRAMES_IN_FLIGHT) - 1);
+    }
+
+    void Engine::uploadDrawList(SceneDrawList &drawList)
+    {
+        const auto frame = static_cast<uint32_t>(frameCount);
+        const auto bit = static_cast<uint8_t>(1u << frame);
+        if ((drawList.staleSlots & bit) == 0 || drawList.draws.empty())
+            return;
+
+        BufferHandle &buffer = drawList.buffers[frame];
+        uint32_t &capacity = drawList.bufferCapacity[frame];
+        const auto drawCount = static_cast<uint32_t>(drawList.draws.size());
+        if (capacity < drawCount)
+        {
+            // Only this slot's last frame used the old buffer, and the fence wait covered it.
+            if (buffer.isValid())
+                ctx.destroyBuffer(buffer);
+            capacity = std::max(drawCount, capacity * 2);
+            buffer = ctx.createBuffer({.name = "Draw Info Buffer", .usage = BufferUsage::INDIRECT, .size = static_cast<uint64_t>(capacity) * sizeof(gfx::DrawInfo)});
+            if (!buffer.isValid())
+            {
+                spdlog::error("Failed to create a draw info buffer of {} draws.", capacity);
+                capacity = 0;
+                return;
+            }
+        }
+
+        if (ctx.fillBuffer(buffer, drawList.draws.data(), drawList.draws.size() * sizeof(gfx::DrawInfo), 0))
+            drawList.staleSlots &= static_cast<uint8_t>(~bit);
     }
 
     void Engine::drawScene(SceneHandle scene, CameraHandle camera)
@@ -308,13 +272,28 @@ namespace rasm
             spdlog::error("drawScene needs a valid camera handle.");
             return;
         }
-
-        const auto &preparedScene = prepareScene(scene);
-
-        // An invalid or empty scene, or a failed preparation (which prepareScene logged and retries next
-        // frame), has no pipeline to bind; the pass keeps its cleared attachments.
-        if (!preparedScene.uberMaterialPipeline.isValid())
+        if (!scene.isValid() || scene.index >= MAX_SCENES || scene.index >= registry.scenes.size())
+        {
+            spdlog::error("drawScene needs a valid scene handle.");
             return;
+        }
+
+        // An empty scene, or one whose entities still load, draws nothing; the pass keeps its cleared attachments.
+        const auto &drawList = gpuScene->drawLists[scene.index];
+        const auto frame = static_cast<uint32_t>(frameCount);
+        if (drawList.draws.empty() || (drawList.staleSlots & (1u << frame)) != 0)
+            return;
+
+        // A shader error retries every frame, so a shader fixed on disk is picked up while the application runs.
+        if (!gpuScene->pipeline.isValid())
+        {
+            gpuScene->pipeline = createPipeline("rasm", readFile(pathFromUtf8(config.shaderDir) / "passes/rasm.slang"));
+            if (!gpuScene->pipeline.isValid())
+            {
+                spdlog::error("Failed to create the uber material pipeline for the scene.");
+                return;
+            }
+        }
 
         uint32_t width = swapchain.width;
         uint32_t height = swapchain.height;
@@ -339,81 +318,51 @@ namespace rasm
             spdlog::error("Exceeded maximum number of drawScene calls per frame.");
             return;
         }
-        // Modeldata has one slot per frame, so a scene drawn by several passes needs its uniforms written once.
-        bool uniformsWritten = false;
-        for (uint32_t i = 0; i < sceneDrawCount; ++i)
-            uniformsWritten = uniformsWritten || drawnScenes[i] == scene;
-
-        drawnScenes[sceneDrawCount] = scene;
         const uint64_t sceneDataOffset = sceneDrawCount++ * sizeof(gfx::SceneData);
 
         auto &sceneRef = registry.scenes[scene.index];
-        auto &currentFrame = frameResources[frameCount];
-        auto commandBuffer = currentFrame.commandBuffer;
-
+        auto commandBuffer = frameResources[frameCount].commandBuffer;
         auto &cameraRef = registry.cameras[camera.index];
-        auto projection = getProjectionMatrix(camera, static_cast<float>(width) / static_cast<float>(height));
-        auto view = getViewMatrix(camera);
 
-        ctx.bindPipeline(commandBuffer, preparedScene.uberMaterialPipeline);
+        gfx::SceneData sceneData{};
+        sceneData.projection = getProjectionMatrix(camera, static_cast<float>(width) / static_cast<float>(height));
+        sceneData.view = getViewMatrix(camera);
+        sceneData.cameraWorldPosition = cameraRef.transform.position;
+        sceneData.numLights = sceneRef.lightCount;
+        for (uint32_t i = 0; i < sceneRef.lightCount; ++i)
         {
-            gfx::SceneData sceneData{};
-            sceneData.projection = projection;
-            sceneData.view = view;
-            sceneData.cameraWorldPosition = cameraRef.transform.position;
-            sceneData.numLights = sceneRef.lightCount;
-            for (uint32_t i = 0; i < sceneRef.lightCount; ++i)
-            {
-                LightHandle sceneLight = sceneRef.lights[i];
-                Light sceneLightData = registry.lights[sceneLight.index];
+            const Light &sceneLight = registry.lights[sceneRef.lights[i].index];
 
-                gfx::Light light{};
-                light.position = sceneLightData.position;
-                light.direction = sceneLightData.direction;
-                light.color = sceneLightData.color;
-                light.intensity = sceneLightData.intensity;
-                light.range = sceneLightData.range;
-                light.type = static_cast<gfx::LightType>(sceneLightData.type);
+            gfx::Light light{};
+            light.position = sceneLight.position;
+            light.direction = sceneLight.direction;
+            light.color = sceneLight.color;
+            light.intensity = sceneLight.intensity;
+            light.range = sceneLight.range;
+            light.type = static_cast<gfx::LightType>(sceneLight.type);
 
-                sceneData.lights[i] = light;
-            }
-            sceneData.vertsPtr = ctx.getBufferDeviceAddress(geometryVertexBuffer);
-            sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(preparedScene.drawInfoBuffer);
-            sceneData.modeldataPtr = ctx.getBufferDeviceAddress(preparedScene.megaModelDataBuffer[frameCount]);
-
-            ctx.fillBuffer(preparedScene.sceneDataBuffer[frameCount], &sceneData, sizeof(sceneData), sceneDataOffset);
-
-            if (!uniformsWritten)
-                updateUniforms(preparedScene);
-
-            ctx.bindDescriptorSet(commandBuffer, preparedScene.uberMaterialPipeline, bindlessDescriptorSet, 0);
-            ctx.bindIndexBuffer(commandBuffer, geometryIndexBuffer, 0, Format::U32_UINT);
-
-            // The cull mode comes from the current transforms, since one can mirror an entity after preparation
-            // grouped the draws (D8). Each run of draws with the same cull mode is one indirect draw.
-            const auto &modelUniforms = preparedScene.modelUniforms;
-            auto cullModeOf = [&](uint32_t draw)
-            {
-                const auto &modelUniform = modelUniforms[draw];
-                return getCullMode(modelUniform.doubleSided, registry.entities[modelUniform.entity.index].transform, modelUniform.meshTransform);
-            };
-
-            gfx::PushConstants pushConstants{};
-            pushConstants.scene = ctx.getBufferDeviceAddress(preparedScene.sceneDataBuffer[frameCount]) + sceneDataOffset;
-            const auto drawCount = static_cast<uint32_t>(modelUniforms.size());
-            while (pushConstants.firstDraw < drawCount)
-            {
-                const CullMode cullMode = cullModeOf(pushConstants.firstDraw);
-                uint32_t runEnd = pushConstants.firstDraw + 1;
-                while (runEnd < drawCount && cullModeOf(runEnd) == cullMode)
-                    ++runEnd;
-
-                ctx.setCullMode(commandBuffer, cullMode);
-                ctx.pushConstants(commandBuffer, preparedScene.uberMaterialPipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
-                ctx.drawIndexedIndirect(commandBuffer, preparedScene.drawInfoBuffer, pushConstants.firstDraw * sizeof(gfx::DrawInfo), runEnd - pushConstants.firstDraw, sizeof(gfx::DrawInfo));
-                pushConstants.firstDraw = runEnd;
-            }
-            ctx.setCullMode(commandBuffer, CullMode::NONE);
+            sceneData.lights[i] = light;
         }
+        sceneData.vertsPtr = ctx.getBufferDeviceAddress(geometryVertexBuffer);
+        sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(drawList.buffers[frame]);
+        sceneData.instancesPtr = ctx.getBufferDeviceAddress(gpuScene->instances.buffer(frame));
+        sceneData.materialsPtr = ctx.getBufferDeviceAddress(gpuScene->materials.buffer(frame));
+        sceneData.geometryPtr = ctx.getBufferDeviceAddress(geometryTableBuffer);
+        ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), sceneDataOffset);
+
+        ctx.bindPipeline(commandBuffer, gpuScene->pipeline);
+        ctx.bindDescriptorSet(commandBuffer, gpuScene->pipeline, bindlessDescriptorSet, 0);
+        ctx.bindIndexBuffer(commandBuffer, geometryIndexBuffer, 0, Format::U32_UINT);
+
+        gfx::PushConstants pushConstants{};
+        pushConstants.scene = ctx.getBufferDeviceAddress(gpuScene->sceneData[frame]) + sceneDataOffset;
+        for (const auto &run : drawList.runs)
+        {
+            pushConstants.firstDraw = run.first;
+            ctx.setCullMode(commandBuffer, run.cullMode);
+            ctx.pushConstants(commandBuffer, gpuScene->pipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+            ctx.drawIndexedIndirect(commandBuffer, drawList.buffers[frame], run.first * sizeof(gfx::DrawInfo), run.count, sizeof(gfx::DrawInfo));
+        }
+        ctx.setCullMode(commandBuffer, CullMode::NONE);
     }
 }

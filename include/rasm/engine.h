@@ -26,6 +26,8 @@ namespace rasm
 {
 
     class ShaderCompiler;
+    struct GpuScene;
+    struct SceneDrawList;
 
     constexpr uint32_t MAX_MATERIALS = 256;
     constexpr uint32_t MAX_CAMERAS   = 8;
@@ -39,9 +41,6 @@ namespace rasm
                                     Engine(const EngineConfig& config);
                                     ~Engine();
         SceneHandle                 createScene();
-        // Has an invalid pipeline when the scene is invalid or empty, or when preparation failed (logged, and
-        // retried on the next call).
-        const PreparedScene&        prepareScene(SceneHandle scene);
         EntityHandle                createEntity(const std::string& name, MeshHandle mesh = MeshHandle{}, MaterialHandle material = MaterialHandle{}, Transform transform = Transform{});
         CameraHandle                createCamera(CameraProjection projection, Transform transform);
         LightHandle                 createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f), float intensity = 1.0f, float range = 10.0f);
@@ -57,6 +56,7 @@ namespace rasm
         bool                        isLoaded(TextureHandle texture) const;
         void                        waitForLoads();
         MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {}, bool doubleSided = false);
+        void                        updateMaterial(MaterialHandle material, const Material& values);
         TextureHandle               createTexture(const TextureDesc& desc);
         BufferHandle                createBuffer(const BufferDesc& desc);
         RenderTargetHandle          createRenderTarget(const RenderTargetDesc& desc);
@@ -112,7 +112,6 @@ namespace rasm
         uint32_t                    getBindlessTextureIndex(const TextureHandle& texture);
         // The render target's color texture for the current frame slot, so fetch it every frame.
         TextureHandle               getRenderTargetTexture(const RenderTargetHandle& renderTarget);
-        void                        updateUniforms(const PreparedScene& preparedScene);
 
         // window related
         Window                      createWindow(uint32_t width, uint32_t height);
@@ -131,9 +130,11 @@ namespace rasm
         TextureHandle                                               depthTexture                            = {};
         BufferHandle                                                geometryVertexBuffer                    = {};
         BufferHandle                                                geometryIndexBuffer                     = {};
+        BufferHandle                                                geometryTableBuffer                     = {};
         uint32_t                                                    geometryVertexCount                     = 0;
         uint32_t                                                    geometryIndexCount                      = 0;
-        std::unordered_map<SceneHandle, PreparedScene, HandleHash>  preparedScenes                          = {};
+        uint32_t                                                    geometryCount                           = 0;
+        std::unique_ptr<GpuScene>                                   gpuScene                                = {};
         RenderContext                                               ctx;
         std::unique_ptr<ShaderCompiler>                             shaderCompiler                          = {};
         HandleManager                                               handleManager                           = {};
@@ -147,7 +148,6 @@ namespace rasm
         uint64_t                                                    frameCount                              = 0;
         uint32_t                                                    imageIdx                                = 0;
         uint32_t                                                    sceneDrawCount                          = 0; // drawScene calls this frame
-        SceneHandle                                                 drawnScenes[MAX_SCENE_DRAWS_PER_FRAME]  = {}; // the scene of each drawScene call this frame
         bool                                                        isRunning                               = false;
         bool                                                        swapchainOutOfDate                      = false;
         bool                                                        swapchainRendered                       = false; // a pass rendered to the swapchain this frame
@@ -170,11 +170,18 @@ namespace rasm
         };
 
         MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
-        bool                        geometryFits(size_t vertexCount, size_t indexCount) const;
+        bool                        geometryFits(size_t vertexCount, size_t indexCount, size_t subMeshCount) const;
         bool                        uploadGeometry(const ObjRaw& raw, MeshGeometry& geometry);
         void                        finishMeshLoad(PendingMeshLoad& load);
         void                        finishTextureLoad(PendingTextureLoad& load);
         void                        finishLoads(bool wait);
+        bool                        createGpuScene();
+        void                        syncGpuScene();
+        void                        writeInstanceRows(EntityHandle entity);
+        void                        writeMaterialRow(MaterialHandle material);
+        void                        markDrawListsDirty();
+        void                        rebuildDrawList(SceneHandle scene);
+        void                        uploadDrawList(SceneDrawList& drawList);
 
         std::vector<PendingMeshLoad>                                            pendingMeshes;
         std::unordered_map<TextureHandle, PendingTextureLoad, HandleHash>       pendingTextures;

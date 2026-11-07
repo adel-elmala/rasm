@@ -94,6 +94,8 @@ namespace rasm
         std::string shaderDir               = {};
         uint32_t    geometryPoolVertices    = 1u << 21; // 64 B each: 128 MiB
         uint32_t    geometryPoolIndices     = 1u << 23; // 4 B each: 32 MiB
+        uint32_t    geometryPoolSubMeshes   = 1u << 14; // 28 B each
+        uint32_t    maxInstances            = 1u << 16; // 108 B each, twice (one copy per frame slot)
     };
 
     struct FrameResources

@@ -145,8 +145,7 @@ namespace rasm
 
         auto &ctx = engine->getRenderContext();
 
-        auto scene = engine->registry.scenes[engine->currentScene.index];
-        auto camera = scene.cameras[0]; // TODO: handle multi-cameras
+        auto camera = engine->registry.scenes[engine->currentScene.index].cameras[0]; // TODO: handle multi-cameras
 
         if (!engine->beginFrame(camera))
             return;

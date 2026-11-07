@@ -187,7 +187,7 @@ Next steps, in order:
 **B12** — *Fixed 2026-10-31:* the SPIR-V options are now a static array. The original finding follows. `ShaderCompiler::getTargetDesc` allocates `new slang::CompilerOptionEntry[1]` and never frees it ([shaderCompiler.cpp:456-458](../src/renderer/shaderCompiler.cpp#L456-L458)).
 
 **B13** — Handle indices are consumed before validation and are never reused.
-- `loadMesh` takes a handle before parsing the file ([mesh.cpp:67](../src/assets/mesh.cpp#L67)), so failed loads burn slots.
+- `loadMesh` takes a handle before parsing the file ([mesh.cpp:96](../src/assets/mesh.cpp#L96)), so failed loads burn slots.
 - With `MAX_MESHES = 8` and indices starting at 1, only 7 meshes can be loaded in total.
 - `MAX_LIGHTS = 8` and `MAX_CAMERAS = 8` are global, not per scene.
 
@@ -199,7 +199,7 @@ Next steps, in order:
 
 **B17** — *Fixed 2026-10-27:* `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` triggers recreation. `Window` has `pixelWidth`/`pixelHeight` (the swapchain's desired extent) next to the logical `width`/`height` used for mouse input. Depth textures, viewport, scissor and camera aspect come from the swapchain extent (`Swapchain::width`/`height`). The original finding follows. Resize uses `SDL_EVENT_WINDOW_RESIZED`, which reports logical size ([window.cpp:116-122](../src/platform/window.cpp#L116-L122)). The depth texture and viewport use `mainWindow` size, while the swapchain extent comes from the surface. On scaled or HiDPI displays they can disagree. Use `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` / `SDL_GetWindowSizeInPixels`, and size everything from the swapchain extent. *Likely.*
 
-**B23 — The CPU/GPU struct check only runs in debug builds.** `validateRasmStructs` is called inside `assert(...)` ([shaderCompiler.cpp:358](../src/renderer/shaderCompiler.cpp#L358)), so with `NDEBUG` the call is compiled out. A Release build with mismatched structs starts normally and the GPU reads shifted data, or hits a device lost when a pointer field moves. Call it unconditionally, log the mismatch and fail the shader or pipeline creation. The check runs once per linked program, so it costs nothing at runtime. *Confirmed.*
+**B23 — The CPU/GPU struct check only runs in debug builds.** `validateRasmStructs` is called inside `assert(...)` ([shaderCompiler.cpp:375](../src/renderer/shaderCompiler.cpp#L375)), so with `NDEBUG` the call is compiled out. A Release build with mismatched structs starts normally and the GPU reads shifted data, or hits a device lost when a pointer field moves. Call it unconditionally, log the mismatch and fail the shader or pipeline creation. The check runs once per linked program, so it costs nothing at runtime. *Confirmed.*
 
 ---
 
@@ -228,7 +228,7 @@ Next steps, in order:
 - The hash XORs component hashes, so collisions are common (`a^b == b^a`, `x^x == 0`).
 - Prefer distinct `BufferDesc`, `TextureDesc`, `PipelineDesc`, … structs with defaulted `operator==` and a proper hash combine.
 
-**D6 — Scene preparation is all-or-nothing.** `prepareScene` is cached forever ([gpuScene.cpp:121-124](../src/renderer/gpuScene.cpp#L121-L124)). Entities, meshes and materials added, removed or edited after the first frame are ignored; only transforms update. A GPU scene needs incremental updates:
+**D6 — Scene preparation is all-or-nothing.** *Mostly fixed 2026-11-07:* `prepareScene` is gone. Engine-wide GPU tables (instances, materials, geometry) live for the engine's lifetime, and `syncGpuScene` uploads only the rows that changed. Each scene keeps a draw list that is rebuilt when an entity is added, an asset finishes loading, or a cull mode changes. Entities and materials can be added and edited at runtime (`updateMaterial`). Still open: nothing can be removed, since there is no destroy API and the tables are append-only (`D4`). The original finding follows. `prepareScene` is cached forever ([gpuScene.cpp:121-124](../src/renderer/gpuScene.cpp#L121-L124)). Entities, meshes and materials added, removed or edited after the first frame are ignored; only transforms update. A GPU scene needs incremental updates:
 - slot allocation inside persistent mega buffers,
 - dirty tracking with per-frame upload of the changed ranges,
 - material and instance tables separate from geometry.
@@ -258,7 +258,7 @@ Use a right-handed Y-up world (glTF's convention) and do the Vulkan flip with a 
 **D11 — Assets and shaders are located through the working directory** (§1.3). *Fixed 2026-11-01:* see [architecture.md §11](architecture.md#11-conventions-that-cross-files).
 
 **D12 — The shader code is Vulkan-only.**
-- `spirv_asm` for `DrawIndex` ([core.slang:114-122](../shaders/lib/core.slang#L114-L122)) is SPIR-V specific.
+- `spirv_asm` for `DrawIndex` ([core.slang:131-140](../shaders/lib/core.slang#L131-L140)) is SPIR-V specific.
 - The data model relies on raw pointers (`SceneData*`, `VertexFull*`) through buffer device address.
 - As far as I know, Slang pointer support is limited to SPIR-V, Metal and CUDA targets: HLSL/DXIL and WGSL have no raw pointers. Verify against the current Slang docs before you design around it.
 
@@ -287,22 +287,22 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 - Host image copy also requires the `hostImageCopy` feature, which narrows hardware support; keep a staging-buffer fallback.
 - Longer term, support GPU-compressed textures (KTX2 + BCn/ASTC), which matters for map tiles and game content.
 
-**P3 — No instancing.** Each entity copies its mesh into the mega buffer. `00_hello_scene` uploads the bunny three times ([gpuScene.cpp:134-157](../src/renderer/gpuScene.cpp#L134-L157)). Separate *geometry* (uploaded once per mesh) from *instances* (transform + material + mesh-range index).
+**P3 — No instancing.** *Fixed 2026-11-07:* geometry is uploaded once per mesh into the geometry pool (since `P6`, 2026-11-04), and each draw now names an instance row (transform, geometry index, material index) through `DrawInfo::firstInstance`. Materials live once in the material table instead of being copied into every draw's `Modeldata`. Several instances of one sub-mesh are still separate draws, not one draw with `instanceCount > 1`. The original finding follows. Each entity copies its mesh into the mega buffer. `00_hello_scene` uploads the bunny three times ([gpuScene.cpp:134-157](../src/renderer/gpuScene.cpp#L134-L157)). Separate *geometry* (uploaded once per mesh) from *instances* (transform + material + mesh-range index).
 
 **P4 — Per-call overhead in `RenderContext`.** *Partly fixed 2026-11-02 (`D1`):* the tables hold pointers to `rhi::` objects, so a lookup copies nothing and device addresses are stored on `rhi::Buffer`. Every call still hashes its handles, until the index-based pools of `D4`. The original finding follows. Every call hashes a handle and **copies** the backend struct, including a `ResourceDesc` with a `std::string` (e.g. `fillBuffer`, [renderContext.cpp:665](../src/rhi/renderContext.cpp#L665); `getBufferDeviceAddress`, [:740](../src/rhi/renderContext.cpp#L740)). Use index-based pools, return references, and cache device addresses.
 
 **P5 — Large by-value copies in the scene code.**
-- `prepareScene` no longer copies meshes: `processMesh` is gone, and each `SceneDraw` points into the registry. It returns a const reference to the cached entry, so `drawScene` copies nothing.
+- *Fixed:* scene preparation no longer copies meshes (`processMesh` is gone), and `drawScene` copies nothing. Since 2026-11-07 the draw list is built from the GPU scene tables (`D6`).
 - *Fixed 2026-11-04:* `getMeshByteSize` copied a whole `Mesh`; it now sums the sub-mesh ranges by reference.
-- `RenderGraph::execute` copies `Scene`, which holds 1,040 handles ([renderGraph.cpp:143](../src/renderer/renderGraph.cpp#L143)).
+- *Fixed 2026-11-07:* `RenderGraph::execute` copied `Scene`, which held 1,040 handles ([renderGraph.cpp:148](../src/renderer/renderGraph.cpp#L148)). It now reads only the camera handle; `Scene::entities` became a vector of up to 65,536 handles, which would have made the copy far worse.
 
 **P6 — CPU memory retention.** *Fixed 2026-11-04:* meshes live in an engine-wide geometry pool (one vertex and one index buffer), uploaded when their load finishes, and keep only their pool ranges. The CPU vertex and index arrays, the `tinygltf::Model` and the `stbi` pixels are freed right after upload. Files are read and decoded on worker threads (`std::async`), and the main thread uploads the results at the start of a frame. A scene is prepared once all its assets are loaded. *Partly fixed 2026-11-01:* `GLTFRaw` no longer kept a copy of the `tinygltf::Model`. The original finding: CPU vertex and index arrays and the `stbi` pixel data for every `loadTexture` stayed resident for the engine's lifetime.
 
-**P7 — Per-frame CPU work grows with draw count.** `updateUniforms` recomputes and uploads every model and normal matrix every frame, with no dirty tracking. That is fine now, but it becomes the bottleneck at 10⁴–10⁵ instances. Plan for dirty ranges and, later, GPU-side transform computation.
+**P7 — Per-frame CPU work grows with draw count.** *Partly fixed 2026-11-07:* `updateTransform` rewrites only that entity's instance rows, and `syncGpuScene` uploads only the dirty row ranges of each frame slot. `drawScene` no longer loops over draws: it issues the cull-mode runs stored with the draw list. In `03_instances`, CPU frame time is the same with 1k and 10k static cubes. Still open: GPU-side transforms, and the draw-list rebuild, which is O(entities in the scene) when the scene changes. The original finding follows. `updateUniforms` recomputes and uploads every model and normal matrix every frame, with no dirty tracking. That is fine now, but it becomes the bottleneck at 10⁴–10⁵ instances. Plan for dirty ranges and, later, GPU-side transform computation.
 
 **P8 — Shader and pipeline creation.** Shaders are compiled from source on every launch. There is no `VkPipelineCache` and no SPIR-V cache. A pipeline layout is created per pipeline even though all pipelines share the same set layout and push-constant range.
 
-**P9 — Shader detail.** `fragMain` copies all 8 lights and the material into a `PBRInfo` local ([rasm.slang:90-91](../shaders/passes/rasm.slang#L90-L91)). Read through the pointer, or pass indices, to keep register pressure down.
+**P9 — Shader detail.** `fragMain` copies all 8 lights and the material into a `PBRInfo` local ([rasm.slang:95-97](../shaders/passes/rasm.slang#L95-L97)). Read through the pointer, or pass indices, to keep register pressure down.
 
 ---
 
@@ -316,7 +316,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
   - `VertexFormat::POS_ONLY`, `MAX_DESCRIPTOR_TYPES`, `compile-shaders.bat`.
 - **C4 — Duplication.**
   - `readFile` and `loadFileToString`.
-  - The model-matrix composition appears twice, in `prepareScene` and `updateUniforms`; `Transform` should have a `toMatrix()` instead.
+  - *Fixed 2026-11-07:* the model-matrix composition appeared twice, in `prepareScene` and `updateUniforms`. It is now one helper, `getModelMatrix` in `gpuScene.cpp`. A `Transform::toMatrix()` would still be the better home.
   - The glTF index-reading loop appears twice.
 - **C5 — Copies instead of references.** `auto mesh = registry.meshes[...]`, `auto entity = ...`, `auto _scene = ...`.
 - **C6 — An unused check.** *Resolved:* `validateRasmStructs` was never called because its sizes did not match. It asked `ProgramLayout::getTypeLayout` for the layout, and no `LayoutRules` value selects the layout of data behind a pointer, so it reported std140/std430 padding (`Modeldata` 240 bytes instead of 188). It now walks `pc` -> `scene` -> the pointer fields, which agrees with the `Offset` decorations in the SPIR-V, and asserts sizes and field offsets after linking any shader that uses `SceneData`.

@@ -59,6 +59,9 @@ namespace rasm
         uint32_t            vertexCount     = 0;
         uint32_t            firstIndex      = 0;
         uint32_t            indexCount      = 0;
+        uint32_t            geometryIndex   = 0;
+        glm::vec3           boundsCenter    = glm::vec3(0.0f);
+        float               boundsRadius    = 0.0f;
     };
 
     struct SubMesh
