@@ -7,6 +7,7 @@ struct Sphere
 {
     float3          center;
     float           radius;
+    float           scale;          // the world matrix's largest stretch, bounded from above
 };
 
 // The draw's geometry bounding sphere in world space.
@@ -30,7 +31,8 @@ Sphere getWorldSphere(SceneData *scene, DrawInfo draw)
     float stretch2          = max(max(dot(c0, c0) + d01 + d02, dot(c1, c1) + d01 + d12), dot(c2, c2) + d02 + d12);
 
     Sphere sphere;
-    sphere.radius           = geometry->boundsRadius * sqrt(stretch2);
+    sphere.scale            = sqrt(stretch2);
+    sphere.radius           = geometry->boundsRadius * sphere.scale;
     sphere.center           = mul(world, float4(geometry->boundsCenter, 1.0)).xyz;
     return sphere;
 }

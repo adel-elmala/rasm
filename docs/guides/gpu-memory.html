@@ -484,7 +484,7 @@
 <h2><span class="n">7</span>The geometry pool</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 210" role="img" aria-label="Three device-local buffers. Each sub-mesh is appended to the vertex pool, the index pool and the geometry table. The used part grows; nothing is freed.">
+  <svg viewBox="0 0 760 210" role="img" aria-label="Three device-local buffers. Each sub-mesh is appended to the vertex pool, the index pool (LOD 0 and then its coarser LODs) and the geometry table. The used part grows; nothing is freed.">
     <text x="20" y="38" class="title">Vertex pool</text>
     <text x="20" y="54" class="small">Vertex, 64 B each</text>
     <rect x="200" y="24" width="540" height="34" rx="4" class="box"/>
@@ -498,22 +498,22 @@
     <text x="20" y="104" class="title">Index pool</text>
     <text x="20" y="120" class="small">uint32_t, 4 B each</text>
     <rect x="200" y="90" width="540" height="34" rx="4" class="box"/>
-    <rect x="200" y="90" width="130" height="34" rx="4" class="mem"/><text x="265" y="112" class="mid small">A, sub 0</text>
+    <rect x="200" y="90" width="130" height="34" rx="4" class="mem"/><text x="265" y="112" class="mid small">A, sub 0 + LODs</text>
     <rect x="330" y="90" width="70"  height="34" rx="4" class="mem"/><text x="365" y="112" class="mid small">A, 1</text>
-    <rect x="400" y="90" width="160" height="34" rx="4" class="mem"/><text x="480" y="112" class="mid small">B, sub 0</text>
+    <rect x="400" y="90" width="160" height="34" rx="4" class="mem"/><text x="480" y="112" class="mid small">B, sub 0 + LODs</text>
     <text x="650" y="112" class="mid small t-faint">free</text>
     <line x1="560" y1="136" x2="560" y2="126" class="arrow hot" marker-end="url(#ah-hot)"/>
     <text x="568" y="140" class="small t-hot">usedIndices</text>
 
     <text x="20" y="170" class="title">Geometry table</text>
-    <text x="20" y="186" class="small">GeometryData, 28 B each</text>
+    <text x="20" y="186" class="small">GeometryData, 120 B each</text>
     <rect x="200" y="156" width="540" height="34" rx="4" class="box"/>
     <rect x="200" y="156" width="44" height="34" rx="4" class="mem"/><text x="222" y="178" class="mid mono">0</text>
     <rect x="244" y="156" width="44" height="34" rx="4" class="mem"/><text x="266" y="178" class="mid mono">1</text>
     <rect x="288" y="156" width="44" height="34" rx="4" class="mem"/><text x="310" y="178" class="mid mono">2</text>
-    <text x="344" y="178" class="small">← one row per sub-mesh: firstIndex, indexCount, vertexOffset, bounds</text>
+    <text x="344" y="178" class="small">← one row per sub-mesh: vertexOffset, bounds, lods[8]</text>
   </svg>
-  <figcaption>A bump allocator. Each sub-mesh starts at the current <code>usedVertices</code> and <code>usedIndices</code>, and gets the next geometry row. Nothing is ever freed, because meshes cannot be destroyed yet (D4).</figcaption>
+  <figcaption>A bump allocator. Each sub-mesh starts at the current <code>usedVertices</code> and <code>usedIndices</code>, and gets the next geometry row. Its indices are LOD 0 followed by its coarser LODs; a small sub-mesh (<samp>A, 1</samp>) has none. Nothing is ever freed, because meshes cannot be destroyed yet (D4).</figcaption>
 </figure>
 
 <p>All meshes share these three default (device-local) buffers. They have one copy, not one per frame slot. That is safe because <code>GeometryPool::upload</code> only writes a new range at the end, which no frame has read yet. Their size is fixed when the engine starts:</p>
@@ -522,12 +522,25 @@
 <table>
   <tr><th><code>EngineConfig</code> field</th><th>Default</th><th>Bytes</th></tr>
   <tr><td><code>geometryPoolVertices</code></td><td>2<sup>21</sup> vertices</td><td>× 64 B = 128 MiB</td></tr>
-  <tr><td><code>geometryPoolIndices</code></td><td>2<sup>23</sup> indices</td><td>× 4 B = 32 MiB</td></tr>
-  <tr><td><code>geometryPoolSubMeshes</code></td><td>2<sup>14</sup> sub-meshes</td><td>× 28 B = 448 KiB</td></tr>
+  <tr><td><code>geometryPoolIndices</code></td><td>2<sup>24</sup> indices</td><td>× 4 B = 64 MiB</td></tr>
+  <tr><td><code>geometryPoolSubMeshes</code></td><td>2<sup>14</sup> sub-meshes</td><td>× 120 B = 1.9 MiB</td></tr>
 </table>
 </div>
 
-<p>A load checks that the whole mesh fits first (<code>GeometryPool::fits</code>). How a load reaches the pool is in <a href="asset-loading.html">Loading assets in the background</a>.</p>
+<h3>What LODs cost</h3>
+
+<p>The <a href="culling.html#lod">LODs</a> of a sub-mesh are index lists into its own vertices. So they cost only indices. Each LOD has about half the triangles of the one before, so all of them together take up to as many indices again as LOD 0. Measured on example <code>02_gltf</code>:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th></th><th>Without LODs</th><th>With LODs</th></tr>
+  <tr><td>Vertices</td><td>835,630</td><td>835,630</td></tr>
+  <tr><td>Indices</td><td>4.00 M</td><td>7.91 M</td></tr>
+  <tr><td>Pool memory used</td><td>69.5 MB</td><td>85.1 MB (+22%)</td></tr>
+</table>
+</div>
+
+<p>A load checks that the whole mesh fits first (<code>GeometryPool::fits</code>), LODs included. How a load reaches the pool is in <a href="asset-loading.html">Loading assets in the background</a>.</p>
 
 <h2><span class="n">8</span>Textures: host image copy and CPU mips</h2>
 

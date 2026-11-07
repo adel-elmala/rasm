@@ -129,53 +129,52 @@
 <table>
   <tr><th>Struct</th><th>Size</th><th>Written by (C++)</th><th>Read by (Slang)</th></tr>
   <tr><td><code>PushConstants</code></td><td>16</td><td><code>drawScene</code>, <code>recordCulling</code>, <code>recordOcclusionCulling</code></td><td><code>rasm.slang</code>, <code>cull.slang</code>, <code>hiz.slang</code></td></tr>
-  <tr><td><code>SceneData</code></td><td>760</td><td><code>drawScene</code></td><td><code>rasm.slang</code>, <code>cull.slang</code>, <code>hiz.slang</code></td></tr>
+  <tr><td><code>SceneData</code></td><td>768</td><td><code>drawScene</code></td><td><code>rasm.slang</code>, <code>cull.slang</code>, <code>hiz.slang</code></td></tr>
   <tr><td><code>Light</code></td><td>48</td><td><code>drawScene</code></td><td><code>pbr.slang</code></td></tr>
   <tr><td><code>DrawInfo</code></td><td>20</td><td><code>rebuildDrawList</code></td><td><code>rasm.slang</code>, <code>cull.slang</code>, the GPU's indirect draw</td></tr>
   <tr><td><code>InstanceData</code></td><td>108</td><td><code>writeInstanceRows</code></td><td><code>rasm.slang</code>, <code>cull.slang</code></td></tr>
   <tr><td><code>MaterialData</code> + <code>Material</code> (80)</td><td>84</td><td><code>convertToGfxMaterial</code>, <code>writeMaterialRow</code></td><td><code>rasm.slang</code>, <code>pbr.slang</code>, <code>unlit.slang</code></td></tr>
-  <tr><td><code>GeometryData</code></td><td>28</td><td><code>GeometryPool::upload</code></td><td><code>cull.slang</code></td></tr>
+  <tr><td><code>GeometryData</code> + <code>GeometryLod</code> (12)</td><td>120</td><td><code>GeometryPool::upload</code></td><td><code>cull.slang</code>, <code>frustumCulling.slang</code>, <code>lodSelection.slang</code></td></tr>
   <tr><td><code>VertexFull</code> (= <code>rasm::Vertex</code>)</td><td>64</td><td><code>GeometryPool::upload</code></td><td><code>rasm.slang</code></td></tr>
 </table>
 </div>
-<p>Shared constants and enums must match too: <code>MAX_LIGHTS</code> (8), <code>MAX_VERTEX_UV_SETS</code> (3), <code>MAX_DRAW_RUNS</code> (3), <code>MaterialId</code>, <code>LightType</code>. Field <i>names</i> may differ: C++ <code>Material::pbr</code> is Slang <code>metallicRoughness</code>.</p>
+<p>Shared constants and enums must match too: <code>MAX_LIGHTS</code> (8), <code>MAX_VERTEX_UV_SETS</code> (3), <code>MAX_MESH_LODS</code> (8), <code>MAX_DRAW_RUNS</code> (3), <code>MaterialId</code>, <code>LightType</code>. Field <i>names</i> may differ: C++ <code>Material::pbr</code> is Slang <code>metallicRoughness</code>.</p>
 
 <h2><span class="n">3</span>Scalar layout: one struct, byte by byte</h2>
 
 <p>GPU languages have several layout rules. The usual one for storage buffers, std430, aligns a <code>float3</code> to 16 bytes. RASM uses <b>scalar layout</b> instead: every type aligns to its largest scalar, so a <code>float3</code> aligns to 4. That is exactly how glm packs <code>glm::vec3</code> in C++. Here is <code>GeometryData</code> under both rules.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 270" role="img" aria-label="Under scalar layout GeometryData is 28 bytes: boundsCenter starts at 12 and boundsRadius at 24. Under std430, 4 bytes of padding move boundsCenter to 16 and boundsRadius to 28, and the struct is 32 bytes.">
-    <text x="40" y="30" class="title t-mem">scalar layout (RASM, and C++ with glm) · 28 bytes</text>
-    <rect x="40"  y="40" width="88"  height="40" rx="3" class="mem"/><text x="84"  y="65" class="mid small">firstIndex</text>
-    <rect x="128" y="40" width="88"  height="40" rx="3" class="mem"/><text x="172" y="65" class="mid small">indexCount</text>
-    <rect x="216" y="40" width="88"  height="40" rx="3" class="mem"/><text x="260" y="65" class="mid small">vertexOffset</text>
-    <rect x="304" y="40" width="264" height="40" rx="3" class="mem"/><text x="436" y="65" class="mid small">boundsCenter (float3, 12 B)</text>
-    <rect x="568" y="40" width="88"  height="40" rx="3" class="mem"/><text x="612" y="65" class="mid small">boundsRadius</text>
-    <text x="40"  y="96" class="mid mono">0</text><text x="128" y="96" class="mid mono">4</text><text x="216" y="96" class="mid mono">8</text>
-    <text x="304" y="96" class="mid mono t-hot">12</text><text x="568" y="96" class="mid mono t-hot">24</text><text x="656" y="96" class="mid mono">28</text>
+  <svg viewBox="0 0 760 270" role="img" aria-label="Under scalar layout GeometryData is 120 bytes: boundsCenter starts at 4, boundsRadius at 16, lodCount at 20 and lods at 24. Under std430, 12 bytes of padding move boundsCenter to 16, boundsRadius to 28, lodCount to 32 and lods to 36, and the struct is 144 bytes.">
+    <text x="40" y="30" class="title t-mem">scalar layout (RASM, and C++ with glm) · 120 bytes</text>
+    <rect x="40"  y="40" width="76"  height="40" rx="3" class="mem"/><text x="78"  y="65" class="mid small">vertexOffset</text>
+    <rect x="116" y="40" width="228" height="40" rx="3" class="mem"/><text x="230" y="65" class="mid small">boundsCenter (float3, 12 B)</text>
+    <rect x="344" y="40" width="76"  height="40" rx="3" class="mem"/><text x="382" y="65" class="mid small">boundsRadius</text>
+    <rect x="420" y="40" width="76"  height="40" rx="3" class="mem"/><text x="458" y="65" class="mid small">lodCount</text>
+    <rect x="496" y="40" width="244" height="40" rx="3" class="mem dashed"/><text x="618" y="65" class="mid small">lods[8], 12 B each … to 120</text>
+    <text x="40"  y="96" class="mid mono">0</text><text x="116" y="96" class="mid mono t-hot">4</text><text x="344" y="96" class="mid mono t-hot">16</text>
+    <text x="420" y="96" class="mid mono t-hot">20</text><text x="496" y="96" class="mid mono t-hot">24</text>
 
-    <text x="40" y="140" class="title">std430 (not used) · 32 bytes</text>
-    <rect x="40"  y="150" width="88"  height="40" rx="3" class="box"/><text x="84"  y="175" class="mid small">firstIndex</text>
-    <rect x="128" y="150" width="88"  height="40" rx="3" class="box"/><text x="172" y="175" class="mid small">indexCount</text>
-    <rect x="216" y="150" width="88"  height="40" rx="3" class="box"/><text x="260" y="175" class="mid small">vertexOffset</text>
-    <rect x="304" y="150" width="88"  height="40" rx="3" class="ghost"/><text x="348" y="175" class="mid small t-faint">padding</text>
-    <rect x="392" y="150" width="264" height="40" rx="3" class="box"/><text x="524" y="175" class="mid small">boundsCenter (float3, 12 B)</text>
-    <rect x="656" y="150" width="88"  height="40" rx="3" class="box"/><text x="700" y="175" class="mid small">boundsRadius</text>
-    <text x="40"  y="206" class="mid mono">0</text><text x="128" y="206" class="mid mono">4</text><text x="216" y="206" class="mid mono">8</text>
-    <text x="304" y="206" class="mid mono">12</text><text x="392" y="206" class="mid mono t-hot">16</text><text x="656" y="206" class="mid mono t-hot">28</text><text x="738" y="206" class="end mono">32</text>
+    <text x="40" y="140" class="title">std430 (not used) · 144 bytes</text>
+    <rect x="40"  y="150" width="76"  height="40" rx="3" class="box"/><text x="78"  y="175" class="mid small">vertexOffset</text>
+    <rect x="116" y="150" width="228" height="40" rx="3" class="ghost"/><text x="230" y="175" class="mid small t-faint">padding (12 B)</text>
+    <rect x="344" y="150" width="228" height="40" rx="3" class="box"/><text x="458" y="175" class="mid small">boundsCenter (float3, 12 B)</text>
+    <rect x="572" y="150" width="76"  height="40" rx="3" class="box"/><text x="610" y="175" class="mid small">boundsRadius</text>
+    <rect x="648" y="150" width="76"  height="40" rx="3" class="box"/><text x="686" y="175" class="mid small">lodCount</text>
+    <text x="40"  y="206" class="mid mono">0</text><text x="116" y="206" class="mid mono">4</text><text x="344" y="206" class="mid mono t-hot">16</text>
+    <text x="572" y="206" class="mid mono t-hot">28</text><text x="648" y="206" class="mid mono t-hot">32</text><text x="724" y="206" class="mid mono t-hot">36</text>
 
-    <line x1="304" y1="104" x2="392" y2="146" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
-    <text x="40" y="240" class="small">If C++ wrote the scalar bytes and the shader read them as std430, boundsCenter would be read 4 bytes late</text>
-    <text x="40" y="258" class="small">(y, z and the radius as x, y, z), and every row after the first would start at the wrong place.</text>
+    <line x1="116" y1="104" x2="344" y2="146" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <text x="40" y="240" class="small">If C++ wrote the scalar bytes and the shader read them as std430, boundsCenter would be read 12 bytes late (the radius,</text>
+    <text x="40" y="258" class="small">lodCount and lods[0].firstIndex as x, y, z), and every row after the first would start at the wrong place (144 B, not 120 B).</text>
   </svg>
-  <figcaption>One byte = 22 px. Scalar layout has no hidden padding here, so the C++ struct (glm's default, unaligned packing) has the same bytes. Sizes from Slang reflection of both rules.</figcaption>
+  <figcaption>The first fields of <code>GeometryData</code>; under std430 <code>lods</code> starts at 36 and the struct rounds up to 144. One byte = 19 px. Scalar layout has no hidden padding here, so the C++ struct (glm's default, unaligned packing) has the same bytes. Sizes from Slang reflection of both rules.</figcaption>
 </figure>
 
 <div class="table-wrap">
 <table>
   <tr><th>Struct</th><th>Scalar (used)</th><th>std430 would give</th><th>Where the difference comes from</th></tr>
-  <tr><td><code>GeometryData</code></td><td>28 bytes</td><td>32 bytes</td><td><code>boundsCenter</code> (a <code>float3</code>) aligned to 16</td></tr>
+  <tr><td><code>GeometryData</code></td><td>120 bytes</td><td>144 bytes</td><td><code>boundsCenter</code> (a <code>float3</code>) aligned to 16, and the struct rounds up to 16</td></tr>
   <tr><td><code>InstanceData</code></td><td>108 bytes</td><td>128 bytes</td><td><code>normalMatrix</code> (<code>float3x3</code>) is 36 bytes, not 48 (each column padded to 16), and the struct rounds up to 16</td></tr>
 </table>
 </div>
@@ -204,7 +203,7 @@
     <text x="132" y="52" class="mid title">C++ side</text>
     <text x="132" y="70" class="mid small">src/renderer/uberMaterialTypes.h</text>
     <text x="28" y="96"  class="small">struct SceneData { … }</text>
-    <text x="28" y="116" class="small">static_assert(sizeof(SceneData) == 760)</text>
+    <text x="28" y="116" class="small">static_assert(sizeof(SceneData) == 768)</text>
     <text x="28" y="136" class="small">static_assert(offsetof(…) == 144)</text>
 
     <rect x="510" y="30" width="235" height="130" rx="6" class="shader"/>
@@ -244,7 +243,7 @@
 <ol class="steps">
   <li><b>Start at <code>pc</code>.</b> It finds the push-constant parameter named <code>pc</code> in the linked program.</li>
   <li><b>Follow <code>scene</code>.</b> If <code>pc.scene</code> is not a <code>SceneData</code>, the shader is a custom pass with its own push constants (for example the stats overlay), and the check returns true.</li>
-  <li><b>Walk the pointers.</b> From <code>SceneData</code> it reaches each struct through a field: <code>lights</code>, <code>vertsPtr</code>, <code>drawInfoPtr</code>, <code>instancesPtr</code>, <code>geometryPtr</code>, <code>materialsPtr</code> → <code>material</code> → its four parts (<code>fieldStruct</code>).</li>
+  <li><b>Walk the pointers.</b> From <code>SceneData</code> it reaches each struct through a field: <code>lights</code>, <code>vertsPtr</code>, <code>drawInfoPtr</code>, <code>instancesPtr</code>, <code>geometryPtr</code> → <code>lods</code>, <code>materialsPtr</code> → <code>material</code> → its four parts (<code>fieldStruct</code>).</li>
   <li><b>Compare.</b> For each struct, <code>validateStruct</code> compares the size and every listed field offset with <code>sizeof</code>/<code>offsetof</code> of the C++ struct, and logs each mismatch.</li>
 </ol>
 <p>Why the walk? <code>ProgramLayout::getTypeLayout</code> has no layout rule for data behind a pointer, so it reports std140/std430 padding. Only the path through <code>pc</code> reports the scalar layout that the shader really reads.</p>
@@ -293,11 +292,11 @@ Assertion failed: validateRasmStructs(...)</code></pre>
   <li><b>The Slang mirror.</b> It is in <code>shaders/lib/core.slang</code>: same field order, matching types.</li>
   <li><b>The <code>static_assert</code>s.</b> At the end of <code>uberMaterialTypes.h</code>: the size, and every offset after the change that matters (arrays, pointers, the last field). Compute the new numbers yourself; do not copy them from the compiler error.</li>
   <li><b>The <code>validateRasmStructs</code> table.</b> In <code>src/renderer/shaderCompiler.cpp</code>: one row per field, <code>{"slangName", offsetof(gfx::X, cppName)}</code>. A new struct needs its own <code>validateStruct</code> call, reached through <code>fieldStruct</code>.</li>
-  <li><b>Shared constants and enums:</b> <code>MAX_LIGHTS</code> (<code>include/rasm/light.h</code>), <code>MAX_VERTEX_UV_SETS</code> (<code>include/rasm/mesh.h</code>), <code>MaterialId</code>, <code>LightType</code>.</li>
+  <li><b>Shared constants and enums:</b> <code>MAX_LIGHTS</code> (<code>include/rasm/light.h</code>), <code>MAX_VERTEX_UV_SETS</code> and <code>MAX_MESH_LODS</code> (<code>include/rasm/mesh.h</code>), <code>MaterialId</code>, <code>LightType</code>.</li>
   <li><b><code>VertexFull</code> only:</b> <code>rasm::Vertex</code> in <code>include/rasm/mesh.h</code> and the <code>static_assert</code>s in <code>src/renderer/geometryPool.cpp</code>.</li>
   <li><b><code>PushConstants</code> only:</b> Keep it at <code>PUSH_CONSTANTS_SIZE</code>.</li>
   <li><b>The CPU writers.</b> Fill the new field in <code>drawScene</code>, <code>writeInstanceRows</code>, <code>rebuildDrawList</code>, <code>convertToGfxMaterial</code> (all in <code>src/renderer/gpuScene.cpp</code>), <code>GeometryPool::upload</code>. Zero-init (<code>{}</code>) hides a forgotten field.</li>
-  <li><b>The GPU readers:</b> <code>shaders/passes/rasm.slang</code>, <code>shaders/passes/cull.slang</code>, <code>shaders/passes/hiz.slang</code>, <code>shaders/lib/pbr.slang</code>, <code>shaders/lib/unlit.slang</code>, <code>shaders/lib/frustumCulling.slang</code>, <code>shaders/lib/occlusionCulling.slang</code>.</li>
+  <li><b>The GPU readers:</b> <code>shaders/passes/rasm.slang</code>, <code>shaders/passes/cull.slang</code>, <code>shaders/passes/hiz.slang</code>, <code>shaders/lib/pbr.slang</code>, <code>shaders/lib/unlit.slang</code>, <code>shaders/lib/frustumCulling.slang</code>, <code>shaders/lib/occlusionCulling.slang</code>, <code>shaders/lib/lodSelection.slang</code>.</li>
   <li><b>Docs that quote numbers:</b> <code>docs/architecture.md</code>, the <code>frame-debug</code> skill, and these guides.</li>
 </ol>
 

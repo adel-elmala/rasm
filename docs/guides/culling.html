@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GPU Culling · RASM</title>
-<meta name="description" content="How RASM removes draws outside the camera view and draws hidden behind others with compute dispatches, and keeps the draw order stable.">
-<meta name="rasm-sources" content="shaders/passes/cull.slang shaders/passes/hiz.slang shaders/lib/frustumCulling.slang shaders/lib/occlusionCulling.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/engine.cpp shaders/lib/core.slang">
+<meta name="description" content="How RASM removes draws outside the camera view and draws hidden behind others with compute dispatches, keeps the draw order stable, and picks each draw's level of detail.">
+<meta name="rasm-sources" content="shaders/passes/cull.slang shaders/passes/hiz.slang shaders/lib/frustumCulling.slang shaders/lib/occlusionCulling.slang shaders/lib/lodSelection.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/engine.cpp shaders/lib/core.slang">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -28,7 +28,7 @@
 
 <p class="eyebrow">Rendering</p>
 <h1>GPU culling</h1>
-<p class="lead">Before the scene is drawn, a compute shader tests every draw against the camera view. Draws that are fully outside are removed, and so are draws hidden behind what is already drawn (<a href="#occlusion">occlusion culling</a>). The CPU never sees which draws survive. The GPU writes the list and the count, and the draw call reads them.</p>
+<p class="lead">Before the scene is drawn, a compute shader tests every draw against the camera view. Draws that are fully outside are removed, and so are draws hidden behind what is already drawn (<a href="#occlusion">occlusion culling</a>). Each draw that stays gets the coarsest <a href="#lod">level of detail</a> that still looks the same. The CPU never sees which draws survive. The GPU writes the list and the count, and the draw call reads them.</p>
 
 <div class="legend">
   <span><i class="cpu"></i>CPU work</span>
@@ -46,6 +46,7 @@
     <li>The visible draws keep the draw list's order, every frame. No count needs to be cleared.</li>
     <li>The culling is recorded <i>after</i> the frame, in its own command buffer, but it runs <i>before</i> the frame on the GPU.</li>
     <li>Occlusion culling runs the same two dispatches twice: <b>early</b> (what was visible last time) before the frame, and <b>late</b> (the rest, tested against a Hi-Z of the early draws' depth) in the middle of the pass.</li>
+    <li>Level of detail: the draw list holds LOD 0. For each visible draw, <code>selectLod</code> swaps in the index range of the coarsest LOD whose error on screen stays under <code>EngineConfig::lodErrorPixels</code>.</li>
   </ul>
 </div>
 
@@ -89,7 +90,7 @@
 <h2><span class="n">2</span>The data flow</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 280" role="img" aria-label="countMain reads the draw list, instances, geometry bounds and frustum planes, and writes per-draw slots and per-group counts. writeMain reads those and copies the visible draws to the packed list and writes the counts, which the indirect draw reads.">
+  <svg viewBox="0 0 760 280" role="img" aria-label="countMain reads the draw list, instances, geometry bounds and LODs, and frustum planes, and writes per-draw slots and per-group counts. writeMain reads those and copies the visible draws, each with its LOD's index range, to the packed list and writes the counts, which the indirect draw reads.">
     <rect x="15"  y="15" width="150" height="46" rx="6" class="mem"/>
     <text x="90"  y="35" class="mid">SceneData</text>
     <text x="90"  y="52" class="mid mono small">frustumPlanes[6]</text>
@@ -98,7 +99,7 @@
     <text x="255" y="52" class="mid mono small">worldMatrix</text>
     <rect x="345" y="15" width="150" height="46" rx="6" class="mem"/>
     <text x="420" y="35" class="mid">Geometry table</text>
-    <text x="420" y="52" class="mid mono small">boundsCenter/Radius</text>
+    <text x="420" y="52" class="mid mono small">bounds · lods[8]</text>
     <path d="M90,61 L210,108"  class="arrow" marker-end="url(#ah)"/>
     <path d="M255,61 L240,108" class="arrow" marker-end="url(#ah)"/>
     <path d="M420,61 L270,108" class="arrow" marker-end="url(#ah)"/>
@@ -140,7 +141,7 @@
     <text x="240" y="238" class="mid mono small">cullStatsPtr</text>
 
     <path d="M80,171 V266 H540 V173" class="arrow dashed" marker-end="url(#ah)"/>
-    <text x="400" y="260" class="mid small">writeMain copies the DrawInfo rows from the draw list</text>
+    <text x="320" y="260" class="mid small">writeMain copies the DrawInfo rows, with each one's LOD range</text>
   </svg>
   <figcaption>Every arrow is a buffer read or write through a device address in <code>SceneData</code>. Nothing goes back to the CPU, except the cull stats for the <a href="stats-overlay.html">stats overlay</a>.</figcaption>
 </figure>
@@ -151,11 +152,11 @@
 <table>
   <tr><th>Pointer in <code>SceneData</code></th><th>Holds</th><th>Written by</th></tr>
   <tr><td><code>allDrawsPtr</code></td><td>the scene's whole draw list</td><td>CPU (<code>uploadDrawList</code>)</td></tr>
-  <tr><td><code>cullSlotsPtr</code></td><td>one <code>uint</code> per draw: its place in its group, or <code>CULLED</code></td><td><code>countMain</code></td></tr>
+  <tr><td><code>cullSlotsPtr</code></td><td>one <code>uint</code> per draw: its place in its group with its LOD above it (<code>slot | lod &lt;&lt; 16</code>), or <code>CULLED</code></td><td><code>countMain</code></td></tr>
   <tr><td><code>groupCountsPtr</code></td><td>one <code>uint</code> per group of 64: how many are visible</td><td><code>countMain</code></td></tr>
   <tr><td><code>drawInfoPtr</code></td><td>the visible draws, packed per run</td><td><code>writeMain</code></td></tr>
   <tr><td><code>drawCountsPtr</code></td><td>one count per run</td><td><code>writeMain</code> (the run's last group)</td></tr>
-  <tr><td><code>cullStatsPtr</code></td><td>visible draws and triangles of the frame</td><td><code>countMain</code> (atomics)</td></tr>
+  <tr><td><code>cullStatsPtr</code></td><td>visible draws, their triangles (at the picked LOD and at LOD 0) and draws per LOD, for the <a href="stats-overlay.html">stats overlay</a></td><td><code>countMain</code> (atomics)</td></tr>
 </table>
 </div>
 <p><code>cullSlotsPtr</code> and <code>groupCountsPtr</code> are not separate buffers. They sit in the same buffer as the visible draws, right after them.</p>
@@ -365,7 +366,7 @@
       <rect x="280" y="168" width="52" height="40" rx="4" class="mem"/><text x="306" y="193" class="mid mono">d8</text>
       <rect x="340" y="168" width="52" height="40" rx="4" class="mem"/><text x="366" y="193" class="mid mono">d9</text>
       <text x="410" y="193" class="small">drawInfoPtr[runFirst + base + slot]</text>
-      <text x="40" y="236" class="small">The 64 threads of a group add up the counts of all earlier groups of the run together, then each copies its draw.</text>
+      <text x="40" y="236" class="small">The 64 threads of a group add up the counts of all earlier groups of the run, then each copies its draw with its LOD's range.</text>
     </svg>
     <p>The packed list has the same order as the draw list. A draw never jumps ahead of another one, so the image is the same every frame.</p>
   </div>
@@ -631,7 +632,121 @@
   <p>The pass ends after the early draws and begins again with <code>load</code>, so with occlusion culling on, <code>beginPass</code> stores depth (<code>storeDepth</code>) and the depth textures can be sampled. The Hi-Z build and the late cull get their own GPU timer, <code>"Hi-Z"</code>, in the <a href="stats-overlay.html">stats overlay</a>.</p>
 </div>
 
-<h2><span class="n">7</span>When culling is off</h2>
+<h2 id="lod"><span class="n">7</span>Level of detail</h2>
+
+<p>A far object covers few pixels, so it does not need all its triangles. When a mesh loads, RASM builds coarser versions of each sub-mesh, its <b>LODs</b> (see <a href="asset-loading.html#lods">Asset loading</a>). Culling picks one LOD for each visible draw, every frame.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 275" role="img" aria-label="In the geometry pool, a sub-mesh's indices are LOD 0 followed by LOD 1, 2 and 3, each about half the one before. All of them point into the same vertices, stored once. The sub-mesh's geometry table row has vertexOffset, lodCount and one firstIndex, indexCount and error per LOD.">
+    <text x="20" y="54" class="title t-mem">indices</text>
+    <text x="20" y="70" class="small">in the pool</text>
+    <rect x="150" y="34" width="300" height="46" rx="4" class="mem"/>
+    <text x="300" y="54" class="mid title">LOD 0</text>
+    <text x="300" y="71" class="mid small">all N triangles · error 0</text>
+    <rect x="450" y="34" width="150" height="46" rx="4" class="mem"/>
+    <text x="525" y="54" class="mid title">LOD 1</text>
+    <text x="525" y="71" class="mid small">≈ N / 2</text>
+    <rect x="600" y="34" width="76" height="46" rx="4" class="mem"/>
+    <text x="638" y="54" class="mid title">LOD 2</text>
+    <text x="638" y="71" class="mid small">≈ N / 4</text>
+    <rect x="676" y="34" width="40" height="46" rx="4" class="mem"/>
+    <text x="696" y="62" class="mid title">3</text>
+    <path d="M150,24 V18 H716 V24" class="arrow"/>
+    <text x="433" y="12" class="mid small">one after another, from firstIndex</text>
+
+    <line x1="300" y1="80" x2="300" y2="142" class="arrow dashed" marker-end="url(#ah)"/>
+    <line x1="525" y1="80" x2="395" y2="142" class="arrow dashed" marker-end="url(#ah)"/>
+    <line x1="638" y1="80" x2="425" y2="142" class="arrow dashed" marker-end="url(#ah)"/>
+    <line x1="696" y1="80" x2="445" y2="142" class="arrow dashed" marker-end="url(#ah)"/>
+
+    <text x="20" y="168" class="title t-mem">vertices</text>
+    <text x="20" y="184" class="small">in the pool</text>
+    <rect x="150" y="146" width="300" height="46" rx="4" class="mem"/>
+    <text x="300" y="166" class="mid title">the sub-mesh's vertices, once</text>
+    <text x="300" y="183" class="mid small">every LOD points into them</text>
+
+    <rect x="500" y="146" width="240" height="96" rx="6" class="mem"/>
+    <text x="620" y="166" class="mid title">GeometryData row</text>
+    <text x="514" y="186" class="mono small">vertexOffset, bounds</text>
+    <text x="514" y="202" class="mono small">lodCount = 4</text>
+    <text x="514" y="218" class="mono small">lods[i]:</text>
+    <text x="520" y="234" class="mono small">firstIndex, indexCount, error</text>
+
+    <text x="20" y="266" class="small">Each LOD is simplified from the one before, to about half its triangles. Its error is in the mesh's own units.</text>
+  </svg>
+  <figcaption><code>GeometryPool::upload</code> writes the vertices once, then LOD 0's indices followed by each coarser LOD's. A LOD costs only its indices. All LODs share <code>vertexOffset</code>, so the vertex shader does not know which LOD it draws.</figcaption>
+</figure>
+
+<h3>Which LOD</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 220" role="img" aria-label="The same object at three distances. Near the camera, LOD 1 would show an error of 3 pixels, so LOD 0 is kept. At middle distance LOD 2 shows 0.8 pixels and LOD 3 shows 1.6, so LOD 2 is picked. Far away every LOD stays under 1 pixel, so the coarsest is picked.">
+    <circle cx="40" cy="120" r="7" class="cpu"/>
+    <text x="40" y="146" class="mid small">camera</text>
+    <line x1="60" y1="186" x2="740" y2="186" class="arrow" marker-end="url(#ah)"/>
+    <text x="740" y="206" class="end small">distance →</text>
+
+    <circle cx="170" cy="120" r="36" class="gpu"/>
+    <text x="170" y="124" class="mid title">LOD 0</text>
+    <text x="170" y="40" class="mid small">LOD 1 would be 3 px</text>
+    <text x="170" y="58" class="mid small t-hot">→ keep LOD 0</text>
+
+    <circle cx="420" cy="120" r="36" class="gpu"/>
+    <text x="420" y="124" class="mid title">LOD 2</text>
+    <text x="420" y="40" class="mid small">LOD 2: 0.8 px · LOD 3: 1.6 px</text>
+    <text x="420" y="58" class="mid small t-hot">→ LOD 2</text>
+
+    <circle cx="660" cy="120" r="36" class="gpu"/>
+    <text x="660" y="124" class="mid title">last LOD</text>
+    <text x="660" y="40" class="mid small">every LOD under 1 px</text>
+    <text x="660" y="58" class="mid small t-hot">→ the coarsest</text>
+  </svg>
+  <figcaption>The same object, with <code>lodErrorPixels</code> = 1. The numbers are an example. <code>selectLod</code> picks the coarsest LOD whose error, seen from the camera, stays under that many pixels.</figcaption>
+</figure>
+
+<pre><code class="lang-text">pixels = lods[i].error × sphere.scale × |projection[1][1]| × viewportHeight / 2 / depth
+depth  = clip w of the sphere center − sphere radius   (≤ 0: the sphere reaches the camera plane, LOD 0)</code></pre>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>Meaning</th></tr>
+  <tr><td><code>lods[i].error</code></td><td>how far LOD i's surface may be from LOD 0, in the mesh's own units. It adds up the errors of the steps, so it never gets smaller. LOD 0 has 0.</td></tr>
+  <tr><td><code>sphere.scale</code></td><td>the world matrix's largest stretch, the same bound the frustum test uses for the radius. It turns mesh units into world units.</td></tr>
+  <tr><td>the rest</td><td>pixels per world unit at that depth. An orthographic camera (<code>projection[3][3] == 1</code>) skips the division by depth.</td></tr>
+  <tr><td><code>depth</code></td><td>the view depth of the sphere's nearest point (along the view direction, not the straight distance), so the error is never too small.</td></tr>
+</table>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="An object near the edge of the screen. Its straight distance from the camera is longer than its depth along the view direction. The projection scales by depth, so dividing by the distance would make the error look smaller than it is and pick too coarse a LOD.">
+    <circle cx="60" cy="150" r="7" class="cpu"/>
+    <text x="60" y="180" class="mid small">camera</text>
+    <line x1="70" y1="150" x2="700" y2="150" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="700" y="172" class="end small">view direction</text>
+    <circle cx="460" cy="50" r="22" class="gpu"/>
+    <line x1="68" y1="146" x2="440" y2="58" class="arrow" marker-end="url(#ah)"/>
+    <text x="250" y="86" class="mid small">distance (too long)</text>
+    <line x1="460" y1="72" x2="460" y2="150" class="arrow dashed"/>
+    <line x1="70" y1="130" x2="460" y2="130" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="300" y="122" class="mid small t-gpu">depth: what the projection divides by</text>
+    <text x="500" y="54" class="small">off the screen's centre</text>
+  </svg>
+  <figcaption>Off the screen's centre an object is nearer in depth than in distance. <code>selectLod</code> uses the depth, so objects at the screen's edges do not get a LOD that is too coarse.</figcaption>
+</figure>
+
+<div class="split">
+  <div>
+    <h4>Where it runs</h4>
+    <p>Only <code>countMain</code> calls <code>selectLod</code>. It counts the LOD's triangles for the <a href="stats-overlay.html">stats overlay</a> and keeps the LOD above the draw's slot in <code>cullSlotsPtr</code>. <code>writeMain</code> reads it back and writes that LOD's <code>firstIndex</code> and <code>indexCount</code> into the visible draw. The draw list on the CPU always holds LOD 0.</p>
+  </div>
+  <div>
+    <h4>Settings</h4>
+    <p><code>EngineConfig::meshLods</code> (on) builds the LODs as meshes load. <code>EngineConfig::lodErrorPixels</code> (1 pixel) is the limit; 0 always draws LOD 0. An unculled <code>drawScene</code> call draws LOD 0.</p>
+<p>For debugging, <code>EngineConfig::forcedLod</code> skips the error test: from 0 up, every draw uses that LOD, or its mesh's coarsest one if it has fewer. -1 (the default) picks by distance. <kbd>F2</kbd> cycles it at runtime: by distance, LOD 0, 1, … 7, by distance. The <a href="stats-overlay.html">stats overlay</a> shows the mode.</p>
+  </div>
+</div>
+
+<h2><span class="n">8</span>When culling is off</h2>
 
 <p>If <code>cull.slang</code> (or a module it includes) fails to compile, <code>drawScene</code> does not leave the screen black. It draws the whole draw list with plain <code>drawIndexedIndirect</code> and logs the error. It tries to build the culling pipelines again next frame, so a fixed shader on disk is picked up while the app runs.</p>
 
@@ -648,7 +763,7 @@
 
 <p>Occlusion culling falls back to frustum culling alone (<code>hizLevelCount</code> = 0, no late pass) when <code>EngineConfig::occlusionCulling</code> is false, when <code>hiz.slang</code> fails to compile, when the depth texture has no bindless slot, when the visibility or Hi-Z buffer cannot be created, or when the viewport is not the whole pass with depth range 0 to 1 (<code>RenderContext::getViewport</code>): the Hi-Z covers the whole attachment, and the test maps NDC onto it. The image is the same either way; only the number of draws changes.</p>
 
-<h2><span class="n">8</span>Where it lives in code</h2>
+<h2><span class="n">9</span>Where it lives in code</h2>
 
 <div class="table-wrap">
 <table class="code-map">
@@ -663,11 +778,14 @@
   <tr><td>Occlusion test</td><td><code>isOccluded</code>, <code>getHizLevel</code> in <code>shaders/lib/occlusionCulling.slang</code></td></tr>
   <tr><td>Count, pack (both phases)</td><td><code>countMain</code>, <code>writeMain</code>, <code>getCullGroup</code> in <code>shaders/passes/cull.slang</code></td></tr>
   <tr><td>Hi-Z build</td><td><code>hizMain</code> in <code>shaders/passes/hiz.slang</code></td></tr>
+  <tr><td>LOD choice</td><td><code>selectLod</code> in <code>shaders/lib/lodSelection.slang</code></td></tr>
+  <tr><td>LOD threshold</td><td><code>SceneData::lodErrorPixels</code>, set from <code>EngineConfig::lodErrorPixels</code> in <code>Engine::drawScene</code></td></tr>
+  <tr><td>Forced LOD (debug)</td><td><code>SceneData::forcedLod</code>, set from <code>EngineConfig::forcedLod</code>; <kbd>F2</kbd> in <code>pollEvents</code> (<code>src/platform/window.cpp</code>)</td></tr>
   <tr><td>Pointers it uses</td><td><code>SceneData</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
 </table>
 </div>
 
-<h2><span class="n">9</span>Rules when you change it</h2>
+<h2><span class="n">10</span>Rules when you change it</h2>
 
 <div class="callout rule">
   <strong>Keep these true</strong>
@@ -675,6 +793,7 @@
     <li><code>CULL_GROUP_SIZE</code>, <code>CULL_EARLY</code> and <code>CULL_LATE</code> are in <code>cull.slang</code> and <code>gpuScene.cpp</code>; <code>HIZ_GROUP_SIZE</code> is in <code>hiz.slang</code> and <code>gpuScene.cpp</code>. Change both sides. So are the Hi-Z level sizes (<code>getHizLevelCount</code>, <code>getHizLevel</code>).</li>
     <li>Both tests must stay conservative. Removing a draw that is partly visible makes objects pop. Compare the image with <code>EngineConfig::occlusionCulling</code> on and off: it must not change.</li>
     <li>Do not record a dispatch inside a render pass. <code>RenderContext::dispatch</code> refuses it.</li>
+    <li><code>selectLod</code> changes only <code>firstIndex</code> and <code>indexCount</code>. All LODs share the sub-mesh's vertices, so <code>vertexOffset</code> stays.</li>
     <li>A new pointer in <code>SceneData</code> is a CPU↔GPU struct change: follow <a href="shaders-structs.html">the struct contract</a>.</li>
   </ul>
 </div>

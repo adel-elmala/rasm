@@ -13,6 +13,8 @@ enum class MaterialId : uint32_t { PBR, UNLIT };
 // Must match rasm::Vertex / rasm::gfx::VertexFull (scalar layout). Unused UV sets are zero.
 // tangent.w is the bitangent sign (±1), or 0 when the mesh has no tangents.
 static const uint MAX_VERTEX_UV_SETS = 3;
+// Must match rasm::MAX_MESH_LODS.
+static const uint MAX_MESH_LODS = 8;
 
 struct VertexFull       { float3 pos; float3 normal; float2 uv[MAX_VERTEX_UV_SETS]; float4 tangent; };
 struct VertexPosOnly    { float3 pos; };
@@ -95,13 +97,21 @@ struct InstanceData
     uint32_t        materialIndex;
 };
 
-struct GeometryData
+struct GeometryLod
 {
     uint32_t        firstIndex;
     uint32_t        indexCount;
+    float           error;              // object space; 0 for LOD 0
+};
+
+// The LODs share the sub-mesh's vertices, so vertexOffset is the same for all of them.
+struct GeometryData
+{
     int32_t         vertexOffset;
     float3          boundsCenter;
     float           boundsRadius;
+    uint32_t        lodCount;
+    GeometryLod     lods[MAX_MESH_LODS];
 };
 
 struct SceneData
@@ -118,9 +128,9 @@ struct SceneData
     GeometryData*       geometryPtr;
     DrawInfo*           allDrawsPtr;        // the scene's whole draw list; cull.slang packs the visible ones into drawInfoPtr
     uint32_t*           drawCountsPtr;      // visible draws per run, written by cull.slang
-    uint32_t*           cullSlotsPtr;       // cull.slang's scratch: a draw's slot among its group's visible draws
+    uint32_t*           cullSlotsPtr;       // cull.slang's scratch: a draw's slot among its group's visible draws, and its LOD
     uint32_t*           groupCountsPtr;     // cull.slang's scratch: visible draws per group of 64
-    uint32_t*           cullStatsPtr;       // the frame's visible draws [0] and triangles [1] low, [2] high, added up by cull.slang
+    uint32_t*           cullStatsPtr;       // the frame's visible draws, triangles and LODs, added up by cull.slang (STATS_* there)
     uint32_t*           visibilityPtr;      // per instance row: 1 if the last occlusion test saw it, read by the early cull
     float*              hizPtr;             // the call's Hi-Z: farthest depth per texel, levels packed one after another
     float4              frustumPlanes[6];   // world space, inside where dot(xyz, p) + w >= 0
@@ -131,6 +141,8 @@ struct SceneData
     uint32_t            depthTexture;       // bindless index of the pass's depth texture
     uint32_t            viewportWidth;      // the pass's size in pixels
     uint32_t            viewportHeight;
+    float               lodErrorPixels;     // culling picks the coarsest LOD whose error stays under this on screen
+    int32_t             forcedLod;          // >= 0: every draw uses this LOD (or its mesh's coarsest), for debugging
     uint32_t            padding;
 };
 

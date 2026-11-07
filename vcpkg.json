@@ -17,6 +17,7 @@
         "spdlog",
         "tinygltf",
         "tinyobjloader",
+        "meshoptimizer",
         "shader-slang",
         "doctest"
     ]

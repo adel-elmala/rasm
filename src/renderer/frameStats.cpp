@@ -30,6 +30,12 @@ namespace rasm
             ctx.writeTimestamp(commandBuffer, slot.timestamps, 2 * timer);
             return timer;
         }
+
+        // A 64-bit count that cull.slang adds up in two words, low first.
+        uint64_t readCount64(const uint32_t *words)
+        {
+            return static_cast<uint64_t>(words[1]) << 32 | words[0];
+        }
     }
 
     // Without timestamps the stats only lack GPU times.
@@ -81,12 +87,17 @@ namespace rasm
 
             // Culling counted the visible draws and triangles of the culled calls; unculled calls drew all of theirs.
             const DrawTotals &totals = gpuScene->drawTotals[frame];
-            uint32_t culled[3] = {};
+            // Unculled calls draw LOD 0.
+            uint32_t culled[CULL_STATS_WORDS] = {};
             ctx.readBuffer(gpuScene->cullStats[frame], culled, sizeof(culled));
             stats.draws = totals.draws;
-            stats.drawsVisible = culled[0] + totals.unculledDraws;
+            stats.drawsVisible = culled[CULL_STATS_DRAWS] + totals.unculledDraws;
             stats.triangles = totals.triangles;
-            stats.trianglesVisible = (static_cast<uint64_t>(culled[2]) << 32 | culled[1]) + totals.unculledTriangles;
+            stats.trianglesVisible = readCount64(culled + CULL_STATS_TRIANGLES) + totals.unculledTriangles;
+            stats.trianglesVisibleLod0 = readCount64(culled + CULL_STATS_LOD0_TRIANGLES) + totals.unculledTriangles;
+            for (uint32_t i = 0; i < MAX_MESH_LODS; ++i)
+                stats.drawsPerLod[i] = culled[CULL_STATS_LOD_DRAWS + i];
+            stats.drawsPerLod[0] += totals.unculledDraws;
         }
         slot.readFenceValue = fenceValue;
         stats.cpuFrameMs = deltaTime * 1000.0f;
@@ -101,7 +112,7 @@ namespace rasm
         if (slot.timestamps.isValid())
             ctx.resetQueries(slot.timestamps);
         // Culling adds to the counts even in frames that aren't measured.
-        const uint32_t zeros[3] = {};
+        const uint32_t zeros[CULL_STATS_WORDS] = {};
         ctx.fillBuffer(gpuScene->cullStats[frame], zeros, sizeof(zeros));
     }
 

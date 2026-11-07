@@ -105,7 +105,8 @@
   <tr><td><code>gpuFrameMs</code></td><td>timestamps</td><td>from the earliest timestamp of the frame to the latest</td></tr>
   <tr><td><code>gpuTimers</code>, <code>gpuTimerCount</code></td><td>timestamps</td><td>one entry per timer except "Frame", sorted by start time, so "Culling" comes first</td></tr>
   <tr><td><code>draws</code>, <code>triangles</code></td><td><code>DrawTotals</code></td><td>CPU sums over the frame's <code>drawScene</code> calls: draw list size and <code>triangleCount</code></td></tr>
-  <tr><td><code>drawsVisible</code>, <code>trianglesVisible</code></td><td>Cull Stats Buffer + <code>DrawTotals</code></td><td>what the early and the late culling kept (in the frustum and, with occlusion culling, not occluded), plus every draw of a call drawn without culling (<code>unculledDraws</code>, <code>unculledTriangles</code>)</td></tr>
+  <tr><td><code>drawsVisible</code>, <code>trianglesVisible</code></td><td>Cull Stats Buffer + <code>DrawTotals</code></td><td>what the early and the late culling kept (in the frustum and, with occlusion culling, not occluded), with triangles counted at the <a href="culling.html#lod">LOD</a> culling picked, plus every draw of a call drawn without culling (<code>unculledDraws</code>, <code>unculledTriangles</code>)</td></tr>
+  <tr><td><code>trianglesVisibleLod0</code>, <code>drawsPerLod</code></td><td>Cull Stats Buffer + <code>DrawTotals</code></td><td>the same visible draws' triangles counted at LOD 0, and how many visible draws use each LOD. A call drawn without culling counts at LOD 0. The overlay shows the difference to <code>trianglesVisible</code> as "LOD saved".</td></tr>
   <tr><td><code>memory</code></td><td><code>queryVRAMStats</code></td><td><code>VRAMStats</code>: device-local and host-visible budget and usage, in bytes</td></tr>
 </table>
 </div>
@@ -246,7 +247,19 @@
 
 <h2><span class="n">5</span>Cull counters and the 64-bit carry</h2>
 
-<p>The Cull Stats Buffer of a slot is 3 × <code>uint</code>: visible draws, triangles low word, triangles high word. It is host-visible and host-readable, so the CPU reads it with <code>readBuffer</code> and zeroes it with <code>fillBuffer</code>. The last thread of each <code>countMain</code> group adds the group's numbers. The early and the late <code>countMain</code> both do it. A draw is still counted once, because the late culling keeps only draws the early one did not draw.</p>
+<p>The Cull Stats Buffer of a slot is <code>CULL_STATS_WORDS</code> = 13 × <code>uint</code>. The <code>STATS_*</code> constants in <code>cull.slang</code> and the matching <code>CULL_STATS_*</code> ones in <code>gpuScene.h</code> name the words:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Words</th><th>Holds</th><th>Read as</th></tr>
+  <tr><td>[0]</td><td>visible draws</td><td><code>drawsVisible</code></td></tr>
+  <tr><td>[1] low, [2] high</td><td>visible triangles, at the picked LOD</td><td><code>trianglesVisible</code></td></tr>
+  <tr><td>[3] low, [4] high</td><td>the same draws' triangles at LOD 0</td><td><code>trianglesVisibleLod0</code></td></tr>
+  <tr><td>[5] … [12]</td><td>visible draws at LOD 0 … 7</td><td><code>drawsPerLod</code></td></tr>
+</table>
+</div>
+
+<p>It is host-visible and host-readable, so the CPU reads it with <code>readBuffer</code> and zeroes it with <code>fillBuffer</code>. The last thread of each <code>countMain</code> group adds the group's numbers. The early and the late <code>countMain</code> both do it. A draw is still counted once, because the late culling keeps only draws the early one did not draw.</p>
 
 <div class="stepper">
   <div class="step">
@@ -260,9 +273,9 @@
       <text x="400" y="56" class="small">A 32-bit add wraps around past 4,294,967,295.</text>
       <text x="400" y="74" class="small">After a wrap the sum is smaller than before,</text>
       <text x="400" y="92" class="small">which is how the carry is found.</text>
-      <text x="20" y="146" class="small">Each thread's triangles are indexCount / 3 of its draw, or 0 when it is culled.</text>
+      <text x="20" y="146" class="small">Each thread's triangles are indexCount / 3 of its draw at the LOD selectLod picks, or 0 when it is culled.</text>
     </svg>
-    <p>One group adds at most 64 draws, but each draw can have many triangles, so even one group may need the high word.</p>
+    <p>One group adds at most 64 draws, but each draw can have many triangles, so even one group may need the high word. The LOD 0 triangles are summed the same way, in the same loop. For the LOD draws, threads 0 to 7 each count the group's draws at their LOD and add that count to word 5 + LOD.</p>
   </div>
   <div class="step">
     <h4>2. Add to the buffer with atomics</h4>
@@ -281,21 +294,23 @@
       <text x="20" y="152" class="mono">InterlockedAdd([2], high + carry)         // only if &gt; 0</text>
       <text x="20" y="186" class="small">Check: 0xFFFFFF00 + 0x200 = 0x1_00000100. High 1, low 0x100. Every group's carry lands, in any order.</text>
     </svg>
-    <p>A group with no visible draw adds nothing. Each atomic is on a 32-bit word, which Metal and WebGPU support too.</p>
+    <p>A group with no visible draw adds nothing. Each atomic is on a 32-bit word, which Metal and WebGPU support too. <code>addCount64</code> does this for words [1, 2] and again for [3, 4].</p>
   </div>
   <div class="step">
     <h4>3. Read back on the CPU</h4>
-    <svg viewBox="0 0 720 150" role="img" aria-label="updateFrameStats reads the three words and computes drawsVisible and trianglesVisible.">
+    <svg viewBox="0 0 720 190" role="img" aria-label="updateFrameStats reads the 13 words and computes drawsVisible, trianglesVisible, trianglesVisibleLod0 and drawsPerLod.">
       <rect x="20" y="20" width="200" height="50" rx="6" class="mem"/>
       <text x="120" y="42" class="mid title">Cull Stats Buffer s</text>
-      <text x="120" y="60" class="mid mono small">culled[3]</text>
+      <text x="120" y="60" class="mid mono small">culled[13]</text>
       <line x1="220" y1="45" x2="298" y2="45" class="arrow" marker-end="url(#ah)"/>
       <text x="259" y="36" class="mid small">readBuffer</text>
-      <rect x="300" y="20" width="410" height="74" rx="6" class="cpu"/>
+      <rect x="300" y="20" width="410" height="114" rx="6" class="cpu"/>
       <text x="312" y="44" class="mono">drawsVisible = culled[0] + unculledDraws</text>
       <text x="312" y="64" class="mono">trianglesVisible = (culled[2] &lt;&lt; 32 | culled[1])</text>
       <text x="312" y="84" class="mono">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;+ unculledTriangles</text>
-      <text x="20" y="124" class="small">Then, if the slot is measured this frame, the three words are zeroed for the next frame in the slot.</text>
+      <text x="312" y="104" class="mono">trianglesVisibleLod0 = [4]:[3] + unculledTriangles</text>
+      <text x="312" y="124" class="mono">drawsPerLod[i] = culled[5 + i]  ([0] + unculledDraws)</text>
+      <text x="20" y="164" class="small">Then, if the slot is measured this frame, the 13 words are zeroed for the next frame in the slot.</text>
     </svg>
     <p>The counters keep growing in frames that are not measured. That does no harm: they are zeroed before the next measured frame in the slot.</p>
   </div>
@@ -304,8 +319,8 @@
 <h2><span class="n">6</span>From numbers to a text grid</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 230" role="img" aria-label="buildText formats FrameStats into lines every 250 milliseconds, buildGrid pads them into a grid of 29 columns and 8 rows, and every frame the grid is copied into the slot's text buffer.">
-    <rect x="15" y="20" width="300" height="190" rx="6" class="box"/>
+  <svg viewBox="0 0 760 290" role="img" aria-label="buildText formats FrameStats into lines every 250 milliseconds, buildGrid pads them into a grid of 29 columns and 11 rows, and every frame the grid is copied into the slot's text buffer.">
+    <rect x="15" y="20" width="300" height="250" rx="6" class="box"/>
     <text x="27" y="44"  class="mono small">Frame&#160;&#160;&#160;&#160;&#160;&#160;16.67&#160;ms&#160;&#160;&#160;&#160;60&#160;fps</text>
     <text x="27" y="64"  class="mono small">GPU&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;1.31&#160;ms</text>
     <text x="27" y="84"  class="mono small">&#160;Culling&#160;&#160;&#160;&#160;0.04&#160;ms</text>
@@ -313,8 +328,11 @@
     <text x="27" y="124" class="mono small">Draws&#160;&#160;&#160;&#160;&#160;812&#160;/&#160;2048</text>
     <text x="27" y="144" class="mono small">Culled&#160;&#160;&#160;&#160;1236</text>
     <text x="27" y="164" class="mono small">Triangles&#160;1.25M&#160;/&#160;3.40M</text>
-    <text x="27" y="184" class="mono small">VRAM&#160;&#160;&#160;&#160;&#160;&#160;1430&#160;/&#160;7920&#160;MiB</text>
-    <text x="165" y="202" class="mid small">8 rows · 29 columns (the longest line)</text>
+    <text x="27" y="184" class="mono small">LOD&#160;&#160;&#160;&#160;&#160;&#160;&#160;by&#160;distance&#160;(F2)</text>
+    <text x="27" y="204" class="mono small">LOD&#160;saved&#160;850.0K&#160;(40%)</text>
+    <text x="27" y="224" class="mono small">LOD&#160;draws&#160;430&#160;260&#160;98&#160;24</text>
+    <text x="27" y="244" class="mono small">VRAM&#160;&#160;&#160;&#160;&#160;&#160;1430&#160;/&#160;7920&#160;MiB</text>
+    <text x="165" y="262" class="mid small">11 rows · 29 columns (the longest line)</text>
 
     <line x1="315" y1="80" x2="373" y2="80" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <rect x="375" y="44" width="170" height="72" rx="6" class="cpu"/>
@@ -325,16 +343,16 @@
     <rect x="585" y="44" width="160" height="72" rx="6" class="mem"/>
     <text x="665" y="66" class="mid title">Stats Overlay</text>
     <text x="665" y="84" class="mid title">Text s</text>
-    <text x="665" y="104" class="mid small">960 bytes, host-visible</text>
+    <text x="665" y="104" class="mid small">1040 bytes, host-visible</text>
     <text x="665" y="136" class="mid small">fillBuffer every frame</text>
     <text x="375" y="160" class="small">The grid is one string, row by row, each line</text>
     <text x="375" y="176" class="small">padded with spaces to the longest one. At most</text>
-    <text x="375" y="192" class="small">40 columns × 24 rows; longer lines are cut.</text>
+    <text x="375" y="192" class="small">40 columns × 26 rows; longer lines are cut.</text>
   </svg>
   <figcaption>Rebuilding the text 4 times a second keeps the numbers readable. Each frame slot draws from its own buffer, so <code>updateStatsOverlay</code> copies the current grid into the slot's buffer every frame, right after the slot's fence wait.</figcaption>
 </figure>
 
-<p>Counts use <code>formatCount</code>: plain up to 9999, then <code>K</code> with one decimal, then <code>M</code> with two. Timer names are cut to 8 characters. The "Culled" line is <code>draws − drawsVisible</code>.</p>
+<p>Counts use <code>formatCount</code>: plain up to 9999, then <code>K</code> with one decimal, then <code>M</code> with two. Timer names are cut to 8 characters. The "Culled" line is <code>draws − drawsVisible</code>. "LOD saved" is <code>trianglesVisibleLod0 − trianglesVisible</code>, with its share of <code>trianglesVisibleLod0</code>. "LOD draws" lists <code>drawsPerLod</code> from LOD 0 up to the coarsest LOD in use, and wraps when it is longer than 40 columns.</p>
 
 <h2><span class="n">7</span>How one pixel finds its glyph bit</h2>
 
@@ -343,11 +361,11 @@
 <div class="stepper">
   <div class="step">
     <h4>1. The panel</h4>
-    <svg viewBox="0 0 720 250" role="img" aria-label="The panel sits 8 pixels from the window's top-left corner. With scale 2 it is 480 by 144 pixels. The text starts 8 more pixels in. The pixel at 34, 42 is inside the second character of the second row.">
+    <svg viewBox="0 0 720 250" role="img" aria-label="The panel sits 8 pixels from the window's top-left corner. With scale 2 it is 480 by 192 pixels. The text starts 8 more pixels in. The pixel at 34, 42 is inside the second character of the second row.">
       <rect x="10" y="10" width="700" height="230" class="zone"/>
       <text x="16" y="236" class="small t-faint">window, top-left corner</text>
-      <rect x="18" y="18" width="480" height="144" class="box"/>
-      <rect x="26" y="26" width="464" height="128" class="ghost"/>
+      <rect x="18" y="18" width="480" height="192" class="box"/>
+      <rect x="26" y="26" width="464" height="176" class="ghost"/>
       <text x="26" y="38"  class="mono small" textLength="464" lengthAdjust="spacing">Frame&#160;&#160;&#160;&#160;&#160;&#160;16.67&#160;ms&#160;&#160;&#160;&#160;60&#160;fps</text>
       <text x="26" y="54"  class="mono small" textLength="304" lengthAdjust="spacing">GPU&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;1.31&#160;ms</text>
       <text x="26" y="70"  class="mono small" textLength="304" lengthAdjust="spacing">&#160;Culling&#160;&#160;&#160;&#160;0.04&#160;ms</text>
@@ -355,15 +373,18 @@
       <text x="26" y="102" class="mono small" textLength="320" lengthAdjust="spacing">Draws&#160;&#160;&#160;&#160;&#160;812&#160;/&#160;2048</text>
       <text x="26" y="118" class="mono small" textLength="224" lengthAdjust="spacing">Culled&#160;&#160;&#160;&#160;1236</text>
       <text x="26" y="134" class="mono small" textLength="368" lengthAdjust="spacing">Triangles&#160;1.25M&#160;/&#160;3.40M</text>
-      <text x="26" y="150" class="mono small" textLength="400" lengthAdjust="spacing">VRAM&#160;&#160;&#160;&#160;&#160;&#160;1430&#160;/&#160;7920&#160;MiB</text>
+      <text x="26" y="150" class="mono small" textLength="416" lengthAdjust="spacing">LOD&#160;&#160;&#160;&#160;&#160;&#160;&#160;by&#160;distance&#160;(F2)</text>
+      <text x="26" y="166" class="mono small" textLength="352" lengthAdjust="spacing">LOD&#160;saved&#160;850.0K&#160;(40%)</text>
+      <text x="26" y="182" class="mono small" textLength="368" lengthAdjust="spacing">LOD&#160;draws&#160;430&#160;260&#160;98&#160;24</text>
+      <text x="26" y="198" class="mono small" textLength="400" lengthAdjust="spacing">VRAM&#160;&#160;&#160;&#160;&#160;&#160;1430&#160;/&#160;7920&#160;MiB</text>
       <circle cx="44" cy="52" r="5" class="hot"/>
-      <line x1="48" y1="56" x2="120" y2="196" class="arrow hot"/>
-      <text x="124" y="204" class="t-hot">pixel (34, 42)</text>
+      <line x1="48" y1="56" x2="120" y2="218" class="arrow hot"/>
+      <text x="124" y="226" class="t-hot">pixel (34, 42)</text>
       <text x="520" y="40"  class="small">MARGIN = 8 px from the corner</text>
       <text x="520" y="58"  class="small">PADDING = 4 font px = 8 px</text>
       <text x="520" y="76"  class="small">scale = max(1, 2160 / 1080) = 2</text>
       <text x="520" y="94"  class="small">width = (29 · 8 + 2 · 4) · 2 = 480</text>
-      <text x="520" y="112" class="small">height = (8 · 8 + 2 · 4) · 2 = 144</text>
+      <text x="520" y="112" class="small">height = (11 · 8 + 2 · 4) · 2 = 192</text>
       <text x="520" y="138" class="small">z = 1: the near plane, so it</text>
       <text x="520" y="154" class="small">passes the depth test</text>
     </svg>
@@ -532,8 +553,8 @@
     <rect x="580" y="30" width="160" height="50" class="mem"/>
     <text x="660" y="52" class="mid mono">screen</text>
     <text x="660" y="70" class="mid small">width | height&lt;&lt;16</text>
-    <text x="420" y="108" class="mono small">29 | 8&lt;&lt;8 | 2&lt;&lt;16</text>
-    <text x="420" y="126" class="mono small">= 0x0002081D</text>
+    <text x="420" y="108" class="mono small">29 | 11&lt;&lt;8 | 2&lt;&lt;16</text>
+    <text x="420" y="126" class="mono small">= 0x00020B1D</text>
     <text x="580" y="108" class="mono small">3840 | 2160&lt;&lt;16</text>
     <text x="580" y="126" class="mono small">= 0x08700F00</text>
     <text x="20" y="108" class="small">OverlayPushConstants in statsOverlay.cpp mirrors</text>
@@ -546,8 +567,8 @@
 <h2><span class="n">9</span>When and how it is drawn</h2>
 
 <ol class="steps">
-  <li><b>At startup</b><code>createStatsOverlay</code> makes one host-visible text buffer per frame slot (<code>MAX_TEXT_COLUMNS</code> × <code>MAX_TEXT_ROWS</code> = 960 bytes) and builds the pipeline from <code>passes/statsOverlay.slang</code> with <code>createPipeline</code>. If the shader fails to compile, the error is logged and the overlay stays off; the engine still runs.</li>
-  <li><b>Toggle</b><kbd>F1</kbd> flips <code>showStats</code> in <code>pollEvents</code> (key repeats are ignored). Applications can set <code>EngineConfig::showStats</code> at start.</li>
+  <li><b>At startup</b><code>createStatsOverlay</code> makes one host-visible text buffer per frame slot (<code>MAX_TEXT_COLUMNS</code> × <code>MAX_TEXT_ROWS</code> = 1040 bytes; 26 rows fit every line with all 16 GPU timers) and builds the pipeline from <code>passes/statsOverlay.slang</code> with <code>createPipeline</code>. If the shader fails to compile, the error is logged and the overlay stays off; the engine still runs.</li>
+  <li><b>Toggle</b><kbd>F1</kbd> flips <code>showStats</code> in <code>pollEvents</code> (key repeats are ignored). <kbd>F2</kbd> cycles <code>forcedLod</code>, which the "LOD" line shows. Applications can set <code>EngineConfig::showStats</code> at start.</li>
   <li><b>Every frame, after the fence wait</b><code>updateFrameStats</code>, then <code>updateStatsOverlay</code>, which sets the slot's <code>columns</code> and <code>rows</code>, or 0 rows when the overlay is off.</li>
   <li><b>At the end of every swapchain pass</b><code>endPass</code> calls <code>drawStatsOverlay</code> before <code>endRendering</code>. Every pass clears its target, so drawing in each swapchain pass keeps the panel on the presented image.</li>
   <li><b>The draw</b>It sets a full-swapchain viewport and scissor (the panel is placed in window pixels, whatever the pass set) and <code>CullMode::NONE</code> (its triangles wind clockwise on screen), binds the pipeline, pushes the 16 bytes and draws 6 vertices.</li>

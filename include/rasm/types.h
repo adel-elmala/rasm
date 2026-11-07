@@ -90,11 +90,14 @@ namespace rasm
         std::string assetRoot               = {};
         std::string shaderDir               = {};
         uint32_t    geometryPoolVertices    = 1u << 21; // 64 B each: 128 MiB
-        uint32_t    geometryPoolIndices     = 1u << 23; // 4 B each: 32 MiB
-        uint32_t    geometryPoolSubMeshes   = 1u << 14; // 28 B each
+        uint32_t    geometryPoolIndices     = 1u << 24; // 4 B each: 64 MiB
+        uint32_t    geometryPoolSubMeshes   = 1u << 14; // 120 B each
         uint32_t    maxInstances            = 1u << 16; // 108 B each, twice (one copy per frame slot)
         bool        showStats               = false;
         bool        occlusionCulling        = true;     // two-pass Hi-Z culling in drawScene; false keeps frustum culling only
+        bool        meshLods                = true;
+        float       lodErrorPixels          = 1.0f;
+        int32_t     forcedLod               = -1;
     };
 
     struct FrameResources

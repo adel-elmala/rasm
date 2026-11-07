@@ -173,6 +173,8 @@ namespace rasm
                                      {"depthTexture", offsetof(gfx::SceneData, depthTexture)},
                                      {"viewportWidth", offsetof(gfx::SceneData, viewportWidth)},
                                      {"viewportHeight", offsetof(gfx::SceneData, viewportHeight)},
+                                     {"lodErrorPixels", offsetof(gfx::SceneData, lodErrorPixels)},
+                                     {"forcedLod", offsetof(gfx::SceneData, forcedLod)},
                                      {"padding", offsetof(gfx::SceneData, padding)}});
 
             valid &= validateStruct(fieldStruct(scene, "lights"), "Light", sizeof(gfx::Light),
@@ -203,11 +205,16 @@ namespace rasm
                                      {"materialIndex", offsetof(gfx::InstanceData, materialIndex)}});
 
             valid &= validateStruct(fieldStruct(scene, "geometryPtr"), "GeometryData", sizeof(gfx::GeometryData),
-                                    {{"firstIndex", offsetof(gfx::GeometryData, firstIndex)},
-                                     {"indexCount", offsetof(gfx::GeometryData, indexCount)},
-                                     {"vertexOffset", offsetof(gfx::GeometryData, vertexOffset)},
+                                    {{"vertexOffset", offsetof(gfx::GeometryData, vertexOffset)},
                                      {"boundsCenter", offsetof(gfx::GeometryData, boundsCenter)},
-                                     {"boundsRadius", offsetof(gfx::GeometryData, boundsRadius)}});
+                                     {"boundsRadius", offsetof(gfx::GeometryData, boundsRadius)},
+                                     {"lodCount", offsetof(gfx::GeometryData, lodCount)},
+                                     {"lods", offsetof(gfx::GeometryData, lods)}});
+
+            valid &= validateStruct(fieldStruct(fieldStruct(scene, "geometryPtr"), "lods"), "GeometryLod", sizeof(gfx::GeometryLod),
+                                    {{"firstIndex", offsetof(gfx::GeometryLod, firstIndex)},
+                                     {"indexCount", offsetof(gfx::GeometryLod, indexCount)},
+                                     {"error", offsetof(gfx::GeometryLod, error)}});
 
             valid &= validateStruct(materialData, "MaterialData", sizeof(gfx::MaterialData),
                                     {{"material", offsetof(gfx::MaterialData, material)},
