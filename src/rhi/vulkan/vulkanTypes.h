@@ -60,5 +60,10 @@ namespace rasm::rhi
     {
         VkSemaphore             semaphore       = VK_NULL_HANDLE;
     };
+
+    struct VulkanQueryPool : QueryPool
+    {
+        VkQueryPool             pool            = VK_NULL_HANDLE;
+    };
 }
 // clang-format on

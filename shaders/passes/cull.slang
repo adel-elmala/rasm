@@ -20,6 +20,7 @@ struct CullGroup
 };
 
 groupshared uint    visibleFlags[CULL_GROUP_SIZE];
+groupshared uint    visibleTriangles[CULL_GROUP_SIZE];
 groupshared uint    partialSums[CULL_GROUP_SIZE];
 
 // The groups of run 0 come first, then those of run 1, and so on.
@@ -77,7 +78,8 @@ bool isVisible(SceneData *scene, DrawInfo draw)
     return true;
 }
 
-// Writes each draw's slot among its group's visible draws (or CULLED), and the group's visible count.
+// Writes each draw's slot among its group's visible draws (or CULLED), and the group's visible count. The
+// group's visible draws and triangles go into the frame's stats with atomics.
 [shader("compute")]
 [numthreads(CULL_GROUP_SIZE, 1, 1)]
 void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
@@ -86,10 +88,16 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     CullGroup group     = getCullGroup(scene, groupId.x);
     uint drawIndex      = group.firstDraw + threadId.x;
     bool visible        = false;
+    uint triangles      = 0;
     if (drawIndex < group.endDraw)
-        visible = isVisible(scene, scene->allDrawsPtr[drawIndex]);
+    {
+        DrawInfo draw   = scene->allDrawsPtr[drawIndex];
+        visible         = isVisible(scene, draw);
+        triangles       = visible ? draw.indexCount / 3 : 0;
+    }
 
-    visibleFlags[threadId.x] = visible ? 1 : 0;
+    visibleFlags[threadId.x]        = visible ? 1 : 0;
+    visibleTriangles[threadId.x]    = triangles;
     GroupMemoryBarrierWithGroupSync();
 
     uint slot = 0;
@@ -98,7 +106,30 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     if (drawIndex < group.endDraw)
         scene->cullSlotsPtr[drawIndex] = visible ? slot : CULLED;
     if (threadId.x == CULL_GROUP_SIZE - 1)
-        scene->groupCountsPtr[groupId.x] = slot + visibleFlags[threadId.x];
+    {
+        uint count = slot + visibleFlags[threadId.x];
+        scene->groupCountsPtr[groupId.x] = count;
+
+        // The triangles are a 64-bit count in two uints, low word first, because not every backend has 64-bit
+        // atomics: a carry out of the low word goes into the high one.
+        uint trianglesLow   = 0;
+        uint trianglesHigh  = 0;
+        for (uint i = 0; i < CULL_GROUP_SIZE; ++i)
+        {
+            uint sum        = trianglesLow + visibleTriangles[i];
+            trianglesHigh  += sum < trianglesLow ? 1 : 0;
+            trianglesLow    = sum;
+        }
+        if (count > 0)
+        {
+            uint previousLow;
+            InterlockedAdd(scene->cullStatsPtr[0], count);
+            InterlockedAdd(scene->cullStatsPtr[1], trianglesLow, previousLow);
+            trianglesHigh  += previousLow + trianglesLow < previousLow ? 1 : 0;
+            if (trianglesHigh > 0)
+                InterlockedAdd(scene->cullStatsPtr[2], trianglesHigh);
+        }
+    }
 }
 
 // Copies the visible draws to their packed place, after the visible draws of the run's earlier groups.

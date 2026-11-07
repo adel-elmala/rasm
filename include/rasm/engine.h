@@ -29,9 +29,31 @@ namespace rasm
     class ShaderCompiler;
     struct GpuScene;
     struct SceneDrawList;
+    struct FrameStatsCollector;
+    struct StatsOverlay;
 
-    constexpr uint32_t MAX_MATERIALS = 256;
-    constexpr uint32_t MAX_CAMERAS   = 8;
+    constexpr uint32_t MAX_MATERIALS    = 256;
+    constexpr uint32_t MAX_CAMERAS      = 8;
+    constexpr uint32_t MAX_GPU_TIMERS   = 16;
+
+    struct GpuTimer
+    {
+        std::string                 name;
+        float                       milliseconds        = 0.0f;
+    };
+
+    struct FrameStats
+    {
+        float                       cpuFrameMs          = 0.0f;
+        float                       gpuFrameMs          = 0.0f;
+        GpuTimer                    gpuTimers[MAX_GPU_TIMERS - 1];
+        uint32_t                    gpuTimerCount       = 0;
+        uint32_t                    draws               = 0;
+        uint32_t                    drawsVisible        = 0;
+        uint64_t                    triangles           = 0;
+        uint64_t                    trianglesVisible    = 0;
+        VRAMStats                   memory              = {};
+    };
 
     class Engine
     {
@@ -87,7 +109,7 @@ namespace rasm
         [[nodiscard]] bool          beginFrame(CameraHandle camera);
         // Presents the swapchain image, cleared if no pass rendered to it this frame.
         void                        endFrame();
-        void                        beginPass();
+        void                        beginPass(const std::string& name = "Pass");
         void                        endPass();
         void                        render(SceneHandle scene, CameraHandle camera);
         // Records a scene into the current pass, for render graph passes, with the camera fitted to the pass's
@@ -107,6 +129,12 @@ namespace rasm
         RenderContext&              getRenderContext();
         MeshSize                    getMeshByteSize(const MeshHandle& handle) const;
         VRAMStats                   queryMemoryStats();
+        // The first call turns on measuring, so the stats fill in a few frames later.
+        const FrameStats&           getFrameStats() const;
+        // Times the GPU work recorded between the two calls into the frame's command buffer, for getFrameStats
+        // and the stats overlay. Returns UINT32_MAX, which endGpuTimer ignores, when nothing is measured.
+        uint32_t                    beginGpuTimer(const CommandBufferHandle& commandBuffer, const std::string& name);
+        void                        endGpuTimer(const CommandBufferHandle& commandBuffer, uint32_t timer);
         uint32_t                    addBindlessTexture(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, SamplerType sampler = SamplerType::LINEAR_REPEAT, uint32_t slot = MAX_BINDLESS_TEXTURES);
         uint32_t                    getBindlessTextureIndex(const TextureHandle& texture);
         // The render target's color texture for the current frame slot, so fetch it every frame.
@@ -127,6 +155,8 @@ namespace rasm
         Swapchain                                                   swapchain                               = {};
         std::unique_ptr<GeometryPool>                               geometryPool                            = {};
         std::unique_ptr<GpuScene>                                   gpuScene                                = {};
+        std::unique_ptr<FrameStatsCollector>                        frameStats                              = {};
+        std::unique_ptr<StatsOverlay>                               statsOverlay                            = {};
         RenderContext                                               ctx;
         std::unique_ptr<ShaderCompiler>                             shaderCompiler                          = {};
         HandleManager                                               handleManager                           = {};
@@ -178,6 +208,12 @@ namespace rasm
         void                        rebuildDrawList(SceneHandle scene);
         void                        uploadDrawList(SceneDrawList& drawList);
         bool                        recordCulling(bool& recorded);
+        void                        createFrameStats();
+        void                        updateFrameStats();
+        uint32_t                    beginCullingTimer(const CommandBufferHandle& commandBuffer);
+        bool                        createStatsOverlay();
+        void                        updateStatsOverlay();
+        void                        drawStatsOverlay();
 
         std::vector<PendingMeshLoad>                                            pendingMeshes;
         std::unordered_map<TextureHandle, PendingTextureLoad, HandleHash>       pendingTextures;

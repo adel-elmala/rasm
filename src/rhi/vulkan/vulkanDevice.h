@@ -30,6 +30,7 @@ namespace rasm::rhi
         CommandBuffer*              createCommandBuffer(QueueType queueType, const std::string& name) override;
         Fence*                      createFence(uint64_t initialValue, const std::string& name) override;
         Swapchain*                  createSwapchain(const SwapchainDesc& desc) override;
+        QueryPool*                  createTimestampQueryPool(uint32_t count, const std::string& name) override;
         void                        destroyBuffer(Buffer* buffer) override;
         void                        destroyTexture(Texture* texture) override;
         void                        destroySampler(Sampler* sampler) override;
@@ -41,8 +42,12 @@ namespace rasm::rhi
         void                        destroyCommandBuffer(CommandBuffer* commandBuffer) override;
         void                        destroyFence(Fence* fence) override;
         void                        destroySwapchain(Swapchain* swapchain) override;
+        void                        destroyQueryPool(QueryPool* pool) override;
         Queue*                      getQueue(QueueType queueType) override;
         bool                        fillBuffer(Buffer* buffer, const void* data, size_t size, size_t offset) override;
+        bool                        readBuffer(Buffer* buffer, void* data, size_t size, size_t offset) override;
+        void                        resetQueries(QueryPool* pool) override;
+        bool                        getTimestamps(QueryPool* pool, uint32_t count, uint64_t* nanoseconds) override;
         bool                        fillTexture(Texture* texture, const void* data) override;
         void                        updateBindlessTexture(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, Sampler* sampler) override;
         bool                        waitForFence(Fence* fence, uint64_t value, uint64_t timeout) override;
@@ -65,6 +70,8 @@ namespace rasm::rhi
         std::unique_ptr<VulkanQueue>    graphicsQueue       = {};
         VkSurfaceKHR                    surface             = VK_NULL_HANDLE;
         bool                            debugUtilsEnabled   = false;
+        uint64_t                        timestampMask       = 0;
+        double                          timestampPeriod     = 0.0;
     };
 
     std::unique_ptr<Device>         createVulkanDevice(const DeviceDesc& desc);

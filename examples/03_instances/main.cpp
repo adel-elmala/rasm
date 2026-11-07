@@ -72,9 +72,8 @@ int main()
         .enableValidation = true,
         .preferredBackend = rasm::Backend::VULKAN,
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
-        .shaderDir = RASM_EXAMPLE_SHADER_DIR
-
-    };
+        .shaderDir = RASM_EXAMPLE_SHADER_DIR,
+        .showStats = true};
 
     rasm::Engine engine(config);
     if (!engine.running())

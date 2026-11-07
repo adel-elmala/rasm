@@ -151,7 +151,9 @@ namespace rasm
             gpuScene->drawCounts[i] = ctx.createBuffer({.name = "Draw Count Buffer " + std::to_string(i),
                                                         .usage = BufferUsage::INDIRECT,
                                                         .size = MAX_SCENE_DRAWS_PER_FRAME * gfx::MAX_DRAW_RUNS * sizeof(uint32_t)});
-            if (!gpuScene->cullCommandBuffers[i].isValid() || !gpuScene->drawCounts[i].isValid())
+            // The frame's visible draws and triangles (low, high), which updateFrameStats reads back once the slot's fence passed.
+            gpuScene->cullStats[i] = ctx.createBuffer({.name = "Cull Stats Buffer " + std::to_string(i), .usage = BufferUsage::STORAGE, .size = 3 * sizeof(uint32_t), .hostVisible = true, .hostReadable = true});
+            if (!gpuScene->cullCommandBuffers[i].isValid() || !gpuScene->drawCounts[i].isValid() || !gpuScene->cullStats[i].isValid())
             {
                 spdlog::error("Failed to create the culling resources.");
                 return false;
@@ -369,6 +371,7 @@ namespace rasm
         drawList.rebuild = false;
         drawList.draws.clear();
         drawList.runs.clear();
+        drawList.triangleCount = 0;
 
         for (auto entity : registry.scenes[scene.index].entities)
         {
@@ -390,6 +393,7 @@ namespace rasm
                                           .firstIndex = geometry.firstIndex,
                                           .vertexOffset = static_cast<int32_t>(geometry.firstVertex),
                                           .firstInstance = state.firstInstance + i});
+                drawList.triangleCount += geometry.indexCount / 3;
             }
         }
 
@@ -565,6 +569,7 @@ namespace rasm
         {
             sceneData.cullSlotsPtr = sceneData.drawInfoPtr + static_cast<uint64_t>(visibleCapacity) * sizeof(gfx::DrawInfo);
             sceneData.groupCountsPtr = sceneData.cullSlotsPtr + static_cast<uint64_t>(visibleCapacity) * sizeof(uint32_t);
+            sceneData.cullStatsPtr = ctx.getBufferDeviceAddress(gpuScene->cullStats[frame]);
         }
         sceneData.drawCount = drawCount;
         sceneData.runCount = static_cast<uint32_t>(drawList.runs.size());
@@ -577,6 +582,16 @@ namespace rasm
         {
             for (const DrawRun &run : drawList.runs)
                 gpuScene->cullGroupCounts[call] += (run.count + CULL_GROUP_SIZE - 1) / CULL_GROUP_SIZE;
+        }
+
+        // Culling counts its visible draws on the GPU; an unculled call draws all of them.
+        DrawTotals &totals = gpuScene->drawTotals[frame];
+        totals.draws += drawCount;
+        totals.triangles += drawList.triangleCount;
+        if (!culled)
+        {
+            totals.unculledDraws += drawCount;
+            totals.unculledTriangles += drawList.triangleCount;
         }
 
         ctx.bindPipeline(commandBuffer, gpuScene->pipeline);
@@ -611,6 +626,7 @@ namespace rasm
         ZoneScoped;
 
         recorded = false;
+        uint32_t cullTimer = UINT32_MAX;
         const auto frame = static_cast<uint32_t>(frameCount);
         const CommandBufferHandle commandBuffer = gpuScene->cullCommandBuffers[frame];
         const uint64_t sceneDataAddress = ctx.getBufferDeviceAddress(gpuScene->sceneData[frame]);
@@ -624,6 +640,7 @@ namespace rasm
                 if (!ctx.beginCommandBuffer(commandBuffer))
                     return false;
                 recorded = true;
+                cullTimer = beginCullingTimer(commandBuffer);
             }
 
             const gfx::PushConstants pushConstants{.scene = sceneDataAddress + i * sizeof(gfx::SceneData)};
@@ -638,7 +655,9 @@ namespace rasm
         if (!recorded)
             return true;
 
-        ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::GRAPHICS);
+        // The host side is for updateFrameStats, which reads the cull stats after the frame fence.
+        ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::GRAPHICS | PipelineStage::HOST);
+        endGpuTimer(commandBuffer, cullTimer);
         return ctx.endCommandBuffer(commandBuffer);
     }
 }

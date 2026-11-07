@@ -36,6 +36,7 @@ namespace rasm::rhi
         void                        dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) override;
         void                        memoryBarrier(PipelineStage before, PipelineStage after) override;
         void                        copyBuffers(Buffer* src, const BufferCopy* copies, uint32_t copyCount) override;
+        void                        writeTimestamp(QueryPool* pool, uint32_t index) override;
         VkCommandBuffer             getVkCommandBuffer() const;
 
     private:

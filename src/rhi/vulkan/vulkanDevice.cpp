@@ -104,6 +104,7 @@ namespace rasm::rhi
                 .descriptorBindingVariableDescriptorCount = VK_TRUE,
                 .runtimeDescriptorArray = VK_TRUE,
                 .scalarBlockLayout = VK_TRUE,
+                .hostQueryReset = VK_TRUE,
                 .timelineSemaphore = VK_TRUE,
                 .bufferDeviceAddress = VK_TRUE,
             };
@@ -369,6 +370,10 @@ namespace rasm::rhi
         }
         graphicsQueue = std::make_unique<VulkanQueue>(queueRet.value(), queueIndexRet.value());
 
+        const uint32_t timestampBits = device.queue_families[queueIndexRet.value()].timestampValidBits;
+        timestampMask = timestampBits >= 64 ? ~0ull : (1ull << timestampBits) - 1;
+        timestampPeriod = physicalDevice.properties.limits.timestampPeriod;
+
         VmaVulkanFunctions vkFunctions{
             .vkGetInstanceProcAddr = vkGetInstanceProcAddr,
             .vkGetDeviceProcAddr = vkGetDeviceProcAddr,
@@ -404,7 +409,10 @@ namespace rasm::rhi
         allocCI.usage = VMA_MEMORY_USAGE_AUTO;
         allocCI.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                         VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        if (!desc.hostVisible)
+        // Write-only memory may be uncached or across the bus, so a buffer the CPU reads asks for random access.
+        if (desc.hostReadable)
+            allocCI.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        else if (!desc.hostVisible)
             allocCI.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
 
         auto *buffer = new VulkanBuffer();
@@ -883,6 +891,31 @@ namespace rasm::rhi
         return swapchain;
     }
 
+    QueryPool *VulkanDevice::createTimestampQueryPool(uint32_t count, const std::string &name)
+    {
+        if (timestampMask == 0)
+        {
+            spdlog::warn("The graphics queue does not support timestamps.");
+            return nullptr;
+        }
+
+        VkQueryPoolCreateInfo poolInfo = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = count};
+        auto *pool = new VulkanQueryPool();
+        pool->count = count;
+        auto result = vkCreateQueryPool(device.device, &poolInfo, nullptr, &pool->pool);
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to create query pool '{}'. Error: {}", name, toVkResultString(result));
+            delete pool;
+            return nullptr;
+        }
+
+        // A new pool's queries are undefined until reset.
+        vkResetQueryPool(device.device, pool->pool, 0, count);
+        setObjectName(VK_OBJECT_TYPE_QUERY_POOL, reinterpret_cast<uint64_t>(pool->pool), name);
+        return pool;
+    }
+
     void VulkanDevice::destroyBuffer(Buffer *buffer)
     {
         auto *vkBuffer = static_cast<VulkanBuffer *>(buffer);
@@ -957,6 +990,13 @@ namespace rasm::rhi
         delete static_cast<VulkanSwapchain *>(swapchain);
     }
 
+    void VulkanDevice::destroyQueryPool(QueryPool *pool)
+    {
+        auto *vkPool = static_cast<VulkanQueryPool *>(pool);
+        vkDestroyQueryPool(device.device, vkPool->pool, nullptr);
+        delete vkPool;
+    }
+
     Queue *VulkanDevice::getQueue(QueueType queueType)
     {
         assert(queueType == QueueType::GRAPHICS);
@@ -977,6 +1017,24 @@ namespace rasm::rhi
             spdlog::error("Failed to flush buffer memory: {}", toVkResultString(result));
             return false;
         }
+        return true;
+    }
+
+    // The buffer was created with hostReadable. The GPU writes must be made available to the host first: a
+    // barrier to PipelineStage::HOST before the fence that the caller waited for.
+    bool VulkanDevice::readBuffer(Buffer *buffer, void *data, size_t size, size_t offset)
+    {
+        auto *vkBuffer = static_cast<VulkanBuffer *>(buffer);
+        assert(offset + size <= vkBuffer->desc.size);
+        assert(vkBuffer->mappedData != nullptr);
+
+        auto result = vmaInvalidateAllocation(allocator, vkBuffer->allocation, offset, size);
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to invalidate buffer memory: {}", toVkResultString(result));
+            return false;
+        }
+        std::memcpy(data, static_cast<const uint8_t *>(vkBuffer->mappedData) + offset, size);
         return true;
     }
 
@@ -1104,6 +1162,45 @@ namespace rasm::rhi
         if (result != VK_SUCCESS)
             spdlog::error("Failed to read fence value. Error: {}", toVkResultString(result));
         return value;
+    }
+
+    // The GPU must be done with the pool: today that means a fence wait covered its last submit.
+    void VulkanDevice::resetQueries(QueryPool *pool)
+    {
+        vkResetQueryPool(device.device, static_cast<VulkanQueryPool *>(pool)->pool, 0, pool->count);
+    }
+
+    // Nanoseconds since the earliest of the queries. False when any of them has not been written since the last reset.
+    bool VulkanDevice::getTimestamps(QueryPool *pool, uint32_t count, uint64_t *nanoseconds)
+    {
+        assert(count <= pool->count);
+        if (count == 0)
+            return true;
+
+        auto result = vkGetQueryPoolResults(device.device, static_cast<VulkanQueryPool *>(pool)->pool, 0, count, count * sizeof(uint64_t),
+                                            nanoseconds, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+        if (result != VK_SUCCESS)
+        {
+            if (result != VK_NOT_READY)
+                spdlog::error("Failed to read timestamps. Error: {}", toVkResultString(result));
+            return false;
+        }
+
+        // The counter wraps after timestampValidBits, so each value is turned into its signed distance from the
+        // first one, modulo the valid bits. That holds while the queries span less than half the counter's range.
+        const uint64_t first = nanoseconds[0];
+        int64_t earliest = 0;
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            uint64_t ticks = (nanoseconds[i] - first) & timestampMask;
+            if (ticks > timestampMask >> 1)
+                ticks |= ~timestampMask;
+            nanoseconds[i] = ticks;
+            earliest = std::min(earliest, static_cast<int64_t>(ticks));
+        }
+        for (uint32_t i = 0; i < count; ++i)
+            nanoseconds[i] = static_cast<uint64_t>(static_cast<double>(static_cast<int64_t>(nanoseconds[i]) - earliest) * timestampPeriod);
+        return true;
     }
 
     VRAMStats VulkanDevice::queryVRAMStats()

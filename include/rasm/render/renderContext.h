@@ -29,6 +29,7 @@ namespace rasm
         DescriptorSetHandle                 allocateDescriptorSet(const std::string& name, const DescriptorPoolHandle& pool, const DescriptorSetLayoutHandle& layout);
         CommandBufferHandle                 createCommandBuffer(const std::string& name);
         FenceHandle                         createFence(const std::string& name, uint64_t initialValue = 0);
+        QueryPoolHandle                     createTimestampQueryPool(const std::string& name, uint32_t count);
         RenderTargetHandle                  createRenderTarget(const RenderTargetDesc& desc);
         const RenderTarget&                 getRenderTarget(const RenderTargetHandle& handle);
         std::vector<TextureHandle>          getSwapchainImages();
@@ -45,6 +46,10 @@ namespace rasm
         bool                                endCommandBuffer(const CommandBufferHandle& commandBuffer);
         bool                                transitionImageLayout(const CommandBufferHandle& commandBuffer, TextureHandle texture, TextureUsage oldUsage, TextureUsage newUsage);
         bool                                fillBuffer(const BufferHandle& buffer, const void* data, size_t size, size_t offset = 0);
+        bool                                readBuffer(const BufferHandle& buffer, void* data, size_t size, size_t offset = 0);
+        void                                resetQueries(const QueryPoolHandle& pool);
+        bool                                getTimestamps(const QueryPoolHandle& pool, uint32_t count, uint64_t* nanoseconds);
+        void                                writeTimestamp(const CommandBufferHandle& commandBuffer, const QueryPoolHandle& pool, uint32_t index);
         bool                                fillTexture(const TextureHandle& texture, const void* data);
         [[nodiscard]] SwapchainStatus       recreateSwapchain();
         bool                                beginRendering(const CommandBufferHandle& commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment, const glm::vec4& clearColor);
