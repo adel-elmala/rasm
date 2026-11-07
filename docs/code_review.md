@@ -258,7 +258,7 @@ Use a right-handed Y-up world (glTF's convention) and do the Vulkan flip with a 
 **D11 — Assets and shaders are located through the working directory** (§1.3). *Fixed 2026-11-01:* see [architecture.md §11](architecture.md#11-conventions-that-cross-files).
 
 **D12 — The shader code is Vulkan-only.**
-- `spirv_asm` for `DrawIndex` ([core.slang:140-149](../shaders/lib/core.slang#L140-L149)) is SPIR-V specific.
+- `spirv_asm` for `DrawIndex` ([core.slang:141-151](../shaders/lib/core.slang#L141-L151)) is SPIR-V specific.
 - The data model relies on raw pointers (`SceneData*`, `VertexFull*`) through buffer device address.
 - As far as I know, Slang pointer support is limited to SPIR-V, Metal and CUDA targets: HLSL/DXIL and WGSL have no raw pointers. Verify against the current Slang docs before you design around it.
 
@@ -273,6 +273,8 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 **D16 — Profiling.** *Partly resolved:* the frame loop, `prepareScene`, uploads, submit and present now have Tracy zones and a frame mark, with the client in on-demand mode. Still open: Tracy is linked publicly, there are no GPU timestamps, and nothing turns Tracy off (every build listens on TCP 8086 on all interfaces, which a shipped game must not do). The VRAM check in `prepareScene` compared host-visible allocations against the device-local budget until `P1` moved the mega buffers to device-local memory.
 
 **D17 — No tests and no CI.** *Partly resolved 2026-11-04:* `rasm_tests` also covers glTF import (indices, strips and fans, node transforms and cycles, interleaved, quantized and sparse attributes, skipped primitives). `.github/workflows/ci.yml` builds the Windows and macOS Debug and Release presets on every PR and push to `main`, and runs `ctest`. Still open: handle-pool tests (`D4`) and image tests. *Partly resolved 2026-11-01:* `rasm_tests` covers handles, descriptor equality and hashing, render-graph sorting, transforms and camera math. It found `B22` on its first run. Pure-CPU pieces such as handle pools, desc hashing, glTF import, camera math and render-graph sorting are easy to unit-test. Rendering can be covered with headless golden-image tests once offscreen rendering exists.
+
+**D18 — Culling runs before every other GPU work of the frame.** `recordCulling` records into its own command buffer, and `endFrame` submits it ahead of the frame's command buffer ([engine.cpp:339-349](../src/engine.cpp#L339-L349)), because `drawScene` records inside a render pass where dispatches are not allowed. Any `RenderGraph::addComputePass` work recorded earlier in the frame therefore runs after culling, not before it. Nothing is wrong today: culling reads only the scene tables, `SceneData` and the draw lists, and no application pass can write them. It becomes a bug once GPU work updates what culling reads, such as GPU-side transforms (`P7`) or Hi-Z occlusion culling, which needs the depth of the frame's first pass. The fix is the graph-driven frame of phase 3: culling becomes a graph pass recorded in order with the others. *Confirmed.*
 
 ---
 

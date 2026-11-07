@@ -253,11 +253,10 @@ namespace rasm
                                    .depthStencilAttachmentFormat = DEPTH_FORMAT});
     }
 
-    PipelineHandle Engine::createComputePipeline(const std::string &name, const std::string &shaderSource)
+    PipelineHandle Engine::createComputePipeline(const std::string &name, const std::string &shaderSource, const std::string &entryPoint)
     {
         ZoneScoped;
 
-        const char *entryPoint = "compMain";
         auto compShader = shaderCompiler->compileFromString(shaderSource, name + ".comp.slang", entryPoint);
         ShaderHandle shader;
         if (!compShader.code.empty())
@@ -337,15 +336,18 @@ namespace rasm
 
         ctx.endCommandBuffer(currentFrame.commandBuffer);
 
-        // The frame's scene draws read what culling writes, so its command buffer goes first.
+        // The frame's scene draws read what culling writes, so its command buffer goes first. A frame whose culling
+        // failed to record is not submitted, since its draws would read stale counts.
+        bool culling = false;
+        const bool cullingRecorded = recordCulling(culling);
         const CommandBufferHandle commandBuffers[] = {gpuScene->cullCommandBuffers[frameCount], currentFrame.commandBuffer};
-        const uint32_t firstCommandBuffer = recordCulling() ? 0 : 1;
+        const uint32_t firstCommandBuffer = culling ? 0 : 1;
 
         // The slot only takes the new value once a submit will signal it; a value nothing signals would block
         // the next wait on this slot forever. After a failed submit the swapchain keeps the image acquired,
         // and the next acquire hands it out again.
         const uint64_t signalValue = frameFenceValue + 1;
-        if (ctx.submit(commandBuffers + firstCommandBuffer, 2 - firstCommandBuffer, frameFence, signalValue, true))
+        if (cullingRecorded && ctx.submit(commandBuffers + firstCommandBuffer, 2 - firstCommandBuffer, frameFence, signalValue, true))
         {
             frameFenceValue = signalValue;
             currentFrame.fenceValue = signalValue;

@@ -725,7 +725,9 @@ namespace rasm
         ZoneScoped;
 
         // They run in this order on the queue, as one submission.
-        std::vector<rhi::CommandBuffer *> rhiCommandBuffers(commandBufferCount);
+        if (!checkArgument(commandBufferCount <= rhi::MAX_SUBMIT_COMMAND_BUFFERS, __func__, "too many command buffers."))
+            return false;
+        rhi::CommandBuffer *rhiCommandBuffers[rhi::MAX_SUBMIT_COMMAND_BUFFERS] = {};
         for (uint32_t i = 0; i < commandBufferCount; ++i)
         {
             rhiCommandBuffers[i] = lookup(impl->commandBuffers, commandBuffers[i], __func__);
@@ -746,7 +748,7 @@ namespace rasm
         impl->uploads.flush();
 
         rhi::SubmitDesc submitDesc = {
-            .commandBuffers = rhiCommandBuffers.data(),
+            .commandBuffers = rhiCommandBuffers,
             .commandBufferCount = commandBufferCount,
             .swapchain = presentsSwapchainImage ? impl->swapchain : nullptr,
             .signalFence = fence,

@@ -7,11 +7,6 @@
 
 namespace rasm::rhi
 {
-    namespace
-    {
-        constexpr uint32_t MAX_SUBMIT_COMMAND_BUFFERS = 8;
-    }
-
     VulkanQueue::VulkanQueue(VkQueue queue, uint32_t familyIndex) : queue(queue), familyIndex(familyIndex) {}
 
     bool VulkanQueue::submit(const SubmitDesc &desc)

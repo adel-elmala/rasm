@@ -44,12 +44,13 @@ namespace rasm
         GpuTable                        materials;
         BufferHandle                    sceneData[MAX_FRAMES_IN_FLIGHT]                                     = {};
         PipelineHandle                  pipeline                                                            = {};
-        PipelineHandle                  cullPipeline                                                        = {};
+        PipelineHandle                  cullCountPipeline                                                   = {};
+        PipelineHandle                  cullWritePipeline                                                   = {};
         CommandBufferHandle             cullCommandBuffers[MAX_FRAMES_IN_FLIGHT]                            = {};
         BufferHandle                    drawCounts[MAX_FRAMES_IN_FLIGHT]                                    = {};
         BufferHandle                    visibleDraws[MAX_FRAMES_IN_FLIGHT][MAX_SCENE_DRAWS_PER_FRAME]       = {};
         uint32_t                        visibleCapacity[MAX_FRAMES_IN_FLIGHT][MAX_SCENE_DRAWS_PER_FRAME]    = {};
-        uint32_t                        cullDrawCounts[MAX_SCENE_DRAWS_PER_FRAME]                           = {};
+        uint32_t                        cullGroupCounts[MAX_SCENE_DRAWS_PER_FRAME]                          = {};
         std::vector<EntityDrawState>    entities;
         std::vector<CullMode>           instanceCullModes;
         uint32_t                        instanceCount                                                       = 0;

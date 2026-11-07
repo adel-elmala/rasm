@@ -149,6 +149,8 @@ namespace rasm::rhi
         virtual glm::uvec2          getExtent() const = 0;
     };
 
+    constexpr uint32_t                  MAX_SUBMIT_COMMAND_BUFFERS = 8;
+
     struct SubmitDesc
     {
         CommandBuffer* const*           commandBuffers      = nullptr;
