@@ -90,7 +90,7 @@ Goal: make RASM's core promise hold at scale.
   - per-frame upload of only the dirty ranges (done 2026-11-07, example `03_instances`).
 - [x] Separate *mesh* from *instance*, so entities that share a mesh share its geometry (`P3`, done 2026-11-07).
 - [x] Compute pipelines and compute passes in the RHI (done 2026-11-07, example `04_compute`). Compute reads and writes buffers only: storage images, which Hi-Z needs, are still open.
-- [ ] **GPU frustum culling**: a compute pass that writes a compacted draw list, followed by `vkCmdDrawIndexedIndirectCount`.
+- [x] **GPU frustum culling**: a compute pass that writes a compacted draw list, followed by `vkCmdDrawIndexedIndirectCount` (done 2026-11-07).
 - [ ] **Occlusion culling**: a two-pass hierarchical-Z scheme (draw what was visible last frame, build Hi-Z, cull and draw the rest).
 - [ ] LOD selection on the GPU, from per-mesh LOD ranges and screen-space error.
 - [ ] Optional: meshlets with cluster culling, and a mesh-shader path where available (a Tier-A extra; keep the vertex-pulling path as the baseline).

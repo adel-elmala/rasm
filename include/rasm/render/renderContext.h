@@ -52,7 +52,7 @@ namespace rasm
         bool                                setViewport(const CommandBufferHandle& commandBuffer, float x, float y, float width, float height, float minDepth = 0.0f, float maxDepth = 1.0f);
         bool                                setScissor(const CommandBufferHandle& commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height);
         bool                                setCullMode(const CommandBufferHandle& commandBuffer, CullMode cullMode);
-        bool                                submit(const CommandBufferHandle& commandBuffer, FenceHandle signalFence, uint64_t signalValue, bool presentsSwapchainImage);
+        bool                                submit(const CommandBufferHandle* commandBuffers, uint32_t commandBufferCount, FenceHandle signalFence, uint64_t signalValue, bool presentsSwapchainImage);
         [[nodiscard]] SwapchainStatus       present();
         void                                destroyTexture(const TextureHandle& texture);
         void                                destroyBuffer(const BufferHandle& buffer);
@@ -63,6 +63,7 @@ namespace rasm
         void                                draw(const CommandBufferHandle& commandBuffer, const uint32_t vertexCount, uint32_t instanceCount = 1);
         void                                drawIndexed(const CommandBufferHandle& commandBuffer, uint32_t indexCount, uint32_t instanceCount = 1, uint32_t vertexOffset = 0, uint32_t firstIndex = 0, uint32_t firstInstance = 0);
         void                                drawIndexedIndirect(const CommandBufferHandle& commandBuffer, const BufferHandle& drawInfoBuffer, uint32_t offset, uint32_t drawCount, uint32_t stride);
+        void                                drawIndexedIndirectCount(const CommandBufferHandle& commandBuffer, const BufferHandle& drawInfoBuffer, uint64_t offset, const BufferHandle& countBuffer, uint64_t countOffset, uint32_t maxDrawCount, uint32_t stride);
         void                                dispatch(const CommandBufferHandle& commandBuffer, uint32_t groupCountX, uint32_t groupCountY = 1, uint32_t groupCountZ = 1);
         void                                memoryBarrier(const CommandBufferHandle& commandBuffer, PipelineStage before, PipelineStage after);
 

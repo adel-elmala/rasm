@@ -66,7 +66,7 @@ namespace rasm
         // returns invalid on failure.
         // The name is a label, so two pipelines can share one.
         PipelineHandle              createPipeline(const std::string& name, const std::string& shaderSource);
-        PipelineHandle              createComputePipeline(const std::string& name, const std::string& shaderSource);
+        PipelineHandle              createComputePipeline(const std::string& name, const std::string& shaderSource, const std::string& entryPoint = "compMain");
         const Material&             getMaterial(const MaterialHandle& handle);
         Transform                   getTransform(EntityHandle entity);
         Transform                   getCameraTransform(CameraHandle camera);
@@ -177,6 +177,7 @@ namespace rasm
         void                        markDrawListsDirty(EntityHandle entity);
         void                        rebuildDrawList(SceneHandle scene);
         void                        uploadDrawList(SceneDrawList& drawList);
+        bool                        recordCulling(bool& recorded);
 
         std::vector<PendingMeshLoad>                                            pendingMeshes;
         std::unordered_map<TextureHandle, PendingTextureLoad, HandleHash>       pendingTextures;

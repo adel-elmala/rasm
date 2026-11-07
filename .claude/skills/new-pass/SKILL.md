@@ -15,7 +15,7 @@ is the working reference (forward pass into a render target, then an overlay pas
 | **Full-screen / post** (tone map, blur, debug view) | own pipeline, `ctx.draw(cmd, 3)`, samples an earlier render target | the common case. Template below. |
 | **Scene into a render target** | `engine.drawScene(scene, camera)` in the pass | uses the uber shader. The target must have the swapchain color format + `D32_SFLOAT`, else `drawScene` logs and skips. |
 | **Scene with its own shader** (shadow map, normals view, ID buffer) | ✗ not possible from the app | the custom shader can't get the `SceneData` address. Needs an engine change: propose it first. |
-| **Compute** (culling, particles, buffer processing) | `engine.createComputePipeline` (`compMain`), `graph.addComputePass`, `ctx.dispatch`; the graph adds the barriers around the pass | reads and writes **buffers** through device addresses only. No storage images and no bindless textures in compute yet (the set is `FRAGMENT`-only), so Hi-Z needs RHI work first. Reference: `examples/04_compute`. |
+| **Compute** (culling, particles, buffer processing) | `engine.createComputePipeline` (`compMain`, or a named entry point), `graph.addComputePass`, `ctx.dispatch`; the graph adds the barriers around the pass | reads and writes **buffers** through device addresses only. No storage images and no bindless textures in compute yet (the set is `FRAGMENT`-only), so Hi-Z needs RHI work first. Reference: `examples/04_compute`. |
 | **Pass built into the engine** (every app gets it) | ✗ `Engine::render` records one fixed pass | phase 3 ("graph-driven frame"). Propose first. |
 
 ## 2. Current limits (check before designing)

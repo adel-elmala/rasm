@@ -12,6 +12,9 @@
 namespace rasm::gfx
 {
 
+    // A draw list has one run per cull mode (CullMode in rasm/types.h). Must match shaders/lib/core.slang.
+    constexpr uint32_t      MAX_DRAW_RUNS       = 3;
+
     // Selects how the uber shader's fragMain shades a model. Must match shaders/lib/core.slang.
     enum class MaterialId : uint32_t { PBR, UNLIT };
 
@@ -116,6 +119,15 @@ namespace rasm::gfx
         uint64_t         instancesPtr;
         uint64_t         materialsPtr;
         uint64_t         geometryPtr;
+        uint64_t         allDrawsPtr;
+        uint64_t         drawCountsPtr;
+        uint64_t         cullSlotsPtr;
+        uint64_t         groupCountsPtr;
+        glm::vec4        frustumPlanes[6];
+        uint32_t         drawCount;
+        uint32_t         runCount;
+        uint32_t         runFirst[MAX_DRAW_RUNS];
+        uint32_t         padding;
     };
 
     struct PushConstants
@@ -142,11 +154,20 @@ namespace rasm::gfx
     static_assert(sizeof(GeometryData) == 28, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, boundsCenter) == 12, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, boundsRadius) == 24, "GeometryData must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 568, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 720, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, lights) == 144, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, vertsPtr) == 528, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, instancesPtr) == 544, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, geometryPtr) == 560, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, allDrawsPtr) == 568, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, drawCountsPtr) == 576, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, cullSlotsPtr) == 584, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, groupCountsPtr) == 592, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, frustumPlanes) == 600, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, drawCount) == 696, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, runCount) == 700, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, runFirst) == 704, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, padding) == 716, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(PushConstants) == PUSH_CONSTANTS_SIZE, "PushConstants must fill the pipelines' push-constant range");
 
 
