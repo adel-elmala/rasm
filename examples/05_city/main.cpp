@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <unordered_map>
 #include <vector>
 
@@ -62,8 +63,9 @@ namespace
     constexpr int CARS_PER_LANE = 48;
     constexpr float LANE_LENGTH = 2.0f * CITY_HALF_SIZE;
 
-    // Animation runs on frames, not seconds, so a given frame renders the same on every run (verify-change).
-    constexpr float FRAMES_PER_SECOND = 60.0f;
+    // Animation follows the wall clock. With --fixed-step (verify-change passes it), each frame advances a fixed
+    // 1/60 s instead, so a given frame renders the same on every run.
+    constexpr double FIXED_STEP_SECONDS = 1.0 / 60.0;
     constexpr float TOUR_SECONDS = 124.0f;
 
     enum class Segment
@@ -229,8 +231,13 @@ namespace
     rasm::TextureHandle createFilledTexture(rasm::Engine &engine, const char *name, rasm::Format format, uint32_t width, uint32_t height, const std::vector<uint8_t> &pixels)
     {
         const rasm::TextureHandle texture = engine.createTexture({.name = name, .width = width, .height = height, .format = format});
-        if (!texture.isValid() || !engine.getRenderContext().fillTexture(texture, pixels.data()))
+        if (!texture.isValid())
             return {};
+        if (!engine.getRenderContext().fillTexture(texture, pixels.data()))
+        {
+            engine.getRenderContext().destroyTexture(texture);
+            return {};
+        }
         return texture;
     }
 
@@ -637,9 +644,9 @@ namespace
             addRowhouses(city, rng, lot);
     }
 
-    glm::vec3 carPosition(const Car &car, float seconds)
+    glm::vec3 carPosition(const Car &car, double seconds)
     {
-        return car.laneStart + car.direction * std::fmod(car.offset + car.speed * seconds, LANE_LENGTH);
+        return car.laneStart + car.direction * static_cast<float>(std::fmod(car.offset + car.speed * seconds, LANE_LENGTH));
     }
 
     // Cars are glowing boxes: white heading one way, red the other, like a long exposure of the street.
@@ -665,8 +672,9 @@ namespace
                                 .scale = scale,
                                 .offset = (static_cast<float>(i) + rng.range(0.0f, 0.6f)) * LANE_LENGTH / CARS_PER_LANE,
                                 .speed = speed};
-                        car.entity = place(city, city.assets.cube, material, carPosition(car, 0.0f), scale);
-                        city.cars.push_back(car);
+                        car.entity = place(city, city.assets.cube, material, carPosition(car, 0.0), scale);
+                        if (car.entity.isValid())
+                            city.cars.push_back(car);
                     }
                 }
             }
@@ -779,9 +787,9 @@ namespace
 
     // The camera's pose on the tour, built from yaw and pitch the way the free-fly controller builds it, so the
     // controller takes over without a jump.
-    rasm::Transform tourTransform(float seconds)
+    rasm::Transform tourTransform(double seconds)
     {
-        const float t = std::fmod(seconds, TOUR_SECONDS);
+        const float t = static_cast<float>(std::fmod(seconds, TOUR_SECONDS));
         int i = 0;
         while (i + 1 < TOUR_KEY_COUNT && TOUR[i + 1].seconds <= t)
             ++i;
@@ -805,14 +813,14 @@ namespace
         return glm::distance(rendered.position, tour.position) > 1e-3f || std::abs(glm::dot(rendered.rotation, tour.rotation)) < 0.99999f;
     }
 
-    void updateTraffic(rasm::Engine &engine, const std::vector<Car> &cars, float seconds)
+    void updateTraffic(rasm::Engine &engine, const std::vector<Car> &cars, double seconds)
     {
         for (const Car &car : cars)
             engine.updateTransform(car.entity, rasm::Transform{carPosition(car, seconds), glm::identity<glm::quat>(), car.scale});
     }
 }
 
-int main()
+int main(int argc, char **argv)
 {
     rasm::EngineConfig config = {
         .appName = "rasm city",
@@ -869,13 +877,14 @@ int main()
     for (const rasm::LightHandle &light : lights)
         engine.addLightToScene(city.scene, light);
 
-    uint64_t frame = 0;
+    // Seconds stay a double: a float would make the cars stutter after a day of running.
+    const bool fixedStep = argc > 1 && std::strcmp(argv[1], "--fixed-step") == 0;
+    double seconds = 0.0;
+    std::chrono::steady_clock::time_point lastTime = std::chrono::steady_clock::now();
     bool touring = true;
     bool aviationOn = false;
     while (engine.running())
     {
-        const float seconds = static_cast<float>(frame) / FRAMES_PER_SECOND;
-
         // The tour sets the pose and re-seeds the free-fly controller from it. Mouse or WASD input then moves the
         // camera away from the pose, and from that frame on the user flies.
         rasm::Transform tour{};
@@ -888,10 +897,14 @@ int main()
 
         // Moving cars rewrite only their own instance rows.
         updateTraffic(engine, city.cars, seconds);
-        engine.updateTransform(city.monument, rasm::Transform{MONUMENT_POSITION, glm::angleAxis(seconds * 0.25f, glm::vec3(0.0f, 1.0f, 0.0f)), glm::vec3(MONUMENT_SCALE)});
+        if (city.monument.isValid())
+        {
+            const float angle = static_cast<float>(std::fmod(seconds * 0.25, glm::two_pi<double>()));
+            engine.updateTransform(city.monument, rasm::Transform{MONUMENT_POSITION, glm::angleAxis(angle, glm::vec3(0.0f, 1.0f, 0.0f)), glm::vec3(MONUMENT_SCALE)});
+        }
 
-        // Every aviation light blinks through one material row.
-        const bool blinkOn = frame % 90 < 12;
+        // Every aviation light blinks through one material row: on for 0.2 s every 1.5 s.
+        const bool blinkOn = std::fmod(seconds, 1.5) < 0.2;
         if (blinkOn != aviationOn)
         {
             aviationOn = blinkOn;
@@ -904,7 +917,10 @@ int main()
 
         if (touring && cameraMovedByUser(engine.getCameraTransform(camera), tour))
             touring = false;
-        ++frame;
+
+        const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+        seconds += fixedStep ? FIXED_STEP_SECONDS : std::chrono::duration<double>(now - lastTime).count();
+        lastTime = now;
     }
 
     return 0;

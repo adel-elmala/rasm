@@ -108,7 +108,7 @@
 <div class="api" id="createMaterial">
   <pre class="sig">MaterialHandle createMaterial(MaterialType type, std::vector&lt;TextureHandle&gt; textures = {}, bool doubleSided = false);</pre>
   <div class="body">
-    <p>Creates a material with the default values below and writes its row. Each valid texture is added to the bindless set. Entities that use the material can be drawn from the next frame on.</p>
+    <p>Creates a material with the default values below and writes its row. Each valid texture without a bindless slot gets one; a texture that already has a slot keeps it, so materials can share textures. Entities that use the material can be drawn from the next frame on.</p>
     <dl>
       <dt>type</dt><dd><code>PBR</code> or <code>UNLIT</code>.</dd>
       <dt>textures</dt><dd>In <code>PbrSlot</code> order: albedo, metallic, roughness, normal, occlusion, emissive. Leave the end out, or pass <code>{}</code> for an empty slot. Entries after the sixth are ignored. Textures that still load are fine.</dd>
