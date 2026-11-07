@@ -19,11 +19,11 @@ namespace rasm
     namespace
     {
         constexpr uint32_t CULL_GROUP_SIZE = 64; // numthreads of cull.slang
-        constexpr uint32_t HIZ_GROUP_SIZE = 8;   // numthreads of cull.slang's hizMain, in x and y
+        constexpr uint32_t HIZ_GROUP_SIZE = 8;   // numthreads of hiz.slang, in x and y
         constexpr uint32_t CULL_EARLY = 0;       // the cull phases of cull.slang
         constexpr uint32_t CULL_LATE = 1;
 
-        // Level 0 is half the pass's size, rounded up, and each level halves the one before, down to 1x1 (cull.slang).
+        // Level 0 is half the pass's size, rounded up, and each level halves the one before, down to 1x1 (occlusionCulling.slang).
         uint32_t getHizLevelCount(uint32_t width, uint32_t height, uint32_t &texelCount)
         {
             uint32_t levelWidth = (width + 1) / 2;
@@ -510,7 +510,7 @@ namespace rasm
             gpuScene->cullCountPipeline = createComputePipeline("cullCount", cullSource, "countMain");
             gpuScene->cullWritePipeline = createComputePipeline("cullWrite", cullSource, "writeMain");
             if (config.occlusionCulling)
-                gpuScene->hizPipeline = createComputePipeline("hiz", cullSource, "hizMain");
+                gpuScene->hizPipeline = createComputePipeline("hiz", readFile(pathFromUtf8(config.shaderDir) / "passes/hiz.slang"), "hizMain");
             if (!gpuScene->cullCountPipeline.isValid() || !gpuScene->cullWritePipeline.isValid())
                 spdlog::error("Failed to create the culling pipelines; the scene is drawn without culling.");
             else if (config.occlusionCulling && !gpuScene->hizPipeline.isValid())

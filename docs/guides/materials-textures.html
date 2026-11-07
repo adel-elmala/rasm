@@ -224,7 +224,7 @@
   <tr><td>Type</td><td><code>COMBINED_IMAGE_SAMPLER</code> at binding 0 of set 0</td></tr>
   <tr><td>Stage</td><td><code>ShaderType::ALL</code>: every stage, compute too</td></tr>
   <tr><td>Flags</td><td>update after bind and partially bound: a slot can be written while an earlier frame is on the GPU, and empty slots are allowed</td></tr>
-  <tr><td>Shader side</td><td><code>Sampler2D gTextures[]</code> with <code>[[vk::binding(0, 0)]]</code> in <code>rasm.slang</code> and <code>cull.slang</code></td></tr>
+  <tr><td>Shader side</td><td><code>Sampler2D gTextures[]</code> with <code>[[vk::binding(0, 0)]]</code> in <code>rasm.slang</code> and <code>hiz.slang</code></td></tr>
 </table>
 </div>
 <p>The layout, pool and set are made in <code>Engine::Engine</code> (<code>src/engine.cpp</code>). The Vulkan flags are set in <code>VulkanDevice::createBindlessDescriptorSetLayout</code>.</p>

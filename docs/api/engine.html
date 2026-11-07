@@ -296,7 +296,7 @@ if (!engine.running())
       <tr><td>At most <code>MAX_SCENE_DRAWS_PER_FRAME</code> (8) calls per frame</td><td>"Exceeded maximum number of drawScene calls per frame." and nothing drawn</td></tr>
       <tr><td>A render target must have the window's color format and <code>D32_SFLOAT</code> depth</td><td>An error is logged and the pass stays cleared</td></tr>
       <tr><td>The scene shader <code>passes/rasm.slang</code> must compile</td><td>An error is logged; the engine tries again next frame, so a fixed shader file is picked up while the program runs</td></tr>
-      <tr><td>The culling shader <code>passes/cull.slang</code> should compile</td><td>The scene is still drawn, only without culling. Without its <code>hizMain</code> entry point it is frustum culled only.</td></tr>
+      <tr><td>The culling shader <code>passes/cull.slang</code> should compile</td><td>The scene is still drawn, only without culling. Without <code>passes/hiz.slang</code> it is frustum culled only.</td></tr>
     </table>
     </div>
   </div>

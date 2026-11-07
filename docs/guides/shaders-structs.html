@@ -128,8 +128,8 @@
 <div class="table-wrap">
 <table>
   <tr><th>Struct</th><th>Size</th><th>Written by (C++)</th><th>Read by (Slang)</th></tr>
-  <tr><td><code>PushConstants</code></td><td>16</td><td><code>drawScene</code>, <code>recordCulling</code>, <code>recordOcclusionCulling</code></td><td><code>rasm.slang</code>, <code>cull.slang</code></td></tr>
-  <tr><td><code>SceneData</code></td><td>760</td><td><code>drawScene</code></td><td><code>rasm.slang</code>, <code>cull.slang</code></td></tr>
+  <tr><td><code>PushConstants</code></td><td>16</td><td><code>drawScene</code>, <code>recordCulling</code>, <code>recordOcclusionCulling</code></td><td><code>rasm.slang</code>, <code>cull.slang</code>, <code>hiz.slang</code></td></tr>
+  <tr><td><code>SceneData</code></td><td>760</td><td><code>drawScene</code></td><td><code>rasm.slang</code>, <code>cull.slang</code>, <code>hiz.slang</code></td></tr>
   <tr><td><code>Light</code></td><td>48</td><td><code>drawScene</code></td><td><code>pbr.slang</code></td></tr>
   <tr><td><code>DrawInfo</code></td><td>20</td><td><code>rebuildDrawList</code></td><td><code>rasm.slang</code>, <code>cull.slang</code>, the GPU's indirect draw</td></tr>
   <tr><td><code>InstanceData</code></td><td>108</td><td><code>writeInstanceRows</code></td><td><code>rasm.slang</code>, <code>cull.slang</code></td></tr>
@@ -297,7 +297,7 @@ Assertion failed: validateRasmStructs(...)</code></pre>
   <li><b><code>VertexFull</code> only:</b> <code>rasm::Vertex</code> in <code>include/rasm/mesh.h</code> and the <code>static_assert</code>s in <code>src/renderer/geometryPool.cpp</code>.</li>
   <li><b><code>PushConstants</code> only:</b> Keep it at <code>PUSH_CONSTANTS_SIZE</code>.</li>
   <li><b>The CPU writers.</b> Fill the new field in <code>drawScene</code>, <code>writeInstanceRows</code>, <code>rebuildDrawList</code>, <code>convertToGfxMaterial</code> (all in <code>src/renderer/gpuScene.cpp</code>), <code>GeometryPool::upload</code>. Zero-init (<code>{}</code>) hides a forgotten field.</li>
-  <li><b>The GPU readers:</b> <code>shaders/passes/rasm.slang</code>, <code>shaders/passes/cull.slang</code>, <code>shaders/lib/pbr.slang</code>, <code>shaders/lib/unlit.slang</code>.</li>
+  <li><b>The GPU readers:</b> <code>shaders/passes/rasm.slang</code>, <code>shaders/passes/cull.slang</code>, <code>shaders/passes/hiz.slang</code>, <code>shaders/lib/pbr.slang</code>, <code>shaders/lib/unlit.slang</code>, <code>shaders/lib/frustumCulling.slang</code>, <code>shaders/lib/occlusionCulling.slang</code>.</li>
   <li><b>Docs that quote numbers:</b> <code>docs/architecture.md</code>, the <code>frame-debug</code> skill, and these guides.</li>
 </ol>
 
@@ -329,7 +329,7 @@ Assertion failed: validateRasmStructs(...)</code></pre>
 
 <div class="callout warn">
   <strong>The script is partly out of date</strong>
-  <p>The <code>rasm.slang</code> line works. The <code>cull.slang</code> line asks for <code>-entry compMain</code>, but <code>cull.slang</code> has <code>countMain</code> and <code>writeMain</code>, so <code>slangc</code> fails with "no function found matching entry point name". <code>statsOverlay.slang</code> is not in the script. To check a shader for real, run an example: it compiles every shader the engine uses.</p>
+  <p>The <code>rasm.slang</code> line works. The <code>cull.slang</code> line asks for <code>-entry compMain</code>, but <code>cull.slang</code> has <code>countMain</code> and <code>writeMain</code>, so <code>slangc</code> fails with "no function found matching entry point name". <code>statsOverlay.slang</code> and <code>hiz.slang</code> are not in the script. To check a shader for real, run an example: it compiles every shader the engine uses.</p>
 </div>
 
 <h2><span class="n">8</span>Where it lives in code</h2>

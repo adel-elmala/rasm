@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GPU Culling · RASM</title>
 <meta name="description" content="How RASM removes draws outside the camera view and draws hidden behind others with compute dispatches, and keeps the draw order stable.">
-<meta name="rasm-sources" content="shaders/passes/cull.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/engine.cpp shaders/lib/core.slang">
+<meta name="rasm-sources" content="shaders/passes/cull.slang shaders/passes/hiz.slang shaders/lib/frustumCulling.slang shaders/lib/occlusionCulling.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/engine.cpp shaders/lib/core.slang">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -611,7 +611,7 @@
     <text x="380" y="222" class="small">A box that reaches behind the camera or past the near plane is visible.</text>
     <text x="380" y="240" class="small">The 1 × 1 top level always qualifies, so the loop always stops.</text>
   </svg>
-  <figcaption><code>isOccluded</code> in <code>cull.slang</code>. The box is bigger than the sphere and nearer, so the test only says "occluded" when the sphere surely is. It works for perspective and orthographic cameras.</figcaption>
+  <figcaption><code>isOccluded</code> in <code>occlusionCulling.slang</code>. The box is bigger than the sphere and nearer, so the test only says "occluded" when the sphere surely is. It works for perspective and orthographic cameras.</figcaption>
 </figure>
 
 <h3>Why it stays correct</h3>
@@ -633,7 +633,7 @@
 
 <h2><span class="n">7</span>When culling is off</h2>
 
-<p>If <code>cull.slang</code> fails to compile, <code>drawScene</code> does not leave the screen black. It draws the whole draw list with plain <code>drawIndexedIndirect</code> and logs the error. It tries to build the culling pipelines again next frame, so a fixed shader on disk is picked up while the app runs.</p>
+<p>If <code>cull.slang</code> (or a module it includes) fails to compile, <code>drawScene</code> does not leave the screen black. It draws the whole draw list with plain <code>drawIndexedIndirect</code> and logs the error. It tries to build the culling pipelines again next frame, so a fixed shader on disk is picked up while the app runs.</p>
 
 <div class="split">
   <div>
@@ -646,7 +646,7 @@
   </div>
 </div>
 
-<p>Occlusion culling falls back to frustum culling alone (<code>hizLevelCount</code> = 0, no late pass) when <code>EngineConfig::occlusionCulling</code> is false, when <code>hizMain</code> fails to compile, or when the depth texture gets no bindless slot or the Hi-Z buffer cannot be created. The image is the same either way; only the number of draws changes.</p>
+<p>Occlusion culling falls back to frustum culling alone (<code>hizLevelCount</code> = 0, no late pass) when <code>EngineConfig::occlusionCulling</code> is false, when <code>hiz.slang</code> fails to compile, or when the depth texture gets no bindless slot or the Hi-Z buffer cannot be created. The image is the same either way; only the number of draws changes.</p>
 
 <h2><span class="n">8</span>Where it lives in code</h2>
 
@@ -659,8 +659,10 @@
   <tr><td>Pause, Hi-Z, late dispatches</td><td><code>Engine::recordOcclusionCulling</code>, <code>getHizLevelCount</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Visibility and Hi-Z buffers</td><td><code>GpuScene::visibility</code>, <code>GpuScene::hiz</code> in <code>src/renderer/gpuScene.h</code></td></tr>
   <tr><td>Submit order {cull, frame}</td><td><code>Engine::endFrame</code> in <code>src/engine.cpp</code></td></tr>
-  <tr><td>Test, count, pack</td><td><code>getWorldSphere</code>, <code>isInFrustum</code>, <code>isOccluded</code>, <code>countMain</code>, <code>writeMain</code>, <code>getCullGroup</code> in <code>shaders/passes/cull.slang</code></td></tr>
-  <tr><td>Hi-Z build</td><td><code>hizMain</code>, <code>getHizLevel0Size</code> in <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>Frustum test</td><td><code>getWorldSphere</code>, <code>isInFrustum</code> in <code>shaders/lib/frustumCulling.slang</code></td></tr>
+  <tr><td>Occlusion test</td><td><code>isOccluded</code>, <code>getHizLevel0Size</code> in <code>shaders/lib/occlusionCulling.slang</code></td></tr>
+  <tr><td>Count, pack (both phases)</td><td><code>countMain</code>, <code>writeMain</code>, <code>getCullGroup</code> in <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>Hi-Z build</td><td><code>hizMain</code> in <code>shaders/passes/hiz.slang</code></td></tr>
   <tr><td>Pointers it uses</td><td><code>SceneData</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
 </table>
 </div>
@@ -670,7 +672,7 @@
 <div class="callout rule">
   <strong>Keep these true</strong>
   <ul>
-    <li><code>CULL_GROUP_SIZE</code>, <code>HIZ_GROUP_SIZE</code>, <code>CULL_EARLY</code> and <code>CULL_LATE</code> are in two places: <code>cull.slang</code> and <code>gpuScene.cpp</code>. Change both. So are the Hi-Z level sizes (<code>getHizLevelCount</code>, <code>getHizLevel0Size</code>).</li>
+    <li><code>CULL_GROUP_SIZE</code>, <code>CULL_EARLY</code> and <code>CULL_LATE</code> are in <code>cull.slang</code> and <code>gpuScene.cpp</code>; <code>HIZ_GROUP_SIZE</code> is in <code>hiz.slang</code> and <code>gpuScene.cpp</code>. Change both sides. So are the Hi-Z level sizes (<code>getHizLevelCount</code>, <code>getHizLevel0Size</code>).</li>
     <li>Both tests must stay conservative. Removing a draw that is partly visible makes objects pop. Compare the image with <code>EngineConfig::occlusionCulling</code> on and off: it must not change.</li>
     <li>Do not record a dispatch inside a render pass. <code>RenderContext::dispatch</code> refuses it.</li>
     <li>A new pointer in <code>SceneData</code> is a CPU↔GPU struct change: follow <a href="shaders-structs.html">the struct contract</a>.</li>
