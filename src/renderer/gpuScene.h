@@ -13,10 +13,12 @@
 namespace rasm
 {
 
-    struct InstanceRange
+    struct EntityDrawState
     {
-        uint32_t                        first                                   = 0;
-        uint32_t                        count                                   = 0;
+        uint32_t                        firstInstance                           = 0;
+        uint32_t                        instanceCount                           = 0;
+        uint16_t                        scenes                                  = 0;
+        bool                            waitingForTextures                      = false;
     };
 
     struct DrawRun
@@ -42,10 +44,12 @@ namespace rasm
         GpuTable                        materials;
         BufferHandle                    sceneData[MAX_FRAMES_IN_FLIGHT]         = {};
         PipelineHandle                  pipeline                                = {};
-        std::vector<InstanceRange>      entityInstances;
+        std::vector<EntityDrawState>    entities;
         std::vector<CullMode>           instanceCullModes;
         uint32_t                        instanceCount                           = 0;
         std::vector<EntityHandle>       entitiesWaitingForMesh;
+        std::vector<EntityHandle>       entitiesWaitingForTextures;
+        bool                            texturesFinished                        = false;
         SceneDrawList                   drawLists[MAX_SCENES];
     };
 

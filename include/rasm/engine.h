@@ -169,10 +169,11 @@ namespace rasm
         void                        syncGpuScene();
         void                        queueInstanceRows(EntityHandle entity);
         void                        writeInstanceRows(EntityHandle entity);
-        void                        rewriteAllInstanceRows();
+        void                        updateCullModes(EntityHandle entity);
+        void                        refreshEntitiesAfterMaterialChange();
         void                        writeMaterialRow(MaterialHandle material);
-        void                        markDrawListDirty(SceneHandle scene);
-        void                        markDrawListsDirty();
+        void                        addEntityToDrawList(SceneHandle scene, EntityHandle entity);
+        void                        markDrawListsDirty(EntityHandle entity);
         void                        rebuildDrawList(SceneHandle scene);
         void                        uploadDrawList(SceneDrawList& drawList);
 

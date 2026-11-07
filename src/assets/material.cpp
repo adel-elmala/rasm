@@ -94,10 +94,12 @@ namespace rasm
             return;
         }
 
+        bool texturesLoading = false;
         for (auto texture : values.textures)
         {
             if (texture.isValid() && getBindlessTextureIndex(texture) == UINT32_MAX)
                 addBindlessTexture(bindlessDescriptorSet, texture);
+            texturesLoading = texturesLoading || (texture.isValid() && !isLoaded(texture));
         }
 
         Material &materialRef = registry.materials[material.index];
@@ -106,9 +108,10 @@ namespace rasm
         materialRef.handle = material;
         writeMaterialRow(material);
 
-        // doubleSided picks the cull mode of every instance that uses the material. This is rare, so all rows are rewritten.
-        if (doubleSidedChanged)
-            rewriteAllInstanceRows();
+        // doubleSided picks the cull mode of the material's instances, and an entity with a texture that still loads is
+        // not drawn. Both are rare, so every entity is checked instead of tracking who uses the material.
+        if (doubleSidedChanged || texturesLoading)
+            refreshEntitiesAfterMaterialChange();
     }
 
     MaterialHandle Engine::loadMaterial(const tinygltf::Model &model, int materialIndex, GltfImportCache &cache)

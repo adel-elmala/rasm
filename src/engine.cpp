@@ -192,8 +192,8 @@ namespace rasm
             }
             finishTextureLoad(it->second);
             it = pendingTextures.erase(it);
-            // Entities wait for their textures, so a scene may now draw more of them.
-            markDrawListsDirty();
+            // syncGpuScene checks the entities that wait for textures only after one finished.
+            gpuScene->texturesFinished = true;
         }
 
         for (size_t i = 0; i < pendingMeshes.size() && !overBudget();)

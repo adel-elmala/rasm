@@ -80,6 +80,9 @@ namespace rasm
             const size_t offset = static_cast<size_t>(range.first) * rowSize;
             uploaded &= ctx.fillBuffer(buffers[frame], shadow.data() + offset, static_cast<size_t>(range.count) * rowSize, offset);
         }
+        // The rows stay dirty, so this slot sends them all again in its next frame.
+        if (!uploaded)
+            return false;
 
         const uint8_t bit = static_cast<uint8_t>(1u << frame);
         for (uint32_t row : rows)

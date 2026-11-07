@@ -29,7 +29,8 @@ struct VSOutput
 VSOutput vertMain(VSInput input)
 {
     // Each draw names its instance row in firstInstance (D6).
-    InstanceData *instance  = pc.scene->instancesPtr + pc.scene->drawInfoPtr[getDrawIndex()].firstInstance;
+    DrawInfo *draw          = pc.scene->drawInfoPtr + getDrawIndex();
+    InstanceData *instance  = pc.scene->instancesPtr + draw->firstInstance;
 
     float4x4 modelMat       = instance->worldMatrix;
     float4x4 viewMat        = pc.scene->view;
@@ -37,8 +38,8 @@ VSOutput vertMain(VSInput input)
     float3x3 normalMat      = instance->normalMatrix;
 
     // Slang lowers SV_VertexID to (VertexIndex - BaseVertex) to match D3D semantics, so it is the raw
-    // index-buffer value and the sub-mesh's vertexOffset must be added back to address the geometry pool.
-    VertexFull vert = pc.scene->vertsPtr[input.vertexID + pc.scene->geometryPtr[instance->geometryIndex].vertexOffset];
+    // index-buffer value and the draw's vertexOffset must be added back to address the geometry pool.
+    VertexFull vert = pc.scene->vertsPtr[input.vertexID + draw->vertexOffset];
 
     VSOutput output = {};
     output.clipPosition         = mul(projectionMat, mul(viewMat, mul(modelMat, float4(vert.pos, 1.0))));

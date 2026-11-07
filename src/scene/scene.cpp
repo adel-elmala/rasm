@@ -44,7 +44,7 @@ namespace rasm
         }
 
         sceneRef.entities.push_back(entity);
-        markDrawListDirty(scene);
+        addEntityToDrawList(scene, entity);
     }
 
     void Engine::addCameraToScene(SceneHandle scene, CameraHandle camera)

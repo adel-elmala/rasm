@@ -28,12 +28,21 @@ namespace rasm
             return determinant < 0.0f ? CullMode::FRONT : CullMode::BACK;
         }
 
-        bool texturesLoaded(Engine &engine, MaterialHandle material)
+        // Primitives without a material use the entity's; getMaterial resolves an invalid one to the default material.
+        const Material &getSubMeshMaterial(Engine &engine, const Entity &entity, const SubMesh &subMesh)
         {
-            for (auto texture : engine.getMaterial(material).textures)
+            return engine.getMaterial(subMesh.material.isValid() ? subMesh.material : entity.material);
+        }
+
+        bool texturesLoaded(Engine &engine, const Entity &entity, const Mesh &mesh)
+        {
+            for (const auto &subMesh : mesh.subMeshes)
             {
-                if (texture.isValid() && !engine.isLoaded(texture))
-                    return false;
+                for (auto texture : getSubMeshMaterial(engine, entity, subMesh).textures)
+                {
+                    if (texture.isValid() && !engine.isLoaded(texture))
+                        return false;
+                }
             }
             return true;
         }
@@ -91,6 +100,8 @@ namespace rasm
         }
     }
 
+    static_assert(MAX_SCENES <= 16, "EntityDrawState::scenes has one bit per scene");
+
     bool Engine::createGpuScene()
     {
         if (!gpuScene->instances.create(ctx, "Instance Table", sizeof(gfx::InstanceData), config.maxInstances) ||
@@ -114,50 +125,86 @@ namespace rasm
     }
 
     // Runs once per frame, after the fence wait for this frame's slot, so the slot's buffers are free to rewrite.
-    // Its cost follows what changed, not how much the scenes hold (P7).
+    // Its cost follows what changed: only the scenes that hold a changed entity rebuild their draw lists (P7).
     void Engine::syncGpuScene()
     {
         ZoneScoped;
 
-        auto &waiting = gpuScene->entitiesWaitingForMesh;
-        for (size_t i = 0; i < waiting.size();)
+        auto &waitingForMesh = gpuScene->entitiesWaitingForMesh;
+        for (size_t i = 0; i < waitingForMesh.size();)
         {
-            const EntityHandle entity = waiting[i];
+            const EntityHandle entity = waitingForMesh[i];
             const Entity &entityRef = registry.entities[entity.index];
-            if (!isLoaded(entityRef.mesh))
+            const bool meshKnown = entityRef.mesh.index < registry.meshes.size();
+            if (meshKnown && registry.meshes[entityRef.mesh.index].state == MeshState::LOADING)
             {
                 ++i;
                 continue;
             }
 
-            const auto &subMeshes = registry.meshes[entityRef.mesh.index].subMeshes;
-            const auto rowCount = static_cast<uint32_t>(subMeshes.size());
-            if (rowCount > gpuScene->instances.capacity() - gpuScene->instanceCount)
+            if (!isLoaded(entityRef.mesh))
             {
-                spdlog::error("The instance table is full: entity {} needs {} rows ({}/{} in use). EngineConfig::maxInstances sets its size.",
-                              entity.index, rowCount, gpuScene->instanceCount, gpuScene->instances.capacity());
+                spdlog::warn("Entity {} is not drawn: its mesh failed to load.", entity.index);
             }
             else
             {
-                for (const auto &subMesh : subMeshes)
+                const Mesh &mesh = registry.meshes[entityRef.mesh.index];
+                const auto rowCount = static_cast<uint32_t>(mesh.subMeshes.size());
+                if (rowCount > gpuScene->instances.capacity() - gpuScene->instanceCount)
                 {
-                    if (subMesh.geometry.vertexCount == 0 || subMesh.geometry.indexCount == 0)
-                        spdlog::warn("Skipping a mesh of entity {}: it has {} vertices and {} indices, and drawing needs both.",
-                                     entity.index, subMesh.geometry.vertexCount, subMesh.geometry.indexCount);
+                    spdlog::error("The instance table is full: entity {} needs {} rows ({}/{} in use). EngineConfig::maxInstances sets its size.",
+                                  entity.index, rowCount, gpuScene->instanceCount, gpuScene->instances.capacity());
                 }
+                else
+                {
+                    for (const auto &subMesh : mesh.subMeshes)
+                    {
+                        if (subMesh.geometry.vertexCount == 0 || subMesh.geometry.indexCount == 0)
+                            spdlog::warn("Skipping a mesh of entity {}: it has {} vertices and {} indices, and drawing needs both.",
+                                         entity.index, subMesh.geometry.vertexCount, subMesh.geometry.indexCount);
+                    }
 
-                // Rows are never freed: entities are not destroyed yet (D4).
-                if (gpuScene->entityInstances.size() <= entity.index)
-                    gpuScene->entityInstances.resize(entity.index + 1);
-                gpuScene->entityInstances[entity.index] = {gpuScene->instanceCount, rowCount};
-                gpuScene->instanceCount += rowCount;
-                gpuScene->instanceCullModes.resize(gpuScene->instanceCount, CullMode::NONE);
-                writeInstanceRows(entity);
-                markDrawListsDirty();
+                    // Rows are never freed: entities are not destroyed yet (D4).
+                    if (gpuScene->entities.size() <= entity.index)
+                        gpuScene->entities.resize(entity.index + 1);
+                    EntityDrawState &state = gpuScene->entities[entity.index];
+                    state.firstInstance = gpuScene->instanceCount;
+                    state.instanceCount = rowCount;
+                    state.waitingForTextures = !texturesLoaded(*this, entityRef, mesh);
+                    gpuScene->instanceCount += rowCount;
+                    gpuScene->instanceCullModes.resize(gpuScene->instanceCount, CullMode::NONE);
+                    writeInstanceRows(entity);
+                    if (state.waitingForTextures)
+                        gpuScene->entitiesWaitingForTextures.push_back(entity);
+                    else
+                        markDrawListsDirty(entity);
+                }
             }
 
-            waiting[i] = waiting.back();
-            waiting.pop_back();
+            waitingForMesh[i] = waitingForMesh.back();
+            waitingForMesh.pop_back();
+        }
+
+        // An entity is drawn only once the textures of all its sub-meshes are loaded, so nothing is drawn half-loaded.
+        if (gpuScene->texturesFinished)
+        {
+            gpuScene->texturesFinished = false;
+            auto &waitingForTextures = gpuScene->entitiesWaitingForTextures;
+            for (size_t i = 0; i < waitingForTextures.size();)
+            {
+                const EntityHandle entity = waitingForTextures[i];
+                const Entity &entityRef = registry.entities[entity.index];
+                if (!texturesLoaded(*this, entityRef, registry.meshes[entityRef.mesh.index]))
+                {
+                    ++i;
+                    continue;
+                }
+
+                gpuScene->entities[entity.index].waitingForTextures = false;
+                markDrawListsDirty(entity);
+                waitingForTextures[i] = waitingForTextures.back();
+                waitingForTextures.pop_back();
+            }
         }
 
         for (uint32_t i = 0; i < MAX_SCENES && i < registry.scenes.size(); ++i)
@@ -181,47 +228,71 @@ namespace rasm
 
     void Engine::writeInstanceRows(EntityHandle entity)
     {
-        if (entity.index >= gpuScene->entityInstances.size())
+        if (entity.index >= gpuScene->entities.size())
             return;
-        const InstanceRange range = gpuScene->entityInstances[entity.index];
-        if (range.count == 0)
+        const EntityDrawState &state = gpuScene->entities[entity.index];
+        if (state.instanceCount == 0)
             return;
 
         const Entity &entityRef = registry.entities[entity.index];
         const Mesh &mesh = registry.meshes[entityRef.mesh.index];
         const glm::mat4 entityMatrix = entityRef.transform.toMatrix();
 
-        bool cullModeChanged = false;
-        for (uint32_t i = 0; i < range.count; ++i)
+        for (uint32_t i = 0; i < state.instanceCount; ++i)
         {
             const SubMesh &subMesh = mesh.subMeshes[i];
-            // Primitives without a material use the entity's; getMaterial resolves an invalid one to the default material.
-            const Material &material = getMaterial(subMesh.material.isValid() ? subMesh.material : entityRef.material);
             const glm::mat4 model = entityMatrix * subMesh.transform;
-
             const gfx::InstanceData row{.worldMatrix = model,
                                         .normalMatrix = glm::transpose(glm::inverse(glm::mat3(model))),
                                         .geometryIndex = subMesh.geometry.geometryIndex,
-                                        .materialIndex = static_cast<uint32_t>(material.handle.index)};
-            gpuScene->instances.setRow(range.first + i, &row);
+                                        .materialIndex = static_cast<uint32_t>(getSubMeshMaterial(*this, entityRef, subMesh).handle.index)};
+            gpuScene->instances.setRow(state.firstInstance + i, &row);
+        }
 
-            // A transform can start or stop mirroring the entity, which moves its draws to another cull-mode run (D8).
-            const CullMode cullMode = getCullMode(material.doubleSided, entityRef.transform, subMesh.transform);
-            CullMode &storedCullMode = gpuScene->instanceCullModes[range.first + i];
-            cullModeChanged = cullModeChanged || storedCullMode != cullMode;
+        // A transform can start or stop mirroring the entity (D8).
+        updateCullModes(entity);
+    }
+
+    // A changed cull mode moves the entity's draws to another cull-mode run, so its scenes rebuild their draw lists.
+    void Engine::updateCullModes(EntityHandle entity)
+    {
+        const EntityDrawState &state = gpuScene->entities[entity.index];
+        const Entity &entityRef = registry.entities[entity.index];
+        const Mesh &mesh = registry.meshes[entityRef.mesh.index];
+
+        bool changed = false;
+        for (uint32_t i = 0; i < state.instanceCount; ++i)
+        {
+            const SubMesh &subMesh = mesh.subMeshes[i];
+            const CullMode cullMode = getCullMode(getSubMeshMaterial(*this, entityRef, subMesh).doubleSided, entityRef.transform, subMesh.transform);
+            CullMode &storedCullMode = gpuScene->instanceCullModes[state.firstInstance + i];
+            changed = changed || storedCullMode != cullMode;
             storedCullMode = cullMode;
         }
 
-        if (cullModeChanged)
-            markDrawListsDirty();
+        // An entity that waits for textures is in no draw list yet.
+        if (changed && !state.waitingForTextures)
+            markDrawListsDirty(entity);
     }
 
-    void Engine::rewriteAllInstanceRows()
+    // updateMaterial keeps the material's row index, so no instance row changes. Its instances may change cull mode,
+    // and an entity that got a texture that still loads leaves the draw lists until the texture finishes.
+    void Engine::refreshEntitiesAfterMaterialChange()
     {
-        for (size_t i = 0; i < gpuScene->entityInstances.size(); ++i)
+        for (size_t i = 0; i < gpuScene->entities.size(); ++i)
         {
-            if (gpuScene->entityInstances[i].count > 0)
-                writeInstanceRows(registry.entities[i].handle);
+            EntityDrawState &state = gpuScene->entities[i];
+            if (state.instanceCount == 0)
+                continue;
+
+            const Entity &entityRef = registry.entities[i];
+            updateCullModes(entityRef.handle);
+            if (!state.waitingForTextures && !texturesLoaded(*this, entityRef, registry.meshes[entityRef.mesh.index]))
+            {
+                state.waitingForTextures = true;
+                gpuScene->entitiesWaitingForTextures.push_back(entityRef.handle);
+                markDrawListsDirty(entityRef.handle);
+            }
         }
     }
 
@@ -232,15 +303,26 @@ namespace rasm
         gpuScene->materials.setRow(static_cast<uint32_t>(material.index), &row);
     }
 
-    void Engine::markDrawListDirty(SceneHandle scene)
+    void Engine::addEntityToDrawList(SceneHandle scene, EntityHandle entity)
     {
-        gpuScene->drawLists[scene.index].rebuild = true;
+        if (gpuScene->entities.size() <= entity.index)
+            gpuScene->entities.resize(entity.index + 1);
+        EntityDrawState &state = gpuScene->entities[entity.index];
+        state.scenes |= static_cast<uint16_t>(1u << scene.index);
+
+        // An entity whose mesh or textures still load joins the draw list when they finish (syncGpuScene).
+        if (state.instanceCount > 0 && !state.waitingForTextures)
+            gpuScene->drawLists[scene.index].rebuild = true;
     }
 
-    void Engine::markDrawListsDirty()
+    void Engine::markDrawListsDirty(EntityHandle entity)
     {
-        for (auto &drawList : gpuScene->drawLists)
-            drawList.rebuild = true;
+        const uint16_t scenes = gpuScene->entities[entity.index].scenes;
+        for (uint32_t i = 0; i < MAX_SCENES; ++i)
+        {
+            if ((scenes & (1u << i)) != 0)
+                gpuScene->drawLists[i].rebuild = true;
+        }
     }
 
     void Engine::rebuildDrawList(SceneHandle scene)
@@ -254,17 +336,14 @@ namespace rasm
 
         for (auto entity : registry.scenes[scene.index].entities)
         {
-            if (!entity.isValid() || entity.index >= gpuScene->entityInstances.size())
+            if (!entity.isValid() || entity.index >= gpuScene->entities.size())
                 continue;
-            const InstanceRange range = gpuScene->entityInstances[entity.index];
-            const Entity &entityRef = registry.entities[entity.index];
-
-            // An entity waits for all of its assets, so nothing is drawn half-loaded.
-            if (range.count == 0 || !texturesLoaded(*this, entityRef.material))
+            const EntityDrawState &state = gpuScene->entities[entity.index];
+            if (state.instanceCount == 0 || state.waitingForTextures)
                 continue;
 
-            const Mesh &mesh = registry.meshes[entityRef.mesh.index];
-            for (uint32_t i = 0; i < range.count; ++i)
+            const Mesh &mesh = registry.meshes[registry.entities[entity.index].mesh.index];
+            for (uint32_t i = 0; i < state.instanceCount; ++i)
             {
                 const MeshGeometry &geometry = mesh.subMeshes[i].geometry;
                 if (geometry.vertexCount == 0 || geometry.indexCount == 0)
@@ -274,7 +353,7 @@ namespace rasm
                                           .instanceCount = 1,
                                           .firstIndex = geometry.firstIndex,
                                           .vertexOffset = static_cast<int32_t>(geometry.firstVertex),
-                                          .firstInstance = range.first + i});
+                                          .firstInstance = state.firstInstance + i});
             }
         }
 

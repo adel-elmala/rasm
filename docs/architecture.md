@@ -69,7 +69,7 @@ There are two kinds of handle owner:
 7. `isRunning = true`. Any failure returns early and leaves `running() == false`.
 
 **Required Vulkan features**: API 1.4.
-- 1.0: `multiDrawIndirect`, `samplerAnisotropy`, `shaderInt64`.
+- 1.0: `multiDrawIndirect`, `drawIndirectFirstInstance` (each draw names its instance row in `firstInstance`), `samplerAnisotropy`, `shaderInt64`.
 - 1.1: `shaderDrawParameters`.
 - 1.2: descriptor indexing (runtime arrays, partially bound, update-after-bind, variable count, non-uniform sampled image indexing), `bufferDeviceAddress`, `scalarBlockLayout`, `timelineSemaphore`, `shaderInt8`, `storagePushConstant8`.
 - 1.3: `dynamicRendering`, `synchronization2`.
@@ -120,7 +120,7 @@ Notes:
 
 ## 4. The GPU-driven path: GPU scene tables + `drawScene`
 
-The scene lives on the GPU in tables that last for the engine's lifetime. They are created in `Engine::createGpuScene` (`src/renderer/gpuScene.cpp`), and their state is `GpuScene` (`src/renderer/gpuScene.h`), which `Engine` holds through a forward declaration, like the `GeometryPool`. Only `gpuScene.cpp` touches `GpuScene`: the scene, entity and material code calls `Engine` methods (`queueInstanceRows`, `writeInstanceRows`, `writeMaterialRow`, `markDrawListDirty`).
+The scene lives on the GPU in tables that last for the engine's lifetime. They are created in `Engine::createGpuScene` (`src/renderer/gpuScene.cpp`), and their state is `GpuScene` (`src/renderer/gpuScene.h`), which `Engine` holds through a forward declaration, like the `GeometryPool`. Only `gpuScene.cpp` touches `GpuScene`: the scene, entity and material code calls `Engine` methods (`queueInstanceRows`, `writeInstanceRows`, `writeMaterialRow`, `addEntityToDrawList`, `refreshEntitiesAfterMaterialChange`).
 
 ```
 ENGINE-WIDE (all scenes share them)                                        PER SCENE
@@ -135,16 +135,18 @@ ENGINE-WIDE (all scenes share them)                                        PER S
 |---|---|---|---|
 | Geometry | `GeometryPool::tableBuffer()`, one copy, `EngineConfig::geometryPoolSubMeshes` rows | `gfx::GeometryData`: `firstIndex`, `indexCount`, `vertexOffset`, bounding sphere (center, radius) | `GeometryPool::upload`, once per sub-mesh. No frame has read a new row yet, so one copy is enough. |
 | Materials | `GpuTable materials`, `MAX_MATERIALS` rows, row = material handle index | `gfx::MaterialData`: `gfx::Material` + `gfx::MaterialId` | `writeMaterialRow`, from `createMaterial`, `loadMaterial` and `updateMaterial` |
-| Instances | `GpuTable instances`, `EngineConfig::maxInstances` rows | `gfx::InstanceData`: world matrix, normal matrix, geometry index, material index | `writeInstanceRows`, from `updateTransform`, when an entity gets its rows, and for every entity when a material's `doubleSided` changes |
+| Instances | `GpuTable instances`, `EngineConfig::maxInstances` rows | `gfx::InstanceData`: world matrix, normal matrix, geometry index, material index | `writeInstanceRows`, from `updateTransform` and when an entity gets its rows |
 | Draw list | `SceneDrawList::buffers[2]`, grown 2x when too small | `gfx::DrawInfo{indexCount, 1, firstIndex, firstVertex, firstInstance = instance row}` | `rebuildDrawList` + `uploadDrawList` |
 
-**`GpuTable`** (`src/renderer/gpuTable.h`) is N rows of a fixed size with a CPU copy and one device-local buffer per frame slot. `setRow` writes the CPU copy and marks the row dirty for both slots. `upload(frame)` sorts that slot's dirty rows, merges neighbours into ranges (`mergeRows`) and writes each range with `fillBuffer`. A slot is written only in its own frame, after the fence wait, so the GPU is done with it. This holds on both `fillBuffer` paths (a staged copy, or a direct write into ReBAR memory).
+**`GpuTable`** (`src/renderer/gpuTable.h`) is N rows of a fixed size with a CPU copy and one device-local buffer per frame slot. `setRow` writes the CPU copy and marks the row dirty for both slots. `upload(frame)` sorts that slot's dirty rows, merges neighbours into ranges (`mergeRows`) and writes each range with `fillBuffer`. If a write fails, the rows stay dirty and the slot sends them again in its next frame. A slot is written only in its own frame, after the fence wait, so the GPU is done with it. This holds on both `fillBuffer` paths (a staged copy, or a direct write into ReBAR memory).
 
-**Instance rows.** An entity created with a mesh goes on `entitiesWaitingForMesh` (`queueInstanceRows`). Once the mesh is READY, `syncGpuScene` bump-allocates one row per sub-mesh (`entityInstances[entity]` = first row, count) and writes them. Nothing is freed, because entities are never destroyed yet (`D4`). A row's matrix is entity transform (`Transform::toMatrix`: scale, then rotate, then translate) x node transform. Its material is the primitive's, else the entity's, and `getMaterial` resolves an invalid one to the default material. Each row also keeps its `CullMode` on the CPU (`instanceCullModes`): `NONE` for a double-sided material, otherwise `BACK`, or `FRONT` when the matrix has a negative determinant (a mirror turns the front faces clockwise, as glTF specifies). A row whose cull mode changes marks every draw list for a rebuild. A sub-mesh missing vertices or indices gets a row but no draw, with a warning.
+**Instance rows.** An entity created with a mesh goes on `entitiesWaitingForMesh` (`queueInstanceRows`). Once the mesh is READY, `syncGpuScene` bump-allocates one row per sub-mesh (`GpuScene::entities[entity]`, an `EntityDrawState`: first row, row count, a bit per scene that holds the entity, and whether it waits for textures) and writes them. An entity whose mesh failed to load leaves the list with a warning and never gets rows. Nothing is freed, because entities are never destroyed yet (`D4`). A row's matrix is entity transform (`Transform::toMatrix`: scale, then rotate, then translate) x node transform. Its material is the primitive's, else the entity's, and `getMaterial` resolves an invalid one to the default material. Each row also keeps its `CullMode` on the CPU (`instanceCullModes`): `NONE` for a double-sided material, otherwise `BACK`, or `FRONT` when the matrix has a negative determinant (a mirror turns the front faces clockwise, as glTF specifies). A row whose cull mode changes (`updateCullModes`) marks the draw lists of the entity's scenes for a rebuild. A sub-mesh missing vertices or indices gets a row but no draw, with a warning.
 
-**Draw lists.** `SceneDrawList::rebuild` is set by `addEntityToScene` (for that scene) and by `markDrawListsDirty` (for every scene) when an entity gets its rows, a texture load finishes, or a cull mode changes. `rebuildDrawList` walks the scene's entities in order. It adds one `DrawInfo` per drawable sub-mesh of each entity that has rows and whose material textures are loaded, so each entity waits for its own assets and nothing is drawn half-loaded. The draws are stable-sorted by cull mode and stored as runs `{cullMode, first, count}`. The list is then stale in both slots (`staleSlots`), and `uploadDrawList` writes it into each slot's buffer in that slot's frame. Growing a slot's buffer destroys the old one, which only that slot's last frame used.
+**Waiting for textures.** An entity is drawn only once every texture of every sub-mesh's material (the primitive's, else the entity's) is loaded, so nothing is drawn half-loaded. When it gets its rows with a texture still loading, it goes on `entitiesWaitingForTextures` instead of into the draw lists. `finishLoads` sets `GpuScene::texturesFinished` when a texture load finishes, and only then does `syncGpuScene` check the waiting entities again. `updateMaterial` calls `refreshEntitiesAfterMaterialChange` when `doubleSided` changed or a new texture still loads. It recomputes every entity's cull modes and moves entities with a texture that still loads back to waiting. It uploads no instance rows: the material keeps its row index.
 
-**`syncGpuScene`** runs in `beginFrame`, after the fence wait for the frame's slot. It assigns rows to waiting entities, rebuilds dirty draw lists, then uploads this slot's dirty instance and material rows and its stale draw lists. Its cost follows what changed, not how much the scenes hold. A change made after `beginFrame` reaches the GPU in the next frame.
+**Draw lists.** `SceneDrawList::rebuild` is set by `addEntityToDrawList` (from `addEntityToScene`, when the entity already has rows) and by `markDrawListsDirty(entity)`, which marks only the scenes that hold the entity. That happens when the entity becomes drawable (rows and textures ready), starts waiting for a texture again, or changes cull mode. `rebuildDrawList` walks the scene's entities in order. It adds one `DrawInfo` per drawable sub-mesh of each entity that has rows and does not wait for textures. The draws are stable-sorted by cull mode and stored as runs `{cullMode, first, count}`. The list is then stale in both slots (`staleSlots`), and `uploadDrawList` writes it into each slot's buffer in that slot's frame. Growing a slot's buffer destroys the old one, which only that slot's last frame used.
+
+**`syncGpuScene`** runs in `beginFrame`, after the fence wait for the frame's slot. It assigns rows to entities whose mesh is ready, checks the entities waiting for textures, rebuilds dirty draw lists, then uploads this slot's dirty instance and material rows and its stale draw lists. Its cost follows what changed, except that a scene holding a changed entity rebuilds its whole draw list (`P7`). A change made after `beginFrame` reaches the GPU in the next frame.
 
 **`drawScene`** (called by `Engine::render`, or directly by render graph passes):
 1. Skips the draw when the scene's draw list is empty or this slot's copy could not be uploaded. The pass keeps its clear color.
@@ -159,16 +161,16 @@ flowchart LR
     PC["push constant<br/>SceneData*, firstDraw (16 bytes)"] --> SD["SceneData<br/>projection, view, camera pos,<br/>numLights, lights[8]"]
     SD -- drawInfoPtr --> DI["DrawInfo[]<br/>(the scene's draw list)"]
     DI -- firstInstance --> ID["InstanceData[]<br/>world, normal matrix,<br/>geometryIndex, materialIndex"]
-    ID -- geometryIndex --> GD["GeometryData[]<br/>vertexOffset, bounds"]
-    GD -- vertexOffset --> V["VertexFull[]<br/>(geometry pool, vertsPtr)"]
+    DI -- vertexOffset --> V["VertexFull[]<br/>(geometry pool, vertsPtr)"]
+    ID -- geometryIndex --> GD["GeometryData[]<br/>ranges, bounds<br/>(for culling, not read yet)"]
     ID -- materialIndex --> MD["MaterialData[]<br/>Material, MaterialId"]
     MD -- texture indices --> T["gTextures[] (set 0, binding 0)<br/>bindless Sampler2D array"]
 ```
 
 In `vertMain`:
 - The draw's index in the list is the SPIR-V `DrawIndex` built-in, read with `spirv_asm` in `core.slang` (`getDrawIndex`), plus `pc.firstDraw`. `DrawIndex` restarts at 0 in each indirect call, so `firstDraw` is the index of the call's first draw.
-- `drawInfoPtr[draw].firstInstance` is the instance row. The matrices come from `instancesPtr[row]`.
-- Slang lowers `SV_VertexID` to `VertexIndex - BaseVertex`, so the shader adds `geometryPtr[instance.geometryIndex].vertexOffset` back before indexing `vertsPtr`.
+- `drawInfoPtr[draw].firstInstance` is the instance row (core Vulkan allows a non-zero `firstInstance` only with `drawIndirectFirstInstance`). The matrices come from `instancesPtr[row]`.
+- Slang lowers `SV_VertexID` to `VertexIndex - BaseVertex`, so the shader adds the draw's own `vertexOffset` (`drawInfoPtr[draw].vertexOffset`) back before indexing `vertsPtr`. Nothing reads the geometry table in shaders yet; GPU culling will.
 - The instance's `materialIndex` goes to the fragment shader. `fragMain` reads `materialsPtr[materialIndex]` and branches on its `materialId`: `MaterialId.UNLIT` calls `shadeUnlit` in `unlit.slang`, and everything else calls `shadePBR` in `pbr.slang`.
 
 ### CPU/GPU struct contract
@@ -180,7 +182,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - `rasm::Material` (`rasm/material.h`) is a CPU-side record:
   - `textures[PbrSlot::COUNT]` and `texCoords[...]`,
   - a flat `float params[]` indexed by `PbrParam` offsets (albedo is 3 floats at offset 0, metallic is at 3, …).
-- `convertToGfxMaterial` (`gpuScene.cpp`) turns it into the GPU `gfx::Material`, which `writeMaterialRow` puts in the material table (§4). `updateMaterial(handle, values)` replaces a material's values at runtime: it gives new textures bindless slots and rewrites the row. Texture handles are replaced by bindless slot indices, and `INVALID_TEXTURE_INDEX` (0xFFFFFFFF) means "no texture".
+- `convertToGfxMaterial` (`gpuScene.cpp`) turns it into the GPU `gfx::Material`, which `writeMaterialRow` puts in the material table (§4). `updateMaterial(handle, values)` replaces a material's values at runtime: it gives new textures bindless slots and rewrites the row. Entities that use a texture still loading stop drawing until it finishes (§4). Texture handles are replaced by bindless slot indices, and `INVALID_TEXTURE_INDEX` (0xFFFFFFFF) means "no texture".
 - **Bindless slots.** `Engine::addBindlessTexture` → `RenderContext::updateBindlessDescriptorSet` writes the texture into the next free slot (`nextBindlessTextureIndex++`), or into a slot the caller names, which also moves `nextBindlessTextureIndex` past it. The slot is remembered in `registry.bindlessTextureIndexMap`. Automatic allocation never reuses a slot; naming a slot that is already taken replaces its descriptor.
 - **Texture upload.** `loadTexture` decodes on a worker (§6) and frees the pixels after the upload. The upload itself is `VulkanDevice::fillTexture`, on the main thread:
   - the image is transitioned on the host and filled with `VK_EXT_host_image_copy` (core in 1.4), so no command buffer or staging buffer is involved;
