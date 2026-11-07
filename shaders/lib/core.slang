@@ -121,19 +121,26 @@ struct SceneData
     uint32_t*           cullSlotsPtr;       // cull.slang's scratch: a draw's slot among its group's visible draws
     uint32_t*           groupCountsPtr;     // cull.slang's scratch: visible draws per group of 64
     uint32_t*           cullStatsPtr;       // the frame's visible draws [0] and triangles [1] low, [2] high, added up by cull.slang
+    uint32_t*           visibilityPtr;      // per instance row: 1 if the last occlusion test saw it, read by the early cull
+    float*              hizPtr;             // the call's Hi-Z: farthest depth per texel, levels packed one after another
     float4              frustumPlanes[6];   // world space, inside where dot(xyz, p) + w >= 0
     uint32_t            drawCount;
     uint32_t            runCount;
     uint32_t            runFirst[MAX_DRAW_RUNS];
+    uint32_t            hizLevelCount;      // 0: no occlusion culling for this call
+    uint32_t            depthTexture;       // bindless index of the pass's depth texture
+    uint32_t            viewportWidth;      // the pass's size in pixels
+    uint32_t            viewportHeight;
     uint32_t            padding;
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.
+// argument is for compute passes: the cull phase or the Hi-Z level (cull.slang).
 struct PushConstants
 {
     SceneData* scene;
     uint32_t   firstDraw;
-    uint32_t   padding;
+    uint32_t   argument;
 };
 
 [[vk::push_constant]]

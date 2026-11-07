@@ -352,8 +352,8 @@ void write(BufferHandle handle);</pre>
 <table>
   <tr><th>What <code>createRenderTarget</code> makes</th><th>Per frame slot (2)</th><th>Notes</th></tr>
   <tr><td>Color texture</td><td>1, usage <code>SAMPLED_COLOR_ATTACHMENT</code></td><td>Added to the bindless set with <code>LINEAR_CLAMP</code>. After each pass it is in the sampled layout, so later passes can read it.</td></tr>
-  <tr><td>Depth texture</td><td>1, usage <code>DEPTH_STENCIL_ATTACHMENT</code></td><td>Cleared to 0 by every pass and not stored after it. Not in the bindless set.</td></tr>
-  <tr><td>Bindless slots used</td><td colspan="2">2 of <code>MAX_BINDLESS_TEXTURES</code> (1024)</td></tr>
+  <tr><td>Depth texture</td><td>1, usage <code>SAMPLED_DEPTH_ATTACHMENT</code> for <code>D32_SFLOAT</code>, else <code>DEPTH_STENCIL_ATTACHMENT</code></td><td>Cleared to 0 by every pass, and stored. <code>drawScene</code> adds it to the bindless set (<code>NEAREST_CLAMP</code>) the first time it occlusion-culls into the target, and builds its Hi-Z from it. It stays a depth attachment, so later passes cannot sample it.</td></tr>
+  <tr><td>Bindless slots used</td><td colspan="2">2 of <code>MAX_BINDLESS_TEXTURES</code> (1024), and 2 more once <code>drawScene</code> occlusion-culls into both slots' depth</td></tr>
 </table>
 </div>
 
@@ -382,7 +382,7 @@ void write(BufferHandle handle);</pre>
       <dt>name</dt><dd>A label. The textures are named <code>"&lt;name&gt; Color Texture"</code> and <code>"&lt;name&gt; Depth Texture"</code> in debug tools.</dd>
       <dt>width, height</dt><dd>Pixels. Fixed: the target does not follow the window size.</dd>
       <dt>colorFormat</dt><dd>To draw into it with <code>drawScene</code> or with a pipeline from <code>createPipeline</code>, use the swapchain format: <code>engine.getRenderContext().getSwapchainImageFormat()</code>.</dd>
-      <dt>depthFormat</dt><dd>Needed: every pass binds a depth attachment. Use <code>Format::D32_SFLOAT</code> for the same reason.</dd>
+      <dt>depthFormat</dt><dd>Needed: every pass binds a depth attachment. Use <code>Format::D32_SFLOAT</code> for the same reason. Only a <code>D32_SFLOAT</code> depth can be sampled, which occlusion culling needs.</dd>
       <dt>clearColor</dt><dd>Linear color. Every pass that writes the target starts from it.</dd>
     </dl>
     <p>The full target, with its per-slot textures, is the <a href="types.html#RenderTarget">RenderTarget</a> that <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns.</p>
@@ -433,7 +433,7 @@ if (engine.beginFrame(camera))
   <tr><td>Entry points in the source</td><td><code>vertMain</code> and <code>fragMain</code></td><td><code>compMain</code>, or the name you pass</td></tr>
   <tr><td>Inputs</td><td>No vertex buffers: use <code>SV_VertexID</code> and read data through pointers</td><td><code>SV_DispatchThreadID</code>; data through pointers</td></tr>
   <tr><td>Push constants</td><td colspan="2"><code>PUSH_CONSTANTS_SIZE</code> = 16 bytes, <code>[[vk::push_constant]]</code>, e.g. one 8-byte buffer address + two 4-byte values</td></tr>
-  <tr><td>Textures</td><td>Bindless array at <code>[[vk::binding(0, 0)]]</code>, fragment shader only</td><td>None (the bindless array is not visible to compute)</td></tr>
+  <tr><td>Textures</td><td>Bindless array at <code>[[vk::binding(0, 0)]]</code></td><td>The same bindless array: bind it with <code>bindDescriptorSet</code>. No storage images, so compute writes buffers only.</td></tr>
   <tr><td>Fixed state</td><td>Triangle list, no blending, depth test and write on (<code>GREATER_OR_EQUAL</code>), front face counter-clockwise, cull mode from the pass</td><td>–</td></tr>
   <tr><td>Attachments</td><td>Swapchain color format + <code>D32_SFLOAT</code> depth</td><td>–</td></tr>
   <tr><td>Imports</td><td colspan="2">The search path is <code>&lt;shaderDir&gt;/lib</code>, so <code>import core;</code> works. Scalar layout, column-major matrices.</td></tr>
@@ -623,7 +623,7 @@ graph.addPass(
     <li>It only orders passes and adds the compute ↔ graphics barriers. It does not track texture layouts, allocate transient resources or alias memory (<code>D9</code>).</li>
     <li>Every graphics pass clears its target. Two passes that draw into the swapchain (or into the same render target) do not add up: the second one replaces the first (<code>D9</code>).</li>
     <li>Depth is not kept between passes.</li>
-    <li>Scene culling, which <code>drawScene</code> needs, runs on the GPU before every pass of the frame, including your compute passes (D18).</li>
+    <li>The early scene culling, which <code>drawScene</code> needs, runs on the GPU before every pass of the frame, including your compute passes (D18). The late culling runs inside the pass that calls <code>drawScene</code>.</li>
     <li>Nothing can be destroyed: render targets, buffers and pipelines live until shutdown (<code>D4</code>).</li>
   </ul>
 </div>

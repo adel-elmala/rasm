@@ -430,7 +430,7 @@ rasm::MeshHandle cube = engine.createMesh(std::move(vertices), std::move(indices
     glm::vec3 boundsCenter  = glm::vec3(0.0f);
     float     boundsRadius  = 0.0f;
 };</pre>
-  <div class="body"><p>Where a sub-mesh sits in the geometry pool, its row in the geometry table (<code>geometryIndex</code>), and its bounding sphere in mesh space, which frustum culling tests.</p></div>
+  <div class="body"><p>Where a sub-mesh sits in the geometry pool, its row in the geometry table (<code>geometryIndex</code>), and its bounding sphere in mesh space, which frustum and occlusion culling test.</p></div>
 </div>
 
 <div class="api" id="ObjRaw">

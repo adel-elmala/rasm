@@ -215,16 +215,16 @@
 
 <h2><span class="n">4</span>The bindless descriptor set</h2>
 
-<p>The engine makes one descriptor set at startup, and every material uses it. The uber pipeline binds it once per <code>drawScene</code> call.</p>
+<p>The engine makes one descriptor set at startup, and every material uses it. The uber pipeline binds it once per <code>drawScene</code> call (twice with occlusion culling), and the Hi-Z build binds it to its compute pipeline.</p>
 
 <div class="table-wrap">
 <table>
   <tr><th>Property</th><th>Value</th></tr>
   <tr><td>Size</td><td><code>MAX_BINDLESS_TEXTURES</code> = 1024 slots (<code>include/rasm/types.h</code>)</td></tr>
   <tr><td>Type</td><td><code>COMBINED_IMAGE_SAMPLER</code> at binding 0 of set 0</td></tr>
-  <tr><td>Stage</td><td><code>FRAGMENT</code> only</td></tr>
+  <tr><td>Stage</td><td><code>ShaderType::ALL</code>: every stage, compute too</td></tr>
   <tr><td>Flags</td><td>update after bind and partially bound: a slot can be written while an earlier frame is on the GPU, and empty slots are allowed</td></tr>
-  <tr><td>Shader side</td><td><code>Sampler2D gTextures[]</code> with <code>[[vk::binding(0, 0)]]</code> in <code>rasm.slang</code></td></tr>
+  <tr><td>Shader side</td><td><code>Sampler2D gTextures[]</code> with <code>[[vk::binding(0, 0)]]</code> in <code>rasm.slang</code> and <code>hiz.slang</code></td></tr>
 </table>
 </div>
 <p>The layout, pool and set are made in <code>Engine::Engine</code> (<code>src/engine.cpp</code>). The Vulkan flags are set in <code>VulkanDevice::createBindlessDescriptorSetLayout</code>.</p>
@@ -263,7 +263,7 @@
 
 <ul>
   <li>When "next" reaches 1024, <code>updateBindlessDescriptorSet</code> logs <i>"Slot index exceeds maximum bindless textures."</i> and returns <code>UINT32_MAX</code>.</li>
-  <li>Who takes slots: <code>createMaterial</code> (each valid texture it gets), <code>updateMaterial</code> (only textures without a slot), <code>loadMaterial</code> (each uploaded glTF texture), and <code>createRenderTarget</code> (each color attachment, with <code>LINEAR_CLAMP</code>).</li>
+  <li>Who takes slots: <code>createMaterial</code> (each valid texture it gets), <code>updateMaterial</code> (only textures without a slot), <code>loadMaterial</code> (each uploaded glTF texture), and <code>createRenderTarget</code> (each color attachment, with <code>LINEAR_CLAMP</code>). With occlusion culling, the depth textures take slots too (<code>NEAREST_CLAMP</code>), for <code>drawScene</code>: <code>createRenderTarget</code> (each <code>D32_SFLOAT</code> depth attachment) and <code>createSwapchainResources</code> (one per frame slot; a depth texture replaced by a resize takes the old one's slot).</li>
   <li><code>loadTexture</code> does <b>not</b> take a slot. The texture gets one when a material uses it.</li>
 </ul>
 

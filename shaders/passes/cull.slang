@@ -1,14 +1,26 @@
 // clang-format off
 #include "core.slang"
+#include "frustumCulling.slang"
+#include "occlusionCulling.slang"
 
 // Culling packs each run's visible draws at the start of its range of drawInfoPtr, in list order, so the draw
 // order is the same every frame. It takes two dispatches over groups of 64 draws that each lie inside one run.
 // countMain tests the draws and counts each group's visible ones. writeMain adds up the counts of the run's
 // earlier groups to find where its group's draws go, and the run's last group writes drawCountsPtr[run], which
-// drawScene draws with drawIndexedIndirectCount.
+// drawScene draws with drawIndexedIndirectCount. The tests live in lib/: frustumCulling.slang and
+// occlusionCulling.slang.
+//
+// Occlusion culling runs both dispatches twice per drawScene call (pc.argument is the phase):
+//   CULL_EARLY, before the frame: the draws that are in the frustum and were visible last time.
+//   passes/hiz.slang, after those are drawn: builds the Hi-Z from the depth they left.
+//   CULL_LATE: tests every draw in the frustum against the Hi-Z, stores the result for the next early
+//   pass, and keeps the visible draws the early pass did not draw.
+// A call with hizLevelCount == 0 only runs CULL_EARLY, as frustum culling.
 
 static const uint   CULL_GROUP_SIZE     = 64;           // Must match CULL_GROUP_SIZE in gpuScene.cpp.
 static const uint   CULLED              = 0xFFFFFFFF;   // cullSlotsPtr of a culled draw
+static const uint   CULL_EARLY          = 0;            // Must match CULL_EARLY and CULL_LATE in gpuScene.cpp.
+static const uint   CULL_LATE           = 1;
 
 struct CullGroup
 {
@@ -47,37 +59,6 @@ CullGroup getCullGroup(SceneData *scene, uint groupIndex)
     return group;
 }
 
-// A draw whose bounding sphere lies fully outside a frustum plane is culled.
-bool isVisible(SceneData *scene, DrawInfo draw)
-{
-    InstanceData *instance  = scene->instancesPtr + draw.firstInstance;
-    GeometryData *geometry  = scene->geometryPtr + instance->geometryIndex;
-
-    // The radius grows by the matrix's largest stretch: the square root of the largest eigenvalue of
-    // transpose(M) * M, whose entries are the dot products of M's columns. Its largest row sum of absolute
-    // values bounds that eigenvalue (Gershgorin), exactly when the columns are orthogonal, and never too small
-    // when a non-uniform scale is followed by a rotation.
-    float4x4 world          = instance->worldMatrix;
-    float3x3 world3         = (float3x3)world;
-    float3 c0               = mul(world3, float3(1.0, 0.0, 0.0));
-    float3 c1               = mul(world3, float3(0.0, 1.0, 0.0));
-    float3 c2               = mul(world3, float3(0.0, 0.0, 1.0));
-    float d01               = abs(dot(c0, c1));
-    float d02               = abs(dot(c0, c2));
-    float d12               = abs(dot(c1, c2));
-    float stretch2          = max(max(dot(c0, c0) + d01 + d02, dot(c1, c1) + d01 + d12), dot(c2, c2) + d02 + d12);
-    float radius            = geometry->boundsRadius * sqrt(stretch2);
-    float3 center           = mul(world, float4(geometry->boundsCenter, 1.0)).xyz;
-
-    for (uint i = 0; i < 6; ++i)
-    {
-        float4 plane = scene->frustumPlanes[i];
-        if (dot(plane.xyz, center) + plane.w < -radius)
-            return false;
-    }
-    return true;
-}
-
 // Writes each draw's slot among its group's visible draws (or CULLED), and the group's visible count. The
 // group's visible draws and triangles go into the frame's stats with atomics.
 [shader("compute")]
@@ -92,7 +73,24 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     if (drawIndex < group.endDraw)
     {
         DrawInfo draw   = scene->allDrawsPtr[drawIndex];
-        visible         = isVisible(scene, draw);
+        Sphere sphere   = getWorldSphere(scene, draw);
+        bool inFrustum  = isInFrustum(scene, sphere);
+        if (scene->hizLevelCount == 0)
+        {
+            visible     = inFrustum;
+        }
+        else if (pc.argument == CULL_EARLY)
+        {
+            visible     = inFrustum && scene->visibilityPtr[draw.firstInstance] != 0;
+        }
+        else
+        {
+            // The early pass's slots are still in cullSlotsPtr until this thread overwrites them below.
+            bool drawnEarly = scene->cullSlotsPtr[drawIndex] != CULLED;
+            bool seen       = inFrustum && !isOccluded(scene, sphere);
+            scene->visibilityPtr[draw.firstInstance] = seen ? 1 : 0;
+            visible         = seen && !drawnEarly;
+        }
         triangles       = visible ? draw.indexCount / 3 : 0;
     }
 

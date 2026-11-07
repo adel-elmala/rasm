@@ -128,8 +128,8 @@
 <div class="table-wrap">
 <table>
   <tr><th>Struct</th><th>Size</th><th>Written by (C++)</th><th>Read by (Slang)</th></tr>
-  <tr><td><code>PushConstants</code></td><td>16</td><td><code>drawScene</code>, <code>recordCulling</code></td><td><code>rasm.slang</code>, <code>cull.slang</code></td></tr>
-  <tr><td><code>SceneData</code></td><td>728</td><td><code>drawScene</code></td><td><code>rasm.slang</code>, <code>cull.slang</code></td></tr>
+  <tr><td><code>PushConstants</code></td><td>16</td><td><code>drawScene</code>, <code>recordCulling</code>, <code>recordOcclusionCulling</code></td><td><code>rasm.slang</code>, <code>cull.slang</code>, <code>hiz.slang</code></td></tr>
+  <tr><td><code>SceneData</code></td><td>760</td><td><code>drawScene</code></td><td><code>rasm.slang</code>, <code>cull.slang</code>, <code>hiz.slang</code></td></tr>
   <tr><td><code>Light</code></td><td>48</td><td><code>drawScene</code></td><td><code>pbr.slang</code></td></tr>
   <tr><td><code>DrawInfo</code></td><td>20</td><td><code>rebuildDrawList</code></td><td><code>rasm.slang</code>, <code>cull.slang</code>, the GPU's indirect draw</td></tr>
   <tr><td><code>InstanceData</code></td><td>108</td><td><code>writeInstanceRows</code></td><td><code>rasm.slang</code>, <code>cull.slang</code></td></tr>
@@ -204,7 +204,7 @@
     <text x="132" y="52" class="mid title">C++ side</text>
     <text x="132" y="70" class="mid small">src/renderer/uberMaterialTypes.h</text>
     <text x="28" y="96"  class="small">struct SceneData { … }</text>
-    <text x="28" y="116" class="small">static_assert(sizeof(SceneData) == 728)</text>
+    <text x="28" y="116" class="small">static_assert(sizeof(SceneData) == 760)</text>
     <text x="28" y="136" class="small">static_assert(offsetof(…) == 144)</text>
 
     <rect x="510" y="30" width="235" height="130" rx="6" class="shader"/>
@@ -259,15 +259,16 @@ Assertion failed: validateRasmStructs(...)</code></pre>
 <h2><span class="n">5</span>The 16-byte push constant</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 170" role="img" aria-label="The push constant is 16 bytes: the 8-byte SceneData address at 0, firstDraw at 8 and padding at 12.">
+  <svg viewBox="0 0 760 170" role="img" aria-label="The push constant is 16 bytes: the 8-byte SceneData address at 0, firstDraw at 8 and argument at 12.">
     <rect x="60"  y="30" width="320" height="46" rx="4" class="mem"/>
     <text x="220" y="52" class="mid title">scene</text>
     <text x="220" y="68" class="mid small">SceneData* / uint64_t device address</text>
     <rect x="380" y="30" width="160" height="46" rx="4" class="mem"/>
     <text x="460" y="52" class="mid title">firstDraw</text>
     <text x="460" y="68" class="mid small">uint32_t</text>
-    <rect x="540" y="30" width="160" height="46" rx="4" class="ghost"/>
-    <text x="620" y="58" class="mid t-faint">padding</text>
+    <rect x="540" y="30" width="160" height="46" rx="4" class="mem"/>
+    <text x="620" y="52" class="mid title">argument</text>
+    <text x="620" y="68" class="mid small">uint32_t, compute only</text>
     <text x="60"  y="94" class="mid mono">0</text><text x="380" y="94" class="mid mono">8</text>
     <text x="540" y="94" class="mid mono">12</text><text x="700" y="94" class="mid mono">16</text>
     <text x="60" y="126" class="small">One byte = 40 px. PUSH_CONSTANTS_SIZE = 16 is the range of every pipeline layout, graphics and compute.</text>
@@ -277,6 +278,7 @@ Assertion failed: validateRasmStructs(...)</code></pre>
 </figure>
 
 <ul>
+  <li><code>argument</code> is for compute only. In <code>countMain</code> and <code>writeMain</code> it is the cull phase (0 early, 1 late). In <code>hizMain</code> it is the Hi-Z level to build. Draws do not read it.</li>
   <li><code>static_assert(sizeof(PushConstants) == PUSH_CONSTANTS_SIZE)</code> ties the C++ struct to the constant, and <code>validateRasmStructs</code> checks the Slang side.</li>
   <li>A custom pass brings its own push-constant struct of at most 16 bytes. The stats overlay's <code>OverlayPushConstants</code> has its own <code>static_assert</code> against <code>PUSH_CONSTANTS_SIZE</code>. See <a href="render-graph.html">the render graph</a>.</li>
   <li>Growing the push constant means raising <code>PUSH_CONSTANTS_SIZE</code>, which changes every pipeline layout.</li>
@@ -295,7 +297,7 @@ Assertion failed: validateRasmStructs(...)</code></pre>
   <li><b><code>VertexFull</code> only:</b> <code>rasm::Vertex</code> in <code>include/rasm/mesh.h</code> and the <code>static_assert</code>s in <code>src/renderer/geometryPool.cpp</code>.</li>
   <li><b><code>PushConstants</code> only:</b> Keep it at <code>PUSH_CONSTANTS_SIZE</code>.</li>
   <li><b>The CPU writers.</b> Fill the new field in <code>drawScene</code>, <code>writeInstanceRows</code>, <code>rebuildDrawList</code>, <code>convertToGfxMaterial</code> (all in <code>src/renderer/gpuScene.cpp</code>), <code>GeometryPool::upload</code>. Zero-init (<code>{}</code>) hides a forgotten field.</li>
-  <li><b>The GPU readers:</b> <code>shaders/passes/rasm.slang</code>, <code>shaders/passes/cull.slang</code>, <code>shaders/lib/pbr.slang</code>, <code>shaders/lib/unlit.slang</code>.</li>
+  <li><b>The GPU readers:</b> <code>shaders/passes/rasm.slang</code>, <code>shaders/passes/cull.slang</code>, <code>shaders/passes/hiz.slang</code>, <code>shaders/lib/pbr.slang</code>, <code>shaders/lib/unlit.slang</code>, <code>shaders/lib/frustumCulling.slang</code>, <code>shaders/lib/occlusionCulling.slang</code>.</li>
   <li><b>Docs that quote numbers:</b> <code>docs/architecture.md</code>, the <code>frame-debug</code> skill, and these guides.</li>
 </ol>
 
@@ -312,7 +314,7 @@ Assertion failed: validateRasmStructs(...)</code></pre>
 
 <h2><span class="n">7</span>tools/compile-shaders.bat</h2>
 
-<p>An offline compile check with <code>slangc</code>, run from the repository root. The engine does not use its output (it writes into <code>shaders/build/</code>). Its flags mirror the session settings:</p>
+<p>An offline compile check with <code>slangc</code>, run from the repository root. It compiles every pass shader with its entry points: <code>rasm.slang</code> and <code>statsOverlay.slang</code> (<code>vertMain</code>, <code>fragMain</code>), <code>cull.slang</code> (<code>countMain</code>, <code>writeMain</code>) and <code>hiz.slang</code> (<code>hizMain</code>). The engine does not use its output (it writes into <code>shaders/build/</code>). Its flags mirror the session settings:</p>
 
 <div class="table-wrap">
 <table>
@@ -321,13 +323,13 @@ Assertion failed: validateRasmStructs(...)</code></pre>
   <tr><td><code>-target spirv -profile spirv_1_4 -emit-spirv-directly</code></td><td><code>SLANG_SPIRV</code>, <code>spirv_1_4</code>, <code>EmitSpirvDirectly</code></td></tr>
   <tr><td><code>-force-glsl-scalar-layout</code></td><td><code>GLSLForceScalarLayout</code></td></tr>
   <tr><td><code>-fvk-use-entrypoint-name</code></td><td><code>VulkanUseEntryPointName</code></td></tr>
-  <tr><td>(none)</td><td><code>MatrixLayoutColumn</code> is not passed</td></tr>
+  <tr><td><code>-matrix-layout-column-major</code></td><td><code>MatrixLayoutColumn</code></td></tr>
 </table>
 </div>
 
-<div class="callout warn">
-  <strong>The script is partly out of date</strong>
-  <p>The <code>rasm.slang</code> line works. The <code>cull.slang</code> line asks for <code>-entry compMain</code>, but <code>cull.slang</code> has <code>countMain</code> and <code>writeMain</code>, so <code>slangc</code> fails with "no function found matching entry point name". <code>statsOverlay.slang</code> is not in the script. To check a shader for real, run an example: it compiles every shader the engine uses.</p>
+<div class="callout">
+  <strong>A new pass shader goes in the script too</strong>
+  <p>Add one <code>slangc</code> line with its <code>-entry</code> names. The script only checks that the shaders compile. The struct check (<code>validateRasmStructs</code>) runs only in the engine, so still run an example.</p>
 </div>
 
 <h2><span class="n">8</span>Where it lives in code</h2>

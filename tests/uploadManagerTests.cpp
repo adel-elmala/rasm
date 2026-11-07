@@ -39,7 +39,7 @@ namespace
         }
         bool end() override { return true; }
         bool transitionTexture(Texture *, TextureUsage, TextureUsage) override { return true; }
-        void beginRendering(Texture *, Texture *, const glm::vec4 &) override {}
+        void beginRendering(Texture *, Texture *, const glm::vec4 &, bool, bool) override {}
         void endRendering() override {}
         void setViewport(float, float, float, float, float, float) override {}
         void setScissor(int32_t, int32_t, uint32_t, uint32_t) override {}

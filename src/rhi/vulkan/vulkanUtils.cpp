@@ -76,6 +76,8 @@ namespace rasm::rhi
             return VK_SHADER_STAGE_COMPUTE_BIT;
         case ShaderType::VERTEX_FRAGMENT:
             return VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        case ShaderType::ALL:
+            return VK_SHADER_STAGE_ALL;
         default:
             return static_cast<VkShaderStageFlags>(0);
         }

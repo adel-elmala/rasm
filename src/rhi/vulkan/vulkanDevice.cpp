@@ -238,6 +238,8 @@ namespace rasm::rhi
                 return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
             case TextureUsage::SAMPLED_COLOR_ATTACHMENT:
                 return VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            case TextureUsage::SAMPLED_DEPTH_ATTACHMENT:
+                return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
             case TextureUsage::TRANSIENT_ATTACHMENT:
                 return VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
             case TextureUsage::INPUT_ATTACHMENT:

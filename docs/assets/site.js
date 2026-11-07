@@ -32,7 +32,7 @@ const SECTIONS = [
         guide: true,
         pages: [
             { path: "guides/uber-shader.html",        title: "Drawing with the uber shader" },
-            { path: "guides/culling.html",            title: "GPU frustum culling" },
+            { path: "guides/culling.html",            title: "GPU culling" },
             { path: "guides/camera-depth.html",       title: "Camera, coordinates and depth" },
             { path: "guides/render-graph.html",       title: "The render graph" },
             { path: "guides/stats-overlay.html",      title: "Frame stats and the overlay" },

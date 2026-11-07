@@ -373,7 +373,7 @@
 <h2><span class="n">6</span>Render targets: one set per frame slot</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="A render target holds attachments for slot 0 and slot 1. Each slot has a color texture, which is also in the bindless set, and a depth texture, which is not stored or sampled. getRenderTargetTexture returns the current slot's color texture.">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A render target holds attachments for slot 0 and slot 1. Each slot has a color texture, which is also in the bindless set, and a depth texture, which is stored and, in D32_SFLOAT, can be sampled. getRenderTargetTexture returns the current slot's color texture.">
     <rect x="15" y="88" width="150" height="54" rx="6" class="box"/>
     <text x="90" y="111" class="mid title">RenderTarget</text>
     <text x="90" y="129" class="mid small">size, formats, clearColor</text>
@@ -384,7 +384,7 @@
     <text x="222" y="28" class="mono small">attachments[0]  (frame slot 0)</text>
     <rect x="222" y="40" width="146" height="54" rx="6" class="mem"/>
     <text x="295" y="62" class="mid title">depth</text>
-    <text x="295" y="80" class="mid small">not stored, not sampled</text>
+    <text x="295" y="80" class="mid small">stored, sampled if D32</text>
     <rect x="382" y="40" width="146" height="54" rx="6" class="mem"/>
     <text x="455" y="62" class="mid title">color</text>
     <text x="455" y="80" class="mid small">sampled attachment</text>
@@ -393,7 +393,7 @@
     <text x="222" y="146" class="mono small">attachments[1]  (frame slot 1)</text>
     <rect x="222" y="158" width="146" height="54" rx="6" class="mem"/>
     <text x="295" y="180" class="mid title">depth</text>
-    <text x="295" y="198" class="mid small">not stored, not sampled</text>
+    <text x="295" y="198" class="mid small">stored, sampled if D32</text>
     <rect x="382" y="158" width="146" height="54" rx="6" class="mem"/>
     <text x="455" y="180" class="mid title">color</text>
     <text x="455" y="198" class="mid small">sampled attachment</text>
@@ -415,6 +415,7 @@
 </figure>
 
 <p><code>RenderContext::createRenderTarget</code> creates both slots and adds both color textures to the bindless set. If any step fails, it destroys what it made and returns an invalid handle.</p>
+<p>A <code>D32_SFLOAT</code> depth texture is created <code>SAMPLED_DEPTH_ATTACHMENT</code>. <code>drawScene</code> adds it to the bindless set (<code>NEAREST_CLAMP</code>) the first time it occlusion-culls into the target, and builds its Hi-Z from it. Other depth formats are <code>DEPTH_STENCIL_ATTACHMENT</code> only, because a depth/stencil view cannot be sampled; <code>drawScene</code> does not draw into those targets anyway. See <a href="culling.html#occlusion">occlusion culling</a>.</p>
 
 <h3>The life of one color attachment in a frame</h3>
 
@@ -441,7 +442,7 @@
     <text x="690" y="80" class="mid small">sample it</text>
 
     <text x="15" y="126" class="small">The SAMPLED layout is what the bindless descriptor promises (B10). Depth goes UNKNOWN → DEPTH_STENCIL_ATTACHMENT</text>
-    <text x="15" y="144" class="small">in beginPass and stays there; it is not stored after the pass. The next frame in this slot starts again from UNKNOWN.</text>
+    <text x="15" y="144" class="small">in beginPass and is stored. drawScene reads it in the middle of the pass for its Hi-Z. The next frame starts again from UNKNOWN.</text>
   </svg>
   <figcaption><code>transitionImageLayout</code> takes the wait from the old usage and the scope from the new one. From <code>UNKNOWN</code> it waits for every stage the image could have been used in.</figcaption>
 </figure>
@@ -462,7 +463,7 @@ ctx.pushConstants(commandBuffer, overlayPipeline,
                   &amp;textureIndex, sizeof(textureIndex), 0);
 ctx.draw(commandBuffer, 3); // one triangle covers the screen</code></pre>
 
-<p>The shader reads it with <code>gTextures[pc.textureIndex].Sample(input.UV)</code>. Only fragment shaders can sample: the bindless set is created for the <code>FRAGMENT</code> stage.</p>
+<p>The shader reads it with <code>gTextures[pc.textureIndex].Sample(input.UV)</code>. Every shader stage can sample: the bindless set is created for <code>ShaderType::ALL</code>. A compute pass binds it with <code>bindDescriptorSet</code> on its compute pipeline.</p>
 
 <h2><span class="n">7</span>The two examples</h2>
 
@@ -520,11 +521,11 @@ ctx.draw(commandBuffer, 3); // one triangle covers the screen</code></pre>
   <tr><th>Not done</th><th>What it means for a pass</th></tr>
   <tr><td>Track resource state per read and write</td><td>Barriers come only from compute/graphics changes. A buffer written by one graphics pass and read by the next gets no barrier (<code>D9</code>).</td></tr>
   <tr><td>Layout transitions beyond the pass begin and end</td><td>Only render target and swapchain images change layout, in <code>beginPass</code>/<code>endPass</code>. Other textures keep theirs.</td></tr>
-  <tr><td>Load or keep a target's contents</td><td>Every graphics pass clears its target. Two passes that draw to the swapchain: the second wipes the first (<code>D9</code>).</td></tr>
+  <tr><td>Load or keep a target's contents</td><td>Every graphics pass clears its target: <code>beginPass</code> never asks <code>beginRendering</code> to load. Two passes that draw to the swapchain: the second wipes the first (<code>D9</code>).</td></tr>
   <tr><td>Transient resources and memory aliasing</td><td><code>PassBuilder::createRenderTarget</code> makes a normal, permanent resource.</td></tr>
   <tr><td>Several color attachments</td><td>A render target has one color and one depth texture.</td></tr>
-  <tr><td>Own the culling</td><td>Culling is not a graph pass. It runs before all the frame's work, compute passes included (D18).</td></tr>
-  <tr><td>Textures in compute</td><td>The bindless set is fragment-only. Compute passes use buffers through device addresses.</td></tr>
+  <tr><td>Own the culling</td><td>Culling is not a graph pass. The early culling runs before all the frame's work, compute passes included (D18). The Hi-Z build and the late culling run inside the pass that calls <code>drawScene</code>.</td></tr>
+  <tr><td>Write textures in compute</td><td>Compute can sample the bindless set, but there are no storage images. Compute passes write buffers through device addresses.</td></tr>
 </table>
 </div>
 

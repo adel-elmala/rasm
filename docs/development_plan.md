@@ -89,9 +89,9 @@ Goal: make RASM's core promise hold at scale.
   - an instance table (transform, mesh index, material index, bounds) and a material table (done 2026-11-07; the bounds are in the geometry table),
   - per-frame upload of only the dirty ranges (done 2026-11-07, example `03_instances`).
 - [x] Separate *mesh* from *instance*, so entities that share a mesh share its geometry (`P3`, done 2026-11-07).
-- [x] Compute pipelines and compute passes in the RHI (done 2026-11-07, example `04_compute`). Compute reads and writes buffers only: storage images, which Hi-Z needs, are still open.
+- [x] Compute pipelines and compute passes in the RHI (done 2026-11-07, example `04_compute`). Compute writes buffers only, and samples textures through the bindless set (done 2026-11-07). Storage images are still open.
 - [x] **GPU frustum culling**: a compute pass that writes a compacted draw list, followed by `vkCmdDrawIndexedIndirectCount` (done 2026-11-07).
-- [ ] **Occlusion culling**: a two-pass hierarchical-Z scheme (draw what was visible last frame, build Hi-Z, cull and draw the rest).
+- [x] **Occlusion culling**: a two-pass hierarchical-Z scheme (draw what was visible last frame, build Hi-Z, cull and draw the rest) (done 2026-11-07, `EngineConfig::occlusionCulling`). The Hi-Z is a buffer pyramid built by compute from the sampled depth, so it needs no storage images.
 - [ ] LOD selection on the GPU, from per-mesh LOD ranges and screen-space error.
 - [ ] Optional: meshlets with cluster culling, and a mesh-shader path where available (a Tier-A extra; keep the vertex-pulling path as the baseline).
 - [x] Stats overlay: frame time, GPU time per pass, triangles, instances drawn/culled, memory. (Original item 8; done 2026-11-07, `EngineConfig::showStats` or F1, on in example `03_instances`.)
