@@ -233,8 +233,10 @@ namespace rasm
     {
         ZoneScoped;
 
-        auto vertShader = shaderCompiler->compileFromString(shaderSource, name + ".vert.slang", "vertMain");
-        auto fragShader = shaderCompiler->compileFromString(shaderSource, name + ".frag.slang", "fragMain");
+        const char *vertEntryPoint = "vertMain";
+        const char *fragEntryPoint = "fragMain";
+        auto vertShader = shaderCompiler->compileFromString(shaderSource, name + ".vert.slang", vertEntryPoint);
+        auto fragShader = shaderCompiler->compileFromString(shaderSource, name + ".frag.slang", fragEntryPoint);
 
         if (vertShader.code.empty() || fragShader.code.empty())
         {
@@ -243,12 +245,31 @@ namespace rasm
         }
 
         return ctx.createPipeline({.name = "Pipeline for " + name,
-                                   .vertexShader = ctx.createShader({.name = name + ".vert", .type = ShaderType::VERTEX, .code = std::move(vertShader.code)}),
-                                   .fragmentShader = ctx.createShader({.name = name + ".frag", .type = ShaderType::FRAGMENT, .code = std::move(fragShader.code)}),
+                                   .vertexShader = ctx.createShader({.name = name + ".vert", .type = ShaderType::VERTEX, .entryPoint = vertEntryPoint, .code = std::move(vertShader.code)}),
+                                   .fragmentShader = ctx.createShader({.name = name + ".frag", .type = ShaderType::FRAGMENT, .entryPoint = fragEntryPoint, .code = std::move(fragShader.code)}),
                                    .descriptorSetLayout = bindlessDescriptorSetLayout,
                                    .topology = PrimitiveTopology::TRIANGLE_LIST,
                                    .colorAttachmentFormat = ctx.getSwapchainImageFormat(),
                                    .depthStencilAttachmentFormat = DEPTH_FORMAT});
+    }
+
+    PipelineHandle Engine::createComputePipeline(const std::string &name, const std::string &shaderSource)
+    {
+        ZoneScoped;
+
+        const char *entryPoint = "compMain";
+        auto compShader = shaderCompiler->compileFromString(shaderSource, name + ".comp.slang", entryPoint);
+        ShaderHandle shader;
+        if (!compShader.code.empty())
+            shader = ctx.createShader({.name = name + ".comp", .type = ShaderType::COMPUTE, .entryPoint = entryPoint, .code = std::move(compShader.code)});
+        // An invalid handle would turn the desc into a graphics pipeline with no shaders.
+        if (!shader.isValid())
+        {
+            spdlog::error("Failed to create the shader of compute pipeline '{}'.", name);
+            return {};
+        }
+
+        return ctx.createPipeline({.name = "Compute Pipeline for " + name, .computeShader = shader, .descriptorSetLayout = bindlessDescriptorSetLayout});
     }
 
     bool Engine::beginFrame(CameraHandle camera)

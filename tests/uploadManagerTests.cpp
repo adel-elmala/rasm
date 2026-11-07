@@ -51,6 +51,8 @@ namespace
         void draw(uint32_t, uint32_t) override {}
         void drawIndexed(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) override {}
         void drawIndexedIndirect(Buffer *, uint64_t, uint32_t, uint32_t) override {}
+        void dispatch(uint32_t, uint32_t, uint32_t) override {}
+        void memoryBarrier(PipelineStage, PipelineStage) override {}
         void copyBuffers(Buffer *source, const BufferCopy *list, uint32_t count) override
         {
             src = source;
@@ -124,6 +126,7 @@ namespace
         Sampler *createSampler(const SamplerDesc &) override { return nullptr; }
         Shader *createShader(const ShaderDesc &) override { return nullptr; }
         Pipeline *createGraphicsPipeline(const PipelineDesc &, Shader *, Shader *, DescriptorSetLayout *) override { return nullptr; }
+        Pipeline *createComputePipeline(const PipelineDesc &, Shader *, DescriptorSetLayout *) override { return nullptr; }
         DescriptorSetLayout *createBindlessDescriptorSetLayout(const BindlessDescriptorSetLayoutDesc &) override { return nullptr; }
         DescriptorPool *createDescriptorPool(const DescriptorPoolDesc &) override { return nullptr; }
         DescriptorSet *allocateDescriptorSet(const std::string &, DescriptorPool *, DescriptorSetLayout *) override { return nullptr; }

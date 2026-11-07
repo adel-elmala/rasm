@@ -17,6 +17,7 @@ namespace rasm
         std::string_view code(reinterpret_cast<const char *>(desc.code.data()), desc.code.size());
         std::size_t hash = std::hash<std::string>()(desc.name);
         hash = hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.type)));
+        hash = hashCombine(hash, std::hash<std::string>()(desc.entryPoint));
         return hashCombine(hash, std::hash<std::string_view>()(code));
     }
 
@@ -25,6 +26,7 @@ namespace rasm
         std::size_t hash = std::hash<std::string>()(desc.name);
         hash = hashCombine(hash, HandleHash()(desc.vertexShader));
         hash = hashCombine(hash, HandleHash()(desc.fragmentShader));
+        hash = hashCombine(hash, HandleHash()(desc.computeShader));
         hash = hashCombine(hash, HandleHash()(desc.descriptorSetLayout));
         hash = hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.topology)));
         hash = hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.colorAttachmentFormat)));

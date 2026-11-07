@@ -1,6 +1,6 @@
 ---
 name: new-pass
-description: Add a render pass to RASM — a full-screen/post-process pass (tone map, blur, vignette, debug view, overlay), a scene pass into an offscreen render target, or a pass with its own shader and parameters — through the render graph. Covers the shader file, pipeline creation, pass ordering, reading earlier targets, passing parameters, the current RHI limits (8-byte push constants, fixed pipeline state, no compute yet), and verification. Use whenever a new pass, post effect or shader-driven draw is added.
+description: Add a render pass to RASM — a full-screen/post-process pass (tone map, blur, vignette, debug view, overlay), a scene pass into an offscreen render target, or a pass with its own shader and parameters — through the render graph. Covers the shader file, pipeline creation, pass ordering, reading earlier targets, passing parameters, the current RHI limits (16-byte push constants, fixed pipeline state, buffer-only compute), and verification. Use whenever a new pass, post effect or shader-driven draw is added.
 ---
 
 # New pass
@@ -15,21 +15,21 @@ is the working reference (forward pass into a render target, then an overlay pas
 | **Full-screen / post** (tone map, blur, debug view) | own pipeline, `ctx.draw(cmd, 3)`, samples an earlier render target | the common case. Template below. |
 | **Scene into a render target** | `engine.drawScene(scene, camera)` in the pass | uses the uber shader. The target must have the swapchain color format + `D32_SFLOAT`, else `drawScene` logs and skips. |
 | **Scene with its own shader** (shadow map, normals view, ID buffer) | ✗ not possible from the app | the custom shader can't get the `SceneData` address. Needs an engine change: propose it first. |
-| **Compute** (culling, Hi-Z, particles) | ✗ no compute pipelines in the RHI yet | development plan phase 2 ("Compute pipelines and compute passes in the RHI"). Propose the RHI work first, don't fake it. |
+| **Compute** (culling, particles, buffer processing) | `engine.createComputePipeline` (`compMain`), `graph.addComputePass`, `ctx.dispatch`; the graph adds the barriers around the pass | reads and writes **buffers** through device addresses only. No storage images and no bindless textures in compute yet (the set is `FRAGMENT`-only), so Hi-Z needs RHI work first. Reference: `examples/04_compute`. |
 | **Pass built into the engine** (every app gets it) | ✗ `Engine::render` records one fixed pass | phase 3 ("graph-driven frame"). Propose first. |
 
 ## 2. Current limits (check before designing)
 
 | Limit | Value | Where |
 |---|---|---|
-| Push constants | **16 bytes total** (`PUSH_CONSTANTS_SIZE`), `ShaderType::VERTEX_FRAGMENT` | `VulkanDevice::createGraphicsPipeline`; `RenderContext::pushConstants` rejects more |
+| Push constants | **16 bytes total** (`PUSH_CONSTANTS_SIZE`), `ShaderType::VERTEX_FRAGMENT` (graphics) or `ShaderType::COMPUTE` | `createPipelineLayout` in `vulkanDevice.cpp`; `RenderContext::pushConstants` rejects more |
 | Entry points | `vertMain` + `fragMain` in **one source string** | `Engine::createPipeline` |
 | Attachments | 1 color (swapchain format) + `D32_SFLOAT` (reversed-Z) | `Engine::createPipeline` |
 | Fixed state | depth test + write `GREATER_OR_EQUAL` (reversed-Z, cleared to 0: a pass that writes its own depth puts the far plane at 0, not `z = w`), no blending, triangle list, no vertex input, front face counter-clockwise | `createGraphicsPipeline` |
 | Cull mode | dynamic: `beginPass` sets `NONE`, `ctx.setCullMode(commandBuffer, CullMode::BACK)` changes it for the pass | `VulkanCommandBuffer::setCullMode` |
 | Every pass **clears** its target | two passes can't accumulate into one target | `VulkanCommandBuffer::beginRendering`, review §3 |
 | Readable outputs | only the **color** of an earlier render target, through its bindless index. Depth isn't stored. | `Engine::endPass` |
-| Ordering | from `builder.read`/`write` only, topologically sorted. No automatic barriers beyond the render target begin/end transitions | `RenderGraph::compile` |
+| Ordering | from `builder.read`/`write` only, topologically sorted. The graph adds a global `memoryBarrier` before every compute pass and before the first graphics pass after one, plus the render target begin/end transitions. Dependent dispatches inside one compute pass need `ctx.memoryBarrier(COMPUTE, COMPUTE)` between them | `RenderGraph::compile` |
 | Camera | `execute(camera)` passes it to `beginFrame` (input and delta time); each pass picks its own camera for `drawScene` | `RenderGraph::execute` |
 
 If a design needs to go past a limit (blending, more push constants, depth reads, MRT), that's an

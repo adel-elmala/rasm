@@ -97,6 +97,22 @@ namespace rasm::rhi
             }
         }
 
+        VkPipelineStageFlags2 toVkStageMask(PipelineStage stage)
+        {
+            if (stage == PipelineStage::COMPUTE)
+                return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            return VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        }
+
+        // Every way a stage can read a buffer: device addresses count as storage access, and graphics
+        // also reads indirect commands, indices and uniforms.
+        VkAccessFlags2 toVkReadMask(PipelineStage stage)
+        {
+            if (stage == PipelineStage::COMPUTE)
+                return VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_UNIFORM_READ_BIT;
+            return VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_UNIFORM_READ_BIT;
+        }
+
         VkCullModeFlags toVkCullMode(CullMode cullMode)
         {
             switch (cullMode)
@@ -327,6 +343,24 @@ namespace rasm::rhi
     void VulkanCommandBuffer::drawIndexedIndirect(Buffer *buffer, uint64_t offset, uint32_t drawCount, uint32_t stride)
     {
         vkCmdDrawIndexedIndirect(commandBuffer, static_cast<VulkanBuffer *>(buffer)->buffer, offset, drawCount, stride);
+    }
+
+    void VulkanCommandBuffer::dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
+    {
+        vkCmdDispatch(commandBuffer, groupCountX, groupCountY, groupCountZ);
+    }
+
+    void VulkanCommandBuffer::memoryBarrier(PipelineStage before, PipelineStage after)
+    {
+        // Shaders write buffers only through storage access. Only writes need to be made available: reads
+        // before the barrier just have to finish, which the stage mask covers.
+        VkMemoryBarrier2 barrier = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                                    .srcStageMask = toVkStageMask(before),
+                                    .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                                    .dstStageMask = toVkStageMask(after),
+                                    .dstAccessMask = toVkReadMask(after) | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
+        VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
+        vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
     }
 
     void VulkanCommandBuffer::copyBuffers(Buffer *src, const BufferCopy *copies, uint32_t copyCount)
