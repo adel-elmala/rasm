@@ -316,7 +316,8 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
   - *Fixed 2026-11-04:* `setUniform` (a no-op) was removed with the backend-neutral device interface (`D1`).
   - *Fixed 2026-11-04:* the glTF branch of `getMeshByteSize` (every mesh is now a list of sub-meshes).
   - *Fixed 2026-11-07:* `VertexFormat` (it was written but never read).
-  - `gfx::VertexPosOnly` and its Slang mirror, `MAX_DESCRIPTOR_TYPES`, `compile-shaders.bat`.
+  - *Fixed 2026-11-07:* `compile-shaders.bat` compiles every pass shader with its real entry points and the session's flags, as an offline compile check.
+  - `gfx::VertexPosOnly` and its Slang mirror, `MAX_DESCRIPTOR_TYPES`.
 - **C4 — Duplication.**
   - `readFile` and `loadFileToString`.
   - *Fixed 2026-11-07:* the model-matrix composition appeared twice, in `prepareScene` and `updateUniforms`. It is now `Transform::toMatrix()`.

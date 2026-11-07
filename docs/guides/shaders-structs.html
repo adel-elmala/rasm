@@ -314,7 +314,7 @@ Assertion failed: validateRasmStructs(...)</code></pre>
 
 <h2><span class="n">7</span>tools/compile-shaders.bat</h2>
 
-<p>An offline compile check with <code>slangc</code>, run from the repository root. The engine does not use its output (it writes into <code>shaders/build/</code>). Its flags mirror the session settings:</p>
+<p>An offline compile check with <code>slangc</code>, run from the repository root. It compiles every pass shader with its entry points: <code>rasm.slang</code> and <code>statsOverlay.slang</code> (<code>vertMain</code>, <code>fragMain</code>), <code>cull.slang</code> (<code>countMain</code>, <code>writeMain</code>) and <code>hiz.slang</code> (<code>hizMain</code>). The engine does not use its output (it writes into <code>shaders/build/</code>). Its flags mirror the session settings:</p>
 
 <div class="table-wrap">
 <table>
@@ -323,13 +323,13 @@ Assertion failed: validateRasmStructs(...)</code></pre>
   <tr><td><code>-target spirv -profile spirv_1_4 -emit-spirv-directly</code></td><td><code>SLANG_SPIRV</code>, <code>spirv_1_4</code>, <code>EmitSpirvDirectly</code></td></tr>
   <tr><td><code>-force-glsl-scalar-layout</code></td><td><code>GLSLForceScalarLayout</code></td></tr>
   <tr><td><code>-fvk-use-entrypoint-name</code></td><td><code>VulkanUseEntryPointName</code></td></tr>
-  <tr><td>(none)</td><td><code>MatrixLayoutColumn</code> is not passed</td></tr>
+  <tr><td><code>-matrix-layout-column-major</code></td><td><code>MatrixLayoutColumn</code></td></tr>
 </table>
 </div>
 
-<div class="callout warn">
-  <strong>The script is partly out of date</strong>
-  <p>The <code>rasm.slang</code> line works. The <code>cull.slang</code> line asks for <code>-entry compMain</code>, but <code>cull.slang</code> has <code>countMain</code> and <code>writeMain</code>, so <code>slangc</code> fails with "no function found matching entry point name". <code>statsOverlay.slang</code> and <code>hiz.slang</code> are not in the script. To check a shader for real, run an example: it compiles every shader the engine uses.</p>
+<div class="callout">
+  <strong>A new pass shader goes in the script too</strong>
+  <p>Add one <code>slangc</code> line with its <code>-entry</code> names. The script only checks that the shaders compile. The struct check (<code>validateRasmStructs</code>) runs only in the engine, so still run an example.</p>
 </div>
 
 <h2><span class="n">8</span>Where it lives in code</h2>
