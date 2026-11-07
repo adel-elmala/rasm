@@ -280,11 +280,14 @@ private:
     std::string assetRoot             = {};
     std::string shaderDir             = {};
     uint32_t    geometryPoolVertices  = 1u &lt;&lt; 21;
-    uint32_t    geometryPoolIndices   = 1u &lt;&lt; 23;
+    uint32_t    geometryPoolIndices   = 1u &lt;&lt; 24;
     uint32_t    geometryPoolSubMeshes = 1u &lt;&lt; 14;
     uint32_t    maxInstances          = 1u &lt;&lt; 16;
     bool        showStats             = false;
     bool        occlusionCulling      = true;
+    bool        meshLods              = true;
+    float       lodErrorPixels        = 1.0f;
+    int32_t     forcedLod             = -1;
 };</pre>
   <div class="body">
     <p>The engine's settings, given to its constructor. Every field is explained on the <a href="engine.html#EngineConfig">Engine page</a>.</p>
@@ -434,6 +437,7 @@ struct RenderTarget
   <tr id="MAX_PARAM_SLOTS"><td><code>MAX_PARAM_SLOTS</code><br><code>rasm/material.h</code></td><td>10 (<code>PbrParam::COUNT</code>)</td><td>Floats in <code>Material::params</code>, indexed by <a href="materials.html#PbrParam">PbrParam</a>.</td></tr>
   <tr id="MAX_MESHES"><td><code>MAX_MESHES</code><br><code>rasm/mesh.h</code></td><td>8</td><td>Meshes: 7 fit, and a failed load uses one up.</td></tr>
   <tr id="MAX_VERTEX_UV_SETS"><td><code>MAX_VERTEX_UV_SETS</code><br><code>rasm/mesh.h</code></td><td>3</td><td>UV sets per <code>Vertex</code>. Mirrored in <code>shaders/lib/core.slang</code>.</td></tr>
+  <tr id="MAX_MESH_LODS"><td><code>MAX_MESH_LODS</code><br><code>rasm/mesh.h</code></td><td>8</td><td>LODs per sub-mesh, LOD 0 included, so <code>ObjRaw::lods</code> holds at most 7 (<a href="scene.html#MeshLod">MeshLod</a>). Mirrored in <code>shaders/lib/core.slang</code>.</td></tr>
   <tr id="MAX_ENTITIES_PER_SCENE"><td><code>MAX_ENTITIES_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>= <code>MAX_ENTITIES</code></td><td><code>addEntityToScene</code> per scene.</td></tr>
   <tr id="MAX_CAMERAS_PER_SCENE"><td><code>MAX_CAMERAS_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>8</td><td><code>addCameraToScene</code> per scene (the global camera limit is lower).</td></tr>
   <tr id="MAX_LIGHTS_PER_SCENE"><td><code>MAX_LIGHTS_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>= <code>MAX_LIGHTS</code></td><td><code>addLightToScene</code> per scene (the global light limit is lower).</td></tr>

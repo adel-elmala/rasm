@@ -166,11 +166,14 @@ if (!engine.running())
   <tr><td><code>assetRoot</code></td><td>empty</td><td>Folder that relative <code>loadMesh</code> and <code>loadTexture</code> paths start from. A relative <code>assetRoot</code> starts beside the executable. Empty: paths are used as given (relative to the working directory).</td></tr>
   <tr><td><code>shaderDir</code></td><td>empty</td><td>Folder with the engine's <code>lib/</code> and <code>passes/</code> shaders. Empty: the build-time default, <code>shaders</code> beside the executable (CMake <code>-DRASM_SHADER_DIR=&lt;path&gt;</code> changes it). A relative path starts beside the executable.</td></tr>
   <tr><td><code>geometryPoolVertices</code></td><td>2<sup>21</sup> = 2,097,152</td><td>Vertices of all meshes together, 64 bytes each (128 MiB). Fixed for the engine's life.</td></tr>
-  <tr><td><code>geometryPoolIndices</code></td><td>2<sup>23</sup> = 8,388,608</td><td>Indices of all meshes together, 4 bytes each (32 MiB).</td></tr>
-  <tr><td><code>geometryPoolSubMeshes</code></td><td>2<sup>14</sup> = 16,384</td><td>Sub-meshes of all meshes together (28 bytes each).</td></tr>
+  <tr><td><code>geometryPoolIndices</code></td><td>2<sup>24</sup> = 16,777,216</td><td>Indices of all meshes together, LODs included, 4 bytes each (64 MiB). The LODs take up to as many again as LOD 0.</td></tr>
+  <tr><td><code>geometryPoolSubMeshes</code></td><td>2<sup>14</sup> = 16,384</td><td>Sub-meshes of all meshes together (120 bytes each: 1.9 MiB).</td></tr>
   <tr><td><code>maxInstances</code></td><td>2<sup>16</sup> = 65,536</td><td>Instance rows: one per sub-mesh of every entity. 108 bytes each, two copies (one per frame slot).</td></tr>
   <tr><td><code>showStats</code></td><td><code>false</code></td><td>Shows the stats overlay from the first frame. <kbd>F1</kbd> toggles it at runtime.</td></tr>
   <tr><td><code>occlusionCulling</code></td><td><code>true</code></td><td>Two-pass Hi-Z occlusion culling in <code>drawScene</code>: draws hidden behind others are not drawn. <code>false</code> keeps frustum culling only. See <a href="../guides/culling.html#occlusion">occlusion culling</a>.</td></tr>
+  <tr><td><code>meshLods</code></td><td><code>true</code></td><td>Builds coarser levels of detail (<a href="scene.html#MeshLod">LODs</a>) of every sub-mesh with 1024 triangles or more as meshes load, on the worker thread for <code>loadMesh</code>. <code>false</code>: meshes have LOD 0 only.</td></tr>
+  <tr><td><code>lodErrorPixels</code></td><td><code>1.0f</code></td><td>Culling draws the coarsest LOD whose error stays under this many pixels on screen. Larger is faster and coarser; 0 always draws LOD 0. See <a href="../guides/culling.html#lod">level of detail</a>.</td></tr>
+  <tr><td><code>forcedLod</code></td><td><code>-1</code></td><td>For debugging. From 0 up, every draw uses this LOD (or its mesh's coarsest one), whatever the distance. -1 picks by distance. <kbd>F2</kbd> cycles it at runtime.</td></tr>
 </table>
 </div>
 
@@ -290,6 +293,7 @@ if (!engine.running())
     </dl>
     <p>Draws nothing, with no error, while the scene is empty or all its entities still load: the pass keeps its clear color.</p>
     <p>The GPU culls the draws first: those outside the camera's view are skipped. With <code>EngineConfig::occlusionCulling</code> it draws in two parts. First come the draws that were visible last time. Then it ends the pass, builds a Hi-Z from their depth, tests the other draws against it, starts the pass again with its color and depth kept, and draws the ones it found visible. What you drew before <code>drawScene</code> in the same pass is kept. A viewport smaller than the pass (<code>RenderContext::setViewport</code>) turns occlusion culling off for that call. See <a href="../guides/culling.html#occlusion">occlusion culling</a>.</p>
+    <p>Culling also picks each visible draw's <a href="../guides/culling.html#lod">level of detail</a> from its distance to the camera and <code>EngineConfig::lodErrorPixels</code>. A call drawn without culling draws LOD 0.</p>
     <div class="table-wrap">
     <table>
       <tr><th>Rule</th><th>What happens otherwise</th></tr>
@@ -402,8 +406,10 @@ for (uint32_t i = 0; i &lt; stats.gpuTimerCount; ++i)
       <dt>gpuTimerCount</dt><dd>How many entries of <code>gpuTimers</code> are filled.</dd>
       <dt>draws</dt><dd>Draws of all <code>drawScene</code> calls of the frame, before culling (one per sub-mesh of each entity).</dd>
       <dt>drawsVisible</dt><dd>Draws that passed culling: inside the view, and with occlusion culling also not hidden. Draws of a call drawn without culling all count.</dd>
-      <dt>triangles</dt><dd>Triangles before culling.</dd>
-      <dt>trianglesVisible</dt><dd>Triangles of the visible draws.</dd>
+      <dt>triangles</dt><dd>Triangles before culling, at LOD 0.</dd>
+      <dt>trianglesVisible</dt><dd>Triangles of the visible draws, at the LOD culling picked for each.</dd>
+      <dt>trianglesVisibleLod0</dt><dd>Triangles of the same visible draws at LOD 0. <code>trianglesVisibleLod0 - trianglesVisible</code> is what LODs saved this frame.</dd>
+      <dt>drawsPerLod</dt><dd>Visible draws at each LOD, from LOD 0 to <code>MAX_MESH_LODS - 1</code>. They add up to <code>drawsVisible</code>.</dd>
       <dt>memory</dt><dd><code>VRAMStats</code> of that frame (see <a href="#queryMemoryStats"><code>queryMemoryStats</code></a>).</dd>
     </dl>
   </div>
@@ -481,7 +487,7 @@ engine.endGpuTimer(commandBuffer, timer);</code></pre>
 <div class="split">
   <div>
     <h4>Built-in keys</h4>
-    <p><kbd>Esc</kbd> or closing the window: <code>running()</code> becomes false.<br><kbd>F1</kbd>: shows or hides the stats overlay.<br>Mouse and <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>: move the camera passed to <code>beginFrame</code> (see <a href="camera.html#pollEvents">camera.html</a>).</p>
+    <p><kbd>Esc</kbd> or closing the window: <code>running()</code> becomes false.<br><kbd>F1</kbd>: shows or hides the stats overlay.<br><kbd>F2</kbd>: cycles <code>forcedLod</code>: by distance, LOD 0, 1, … 7, by distance.<br>Mouse and <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>: move the camera passed to <code>beginFrame</code> (see <a href="camera.html#pollEvents">camera.html</a>).</p>
   </div>
   <div>
     <h4>Two sizes</h4>

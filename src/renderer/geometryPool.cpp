@@ -76,35 +76,54 @@ namespace rasm
         return false;
     }
 
-    // Appends the sub-mesh and its table row. Nothing is ever freed: meshes are not destroyed yet (D4). No frame has
-    // read the new row yet, so the table needs one copy, not one per frame slot.
+    // Appends the sub-mesh and its table row: the vertices, then LOD 0's indices followed by the coarser LODs'.
+    // Nothing is ever freed: meshes are not destroyed yet (D4). No frame has read the new row yet, so the table
+    // needs one copy, not one per frame slot.
     bool GeometryPool::upload(RenderContext &ctx, const ObjRaw &raw, MeshGeometry &geometry)
     {
-        if (!fits(raw.vertices.size(), raw.indices.size(), 1))
+        const size_t lodCount = std::min<size_t>(raw.lods.size() + 1, MAX_MESH_LODS);
+        size_t lodIndexCount = 0;
+        for (size_t i = 1; i < lodCount; ++i)
+            lodIndexCount += raw.lods[i - 1].indices.size();
+        if (!fits(raw.vertices.size(), raw.indices.size() + lodIndexCount, 1))
             return false;
 
         geometry = {.firstVertex = usedVertices,
                     .vertexCount = static_cast<uint32_t>(raw.vertices.size()),
                     .firstIndex = usedIndices,
                     .indexCount = static_cast<uint32_t>(raw.indices.size()),
+                    .lodIndexCount = static_cast<uint32_t>(lodIndexCount),
                     .geometryIndex = usedSubMeshes};
         computeBounds(raw.vertices, geometry);
+
+        gfx::GeometryData row{.vertexOffset = static_cast<int32_t>(geometry.firstVertex),
+                              .boundsCenter = geometry.boundsCenter,
+                              .boundsRadius = geometry.boundsRadius,
+                              .lodCount = static_cast<uint32_t>(lodCount)};
+        row.lods[0] = {.firstIndex = geometry.firstIndex, .indexCount = geometry.indexCount, .error = 0.0f};
+        uint32_t nextIndex = geometry.firstIndex + geometry.indexCount;
+        for (size_t i = 1; i < lodCount; ++i)
+        {
+            const MeshLod &lod = raw.lods[i - 1];
+            row.lods[i] = {.firstIndex = nextIndex, .indexCount = static_cast<uint32_t>(lod.indices.size()), .error = lod.error};
+            nextIndex += row.lods[i].indexCount;
+        }
 
         if (!raw.vertices.empty() && !ctx.fillBuffer(vertices, raw.vertices.data(), raw.vertices.size() * sizeof(Vertex), static_cast<size_t>(geometry.firstVertex) * sizeof(Vertex)))
             return false;
         if (!raw.indices.empty() && !ctx.fillBuffer(indices, raw.indices.data(), raw.indices.size() * sizeof(uint32_t), static_cast<size_t>(geometry.firstIndex) * sizeof(uint32_t)))
             return false;
-
-        const gfx::GeometryData row{.firstIndex = geometry.firstIndex,
-                                    .indexCount = geometry.indexCount,
-                                    .vertexOffset = static_cast<int32_t>(geometry.firstVertex),
-                                    .boundsCenter = geometry.boundsCenter,
-                                    .boundsRadius = geometry.boundsRadius};
+        for (size_t i = 1; i < lodCount; ++i)
+        {
+            const std::vector<uint32_t> &lodIndices = raw.lods[i - 1].indices;
+            if (!lodIndices.empty() && !ctx.fillBuffer(indices, lodIndices.data(), lodIndices.size() * sizeof(uint32_t), static_cast<size_t>(row.lods[i].firstIndex) * sizeof(uint32_t)))
+                return false;
+        }
         if (!ctx.fillBuffer(table, &row, sizeof(row), static_cast<size_t>(usedSubMeshes) * sizeof(row)))
             return false;
 
         usedVertices += geometry.vertexCount;
-        usedIndices += geometry.indexCount;
+        usedIndices += geometry.indexCount + geometry.lodIndexCount;
         ++usedSubMeshes;
         return true;
     }

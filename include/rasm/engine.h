@@ -44,15 +44,17 @@ namespace rasm
 
     struct FrameStats
     {
-        float                       cpuFrameMs          = 0.0f;
-        float                       gpuFrameMs          = 0.0f;
+        float                       cpuFrameMs                  = 0.0f;
+        float                       gpuFrameMs                  = 0.0f;
         GpuTimer                    gpuTimers[MAX_GPU_TIMERS - 1];
-        uint32_t                    gpuTimerCount       = 0;
-        uint32_t                    draws               = 0;
-        uint32_t                    drawsVisible        = 0;
-        uint64_t                    triangles           = 0;
-        uint64_t                    trianglesVisible    = 0;
-        VRAMStats                   memory              = {};
+        uint32_t                    gpuTimerCount               = 0;
+        uint32_t                    draws                       = 0;
+        uint32_t                    drawsVisible                = 0;
+        uint64_t                    triangles                   = 0;
+        uint64_t                    trianglesVisible            = 0;
+        uint64_t                    trianglesVisibleLod0        = 0;
+        uint32_t                    drawsPerLod[MAX_MESH_LODS]  = {};
+        VRAMStats                   memory                      = {};
     };
 
     class Engine

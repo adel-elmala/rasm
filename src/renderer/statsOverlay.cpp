@@ -14,7 +14,9 @@ namespace rasm
     namespace
     {
         constexpr uint32_t MAX_TEXT_COLUMNS = 40;
-        constexpr uint32_t MAX_TEXT_ROWS = 24;
+        // Frame, GPU and its timers (one is kept for culling), Draws, Culled, Triangles, two LOD lines, LOD draws
+        // (8 counts of up to 8 characters wrap at most twice) and VRAM.
+        constexpr uint32_t MAX_TEXT_ROWS = 2 + (MAX_GPU_TIMERS - 1) + 3 + 2 + 3 + 1;
         // Slow enough for the numbers to be read.
         constexpr std::chrono::milliseconds TEXT_REFRESH(250);
 
@@ -42,7 +44,7 @@ namespace rasm
             return text;
         }
 
-        std::string buildText(const FrameStats &stats)
+        std::string buildText(const FrameStats &stats, int32_t forcedLod)
         {
             char line[128];
             std::string text;
@@ -65,6 +67,33 @@ namespace rasm
             text += line;
             std::snprintf(line, sizeof(line), "Triangles %s / %s\n", formatCount(stats.trianglesVisible).c_str(), formatCount(stats.triangles).c_str());
             text += line;
+
+            if (forcedLod >= 0)
+                std::snprintf(line, sizeof(line), "LOD       forced %d (F2)\n", forcedLod);
+            else
+                std::snprintf(line, sizeof(line), "LOD       by distance (F2)\n");
+            text += line;
+            const uint64_t saved = stats.trianglesVisibleLod0 > stats.trianglesVisible ? stats.trianglesVisibleLod0 - stats.trianglesVisible : 0;
+            const double savedPercent = stats.trianglesVisibleLod0 > 0 ? 100.0 * static_cast<double>(saved) / static_cast<double>(stats.trianglesVisibleLod0) : 0.0;
+            std::snprintf(line, sizeof(line), "LOD saved %s (%.0f%%)\n", formatCount(saved).c_str(), savedPercent);
+            text += line;
+
+            // The visible draws at LOD 0, 1, 2, ... up to the coarsest one in use, wrapped to the overlay's width.
+            uint32_t lodsUsed = 1;
+            for (uint32_t i = 0; i < MAX_MESH_LODS; ++i)
+                lodsUsed = stats.drawsPerLod[i] > 0 ? i + 1 : lodsUsed;
+            std::string lodLine = "LOD draws";
+            for (uint32_t i = 0; i < lodsUsed; ++i)
+            {
+                const std::string count = formatCount(stats.drawsPerLod[i]);
+                if (lodLine.size() + 1 + count.size() > MAX_TEXT_COLUMNS)
+                {
+                    text += lodLine + "\n";
+                    lodLine = "         ";
+                }
+                lodLine += " " + count;
+            }
+            text += lodLine + "\n";
             std::snprintf(line, sizeof(line), "VRAM      %llu / %llu MiB\n", static_cast<unsigned long long>(stats.memory.vramUsage >> 20),
                           static_cast<unsigned long long>(stats.memory.vramBudget >> 20));
             text += line;
@@ -127,7 +156,7 @@ namespace rasm
         if (statsOverlay->grid.empty() || now - statsOverlay->gridTime >= TEXT_REFRESH)
         {
             statsOverlay->gridTime = now;
-            buildGrid(buildText(frameStats->stats), statsOverlay->grid, statsOverlay->columns, statsOverlay->rows);
+            buildGrid(buildText(frameStats->stats, config.forcedLod), statsOverlay->grid, statsOverlay->columns, statsOverlay->rows);
         }
         if (ctx.fillBuffer(slot.text, statsOverlay->grid.data(), statsOverlay->grid.size()))
         {
