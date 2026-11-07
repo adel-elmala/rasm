@@ -152,7 +152,7 @@
 <table>
   <tr><th>Pointer in <code>SceneData</code></th><th>Holds</th><th>Written by</th></tr>
   <tr><td><code>allDrawsPtr</code></td><td>the scene's whole draw list</td><td>CPU (<code>uploadDrawList</code>)</td></tr>
-  <tr><td><code>cullSlotsPtr</code></td><td>one <code>uint</code> per draw: its place in its group, or <code>CULLED</code></td><td><code>countMain</code></td></tr>
+  <tr><td><code>cullSlotsPtr</code></td><td>one <code>uint</code> per draw: its place in its group with its LOD above it (<code>slot | lod &lt;&lt; 16</code>), or <code>CULLED</code></td><td><code>countMain</code></td></tr>
   <tr><td><code>groupCountsPtr</code></td><td>one <code>uint</code> per group of 64: how many are visible</td><td><code>countMain</code></td></tr>
   <tr><td><code>drawInfoPtr</code></td><td>the visible draws, packed per run</td><td><code>writeMain</code></td></tr>
   <tr><td><code>drawCountsPtr</code></td><td>one count per run</td><td><code>writeMain</code> (the run's last group)</td></tr>
@@ -704,28 +704,45 @@
   <figcaption>The same object, with <code>lodErrorPixels</code> = 1. The numbers are an example. <code>selectLod</code> picks the coarsest LOD whose error, seen from the camera, stays under that many pixels.</figcaption>
 </figure>
 
-<pre><code class="lang-text">pixels   = lods[i].error × sphere.scale × |projection[1][1]| × viewportHeight / 2 / distance
-distance = |sphere center − camera| − sphere radius     (≤ 0: the camera is inside, LOD 0)</code></pre>
+<pre><code class="lang-text">pixels = lods[i].error × sphere.scale × |projection[1][1]| × viewportHeight / 2 / depth
+depth  = clip w of the sphere center − sphere radius   (≤ 0: the sphere reaches the camera plane, LOD 0)</code></pre>
 
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>Meaning</th></tr>
   <tr><td><code>lods[i].error</code></td><td>how far LOD i's surface may be from LOD 0, in the mesh's own units. It adds up the errors of the steps, so it never gets smaller. LOD 0 has 0.</td></tr>
   <tr><td><code>sphere.scale</code></td><td>the world matrix's largest stretch, the same bound the frustum test uses for the radius. It turns mesh units into world units.</td></tr>
-  <tr><td>the rest</td><td>pixels per world unit at that distance. An orthographic camera (<code>projection[3][3] == 1</code>) skips the division by distance.</td></tr>
-  <tr><td><code>distance</code></td><td>to the sphere's nearest point, so the error is never too small.</td></tr>
+  <tr><td>the rest</td><td>pixels per world unit at that depth. An orthographic camera (<code>projection[3][3] == 1</code>) skips the division by depth.</td></tr>
+  <tr><td><code>depth</code></td><td>the view depth of the sphere's nearest point (along the view direction, not the straight distance), so the error is never too small.</td></tr>
 </table>
 </div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="An object near the edge of the screen. Its straight distance from the camera is longer than its depth along the view direction. The projection scales by depth, so dividing by the distance would make the error look smaller than it is and pick too coarse a LOD.">
+    <circle cx="60" cy="150" r="7" class="cpu"/>
+    <text x="60" y="180" class="mid small">camera</text>
+    <line x1="70" y1="150" x2="700" y2="150" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="700" y="172" class="end small">view direction</text>
+    <circle cx="460" cy="50" r="22" class="gpu"/>
+    <line x1="68" y1="146" x2="440" y2="58" class="arrow" marker-end="url(#ah)"/>
+    <text x="250" y="86" class="mid small">distance (too long)</text>
+    <line x1="460" y1="72" x2="460" y2="150" class="arrow dashed"/>
+    <line x1="70" y1="130" x2="460" y2="130" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="300" y="122" class="mid small t-gpu">depth: what the projection divides by</text>
+    <text x="500" y="54" class="small">off the screen's centre</text>
+  </svg>
+  <figcaption>Off the screen's centre an object is nearer in depth than in distance. <code>selectLod</code> uses the depth, so objects at the screen's edges do not get a LOD that is too coarse.</figcaption>
+</figure>
 
 <div class="split">
   <div>
     <h4>Where it runs</h4>
-    <p><code>countMain</code> calls <code>selectLod</code> to count the visible triangles for the <a href="stats-overlay.html">stats overlay</a>. <code>writeMain</code> calls it and writes the LOD's <code>firstIndex</code> and <code>indexCount</code> into the visible draw. The draw list on the CPU always holds LOD 0.</p>
+    <p>Only <code>countMain</code> calls <code>selectLod</code>. It counts the LOD's triangles for the <a href="stats-overlay.html">stats overlay</a> and keeps the LOD above the draw's slot in <code>cullSlotsPtr</code>. <code>writeMain</code> reads it back and writes that LOD's <code>firstIndex</code> and <code>indexCount</code> into the visible draw. The draw list on the CPU always holds LOD 0.</p>
   </div>
   <div>
     <h4>Settings</h4>
     <p><code>EngineConfig::meshLods</code> (on) builds the LODs as meshes load. <code>EngineConfig::lodErrorPixels</code> (1 pixel) is the limit; 0 always draws LOD 0. An unculled <code>drawScene</code> call draws LOD 0.</p>
-<p>For debugging, <code>EngineConfig::forcedLod</code> skips the distance test: from 0 up, every draw uses that LOD, or its mesh's coarsest one if it has fewer. -1 (the default) picks by distance. <kbd>F2</kbd> cycles it at runtime: by distance, LOD 0, 1, … 7, by distance. The <a href="stats-overlay.html">stats overlay</a> shows the mode.</p>
+<p>For debugging, <code>EngineConfig::forcedLod</code> skips the error test: from 0 up, every draw uses that LOD, or its mesh's coarsest one if it has fewer. -1 (the default) picks by distance. <kbd>F2</kbd> cycles it at runtime: by distance, LOD 0, 1, … 7, by distance. The <a href="stats-overlay.html">stats overlay</a> shows the mode.</p>
   </div>
 </div>
 

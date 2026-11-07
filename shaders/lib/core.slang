@@ -128,7 +128,7 @@ struct SceneData
     GeometryData*       geometryPtr;
     DrawInfo*           allDrawsPtr;        // the scene's whole draw list; cull.slang packs the visible ones into drawInfoPtr
     uint32_t*           drawCountsPtr;      // visible draws per run, written by cull.slang
-    uint32_t*           cullSlotsPtr;       // cull.slang's scratch: a draw's slot among its group's visible draws
+    uint32_t*           cullSlotsPtr;       // cull.slang's scratch: a draw's slot among its group's visible draws, and its LOD
     uint32_t*           groupCountsPtr;     // cull.slang's scratch: visible draws per group of 64
     uint32_t*           cullStatsPtr;       // the frame's visible draws, triangles and LODs, added up by cull.slang (STATS_* there)
     uint32_t*           visibilityPtr;      // per instance row: 1 if the last occlusion test saw it, read by the early cull

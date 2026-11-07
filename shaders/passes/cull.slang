@@ -9,8 +9,8 @@
 // countMain tests the draws and counts each group's visible ones. writeMain adds up the counts of the run's
 // earlier groups to find where its group's draws go, and the run's last group writes drawCountsPtr[run], which
 // drawScene draws with drawIndexedIndirectCount. The tests live in lib/: frustumCulling.slang and
-// occlusionCulling.slang. Both dispatches pick each visible draw's LOD the same way (lodSelection.slang): countMain
-// to count its triangles, writeMain to write its index range.
+// occlusionCulling.slang. countMain also picks each visible draw's LOD (lodSelection.slang) and keeps it beside
+// the draw's slot, and writeMain writes that LOD's index range.
 //
 // Occlusion culling runs both dispatches twice per drawScene call (pc.argument is the phase):
 //   CULL_EARLY, before the frame: the draws that are in the frustum and were visible last time.
@@ -21,10 +21,12 @@
 
 static const uint   CULL_GROUP_SIZE     = 64;           // Must match CULL_GROUP_SIZE in gpuScene.cpp.
 static const uint   CULLED              = 0xFFFFFFFF;   // cullSlotsPtr of a culled draw
+static const uint   CULL_LOD_SHIFT      = 16;           // cullSlotsPtr of a visible draw: slot | lod << CULL_LOD_SHIFT
 static const uint   CULL_EARLY          = 0;            // Must match CULL_EARLY and CULL_LATE in gpuScene.cpp.
 static const uint   CULL_LATE           = 1;
 // cullStatsPtr: visible draws, visible triangles (low, high), the same triangles at LOD 0 (low, high), then the
-// visible draws at each LOD. Must match CULL_STATS_WORDS in gpuScene.h.
+// visible draws at each LOD. Must match the CULL_STATS_* words in gpuScene.h.
+static const uint   STATS_DRAWS         = 0;
 static const uint   STATS_TRIANGLES     = 1;
 static const uint   STATS_LOD0_TRIANGLES = 3;
 static const uint   STATS_LOD_DRAWS     = 5;
@@ -79,8 +81,8 @@ void addCount64(uint32_t *counter, uint low, uint high)
         InterlockedAdd(counter[1], high);
 }
 
-// Writes each draw's slot among its group's visible draws (or CULLED), and the group's visible count. The
-// group's visible draws, triangles and LODs go into the frame's stats with atomics.
+// Writes each draw's slot among its group's visible draws and its LOD (or CULLED), and the group's visible
+// count. The group's visible draws, triangles and LODs go into the frame's stats with atomics.
 [shader("compute")]
 [numthreads(CULL_GROUP_SIZE, 1, 1)]
 void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
@@ -115,8 +117,9 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         }
         if (visible)
         {
-            lod             = selectLod(scene, draw, sphere);
-            triangles       = getLodDraw(scene, draw, lod).indexCount / 3;
+            GeometryData *geometry = getDrawGeometry(scene, draw);
+            lod             = selectLod(scene, geometry, sphere);
+            triangles       = geometry->lods[lod].indexCount / 3;
             lod0Triangles   = draw.indexCount / 3;
         }
     }
@@ -140,7 +143,7 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     for (uint i = 0; i < threadId.x; ++i)
         slot += visibleFlags[i];
     if (drawIndex < group.endDraw)
-        scene->cullSlotsPtr[drawIndex] = visible ? slot : CULLED;
+        scene->cullSlotsPtr[drawIndex] = visible ? (slot | lod << CULL_LOD_SHIFT) : CULLED;
     if (threadId.x == CULL_GROUP_SIZE - 1)
     {
         uint count = slot + visibleFlags[threadId.x];
@@ -162,7 +165,7 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         }
         if (count > 0)
         {
-            InterlockedAdd(scene->cullStatsPtr[0], count);
+            InterlockedAdd(scene->cullStatsPtr[STATS_DRAWS], count);
             addCount64(scene->cullStatsPtr + STATS_TRIANGLES, trianglesLow, trianglesHigh);
             addCount64(scene->cullStatsPtr + STATS_LOD0_TRIANGLES, lod0Low, lod0High);
         }
@@ -190,12 +193,13 @@ void writeMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     uint drawIndex = group.firstDraw + threadId.x;
     if (drawIndex < group.endDraw)
     {
-        uint slot = scene->cullSlotsPtr[drawIndex];
-        if (slot != CULLED)
+        uint packed = scene->cullSlotsPtr[drawIndex];
+        if (packed != CULLED)
         {
-            DrawInfo draw = scene->allDrawsPtr[drawIndex];
-            uint lod      = selectLod(scene, draw, getWorldSphere(scene, draw));
-            scene->drawInfoPtr[scene->runFirst[group.run] + base + slot] = getLodDraw(scene, draw, lod);
+            uint slot       = packed & ((1u << CULL_LOD_SHIFT) - 1);
+            uint lod        = packed >> CULL_LOD_SHIFT;
+            DrawInfo draw   = scene->allDrawsPtr[drawIndex];
+            scene->drawInfoPtr[scene->runFirst[group.run] + base + slot] = getLodDraw(getDrawGeometry(scene, draw), draw, lod);
         }
     }
     if (threadId.x == 0 && groupId.x + 1 == group.runEndGroup)

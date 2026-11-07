@@ -406,6 +406,26 @@
   <figcaption>Simplification only collapses edges between triangles that share vertices, and the OBJ importer gives every corner its own vertex. So identical vertices are merged first. The error is an upper bound of how far a LOD's surface is from LOD 0.</figcaption>
 </figure>
 
+<p>Each step also locks the sub-mesh's open border (<code>meshopt_SimplifyLockBorder</code>): its border vertices and edges stay in every LOD. Culling picks a LOD for each sub-mesh on its own, so two sub-meshes that share an edge, like the parts of a glTF mesh split by material, can draw different LODs. With the border kept they still meet.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 190" role="img" aria-label="Two sub-meshes share an edge. The left one draws LOD 0 with many triangles, the right one LOD 2 with few. The vertices on the shared edge are locked in every LOD, so the seam stays closed.">
+    <rect x="140" y="30" width="220" height="120" rx="2" class="box"/>
+    <line x1="140" y1="70" x2="360" y2="70" class="arrow dashed"/><line x1="140" y1="110" x2="360" y2="110" class="arrow dashed"/>
+    <line x1="195" y1="30" x2="195" y2="150" class="arrow dashed"/><line x1="250" y1="30" x2="250" y2="150" class="arrow dashed"/><line x1="305" y1="30" x2="305" y2="150" class="arrow dashed"/>
+    <text x="250" y="174" class="mid small">sub-mesh A · LOD 0</text>
+    <rect x="360" y="30" width="220" height="120" rx="2" class="box"/>
+    <line x1="360" y1="70" x2="580" y2="150" class="arrow dashed"/><line x1="360" y1="110" x2="580" y2="150" class="arrow dashed"/><line x1="360" y1="30" x2="580" y2="150" class="arrow dashed"/>
+    <text x="470" y="174" class="mid small">sub-mesh B · LOD 2</text>
+    <circle cx="360" cy="30" r="5" class="hot"/><circle cx="360" cy="70" r="5" class="hot"/><circle cx="360" cy="110" r="5" class="hot"/><circle cx="360" cy="150" r="5" class="hot"/>
+    <text x="600" y="86" class="small t-hot">shared edge: its vertices</text>
+    <text x="600" y="102" class="small t-hot">are locked in every LOD</text>
+  </svg>
+  <figcaption>Without the lock, B's coarse LOD would move or drop the edge's middle vertices and a crack would open along the seam.</figcaption>
+</figure>
+
+<p>Each step simplifies with <code>meshopt_SimplifySparse</code>, so a coarse level costs work for its own indices, not for all the vertices. Then <code>meshopt_optimizeVertexCache</code> reorders the level's triangles so the GPU's vertex cache reuses more vertices. <code>createMesh</code> checks your indices before any of this: their count must be a multiple of 3 and each one below the vertex count.</p>
+
 <p>A LOD costs only its indices, up to as many again as LOD 0 in total. The numbers for an example are in <a href="gpu-memory.html">How data reaches the GPU</a>.</p>
 
 <h2><span class="n">4</span>Path caching and failures</h2>

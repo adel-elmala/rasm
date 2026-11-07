@@ -67,7 +67,6 @@ namespace rasm
         uint32_t            vertexCount     = 0;
         uint32_t            firstIndex      = 0;
         uint32_t            indexCount      = 0;
-        uint32_t            lodCount        = 1;
         uint32_t            lodIndexCount   = 0;
         uint32_t            geometryIndex   = 0;
         glm::vec3           boundsCenter    = glm::vec3(0.0f);

@@ -24,6 +24,21 @@ namespace rasm
 
     MeshHandle Engine::createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices)
     {
+        // The importers check their indices; the application's are checked here, before the LOD builder reads them.
+        if (indices.size() % 3 != 0)
+        {
+            spdlog::error("createMesh: {} indices is not a whole number of triangles.", indices.size());
+            return {};
+        }
+        for (uint32_t index : indices)
+        {
+            if (index >= vertices.size())
+            {
+                spdlog::error("createMesh: index {} is out of range for {} vertices.", index, vertices.size());
+                return {};
+            }
+        }
+
         auto handle = handleManager.getNextMeshHandle();
         if (handle.index >= MAX_MESHES)
         {

@@ -61,6 +61,26 @@ TEST_CASE("a large mesh gets a chain of coarser LODs that share its welded verti
     }
 }
 
+TEST_CASE("every LOD keeps the mesh's open border, so neighbouring sub-meshes meet at any LOD")
+{
+    rasm::ObjRaw raw = makeUnweldedGrid(64);
+    rasm::buildMeshLods(raw);
+    REQUIRE(!raw.lods.empty());
+
+    for (const auto &lod : raw.lods)
+    {
+        std::vector<bool> used(raw.vertices.size(), false);
+        for (uint32_t index : lod.indices)
+            used[index] = true;
+        for (size_t i = 0; i < raw.vertices.size(); ++i)
+        {
+            const glm::vec3 pos = raw.vertices[i].pos;
+            if (pos.x == 0.0f || pos.x == 64.0f || pos.z == 0.0f || pos.z == 64.0f)
+                REQUIRE(used[i]);
+        }
+    }
+}
+
 TEST_CASE("a small mesh gets no LODs and keeps its vertices")
 {
     rasm::ObjRaw raw = makeUnweldedGrid(4);

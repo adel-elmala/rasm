@@ -34,7 +34,8 @@ namespace rasm
 
     // Each level has about half the triangles of the one before and reuses the mesh's vertices, so the levels
     // cost only their indices. A level is simplified from the one before; its error adds up the errors of the
-    // steps, which bounds its distance from LOD 0.
+    // steps, which bounds its distance from LOD 0. Open borders stay as they are: sub-meshes that meet along one
+    // pick their LODs on their own, and the seam must not crack.
     void buildMeshLods(ObjRaw &raw)
     {
         ZoneScoped;
@@ -57,14 +58,17 @@ namespace rasm
             MeshLod lod;
             lod.indices.resize(previous->size());
             float stepError = 0.0f;
+            // Sparse: a coarse level uses few of the vertices, so the work follows its indices, not the vertex count.
+            const unsigned int options = meshopt_SimplifyLockBorder | meshopt_SimplifySparse | meshopt_SimplifyErrorAbsolute;
             const size_t count = meshopt_simplify(lod.indices.data(), previous->data(), previous->size(), &raw.vertices[0].pos.x, raw.vertices.size(), sizeof(Vertex),
-                                                  target, std::numeric_limits<float>::max(), meshopt_SimplifyErrorAbsolute, &stepError);
+                                                  target, std::numeric_limits<float>::max(), options, &stepError);
             // A level that removes under a tenth of the triangles is not worth drawing instead of the one before.
             if (count == 0 || count * 10 > previous->size() * 9)
                 break;
 
             lod.indices.resize(count);
             lod.indices.shrink_to_fit();
+            meshopt_optimizeVertexCache(lod.indices.data(), lod.indices.data(), count, raw.vertices.size());
             error += stepError;
             lod.error = error;
             raw.lods.push_back(std::move(lod));

@@ -325,9 +325,9 @@ rasm::EntityHandle entity = engine.createEntity("room", room, {}, transform); //
     <p>Makes a mesh from your data, builds its <a href="#MeshLod">LODs</a> when <code>EngineConfig::meshLods</code> is on, and uploads it now (the copy reaches the GPU with the next frame). The mesh has one sub-mesh with no material, so its entities use their own material.</p>
     <dl>
       <dt>vertices</dt><dd>See <a href="#Vertex"><code>Vertex</code></a>. Set <code>tangent</code> to zero when you have none.</dd>
-      <dt>indices</dt><dd>A triangle list, 3 per triangle, counting from 0 in <code>vertices</code>. Front faces are counter-clockwise seen from outside. They are not checked against the vertex count.</dd>
+      <dt>indices</dt><dd>A triangle list, 3 per triangle, counting from 0 in <code>vertices</code>. Front faces are counter-clockwise seen from outside.</dd>
     </dl>
-    <p>Returns an invalid handle when <code>MAX_MESHES</code> is reached or the geometry pool is full (both logged). A mesh with no vertices or no indices is accepted but its entities skip it with a warning.</p>
+    <p>Returns an invalid handle when the index count is not a multiple of 3, an index is not below <code>vertices.size()</code>, <code>MAX_MESHES</code> is reached or the geometry pool is full (all logged). A mesh with no vertices or no indices is accepted but its entities skip it with a warning.</p>
     <pre><code>// examples/03_instances: one quad per cube face, so each face has its own normal.
 std::vector&lt;rasm::Vertex&gt; vertices;
 std::vector&lt;uint32_t&gt; indices;
@@ -426,7 +426,6 @@ rasm::MeshHandle cube = engine.createMesh(std::move(vertices), std::move(indices
     uint32_t  vertexCount   = 0;
     uint32_t  firstIndex    = 0;
     uint32_t  indexCount    = 0;
-    uint32_t  lodCount      = 1;
     uint32_t  lodIndexCount = 0;
     uint32_t  geometryIndex = 0;
     glm::vec3 boundsCenter  = glm::vec3(0.0f);
@@ -436,7 +435,6 @@ rasm::MeshHandle cube = engine.createMesh(std::move(vertices), std::move(indices
     <p>Where a sub-mesh sits in the geometry pool, its row in the geometry table (<code>geometryIndex</code>), and its bounding sphere in mesh space, which frustum and occlusion culling test.</p>
     <dl>
       <dt>firstIndex, indexCount</dt><dd>LOD 0, the full detail.</dd>
-      <dt>lodCount</dt><dd>The number of LODs, LOD 0 included: 1 when the sub-mesh has none.</dd>
       <dt>lodIndexCount</dt><dd>The indices of LOD 1 and coarser, together. They come right after LOD 0's in the pool.</dd>
     </dl>
   </div>

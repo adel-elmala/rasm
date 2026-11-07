@@ -187,7 +187,7 @@ Next steps, in order:
 **B12** — *Fixed 2026-10-31:* the SPIR-V options are now a static array. The original finding follows. `ShaderCompiler::getTargetDesc` allocates `new slang::CompilerOptionEntry[1]` and never frees it ([shaderCompiler.cpp:456-458](../src/renderer/shaderCompiler.cpp#L456-L458)).
 
 **B13** — Handle indices are consumed before validation and are never reused.
-- `loadMesh` takes a handle before parsing the file ([mesh.cpp:79](../src/assets/mesh.cpp#L79)), so failed loads burn slots.
+- `loadMesh` takes a handle before parsing the file ([mesh.cpp:94](../src/assets/mesh.cpp#L94)), so failed loads burn slots.
 - With `MAX_MESHES = 8` and indices starting at 1, only 7 meshes can be loaded in total.
 - `MAX_LIGHTS = 8` and `MAX_CAMERAS = 8` are global, not per scene.
 

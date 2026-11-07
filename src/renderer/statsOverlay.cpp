@@ -14,7 +14,9 @@ namespace rasm
     namespace
     {
         constexpr uint32_t MAX_TEXT_COLUMNS = 40;
-        constexpr uint32_t MAX_TEXT_ROWS = 24;
+        // Frame, GPU and its timers (one is kept for culling), Draws, Culled, Triangles, two LOD lines, LOD draws
+        // (8 counts of up to 8 characters wrap at most twice) and VRAM.
+        constexpr uint32_t MAX_TEXT_ROWS = 2 + (MAX_GPU_TIMERS - 1) + 3 + 2 + 3 + 1;
         // Slow enough for the numbers to be read.
         constexpr std::chrono::milliseconds TEXT_REFRESH(250);
 

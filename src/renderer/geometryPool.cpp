@@ -92,7 +92,6 @@ namespace rasm
                     .vertexCount = static_cast<uint32_t>(raw.vertices.size()),
                     .firstIndex = usedIndices,
                     .indexCount = static_cast<uint32_t>(raw.indices.size()),
-                    .lodCount = static_cast<uint32_t>(lodCount),
                     .lodIndexCount = static_cast<uint32_t>(lodIndexCount),
                     .geometryIndex = usedSubMeshes};
         computeBounds(raw.vertices, geometry);
@@ -100,7 +99,7 @@ namespace rasm
         gfx::GeometryData row{.vertexOffset = static_cast<int32_t>(geometry.firstVertex),
                               .boundsCenter = geometry.boundsCenter,
                               .boundsRadius = geometry.boundsRadius,
-                              .lodCount = geometry.lodCount};
+                              .lodCount = static_cast<uint32_t>(lodCount)};
         row.lods[0] = {.firstIndex = geometry.firstIndex, .indexCount = geometry.indexCount, .error = 0.0f};
         uint32_t nextIndex = geometry.firstIndex + geometry.indexCount;
         for (size_t i = 1; i < lodCount; ++i)

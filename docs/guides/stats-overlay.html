@@ -247,7 +247,7 @@
 
 <h2><span class="n">5</span>Cull counters and the 64-bit carry</h2>
 
-<p>The Cull Stats Buffer of a slot is <code>CULL_STATS_WORDS</code> = 13 × <code>uint</code>. The <code>STATS_*</code> constants in <code>cull.slang</code> name the words:</p>
+<p>The Cull Stats Buffer of a slot is <code>CULL_STATS_WORDS</code> = 13 × <code>uint</code>. The <code>STATS_*</code> constants in <code>cull.slang</code> and the matching <code>CULL_STATS_*</code> ones in <code>gpuScene.h</code> name the words:</p>
 
 <div class="table-wrap">
 <table>
@@ -343,11 +343,11 @@
     <rect x="585" y="44" width="160" height="72" rx="6" class="mem"/>
     <text x="665" y="66" class="mid title">Stats Overlay</text>
     <text x="665" y="84" class="mid title">Text s</text>
-    <text x="665" y="104" class="mid small">960 bytes, host-visible</text>
+    <text x="665" y="104" class="mid small">1040 bytes, host-visible</text>
     <text x="665" y="136" class="mid small">fillBuffer every frame</text>
     <text x="375" y="160" class="small">The grid is one string, row by row, each line</text>
     <text x="375" y="176" class="small">padded with spaces to the longest one. At most</text>
-    <text x="375" y="192" class="small">40 columns × 24 rows; longer lines are cut.</text>
+    <text x="375" y="192" class="small">40 columns × 26 rows; longer lines are cut.</text>
   </svg>
   <figcaption>Rebuilding the text 4 times a second keeps the numbers readable. Each frame slot draws from its own buffer, so <code>updateStatsOverlay</code> copies the current grid into the slot's buffer every frame, right after the slot's fence wait.</figcaption>
 </figure>
@@ -567,7 +567,7 @@
 <h2><span class="n">9</span>When and how it is drawn</h2>
 
 <ol class="steps">
-  <li><b>At startup</b><code>createStatsOverlay</code> makes one host-visible text buffer per frame slot (<code>MAX_TEXT_COLUMNS</code> × <code>MAX_TEXT_ROWS</code> = 960 bytes) and builds the pipeline from <code>passes/statsOverlay.slang</code> with <code>createPipeline</code>. If the shader fails to compile, the error is logged and the overlay stays off; the engine still runs.</li>
+  <li><b>At startup</b><code>createStatsOverlay</code> makes one host-visible text buffer per frame slot (<code>MAX_TEXT_COLUMNS</code> × <code>MAX_TEXT_ROWS</code> = 1040 bytes; 26 rows fit every line with all 16 GPU timers) and builds the pipeline from <code>passes/statsOverlay.slang</code> with <code>createPipeline</code>. If the shader fails to compile, the error is logged and the overlay stays off; the engine still runs.</li>
   <li><b>Toggle</b><kbd>F1</kbd> flips <code>showStats</code> in <code>pollEvents</code> (key repeats are ignored). <kbd>F2</kbd> cycles <code>forcedLod</code>, which the "LOD" line shows. Applications can set <code>EngineConfig::showStats</code> at start.</li>
   <li><b>Every frame, after the fence wait</b><code>updateFrameStats</code>, then <code>updateStatsOverlay</code>, which sets the slot's <code>columns</code> and <code>rows</code>, or 0 rows when the overlay is off.</li>
   <li><b>At the end of every swapchain pass</b><code>endPass</code> calls <code>drawStatsOverlay</code> before <code>endRendering</code>. Every pass clears its target, so drawing in each swapchain pass keeps the panel on the presented image.</li>
