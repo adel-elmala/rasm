@@ -33,6 +33,28 @@ namespace
                 [](rasm::RenderContext &) {});
         }
 
+        void addBufferPass(bool compute, const std::vector<rasm::BufferHandle> &reads, const std::vector<rasm::BufferHandle> &writes)
+        {
+            const auto setup = [&](rasm::PassBuilder &builder)
+            {
+                for (auto handle : reads)
+                {
+                    builder.read(handle);
+                }
+                for (auto handle : writes)
+                {
+                    builder.write(handle);
+                }
+            };
+            if (compute)
+                addComputePass("compute", setup, [](rasm::RenderContext &) {});
+            else
+                addPass("graphics", setup, [](rasm::RenderContext &) {});
+        }
+
+        // What execute records before the pass: false for no barrier.
+        bool barrierBefore(uint32_t passIdx, rasm::PipelineStage &before, rasm::PipelineStage &after) { return bufferBarrier(passes[passIdx], before, after); }
+
         const std::vector<uint32_t> &order() const { return executionOrder; }
         const rasm::Pass &pass(uint32_t passIdx) const { return passes[passIdx]; }
         bool isCompiled() const { return compiled; }
@@ -192,6 +214,39 @@ TEST_CASE("adding a pass after compiling triggers a new sort")
     CHECK(graph.order() == std::vector<uint32_t>{1, 0});
 }
 
+TEST_CASE("a pass that reads the render target it draws to fails to compile")
+{
+    const rasm::RenderTargetHandle renderTarget{1, 1};
+
+    TestGraph graph;
+    graph.addPass(
+        "feedback",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.read(renderTarget);
+            builder.write(renderTarget);
+        },
+        [](rasm::RenderContext &) {});
+
+    graph.compile();
+
+    CHECK_FALSE(graph.isCompiled());
+    CHECK(graph.order().empty());
+}
+
+TEST_CASE("a compute pass that declares no buffer write fails to compile")
+{
+    const rasm::BufferHandle buffer{1, 1};
+
+    TestGraph graph;
+    graph.addBufferPass(true, {buffer}, {});
+
+    graph.compile();
+
+    CHECK_FALSE(graph.isCompiled());
+    CHECK(graph.order().empty());
+}
+
 TEST_CASE("a compute pass sorts by its resources and writes no render target")
 {
     const rasm::BufferHandle buffer{1, 1};
@@ -218,4 +273,62 @@ TEST_CASE("a compute pass sorts by its resources and writes no render target")
     CHECK(graph.pass(1).compute);
     CHECK_FALSE(graph.pass(0).compute);
     CHECK_FALSE(graph.pass(1).outputRenderTarget.isValid());
+}
+
+TEST_CASE("a buffer barrier goes only where a pass uses a buffer another pass wrote or read")
+{
+    const rasm::BufferHandle particles{1, 1};
+    const rasm::BufferHandle other{2, 1};
+    constexpr bool COMPUTE = true;
+    constexpr bool GRAPHICS = false;
+
+    TestGraph graph;
+    graph.addBufferPass(COMPUTE, {}, {particles});  // 0: animate
+    graph.addBufferPass(GRAPHICS, {particles}, {}); // 1: draw
+    graph.addBufferPass(GRAPHICS, {particles}, {}); // 2: draw again
+    graph.addBufferPass(COMPUTE, {other}, {});      // 3: an unrelated read
+    graph.addBufferPass(GRAPHICS, {}, {particles}); // 4: overwrite
+
+    rasm::PipelineStage before = {};
+    rasm::PipelineStage after = {};
+
+    SUBCASE("the first write of a buffer waits for nothing")
+    {
+        CHECK_FALSE(graph.barrierBefore(0, before, after));
+    }
+
+    SUBCASE("a read waits for the write, once per stage")
+    {
+        graph.barrierBefore(0, before, after);
+
+        REQUIRE(graph.barrierBefore(1, before, after));
+        CHECK(before == rasm::PipelineStage::COMPUTE);
+        CHECK(after == rasm::PipelineStage::GRAPHICS);
+        CHECK_FALSE(graph.barrierBefore(2, before, after));
+    }
+
+    SUBCASE("a read of a buffer nothing wrote waits for nothing")
+    {
+        CHECK_FALSE(graph.barrierBefore(3, before, after));
+    }
+
+    SUBCASE("a write waits for the write and the reads before it")
+    {
+        graph.barrierBefore(0, before, after);
+        graph.barrierBefore(1, before, after);
+
+        REQUIRE(graph.barrierBefore(4, before, after));
+        CHECK(before == (rasm::PipelineStage::COMPUTE | rasm::PipelineStage::GRAPHICS));
+        CHECK(after == rasm::PipelineStage::GRAPHICS);
+    }
+
+    SUBCASE("the next frame's write waits for this frame's reads")
+    {
+        graph.barrierBefore(0, before, after);
+        graph.barrierBefore(1, before, after);
+
+        REQUIRE(graph.barrierBefore(0, before, after));
+        CHECK(before == (rasm::PipelineStage::COMPUTE | rasm::PipelineStage::GRAPHICS));
+        CHECK(after == rasm::PipelineStage::COMPUTE);
+    }
 }

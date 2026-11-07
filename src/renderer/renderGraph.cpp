@@ -4,8 +4,9 @@
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
 
-#include <unordered_map>
+#include <algorithm>
 #include <queue>
+#include <unordered_map>
 
 namespace rasm
 {
@@ -39,6 +40,30 @@ namespace rasm
     {
         if (compiled)
             return;
+
+        // 0. Barriers come only from what the passes declare, so reject what they can't have declared right.
+        // Both fail the compile like a cycle does, so the frames draw no passes.
+        bool valid = true;
+        for (const auto &pass : passes)
+        {
+            // Its color would be sampled while it is an attachment.
+            if (pass.outputRenderTarget.isValid() && std::find(pass.inputRenderTargets.begin(), pass.inputRenderTargets.end(), pass.outputRenderTarget) != pass.inputRenderTargets.end())
+            {
+                spdlog::error("Pass '{}' reads the render target it draws to.", pass.name);
+                valid = false;
+            }
+            // Compute writes only buffers, so a compute pass that declares no write is missing its buffers.
+            if (pass.compute && pass.outputBuffers.empty())
+            {
+                spdlog::error("Compute pass '{}' declares no buffer write; declare every buffer it uses.", pass.name);
+                valid = false;
+            }
+        }
+        if (!valid)
+        {
+            executionOrder.clear();
+            return;
+        }
 
         // Reset in-degrees and successors for all passes
         for (auto &pass : passes)
@@ -161,18 +186,19 @@ namespace rasm
         if (!engine->beginFrame(camera))
             return;
 
-        // Shaders share buffers through device addresses, so a barrier goes before every compute pass and
-        // before the first graphics pass after one. The frame starts after the previous frame's draws, and
-        // a compute pass at the end of the frame is made visible to the next frame's draws.
         auto commandBuffer = engine->getCurrentFrameResources().commandBuffer;
-        PipelineStage previous = PipelineStage::GRAPHICS;
         for (const auto &passIdx : executionOrder)
         {
             auto &pass = passes[passIdx];
-            const PipelineStage stage = pass.compute ? PipelineStage::COMPUTE : PipelineStage::GRAPHICS;
-            if (pass.compute || previous == PipelineStage::COMPUTE)
-                ctx.memoryBarrier(commandBuffer, previous, stage);
-            previous = stage;
+
+            // Barriers are not allowed inside a render pass, so all of them go before the pass begins. beginPass
+            // moves the attachments it draws to, and endPass leaves a render target's color SAMPLED for its readers.
+            PipelineStage before = {};
+            PipelineStage after = {};
+            if (bufferBarrier(pass, before, after))
+                ctx.memoryBarrier(commandBuffer, before, after);
+            for (auto texture : pass.inputTextures)
+                ctx.transitionImageLayout(commandBuffer, texture, TextureUsage::SAMPLED);
 
             if (pass.compute)
             {
@@ -187,9 +213,43 @@ namespace rasm
             engine->endPass();
             engine->resetRenderTarget();
         }
-        if (previous == PipelineStage::COMPUTE)
-            ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::GRAPHICS);
         engine->endFrame();
+    }
+
+    // Shaders reach buffers through device addresses, so one global barrier covers all of a pass's buffers.
+    // The state carries over to the next frame: a write waits for the reads of the frame before, and a read
+    // waits for a write at the end of the frame before. Barriers cover earlier submissions on the queue.
+    bool RenderGraph::bufferBarrier(const Pass &pass, PipelineStage &before, PipelineStage &after)
+    {
+        const PipelineStage stage = pass.compute ? PipelineStage::COMPUTE : PipelineStage::GRAPHICS;
+        before = {};
+        after = {};
+
+        // A write is made visible to each stage once, so the next read in the same stage needs no barrier.
+        for (auto buffer : pass.inputBuffers)
+        {
+            auto &access = bufferAccess[buffer];
+            if (access.writeStages != PipelineStage{} && !hasStage(access.readStages, stage))
+            {
+                before = before | access.writeStages;
+                after = after | stage;
+            }
+            access.readStages = access.readStages | stage;
+        }
+
+        // A write waits for every use since the last write, reads included.
+        for (auto buffer : pass.outputBuffers)
+        {
+            auto &access = bufferAccess[buffer];
+            const PipelineStage used = access.writeStages | access.readStages;
+            if (used != PipelineStage{})
+            {
+                before = before | used;
+                after = after | stage;
+            }
+            access = {.writeStages = stage};
+        }
+        return after != PipelineStage{};
     }
 
     TextureHandle RenderGraph::createTexture(const TextureDesc &desc)

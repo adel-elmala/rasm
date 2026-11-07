@@ -102,7 +102,7 @@ Goal: make RASM's core promise hold at scale.
 
 Goal: passes describe what they use, and the graph does the synchronization and memory work (`D9`).
 
-- [ ] Track resource state and generate barriers and layout transitions automatically.
+- [x] Track resource state and generate barriers and layout transitions automatically (done 2026-11-07). Textures keep their state in `RenderContext`, and the graph orders each declared buffer by its last write and the reads since, across frames. A pass must declare every buffer it uses: an undeclared one gets no barrier.
 - [ ] Imported resources (swapchain, history buffers) and transient resources with lifetime-based memory aliasing.
 - [ ] Per-pass attachment load and store ops (no implicit clears), multiple color attachments, and resolve.
 - [ ] Graph-driven frame: the forward/culling pipeline from phase 2 becomes a set of graph passes, and `Engine::render` moves behind `Renderer::render(view)`.

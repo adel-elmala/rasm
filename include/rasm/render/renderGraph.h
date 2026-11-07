@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <functional>
 
@@ -74,7 +75,14 @@ namespace rasm
         void execute(CameraHandle camera);
 
     protected:
+        struct BufferAccess
+        {
+            PipelineStage   writeStages = {};
+            PipelineStage   readStages  = {};
+        };
+
         void                analyzeDependencies();
+        bool                bufferBarrier(const Pass& pass, PipelineStage& before, PipelineStage& after);
         TextureHandle       createTexture(const TextureDesc& desc);
         BufferHandle        createBuffer(const BufferDesc& desc);
         RenderTargetHandle  createRenderTarget(const RenderTargetDesc& desc);
@@ -85,10 +93,11 @@ namespace rasm
         void                write(uint32_t passIdx, BufferHandle h);
         void                write(uint32_t passIdx, RenderTargetHandle h);
 
-        std::vector<Pass>           passes;
-        std::vector<uint32_t>       executionOrder; // Sorted pass indices
-        Engine*                     engine   = nullptr;
-        bool                        compiled = false;
+        std::vector<Pass>                                           passes;
+        std::vector<uint32_t>                                       executionOrder; // Sorted pass indices
+        std::unordered_map<BufferHandle, BufferAccess, HandleHash>  bufferAccess;
+        Engine*                                                     engine   = nullptr;
+        bool                                                        compiled = false;
     };
 }
 // clang-format on

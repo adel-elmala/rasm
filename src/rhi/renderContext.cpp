@@ -1,6 +1,7 @@
 #include "rasm/render/renderContext.h"
 #include "rasm/engine.h"
 #include "rhi/device.h"
+#include "rhi/textureStates.h"
 #include "rhi/uploadManager.h"
 
 #include "spdlog/spdlog.h"
@@ -163,6 +164,7 @@ namespace rasm
         rhi::Swapchain*                                                                                                         swapchain       = nullptr;
         rhi::Sampler*                                                                                                           samplers[static_cast<size_t>(SamplerType::COUNT)] = {};
         rhi::UploadManager                                                                                                      uploads;
+        rhi::TextureStates                                                                                                      textureStates;
         std::vector<TextureHandle>                                                                                              swapchainImages;  // also in textures, but owned by the swapchain
 
         std::unordered_map<BufferHandle, rhi::Buffer*, HandleHash>                                                              buffers;
@@ -540,6 +542,7 @@ namespace rasm
         auto *rhiTexture = lookup(impl->textures, texture, __func__);
         if (!rhiTexture)
             return;
+        impl->textureStates.forget(rhiTexture);
         impl->device->destroyTexture(rhiTexture);
         impl->textures.erase(texture);
     }
@@ -629,7 +632,10 @@ namespace rasm
         auto *rhiTexture = lookup(impl->textures, texture, __func__);
         if (!rhiTexture)
             return false;
-        return impl->device->fillTexture(rhiTexture, data);
+        if (!impl->device->fillTexture(rhiTexture, data))
+            return false;
+        rhiTexture->state = TextureUsage::SAMPLED;
+        return true;
     }
 
     uint64_t RenderContext::getBufferDeviceAddress(const BufferHandle &buffer)
@@ -701,7 +707,16 @@ namespace rasm
     {
         ZoneScoped;
 
-        return impl->swapchain->acquireNextImage(imageIndex);
+        const SwapchainStatus status = impl->swapchain->acquireNextImage(imageIndex);
+        if (status != SwapchainStatus::OK && status != SwapchainStatus::SUBOPTIMAL)
+            return status;
+
+        // An acquired image holds nothing worth keeping, and the transition out of UNKNOWN waits for the acquire.
+        auto *image = imageIndex < impl->swapchainImages.size() ? lookup(impl->textures, impl->swapchainImages[imageIndex], __func__) : nullptr;
+        if (!image)
+            return SwapchainStatus::FAILURE;
+        image->state = TextureUsage::UNKNOWN;
+        return status;
     }
 
     bool RenderContext::beginCommandBuffer(const CommandBufferHandle &commandBuffer)
@@ -720,11 +735,13 @@ namespace rasm
         return rhiCommandBuffer && rhiCommandBuffer->end();
     }
 
-    bool RenderContext::transitionImageLayout(const CommandBufferHandle &commandBuffer, TextureHandle texture, TextureUsage oldUsage, TextureUsage newUsage)
+    bool RenderContext::transitionImageLayout(const CommandBufferHandle &commandBuffer, TextureHandle texture, TextureUsage newUsage, bool discard)
     {
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         auto *rhiTexture = lookup(impl->textures, texture, __func__);
-        return rhiCommandBuffer && rhiTexture && rhiCommandBuffer->transitionTexture(rhiTexture, oldUsage, newUsage);
+        if (!rhiCommandBuffer || !rhiTexture || !checkArgument(!impl->insidePass, __func__, "barriers must be recorded outside a render pass."))
+            return false;
+        return impl->textureStates.transition(*rhiCommandBuffer, rhiTexture, newUsage, discard);
     }
 
     bool RenderContext::beginRendering(const CommandBufferHandle &commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment, const glm::vec4 &clearColor, bool load, bool storeDepth)
@@ -827,7 +844,17 @@ namespace rasm
             .signalFence = fence,
             .signalValue = signalValue,
         };
-        return impl->device->getQueue(rhi::QueueType::GRAPHICS)->submit(submitDesc);
+        if (!impl->device->getQueue(rhi::QueueType::GRAPHICS)->submit(submitDesc))
+            return false;
+        impl->textureStates.submitted();
+        return true;
+    }
+
+    // For commands that were recorded but will not run, a failed submit included: the textures go back to
+    // the states they had before them, which is still what the GPU has.
+    void RenderContext::discardRecording()
+    {
+        impl->textureStates.discardUnsubmitted();
     }
 
     SwapchainStatus RenderContext::present()

@@ -318,7 +318,7 @@
       <path d="M136,122 V128 H706 V122" class="arrow"/>
       <text x="421" y="144" class="mid small mono">beginPass("Scene")</text>
       <text x="14" y="174" class="small">barrier: image — swapchain image UNKNOWN → COLOR_ATTACHMENT; it waits at color output, after the acquire.</text>
-      <text x="14" y="192" class="small">barrier: depth — the slot's depth texture UNKNOWN → DEPTH_STENCIL_ATTACHMENT.</text>
+      <text x="14" y="192" class="small">barrier: depth — the slot's depth texture UNKNOWN → DEPTH_STENCIL_ATTACHMENT. Both discard: the pass clears them.</text>
       <text x="14" y="210" class="small">beginRendering — clears color to SWAPCHAIN_CLEAR_COLOR and depth to 0 (reversed-Z).</text>
       <text x="14" y="228" class="small">ts — a GPU timestamp, only while frame stats are measured.</text>
     </svg>
@@ -403,7 +403,7 @@
 
   <div class="step">
     <h4>9. endPass, and the end of the frame's command buffer</h4>
-    <svg viewBox="0 0 730 232" role="img" aria-label="endPass records the overlay, endRendering and the barrier to PRESENT_SRC. endFrame closes the frame timer and ends the command buffer.">
+    <svg viewBox="0 0 730 232" role="img" aria-label="endPass records the overlay and endRendering. endFrame records the barrier to PRESENT_SRC, closes the frame timer and ends the command buffer.">
       <!--strip 5-->
       <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
       <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
@@ -413,21 +413,21 @@
       <rect x="520" y="8" width="98" height="28" rx="5" class="cpu"/><rect x="518" y="6" width="102" height="32" rx="7" class="hot"/><text x="569" y="26" class="mid small title">record</text>
       <rect x="622" y="8" width="98" height="28" rx="5" class="ghost"/><text x="671" y="26" class="mid small t-faint">submit · present</text>
       <!--/strip-->
-      <path d="M128,64 V58 H514 V64" class="arrow"/>
-      <text x="321" y="52" class="mid small mono">endPass()</text>
-      <path d="M518,64 V58 H650 V64" class="arrow"/>
-      <text x="584" y="52" class="mid small mono">endFrame()</text>
+      <path d="M128,64 V58 H370 V64" class="arrow"/>
+      <text x="249" y="52" class="mid small mono">endPass()</text>
+      <path d="M374,64 V58 H650 V64" class="arrow"/>
+      <text x="512" y="52" class="mid small mono">endFrame()</text>
       <rect x="10" y="70" width="710" height="44" rx="6" class="zone"/>
       <rect x="14"  y="78" width="110" height="28" rx="4" class="ghost"/><text x="69"  y="96" class="mid small t-faint">… drawScene</text>
       <rect x="128" y="78" width="60"  height="28" rx="4" class="cpu"/><text x="158" y="96" class="mid small">overlay</text>
       <rect x="192" y="78" width="90"  height="28" rx="4" class="cpu"/><text x="237" y="96" class="mid small">endRendering</text>
-      <rect x="286" y="78" width="140" height="28" rx="4" class="cpu"/><text x="356" y="96" class="mid small">barrier: → PRESENT_SRC</text>
-      <rect x="430" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="472" y="96" class="mid small">ts Scene end</text>
+      <rect x="286" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="328" y="96" class="mid small">ts Scene end</text>
+      <rect x="374" y="78" width="140" height="28" rx="4" class="cpu"/><text x="444" y="96" class="mid small">barrier: → PRESENT_SRC</text>
       <rect x="518" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="560" y="96" class="mid small">ts Frame end</text>
       <rect x="606" y="78" width="44"  height="28" rx="4" class="cpu"/><text x="628" y="96" class="mid small">end</text>
       <text x="14" y="146" class="small">overlay — the stats overlay, only in a swapchain pass and only when it is shown (F1).</text>
-      <text x="14" y="164" class="small">barrier — the image goes COLOR_ATTACHMENT → PRESENT_SRC, and swapchainRendered becomes true.</text>
-      <text x="14" y="182" class="small">A render target pass instead moves its color texture to SAMPLED, for later passes.</text>
+      <text x="14" y="164" class="small">endPass sets swapchainRendered. A render target pass instead moves its color texture to SAMPLED, for later passes.</text>
+      <text x="14" y="182" class="small">barrier — in endFrame, once per frame: the image goes COLOR_ATTACHMENT → PRESENT_SRC.</text>
       <text x="14" y="212" class="small t-hot">No pass drew to the swapchain? endFrame first records an empty pass named "Clear", so present still works.</text>
     </svg>
     <p>Present needs the image in <code>PRESENT_SRC</code>. A frame that only draws into render targets gets the empty <code>"Clear"</code> pass, so it presents the clear color (there is no offscreen-only frame yet, <b>D7</b>).</p>
@@ -635,7 +635,7 @@
   </div>
   <div>
     <h4>A frame that fails to submit</h4>
-    <p>It was recorded, but the slot keeps its old fence value, so the next wait on it passes at once. <code>frameCount</code> still moves. The image stays acquired, and the next acquire returns it again. Its timestamps are not read, because the slot's value did not change.</p>
+    <p>It was recorded, but the slot keeps its old fence value, so the next wait on it passes at once. <code>frameCount</code> still moves. The image stays acquired, and the next acquire returns it again. Its timestamps are not read, because the slot's value did not change. <code>endFrame</code> calls <code>discardRecording</code>, so the textures it moved go back to the layouts they still have on the GPU. The same happens when culling fails to record.</p>
   </div>
 </div>
 
