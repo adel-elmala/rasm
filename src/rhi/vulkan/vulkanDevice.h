@@ -23,6 +23,7 @@ namespace rasm::rhi
         Sampler*                    createSampler(const SamplerDesc& desc) override;
         Shader*                     createShader(const ShaderDesc& desc) override;
         Pipeline*                   createGraphicsPipeline(const PipelineDesc& desc, Shader* vertexShader, Shader* fragmentShader, DescriptorSetLayout* layout) override;
+        Pipeline*                   createComputePipeline(const PipelineDesc& desc, Shader* computeShader, DescriptorSetLayout* layout) override;
         DescriptorSetLayout*        createBindlessDescriptorSetLayout(const BindlessDescriptorSetLayoutDesc& desc) override;
         DescriptorPool*             createDescriptorPool(const DescriptorPoolDesc& desc) override;
         DescriptorSet*              allocateDescriptorSet(const std::string& name, DescriptorPool* pool, DescriptorSetLayout* layout) override;

@@ -6,7 +6,7 @@ namespace
 {
     rasm::ShaderDesc makeShaderDesc(std::vector<uint8_t> code)
     {
-        return {.name = "shader", .type = rasm::ShaderType::VERTEX, .code = std::move(code)};
+        return {.name = "shader", .type = rasm::ShaderType::VERTEX, .entryPoint = "vertMain", .code = std::move(code)};
     }
 
     rasm::PipelineDesc makePipelineDesc()
@@ -68,6 +68,10 @@ TEST_CASE("shader descriptors compare the code")
     auto fragment = makeShaderDesc({1, 2, 3, 4});
     fragment.type = rasm::ShaderType::FRAGMENT;
     CHECK_FALSE(makeShaderDesc({1, 2, 3, 4}) == fragment);
+
+    auto otherEntryPoint = makeShaderDesc({1, 2, 3, 4});
+    otherEntryPoint.entryPoint = "otherMain";
+    CHECK_FALSE(makeShaderDesc({1, 2, 3, 4}) == otherEntryPoint);
 }
 
 TEST_CASE("the hash is order-sensitive, unlike an XOR of the fields (D5)")
@@ -92,6 +96,11 @@ TEST_CASE("every pipeline field takes part in equality")
     auto fragmentShader = base;
     fragmentShader.fragmentShader.index = 9;
     CHECK_FALSE(base == fragmentShader);
+
+    auto computeShader = base;
+    computeShader.computeShader = rasm::ShaderHandle{9, 1};
+    CHECK_FALSE(base == computeShader);
+    CHECK(rasm::PipelineDescHash{}(base) != rasm::PipelineDescHash{}(computeShader));
 
     auto layout = base;
     layout.descriptorSetLayout.index = 9;

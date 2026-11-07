@@ -22,6 +22,19 @@ namespace rasm
         compiled = false; // Mark graph as dirty
     }
 
+    void RenderGraph::addComputePass(std::string name, std::function<void(PassBuilder &)> setup, std::function<void(RenderContext &)> execute)
+    {
+        addPass(std::move(name), std::move(setup), std::move(execute));
+        auto &pass = passes.back();
+        pass.compute = true;
+        // A compute pass runs outside any render pass, so it has no attachments to write.
+        if (pass.outputRenderTarget.isValid())
+        {
+            spdlog::error("Compute pass '{}' cannot write a render target; the write is ignored.", pass.name);
+            pass.outputRenderTarget = {};
+        }
+    }
+
     void RenderGraph::compile()
     {
         if (compiled)
@@ -147,15 +160,33 @@ namespace rasm
 
         if (!engine->beginFrame(camera))
             return;
+
+        // Shaders share buffers through device addresses, so a barrier goes before every compute pass and
+        // before the first graphics pass after one. The frame starts after the previous frame's draws, and
+        // a compute pass at the end of the frame is made visible to the next frame's draws.
+        auto commandBuffer = engine->getCurrentFrameResources().commandBuffer;
+        PipelineStage previous = PipelineStage::GRAPHICS;
         for (const auto &passIdx : executionOrder)
         {
             auto &pass = passes[passIdx];
+            const PipelineStage stage = pass.compute ? PipelineStage::COMPUTE : PipelineStage::GRAPHICS;
+            if (pass.compute || previous == PipelineStage::COMPUTE)
+                ctx.memoryBarrier(commandBuffer, previous, stage);
+            previous = stage;
+
+            if (pass.compute)
+            {
+                pass.execute(ctx);
+                continue;
+            }
             engine->setRenderTarget(pass.outputRenderTarget);
             engine->beginPass();
             pass.execute(ctx);
             engine->endPass();
             engine->resetRenderTarget();
         }
+        if (previous == PipelineStage::COMPUTE)
+            ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::GRAPHICS);
         engine->endFrame();
     }
 

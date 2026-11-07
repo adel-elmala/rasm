@@ -3,9 +3,11 @@
 
 #include "doctest/doctest.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <system_error>
 
 namespace
 {
@@ -14,14 +16,24 @@ namespace
     class ScopedTempDir
     {
     public:
-        ScopedTempDir() : dir(fs::temp_directory_path() / "rasm_path_tests")
+        // A new name each time: Windows may still be deleting the previous test's folder, and creating it
+        // again while that delete is pending fails.
+        ScopedTempDir() : dir(fs::temp_directory_path() / ("rasm_path_tests_" + std::to_string(nextId++)))
         {
             fs::remove_all(dir);
             fs::create_directories(dir);
         }
-        ~ScopedTempDir() { fs::remove_all(dir); }
+        // Never throws: a leftover temp folder is harmless, a throwing destructor terminates the run.
+        ~ScopedTempDir()
+        {
+            std::error_code error;
+            fs::remove_all(dir, error);
+        }
 
         const fs::path dir;
+
+    private:
+        static inline uint32_t nextId = 0;
     };
 
     class ScopedWorkingDir

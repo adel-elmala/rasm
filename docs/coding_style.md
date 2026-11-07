@@ -128,7 +128,7 @@ Deliberate exceptions:
 
 ## 9. Shaders (Slang)
 
-- Entry points are `vertMain`, `fragMain` and (future) `compMain`, with `[shader("...")]` attributes.
+- Entry points are `vertMain`, `fragMain` and `compMain`, with `[shader("...")]` attributes.
 - One responsibility per module: data layout (`core.slang`), lighting and BRDF (`pbr.slang`), unlit shading (`unlit.slang`), pass or entry shaders (`rasm.slang`).
 - Shaders output **linear** color. sRGB encoding is done by the attachment format.
 - Texture access checks `hasTexture(index)` before sampling, and glTF default values apply when a texture is absent.
