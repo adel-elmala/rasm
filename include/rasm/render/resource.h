@@ -42,6 +42,12 @@ namespace rasm
         DEVICE_ADDRESS,
     };
 
+    enum class PipelineStage
+    {
+        COMPUTE,
+        GRAPHICS,
+    };
+
     enum class DescriptorType
     {
         UNIFORM_BUFFER,
@@ -95,6 +101,7 @@ namespace rasm
         std::string                 name;
         ShaderHandle                vertexShader;
         ShaderHandle                fragmentShader;
+        ShaderHandle                computeShader;
         DescriptorSetLayoutHandle   descriptorSetLayout;
         PrimitiveTopology           topology                        = PrimitiveTopology::TRIANGLE_LIST;
         Format                      colorAttachmentFormat           = Format::UNKNOWN;

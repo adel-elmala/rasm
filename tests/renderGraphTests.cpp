@@ -34,6 +34,7 @@ namespace
         }
 
         const std::vector<uint32_t> &order() const { return executionOrder; }
+        const rasm::Pass &pass(uint32_t passIdx) const { return passes[passIdx]; }
         bool isCompiled() const { return compiled; }
     };
 
@@ -189,4 +190,32 @@ TEST_CASE("adding a pass after compiling triggers a new sort")
 
     graph.compile();
     CHECK(graph.order() == std::vector<uint32_t>{1, 0});
+}
+
+TEST_CASE("a compute pass sorts by its resources and writes no render target")
+{
+    const rasm::BufferHandle buffer{1, 1};
+    const rasm::RenderTargetHandle renderTarget{1, 1};
+
+    TestGraph graph;
+    graph.addPass(
+        "draw",
+        [&](rasm::PassBuilder &builder)
+        { builder.read(buffer); },
+        [](rasm::RenderContext &) {});
+    graph.addComputePass(
+        "cull",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.write(buffer);
+            builder.write(renderTarget);
+        },
+        [](rasm::RenderContext &) {});
+
+    graph.compile();
+
+    CHECK(graph.order() == std::vector<uint32_t>{1, 0});
+    CHECK(graph.pass(1).compute);
+    CHECK_FALSE(graph.pass(0).compute);
+    CHECK_FALSE(graph.pass(1).outputRenderTarget.isValid());
 }

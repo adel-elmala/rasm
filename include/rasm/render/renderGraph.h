@@ -24,6 +24,7 @@ namespace rasm
         std::vector<BufferHandle>           outputBuffers;
         RenderTargetHandle                  outputRenderTarget;
         std::function<void(RenderContext&)> execute;
+        bool                                compute     = false;
 
         // For Sorting
         uint32_t                inDegree = 0;
@@ -63,6 +64,9 @@ namespace rasm
              RenderGraph(Engine* owner) : engine(owner) {}
              ~RenderGraph() = default;
         void addPass(std::string name,
+                 std::function<void(PassBuilder&)> setup,
+                 std::function<void(RenderContext&)> execute);
+        void addComputePass(std::string name,
                  std::function<void(PassBuilder&)> setup,
                  std::function<void(RenderContext&)> execute);
 

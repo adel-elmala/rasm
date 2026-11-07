@@ -66,6 +66,7 @@ namespace rasm
         // returns invalid on failure.
         // The name is a label, so two pipelines can share one.
         PipelineHandle              createPipeline(const std::string& name, const std::string& shaderSource);
+        PipelineHandle              createComputePipeline(const std::string& name, const std::string& shaderSource);
         const Material&             getMaterial(const MaterialHandle& handle);
         Transform                   getTransform(EntityHandle entity);
         Transform                   getCameraTransform(CameraHandle camera);

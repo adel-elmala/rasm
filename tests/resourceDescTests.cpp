@@ -93,6 +93,11 @@ TEST_CASE("every pipeline field takes part in equality")
     fragmentShader.fragmentShader.index = 9;
     CHECK_FALSE(base == fragmentShader);
 
+    auto computeShader = base;
+    computeShader.computeShader = rasm::ShaderHandle{9, 1};
+    CHECK_FALSE(base == computeShader);
+    CHECK(rasm::PipelineDescHash{}(base) != rasm::PipelineDescHash{}(computeShader));
+
     auto layout = base;
     layout.descriptorSetLayout.index = 9;
     CHECK_FALSE(base == layout);

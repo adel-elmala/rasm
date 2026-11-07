@@ -278,6 +278,32 @@ namespace rasm::rhi
                 return VK_SAMPLER_ADDRESS_MODE_REPEAT;
             }
         }
+
+        // The bindless set and a PUSH_CONSTANTS_SIZE range visible to the pipeline's stages.
+        VkPipelineLayout createPipelineLayout(VkDevice device, VkShaderStageFlags stages, DescriptorSetLayout *layout)
+        {
+            VkPushConstantRange pushConstantRange{
+                .stageFlags = stages,
+                .size = PUSH_CONSTANTS_SIZE};
+
+            VkDescriptorSetLayout setLayouts[] = {static_cast<VulkanDescriptorSetLayout *>(layout)->layout};
+
+            VkPipelineLayoutCreateInfo pipelineLayoutInfo = {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+                .setLayoutCount = 1,
+                .pSetLayouts = setLayouts,
+                .pushConstantRangeCount = 1,
+                .pPushConstantRanges = &pushConstantRange};
+
+            VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+            auto result = vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout);
+            if (result != VK_SUCCESS)
+            {
+                spdlog::error("Failed to create pipeline layout. Error: {}", toVkResultString(result));
+                return VK_NULL_HANDLE;
+            }
+            return pipelineLayout;
+        }
     }
 
     std::unique_ptr<Device> createVulkanDevice(const DeviceDesc &desc)
@@ -537,26 +563,9 @@ namespace rasm::rhi
 
     Pipeline *VulkanDevice::createGraphicsPipeline(const PipelineDesc &desc, Shader *vertexShader, Shader *fragmentShader, DescriptorSetLayout *layout)
     {
-        VkPushConstantRange pushConstantRange{
-            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            .size = PUSH_CONSTANTS_SIZE};
-
-        VkDescriptorSetLayout setLayouts[] = {static_cast<VulkanDescriptorSetLayout *>(layout)->layout};
-
-        VkPipelineLayoutCreateInfo pipelineLayoutInfo = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 1,
-            .pSetLayouts = setLayouts,
-            .pushConstantRangeCount = 1,
-            .pPushConstantRanges = &pushConstantRange};
-
-        VkPipelineLayout pipelineLayout;
-        auto result = vkCreatePipelineLayout(device.device, &pipelineLayoutInfo, nullptr, &pipelineLayout);
-        if (result != VK_SUCCESS)
-        {
-            spdlog::error("Failed to create pipeline layout. Error: {}", toVkResultString(result));
+        VkPipelineLayout pipelineLayout = createPipelineLayout(device.device, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, layout);
+        if (pipelineLayout == VK_NULL_HANDLE)
             return nullptr;
-        }
 
         // With vertex pulling the shader fetches vertices itself, so use an empty vertex input state.
         // This is core Vulkan and avoids VK_EXT_vertex_input_dynamic_state, which MoltenVK doesn't support.
@@ -666,7 +675,7 @@ namespace rasm::rhi
             .layout = pipelineLayout};
 
         VkPipeline vkPipeline;
-        result = vkCreateGraphicsPipelines(device.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vkPipeline);
+        auto result = vkCreateGraphicsPipelines(device.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vkPipeline);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create graphics pipeline. Error: {}", toVkResultString(result));
@@ -681,6 +690,41 @@ namespace rasm::rhi
         pipeline->pipeline = vkPipeline;
         pipeline->layout = pipelineLayout;
         pipeline->bindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        return pipeline;
+    }
+
+    Pipeline *VulkanDevice::createComputePipeline(const PipelineDesc &desc, Shader *computeShader, DescriptorSetLayout *layout)
+    {
+        VkPipelineLayout pipelineLayout = createPipelineLayout(device.device, VK_SHADER_STAGE_COMPUTE_BIT, layout);
+        if (pipelineLayout == VK_NULL_HANDLE)
+            return nullptr;
+
+        VkComputePipelineCreateInfo pipelineInfo = {
+            .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+            .stage = {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+                .module = static_cast<VulkanShader *>(computeShader)->module,
+                .pName = "compMain",
+            },
+            .layout = pipelineLayout};
+
+        VkPipeline vkPipeline;
+        auto result = vkCreateComputePipelines(device.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &vkPipeline);
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to create compute pipeline. Error: {}", toVkResultString(result));
+            vkDestroyPipelineLayout(device.device, pipelineLayout, nullptr);
+            return nullptr;
+        }
+
+        setObjectName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(vkPipeline), desc.name);
+
+        auto *pipeline = new VulkanPipeline();
+        pipeline->desc = desc;
+        pipeline->pipeline = vkPipeline;
+        pipeline->layout = pipelineLayout;
+        pipeline->bindPoint = VK_PIPELINE_BIND_POINT_COMPUTE;
         return pipeline;
     }
 

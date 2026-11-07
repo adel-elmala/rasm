@@ -176,6 +176,7 @@ namespace rasm
         Format                                                                                                                  passColorFormat = Format::UNKNOWN;
         Format                                                                                                                  passDepthFormat = Format::UNKNOWN;
         bool                                                                                                                    skipDraws       = false; // a mismatched pipeline was rejected
+        bool                                                                                                                    insidePass      = false; // between beginRendering and endRendering, where dispatches and barriers are not allowed
 
         void registerSwapchainImages(HandleManager& handleManager)
         {
@@ -311,17 +312,34 @@ namespace rasm
 
     PipelineHandle RenderContext::createPipeline(const PipelineDesc &desc)
     {
+        const bool compute = desc.computeShader.isValid();
+        if (!checkArgument(!compute || (!desc.vertexShader.isValid() && !desc.fragmentShader.isValid()), __func__, "a pipeline has either a compute shader or vertex and fragment shaders."))
+            return {};
+
         auto cachedIt = impl->pipelineDescCache.find(desc);
         if (cachedIt != impl->pipelineDescCache.end())
             return cachedIt->second;
 
-        auto *vertexShader = lookup(impl->shaders, desc.vertexShader, __func__);
-        auto *fragmentShader = lookup(impl->shaders, desc.fragmentShader, __func__);
         auto *layout = lookup(impl->descriptorSetLayouts, desc.descriptorSetLayout, __func__);
-        if (!vertexShader || !fragmentShader || !layout)
+        if (!layout)
             return {};
 
-        auto *pipeline = impl->device->createGraphicsPipeline(desc, vertexShader, fragmentShader, layout);
+        rhi::Pipeline *pipeline = nullptr;
+        if (compute)
+        {
+            auto *computeShader = lookup(impl->shaders, desc.computeShader, __func__);
+            if (!computeShader)
+                return {};
+            pipeline = impl->device->createComputePipeline(desc, computeShader, layout);
+        }
+        else
+        {
+            auto *vertexShader = lookup(impl->shaders, desc.vertexShader, __func__);
+            auto *fragmentShader = lookup(impl->shaders, desc.fragmentShader, __func__);
+            if (!vertexShader || !fragmentShader)
+                return {};
+            pipeline = impl->device->createGraphicsPipeline(desc, vertexShader, fragmentShader, layout);
+        }
         if (!pipeline)
             return {};
 
@@ -645,6 +663,7 @@ namespace rasm
         impl->passColorFormat = color->desc.format;
         impl->passDepthFormat = depth->desc.format;
         impl->skipDraws = false;
+        impl->insidePass = true;
         return true;
     }
 
@@ -655,6 +674,7 @@ namespace rasm
             return false;
 
         rhiCommandBuffer->endRendering();
+        impl->insidePass = false;
         return true;
     }
 
@@ -750,7 +770,14 @@ namespace rasm
         if (!rhiCommandBuffer || !rhiPipeline)
             return;
 
+        // Compute has its own bind point and no attachments, so it leaves the pass's graphics pipeline alone.
         const auto &desc = rhiPipeline->desc;
+        if (desc.computeShader.isValid())
+        {
+            rhiCommandBuffer->bindPipeline(rhiPipeline);
+            return;
+        }
+
         if (desc.colorAttachmentFormat != impl->passColorFormat || desc.depthStencilAttachmentFormat != impl->passDepthFormat)
         {
             spdlog::error("Pipeline '{}' does not match the formats of the pass's attachments, so its draws are skipped.", desc.name);
@@ -814,5 +841,25 @@ namespace rasm
         auto *rhiBuffer = lookup(impl->buffers, drawInfoBuffer, __func__);
         if (!impl->skipDraws && rhiCommandBuffer && rhiBuffer)
             rhiCommandBuffer->drawIndexedIndirect(rhiBuffer, offset, drawCount, stride);
+    }
+
+    void RenderContext::dispatch(const CommandBufferHandle &commandBuffer, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
+    {
+        if (!checkArgument(!impl->insidePass, __func__, "dispatches must be recorded outside a render pass (use RenderGraph::addComputePass)."))
+            return;
+
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        if (rhiCommandBuffer)
+            rhiCommandBuffer->dispatch(groupCountX, groupCountY, groupCountZ);
+    }
+
+    void RenderContext::memoryBarrier(const CommandBufferHandle &commandBuffer, PipelineStage before, PipelineStage after)
+    {
+        if (!checkArgument(!impl->insidePass, __func__, "barriers must be recorded outside a render pass."))
+            return;
+
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        if (rhiCommandBuffer)
+            rhiCommandBuffer->memoryBarrier(before, after);
     }
 }

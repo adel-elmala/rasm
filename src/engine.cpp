@@ -251,6 +251,22 @@ namespace rasm
                                    .depthStencilAttachmentFormat = DEPTH_FORMAT});
     }
 
+    PipelineHandle Engine::createComputePipeline(const std::string &name, const std::string &shaderSource)
+    {
+        ZoneScoped;
+
+        auto compShader = shaderCompiler->compileFromString(shaderSource, name + ".comp.slang", "compMain");
+        if (compShader.code.empty())
+        {
+            spdlog::error("Failed to compile the shader of compute pipeline '{}'.", name);
+            return {};
+        }
+
+        return ctx.createPipeline({.name = "Compute Pipeline for " + name,
+                                   .computeShader = ctx.createShader({.name = name + ".comp", .type = ShaderType::COMPUTE, .code = std::move(compShader.code)}),
+                                   .descriptorSetLayout = bindlessDescriptorSetLayout});
+    }
+
     bool Engine::beginFrame(CameraHandle camera)
     {
         ZoneScoped;
