@@ -250,7 +250,7 @@
 <p>Source scope: the <i>before</i> stages and their writes. Destination scope: the <i>after</i> stages and their reads and writes. Reads before a barrier only have to finish, which the stage mask covers.</p>
 
 <h3>Image layout transitions</h3>
-<p><code>transitionImageLayout</code> records one image barrier. Its source scope comes from the old usage only, and its destination scope from the new usage only.</p>
+<p><code>transitionImageLayout(cmd, texture, newUsage)</code> records one image barrier. <code>RenderContext</code> keeps each texture's current usage in <code>rhi::Texture::state</code> and passes it to <code>CommandBuffer::transitionTexture</code> as the old usage. The source scope comes from the old usage only, and the destination scope from the new usage only. <code>SAMPLED</code> → <code>SAMPLED</code> records nothing. A texture starts <code>UNKNOWN</code>, <code>fillTexture</code> leaves it <code>SAMPLED</code>, and <code>acquireNextImage</code> sets the acquired swapchain image back to <code>UNKNOWN</code>.</p>
 <div class="table-wrap">
 <table>
   <tr><th><code>TextureUsage</code></th><th>Layout</th><th>As old usage, waits for</th><th>As new usage, blocks</th></tr>

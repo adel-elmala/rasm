@@ -300,16 +300,37 @@ constexpr bool          hasStage(PipelineStage stages, PipelineStage stage);</pr
 </div>
 
 <div class="api" id="transitionImageLayout">
-  <pre class="sig">bool transitionImageLayout(const CommandBufferHandle&amp; commandBuffer,
-                           TextureHandle texture, TextureUsage oldUsage,
-                           TextureUsage newUsage);</pre>
+  <pre class="sig">bool transitionImageLayout(const CommandBufferHandle&amp; commandBuffer, TextureHandle texture, TextureUsage newUsage);</pre>
   <div class="body">
-    <p>Records a barrier that moves a texture from one use to another. The barrier waits for <code>oldUsage</code> and blocks <code>newUsage</code>. <code>SAMPLED</code> covers fragment and compute shaders. The attachment usages cover reads too, for a <code>beginRendering</code> with <code>load</code>.</p>
+    <p>Records a barrier that moves a texture from the use it is in now to <code>newUsage</code>. The context remembers each texture's use, so you name only the new one. The barrier waits for the old use and blocks the new one. <code>SAMPLED</code> covers fragment and compute shaders. The attachment usages cover reads too, for a <code>beginRendering</code> with <code>load</code>.</p>
     <dl>
-      <dt>oldUsage</dt><dd><code>UNKNOWN</code> (the contents are thrown away), <code>COLOR_ATTACHMENT</code>, <code>DEPTH_STENCIL_ATTACHMENT</code> or <code>SAMPLED</code>.</dd>
       <dt>newUsage</dt><dd><code>COLOR_ATTACHMENT</code>, <code>DEPTH_STENCIL_ATTACHMENT</code>, <code>SAMPLED</code> or <code>PRESENT_SRC</code>.</dd>
     </dl>
-    <p><span class="tag">errors</span> Another usage logs an error, records nothing and returns <code>false</code>. <code>beginPass</code> and <code>endPass</code> already do the transitions of their attachments.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 700 150" role="img" aria-label="A texture starts UNKNOWN. fillTexture makes it SAMPLED. Each transition records a barrier and remembers the new usage, except SAMPLED to SAMPLED, which records nothing. Acquiring a swapchain image makes it UNKNOWN again.">
+        <rect x="10" y="50" width="110" height="40" rx="6" class="box"/><text x="65" y="75" class="mid mono">UNKNOWN</text>
+        <text x="65" y="110" class="mid small">created, or a swapchain</text>
+        <text x="65" y="124" class="mid small">image just acquired</text>
+        <line x1="120" y1="70" x2="208" y2="70" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+        <text x="164" y="62" class="mid small">barrier</text>
+        <rect x="210" y="50" width="200" height="40" rx="6" class="gpu"/><text x="310" y="75" class="mid mono">COLOR / DEPTH attachment</text>
+        <path d="M290,50 C290,22 330,22 330,50" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+        <text x="310" y="16" class="mid small">barrier: written again</text>
+        <line x1="410" y1="70" x2="498" y2="70" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+        <text x="454" y="62" class="mid small">barrier</text>
+        <rect x="500" y="50" width="90" height="40" rx="6" class="gpu"/><text x="545" y="75" class="mid mono">SAMPLED</text>
+        <path d="M530,50 C530,22 560,22 560,50" class="arrow" marker-end="url(#ah)"/>
+        <text x="545" y="16" class="mid small">no barrier</text>
+        <text x="545" y="110" class="mid small">fillTexture leaves</text>
+        <text x="545" y="124" class="mid small">a texture here</text>
+        <line x1="590" y1="70" x2="618" y2="70" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+        <rect x="620" y="50" width="76" height="40" rx="6" class="gpu"/><text x="658" y="75" class="mid mono">PRESENT</text>
+        <text x="658" y="110" class="mid small">endFrame</text>
+      </svg>
+      <figcaption>Every arrow can go the other way too, except into <code>UNKNOWN</code>. Only <code>SAMPLED</code> to <code>SAMPLED</code> records nothing: reads after reads need no barrier.</figcaption>
+    </figure>
+    <p>The use changes when the barrier is recorded, so it assumes the command buffer is submitted, and command buffers that touch the same texture are submitted in the order they were recorded.</p>
+    <p><span class="tag">errors</span> Another usage logs an error, records nothing and returns <code>false</code>. Inside a render pass it records nothing (barriers are not allowed there). <code>beginPass</code> moves its attachments, <code>endFrame</code> moves the swapchain image to <code>PRESENT_SRC</code>, and a render graph pass that reads a texture or render target gets it in <code>SAMPLED</code>. Call it yourself only to sample a render target outside a graph.</p>
   </div>
 </div>
 
@@ -530,18 +551,18 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
     UNKNOWN,
 };</pre>
   <div class="body">
-    <p>Two jobs: in <code>TextureDesc</code> it says what a texture can be used for; in <code>transitionImageLayout</code> it names the state it moves between.</p>
+    <p>Two jobs: in <code>TextureDesc</code> it says what a texture can be used for; in <code>transitionImageLayout</code> it names the state it moves to.</p>
     <div class="table-wrap">
     <table>
-      <tr><th>Value</th><th>At creation</th><th>In <code>transitionImageLayout</code></th></tr>
-      <tr><td><code>SAMPLED</code></td><td>read by shaders, filled from the CPU with <code>fillTexture</code></td><td>old and new</td></tr>
-      <tr><td><code>COLOR_ATTACHMENT</code></td><td>drawn into</td><td>old and new</td></tr>
-      <tr><td><code>DEPTH_STENCIL_ATTACHMENT</code></td><td>depth buffer</td><td>old and new</td></tr>
+      <tr><th>Value</th><th>At creation</th><th>As a texture's state</th></tr>
+      <tr><td><code>SAMPLED</code></td><td>read by shaders, filled from the CPU with <code>fillTexture</code></td><td>yes</td></tr>
+      <tr><td><code>COLOR_ATTACHMENT</code></td><td>drawn into</td><td>yes</td></tr>
+      <tr><td><code>DEPTH_STENCIL_ATTACHMENT</code></td><td>depth buffer</td><td>yes</td></tr>
       <tr><td><code>SAMPLED_COLOR_ATTACHMENT</code></td><td>drawn into, then read (render target color)</td><td>–</td></tr>
       <tr><td><code>SAMPLED_DEPTH_ATTACHMENT</code></td><td>depth buffer that shaders can also read (swapchain depth, and render target depth in <code>D32_SFLOAT</code>)</td><td>–</td></tr>
       <tr><td><code>TRANSFER_SRC</code>, <code>TRANSFER_DST</code>, <code>STORAGE</code>, <code>TRANSIENT_ATTACHMENT</code>, <code>INPUT_ATTACHMENT</code></td><td>only passed on to the backend; no RASM call uses them</td><td>–</td></tr>
-      <tr><td><code>PRESENT_SRC</code></td><td>–</td><td>new only (swapchain image before present)</td></tr>
-      <tr><td><code>UNKNOWN</code></td><td>–</td><td>old only (contents thrown away)</td></tr>
+      <tr><td><code>PRESENT_SRC</code></td><td>–</td><td>yes (swapchain image before present)</td></tr>
+      <tr><td><code>UNKNOWN</code></td><td>–</td><td>the start; never a target (contents thrown away)</td></tr>
     </table>
     </div>
   </div>

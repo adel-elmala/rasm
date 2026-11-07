@@ -724,7 +724,7 @@ namespace rasm
         const auto commandBuffer = frameResources[frameCount].commandBuffer;
         const uint32_t timer = beginGpuTimer(commandBuffer, "Hi-Z");
         ctx.endRendering(commandBuffer);
-        ctx.transitionImageLayout(commandBuffer, depthTexture, TextureUsage::DEPTH_STENCIL_ATTACHMENT, TextureUsage::SAMPLED);
+        ctx.transitionImageLayout(commandBuffer, depthTexture, TextureUsage::SAMPLED);
 
         // The early draws are done with the lists the late culling rewrites, and the early culling's slots are visible.
         ctx.memoryBarrier(commandBuffer, PipelineStage::GRAPHICS | PipelineStage::COMPUTE, PipelineStage::COMPUTE);
@@ -755,9 +755,9 @@ namespace rasm
 
         // The host side is for the cull stats, as in recordCulling.
         ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::GRAPHICS | PipelineStage::HOST);
-        ctx.transitionImageLayout(commandBuffer, depthTexture, TextureUsage::SAMPLED, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
+        ctx.transitionImageLayout(commandBuffer, depthTexture, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
         // The same layout: only orders the early draws' color writes before the load.
-        ctx.transitionImageLayout(commandBuffer, colorTexture, TextureUsage::COLOR_ATTACHMENT, TextureUsage::COLOR_ATTACHMENT);
+        ctx.transitionImageLayout(commandBuffer, colorTexture, TextureUsage::COLOR_ATTACHMENT);
         // Depth is stored again, for a later drawScene call in the same pass.
         ctx.beginRendering(commandBuffer, colorTexture, depthTexture, glm::vec4(0.0f), true, true);
         endGpuTimer(commandBuffer, timer);

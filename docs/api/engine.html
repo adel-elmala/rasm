@@ -279,7 +279,7 @@ if (!engine.running())
 <div class="api" id="endPass">
   <pre class="sig">void endPass();</pre>
   <div class="body">
-    <p>Ends the pass. On the window, it first draws the stats overlay (when shown). On a render target, it makes the color image ready to be sampled by later passes (see <a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a>). The depth image stays a depth attachment, so later passes cannot sample it.</p>
+    <p>Ends the pass. On the window, it first draws the stats overlay (when shown). Color and depth stay attachments. A render graph pass that reads the render target gets its color in the sampled layout; outside a graph, call <a href="low-level.html#transitionImageLayout"><code>transitionImageLayout</code></a> first (see <a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a>). Depth is never sampled by later passes. <code>endFrame</code> moves the swapchain image to the present layout.</p>
   </div>
 </div>
 

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <functional>
 
@@ -34,6 +35,13 @@ namespace rasm
     struct ResourceMetadata
     {
         uint32_t producerIdx = static_cast<uint32_t>(-1); // Which pass writes this resource?
+    };
+
+    // How passes used a buffer since its last write, across frames.
+    struct BufferAccess
+    {
+        PipelineStage           writeStages = {};   // the last write's stages, none before the first write
+        PipelineStage           readStages  = {};   // stages that have read it since, behind a barrier from the write
     };
 
     class RenderGraph;
@@ -75,6 +83,7 @@ namespace rasm
 
     protected:
         void                analyzeDependencies();
+        bool                bufferBarrier(const Pass& pass, PipelineStage& before, PipelineStage& after);
         TextureHandle       createTexture(const TextureDesc& desc);
         BufferHandle        createBuffer(const BufferDesc& desc);
         RenderTargetHandle  createRenderTarget(const RenderTargetDesc& desc);
@@ -85,10 +94,11 @@ namespace rasm
         void                write(uint32_t passIdx, BufferHandle h);
         void                write(uint32_t passIdx, RenderTargetHandle h);
 
-        std::vector<Pass>           passes;
-        std::vector<uint32_t>       executionOrder; // Sorted pass indices
-        Engine*                     engine   = nullptr;
-        bool                        compiled = false;
+        std::vector<Pass>                                           passes;
+        std::vector<uint32_t>                                       executionOrder; // Sorted pass indices
+        std::unordered_map<BufferHandle, BufferAccess, HandleHash>  bufferAccess;
+        Engine*                                                     engine   = nullptr;
+        bool                                                        compiled = false;
     };
 }
 // clang-format on

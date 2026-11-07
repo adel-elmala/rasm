@@ -629,7 +629,10 @@ namespace rasm
         auto *rhiTexture = lookup(impl->textures, texture, __func__);
         if (!rhiTexture)
             return false;
-        return impl->device->fillTexture(rhiTexture, data);
+        if (!impl->device->fillTexture(rhiTexture, data))
+            return false;
+        rhiTexture->state = TextureUsage::SAMPLED;
+        return true;
     }
 
     uint64_t RenderContext::getBufferDeviceAddress(const BufferHandle &buffer)
@@ -701,7 +704,11 @@ namespace rasm
     {
         ZoneScoped;
 
-        return impl->swapchain->acquireNextImage(imageIndex);
+        const SwapchainStatus status = impl->swapchain->acquireNextImage(imageIndex);
+        // An acquired image holds nothing worth keeping, and the transition out of UNKNOWN waits for the acquire.
+        if (status == SwapchainStatus::OK || status == SwapchainStatus::SUBOPTIMAL)
+            impl->textures[impl->swapchainImages[imageIndex]]->state = TextureUsage::UNKNOWN;
+        return status;
     }
 
     bool RenderContext::beginCommandBuffer(const CommandBufferHandle &commandBuffer)
@@ -720,11 +727,20 @@ namespace rasm
         return rhiCommandBuffer && rhiCommandBuffer->end();
     }
 
-    bool RenderContext::transitionImageLayout(const CommandBufferHandle &commandBuffer, TextureHandle texture, TextureUsage oldUsage, TextureUsage newUsage)
+    bool RenderContext::transitionImageLayout(const CommandBufferHandle &commandBuffer, TextureHandle texture, TextureUsage newUsage)
     {
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         auto *rhiTexture = lookup(impl->textures, texture, __func__);
-        return rhiCommandBuffer && rhiTexture && rhiCommandBuffer->transitionTexture(rhiTexture, oldUsage, newUsage);
+        if (!rhiCommandBuffer || !rhiTexture || !checkArgument(!impl->insidePass, __func__, "barriers must be recorded outside a render pass."))
+            return false;
+
+        // Reads after reads need no barrier. An attachment used again still gets one, since it is written.
+        if (rhiTexture->state == newUsage && newUsage == TextureUsage::SAMPLED)
+            return true;
+        if (!rhiCommandBuffer->transitionTexture(rhiTexture, rhiTexture->state, newUsage))
+            return false;
+        rhiTexture->state = newUsage;
+        return true;
     }
 
     bool RenderContext::beginRendering(const CommandBufferHandle &commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment, const glm::vec4 &clearColor, bool load, bool storeDepth)
