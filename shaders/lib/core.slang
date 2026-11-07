@@ -130,7 +130,7 @@ struct SceneData
     uint32_t*           drawCountsPtr;      // visible draws per run, written by cull.slang
     uint32_t*           cullSlotsPtr;       // cull.slang's scratch: a draw's slot among its group's visible draws
     uint32_t*           groupCountsPtr;     // cull.slang's scratch: visible draws per group of 64
-    uint32_t*           cullStatsPtr;       // the frame's visible draws [0] and triangles [1] low, [2] high, added up by cull.slang
+    uint32_t*           cullStatsPtr;       // the frame's visible draws, triangles and LODs, added up by cull.slang (STATS_* there)
     uint32_t*           visibilityPtr;      // per instance row: 1 if the last occlusion test saw it, read by the early cull
     float*              hizPtr;             // the call's Hi-Z: farthest depth per texel, levels packed one after another
     float4              frustumPlanes[6];   // world space, inside where dot(xyz, p) + w >= 0

@@ -13,6 +13,8 @@
 namespace rasm
 {
 
+    constexpr uint32_t                  CULL_STATS_WORDS                                                    = 5 + MAX_MESH_LODS;
+
     struct EntityDrawState
     {
         uint32_t                        firstInstance                                                       = 0;

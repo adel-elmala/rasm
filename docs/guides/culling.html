@@ -156,7 +156,7 @@
   <tr><td><code>groupCountsPtr</code></td><td>one <code>uint</code> per group of 64: how many are visible</td><td><code>countMain</code></td></tr>
   <tr><td><code>drawInfoPtr</code></td><td>the visible draws, packed per run</td><td><code>writeMain</code></td></tr>
   <tr><td><code>drawCountsPtr</code></td><td>one count per run</td><td><code>writeMain</code> (the run's last group)</td></tr>
-  <tr><td><code>cullStatsPtr</code></td><td>visible draws and triangles of the frame</td><td><code>countMain</code> (atomics)</td></tr>
+  <tr><td><code>cullStatsPtr</code></td><td>visible draws, their triangles (at the picked LOD and at LOD 0) and draws per LOD, for the <a href="stats-overlay.html">stats overlay</a></td><td><code>countMain</code> (atomics)</td></tr>
 </table>
 </div>
 <p><code>cullSlotsPtr</code> and <code>groupCountsPtr</code> are not separate buffers. They sit in the same buffer as the visible draws, right after them.</p>

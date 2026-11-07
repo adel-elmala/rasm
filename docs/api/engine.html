@@ -407,6 +407,8 @@ for (uint32_t i = 0; i &lt; stats.gpuTimerCount; ++i)
       <dt>drawsVisible</dt><dd>Draws that passed culling: inside the view, and with occlusion culling also not hidden. Draws of a call drawn without culling all count.</dd>
       <dt>triangles</dt><dd>Triangles before culling, at LOD 0.</dd>
       <dt>trianglesVisible</dt><dd>Triangles of the visible draws, at the LOD culling picked for each.</dd>
+      <dt>trianglesVisibleLod0</dt><dd>Triangles of the same visible draws at LOD 0. <code>trianglesVisibleLod0 - trianglesVisible</code> is what LODs saved this frame.</dd>
+      <dt>drawsPerLod</dt><dd>Visible draws at each LOD, from LOD 0 to <code>MAX_MESH_LODS - 1</code>. They add up to <code>drawsVisible</code>.</dd>
       <dt>memory</dt><dd><code>VRAMStats</code> of that frame (see <a href="#queryMemoryStats"><code>queryMemoryStats</code></a>).</dd>
     </dl>
   </div>

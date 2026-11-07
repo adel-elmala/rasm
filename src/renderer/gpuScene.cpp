@@ -172,7 +172,7 @@ namespace rasm
                                                         .usage = BufferUsage::INDIRECT,
                                                         .size = MAX_SCENE_DRAWS_PER_FRAME * gfx::MAX_DRAW_RUNS * sizeof(uint32_t)});
             // The frame's visible draws and triangles (low, high), which updateFrameStats reads back once the slot's fence passed.
-            gpuScene->cullStats[i] = ctx.createBuffer({.name = "Cull Stats Buffer " + std::to_string(i), .usage = BufferUsage::STORAGE, .size = 3 * sizeof(uint32_t), .hostVisible = true, .hostReadable = true});
+            gpuScene->cullStats[i] = ctx.createBuffer({.name = "Cull Stats Buffer " + std::to_string(i), .usage = BufferUsage::STORAGE, .size = CULL_STATS_WORDS * sizeof(uint32_t), .hostVisible = true, .hostReadable = true});
             if (!gpuScene->cullCommandBuffers[i].isValid() || !gpuScene->drawCounts[i].isValid() || !gpuScene->cullStats[i].isValid())
             {
                 spdlog::error("Failed to create the culling resources.");

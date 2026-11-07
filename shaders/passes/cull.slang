@@ -23,6 +23,11 @@ static const uint   CULL_GROUP_SIZE     = 64;           // Must match CULL_GROUP
 static const uint   CULLED              = 0xFFFFFFFF;   // cullSlotsPtr of a culled draw
 static const uint   CULL_EARLY          = 0;            // Must match CULL_EARLY and CULL_LATE in gpuScene.cpp.
 static const uint   CULL_LATE           = 1;
+// cullStatsPtr: visible draws, visible triangles (low, high), the same triangles at LOD 0 (low, high), then the
+// visible draws at each LOD. Must match CULL_STATS_WORDS in gpuScene.h.
+static const uint   STATS_TRIANGLES     = 1;
+static const uint   STATS_LOD0_TRIANGLES = 3;
+static const uint   STATS_LOD_DRAWS     = 5;
 
 struct CullGroup
 {
@@ -35,6 +40,8 @@ struct CullGroup
 
 groupshared uint    visibleFlags[CULL_GROUP_SIZE];
 groupshared uint    visibleTriangles[CULL_GROUP_SIZE];
+groupshared uint    visibleLod0Triangles[CULL_GROUP_SIZE];
+groupshared uint    visibleLods[CULL_GROUP_SIZE];          // MAX_MESH_LODS for a culled draw
 groupshared uint    partialSums[CULL_GROUP_SIZE];
 
 // The groups of run 0 come first, then those of run 1, and so on.
@@ -61,8 +68,19 @@ CullGroup getCullGroup(SceneData *scene, uint groupIndex)
     return group;
 }
 
+// Adds a 64-bit count, low word first, to counter[0] (low) and counter[1] (high). Not every backend has 64-bit
+// atomics, so a carry out of the low word goes into the high one.
+void addCount64(uint32_t *counter, uint low, uint high)
+{
+    uint previousLow;
+    InterlockedAdd(counter[0], low, previousLow);
+    high += previousLow + low < previousLow ? 1 : 0;
+    if (high > 0)
+        InterlockedAdd(counter[1], high);
+}
+
 // Writes each draw's slot among its group's visible draws (or CULLED), and the group's visible count. The
-// group's visible draws and triangles go into the frame's stats with atomics.
+// group's visible draws, triangles and LODs go into the frame's stats with atomics.
 [shader("compute")]
 [numthreads(CULL_GROUP_SIZE, 1, 1)]
 void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
@@ -72,6 +90,8 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     uint drawIndex      = group.firstDraw + threadId.x;
     bool visible        = false;
     uint triangles      = 0;
+    uint lod0Triangles  = 0;
+    uint lod            = MAX_MESH_LODS;
     if (drawIndex < group.endDraw)
     {
         DrawInfo draw   = scene->allDrawsPtr[drawIndex];
@@ -93,12 +113,28 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
             scene->visibilityPtr[draw.firstInstance] = seen ? 1 : 0;
             visible         = seen && !drawnEarly;
         }
-        triangles       = visible ? selectLod(scene, draw, sphere).indexCount / 3 : 0;
+        if (visible)
+        {
+            lod             = selectLod(scene, draw, sphere);
+            triangles       = getLodDraw(scene, draw, lod).indexCount / 3;
+            lod0Triangles   = draw.indexCount / 3;
+        }
     }
 
-    visibleFlags[threadId.x]        = visible ? 1 : 0;
-    visibleTriangles[threadId.x]    = triangles;
+    visibleFlags[threadId.x]            = visible ? 1 : 0;
+    visibleTriangles[threadId.x]        = triangles;
+    visibleLod0Triangles[threadId.x]    = lod0Triangles;
+    visibleLods[threadId.x]             = lod;
     GroupMemoryBarrierWithGroupSync();
+
+    if (threadId.x < MAX_MESH_LODS)
+    {
+        uint lodDraws = 0;
+        for (uint i = 0; i < CULL_GROUP_SIZE; ++i)
+            lodDraws += visibleLods[i] == threadId.x ? 1 : 0;
+        if (lodDraws > 0)
+            InterlockedAdd(scene->cullStatsPtr[STATS_LOD_DRAWS + threadId.x], lodDraws);
+    }
 
     uint slot = 0;
     for (uint i = 0; i < threadId.x; ++i)
@@ -110,24 +146,25 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         uint count = slot + visibleFlags[threadId.x];
         scene->groupCountsPtr[groupId.x] = count;
 
-        // The triangles are a 64-bit count in two uints, low word first, because not every backend has 64-bit
-        // atomics: a carry out of the low word goes into the high one.
-        uint trianglesLow   = 0;
-        uint trianglesHigh  = 0;
+        // The triangle counts are 64-bit, in two uints (addCount64).
+        uint trianglesLow       = 0;
+        uint trianglesHigh      = 0;
+        uint lod0Low            = 0;
+        uint lod0High           = 0;
         for (uint i = 0; i < CULL_GROUP_SIZE; ++i)
         {
-            uint sum        = trianglesLow + visibleTriangles[i];
-            trianglesHigh  += sum < trianglesLow ? 1 : 0;
-            trianglesLow    = sum;
+            uint sum            = trianglesLow + visibleTriangles[i];
+            trianglesHigh      += sum < trianglesLow ? 1 : 0;
+            trianglesLow        = sum;
+            uint lod0Sum        = lod0Low + visibleLod0Triangles[i];
+            lod0High           += lod0Sum < lod0Low ? 1 : 0;
+            lod0Low             = lod0Sum;
         }
         if (count > 0)
         {
-            uint previousLow;
             InterlockedAdd(scene->cullStatsPtr[0], count);
-            InterlockedAdd(scene->cullStatsPtr[1], trianglesLow, previousLow);
-            trianglesHigh  += previousLow + trianglesLow < previousLow ? 1 : 0;
-            if (trianglesHigh > 0)
-                InterlockedAdd(scene->cullStatsPtr[2], trianglesHigh);
+            addCount64(scene->cullStatsPtr + STATS_TRIANGLES, trianglesLow, trianglesHigh);
+            addCount64(scene->cullStatsPtr + STATS_LOD0_TRIANGLES, lod0Low, lod0High);
         }
     }
 }
@@ -157,7 +194,8 @@ void writeMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         if (slot != CULLED)
         {
             DrawInfo draw = scene->allDrawsPtr[drawIndex];
-            scene->drawInfoPtr[scene->runFirst[group.run] + base + slot] = selectLod(scene, draw, getWorldSphere(scene, draw));
+            uint lod      = selectLod(scene, draw, getWorldSphere(scene, draw));
+            scene->drawInfoPtr[scene->runFirst[group.run] + base + slot] = getLodDraw(scene, draw, lod);
         }
     }
     if (threadId.x == 0 && groupId.x + 1 == group.runEndGroup)

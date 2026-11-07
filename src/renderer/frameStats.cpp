@@ -81,12 +81,17 @@ namespace rasm
 
             // Culling counted the visible draws and triangles of the culled calls; unculled calls drew all of theirs.
             const DrawTotals &totals = gpuScene->drawTotals[frame];
-            uint32_t culled[3] = {};
+            // The words are laid out as the STATS_* constants in cull.slang say. Unculled calls draw LOD 0.
+            uint32_t culled[CULL_STATS_WORDS] = {};
             ctx.readBuffer(gpuScene->cullStats[frame], culled, sizeof(culled));
             stats.draws = totals.draws;
             stats.drawsVisible = culled[0] + totals.unculledDraws;
             stats.triangles = totals.triangles;
             stats.trianglesVisible = (static_cast<uint64_t>(culled[2]) << 32 | culled[1]) + totals.unculledTriangles;
+            stats.trianglesVisibleLod0 = (static_cast<uint64_t>(culled[4]) << 32 | culled[3]) + totals.unculledTriangles;
+            for (uint32_t i = 0; i < MAX_MESH_LODS; ++i)
+                stats.drawsPerLod[i] = culled[5 + i];
+            stats.drawsPerLod[0] += totals.unculledDraws;
         }
         slot.readFenceValue = fenceValue;
         stats.cpuFrameMs = deltaTime * 1000.0f;
@@ -101,7 +106,7 @@ namespace rasm
         if (slot.timestamps.isValid())
             ctx.resetQueries(slot.timestamps);
         // Culling adds to the counts even in frames that aren't measured.
-        const uint32_t zeros[3] = {};
+        const uint32_t zeros[CULL_STATS_WORDS] = {};
         ctx.fillBuffer(gpuScene->cullStats[frame], zeros, sizeof(zeros));
     }
 

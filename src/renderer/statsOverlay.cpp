@@ -65,6 +65,28 @@ namespace rasm
             text += line;
             std::snprintf(line, sizeof(line), "Triangles %s / %s\n", formatCount(stats.trianglesVisible).c_str(), formatCount(stats.triangles).c_str());
             text += line;
+
+            const uint64_t saved = stats.trianglesVisibleLod0 > stats.trianglesVisible ? stats.trianglesVisibleLod0 - stats.trianglesVisible : 0;
+            const double savedPercent = stats.trianglesVisibleLod0 > 0 ? 100.0 * static_cast<double>(saved) / static_cast<double>(stats.trianglesVisibleLod0) : 0.0;
+            std::snprintf(line, sizeof(line), "LOD saved %s (%.0f%%)\n", formatCount(saved).c_str(), savedPercent);
+            text += line;
+
+            // The visible draws at LOD 0, 1, 2, ... up to the coarsest one in use, wrapped to the overlay's width.
+            uint32_t lodsUsed = 1;
+            for (uint32_t i = 0; i < MAX_MESH_LODS; ++i)
+                lodsUsed = stats.drawsPerLod[i] > 0 ? i + 1 : lodsUsed;
+            std::string lodLine = "LOD draws";
+            for (uint32_t i = 0; i < lodsUsed; ++i)
+            {
+                const std::string count = formatCount(stats.drawsPerLod[i]);
+                if (lodLine.size() + 1 + count.size() > MAX_TEXT_COLUMNS)
+                {
+                    text += lodLine + "\n";
+                    lodLine = "         ";
+                }
+                lodLine += " " + count;
+            }
+            text += lodLine + "\n";
             std::snprintf(line, sizeof(line), "VRAM      %llu / %llu MiB\n", static_cast<unsigned long long>(stats.memory.vramUsage >> 20),
                           static_cast<unsigned long long>(stats.memory.vramBudget >> 20));
             text += line;
