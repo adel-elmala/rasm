@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Asset Loading · RASM</title>
 <meta name="description" content="How loadMesh, loadGLTF and loadTexture load in the background: worker threads, finishLoads and its time budget, the glTF and OBJ import, caching, failures, the geometry pool fit check and what CPU memory is freed.">
-<meta name="rasm-sources" content="src/assets/mesh.cpp src/assets/texture.cpp src/assets/meshImport.h src/assets/meshImport.cpp src/assets/material.cpp src/engine.cpp include/rasm/engine.h include/rasm/mesh.h include/rasm/types.h src/renderer/geometryPool.h src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp src/platform/paths.h src/platform/paths.cpp src/rhi/vulkan/vulkanDevice.cpp">
+<meta name="rasm-sources" content="src/assets/mesh.cpp src/assets/texture.cpp src/assets/meshImport.h src/assets/meshImport.cpp src/assets/meshLod.h src/assets/meshLod.cpp src/assets/material.cpp src/engine.cpp include/rasm/engine.h include/rasm/mesh.h include/rasm/types.h src/renderer/geometryPool.h src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp src/platform/paths.h src/platform/paths.cpp src/rhi/vulkan/vulkanDevice.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -42,6 +42,7 @@
     <li>One <code>std::async</code> task per load, no thread pool. The worker never touches the engine.</li>
     <li><code>finishLoads</code> runs at the start of <code>beginFrame</code>. It finishes the loads that are ready, and stops after 4 ms (<code>LOAD_BUDGET</code>). <code>waitForLoads</code> finishes all of them, without a budget.</li>
     <li>glTF: a node walk with an explicit stack, and one checked accessor reader (strides, sparse, quantized). OBJ: one sub-mesh, one vertex per index.</li>
+    <li>With <code>EngineConfig::meshLods</code> on, the worker also builds coarser <a href="#lods">LODs</a> of each sub-mesh (<code>buildMeshLods</code>).</li>
     <li>Paths are cached: loading the same file twice gives the same handle. A mesh that failed can be loaded again on the same handle.</li>
     <li>A mesh must fit the geometry pool as a whole before anything is created. After upload, the vertex arrays, the glTF model and the pixels are freed.</li>
   </ul>
@@ -68,10 +69,10 @@
       <path d="M140,88 V144" class="arrow dashed" marker-end="url(#ah)"/>
       <text x="148" y="124" class="small">starts the task</text>
       <rect x="140" y="146" width="290" height="50" rx="6" class="ghost"/>
-      <text x="285" y="175" class="mid small t-faint">importMeshFile (not started yet)</text>
+      <text x="285" y="175" class="mid small t-faint">importMeshFile, buildMeshLods (not started yet)</text>
 
       <text x="20" y="218" class="small">loadMesh resolves the path, checks the path cache, the extension (obj, gltf, glb) and that the file exists.</text>
-      <text x="20" y="234" class="small">It takes a handle, sets the mesh to MeshState::LOADING, starts std::async(importMeshFile) and returns.</text>
+      <text x="20" y="234" class="small">It takes a handle, sets the mesh to MeshState::LOADING, starts the std::async task and returns.</text>
     </svg>
     <p>The handle is usable at once: <code>createEntity</code> can take it. The entity waits for the mesh in <code>entitiesWaitingForMesh</code> (see <a href="gpu-scene.html">The GPU scene tables</a>).</p>
   </div>
@@ -95,10 +96,10 @@
       <text x="396" y="112" class="mid small t-faint">not ready</text>
       <path d="M140,88 V144" class="arrow dashed" marker-end="url(#ah)"/>
       <rect x="140" y="146" width="290" height="50" rx="6" class="cpu"/><rect x="140" y="146" width="290" height="50" rx="6" class="hot"/>
-      <text x="285" y="166" class="mid mono">importMeshFile</text>
-      <text x="285" y="184" class="mid small">read · parse · decode images · build vertices</text>
+      <text x="285" y="166" class="mid mono">importMeshFile → buildMeshLods</text>
+      <text x="285" y="184" class="mid small">read · parse · decode images · vertices · LODs</text>
 
-      <text x="20" y="218" class="small">The worker has only the path. It returns a GLTFRaw and never reads or writes engine state.</text>
+      <text x="20" y="218" class="small">The worker has only the path and the meshLods flag. It returns a GLTFRaw and never reads or writes engine state.</text>
       <text x="20" y="234" class="small">finishLoads asks each future wait_for(0): not ready means skip it this frame, without waiting.</text>
     </svg>
     <p>Frames keep their normal speed while a big file decodes. A scene that uses the mesh simply draws without it.</p>
@@ -124,12 +125,12 @@
       <rect x="486" y="62" width="80" height="26" rx="4" class="ghost"/><text x="526" y="79" class="mid small t-faint">finishLoads</text>
       <path d="M140,88 V144" class="arrow dashed" marker-end="url(#ah)"/>
       <rect x="140" y="146" width="290" height="50" rx="6" class="cpu"/>
-      <text x="285" y="166" class="mid mono">importMeshFile</text>
-      <text x="285" y="184" class="mid small">read · parse · decode images · build vertices</text>
+      <text x="285" y="166" class="mid mono">importMeshFile → buildMeshLods</text>
+      <text x="285" y="184" class="mid small">read · parse · decode images · vertices · LODs</text>
       <path d="M430,146 V128 H526 V90" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
       <text x="440" y="142" class="small t-hot">GLTFRaw ready</text>
 
-      <text x="20" y="218" class="small">GLTFRaw: one SubGLTFRaw per primitive (vertices, indices, node transform, glTF material index),</text>
+      <text x="20" y="218" class="small">GLTFRaw: one SubGLTFRaw per primitive (vertices, indices, LODs, node transform, glTF material index),</text>
       <text x="20" y="234" class="small">and the tinygltf model, already without its raw buffers but with its decoded images.</text>
     </svg>
     <p>The worker is done, but nothing in the engine changes yet. The result waits in the <code>std::future</code> of the <code>PendingMeshLoad</code>.</p>
@@ -153,8 +154,8 @@
       <rect x="486" y="62" width="80" height="26" rx="4" class="cpu"/><rect x="486" y="62" width="80" height="26" rx="4" class="hot"/><text x="526" y="79" class="mid small">finishLoads</text>
       <path d="M140,88 V144" class="arrow dashed" marker-end="url(#ah)"/>
       <rect x="140" y="146" width="290" height="50" rx="6" class="cpu"/>
-      <text x="285" y="166" class="mid mono">importMeshFile</text>
-      <text x="285" y="184" class="mid small">read · parse · decode images · build vertices</text>
+      <text x="285" y="166" class="mid mono">importMeshFile → buildMeshLods</text>
+      <text x="285" y="184" class="mid small">read · parse · decode images · vertices · LODs</text>
       <line x1="526" y1="88" x2="526" y2="104" class="arrow hot"/>
       <rect x="470" y="104" width="240" height="98" rx="6" class="zone"/>
       <text x="482" y="122" class="small t-hot">finishMeshLoad:</text>
@@ -341,9 +342,71 @@
   </div>
   <div>
     <h4>One vertex per index</h4>
-    <p>Every face corner becomes its own vertex; vertices are not shared. V is flipped (<code>1.0 - v</code>), because OBJ puts the UV origin at the bottom-left. A missing normal or UV stays zero.</p>
+    <p>Every face corner becomes its own vertex; vertices are not shared (<code>buildMeshLods</code> merges them before it makes LODs). V is flipped (<code>1.0 - v</code>), because OBJ puts the UV origin at the bottom-left. A missing normal or UV stays zero.</p>
   </div>
 </div>
+
+<h3 id="lods">LODs</h3>
+
+<p>When <code>EngineConfig::meshLods</code> is on (the default), the worker calls <code>buildMeshLods</code> on each sub-mesh right after <code>importMeshFile</code>. <code>createMesh</code> calls it on the main thread. It makes coarser versions of the sub-mesh, its <b>LODs</b>, with meshoptimizer. Culling picks one per draw (see <a href="culling.html#lod">GPU culling</a>).</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="buildMeshLods merges identical vertices, then simplifies LOD 0 to LOD 1 with about half the triangles, LOD 1 to LOD 2, and so on. It stops at 8 levels, under 64 triangles, or when a step removes under a tenth.">
+    <text x="550" y="16" class="mid small t-cpu">each step: meshopt_simplify to half of the one before</text>
+    <path d="M430,24 V28 H670 V24" class="arrow cpu"/>
+
+    <rect x="20" y="34" width="120" height="52" rx="6" class="cpu"/>
+    <text x="80" y="56" class="mid title">ObjRaw</text>
+    <text x="80" y="74" class="mid small">from the importer</text>
+    <line x1="140" y1="60" x2="158" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="160" y="34" width="140" height="52" rx="6" class="cpu"/>
+    <text x="230" y="56" class="mid title">weld vertices</text>
+    <text x="230" y="74" class="mid small">identical ones → one</text>
+    <text x="230" y="104" class="mid mono small">meshopt_generateVertexRemap</text>
+    <line x1="300" y1="60" x2="318" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="320" y="34" width="100" height="52" rx="6" class="cpu"/>
+    <text x="370" y="56" class="mid title">LOD 0</text>
+    <text x="370" y="74" class="mid small">N triangles</text>
+    <line x1="420" y1="60" x2="438" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="440" y="34" width="100" height="52" rx="6" class="cpu"/>
+    <text x="490" y="56" class="mid title">LOD 1</text>
+    <text x="490" y="74" class="mid small">≈ N/2 · error e1</text>
+    <line x1="540" y1="60" x2="558" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="560" y="34" width="100" height="52" rx="6" class="cpu"/>
+    <text x="610" y="56" class="mid title">LOD 2</text>
+    <text x="610" y="74" class="mid small">≈ N/4 · e1 + e2</text>
+    <line x1="660" y1="60" x2="678" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="680" y="34" width="60" height="52" rx="6" class="cpu"/>
+    <text x="710" y="64" class="mid title">…</text>
+
+    <rect x="20" y="126" width="230" height="78" rx="6" class="zone"/>
+    <text x="32" y="146" class="title">No LODs when</text>
+    <text x="32" y="166" class="small">the sub-mesh has under 1024 triangles,</text>
+    <text x="32" y="182" class="small">or EngineConfig::meshLods is false</text>
+
+    <rect x="265" y="126" width="270" height="78" rx="6" class="zone"/>
+    <text x="277" y="146" class="title">The chain stops at</text>
+    <text x="277" y="164" class="small">8 levels, LOD 0 included (MAX_MESH_LODS),</text>
+    <text x="277" y="180" class="small">a next level under 64 triangles, or a step</text>
+    <text x="277" y="196" class="small">that removes under a tenth of the triangles</text>
+
+    <rect x="550" y="126" width="190" height="78" rx="6" class="zone"/>
+    <text x="562" y="146" class="title">The error</text>
+    <text x="562" y="164" class="small">adds up the steps' errors,</text>
+    <text x="562" y="180" class="small">in the mesh's own units,</text>
+    <text x="562" y="196" class="small">so it never gets smaller</text>
+
+    <text x="20" y="230" class="small">Every LOD is a list of indices into the same welded vertices (ObjRaw::lods, from fine to coarse).</text>
+  </svg>
+  <figcaption>Simplification only collapses edges between triangles that share vertices, and the OBJ importer gives every corner its own vertex. So identical vertices are merged first. The error is an upper bound of how far a LOD's surface is from LOD 0.</figcaption>
+</figure>
+
+<p>A LOD costs only its indices, up to as many again as LOD 0 in total. The numbers for an example are in <a href="gpu-memory.html">How data reaches the GPU</a>.</p>
 
 <h2><span class="n">4</span>Path caching and failures</h2>
 
@@ -392,13 +455,13 @@
     <text x="615" y="117" class="mid small t-faint">new mesh</text>
     <text x="695" y="117" class="mid small t-hot">too much</text>
 
-    <text x="150" y="160" class="small">fits() takes the sums over all sub-meshes: vertices, indices, and the sub-mesh count (geometry rows).</text>
+    <text x="150" y="160" class="small">fits() takes the sums over all sub-meshes: vertices, indices (LODs too), and the sub-mesh count (geometry rows).</text>
     <text x="150" y="178" class="small">If any of the three does not fit, nothing is created: no geometry, no material, no texture, no bindless slot.</text>
   </svg>
   <figcaption>The check comes first because nothing is ever freed from the pool (D4). A mesh that failed halfway would leak the pool space, materials and bindless slots of its first sub-meshes.</figcaption>
 </figure>
 
-<p>When it fits, <code>finishMeshLoad</code> goes over the sub-meshes in order. For each one it calls <code>loadMaterial</code> (glTF only) and then <code>GeometryPool::upload</code>, which appends the vertices and indices, computes a bounding sphere and writes one geometry row. The pool size is set by <code>EngineConfig</code>; the defaults and the upload path are in <a href="gpu-memory.html">How data reaches the GPU</a>. <code>createMesh</code> skips all of this background work: it uploads at once and returns a <code>READY</code> mesh.</p>
+<p>When it fits, <code>finishMeshLoad</code> goes over the sub-meshes in order. For each one it calls <code>loadMaterial</code> (glTF only) and then <code>GeometryPool::upload</code>, which appends the vertices, then LOD 0's indices followed by each coarser LOD's, computes a bounding sphere and writes one geometry row. The pool size is set by <code>EngineConfig</code>; the defaults and the upload path are in <a href="gpu-memory.html">How data reaches the GPU</a>. <code>createMesh</code> skips all of this background work: it builds the LODs, uploads at once and returns a <code>READY</code> mesh.</p>
 
 <h2><span class="n">6</span>Textures: two ways in</h2>
 
@@ -421,14 +484,14 @@
 <table>
   <tr><th>Data</th><th>Freed</th></tr>
   <tr><td>glTF buffers (the raw file bytes)</td><td>on the worker, once every accessor is read</td></tr>
-  <tr><td>Vertex and index arrays (<code>ObjRaw</code>)</td><td>at the end of <code>finishMeshLoad</code>, when the <code>GLTFRaw</code> goes out of scope</td></tr>
+  <tr><td>Vertex, index and LOD arrays (<code>ObjRaw</code>)</td><td>at the end of <code>finishMeshLoad</code>, when the <code>GLTFRaw</code> goes out of scope</td></tr>
   <tr><td>The <code>tinygltf::Model</code> and its decoded images</td><td>at the end of <code>finishMeshLoad</code></td></tr>
   <tr><td>Decoded pixels of <code>loadTexture</code></td><td>at the end of <code>finishTextureLoad</code> (<code>stbi_image_free</code>)</td></tr>
   <tr><td>Generated mip levels</td><td>when <code>fillTexture</code> returns</td></tr>
 </table>
 </div>
 
-<p>What stays is small: a <code>Mesh</code> keeps its state and its <code>SubMesh</code> list. Each <code>SubMesh</code> is a <code>MeshGeometry</code> (a range in the pool, its geometry row and bounding sphere), a node transform and a material handle.</p>
+<p>What stays is small: a <code>Mesh</code> keeps its state and its <code>SubMesh</code> list. Each <code>SubMesh</code> is a <code>MeshGeometry</code> (a range in the pool, its LOD count, its geometry row and bounding sphere), a node transform and a material handle.</p>
 
 <h2><span class="n">8</span>Where it lives in code</h2>
 
@@ -438,12 +501,13 @@
   <tr><td>Mesh loads</td><td><code>Engine::loadMesh</code>, <code>loadGLTF</code>, <code>createMesh</code>, <code>finishMeshLoad</code>, <code>isLoaded</code> in <code>src/assets/mesh.cpp</code></td></tr>
   <tr><td>Texture loads</td><td><code>Engine::loadTexture</code>, <code>decodeTexture</code>, <code>finishTextureLoad</code> in <code>src/assets/texture.cpp</code></td></tr>
   <tr><td>Worker import</td><td><code>importMeshFile</code>, <code>importGltf</code>, <code>importObj</code>, <code>traverseNodes</code>, <code>extractGLTFRaws</code>, <code>gatherAccessor</code> in <code>src/assets/meshImport.cpp</code></td></tr>
+  <tr><td>LOD build</td><td><code>buildMeshLods</code>, <code>weldVertices</code> in <code>src/assets/meshLod.cpp</code></td></tr>
   <tr><td>glTF materials and images</td><td><code>Engine::loadMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
   <tr><td>The budget</td><td><code>finishLoads</code>, <code>waitForLoads</code>, <code>LOAD_BUDGET</code> in <code>src/engine.cpp</code></td></tr>
-  <tr><td>Raw result types</td><td><code>GLTFRaw</code>, <code>SubGLTFRaw</code>, <code>ObjRaw</code>, <code>MeshState</code> in <code>include/rasm/mesh.h</code>; <code>TextureRaw</code> in <code>include/rasm/types.h</code></td></tr>
+  <tr><td>Raw result types</td><td><code>GLTFRaw</code>, <code>SubGLTFRaw</code>, <code>ObjRaw</code>, <code>MeshLod</code>, <code>MeshState</code> in <code>include/rasm/mesh.h</code>; <code>TextureRaw</code> in <code>include/rasm/types.h</code></td></tr>
   <tr><td>Pool append and fit check</td><td><code>GeometryPool::fits</code>, <code>GeometryPool::upload</code> in <code>src/renderer/geometryPool.cpp</code></td></tr>
   <tr><td>Paths</td><td><code>Engine::resolveAssetPath</code> in <code>src/engine.cpp</code>; UTF-8 helpers in <code>src/platform/paths.h</code></td></tr>
-  <tr><td>Tests (no GPU)</td><td><code>tests/gltfImportTests.cpp</code>, <code>tests/meshTests.cpp</code></td></tr>
+  <tr><td>Tests (no GPU)</td><td><code>tests/gltfImportTests.cpp</code>, <code>tests/meshTests.cpp</code>, <code>tests/meshLodTests.cpp</code></td></tr>
 </table>
 </div>
 
@@ -452,13 +516,13 @@
 <div class="callout rule">
   <strong>Keep these true</strong>
   <ul>
-    <li>Worker code (<code>importMeshFile</code>, <code>decodeTexture</code>) must not touch the engine. It gets a path and returns a plain result.</li>
+    <li>Worker code (<code>importMeshFile</code>, <code>buildMeshLods</code>, <code>decodeTexture</code>) must not touch the engine. It gets a path and returns a plain result.</li>
     <li>Anything that creates GPU objects, writes the registry or calls <code>fillBuffer</code> for a load runs in <code>finishLoads</code>, on the main thread, before anything binds the bindless set or the geometry pool.</li>
     <li>Check that the whole mesh fits (<code>GeometryPool::fits</code>) before creating anything for it. Nothing is freed (D4).</li>
     <li>Free the CPU copy after upload (P6). Do not keep vertex arrays, the glTF model or pixels in the registry.</li>
     <li>A texture that a material may already use must always be filled, even when its decode fails.</li>
     <li>Normal, metallic-roughness and AO textures are <code>R8G8B8A8_UNORM</code>; color and emissive are <code>R8G8B8A8_SRGB</code>.</li>
-    <li>Changes to import behaviour need a test in <code>tests/gltfImportTests.cpp</code> (no GPU needed).</li>
+    <li>Changes to import behaviour need a test in <code>tests/gltfImportTests.cpp</code>, and changes to LOD building one in <code>tests/meshLodTests.cpp</code> (no GPU needed).</li>
   </ul>
 </div>
 

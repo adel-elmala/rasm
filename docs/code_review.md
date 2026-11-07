@@ -187,7 +187,7 @@ Next steps, in order:
 **B12** — *Fixed 2026-10-31:* the SPIR-V options are now a static array. The original finding follows. `ShaderCompiler::getTargetDesc` allocates `new slang::CompilerOptionEntry[1]` and never frees it ([shaderCompiler.cpp:456-458](../src/renderer/shaderCompiler.cpp#L456-L458)).
 
 **B13** — Handle indices are consumed before validation and are never reused.
-- `loadMesh` takes a handle before parsing the file ([mesh.cpp:96](../src/assets/mesh.cpp#L96)), so failed loads burn slots.
+- `loadMesh` takes a handle before parsing the file ([mesh.cpp:79](../src/assets/mesh.cpp#L79)), so failed loads burn slots.
 - With `MAX_MESHES = 8` and indices starting at 1, only 7 meshes can be loaded in total.
 - `MAX_LIGHTS = 8` and `MAX_CAMERAS = 8` are global, not per scene.
 
@@ -199,7 +199,7 @@ Next steps, in order:
 
 **B17** — *Fixed 2026-10-27:* `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` triggers recreation. `Window` has `pixelWidth`/`pixelHeight` (the swapchain's desired extent) next to the logical `width`/`height` used for mouse input. Depth textures, viewport, scissor and camera aspect come from the swapchain extent (`Swapchain::width`/`height`). The original finding follows. Resize uses `SDL_EVENT_WINDOW_RESIZED`, which reports logical size ([window.cpp:116-122](../src/platform/window.cpp#L116-L122)). The depth texture and viewport use `mainWindow` size, while the swapchain extent comes from the surface. On scaled or HiDPI displays they can disagree. Use `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` / `SDL_GetWindowSizeInPixels`, and size everything from the swapchain extent. *Likely.*
 
-**B23 — The CPU/GPU struct check only runs in debug builds.** `validateRasmStructs` is called inside `assert(...)` ([shaderCompiler.cpp:391](../src/renderer/shaderCompiler.cpp#L391)), so with `NDEBUG` the call is compiled out. A Release build with mismatched structs starts normally and the GPU reads shifted data, or hits a device lost when a pointer field moves. Call it unconditionally, log the mismatch and fail the shader or pipeline creation. The check runs once per linked program, so it costs nothing at runtime. *Confirmed.*
+**B23 — The CPU/GPU struct check only runs in debug builds.** `validateRasmStructs` is called inside `assert(...)` ([shaderCompiler.cpp:396](../src/renderer/shaderCompiler.cpp#L396)), so with `NDEBUG` the call is compiled out. A Release build with mismatched structs starts normally and the GPU reads shifted data, or hits a device lost when a pointer field moves. Call it unconditionally, log the mismatch and fail the shader or pipeline creation. The check runs once per linked program, so it costs nothing at runtime. *Confirmed.*
 
 **B24 — A camera at rest moved by float noise that depended on the frame time.** *Fixed 2026-11-07:* `easeCamera` snaps the rendered transform to the target once position, rotation and scale are within 1e-6 of it (relative for the position). The original finding follows. `easeCamera` ([camera.cpp:121-156](../src/scene/camera.cpp#L121-L156)) ran `slerp`, `normalize` and `mix` toward the target every frame, even when the camera was already there. With `t` taken from `deltaTime`, the rounding differed from run to run, so frame N of an example without input was not the same on every run. Frustum culling hid it. With occlusion culling, a test that sits right on the edge can flip, which moves a draw between the early and late pass and changes which face wins on equal depth: `03_instances` frame 60 differed in 480 pixels on cube edges in about half the runs. After the fix, 6 full captures out of 6 were identical. *Confirmed.*
 
@@ -260,7 +260,7 @@ Use a right-handed Y-up world (glTF's convention) and do the Vulkan flip with a 
 **D11 — Assets and shaders are located through the working directory** (§1.3). *Fixed 2026-11-01:* see [architecture.md §11](architecture.md#11-conventions-that-cross-files).
 
 **D12 — The shader code is Vulkan-only.**
-- `spirv_asm` for `DrawIndex` ([core.slang:150-159](../shaders/lib/core.slang#L150-L159)) is SPIR-V specific.
+- `spirv_asm` for `DrawIndex` ([core.slang:160-169](../shaders/lib/core.slang#L160-L169)) is SPIR-V specific.
 - The data model relies on raw pointers (`SceneData*`, `VertexFull*`) through buffer device address.
 - As far as I know, Slang pointer support is limited to SPIR-V, Metal and CUDA targets: HLSL/DXIL and WGSL have no raw pointers. Verify against the current Slang docs before you design around it.
 

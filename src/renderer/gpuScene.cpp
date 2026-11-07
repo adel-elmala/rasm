@@ -663,6 +663,7 @@ namespace rasm
         sceneData.depthTexture = depthSlot;
         sceneData.viewportWidth = width;
         sceneData.viewportHeight = height;
+        sceneData.lodErrorPixels = config.lodErrorPixels;
         ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), sceneDataOffset);
 
         // cull.slang's groups each lie inside one run.

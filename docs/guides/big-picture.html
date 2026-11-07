@@ -130,7 +130,7 @@
   <tr><td><code>include/rasm/render/</code></td><td>the low-level public API</td><td><code>renderContext.h</code>, <code>renderGraph.h</code>, <code>resource.h</code></td></tr>
   <tr><td><code>src/core/</code></td><td>handle manager, file reading</td><td><code>handle.cpp</code>, <code>utils.cpp</code></td></tr>
   <tr><td><code>src/platform/</code></td><td>SDL3 window and input, paths, the Vulkan surface hook</td><td><code>window.cpp</code>, <code>paths.cpp</code>, <code>windowSurface.h</code></td></tr>
-  <tr><td><code>src/assets/</code></td><td>mesh, texture and material loading, glTF and OBJ import</td><td><code>mesh.cpp</code>, <code>meshImport.cpp</code>, <code>texture.cpp</code>, <code>material.cpp</code></td></tr>
+  <tr><td><code>src/assets/</code></td><td>mesh, texture and material loading, glTF and OBJ import, mesh LODs</td><td><code>mesh.cpp</code>, <code>meshImport.cpp</code>, <code>meshLod.cpp</code>, <code>texture.cpp</code>, <code>material.cpp</code></td></tr>
   <tr><td><code>src/scene/</code></td><td>scenes, entities, cameras, lights, transforms</td><td><code>scene.cpp</code>, <code>entity.cpp</code>, <code>camera.cpp</code></td></tr>
   <tr><td><code>src/renderer/</code></td><td>GPU scene tables, culling, frame stats, overlay, render graph, shader compiler, GPU structs</td><td><code>gpuScene.cpp</code>, <code>gpuTable.cpp</code>, <code>geometryPool.cpp</code>, <code>shaderCompiler.cpp</code></td></tr>
   <tr><td><code>src/rhi/</code></td><td><code>RenderContext</code>, the <code>rhi::Device</code> interface, uploads</td><td><code>renderContext.cpp</code>, <code>device.h</code>, <code>uploadManager.cpp</code></td></tr>

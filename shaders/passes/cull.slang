@@ -1,6 +1,7 @@
 // clang-format off
 #include "core.slang"
 #include "frustumCulling.slang"
+#include "lodSelection.slang"
 #include "occlusionCulling.slang"
 
 // Culling packs each run's visible draws at the start of its range of drawInfoPtr, in list order, so the draw
@@ -8,7 +9,8 @@
 // countMain tests the draws and counts each group's visible ones. writeMain adds up the counts of the run's
 // earlier groups to find where its group's draws go, and the run's last group writes drawCountsPtr[run], which
 // drawScene draws with drawIndexedIndirectCount. The tests live in lib/: frustumCulling.slang and
-// occlusionCulling.slang.
+// occlusionCulling.slang. Both dispatches pick each visible draw's LOD the same way (lodSelection.slang): countMain
+// to count its triangles, writeMain to write its index range.
 //
 // Occlusion culling runs both dispatches twice per drawScene call (pc.argument is the phase):
 //   CULL_EARLY, before the frame: the draws that are in the frustum and were visible last time.
@@ -91,7 +93,7 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
             scene->visibilityPtr[draw.firstInstance] = seen ? 1 : 0;
             visible         = seen && !drawnEarly;
         }
-        triangles       = visible ? draw.indexCount / 3 : 0;
+        triangles       = visible ? selectLod(scene, draw, sphere).indexCount / 3 : 0;
     }
 
     visibleFlags[threadId.x]        = visible ? 1 : 0;
@@ -153,7 +155,10 @@ void writeMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     {
         uint slot = scene->cullSlotsPtr[drawIndex];
         if (slot != CULLED)
-            scene->drawInfoPtr[scene->runFirst[group.run] + base + slot] = scene->allDrawsPtr[drawIndex];
+        {
+            DrawInfo draw = scene->allDrawsPtr[drawIndex];
+            scene->drawInfoPtr[scene->runFirst[group.run] + base + slot] = selectLod(scene, draw, getWorldSphere(scene, draw));
+        }
     }
     if (threadId.x == 0 && groupId.x + 1 == group.runEndGroup)
         scene->drawCountsPtr[group.run] = base + scene->groupCountsPtr[groupId.x];

@@ -13,6 +13,8 @@ enum class MaterialId : uint32_t { PBR, UNLIT };
 // Must match rasm::Vertex / rasm::gfx::VertexFull (scalar layout). Unused UV sets are zero.
 // tangent.w is the bitangent sign (±1), or 0 when the mesh has no tangents.
 static const uint MAX_VERTEX_UV_SETS = 3;
+// Must match rasm::MAX_MESH_LODS.
+static const uint MAX_MESH_LODS = 8;
 
 struct VertexFull       { float3 pos; float3 normal; float2 uv[MAX_VERTEX_UV_SETS]; float4 tangent; };
 struct VertexPosOnly    { float3 pos; };
@@ -95,13 +97,21 @@ struct InstanceData
     uint32_t        materialIndex;
 };
 
-struct GeometryData
+struct GeometryLod
 {
     uint32_t        firstIndex;
     uint32_t        indexCount;
+    float           error;              // object space; 0 for LOD 0
+};
+
+// The LODs share the sub-mesh's vertices, so vertexOffset is the same for all of them.
+struct GeometryData
+{
     int32_t         vertexOffset;
     float3          boundsCenter;
     float           boundsRadius;
+    uint32_t        lodCount;
+    GeometryLod     lods[MAX_MESH_LODS];
 };
 
 struct SceneData
@@ -131,7 +141,7 @@ struct SceneData
     uint32_t            depthTexture;       // bindless index of the pass's depth texture
     uint32_t            viewportWidth;      // the pass's size in pixels
     uint32_t            viewportHeight;
-    uint32_t            padding;
+    float               lodErrorPixels;     // culling picks the coarsest LOD whose error stays under this on screen
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.

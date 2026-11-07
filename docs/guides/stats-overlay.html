@@ -105,7 +105,7 @@
   <tr><td><code>gpuFrameMs</code></td><td>timestamps</td><td>from the earliest timestamp of the frame to the latest</td></tr>
   <tr><td><code>gpuTimers</code>, <code>gpuTimerCount</code></td><td>timestamps</td><td>one entry per timer except "Frame", sorted by start time, so "Culling" comes first</td></tr>
   <tr><td><code>draws</code>, <code>triangles</code></td><td><code>DrawTotals</code></td><td>CPU sums over the frame's <code>drawScene</code> calls: draw list size and <code>triangleCount</code></td></tr>
-  <tr><td><code>drawsVisible</code>, <code>trianglesVisible</code></td><td>Cull Stats Buffer + <code>DrawTotals</code></td><td>what the early and the late culling kept (in the frustum and, with occlusion culling, not occluded), plus every draw of a call drawn without culling (<code>unculledDraws</code>, <code>unculledTriangles</code>)</td></tr>
+  <tr><td><code>drawsVisible</code>, <code>trianglesVisible</code></td><td>Cull Stats Buffer + <code>DrawTotals</code></td><td>what the early and the late culling kept (in the frustum and, with occlusion culling, not occluded), with triangles counted at the <a href="culling.html#lod">LOD</a> culling picked, plus every draw of a call drawn without culling (<code>unculledDraws</code>, <code>unculledTriangles</code>)</td></tr>
   <tr><td><code>memory</code></td><td><code>queryVRAMStats</code></td><td><code>VRAMStats</code>: device-local and host-visible budget and usage, in bytes</td></tr>
 </table>
 </div>
@@ -260,7 +260,7 @@
       <text x="400" y="56" class="small">A 32-bit add wraps around past 4,294,967,295.</text>
       <text x="400" y="74" class="small">After a wrap the sum is smaller than before,</text>
       <text x="400" y="92" class="small">which is how the carry is found.</text>
-      <text x="20" y="146" class="small">Each thread's triangles are indexCount / 3 of its draw, or 0 when it is culled.</text>
+      <text x="20" y="146" class="small">Each thread's triangles are indexCount / 3 of its draw at the LOD selectLod picks, or 0 when it is culled.</text>
     </svg>
     <p>One group adds at most 64 draws, but each draw can have many triangles, so even one group may need the high word.</p>
   </div>

@@ -1,6 +1,7 @@
 #include "rasm/mesh.h"
 #include "rasm/engine.h"
 #include "assets/meshImport.h"
+#include "assets/meshLod.h"
 #include "platform/paths.h"
 #include "renderer/geometryPool.h"
 
@@ -30,8 +31,12 @@ namespace rasm
             return {};
         }
 
+        ObjRaw raw{std::move(vertices), std::move(indices)};
+        if (config.meshLods)
+            buildMeshLods(raw);
+
         Mesh mesh{.state = MeshState::READY, .subMeshes = {SubMesh{.transform = glm::mat4(1.0f)}}};
-        if (!geometryPool->upload(ctx, {std::move(vertices), std::move(indices)}, mesh.subMeshes[0].geometry))
+        if (!geometryPool->upload(ctx, raw, mesh.subMeshes[0].geometry))
             return {};
 
         registry.meshes.resize(handle.index + 1);
@@ -82,8 +87,19 @@ namespace rasm
         }
         registry.meshes[handle.index] = Mesh{};
 
-        // The worker reads and decodes the file; beginFrame uploads the result (finishLoads).
-        pendingMeshes.push_back({handle, path, std::async(std::launch::async, importMeshFile, path)});
+        // The worker reads and decodes the file and builds the LODs; beginFrame uploads the result (finishLoads).
+        const bool lods = config.meshLods;
+        auto import = [path, lods]()
+        {
+            GLTFRaw raw = importMeshFile(path);
+            if (lods)
+            {
+                for (auto &sub : raw.subGltfRaws)
+                    buildMeshLods(sub.objRaw);
+            }
+            return raw;
+        };
+        pendingMeshes.push_back({handle, path, std::async(std::launch::async, import)});
 
         return handle;
     }
@@ -117,6 +133,8 @@ namespace rasm
         {
             vertexCount += sub.objRaw.vertices.size();
             indexCount += sub.objRaw.indices.size();
+            for (const auto &lod : sub.objRaw.lods)
+                indexCount += lod.indices.size();
         }
         if (!geometryPool->fits(vertexCount, indexCount, raw.subGltfRaws.size()))
         {
@@ -156,7 +174,7 @@ namespace rasm
         for (const auto &subMesh : registry.meshes[handle.index].subMeshes)
         {
             meshSize.verticesByteSize += subMesh.geometry.vertexCount * sizeof(Vertex);
-            meshSize.indicesByteSize += subMesh.geometry.indexCount * sizeof(uint32_t);
+            meshSize.indicesByteSize += (subMesh.geometry.indexCount + subMesh.geometry.lodIndexCount) * sizeof(uint32_t);
         }
         return meshSize;
     }

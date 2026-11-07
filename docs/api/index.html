@@ -151,7 +151,7 @@ target_link_libraries(my_app PRIVATE rasm::rasm)   # adds C++20, glm
 # Shaders are compiled at runtime: copy them next to the executable.
 add_custom_command(TARGET my_app POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${rasm_SHADER_DIR}" "$&lt;TARGET_FILE_DIR:my_app&gt;/shaders")</code></pre></li>
-  <li><b>Give your project RASM's dependencies.</b> RASM is static, so your executable links its dependencies too. <code>find_package(rasm)</code> looks for them. With vcpkg, add to your manifest: <code>vk-bootstrap</code>, <code>vulkan-memory-allocator</code>, <code>glm</code>, <code>sdl3[vulkan]</code>, <code>tracy[on-demand]</code>, <code>spdlog</code>, <code>tinyobjloader</code> and <code>shader-slang</code>. The Vulkan SDK provides Vulkan.</li>
+  <li><b>Give your project RASM's dependencies.</b> RASM is static, so your executable links its dependencies too. <code>find_package(rasm)</code> looks for them. With vcpkg, add to your manifest: <code>vk-bootstrap</code>, <code>vulkan-memory-allocator</code>, <code>glm</code>, <code>sdl3[vulkan]</code>, <code>tracy[on-demand]</code>, <code>spdlog</code>, <code>tinyobjloader</code>, <code>meshoptimizer</code> and <code>shader-slang</code>. The Vulkan SDK provides Vulkan.</li>
 </ol>
 
 <div class="callout">

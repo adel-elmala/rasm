@@ -17,6 +17,7 @@ namespace rasm
 
     constexpr uint32_t MAX_MESHES              = 8;
     constexpr uint32_t MAX_VERTEX_UV_SETS      = 3;
+    constexpr uint32_t MAX_MESH_LODS           = 8;
 
     struct Vertex
     {
@@ -26,10 +27,17 @@ namespace rasm
         glm::vec4 tangent;      // glTF TANGENT: xyz tangent, w = bitangent sign (±1). w = 0 means none; the shader reconstructs one.
     };
 
+    struct MeshLod
+    {
+        std::vector<uint32_t>   indices;
+        float                   error       = 0.0f;
+    };
+
     struct ObjRaw
     {
         std::vector<Vertex>     vertices;
         std::vector<uint32_t>   indices;
+        std::vector<MeshLod>    lods;
     };
 
     struct SubGLTFRaw
@@ -59,6 +67,8 @@ namespace rasm
         uint32_t            vertexCount     = 0;
         uint32_t            firstIndex      = 0;
         uint32_t            indexCount      = 0;
+        uint32_t            lodCount        = 1;
+        uint32_t            lodIndexCount   = 0;
         uint32_t            geometryIndex   = 0;
         glm::vec3           boundsCenter    = glm::vec3(0.0f);
         float               boundsRadius    = 0.0f;

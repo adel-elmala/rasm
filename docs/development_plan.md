@@ -92,7 +92,7 @@ Goal: make RASM's core promise hold at scale.
 - [x] Compute pipelines and compute passes in the RHI (done 2026-11-07, example `04_compute`). Compute writes buffers only, and samples textures through the bindless set (done 2026-11-07). Storage images are still open.
 - [x] **GPU frustum culling**: a compute pass that writes a compacted draw list, followed by `vkCmdDrawIndexedIndirectCount` (done 2026-11-07).
 - [x] **Occlusion culling**: a two-pass hierarchical-Z scheme (draw what was visible last frame, build Hi-Z, cull and draw the rest) (done 2026-11-07, `EngineConfig::occlusionCulling`). The Hi-Z is a buffer pyramid built by compute from the sampled depth, so it needs no storage images.
-- [ ] LOD selection on the GPU, from per-mesh LOD ranges and screen-space error.
+- [x] LOD selection on the GPU, from per-mesh LOD ranges and screen-space error (done 2026-11-07, `EngineConfig::meshLods` and `lodErrorPixels`). LODs are built with meshoptimizer as meshes load and share the mesh's vertices. Reordering the vertices for coarse-LOD fetch locality, and streaming LODs in and out of the pool (after `D4`), are still open.
 - [ ] Optional: meshlets with cluster culling, and a mesh-shader path where available (a Tier-A extra; keep the vertex-pulling path as the baseline).
 - [x] Stats overlay: frame time, GPU time per pass, triangles, instances drawn/culled, memory. (Original item 8; done 2026-11-07, `EngineConfig::showStats` or F1, on in example `03_instances`.)
 

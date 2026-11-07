@@ -7,6 +7,7 @@ set(RASM_SRC
             "platform/window.cpp"
             "assets/mesh.cpp"
             "assets/meshImport.cpp"
+            "assets/meshLod.cpp"
             "assets/texture.cpp"
             "assets/material.cpp"
             "scene/scene.cpp"
@@ -43,6 +44,7 @@ find_package(Stb REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_path(TINYGLTF_INCLUDE_DIRS "tiny_gltf.h" REQUIRED)
 find_package(tinyobjloader CONFIG REQUIRED)
+find_package(meshoptimizer CONFIG REQUIRED)
 find_package(slang CONFIG REQUIRED)
 
 add_library(rasm STATIC ${RASM_SRC})
@@ -60,6 +62,7 @@ target_link_libraries(rasm PRIVATE slang::slang)
 target_link_libraries(rasm PRIVATE Tracy::TracyClient)
 target_link_libraries(rasm PRIVATE spdlog::spdlog)
 target_link_libraries(rasm PRIVATE tinyobjloader::tinyobjloader)
+target_link_libraries(rasm PRIVATE meshoptimizer::meshoptimizer)
 target_link_libraries(rasm PRIVATE SDL3::SDL3)
 
 # Library configuration macros live here, never in a .cpp (B2). PUBLIC so every consumer that

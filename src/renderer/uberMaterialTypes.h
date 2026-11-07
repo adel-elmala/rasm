@@ -98,13 +98,20 @@ namespace rasm::gfx
         uint32_t        materialIndex;
     };
 
-    struct GeometryData
+    struct GeometryLod
     {
         uint32_t        firstIndex;
         uint32_t        indexCount;
+        float           error;
+    };
+
+    struct GeometryData
+    {
         int32_t         vertexOffset;
         glm::vec3       boundsCenter;
         float           boundsRadius;
+        uint32_t        lodCount;
+        GeometryLod     lods[MAX_MESH_LODS];
     };
 
     struct SceneData
@@ -134,7 +141,7 @@ namespace rasm::gfx
         uint32_t         depthTexture;
         uint32_t         viewportWidth;
         uint32_t         viewportHeight;
-        uint32_t         padding;
+        float            lodErrorPixels;
     };
 
     struct PushConstants
@@ -158,9 +165,13 @@ namespace rasm::gfx
     static_assert(offsetof(InstanceData, normalMatrix) == 64, "InstanceData must match the shader's scalar layout");
     static_assert(offsetof(InstanceData, geometryIndex) == 100, "InstanceData must match the shader's scalar layout");
     static_assert(offsetof(InstanceData, materialIndex) == 104, "InstanceData must match the shader's scalar layout");
-    static_assert(sizeof(GeometryData) == 28, "GeometryData must match the shader's scalar layout");
-    static_assert(offsetof(GeometryData, boundsCenter) == 12, "GeometryData must match the shader's scalar layout");
-    static_assert(offsetof(GeometryData, boundsRadius) == 24, "GeometryData must match the shader's scalar layout");
+    static_assert(sizeof(GeometryLod) == 12, "GeometryLod must match the shader's scalar layout");
+    static_assert(offsetof(GeometryLod, error) == 8, "GeometryLod must match the shader's scalar layout");
+    static_assert(sizeof(GeometryData) == 24 + 12 * MAX_MESH_LODS, "GeometryData must match the shader's scalar layout");
+    static_assert(offsetof(GeometryData, boundsCenter) == 4, "GeometryData must match the shader's scalar layout");
+    static_assert(offsetof(GeometryData, boundsRadius) == 16, "GeometryData must match the shader's scalar layout");
+    static_assert(offsetof(GeometryData, lodCount) == 20, "GeometryData must match the shader's scalar layout");
+    static_assert(offsetof(GeometryData, lods) == 24, "GeometryData must match the shader's scalar layout");
     static_assert(sizeof(SceneData) == 760, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, lights) == 144, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, vertsPtr) == 528, "SceneData must match the shader's scalar layout");
@@ -181,7 +192,7 @@ namespace rasm::gfx
     static_assert(offsetof(SceneData, depthTexture) == 744, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, viewportWidth) == 748, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, viewportHeight) == 752, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, padding) == 756, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, lodErrorPixels) == 756, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(PushConstants) == PUSH_CONSTANTS_SIZE, "PushConstants must fill the pipelines' push-constant range");
 
 
