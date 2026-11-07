@@ -79,7 +79,7 @@ bool isVisible(SceneData *scene, DrawInfo draw)
 }
 
 // Writes each draw's slot among its group's visible draws (or CULLED), and the group's visible count. The
-// group's visible draws and triangles go into the frame's stats with one atomic each.
+// group's visible draws and triangles go into the frame's stats with atomics.
 [shader("compute")]
 [numthreads(CULL_GROUP_SIZE, 1, 1)]
 void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
@@ -110,13 +110,24 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         uint count = slot + visibleFlags[threadId.x];
         scene->groupCountsPtr[groupId.x] = count;
 
-        uint groupTriangles = 0;
+        // The triangles are a 64-bit count in two uints, low word first, because not every backend has 64-bit
+        // atomics: a carry out of the low word goes into the high one.
+        uint trianglesLow   = 0;
+        uint trianglesHigh  = 0;
         for (uint i = 0; i < CULL_GROUP_SIZE; ++i)
-            groupTriangles += visibleTriangles[i];
+        {
+            uint sum        = trianglesLow + visibleTriangles[i];
+            trianglesHigh  += sum < trianglesLow ? 1 : 0;
+            trianglesLow    = sum;
+        }
         if (count > 0)
         {
+            uint previousLow;
             InterlockedAdd(scene->cullStatsPtr[0], count);
-            InterlockedAdd(scene->cullStatsPtr[1], groupTriangles);
+            InterlockedAdd(scene->cullStatsPtr[1], trianglesLow, previousLow);
+            trianglesHigh  += previousLow + trianglesLow < previousLow ? 1 : 0;
+            if (trianglesHigh > 0)
+                InterlockedAdd(scene->cullStatsPtr[2], trianglesHigh);
         }
     }
 }

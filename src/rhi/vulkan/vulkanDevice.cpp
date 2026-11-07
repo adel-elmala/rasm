@@ -409,7 +409,10 @@ namespace rasm::rhi
         allocCI.usage = VMA_MEMORY_USAGE_AUTO;
         allocCI.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                         VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        if (!desc.hostVisible)
+        // Write-only memory may be uncached or across the bus, so a buffer the CPU reads asks for random access.
+        if (desc.hostReadable)
+            allocCI.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        else if (!desc.hostVisible)
             allocCI.flags |= VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT;
 
         auto *buffer = new VulkanBuffer();
@@ -1017,8 +1020,8 @@ namespace rasm::rhi
         return true;
     }
 
-    // The GPU writes must be made available to the host first: a barrier to PipelineStage::HOST before the
-    // fence that the caller waited for.
+    // The buffer was created with hostReadable. The GPU writes must be made available to the host first: a
+    // barrier to PipelineStage::HOST before the fence that the caller waited for.
     bool VulkanDevice::readBuffer(Buffer *buffer, void *data, size_t size, size_t offset)
     {
         auto *vkBuffer = static_cast<VulkanBuffer *>(buffer);
@@ -1183,11 +1186,20 @@ namespace rasm::rhi
             return false;
         }
 
-        uint64_t earliest = UINT64_MAX;
+        // The counter wraps after timestampValidBits, so each value is turned into its signed distance from the
+        // first one, modulo the valid bits. That holds while the queries span less than half the counter's range.
+        const uint64_t first = nanoseconds[0];
+        int64_t earliest = 0;
         for (uint32_t i = 0; i < count; ++i)
-            earliest = std::min(earliest, nanoseconds[i] & timestampMask);
+        {
+            uint64_t ticks = (nanoseconds[i] - first) & timestampMask;
+            if (ticks > timestampMask >> 1)
+                ticks |= ~timestampMask;
+            nanoseconds[i] = ticks;
+            earliest = std::min(earliest, static_cast<int64_t>(ticks));
+        }
         for (uint32_t i = 0; i < count; ++i)
-            nanoseconds[i] = static_cast<uint64_t>(static_cast<double>((nanoseconds[i] & timestampMask) - earliest) * timestampPeriod);
+            nanoseconds[i] = static_cast<uint64_t>(static_cast<double>(static_cast<int64_t>(nanoseconds[i]) - earliest) * timestampPeriod);
         return true;
     }
 

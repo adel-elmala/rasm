@@ -14,6 +14,7 @@ set(RASM_SRC
             "scene/camera.cpp"
             "scene/light.cpp"
             "scene/transform.cpp"
+            "renderer/frameStats.cpp"
             "renderer/geometryPool.cpp"
             "renderer/gpuScene.cpp"
             "renderer/gpuTable.cpp"

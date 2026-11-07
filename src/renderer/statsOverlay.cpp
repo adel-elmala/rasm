@@ -1,10 +1,9 @@
 #include "renderer/statsOverlay.h"
 #include "core/utils.h"
 #include "platform/paths.h"
-#include "renderer/gpuScene.h"
+#include "renderer/frameStats.h"
 
 #include "spdlog/spdlog.h"
-#include "tracy/Tracy.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -96,13 +95,12 @@ namespace rasm
         }
     }
 
+    // A shader that fails to compile only leaves the overlay off.
     bool Engine::createStatsOverlay()
     {
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
-            StatsFrameSlot &slot = statsOverlay->slots[i];
-            // Without timestamps the stats only lack GPU times.
-            slot.timestamps = ctx.createTimestampQueryPool("GPU Timers " + std::to_string(i), 2 * MAX_GPU_TIMERS);
+            StatsOverlaySlot &slot = statsOverlay->slots[i];
             slot.text = ctx.createBuffer({.name = "Stats Overlay Text " + std::to_string(i), .usage = BufferUsage::STORAGE, .size = MAX_TEXT_COLUMNS * MAX_TEXT_ROWS, .hostVisible = true});
             if (!slot.text.isValid())
             {
@@ -110,80 +108,27 @@ namespace rasm
                 return false;
             }
         }
+
+        statsOverlay->pipeline = createPipeline("statsOverlay", readFile(pathFromUtf8(config.shaderDir) / "passes/statsOverlay.slang"));
+        if (!statsOverlay->pipeline.isValid())
+            spdlog::error("Failed to create the stats overlay pipeline; the overlay stays off.");
         return true;
     }
 
-    // Runs right after the fence wait for the frame's slot: it reads what the slot's last frame measured, then
-    // resets the slot's timers and counts for this frame, and writes the overlay's text into the slot's buffer.
-    void Engine::updateFrameStats()
+    // Runs after updateFrameStats. Each slot draws from its own buffer, so both get the current text every frame.
+    void Engine::updateStatsOverlay()
     {
-        ZoneScoped;
-
-        const auto frame = static_cast<uint32_t>(frameCount);
-        StatsFrameSlot &slot = statsOverlay->slots[frame];
-        FrameStats &stats = statsOverlay->stats;
-
-        // The slot's fence value moves only when a frame in it was submitted, so a frame that was recorded but not
-        // submitted is skipped: its queries were never written.
-        const uint64_t fenceValue = frameResources[frame].fenceValue;
-        if (fenceValue != slot.readFenceValue)
-        {
-            slot.readFenceValue = fenceValue;
-
-            // Timer 0 is the frame's command buffer. Culling's command buffer runs before it, so the frame's GPU
-            // time goes from the earliest timestamp (0) to the latest, and the timers are listed by start time.
-            uint64_t nanoseconds[2 * MAX_GPU_TIMERS];
-            if (slot.timerCount > 0 && ctx.getTimestamps(slot.timestamps, 2 * slot.timerCount, nanoseconds))
-            {
-                uint64_t end = 0;
-                for (uint32_t i = 0; i < slot.timerCount; ++i)
-                    end = std::max(end, nanoseconds[2 * i + 1]);
-                stats.gpuFrameMs = static_cast<float>(static_cast<double>(end) * 1e-6);
-
-                uint32_t order[MAX_GPU_TIMERS];
-                for (uint32_t i = 1; i < slot.timerCount; ++i)
-                    order[i - 1] = i;
-                stats.gpuTimerCount = slot.timerCount - 1;
-                std::sort(order, order + stats.gpuTimerCount, [&](uint32_t a, uint32_t b)
-                          { return nanoseconds[2 * a] < nanoseconds[2 * b]; });
-                for (uint32_t i = 0; i < stats.gpuTimerCount; ++i)
-                {
-                    const uint32_t timer = order[i];
-                    stats.gpuTimers[i] = {.name = slot.timerNames[timer],
-                                          .milliseconds = static_cast<float>(static_cast<double>(nanoseconds[2 * timer + 1] - nanoseconds[2 * timer]) * 1e-6)};
-                }
-            }
-
-            // Culling counted the visible draws and triangles of the culled calls; unculled calls drew all of theirs.
-            const DrawTotals &totals = gpuScene->drawTotals[frame];
-            uint32_t culled[2] = {};
-            ctx.readBuffer(gpuScene->cullStats[frame], culled, sizeof(culled));
-            stats.draws = totals.draws;
-            stats.drawsVisible = culled[0] + totals.unculledDraws;
-            stats.triangles = totals.triangles;
-            stats.trianglesVisible = culled[1] + totals.unculledTriangles;
-        }
-        stats.cpuFrameMs = deltaTime * 1000.0f;
-        stats.memory = ctx.queryVRAMStats();
-
-        slot.timerCount = 0;
-        if (slot.timestamps.isValid())
-            ctx.resetQueries(slot.timestamps);
-        const uint32_t zeros[2] = {};
-        ctx.fillBuffer(gpuScene->cullStats[frame], zeros, sizeof(zeros));
-        gpuScene->drawTotals[frame] = {};
-
-        if (!config.showStats)
+        StatsOverlaySlot &slot = statsOverlay->slots[frameCount];
+        slot.rows = 0;
+        if (!config.showStats || !statsOverlay->pipeline.isValid())
             return;
 
-        // Each slot draws from its own buffer, so both get the current text every frame.
         const auto now = std::chrono::steady_clock::now();
         if (statsOverlay->grid.empty() || now - statsOverlay->gridTime >= TEXT_REFRESH)
         {
             statsOverlay->gridTime = now;
-            buildGrid(buildText(stats), statsOverlay->grid, statsOverlay->columns, statsOverlay->rows);
+            buildGrid(buildText(frameStats->stats), statsOverlay->grid, statsOverlay->columns, statsOverlay->rows);
         }
-        slot.rows = 0;
         if (ctx.fillBuffer(slot.text, statsOverlay->grid.data(), statsOverlay->grid.size()))
         {
             slot.columns = statsOverlay->columns;
@@ -191,56 +136,26 @@ namespace rasm
         }
     }
 
-    // Returns UINT32_MAX, which endGpuTimer ignores, when the GPU has no timestamps or the frame has used every timer.
-    uint32_t Engine::beginGpuTimer(CommandBufferHandle commandBuffer, const std::string &name)
-    {
-        StatsFrameSlot &slot = statsOverlay->slots[frameCount];
-        if (!slot.timestamps.isValid() || slot.timerCount >= MAX_GPU_TIMERS)
-            return UINT32_MAX;
-
-        const uint32_t timer = slot.timerCount++;
-        slot.timerNames[timer] = name;
-        ctx.writeTimestamp(commandBuffer, slot.timestamps, 2 * timer);
-        return timer;
-    }
-
-    void Engine::endGpuTimer(CommandBufferHandle commandBuffer, uint32_t timer)
-    {
-        if (timer != UINT32_MAX)
-            ctx.writeTimestamp(commandBuffer, statsOverlay->slots[frameCount].timestamps, 2 * timer + 1);
-    }
-
     // Records into the current swapchain pass, before it ends. Every swapchain pass clears, so drawing it in each
     // one keeps it on the presented image.
     void Engine::drawStatsOverlay()
     {
-        const StatsFrameSlot &slot = statsOverlay->slots[frameCount];
+        const StatsOverlaySlot &slot = statsOverlay->slots[frameCount];
         if (!config.showStats || slot.rows == 0)
             return;
-
-        // A shader error retries every frame, so a shader fixed on disk is picked up while the application runs.
-        if (!statsOverlay->pipeline.isValid())
-        {
-            statsOverlay->pipeline = createPipeline("statsOverlay", readFile(pathFromUtf8(config.shaderDir) / "passes/statsOverlay.slang"));
-            if (!statsOverlay->pipeline.isValid())
-            {
-                spdlog::error("Failed to create the stats overlay pipeline.");
-                return;
-            }
-        }
 
         const uint32_t scale = std::max(1u, swapchain.height / 1080);
         const OverlayPushConstants pushConstants{.text = ctx.getBufferDeviceAddress(slot.text),
                                                  .grid = slot.columns | slot.rows << 8 | scale << 16,
                                                  .screen = swapchain.width | swapchain.height << 16};
         const auto commandBuffer = frameResources[frameCount].commandBuffer;
+        // The shader places the panel in window pixels, whatever viewport the pass left set, and its triangles
+        // wind clockwise on screen.
+        ctx.setViewport(commandBuffer, 0.0f, 0.0f, static_cast<float>(swapchain.width), static_cast<float>(swapchain.height));
+        ctx.setScissor(commandBuffer, 0, 0, swapchain.width, swapchain.height);
+        ctx.setCullMode(commandBuffer, CullMode::NONE);
         ctx.bindPipeline(commandBuffer, statsOverlay->pipeline);
         ctx.pushConstants(commandBuffer, statsOverlay->pipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
         ctx.draw(commandBuffer, 6);
-    }
-
-    const FrameStats &Engine::getFrameStats() const
-    {
-        return statsOverlay->stats;
     }
 }

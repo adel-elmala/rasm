@@ -42,12 +42,16 @@ namespace rasm
         DEVICE_ADDRESS,
     };
 
-    enum class PipelineStage
+    // Flags: a barrier can wait for, or be waited on by, several stages at once.
+    enum class PipelineStage : uint32_t
     {
-        COMPUTE,
-        GRAPHICS,
-        HOST,
+        COMPUTE                     = 1u << 0,
+        GRAPHICS                    = 1u << 1,
+        HOST                        = 1u << 2,
     };
+
+    constexpr PipelineStage         operator|(PipelineStage a, PipelineStage b)     { return static_cast<PipelineStage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b)); }
+    constexpr bool                  hasStage(PipelineStage stages, PipelineStage stage) { return (static_cast<uint32_t>(stages) & static_cast<uint32_t>(stage)) != 0; }
 
     enum class DescriptorType
     {
@@ -73,6 +77,7 @@ namespace rasm
         BufferUsage                 usage                           = BufferUsage::STORAGE;
         uint64_t                    size                            = 0;
         bool                        hostVisible                     = false;
+        bool                        hostReadable                    = false;    // host-visible, in cached memory, for RenderContext::readBuffer
 
         bool                        operator==(const BufferDesc&) const = default;
     };

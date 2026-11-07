@@ -151,8 +151,8 @@ namespace rasm
             gpuScene->drawCounts[i] = ctx.createBuffer({.name = "Draw Count Buffer " + std::to_string(i),
                                                         .usage = BufferUsage::INDIRECT,
                                                         .size = MAX_SCENE_DRAWS_PER_FRAME * gfx::MAX_DRAW_RUNS * sizeof(uint32_t)});
-            // The frame's visible draws and triangles, which updateFrameStats reads back once the slot's fence passed.
-            gpuScene->cullStats[i] = ctx.createBuffer({.name = "Cull Stats Buffer " + std::to_string(i), .usage = BufferUsage::STORAGE, .size = 2 * sizeof(uint32_t), .hostVisible = true});
+            // The frame's visible draws and triangles (low, high), which updateFrameStats reads back once the slot's fence passed.
+            gpuScene->cullStats[i] = ctx.createBuffer({.name = "Cull Stats Buffer " + std::to_string(i), .usage = BufferUsage::STORAGE, .size = 3 * sizeof(uint32_t), .hostVisible = true, .hostReadable = true});
             if (!gpuScene->cullCommandBuffers[i].isValid() || !gpuScene->drawCounts[i].isValid() || !gpuScene->cullStats[i].isValid())
             {
                 spdlog::error("Failed to create the culling resources.");
@@ -640,7 +640,7 @@ namespace rasm
                 if (!ctx.beginCommandBuffer(commandBuffer))
                     return false;
                 recorded = true;
-                cullTimer = beginGpuTimer(commandBuffer, "Culling");
+                cullTimer = beginCullingTimer(commandBuffer);
             }
 
             const gfx::PushConstants pushConstants{.scene = sceneDataAddress + i * sizeof(gfx::SceneData)};
@@ -655,9 +655,8 @@ namespace rasm
         if (!recorded)
             return true;
 
-        ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::GRAPHICS);
-        // updateFrameStats reads the cull stats on the CPU after the frame fence.
-        ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::HOST);
+        // The host side is for updateFrameStats, which reads the cull stats after the frame fence.
+        ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::GRAPHICS | PipelineStage::HOST);
         endGpuTimer(commandBuffer, cullTimer);
         return ctx.endCommandBuffer(commandBuffer);
     }

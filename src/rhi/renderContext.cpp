@@ -584,7 +584,7 @@ namespace rasm
 
         auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
         if (!rhiBuffer || !checkArgument(offset + size <= rhiBuffer->desc.size, __func__, "the range is outside the buffer.") ||
-            !checkArgument(rhiBuffer->desc.hostVisible, __func__, "only host-visible buffers can be read."))
+            !checkArgument(rhiBuffer->desc.hostReadable, __func__, "only buffers created with hostReadable can be read."))
             return false;
         return impl->device->readBuffer(rhiBuffer, data, size, offset);
     }

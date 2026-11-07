@@ -29,6 +29,7 @@ namespace rasm
     class ShaderCompiler;
     struct GpuScene;
     struct SceneDrawList;
+    struct FrameStatsCollector;
     struct StatsOverlay;
 
     constexpr uint32_t MAX_MATERIALS    = 256;
@@ -57,7 +58,6 @@ namespace rasm
     class Engine
     {
         friend class RenderContext;
-        friend class RenderGraph;
 
     public:
                                     Engine(const EngineConfig& config);
@@ -129,7 +129,12 @@ namespace rasm
         RenderContext&              getRenderContext();
         MeshSize                    getMeshByteSize(const MeshHandle& handle) const;
         VRAMStats                   queryMemoryStats();
+        // The first call turns on measuring, so the stats fill in a few frames later.
         const FrameStats&           getFrameStats() const;
+        // Times the GPU work recorded between the two calls into the frame's command buffer, for getFrameStats
+        // and the stats overlay. Returns UINT32_MAX, which endGpuTimer ignores, when nothing is measured.
+        uint32_t                    beginGpuTimer(const CommandBufferHandle& commandBuffer, const std::string& name);
+        void                        endGpuTimer(const CommandBufferHandle& commandBuffer, uint32_t timer);
         uint32_t                    addBindlessTexture(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, SamplerType sampler = SamplerType::LINEAR_REPEAT, uint32_t slot = MAX_BINDLESS_TEXTURES);
         uint32_t                    getBindlessTextureIndex(const TextureHandle& texture);
         // The render target's color texture for the current frame slot, so fetch it every frame.
@@ -150,6 +155,7 @@ namespace rasm
         Swapchain                                                   swapchain                               = {};
         std::unique_ptr<GeometryPool>                               geometryPool                            = {};
         std::unique_ptr<GpuScene>                                   gpuScene                                = {};
+        std::unique_ptr<FrameStatsCollector>                        frameStats                              = {};
         std::unique_ptr<StatsOverlay>                               statsOverlay                            = {};
         RenderContext                                               ctx;
         std::unique_ptr<ShaderCompiler>                             shaderCompiler                          = {};
@@ -202,10 +208,11 @@ namespace rasm
         void                        rebuildDrawList(SceneHandle scene);
         void                        uploadDrawList(SceneDrawList& drawList);
         bool                        recordCulling(bool& recorded);
-        bool                        createStatsOverlay();
+        void                        createFrameStats();
         void                        updateFrameStats();
-        uint32_t                    beginGpuTimer(CommandBufferHandle commandBuffer, const std::string& name);
-        void                        endGpuTimer(CommandBufferHandle commandBuffer, uint32_t timer);
+        uint32_t                    beginCullingTimer(const CommandBufferHandle& commandBuffer);
+        bool                        createStatsOverlay();
+        void                        updateStatsOverlay();
         void                        drawStatsOverlay();
 
         std::vector<PendingMeshLoad>                                            pendingMeshes;
