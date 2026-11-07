@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Scenes and Meshes · RASM</title>
 <meta name="description" content="Scenes, entities, Transform, meshes (createMesh, loadMesh, loadGLTF, Vertex, SubMesh, MeshLod), lights, adding objects to scenes, when changes reach the GPU, and the limits.">
-<meta name="rasm-sources" content="include/rasm/scene.h include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/engine.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp">
+<meta name="rasm-sources" content="include/rasm/scene.h include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/engine.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/05_city/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -179,7 +179,7 @@
       <dt>material</dt><dd>Used by every sub-mesh that has no material of its own (OBJ files, <code>createMesh</code>, glTF primitives without one). Invalid: the default material (white, metallic 1, roughness 1). A glTF sub-mesh's own material always wins.</dd>
       <dt>transform</dt><dd>Position, rotation and scale in the world. Default: the origin, no rotation, scale 1. A negative scale (a mirror) works: the engine culls the other face.</dd>
     </dl>
-    <p>Returns an invalid handle and logs a warning after 65,535 entities (<code>MAX_ENTITIES</code>). Each entity needs one row in the instance table per sub-mesh; when <code>EngineConfig::maxInstances</code> rows are used, new entities log an error and are not drawn.</p>
+    <p>Returns an invalid handle and logs a warning after 262,143 entities (<code>MAX_ENTITIES</code>). Each entity needs one row in the instance table per sub-mesh; when <code>EngineConfig::maxInstances</code> rows are used, new entities log an error and are not drawn.</p>
     <pre><code>// examples/03_instances: 10,000 cubes share one mesh and two materials.
 for (int z = 0; z &lt; GRID_SIZE; ++z)
 {
@@ -576,8 +576,8 @@ engine.addLightToScene(scene, lamp);</code></pre>
 <table>
   <tr><th>Constant / setting</th><th>Value</th><th>Usable</th><th>What it limits</th></tr>
   <tr><td><code>MAX_SCENES</code></td><td>16</td><td>15</td><td>scenes</td></tr>
-  <tr><td><code>MAX_ENTITIES</code></td><td>65,536</td><td>65,535</td><td>entities in total</td></tr>
-  <tr><td><code>MAX_ENTITIES_PER_SCENE</code></td><td>65,536</td><td>65,536</td><td>entity entries in one scene</td></tr>
+  <tr><td><code>MAX_ENTITIES</code></td><td>262,144</td><td>262,143</td><td>entities in total</td></tr>
+  <tr><td><code>MAX_ENTITIES_PER_SCENE</code></td><td>262,144</td><td>262,144</td><td>entity entries in one scene</td></tr>
   <tr><td><code>MAX_MESHES</code></td><td>8</td><td>7</td><td>meshes in total (each glTF file is one mesh)</td></tr>
   <tr><td><code>MAX_LIGHTS</code></td><td>8</td><td>7</td><td>lights in total</td></tr>
   <tr><td><code>MAX_LIGHTS_PER_SCENE</code></td><td>8</td><td>8</td><td>light entries in one scene</td></tr>

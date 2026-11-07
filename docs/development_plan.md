@@ -96,7 +96,7 @@ Goal: make RASM's core promise hold at scale.
 - [ ] Optional: meshlets with cluster culling, and a mesh-shader path where available (a Tier-A extra; keep the vertex-pulling path as the baseline).
 - [x] Stats overlay: frame time, GPU time per pass, triangles, instances drawn/culled, memory. (Original item 8; done 2026-11-07, `EngineConfig::showStats` or F1, on in example `03_instances`.)
 
-**Exit criteria:** a "city" example with ≥ 100k instances renders with CPU frame time independent of instance count. Culling statistics are visible on screen.
+**Exit criteria:** a "city" example with ≥ 100k instances renders with CPU frame time independent of instance count. Culling statistics are visible on screen. (Example `05_city`, done 2026-11-07: 145.6k instances, about 1 ms of CPU per frame in Release, GPU-bound.)
 
 ## Phase 3: A real render graph
 
