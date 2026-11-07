@@ -24,6 +24,9 @@ namespace rasm
         registry.entities.resize(id.index + 1);
         registry.entities[id.index] = entity;
 
+        if (mesh.isValid())
+            queueInstanceRows(id);
+
         return id;
     }
 
@@ -36,6 +39,7 @@ namespace rasm
         }
 
         registry.entities[entity.index].transform = transform;
+        writeInstanceRows(entity);
     }
 
     Transform Engine::getTransform(EntityHandle entity)

@@ -38,14 +38,14 @@ Put traces in the scratchpad directory. `zones`/`frames` cache CSVs next to the 
 2. capture (10 s)                   loading is in the first 1-3 s
 3. frames --from 3                  steady state: is it CPU or GPU bound? any spikes?
 4. zones --from 3 --self            where the CPU time goes
-5. zones --to 3                     startup/loading cost (importMeshFile, fillTexture, createPipeline, prepareScene)
+5. zones --to 3                     startup/loading cost (importMeshFile, fillTexture, createPipeline, the first syncGpuScene)
 6. change code → capture again → compare old new --from 3
 ```
 
 ## Reading RASM traces
 
 - **Thread 1 is the main thread.** Other threads are `std::async` loaders (`importMeshFile`, `decodeTexture`).
-- **Frame zones**: `render` → `beginFrame` (contains `waitForFence`, `acquireNextImage`) → `drawScene` (`updateUniforms`, `prepareScene` once per scene, then cached) → `endFrame` (`submit`, `present`, then `FrameMark`).
+- **Frame zones**: `render` → `beginFrame` (contains `waitForFence`, `syncGpuScene` with `rebuildDrawList` and `GpuTable::upload` when something changed, `acquireNextImage`) → `drawScene` (`createPipeline` on first use) → `endFrame` (`submit`, `present`, then `FrameMark`).
 - **`waitForFence` big = GPU bound.** The CPU waits for the frame-in-flight slot. Tracy has **no GPU zones** in RASM yet (`D16` in `docs/code_review.md`), so GPU cost only shows up as this wait. For GPU-side questions use the `frame-debug` skill, or propose adding Tracy Vulkan GPU zones (ask first, it is a new subsystem).
 - **Present mode matters**: with vsync, `waitForFence`/`acquireNextImage` include waiting for the display, so frame time is capped (16.7 ms at 60 Hz).
 - **Noise**: two runs of the same build differ by about 5-8% on sub-0.1 ms zones. Before calling a change faster, repeat the capture, or only trust differences clearly above that.

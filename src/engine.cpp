@@ -1,5 +1,7 @@
 #include "rasm/engine.h"
 #include "platform/paths.h"
+#include "renderer/geometryPool.h"
+#include "renderer/gpuScene.h"
 #include "renderer/shaderCompiler.h"
 
 #include "spdlog/spdlog.h"
@@ -40,7 +42,7 @@ namespace rasm
         }
     }
 
-    Engine::Engine(const EngineConfig &config) : config(config), ctx(this), shaderCompiler(std::make_unique<ShaderCompiler>())
+    Engine::Engine(const EngineConfig &config) : config(config), geometryPool(std::make_unique<GeometryPool>()), gpuScene(std::make_unique<GpuScene>()), ctx(this), shaderCompiler(std::make_unique<ShaderCompiler>())
     {
         // In a real implementation, this is where we'd initialize the window, graphics context, etc.
         spdlog::info("initializing engine with config: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
@@ -100,20 +102,8 @@ namespace rasm
             return;
         }
 
-        // Every mesh lives in these two buffers, so its CPU copy can go after upload (P6). Their size is
-        // fixed for the engine's lifetime, so apps size them through EngineConfig.
-        if (this->config.geometryPoolVertices == 0 || this->config.geometryPoolIndices == 0)
-        {
-            spdlog::error("The geometry pool needs room for at least one vertex and one index.");
+        if (!geometryPool->create(ctx, this->config) || !createGpuScene())
             return;
-        }
-        geometryVertexBuffer = ctx.createBuffer({.name = "Geometry Vertex Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(this->config.geometryPoolVertices) * sizeof(Vertex)});
-        geometryIndexBuffer = ctx.createBuffer({.name = "Geometry Index Pool", .usage = BufferUsage::INDEX, .size = static_cast<uint64_t>(this->config.geometryPoolIndices) * sizeof(uint32_t)});
-        if (!geometryVertexBuffer.isValid() || !geometryIndexBuffer.isValid())
-        {
-            spdlog::error("Failed to create the geometry pool.");
-            return;
-        }
 
         // Create bindless texture descriptor set layout, pool, and set
         bindlessDescriptorSetLayout = ctx.createBindlessDescriptorSetLayout({.name = "BindlessDescriptorSetLayout",
@@ -149,8 +139,10 @@ namespace rasm
             spdlog::error("Failed to create the default material.");
             return;
         }
-        registry.materials[defaultMaterial.index].name = "default";
-        registry.materials[defaultMaterial.index].params[static_cast<uint32_t>(PbrParam::METALLIC)] = 1.0f;
+        Material defaultValues = getMaterial(defaultMaterial);
+        defaultValues.name = "default";
+        defaultValues.params[static_cast<uint32_t>(PbrParam::METALLIC)] = 1.0f;
+        updateMaterial(defaultMaterial, defaultValues);
 
         isRunning = true;
     }
@@ -200,6 +192,8 @@ namespace rasm
             }
             finishTextureLoad(it->second);
             it = pendingTextures.erase(it);
+            // syncGpuScene checks the entities that wait for textures only after one finished.
+            gpuScene->texturesFinished = true;
         }
 
         for (size_t i = 0; i < pendingMeshes.size() && !overBudget();)
@@ -280,6 +274,9 @@ namespace rasm
         auto &currentFrame = frameResources[frameCount];
         if (!ctx.waitForFence(frameFence, currentFrame.fenceValue))
             return false;
+
+        // After the wait: it rewrites this slot's tables, which the slot's last frame read.
+        syncGpuScene();
 
         // B4
         auto status = ctx.acquireNextImage(imageIdx);
@@ -399,16 +396,6 @@ namespace rasm
         this->currentRenderTarget = RenderTargetHandle{};
     }
 
-    void Engine::setScene(SceneHandle scene)
-    {
-        this->currentScene = scene;
-    }
-
-    SceneHandle Engine::getScene() const
-    {
-        return currentScene;
-    }
-
     bool Engine::recreateSwapchain()
     {
         auto status = ctx.recreateSwapchain();
@@ -474,6 +461,11 @@ namespace rasm
     bool Engine::running() const
     {
         return isRunning;
+    }
+
+    VRAMStats Engine::queryMemoryStats()
+    {
+        return ctx.queryVRAMStats();
     }
 
     const FrameResources &Engine::getCurrentFrameResources()

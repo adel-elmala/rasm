@@ -12,8 +12,6 @@
 namespace rasm::gfx
 {
 
-    enum class VertexFormat : uint32_t { FULL, POS_ONLY };
-
     // Selects how the uber shader's fragMain shades a model. Must match shaders/lib/core.slang.
     enum class MaterialId : uint32_t { PBR, UNLIT };
 
@@ -83,13 +81,27 @@ namespace rasm::gfx
         EmissiveMaterial            emissive;
     };
 
-    struct Modeldata
+    struct MaterialData
+    {
+        Material        material;
+        MaterialId      materialId;
+    };
+
+    struct InstanceData
     {
         glm::mat4       worldMatrix;
         glm::mat3       normalMatrix;
-        Material        material;
-        VertexFormat    vertFormat;
-        MaterialId      materialId;
+        uint32_t        geometryIndex;
+        uint32_t        materialIndex;
+    };
+
+    struct GeometryData
+    {
+        uint32_t        firstIndex;
+        uint32_t        indexCount;
+        int32_t         vertexOffset;
+        glm::vec3       boundsCenter;
+        float           boundsRadius;
     };
 
     struct SceneData
@@ -101,7 +113,9 @@ namespace rasm::gfx
         Light            lights[MAX_LIGHTS];
         uint64_t         vertsPtr;
         uint64_t         drawInfoPtr;
-        uint64_t         modeldataPtr;
+        uint64_t         instancesPtr;
+        uint64_t         materialsPtr;
+        uint64_t         geometryPtr;
     };
 
     struct PushConstants
@@ -113,20 +127,26 @@ namespace rasm::gfx
 
     // These structs are read by shaders/passes/rasm.slang through buffer-device-address pointers,
     // compiled with GLSL scalar layout. Any drift here silently corrupts the GPU reads (a wrong
-    // vertsPtr/modeldataPtr turns into a device lost on the first draw).
+    // vertsPtr/instancesPtr turns into a device lost on the first draw).
     static_assert(sizeof(Light) == 48, "Light must match the shader's scalar layout");
     static_assert(sizeof(VertexFull) == 64, "VertexFull must match the shader's scalar layout");
     static_assert(offsetof(VertexFull, tangent) == 48, "VertexFull must match the shader's scalar layout");
     static_assert(sizeof(MetallicRoughnessMaterial) == 36, "MetallicRoughnessMaterial must match the shader's scalar layout");
     static_assert(sizeof(Material) == 80, "Material must match the shader's scalar layout");
-    static_assert(sizeof(Modeldata) == 188, "Modeldata must match the shader's scalar layout");
-    static_assert(offsetof(Modeldata, normalMatrix) == 64, "Modeldata must match the shader's scalar layout");
-    static_assert(offsetof(Modeldata, material) == 100, "Modeldata must match the shader's scalar layout");
-    static_assert(offsetof(Modeldata, materialId) == 184, "Modeldata must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 552, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(MaterialData) == 84, "MaterialData must match the shader's scalar layout");
+    static_assert(offsetof(MaterialData, materialId) == 80, "MaterialData must match the shader's scalar layout");
+    static_assert(sizeof(InstanceData) == 108, "InstanceData must match the shader's scalar layout");
+    static_assert(offsetof(InstanceData, normalMatrix) == 64, "InstanceData must match the shader's scalar layout");
+    static_assert(offsetof(InstanceData, geometryIndex) == 100, "InstanceData must match the shader's scalar layout");
+    static_assert(offsetof(InstanceData, materialIndex) == 104, "InstanceData must match the shader's scalar layout");
+    static_assert(sizeof(GeometryData) == 28, "GeometryData must match the shader's scalar layout");
+    static_assert(offsetof(GeometryData, boundsCenter) == 12, "GeometryData must match the shader's scalar layout");
+    static_assert(offsetof(GeometryData, boundsRadius) == 24, "GeometryData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 568, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, lights) == 144, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, vertsPtr) == 528, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, modeldataPtr) == 544, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, instancesPtr) == 544, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, geometryPtr) == 560, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(PushConstants) == PUSH_CONSTANTS_SIZE, "PushConstants must fill the pipelines' push-constant range");
 
 

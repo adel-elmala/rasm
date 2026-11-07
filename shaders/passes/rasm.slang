@@ -21,23 +21,25 @@ struct VSOutput
     float2 uv1            : TEXCOORD1;
     float2 uv2            : TEXCOORD2;
     float3 worldCameraPosition : TEXCOORD3;
-    nointerpolation uint drawID;
+    nointerpolation uint materialIndex;
     nointerpolation float handedness;   // -1 when the model matrix mirrors the mesh
 };
 
 [shader("vertex")]
 VSOutput vertMain(VSInput input)
 {
-    uint drawID = getDrawIndex();
+    // Each draw names its instance row in firstInstance (D6).
+    DrawInfo *draw          = pc.scene->drawInfoPtr + getDrawIndex();
+    InstanceData *instance  = pc.scene->instancesPtr + draw->firstInstance;
 
-    float4x4 modelMat       = pc.scene->modeldataPtr[drawID].worldMatrix;
+    float4x4 modelMat       = instance->worldMatrix;
     float4x4 viewMat        = pc.scene->view;
     float4x4 projectionMat  = pc.scene->projection;
-    float3x3 normalMat      = pc.scene->modeldataPtr[drawID].normalMatrix;
+    float3x3 normalMat      = instance->normalMatrix;
 
     // Slang lowers SV_VertexID to (VertexIndex - BaseVertex) to match D3D semantics, so it is the raw
-    // index-buffer value and the per-draw vertexOffset must be added back to address the mega buffer.
-    VertexFull vert = pc.scene->vertsPtr[input.vertexID + pc.scene->drawInfoPtr[drawID].vertexOffset];
+    // index-buffer value and the draw's vertexOffset must be added back to address the geometry pool.
+    VertexFull vert = pc.scene->vertsPtr[input.vertexID + draw->vertexOffset];
 
     VSOutput output = {};
     output.clipPosition         = mul(projectionMat, mul(viewMat, mul(modelMat, float4(vert.pos, 1.0))));
@@ -54,7 +56,7 @@ VSOutput vertMain(VSInput input)
     output.uv0                  = vert.uv[0];
     output.uv1                  = vert.uv[1];
     output.uv2                  = vert.uv[2];
-    output.drawID               = drawID;
+    output.materialIndex        = instance->materialIndex;
     output.handedness           = handedness;
 
     return output;
@@ -67,7 +69,7 @@ Sampler2D gTextures[];
 float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
 {
     // A pointer, so the unlit path loads only the fields it reads.
-    Modeldata *model = pc.scene->modeldataPtr + input.drawID;
+    MaterialData *model = pc.scene->materialsPtr + input.materialIndex;
 
     if (model->materialId == MaterialId.UNLIT)
     {

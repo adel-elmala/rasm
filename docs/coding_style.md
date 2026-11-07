@@ -18,7 +18,7 @@ These rules describe how RASM code is written. Most of them are what the code al
 | Kind | Style | Example |
 |---|---|---|
 | Namespaces | lower case | `rasm`, `rasm::gfx` |
-| Types (class, struct, enum, alias) | PascalCase | `RenderContext`, `PreparedScene`, `MeshHandle` |
+| Types (class, struct, enum, alias) | PascalCase | `RenderContext`, `SceneDrawList`, `MeshHandle` |
 | Functions and methods | camelCase, verb first | `createBuffer`, `loadMesh`, `getBindlessTextureIndex` |
 | Variables, parameters, members | camelCase, no prefixes | `frameCount`, `megaVertexBuffer` |
 | Compile-time constants | UPPER_SNAKE_CASE | `MAX_FRAMES_IN_FLIGHT`, `INVALID_TEXTURE_INDEX` |

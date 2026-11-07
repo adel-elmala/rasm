@@ -81,8 +81,37 @@ namespace rasm
 
         registry.materials.resize(handle.index + 1);
         registry.materials[handle.index] = material;
+        writeMaterialRow(handle);
 
         return handle;
+    }
+
+    void Engine::updateMaterial(MaterialHandle material, const Material &values)
+    {
+        if (!material.isValid() || material.index >= registry.materials.size())
+        {
+            spdlog::error("Invalid material handle for updating material.");
+            return;
+        }
+
+        bool texturesLoading = false;
+        for (auto texture : values.textures)
+        {
+            if (texture.isValid() && getBindlessTextureIndex(texture) == UINT32_MAX)
+                addBindlessTexture(bindlessDescriptorSet, texture);
+            texturesLoading = texturesLoading || (texture.isValid() && !isLoaded(texture));
+        }
+
+        Material &materialRef = registry.materials[material.index];
+        const bool doubleSidedChanged = materialRef.doubleSided != values.doubleSided;
+        materialRef = values;
+        materialRef.handle = material;
+        writeMaterialRow(material);
+
+        // doubleSided picks the cull mode of the material's instances, and an entity with a texture that still loads is
+        // not drawn. Both are rare, so every entity is checked instead of tracking who uses the material.
+        if (doubleSidedChanged || texturesLoading)
+            refreshEntitiesAfterMaterialChange();
     }
 
     MaterialHandle Engine::loadMaterial(const tinygltf::Model &model, int materialIndex, GltfImportCache &cache)
@@ -217,6 +246,7 @@ namespace rasm
 
         registry.materials.resize(handle.index + 1);
         registry.materials[handle.index] = mat;
+        writeMaterialRow(handle);
         cache.materials[materialIndex] = handle;
         return handle;
     }

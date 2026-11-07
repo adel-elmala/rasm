@@ -67,7 +67,7 @@ namespace rasm
                  std::function<void(RenderContext&)> execute);
 
         void compile();
-        void execute();
+        void execute(CameraHandle camera);
 
     protected:
         void                analyzeDependencies();

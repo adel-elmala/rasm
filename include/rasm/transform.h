@@ -13,6 +13,7 @@ namespace rasm
         glm::vec3 scale    = glm::vec3(1.0f);
 
         Transform rotate(const glm::vec3& axis, float radians);
+        glm::mat4 toMatrix() const;
     };
 }
 // clang-format on

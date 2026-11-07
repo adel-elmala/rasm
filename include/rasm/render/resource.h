@@ -10,6 +10,14 @@
 
 namespace rasm
 {
+    struct VRAMStats
+    {
+        uint64_t                    vramBudget                      = 0;    // DEVICE_LOCAL, bytes
+        uint64_t                    vramUsage                       = 0;
+        uint64_t                    hostBudget                      = 0;    // HOST_VISIBLE, bytes
+        uint64_t                    hostUsage                       = 0;
+    };
+
     enum class TextureUsage
     {
         TRANSFER_SRC,
