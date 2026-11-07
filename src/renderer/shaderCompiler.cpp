@@ -145,7 +145,7 @@ namespace rasm
             valid &= validateStruct(pushConstants, "PushConstants", sizeof(gfx::PushConstants),
                                     {{"scene", offsetof(gfx::PushConstants, scene)},
                                      {"firstDraw", offsetof(gfx::PushConstants, firstDraw)},
-                                     {"padding", offsetof(gfx::PushConstants, padding)}});
+                                     {"argument", offsetof(gfx::PushConstants, argument)}});
 
             valid &= validateStruct(scene, "SceneData", sizeof(gfx::SceneData),
                                     {{"projection", offsetof(gfx::SceneData, projection)},
@@ -163,10 +163,16 @@ namespace rasm
                                      {"cullSlotsPtr", offsetof(gfx::SceneData, cullSlotsPtr)},
                                      {"groupCountsPtr", offsetof(gfx::SceneData, groupCountsPtr)},
                                      {"cullStatsPtr", offsetof(gfx::SceneData, cullStatsPtr)},
+                                     {"visibilityPtr", offsetof(gfx::SceneData, visibilityPtr)},
+                                     {"hizPtr", offsetof(gfx::SceneData, hizPtr)},
                                      {"frustumPlanes", offsetof(gfx::SceneData, frustumPlanes)},
                                      {"drawCount", offsetof(gfx::SceneData, drawCount)},
                                      {"runCount", offsetof(gfx::SceneData, runCount)},
                                      {"runFirst", offsetof(gfx::SceneData, runFirst)},
+                                     {"hizLevelCount", offsetof(gfx::SceneData, hizLevelCount)},
+                                     {"depthTexture", offsetof(gfx::SceneData, depthTexture)},
+                                     {"viewportWidth", offsetof(gfx::SceneData, viewportWidth)},
+                                     {"viewportHeight", offsetof(gfx::SceneData, viewportHeight)},
                                      {"padding", offsetof(gfx::SceneData, padding)}});
 
             valid &= validateStruct(fieldStruct(scene, "lights"), "Light", sizeof(gfx::Light),

@@ -18,6 +18,16 @@ namespace rasm
         uint64_t                    hostUsage                       = 0;
     };
 
+    struct Viewport
+    {
+        float                       x                               = 0.0f; // pixels, from the top-left corner
+        float                       y                               = 0.0f;
+        float                       width                           = 0.0f;
+        float                       height                          = 0.0f;
+        float                       minDepth                        = 0.0f;
+        float                       maxDepth                        = 1.0f;
+    };
+
     enum class TextureUsage
     {
         TRANSFER_SRC,
@@ -27,6 +37,7 @@ namespace rasm
         COLOR_ATTACHMENT,
         DEPTH_STENCIL_ATTACHMENT,
         SAMPLED_COLOR_ATTACHMENT,
+        SAMPLED_DEPTH_ATTACHMENT,
         TRANSIENT_ATTACHMENT,
         INPUT_ATTACHMENT,
         PRESENT_SRC,

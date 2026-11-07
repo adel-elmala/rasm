@@ -129,11 +129,13 @@
   <tr><td>Draw list<br><code>DrawInfo</code>, 20 B</td><td><code>SceneDrawList::buffers</code>, one per frame slot and scene</td><td>grows ×2 when too small</td><td><code>rebuildDrawList</code>, then <code>uploadDrawList</code></td></tr>
   <tr><td>Visible draws</td><td><code>visibleDraws</code>, per frame slot and <code>drawScene</code> call</td><td>grows ×2 when too small</td><td>the GPU (<a href="culling.html">culling</a>)</td></tr>
   <tr><td>Draw counts</td><td><code>drawCounts</code>, one per frame slot</td><td><code>MAX_DRAW_RUNS</code> per <code>drawScene</code> call</td><td>the GPU (culling)</td></tr>
+  <tr><td>Visibility</td><td><code>visibility</code>, one for both frame slots</td><td><code>maxInstances</code> <code>uint32_t</code>s, one per instance row, 0 at start</td><td>the GPU (late <code>countMain</code>, <a href="culling.html#occlusion">occlusion culling</a>)</td></tr>
+  <tr><td>Hi-Z</td><td><code>hiz</code>, per frame slot and <code>drawScene</code> call</td><td><code>float</code>s, all levels of the pass's size; grows when the pass is bigger</td><td>the GPU (<code>hizMain</code>)</td></tr>
   <tr><td>Scene data</td><td><code>sceneData</code>, one per frame slot, <code>hostVisible</code></td><td><code>MAX_SCENE_DRAWS_PER_FRAME</code> = 8 <code>SceneData</code></td><td><code>drawScene</code>, every call</td></tr>
 </table>
 </div>
 
-<p>All of these are created once, in <code>createGpuScene</code> and <code>GeometryPool::create</code>, except the draw-list and visible-draw buffers, which grow on demand. How a <code>GpuTable</code> uploads only its dirty rows, per frame slot, is in <a href="gpu-memory.html">How data reaches the GPU</a>.</p>
+<p>All of these are created once, in <code>createGpuScene</code> and <code>GeometryPool::create</code>, except the draw-list, visible-draw and Hi-Z buffers, which grow on demand. How a <code>GpuTable</code> uploads only its dirty rows, per frame slot, is in <a href="gpu-memory.html">How data reaches the GPU</a>.</p>
 
 <h2><span class="n">2</span>The life of an entity</h2>
 

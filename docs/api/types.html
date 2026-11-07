@@ -227,9 +227,9 @@ private:
 </div>
 
 <div class="api" id="ShaderType">
-  <pre class="sig">enum class ShaderType { VERTEX, FRAGMENT, VERTEX_FRAGMENT, COMPUTE };</pre>
+  <pre class="sig">enum class ShaderType { VERTEX, FRAGMENT, VERTEX_FRAGMENT, COMPUTE, ALL };</pre>
   <div class="body">
-    <p>A shader stage. <code>ShaderDesc::type</code> is <code>VERTEX</code>, <code>FRAGMENT</code> or <code>COMPUTE</code>. <code>pushConstants</code> takes <code>VERTEX_FRAGMENT</code> for graphics pipelines and <code>COMPUTE</code> for compute pipelines.</p>
+    <p>A shader stage. <code>ShaderDesc::type</code> is <code>VERTEX</code>, <code>FRAGMENT</code> or <code>COMPUTE</code>. <code>pushConstants</code> takes <code>VERTEX_FRAGMENT</code> for graphics pipelines and <code>COMPUTE</code> for compute pipelines. <code>ALL</code> is every stage, for descriptor set layouts: the engine's bindless layout uses it, so compute shaders can sample textures too.</p>
   </div>
 </div>
 
@@ -284,6 +284,7 @@ private:
     uint32_t    geometryPoolSubMeshes = 1u &lt;&lt; 14;
     uint32_t    maxInstances          = 1u &lt;&lt; 16;
     bool        showStats             = false;
+    bool        occlusionCulling      = true;
 };</pre>
   <div class="body">
     <p>The engine's settings, given to its constructor. Every field is explained on the <a href="engine.html#EngineConfig">Engine page</a>.</p>
@@ -394,6 +395,21 @@ struct RenderTarget
       <dt>vramBudget, vramUsage</dt><dd>Device-local heaps (video memory): how much this process may use now, and how much it uses.</dd>
       <dt>hostBudget, hostUsage</dt><dd>The other heaps (system memory the GPU can reach).</dd>
     </dl>
+  </div>
+</div>
+
+<div class="api" id="Viewport">
+  <pre class="sig">struct Viewport
+{
+    float x        = 0.0f;
+    float y        = 0.0f;
+    float width    = 0.0f;
+    float height   = 0.0f;
+    float minDepth = 0.0f;
+    float maxDepth = 1.0f;
+};</pre>
+  <div class="body">
+    <p>The last viewport set with <a href="low-level.html#setViewport">setViewport</a>, from <a href="low-level.html#getViewport">getViewport</a>. Pixels, with <code>x</code>, <code>y</code> at the top-left corner.</p>
   </div>
 </div>
 

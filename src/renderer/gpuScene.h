@@ -55,11 +55,15 @@ namespace rasm
         PipelineHandle                  pipeline                                                            = {};
         PipelineHandle                  cullCountPipeline                                                   = {};
         PipelineHandle                  cullWritePipeline                                                   = {};
+        PipelineHandle                  hizPipeline                                                         = {};
         CommandBufferHandle             cullCommandBuffers[MAX_FRAMES_IN_FLIGHT]                            = {};
         BufferHandle                    drawCounts[MAX_FRAMES_IN_FLIGHT]                                    = {};
         BufferHandle                    visibleDraws[MAX_FRAMES_IN_FLIGHT][MAX_SCENE_DRAWS_PER_FRAME]       = {};
         uint32_t                        visibleCapacity[MAX_FRAMES_IN_FLIGHT][MAX_SCENE_DRAWS_PER_FRAME]    = {};
         uint32_t                        cullGroupCounts[MAX_SCENE_DRAWS_PER_FRAME]                          = {};
+        BufferHandle                    visibility[MAX_SCENE_DRAWS_PER_FRAME]                               = {};
+        BufferHandle                    hiz[MAX_FRAMES_IN_FLIGHT][MAX_SCENE_DRAWS_PER_FRAME]                = {};
+        uint32_t                        hizCapacity[MAX_FRAMES_IN_FLIGHT][MAX_SCENE_DRAWS_PER_FRAME]        = {};
         BufferHandle                    cullStats[MAX_FRAMES_IN_FLIGHT]                                     = {};
         DrawTotals                      drawTotals[MAX_FRAMES_IN_FLIGHT]                                    = {};
         std::vector<EntityDrawState>    entities;

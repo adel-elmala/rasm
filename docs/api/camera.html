@@ -254,7 +254,7 @@ engine.addCameraToScene(scene, camera);</code></pre>
       <dt>yaw, pitch</dt><dd>Radians. <code>setCameraController</code> overwrites them from the current view direction, so the view does not jump. Pitch stays within ±89°.</dd>
       <dt>speed</dt><dd>World units per second for W, A, S, D.</dd>
       <dt>lookSensitivity</dt><dd>Radians per NDC unit of mouse drag.</dd>
-      <dt>easingSpeed</dt><dd>How fast the rendered pose follows the target: each frame it moves <code>1 − exp(−easingSpeed × dt)</code> of the way. Higher is snappier. 0 or less snaps at once.</dd>
+      <dt>easingSpeed</dt><dd>How fast the rendered pose follows the target: each frame it moves <code>1 − exp(−easingSpeed × dt)</code> of the way. Higher is snappier. 0 or less snaps at once. Once the pose is within float precision of the target (about one millionth), it snaps to it, so a camera at rest does not move.</dd>
     </dl>
   </div>
 </div>

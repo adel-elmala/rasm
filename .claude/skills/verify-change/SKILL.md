@@ -66,6 +66,6 @@ Look at the diff and the new screenshot with Read.
 ## Determinism
 
 Frame N is pixel-exact between runs (tested: max diff 0) because the examples rotate objects by
-a fixed angle per frame, not by elapsed time, and the camera has no input. If an example starts
+a fixed angle per frame, not by elapsed time, and the camera has no input. The camera eases toward its target by `deltaTime`, but snaps to it once it is within float precision (`B24`), so a camera at rest does not drift. A DIFF only on equal-depth edges, different from run to run, points at something time-based like that. If an example starts
 animating by time, its diffs become noise. Make the animation per-frame, or exclude that example
 with `--examples`.
