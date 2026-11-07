@@ -10,6 +10,7 @@
 #include <cassert>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace rasm
 {
@@ -719,13 +720,18 @@ namespace rasm
         return true;
     }
 
-    bool RenderContext::submit(const CommandBufferHandle &commandBuffer, FenceHandle signalFence, uint64_t signalValue, bool presentsSwapchainImage)
+    bool RenderContext::submit(const CommandBufferHandle *commandBuffers, uint32_t commandBufferCount, FenceHandle signalFence, uint64_t signalValue, bool presentsSwapchainImage)
     {
         ZoneScoped;
 
-        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
-        if (!rhiCommandBuffer)
-            return false;
+        // They run in this order on the queue, as one submission.
+        std::vector<rhi::CommandBuffer *> rhiCommandBuffers(commandBufferCount);
+        for (uint32_t i = 0; i < commandBufferCount; ++i)
+        {
+            rhiCommandBuffers[i] = lookup(impl->commandBuffers, commandBuffers[i], __func__);
+            if (!rhiCommandBuffers[i])
+                return false;
+        }
 
         rhi::Fence *fence = nullptr;
         if (signalFence.isValid())
@@ -739,10 +745,9 @@ namespace rasm
         // retried with the next submit; the frame still goes out so the swapchain keeps moving.
         impl->uploads.flush();
 
-        rhi::CommandBuffer *commandBuffers[] = {rhiCommandBuffer};
         rhi::SubmitDesc submitDesc = {
-            .commandBuffers = commandBuffers,
-            .commandBufferCount = 1,
+            .commandBuffers = rhiCommandBuffers.data(),
+            .commandBufferCount = commandBufferCount,
             .swapchain = presentsSwapchainImage ? impl->swapchain : nullptr,
             .signalFence = fence,
             .signalValue = signalValue,
@@ -873,6 +878,18 @@ namespace rasm
         auto *rhiBuffer = lookup(impl->buffers, drawInfoBuffer, __func__);
         if (!impl->skipDraws && rhiCommandBuffer && rhiBuffer)
             rhiCommandBuffer->drawIndexedIndirect(rhiBuffer, offset, drawCount, stride);
+    }
+
+    void RenderContext::drawIndexedIndirectCount(const CommandBufferHandle &commandBuffer, const BufferHandle &drawInfoBuffer, uint64_t offset, const BufferHandle &countBuffer, uint64_t countOffset, uint32_t maxDrawCount, uint32_t stride)
+    {
+        if (!checkArgument(impl->insidePass, __func__, "draws must be recorded inside a render pass."))
+            return;
+
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        auto *rhiBuffer = lookup(impl->buffers, drawInfoBuffer, __func__);
+        auto *rhiCountBuffer = lookup(impl->buffers, countBuffer, __func__);
+        if (!impl->skipDraws && rhiCommandBuffer && rhiBuffer && rhiCountBuffer)
+            rhiCommandBuffer->drawIndexedIndirectCount(rhiBuffer, offset, rhiCountBuffer, countOffset, maxDrawCount, stride);
     }
 
     void RenderContext::dispatch(const CommandBufferHandle &commandBuffer, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)

@@ -18,6 +18,27 @@ namespace rasm
 {
     namespace
     {
+        constexpr uint32_t CULL_GROUP_SIZE = 64; // numthreads of cull.slang
+
+        // The planes of clip space (-w <= x, y <= w and 0 <= z <= w) are sums of rows of projection * view, in world space.
+        // The infinite far plane of reversed-Z comes out as (0, 0, 0, nearZ), which every sphere passes.
+        void getFrustumPlanes(const glm::mat4 &viewProjection, glm::vec4 planes[6])
+        {
+            const glm::mat4 rows = glm::transpose(viewProjection);
+            planes[0] = rows[3] + rows[0];
+            planes[1] = rows[3] - rows[0];
+            planes[2] = rows[3] + rows[1];
+            planes[3] = rows[3] - rows[1];
+            planes[4] = rows[2];
+            planes[5] = rows[3] - rows[2];
+            for (uint32_t i = 0; i < 6; ++i)
+            {
+                const float length = glm::length(glm::vec3(planes[i]));
+                if (length > 0.0f)
+                    planes[i] /= length;
+            }
+        }
+
         // glTF: a transform with a negative determinant mirrors the mesh, so its front faces turn clockwise (D8).
         // det(T * R * S * M) = sx * sy * sz * det(M).
         CullMode getCullMode(bool doubleSided, const Transform &transform, const glm::mat4 &meshTransform)
@@ -101,6 +122,7 @@ namespace rasm
     }
 
     static_assert(MAX_SCENES <= 16, "EntityDrawState::scenes has one bit per scene");
+    static_assert(static_cast<uint32_t>(CullMode::BACK) + 1 == gfx::MAX_DRAW_RUNS, "a draw list has one run per cull mode");
 
     bool Engine::createGpuScene()
     {
@@ -118,6 +140,20 @@ namespace rasm
             if (!buffer.isValid())
             {
                 spdlog::error("Failed to create the scene data buffer.");
+                return false;
+            }
+        }
+
+        // Culling writes a visible draw count per run of each drawScene call; the draws read them as indirect counts.
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        {
+            gpuScene->cullCommandBuffers[i] = ctx.createCommandBuffer("Cull Command Buffer " + std::to_string(i));
+            gpuScene->drawCounts[i] = ctx.createBuffer({.name = "Draw Count Buffer " + std::to_string(i),
+                                                        .usage = BufferUsage::INDIRECT,
+                                                        .size = MAX_SCENE_DRAWS_PER_FRAME * gfx::MAX_DRAW_RUNS * sizeof(uint32_t)});
+            if (!gpuScene->cullCommandBuffers[i].isValid() || !gpuScene->drawCounts[i].isValid())
+            {
+                spdlog::error("Failed to create the culling resources.");
                 return false;
             }
         }
@@ -432,6 +468,15 @@ namespace rasm
                 return;
             }
         }
+        if (!gpuScene->cullPipeline.isValid())
+        {
+            gpuScene->cullPipeline = createComputePipeline("cull", readFile(pathFromUtf8(config.shaderDir) / "passes/cull.slang"));
+            if (!gpuScene->cullPipeline.isValid())
+            {
+                spdlog::error("Failed to create the culling pipeline for the scene.");
+                return;
+            }
+        }
 
         uint32_t width = swapchain.width;
         uint32_t height = swapchain.height;
@@ -456,7 +501,34 @@ namespace rasm
             spdlog::error("Exceeded maximum number of drawScene calls per frame.");
             return;
         }
-        const uint64_t sceneDataOffset = sceneDrawCount++ * sizeof(gfx::SceneData);
+        const uint32_t call = sceneDrawCount++;
+        const uint64_t sceneDataOffset = call * sizeof(gfx::SceneData);
+        const uint64_t drawCountsOffset = call * gfx::MAX_DRAW_RUNS * sizeof(uint32_t);
+        const auto drawCount = static_cast<uint32_t>(drawList.draws.size());
+        gpuScene->cullDrawCounts[call] = 0;
+
+        // Each call culls into its own list, so passes with different cameras can draw one scene in a frame.
+        // Only this slot's last frame used the old buffer, and the fence wait covered it.
+        BufferHandle &visibleDraws = gpuScene->visibleDraws[frame][call];
+        uint32_t &visibleCapacity = gpuScene->visibleCapacity[frame][call];
+        if (visibleCapacity < drawCount)
+        {
+            if (visibleDraws.isValid())
+                ctx.destroyBuffer(visibleDraws);
+            visibleCapacity = std::max(drawCount, visibleCapacity * 2);
+            visibleDraws = ctx.createBuffer({.name = "Visible Draw Buffer", .usage = BufferUsage::INDIRECT, .size = static_cast<uint64_t>(visibleCapacity) * sizeof(gfx::DrawInfo)});
+            if (!visibleDraws.isValid())
+            {
+                spdlog::error("Failed to create a visible draw buffer of {} draws.", visibleCapacity);
+                visibleCapacity = 0;
+                return;
+            }
+        }
+
+        // The copy lands before the frame's submit, so culling counts from zero.
+        const uint32_t zeroCounts[gfx::MAX_DRAW_RUNS] = {};
+        if (!ctx.fillBuffer(gpuScene->drawCounts[frame], zeroCounts, sizeof(zeroCounts), drawCountsOffset))
+            return;
 
         auto &sceneRef = registry.scenes[scene.index];
         auto commandBuffer = frameResources[frameCount].commandBuffer;
@@ -465,6 +537,7 @@ namespace rasm
         gfx::SceneData sceneData{};
         sceneData.projection = getProjectionMatrix(camera, static_cast<float>(width) / static_cast<float>(height));
         sceneData.view = getViewMatrix(camera);
+        getFrustumPlanes(sceneData.projection * sceneData.view, sceneData.frustumPlanes);
         sceneData.cameraWorldPosition = cameraRef.transform.position;
         sceneData.numLights = static_cast<uint32_t>(sceneRef.lights.size());
         for (uint32_t i = 0; i < sceneData.numLights; ++i)
@@ -482,11 +555,18 @@ namespace rasm
             sceneData.lights[i] = light;
         }
         sceneData.vertsPtr = ctx.getBufferDeviceAddress(geometryPool->vertexBuffer());
-        sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(drawList.buffers[frame]);
+        sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(visibleDraws);
         sceneData.instancesPtr = ctx.getBufferDeviceAddress(gpuScene->instances.buffer(frame));
         sceneData.materialsPtr = ctx.getBufferDeviceAddress(gpuScene->materials.buffer(frame));
         sceneData.geometryPtr = ctx.getBufferDeviceAddress(geometryPool->tableBuffer());
+        sceneData.allDrawsPtr = ctx.getBufferDeviceAddress(drawList.buffers[frame]);
+        sceneData.drawCountsPtr = ctx.getBufferDeviceAddress(gpuScene->drawCounts[frame]) + drawCountsOffset;
+        sceneData.drawCount = drawCount;
+        sceneData.runCount = static_cast<uint32_t>(drawList.runs.size());
+        for (uint32_t i = 0; i < sceneData.runCount; ++i)
+            sceneData.runFirst[i] = drawList.runs[i].first;
         ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), sceneDataOffset);
+        gpuScene->cullDrawCounts[call] = drawCount;
 
         ctx.bindPipeline(commandBuffer, gpuScene->pipeline);
         ctx.bindDescriptorSet(commandBuffer, gpuScene->pipeline, bindlessDescriptorSet, 0);
@@ -494,13 +574,50 @@ namespace rasm
 
         gfx::PushConstants pushConstants{};
         pushConstants.scene = ctx.getBufferDeviceAddress(gpuScene->sceneData[frame]) + sceneDataOffset;
-        for (const auto &run : drawList.runs)
+        for (uint32_t i = 0; i < drawList.runs.size(); ++i)
         {
+            // Culling packs a run's visible draws at the start of its range and counts them (recordCulling).
+            const DrawRun &run = drawList.runs[i];
             pushConstants.firstDraw = run.first;
             ctx.setCullMode(commandBuffer, run.cullMode);
             ctx.pushConstants(commandBuffer, gpuScene->pipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
-            ctx.drawIndexedIndirect(commandBuffer, drawList.buffers[frame], run.first * sizeof(gfx::DrawInfo), run.count, sizeof(gfx::DrawInfo));
+            ctx.drawIndexedIndirectCount(commandBuffer, visibleDraws, run.first * sizeof(gfx::DrawInfo), gpuScene->drawCounts[frame],
+                                         drawCountsOffset + i * sizeof(uint32_t), run.count, sizeof(gfx::DrawInfo));
         }
         ctx.setCullMode(commandBuffer, CullMode::NONE);
+    }
+
+    // drawScene records inside a render pass, where dispatches are not allowed, so the frame's culling is recorded
+    // here, after the frame's command buffer, and endFrame submits it first. Its barrier makes the visible lists and
+    // counts visible to the draws.
+    bool Engine::recordCulling()
+    {
+        const auto frame = static_cast<uint32_t>(frameCount);
+        bool anyDraws = false;
+        for (uint32_t i = 0; i < sceneDrawCount; ++i)
+            anyDraws = anyDraws || gpuScene->cullDrawCounts[i] > 0;
+        if (!anyDraws)
+            return false;
+
+        ZoneScoped;
+
+        // If recording fails, the counts stay zero and the frame's scene draws draw nothing.
+        const CommandBufferHandle commandBuffer = gpuScene->cullCommandBuffers[frame];
+        if (!ctx.beginCommandBuffer(commandBuffer))
+            return false;
+
+        ctx.bindPipeline(commandBuffer, gpuScene->cullPipeline);
+        const uint64_t sceneDataAddress = ctx.getBufferDeviceAddress(gpuScene->sceneData[frame]);
+        for (uint32_t i = 0; i < sceneDrawCount; ++i)
+        {
+            const uint32_t drawCount = gpuScene->cullDrawCounts[i];
+            if (drawCount == 0)
+                continue;
+            const gfx::PushConstants pushConstants{.scene = sceneDataAddress + i * sizeof(gfx::SceneData)};
+            ctx.pushConstants(commandBuffer, gpuScene->cullPipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+            ctx.dispatch(commandBuffer, (drawCount + CULL_GROUP_SIZE - 1) / CULL_GROUP_SIZE);
+        }
+        ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::GRAPHICS);
+        return ctx.endCommandBuffer(commandBuffer);
     }
 }

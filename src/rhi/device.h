@@ -130,6 +130,7 @@ namespace rasm::rhi
         virtual void                draw(uint32_t vertexCount, uint32_t instanceCount) = 0;
         virtual void                drawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t vertexOffset, uint32_t firstIndex, uint32_t firstInstance) = 0;
         virtual void                drawIndexedIndirect(Buffer* buffer, uint64_t offset, uint32_t drawCount, uint32_t stride) = 0;
+        virtual void                drawIndexedIndirectCount(Buffer* buffer, uint64_t offset, Buffer* countBuffer, uint64_t countOffset, uint32_t maxDrawCount, uint32_t stride) = 0;
         virtual void                dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
         virtual void                memoryBarrier(PipelineStage before, PipelineStage after) = 0;
         virtual void                copyBuffers(Buffer* src, const BufferCopy* copies, uint32_t copyCount) = 0;

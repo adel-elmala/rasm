@@ -345,6 +345,11 @@ namespace rasm::rhi
         vkCmdDrawIndexedIndirect(commandBuffer, static_cast<VulkanBuffer *>(buffer)->buffer, offset, drawCount, stride);
     }
 
+    void VulkanCommandBuffer::drawIndexedIndirectCount(Buffer *buffer, uint64_t offset, Buffer *countBuffer, uint64_t countOffset, uint32_t maxDrawCount, uint32_t stride)
+    {
+        vkCmdDrawIndexedIndirectCount(commandBuffer, static_cast<VulkanBuffer *>(buffer)->buffer, offset, static_cast<VulkanBuffer *>(countBuffer)->buffer, countOffset, maxDrawCount, stride);
+    }
+
     void VulkanCommandBuffer::dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
     {
         vkCmdDispatch(commandBuffer, groupCountX, groupCountY, groupCountZ);

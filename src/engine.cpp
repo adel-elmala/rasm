@@ -337,11 +337,15 @@ namespace rasm
 
         ctx.endCommandBuffer(currentFrame.commandBuffer);
 
+        // The frame's scene draws read what culling writes, so its command buffer goes first.
+        const CommandBufferHandle commandBuffers[] = {gpuScene->cullCommandBuffers[frameCount], currentFrame.commandBuffer};
+        const uint32_t firstCommandBuffer = recordCulling() ? 0 : 1;
+
         // The slot only takes the new value once a submit will signal it; a value nothing signals would block
         // the next wait on this slot forever. After a failed submit the swapchain keeps the image acquired,
         // and the next acquire hands it out again.
         const uint64_t signalValue = frameFenceValue + 1;
-        if (ctx.submit(currentFrame.commandBuffer, frameFence, signalValue, true))
+        if (ctx.submit(commandBuffers + firstCommandBuffer, 2 - firstCommandBuffer, frameFence, signalValue, true))
         {
             frameFenceValue = signalValue;
             currentFrame.fenceValue = signalValue;
