@@ -2,7 +2,6 @@
 #pragma once
 
 #include "rasm/types.h"
-#include "rasm/profiler.h"
 #include "rasm/render/resource.h"
 
 #include <cstddef>

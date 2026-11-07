@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "rasm/types.h"
-#include "rasm/profiler.h"
 #include "rasm/render/resource.h"
 
 namespace rasm

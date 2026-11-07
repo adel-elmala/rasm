@@ -15,18 +15,8 @@ namespace rasm
             return {};
         }
 
-        auto scene = Scene{.handle = id,
-                           .entities = {},
-                           .entityCount = 0,
-                           .cameras = {},
-                           .cameraCount = 0,
-                           .lights = {},
-                           .lightCount = 0};
-
         registry.scenes.resize(id.index + 1);
-        registry.scenes[id.index] = scene;
-
-        currentScene = id;
+        registry.scenes[id.index] = Scene{.handle = id};
 
         return id;
     }
@@ -47,13 +37,14 @@ namespace rasm
 
         auto &sceneRef = registry.scenes[scene.index];
 
-        if (sceneRef.entityCount + 1 > MAX_ENTITIES_PER_SCENE)
+        if (sceneRef.entities.size() >= MAX_ENTITIES_PER_SCENE)
         {
             spdlog::warn("Exceeded maximum entities per scene.");
             return;
         }
 
-        sceneRef.entities[sceneRef.entityCount++] = entity;
+        sceneRef.entities.push_back(entity);
+        addEntityToDrawList(scene, entity);
     }
 
     void Engine::addCameraToScene(SceneHandle scene, CameraHandle camera)
@@ -72,13 +63,13 @@ namespace rasm
 
         auto &sceneRef = registry.scenes[scene.index];
 
-        if (sceneRef.cameraCount + 1 > MAX_CAMERAS_PER_SCENE)
+        if (sceneRef.cameras.size() >= MAX_CAMERAS_PER_SCENE)
         {
             spdlog::warn("Exceeded maximum cameras per scene.");
             return;
         }
 
-        sceneRef.cameras[sceneRef.cameraCount++] = camera;
+        sceneRef.cameras.push_back(camera);
     }
 
     void Engine::addLightToScene(SceneHandle scene, LightHandle light)
@@ -97,13 +88,13 @@ namespace rasm
 
         auto &sceneRef = registry.scenes[scene.index];
 
-        if (sceneRef.lightCount + 1 > MAX_LIGHTS_PER_SCENE)
+        if (sceneRef.lights.size() >= MAX_LIGHTS_PER_SCENE)
         {
             spdlog::warn("Exceeded maximum lights per scene.");
             return;
         }
 
-        sceneRef.lights[sceneRef.lightCount++] = light;
+        sceneRef.lights.push_back(light);
     }
 
 } // namespace rasm

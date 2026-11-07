@@ -7,12 +7,15 @@
 
 #include <future>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace rasm
 {
     namespace
     {
+        const std::unordered_set<std::string> supportedTextureExtensions = {"png", "jpg", "jpeg"};
+
         // Runs on a worker thread: it must not touch the engine.
         TextureRaw decodeTexture(const std::string &path)
         {
@@ -42,7 +45,7 @@ namespace rasm
 
         // find if the texture extension is supported, if not return invalid handle
         auto extension = path.substr(path.find_last_of(".") + 1);
-        if (supportedTextureExtensions.find(extension) == supportedTextureExtensions.end())
+        if (!supportedTextureExtensions.contains(extension))
         {
             spdlog::error("Unsupported texture format: {}", extension);
             return TextureHandle{};

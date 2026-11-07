@@ -5,6 +5,7 @@
 #include "platform/windowSurface.h"
 
 #include <algorithm>
+#include <chrono>
 
 #include "SDL3/SDL.h"
 #include "SDL3/SDL_vulkan.h"
@@ -63,7 +64,10 @@ namespace rasm
 
     void Engine::pollEvents(CameraHandle camera)
     {
-        profiler.updateDeltaTime();
+        // The first frame has no previous one, and a long stall (a debugger, a window drag) is capped so the camera does not jump.
+        const auto now = std::chrono::steady_clock::now();
+        deltaTime = lastFrameTime == std::chrono::steady_clock::time_point{} ? 0.0f : std::min(std::chrono::duration<float>(now - lastFrameTime).count(), 0.1f);
+        lastFrameTime = now;
 
         glm::vec2 dragStart = mainWindow.lastMousePos;
         glm::vec2 dragEnd = mainWindow.lastMousePos;
@@ -164,7 +168,7 @@ namespace rasm
         const bool *keys = SDL_GetKeyboardState(nullptr);
 
         CameraInput input{};
-        input.deltaTime = profiler.deltaTime;
+        input.deltaTime = deltaTime;
         input.wheelDelta = wheelDelta;
         if (mainWindow.mouseDragActive)
         {

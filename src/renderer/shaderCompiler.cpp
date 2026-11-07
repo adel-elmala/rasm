@@ -117,7 +117,7 @@ namespace rasm
         }
 
         // Walks pc -> scene -> pointers because only that reports the layout the shaders read. ProgramLayout::getTypeLayout
-        // has no LayoutRules value for data behind a pointer, so it adds std140/std430 padding (Modeldata is 240 there, not 188).
+        // has no LayoutRules value for data behind a pointer, so it adds std140/std430 padding.
         bool validateRasmStructs(slang::ProgramLayout *programLayout)
         {
             slang::TypeLayoutReflection *pushConstants = nullptr;
@@ -137,8 +137,8 @@ namespace rasm
                 return true;
             }
 
-            auto modeldata = fieldStruct(scene, "modeldataPtr");
-            auto material = fieldStruct(modeldata, "material");
+            auto materialData = fieldStruct(scene, "materialsPtr");
+            auto material = fieldStruct(materialData, "material");
 
             bool valid = true;
 
@@ -155,7 +155,9 @@ namespace rasm
                                      {"lights", offsetof(gfx::SceneData, lights)},
                                      {"vertsPtr", offsetof(gfx::SceneData, vertsPtr)},
                                      {"drawInfoPtr", offsetof(gfx::SceneData, drawInfoPtr)},
-                                     {"modeldataPtr", offsetof(gfx::SceneData, modeldataPtr)}});
+                                     {"instancesPtr", offsetof(gfx::SceneData, instancesPtr)},
+                                     {"materialsPtr", offsetof(gfx::SceneData, materialsPtr)},
+                                     {"geometryPtr", offsetof(gfx::SceneData, geometryPtr)}});
 
             valid &= validateStruct(fieldStruct(scene, "lights"), "Light", sizeof(gfx::Light),
                                     {{"position", offsetof(gfx::Light, position)},
@@ -178,12 +180,22 @@ namespace rasm
                                      {"vertexOffset", offsetof(gfx::DrawInfo, vertexOffset)},
                                      {"firstInstance", offsetof(gfx::DrawInfo, firstInstance)}});
 
-            valid &= validateStruct(modeldata, "Modeldata", sizeof(gfx::Modeldata),
-                                    {{"worldMatrix", offsetof(gfx::Modeldata, worldMatrix)},
-                                     {"normalMatrix", offsetof(gfx::Modeldata, normalMatrix)},
-                                     {"material", offsetof(gfx::Modeldata, material)},
-                                     {"vertFormat", offsetof(gfx::Modeldata, vertFormat)},
-                                     {"materialId", offsetof(gfx::Modeldata, materialId)}});
+            valid &= validateStruct(fieldStruct(scene, "instancesPtr"), "InstanceData", sizeof(gfx::InstanceData),
+                                    {{"worldMatrix", offsetof(gfx::InstanceData, worldMatrix)},
+                                     {"normalMatrix", offsetof(gfx::InstanceData, normalMatrix)},
+                                     {"geometryIndex", offsetof(gfx::InstanceData, geometryIndex)},
+                                     {"materialIndex", offsetof(gfx::InstanceData, materialIndex)}});
+
+            valid &= validateStruct(fieldStruct(scene, "geometryPtr"), "GeometryData", sizeof(gfx::GeometryData),
+                                    {{"firstIndex", offsetof(gfx::GeometryData, firstIndex)},
+                                     {"indexCount", offsetof(gfx::GeometryData, indexCount)},
+                                     {"vertexOffset", offsetof(gfx::GeometryData, vertexOffset)},
+                                     {"boundsCenter", offsetof(gfx::GeometryData, boundsCenter)},
+                                     {"boundsRadius", offsetof(gfx::GeometryData, boundsRadius)}});
+
+            valid &= validateStruct(materialData, "MaterialData", sizeof(gfx::MaterialData),
+                                    {{"material", offsetof(gfx::MaterialData, material)},
+                                     {"materialId", offsetof(gfx::MaterialData, materialId)}});
 
             valid &= validateStruct(material, "Material", sizeof(gfx::Material),
                                     {{"metallicRoughness", offsetof(gfx::Material, pbr)},

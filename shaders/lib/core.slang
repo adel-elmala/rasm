@@ -5,8 +5,6 @@
 static const uint   MAX_LIGHTS          = 8;
 static const uint   INVALID_TEXTURE_INDEX = 0xFFFFFFFF;
 
-enum class VertexFormat : uint32_t { FULL, POS_ONLY };
-
 // Selects how fragMain shades a model. Must match rasm::gfx::MaterialId.
 enum class MaterialId : uint32_t { PBR, UNLIT };
 
@@ -30,7 +28,7 @@ enum class LightType : uint32_t { DIRECTIONAL, POINT };
 
 // Must match rasm::gfx::Light exactly (scalar layout): the lights array sits between numLights and
 // the buffer device addresses in SceneData, so any size drift shifts vertsPtr/drawInfoPtr/
-// modeldataPtr and the shader dereferences a garbage address (device lost).
+// instancesPtr and the shader dereferences a garbage address (device lost).
 struct Light
 {
     float3      position;
@@ -81,13 +79,27 @@ struct Material
     EmissiveMaterial            emissive;
 };
 
-struct Modeldata
+struct MaterialData
+{
+    Material        material;
+    MaterialId      materialId;
+};
+
+struct InstanceData
 {
     float4x4        worldMatrix;
     float3x3        normalMatrix;
-    Material        material;
-    VertexFormat    vertFormat;
-    MaterialId      materialId;
+    uint32_t        geometryIndex;
+    uint32_t        materialIndex;
+};
+
+struct GeometryData
+{
+    uint32_t        firstIndex;
+    uint32_t        indexCount;
+    int32_t         vertexOffset;
+    float3          boundsCenter;
+    float           boundsRadius;
 };
 
 struct SceneData
@@ -99,10 +111,12 @@ struct SceneData
     Light[MAX_LIGHTS]   lights;
     VertexFull*         vertsPtr;
     DrawInfo*           drawInfoPtr;
-    Modeldata*          modeldataPtr;
+    InstanceData*       instancesPtr;
+    MaterialData*       materialsPtr;
+    GeometryData*       geometryPtr;
 };
 
-// Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's Modeldata.
+// Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.
 struct PushConstants
 {
     SceneData* scene;
