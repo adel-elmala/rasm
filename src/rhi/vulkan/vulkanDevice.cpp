@@ -94,6 +94,7 @@ namespace rasm::rhi
             VkPhysicalDeviceVulkan12Features enabledVk12Features{
                 .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
                 .pNext = &enabledVk11Features,
+                .drawIndirectCount = VK_TRUE,
                 .storagePushConstant8 = VK_TRUE,
                 .shaderInt8 = VK_TRUE,
                 .descriptorIndexing = VK_TRUE,

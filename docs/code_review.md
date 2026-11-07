@@ -199,7 +199,7 @@ Next steps, in order:
 
 **B17** — *Fixed 2026-10-27:* `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` triggers recreation. `Window` has `pixelWidth`/`pixelHeight` (the swapchain's desired extent) next to the logical `width`/`height` used for mouse input. Depth textures, viewport, scissor and camera aspect come from the swapchain extent (`Swapchain::width`/`height`). The original finding follows. Resize uses `SDL_EVENT_WINDOW_RESIZED`, which reports logical size ([window.cpp:116-122](../src/platform/window.cpp#L116-L122)). The depth texture and viewport use `mainWindow` size, while the swapchain extent comes from the surface. On scaled or HiDPI displays they can disagree. Use `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` / `SDL_GetWindowSizeInPixels`, and size everything from the swapchain extent. *Likely.*
 
-**B23 — The CPU/GPU struct check only runs in debug builds.** `validateRasmStructs` is called inside `assert(...)` ([shaderCompiler.cpp:375](../src/renderer/shaderCompiler.cpp#L375)), so with `NDEBUG` the call is compiled out. A Release build with mismatched structs starts normally and the GPU reads shifted data, or hits a device lost when a pointer field moves. Call it unconditionally, log the mismatch and fail the shader or pipeline creation. The check runs once per linked program, so it costs nothing at runtime. *Confirmed.*
+**B23 — The CPU/GPU struct check only runs in debug builds.** `validateRasmStructs` is called inside `assert(...)` ([shaderCompiler.cpp:382](../src/renderer/shaderCompiler.cpp#L382)), so with `NDEBUG` the call is compiled out. A Release build with mismatched structs starts normally and the GPU reads shifted data, or hits a device lost when a pointer field moves. Call it unconditionally, log the mismatch and fail the shader or pipeline creation. The check runs once per linked program, so it costs nothing at runtime. *Confirmed.*
 
 ---
 
@@ -258,7 +258,7 @@ Use a right-handed Y-up world (glTF's convention) and do the Vulkan flip with a 
 **D11 — Assets and shaders are located through the working directory** (§1.3). *Fixed 2026-11-01:* see [architecture.md §11](architecture.md#11-conventions-that-cross-files).
 
 **D12 — The shader code is Vulkan-only.**
-- `spirv_asm` for `DrawIndex` ([core.slang:131-140](../shaders/lib/core.slang#L131-L140)) is SPIR-V specific.
+- `spirv_asm` for `DrawIndex` ([core.slang:141-151](../shaders/lib/core.slang#L141-L151)) is SPIR-V specific.
 - The data model relies on raw pointers (`SceneData*`, `VertexFull*`) through buffer device address.
 - As far as I know, Slang pointer support is limited to SPIR-V, Metal and CUDA targets: HLSL/DXIL and WGSL have no raw pointers. Verify against the current Slang docs before you design around it.
 
@@ -274,6 +274,8 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 
 **D17 — No tests and no CI.** *Partly resolved 2026-11-04:* `rasm_tests` also covers glTF import (indices, strips and fans, node transforms and cycles, interleaved, quantized and sparse attributes, skipped primitives). `.github/workflows/ci.yml` builds the Windows and macOS Debug and Release presets on every PR and push to `main`, and runs `ctest`. Still open: handle-pool tests (`D4`) and image tests. *Partly resolved 2026-11-01:* `rasm_tests` covers handles, descriptor equality and hashing, render-graph sorting, transforms and camera math. It found `B22` on its first run. Pure-CPU pieces such as handle pools, desc hashing, glTF import, camera math and render-graph sorting are easy to unit-test. Rendering can be covered with headless golden-image tests once offscreen rendering exists.
 
+**D18 — Culling runs before every other GPU work of the frame.** `recordCulling` records into its own command buffer, and `endFrame` submits it ahead of the frame's command buffer ([engine.cpp:339-349](../src/engine.cpp#L339-L349)), because `drawScene` records inside a render pass where dispatches are not allowed. Any `RenderGraph::addComputePass` work recorded earlier in the frame therefore runs after culling, not before it. Nothing is wrong today: culling reads only the scene tables, `SceneData` and the draw lists, and no application pass can write them. It becomes a bug once GPU work updates what culling reads, such as GPU-side transforms (`P7`) or Hi-Z occlusion culling, which needs the depth of the frame's first pass. The fix is the graph-driven frame of phase 3: culling becomes a graph pass recorded in order with the others. *Confirmed.*
+
 ---
 
 ## 4. Performance
@@ -281,7 +283,7 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 **P1 — Every buffer is host-visible and mapped.** *Fixed 2026-11-04:* only buffers with `BufferDesc::hostVisible` (the per-frame model and scene data) are forced into host-visible memory. Other buffers are device-local, use `ALLOW_TRANSFER_INSTEAD` so they stay mapped where device-local memory is host-visible, and are otherwise filled through `rhi::UploadManager`: a staging ring with batched copies and timeline-fence completion ([architecture.md §12](architecture.md#12-rhi)). The original finding follows. (`HOST_ACCESS_SEQUENTIAL_WRITE | MAPPED`, [vulkanContext.cpp:205-208](../src/rhi/vulkan/vulkanContext.cpp#L205-L208)). On discrete GPUs without ReBAR, the mega vertex and index buffers end up in system RAM and every vertex fetch crosses PCIe. Static data should go to device-local memory through staging (or `ALLOW_TRANSFER_INSTEAD`). Keep host-visible memory for per-frame data only.
 
 **P2 — Texture path.**
-- Sampled images are created with `HOST_ACCESS_*` allocation flags for host image copy ([vulkanDevice.cpp:471-475](../src/rhi/vulkan/vulkanDevice.cpp#L471-L475)), which can push them into host-visible memory.
+- Sampled images are created with `HOST_ACCESS_*` allocation flags for host image copy ([vulkanDevice.cpp:472-476](../src/rhi/vulkan/vulkanDevice.cpp#L472-L476)), which can push them into host-visible memory.
 - Each image gets a dedicated allocation, and mips are generated on the CPU on the main thread.
 - *Fixed 2026-11-02 (`D1`), 2026-11-04:* bindless textures share a fixed set of six samplers (`SamplerType`), picked per slot; glTF textures map their sampler onto it. Originally each texture created its own `VkSampler` and called `vkGetPhysicalDeviceProperties`. Drivers often cap samplers at about 4000, so use a handful of shared samplers.
 - Host image copy also requires the `hostImageCopy` feature, which narrows hardware support; keep a staging-buffer fallback.

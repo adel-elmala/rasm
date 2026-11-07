@@ -157,7 +157,16 @@ namespace rasm
                                      {"drawInfoPtr", offsetof(gfx::SceneData, drawInfoPtr)},
                                      {"instancesPtr", offsetof(gfx::SceneData, instancesPtr)},
                                      {"materialsPtr", offsetof(gfx::SceneData, materialsPtr)},
-                                     {"geometryPtr", offsetof(gfx::SceneData, geometryPtr)}});
+                                     {"geometryPtr", offsetof(gfx::SceneData, geometryPtr)},
+                                     {"allDrawsPtr", offsetof(gfx::SceneData, allDrawsPtr)},
+                                     {"drawCountsPtr", offsetof(gfx::SceneData, drawCountsPtr)},
+                                     {"cullSlotsPtr", offsetof(gfx::SceneData, cullSlotsPtr)},
+                                     {"groupCountsPtr", offsetof(gfx::SceneData, groupCountsPtr)},
+                                     {"frustumPlanes", offsetof(gfx::SceneData, frustumPlanes)},
+                                     {"drawCount", offsetof(gfx::SceneData, drawCount)},
+                                     {"runCount", offsetof(gfx::SceneData, runCount)},
+                                     {"runFirst", offsetof(gfx::SceneData, runFirst)},
+                                     {"padding", offsetof(gfx::SceneData, padding)}});
 
             valid &= validateStruct(fieldStruct(scene, "lights"), "Light", sizeof(gfx::Light),
                                     {{"position", offsetof(gfx::Light, position)},

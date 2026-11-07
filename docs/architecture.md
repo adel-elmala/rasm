@@ -4,7 +4,7 @@ This document describes how RASM is built **today** (branch `feat/pbr`, Oct 2026
 
 ## 1. Overview
 
-RASM is a C++20 rendering engine with a single implemented backend (Vulkan 1.4). It is built as a static library (`rasm`, alias `rasm::rasm`) and driven by small example programs. Its rendering core is *GPU-driven*: the whole scene is drawn with one pipeline and one `vkCmdDrawIndexedIndirect` call per run of draws with the same cull mode (usually at most three). Vertices are pulled from one engine-wide geometry pool through buffer device addresses, textures are accessed through one bindless descriptor array, and the only per-draw binding is a 16-byte push constant.
+RASM is a C++20 rendering engine with a single implemented backend (Vulkan 1.4). It is built as a static library (`rasm`, alias `rasm::rasm`) and driven by small example programs. Its rendering core is *GPU-driven*: a compute pass culls the scene's draws against the camera frustum, and the visible ones are drawn with one pipeline and one `vkCmdDrawIndexedIndirectCount` call per run of draws with the same cull mode (usually at most three). Vertices are pulled from one engine-wide geometry pool through buffer device addresses, textures are accessed through one bindless descriptor array, and the only per-draw binding is a 16-byte push constant.
 
 ```mermaid
 flowchart TD
@@ -29,12 +29,12 @@ flowchart TD
 | Platform | `src/platform/window.cpp` | SDL3 window, event polling and camera input. |
 | Assets | `src/assets/` | glTF/OBJ import on the worker thread (`meshImport.h/.cpp`, also used by tests), meshes and the geometry pool (`mesh.cpp`), textures (`texture.cpp`), materials and glTF material/texture import (`material.cpp`). |
 | Scene | `src/scene/` | Scenes, entities, cameras, lights, transforms. |
-| Renderer | `src/renderer/` | The GPU-driven scene path (`gpuScene.cpp`: GPU scene tables, `syncGpuScene`, `drawScene`; `gpuTable.cpp`: per-slot tables with dirty-range uploads; `geometryPool.cpp`: the geometry pool and its table), render graph, Slang shader compiler, GPU struct definitions (`uberMaterialTypes.h`). |
+| Renderer | `src/renderer/` | The GPU-driven scene path (`gpuScene.cpp`: GPU scene tables, `syncGpuScene`, `drawScene`, `recordCulling`; `gpuTable.cpp`: per-slot tables with dirty-range uploads; `geometryPool.cpp`: the geometry pool and its table), render graph, Slang shader compiler, GPU struct definitions (`uberMaterialTypes.h`). |
 | Render context | `src/rhi/renderContext.cpp` | Backend-neutral API over handles; owns the handle → `rhi::` object tables, the creation-dedup caches and render targets. |
 | RHI | `src/rhi/device.h` | The backend-neutral GPU interface: `Device`, `CommandBuffer`, `Queue`, `Swapchain` and the resource objects (§12). |
 | Vulkan backend | `src/rhi/vulkan/` | `VulkanDevice` (instance, device, VMA, resource creation), `VulkanCommandBuffer` (recording, barriers), `VulkanSwapchain` (surface swapchain and its semaphores), `VulkanQueue` (submission), one `.h`/`.cpp` pair each. `vulkanTypes.h`: the Vulkan objects behind each `rhi::` struct. |
 | Third-party implementations | `src/thirdparty_impl.cpp` | The single translation unit with the `*_IMPLEMENTATION` defines (stb, tinygltf, tinyobjloader, VMA). |
-| Shaders | `shaders/lib/`, `shaders/passes/` | `lib/`: shared modules: GPU structs (`core.slang`), PBR BRDF (`pbr.slang`), unlit shading (`unlit.slang`). `passes/`: entry shaders: the uber shader (`rasm.slang`). |
+| Shaders | `shaders/lib/`, `shaders/passes/` | `lib/`: shared modules: GPU structs (`core.slang`), PBR BRDF (`pbr.slang`), unlit shading (`unlit.slang`). `passes/`: entry shaders: the uber shader (`rasm.slang`) and frustum culling (`cull.slang`). |
 
 Applications compile against `include/rasm/` and glm only. `src/`, the backend libraries and the tinygltf/stb include paths are PRIVATE to the `rasm` target, and static linking still pulls the libraries in. `RenderContext` keeps its `rhi::Device` and object tables in a private `RenderContext::Impl`, defined in `src/rhi/renderContext.cpp`. `Engine` holds `ShaderCompiler` through a forward declaration.
 
@@ -71,7 +71,7 @@ There are two kinds of handle owner:
 **Required Vulkan features**: API 1.4.
 - 1.0: `multiDrawIndirect`, `drawIndirectFirstInstance` (each draw names its instance row in `firstInstance`), `samplerAnisotropy`, `shaderInt64`.
 - 1.1: `shaderDrawParameters`.
-- 1.2: descriptor indexing (runtime arrays, partially bound, update-after-bind, variable count, non-uniform sampled image indexing), `bufferDeviceAddress`, `scalarBlockLayout`, `timelineSemaphore`, `shaderInt8`, `storagePushConstant8`.
+- 1.2: descriptor indexing (runtime arrays, partially bound, update-after-bind, variable count, non-uniform sampled image indexing), `drawIndirectCount`, `bufferDeviceAddress`, `scalarBlockLayout`, `timelineSemaphore`, `shaderInt8`, `storagePushConstant8`.
 - 1.3: `dynamicRendering`, `synchronization2`.
 - 1.4: `hostImageCopy`.
 - Extensions: `VK_KHR_swapchain`, `VK_EXT_memory_budget`.
@@ -93,16 +93,17 @@ sequenceDiagram
     E->>C: acquireNextImage (skip frame on OUT_OF_DATE)
     E->>C: begin command buffer
     E->>C: beginPass: barriers (swapchain→COLOR_ATTACHMENT, depth→DEPTH), beginRendering (CLEAR), viewport/scissor, cull NONE
-    E->>C: write the call's slot of SceneData[frame] (camera, lights, table addresses)
+    E->>C: write the call's slot of SceneData[frame] (camera, frustum planes, lights, table addresses), zero its draw counts
     E->>C: bind the uber pipeline, the bindless set and the geometry pool's index buffer
     loop each run of draws with the same current cull mode
         E->>C: setCullMode(mode)
         E->>C: push constant = {address of that slot, firstDraw}
-        E->>C: drawIndexedIndirect(drawInfoBuffer + firstDraw, run length)
+        E->>C: drawIndexedIndirectCount(visible draws + firstDraw, count = the run's visible count, max = run length)
     end
     E->>C: setCullMode(NONE)
     E->>C: endPass: endRendering, swapchain→PRESENT_SRC
-    E->>C: submit (waits for the acquired image, signals frameFence = ++frameFenceValue)
+    E->>C: recordCulling: cull command buffer, per drawScene call countMain, COMPUTE→COMPUTE barrier, writeMain; then COMPUTE→GRAPHICS barrier
+    E->>C: submit {cull, frame} (waits for the acquired image, signals frameFence = ++frameFenceValue)
     E->>C: present (SUBOPTIMAL / OUT_OF_DATE → recreate next frame)
     E->>E: frameCount = (frameCount + 1) % 2
 ```
@@ -137,6 +138,8 @@ ENGINE-WIDE (all scenes share them)                                        PER S
 | Materials | `GpuTable materials`, `MAX_MATERIALS` rows, row = material handle index | `gfx::MaterialData`: `gfx::Material` + `gfx::MaterialId` | `writeMaterialRow`, from `createMaterial`, `loadMaterial` and `updateMaterial` |
 | Instances | `GpuTable instances`, `EngineConfig::maxInstances` rows | `gfx::InstanceData`: world matrix, normal matrix, geometry index, material index | `writeInstanceRows`, from `updateTransform` and when an entity gets its rows |
 | Draw list | `SceneDrawList::buffers[2]`, grown 2x when too small | `gfx::DrawInfo{indexCount, 1, firstIndex, firstVertex, firstInstance = instance row}` | `rebuildDrawList` + `uploadDrawList` |
+| Visible draws | `GpuScene::visibleDraws[2][MAX_SCENE_DRAWS_PER_FRAME]`, one per frame slot and `drawScene` call, grown 2x when too small | `gfx::DrawInfo`, the draw list's rows that pass culling, packed per run in list order. Then culling's scratch: a `uint32_t` slot per draw (`cullSlotsPtr`) and a visible count per group of 64 (`groupCountsPtr`) | `cull.slang`, on the GPU |
+| Draw counts | `GpuScene::drawCounts[2]`, `MAX_DRAW_RUNS` `uint32_t`s per `drawScene` call | visible draws of each run | `cull.slang` (`writeMain`, the run's last group) |
 
 **`GpuTable`** (`src/renderer/gpuTable.h`) is N rows of a fixed size with a CPU copy and one device-local buffer per frame slot. `setRow` writes the CPU copy and marks the row dirty for both slots. `upload(frame)` sorts that slot's dirty rows, merges neighbours into ranges (`mergeRows`) and writes each range with `fillBuffer`. If a write fails, the rows stay dirty and the slot sends them again in its next frame. A slot is written only in its own frame, after the fence wait, so the GPU is done with it. This holds on both `fillBuffer` paths (a staged copy, or a direct write into ReBAR memory).
 
@@ -150,19 +153,28 @@ ENGINE-WIDE (all scenes share them)                                        PER S
 
 **`drawScene`** (called by `Engine::render`, or directly by render graph passes):
 1. Skips the draw when the scene's draw list is empty or this slot's copy could not be uploaded. The pass keeps its clear color.
-2. Creates the uber pipeline on first use: `Engine::createPipeline` with `shaders/passes/rasm.slang` (`vertMain`/`fragMain`), no vertex input, the bindless set layout, the swapchain's color format and `D32_SFLOAT` depth. A shader error logs and retries next frame, so a shader fixed on disk is picked up while the application runs. Cull mode is dynamic state, so one pipeline serves all cull modes. A render target must use the same formats; for any other target `drawScene` logs an error and skips the draw.
-3. Writes the call's slot of `GpuScene::sceneData[frame]`, which holds `MAX_SCENE_DRAWS_PER_FRAME` host-visible `gfx::SceneData`s per frame slot: camera, lights, and the addresses of the geometry pool, this slot's draw list, instance and material tables, and the geometry table. The GPU reads `SceneData` after the whole frame is recorded, so each call needs its own slot. That is what lets passes in one frame use different cameras. Past `MAX_SCENE_DRAWS_PER_FRAME` calls, or with an invalid scene or camera, `drawScene` logs an error and skips the draw.
-4. Binds the pipeline, the bindless set and the geometry pool's index buffer. Then, per run: `setCullMode`, push constant `{SceneData address, firstDraw = run.first}`, and `drawIndexedIndirect(draw list + run.first, run.count)`. It sets the cull mode back to `NONE`, which is what `beginPass` sets for every other pipeline.
+2. Creates the uber pipeline on first use: `Engine::createPipeline` with `shaders/passes/rasm.slang` (`vertMain`/`fragMain`), no vertex input, the bindless set layout, the swapchain's color format and `D32_SFLOAT` depth. The two culling pipelines come from `Engine::createComputePipeline` with the `countMain` and `writeMain` entry points of `shaders/passes/cull.slang`. If either fails, the call draws its whole list unculled with `drawIndexedIndirect`, so a culling shader error does not blank the scene. A shader error logs and retries next frame, so a shader fixed on disk is picked up while the application runs. Cull mode is dynamic state, so one pipeline serves all cull modes. A render target must use the same formats; for any other target `drawScene` logs an error and skips the draw.
+3. Takes the call's index (`sceneDrawCount`) and grows the call's visible-draw buffer to the draw list's size if needed.
+4. Writes the call's slot of `GpuScene::sceneData[frame]`, which holds `MAX_SCENE_DRAWS_PER_FRAME` host-visible `gfx::SceneData`s per frame slot: camera, the six world-space frustum planes, lights, the run starts, and the addresses of the geometry pool, the scene's whole draw list (`allDrawsPtr`), the call's visible draws (`drawInfoPtr`), draw counts and culling scratch, the instance and material tables, and the geometry table. The GPU reads `SceneData` after the whole frame is recorded, so each call needs its own slot, its own visible list and its own counts. That is what lets passes in one frame use different cameras. Past `MAX_SCENE_DRAWS_PER_FRAME` calls, or with an invalid scene or camera, `drawScene` logs an error and skips the draw.
+5. Binds the pipeline, the bindless set and the geometry pool's index buffer. Then, per run: `setCullMode`, push constant `{SceneData address, firstDraw = run.first}`, and `drawIndexedIndirectCount(visible draws + run.first, count = the run's draw count, max = run.count)` (unculled: `drawIndexedIndirect` of the whole list). It stores the call's number of cull groups for `recordCulling`. It sets the cull mode back to `NONE`, which is what `beginPass` sets for every other pipeline.
+
+**GPU frustum culling.** `drawScene` records inside a render pass, where dispatches are not allowed, so the dispatches go into a second command buffer per frame slot (`GpuScene::cullCommandBuffers`). `endFrame` ends the frame's command buffer, then `recordCulling` begins the cull command buffer at the first culled call and records, per call, `countMain`, a `COMPUTE → COMPUTE` `memoryBarrier` and `writeMain`, then one `COMPUTE → GRAPHICS` barrier. Both go out in one submit, the cull command buffer first, so the barrier orders the dispatches before the frame's draws. A frame with no culled draws submits only its own command buffer. If the cull command buffer cannot be recorded, the frame is not submitted, since its draws would read stale counts. Each run of the draw list is split into groups of 64 draws (`getCullGroup`), the groups of run 0 first:
+- `countMain` tests each draw. It transforms the geometry table's bounding sphere with the instance's world matrix and scales the radius by the matrix's largest stretch, bounded from above with Gershgorin's theorem on `transpose(M) * M`. The bound is exact when the columns are orthogonal, and never too small under a non-uniform scale followed by a rotation.
+- A sphere fully outside one of the frustum planes is culled. The planes come from the rows of projection × view (`getFrustumPlanes`), normalized. The infinite reversed-Z far plane comes out as `(0, 0, 0, nearZ)`, which every sphere passes.
+- `countMain` writes each draw's slot among its group's visible draws (or `CULLED`) to `cullSlotsPtr`, and the group's visible count to `groupCountsPtr`.
+- `writeMain` adds up the counts of the run's earlier groups, copies each visible `DrawInfo` to `drawInfoPtr[runFirst[run] + that sum + slot]`, and the run's last group writes the run's count. The visible draws therefore keep the draw list's order every frame, and no count needs zeroing.
 
 ### GPU data chain
 
 ```mermaid
 flowchart LR
-    PC["push constant<br/>SceneData*, firstDraw (16 bytes)"] --> SD["SceneData<br/>projection, view, camera pos,<br/>numLights, lights[8]"]
-    SD -- drawInfoPtr --> DI["DrawInfo[]<br/>(the scene's draw list)"]
+    PC["push constant<br/>SceneData*, firstDraw (16 bytes)"] --> SD["SceneData<br/>projection, view, camera pos,<br/>numLights, lights[8], frustum planes, runs"]
+    SD -- allDrawsPtr --> AD["DrawInfo[]<br/>(the scene's draw list,<br/>read by cull.slang)"]
+    AD -- cull.slang --> DI
+    SD -- drawInfoPtr --> DI["DrawInfo[]<br/>(the call's visible draws)"]
     DI -- firstInstance --> ID["InstanceData[]<br/>world, normal matrix,<br/>geometryIndex, materialIndex"]
     DI -- vertexOffset --> V["VertexFull[]<br/>(geometry pool, vertsPtr)"]
-    ID -- geometryIndex --> GD["GeometryData[]<br/>ranges, bounds<br/>(for culling, not read yet)"]
+    ID -- geometryIndex --> GD["GeometryData[]<br/>ranges, bounds<br/>(read by cull.slang)"]
     ID -- materialIndex --> MD["MaterialData[]<br/>Material, MaterialId"]
     MD -- texture indices --> T["gTextures[] (set 0, binding 0)<br/>bindless Sampler2D array"]
 ```
@@ -170,12 +182,12 @@ flowchart LR
 In `vertMain`:
 - The draw's index in the list is the SPIR-V `DrawIndex` built-in, read with `spirv_asm` in `core.slang` (`getDrawIndex`), plus `pc.firstDraw`. `DrawIndex` restarts at 0 in each indirect call, so `firstDraw` is the index of the call's first draw.
 - `drawInfoPtr[draw].firstInstance` is the instance row (core Vulkan allows a non-zero `firstInstance` only with `drawIndirectFirstInstance`). The matrices come from `instancesPtr[row]`.
-- Slang lowers `SV_VertexID` to `VertexIndex - BaseVertex`, so the shader adds the draw's own `vertexOffset` (`drawInfoPtr[draw].vertexOffset`) back before indexing `vertsPtr`. Nothing reads the geometry table in shaders yet; GPU culling will.
+- Slang lowers `SV_VertexID` to `VertexIndex - BaseVertex`, so the shader adds the draw's own `vertexOffset` (`drawInfoPtr[draw].vertexOffset`) back before indexing `vertsPtr`. Only `cull.slang` reads the geometry table, for the bounds.
 - The instance's `materialIndex` goes to the fragment shader. `fragMain` reads `materialsPtr[materialIndex]` and branches on its `materialId`: `MaterialId.UNLIT` calls `shadeUnlit` in `unlit.slang`, and everything else calls `shadePBR` in `pbr.slang`.
 
 ### CPU/GPU struct contract
 
-The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `shaders/lib/core.slang` must match byte for byte under **scalar layout**. The C++ side `static_assert`s the sizes and key offsets (`SceneData` = 568 bytes, `InstanceData` = 108, `MaterialData` = 84, `GeometryData` = 28, …), and `rasm::Vertex` is asserted equal to `gfx::VertexFull`. Those asserts only pin the C++ side, so debug builds also run `validateRasmStructs` (`shaderCompiler.cpp`), which asserts each struct's size and field offsets against Slang reflection after linking. Read shader layouts by walking from `pc` through the pointers: `ProgramLayout::getTypeLayout` reports std140/std430 padding instead. When you change a struct, change both sides, the asserts and the `validateRasmStructs` tables.
+The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `shaders/lib/core.slang` must match byte for byte under **scalar layout**. The C++ side `static_assert`s the sizes and key offsets (`SceneData` = 720 bytes, `InstanceData` = 108, `MaterialData` = 84, `GeometryData` = 28, …), and `rasm::Vertex` is asserted equal to `gfx::VertexFull`. Those asserts only pin the C++ side, so debug builds also run `validateRasmStructs` (`shaderCompiler.cpp`), which asserts each struct's size and field offsets against Slang reflection after linking. Read shader layouts by walking from `pc` through the pointers: `ProgramLayout::getTypeLayout` reports std140/std430 padding instead. When you change a struct, change both sides, the asserts and the `validateRasmStructs` tables.
 
 ## 5. Materials and textures
 
@@ -245,7 +257,7 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - `execute(camera)` runs `beginFrame(camera)` once, then for each pass in order calls `setRenderTarget(pass.outputRenderTarget)`, `beginPass`, `pass.execute(ctx)` and `endPass`. A pass without an output render target renders to the swapchain. Last comes `endFrame`.
 - `addComputePass` adds a pass that `execute` runs outside any rendering scope: only `pass.execute(ctx)`, with no render target, transitions or clear. It sorts by its reads and writes like any other pass. A render target it writes is dropped with an error, because it has no attachments. `examples/04_compute` animates particles in one and draws them in the next.
 - The graph orders passes and puts a `memoryBarrier` (§12) before every compute pass and before the first graphics pass after one. The frame starts with a `GRAPHICS → COMPUTE` barrier, so the previous frame's draws are done with shared buffers, and a compute pass at the end of the frame gets a `COMPUTE → GRAPHICS` barrier for the next frame. These are global barriers on every change of kind, not per read/write edge. The graph does not insert other barriers or layout transitions, and does not allocate transient resources. A pass with several dependent dispatches records `ctx.memoryBarrier(COMPUTE, COMPUTE)` between them. `examples/01_render_graph` and `examples/04_compute` use it.
-- A pass records through `Engine::drawScene`, or through its own pipeline from `Engine::createPipeline`. That example's overlay pass does the second: it binds a pipeline and draws a screen-covering triangle. A compute pass uses a pipeline from `Engine::createComputePipeline`, which compiles the `compMain` entry point of a Slang source string and uses the bindless set layout. `ShaderDesc::entryPoint` carries the entry point name to the pipeline, so the name is written only where the shader is compiled.
+- A pass records through `Engine::drawScene`, or through its own pipeline from `Engine::createPipeline`. That example's overlay pass does the second: it binds a pipeline and draws a screen-covering triangle. A compute pass uses a pipeline from `Engine::createComputePipeline`, which compiles an entry point of a Slang source string (`compMain` unless another is named) and uses the bindless set layout. `ShaderDesc::entryPoint` carries the entry point name to the pipeline, so the name is written only where the shader is compiled.
 - A render target has one color and one depth texture per frame slot, and a `clearColor` that every pass writing it starts from. `beginPass` transitions the current slot's attachments from `UNDEFINED` and sizes the viewport from the render target. `endPass` transitions the color attachment to `SHADER_READ_ONLY_OPTIMAL`, the layout its bindless descriptor promises. Later passes read it with `getRenderTargetTexture` and `getBindlessTextureIndex`. Depth is not stored and is not in the bindless array.
 - `transitionImageLayout` takes the barrier's source scope from the old usage and its destination scope from the new one. `UNKNOWN` discards the contents and waits for every stage the image could have been used in, including `COLOR_ATTACHMENT_OUTPUT`, which chains the barrier to the acquire semaphore of a swapchain image. A usage without a defined scope logs an error, records no barrier and returns `false`.
 
@@ -309,7 +321,9 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 - A batch whose flush fails stays pending and goes out with the next flush, since `fillBuffer` already returned true for it.
 - Copies in one batch have no barriers between them, so a write that overlaps a range already written in the batch starts a new batch.
 
-**Queues.** There is one graphics queue (`QueueType::GRAPHICS`), used for frames and uploads. Transfer and async-compute queues are `D13`. Vulkan submits with `vkQueueSubmit2` and waits for the acquired image at `COLOR_ATTACHMENT_OUTPUT`, the stage the barrier out of `UNKNOWN` also waits for.
+**Draws.** Besides direct draws there are `drawIndexedIndirect` and `drawIndexedIndirectCount`; the second reads the draw count from a buffer on the GPU, clamped to `maxDrawCount`. Both buffers need `BufferUsage::INDIRECT`.
+
+**Queues.** There is one graphics queue (`QueueType::GRAPHICS`), used for frames and uploads. `RenderContext::submit` takes several command buffers, which run in the given order as one submission. Transfer and async-compute queues are `D13`. Vulkan submits with `vkQueueSubmit2` and waits for the acquired image at `COLOR_ATTACHMENT_OUTPUT`, the stage the barrier out of `UNKNOWN` also waits for.
 
 **Adding a backend.**
 1. Implement `Device`, `CommandBuffer`, `Queue` and `Swapchain`, and derive the resource structs, under `src/rhi/<backend>/`.

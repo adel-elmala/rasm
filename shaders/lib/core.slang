@@ -4,6 +4,8 @@
 // Constants
 static const uint   MAX_LIGHTS          = 8;
 static const uint   INVALID_TEXTURE_INDEX = 0xFFFFFFFF;
+// One draw run per cull mode. Must match rasm::gfx::MAX_DRAW_RUNS.
+static const uint   MAX_DRAW_RUNS       = 3;
 
 // Selects how fragMain shades a model. Must match rasm::gfx::MaterialId.
 enum class MaterialId : uint32_t { PBR, UNLIT };
@@ -114,6 +116,15 @@ struct SceneData
     InstanceData*       instancesPtr;
     MaterialData*       materialsPtr;
     GeometryData*       geometryPtr;
+    DrawInfo*           allDrawsPtr;        // the scene's whole draw list; cull.slang packs the visible ones into drawInfoPtr
+    uint32_t*           drawCountsPtr;      // visible draws per run, written by cull.slang
+    uint32_t*           cullSlotsPtr;       // cull.slang's scratch: a draw's slot among its group's visible draws
+    uint32_t*           groupCountsPtr;     // cull.slang's scratch: visible draws per group of 64
+    float4              frustumPlanes[6];   // world space, inside where dot(xyz, p) + w >= 0
+    uint32_t            drawCount;
+    uint32_t            runCount;
+    uint32_t            runFirst[MAX_DRAW_RUNS];
+    uint32_t            padding;
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.
