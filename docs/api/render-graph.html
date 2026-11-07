@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Render Graph · RASM</title>
+<meta name="description" content="Build a frame from passes: RenderGraph, PassBuilder, compute passes, render targets, custom pipelines from Slang source, and GPU timers.">
+<meta name="rasm-sources" content="include/rasm/render/renderGraph.h include/rasm/render/resource.h include/rasm/engine.h include/rasm/types.h src/renderer/renderGraph.cpp src/engine.cpp src/rhi/renderContext.cpp src/renderer/frameStats.cpp src/renderer/shaderCompiler.cpp src/renderer/gpuScene.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="api/render-graph.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">API reference</p>
+<h1>Render graph and custom passes</h1>
+<p class="lead">A render graph is a list of passes. Each pass says what it reads and writes, and records its commands in a callback. The graph puts the passes in an order that respects those reads and writes, then runs them every frame between <code>beginFrame</code> and <code>endFrame</code>. Use it when one <code>render</code> call is not enough: offscreen targets, post effects, compute work.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU work</span>
+  <span><i class="gpu"></i>GPU work</span>
+  <span><i class="mem"></i>GPU buffer or texture</span>
+  <span><i class="shader"></i>your callback</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 310" role="img" aria-label="Once: createRenderGraph, then addPass or addComputePass, whose setup runs at once, then compile. Every frame, execute calls beginFrame, then for each pass in order either setRenderTarget, beginPass, your execute and endPass for a graphics pass, or a barrier, a GPU timer and your execute for a compute pass, then endFrame.">
+    <text x="10" y="16" class="small">once, before the loop</text>
+    <rect x="10" y="26" width="200" height="54" rx="6" class="cpu"/>
+    <text x="110" y="48" class="mid mono">createRenderGraph</text>
+    <text x="110" y="67" class="mid small">returns a RenderGraph</text>
+    <line x1="210" y1="53" x2="258" y2="53" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="260" y="26" width="240" height="54" rx="6" class="cpu"/>
+    <text x="380" y="48" class="mid mono">addPass / addComputePass</text>
+    <text x="380" y="67" class="mid small">your setup(builder) runs now</text>
+    <line x1="500" y1="53" x2="548" y2="53" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="550" y="26" width="200" height="54" rx="6" class="cpu"/>
+    <text x="650" y="48" class="mid mono">compile</text>
+    <text x="650" y="67" class="mid small">edges, then the pass order</text>
+
+    <text x="10" y="112" class="small">every frame: execute(camera)</text>
+    <rect x="10" y="180" width="160" height="56" rx="6" class="cpu"/>
+    <text x="90" y="203" class="mid mono">beginFrame</text>
+    <text x="90" y="222" class="mid small">input, wait, acquire</text>
+    <line x1="170" y1="208" x2="186" y2="208" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="188" y="122" width="450" height="176" rx="8" class="zone"/>
+    <text x="200" y="140" class="title">for each pass, in compiled order</text>
+    <text x="200" y="160" class="small">graphics pass</text>
+    <rect x="200" y="166" width="125" height="46" rx="6" class="cpu"/>
+    <text x="262" y="185" class="mid mono">setRenderTarget</text>
+    <text x="262" y="202" class="mid small">output or swapchain</text>
+    <rect x="337" y="166" width="90" height="46" rx="6" class="cpu"/>
+    <text x="382" y="185" class="mid mono">beginPass</text>
+    <text x="382" y="202" class="mid small">clears</text>
+    <rect x="439" y="166" width="85" height="46" rx="23" class="shader"/>
+    <text x="481" y="185" class="mid mono">execute</text>
+    <text x="481" y="202" class="mid small">your lambda</text>
+    <rect x="536" y="166" width="90" height="46" rx="6" class="cpu"/>
+    <text x="581" y="185" class="mid mono">endPass</text>
+    <text x="581" y="202" class="mid small">transitions</text>
+
+    <text x="200" y="230" class="small">compute pass</text>
+    <rect x="200" y="236" width="110" height="46" rx="6" class="gpu"/>
+    <text x="255" y="255" class="mid mono">barrier</text>
+    <text x="255" y="272" class="mid small">before compute</text>
+    <rect x="322" y="236" width="108" height="46" rx="6" class="cpu"/>
+    <text x="376" y="255" class="mid mono">GPU timer</text>
+    <text x="376" y="272" class="mid small">named after it</text>
+    <rect x="442" y="236" width="85" height="46" rx="23" class="shader"/>
+    <text x="484" y="255" class="mid mono">execute</text>
+    <text x="484" y="272" class="mid small">your lambda</text>
+    <rect x="539" y="236" width="87" height="46" rx="6" class="cpu"/>
+    <text x="582" y="255" class="mid small">no render pass,</text>
+    <text x="582" y="270" class="mid small">no clear</text>
+
+    <line x1="638" y1="208" x2="650" y2="208" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="652" y="180" width="98" height="56" rx="6" class="cpu"/>
+    <text x="701" y="203" class="mid mono">endFrame</text>
+    <text x="701" y="222" class="mid small">submit, present</text>
+  </svg>
+  <figcaption>The setup callback runs inside <code>addPass</code>. The execute callback runs every frame, inside <code>execute</code>. Both are yours.</figcaption>
+</figure>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Create targets and buffers in the setup callback, and declare them with <code>read</code> / <code>write</code>. Only these declarations order the passes.</li>
+    <li>A graphics pass draws into the render target it writes, or into the swapchain if it writes none. Every graphics pass <b>clears</b> its target first.</li>
+    <li>A compute pass runs outside any render pass. The graph puts a memory barrier before it and before the next graphics pass.</li>
+    <li>Inside a callback, record with the <a href="low-level.html">RenderContext</a> and the frame's command buffer: <code>engine.getCurrentFrameResources().commandBuffer</code>.</li>
+    <li>Pipelines for your own shaders come from <code>createPipeline</code> and <code>createComputePipeline</code>, compiled from Slang source at run time.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>The graph</h2>
+
+<div class="api" id="createRenderGraph">
+  <pre class="sig">RenderGraph createRenderGraph();</pre>
+  <div class="body">
+    <p>Returns an empty graph tied to this engine. Keep it alive for as long as you call <code>execute</code>, and keep everything its callbacks capture by reference alive too.</p>
+  </div>
+</div>
+
+<div class="api" id="RenderGraph">
+  <pre class="sig">class RenderGraph
+{
+public:
+         RenderGraph(Engine* owner);
+    void addPass(std::string name,
+             std::function&lt;void(PassBuilder&amp;)&gt; setup,
+             std::function&lt;void(RenderContext&amp;)&gt; execute);
+    void addComputePass(std::string name,
+             std::function&lt;void(PassBuilder&amp;)&gt; setup,
+             std::function&lt;void(RenderContext&amp;)&gt; execute);
+    void compile();
+    void execute(CameraHandle camera);
+};</pre>
+  <div class="body">
+    <p>The pass list and its order. Make one with <code>createRenderGraph</code> rather than with the constructor. Passes cannot be removed; build a new graph to change the frame.</p>
+  </div>
+</div>
+
+<div class="api" id="addPass">
+  <pre class="sig">void addPass(std::string name,
+         std::function&lt;void(PassBuilder&amp;)&gt; setup,
+         std::function&lt;void(RenderContext&amp;)&gt; execute);</pre>
+  <div class="body">
+    <p>Adds a graphics pass. <code>setup</code> is called right away, before <code>addPass</code> returns, so handles it creates are ready on the next line. The graph must be compiled again (<code>execute</code> does it if you don't).</p>
+    <dl>
+      <dt>name</dt><dd>A label. It names the pass's GPU timer in the <a href="engine.html#getFrameStats">frame stats</a>.</dd>
+      <dt>setup</dt><dd>Gets a <a href="#PassBuilder">PassBuilder</a>. Create resources and declare reads and writes here.</dd>
+      <dt>execute</dt><dd>Called every frame between <code>beginPass</code> and <code>endPass</code>, so draws are allowed and dispatches and barriers are not. The viewport and scissor cover the whole target, and the cull mode is <code>NONE</code>.</dd>
+    </dl>
+    <p><span class="tag">target</span> The target is the render target the pass writes, or the swapchain image if it writes none. It is cleared at the start of the pass: color to the target's <code>clearColor</code> (the swapchain uses a dark gray), depth to 0.</p>
+  </div>
+</div>
+
+<div class="api" id="addComputePass">
+  <pre class="sig">void addComputePass(std::string name,
+         std::function&lt;void(PassBuilder&amp;)&gt; setup,
+         std::function&lt;void(RenderContext&amp;)&gt; execute);</pre>
+  <div class="body">
+    <p>Adds a compute pass. It is sorted like any other pass. <code>execute</code> runs outside any render pass, so <code>dispatch</code> and <code>memoryBarrier</code> are allowed and draws are not. There is no target, no clear and no layout transition.</p>
+    <p><span class="tag">errors</span> A render target written in <code>setup</code> logs <code>Compute pass '…' cannot write a render target; the write is ignored.</code> and is dropped.</p>
+    <p>The graph adds a barrier before the pass (from the previous pass, or from the previous frame's draws) and one before the next graphics pass. A pass with several dependent dispatches records <code>ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE)</code> between them itself.</p>
+  </div>
+</div>
+
+<h2><span class="n">2</span>Declaring reads and writes</h2>
+
+<div class="api" id="PassBuilder">
+  <pre class="sig">class PassBuilder
+{
+public:
+                       PassBuilder(RenderGraph&amp; g, uint32_t passIdx);
+    TextureHandle      createTexture(const TextureDesc&amp; desc);
+    BufferHandle       createBuffer(const BufferDesc&amp; desc);
+    RenderTargetHandle createRenderTarget(const RenderTargetDesc&amp; desc);
+    void               read(TextureHandle handle);
+    void               read(BufferHandle handle);
+    void               read(RenderTargetHandle handle);
+    void               write(TextureHandle handle);
+    void               write(BufferHandle handle);
+    void               write(RenderTargetHandle rt);
+};</pre>
+  <div class="body">
+    <p>Given to your <code>setup</code> callback. It records what one pass uses. The graph makes it; you do not construct one.</p>
+  </div>
+</div>
+
+<div class="api" id="PassBuilder-createTexture">
+  <pre class="sig">TextureHandle      createTexture(const TextureDesc&amp; desc);
+BufferHandle       createBuffer(const BufferDesc&amp; desc);
+RenderTargetHandle createRenderTarget(const RenderTargetDesc&amp; desc);</pre>
+  <div class="body">
+    <p>The same as <a href="low-level.html#createTexture">Engine::createTexture</a>, <a href="low-level.html#createBuffer">Engine::createBuffer</a> and <a href="#createRenderTarget">Engine::createRenderTarget</a>. They do <b>not</b> declare a read or write: call <code>read</code> or <code>write</code> too. The resources are not transient; they live until the engine shuts down (<code>D4</code>).</p>
+  </div>
+</div>
+
+<div class="api" id="read">
+  <pre class="sig">void read(TextureHandle handle);
+void read(BufferHandle handle);
+void read(RenderTargetHandle handle);</pre>
+  <div class="body">
+    <p>This pass reads the resource. If another pass writes it, that pass runs first. A read of something no pass writes adds no order. Declaring a read does not bind anything: the pass still finds the data itself (a bindless index, a device address).</p>
+  </div>
+</div>
+
+<div class="api" id="write">
+  <pre class="sig">void write(TextureHandle handle);
+void write(BufferHandle handle);</pre>
+  <div class="body">
+    <p>This pass writes the resource, so passes that read it run after this one. If several passes write the same resource, the last one added is the one readers wait for. Writing a texture does not make it an attachment; only a render target is drawn into.</p>
+  </div>
+</div>
+
+<div class="api" id="write-renderTarget">
+  <pre class="sig">void write(RenderTargetHandle rt);</pre>
+  <div class="body">
+    <p>This graphics pass draws into <code>rt</code>. A pass has one output target: a second call replaces the first. Without this call the pass draws into the swapchain.</p>
+  </div>
+</div>
+
+<div class="api" id="Pass">
+  <pre class="sig">struct Pass
+{
+    std::string                         name;
+    std::vector&lt;TextureHandle&gt;          inputTextures;
+    std::vector&lt;BufferHandle&gt;           inputBuffers;
+    std::vector&lt;RenderTargetHandle&gt;     inputRenderTargets;
+    std::vector&lt;TextureHandle&gt;          outputTextures;
+    std::vector&lt;BufferHandle&gt;           outputBuffers;
+    RenderTargetHandle                  outputRenderTarget;
+    std::function&lt;void(RenderContext&amp;)&gt; execute;
+    bool                                compute     = false;
+
+    uint32_t                inDegree = 0;
+    std::vector&lt;uint32_t&gt;   successors;
+};</pre>
+  <div class="body">
+    <p>What the graph stores per pass. <code>read</code> and <code>write</code> fill the input and output lists. <code>inDegree</code> and <code>successors</code> are filled by <code>compile</code>: the number of passes that must run first, and the passes that wait for this one. You never build a <code>Pass</code> yourself.</p>
+  </div>
+</div>
+
+<div class="api" id="ResourceMetadata">
+  <pre class="sig">struct ResourceMetadata
+{
+    uint32_t producerIdx = static_cast&lt;uint32_t&gt;(-1);
+};</pre>
+  <div class="body">
+    <p>Declared in <code>rasm/render/renderGraph.h</code>, but nothing uses it: <code>compile</code> keeps its producer maps locally.</p>
+  </div>
+</div>
+
+<h2><span class="n">3</span>Compile and execute</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Three passes added as Overlay, Forward, Particles. Overlay reads rt, which Forward writes, so there is one edge Forward to Overlay. Kahn's sort starts with the passes nobody waits on, in add order: Forward, Particles. Removing Forward frees Overlay. The order is Forward, Particles, Overlay.">
+    <text x="20" y="20" class="title">1. Added in this order</text>
+    <rect x="20" y="34" width="210" height="48" rx="6" class="cpu"/>
+    <text x="32" y="54" class="mono">0 Overlay</text>
+    <text x="32" y="72" class="small">read(rt)</text>
+    <rect x="20" y="92" width="210" height="48" rx="6" class="cpu"/>
+    <text x="32" y="112" class="mono">1 Forward</text>
+    <text x="32" y="130" class="small">write(rt)</text>
+    <rect x="20" y="150" width="210" height="48" rx="6" class="gpu"/>
+    <text x="32" y="170" class="mono">2 Particles</text>
+    <text x="32" y="188" class="small">compute · write(buffer)</text>
+
+    <text x="280" y="20" class="title">2. Edges: writer → reader</text>
+    <rect x="280" y="60" width="110" height="36" rx="6" class="cpu"/>
+    <text x="335" y="83" class="mid mono">Forward</text>
+    <line x1="390" y1="78" x2="448" y2="78" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="419" y="70" class="mid small t-hot">rt</text>
+    <rect x="450" y="60" width="100" height="36" rx="6" class="cpu"/>
+    <text x="500" y="83" class="mid mono">Overlay</text>
+    <rect x="280" y="130" width="110" height="36" rx="6" class="gpu"/>
+    <text x="335" y="153" class="mid mono">Particles</text>
+    <text x="280" y="190" class="small">no reader of its buffer:</text>
+    <text x="280" y="206" class="small">no edge</text>
+
+    <text x="590" y="20" class="title">3. Run order</text>
+    <rect x="590" y="34" width="150" height="40" rx="6" class="cpu"/>
+    <text x="665" y="59" class="mid mono">Forward</text>
+    <rect x="590" y="84" width="150" height="40" rx="6" class="gpu"/>
+    <text x="665" y="109" class="mid mono">Particles</text>
+    <rect x="590" y="134" width="150" height="40" rx="6" class="cpu"/>
+    <text x="665" y="159" class="mid mono">Overlay</text>
+    <text x="590" y="196" class="small">Ready passes run in add</text>
+    <text x="590" y="212" class="small">order; a freed pass waits</text>
+    <text x="590" y="228" class="small">behind them (Kahn, FIFO).</text>
+  </svg>
+  <figcaption>Only reads and writes decide the order. Passes with no edge between them may not keep the order you added them in. If the order matters, connect them with a read and a write.</figcaption>
+</figure>
+
+<div class="api" id="compile">
+  <pre class="sig">void compile();</pre>
+  <div class="body">
+    <p>Builds one edge from the writer of each resource to every pass that reads it, then sorts the passes (Kahn's algorithm). Does nothing if the graph is already compiled. <code>execute</code> calls it when a pass was added since the last compile, so calling it yourself only moves the work (and its log line) to start-up.</p>
+    <p><span class="tag">errors</span> A cycle (A reads what B writes and B reads what A writes) logs <code>Frame Graph contains a cycle!</code> and leaves no pass to run. The graph stays uncompiled, so each <code>execute</code> tries again and logs again. Frames still run and present a cleared image, so the window keeps responding.</p>
+  </div>
+</div>
+
+<div class="api" id="execute">
+  <pre class="sig">void execute(CameraHandle camera);</pre>
+  <div class="body">
+    <p>Runs one whole frame: <code>beginFrame(camera)</code>, every pass in order, <code>endFrame</code>. Call it once per loop instead of <code>render</code>. The results show on screen when the frame is presented.</p>
+    <dl>
+      <dt>camera</dt><dd>Gets this frame's mouse and keyboard input (through <a href="camera.html#pollEvents">pollEvents</a>). It is not given to the passes: a pass that calls <code>drawScene</code> names its own camera.</dd>
+    </dl>
+    <p>When <code>beginFrame</code> returns false (window minimized, swapchain being re-created, failed wait), no pass runs that frame. If no pass draws into the swapchain, <code>endFrame</code> clears it so it can be presented.</p>
+  </div>
+</div>
+
+<h3>What one frame records: <code>examples/04_compute</code></h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 190" role="img" aria-label="The frame command buffer of example 4: a graphics to compute barrier, the Animate compute pass that writes particle positions, a compute to graphics barrier, then the Draw pass with its clear and draw call, then the stats overlay and endPass.">
+    <line x1="20" y1="20" x2="740" y2="20" class="arrow" marker-end="url(#ah)"/>
+    <text x="20" y="14" class="small">frame command buffer, in recording order →</text>
+
+    <line x1="40" y1="34" x2="40" y2="120" class="hot"/>
+    <text x="40" y="138" class="mid small t-hot">GRAPHICS</text>
+    <text x="40" y="152" class="mid small t-hot">→ COMPUTE</text>
+
+    <rect x="76" y="40" width="200" height="72" rx="6" class="gpu"/>
+    <text x="176" y="62" class="mid title">Animate (compute)</text>
+    <text x="176" y="82" class="mid mono">bindPipeline</text>
+    <text x="176" y="100" class="mid mono">dispatch(64 groups)</text>
+
+    <line x1="312" y1="34" x2="312" y2="120" class="hot"/>
+    <text x="312" y="138" class="mid small t-hot">COMPUTE</text>
+    <text x="312" y="152" class="mid small t-hot">→ GRAPHICS</text>
+
+    <rect x="348" y="40" width="300" height="72" rx="6" class="gpu"/>
+    <text x="498" y="62" class="mid title">Draw (graphics, swapchain)</text>
+    <text x="498" y="82" class="mid mono">beginPass: clear · viewport</text>
+    <text x="498" y="100" class="mid mono">draw(4096 × 3) · endPass</text>
+
+    <rect x="664" y="40" width="80" height="72" rx="6" class="cpu"/>
+    <text x="704" y="72" class="mid mono">endFrame</text>
+    <text x="704" y="90" class="mid small">submit</text>
+
+    <rect x="76" y="160" width="200" height="26" rx="4" class="mem"/>
+    <text x="176" y="178" class="mid small">particle buffer (writes)</text>
+    <line x1="176" y1="112" x2="176" y2="158" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="398" y="160" width="200" height="26" rx="4" class="mem"/>
+    <text x="498" y="178" class="mid small">same buffer (reads)</text>
+    <line x1="498" y1="158" x2="498" y2="114" class="arrow mem" marker-end="url(#ah-mem)"/>
+  </svg>
+  <figcaption>The first barrier waits for the previous frame's draws, which read the same buffer (both frame slots share it). The second one makes the new positions visible to this frame's draw. The example records no barrier itself.</figcaption>
+</figure>
+
+<h2><span class="n">4</span>Render targets</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>What <code>createRenderTarget</code> makes</th><th>Per frame slot (2)</th><th>Notes</th></tr>
+  <tr><td>Color texture</td><td>1, usage <code>SAMPLED_COLOR_ATTACHMENT</code></td><td>Added to the bindless set with <code>LINEAR_CLAMP</code>. After each pass it is in the sampled layout, so later passes can read it.</td></tr>
+  <tr><td>Depth texture</td><td>1, usage <code>DEPTH_STENCIL_ATTACHMENT</code></td><td>Cleared to 0 by every pass and not stored after it. Not in the bindless set.</td></tr>
+  <tr><td>Bindless slots used</td><td colspan="2">2 of <code>MAX_BINDLESS_TEXTURES</code> (1024)</td></tr>
+</table>
+</div>
+
+<div class="api" id="createRenderTarget">
+  <pre class="sig">RenderTargetHandle createRenderTarget(const RenderTargetDesc&amp; desc);</pre>
+  <div class="body">
+    <p>Creates an offscreen color + depth target, one pair per frame slot, and makes both color textures bindless. Ready at once. A pass draws into it after <code>builder.write(rt)</code>, or after <code>setRenderTarget(rt)</code> in a hand-written frame.</p>
+    <p><span class="tag">errors</span> If a texture cannot be created or the bindless set is full, it logs an error, destroys what it created, and returns an invalid handle.</p>
+  </div>
+</div>
+
+<div class="api" id="RenderTargetDesc">
+  <pre class="sig">struct RenderTargetDesc
+{
+    std::string name;
+    uint32_t    width       = 0;
+    uint32_t    height      = 0;
+    Format      colorFormat = Format::UNKNOWN;
+    Format      depthFormat = Format::UNKNOWN;
+    glm::vec4   clearColor  = glm::vec4(0.0f);
+
+    bool operator==(const RenderTargetDesc&amp;) const = default;
+};</pre>
+  <div class="body">
+    <dl>
+      <dt>name</dt><dd>A label. The textures are named <code>"&lt;name&gt; Color Texture"</code> and <code>"&lt;name&gt; Depth Texture"</code> in debug tools.</dd>
+      <dt>width, height</dt><dd>Pixels. Fixed: the target does not follow the window size.</dd>
+      <dt>colorFormat</dt><dd>To draw into it with <code>drawScene</code> or with a pipeline from <code>createPipeline</code>, use the swapchain format: <code>engine.getRenderContext().getSwapchainImageFormat()</code>.</dd>
+      <dt>depthFormat</dt><dd>Needed: every pass binds a depth attachment. Use <code>Format::D32_SFLOAT</code> for the same reason.</dd>
+      <dt>clearColor</dt><dd>Linear color. Every pass that writes the target starts from it.</dd>
+    </dl>
+    <p>The full target, with its per-slot textures, is the <a href="types.html#RenderTarget">RenderTarget</a> that <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns.</p>
+  </div>
+</div>
+
+<div class="api" id="getRenderTargetTexture">
+  <pre class="sig">TextureHandle getRenderTargetTexture(const RenderTargetHandle&amp; renderTarget);</pre>
+  <div class="body">
+    <p>The color texture of the <b>current frame slot</b>. The slot changes every frame, so fetch it every frame, inside the pass that reads it. Pass it to <a href="materials.html#getBindlessTextureIndex">getBindlessTextureIndex</a> to get the index a shader samples with. An unknown handle logs <code>Render target handle not found.</code> and returns an invalid handle.</p>
+  </div>
+</div>
+
+<div class="api" id="setRenderTarget">
+  <pre class="sig">void setRenderTarget(const RenderTargetHandle&amp; renderTarget);</pre>
+  <div class="body">
+    <p>The next <code>beginPass</code> draws into this target instead of the swapchain. For frames you write by hand with <code>beginFrame</code> / <code>beginPass</code>; <code>RenderGraph::execute</code> calls it for each pass from the pass's <code>write</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="resetRenderTarget">
+  <pre class="sig">void resetRenderTarget();</pre>
+  <div class="body">
+    <p>The next <code>beginPass</code> draws into the swapchain again.</p>
+  </div>
+</div>
+
+<pre><code>// A hand-written frame with an offscreen pass (what the graph does for you)
+if (engine.beginFrame(camera))
+{
+    engine.setRenderTarget(rt);
+    engine.beginPass("Offscreen");
+    engine.drawScene(scene, camera);
+    engine.endPass();
+    engine.resetRenderTarget();
+
+    engine.beginPass("Present"); // swapchain; sample rt here
+    // ... bind a pipeline and draw
+    engine.endPass();
+    engine.endFrame();
+}</code></pre>
+
+<h2><span class="n">5</span>Pipelines for your own shaders</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th></th><th><code>createPipeline</code></th><th><code>createComputePipeline</code></th></tr>
+  <tr><td>Entry points in the source</td><td><code>vertMain</code> and <code>fragMain</code></td><td><code>compMain</code>, or the name you pass</td></tr>
+  <tr><td>Inputs</td><td>No vertex buffers: use <code>SV_VertexID</code> and read data through pointers</td><td><code>SV_DispatchThreadID</code>; data through pointers</td></tr>
+  <tr><td>Push constants</td><td colspan="2"><code>PUSH_CONSTANTS_SIZE</code> = 16 bytes, <code>[[vk::push_constant]]</code>, e.g. one 8-byte buffer address + two 4-byte values</td></tr>
+  <tr><td>Textures</td><td>Bindless array at <code>[[vk::binding(0, 0)]]</code>, fragment shader only</td><td>None (the bindless array is not visible to compute)</td></tr>
+  <tr><td>Fixed state</td><td>Triangle list, no blending, depth test and write on (<code>GREATER_OR_EQUAL</code>), front face counter-clockwise, cull mode from the pass</td><td>–</td></tr>
+  <tr><td>Attachments</td><td>Swapchain color format + <code>D32_SFLOAT</code> depth</td><td>–</td></tr>
+  <tr><td>Imports</td><td colspan="2">The search path is <code>&lt;shaderDir&gt;/lib</code>, so <code>import core;</code> works. Scalar layout, column-major matrices.</td></tr>
+</table>
+</div>
+
+<div class="api" id="createPipeline">
+  <pre class="sig">PipelineHandle createPipeline(const std::string&amp; name,
+                              const std::string&amp; shaderSource);</pre>
+  <div class="body">
+    <p>Compiles <code>shaderSource</code> (Slang) twice, for <code>vertMain</code> and <code>fragMain</code>, and makes a graphics pipeline from them. It compiles at once, on the calling thread, which can take a moment: create pipelines before the loop, not every frame.</p>
+    <dl>
+      <dt>name</dt><dd>A label for logs and debug tools. Two pipelines may share one name.</dd>
+      <dt>shaderSource</dt><dd>The full Slang source, as a string (a raw string literal works well, see below). The same name and source give back the same pipeline.</dd>
+    </dl>
+    <p><span class="tag">errors</span> A compile error is logged with Slang's message and the call returns an invalid handle. Binding the pipeline in a pass whose attachments have other formats logs an error and skips the pass's draws.</p>
+  </div>
+</div>
+
+<div class="api" id="createComputePipeline">
+  <pre class="sig">PipelineHandle createComputePipeline(
+    const std::string&amp; name,
+    const std::string&amp; shaderSource,
+    const std::string&amp; entryPoint = "compMain");</pre>
+  <div class="body">
+    <p>Compiles one compute entry point of <code>shaderSource</code> and makes a compute pipeline. Bind it in a compute pass, push constants with <code>ShaderType::COMPUTE</code>, then <code>dispatch</code>.</p>
+    <dl>
+      <dt>entryPoint</dt><dd>The <code>[shader("compute")]</code> function to use. One source can hold several, as <code>shaders/passes/cull.slang</code> does.</dd>
+    </dl>
+    <p><span class="tag">errors</span> A compile error, or a missing entry point, logs an error and returns an invalid handle.</p>
+  </div>
+</div>
+
+<h2><span class="n">6</span>Timing your own GPU work</h2>
+
+<div class="api" id="beginGpuTimer">
+  <pre class="sig">uint32_t beginGpuTimer(const CommandBufferHandle&amp; commandBuffer,
+                       const std::string&amp; name);</pre>
+  <div class="body">
+    <p>Writes a start timestamp into the frame's command buffer and returns a timer id. Call it between <code>beginFrame</code> and <code>endFrame</code>, with <code>getCurrentFrameResources().commandBuffer</code>. The graph already times every pass by its name, so use this for a part of a pass.</p>
+    <p>Returns <code>UINT32_MAX</code> (which <code>endGpuTimer</code> ignores) when nothing is measured: the stats overlay is off and <code>getFrameStats</code> was never called, the GPU has no timestamps, or the frame already used all timers. A frame has <code>MAX_GPU_TIMERS</code> (16) timers: one for the whole frame, one kept for culling, and 14 for the passes and your timers together. The first time they run out, a warning is logged.</p>
+  </div>
+</div>
+
+<div class="api" id="endGpuTimer">
+  <pre class="sig">void endGpuTimer(const CommandBufferHandle&amp; commandBuffer, uint32_t timer);</pre>
+  <div class="body">
+    <p>Writes the end timestamp of <code>timer</code>. The time appears in <code>FrameStats::gpuTimers</code> under the timer's name <code>MAX_FRAMES_IN_FLIGHT</code> frames later, when that frame slot is reused. See <a href="engine.html#getFrameStats">getFrameStats</a>.</p>
+  </div>
+</div>
+
+<h2><span class="n">7</span>Complete examples</h2>
+
+<h3>Offscreen scene + full-screen pass (<code>examples/01_render_graph</code>)</h3>
+
+<pre><code>// Shortened from examples/01_render_graph/main.cpp
+rasm::RenderGraph graph = engine.createRenderGraph();
+rasm::RenderTargetHandle rtHandle{};
+
+graph.addPass(
+    "Forward",
+    [&amp;](rasm::PassBuilder &amp;builder)
+    {
+        rtHandle = builder.createRenderTarget({
+            .name = "offscreen_rt",
+            .width = 1920,
+            .height = 1080,
+            .colorFormat = engine.getRenderContext().getSwapchainImageFormat(),
+            .depthFormat = rasm::Format::D32_SFLOAT,
+            .clearColor = glm::vec4(0.0f),
+        });
+        builder.write(rtHandle);
+    },
+
+    [&amp;](rasm::RenderContext &amp;)
+    {
+        engine.drawScene(scene, camera);
+    });
+
+auto overlayPipeline = engine.createPipeline("overlay", R"(
+    struct PushConstants { uint textureIndex; };
+    [[vk::push_constant]] ConstantBuffer&lt;PushConstants&gt; pc;
+
+    struct VSOutput { float4 Pos : SV_POSITION; float2 UV : TEXCOORD0; };
+
+    [shader("vertex")]
+    VSOutput vertMain(uint vertexID : SV_VertexID)
+    {
+        VSOutput output;   // one triangle that covers the screen
+        output.UV = float2((vertexID &lt;&lt; 1) &amp; 2, vertexID &amp; 2);
+        output.Pos = float4(output.UV.x * 2.0 - 1.0,
+                            1.0 - output.UV.y * 2.0, 0.0, 1.0);
+        return output;
+    }
+
+    [[vk::binding(0, 0)]] Sampler2D gTextures[];
+
+    [shader("fragment")]
+    float4 fragMain(VSOutput input) : SV_TARGET
+    {
+        return gTextures[pc.textureIndex].Sample(input.UV);
+    }
+)");
+
+graph.addPass(
+    "overlay",
+    [&amp;](rasm::PassBuilder &amp;builder)
+    {
+        builder.read(rtHandle); // this pass runs after "Forward"
+    },
+
+    [&amp;](rasm::RenderContext &amp;ctx)
+    {
+        auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
+        // this frame's slot of the render target
+        auto texture = engine.getRenderTargetTexture(rtHandle);
+        uint32_t textureIndex = engine.getBindlessTextureIndex(texture);
+
+        ctx.bindPipeline(commandBuffer, overlayPipeline);
+        ctx.bindDescriptorSet(commandBuffer, overlayPipeline,
+                              engine.getBindlessDescriptorSet(), 0);
+        ctx.pushConstants(commandBuffer, overlayPipeline,
+                          rasm::ShaderType::VERTEX_FRAGMENT,
+                          &amp;textureIndex, sizeof(textureIndex), 0);
+        ctx.draw(commandBuffer, 3);
+    });
+
+graph.compile();
+while (engine.running())
+    graph.execute(camera);</code></pre>
+
+<h3>Compute then draw (<code>examples/04_compute</code>)</h3>
+
+<pre><code>// Shortened from examples/04_compute/main.cpp
+rasm::BufferHandle particles = engine.createBuffer({.name = "Particle Positions",
+                                                    .usage = rasm::BufferUsage::STORAGE,
+                                                    .size = PARTICLE_COUNT * 2 * sizeof(float)});
+const uint64_t particlesAddress = engine.getRenderContext().getBufferDeviceAddress(particles);
+
+graph.addComputePass(
+    "Animate",
+    [&amp;](rasm::PassBuilder &amp;builder)
+    {
+        builder.write(particles);
+    },
+
+    [&amp;](rasm::RenderContext &amp;ctx)
+    {
+        auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
+        const AnimatePushConstants pushConstants = {
+            .positions = particlesAddress, // 8 bytes
+            .count = PARTICLE_COUNT,       // 4 bytes
+            .time = frame * FRAME_TIME};   // 4 bytes: 16 in all
+        ctx.bindPipeline(commandBuffer, animatePipeline);
+        ctx.pushConstants(commandBuffer, animatePipeline,
+                          rasm::ShaderType::COMPUTE,
+                          &amp;pushConstants, sizeof(pushConstants));
+        const uint32_t groups = (PARTICLE_COUNT + GROUP_SIZE - 1) / GROUP_SIZE;
+        ctx.dispatch(commandBuffer, groups);
+    });
+
+graph.addPass(
+    "Draw",
+    [&amp;](rasm::PassBuilder &amp;builder)
+    {
+        builder.read(particles); // this pass runs after "Animate"
+    },
+
+    [&amp;](rasm::RenderContext &amp;ctx)
+    {
+        auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
+        // ... push the address, then three vertices per particle
+        ctx.bindPipeline(commandBuffer, drawPipeline);
+        ctx.pushConstants(commandBuffer, drawPipeline,
+                          rasm::ShaderType::VERTEX_FRAGMENT,
+                          &amp;pushConstants, sizeof(pushConstants));
+        ctx.draw(commandBuffer, PARTICLE_COUNT * 3);
+    });</code></pre>
+
+<p>In the shader the address arrives as a pointer: <code>float2* positions;</code> in the push constant struct. See <a href="low-level.html#getBufferDeviceAddress">getBufferDeviceAddress</a>.</p>
+
+<h2><span class="n">8</span>What the graph does not do</h2>
+
+<div class="callout warn">
+  <strong>Known limits</strong>
+  <ul>
+    <li>It only orders passes and adds the compute ↔ graphics barriers. It does not track texture layouts, allocate transient resources or alias memory (<code>D9</code>).</li>
+    <li>Every graphics pass clears its target. Two passes that draw into the swapchain (or into the same render target) do not add up: the second one replaces the first (<code>D9</code>).</li>
+    <li>Depth is not kept between passes.</li>
+    <li>Scene culling, which <code>drawScene</code> needs, runs on the GPU before every pass of the frame, including your compute passes (D18).</li>
+    <li>Nothing can be destroyed: render targets, buffers and pipelines live until shutdown (<code>D4</code>).</li>
+  </ul>
+</div>
+
+<p>How the graph works inside, with the barriers and layouts step by step: the guide <a href="../guides/render-graph.html">The render graph</a>. To add a pass to the engine itself, see the <code>new-pass</code> skill in <code>.claude/skills/</code>.</p>
+
+</main>
+</div>
+</body>
+</html>

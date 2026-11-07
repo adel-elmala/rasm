@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Engine · RASM</title>
+<meta name="description" content="The Engine class: EngineConfig, construction and shutdown, the frame functions, loading, frame stats, paths and the window, plus an index of every Engine method.">
+<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/window.cpp src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="api/engine.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">API reference</p>
+<h1>Engine</h1>
+<p class="lead"><code>rasm::Engine</code> is the one object your program creates. It opens the window, owns every scene object and GPU resource, and runs the frame. This page covers how to create it, the frame functions, loading, frame stats, paths and the window. The table below lists every method and the page that documents it.</p>
+
+<h2 id="index"><span class="n">1</span>Every Engine method</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Method</th><th>Task</th><th>Page</th></tr>
+  <tr><td><a href="#Engine"><code>Engine</code></a> / <a href="#Engine-destructor"><code>~Engine</code></a></td><td>create and shut down</td><td>this page</td></tr>
+  <tr><td><a href="#running"><code>running</code></a></td><td>false after quit or a failed start</td><td>this page</td></tr>
+  <tr><td><a href="#getConfig"><code>getConfig</code></a></td><td>the config, with resolved paths</td><td>this page</td></tr>
+  <tr><td><a href="#resolveAssetPath"><code>resolveAssetPath</code></a></td><td>where an asset path points</td><td>this page</td></tr>
+  <tr><td><a href="#render"><code>render</code></a></td><td>a whole frame, one scene</td><td>this page</td></tr>
+  <tr><td><a href="#beginFrame"><code>beginFrame</code></a> / <a href="#endFrame"><code>endFrame</code></a></td><td>start and finish a frame</td><td>this page</td></tr>
+  <tr><td><a href="#beginPass"><code>beginPass</code></a> / <a href="#endPass"><code>endPass</code></a></td><td>start and finish a render pass</td><td>this page</td></tr>
+  <tr><td><a href="#drawScene"><code>drawScene</code></a></td><td>record a scene into the pass</td><td>this page</td></tr>
+  <tr><td><a href="#getCurrentFrameResources"><code>getCurrentFrameResources</code></a></td><td>this frame's command buffer and depth</td><td>this page</td></tr>
+  <tr><td><a href="#recreateSwapchain"><code>recreateSwapchain</code></a></td><td>rebuild after a resize</td><td>this page</td></tr>
+  <tr><td><a href="#waitForLoads"><code>waitForLoads</code></a></td><td>finish every background load now</td><td>this page</td></tr>
+  <tr><td><a href="#getFrameStats"><code>getFrameStats</code></a></td><td>frame times, draws, memory</td><td>this page</td></tr>
+  <tr><td><a href="#beginGpuTimer"><code>beginGpuTimer</code></a> / <a href="#endGpuTimer"><code>endGpuTimer</code></a></td><td>time your own GPU work</td><td>this page</td></tr>
+  <tr><td><a href="#queryMemoryStats"><code>queryMemoryStats</code></a></td><td>GPU memory budget and use</td><td>this page</td></tr>
+  <tr><td><a href="#getMainWindow"><code>getMainWindow</code></a></td><td>window size and state</td><td>this page</td></tr>
+  <tr><td><a href="#createWindow"><code>createWindow</code></a> / <a href="#destroyWindow"><code>destroyWindow</code></a></td><td>used by the engine itself</td><td>this page</td></tr>
+  <tr><td><a href="#createBuffer"><code>createBuffer</code></a> / <a href="#createTexture"><code>createTexture</code></a></td><td>raw GPU resources</td><td>this page</td></tr>
+  <tr><td><a href="scene.html#createScene"><code>createScene</code></a></td><td>new scene</td><td>scene.html</td></tr>
+  <tr><td><a href="scene.html#addEntityToScene"><code>addEntityToScene</code></a>, <a href="scene.html#addCameraToScene"><code>addCameraToScene</code></a>, <a href="scene.html#addLightToScene"><code>addLightToScene</code></a></td><td>put objects in a scene</td><td>scene.html</td></tr>
+  <tr><td><a href="scene.html#createEntity"><code>createEntity</code></a></td><td>new entity</td><td>scene.html</td></tr>
+  <tr><td><a href="scene.html#updateTransform"><code>updateTransform</code></a> / <a href="scene.html#getTransform"><code>getTransform</code></a></td><td>move an entity</td><td>scene.html</td></tr>
+  <tr><td><a href="scene.html#createLight"><code>createLight</code></a></td><td>new light</td><td>scene.html</td></tr>
+  <tr><td><a href="scene.html#createMesh"><code>createMesh</code></a></td><td>mesh from your vertices</td><td>scene.html</td></tr>
+  <tr><td><a href="scene.html#loadMesh"><code>loadMesh</code></a> / <a href="scene.html#loadGLTF"><code>loadGLTF</code></a></td><td>mesh from a file, in the background</td><td>scene.html</td></tr>
+  <tr><td><a href="scene.html#isLoaded-mesh"><code>isLoaded(MeshHandle)</code></a></td><td>is the mesh ready</td><td>scene.html</td></tr>
+  <tr><td><a href="scene.html#getMeshByteSize"><code>getMeshByteSize</code></a></td><td>bytes of a mesh's geometry</td><td>scene.html</td></tr>
+  <tr><td><a href="materials.html#createMaterial"><code>createMaterial</code></a></td><td>new material</td><td>materials.html</td></tr>
+  <tr><td><a href="materials.html#getMaterial"><code>getMaterial</code></a> / <a href="materials.html#updateMaterial"><code>updateMaterial</code></a></td><td>read and change a material</td><td>materials.html</td></tr>
+  <tr><td><a href="materials.html#loadTexture"><code>loadTexture</code></a></td><td>texture from a file, in the background</td><td>materials.html</td></tr>
+  <tr><td><a href="materials.html#isLoaded-texture"><code>isLoaded(TextureHandle)</code></a></td><td>are the pixels uploaded</td><td>materials.html</td></tr>
+  <tr><td><a href="materials.html#addBindlessTexture"><code>addBindlessTexture</code></a> / <a href="materials.html#getBindlessTextureIndex"><code>getBindlessTextureIndex</code></a></td><td>texture slots for shaders</td><td>materials.html</td></tr>
+  <tr><td><a href="camera.html#createCamera"><code>createCamera</code></a></td><td>new camera</td><td>camera.html</td></tr>
+  <tr><td><a href="camera.html#getCameraTransform"><code>getCameraTransform</code></a> / <a href="camera.html#setCameraTransform"><code>setCameraTransform</code></a></td><td>camera position and rotation</td><td>camera.html</td></tr>
+  <tr><td><a href="camera.html#getCameraProjection"><code>getCameraProjection</code></a> / <a href="camera.html#setCameraProjection"><code>setCameraProjection</code></a></td><td>perspective or orthographic</td><td>camera.html</td></tr>
+  <tr><td><a href="camera.html#getCameraController"><code>getCameraController</code></a> / <a href="camera.html#setCameraController"><code>setCameraController</code></a></td><td>trackball or free-fly</td><td>camera.html</td></tr>
+  <tr><td><a href="camera.html#getProjectionMatrix"><code>getProjectionMatrix</code></a>, <a href="camera.html#getProjectionMatrix-aspect"><code>getProjectionMatrix(camera, aspect)</code></a>, <a href="camera.html#getViewMatrix"><code>getViewMatrix</code></a></td><td>camera matrices</td><td>camera.html</td></tr>
+  <tr><td><a href="camera.html#updateCameraAspectRatio"><code>updateCameraAspectRatio</code></a></td><td>aspect of every camera</td><td>camera.html</td></tr>
+  <tr><td><a href="camera.html#updateCamera"><code>updateCamera</code></a> / <a href="camera.html#pollEvents"><code>pollEvents</code></a></td><td>input and camera control</td><td>camera.html</td></tr>
+  <tr><td><a href="render-graph.html#createRenderGraph"><code>createRenderGraph</code></a></td><td>new render graph</td><td>render-graph.html</td></tr>
+  <tr><td><a href="render-graph.html#createPipeline"><code>createPipeline</code></a> / <a href="render-graph.html#createComputePipeline"><code>createComputePipeline</code></a></td><td>your own Slang shaders</td><td>render-graph.html</td></tr>
+  <tr><td><a href="render-graph.html#createRenderTarget"><code>createRenderTarget</code></a></td><td>offscreen color + depth</td><td>render-graph.html</td></tr>
+  <tr><td><a href="render-graph.html#setRenderTarget"><code>setRenderTarget</code></a> / <a href="render-graph.html#resetRenderTarget"><code>resetRenderTarget</code></a></td><td>where the next pass draws</td><td>render-graph.html</td></tr>
+  <tr><td><a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a></td><td>read a target in a later pass</td><td>render-graph.html</td></tr>
+  <tr><td><a href="low-level.html#getRenderContext"><code>getRenderContext</code></a></td><td>the low-level API</td><td>low-level.html</td></tr>
+  <tr><td><a href="low-level.html#getBindlessDescriptorSet"><code>getBindlessDescriptorSet</code></a></td><td>the texture set to bind</td><td>low-level.html</td></tr>
+</table>
+</div>
+
+<h2 id="create"><span class="n">2</span>Create and shut down</h2>
+
+<div class="legend">
+  <span><i class="cpu"></i>engine setup</span>
+  <span><i class="mem"></i>GPU buffers and descriptor sets</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 172" role="img" aria-label="The constructor opens the window, creates the Vulkan device, the frame resources, the shader compiler, the GPU scene tables, the bindless texture set and the default material. If any step fails, running returns false. The destructor waits for loads and frees everything.">
+    <text x="10" y="20" class="title">Engine(config)</text>
+    <text x="120" y="20" class="small">each step logs an error and stops if it fails</text>
+    <rect x="10"  y="34" width="112" height="50" rx="6" class="cpu"/><text x="66"  y="55" class="mid">window</text><text x="66"  y="72" class="mid small">SDL, resizable</text>
+    <rect x="134" y="34" width="112" height="50" rx="6" class="cpu"/><text x="190" y="55" class="mid">device</text><text x="190" y="72" class="mid small">Vulkan 1.4</text>
+    <rect x="258" y="34" width="112" height="50" rx="6" class="cpu"/><text x="314" y="55" class="mid">frames</text><text x="314" y="72" class="mid small">fence, 2 slots</text>
+    <rect x="382" y="34" width="112" height="50" rx="6" class="cpu"/><text x="438" y="55" class="mid">shaders</text><text x="438" y="72" class="mid small">Slang compiler</text>
+    <rect x="506" y="34" width="112" height="50" rx="6" class="mem"/><text x="562" y="55" class="mid">GPU tables</text><text x="562" y="72" class="mid small">geometry, rows</text>
+    <rect x="630" y="34" width="120" height="50" rx="6" class="mem"/><text x="690" y="55" class="mid">bindless set</text><text x="690" y="72" class="mid small">+ default material</text>
+    <line x1="122" y1="59" x2="132" y2="59" class="arrow" marker-end="url(#ah)"/>
+    <line x1="246" y1="59" x2="256" y2="59" class="arrow" marker-end="url(#ah)"/>
+    <line x1="370" y1="59" x2="380" y2="59" class="arrow" marker-end="url(#ah)"/>
+    <line x1="494" y1="59" x2="504" y2="59" class="arrow" marker-end="url(#ah)"/>
+    <line x1="618" y1="59" x2="628" y2="59" class="arrow" marker-end="url(#ah)"/>
+
+    <path d="M66,84 V108" class="arrow hot dashed"/>
+    <path d="M190,84 V108" class="arrow hot dashed"/>
+    <path d="M314,84 V108" class="arrow hot dashed"/>
+    <path d="M438,84 V108" class="arrow hot dashed"/>
+    <path d="M562,84 V108" class="arrow hot dashed"/>
+    <path d="M66,108 H690 V84" class="arrow hot dashed"/>
+    <line x1="380" y1="108" x2="380" y2="128" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <rect x="250" y="130" width="260" height="30" rx="5" class="ghost"/>
+    <text x="380" y="150" class="mid small t-hot">a step failed: running() stays false</text>
+    <line x1="728" y1="84" x2="728" y2="126" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="598" y="130" width="152" height="30" rx="5" class="cpu"/>
+    <text x="674" y="150" class="mid small">success: running() true</text>
+  </svg>
+  <figcaption>Check <code>running()</code> right after the constructor, like every example does. When it is false, the reason is in the log; do not use the engine further.</figcaption>
+</figure>
+
+<div class="api" id="Engine">
+  <pre class="sig">Engine(const EngineConfig&amp; config);</pre>
+  <div class="body">
+    <p>Opens the main window and sets up the whole renderer. It also resolves <code>shaderDir</code> and <code>assetRoot</code> (see <a href="#resolveAssetPath">paths</a>) and creates the default material. On any failure it logs an error and returns early, and <code>running()</code> stays false. A window width or height of 0 or less fails at once with <i>"Window dimensions must be positive."</i>.</p>
+    <dl>
+      <dt>config</dt><dd>Copied into the engine. Fields are in the <a href="#EngineConfig">EngineConfig</a> table below (also on <a href="types.html#EngineConfig">types.html</a>).</dd>
+    </dl>
+    <pre><code>rasm::Engine engine(config);
+if (!engine.running())
+    return 1;</code></pre>
+  </div>
+</div>
+
+<div class="api" id="Engine-destructor">
+  <pre class="sig">~Engine();</pre>
+  <div class="body">
+    <p>Waits for background loads that are still running, frees every GPU resource, destroys the window and shuts SDL down. Scene objects cannot be destroyed earlier: there is no destroy function for scenes, entities, meshes, materials, cameras or lights yet (<code>D4</code>).</p>
+  </div>
+</div>
+
+<div class="api" id="running">
+  <pre class="sig">bool running() const;</pre>
+  <div class="body">
+    <p>True while the engine works. It becomes false when the window is closed or <kbd>Esc</kbd> is pressed (both handled in <code>pollEvents</code>, inside <code>beginFrame</code>), and it is false from the start when the constructor failed. Use it as the main loop condition.</p>
+  </div>
+</div>
+
+<div class="api" id="EngineConfig">
+  <pre class="sig">struct EngineConfig   // include/rasm/types.h</pre>
+  <div class="body">
+    <p>All settings of the engine. Pass it to the constructor; later changes to your copy have no effect. Use designated initializers and leave out what you do not need.</p>
+  </div>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Field</th><th>Default</th><th>Meaning</th></tr>
+  <tr><td><code>appName</code></td><td>empty</td><td>Vulkan application name (<code>rasm_app</code> when empty). The window title is always "RASM Engine".</td></tr>
+  <tr><td><code>windowWidth</code>, <code>windowHeight</code></td><td>0, 0</td><td>Window size in logical units (screen points). Must be greater than 0.</td></tr>
+  <tr><td><code>enableValidation</code></td><td><code>false</code></td><td>Turns on the Vulkan validation layers, if they are installed. Keep it on while you develop.</td></tr>
+  <tr><td><code>preferredBackend</code></td><td><code>Backend::VULKAN</code></td><td>Only <code>VULKAN</code> works. The others log "not implemented yet" and the engine does not start.</td></tr>
+  <tr><td><code>assetRoot</code></td><td>empty</td><td>Folder that relative <code>loadMesh</code> and <code>loadTexture</code> paths start from. A relative <code>assetRoot</code> starts beside the executable. Empty: paths are used as given (relative to the working directory).</td></tr>
+  <tr><td><code>shaderDir</code></td><td>empty</td><td>Folder with the engine's <code>lib/</code> and <code>passes/</code> shaders. Empty: the build-time default, <code>shaders</code> beside the executable (CMake <code>-DRASM_SHADER_DIR=&lt;path&gt;</code> changes it). A relative path starts beside the executable.</td></tr>
+  <tr><td><code>geometryPoolVertices</code></td><td>2<sup>21</sup> = 2,097,152</td><td>Vertices of all meshes together, 64 bytes each (128 MiB). Fixed for the engine's life.</td></tr>
+  <tr><td><code>geometryPoolIndices</code></td><td>2<sup>23</sup> = 8,388,608</td><td>Indices of all meshes together, 4 bytes each (32 MiB).</td></tr>
+  <tr><td><code>geometryPoolSubMeshes</code></td><td>2<sup>14</sup> = 16,384</td><td>Sub-meshes of all meshes together (28 bytes each).</td></tr>
+  <tr><td><code>maxInstances</code></td><td>2<sup>16</sup> = 65,536</td><td>Instance rows: one per sub-mesh of every entity. 108 bytes each, two copies (one per frame slot).</td></tr>
+  <tr><td><code>showStats</code></td><td><code>false</code></td><td>Shows the stats overlay from the first frame. <kbd>F1</kbd> toggles it at runtime.</td></tr>
+</table>
+</div>
+
+<div class="callout warn">
+  <strong>The pools never shrink</strong>
+  <p>Geometry and instance rows are never freed (<code>D4</code>). When a pool is full, the next mesh or entity fails with an error that names the <code>EngineConfig</code> field to raise. Size the pools for everything your program will ever load.</p>
+</div>
+
+<h2 id="frame"><span class="n">3</span>Run a frame</h2>
+
+<p>A frame is <code>beginFrame</code>, then one or more passes, then <code>endFrame</code>. <code>render</code> does all of it for one scene. Here is what each part does inside:</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>engine work on the CPU</span>
+  <span><i class="mem"></i>uploads to GPU buffers</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 306" role="img" aria-label="beginFrame polls events, finishes loads for up to 4 milliseconds, waits for the frame slot, uploads scene changes and acquires a swapchain image. It returns false when the window is minimized, the swapchain cannot be rebuilt, or acquire fails. Then your passes run. endFrame clears the swapchain if no pass drew to it, records culling, submits and presents.">
+    <text x="10" y="22" class="title mono">beginFrame(camera)</text>
+    <rect x="10"  y="34" width="132" height="50" rx="6" class="cpu"/><text x="76"  y="55" class="mid">pollEvents</text><text x="76"  y="72" class="mid small">input, camera, quit</text>
+    <rect x="157" y="34" width="132" height="50" rx="6" class="cpu"/><text x="223" y="55" class="mid">finishLoads</text><text x="223" y="72" class="mid small">up to 4 ms of loads</text>
+    <rect x="304" y="34" width="132" height="50" rx="6" class="cpu"/><text x="370" y="55" class="mid">wait for slot</text><text x="370" y="72" class="mid small">frame fence</text>
+    <rect x="451" y="34" width="132" height="50" rx="6" class="mem"/><text x="517" y="55" class="mid">syncGpuScene</text><text x="517" y="72" class="mid small">upload what changed</text>
+    <rect x="598" y="34" width="132" height="50" rx="6" class="cpu"/><text x="664" y="55" class="mid">acquire image</text><text x="664" y="72" class="mid small">from the swapchain</text>
+    <line x1="142" y1="59" x2="155" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="289" y1="59" x2="302" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="436" y1="59" x2="449" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="583" y1="59" x2="596" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <line x1="296" y1="62" x2="296" y2="112" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="296" y="126" class="mid small t-hot">minimized or resize failed</text>
+    <line x1="400" y1="84" x2="400" y2="112" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="420" y="126" class="mid small t-hot">wait failed</text>
+    <line x1="630" y1="84" x2="630" y2="112" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="630" y="126" class="mid small t-hot">out of date or failure</text>
+    <text x="10" y="126" class="small t-hot">returns false:</text>
+
+    <path d="M700,84 V146 H85 V184" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="95" y="166" class="small">returns true</text>
+
+    <text x="175" y="180" class="title mono">endFrame()</text>
+    <rect x="10"  y="188" width="150" height="50" rx="6" class="box"/><text x="85"  y="209" class="mid">your passes</text><text x="85"  y="226" class="mid small">beginPass … endPass</text>
+    <rect x="175" y="188" width="132" height="50" rx="6" class="cpu"/><text x="241" y="209" class="mid">clear if unused</text><text x="241" y="226" class="mid small">no pass drew the window</text>
+    <rect x="322" y="188" width="132" height="50" rx="6" class="cpu"/><text x="388" y="209" class="mid">record culling</text><text x="388" y="226" class="mid small">one per drawScene</text>
+    <rect x="469" y="188" width="132" height="50" rx="6" class="cpu"/><text x="535" y="209" class="mid">submit</text><text x="535" y="226" class="mid small">culling, then frame</text>
+    <rect x="616" y="188" width="132" height="50" rx="6" class="cpu"/><text x="682" y="209" class="mid">present</text><text x="682" y="226" class="mid small">image to the window</text>
+    <line x1="160" y1="213" x2="173" y2="213" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="307" y1="213" x2="320" y2="213" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="454" y1="213" x2="467" y2="213" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="601" y1="213" x2="614" y2="213" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <text x="10" y="270" class="small">Then the frame slot flips (0 → 1 → 0 …). The next beginFrame waits until the GPU finished the last frame of that slot,</text>
+    <text x="10" y="288" class="small">so the CPU records at most 2 frames ahead (MAX_FRAMES_IN_FLIGHT = 2).</text>
+  </svg>
+  <figcaption>When <code>beginFrame</code> returns false, record nothing and do not call <code>endFrame</code>. Try again next loop. A resize is handled inside <code>beginFrame</code>: it rebuilds the swapchain and the depth textures.</figcaption>
+</figure>
+
+<div class="api" id="render">
+  <pre class="sig">void render(SceneHandle scene, CameraHandle camera);</pre>
+  <div class="body">
+    <p>One whole frame: <code>beginFrame(camera)</code>, a pass named "Scene" on the window, <code>drawScene(scene, camera)</code>, <code>endPass</code>, <code>endFrame</code>. When <code>beginFrame</code> returns false, it returns at once.</p>
+    <dl>
+      <dt>scene</dt><dd>The scene to draw. Invalid: an error is logged and the window is only cleared.</dd>
+      <dt>camera</dt><dd>Gets this frame's input (mouse, keys) and is the view. It does not need to be in the scene.</dd>
+    </dl>
+    <pre><code>while (engine.running())
+    engine.render(scene, camera);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="beginFrame">
+  <pre class="sig">[[nodiscard]] bool beginFrame(CameraHandle camera);</pre>
+  <div class="body">
+    <p>Starts a frame (steps in the diagram above). It handles window events and moves <code>camera</code> with the input, finishes background loads for up to 4 ms, waits until this frame slot is free, uploads changed scene data, acquires a window image and starts the frame's command buffer.</p>
+    <dl>
+      <dt>camera</dt><dd>The camera that the mouse and keyboard move. Invalid: "Invalid camera handle." is logged every frame, and the frame still runs.</dd>
+      <dt>returns</dt><dd><code>false</code> when the frame must be skipped: window minimized or 0 pixels wide, swapchain rebuild failed, fence wait failed, or the image could not be acquired. Then record nothing and do not call <code>endFrame</code>.</dd>
+    </dl>
+    <p><span class="tag main-thread">may block</span> It waits for the GPU when the CPU is 2 frames ahead.</p>
+  </div>
+</div>
+
+<div class="api" id="endFrame">
+  <pre class="sig">void endFrame();</pre>
+  <div class="body">
+    <p>Ends the frame's command buffer and sends the frame to the GPU, then shows it in the window. If no pass drew to the window this frame (for example, all passes drew to render targets), it adds a pass that clears the window first. It also records the frustum culling of every <code>drawScene</code> call of the frame, which runs on the GPU before the frame's draws (see <a href="../guides/culling.html">GPU frustum culling</a>).</p>
+    <p>Call it only after a <code>beginFrame</code> that returned true, and after the last <code>endPass</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="beginPass">
+  <pre class="sig">void beginPass(const std::string&amp; name = "Pass");</pre>
+  <div class="body">
+    <p>Starts rendering into the current target: the window, or the render target set with <a href="render-graph.html#setRenderTarget"><code>setRenderTarget</code></a>. It clears color and depth, sets the viewport and scissor to the whole target, and sets cull mode to none. Only between <code>beginFrame</code> and <code>endFrame</code>.</p>
+    <dl>
+      <dt>name</dt><dd>Label of the pass. It names the pass's GPU timer in <code>getFrameStats</code> and the stats overlay.</dd>
+    </dl>
+    <p>The window is cleared to a dark gray. A render target is cleared to its own <code>clearColor</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="endPass">
+  <pre class="sig">void endPass();</pre>
+  <div class="body">
+    <p>Ends the pass. On the window, it first draws the stats overlay (when shown). On a render target, it makes the color image ready to be sampled by later passes (see <a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a>). The depth image is not kept for later passes.</p>
+  </div>
+</div>
+
+<div class="api" id="drawScene">
+  <pre class="sig">void drawScene(SceneHandle scene, CameraHandle camera);</pre>
+  <div class="body">
+    <p>Records the scene into the current pass, with the camera's projection fitted to the pass's aspect ratio (the camera itself does not change). Use it inside <code>beginPass</code> / <code>endPass</code>, or inside a render graph pass. The scene's lights are read at this call, up to the scene's light count.</p>
+    <dl>
+      <dt>scene</dt><dd>Invalid: logs "drawScene needs a valid scene handle." and draws nothing.</dd>
+      <dt>camera</dt><dd>The view. Invalid: logs an error and draws nothing.</dd>
+    </dl>
+    <p>Draws nothing, with no error, while the scene is empty or all its entities still load: the pass keeps its clear color.</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Rule</th><th>What happens otherwise</th></tr>
+      <tr><td>At most <code>MAX_SCENE_DRAWS_PER_FRAME</code> (8) calls per frame</td><td>"Exceeded maximum number of drawScene calls per frame." and nothing drawn</td></tr>
+      <tr><td>A render target must have the window's color format and <code>D32_SFLOAT</code> depth</td><td>An error is logged and the pass stays cleared</td></tr>
+      <tr><td>The scene shader <code>passes/rasm.slang</code> must compile</td><td>An error is logged; the engine tries again next frame, so a fixed shader file is picked up while the program runs</td></tr>
+      <tr><td>The culling shader <code>passes/cull.slang</code> should compile</td><td>The scene is still drawn, only without culling</td></tr>
+    </table>
+    </div>
+  </div>
+</div>
+
+<div class="api" id="getCurrentFrameResources">
+  <pre class="sig">const FrameResources&amp; getCurrentFrameResources();</pre>
+  <div class="body">
+    <p>The current frame slot's <a href="types.html#FrameResources"><code>FrameResources</code></a>: <code>commandBuffer</code> (record your own draws and dispatches into it), <code>depthTexture</code> (the window pass's depth) and <code>fenceValue</code>. Fetch it every frame, because the slot changes every frame. The depth textures are replaced on resize.</p>
+    <pre><code>auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
+ctx.bindPipeline(commandBuffer, pipeline);
+ctx.draw(commandBuffer, 3);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="recreateSwapchain">
+  <pre class="sig">bool recreateSwapchain();</pre>
+  <div class="body">
+    <p>Rebuilds the swapchain, the depth textures, and the aspect ratio of every camera, from the window's current pixel size. <code>beginFrame</code> already calls it after a resize or an out-of-date swapchain, so a program does not need to.</p>
+    <dl>
+      <dt>returns</dt><dd><code>false</code> while the window has 0 pixels, or when the rebuild failed. <code>beginFrame</code> then tries again next frame.</dd>
+    </dl>
+  </div>
+</div>
+
+<h2 id="loading"><span class="n">4</span>Loading and waiting</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="loadMesh or loadTexture returns a handle at once. A worker thread reads and decodes the file. The next beginFrame uploads finished loads for up to 4 milliseconds. Then isLoaded is true, and syncGpuScene adds the entities that wait for it to the draw lists. waitForLoads finishes every load at once instead.">
+    <rect x="10"  y="30" width="140" height="56" rx="6" class="cpu"/><text x="80"  y="52" class="mid mono">loadMesh</text><text x="80"  y="72" class="mid small">returns a handle now</text>
+    <rect x="165" y="30" width="140" height="56" rx="6" class="ghost"/><text x="235" y="52" class="mid">worker thread</text><text x="235" y="72" class="mid small">reads, decodes</text>
+    <rect x="320" y="30" width="140" height="56" rx="6" class="mem"/><text x="390" y="52" class="mid">finishLoads</text><text x="390" y="72" class="mid small">uploads, ≤ 4 ms/frame</text>
+    <rect x="475" y="30" width="125" height="56" rx="6" class="cpu"/><text x="537" y="52" class="mid mono">isLoaded</text><text x="537" y="72" class="mid small">now true</text>
+    <rect x="615" y="30" width="135" height="56" rx="6" class="mem"/><text x="682" y="52" class="mid">syncGpuScene</text><text x="682" y="72" class="mid small">entity is drawn</text>
+    <line x1="150" y1="58" x2="163" y2="58" class="arrow" marker-end="url(#ah)"/>
+    <line x1="305" y1="58" x2="318" y2="58" class="arrow" marker-end="url(#ah)"/>
+    <line x1="460" y1="58" x2="473" y2="58" class="arrow" marker-end="url(#ah)"/>
+    <line x1="600" y1="58" x2="613" y2="58" class="arrow" marker-end="url(#ah)"/>
+    <text x="80"  y="20" class="mid small">your call</text>
+    <text x="235" y="20" class="mid small">in the background</text>
+    <text x="390" y="20" class="mid small">in beginFrame, main thread</text>
+    <text x="610" y="20" class="mid small">same or next beginFrame</text>
+
+    <path d="M80,86 V130 H390 V90" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <rect x="130" y="118" width="210" height="26" rx="5" class="box"/>
+    <text x="235" y="135" class="mid mono">waitForLoads()</text>
+    <text x="400" y="128" class="small">finishes every load now, with no time limit</text>
+    <text x="10" y="178" class="small">A frame finishes loads until 4 ms have passed. The load that crosses the limit still finishes, so one big file can take longer.</text>
+    <text x="10" y="196" class="small">Loads that finish together spread over several frames, so the frame rate stays smooth.</text>
+  </svg>
+  <figcaption>Loading never blocks the frame unless you ask for it. The load functions are on <a href="scene.html#loadMesh">scene.html</a> (meshes) and <a href="materials.html#loadTexture">materials.html</a> (textures).</figcaption>
+</figure>
+
+<div class="api" id="waitForLoads">
+  <pre class="sig">void waitForLoads();</pre>
+  <div class="body">
+    <p>Finishes every pending mesh and texture load now: it waits for the worker threads and uploads the results, with no time limit. After it returns, <code>isLoaded</code> is true for every successful load. Entities that use them join their scenes' draw lists at the next <code>beginFrame</code>, so the first frame after it shows everything.</p>
+    <p><span class="tag main-thread">blocks the main thread</span> Use it before the main loop to avoid objects popping in, or in tests. Do not call it every frame.</p>
+    <pre><code>auto mesh = engine.loadGLTF("models/gltf/coffee-room/scene.gltf");
+engine.waitForLoads();
+bool ok = engine.isLoaded(mesh); // false if the file failed to parse</code></pre>
+  </div>
+</div>
+
+<h2 id="stats"><span class="n">5</span>Frame stats</h2>
+
+<div class="legend">
+  <span><i class="gpu"></i>GPU work</span>
+  <span><i class="cpu"></i>CPU work</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="Frame N in slot 0 writes GPU timestamps and cull counts. Two frames later, frame N+2 uses slot 0 again, waits for its fence and reads them. So the stats are two frames old.">
+    <rect x="10"  y="60" width="170" height="50" rx="6" class="gpu"/><text x="95"  y="81" class="mid">frame N</text><text x="95"  y="98" class="mid small">slot 0: GPU writes timers</text>
+    <rect x="200" y="60" width="170" height="50" rx="6" class="box"/><text x="285" y="81" class="mid">frame N+1</text><text x="285" y="98" class="mid small">slot 1</text>
+    <rect x="390" y="60" width="170" height="50" rx="6" class="cpu"/><text x="475" y="81" class="mid">frame N+2</text><text x="475" y="98" class="mid small">slot 0: fence wait, read</text>
+    <rect x="580" y="60" width="170" height="50" rx="6" class="box"/><text x="665" y="81" class="mid">frame N+3</text><text x="665" y="98" class="mid small">slot 1</text>
+    <path d="M95,60 C95,30 475,30 475,56" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="285" y="24" class="mid small t-hot">getFrameStats() now shows frame N</text>
+    <text x="10" y="140" class="small">Measuring is off until the first getFrameStats() call or while the overlay is shown (showStats, F1).</text>
+    <text x="10" y="158" class="small">So the first values appear a few frames after the first call.</text>
+  </svg>
+  <figcaption>The GPU results of a frame can only be read after the GPU finished it. The engine reads them when the slot comes back, two frames later.</figcaption>
+</figure>
+
+<div class="api" id="getFrameStats">
+  <pre class="sig">const FrameStats&amp; getFrameStats() const;</pre>
+  <div class="body">
+    <p>The latest measured frame. The first call turns measuring on for every later frame, so the values fill in a few frames later. The reference stays valid; read it every frame.</p>
+    <pre><code>const rasm::FrameStats &amp;stats = engine.getFrameStats();
+for (uint32_t i = 0; i &lt; stats.gpuTimerCount; ++i)
+    std::printf("%s: %.2f ms\n", stats.gpuTimers[i].name.c_str(), stats.gpuTimers[i].milliseconds);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="FrameStats">
+  <pre class="sig">struct FrameStats</pre>
+  <div class="body">
+    <dl>
+      <dt>cpuFrameMs</dt><dd>Time between the last two frames on the CPU, in ms. Capped at 100 ms. Updated every frame, even when not measuring.</dd>
+      <dt>gpuFrameMs</dt><dd>GPU time of the whole frame (culling and all passes), in ms. 0 on a GPU without timestamps.</dd>
+      <dt>gpuTimers</dt><dd>One <code>GpuTimer</code> per pass, compute pass, culling and your own timers, in GPU start order. Room for <code>MAX_GPU_TIMERS - 1</code> (15).</dd>
+      <dt>gpuTimerCount</dt><dd>How many entries of <code>gpuTimers</code> are filled.</dd>
+      <dt>draws</dt><dd>Draws of all <code>drawScene</code> calls of the frame, before culling (one per sub-mesh of each entity).</dd>
+      <dt>drawsVisible</dt><dd>Draws that passed frustum culling.</dd>
+      <dt>triangles</dt><dd>Triangles before culling.</dd>
+      <dt>trianglesVisible</dt><dd>Triangles of the visible draws.</dd>
+      <dt>memory</dt><dd><code>VRAMStats</code> of that frame (see <a href="#queryMemoryStats"><code>queryMemoryStats</code></a>).</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="GpuTimer">
+  <pre class="sig">struct GpuTimer</pre>
+  <div class="body">
+    <dl>
+      <dt>name</dt><dd>The pass name, "Culling", or the name you gave <code>beginGpuTimer</code>.</dd>
+      <dt>milliseconds</dt><dd>GPU time between the timer's start and end, in ms.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="beginGpuTimer">
+  <pre class="sig">uint32_t beginGpuTimer(const CommandBufferHandle&amp; commandBuffer, const std::string&amp; name);</pre>
+  <div class="body">
+    <p>Writes a start timestamp into the frame's command buffer. The GPU time until the matching <code>endGpuTimer</code> appears in <code>getFrameStats</code> and the overlay. Passes and render graph compute passes are already timed for you.</p>
+    <dl>
+      <dt>commandBuffer</dt><dd>The frame's command buffer, from <a href="#getCurrentFrameResources"><code>getCurrentFrameResources</code></a>.</dd>
+      <dt>name</dt><dd>Label in the stats.</dd>
+      <dt>returns</dt><dd>The timer id, or <code>UINT32_MAX</code> when nothing is measured: measuring is off, the GPU has no timestamps, or the frame used all its timers (a warning is logged once).</dd>
+    </dl>
+    <p>A frame has <code>MAX_GPU_TIMERS</code> (16) timers: one for the whole frame, one kept for culling, and 14 for passes and your timers together.</p>
+  </div>
+</div>
+
+<div class="api" id="endGpuTimer">
+  <pre class="sig">void endGpuTimer(const CommandBufferHandle&amp; commandBuffer, uint32_t timer);</pre>
+  <div class="body">
+    <p>Writes the end timestamp of <code>timer</code>. It does nothing for <code>UINT32_MAX</code>, so you can always pass what <code>beginGpuTimer</code> returned.</p>
+    <pre><code>const uint32_t timer = engine.beginGpuTimer(commandBuffer, "Particles");
+ctx.dispatch(commandBuffer, groupCount);
+engine.endGpuTimer(commandBuffer, timer);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="queryMemoryStats">
+  <pre class="sig">VRAMStats queryMemoryStats();</pre>
+  <div class="body">
+    <p>Asks the GPU memory allocator now. Returns <code>vramBudget</code> and <code>vramUsage</code> (device-local memory) and <code>hostBudget</code> and <code>hostUsage</code> (host-visible memory), all in bytes. See <a href="types.html#VRAMStats"><code>VRAMStats</code></a>.</p>
+  </div>
+</div>
+
+<h2 id="paths"><span class="n">6</span>Paths and config</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Config assetRoot</th><th>You pass</th><th>Resolved path</th></tr>
+  <tr><td>empty</td><td><samp>models/a.obj</samp></td><td><samp>models/a.obj</samp>, relative to the working directory</td></tr>
+  <tr><td><samp>assets</samp> (relative)</td><td><samp>models/a.obj</samp></td><td><samp>&lt;executable folder&gt;/assets/models/a.obj</samp></td></tr>
+  <tr><td><samp>D:/game/data</samp> (absolute)</td><td><samp>models/../a.obj</samp></td><td><samp>D:/game/data/a.obj</samp> (normalized)</td></tr>
+  <tr><td>any</td><td><samp>D:/other/a.obj</samp> (absolute)</td><td><samp>D:/other/a.obj</samp>: an absolute path is kept</td></tr>
+</table>
+</div>
+<p><code>shaderDir</code> follows the same rule against the executable's folder, with the build-time default when empty. Paths are UTF-8, so folders with non-Latin names work.</p>
+
+<div class="api" id="resolveAssetPath">
+  <pre class="sig">std::string resolveAssetPath(const std::string&amp; path) const;</pre>
+  <div class="body">
+    <p>Joins <code>path</code> to the resolved <code>assetRoot</code>, as every loader does, and returns it as UTF-8 with forward slashes. Useful to check where a file is looked for, or to open your own files from the same folder.</p>
+  </div>
+</div>
+
+<div class="api" id="getConfig">
+  <pre class="sig">EngineConfig getConfig() const;</pre>
+  <div class="body">
+    <p>A copy of the engine's config. <code>shaderDir</code> and <code>assetRoot</code> are the resolved paths (an empty <code>assetRoot</code> stays empty), and <code>showStats</code> is its current value (<kbd>F1</kbd> changes it). Changing the copy changes nothing in the engine.</p>
+  </div>
+</div>
+
+<h2 id="window"><span class="n">7</span>The window</h2>
+
+<div class="split">
+  <div>
+    <h4>Built-in keys</h4>
+    <p><kbd>Esc</kbd> or closing the window: <code>running()</code> becomes false.<br><kbd>F1</kbd>: shows or hides the stats overlay.<br>Mouse and <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>: move the camera passed to <code>beginFrame</code> (see <a href="camera.html#pollEvents">camera.html</a>).</p>
+  </div>
+  <div>
+    <h4>Two sizes</h4>
+    <p><code>width</code>, <code>height</code>: logical size, the unit of mouse positions.<br><code>pixelWidth</code>, <code>pixelHeight</code>: the drawable size. They differ on HiDPI screens. The swapchain, depth and viewports use the pixel size.</p>
+  </div>
+</div>
+
+<div class="callout warn">
+  <strong>The engine owns the window and the input</strong>
+  <p>Events are read inside <code>beginFrame</code>, and your program does not see them. You cannot render into a window you made yourself, or run without a window (<code>D7</code>).</p>
+</div>
+
+<div class="api" id="getMainWindow">
+  <pre class="sig">const Window&amp; getMainWindow() const;</pre>
+  <div class="body">
+    <p>The window the engine renders to, with its current sizes and state (<code>minimized</code>, <code>resized</code>, mouse drag). It updates in <code>beginFrame</code>. Use the pixel size for viewports, like <code>examples/01_render_graph/main.cpp</code> does. Fields are in <a href="types.html#Window">types.html</a>.</p>
+    <pre><code>const auto &amp;window = engine.getMainWindow();
+const float width = static_cast&lt;float&gt;(window.pixelWidth);
+const float height = static_cast&lt;float&gt;(window.pixelHeight);
+const float aspect = width / height;</code></pre>
+  </div>
+</div>
+
+<div class="api" id="createWindow">
+  <pre class="sig">Window createWindow(uint32_t width, uint32_t height);</pre>
+  <div class="body">
+    <p>Starts SDL and opens a resizable Vulkan window titled "RASM Engine". The constructor calls it for the main window. A program has no use for it: a second window gets no rendering. Returns a <code>Window</code> with an invalid handle on failure (logged).</p>
+  </div>
+</div>
+
+<div class="api" id="destroyWindow">
+  <pre class="sig">void destroyWindow(const Window&amp; window);</pre>
+  <div class="body">
+    <p>Closes the window and shuts SDL down. The destructor calls it for the main window; do not call it on the main window yourself. <code>docs/code_review.md</code> lists both window functions among the calls that should leave the public API for a platform layer (<code>D2</code>, <code>D7</code>).</p>
+  </div>
+</div>
+
+<h2 id="resources"><span class="n">8</span>Raw GPU resources</h2>
+
+<p>For your own passes you may need buffers and textures that are not part of a scene. These two functions forward to <code>RenderContext</code>. The descriptors (<a href="low-level.html#BufferDesc"><code>BufferDesc</code></a>, <a href="low-level.html#TextureDesc"><code>TextureDesc</code></a>) and how to fill, read and bind the resources are on <a href="low-level.html">RenderContext and resources</a>.</p>
+
+<div class="api" id="createBuffer">
+  <pre class="sig">BufferHandle createBuffer(const BufferDesc&amp; desc);</pre>
+  <div class="body">
+    <p>Creates a new GPU buffer, every call (two equal descriptors give two buffers). Returns an invalid handle and logs an error on failure. It is device-local unless <code>hostVisible</code> is set. <a href="low-level.html#destroyBuffer"><code>RenderContext::destroyBuffer</code></a> frees it.</p>
+    <pre><code>rasm::BufferHandle particles = engine.createBuffer({.name = "Particle Positions",
+                                                    .usage = rasm::BufferUsage::STORAGE,
+                                                    .size = PARTICLE_COUNT * 2 * sizeof(float)});
+const uint64_t address = engine.getRenderContext().getBufferDeviceAddress(particles);</code></pre>
+    <p>From <code>examples/04_compute/main.cpp</code>: a shader reads and writes the buffer through its device address.</p>
+  </div>
+</div>
+
+<div class="api" id="createTexture">
+  <pre class="sig">TextureHandle createTexture(const TextureDesc&amp; desc);</pre>
+  <div class="body">
+    <p>Creates a new, empty texture. Fill it with <a href="low-level.html#fillTexture"><code>RenderContext::fillTexture</code></a>, and add it to the bindless set (<a href="materials.html#addBindlessTexture"><code>addBindlessTexture</code></a>) to sample it in a shader. For image files use <a href="materials.html#loadTexture"><code>loadTexture</code></a> instead. Returns an invalid handle on failure.</p>
+  </div>
+</div>
+
+</main>
+</div>
+</body>
+</html>

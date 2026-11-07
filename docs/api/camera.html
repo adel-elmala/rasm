@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cameras and Input · RASM</title>
+<meta name="description" content="Create and control cameras: projections, trackball and free-fly controllers, view and projection matrices, and the input that drives them.">
+<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/engine.h include/rasm/window.h include/rasm/scene.h src/scene/camera.cpp src/platform/window.cpp src/engine.cpp src/renderer/gpuScene.cpp src/scene/scene.cpp src/core/handle.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="api/camera.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">API reference</p>
+<h1>Cameras and input</h1>
+<p class="lead">A camera is a projection, a controller and a transform. You create it with <code>createCamera</code> and refer to it by a <code>CameraHandle</code>. Every frame the engine reads the mouse and keyboard, moves the camera with its controller, and eases the rendered pose toward the new one. The matrices come from the rendered pose.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU work</span>
+  <span><i class="mem"></i>GPU buffer</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="SDL events become a CameraInput in pollEvents, which beginFrame calls. updateCamera moves the target transform with the controller, then eases the rendered transform toward it. drawScene builds the view matrix from the rendered transform and the projection fitted to the pass, and writes both into SceneData.">
+    <rect x="10"  y="20" width="130" height="56" rx="6" class="box"/>
+    <text x="75"  y="43" class="mid title">SDL events</text>
+    <text x="75"  y="62" class="mid small">mouse, wheel, keys</text>
+    <line x1="140" y1="48" x2="160" y2="48" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="162" y="20" width="130" height="56" rx="6" class="cpu"/>
+    <text x="227" y="43" class="mid mono">pollEvents</text>
+    <text x="227" y="62" class="mid small">called by beginFrame</text>
+    <line x1="292" y1="48" x2="312" y2="48" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="314" y="20" width="130" height="56" rx="6" class="box"/>
+    <text x="379" y="43" class="mid mono">CameraInput</text>
+    <text x="379" y="62" class="mid small">drag · wheel · keys</text>
+    <line x1="444" y1="48" x2="464" y2="48" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="466" y="20" width="130" height="56" rx="6" class="cpu"/>
+    <text x="531" y="43" class="mid mono">updateCamera</text>
+    <text x="531" y="62" class="mid small">moves the target</text>
+    <line x1="596" y1="48" x2="616" y2="48" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="618" y="20" width="130" height="56" rx="6" class="cpu"/>
+    <text x="683" y="43" class="mid title">Easing</text>
+    <text x="683" y="62" class="mid small">pose follows target</text>
+    <line x1="683" y1="76" x2="683" y2="130" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="692" y="108" class="small">writes</text>
+
+    <rect x="618" y="132" width="130" height="50" rx="6" class="box"/>
+    <text x="683" y="153" class="mid mono">transform</text>
+    <text x="683" y="171" class="mid small">rendered pose</text>
+    <rect x="618" y="210" width="130" height="50" rx="6" class="box"/>
+    <text x="683" y="231" class="mid mono">projection</text>
+    <text x="683" y="249" class="mid small">CameraProjection</text>
+
+    <rect x="420" y="132" width="178" height="50" rx="6" class="cpu"/>
+    <text x="509" y="153" class="mid mono">getViewMatrix</text>
+    <text x="509" y="171" class="mid small">inverse of the pose</text>
+    <rect x="420" y="210" width="178" height="50" rx="6" class="cpu"/>
+    <text x="509" y="231" class="mid mono">getProjectionMatrix</text>
+    <text x="509" y="249" class="mid small">fitted to the pass aspect</text>
+    <line x1="618" y1="157" x2="600" y2="157" class="arrow" marker-end="url(#ah)"/>
+    <line x1="618" y1="235" x2="600" y2="235" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="222" y="170" width="170" height="54" rx="6" class="cpu"/>
+    <text x="307" y="192" class="mid mono">drawScene</text>
+    <text x="307" y="211" class="mid small">once per pass</text>
+    <line x1="420" y1="157" x2="394" y2="184" class="arrow" marker-end="url(#ah)"/>
+    <line x1="420" y1="235" x2="394" y2="210" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="10" y="170" width="186" height="54" rx="6" class="mem"/>
+    <text x="103" y="192" class="mid mono">SceneData</text>
+    <text x="103" y="211" class="mid small">view, projection, planes</text>
+    <line x1="222" y1="197" x2="198" y2="197" class="arrow mem" marker-end="url(#ah-mem)"/>
+
+    <text x="10" y="282" class="small">The camera itself never changes when a pass has another shape: drawScene only fits a copy of the projection.</text>
+  </svg>
+  <figcaption>One frame of camera work. Input moves the <i>target</i>; the matrices use the eased <i>rendered</i> pose.</figcaption>
+</figure>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A new camera gets a <code>TRACK_BALL</code> controller that orbits a point 1 unit in front of it. Change it with <code>setCameraController</code>.</li>
+    <li>Pass the camera to <code>render</code>, <code>beginFrame</code> or <code>RenderGraph::execute</code>. That camera receives the mouse and keyboard input of the frame.</li>
+    <li>The projection is reversed-Z: near is depth 1, far is depth 0. A perspective <code>farZ</code> of 0 (the default when you leave it out) means an infinite far plane.</li>
+    <li><code>fovY</code> is in degrees. Free-fly <code>yaw</code> and <code>pitch</code> are in radians.</li>
+    <li>An invalid handle logs <code>Invalid camera handle.</code> and the call does nothing (setters) or returns a default value (getters).</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>Create a camera</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Projection</th><th>Fields</th><th>Valid values (checked by <code>createCamera</code> and <code>setCameraProjection</code>)</th></tr>
+  <tr><td><code>PERSPECTIVE</code></td><td><code>fovY</code> (degrees), <code>aspect</code>, <code>nearZ</code>, <code>farZ</code></td><td><code>nearZ</code> finite and &gt; 0. <code>farZ</code> &gt; <code>nearZ</code>, or 0 or infinity for an infinite far plane.</td></tr>
+  <tr><td><code>ORTHOGRAPHIC</code></td><td><code>left</code>, <code>right</code>, <code>bottom</code>, <code>top</code>, <code>nearZ</code>, <code>farZ</code></td><td><code>nearZ</code> and <code>farZ</code> finite, <code>farZ</code> &gt; <code>nearZ</code>. There is no infinite form.</td></tr>
+</table>
+</div>
+
+<div class="api" id="createCamera">
+  <pre class="sig">CameraHandle createCamera(CameraProjection projection, Transform transform);</pre>
+  <div class="body">
+    <p>Creates a camera at <code>transform</code> with the given projection. The camera looks down its local −Z axis, with +Y up. It can be used in the same frame.</p>
+    <dl>
+      <dt>projection</dt><dd>Perspective or orthographic, see <a href="#CameraProjection">CameraProjection</a>. Its <code>aspect</code> is replaced by the swapchain aspect when the swapchain is created again (window resize), see <a href="#updateCameraAspectRatio">updateCameraAspectRatio</a>.</dd>
+      <dt>transform</dt><dd>The start pose. Only <code>position</code> and <code>rotation</code> matter for the view. Both the rendered and the target transform start here.</dd>
+    </dl>
+    <p>The camera starts with a <code>TRACK_BALL</code> controller: <code>radius</code> 1, <code>center</code> 1 unit in front of the camera, <code>orbitSensitivity</code> 1, <code>easingSpeed</code> 12. So the first drag does not move the camera away from its pose.</p>
+    <p><span class="tag">errors</span> An invalid projection logs an error and returns an invalid handle. Past <code>MAX_CAMERAS</code> it logs <code>Exceeded maximum number of cameras.</code> and returns an invalid handle. Handle indices start at 1, so 7 cameras fit, and a refused call still uses up an index (B13).</p>
+  </div>
+</div>
+
+<pre><code>// examples/01_render_graph: farZ is left out (0), so the far plane is infinite
+rasm::CameraHandle camera = engine.createCamera(
+    rasm::CameraProjection{.type = rasm::CameraProjection::Type::PERSPECTIVE,
+                           .perspective{.fovY = 45.0f,
+                                        .aspect = 1920.0f / 1080.0f,
+                                        .nearZ = 0.1f}},
+    rasm::Transform{glm::vec3(0.0f, 0.0f, -1.0f),      // position
+                    glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
+                    glm::vec3(1.0f)});                 // scale
+engine.addCameraToScene(scene, camera);</code></pre>
+
+<div class="api" id="CameraProjection">
+  <pre class="sig">struct CameraProjection
+{
+    enum class Type { PERSPECTIVE, ORTHOGRAPHIC };
+
+    struct Perspective
+    {
+        float fovY;
+        float aspect;
+        float nearZ;
+        float farZ;
+    };
+
+    struct Orthographic
+    {
+        float left;
+        float right;
+        float bottom;
+        float top;
+        float nearZ;
+        float farZ;
+    };
+
+    Type type;
+    union
+    {
+        Perspective     perspective;
+        Orthographic    orthographic;
+    };
+};</pre>
+  <div class="body">
+    <p>The projection. <code>type</code> says which member of the union is used.</p>
+    <dl>
+      <dt>fovY</dt><dd>Vertical field of view in degrees.</dd>
+      <dt>aspect</dt><dd>Width / height. The engine sets it for every camera when the swapchain is created; <code>drawScene</code> uses a copy fitted to the current pass.</dd>
+      <dt>nearZ, farZ</dt><dd>Distances in front of the camera, in world units. Perspective: <code>farZ</code> 0 or infinity gives an infinite far plane.</dd>
+      <dt>left … top</dt><dd>Orthographic view box in world units, in camera space. A new aspect keeps the width and the center, and changes the height.</dd>
+    </dl>
+  </div>
+</div>
+
+<h2><span class="n">2</span>Controllers</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="The trackball keeps the camera on a sphere of radius around center, looking at the center. Dragging rotates the camera around the center, the wheel changes the radius. Free fly turns the camera with yaw and pitch and moves it with W, A, S, D.">
+    <text x="190" y="20" class="mid title">TRACK_BALL</text>
+    <circle cx="190" cy="120" r="80" class="ghost"/>
+    <circle cx="190" cy="120" r="5" class="cpu"/>
+    <text x="190" y="140" class="mid small">center</text>
+    <line x1="190" y1="120" x2="244" y2="66" class="arrow dashed"/>
+    <text x="224" y="106" class="small">radius</text>
+    <rect x="240" y="48" width="26" height="18" rx="3" class="cpu"/>
+    <text x="276" y="54" class="small">camera, looks at center</text>
+    <path d="M110,128 A80,80 0 0,1 130,66" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="36" y="104" class="small t-hot">drag: orbit</text>
+    <line x1="300" y1="168" x2="270" y2="140" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="250" y="190" class="small t-hot">wheel: radius − wheel steps</text>
+    <text x="40" y="222" class="small">position = center + radius × (rotation × +Z)</text>
+
+    <line x1="400" y1="16" x2="400" y2="222" class="arrow dashed"/>
+
+    <text x="580" y="20" class="mid title">FREE_FLY</text>
+    <rect x="566" y="110" width="28" height="20" rx="3" class="cpu"/>
+    <line x1="580" y1="110" x2="580" y2="56" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="580" y="48" class="mid small t-hot">W: forward (−Z)</text>
+    <line x1="580" y1="130" x2="580" y2="176" class="arrow" marker-end="url(#ah)"/>
+    <text x="580" y="192" class="mid small">S: back</text>
+    <line x1="566" y1="120" x2="500" y2="120" class="arrow" marker-end="url(#ah)"/>
+    <text x="470" y="124" class="mid small">A: left</text>
+    <line x1="594" y1="120" x2="660" y2="120" class="arrow" marker-end="url(#ah)"/>
+    <text x="692" y="124" class="mid small">D: right</text>
+    <text x="580" y="222" class="mid small">drag: yaw around world +Y, pitch (±89°)</text>
+  </svg>
+  <figcaption>The two controllers. Both write the <i>target</i> transform; the rendered transform eases toward it with <code>easingSpeed</code>.</figcaption>
+</figure>
+
+<div class="api" id="CameraController">
+  <pre class="sig">struct CameraController
+{
+    enum class Type { TRACK_BALL, FREE_FLY };
+
+    struct TrackBall
+    {
+        float       radius;
+        glm::vec3   center;
+        float       orbitSensitivity;
+    };
+
+    struct FreeFly
+    {
+        float yaw;
+        float pitch;
+        float speed;
+        float lookSensitivity;
+    };
+
+    Type type;
+    union
+    {
+        TrackBall   trackBall;
+        FreeFly     freeFly;
+    };
+
+    float easingSpeed = 12.0f;
+};</pre>
+  <div class="body">
+    <p>How input moves the camera. <code>type</code> says which member of the union is used.</p>
+    <dl>
+      <dt>radius</dt><dd>Orbit distance from <code>center</code>. The wheel subtracts its steps from it (never below 0). The rendered distance eases toward it.</dd>
+      <dt>center</dt><dd>The point the camera orbits and looks at, in world space.</dd>
+      <dt>orbitSensitivity</dt><dd>Multiplies the drag rotation. 1 means the scene follows the cursor.</dd>
+      <dt>yaw, pitch</dt><dd>Radians. <code>setCameraController</code> overwrites them from the current view direction, so the view does not jump. Pitch stays within ±89°.</dd>
+      <dt>speed</dt><dd>World units per second for W, A, S, D.</dd>
+      <dt>lookSensitivity</dt><dd>Radians per NDC unit of mouse drag.</dd>
+      <dt>easingSpeed</dt><dd>How fast the rendered pose follows the target: each frame it moves <code>1 − exp(−easingSpeed × dt)</code> of the way. Higher is snappier. 0 or less snaps at once.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="setCameraController">
+  <pre class="sig">void setCameraController(CameraHandle camera, CameraController controller);</pre>
+  <div class="body">
+    <p>Replaces the controller. The target transform is reset to the current rendered pose, so the camera does not jump. Takes effect at the next <code>updateCamera</code> (the next frame).</p>
+    <dl>
+      <dt>controller</dt><dd>For <code>FREE_FLY</code>, <code>yaw</code> and <code>pitch</code> are computed from the current view direction (roll is lost); the values you pass are ignored. For <code>TRACK_BALL</code>, choose <code>center</code> and <code>radius</code> so that the camera already sits on the orbit (see the example). Otherwise the camera moves onto the orbit sphere at the next frame.</dd>
+    </dl>
+  </div>
+</div>
+
+<pre><code>// examples/01_render_graph: orbit the bunny at (0, 0, -10)
+const glm::vec3 orbitCenter(0.0f, 0.0f, -10.0f);
+const glm::vec3 position = engine.getCameraTransform(camera).position;
+engine.setCameraController(camera, rasm::CameraController{
+                                       .type = rasm::CameraController::Type::TRACK_BALL,
+                                       .trackBall = {.radius = glm::length(orbitCenter - position),
+                                                     .center = orbitCenter,
+                                                     .orbitSensitivity = 1.0f},
+                                       .easingSpeed = 6.0f});</code></pre>
+
+<div class="api" id="getCameraController">
+  <pre class="sig">CameraController getCameraController(CameraHandle camera);</pre>
+  <div class="body">
+    <p>Returns a copy of the controller, including the current <code>radius</code>, <code>yaw</code> and <code>pitch</code> after input. An invalid handle logs an error and returns <code>CameraController{}</code>.</p>
+  </div>
+</div>
+
+<h2><span class="n">3</span>Set and read the pose and projection</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Call</th><th>rendered <code>transform</code></th><th><code>targetTransform</code></th><th><code>projection</code></th></tr>
+  <tr><td><code>setCameraTransform</code></td><td>set</td><td>set</td><td>–</td></tr>
+  <tr><td><code>setCameraProjection</code></td><td>–</td><td>–</td><td>set, if valid</td></tr>
+  <tr><td><code>setCameraController</code></td><td>–</td><td>= rendered transform</td><td>–</td></tr>
+  <tr><td><code>updateCamera</code> (every frame)</td><td>eased toward the target</td><td>moved by the controller</td><td>–</td></tr>
+  <tr><td><code>updateCameraAspectRatio</code></td><td>–</td><td>–</td><td>aspect, for every camera</td></tr>
+</table>
+</div>
+
+<div class="api" id="setCameraTransform">
+  <pre class="sig">void setCameraTransform(CameraHandle camera, Transform transform);</pre>
+  <div class="body">
+    <p>Moves the camera at once, with no easing: both the rendered and the target transform become <code>transform</code>. The next frame uses it.</p>
+    <p>With a <code>TRACK_BALL</code> controller the orbit <code>center</code> stays where it was, and the next <code>updateCamera</code> puts the camera back on the orbit sphere around it. To move a trackball camera, call <code>setCameraController</code> after this with a new center and radius.</p>
+  </div>
+</div>
+
+<div class="api" id="getCameraTransform">
+  <pre class="sig">Transform getCameraTransform(CameraHandle camera);</pre>
+  <div class="body">
+    <p>Returns the rendered (eased) transform, the one the view matrix uses. An invalid handle logs an error and returns <code>Transform{}</code>. See <a href="scene.html#Transform">Transform</a>.</p>
+  </div>
+</div>
+
+<div class="api" id="setCameraProjection">
+  <pre class="sig">void setCameraProjection(CameraHandle camera, CameraProjection projection);</pre>
+  <div class="body">
+    <p>Replaces the projection. The next frame uses it. An invalid projection (see the table in section 1) logs an error and keeps the old one.</p>
+  </div>
+</div>
+
+<div class="api" id="getCameraProjection">
+  <pre class="sig">CameraProjection getCameraProjection(CameraHandle camera);</pre>
+  <div class="body">
+    <p>Returns a copy of the stored projection. Its aspect is the one of the last swapchain creation, unless you set another one after it. An invalid handle logs an error and returns <code>CameraProjection{}</code>.</p>
+  </div>
+</div>
+
+<h2><span class="n">4</span>Matrices and depth</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="Reversed-Z with an infinite far plane: depth is nearZ divided by the distance. At nearZ depth is 1, at 2 nearZ it is 0.5, at 4 nearZ 0.25, and it goes to 0 far away.">
+    <rect x="20" y="62" width="34" height="26" rx="4" class="cpu"/>
+    <text x="37" y="108" class="mid small">camera</text>
+    <line x1="54" y1="75" x2="740" y2="75" class="arrow" marker-end="url(#ah)"/>
+    <text x="740" y="64" class="end small">distance along −Z</text>
+
+    <line x1="120" y1="40" x2="120" y2="110" class="hot"/>
+    <text x="120" y="30" class="mid small">nearZ</text>
+    <text x="120" y="130" class="mid mono t-hot">1.0</text>
+    <line x1="240" y1="66" x2="240" y2="84" class="arrow"/>
+    <text x="240" y="30" class="mid small">2 × nearZ</text>
+    <text x="240" y="130" class="mid mono">0.5</text>
+    <line x1="480" y1="66" x2="480" y2="84" class="arrow"/>
+    <text x="480" y="30" class="mid small">4 × nearZ</text>
+    <text x="480" y="130" class="mid mono">0.25</text>
+    <text x="690" y="30" class="mid small">far away</text>
+    <text x="690" y="130" class="mid mono">→ 0</text>
+    <text x="20" y="130" class="small">depth</text>
+    <text x="20" y="160" class="small">depth = nearZ / distance. The depth buffer is cleared to 0 and the test keeps a pixel when depth ≥ the stored one.</text>
+  </svg>
+  <figcaption>Reversed-Z with a float depth buffer keeps good precision far away. With a finite <code>farZ</code>, depth goes from 1 at <code>nearZ</code> to 0 at <code>farZ</code>.</figcaption>
+</figure>
+
+<div class="api" id="getViewMatrix">
+  <pre class="sig">glm::mat4 getViewMatrix(CameraHandle camera);</pre>
+  <div class="body">
+    <p>World-to-camera matrix of the rendered pose: <code>conjugate(rotation)</code> × <code>translate(−position)</code>. Scale is ignored. An invalid handle logs an error and returns the identity.</p>
+  </div>
+</div>
+
+<div class="api" id="getProjectionMatrix">
+  <pre class="sig">glm::mat4 getProjectionMatrix(CameraHandle camera);</pre>
+  <div class="body">
+    <p>The projection matrix of the stored projection, with Vulkan depth range [0, 1] and reversed-Z (near = 1, far = 0). An infinite perspective far plane gives a matrix with depth = <code>nearZ</code> / distance. An invalid handle logs an error and returns the identity.</p>
+  </div>
+</div>
+
+<div class="api" id="getProjectionMatrix-aspect">
+  <pre class="sig">glm::mat4 getProjectionMatrix(CameraHandle camera, float aspect);</pre>
+  <div class="body">
+    <p>The same, fitted to another aspect ratio. The camera itself does not change. A perspective camera keeps its vertical field of view; an orthographic one keeps its width and center. <code>drawScene</code> calls this with the size of the current pass, so a render target of any shape renders without stretching.</p>
+    <dl>
+      <dt>aspect</dt><dd>Width / height of the image you render into.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="updateCameraAspectRatio">
+  <pre class="sig">void updateCameraAspectRatio(float aspect);</pre>
+  <div class="body">
+    <p>Sets the aspect of <b>every</b> camera. The engine calls it with the swapchain's width / height at start-up and after each swapchain re-creation (window resize). You rarely need it: <code>drawScene</code> fits the aspect per pass anyway.</p>
+  </div>
+</div>
+
+<h2><span class="n">5</span>Input</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Input</th><th><code>TRACK_BALL</code></th><th><code>FREE_FLY</code></th></tr>
+  <tr><td>Drag with any mouse button</td><td>orbit around <code>center</code> (the scene follows the cursor)</td><td>look: yaw and pitch</td></tr>
+  <tr><td>Mouse wheel</td><td><code>radius</code> − wheel steps (zoom)</td><td>–</td></tr>
+  <tr><td><kbd>W</kbd> <kbd>S</kbd></td><td>–</td><td>forward / back, <code>speed</code> units per second</td></tr>
+  <tr><td><kbd>A</kbd> <kbd>D</kbd></td><td>–</td><td>left / right</td></tr>
+  <tr><td><kbd>Esc</kbd>, closing the window</td><td colspan="2"><code>running</code> returns false from now on</td></tr>
+  <tr><td><kbd>F1</kbd></td><td colspan="2">turns the stats overlay on or off (<code>EngineConfig::showStats</code>)</td></tr>
+</table>
+</div>
+
+<div class="api" id="pollEvents">
+  <pre class="sig">void pollEvents(CameraHandle camera);</pre>
+  <div class="body">
+    <p>Reads all window events, updates the window state (size, minimized, quit), builds a <a href="#CameraInput">CameraInput</a> and calls <code>updateCamera(camera, input)</code>. <code>beginFrame</code> calls it first thing, so <code>render</code>, <code>beginFrame</code> and <code>RenderGraph::execute</code> already do this. Do not call it yourself in a normal frame loop, or the camera moves twice.</p>
+    <dl>
+      <dt>camera</dt><dd>The camera that gets the input. It must be valid, or <code>updateCamera</code> logs an error every frame. Pass any valid camera if your frame does not use one (<code>examples/04_compute</code> does this).</dd>
+    </dl>
+    <p><span class="tag main-thread">main thread</span> The frame time it measures is capped at 0.1 s, and the first frame has 0. While the window is minimized it waits up to 100 ms for an event.</p>
+  </div>
+</div>
+
+<div class="api" id="CameraInput">
+  <pre class="sig">struct CameraInput
+{
+    glm::vec2 mouseStart = glm::vec2(0.0f);
+    glm::vec2 mouseEnd   = glm::vec2(0.0f);
+    float     wheelDelta = 0.0f;
+    float     deltaTime  = 0.0f;
+
+    bool      forward  = false;
+    bool      backward = false;
+    bool      left     = false;
+    bool      right    = false;
+};</pre>
+  <div class="body">
+    <p>One frame of input for <code>updateCamera</code>.</p>
+    <dl>
+      <dt>mouseStart, mouseEnd</dt><dd>The drag of this frame, in NDC with +Y up. Both axes are divided by the smaller window side, so the short axis spans [−1, 1] and the long one is wider. Equal values mean no drag.</dd>
+      <dt>wheelDelta</dt><dd>Wheel steps this frame (positive = away from you).</dd>
+      <dt>deltaTime</dt><dd>Seconds since the last frame. Used for free-fly movement and easing.</dd>
+      <dt>forward … right</dt><dd>Held keys (W, S, A, D in <code>pollEvents</code>).</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="updateCamera">
+  <pre class="sig">void updateCamera(CameraHandle camera, const CameraInput&amp; input);</pre>
+  <div class="body">
+    <p>Moves the target transform with the camera's controller, then eases the rendered transform toward it. The trackball eases along the orbit sphere, so the camera does not cut inside the orbit. The next matrices use the result.</p>
+    <p>You can drive a camera with your own input this way. Note that the camera you pass to <code>beginFrame</code> also gets the window's input in the same frame (<code>D7</code>: the engine owns the event loop).</p>
+  </div>
+</div>
+
+<h2><span class="n">6</span>The camera type and limits</h2>
+
+<div class="api" id="Camera">
+  <pre class="sig">struct Camera
+{
+    CameraProjection projection;
+    CameraController controller;
+    Transform        transform;
+    Transform        targetTransform;
+};</pre>
+  <div class="body">
+    <p>What the engine stores per camera. You never get a <code>Camera</code> directly; use the getters above.</p>
+    <dl>
+      <dt>transform</dt><dd>The rendered pose, used by <code>getViewMatrix</code>.</dd>
+      <dt>targetTransform</dt><dd>Where the controller wants the camera; <code>transform</code> eases toward it each frame.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Constant</th><th>Value</th><th>What it limits</th></tr>
+  <tr><td><code>MAX_CAMERAS</code></td><td>8 (7 usable)</td><td>cameras in the whole engine, <code>rasm/engine.h</code></td></tr>
+  <tr><td><code>MAX_CAMERAS_PER_SCENE</code></td><td>8</td><td><code>addCameraToScene</code> per scene, <code>rasm/scene.h</code></td></tr>
+  <tr><td><code>MAX_SCENE_DRAWS_PER_FRAME</code></td><td>8</td><td><code>drawScene</code> calls per frame, so at most 8 camera views per frame</td></tr>
+</table>
+</div>
+
+<div class="callout warn">
+  <strong>Known limits</strong>
+  <p>Cameras cannot be destroyed (<code>D4</code>), and handles of refused calls are never reused (B13). The engine reads the window events itself, so applications do not see them (<code>D7</code>). For the math (coordinate system, viewport flip, depth) see the guide <a href="../guides/camera-depth.html">Camera, coordinates and depth</a>.</p>
+</div>
+
+</main>
+</div>
+</body>
+</html>

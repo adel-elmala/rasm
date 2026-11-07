@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Asset Loading · RASM</title>
+<meta name="description" content="How loadMesh, loadGLTF and loadTexture load in the background: worker threads, finishLoads and its time budget, the glTF and OBJ import, caching, failures, the geometry pool fit check and what CPU memory is freed.">
+<meta name="rasm-sources" content="src/assets/mesh.cpp src/assets/texture.cpp src/assets/meshImport.h src/assets/meshImport.cpp src/assets/material.cpp src/engine.cpp include/rasm/engine.h include/rasm/mesh.h include/rasm/types.h src/renderer/geometryPool.h src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp src/platform/paths.h src/platform/paths.cpp src/rhi/vulkan/vulkanDevice.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/asset-loading.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Data</p>
+<h1>Loading assets in the background</h1>
+<p class="lead"><code>loadMesh</code>, <code>loadGLTF</code> and <code>loadTexture</code> return a handle at once. A worker thread reads and decodes the file. The main thread picks up the result at the start of a later frame, uploads it, and frees the CPU copy.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU work (main thread or worker)</span>
+  <span><i class="gpu"></i>GPU work</span>
+  <span><i class="mem"></i>GPU buffer</span>
+</div>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>One <code>std::async</code> task per load, no thread pool. The worker never touches the engine.</li>
+    <li><code>finishLoads</code> runs at the start of <code>beginFrame</code>. It finishes the loads that are ready, and stops after 4 ms (<code>LOAD_BUDGET</code>). <code>waitForLoads</code> finishes all of them, without a budget.</li>
+    <li>glTF: a node walk with an explicit stack, and one checked accessor reader (strides, sparse, quantized). OBJ: one sub-mesh, one vertex per index.</li>
+    <li>Paths are cached: loading the same file twice gives the same handle. A mesh that failed can be loaded again on the same handle.</li>
+    <li>A mesh must fit the geometry pool as a whole before anything is created. After upload, the vertex arrays, the glTF model and the pixels are freed.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>Main thread and worker, step by step</h2>
+
+<p>A glTF file loads while the app keeps drawing frames. Click through (or use the arrow keys).</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. loadMesh returns at once</h4>
+    <svg viewBox="0 0 720 240" role="img" aria-label="In frame 1 the main thread calls loadMesh. It starts a worker task and returns a handle in the LOADING state.">
+      <text x="16" y="24" class="small">time →</text>
+      <line x1="90" y1="20" x2="710" y2="20" class="arrow" marker-end="url(#ah)"/>
+      <text x="16" y="64" class="title t-cpu">main</text><text x="16" y="80" class="small">thread</text>
+      <text x="16" y="172" class="title t-cpu">worker</text><text x="16" y="188" class="small">std::async</text>
+      <rect x="90"  y="36" width="120" height="60" rx="6" class="box"/><text x="98"  y="52" class="small">frame 1</text>
+      <rect x="220" y="36" width="120" height="60" rx="6" class="box"/><text x="228" y="52" class="small">frame 2</text>
+      <rect x="350" y="36" width="120" height="60" rx="6" class="box"/><text x="358" y="52" class="small">frame 3</text>
+      <rect x="480" y="36" width="230" height="60" rx="6" class="box"/><text x="488" y="52" class="small">frame 4</text>
+
+      <rect x="96" y="62" width="80" height="26" rx="4" class="cpu"/><rect x="96" y="62" width="80" height="26" rx="4" class="hot"/><text x="136" y="79" class="mid small">loadMesh</text>
+      <path d="M140,88 V144" class="arrow dashed" marker-end="url(#ah)"/>
+      <text x="148" y="124" class="small">starts the task</text>
+      <rect x="140" y="146" width="290" height="50" rx="6" class="ghost"/>
+      <text x="285" y="175" class="mid small t-faint">importMeshFile (not started yet)</text>
+
+      <text x="20" y="218" class="small">loadMesh resolves the path, checks the path cache, the extension (obj, gltf, glb) and that the file exists.</text>
+      <text x="20" y="234" class="small">It takes a handle, sets the mesh to MeshState::LOADING, starts std::async(importMeshFile) and returns.</text>
+    </svg>
+    <p>The handle is usable at once: <code>createEntity</code> can take it. The entity waits for the mesh in <code>entitiesWaitingForMesh</code> (see <a href="gpu-scene.html">The GPU scene tables</a>).</p>
+  </div>
+
+  <div class="step">
+    <h4>2. The worker decodes; frames go on</h4>
+    <svg viewBox="0 0 720 240" role="img" aria-label="The worker reads and decodes the file. Frames 2 and 3 run finishLoads, see the result is not ready, and move on.">
+      <text x="16" y="24" class="small">time →</text>
+      <line x1="90" y1="20" x2="710" y2="20" class="arrow" marker-end="url(#ah)"/>
+      <text x="16" y="64" class="title t-cpu">main</text><text x="16" y="80" class="small">thread</text>
+      <text x="16" y="172" class="title t-cpu">worker</text><text x="16" y="188" class="small">std::async</text>
+      <rect x="90"  y="36" width="120" height="60" rx="6" class="box"/><text x="98"  y="52" class="small">frame 1</text>
+      <rect x="220" y="36" width="120" height="60" rx="6" class="box"/><text x="228" y="52" class="small">frame 2</text>
+      <rect x="350" y="36" width="120" height="60" rx="6" class="box"/><text x="358" y="52" class="small">frame 3</text>
+      <rect x="480" y="36" width="230" height="60" rx="6" class="box"/><text x="488" y="52" class="small">frame 4</text>
+
+      <rect x="96" y="62" width="80" height="26" rx="4" class="cpu"/><text x="136" y="79" class="mid small">loadMesh</text>
+      <rect x="226" y="62" width="80" height="26" rx="4" class="cpu"/><rect x="226" y="62" width="80" height="26" rx="4" class="hot"/><text x="266" y="79" class="mid small">finishLoads</text>
+      <rect x="356" y="62" width="80" height="26" rx="4" class="cpu"/><rect x="356" y="62" width="80" height="26" rx="4" class="hot"/><text x="396" y="79" class="mid small">finishLoads</text>
+      <text x="266" y="112" class="mid small t-faint">not ready</text>
+      <text x="396" y="112" class="mid small t-faint">not ready</text>
+      <path d="M140,88 V144" class="arrow dashed" marker-end="url(#ah)"/>
+      <rect x="140" y="146" width="290" height="50" rx="6" class="cpu"/><rect x="140" y="146" width="290" height="50" rx="6" class="hot"/>
+      <text x="285" y="166" class="mid mono">importMeshFile</text>
+      <text x="285" y="184" class="mid small">read · parse · decode images · build vertices</text>
+
+      <text x="20" y="218" class="small">The worker has only the path. It returns a GLTFRaw and never reads or writes engine state.</text>
+      <text x="20" y="234" class="small">finishLoads asks each future wait_for(0): not ready means skip it this frame, without waiting.</text>
+    </svg>
+    <p>Frames keep their normal speed while a big file decodes. A scene that uses the mesh simply draws without it.</p>
+  </div>
+
+  <div class="step">
+    <h4>3. The result is ready</h4>
+    <svg viewBox="0 0 720 240" role="img" aria-label="The worker finishes during frame 3, after that frame's finishLoads. The result waits in the future until frame 4.">
+      <text x="16" y="24" class="small">time →</text>
+      <line x1="90" y1="20" x2="710" y2="20" class="arrow" marker-end="url(#ah)"/>
+      <text x="16" y="64" class="title t-cpu">main</text><text x="16" y="80" class="small">thread</text>
+      <text x="16" y="172" class="title t-cpu">worker</text><text x="16" y="188" class="small">std::async</text>
+      <rect x="90"  y="36" width="120" height="60" rx="6" class="box"/><text x="98"  y="52" class="small">frame 1</text>
+      <rect x="220" y="36" width="120" height="60" rx="6" class="box"/><text x="228" y="52" class="small">frame 2</text>
+      <rect x="350" y="36" width="120" height="60" rx="6" class="box"/><text x="358" y="52" class="small">frame 3</text>
+      <rect x="480" y="36" width="230" height="60" rx="6" class="box"/><text x="488" y="52" class="small">frame 4</text>
+
+      <rect x="96" y="62" width="80" height="26" rx="4" class="cpu"/><text x="136" y="79" class="mid small">loadMesh</text>
+      <rect x="226" y="62" width="80" height="26" rx="4" class="cpu"/><text x="266" y="79" class="mid small">finishLoads</text>
+      <rect x="356" y="62" width="80" height="26" rx="4" class="cpu"/><text x="396" y="79" class="mid small">finishLoads</text>
+      <text x="266" y="112" class="mid small t-faint">not ready</text>
+      <text x="396" y="112" class="mid small t-faint">not ready</text>
+      <rect x="486" y="62" width="80" height="26" rx="4" class="ghost"/><text x="526" y="79" class="mid small t-faint">finishLoads</text>
+      <path d="M140,88 V144" class="arrow dashed" marker-end="url(#ah)"/>
+      <rect x="140" y="146" width="290" height="50" rx="6" class="cpu"/>
+      <text x="285" y="166" class="mid mono">importMeshFile</text>
+      <text x="285" y="184" class="mid small">read · parse · decode images · build vertices</text>
+      <path d="M430,146 V128 H526 V90" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+      <text x="440" y="142" class="small t-hot">GLTFRaw ready</text>
+
+      <text x="20" y="218" class="small">GLTFRaw: one SubGLTFRaw per primitive (vertices, indices, node transform, glTF material index),</text>
+      <text x="20" y="234" class="small">and the tinygltf model, already without its raw buffers but with its decoded images.</text>
+    </svg>
+    <p>The worker is done, but nothing in the engine changes yet. The result waits in the <code>std::future</code> of the <code>PendingMeshLoad</code>.</p>
+  </div>
+
+  <div class="step">
+    <h4>4. Frame 4: finishLoads uploads it</h4>
+    <svg viewBox="0 0 720 240" role="img" aria-label="At the start of frame 4, finishLoads takes the result: fit check, materials and textures, geometry upload, mesh READY, CPU data freed.">
+      <text x="16" y="24" class="small">time →</text>
+      <line x1="90" y1="20" x2="710" y2="20" class="arrow" marker-end="url(#ah)"/>
+      <text x="16" y="64" class="title t-cpu">main</text><text x="16" y="80" class="small">thread</text>
+      <text x="16" y="172" class="title t-cpu">worker</text><text x="16" y="188" class="small">std::async</text>
+      <rect x="90"  y="36" width="120" height="60" rx="6" class="box"/><text x="98"  y="52" class="small">frame 1</text>
+      <rect x="220" y="36" width="120" height="60" rx="6" class="box"/><text x="228" y="52" class="small">frame 2</text>
+      <rect x="350" y="36" width="120" height="60" rx="6" class="box"/><text x="358" y="52" class="small">frame 3</text>
+      <rect x="480" y="36" width="230" height="60" rx="6" class="box"/><text x="488" y="52" class="small">frame 4</text>
+
+      <rect x="96" y="62" width="80" height="26" rx="4" class="cpu"/><text x="136" y="79" class="mid small">loadMesh</text>
+      <rect x="226" y="62" width="80" height="26" rx="4" class="cpu"/><text x="266" y="79" class="mid small">finishLoads</text>
+      <rect x="356" y="62" width="80" height="26" rx="4" class="cpu"/><text x="396" y="79" class="mid small">finishLoads</text>
+      <rect x="486" y="62" width="80" height="26" rx="4" class="cpu"/><rect x="486" y="62" width="80" height="26" rx="4" class="hot"/><text x="526" y="79" class="mid small">finishLoads</text>
+      <path d="M140,88 V144" class="arrow dashed" marker-end="url(#ah)"/>
+      <rect x="140" y="146" width="290" height="50" rx="6" class="cpu"/>
+      <text x="285" y="166" class="mid mono">importMeshFile</text>
+      <text x="285" y="184" class="mid small">read · parse · decode images · build vertices</text>
+      <line x1="526" y1="88" x2="526" y2="104" class="arrow hot"/>
+      <rect x="470" y="104" width="240" height="98" rx="6" class="zone"/>
+      <text x="482" y="122" class="small t-hot">finishMeshLoad:</text>
+      <text x="482" y="140" class="small">1. the whole mesh fits the pool?</text>
+      <text x="482" y="156" class="small">2. loadMaterial per primitive</text>
+      <text x="482" y="172" class="small">3. GeometryPool::upload per sub-mesh</text>
+      <text x="482" y="188" class="small">4. state READY, GLTFRaw freed</text>
+
+      <text x="20" y="218" class="small">Everything that creates GPU objects or writes the registry runs here, on the main thread, before anything</text>
+      <text x="20" y="234" class="small">binds the bindless set or the geometry pool. glTF textures are created and filled inside loadMaterial.</text>
+    </svg>
+    <p><code>GeometryPool::upload</code> calls <code>fillBuffer</code>. Without ReBAR the data goes to the staging ring and reaches the pool at this frame's submit (see <a href="gpu-memory.html">How data reaches the GPU</a>).</p>
+  </div>
+
+  <div class="step">
+    <h4>5. The same frame draws it</h4>
+    <svg viewBox="0 0 720 240" role="img" aria-label="Later in frame 4, syncGpuScene gives the entity its rows, and at submit the geometry copies run before the frame. The mesh is drawn in frame 4.">
+      <text x="16" y="24" class="small">time →</text>
+      <line x1="90" y1="20" x2="710" y2="20" class="arrow" marker-end="url(#ah)"/>
+      <text x="16" y="64" class="title t-cpu">main</text><text x="16" y="80" class="small">thread</text>
+      <text x="16" y="172" class="title t-gpu">GPU</text>
+      <rect x="90"  y="36" width="120" height="60" rx="6" class="box"/><text x="98"  y="52" class="small">frame 1</text>
+      <rect x="220" y="36" width="120" height="60" rx="6" class="box"/><text x="228" y="52" class="small">frame 2</text>
+      <rect x="350" y="36" width="120" height="60" rx="6" class="box"/><text x="358" y="52" class="small">frame 3</text>
+      <rect x="480" y="36" width="230" height="60" rx="6" class="box"/><text x="488" y="52" class="small">frame 4</text>
+
+      <rect x="96" y="62" width="80" height="26" rx="4" class="cpu"/><text x="136" y="79" class="mid small">loadMesh</text>
+      <rect x="226" y="62" width="80" height="26" rx="4" class="cpu"/><text x="266" y="79" class="mid small">finishLoads</text>
+      <rect x="356" y="62" width="80" height="26" rx="4" class="cpu"/><text x="396" y="79" class="mid small">finishLoads</text>
+      <rect x="486" y="62" width="80" height="26" rx="4" class="cpu"/><text x="526" y="79" class="mid small">finishLoads</text>
+      <rect x="572" y="62" width="80" height="26" rx="4" class="cpu"/><rect x="572" y="62" width="80" height="26" rx="4" class="hot"/><text x="612" y="79" class="mid small">syncGpuScene</text>
+      <rect x="658" y="62" width="48" height="26" rx="4" class="cpu"/><rect x="658" y="62" width="48" height="26" rx="4" class="hot"/><text x="682" y="79" class="mid small">submit</text>
+
+      <line x1="682" y1="88" x2="560" y2="144" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <rect x="480" y="146" width="100" height="50" rx="6" class="gpu"/>
+      <text x="530" y="166" class="mid">copies</text><text x="530" y="184" class="mid small">into the pool</text>
+      <rect x="590" y="146" width="120" height="50" rx="6" class="gpu"/>
+      <text x="650" y="166" class="mid">frame 4</text><text x="650" y="184" class="mid small">draws the mesh</text>
+
+      <text x="20" y="218" class="small">After the fence wait, syncGpuScene sees the mesh READY: the entity gets its rows and joins the draw lists</text>
+      <text x="20" y="234" class="small">(its glTF textures are already filled). At submit the upload batch goes first, so the draw sees the geometry.</text>
+    </svg>
+    <p>A texture loaded with <code>loadTexture</code> takes the same path, with <code>decodeTexture</code> on the worker and <code>finishTextureLoad</code> on the main thread. An entity whose material uses it waits until it is in.</p>
+  </div>
+</div>
+
+<p><code>finishLoads</code> runs before the minimized-window check in <code>beginFrame</code>, so loads still finish while the window is minimized.</p>
+
+<h2><span class="n">2</span>The time budget</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="In frame A, finishLoads fills texture 1, then starts texture 2 before the 4 ms line, so texture 2 finishes. Texture 3 and the mesh wait for frame B.">
+    <text x="300" y="20" class="mid small t-hot">LOAD_BUDGET = 4 ms</text>
+    <line x1="300" y1="28" x2="300" y2="172" class="hot dashed"/>
+
+    <text x="20" y="58" class="title">frame A</text>
+    <text x="20" y="74" class="small">3 textures ready,</text>
+    <text x="20" y="88" class="small">1 mesh ready</text>
+    <rect x="140" y="40" width="100" height="40" rx="4" class="cpu"/>
+    <text x="190" y="58" class="mid">texture 1</text><text x="190" y="73" class="mid small">fill + mips</text>
+    <rect x="240" y="40" width="100" height="40" rx="4" class="cpu"/>
+    <text x="290" y="58" class="mid">texture 2</text><text x="290" y="73" class="mid small">crosses the line</text>
+    <rect x="350" y="40" width="390" height="40" rx="4" class="ghost"/>
+    <text x="545" y="64" class="mid small t-faint">over budget: texture 3 and the mesh wait · rest of the frame</text>
+
+    <text x="20" y="138" class="title">frame B</text>
+    <rect x="140" y="120" width="100" height="40" rx="4" class="cpu"/>
+    <text x="190" y="138" class="mid">texture 3</text><text x="190" y="153" class="mid small">fill + mips</text>
+    <rect x="240" y="120" width="90" height="40" rx="4" class="cpu"/>
+    <text x="285" y="138" class="mid">mesh</text><text x="285" y="153" class="mid small">finishMeshLoad</text>
+    <rect x="340" y="120" width="400" height="40" rx="4" class="ghost"/>
+    <text x="540" y="144" class="mid small t-faint">nothing left · rest of the frame</text>
+
+    <text x="140" y="196" class="small">Textures first, then meshes. Before each load: over budget? Stop. A load that starts before the line always finishes.</text>
+  </svg>
+  <figcaption>Loads that finish together are spread over several frames, so one frame does not stall for all of them. One big glTF still finishes in one frame: all its textures and their mips are made inside <code>finishMeshLoad</code>.</figcaption>
+</figure>
+
+<p><code>waitForLoads</code> calls <code>finishLoads(true)</code>: no budget, and it blocks on each future until every pending load is done. Use it to show a fully loaded scene in the first frame.</p>
+
+<h2><span class="n">3</span>What the worker does</h2>
+
+<p><code>importMeshFile</code> picks the importer from the file extension: <code>.gltf</code> and <code>.glb</code> go to tinygltf, everything else to tinyobjloader.</p>
+
+<h3>glTF: the node walk</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A node tree: A has children B with mesh 0 and C, and C has child D with mesh 1. The walk pops nodes from a stack in file order and multiplies parent and local transforms. Each primitive of a mesh node becomes one sub-mesh with its world transform.">
+    <rect x="60" y="24" width="80" height="40" rx="6" class="box"/>
+    <text x="100" y="42" class="mid title">A</text><text x="100" y="57" class="mid small">no mesh</text>
+    <rect x="10" y="104" width="80" height="40" rx="6" class="box"/>
+    <text x="50" y="122" class="mid title">B</text><text x="50" y="137" class="mid small">mesh 0</text>
+    <rect x="120" y="104" width="80" height="40" rx="6" class="box"/>
+    <text x="160" y="122" class="mid title">C</text><text x="160" y="137" class="mid small">no mesh</text>
+    <rect x="120" y="184" width="80" height="40" rx="6" class="box"/>
+    <text x="160" y="202" class="mid title">D</text><text x="160" y="217" class="mid small">mesh 1</text>
+    <line x1="90" y1="64" x2="55" y2="102" class="arrow" marker-end="url(#ah)"/>
+    <line x1="110" y1="64" x2="150" y2="102" class="arrow" marker-end="url(#ah)"/>
+    <line x1="160" y1="144" x2="160" y2="182" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="250" y="36" class="title">explicit stack, file order</text>
+    <text x="250" y="64"  class="mono">pop A  world = A</text>
+    <text x="250" y="90"  class="mono">pop B  world = A·B  → mesh 0</text>
+    <text x="250" y="116" class="mono">pop C  world = A·C</text>
+    <text x="250" y="142" class="mono">pop D  world = A·C·D → mesh 1</text>
+    <text x="250" y="172" class="small">world = parent world × local (matrix, or T·R·S)</text>
+
+    <text x="560" y="36" class="title">subGltfRaws</text>
+    <rect x="560" y="48"  width="180" height="28" rx="4" class="cpu"/><text x="570" y="67"  class="small">mesh 0 · prim 0 · A·B</text>
+    <rect x="560" y="82"  width="180" height="28" rx="4" class="cpu"/><text x="570" y="101" class="small">mesh 1 · prim 0 · A·C·D</text>
+    <rect x="560" y="116" width="180" height="28" rx="4" class="cpu"/><text x="570" y="135" class="small">mesh 1 · prim 1 · A·C·D</text>
+    <text x="560" y="166" class="small">+ vertices, indices and the</text>
+    <text x="560" y="180" class="small">glTF material index of each</text>
+
+    <text x="20" y="244" class="small">A node reached a second time (a cycle, or a node with two parents) is skipped with a warning. Out-of-range node indices are skipped too.</text>
+  </svg>
+  <figcaption><code>processGLTF</code> starts at the root nodes of the default scene (or scene 0), with an identity root transform: glTF is right-handed and Y-up, like the engine. <code>traverseNodes</code> walks the tree; <code>extractGLTFRaws</code> turns each primitive of a mesh node into one <code>SubGLTFRaw</code>.</figcaption>
+</figure>
+
+<h3>glTF: reading an accessor</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="An accessor's elements are gathered from an interleaved buffer view using the byte stride into a packed copy. Sparse values then replace some elements. Then each component is decoded to float.">
+    <text x="20" y="50" class="small">buffer view</text>
+    <text x="20" y="64" class="small">(interleaved)</text>
+    <path d="M180,26 V20 H296 V26" class="arrow"/>
+    <text x="238" y="14" class="mid small">byteStride</text>
+    <rect x="180" y="30" width="56" height="30" rx="3" class="mem"/><text x="208" y="50" class="mid mono">P0</text>
+    <rect x="240" y="30" width="56" height="30" rx="3" class="box"/><text x="268" y="50" class="mid mono t-faint">N0</text>
+    <rect x="300" y="30" width="56" height="30" rx="3" class="mem"/><text x="328" y="50" class="mid mono">P1</text>
+    <rect x="360" y="30" width="56" height="30" rx="3" class="box"/><text x="388" y="50" class="mid mono t-faint">N1</text>
+    <rect x="420" y="30" width="56" height="30" rx="3" class="mem"/><text x="448" y="50" class="mid mono">P2</text>
+    <rect x="480" y="30" width="56" height="30" rx="3" class="box"/><text x="508" y="50" class="mid mono t-faint">N2</text>
+    <text x="556" y="50" class="small">POSITION reads every P</text>
+
+    <line x1="208" y1="60" x2="208" y2="98" class="arrow" marker-end="url(#ah)"/>
+    <line x1="328" y1="60" x2="268" y2="98" class="arrow" marker-end="url(#ah)"/>
+    <line x1="448" y1="60" x2="328" y2="98" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="20" y="120" class="small">packed copy</text>
+    <rect x="180" y="100" width="56" height="30" rx="3" class="cpu"/><text x="208" y="120" class="mid mono">P0</text>
+    <rect x="240" y="100" width="56" height="30" rx="3" class="cpu"/><text x="268" y="120" class="mid mono">P1</text>
+    <rect x="300" y="100" width="56" height="30" rx="3" class="cpu"/><text x="328" y="120" class="mid mono">P2</text>
+    <text x="380" y="120" class="small">gatherAccessor: count × element size, range-checked</text>
+
+    <line x1="208" y1="130" x2="208" y2="158" class="arrow" marker-end="url(#ah)"/>
+    <line x1="268" y1="130" x2="268" y2="158" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="328" y1="130" x2="328" y2="158" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="20" y="180" class="small">after sparse</text>
+    <rect x="180" y="160" width="56" height="30" rx="3" class="cpu"/><text x="208" y="180" class="mid mono">P0</text>
+    <rect x="240" y="160" width="56" height="30" rx="3" class="cpu"/><rect x="240" y="160" width="56" height="30" rx="3" class="hot"/><text x="268" y="180" class="mid mono">P1′</text>
+    <rect x="300" y="160" width="56" height="30" rx="3" class="cpu"/><text x="328" y="180" class="mid mono">P2</text>
+    <text x="380" y="180" class="small">sparse: element 1 is replaced by a sparse value</text>
+
+    <text x="20" y="216" class="small">Then each component is decoded: floats as they are, normalized integers to [0, 1] or [−1, 1], other integers keep their value.</text>
+  </svg>
+  <figcaption>One reader for every attribute and index buffer. Components are read with <code>memcpy</code>, because glTF data does not have to be aligned. Indices stay integers, so values above 2<sup>24</sup> stay exact.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Primitive has…</th><th>The importer…</th></tr>
+  <tr><td>no or bad <code>POSITION</code></td><td>skips the primitive, with a warning</td></tr>
+  <tr><td>points or lines</td><td>skips it (only triangle modes are drawn)</td></tr>
+  <tr><td>a strip or a fan</td><td>turns it into a triangle list with the same winding (<code>toTriangleList</code>)</td></tr>
+  <tr><td>no indices</td><td>generates 0, 1, 2, …</td></tr>
+  <tr><td>an index past the vertex count</td><td>skips the primitive</td></tr>
+  <tr><td>no <code>NORMAL</code></td><td>computes smooth normals, and ignores <code>TANGENT</code> (the glTF spec requires it)</td></tr>
+  <tr><td><code>TEXCOORD_0</code> to <code>TEXCOORD_2</code></td><td>loads up to <code>MAX_VERTEX_UV_SETS</code> = 3 sets; a missing set is (0, 0)</td></tr>
+  <tr><td><code>TANGENT</code></td><td>snaps w to ±1; without tangents w stays 0 and the shader builds a frame</td></tr>
+  <tr><td>a bad optional attribute</td><td>ignores that attribute, with a warning</td></tr>
+</table>
+</div>
+
+<p>When every accessor is read, the worker clears <code>model-&gt;buffers</code>. Materials only need the decoded images, so the raw file bytes go early.</p>
+
+<h3>OBJ</h3>
+
+<div class="split">
+  <div>
+    <h4>One sub-mesh</h4>
+    <p>All shapes go into one <code>SubGLTFRaw</code> with an identity transform and no material (index −1). The entity's material is used. OBJ materials are not read.</p>
+  </div>
+  <div>
+    <h4>One vertex per index</h4>
+    <p>Every face corner becomes its own vertex; vertices are not shared. V is flipped (<code>1.0 - v</code>), because OBJ puts the UV origin at the bottom-left. A missing normal or UV stays zero.</p>
+  </div>
+</div>
+
+<h2><span class="n">4</span>Path caching and failures</h2>
+
+<p>Both loaders first call <code>resolveAssetPath</code>: a relative path is joined to <code>EngineConfig::assetRoot</code>, so a relative and an absolute path to one file give the same key. Meshes are cached by that path in <code>loadedMeshes</code>. Textures are cached by path and format in <code>loadedTextures</code>, so one file can be loaded once as sRGB and once as UNORM.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Case</th><th>Mesh</th><th>Texture</th></tr>
+  <tr><td>Loaded before</td><td>the same handle (also while it loads)</td><td>the same handle</td></tr>
+  <tr><td>Loaded before and <code>FAILED</code></td><td>loads again, on the same handle</td><td>—</td></tr>
+  <tr><td>Unsupported extension</td><td>invalid handle (obj, gltf, glb only)</td><td>invalid handle (png, jpg, jpeg only)</td></tr>
+  <tr><td>Wrong format</td><td>—</td><td>invalid handle (only <code>R8G8B8A8_SRGB</code> or <code>R8G8B8A8_UNORM</code>)</td></tr>
+  <tr><td>File missing</td><td>invalid handle (<code>is_regular_file</code>)</td><td>invalid handle (<code>stbi_info</code> fails)</td></tr>
+  <tr><td>Out of handles</td><td>invalid handle (<code>MAX_MESHES</code>)</td><td>—</td></tr>
+  <tr><td>Decode fails on the worker</td><td><code>FAILED</code>: <code>isLoaded</code> stays false, entities are never drawn</td><td>filled white, because a material may already use it</td></tr>
+  <tr><td>Does not fit the geometry pool</td><td><code>FAILED</code>, with the pool usage in the log</td><td>—</td></tr>
+  <tr><td>Destroyed while decoding</td><td>—</td><td>skipped, pixels freed</td></tr>
+</table>
+</div>
+
+<p>Every error before the worker starts returns an invalid handle and caches nothing. <code>isLoaded(mesh)</code> is true only for <code>MeshState::READY</code>. <code>isLoaded(texture)</code> is true once the handle is no longer in <code>pendingTextures</code>, also for a texture that was filled white.</p>
+
+<div class="callout warn">
+  <strong>Known limit: B13</strong>
+  <p><code>MAX_MESHES</code> is 8 and mesh handles start at 1, so only 7 meshes can exist, counting <code>createMesh</code>. Handles are never reused.</p>
+</div>
+
+<h2><span class="n">5</span>The geometry pool fit check</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 195" role="img" aria-label="If the whole mesh fits the free part of the pool, every sub-mesh is appended. If not, nothing is created and the mesh fails.">
+    <text x="20" y="44" class="title">fits</text>
+    <rect x="150" y="26" width="500" height="32" rx="4" class="box"/>
+    <rect x="150" y="26" width="250" height="32" rx="4" class="mem"/><text x="275" y="47" class="mid small">in use</text>
+    <rect x="400" y="26" width="70" height="32" rx="4" class="cpu"/><text x="435" y="47" class="mid small">sub 0</text>
+    <rect x="470" y="26" width="50" height="32" rx="4" class="cpu"/><text x="495" y="47" class="mid small">1</text>
+    <rect x="520" y="26" width="40" height="32" rx="4" class="cpu"/><text x="540" y="47" class="mid small">2</text>
+    <text x="605" y="47" class="mid small t-faint">free</text>
+    <text x="660" y="47" class="small">all appended</text>
+
+    <text x="20" y="114" class="title">does not fit</text>
+    <rect x="150" y="96" width="500" height="32" rx="4" class="box"/>
+    <rect x="150" y="96" width="430" height="32" rx="4" class="mem"/><text x="365" y="117" class="mid small">in use</text>
+    <rect x="580" y="96" width="160" height="32" rx="4" class="ghost"/>
+    <rect x="650" y="96" width="90" height="32" rx="4" class="hot"/>
+    <text x="615" y="117" class="mid small t-faint">new mesh</text>
+    <text x="695" y="117" class="mid small t-hot">too much</text>
+
+    <text x="150" y="160" class="small">fits() takes the sums over all sub-meshes: vertices, indices, and the sub-mesh count (geometry rows).</text>
+    <text x="150" y="178" class="small">If any of the three does not fit, nothing is created: no geometry, no material, no texture, no bindless slot.</text>
+  </svg>
+  <figcaption>The check comes first because nothing is ever freed from the pool (D4). A mesh that failed halfway would leak the pool space, materials and bindless slots of its first sub-meshes.</figcaption>
+</figure>
+
+<p>When it fits, <code>finishMeshLoad</code> goes over the sub-meshes in order. For each one it calls <code>loadMaterial</code> (glTF only) and then <code>GeometryPool::upload</code>, which appends the vertices and indices, computes a bounding sphere and writes one geometry row. The pool size is set by <code>EngineConfig</code>; the defaults and the upload path are in <a href="gpu-memory.html">How data reaches the GPU</a>. <code>createMesh</code> skips all of this background work: it uploads at once and returns a <code>READY</code> mesh.</p>
+
+<h2><span class="n">6</span>Textures: two ways in</h2>
+
+<div class="split">
+  <div>
+    <h4><code>loadTexture</code></h4>
+    <p>The main thread reads only the image header (<code>stbi_info</code>) and creates the texture at once, so it can go into a material before its pixels exist. The worker runs <code>decodeTexture</code> (<code>stbi_load</code> to 4 channels). <code>finishTextureLoad</code> calls <code>fillTexture</code>, and <code>finishLoads</code> sets <code>texturesFinished</code>, so waiting entities are checked.</p>
+  </div>
+  <div>
+    <h4>glTF images</h4>
+    <p>tinygltf decodes them on the worker, as part of the file. <code>loadMaterial</code> creates and fills each texture on the main thread inside <code>finishMeshLoad</code>, so they are ready when the mesh is. Each image is uploaded once per import, per sampler and color space (<code>GltfImportCache</code>).</p>
+  </div>
+</div>
+
+<p><code>fillTexture</code> builds the whole mip chain on the main thread, inside the load budget. Color textures are sRGB, data maps are UNORM. See <a href="materials-textures.html">Materials and bindless textures</a>.</p>
+
+<h2><span class="n">7</span>What CPU memory is freed</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Data</th><th>Freed</th></tr>
+  <tr><td>glTF buffers (the raw file bytes)</td><td>on the worker, once every accessor is read</td></tr>
+  <tr><td>Vertex and index arrays (<code>ObjRaw</code>)</td><td>at the end of <code>finishMeshLoad</code>, when the <code>GLTFRaw</code> goes out of scope</td></tr>
+  <tr><td>The <code>tinygltf::Model</code> and its decoded images</td><td>at the end of <code>finishMeshLoad</code></td></tr>
+  <tr><td>Decoded pixels of <code>loadTexture</code></td><td>at the end of <code>finishTextureLoad</code> (<code>stbi_image_free</code>)</td></tr>
+  <tr><td>Generated mip levels</td><td>when <code>fillTexture</code> returns</td></tr>
+</table>
+</div>
+
+<p>What stays is small: a <code>Mesh</code> keeps its state and its <code>SubMesh</code> list. Each <code>SubMesh</code> is a <code>MeshGeometry</code> (a range in the pool, its geometry row and bounding sphere), a node transform and a material handle.</p>
+
+<h2><span class="n">8</span>Where it lives in code</h2>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Mesh loads</td><td><code>Engine::loadMesh</code>, <code>loadGLTF</code>, <code>createMesh</code>, <code>finishMeshLoad</code>, <code>isLoaded</code> in <code>src/assets/mesh.cpp</code></td></tr>
+  <tr><td>Texture loads</td><td><code>Engine::loadTexture</code>, <code>decodeTexture</code>, <code>finishTextureLoad</code> in <code>src/assets/texture.cpp</code></td></tr>
+  <tr><td>Worker import</td><td><code>importMeshFile</code>, <code>importGltf</code>, <code>importObj</code>, <code>traverseNodes</code>, <code>extractGLTFRaws</code>, <code>gatherAccessor</code> in <code>src/assets/meshImport.cpp</code></td></tr>
+  <tr><td>glTF materials and images</td><td><code>Engine::loadMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
+  <tr><td>The budget</td><td><code>finishLoads</code>, <code>waitForLoads</code>, <code>LOAD_BUDGET</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Raw result types</td><td><code>GLTFRaw</code>, <code>SubGLTFRaw</code>, <code>ObjRaw</code>, <code>MeshState</code> in <code>include/rasm/mesh.h</code>; <code>TextureRaw</code> in <code>include/rasm/types.h</code></td></tr>
+  <tr><td>Pool append and fit check</td><td><code>GeometryPool::fits</code>, <code>GeometryPool::upload</code> in <code>src/renderer/geometryPool.cpp</code></td></tr>
+  <tr><td>Paths</td><td><code>Engine::resolveAssetPath</code> in <code>src/engine.cpp</code>; UTF-8 helpers in <code>src/platform/paths.h</code></td></tr>
+  <tr><td>Tests (no GPU)</td><td><code>tests/gltfImportTests.cpp</code>, <code>tests/meshTests.cpp</code></td></tr>
+</table>
+</div>
+
+<h2><span class="n">9</span>Rules when you change it</h2>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Worker code (<code>importMeshFile</code>, <code>decodeTexture</code>) must not touch the engine. It gets a path and returns a plain result.</li>
+    <li>Anything that creates GPU objects, writes the registry or calls <code>fillBuffer</code> for a load runs in <code>finishLoads</code>, on the main thread, before anything binds the bindless set or the geometry pool.</li>
+    <li>Check that the whole mesh fits (<code>GeometryPool::fits</code>) before creating anything for it. Nothing is freed (D4).</li>
+    <li>Free the CPU copy after upload (P6). Do not keep vertex arrays, the glTF model or pixels in the registry.</li>
+    <li>A texture that a material may already use must always be filled, even when its decode fails.</li>
+    <li>Normal, metallic-roughness and AO textures are <code>R8G8B8A8_UNORM</code>; color and emissive are <code>R8G8B8A8_SRGB</code>.</li>
+    <li>Changes to import behaviour need a test in <code>tests/gltfImportTests.cpp</code> (no GPU needed).</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>There is no thread pool and no cancel. Mips are built on the main thread (P2), so a big glTF can make one long frame. Meshes and textures cannot be unloaded (D4).</p>
+</div>
+
+</main>
+</div>
+</body>
+</html>

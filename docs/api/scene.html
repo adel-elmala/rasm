@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scenes and Meshes · RASM</title>
+<meta name="description" content="Scenes, entities, Transform, meshes (createMesh, loadMesh, loadGLTF, Vertex, SubMesh), lights, adding objects to scenes, when changes reach the GPU, and the limits.">
+<meta name="rasm-sources" content="include/rasm/scene.h include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/engine.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="api/scene.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">API reference</p>
+<h1>Scenes, entities, meshes and lights</h1>
+<p class="lead">A scene is a list of entities, cameras and lights. An entity puts a mesh into the world with a material and a <code>Transform</code>. You create each object with an <code>Engine</code> function, then add it to one or more scenes. The engine sends the changes to the GPU at the start of the next frame.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li><code>createScene</code>, <code>createEntity</code>, <code>createLight</code>, then <code>addEntityToScene</code> and <code>addLightToScene</code>.</li>
+    <li>Meshes come from files (<code>loadMesh</code>, background) or from your own vertices (<code>createMesh</code>, at once).</li>
+    <li>An entity is drawn only when its mesh and all its textures are loaded. Until then it is silently skipped.</li>
+    <li>Move entities with <code>updateTransform</code>. Only the changed rows are uploaded.</li>
+    <li>Nothing can be destroyed or removed from a scene yet (<code>D4</code>).</li>
+  </ul>
+</div>
+
+<h2 id="scenes"><span class="n">1</span>Scenes</h2>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU record</span>
+  <span><i class="mem"></i>GPU buffer</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="A scene lists entities, cameras and lights by handle. One entity can be in several scenes and shares its instance rows between them. Each scene has its own draw list.">
+    <rect x="10" y="20" width="200" height="160" rx="8" class="cpu"/>
+    <text x="110" y="44" class="mid title">Scene A</text>
+    <text x="30" y="72"  class="small">entities: bunny, cube</text>
+    <text x="30" y="96"  class="small">cameras: main</text>
+    <text x="30" y="120" class="small">lights: sun, lamp</text>
+    <text x="30" y="160" class="small t-faint">a list of handles</text>
+
+    <rect x="550" y="20" width="200" height="160" rx="8" class="cpu"/>
+    <text x="650" y="44" class="mid title">Scene B</text>
+    <text x="570" y="72"  class="small">entities: bunny</text>
+    <text x="570" y="96"  class="small">cameras: (none)</text>
+    <text x="570" y="120" class="small">lights: sun</text>
+
+    <rect x="300" y="30" width="160" height="50" rx="6" class="cpu"/>
+    <text x="380" y="52" class="mid">Entity "bunny"</text>
+    <text x="380" y="69" class="mid small">one copy, in both scenes</text>
+    <line x1="210" y1="68" x2="297" y2="58" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="550" y1="68" x2="463" y2="58" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="300" y="120" width="160" height="50" rx="6" class="mem"/>
+    <text x="380" y="142" class="mid">instance rows</text>
+    <text x="380" y="159" class="mid small">shared by both scenes</text>
+    <line x1="380" y1="80" x2="380" y2="117" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="215" y="196" class="small">Each scene has its own draw list. drawScene(A, camera) draws only A's entities, with A's lights.</text>
+  </svg>
+  <figcaption>A scene holds handles, not copies. Putting an entity in two scenes costs no extra GPU rows.</figcaption>
+</figure>
+
+<div class="api" id="createScene">
+  <pre class="sig">SceneHandle createScene();</pre>
+  <div class="body">
+    <p>Creates an empty scene. Returns an invalid handle and logs a warning when <code>MAX_SCENES</code> is reached (15 scenes can exist, because handle indices start at 1).</p>
+  </div>
+</div>
+
+<div class="api" id="addEntityToScene">
+  <pre class="sig">void addEntityToScene(SceneHandle scene, EntityHandle entity);</pre>
+  <div class="body">
+    <p>Adds the entity to the scene. If the entity is ready, the scene's draw list is rebuilt at the next <code>beginFrame</code> and the entity is drawn in that frame. If its mesh or textures still load, it joins when they finish.</p>
+    <dl>
+      <dt>scene</dt><dd>Invalid: logs an error, nothing changes.</dd>
+      <dt>entity</dt><dd>Invalid: logs an error. The same entity added twice is drawn twice.</dd>
+    </dl>
+    <p>A scene holds at most <code>MAX_ENTITIES_PER_SCENE</code> entities (a warning is logged after that). There is no function to remove an entity (<code>D4</code>).</p>
+  </div>
+</div>
+
+<div class="api" id="addCameraToScene">
+  <pre class="sig">void addCameraToScene(SceneHandle scene, CameraHandle camera);</pre>
+  <div class="body">
+    <p>Records the camera in the scene's camera list (at most <code>MAX_CAMERAS_PER_SCENE</code>, 8). Drawing does not read this list today: <code>render</code> and <code>drawScene</code> take the camera as an argument, and any camera can draw any scene. Cameras are on <a href="camera.html#createCamera">camera.html</a>.</p>
+  </div>
+</div>
+
+<div class="api" id="addLightToScene">
+  <pre class="sig">void addLightToScene(SceneHandle scene, LightHandle light);</pre>
+  <div class="body">
+    <p>Adds the light to the scene. Every <code>drawScene</code> of this scene reads the scene's lights, so the light shines from the next draw on. At most <code>MAX_LIGHTS_PER_SCENE</code> (8) entries; a warning is logged after that.</p>
+  </div>
+</div>
+
+<div class="api" id="Scene">
+  <pre class="sig">struct Scene
+{
+    SceneHandle               handle;
+    std::vector&lt;EntityHandle&gt; entities;
+    std::vector&lt;CameraHandle&gt; cameras;
+    std::vector&lt;LightHandle&gt;  lights;
+};</pre>
+  <div class="body">
+    <p>The record the engine keeps for each scene. There is no getter for it; it is in the public header because <code>Engine</code> stores it.</p>
+  </div>
+</div>
+
+<h2 id="entities"><span class="n">2</span>Entities</h2>
+
+<p>An entity is not drawn the moment you create it. It moves through these states. Each arrow happens inside <code>beginFrame</code>.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>your call</span>
+  <span><i class="mem"></i>GPU rows written</span>
+  <span><i class="gpu"></i>drawn by the GPU</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="createEntity, then the entity waits while its mesh loads, then it gets instance rows, then it waits while its textures load, then it is in the draw lists of its scenes. A failed mesh or a full instance table stops it.">
+    <rect x="10"  y="50" width="116" height="56" rx="6" class="cpu"/><text x="68"  y="73" class="mid mono">createEntity</text><text x="68"  y="92" class="mid small">record stored</text>
+    <rect x="166" y="50" width="116" height="56" rx="6" class="ghost"/><text x="224" y="73" class="mid">waiting</text><text x="224" y="92" class="mid small">for the mesh</text>
+    <rect x="322" y="50" width="116" height="56" rx="6" class="mem"/><text x="380" y="73" class="mid">instance rows</text><text x="380" y="92" class="mid small">one per sub-mesh</text>
+    <rect x="478" y="50" width="116" height="56" rx="6" class="ghost"/><text x="536" y="73" class="mid">waiting</text><text x="536" y="92" class="mid small">for its textures</text>
+    <rect x="634" y="50" width="116" height="56" rx="6" class="gpu"/><text x="692" y="73" class="mid">drawn</text><text x="692" y="92" class="mid small">in its scenes' lists</text>
+
+    <line x1="126" y1="78" x2="163" y2="78" class="arrow" marker-end="url(#ah)"/>
+    <line x1="282" y1="78" x2="319" y2="78" class="arrow" marker-end="url(#ah)"/>
+    <line x1="438" y1="78" x2="475" y2="78" class="arrow" marker-end="url(#ah)"/>
+    <line x1="594" y1="78" x2="631" y2="78" class="arrow" marker-end="url(#ah)"/>
+    <text x="146" y="38" class="mid small">next beginFrame</text>
+    <text x="302" y="38" class="mid small">mesh is ready</text>
+    <text x="458" y="38" class="mid small">a texture loads</text>
+    <text x="614" y="38" class="mid small">all loaded</text>
+
+    <path d="M410,106 V128 H692 V109" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="551" y="144" class="mid small">textures already loaded: no wait</text>
+
+    <line x1="68" y1="106" x2="68" y2="160" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="68" y="176" class="mid small t-hot">no mesh: never drawn</text>
+    <line x1="224" y1="106" x2="224" y2="192" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="224" y="208" class="mid small t-hot">mesh failed: warning</text>
+    <line x1="350" y1="106" x2="350" y2="222" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="350" y="238" class="mid small t-hot">instance table full: error</text>
+
+    <rect x="600" y="196" width="150" height="34" rx="5" class="cpu"/>
+    <text x="675" y="218" class="mid mono">addEntityToScene</text>
+    <line x1="728" y1="196" x2="728" y2="109" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="675" y="186" class="mid small">any time, any order</text>
+  </svg>
+  <figcaption>A mesh made with <code>createMesh</code> is ready at once, so its entity gets rows at the next <code>beginFrame</code>. A failed entity stays in its scenes but draws nothing. Its rows, once written, are never freed.</figcaption>
+</figure>
+
+<div class="api" id="createEntity">
+  <pre class="sig">EntityHandle createEntity(const std::string&amp; name, MeshHandle mesh = MeshHandle{}, MaterialHandle material = MaterialHandle{}, Transform transform = Transform{});</pre>
+  <div class="body">
+    <p>Creates an entity. It appears once it is in a scene and its mesh and textures are loaded (diagram above). You can pass a mesh that is still loading.</p>
+    <dl>
+      <dt>name</dt><dd>A label for you; the engine only stores it.</dd>
+      <dt>mesh</dt><dd>What to draw. Without a mesh the entity is never drawn, and the mesh cannot be set later.</dd>
+      <dt>material</dt><dd>Used by every sub-mesh that has no material of its own (OBJ files, <code>createMesh</code>, glTF primitives without one). Invalid: the default material (white, metallic 1, roughness 1). A glTF sub-mesh's own material always wins.</dd>
+      <dt>transform</dt><dd>Position, rotation and scale in the world. Default: the origin, no rotation, scale 1. A negative scale (a mirror) works: the engine culls the other face.</dd>
+    </dl>
+    <p>Returns an invalid handle and logs a warning after 65,535 entities (<code>MAX_ENTITIES</code>). Each entity needs one row in the instance table per sub-mesh; when <code>EngineConfig::maxInstances</code> rows are used, new entities log an error and are not drawn.</p>
+    <pre><code>// examples/03_instances: 10,000 cubes share one mesh and two materials.
+for (int z = 0; z &lt; GRID_SIZE; ++z)
+{
+    for (int x = 0; x &lt; GRID_SIZE; ++x)
+    {
+        const auto material = (x + z) % 2 == 0 ? warm : cool;
+        const auto transform = cubeTransform(gridPosition(x, z), 1.0f);
+        engine.addEntityToScene(scene, engine.createEntity("grid", cube, material, transform));
+    }
+}</code></pre>
+  </div>
+</div>
+
+<div class="api" id="updateTransform">
+  <pre class="sig">void updateTransform(EntityHandle entity, Transform transform);</pre>
+  <div class="body">
+    <p>Moves the entity. Its instance rows (one per sub-mesh) are marked changed and uploaded at the next <code>beginFrame</code>, so the next frame shows the new place. Only these rows are uploaded, so moving a few entities in a big scene is cheap. If the sign of the scale changes (mirroring on or off), the entity's scenes rebuild their draw lists.</p>
+    <dl>
+      <dt>entity</dt><dd>Invalid: logs "Invalid entity handle for updating transform." and does nothing.</dd>
+      <dt>transform</dt><dd>Replaces the whole transform.</dd>
+    </dl>
+    <pre><code>rasm::Transform transform = engine.getTransform(bunny);
+transform.rotate(glm::vec3(0.0f, 1.0f, 0.0f), glm::radians(0.01f));
+engine.updateTransform(bunny, transform);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="getTransform">
+  <pre class="sig">Transform getTransform(EntityHandle entity);</pre>
+  <div class="body">
+    <p>A copy of the entity's transform. Invalid handle: logs an error and returns a default <code>Transform</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="Entity">
+  <pre class="sig">struct Entity
+{
+    EntityHandle   handle{};
+    std::string    name;
+    MeshHandle     mesh{};
+    MaterialHandle material{};
+    Transform      transform{};
+};</pre>
+  <div class="body">
+    <p>The record the engine keeps for each entity. Read the transform with <code>getTransform</code>; the other fields have no getter.</p>
+  </div>
+</div>
+
+<h2 id="transform"><span class="n">3</span>Transform</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Field</th><th>Default</th><th>Meaning</th></tr>
+  <tr><td><code>position</code></td><td>(0, 0, 0)</td><td>World position. The world is right-handed, +Y is up, and a camera looks along −Z.</td></tr>
+  <tr><td><code>rotation</code></td><td>identity</td><td>A <code>glm::quat</code>. Note the constructor order <code>glm::quat(w, x, y, z)</code>.</td></tr>
+  <tr><td><code>scale</code></td><td>(1, 1, 1)</td><td>Per axis. Negative values mirror the object.</td></tr>
+</table>
+</div>
+
+<div class="api" id="Transform">
+  <pre class="sig">struct Transform
+{
+    glm::vec3 position = glm::vec3(0.0f);
+    glm::quat rotation = glm::identity&lt;glm::quat&gt;();
+    glm::vec3 scale    = glm::vec3(1.0f);
+};</pre>
+  <div class="body">
+    <p>Used for entities and cameras. It is an aggregate, so designated initializers work and you can skip fields: <code>Transform{.position = p, .scale = s}</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="rotate">
+  <pre class="sig">Transform rotate(const glm::vec3&amp; axis, float radians);</pre>
+  <div class="body">
+    <p>Turns the transform by <code>radians</code> around <code>axis</code>, an axis in world space (the new turn is applied after the old rotation). It changes the transform itself and also returns the result, so it can be passed on directly. A zero axis changes nothing. The axis does not need to be normalized.</p>
+  </div>
+</div>
+
+<div class="api" id="toMatrix">
+  <pre class="sig">glm::mat4 toMatrix() const;</pre>
+  <div class="body">
+    <p>The model matrix: scale first, then rotate, then translate (<code>T * R * S</code>). For a glTF sub-mesh the engine multiplies it with the sub-mesh's node matrix: <code>entity.toMatrix() * subMesh.transform</code>.</p>
+  </div>
+</div>
+
+<h2 id="meshes"><span class="n">4</span>Meshes</h2>
+
+<div class="split">
+  <div>
+    <h4>OBJ (<code>loadMesh</code>)</h4>
+    <p>One sub-mesh: every shape of the file is merged. No material: the entity's material is used. Positions, normals and the first UV set are read; the UV v is flipped so textures are not upside down. The <code>.mtl</code> file is ignored.</p>
+  </div>
+  <div>
+    <h4>glTF / GLB (<code>loadMesh</code>, <code>loadGLTF</code>)</h4>
+    <p>One sub-mesh per triangle primitive of each mesh node of the default scene, with the node's world matrix. Up to 3 UV sets and tangents are read; missing normals are computed. Each glTF material becomes a <code>Material</code> with its textures (see <a href="materials.html#gltf">materials.html</a>).</p>
+  </div>
+</div>
+
+<div class="api" id="loadMesh">
+  <pre class="sig">MeshHandle loadMesh(const std::string&amp; path);</pre>
+  <div class="body">
+    <p>Starts loading a <code>.obj</code>, <code>.gltf</code> or <code>.glb</code> file and returns its handle at once. A worker thread reads and decodes the file. A later <code>beginFrame</code> uploads it to the geometry pool, then <code>isLoaded</code> becomes true and the entities that use it are drawn.</p>
+    <dl>
+      <dt>path</dt><dd>Relative to <code>EngineConfig::assetRoot</code> (see <a href="engine.html#resolveAssetPath"><code>resolveAssetPath</code></a>), or absolute. UTF-8. The extension is checked in lower case only.</dd>
+    </dl>
+    <p><span class="tag async">loads in the background</span> Loading the same path again returns the same handle; the file is read once.</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Problem</th><th>When you see it</th><th>Result</th></tr>
+      <tr><td>Unknown extension</td><td>at the call</td><td>"Unsupported mesh format" logged, invalid handle</td></tr>
+      <tr><td>File does not exist</td><td>at the call</td><td>"Mesh file not found" logged, invalid handle</td></tr>
+      <tr><td>More than 7 meshes</td><td>at the call</td><td>warning, invalid handle (<code>MAX_MESHES</code> is 8, indices start at 1)</td></tr>
+      <tr><td>File does not parse</td><td>in a later <code>beginFrame</code></td><td>error logged, the handle stays valid but <code>isLoaded</code> is false; entities using it log a warning and are not drawn</td></tr>
+      <tr><td>Geometry pool full</td><td>in a later <code>beginFrame</code></td><td>error naming the <code>EngineConfig</code> field to raise; nothing of the mesh is uploaded</td></tr>
+    </table>
+    </div>
+    <p>After a parse failure, calling <code>loadMesh</code> with the same path tries again on the same handle.</p>
+  </div>
+</div>
+
+<div class="api" id="loadGLTF">
+  <pre class="sig">MeshHandle loadGLTF(const std::string&amp; path);</pre>
+  <div class="body">
+    <p>The same as <code>loadMesh</code>; the file extension picks the importer.</p>
+    <pre><code>rasm::MeshHandle room = engine.loadGLTF("models/gltf/coffee-room/scene.gltf");
+if (!room.isValid())
+    return 1;
+rasm::Transform transform{.scale = glm::vec3(2.0f)};
+rasm::EntityHandle entity = engine.createEntity("room", room, {}, transform); // {}: use the glTF materials</code></pre>
+  </div>
+</div>
+
+<div class="api" id="isLoaded-mesh">
+  <pre class="sig">bool isLoaded(MeshHandle mesh) const;</pre>
+  <div class="body">
+    <p>True when the mesh is uploaded and ready to draw. False while it loads, after it failed, and for an invalid handle. A mesh from <code>createMesh</code> is loaded at once. You do not need to wait for it before creating entities.</p>
+  </div>
+</div>
+
+<div class="api" id="createMesh">
+  <pre class="sig">MeshHandle createMesh(std::vector&lt;Vertex&gt; vertices, std::vector&lt;uint32_t&gt; indices);</pre>
+  <div class="body">
+    <p>Makes a mesh from your data and uploads it now (the copy reaches the GPU with the next frame). The mesh has one sub-mesh with no material, so its entities use their own material.</p>
+    <dl>
+      <dt>vertices</dt><dd>See <a href="#Vertex"><code>Vertex</code></a>. Set <code>tangent</code> to zero when you have none.</dd>
+      <dt>indices</dt><dd>A triangle list, 3 per triangle, counting from 0 in <code>vertices</code>. Front faces are counter-clockwise seen from outside. They are not checked against the vertex count.</dd>
+    </dl>
+    <p>Returns an invalid handle when <code>MAX_MESHES</code> is reached or the geometry pool is full (both logged). A mesh with no vertices or no indices is accepted but its entities skip it with a warning.</p>
+    <pre><code>// examples/03_instances: one quad per cube face, so each face has its own normal.
+std::vector&lt;rasm::Vertex&gt; vertices;
+std::vector&lt;uint32_t&gt; indices;
+// ... per face: 4 vertices like this, 6 indices
+vertices.push_back({.pos = corners[i] * 0.5f,
+                    .normal = n,
+                    .uv = {uvs[i], uvs[i], uvs[i]},
+                    .tangent = glm::vec4(0.0f)});
+// ...
+rasm::MeshHandle cube = engine.createMesh(std::move(vertices), std::move(indices));</code></pre>
+  </div>
+</div>
+
+<div class="api" id="getMeshByteSize">
+  <pre class="sig">MeshSize getMeshByteSize(const MeshHandle&amp; handle) const;</pre>
+  <div class="body">
+    <p>The bytes the mesh uses in the geometry pool: vertices × 64 and indices × 4, over all sub-meshes. While the mesh loads it returns zeros. Invalid handle: logs an error and returns zeros.</p>
+  </div>
+</div>
+
+<div class="api" id="MeshSize">
+  <pre class="sig">struct MeshSize
+{
+    uint64_t verticesByteSize;
+    uint64_t indicesByteSize;
+};</pre>
+  <div class="body"><p>The result of <code>getMeshByteSize</code>, in bytes.</p></div>
+</div>
+
+<h3 id="vertex-layout">The vertex</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 120" role="img" aria-label="A Vertex is 64 bytes: pos at 0, normal at 12, three UV sets at 24, 32 and 40, tangent at 48.">
+    <rect x="40"  y="30" width="120" height="44" class="mem"/><text x="100" y="50" class="mid mono">pos</text><text x="100" y="66" class="mid small">vec3</text>
+    <rect x="160" y="30" width="120" height="44" class="mem"/><text x="220" y="50" class="mid mono">normal</text><text x="220" y="66" class="mid small">vec3</text>
+    <rect x="280" y="30" width="80"  height="44" class="mem"/><text x="320" y="50" class="mid mono">uv[0]</text><text x="320" y="66" class="mid small">vec2</text>
+    <rect x="360" y="30" width="80"  height="44" class="mem"/><text x="400" y="50" class="mid mono">uv[1]</text><text x="400" y="66" class="mid small">vec2</text>
+    <rect x="440" y="30" width="80"  height="44" class="mem"/><text x="480" y="50" class="mid mono">uv[2]</text><text x="480" y="66" class="mid small">vec2</text>
+    <rect x="520" y="30" width="160" height="44" class="mem"/><text x="600" y="50" class="mid mono">tangent</text><text x="600" y="66" class="mid small">vec4, w = ±1 or 0</text>
+    <text x="40"  y="22" class="mid small">0</text><text x="160" y="22" class="mid small">12</text><text x="280" y="22" class="mid small">24</text>
+    <text x="360" y="22" class="mid small">32</text><text x="440" y="22" class="mid small">40</text><text x="520" y="22" class="mid small">48</text><text x="680" y="22" class="mid small">64</text>
+    <text x="40" y="98" class="small">byte offsets · 10 px per byte · the shader reads this exact layout from the geometry pool (VertexFull in core.slang)</text>
+  </svg>
+  <figcaption>64 bytes per vertex. This is why the default <code>geometryPoolVertices</code> of 2<sup>21</sup> vertices takes 128 MiB.</figcaption>
+</figure>
+
+<div class="api" id="Vertex">
+  <pre class="sig">struct Vertex
+{
+    glm::vec3 pos;
+    glm::vec3 normal;
+    glm::vec2 uv[MAX_VERTEX_UV_SETS];
+    glm::vec4 tangent;
+};</pre>
+  <div class="body">
+    <dl>
+      <dt>pos</dt><dd>Position in mesh space.</dd>
+      <dt>normal</dt><dd>Unit normal, used for lighting.</dd>
+      <dt>uv</dt><dd>Up to <code>MAX_VERTEX_UV_SETS</code> (3) texture coordinate sets. A material picks a set per texture. (0, 0) when unused.</dd>
+      <dt>tangent</dt><dd>glTF tangent: xyz is the tangent, w is the bitangent sign (±1). w = 0 means "no tangent": the shader builds one from the UVs for normal mapping.</dd>
+    </dl>
+  </div>
+</div>
+
+<h3 id="mesh-records">Mesh records in the public header</h3>
+<p>These types are in <code>rasm/mesh.h</code> because <code>Engine</code> stores them. No public function returns them; they are listed so you know what they are.</p>
+
+<div class="api" id="SubMesh">
+  <pre class="sig">struct SubMesh
+{
+    MeshGeometry   geometry;
+    glm::mat4      transform;
+    MaterialHandle material;
+};</pre>
+  <div class="body"><p>One drawable part of a mesh: its place in the geometry pool, its node matrix (identity for OBJ and <code>createMesh</code>), and its glTF material (invalid when it has none). Each sub-mesh of an entity is one draw and one instance row.</p></div>
+</div>
+
+<div class="api" id="Mesh">
+  <pre class="sig">struct Mesh
+{
+    MeshState            state = MeshState::LOADING;
+    std::vector&lt;SubMesh&gt; subMeshes;
+};</pre>
+  <div class="body"><p>A mesh: its load state and its sub-meshes.</p></div>
+</div>
+
+<div class="api" id="MeshState">
+  <pre class="sig">enum class MeshState { LOADING, READY, FAILED };</pre>
+  <div class="body"><p><code>READY</code> is what <code>isLoaded</code> checks. <code>FAILED</code> means the file did not parse or did not fit in the geometry pool.</p></div>
+</div>
+
+<div class="api" id="MeshGeometry">
+  <pre class="sig">struct MeshGeometry
+{
+    uint32_t  firstVertex   = 0;
+    uint32_t  vertexCount   = 0;
+    uint32_t  firstIndex    = 0;
+    uint32_t  indexCount    = 0;
+    uint32_t  geometryIndex = 0;
+    glm::vec3 boundsCenter  = glm::vec3(0.0f);
+    float     boundsRadius  = 0.0f;
+};</pre>
+  <div class="body"><p>Where a sub-mesh sits in the geometry pool, its row in the geometry table (<code>geometryIndex</code>), and its bounding sphere in mesh space, which frustum culling tests.</p></div>
+</div>
+
+<div class="api" id="ObjRaw">
+  <pre class="sig">struct ObjRaw
+{
+    std::vector&lt;Vertex&gt;   vertices;
+    std::vector&lt;uint32_t&gt; indices;
+};</pre>
+  <div class="body"><p>Decoded vertices and indices of one sub-mesh, before upload (also used for glTF).</p></div>
+</div>
+
+<div class="api" id="SubGLTFRaw">
+  <pre class="sig">struct SubGLTFRaw
+{
+    ObjRaw    objRaw;
+    glm::mat4 transform;
+    int       materialIndex;
+};</pre>
+  <div class="body"><p>One decoded sub-mesh with its node matrix and its glTF material index (−1 for none).</p></div>
+</div>
+
+<div class="api" id="GLTFRaw">
+  <pre class="sig">struct GLTFRaw
+{
+    std::vector&lt;SubGLTFRaw&gt;          subGltfRaws;
+    std::shared_ptr&lt;tinygltf::Model&gt; model;
+    bool                             loaded = false;
+};</pre>
+  <div class="body"><p>What the worker thread hands back for one file: the sub-meshes, the parsed glTF model (for its materials and images; empty for OBJ) and whether the file loaded. It is freed once the mesh is uploaded.</p></div>
+</div>
+
+<div class="api" id="GltfImportCache">
+  <pre class="sig">struct GltfImportCache
+{
+    std::unordered_map&lt;int, MaterialHandle&gt;      materials;
+    std::unordered_map&lt;uint64_t, TextureHandle&gt; imageTextures;
+};</pre>
+  <div class="body"><p>Used while one glTF file is imported, so primitives that share a material, and materials that share an image, create it only once.</p></div>
+</div>
+
+<h2 id="lights"><span class="n">5</span>Lights</h2>
+
+<div class="split">
+  <div>
+    <h4><code>LightType::DIRECTIONAL</code></h4>
+    <p>Like the sun: same strength everywhere. Uses <code>direction</code> (the way the light travels, from the light to the surface), <code>color</code> and <code>intensity</code>. <code>position</code> and <code>range</code> are ignored.</p>
+  </div>
+  <div>
+    <h4><code>LightType::POINT</code></h4>
+    <p>Like a bulb: light / distance². Uses <code>position</code>, <code>color</code>, <code>intensity</code> and <code>range</code>. With <code>range</code> &gt; 0 the light fades smoothly to zero at <code>range</code>; 0 means no limit. <code>direction</code> is ignored.</p>
+  </div>
+</div>
+<p>Lights shade <code>PBR</code> materials. <code>UNLIT</code> materials ignore them. There is also a small fixed ambient term, so unlit sides are not fully black.</p>
+
+<div class="api" id="createLight">
+  <pre class="sig">LightHandle createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f), float intensity = 1.0f, float range = 10.0f);</pre>
+  <div class="body">
+    <p>Creates a light. Add it to a scene with <code>addLightToScene</code>. A light cannot be changed after creation: there is no function to update or move it.</p>
+    <dl>
+      <dt>type</dt><dd><code>DIRECTIONAL</code> or <code>POINT</code>.</dd>
+      <dt>color</dt><dd>Linear RGB, multiplied by <code>intensity</code>.</dd>
+      <dt>position</dt><dd>World position (point lights).</dd>
+      <dt>direction</dt><dd>Direction the light travels (directional lights). Pass a unit vector.</dd>
+      <dt>intensity</dt><dd>Strength. Point lights fall off with distance², so they need larger values (the examples use 40).</dd>
+      <dt>range</dt><dd>Point lights: distance where the light reaches zero; 0 = no limit.</dd>
+    </dl>
+    <p>Returns an invalid handle and logs a warning when <code>MAX_LIGHTS</code> is reached: 7 lights can exist in total, because handle indices start at 1.</p>
+    <pre><code>rasm::LightHandle lamp = engine.createLight(rasm::LightType::POINT,
+                                            glm::vec3(1.0f, 0.85f, 0.65f), // color
+                                            glm::vec3(0.0f, 3.0f, -7.0f),  // position
+                                            glm::vec3(0.0f),               // direction (unused)
+                                            40.0f, 18.0f);                 // intensity, range
+engine.addLightToScene(scene, lamp);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="Light">
+  <pre class="sig">struct Light
+{
+    LightHandle handle;
+    LightType   type;
+    float       intensity = 1.0f;
+    float       range     = 10.0f;
+    glm::vec3   color     = glm::vec3(1.0f);
+    glm::vec3   position  = glm::vec3(1.0f);
+    glm::vec3   direction = glm::vec3(0.0f, -1.0f, 0.0f);
+};</pre>
+  <div class="body"><p>The record the engine keeps for each light. <code>drawScene</code> copies the scene's lights into the GPU's scene data on every call.</p></div>
+</div>
+
+<div class="api" id="LightType">
+  <pre class="sig">enum class LightType { DIRECTIONAL, POINT };</pre>
+  <div class="body"><p>The two light kinds. The order matches the shader's <code>LightType</code> in <code>shaders/lib/core.slang</code>.</p></div>
+</div>
+
+<h2 id="timing"><span class="n">6</span>When changes reach the GPU</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>You call</th><th>What the engine writes</th><th>Visible in</th></tr>
+  <tr><td><code>createEntity</code> + <code>addEntityToScene</code></td><td>instance rows, the scene's draw list</td><td>the frame of the next <code>beginFrame</code>, if mesh and textures are loaded</td></tr>
+  <tr><td><code>updateTransform</code></td><td>the entity's instance rows (one per sub-mesh)</td><td>the next frame</td></tr>
+  <tr><td><code>loadMesh</code></td><td>geometry pool, geometry table</td><td>a later frame, when the worker is done (up to 4 ms of uploads per frame)</td></tr>
+  <tr><td><code>createMesh</code></td><td>geometry pool, geometry table</td><td>the next frame</td></tr>
+  <tr><td><code>addLightToScene</code></td><td>nothing stored on the GPU; copied into the scene data</td><td>the next <code>drawScene</code></td></tr>
+  <tr><td><code>updateMaterial</code></td><td>one material table row</td><td>the next frame (see <a href="materials.html#updateMaterial">materials.html</a>)</td></tr>
+</table>
+</div>
+<p>The engine keeps one copy of each table per frame slot. A changed row is uploaded to each copy once, in that copy's own frame, so the GPU never reads a row while the CPU writes it. The guide <a href="../guides/gpu-scene.html">The GPU scene tables</a> explains the details.</p>
+
+<h2 id="limits"><span class="n">7</span>Limits</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Constant / setting</th><th>Value</th><th>Usable</th><th>What it limits</th></tr>
+  <tr><td><code>MAX_SCENES</code></td><td>16</td><td>15</td><td>scenes</td></tr>
+  <tr><td><code>MAX_ENTITIES</code></td><td>65,536</td><td>65,535</td><td>entities in total</td></tr>
+  <tr><td><code>MAX_ENTITIES_PER_SCENE</code></td><td>65,536</td><td>65,536</td><td>entity entries in one scene</td></tr>
+  <tr><td><code>MAX_MESHES</code></td><td>8</td><td>7</td><td>meshes in total (each glTF file is one mesh)</td></tr>
+  <tr><td><code>MAX_LIGHTS</code></td><td>8</td><td>7</td><td>lights in total</td></tr>
+  <tr><td><code>MAX_LIGHTS_PER_SCENE</code></td><td>8</td><td>8</td><td>light entries in one scene</td></tr>
+  <tr><td><code>MAX_CAMERAS_PER_SCENE</code></td><td>8</td><td>8</td><td>camera entries in one scene</td></tr>
+  <tr><td><code>MAX_SCENE_DRAWS_PER_FRAME</code></td><td>8</td><td>8</td><td><code>drawScene</code> calls per frame</td></tr>
+  <tr><td><code>MAX_VERTEX_UV_SETS</code></td><td>3</td><td>3</td><td>UV sets per vertex</td></tr>
+  <tr><td><code>EngineConfig::maxInstances</code></td><td>65,536</td><td>all</td><td>sub-meshes of all entities together</td></tr>
+  <tr><td><code>EngineConfig::geometryPoolVertices</code>, <code>geometryPoolIndices</code>, <code>geometryPoolSubMeshes</code></td><td>2<sup>21</sup> / 2<sup>23</sup> / 2<sup>14</sup></td><td>all</td><td>geometry of all meshes together</td></tr>
+</table>
+</div>
+<p>"Usable" is lower for limits that count handles, because handle indices start at 1. Every limit logs a message when it is reached. The full list is on <a href="types.html">Types, handles and limits</a>.</p>
+
+<div class="callout warn">
+  <strong>Known limits</strong>
+  <p>Nothing can be destroyed or removed from a scene, and pool space is never reused (<code>D4</code>). The fixed counts above are compile-time constants (<code>D15</code>). Lights have no update function, and only 7 can exist.</p>
+</div>
+
+</main>
+</div>
+</body>
+</html>
