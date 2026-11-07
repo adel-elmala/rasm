@@ -236,7 +236,7 @@ rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, text
 // 2,000 spawned cubes that use it change color every frame.
 auto values = engine.getMaterial(pulse);
 const auto albedo = static_cast&lt;uint32_t&gt;(rasm::PbrParam::ALBEDO);
-values.params[albedo]     = 0.5f + 0.5f * std::sin(t);
+values.params[albedo] = 0.5f + 0.5f * std::sin(t);
 values.params[albedo + 1] = 0.5f + 0.5f * std::sin(t + 2.1f);
 values.params[albedo + 2] = 0.5f + 0.5f * std::sin(t + 4.2f);
 engine.updateMaterial(pulse, values);</code></pre>

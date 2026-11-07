@@ -135,9 +135,9 @@ rasm::CameraHandle camera = engine.createCamera(
                            .perspective{.fovY = 45.0f,
                                         .aspect = 1920.0f / 1080.0f,
                                         .nearZ = 0.1f}},
-    rasm::Transform{glm::vec3(0.0f, 0.0f, -1.0f),        // position
-                    glm::quat(1.0f, 0.0f, 0.0f, 0.0f),   // rotation
-                    glm::vec3(1.0f)});                   // scale
+    rasm::Transform{glm::vec3(0.0f, 0.0f, -1.0f),      // position
+                    glm::quat(1.0f, 0.0f, 0.0f, 0.0f), // rotation
+                    glm::vec3(1.0f)});                 // scale
 engine.addCameraToScene(scene, camera);</code></pre>
 
 <div class="api" id="CameraProjection">
@@ -273,11 +273,11 @@ engine.addCameraToScene(scene, camera);</code></pre>
 const glm::vec3 orbitCenter(0.0f, 0.0f, -10.0f);
 const glm::vec3 position = engine.getCameraTransform(camera).position;
 engine.setCameraController(camera, rasm::CameraController{
-    .type = rasm::CameraController::Type::TRACK_BALL,
-    .trackBall = {.radius = glm::length(orbitCenter - position),
-                  .center = orbitCenter,
-                  .orbitSensitivity = 1.0f},
-    .easingSpeed = 6.0f});</code></pre>
+                                       .type = rasm::CameraController::Type::TRACK_BALL,
+                                       .trackBall = {.radius = glm::length(orbitCenter - position),
+                                                     .center = orbitCenter,
+                                                     .orbitSensitivity = 1.0f},
+                                       .easingSpeed = 6.0f});</code></pre>
 
 <div class="api" id="getCameraController">
   <pre class="sig">CameraController getCameraController(CameraHandle camera);</pre>

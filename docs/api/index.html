@@ -173,12 +173,12 @@ int main()
         .windowWidth = 1280,
         .windowHeight = 720,
         .enableValidation = true,
-        .assetRoot = "assets",              // relative paths start beside the executable
+        .assetRoot = "assets", // relative paths start beside the executable
     };
 
     rasm::Engine engine(config);
     if (!engine.running())
-        return 1;                           // the reason is in the log
+        return 1; // the reason is in the log
 
     rasm::SceneHandle scene = engine.createScene();
 
@@ -186,11 +186,11 @@ int main()
     rasm::MeshHandle mesh = engine.loadMesh("models/obj/bunny/bunny.obj");
     rasm::TextureHandle albedo = engine.loadTexture("models/obj/bunny/bunny-atlas.jpg");
     if (!mesh.isValid() || !albedo.isValid())
-        return 1;                           // unknown format or missing file
+        return 1; // unknown format or missing file
 
     rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::PBR, {albedo});
     rasm::EntityHandle bunny = engine.createEntity("bunny", mesh, material,
-        rasm::Transform{.position = glm::vec3(0.0f, 0.0f, -10.0f), .scale = glm::vec3(0.005f)});
+                                                   rasm::Transform{.position = glm::vec3(0.0f, 0.0f, -10.0f), .scale = glm::vec3(0.005f)});
 
     rasm::CameraHandle camera = engine.createCamera(
         rasm::CameraProjection{.type = rasm::CameraProjection::Type::PERSPECTIVE,
@@ -206,7 +206,7 @@ int main()
     engine.addLightToScene(scene, sun);
 
     while (engine.running())
-        engine.render(scene, camera);       // the bunny appears once its files are loaded
+        engine.render(scene, camera); // the bunny appears once its files are loaded
     return 0;
 }</code></pre>
 
@@ -287,7 +287,7 @@ int main()
 while (engine.running())
 {
     if (!engine.beginFrame(camera))
-        continue;                           // skipped: record nothing, no endFrame
+        continue; // skipped: record nothing, no endFrame
     engine.beginPass("Main");
     engine.drawScene(scene, camera);
     // engine.getRenderContext() records more draws into

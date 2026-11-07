@@ -136,12 +136,12 @@
 
 <pre><code>graph.addPass(
     "Forward",
-    [&amp;](rasm::PassBuilder &amp;builder)            // setup: once
+    [&amp;](rasm::PassBuilder &amp;builder) // setup: once
     {
-        rtHandle = builder.createRenderTarget({ ... });
+        rtHandle = builder.createRenderTarget({...});
         builder.write(rtHandle);
     },
-    [&amp;](rasm::RenderContext &amp;)                 // execute: every frame
+    [&amp;](rasm::RenderContext &amp;) // execute: every frame
     {
         engine.drawScene(scene, camera);
     });</code></pre>
@@ -460,7 +460,7 @@ ctx.bindDescriptorSet(commandBuffer, overlayPipeline,
 ctx.pushConstants(commandBuffer, overlayPipeline,
                   rasm::ShaderType::VERTEX_FRAGMENT,
                   &amp;textureIndex, sizeof(textureIndex), 0);
-ctx.draw(commandBuffer, 3);   // one triangle covers the screen</code></pre>
+ctx.draw(commandBuffer, 3); // one triangle covers the screen</code></pre>
 
 <p>The shader reads it with <code>gTextures[pc.textureIndex].Sample(input.UV)</code>. Only fragment shaders can sample: the bindless set is created for the <code>FRAGMENT</code> stage.</p>
 

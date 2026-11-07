@@ -172,3 +172,152 @@ const SECTIONS = [
         show(0);
     });
 })();
+
+// ---------------------------------------------------------------- syntax highlighting
+// A small offline highlighter: C++ and Slang (default), CMake and shell. A block picks its language with
+// <code class="lang-cpp | lang-slang | lang-cmake | lang-shell | lang-text">; without a class, CMake and shell
+// are recognized and everything else is C++. lang-text is left as is (logs, math).
+
+const C_KEYWORDS = new Set((
+    "alignas alignof auto break case catch class const constexpr const_cast continue decltype default delete do " +
+    "dynamic_cast else enum explicit extern false for friend goto if inline mutable namespace new noexcept nullptr " +
+    "operator override private protected public reinterpret_cast return sizeof static static_assert static_cast " +
+    "struct switch template this throw true try typedef typename union using virtual volatile while " +
+    "in out inout uniform groupshared import module let var func").split(" "));
+
+const C_TYPES = new Set((
+    "void bool char short int long float double unsigned signed size_t int8_t int16_t int32_t int64_t uint8_t " +
+    "uint16_t uint32_t uint64_t uintptr_t uint uint2 uint3 uint4 int2 int3 int4 float2 float3 float4 float3x3 " +
+    "float4x4 half vec2 vec3 vec4 ivec2 ivec3 uvec2 mat3 mat4 quat string vector function unique_ptr shared_ptr " +
+    "array unordered_map optional pair").split(" "));
+
+function escapeHtml(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function token(kind, text) {
+    return kind ? `<span class="tok-${kind}">${escapeHtml(text)}</span>` : escapeHtml(text);
+}
+
+function languageOf(el) {
+    const m = (el.className || "").match(/\blang-(\w+)/);
+    if (m) return m[1] === "slang" ? "cpp" : m[1];
+    if (el.classList.contains("sig")) return "cpp";
+    const text = el.textContent;
+    if (/^\s*(cmake_minimum_required|find_package|target_link_libraries|add_executable|add_subdirectory)\s*\(/m.test(text)) return "cmake";
+    if (/^\s*(cmake|ctest|git|python|pip|vcpkg|\.\\|\.\/)\s/m.test(text) && !/;\s*$/m.test(text)) return "shell";
+    return "cpp";
+}
+
+function highlight(text, lang) {
+    if (lang === "cmake") return highlightCMake(text);
+    if (lang === "shell") return highlightShell(text);
+    return highlightC(text);
+}
+
+function highlightC(src) {
+    const rules = [
+        ["com",  /\/\/[^\n]*|\/\*[\s\S]*?\*\//y],
+        ["attr", /\[\[[^\]\n]*\]\]/y],
+        ["str",  /"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])'/y],
+        ["num",  /(?:0[xX][0-9a-fA-F]+|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)[uUlLfF]*/y],
+        ["id",   /[A-Za-z_]\w*/y],
+        ["ws",   /\s+/y],
+    ];
+    let out = "";
+    let i = 0;
+    let lineStart = true;
+    let previous = "";
+    while (i < src.length) {
+        // a preprocessor line: #include "x" keeps its string colored
+        if (lineStart && src[i] === "#") {
+            const m = /#[ \t]*\w+/y;
+            m.lastIndex = i;
+            const hit = m.exec(src);
+            if (hit) {
+                out += token("pre", hit[0]);
+                i += hit[0].length;
+                lineStart = false;
+                continue;
+            }
+        }
+        let matched = false;
+        for (const [kind, re] of rules) {
+            re.lastIndex = i;
+            const hit = re.exec(src);
+            if (!hit || hit[0].length === 0) continue;
+            const text = hit[0];
+            if (kind === "ws") {
+                out += escapeHtml(text);
+                if (text.indexOf("\n") >= 0) lineStart = true;
+            } else if (kind === "id") {
+                out += token(classifyIdentifier(text, src, i + text.length, previous), text);
+                previous = text;
+                lineStart = false;
+            } else {
+                out += token(kind, text);
+                previous = text;
+                lineStart = false;
+            }
+            i += text.length;
+            matched = true;
+            break;
+        }
+        if (!matched) {
+            previous = src[i];
+            out += escapeHtml(src[i]);
+            lineStart = false;
+            i += 1;
+        }
+    }
+    return out;
+}
+
+function classifyIdentifier(name, src, end, previous) {
+    if (C_KEYWORDS.has(name)) return "kw";
+    if (C_TYPES.has(name)) return "type";
+    const after = src.slice(end, end + 2);
+    const nextChar = (src.slice(end).match(/^\s*(.)/) || [])[1];
+    if (after === "::") return /^[A-Z]/.test(name) ? "type" : "ns";
+    if (/^[A-Z][A-Z0-9_]+$/.test(name)) return "const";
+    if (nextChar === "(" && !/^[A-Z]/.test(name)) return "fn";
+    if (/^[A-Z]/.test(name)) return "type";
+    return "";
+}
+
+function highlightCMake(src) {
+    return src.split("\n").map(function (line) {
+        return line.replace(/(#.*$)|("(?:\\.|[^"\\])*")|(\$\{[^}]*\})|(\b[A-Za-z_]\w*)(?=\s*\()|(\b[A-Z][A-Z0-9_]{2,}\b)|([^#"$A-Za-z_]+|[\s\S])/g,
+            function (all, com, str, variable, command, keyword) {
+                if (com) return token("com", com);
+                if (str) return token("str", str);
+                if (variable) return token("const", variable);
+                if (command) return token("fn", command);
+                if (keyword) return token("kw", keyword);
+                return escapeHtml(all);
+            });
+    }).join("\n");
+}
+
+function highlightShell(src) {
+    return src.split("\n").map(function (line) {
+        let first = true;
+        return line.replace(/(\s*#.*$)|("(?:\\.|[^"\\])*"|'[^']*')|(\s--?[A-Za-z][\w-]*)|(\S+)|(\s+)/g,
+            function (all, com, str, flag, word) {
+                if (com) return token("com", com);
+                if (str) { first = false; return token("str", str); }
+                if (flag) return token("kw", flag);
+                if (word) {
+                    const kind = first ? "fn" : "";
+                    first = false;
+                    return token(kind, word);
+                }
+                return escapeHtml(all);
+            });
+    }).join("\n");
+}
+
+document.querySelectorAll("pre.sig, pre > code").forEach(function (el) {
+    const lang = languageOf(el);
+    if (lang !== "text") el.innerHTML = highlight(el.textContent, lang);
+});

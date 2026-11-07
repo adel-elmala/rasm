@@ -48,6 +48,12 @@ Read the diff of each changed source (`git diff <stamp> <target> -- <file>`) and
   code only, no history. Known issues by ID from `docs/code_review.md`.
 - Only classes from `docs/assets/style.css`; no inline styles, no `<style>`/`<script>` inside SVGs, no libraries.
   Colors keep their meaning: `cpu` blue, `gpu` green, `mem` amber (buffers), `shader` purple.
+- Code blocks are `<pre><code>` (signatures `<pre class="sig">`), plain escaped text with no markup inside;
+  `site.js` highlights them. Format code like RASM code: snippets like the examples' `.cpp` code, i.e. unchanged
+  by `clang-format` with the repo's `.clang-format` (`check` runs it: Allman braces, `&`/`*` on the name, and
+  `addPass(` with the name and each lambda on their own lines as in `examples/01_render_graph`); signatures like
+  the headers they are copied from (`&`/`*` on the type). C++/Slang is the default and CMake/shell are detected; mark output, logs or
+  math with `<code class="lang-text">` (or force a language with `lang-cmake`, `lang-shell`, `lang-slang`).
 - Every identifier in `<code>` must exist in the code; never invent names or numbers. Example values that are not
   repo names (an asset path in a snippet, a user's file name) go in `<samp>`, which `check` does not test.
 

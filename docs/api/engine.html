@@ -355,7 +355,7 @@ ctx.draw(commandBuffer, 3);</code></pre>
     <p><span class="tag main-thread">blocks the main thread</span> Use it before the main loop to avoid objects popping in, or in tests. Do not call it every frame.</p>
     <pre><code>auto mesh = engine.loadGLTF("models/gltf/coffee-room/scene.gltf");
 engine.waitForLoads();
-bool ok = engine.isLoaded(mesh);    // false if the file failed to parse</code></pre>
+bool ok = engine.isLoaded(mesh); // false if the file failed to parse</code></pre>
   </div>
 </div>
 
@@ -384,7 +384,7 @@ bool ok = engine.isLoaded(mesh);    // false if the file failed to parse</code><
   <pre class="sig">const FrameStats&amp; getFrameStats() const;</pre>
   <div class="body">
     <p>The latest measured frame. The first call turns measuring on for every later frame, so the values fill in a few frames later. The reference stays valid; read it every frame.</p>
-    <pre><code>const rasm::FrameStats&amp; stats = engine.getFrameStats();
+    <pre><code>const rasm::FrameStats &amp;stats = engine.getFrameStats();
 for (uint32_t i = 0; i &lt; stats.gpuTimerCount; ++i)
     std::printf("%s: %.2f ms\n", stats.gpuTimers[i].name.c_str(), stats.gpuTimers[i].milliseconds);</code></pre>
   </div>
@@ -496,7 +496,7 @@ engine.endGpuTimer(commandBuffer, timer);</code></pre>
   <pre class="sig">const Window&amp; getMainWindow() const;</pre>
   <div class="body">
     <p>The window the engine renders to, with its current sizes and state (<code>minimized</code>, <code>resized</code>, mouse drag). It updates in <code>beginFrame</code>. Use the pixel size for viewports, like <code>examples/01_render_graph/main.cpp</code> does. Fields are in <a href="types.html#Window">types.html</a>.</p>
-    <pre><code>const auto&amp; window = engine.getMainWindow();
+    <pre><code>const auto &amp;window = engine.getMainWindow();
 const float width = static_cast&lt;float&gt;(window.pixelWidth);
 const float height = static_cast&lt;float&gt;(window.pixelHeight);
 const float aspect = width / height;</code></pre>
@@ -525,10 +525,9 @@ const float aspect = width / height;</code></pre>
   <pre class="sig">BufferHandle createBuffer(const BufferDesc&amp; desc);</pre>
   <div class="body">
     <p>Creates a new GPU buffer, every call (two equal descriptors give two buffers). Returns an invalid handle and logs an error on failure. It is device-local unless <code>hostVisible</code> is set. <a href="low-level.html#destroyBuffer"><code>RenderContext::destroyBuffer</code></a> frees it.</p>
-    <pre><code>rasm::BufferHandle particles = engine.createBuffer({
-    .name = "Particle Positions",
-    .usage = rasm::BufferUsage::STORAGE,
-    .size = PARTICLE_COUNT * 2 * sizeof(float)});
+    <pre><code>rasm::BufferHandle particles = engine.createBuffer({.name = "Particle Positions",
+                                                    .usage = rasm::BufferUsage::STORAGE,
+                                                    .size = PARTICLE_COUNT * 2 * sizeof(float)});
 const uint64_t address = engine.getRenderContext().getBufferDeviceAddress(particles);</code></pre>
     <p>From <code>examples/04_compute/main.cpp</code>: a shader reads and writes the buffer through its device address.</p>
   </div>

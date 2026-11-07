@@ -250,7 +250,7 @@
 <p>Why the walk? <code>ProgramLayout::getTypeLayout</code> has no layout rule for data behind a pointer, so it reports std140/std430 padding. Only the path through <code>pc</code> reports the scalar layout that the shader really reads.</p>
 
 <p>A missed side fails at start-up with exact numbers (debug build):</p>
-<pre><code>[error] Size mismatch for SceneData: C++ 552, shader 560
+<pre><code class="lang-text">[error] Size mismatch for SceneData: C++ 552, shader 560
 [error] Offset mismatch for SceneData.lights: C++ 144, shader 148
 [error] Offset mismatch for SceneData.vertsPtr: C++ 528, shader 536
 Assertion failed: validateRasmStructs(...)</code></pre>

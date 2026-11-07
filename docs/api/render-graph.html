@@ -419,7 +419,7 @@ if (engine.beginFrame(camera))
     engine.endPass();
     engine.resetRenderTarget();
 
-    engine.beginPass("Present");     // swapchain; sample rt here
+    engine.beginPass("Present"); // swapchain; sample rt here
     // ... bind a pipeline and draw
     engine.endPass();
     engine.endFrame();
@@ -493,18 +493,25 @@ if (engine.beginFrame(camera))
 rasm::RenderGraph graph = engine.createRenderGraph();
 rasm::RenderTargetHandle rtHandle{};
 
-graph.addPass("Forward",
-    [&amp;](rasm::PassBuilder&amp; builder)
+graph.addPass(
+    "Forward",
+    [&amp;](rasm::PassBuilder &amp;builder)
     {
         rtHandle = builder.createRenderTarget({
             .name = "offscreen_rt",
-            .width = 1920, .height = 1080,
+            .width = 1920,
+            .height = 1080,
             .colorFormat = engine.getRenderContext().getSwapchainImageFormat(),
             .depthFormat = rasm::Format::D32_SFLOAT,
-            .clearColor = glm::vec4(0.0f)});
+            .clearColor = glm::vec4(0.0f),
+        });
         builder.write(rtHandle);
     },
-    [&amp;](rasm::RenderContext&amp;) { engine.drawScene(scene, camera); });
+
+    [&amp;](rasm::RenderContext &amp;)
+    {
+        engine.drawScene(scene, camera);
+    });
 
 auto overlayPipeline = engine.createPipeline("overlay", R"(
     struct PushConstants { uint textureIndex; };
@@ -531,10 +538,14 @@ auto overlayPipeline = engine.createPipeline("overlay", R"(
     }
 )");
 
-graph.addPass("overlay",
-    // read(rtHandle): this pass runs after "Forward"
-    [&amp;](rasm::PassBuilder&amp; builder) { builder.read(rtHandle); },
-    [&amp;](rasm::RenderContext&amp; ctx)
+graph.addPass(
+    "overlay",
+    [&amp;](rasm::PassBuilder &amp;builder)
+    {
+        builder.read(rtHandle); // this pass runs after "Forward"
+    },
+
+    [&amp;](rasm::RenderContext &amp;ctx)
     {
         auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
         // this frame's slot of the render target
@@ -557,22 +568,25 @@ while (engine.running())
 <h3>Compute then draw (<code>examples/04_compute</code>)</h3>
 
 <pre><code>// Shortened from examples/04_compute/main.cpp
-rasm::BufferHandle particles = engine.createBuffer({
-    .name = "Particle Positions",
-    .usage = rasm::BufferUsage::STORAGE,
-    .size = PARTICLE_COUNT * 2 * sizeof(float)});
-const uint64_t particlesAddress =
-    engine.getRenderContext().getBufferDeviceAddress(particles);
+rasm::BufferHandle particles = engine.createBuffer({.name = "Particle Positions",
+                                                    .usage = rasm::BufferUsage::STORAGE,
+                                                    .size = PARTICLE_COUNT * 2 * sizeof(float)});
+const uint64_t particlesAddress = engine.getRenderContext().getBufferDeviceAddress(particles);
 
-graph.addComputePass("Animate",
-    [&amp;](rasm::PassBuilder&amp; builder) { builder.write(particles); },
-    [&amp;](rasm::RenderContext&amp; ctx)
+graph.addComputePass(
+    "Animate",
+    [&amp;](rasm::PassBuilder &amp;builder)
+    {
+        builder.write(particles);
+    },
+
+    [&amp;](rasm::RenderContext &amp;ctx)
     {
         auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
         const AnimatePushConstants pushConstants = {
-            .positions = particlesAddress,   // 8 bytes
-            .count = PARTICLE_COUNT,         // 4 bytes
-            .time = frame * FRAME_TIME};     // 4 bytes: 16 in all
+            .positions = particlesAddress, // 8 bytes
+            .count = PARTICLE_COUNT,       // 4 bytes
+            .time = frame * FRAME_TIME};   // 4 bytes: 16 in all
         ctx.bindPipeline(commandBuffer, animatePipeline);
         ctx.pushConstants(commandBuffer, animatePipeline,
                           rasm::ShaderType::COMPUTE,
@@ -581,10 +595,14 @@ graph.addComputePass("Animate",
         ctx.dispatch(commandBuffer, groups);
     });
 
-graph.addPass("Draw",
-    // read(particles): this pass runs after "Animate"
-    [&amp;](rasm::PassBuilder&amp; builder) { builder.read(particles); },
-    [&amp;](rasm::RenderContext&amp; ctx)
+graph.addPass(
+    "Draw",
+    [&amp;](rasm::PassBuilder &amp;builder)
+    {
+        builder.read(particles); // this pass runs after "Animate"
+    },
+
+    [&amp;](rasm::RenderContext &amp;ctx)
     {
         auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
         // ... push the address, then three vertices per particle

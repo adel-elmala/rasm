@@ -308,7 +308,7 @@ engine.updateTransform(bunny, transform);</code></pre>
 if (!room.isValid())
     return 1;
 rasm::Transform transform{.scale = glm::vec3(2.0f)};
-rasm::EntityHandle entity = engine.createEntity("room", room, {}, transform);   // {}: use the glTF materials</code></pre>
+rasm::EntityHandle entity = engine.createEntity("room", room, {}, transform); // {}: use the glTF materials</code></pre>
   </div>
 </div>
 
@@ -331,12 +331,12 @@ rasm::EntityHandle entity = engine.createEntity("room", room, {}, transform);   
     <pre><code>// examples/03_instances: one quad per cube face, so each face has its own normal.
 std::vector&lt;rasm::Vertex&gt; vertices;
 std::vector&lt;uint32_t&gt; indices;
-...                                     // per face: 4 vertices like this, 6 indices
+// ... per face: 4 vertices like this, 6 indices
 vertices.push_back({.pos = corners[i] * 0.5f,
                     .normal = n,
                     .uv = {uvs[i], uvs[i], uvs[i]},
                     .tangent = glm::vec4(0.0f)});
-...
+// ...
 rasm::MeshHandle cube = engine.createMesh(std::move(vertices), std::move(indices));</code></pre>
   </div>
 </div>
@@ -499,10 +499,10 @@ rasm::MeshHandle cube = engine.createMesh(std::move(vertices), std::move(indices
     </dl>
     <p>Returns an invalid handle and logs a warning when <code>MAX_LIGHTS</code> is reached: 7 lights can exist in total, because handle indices start at 1.</p>
     <pre><code>rasm::LightHandle lamp = engine.createLight(rasm::LightType::POINT,
-                                            glm::vec3(1.0f, 0.85f, 0.65f),   // color
-                                            glm::vec3(0.0f, 3.0f, -7.0f),    // position
-                                            glm::vec3(0.0f),                 // direction (unused)
-                                            40.0f, 18.0f);                   // intensity, range
+                                            glm::vec3(1.0f, 0.85f, 0.65f), // color
+                                            glm::vec3(0.0f, 3.0f, -7.0f),  // position
+                                            glm::vec3(0.0f),               // direction (unused)
+                                            40.0f, 18.0f);                 // intensity, range
 engine.addLightToScene(scene, lamp);</code></pre>
   </div>
 </div>

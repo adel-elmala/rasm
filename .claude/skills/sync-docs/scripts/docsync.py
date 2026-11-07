@@ -255,6 +255,42 @@ def check_links(path, name, page, parsed, problems):
             problems.append(f"{name}:{line}: link `{href}`: no id `{anchor}`")
 
 
+SNIPPET = re.compile(r'<pre><code(?P<attr>[^>]*)>(?P<body>.*?)</code></pre>', re.S)
+
+
+def snippet_language(attr, text):
+    """The same choice docs/assets/site.js makes for highlighting."""
+    m = re.search(r"lang-(\w+)", attr)
+    if m:
+        return m.group(1)
+    if re.search(r"^\s*(cmake_minimum_required|find_package|target_link_libraries|add_executable|add_subdirectory)\s*\(", text, re.M):
+        return "cmake"
+    if re.search(r"^\s*(cmake|ctest|git|python|pip|vcpkg|\.\\|\./)\s", text, re.M) and not re.search(r";\s*$", text, re.M):
+        return "shell"
+    return "cpp"
+
+
+def check_snippet_format(path, name, problems):
+    """C++ snippets must look like RASM .cpp code: unchanged by clang-format with the repo's .clang-format."""
+    with open(path, encoding="utf-8") as f:
+        src = f.read()
+    for m in SNIPPET.finditer(src):
+        text = html.unescape(m.group("body"))
+        if snippet_language(m.group("attr"), text) not in ("cpp", "slang"):
+            continue
+        try:
+            result = subprocess.run(["clang-format", "--style=file", "--assume-filename=" + os.path.join(REPO, "snippet.cpp")],
+                                    input=text, capture_output=True, text=True, encoding="utf-8", cwd=REPO)
+        except FileNotFoundError:
+            problems.append("clang-format not found: snippet formatting was not checked")
+            return False
+        if result.returncode == 0 and result.stdout.rstrip("\n") != text.rstrip("\n"):
+            line = src.count("\n", 0, m.start()) + 1
+            first = text.strip().splitlines()[0][:60] if text.strip() else ""
+            problems.append(f"{name}:{line}: code snippet is not clang-formatted (`{first}`)")
+    return True
+
+
 def public_api_names():
     """Public function, type and constant names declared in the public headers. Protected and private
     sections (up to the class's closing brace at namespace indentation) and forward declarations are skipped."""
@@ -280,6 +316,7 @@ def cmd_check(args):
     paths = pages()
     parsed = {rel(p): parse(p) for p in paths}
     problems = []
+    formatter = True
 
     with open(SITE_JS, encoding="utf-8") as f:
         listed = set(re.findall(r'path:\s*"([^"]+)"', f.read()))
@@ -296,6 +333,8 @@ def cmd_check(args):
                 problems.append(f"{name}: rasm-sources `{s}` does not exist")
         check_code_names(name, page, words, files, problems)
         check_links(p, name, page, parsed, problems)
+        if formatter:
+            formatter = check_snippet_format(p, name, problems)
     for short in sorted(listed):
         if short.endswith(".html") and not os.path.isfile(os.path.join(DOCS, short)):
             problems.append(f"docs/assets/site.js: lists `{short}`, which does not exist")
