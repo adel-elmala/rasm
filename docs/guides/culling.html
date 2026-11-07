@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU Frustum Culling · RASM</title>
+<meta name="description" content="How RASM removes draws outside the camera view with two compute dispatches, and keeps the draw order stable.">
+<meta name="rasm-sources" content="shaders/passes/cull.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/engine.cpp shaders/lib/core.slang">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/culling.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Rendering</p>
+<h1>GPU frustum culling</h1>
+<p class="lead">Before the scene is drawn, a compute shader tests every draw against the camera view. Draws that are fully outside are removed. The CPU never sees which draws survive. The GPU writes the list and the count, and the draw call reads them.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU work</span>
+  <span><i class="gpu"></i>GPU work</span>
+  <span><i class="mem"></i>GPU buffer</span>
+  <span><i class="shader"></i>shader entry point</span>
+</div>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Input: the scene's <b>draw list</b> (one <code>DrawInfo</code> per sub-mesh of each entity). Output: the <b>visible draws</b>, packed, and one <b>count</b> per run.</li>
+    <li>Two dispatches per <code>drawScene</code> call: <code>countMain</code> tests and counts, <code>writeMain</code> copies the visible draws to their final place.</li>
+    <li>Test: a bounding sphere that is fully behind one of the 6 frustum planes is culled.</li>
+    <li>The visible draws keep the draw list's order, every frame. No count needs to be cleared.</li>
+    <li>The culling is recorded <i>after</i> the frame, in its own command buffer, but it runs <i>before</i> the frame on the GPU.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>Where culling sits in a frame</h2>
+
+<p><code>drawScene</code> records its draws inside a render pass. Vulkan does not allow dispatches inside a render pass. So the dispatches go into a second command buffer, the <b>cull command buffer</b>. It is recorded last, in <code>endFrame</code>, but it is submitted first.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="The CPU records the frame command buffer first and the cull command buffer second. The GPU runs the cull command buffer first, then a barrier, then the frame.">
+    <text x="20" y="54" class="title t-cpu">CPU</text>
+    <text x="20" y="70" class="small">records</text>
+    <rect x="120" y="25" width="300" height="56" rx="6" class="cpu"/>
+    <text x="270" y="48" class="mid title">Frame command buffer</text>
+    <text x="270" y="68" class="mid small">beginPass · drawScene (indirect draws) · endPass</text>
+    <rect x="440" y="25" width="300" height="56" rx="6" class="cpu"/>
+    <text x="590" y="48" class="mid title">Cull command buffer</text>
+    <text x="590" y="68" class="mid small">countMain · barrier · writeMain · barrier</text>
+    <line x1="120" y1="12" x2="740" y2="12" class="arrow" marker-end="url(#ah)"/>
+    <text x="20" y="16" class="small">time →</text>
+
+    <line x1="590" y1="81" x2="270" y2="160" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="270" y1="81" x2="590" y2="160" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="120" y="126" class="small">one submit: {cull, frame}</text>
+
+    <text x="20" y="194" class="title t-gpu">GPU</text>
+    <text x="20" y="210" class="small">runs</text>
+    <rect x="120" y="165" width="290" height="56" rx="6" class="gpu"/>
+    <text x="265" y="188" class="mid title">Culling</text>
+    <text x="265" y="208" class="mid small">writes visible draws + counts</text>
+    <line x1="425" y1="160" x2="425" y2="226" class="hot"/>
+    <text x="425" y="242" class="mid small t-hot">COMPUTE → GRAPHICS | HOST barrier</text>
+    <rect x="440" y="165" width="300" height="56" rx="6" class="gpu"/>
+    <text x="590" y="188" class="mid title">Frame</text>
+    <text x="590" y="208" class="mid small">draws read those draws + counts</text>
+  </svg>
+  <figcaption>Recording order and GPU order are opposite. The last barrier of the cull command buffer makes its writes visible to the indirect draws, and to the CPU for the frame stats.</figcaption>
+</figure>
+
+<p>This works because <code>drawScene</code> does not need the results while recording. It only records <i>"draw from this buffer, with the count in that buffer"</i>. The buffers are filled later on the GPU, before the draws run.</p>
+
+<h2><span class="n">2</span>The data flow</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 280" role="img" aria-label="countMain reads the draw list, instances, geometry bounds and frustum planes, and writes per-draw slots and per-group counts. writeMain reads those and copies the visible draws to the packed list and writes the counts, which the indirect draw reads.">
+    <rect x="15"  y="15" width="150" height="46" rx="6" class="mem"/>
+    <text x="90"  y="35" class="mid">SceneData</text>
+    <text x="90"  y="52" class="mid mono small">frustumPlanes[6]</text>
+    <rect x="180" y="15" width="150" height="46" rx="6" class="mem"/>
+    <text x="255" y="35" class="mid">Instance table</text>
+    <text x="255" y="52" class="mid mono small">worldMatrix</text>
+    <rect x="345" y="15" width="150" height="46" rx="6" class="mem"/>
+    <text x="420" y="35" class="mid">Geometry table</text>
+    <text x="420" y="52" class="mid mono small">boundsCenter/Radius</text>
+    <path d="M90,61 L210,108"  class="arrow" marker-end="url(#ah)"/>
+    <path d="M255,61 L240,108" class="arrow" marker-end="url(#ah)"/>
+    <path d="M420,61 L270,108" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="10"  y="115" width="140" height="56" rx="6" class="mem"/>
+    <text x="80"  y="138" class="mid">Draw list</text>
+    <text x="80"  y="157" class="mid mono small">allDrawsPtr</text>
+    <line x1="150" y1="143" x2="183" y2="143" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="185" y="115" width="110" height="56" rx="28" class="shader"/>
+    <text x="240" y="138" class="mid title">countMain</text>
+    <text x="240" y="157" class="mid small">test + count</text>
+    <line x1="295" y1="143" x2="323" y2="143" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="325" y="115" width="140" height="56" rx="6" class="mem"/>
+    <text x="395" y="133" class="mid">Slots + counts</text>
+    <text x="395" y="150" class="mid mono small">cullSlotsPtr</text>
+    <text x="395" y="164" class="mid mono small">groupCountsPtr</text>
+    <line x1="465" y1="143" x2="483" y2="143" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="485" y="115" width="110" height="56" rx="28" class="shader"/>
+    <text x="540" y="138" class="mid title">writeMain</text>
+    <text x="540" y="157" class="mid small">pack</text>
+    <line x1="595" y1="143" x2="613" y2="143" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="615" y="115" width="135" height="56" rx="6" class="mem"/>
+    <text x="682" y="133" class="mid">Visible draws</text>
+    <text x="682" y="150" class="mid mono small">drawInfoPtr</text>
+    <text x="682" y="164" class="mid mono small">drawCountsPtr</text>
+
+    <line x1="682" y1="171" x2="682" y2="203" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="600" y="205" width="150" height="44" rx="6" class="gpu"/>
+    <text x="675" y="224" class="mid">indirect draws</text>
+    <text x="675" y="240" class="mid mono small">…IndirectCount</text>
+
+    <line x1="240" y1="171" x2="240" y2="203" class="arrow" marker-end="url(#ah)"/>
+    <rect x="170" y="205" width="140" height="40" rx="6" class="mem"/>
+    <text x="240" y="223" class="mid">Cull stats</text>
+    <text x="240" y="238" class="mid mono small">cullStatsPtr</text>
+
+    <path d="M80,171 V266 H540 V173" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="400" y="260" class="mid small">writeMain copies the DrawInfo rows from the draw list</text>
+  </svg>
+  <figcaption>Every arrow is a buffer read or write through a device address in <code>SceneData</code>. Nothing goes back to the CPU, except the cull stats for the <a href="stats-overlay.html">stats overlay</a>.</figcaption>
+</figure>
+
+<p>All these buffers are found through <code>SceneData</code>, which the push constant points to. Each <code>drawScene</code> call has its own <code>SceneData</code>, its own visible-draw buffer and its own counts. That is why two passes can draw the same scene with two cameras in one frame.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Pointer in <code>SceneData</code></th><th>Holds</th><th>Written by</th></tr>
+  <tr><td><code>allDrawsPtr</code></td><td>the scene's whole draw list</td><td>CPU (<code>uploadDrawList</code>)</td></tr>
+  <tr><td><code>cullSlotsPtr</code></td><td>one <code>uint</code> per draw: its place in its group, or <code>CULLED</code></td><td><code>countMain</code></td></tr>
+  <tr><td><code>groupCountsPtr</code></td><td>one <code>uint</code> per group of 64: how many are visible</td><td><code>countMain</code></td></tr>
+  <tr><td><code>drawInfoPtr</code></td><td>the visible draws, packed per run</td><td><code>writeMain</code></td></tr>
+  <tr><td><code>drawCountsPtr</code></td><td>one count per run</td><td><code>writeMain</code> (the run's last group)</td></tr>
+  <tr><td><code>cullStatsPtr</code></td><td>visible draws and triangles of the frame</td><td><code>countMain</code> (atomics)</td></tr>
+</table>
+</div>
+<p><code>cullSlotsPtr</code> and <code>groupCountsPtr</code> are not separate buffers. They sit in the same buffer as the visible draws, right after them.</p>
+
+<h2><span class="n">3</span>The test: sphere against plane</h2>
+
+<p>Every sub-mesh has a bounding sphere in the geometry table, in mesh space. <code>countMain</code> moves it to world space with the instance's world matrix, then tests it against the 6 planes of the camera frustum.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Top view of the frustum. A sphere inside is kept, a sphere that crosses a plane is kept, a sphere fully outside a plane is culled.">
+    <polygon points="230,280 40,20 420,20" class="zone"/>
+    <line x1="230" y1="280" x2="40"  y2="20" class="arrow"/>
+    <line x1="230" y1="280" x2="420" y2="20" class="arrow"/>
+    <line x1="215" y1="260" x2="245" y2="260" class="arrow"/>
+    <text x="252" y="264" class="small">near plane</text>
+    <circle cx="230" cy="285" r="6" class="cpu"/>
+    <text x="230" y="20" class="mid small">far plane is infinite (always passes)</text>
+
+    <line x1="135" y1="150" x2="160" y2="132" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="164" y="132" class="small t-hot">n</text>
+    <line x1="325" y1="150" x2="300" y2="132" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="286" y="132" class="small t-hot">n</text>
+
+    <circle cx="225" cy="110" r="30" class="gpu"/>
+    <text x="225" y="114" class="mid small">kept</text>
+    <circle cx="372" cy="120" r="36" class="gpu"/>
+    <text x="372" y="117" class="mid small">kept</text>
+    <text x="372" y="131" class="mid small">(touches)</text>
+    <circle cx="70" cy="215" r="28" class="ghost"/>
+    <text x="70" y="219" class="mid small t-faint">culled</text>
+
+    <text x="470" y="50" class="title">For each of the 6 planes</text>
+    <text x="470" y="78" class="mono">d = dot(n, center) + w</text>
+    <text x="470" y="108">d &lt; −radius</text>
+    <text x="600" y="108" class="small">fully outside → <tspan class="t-hot">culled</tspan></text>
+    <text x="470" y="132">d ≥ −radius</text>
+    <text x="600" y="132" class="small">touches or inside → next plane</text>
+    <text x="470" y="166" class="title">Passes all 6 → visible</text>
+    <text x="470" y="200" class="small">n points into the frustum.</text>
+    <text x="470" y="218" class="small">Planes come from projection × view,</text>
+    <text x="470" y="236" class="small">computed on the CPU per drawScene call</text>
+    <text x="470" y="254" class="small">(getFrustumPlanes).</text>
+  </svg>
+  <figcaption>The test is conservative: a sphere that only touches the frustum is kept. A draw is removed only when it is surely invisible.</figcaption>
+</figure>
+
+<h3>Two details that keep the test correct</h3>
+<div class="split">
+  <div>
+    <h4>The radius under scale</h4>
+    <p>A scaled mesh has a bigger sphere. <code>countMain</code> multiplies the radius by the largest stretch of the world matrix. It gets an upper bound of it cheaply (Gershgorin's theorem on <code>transpose(M) × M</code>). The bound is exact for normal rotate + scale matrices, and never too small for odd ones.</p>
+  </div>
+  <div>
+    <h4>The far plane</h4>
+    <p>RASM uses reversed-Z with an infinite far plane by default. The far plane then comes out as <code>(0, 0, 0, nearZ)</code>, so <code>d = nearZ</code> for every sphere and it always passes. See <a href="camera-depth.html">Camera, coordinates and depth</a>.</p>
+  </div>
+</div>
+
+<h2><span class="n">4</span>Runs and groups</h2>
+
+<p>The draw list is stable-sorted by cull mode into <b>runs</b> (<code>NONE</code>, then <code>FRONT</code>, then <code>BACK</code>, the order of the enum), because cull mode is set per indirect call. Culling splits each run into <b>groups of 64 draws</b>, one compute workgroup each. A group never crosses into the next run.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="A draw list of 20 draws in three runs. Each run is split into groups of 4 for this picture; the last group of a run can be partial.">
+    <text x="40" y="22" class="small">run 0 · cull NONE · 11 draws</text>
+    <path d="M40,30 V36 H408 V30" class="arrow"/>
+    <text x="414" y="22" class="small">run 1 · FRONT</text>
+    <path d="M414,30 V36 H544 V30" class="arrow"/>
+    <text x="550" y="22" class="small">run 2 · BACK</text>
+    <path d="M550,30 V36 H714 V30" class="arrow"/>
+
+    <g>
+      <rect x="40"  y="46" width="30" height="34" rx="3" class="box"/><rect x="74"  y="46" width="30" height="34" rx="3" class="box"/>
+      <rect x="108" y="46" width="30" height="34" rx="3" class="box"/><rect x="142" y="46" width="30" height="34" rx="3" class="box"/>
+      <rect x="176" y="46" width="30" height="34" rx="3" class="box"/><rect x="210" y="46" width="30" height="34" rx="3" class="box"/>
+      <rect x="244" y="46" width="30" height="34" rx="3" class="box"/><rect x="278" y="46" width="30" height="34" rx="3" class="box"/>
+      <rect x="312" y="46" width="30" height="34" rx="3" class="box"/><rect x="346" y="46" width="30" height="34" rx="3" class="box"/>
+      <rect x="380" y="46" width="30" height="34" rx="3" class="box"/>
+      <rect x="414" y="46" width="30" height="34" rx="3" class="box"/><rect x="448" y="46" width="30" height="34" rx="3" class="box"/>
+      <rect x="482" y="46" width="30" height="34" rx="3" class="box"/><rect x="516" y="46" width="30" height="34" rx="3" class="box"/>
+      <rect x="550" y="46" width="30" height="34" rx="3" class="box"/><rect x="584" y="46" width="30" height="34" rx="3" class="box"/>
+      <rect x="618" y="46" width="30" height="34" rx="3" class="box"/><rect x="652" y="46" width="30" height="34" rx="3" class="box"/>
+      <rect x="686" y="46" width="30" height="34" rx="3" class="box"/>
+    </g>
+
+    <path d="M40,92 V98 H172 V92"  class="arrow gpu"/><text x="106" y="116" class="mid small">group 0</text>
+    <path d="M176,92 V98 H308 V92" class="arrow gpu"/><text x="242" y="116" class="mid small">group 1</text>
+    <path d="M312,92 V98 H410 V92" class="arrow gpu"/><text x="361" y="116" class="mid small">group 2 (3)</text>
+    <path d="M414,92 V98 H546 V92" class="arrow gpu"/><text x="480" y="116" class="mid small">group 3</text>
+    <path d="M550,92 V98 H682 V92" class="arrow gpu"/><text x="616" y="116" class="mid small">group 4</text>
+    <path d="M686,92 V98 H716 V92" class="arrow gpu"/><text x="701" y="116" class="mid small">5 (1)</text>
+
+    <text x="40" y="150" class="small">Shown with groups of 4 to fit. In the engine a group is 64 draws (CULL_GROUP_SIZE in cull.slang and gpuScene.cpp).</text>
+  </svg>
+  <figcaption>Groups of run 0 come first, then run 1, and so on. A thread finds its group's run with <code>getCullGroup</code>.</figcaption>
+</figure>
+
+<p>The CPU counts the groups of each call in <code>drawScene</code> (<code>cullGroupCounts</code>). <code>recordCulling</code> dispatches that many groups for both entry points.</p>
+
+<h2><span class="n">5</span>Worked example: one run, step by step</h2>
+
+<p>Here is one run of 10 draws, with groups of 4. Click through the steps (or use the arrow keys).</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. The input: the draw list</h4>
+    <svg viewBox="0 0 720 150" role="img" aria-label="Ten draws d0 to d9 in three groups.">
+      <text x="40" y="20" class="small">group 0</text><path d="M40,28 V34 H272 V28" class="arrow"/>
+      <text x="280" y="20" class="small">group 1</text><path d="M280,28 V34 H512 V28" class="arrow"/>
+      <text x="520" y="20" class="small">group 2</text><path d="M520,28 V34 H632 V28" class="arrow"/>
+      <rect x="40"  y="44" width="52" height="40" rx="4" class="box"/><text x="66"  y="69" class="mid mono">d0</text>
+      <rect x="100" y="44" width="52" height="40" rx="4" class="box"/><text x="126" y="69" class="mid mono">d1</text>
+      <rect x="160" y="44" width="52" height="40" rx="4" class="box"/><text x="186" y="69" class="mid mono">d2</text>
+      <rect x="220" y="44" width="52" height="40" rx="4" class="box"/><text x="246" y="69" class="mid mono">d3</text>
+      <rect x="280" y="44" width="52" height="40" rx="4" class="box"/><text x="306" y="69" class="mid mono">d4</text>
+      <rect x="340" y="44" width="52" height="40" rx="4" class="box"/><text x="366" y="69" class="mid mono">d5</text>
+      <rect x="400" y="44" width="52" height="40" rx="4" class="box"/><text x="426" y="69" class="mid mono">d6</text>
+      <rect x="460" y="44" width="52" height="40" rx="4" class="box"/><text x="486" y="69" class="mid mono">d7</text>
+      <rect x="520" y="44" width="52" height="40" rx="4" class="box"/><text x="546" y="69" class="mid mono">d8</text>
+      <rect x="580" y="44" width="52" height="40" rx="4" class="box"/><text x="606" y="69" class="mid mono">d9</text>
+      <text x="40" y="120" class="small">allDrawsPtr: 10 DrawInfo rows, one thread each. Group 2 has only 2 draws; its other threads do nothing.</text>
+    </svg>
+    <p>Each thread of <code>countMain</code> takes one draw.</p>
+  </div>
+
+  <div class="step">
+    <h4>2. countMain: test each draw</h4>
+    <svg viewBox="0 0 720 150" role="img" aria-label="Six draws are visible: d0, d2, d3, d6, d8, d9. Four are culled.">
+      <text x="40" y="20" class="small">group 0</text><path d="M40,28 V34 H272 V28" class="arrow"/>
+      <text x="280" y="20" class="small">group 1</text><path d="M280,28 V34 H512 V28" class="arrow"/>
+      <text x="520" y="20" class="small">group 2</text><path d="M520,28 V34 H632 V28" class="arrow"/>
+      <rect x="40"  y="44" width="52" height="40" rx="4" class="gpu"/><text x="66"  y="69" class="mid mono">d0</text>
+      <rect x="100" y="44" width="52" height="40" rx="4" class="ghost"/><text x="126" y="69" class="mid mono t-faint">d1</text>
+      <rect x="160" y="44" width="52" height="40" rx="4" class="gpu"/><text x="186" y="69" class="mid mono">d2</text>
+      <rect x="220" y="44" width="52" height="40" rx="4" class="gpu"/><text x="246" y="69" class="mid mono">d3</text>
+      <rect x="280" y="44" width="52" height="40" rx="4" class="ghost"/><text x="306" y="69" class="mid mono t-faint">d4</text>
+      <rect x="340" y="44" width="52" height="40" rx="4" class="ghost"/><text x="366" y="69" class="mid mono t-faint">d5</text>
+      <rect x="400" y="44" width="52" height="40" rx="4" class="gpu"/><text x="426" y="69" class="mid mono">d6</text>
+      <rect x="460" y="44" width="52" height="40" rx="4" class="ghost"/><text x="486" y="69" class="mid mono t-faint">d7</text>
+      <rect x="520" y="44" width="52" height="40" rx="4" class="gpu"/><text x="546" y="69" class="mid mono">d8</text>
+      <rect x="580" y="44" width="52" height="40" rx="4" class="gpu"/><text x="606" y="69" class="mid mono">d9</text>
+      <text x="66" y="106" class="mid mono">1</text><text x="126" y="106" class="mid mono t-faint">0</text><text x="186" y="106" class="mid mono">1</text><text x="246" y="106" class="mid mono">1</text>
+      <text x="306" y="106" class="mid mono t-faint">0</text><text x="366" y="106" class="mid mono t-faint">0</text><text x="426" y="106" class="mid mono">1</text><text x="486" y="106" class="mid mono t-faint">0</text>
+      <text x="546" y="106" class="mid mono">1</text><text x="606" y="106" class="mid mono">1</text>
+      <text x="660" y="106" class="small">visibleFlags</text>
+      <text x="40" y="136" class="small">Each thread writes its flag into group shared memory, then the group syncs.</text>
+    </svg>
+    <p>Green draws pass all 6 planes. Dashed draws are fully outside one plane.</p>
+  </div>
+
+  <div class="step">
+    <h4>3. countMain: slot in the group, and group count</h4>
+    <svg viewBox="0 0 720 170" role="img" aria-label="Each visible draw gets its slot among the visible draws of its group. Group counts are 3, 1 and 2.">
+      <rect x="40"  y="20" width="52" height="40" rx="4" class="gpu"/><text x="66"  y="45" class="mid mono">d0</text>
+      <rect x="100" y="20" width="52" height="40" rx="4" class="ghost"/><text x="126" y="45" class="mid mono t-faint">d1</text>
+      <rect x="160" y="20" width="52" height="40" rx="4" class="gpu"/><text x="186" y="45" class="mid mono">d2</text>
+      <rect x="220" y="20" width="52" height="40" rx="4" class="gpu"/><text x="246" y="45" class="mid mono">d3</text>
+      <rect x="280" y="20" width="52" height="40" rx="4" class="ghost"/><text x="306" y="45" class="mid mono t-faint">d4</text>
+      <rect x="340" y="20" width="52" height="40" rx="4" class="ghost"/><text x="366" y="45" class="mid mono t-faint">d5</text>
+      <rect x="400" y="20" width="52" height="40" rx="4" class="gpu"/><text x="426" y="45" class="mid mono">d6</text>
+      <rect x="460" y="20" width="52" height="40" rx="4" class="ghost"/><text x="486" y="45" class="mid mono t-faint">d7</text>
+      <rect x="520" y="20" width="52" height="40" rx="4" class="gpu"/><text x="546" y="45" class="mid mono">d8</text>
+      <rect x="580" y="20" width="52" height="40" rx="4" class="gpu"/><text x="606" y="45" class="mid mono">d9</text>
+      <text x="66" y="84" class="mid mono t-mem">0</text><text x="126" y="84" class="mid mono t-faint">–</text><text x="186" y="84" class="mid mono t-mem">1</text><text x="246" y="84" class="mid mono t-mem">2</text>
+      <text x="306" y="84" class="mid mono t-faint">–</text><text x="366" y="84" class="mid mono t-faint">–</text><text x="426" y="84" class="mid mono t-mem">0</text><text x="486" y="84" class="mid mono t-faint">–</text>
+      <text x="546" y="84" class="mid mono t-mem">0</text><text x="606" y="84" class="mid mono t-mem">1</text>
+      <text x="660" y="84" class="small">cullSlots</text>
+      <rect x="110" y="104" width="100" height="32" rx="4" class="mem"/><text x="160" y="125" class="mid mono">count 3</text>
+      <rect x="350" y="104" width="100" height="32" rx="4" class="mem"/><text x="400" y="125" class="mid mono">count 1</text>
+      <rect x="526" y="104" width="100" height="32" rx="4" class="mem"/><text x="576" y="125" class="mid mono">count 2</text>
+      <text x="660" y="125" class="small">groupCounts</text>
+      <text x="40" y="160" class="small">slot = how many visible draws come before it in its group. A culled draw stores CULLED (0xFFFFFFFF).</text>
+    </svg>
+    <p>A group only knows about itself. It cannot know yet where its draws go in the final list, because that depends on the groups before it. That is why there is a second dispatch.</p>
+  </div>
+
+  <div class="step">
+    <h4>4. writeMain: add up earlier groups, copy</h4>
+    <svg viewBox="0 0 720 250" role="img" aria-label="Group 0 has base 0, group 1 base 3, group 2 base 4. Each visible draw goes to base plus slot in the packed list.">
+      <text x="156" y="16" class="mid small t-hot">base 0</text>
+      <text x="396" y="16" class="mid small t-hot">base 0 + 3 = 3</text>
+      <text x="576" y="16" class="mid small t-hot">base 3 + 1 = 4</text>
+      <rect x="40"  y="26" width="52" height="40" rx="4" class="gpu"/><text x="66"  y="51" class="mid mono">d0</text>
+      <rect x="100" y="26" width="52" height="40" rx="4" class="ghost"/><text x="126" y="51" class="mid mono t-faint">d1</text>
+      <rect x="160" y="26" width="52" height="40" rx="4" class="gpu"/><text x="186" y="51" class="mid mono">d2</text>
+      <rect x="220" y="26" width="52" height="40" rx="4" class="gpu"/><text x="246" y="51" class="mid mono">d3</text>
+      <rect x="280" y="26" width="52" height="40" rx="4" class="ghost"/><text x="306" y="51" class="mid mono t-faint">d4</text>
+      <rect x="340" y="26" width="52" height="40" rx="4" class="ghost"/><text x="366" y="51" class="mid mono t-faint">d5</text>
+      <rect x="400" y="26" width="52" height="40" rx="4" class="gpu"/><text x="426" y="51" class="mid mono">d6</text>
+      <rect x="460" y="26" width="52" height="40" rx="4" class="ghost"/><text x="486" y="51" class="mid mono t-faint">d7</text>
+      <rect x="520" y="26" width="52" height="40" rx="4" class="gpu"/><text x="546" y="51" class="mid mono">d8</text>
+      <rect x="580" y="26" width="52" height="40" rx="4" class="gpu"/><text x="606" y="51" class="mid mono">d9</text>
+      <text x="66" y="86" class="mid small">0+0</text><text x="186" y="86" class="mid small">0+1</text><text x="246" y="86" class="mid small">0+2</text>
+      <text x="426" y="86" class="mid small">3+0</text><text x="546" y="86" class="mid small">4+0</text><text x="606" y="86" class="mid small">4+1</text>
+
+      <line x1="66"  y1="94" x2="66"  y2="164" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="186" y1="94" x2="126" y2="164" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="246" y1="94" x2="186" y2="164" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="426" y1="94" x2="246" y2="164" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="546" y1="94" x2="306" y2="164" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="606" y1="94" x2="366" y2="164" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+
+      <rect x="40"  y="168" width="52" height="40" rx="4" class="mem"/><text x="66"  y="193" class="mid mono">d0</text>
+      <rect x="100" y="168" width="52" height="40" rx="4" class="mem"/><text x="126" y="193" class="mid mono">d2</text>
+      <rect x="160" y="168" width="52" height="40" rx="4" class="mem"/><text x="186" y="193" class="mid mono">d3</text>
+      <rect x="220" y="168" width="52" height="40" rx="4" class="mem"/><text x="246" y="193" class="mid mono">d6</text>
+      <rect x="280" y="168" width="52" height="40" rx="4" class="mem"/><text x="306" y="193" class="mid mono">d8</text>
+      <rect x="340" y="168" width="52" height="40" rx="4" class="mem"/><text x="366" y="193" class="mid mono">d9</text>
+      <text x="410" y="193" class="small">drawInfoPtr[runFirst + base + slot]</text>
+      <text x="40" y="236" class="small">The 64 threads of a group add up the counts of all earlier groups of the run together, then each copies its draw.</text>
+    </svg>
+    <p>The packed list has the same order as the draw list. A draw never jumps ahead of another one, so the image is the same every frame.</p>
+  </div>
+
+  <div class="step">
+    <h4>5. The count, and the draw</h4>
+    <svg viewBox="0 0 720 200" role="img" aria-label="The run's last group writes count 6. The indirect draw reads 6 of the 10 places in the run's range.">
+      <rect x="40"  y="20" width="52" height="40" rx="4" class="mem"/><text x="66"  y="45" class="mid mono">d0</text>
+      <rect x="100" y="20" width="52" height="40" rx="4" class="mem"/><text x="126" y="45" class="mid mono">d2</text>
+      <rect x="160" y="20" width="52" height="40" rx="4" class="mem"/><text x="186" y="45" class="mid mono">d3</text>
+      <rect x="220" y="20" width="52" height="40" rx="4" class="mem"/><text x="246" y="45" class="mid mono">d6</text>
+      <rect x="280" y="20" width="52" height="40" rx="4" class="mem"/><text x="306" y="45" class="mid mono">d8</text>
+      <rect x="340" y="20" width="52" height="40" rx="4" class="mem"/><text x="366" y="45" class="mid mono">d9</text>
+      <rect x="400" y="20" width="52" height="40" rx="4" class="ghost"/><rect x="460" y="20" width="52" height="40" rx="4" class="ghost"/>
+      <rect x="520" y="20" width="52" height="40" rx="4" class="ghost"/><rect x="580" y="20" width="52" height="40" rx="4" class="ghost"/>
+      <text x="516" y="80" class="mid small t-faint">old data, not drawn</text>
+      <path d="M40,72 V78 H392 V72" class="arrow gpu"/>
+      <text x="216" y="96" class="mid small">count = 6</text>
+
+      <rect x="440" y="110" width="200" height="34" rx="4" class="mem"/>
+      <text x="540" y="132" class="mid mono">drawCounts[run] = 4 + 2</text>
+      <text x="540" y="164" class="mid small">written by the run's last group (group 2)</text>
+
+      <rect x="40" y="120" width="352" height="46" rx="6" class="gpu"/>
+      <text x="216" y="140" class="mid mono">drawIndexedIndirectCount(</text>
+      <text x="216" y="157" class="mid mono">visible + run.first, count, max = 10)</text>
+      <line x1="440" y1="127" x2="394" y2="137" class="arrow" marker-end="url(#ah)"/>
+    </svg>
+    <p>The count is written fresh each frame, so it never needs to be cleared. The places after the count may hold last frame's draws; the GPU does not read them.</p>
+  </div>
+</div>
+
+<h2><span class="n">6</span>When culling is off</h2>
+
+<p>If <code>cull.slang</code> fails to compile, <code>drawScene</code> does not leave the screen black. It draws the whole draw list with plain <code>drawIndexedIndirect</code> and logs the error. It tries to build the culling pipelines again next frame, so a fixed shader on disk is picked up while the app runs.</p>
+
+<div class="split">
+  <div>
+    <h4>Culled call</h4>
+    <p><code>drawInfoPtr</code> → visible-draw buffer<br>draw: <code>drawIndexedIndirectCount</code><br>stats: visible counts come from the GPU</p>
+  </div>
+  <div>
+    <h4>Unculled call (fallback)</h4>
+    <p><code>drawInfoPtr</code> → the draw list itself<br>draw: <code>drawIndexedIndirect</code>, all draws<br>stats: all draws count as visible</p>
+  </div>
+</div>
+
+<h2><span class="n">7</span>Where it lives in code</h2>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Frustum planes</td><td><code>getFrustumPlanes</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Per-call setup, group count</td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Dispatches and barriers</td><td><code>Engine::recordCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Submit order {cull, frame}</td><td><code>Engine::endFrame</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Test, count, pack</td><td><code>isVisible</code>, <code>countMain</code>, <code>writeMain</code>, <code>getCullGroup</code> in <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>Pointers it uses</td><td><code>SceneData</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
+</table>
+</div>
+
+<h2><span class="n">8</span>Rules when you change it</h2>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li><code>CULL_GROUP_SIZE</code> is in two places: <code>cull.slang</code> and <code>gpuScene.cpp</code>. Change both.</li>
+    <li>The test must stay conservative. Removing a draw that is partly visible makes objects pop.</li>
+    <li>Do not record a dispatch inside a render pass. <code>RenderContext::dispatch</code> refuses it.</li>
+    <li>A new pointer in <code>SceneData</code> is a CPU↔GPU struct change: follow <a href="shaders-structs.html">the struct contract</a>.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>There is no occlusion culling (hidden behind other objects) and no per-triangle culling. Only the frustum test runs today.</p>
+</div>
+
+</main>
+</div>
+</body>
+</html>

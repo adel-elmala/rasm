@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The RHI · RASM</title>
+<meta name="description" content="The backend-neutral rhi::Device interface and its Vulkan implementation: resource structs and derivation, command buffers, memoryBarrier and PipelineStage, timestamps, timeline fences, swapchain semaphores, the one queue, and how to add a backend.">
+<meta name="rasm-sources" content="src/rhi/device.h src/rhi/device.cpp src/rhi/renderContext.cpp src/rhi/uploadManager.h src/rhi/uploadManager.cpp src/rhi/vulkan/vulkanTypes.h src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.h src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanQueue.h src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanUtils.h src/rhi/vulkan/vulkanUtils.cpp include/rasm/render/renderContext.h include/rasm/render/resource.h include/rasm/types.h src/engine.cpp src/platform/windowSurface.h src/CMakeLists.txt">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/rhi.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Foundations</p>
+<h1>The RHI and the Vulkan backend</h1>
+<p class="lead"><code>src/rhi/device.h</code> is the line between the engine and a graphics API. Above it, code sees only neutral types. Below it, a backend turns them into native objects. Vulkan is the only backend today.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU work</span>
+  <span><i class="gpu"></i>GPU work</span>
+  <span><i class="mem"></i>GPU memory / sync object</span>
+  <span><i class="shader"></i>shader entry point</span>
+</div>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li><code>rhi::createDevice</code> picks the backend. <code>VULKAN</code> works; <code>DX12</code>, <code>METAL</code> and <code>WEBGPU</code> log an error and return null.</li>
+    <li>Resources are plain structs that keep their descriptor. The backend derives from each one (<code>VulkanBuffer</code> from <code>Buffer</code>) and adds native members.</li>
+    <li><code>CommandBuffer</code>, <code>Queue</code>, <code>Swapchain</code> and <code>Device</code> are interfaces with virtual functions.</li>
+    <li>Fences are timelines: a submit signals a 64-bit value, and waits block until the GPU reaches it.</li>
+    <li>The swapchain owns its semaphores. No semaphore crosses the interface; the order acquire → submit → present is enforced inside.</li>
+    <li>There is one queue, the graphics queue. Frames and uploads both use it.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>Resource structs and the backend's derived types</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 540" role="img" aria-label="Each rhi resource struct has a Vulkan struct that derives from it and adds native members. Device, CommandBuffer, Queue and Swapchain are interfaces implemented by VulkanDevice, VulkanCommandBuffer, VulkanQueue and VulkanSwapchain.">
+    <text x="20" y="22" class="title">rhi:: · src/rhi/device.h</text>
+    <text x="320" y="22" class="title">Vulkan · src/rhi/vulkan/</text>
+    <text x="20" y="44" class="small">resource structs: plain data</text>
+    <text x="290" y="44" class="mid small">derives from</text>
+
+    <rect x="20"  y="54"  width="240" height="26" rx="4" class="box"/><text x="32"  y="72"  class="mono">Buffer</text><text x="250" y="71"  class="end small">desc, deviceAddress, mapped</text>
+    <rect x="320" y="54"  width="420" height="26" rx="4" class="box"/><text x="332" y="72"  class="mono">VulkanBuffer</text><text x="728" y="71"  class="end small">buffer, allocation, mappedData</text>
+    <line x1="320" y1="67"  x2="262" y2="67"  class="arrow" marker-end="url(#ah)"/>
+    <rect x="20"  y="86"  width="240" height="26" rx="4" class="box"/><text x="32"  y="104" class="mono">Texture</text><text x="250" y="103" class="end small">desc</text>
+    <rect x="320" y="86"  width="420" height="26" rx="4" class="box"/><text x="332" y="104" class="mono">VulkanTexture</text><text x="728" y="103" class="end small">image, view, allocation, mipLevels</text>
+    <line x1="320" y1="99"  x2="262" y2="99"  class="arrow" marker-end="url(#ah)"/>
+    <rect x="20"  y="118" width="240" height="26" rx="4" class="box"/><text x="32"  y="136" class="mono">Sampler</text><text x="250" y="135" class="end small">desc</text>
+    <rect x="320" y="118" width="420" height="26" rx="4" class="box"/><text x="332" y="136" class="mono">VulkanSampler</text><text x="728" y="135" class="end small">sampler</text>
+    <line x1="320" y1="131" x2="262" y2="131" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20"  y="150" width="240" height="26" rx="4" class="box"/><text x="32"  y="168" class="mono">Shader</text><text x="250" y="167" class="end small">desc</text>
+    <rect x="320" y="150" width="420" height="26" rx="4" class="box"/><text x="332" y="168" class="mono">VulkanShader</text><text x="728" y="167" class="end small">module</text>
+    <line x1="320" y1="163" x2="262" y2="163" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20"  y="182" width="240" height="26" rx="4" class="box"/><text x="32"  y="200" class="mono">Pipeline</text><text x="250" y="199" class="end small">desc</text>
+    <rect x="320" y="182" width="420" height="26" rx="4" class="box"/><text x="332" y="200" class="mono">VulkanPipeline</text><text x="728" y="199" class="end small">pipeline, layout, bindPoint</text>
+    <line x1="320" y1="195" x2="262" y2="195" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20"  y="214" width="240" height="26" rx="4" class="box"/><text x="32"  y="232" class="mono">DescriptorSetLayout</text><text x="250" y="231" class="end small">desc</text>
+    <rect x="320" y="214" width="420" height="26" rx="4" class="box"/><text x="332" y="232" class="mono">VulkanDescriptorSetLayout</text><text x="728" y="231" class="end small">layout</text>
+    <line x1="320" y1="227" x2="262" y2="227" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20"  y="246" width="240" height="26" rx="4" class="box"/><text x="32"  y="264" class="mono">DescriptorPool</text><text x="250" y="263" class="end small">desc</text>
+    <rect x="320" y="246" width="420" height="26" rx="4" class="box"/><text x="332" y="264" class="mono">VulkanDescriptorPool</text><text x="728" y="263" class="end small">pool</text>
+    <line x1="320" y1="259" x2="262" y2="259" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20"  y="278" width="240" height="26" rx="4" class="box"/><text x="32"  y="296" class="mono">DescriptorSet</text><text x="250" y="295" class="end small">name</text>
+    <rect x="320" y="278" width="420" height="26" rx="4" class="box"/><text x="332" y="296" class="mono">VulkanDescriptorSet</text><text x="728" y="295" class="end small">set</text>
+    <line x1="320" y1="291" x2="262" y2="291" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20"  y="310" width="240" height="26" rx="4" class="box"/><text x="32"  y="328" class="mono">Fence</text><text x="250" y="327" class="end small">(no fields)</text>
+    <rect x="320" y="310" width="420" height="26" rx="4" class="box"/><text x="332" y="328" class="mono">VulkanFence</text><text x="728" y="327" class="end small">semaphore (a timeline VkSemaphore)</text>
+    <line x1="320" y1="323" x2="262" y2="323" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20"  y="342" width="240" height="26" rx="4" class="box"/><text x="32"  y="360" class="mono">QueryPool</text><text x="250" y="359" class="end small">count</text>
+    <rect x="320" y="342" width="420" height="26" rx="4" class="box"/><text x="332" y="360" class="mono">VulkanQueryPool</text><text x="728" y="359" class="end small">pool</text>
+    <line x1="320" y1="355" x2="262" y2="355" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="20" y="394" class="small">interfaces: virtual functions</text>
+    <rect x="20"  y="404" width="240" height="26" rx="4" class="cpu"/><text x="32"  y="422" class="mono">Device</text><text x="250" y="421" class="end small">create*, destroy*, …</text>
+    <rect x="320" y="404" width="420" height="26" rx="4" class="cpu"/><text x="332" y="422" class="mono">VulkanDevice</text><text x="728" y="421" class="end small">VMA allocator, graphicsQueue, surface</text>
+    <line x1="320" y1="417" x2="262" y2="417" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="20"  y="436" width="240" height="26" rx="4" class="cpu"/><text x="32"  y="454" class="mono">CommandBuffer</text><text x="250" y="453" class="end small">records</text>
+    <rect x="320" y="436" width="420" height="26" rx="4" class="cpu"/><text x="332" y="454" class="mono">VulkanCommandBuffer</text><text x="728" y="453" class="end small">pool, commandBuffer (one pool each)</text>
+    <line x1="320" y1="449" x2="262" y2="449" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="20"  y="468" width="240" height="26" rx="4" class="cpu"/><text x="32"  y="486" class="mono">Queue</text><text x="250" y="485" class="end small">submit</text>
+    <rect x="320" y="468" width="420" height="26" rx="4" class="cpu"/><text x="332" y="486" class="mono">VulkanQueue</text><text x="728" y="485" class="end small">queue, familyIndex</text>
+    <line x1="320" y1="481" x2="262" y2="481" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="20"  y="500" width="240" height="26" rx="4" class="cpu"/><text x="32"  y="518" class="mono">Swapchain</text><text x="250" y="517" class="end small">acquire, present</text>
+    <rect x="320" y="500" width="420" height="26" rx="4" class="cpu"/><text x="332" y="518" class="mono">VulkanSwapchain</text><text x="728" y="517" class="end small">images, acquire and present semaphores</text>
+    <line x1="320" y1="513" x2="262" y2="513" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+  </svg>
+  <figcaption>Gray: plain structs. Every resource struct keeps the neutral descriptor it was made from (<code>BufferDesc</code>, <code>TextureDesc</code>, ...). Blue: classes with virtual functions. The native types appear only on the right.</figcaption>
+</figure>
+
+<p>An object passed to a device always came from that device. So the backend casts it back with <code>static_cast</code>, with no check and no lookup. Here is one buffer, from creation to use:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 196" role="img" aria-label="createBuffer goes through RenderContext and the virtual Device call to VulkanDevice, which creates a VulkanBuffer; RenderContext stores the pointer under a handle. Later bindIndexBuffer looks the handle up and the Vulkan command buffer casts the pointer back to VulkanBuffer.">
+    <text x="10" y="20" class="small">create</text>
+    <rect x="10"  y="28" width="170" height="50" rx="6" class="cpu"/>
+    <text x="95" y="49" class="mid mono">createBuffer(desc)</text>
+    <text x="95" y="67" class="mid small">RenderContext</text>
+    <line x1="180" y1="53" x2="198" y2="53" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="200" y="28" width="170" height="50" rx="6" class="cpu"/>
+    <text x="285" y="49" class="mid mono">device-&gt;createBuffer</text>
+    <text x="285" y="67" class="mid small">virtual call</text>
+    <line x1="370" y1="53" x2="388" y2="53" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="390" y="28" width="190" height="50" rx="6" class="mem"/>
+    <text x="485" y="49" class="mid mono">new VulkanBuffer</text>
+    <text x="485" y="67" class="mid small">VMA memory + device address</text>
+    <line x1="580" y1="53" x2="598" y2="53" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="600" y="28" width="150" height="50" rx="6" class="cpu"/>
+    <text x="675" y="49" class="mid mono">buffers[handle]</text>
+    <text x="675" y="67" class="mid small">keeps the Buffer*</text>
+
+    <text x="10" y="116" class="small">use</text>
+    <rect x="10"  y="124" width="170" height="50" rx="6" class="cpu"/>
+    <text x="95" y="145" class="mid mono">bindIndexBuffer</text>
+    <text x="95" y="163" class="mid small">RenderContext, by handle</text>
+    <line x1="180" y1="149" x2="198" y2="149" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="200" y="124" width="170" height="50" rx="6" class="cpu"/>
+    <text x="285" y="145" class="mid mono">lookup(buffers, h)</text>
+    <text x="285" y="163" class="mid small">→ rhi::Buffer*</text>
+    <line x1="370" y1="149" x2="388" y2="149" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="390" y="124" width="190" height="50" rx="6" class="cpu"/>
+    <text x="485" y="145" class="mid mono">cmd-&gt;bindIndexBuffer</text>
+    <text x="485" y="163" class="mid small">VulkanCommandBuffer</text>
+    <line x1="580" y1="149" x2="598" y2="149" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="600" y="124" width="150" height="50" rx="6" class="gpu"/>
+    <text x="675" y="145" class="mid mono">static_cast</text>
+    <text x="675" y="163" class="mid small">→ VkBuffer, vkCmd…</text>
+  </svg>
+  <figcaption><code>RenderContext</code> adds what no API gives per object: handles, dedup of shaders, pipelines and layouts, render targets, bindless slot allocation and the shared samplers. See <a href="big-picture.html">the big picture</a>.</figcaption>
+</figure>
+
+<div class="split">
+  <div>
+    <h4><code>create*</code></h4>
+    <p>Logs the failure and returns null. <code>RenderContext</code> then returns an invalid handle. Every Vulkan object gets a debug name through <code>setObjectName</code>, which does nothing when debug utils is missing.</p>
+  </div>
+  <div>
+    <h4><code>destroy*</code></h4>
+    <p>Releases at once. The caller must know the GPU is done with the object: today that means the device is idle, or a fence wait covered its last use. Swapchain images belong to the swapchain; <code>RenderContext::destroyTexture</code> refuses them.</p>
+  </div>
+</div>
+
+<p>A <code>PipelineDesc</code> with <code>computeShader</code> set is a compute pipeline; otherwise it needs <code>vertexShader</code> and <code>fragmentShader</code>. <code>RenderContext::createPipeline</code> calls <code>createComputePipeline</code> or <code>createGraphicsPipeline</code>, and refuses a desc that sets both kinds. Every pipeline layout is the bindless set plus one <code>PUSH_CONSTANTS_SIZE</code> (16 bytes) push-constant range.</p>
+
+<h2><span class="n">2</span>Command buffers</h2>
+
+<p>On Vulkan each command buffer owns its own command pool (<code>VK_COMMAND_POOL_CREATE_TRANSIENT_BIT</code>). <code>begin</code> resets the whole pool and begins with <code>VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT</code>. So the GPU must have finished the buffer's last submission before <code>begin</code>; a fence wait makes sure of that.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Command buffers</th><th>Count</th><th>Recorded in</th><th>Safe to reset because</th></tr>
+  <tr><td>Frame Command Buffer</td><td>one per frame slot</td><td><code>beginFrame</code> to <code>endFrame</code></td><td><code>beginFrame</code> waits for the slot's fence value</td></tr>
+  <tr><td>Cull Command Buffer</td><td>one per frame slot</td><td><code>recordCulling</code> in <code>endFrame</code></td><td>the same wait</td></tr>
+  <tr><td>Upload Command Buffer</td><td>2, used in turn</td><td><code>UploadManager::flush</code></td><td>it waits for that batch's Upload Fence value first</td></tr>
+</table>
+</div>
+
+<h3>What may be recorded where</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 256" role="img" aria-label="Outside a rendering scope, dispatches and memory barriers are allowed and draws are refused. Inside, draws are allowed and dispatches and memory barriers are refused.">
+    <path d="M185,36 V22 H575 V34" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="380" y="16" class="mid small mono">beginRendering</text>
+    <path d="M575,216 V232 H185 V218" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="380" y="248" class="mid small mono">endRendering</text>
+
+    <rect x="10" y="36" width="350" height="180" rx="8" class="zone"/>
+    <text x="26" y="60" class="title">Outside a rendering scope</text>
+    <text x="26" y="86" class="small">✓ dispatch — a compute pipeline must be bound</text>
+    <text x="26" y="106" class="small">✓ memoryBarrier</text>
+    <text x="26" y="126" class="small">✓ transitionImageLayout</text>
+    <text x="26" y="146" class="small">✓ bindPipeline, pushConstants (compute)</text>
+    <text x="26" y="178" class="small t-hot">✗ draw, drawIndexed, drawIndexedIndirect,</text>
+    <text x="26" y="196" class="small t-hot">   drawIndexedIndirectCount</text>
+
+    <rect x="400" y="36" width="350" height="180" rx="8" class="zone"/>
+    <text x="416" y="60" class="title">Inside: between begin and end</text>
+    <text x="416" y="86" class="small">✓ draws — skipped while skipDraws is set</text>
+    <text x="416" y="106" class="small">✓ bindPipeline — color and depth formats must match</text>
+    <text x="416" y="126" class="small">✓ setViewport, setScissor, setCullMode</text>
+    <text x="416" y="146" class="small">✓ pushConstants, bindDescriptorSet, bindIndexBuffer</text>
+    <text x="416" y="178" class="small t-hot">✗ dispatch</text>
+    <text x="416" y="196" class="small t-hot">✗ memoryBarrier</text>
+  </svg>
+  <figcaption>Vulkan forbids dispatches and barriers inside dynamic rendering. <code>RenderContext</code> checks it with <code>checkArgument</code>: an error log, an assert in debug builds, and the call does nothing.</figcaption>
+</figure>
+
+<p><code>RenderContext</code> keeps three flags for the command buffer being recorded, and <code>beginCommandBuffer</code> resets them:</p>
+<div class="table-wrap">
+<table>
+  <tr><th>Flag</th><th>Set by</th><th>Effect</th></tr>
+  <tr><td><code>insidePass</code></td><td><code>beginRendering</code>, cleared by <code>endRendering</code></td><td>which calls are allowed (the picture above)</td></tr>
+  <tr><td><code>computeBound</code></td><td><code>bindPipeline</code> with a compute pipeline</td><td><code>dispatch</code> needs it</td></tr>
+  <tr><td><code>skipDraws</code></td><td><code>bindPipeline</code> with a missing pipeline, or one whose formats differ from the pass</td><td>draws are dropped until a matching pipeline is bound</td></tr>
+</table>
+</div>
+<p><code>pushConstants</code> must name <code>COMPUTE</code> for a compute pipeline and <code>VERTEX_FRAGMENT</code> for a graphics one, and fit in <code>PUSH_CONSTANTS_SIZE</code>. Binding a compute pipeline leaves the pass's graphics pipeline bound.</p>
+
+<h2><span class="n">3</span>Barriers: <code>memoryBarrier</code> and <code>PipelineStage</code></h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="A memory barrier waits for the before stages, makes their writes available, and makes them visible to the reads and writes of the after stages. Culling ends with COMPUTE to GRAPHICS or HOST.">
+    <rect x="10" y="30" width="300" height="96" rx="6" class="gpu"/>
+    <text x="24" y="52" class="title">before = COMPUTE</text>
+    <text x="24" y="74" class="small">wait until these stages are done,</text>
+    <text x="24" y="92" class="small">make their storage writes available</text>
+    <text x="24" y="114" class="small mono">countMain, writeMain</text>
+    <line x1="380" y1="20" x2="380" y2="136" class="hot"/>
+    <text x="380" y="156" class="mid small mono">memoryBarrier(cmd, COMPUTE, GRAPHICS | HOST)</text>
+    <line x1="310" y1="78" x2="448" y2="78" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="450" y="30" width="300" height="96" rx="6" class="gpu"/>
+    <text x="464" y="52" class="title">after = GRAPHICS | HOST</text>
+    <text x="464" y="74" class="small">indirect args, indices, vertex and</text>
+    <text x="464" y="92" class="small">fragment reads see the writes;</text>
+    <text x="464" y="114" class="small">so do host reads after a fence wait</text>
+  </svg>
+  <figcaption>The last barrier of culling. <code>PipelineStage</code> is a set of flags, so one barrier can name several stages with <code>|</code>.</figcaption>
+</figure>
+
+<p>Shaders reach buffers through device addresses, so the barrier is global (<code>VkMemoryBarrier2</code>), not per buffer. Its first scope includes earlier submissions on the same queue, so a <code>GRAPHICS → COMPUTE</code> barrier at the start of a frame also waits for the previous frame's draws.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th><code>PipelineStage</code></th><th>Vulkan stages</th><th>Reads (as <i>after</i>)</th><th>Writes</th></tr>
+  <tr><td><code>COMPUTE</code></td><td>compute shader</td><td>storage, uniform</td><td>storage</td></tr>
+  <tr><td><code>GRAPHICS</code></td><td>draw indirect, index input, vertex shader, fragment shader</td><td>indirect command, index, storage, uniform</td><td>storage</td></tr>
+  <tr><td><code>HOST</code></td><td>host</td><td>host read</td><td>host write</td></tr>
+</table>
+</div>
+<p>Source scope: the <i>before</i> stages and their writes. Destination scope: the <i>after</i> stages and their reads and writes. Reads before a barrier only have to finish, which the stage mask covers.</p>
+
+<h3>Image layout transitions</h3>
+<p><code>transitionImageLayout</code> records one image barrier. Its source scope comes from the old usage only, and its destination scope from the new usage only.</p>
+<div class="table-wrap">
+<table>
+  <tr><th><code>TextureUsage</code></th><th>Layout</th><th>As old usage, waits for</th><th>As new usage, blocks</th></tr>
+  <tr><td><code>UNKNOWN</code></td><td>undefined (contents discarded)</td><td>color output, depth tests, fragment shader</td><td>—</td></tr>
+  <tr><td><code>COLOR_ATTACHMENT</code></td><td>color attachment</td><td>color output writes</td><td>color output</td></tr>
+  <tr><td><code>DEPTH_STENCIL_ATTACHMENT</code></td><td>depth stencil attachment</td><td>depth test writes</td><td>depth tests</td></tr>
+  <tr><td><code>SAMPLED</code></td><td>shader read only</td><td>fragment shader (reads)</td><td>fragment shader reads</td></tr>
+  <tr><td><code>PRESENT_SRC</code></td><td>present source</td><td>—</td><td>nothing</td></tr>
+</table>
+</div>
+<p>Waiting at color output from <code>UNKNOWN</code> also chains the barrier to the swapchain's acquire semaphore, which the submit waits for at the same stage. Any other usage has no scope: the call logs an error, records nothing and returns false.</p>
+
+<h2><span class="n">4</span>Timestamps</h2>
+
+<p><code>createTimestampQueryPool</code> returns null when the graphics queue has no timestamps (<code>timestampValidBits</code> is 0). That is not an error; the stats just have no GPU times. <code>writeTimestamp</code> writes once all earlier commands are done, so two timestamps bracket the commands between them. <code>resetQueries</code> resets the whole pool from the CPU, so the GPU must be done with it.</p>
+
+<p><code>getTimestamps</code> returns nanoseconds since the earliest query, and false while any query is unwritten. The counter can wrap, so each value becomes a signed distance from the first one, modulo the valid bits. A worked example with an 8-bit counter (real GPUs have up to 64):</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Query</th><th>Raw ticks</th><th>(raw − first) &amp; mask</th><th>− earliest</th><th>× <code>timestampPeriod</code> (here 1)</th></tr>
+  <tr><td>0</td><td>250</td><td>0</td><td>0</td><td>0 ns</td></tr>
+  <tr><td>1</td><td>4 (wrapped)</td><td>10</td><td>10</td><td>10 ns</td></tr>
+  <tr><td>2</td><td>10</td><td>16</td><td>16</td><td>16 ns</td></tr>
+</table>
+</div>
+<p>A distance above half the range (here 127) counts as negative, so a query written before query 0 still comes out right. This holds while the queries span less than half the counter's range.</p>
+
+<h2><span class="n">5</span>Fences are timelines</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 150" role="img" aria-label="A fence is a growing 64-bit value. The GPU has reached 5. waitForFence for 6 blocks until the GPU reaches 6. getFenceValue returns 5 at once. The last submit signals 7.">
+    <line x1="60" y1="70" x2="720" y2="70" class="arrow" marker-end="url(#ah)"/>
+    <rect x="60" y="62" width="350" height="16" rx="3" class="gpu"/>
+    <text x="60"  y="98" class="mid small mono">0</text>
+    <text x="130" y="98" class="mid small mono">1</text>
+    <text x="200" y="98" class="mid small mono">2</text>
+    <text x="270" y="98" class="mid small mono">3</text>
+    <text x="340" y="98" class="mid small mono">4</text>
+    <text x="410" y="98" class="mid small mono">5</text>
+    <text x="480" y="98" class="mid small mono">6</text>
+    <text x="550" y="98" class="mid small mono">7</text>
+    <text x="620" y="98" class="mid small mono">8</text>
+    <text x="235" y="52" class="mid small t-gpu">the GPU has reached 5</text>
+    <line x1="480" y1="50" x2="480" y2="84" class="hot"/>
+    <text x="480" y="40" class="mid small t-hot">waitForFence(fence, 6) blocks until here</text>
+    <line x1="550" y1="62" x2="550" y2="78" class="arrow cpu"/>
+    <text x="410" y="128" class="mid small">getFenceValue → 5, never blocks</text>
+    <text x="560" y="128" class="small">the last submit signals 7</text>
+  </svg>
+  <figcaption>Values only grow and are never reset. In Vulkan a <code>Fence</code> is a timeline semaphore; the same idea maps to ID3D12Fence and MTLSharedEvent.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Timeline</th><th>Owner</th><th>Signaled by</th><th>Waited on by</th></tr>
+  <tr><td>Frame Fence</td><td><code>Engine::frameFence</code></td><td>every frame submit, <code>frameFenceValue</code> + 1</td><td><code>beginFrame</code>, per slot (see <a href="frame-loop.html">one frame</a>)</td></tr>
+  <tr><td>Upload Fence</td><td><code>UploadManager</code></td><td>every upload batch</td><td>reuse of an upload command buffer; ring space is freed with <code>getFenceValue</code></td></tr>
+  <tr><td>Swapchain Release</td><td><code>VulkanSwapchain::releaseTimeline</code> (backend only)</td><td>every presenting submit</td><td><code>acquireNextImage</code>, before it reuses an acquire semaphore</td></tr>
+</table>
+</div>
+
+<h2><span class="n">6</span>The swapchain: acquire → submit → present</h2>
+
+<p>The swapchain owns everything that syncs it with the queue. A <code>SubmitDesc</code> with <code>swapchain</code> set waits for the image of the last acquire, and makes the next <code>present</code> wait for that submit.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 384" role="img" aria-label="Acquire gets an image; the presentation engine signals the acquire semaphore when the image is free. The submit waits on it at color output and signals the image's present semaphore, the release timeline and the frame fence. Present waits on the present semaphore. A later acquire with the same slot waits on the release timeline on the CPU.">
+    <rect x="10" y="20"  width="740" height="70" rx="8" class="zone"/>
+    <rect x="10" y="160" width="740" height="72" rx="8" class="zone"/>
+    <rect x="10" y="300" width="740" height="72" rx="8" class="zone"/>
+    <text x="20" y="60"  class="title t-cpu">CPU</text>
+    <text x="20" y="201" class="title t-gpu">GPU queue</text>
+    <text x="20" y="332" class="title">presentation</text>
+    <text x="20" y="348" class="small">engine</text>
+
+    <rect x="110" y="30" width="180" height="50" rx="6" class="cpu"/>
+    <text x="200" y="51" class="mid mono">acquireNextImage</text>
+    <text x="200" y="69" class="mid small">vkAcquireNextImageKHR</text>
+    <line x1="290" y1="55" x2="328" y2="55" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="330" y="30" width="180" height="50" rx="6" class="cpu"/>
+    <text x="420" y="51" class="mid mono">submit</text>
+    <text x="420" y="69" class="mid small">one vkQueueSubmit2</text>
+    <line x1="510" y1="55" x2="548" y2="55" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="550" y="30" width="180" height="50" rx="6" class="cpu"/>
+    <text x="640" y="51" class="mid mono">present</text>
+    <text x="640" y="69" class="mid small">vkQueuePresentKHR</text>
+
+    <line x1="420" y1="80" x2="420" y2="168" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="330" y="170" width="180" height="50" rx="6" class="gpu"/>
+    <text x="420" y="191" class="mid title">frame work</text>
+    <text x="420" y="209" class="mid small">cull + frame command buffers</text>
+
+    <rect x="110" y="310" width="180" height="50" rx="6" class="box"/>
+    <text x="200" y="331" class="mid">image is free</text>
+    <text x="200" y="349" class="mid small">signals the semaphore</text>
+    <rect x="550" y="310" width="180" height="50" rx="6" class="box"/>
+    <text x="640" y="331" class="mid">shows the image</text>
+    <text x="640" y="349" class="mid small">after the wait</text>
+
+    <rect x="110" y="108" width="180" height="26" rx="13" class="mem"/>
+    <text x="200" y="126" class="mid mono">releaseTimeline</text>
+    <rect x="550" y="108" width="180" height="26" rx="13" class="mem"/>
+    <text x="640" y="126" class="mid mono">frameFence</text>
+    <rect x="110" y="248" width="200" height="26" rx="13" class="mem"/>
+    <text x="210" y="266" class="mid mono">acquireSemaphores[slot]</text>
+    <rect x="530" y="248" width="200" height="26" rx="13" class="mem"/>
+    <text x="630" y="266" class="mid mono">presentSemaphores[image]</text>
+
+    <line x1="200" y1="310" x2="200" y2="278" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="206" y="296" class="small">signal</text>
+    <line x1="310" y1="261" x2="358" y2="223" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="340" y="262" class="small">wait</text>
+    <line x1="490" y1="220" x2="558" y2="246" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="540" y="230" class="small">signal</text>
+    <line x1="640" y1="274" x2="640" y2="308" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="646" y="295" class="small">wait</text>
+    <path d="M330,190 H250 V136" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="256" y="154" class="small">signal releaseValue + 1</text>
+    <line x1="200" y1="108" x2="200" y2="82" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <text x="206" y="99" class="small t-hot">a later acquire waits (CPU)</text>
+    <path d="M510,190 H640 V136" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="632" y="154" class="end small">signal frameFenceValue + 1</text>
+  </svg>
+  <figcaption>One presenting submit waits on one semaphore and signals three: the image's present semaphore, the release timeline, and the frame fence. It waits at color attachment output, the same stage the barrier out of <code>UNKNOWN</code> waits for.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Semaphore</th><th>Kind</th><th>How many</th><th>Why that many</th></tr>
+  <tr><td><code>acquireSemaphores</code></td><td>binary</td><td><code>MAX_FRAMES_IN_FLIGHT</code> (2), used in turn</td><td>before reuse, acquire waits on the CPU until the submit that waited on it has finished (<code>acquireReleaseValues</code>), so it works at any frame pacing</td></tr>
+  <tr><td><code>presentSemaphores</code></td><td>binary</td><td>one per swapchain image</td><td>an image is acquired again only after its present finished. They survive a resize; a bigger swapchain only adds more</td></tr>
+  <tr><td><code>releaseTimeline</code></td><td>timeline</td><td>1</td><td>tells acquire when an acquire semaphore is free again</td></tr>
+</table>
+</div>
+
+<h3>The order is enforced</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 186" role="img" aria-label="The swapchain moves from idle to acquired on acquire, to submitted on a successful submit, and back to idle on present. Acquiring again while acquired returns the same image.">
+    <rect x="20" y="50" width="200" height="60" rx="6" class="cpu"/>
+    <text x="120" y="72" class="mid title">Idle</text>
+    <text x="120" y="90" class="mid small">acquiredSlot = NO_ACQUIRE</text>
+    <text x="120" y="104" class="mid small">presentPending = false</text>
+    <rect x="280" y="50" width="200" height="60" rx="6" class="cpu"/>
+    <text x="380" y="72" class="mid title">Acquired</text>
+    <text x="380" y="92" class="mid small">acquiredSlot = the slot used</text>
+    <rect x="540" y="50" width="200" height="60" rx="6" class="cpu"/>
+    <text x="640" y="72" class="mid title">Submitted</text>
+    <text x="640" y="92" class="mid small">presentPending = true</text>
+    <line x1="220" y1="80" x2="278" y2="80" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="250" y="40" class="mid small">acquire OK or SUBOPTIMAL</text>
+    <line x1="480" y1="80" x2="538" y2="80" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="510" y="40" class="mid small mono">onSubmitted()</text>
+    <path d="M640,110 V150 H120 V112" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="380" y="166" class="mid small">present (any result)</text>
+    <text x="380" y="130" class="mid small">acquire again → the same image</text>
+  </svg>
+  <figcaption>Calls in the wrong state fail with an error: a submit that names the swapchain while <i>Idle</i>, an acquire while <i>Submitted</i> (<code>FAILURE</code>), a present that is not right after a submit.</figcaption>
+</figure>
+
+<p>"Acquire again" happens after a failed submit: the image is still acquired and its semaphore still signaled, so acquire hands it out again instead of taking another one.</p>
+
+<h3>Resize</h3>
+<ol class="steps">
+  <li><b>A 0 × 0 surface</b> returns <code>OUT_OF_DATE</code> and keeps the old swapchain. A failed surface query returns <code>FAILURE</code> and also keeps it.</li>
+  <li><b>Pending signals are consumed.</b> <code>releasePendingSemaphores</code> submits a wait-only batch for an acquired-but-unsubmitted image and for a submitted-but-unpresented one. A binary semaphore that is signaled and never waited on cannot be signaled again.</li>
+  <li><b>The device goes idle</b>, the old images are dropped, and the new swapchain is built with the old one as <code>oldSwapchain</code>. The present mode is always <code>VK_PRESENT_MODE_FIFO_KHR</code> (<b>B21</b>).</li>
+  <li><b>If the build fails</b> there is no swapchain, and acquire reports <code>OUT_OF_DATE</code> until a resize works.</li>
+</ol>
+
+<h2><span class="n">7</span>The one queue</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Submit</th><th>Waits on</th><th>Signals</th></tr>
+  <tr><td>upload batch (<code>UploadManager::flush</code>, first inside every <code>RenderContext::submit</code>)</td><td>nothing</td><td>Upload Fence</td></tr>
+  <tr><td>frame: <code>{cull, frame}</code> with <code>presentsSwapchainImage</code></td><td><code>acquireSemaphores[slot]</code> at color output</td><td><code>presentSemaphores[image]</code>, <code>releaseTimeline</code>, <code>frameFence</code></td></tr>
+</table>
+</div>
+
+<p><code>QueueType</code> has only <code>GRAPHICS</code>. All submits go to it, in order. That is why the upload copies need no semaphore: the barriers inside <code>copyBuffers</code> order them after earlier submissions and before later ones on the same queue. A <code>SubmitDesc</code> takes at most <code>MAX_SUBMIT_COMMAND_BUFFERS</code> (8) command buffers, which run in the given order. A failed submit leaves every semaphore as it was.</p>
+
+<div class="callout warn">
+  <strong>Known issues</strong>
+  <p><b>D13</b>: there is no transfer or async-compute queue yet.</p>
+  <p><b>D4</b>: there is no deferred destruction. <code>destroy*</code> is immediate, so it is only safe when the device is idle or a fence covered the object.</p>
+  <p><b>P8</b>: there is no pipeline cache, and every pipeline makes its own pipeline layout although they are all the same.</p>
+</div>
+
+<h2><span class="n">8</span>How to add a backend</h2>
+
+<ol class="steps">
+  <li><b>Implement the interfaces</b> under <code>src/rhi/&lt;backend&gt;/</code>: <code>Device</code>, <code>CommandBuffer</code>, <code>Queue</code>, <code>Swapchain</code>, and a derived struct for each resource. Follow the Vulkan files: one <code>.h</code>/<code>.cpp</code> pair each, native types in one types header like <code>vulkanTypes.h</code>.</li>
+  <li><b>Register it.</b> Add a case to the switch in <code>rhi::createDevice</code> (<code>src/rhi/device.cpp</code>), the sources to <code>RASM_SRC</code>, the libraries to <code>src/CMakeLists.txt</code>, and a <code>find_dependency</code> line to <code>cmake/rasmConfig.cmake.in</code>.</li>
+  <li><b>Pick the shader target.</b> <code>getShaderCompilerTarget</code> in <code>src/engine.cpp</code> maps the backend to MSL, HLSL or WGSL. The shaders still use device addresses and <code>spirv_asm</code>, so D3D12 and WebGPU need the binding work of <b>D12</b> first.</li>
+  <li><b>Give it a window hook.</b> <code>createWindowSurface</code> in <code>src/platform/</code> takes a <code>VkInstance</code>, so it is Vulkan-only. A new backend needs its own platform hook until <b>D7</b> puts native window handles in <code>DeviceDesc</code>.</li>
+  <li><b>Keep the contracts.</b> Fences as growing 64-bit values, the swapchain's acquire → submit → present order with its own sync objects, global memory barriers between <code>PipelineStage</code> sets, timestamps in nanoseconds.</li>
+</ol>
+
+<h2><span class="n">9</span>Where it lives in code</h2>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The interface</td><td><code>src/rhi/device.h</code></td></tr>
+  <tr><td>Backend choice</td><td><code>rhi::createDevice</code> in <code>src/rhi/device.cpp</code></td></tr>
+  <tr><td>Handle tables, checks</td><td><code>RenderContext</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Native types</td><td><code>src/rhi/vulkan/vulkanTypes.h</code></td></tr>
+  <tr><td>Device, resources</td><td><code>VulkanDevice</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>Recording, barriers</td><td><code>VulkanCommandBuffer</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
+  <tr><td>Submit</td><td><code>VulkanQueue::submit</code> in <code>src/rhi/vulkan/vulkanQueue.cpp</code></td></tr>
+  <tr><td>Swapchain and its semaphores</td><td><code>VulkanSwapchain</code> in <code>src/rhi/vulkan/vulkanSwapchain.cpp</code></td></tr>
+  <tr><td>Format and result helpers</td><td><code>toVkFormat</code>, <code>toVkResultString</code> in <code>src/rhi/vulkan/vulkanUtils.cpp</code></td></tr>
+  <tr><td>Staging uploads</td><td><code>UploadManager</code> in <code>src/rhi/uploadManager.cpp</code> (see <a href="gpu-memory.html">how data reaches the GPU</a>)</td></tr>
+</table>
+</div>
+
+<h2><span class="n">10</span>Rules when you change it</h2>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>All Vulkan calls live under <code>src/rhi/vulkan/</code>. Only the backend and <code>src/rhi/device.cpp</code> include its headers; the one exception is the surface hook in <code>src/platform/</code>.</li>
+    <li>New GPU features go into <code>src/rhi/device.h</code> in terms every planned backend (Vulkan, D3D12, Metal, WebGPU) can implement, never as a Vulkan-only path above the RHI.</li>
+    <li>Use synchronization2 (<code>vkCmdPipelineBarrier2</code>) and dynamic rendering. No render passes or framebuffers.</li>
+    <li>Check every <code>VkResult</code>, and pass it through <code>toVkResultString</code> in messages. Swapchain calls handle <code>VK_SUBOPTIMAL_KHR</code> and <code>VK_ERROR_OUT_OF_DATE_KHR</code> explicitly.</li>
+    <li>Every created object gets a debug name.</li>
+    <li>Public API misuse is checked in <code>RenderContext</code> with <code>checkArgument</code>; inside the backend, use plain <code>assert</code>.</li>
+    <li>Test with <code>enableValidation</code> on. A change that adds validation messages is not done.</li>
+  </ul>
+</div>
+
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,901 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RenderContext and Resources · RASM</title>
+<meta name="description" content="The low-level API: every RenderContext method grouped by task, the resource descriptors and enums of render/resource.h, and the rules for recording, uploading and reading back.">
+<meta name="rasm-sources" content="include/rasm/render/renderContext.h include/rasm/render/resource.h include/rasm/engine.h include/rasm/types.h src/rhi/renderContext.cpp src/rhi/resource.cpp src/rhi/uploadManager.cpp src/rhi/device.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanUtils.cpp src/engine.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="api/low-level.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">API reference</p>
+<h1>RenderContext and resources</h1>
+<p class="lead"><code>RenderContext</code> is the engine's thin, backend-neutral layer over the GPU. It creates buffers, textures and pipelines, and records commands into a command buffer. Inside a render graph pass you get it as the callback's argument; elsewhere from <code>engine.getRenderContext()</code>. Everything is addressed by handles.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU work</span>
+  <span><i class="gpu"></i>GPU work</span>
+  <span><i class="mem"></i>GPU buffer</span>
+</div>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Record into <code>engine.getCurrentFrameResources().commandBuffer</code>, between <code>beginFrame</code> and <code>endFrame</code>. The engine begins, ends and submits it.</li>
+    <li>Draws go inside a render pass, dispatches and barriers outside. Calls in the wrong place are refused.</li>
+    <li>Shaders read buffers through device addresses (<code>getBufferDeviceAddress</code>), passed in the 16-byte push constant. There are no vertex buffers.</li>
+    <li><code>fillBuffer</code> writes mapped buffers at once and queues the others for the next submit.</li>
+    <li>Nothing is destroyed for you, and buffers and textures are never shared: each <code>create</code> call makes a new one.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>How errors are reported</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Problem</th><th>What happens</th></tr>
+  <tr><td>Unknown handle (never created, destroyed)</td><td>Logs <code>&lt;function&gt;: buffer handle not found.</code> (or texture, pipeline, …). The call does nothing and returns <code>false</code>, 0 or an invalid handle.</td></tr>
+  <tr><td>Invalid use: a wrong argument, or a call in the wrong place (a draw outside a pass, a dispatch inside one)</td><td>Logs the reason. In debug builds an <code>assert</code> stops in the debugger; in release builds the call fails as above.</td></tr>
+  <tr><td>The backend fails (out of memory, device limit)</td><td>Logs the backend's error and returns an invalid handle or <code>false</code>.</td></tr>
+</table>
+</div>
+
+<h2><span class="n">2</span>Getting at it</h2>
+
+<div class="api" id="getRenderContext">
+  <pre class="sig">RenderContext&amp; getRenderContext();</pre>
+  <div class="body">
+    <p>The engine's one <code>RenderContext</code>. It lives as long as the engine.</p>
+  </div>
+</div>
+
+<div class="api" id="getCurrentFrameResources">
+  <pre class="sig">const FrameResources&amp; getCurrentFrameResources();</pre>
+  <div class="body">
+    <p>The resources of the current frame slot (0 or 1): the frame's <code>commandBuffer</code>, the swapchain-sized <code>depthTexture</code> and the slot's fence value. See <a href="types.html#FrameResources">FrameResources</a>. Between <code>beginFrame</code> and <code>endFrame</code> the command buffer is recording; record your commands into it. The slot changes in <code>endFrame</code>, so fetch it every frame.</p>
+  </div>
+</div>
+
+<div class="api" id="getBindlessDescriptorSet">
+  <pre class="sig">DescriptorSetHandle getBindlessDescriptorSet();</pre>
+  <div class="body">
+    <p>The engine's bindless texture set: <code>MAX_BINDLESS_TEXTURES</code> combined image samplers at set 0, binding 0, visible to fragment shaders. Pipelines from <code>createPipeline</code> use its layout. Bind it with <code>bindDescriptorSet(commandBuffer, pipeline, set, 0)</code> before drawing with a pipeline that samples textures. See <a href="materials.html">Materials and textures</a> for how textures get a slot.</p>
+  </div>
+</div>
+
+<h2><span class="n">3</span>Recording commands</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 340" role="img" aria-label="Commands outside a render pass: dispatch, memoryBarrier, transitionImageLayout. Commands inside a render pass: draw, drawIndexed, drawIndexedIndirect and drawIndexedIndirectCount. beginRendering enters the pass and endRendering leaves it. Binding, push constants, viewport, scissor and cull mode are allowed in both.">
+    <path d="M190,58 C190,18 570,18 570,58" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="380" y="22" class="mid small">beginRendering (Engine::beginPass)</text>
+
+    <rect x="10" y="60" width="360" height="150" rx="8" class="zone"/>
+    <text x="26" y="84" class="title">Outside a render pass</text>
+    <text x="26" y="102" class="small">compute pass callback, or between passes</text>
+    <text x="40" y="130" class="mono">dispatch</text>
+    <text x="40" y="152" class="mono">memoryBarrier</text>
+    <text x="40" y="174" class="mono">transitionImageLayout</text>
+    <text x="26" y="198" class="small">dispatch needs a compute pipeline bound</text>
+
+    <rect x="390" y="60" width="360" height="150" rx="8" class="zone"/>
+    <text x="406" y="84" class="title">Inside a render pass</text>
+    <text x="406" y="102" class="small">graphics pass callback (beginPass … endPass)</text>
+    <text x="420" y="130" class="mono">draw</text>
+    <text x="420" y="152" class="mono">drawIndexed</text>
+    <text x="420" y="174" class="mono">drawIndexedIndirect(Count)</text>
+    <text x="406" y="198" class="small">skipped while the bound pipeline is rejected</text>
+
+    <path d="M570,212 C570,252 190,252 190,212" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="380" y="232" class="mid small">endRendering (Engine::endPass)</text>
+
+    <rect x="10" y="266" width="740" height="64" rx="8" class="box"/>
+    <text x="26" y="288" class="title">Allowed in both</text>
+    <text x="170" y="288" class="mono">bindPipeline · bindDescriptorSet · pushConstants · bindIndexBuffer</text>
+    <text x="170" y="314" class="mono">setViewport · setScissor · setCullMode · writeTimestamp</text>
+  </svg>
+  <figcaption>A draw outside a pass, or a dispatch or barrier inside one, is refused with an error. <code>bindPipeline</code> also checks that a graphics pipeline matches the pass's attachment formats; if not, the pass's draws are skipped until a matching pipeline is bound.</figcaption>
+</figure>
+
+<div class="api" id="bindPipeline">
+  <pre class="sig">void bindPipeline(const CommandBufferHandle&amp; commandBuffer,
+                  const PipelineHandle&amp; pipeline);</pre>
+  <div class="body">
+    <p>Binds a graphics or compute pipeline. A compute pipeline makes <code>dispatch</code> possible and leaves the graphics pipeline alone.</p>
+    <p><span class="tag">errors</span> A graphics pipeline whose color or depth format differs from the current pass's attachments logs <code>Pipeline '…' does not match the formats of the pass's attachments, so its draws are skipped.</code> Then every draw is skipped until a matching pipeline is bound. An unknown pipeline also skips draws and dispatches.</p>
+  </div>
+</div>
+
+<div class="api" id="bindDescriptorSet">
+  <pre class="sig">void bindDescriptorSet(const CommandBufferHandle&amp; commandBuffer,
+                       const PipelineHandle&amp; pipeline,
+                       const DescriptorSetHandle&amp; descriptorSet,
+                       uint32_t setIndex = 0);</pre>
+  <div class="body">
+    <p>Binds a descriptor set for <code>pipeline</code>'s bind point. Every pipeline has exactly one set, at index 0, so <code>setIndex</code> is 0. In practice the set is <code>getBindlessDescriptorSet()</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="pushConstants">
+  <pre class="sig">void pushConstants(const CommandBufferHandle&amp; commandBuffer,
+                   const PipelineHandle&amp; pipeline, ShaderType stage,
+                   const void* data, uint32_t size, uint32_t offset = 0);</pre>
+  <div class="body">
+    <p>Copies up to 16 bytes into the push constants, which the next draws or dispatches read.</p>
+    <dl>
+      <dt>stage</dt><dd><code>ShaderType::COMPUTE</code> for a compute pipeline, <code>ShaderType::VERTEX_FRAGMENT</code> for a graphics pipeline. Anything else is refused.</dd>
+      <dt>size, offset</dt><dd>Bytes. <code>offset + size</code> must be at most <code>PUSH_CONSTANTS_SIZE</code> (16); a bigger push logs an error and is dropped. A typical layout is one 8-byte buffer address and two 4-byte values.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="bindIndexBuffer">
+  <pre class="sig">void bindIndexBuffer(const CommandBufferHandle&amp; commandBuffer,
+                     const BufferHandle&amp; buffer, uint64_t offset,
+                     Format indexType);</pre>
+  <div class="body">
+    <p>Binds an index buffer for <code>drawIndexed</code> and the indirect indexed draws. The buffer needs <code>BufferUsage::INDEX</code>.</p>
+    <dl>
+      <dt>offset</dt><dd>Bytes from the start of the buffer.</dd>
+      <dt>indexType</dt><dd><code>Format::U16_UINT</code> or <code>Format::U32_UINT</code>.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="setViewport">
+  <pre class="sig">bool setViewport(const CommandBufferHandle&amp; commandBuffer, float x, float y,
+                 float width, float height,
+                 float minDepth = 0.0f, float maxDepth = 1.0f);</pre>
+  <div class="body">
+    <p>Sets the viewport, in pixels, with <code>x</code>, <code>y</code> at the top-left corner. RASM flips it (negative height) so that clip space is Y-up. <code>beginPass</code> already sets it to the whole target; change it to draw into a part of it, as <code>examples/01_render_graph</code> does to keep the image's shape.</p>
+  </div>
+</div>
+
+<div class="api" id="setScissor">
+  <pre class="sig">bool setScissor(const CommandBufferHandle&amp; commandBuffer, int32_t x,
+                int32_t y, uint32_t width, uint32_t height);</pre>
+  <div class="body">
+    <p>Sets the scissor rectangle in pixels, top-left origin. <code>beginPass</code> sets it to the whole target.</p>
+  </div>
+</div>
+
+<div class="api" id="setCullMode">
+  <pre class="sig">bool setCullMode(const CommandBufferHandle&amp; commandBuffer, CullMode cullMode);</pre>
+  <div class="body">
+    <p>Sets which faces the next draws skip. Every pipeline takes its cull mode from here. Front faces are counter-clockwise. <code>beginPass</code> sets <code>CullMode::NONE</code>, and <code>drawScene</code> changes it and sets it back.</p>
+  </div>
+</div>
+
+<div class="api" id="draw">
+  <pre class="sig">void draw(const CommandBufferHandle&amp; commandBuffer,
+          const uint32_t vertexCount, uint32_t instanceCount = 1);</pre>
+  <div class="body">
+    <p>Draws <code>vertexCount</code> vertices with no vertex buffer; the vertex shader uses <code>SV_VertexID</code>, which counts from 0. Must be inside a render pass with a graphics pipeline bound. <code>draw(commandBuffer, 3)</code> with a full-screen triangle is the usual post-process pass.</p>
+  </div>
+</div>
+
+<div class="api" id="drawIndexed">
+  <pre class="sig">void drawIndexed(const CommandBufferHandle&amp; commandBuffer,
+                 uint32_t indexCount, uint32_t instanceCount = 1,
+                 uint32_t vertexOffset = 0, uint32_t firstIndex = 0,
+                 uint32_t firstInstance = 0);</pre>
+  <div class="body">
+    <p>Draws with the bound index buffer. <code>vertexOffset</code> is added to each index. Inside a render pass only.</p>
+  </div>
+</div>
+
+<div class="api" id="drawIndexedIndirect">
+  <pre class="sig">void drawIndexedIndirect(const CommandBufferHandle&amp; commandBuffer,
+                         const BufferHandle&amp; drawInfoBuffer, uint32_t offset,
+                         uint32_t drawCount, uint32_t stride);</pre>
+  <div class="body">
+    <p>Draws <code>drawCount</code> indexed draws whose parameters the GPU reads from <code>drawInfoBuffer</code> (usage <code>INDIRECT</code>). Each record starts with five 32-bit values: index count, instance count, first index, vertex offset, first instance.</p>
+    <dl>
+      <dt>offset</dt><dd>Byte offset of the first record.</dd>
+      <dt>stride</dt><dd>Bytes from one record to the next; at least 20.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="drawIndexedIndirectCount">
+  <pre class="sig">void drawIndexedIndirectCount(const CommandBufferHandle&amp; commandBuffer,
+                              const BufferHandle&amp; drawInfoBuffer,
+                              uint64_t offset,
+                              const BufferHandle&amp; countBuffer,
+                              uint64_t countOffset, uint32_t maxDrawCount,
+                              uint32_t stride);</pre>
+  <div class="body">
+    <p>The same, but the GPU also reads the number of draws, a <code>uint32_t</code> at <code>countOffset</code> in <code>countBuffer</code>, and draws at most <code>maxDrawCount</code>. This is how <code>drawScene</code> draws what culling kept.</p>
+  </div>
+</div>
+
+<div class="api" id="dispatch">
+  <pre class="sig">void dispatch(const CommandBufferHandle&amp; commandBuffer, uint32_t groupCountX,
+              uint32_t groupCountY = 1, uint32_t groupCountZ = 1);</pre>
+  <div class="body">
+    <p>Runs the bound compute pipeline on <code>groupCountX × groupCountY × groupCountZ</code> work groups. The group size is the shader's <code>[numthreads]</code>, so for N items use <code>(N + size − 1) / size</code> groups.</p>
+    <p><span class="tag">errors</span> Refused inside a render pass (<code>dispatches must be recorded outside a render pass (use RenderGraph::addComputePass).</code>) and when no compute pipeline is bound.</p>
+  </div>
+</div>
+
+<div class="api" id="memoryBarrier">
+  <pre class="sig">void memoryBarrier(const CommandBufferHandle&amp; commandBuffer,
+                   PipelineStage before, PipelineStage after);</pre>
+  <div class="body">
+    <p>Makes buffer writes of the <code>before</code> stages finish and become visible to the <code>after</code> stages. It covers every way shaders, indirect draws, index fetch and the CPU touch buffers. It does not change texture layouts (use <code>transitionImageLayout</code>). Outside a render pass only.</p>
+    <dl>
+      <dt>before, after</dt><dd>One or more <a href="#PipelineStage">PipelineStage</a> flags, combined with <code>|</code>.</dd>
+    </dl>
+    <p>The render graph already puts one around compute passes. Record your own between two dependent dispatches (<code>COMPUTE</code> → <code>COMPUTE</code>), and before reading a buffer on the CPU (… → <code>HOST</code>).</p>
+  </div>
+</div>
+
+<div class="api" id="PipelineStage">
+  <pre class="sig">enum class PipelineStage : uint32_t
+{
+    COMPUTE  = 1u &lt;&lt; 0,
+    GRAPHICS = 1u &lt;&lt; 1,
+    HOST     = 1u &lt;&lt; 2,
+};
+
+constexpr PipelineStage operator|(PipelineStage a, PipelineStage b);
+constexpr bool          hasStage(PipelineStage stages, PipelineStage stage);</pre>
+  <div class="body">
+    <p>Flags for <code>memoryBarrier</code>. <code>operator|</code> combines them; <code>hasStage</code> tests one.</p>
+    <dl>
+      <dt>COMPUTE</dt><dd>Compute shaders.</dd>
+      <dt>GRAPHICS</dt><dd>Indirect argument reads, index fetch, vertex and fragment shaders.</dd>
+      <dt>HOST</dt><dd>The CPU: <code>readBuffer</code> after the barrier, or CPU writes before it.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="beginRendering">
+  <pre class="sig">bool beginRendering(const CommandBufferHandle&amp; commandBuffer,
+                    TextureHandle colorAttachment,
+                    TextureHandle depthAttachment,
+                    const glm::vec4&amp; clearColor);</pre>
+  <div class="body">
+    <p>Starts a render pass into one color and one depth texture. Color is cleared to <code>clearColor</code> and kept; depth is cleared to 0 and not kept. Both attachments are required. <code>Engine::beginPass</code> calls this after the layout transitions and also sets the viewport, scissor and cull mode, so use <code>beginPass</code> unless you build the whole frame yourself.</p>
+  </div>
+</div>
+
+<div class="api" id="endRendering">
+  <pre class="sig">bool endRendering(const CommandBufferHandle&amp; commandBuffer);</pre>
+  <div class="body">
+    <p>Ends the render pass. <code>Engine::endPass</code> calls it.</p>
+  </div>
+</div>
+
+<div class="api" id="transitionImageLayout">
+  <pre class="sig">bool transitionImageLayout(const CommandBufferHandle&amp; commandBuffer,
+                           TextureHandle texture, TextureUsage oldUsage,
+                           TextureUsage newUsage);</pre>
+  <div class="body">
+    <p>Records a barrier that moves a texture from one use to another. The barrier waits for <code>oldUsage</code> and blocks <code>newUsage</code>.</p>
+    <dl>
+      <dt>oldUsage</dt><dd><code>UNKNOWN</code> (the contents are thrown away), <code>COLOR_ATTACHMENT</code>, <code>DEPTH_STENCIL_ATTACHMENT</code> or <code>SAMPLED</code>.</dd>
+      <dt>newUsage</dt><dd><code>COLOR_ATTACHMENT</code>, <code>DEPTH_STENCIL_ATTACHMENT</code>, <code>SAMPLED</code> or <code>PRESENT_SRC</code>.</dd>
+    </dl>
+    <p><span class="tag">errors</span> Another usage logs an error, records nothing and returns <code>false</code>. <code>beginPass</code> and <code>endPass</code> already do the transitions of their attachments.</p>
+  </div>
+</div>
+
+<div class="api" id="beginCommandBuffer">
+  <pre class="sig">bool beginCommandBuffer(const CommandBufferHandle&amp; commandBuffer);
+bool endCommandBuffer(const CommandBufferHandle&amp; commandBuffer);</pre>
+  <div class="body">
+    <p>Start and finish recording. <code>beginFrame</code> and <code>endFrame</code> do this for the frame's command buffer; call them only for a command buffer of your own. <code>beginCommandBuffer</code> also resets the context's recording state (in a pass or not, pipeline bound or not), which is shared by all command buffers, so record one at a time.</p>
+  </div>
+</div>
+
+<h2><span class="n">4</span>Buffers</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="fillBuffer checks the range. If the buffer is mapped, the CPU copies the data into it at once. If not, the data goes into the 64 MiB staging ring now, and a GPU copy into the device-local buffer runs at the next submit, before that submit's commands.">
+    <rect x="10" y="74" width="170" height="54" rx="6" class="cpu"/>
+    <text x="95" y="96" class="mid mono">fillBuffer</text>
+    <text x="95" y="115" class="mid small">range and size checked</text>
+    <line x1="180" y1="101" x2="208" y2="101" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="210" y="74" width="160" height="54" rx="6" class="box"/>
+    <text x="290" y="96" class="mid title">Mapped memory?</text>
+    <text x="290" y="115" class="mid small">hostVisible, ReBAR</text>
+
+    <path d="M370,90 L398,48" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="352" y="66" class="small">yes</text>
+    <rect x="400" y="20" width="160" height="54" rx="6" class="cpu"/>
+    <text x="480" y="42" class="mid title">CPU copy now</text>
+    <text x="480" y="61" class="mid small">memcpy into the buffer</text>
+    <line x1="560" y1="47" x2="588" y2="47" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="590" y="20" width="160" height="54" rx="6" class="mem"/>
+    <text x="670" y="42" class="mid title">The buffer</text>
+    <text x="670" y="61" class="mid small">later submits see it</text>
+
+    <path d="M370,112 L398,150" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="358" y="144" class="small">no</text>
+    <rect x="400" y="128" width="160" height="54" rx="6" class="mem"/>
+    <text x="480" y="150" class="mid title">Staging ring</text>
+    <text x="480" y="169" class="mid small">64 MiB, CPU copy now</text>
+    <line x1="560" y1="155" x2="588" y2="155" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="574" y="194" class="mid small t-gpu">next submit</text>
+    <rect x="590" y="128" width="160" height="54" rx="6" class="gpu"/>
+    <text x="670" y="150" class="mid title">GPU copy</text>
+    <text x="670" y="169" class="mid small">before the frame runs</text>
+  </svg>
+  <figcaption>Either way the data is in place for the next submitted frame. A mapped buffer is written at once, so it must not be in use by a frame the GPU is still running.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th><code>BufferDesc</code> flags</th><th>Memory</th><th><code>fillBuffer</code></th><th><code>readBuffer</code></th></tr>
+  <tr><td>none (default)</td><td>device-local; mapped too when the GPU has ReBAR or shared memory</td><td>staging ring, or at once when mapped</td><td>refused</td></tr>
+  <tr><td><code>hostVisible</code></td><td>CPU-writable, mapped</td><td>at once</td><td>refused</td></tr>
+  <tr><td><code>hostReadable</code></td><td>CPU-cached, mapped</td><td>at once</td><td>yes</td></tr>
+</table>
+</div>
+
+<div class="api" id="createBuffer">
+  <pre class="sig">BufferHandle createBuffer(const BufferDesc&amp; desc);</pre>
+  <div class="body">
+    <p>The <code>Engine</code> method: forwards to <a href="#RenderContext-createBuffer">RenderContext::createBuffer</a>. Usable at once.</p>
+  </div>
+</div>
+
+<div class="api" id="RenderContext-createBuffer">
+  <pre class="sig">BufferHandle createBuffer(const BufferDesc&amp; desc);</pre>
+  <div class="body">
+    <p>Creates a new buffer every time (no sharing, <code>B1</code>). Every buffer has a device address and can be a copy source and destination, whatever its <code>usage</code>. Its contents start undefined.</p>
+    <p><span class="tag">errors</span> A failed allocation logs <code>Failed to create buffer '…'</code> and returns an invalid handle.</p>
+  </div>
+</div>
+
+<div class="api" id="BufferDesc">
+  <pre class="sig">struct BufferDesc
+{
+    std::string name;
+    BufferUsage usage        = BufferUsage::STORAGE;
+    uint64_t    size         = 0;
+    bool        hostVisible  = false;
+    bool        hostReadable = false;
+
+    bool operator==(const BufferDesc&amp;) const = default;
+};</pre>
+  <div class="body">
+    <dl>
+      <dt>name</dt><dd>Shown in logs and GPU debuggers.</dd>
+      <dt>usage</dt><dd>See <a href="#BufferUsage">BufferUsage</a>.</dd>
+      <dt>size</dt><dd>Bytes, greater than 0.</dd>
+      <dt>hostVisible</dt><dd>Put it in memory the CPU writes directly. For data you change often from the CPU, with one buffer per frame slot.</dd>
+      <dt>hostReadable</dt><dd>Put it in cached memory the CPU reads, for <code>readBuffer</code>.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="BufferUsage">
+  <pre class="sig">enum class BufferUsage
+{
+    INDEX,
+    INDIRECT,
+    UNIFORM,
+    STORAGE,
+    DEVICE_ADDRESS,
+};</pre>
+  <div class="body">
+    <p>The main use, added on top of device address and copy use, which every buffer has.</p>
+    <dl>
+      <dt>INDEX</dt><dd>For <code>bindIndexBuffer</code>.</dd>
+      <dt>INDIRECT</dt><dd>Draw records or counts for the indirect draws.</dd>
+      <dt>UNIFORM</dt><dd>A uniform buffer.</dd>
+      <dt>STORAGE</dt><dd>A storage buffer (the default). Shaders usually reach it by address anyway.</dd>
+      <dt>DEVICE_ADDRESS</dt><dd>Only the address and copies.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="fillBuffer">
+  <pre class="sig">bool fillBuffer(const BufferHandle&amp; buffer, const void* data, size_t size,
+                size_t offset = 0);</pre>
+  <div class="body">
+    <p>Writes <code>size</code> bytes from <code>data</code> at <code>offset</code> (bytes). Your <code>data</code> is copied before the call returns, so you can free it. See the picture above for when the GPU sees it.</p>
+    <p><span class="tag">errors</span> <code>data</code> null, <code>size</code> 0, or a range past the end of the buffer is refused and returns <code>false</code>.</p>
+  </div>
+</div>
+
+<pre><code>// Upload 4096 start positions once, before the loop.
+// The buffer is device-local: the data goes out with the first submit.
+std::vector&lt;glm::vec2&gt; positions(4096);
+engine.getRenderContext().fillBuffer(particles, positions.data(),
+                                     positions.size() * sizeof(glm::vec2));</code></pre>
+
+<div class="api" id="readBuffer">
+  <pre class="sig">bool readBuffer(const BufferHandle&amp; buffer, void* data, size_t size,
+                size_t offset = 0);</pre>
+  <div class="body">
+    <p>Copies <code>size</code> bytes at <code>offset</code> from a <code>hostReadable</code> buffer into <code>data</code>. It does not wait for the GPU. Follow these steps so the bytes are the GPU's results:</p>
+    <ol class="steps">
+      <li><b>Write on the GPU</b> A pass writes the buffer, for example with a dispatch.</li>
+      <li><b>Barrier to the CPU</b> Record <code>memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::HOST)</code>, outside a render pass.</li>
+      <li><b>Wait</b> Wait until that frame is done. The simplest way: read it <code>MAX_FRAMES_IN_FLIGHT</code> frames later, after <code>beginFrame</code> has waited for the same frame slot (as the frame stats do). Use one buffer per frame slot.</li>
+      <li><b>Read</b> Call <code>readBuffer</code>.</li>
+    </ol>
+    <p><span class="tag">errors</span> A buffer without <code>hostReadable</code>, null <code>data</code>, size 0 or a range past the end is refused and returns <code>false</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="getBufferDeviceAddress">
+  <pre class="sig">uint64_t getBufferDeviceAddress(const BufferHandle&amp; buffer);</pre>
+  <div class="body">
+    <p>The buffer's GPU address. Put it in a push constant (or in another buffer) and use it as a pointer in Slang, e.g. <code>float2* positions;</code>. The address never changes. Returns 0 with an error for an unknown handle.</p>
+  </div>
+</div>
+
+<div class="api" id="getBufferDesc">
+  <pre class="sig">BufferDesc getBufferDesc(const BufferHandle&amp; buffer);</pre>
+  <div class="body">
+    <p>The desc the buffer was created with. An unknown handle logs an error and returns <code>BufferDesc{}</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="destroyBuffer">
+  <pre class="sig">void destroyBuffer(const BufferHandle&amp; buffer);</pre>
+  <div class="body">
+    <p>Destroys the buffer at once and drops its queued uploads. The GPU must be done with it: no frame in flight may still use it. The handle is not reused, but it is not detected as stale either (<code>D4</code>).</p>
+  </div>
+</div>
+
+<h2><span class="n">5</span>Textures</h2>
+
+<div class="api" id="createTexture">
+  <pre class="sig">TextureHandle createTexture(const TextureDesc&amp; desc);</pre>
+  <div class="body">
+    <p>The <code>Engine</code> method: forwards to <a href="#RenderContext-createTexture">RenderContext::createTexture</a>. For image files use <a href="materials.html#loadTexture">loadTexture</a> instead, which decodes, uploads and makes the texture bindless.</p>
+  </div>
+</div>
+
+<div class="api" id="RenderContext-createTexture">
+  <pre class="sig">TextureHandle createTexture(const TextureDesc&amp; desc);</pre>
+  <div class="body">
+    <p>Creates a new 2D texture every time (<code>B1</code>). A <code>SAMPLED</code> texture in an RGBA8 format (<code>R8G8B8A8_UNORM</code>, <code>R8G8B8A8_SRGB</code>, <code>B8G8R8A8_SRGB</code>) gets a full mip chain; every other texture has one level. Fill a sampled texture with <code>fillTexture</code>.</p>
+    <p><span class="tag">errors</span> A size above the device's limit, or a failed allocation, logs an error and returns an invalid handle.</p>
+  </div>
+</div>
+
+<div class="api" id="TextureDesc">
+  <pre class="sig">struct TextureDesc
+{
+    std::string  name;
+    uint32_t     width  = 0;
+    uint32_t     height = 0;
+    Format       format = Format::UNKNOWN;
+    TextureUsage usage  = TextureUsage::SAMPLED;
+
+    bool operator==(const TextureDesc&amp;) const = default;
+};</pre>
+  <div class="body">
+    <dl>
+      <dt>width, height</dt><dd>Pixels.</dd>
+      <dt>format</dt><dd>See <a href="types.html#Format">Format</a>. Color data uses <code>R8G8B8A8_SRGB</code>; normal, metallic-roughness and occlusion data <code>R8G8B8A8_UNORM</code>.</dd>
+      <dt>usage</dt><dd>What the texture is created for, see <a href="#TextureUsage">TextureUsage</a>.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="TextureUsage">
+  <pre class="sig">enum class TextureUsage
+{
+    TRANSFER_SRC,
+    TRANSFER_DST,
+    SAMPLED,
+    STORAGE,
+    COLOR_ATTACHMENT,
+    DEPTH_STENCIL_ATTACHMENT,
+    SAMPLED_COLOR_ATTACHMENT,
+    TRANSIENT_ATTACHMENT,
+    INPUT_ATTACHMENT,
+    PRESENT_SRC,
+    UNKNOWN,
+};</pre>
+  <div class="body">
+    <p>Two jobs: in <code>TextureDesc</code> it says what a texture can be used for; in <code>transitionImageLayout</code> it names the state it moves between.</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Value</th><th>At creation</th><th>In <code>transitionImageLayout</code></th></tr>
+      <tr><td><code>SAMPLED</code></td><td>read by shaders, filled from the CPU with <code>fillTexture</code></td><td>old and new</td></tr>
+      <tr><td><code>COLOR_ATTACHMENT</code></td><td>drawn into</td><td>old and new</td></tr>
+      <tr><td><code>DEPTH_STENCIL_ATTACHMENT</code></td><td>depth buffer</td><td>old and new</td></tr>
+      <tr><td><code>SAMPLED_COLOR_ATTACHMENT</code></td><td>drawn into, then read (render target color)</td><td>–</td></tr>
+      <tr><td><code>TRANSFER_SRC</code>, <code>TRANSFER_DST</code>, <code>STORAGE</code>, <code>TRANSIENT_ATTACHMENT</code>, <code>INPUT_ATTACHMENT</code></td><td>only passed on to the backend; no RASM call uses them</td><td>–</td></tr>
+      <tr><td><code>PRESENT_SRC</code></td><td>–</td><td>new only (swapchain image before present)</td></tr>
+      <tr><td><code>UNKNOWN</code></td><td>–</td><td>old only (contents thrown away)</td></tr>
+    </table>
+    </div>
+  </div>
+</div>
+
+<div class="api" id="fillTexture">
+  <pre class="sig">bool fillTexture(const TextureHandle&amp; texture, const void* data);</pre>
+  <div class="body">
+    <p>Copies pixels from the CPU straight into a <code>SAMPLED</code> texture (host image copy), builds its whole mip chain on the CPU (sRGB-aware for sRGB formats), and leaves it ready for sampling. It finishes before it returns; there is no command buffer involved.</p>
+    <dl>
+      <dt>data</dt><dd><code>width × height × 4</code> bytes of RGBA8, rows top to bottom, no padding.</dd>
+    </dl>
+    <p>The texture must not be in use by a frame the GPU is still running. Returns <code>false</code> with an error when a copy step fails.</p>
+  </div>
+</div>
+
+<div class="api" id="getTextureDesc">
+  <pre class="sig">TextureDesc getTextureDesc(const TextureHandle&amp; texture);</pre>
+  <div class="body">
+    <p>The desc the texture was created with. An unknown handle logs an error and returns <code>TextureDesc{}</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="destroyTexture">
+  <pre class="sig">void destroyTexture(const TextureHandle&amp; texture);</pre>
+  <div class="body">
+    <p>Destroys the texture at once. The GPU must be done with it. A bindless slot that points at it is <b>not</b> freed or cleared, so no shader may sample that slot afterwards.</p>
+    <p><span class="tag">errors</span> Swapchain images are refused: <code>Swapchain images belong to the swapchain and can't be destroyed.</code></p>
+  </div>
+</div>
+
+<div class="api" id="updateBindlessDescriptorSet">
+  <pre class="sig">uint32_t updateBindlessDescriptorSet(
+    const DescriptorSetHandle&amp; bindlessSet,
+    const TextureHandle&amp; texture,
+    SamplerType sampler = SamplerType::LINEAR_REPEAT,
+    uint32_t slot = MAX_BINDLESS_TEXTURES);</pre>
+  <div class="body">
+    <p>Writes <code>texture</code> with <code>sampler</code> into a slot of the bindless set and returns the slot, which shaders use as the array index. The descriptor promises the sampled layout, so the texture must be in it when a shader reads it. Prefer <a href="materials.html#addBindlessTexture">Engine::addBindlessTexture</a>, which calls this and also remembers the slot for <code>getBindlessTextureIndex</code>.</p>
+    <dl>
+      <dt>slot</dt><dd><code>MAX_BINDLESS_TEXTURES</code> (the default) takes the next free slot. A smaller value overwrites that slot; later automatic slots go past it. Slots are never given back.</dd>
+    </dl>
+    <p><span class="tag">errors</span> All slots used, or a slot above <code>MAX_BINDLESS_TEXTURES</code>, logs <code>Slot index exceeds maximum bindless textures.</code> and returns <code>UINT32_MAX</code>, as does an unknown set or texture.</p>
+  </div>
+</div>
+
+<div class="api" id="SamplerType">
+  <pre class="sig">enum class SamplerType
+{
+    LINEAR_REPEAT,
+    LINEAR_MIRRORED_REPEAT,
+    LINEAR_CLAMP,
+    NEAREST_REPEAT,
+    NEAREST_MIRRORED_REPEAT,
+    NEAREST_CLAMP,
+    COUNT,
+};</pre>
+  <div class="body">
+    <p>One of six fixed samplers, shared by all bindless textures. <code>LINEAR_*</code> filters linearly between pixels and mip levels, with 8× anisotropy. <code>NEAREST_*</code> takes the nearest pixel and mip level. The suffix is what happens outside [0, 1]: repeat, mirror, or clamp to the edge. Render targets use <code>LINEAR_CLAMP</code>. <code>COUNT</code> is not a sampler.</p>
+  </div>
+</div>
+
+<h2><span class="n">6</span>Shaders, pipelines and descriptors</h2>
+
+<p>Most applications use <a href="render-graph.html#createPipeline">Engine::createPipeline</a> and <a href="render-graph.html#createComputePipeline">Engine::createComputePipeline</a>, which compile Slang source and call the functions below. Use these directly only for a pipeline with other attachment formats or topology.</p>
+
+<div class="api" id="createShader">
+  <pre class="sig">ShaderHandle createShader(const ShaderDesc&amp; desc);</pre>
+  <div class="body">
+    <p>Creates a shader module from compiled code (SPIR-V for Vulkan). An equal <code>ShaderDesc</code> gives back the existing handle.</p>
+    <p><span class="tag">errors</span> Empty <code>code</code> or an empty <code>entryPoint</code> is refused.</p>
+  </div>
+</div>
+
+<div class="api" id="ShaderDesc">
+  <pre class="sig">struct ShaderDesc
+{
+    std::string          name;
+    ShaderType           type = ShaderType::VERTEX;
+    std::string          entryPoint;
+    std::vector&lt;uint8_t&gt; code;
+
+    bool operator==(const ShaderDesc&amp;) const = default;
+};</pre>
+  <div class="body">
+    <dl>
+      <dt>type</dt><dd><code>VERTEX</code>, <code>FRAGMENT</code> or <code>COMPUTE</code>, see <a href="types.html#ShaderType">ShaderType</a>.</dd>
+      <dt>entryPoint</dt><dd>The function name inside <code>code</code>, e.g. <code>vertMain</code>.</dd>
+      <dt>code</dt><dd>The compiled bytes.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="RenderContext-createPipeline">
+  <pre class="sig">PipelineHandle createPipeline(const PipelineDesc&amp; desc);</pre>
+  <div class="body">
+    <p>Creates a graphics pipeline (vertex + fragment shader) or a compute pipeline (compute shader). An equal <code>PipelineDesc</code> gives back the existing handle. Every pipeline has one descriptor set (the layout in the desc) and a 16-byte push constant range. A graphics pipeline has no vertex input, no blending, depth test and write with <code>GREATER_OR_EQUAL</code>, counter-clockwise front faces, and dynamic viewport, scissor and cull mode.</p>
+    <p><span class="tag">errors</span> A desc with both a compute shader and a vertex or fragment shader is refused, as are shaders of the wrong <code>type</code>. An unknown layout or shader returns an invalid handle.</p>
+  </div>
+</div>
+
+<div class="api" id="PipelineDesc">
+  <pre class="sig">struct PipelineDesc
+{
+    std::string               name;
+    ShaderHandle              vertexShader;
+    ShaderHandle              fragmentShader;
+    ShaderHandle              computeShader;
+    DescriptorSetLayoutHandle descriptorSetLayout;
+    PrimitiveTopology         topology = PrimitiveTopology::TRIANGLE_LIST;
+    Format                    colorAttachmentFormat = Format::UNKNOWN;
+    Format                    depthStencilAttachmentFormat = Format::UNKNOWN;
+
+    bool operator==(const PipelineDesc&amp;) const = default;
+};</pre>
+  <div class="body">
+    <dl>
+      <dt>computeShader</dt><dd>Valid for a compute pipeline; then leave the vertex and fragment shaders invalid.</dd>
+      <dt>descriptorSetLayout</dt><dd>Required. Usually the engine's bindless layout (the one <code>Engine::createPipeline</code> uses).</dd>
+      <dt>topology</dt><dd>See <a href="types.html#PrimitiveTopology">PrimitiveTopology</a>.</dd>
+      <dt>colorAttachmentFormat</dt><dd>Must equal the color format of the pass the pipeline is used in, or <code>bindPipeline</code> rejects it.</dd>
+      <dt>depthStencilAttachmentFormat</dt><dd>The same for the depth format.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="createBindlessDescriptorSetLayout">
+  <pre class="sig">DescriptorSetLayoutHandle createBindlessDescriptorSetLayout(
+    const BindlessDescriptorSetLayoutDesc&amp; desc);</pre>
+  <div class="body">
+    <p>Creates a set layout with one binding (0) holding an array of <code>count</code> descriptors that may be partly empty and may be updated while bound. An equal desc gives back the existing handle. The engine makes one at start-up; you rarely need another.</p>
+  </div>
+</div>
+
+<div class="api" id="BindlessDescriptorSetLayoutDesc">
+  <pre class="sig">struct BindlessDescriptorSetLayoutDesc
+{
+    std::string    name;
+    ShaderType     stage = ShaderType::FRAGMENT;
+    uint32_t       count = 0;
+    DescriptorType type  = DescriptorType::COMBINED_IMAGE_SAMPLER;
+
+    bool operator==(const BindlessDescriptorSetLayoutDesc&amp;) const = default;
+};</pre>
+  <div class="body">
+    <dl>
+      <dt>stage</dt><dd>Which shaders see the array. The engine's layout uses <code>FRAGMENT</code>.</dd>
+      <dt>count</dt><dd>Array size. The engine's layout uses <code>MAX_BINDLESS_TEXTURES</code>.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="DescriptorType">
+  <pre class="sig">enum class DescriptorType
+{
+    UNIFORM_BUFFER,
+    SAMPLER,
+    COMBINED_IMAGE_SAMPLER,
+};</pre>
+  <div class="body">
+    <p>Descriptor kinds. The engine only uses <code>COMBINED_IMAGE_SAMPLER</code> (a texture with its sampler).</p>
+  </div>
+</div>
+
+<div class="api" id="createDescriptorPool">
+  <pre class="sig">DescriptorPoolHandle createDescriptorPool(const DescriptorPoolDesc&amp; desc);</pre>
+  <div class="body">
+    <p>Creates a pool that descriptor sets are allocated from. Always a new pool.</p>
+  </div>
+</div>
+
+<div class="api" id="DescriptorPoolDesc">
+  <pre class="sig">struct DescriptorPoolDesc
+{
+    std::string        name;
+    DescriptorPoolSize sizes[MAX_DESCRIPTOR_TYPES] = {};
+    uint32_t           maxSets                     = 0;
+
+    bool operator==(const DescriptorPoolDesc&amp;) const = default;
+};</pre>
+  <div class="body">
+    <p>How many descriptors of each type the pool holds (<code>MAX_DESCRIPTOR_TYPES</code> = 1 entry) and how many sets can be allocated from it.</p>
+  </div>
+</div>
+
+<div class="api" id="DescriptorPoolSize">
+  <pre class="sig">struct DescriptorPoolSize
+{
+    DescriptorType type  = DescriptorType::COMBINED_IMAGE_SAMPLER;
+    uint32_t       count = 0;
+
+    bool operator==(const DescriptorPoolSize&amp;) const = default;
+};</pre>
+  <div class="body">
+    <p>One entry of <code>DescriptorPoolDesc::sizes</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="allocateDescriptorSet">
+  <pre class="sig">DescriptorSetHandle allocateDescriptorSet(
+    const std::string&amp; name,
+    const DescriptorPoolHandle&amp; pool,
+    const DescriptorSetLayoutHandle&amp; layout);</pre>
+  <div class="body">
+    <p>Allocates a set with <code>layout</code> from <code>pool</code>. Unknown handles or a full pool return an invalid handle.</p>
+  </div>
+</div>
+
+<div class="api" id="ShaderDescHash">
+  <pre class="sig">struct ShaderDescHash
+{
+    std::size_t operator()(const ShaderDesc&amp; desc) const;
+};
+
+struct PipelineDescHash
+{
+    std::size_t operator()(const PipelineDesc&amp; desc) const;
+};
+
+struct BindlessDescriptorSetLayoutDescHash
+{
+    std::size_t operator()(
+        const BindlessDescriptorSetLayoutDesc&amp; desc) const;
+};</pre>
+  <div class="body">
+    <p>Hash functions for the three descs that <code>RenderContext</code> deduplicates (shaders, pipelines, set layouts). Each hashes every field with <code>hashCombine</code>. A new field in one of these descs must be added to its hash in <code>src/rhi/resource.cpp</code> too.</p>
+  </div>
+</div>
+
+<h2><span class="n">7</span>Render targets</h2>
+
+<div class="api" id="RenderContext-createRenderTarget">
+  <pre class="sig">RenderTargetHandle createRenderTarget(const RenderTargetDesc&amp; desc);</pre>
+  <div class="body">
+    <p>What <a href="render-graph.html#createRenderTarget">Engine::createRenderTarget</a> calls: a color and a depth texture per frame slot, both colors made bindless with <code>LINEAR_CLAMP</code>. See <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>.</p>
+  </div>
+</div>
+
+<div class="api" id="getRenderTarget">
+  <pre class="sig">const RenderTarget&amp; getRenderTarget(const RenderTargetHandle&amp; handle);</pre>
+  <div class="body">
+    <p>The target's textures (<code>attachments[slot].color</code> and <code>.depth</code> per frame slot), size, formats and clear color. See <a href="types.html#RenderTarget">RenderTarget</a>. An unknown handle logs <code>Render target handle not found.</code> and returns an empty target with invalid handles.</p>
+  </div>
+</div>
+
+<h2><span class="n">8</span>Frames, fences and the swapchain</h2>
+
+<div class="callout">
+  <strong>The engine runs these for you</strong>
+  <p><code>beginFrame</code> and <code>endFrame</code> wait for the frame slot, acquire, begin and end the command buffer, submit and present. Call the functions below yourself only for extra work outside the frame, and never <code>acquireNextImage</code>, <code>present</code> or <code>recreateSwapchain</code> while the engine runs frames.</p>
+</div>
+
+<div class="api" id="createCommandBuffer">
+  <pre class="sig">CommandBufferHandle createCommandBuffer(const std::string&amp; name);</pre>
+  <div class="body">
+    <p>Creates a command buffer for the one graphics queue.</p>
+  </div>
+</div>
+
+<div class="api" id="createFence">
+  <pre class="sig">FenceHandle createFence(const std::string&amp; name, uint64_t initialValue = 0);</pre>
+  <div class="body">
+    <p>Creates a timeline fence: a 64-bit counter that a submit sets to a value when its work is done.</p>
+  </div>
+</div>
+
+<div class="api" id="waitForFence">
+  <pre class="sig">bool waitForFence(FenceHandle fence, uint64_t value,
+                  uint64_t timeout = UINT64_MAX);</pre>
+  <div class="body">
+    <p>Blocks until the fence reaches <code>value</code>. <code>timeout</code> is in nanoseconds. Returns <code>false</code> with an error on timeout or failure.</p>
+  </div>
+</div>
+
+<div class="api" id="submit">
+  <pre class="sig">bool submit(const CommandBufferHandle* commandBuffers,
+            uint32_t commandBufferCount, FenceHandle signalFence,
+            uint64_t signalValue, bool presentsSwapchainImage);</pre>
+  <div class="body">
+    <p>Submits up to 8 command buffers as one submission; they run in array order. Pending <code>fillBuffer</code> uploads are submitted first, so these command buffers see their data.</p>
+    <dl>
+      <dt>signalFence, signalValue</dt><dd>The fence is set to <code>signalValue</code> when the work is done. An invalid handle signals nothing.</dd>
+      <dt>presentsSwapchainImage</dt><dd><code>true</code> only for the frame that draws the acquired swapchain image: it waits for the acquire and signals the present.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="acquireNextImage">
+  <pre class="sig">[[nodiscard]] SwapchainStatus acquireNextImage(uint32_t&amp; imageIndex);
+[[nodiscard]] SwapchainStatus present();
+[[nodiscard]] SwapchainStatus recreateSwapchain();</pre>
+  <div class="body">
+    <p>The swapchain steps of <code>beginFrame</code>, <code>endFrame</code> and a resize. Each returns a <a href="types.html#SwapchainStatus">SwapchainStatus</a>. <code>recreateSwapchain</code> sizes the swapchain from the window's pixel size; on success the swapchain image handles change. Use <code>Engine::recreateSwapchain</code>, which also rebuilds the depth textures.</p>
+  </div>
+</div>
+
+<div class="api" id="getSwapchainImages">
+  <pre class="sig">std::vector&lt;TextureHandle&gt; getSwapchainImages();
+Format                     getSwapchainImageFormat();
+glm::uvec2                 getSwapchainExtent();</pre>
+  <div class="body">
+    <p>The swapchain's image handles (they change when it is re-created), its color format (RASM asks for <code>B8G8R8A8_SRGB</code>), and its size in pixels. Use the format for render targets and pipelines that should match the swapchain.</p>
+  </div>
+</div>
+
+<h2><span class="n">9</span>GPU timestamps and memory</h2>
+
+<p>For timing inside a frame, <a href="render-graph.html#beginGpuTimer">beginGpuTimer</a> is simpler: it uses the engine's own query pools and shows up in the frame stats.</p>
+
+<div class="api" id="createTimestampQueryPool">
+  <pre class="sig">QueryPoolHandle createTimestampQueryPool(const std::string&amp; name,
+                                         uint32_t count);</pre>
+  <div class="body">
+    <p>Creates <code>count</code> timestamp queries, already reset. Returns an invalid handle, with a warning, when the GPU's queue has no timestamps.</p>
+  </div>
+</div>
+
+<div class="api" id="writeTimestamp">
+  <pre class="sig">void writeTimestamp(const CommandBufferHandle&amp; commandBuffer,
+                    const QueryPoolHandle&amp; pool, uint32_t index);</pre>
+  <div class="body">
+    <p>Records the GPU time into query <code>index</code> when the GPU reaches this point. <code>index</code> must be below the pool's count.</p>
+  </div>
+</div>
+
+<div class="api" id="resetQueries">
+  <pre class="sig">void resetQueries(const QueryPoolHandle&amp; pool);</pre>
+  <div class="body">
+    <p>Resets all queries of the pool, from the CPU, at once. The GPU must be done with the pool.</p>
+  </div>
+</div>
+
+<div class="api" id="getTimestamps">
+  <pre class="sig">bool getTimestamps(const QueryPoolHandle&amp; pool, uint32_t count,
+                   uint64_t* nanoseconds);</pre>
+  <div class="body">
+    <p>Reads the first <code>count</code> queries into <code>nanoseconds</code>, as nanoseconds after the earliest of them. It does not wait: it returns <code>false</code> if any of them has not been written since the last reset.</p>
+  </div>
+</div>
+
+<div class="api" id="queryVRAMStats">
+  <pre class="sig">VRAMStats queryVRAMStats();</pre>
+  <div class="body">
+    <p>The memory budget and usage of the GPU heaps, from the driver, right now. See <a href="types.html#VRAMStats">VRAMStats</a>. <code>Engine::queryMemoryStats</code> returns the same.</p>
+  </div>
+</div>
+
+<h2><span class="n">10</span>Lifetime</h2>
+
+<div class="api" id="RenderContext">
+  <pre class="sig">     RenderContext(Engine* owner);
+     ~RenderContext();
+bool initialize(Backend backend);
+void cleanup();</pre>
+  <div class="body">
+    <p>The <code>Engine</code> owns its <code>RenderContext</code>, initializes it in its constructor and cleans it up in its destructor. Do not create another one or call these. <code>initialize</code> creates the device for the backend (only <code>VULKAN</code> exists), the swapchain and the six samplers. <code>cleanup</code> waits until the GPU is idle and destroys every object it still holds.</p>
+  </div>
+</div>
+
+<div class="callout warn">
+  <strong>Known limits</strong>
+  <ul>
+    <li>Only buffers and textures can be destroyed, and only by hand; nothing waits for the GPU for you (<code>D4</code>).</li>
+    <li>Each call looks its handles up in a hash map (<code>P4</code>).</li>
+    <li>There is one queue: no async compute or transfer queue (D13).</li>
+  </ul>
+  <p>How these calls reach Vulkan: the guide <a href="../guides/rhi.html">The RHI and the Vulkan backend</a>, and for uploads <a href="../guides/gpu-memory.html">How data reaches the GPU</a>.</p>
+</div>
+
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Types, Handles and Limits · RASM</title>
+<meta name="description" content="Handle and every handle alias, the enums and plain structs of types.h, Window, VRAMStats, and every compile-time limit with its value and header.">
+<meta name="rasm-sources" content="include/rasm/handle.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h include/rasm/engine.h include/rasm/entity.h include/rasm/light.h include/rasm/material.h include/rasm/mesh.h include/rasm/scene.h src/core/handle.cpp src/platform/window.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanUtils.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/assets/texture.cpp src/assets/material.cpp src/assets/mesh.cpp src/scene/camera.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/scene.cpp src/renderer/gpuScene.cpp src/renderer/frameStats.cpp src/engine.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="api/types.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">API reference</p>
+<h1>Types, handles and limits</h1>
+<p class="lead">The small shared types: the handle that names every engine object, the enums and plain structs of <code>rasm/types.h</code>, the window state, the memory stats, and every compile-time limit.</p>
+
+<h2><span class="n">1</span>Handles</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="A CameraHandle with index 3 and generation 1 points at slot 3 of the engine's camera list. Slot 0 is never used. Indices count up from 1, so with MAX_CAMERAS of 8 the ninth slot, index 8, is refused and 7 cameras fit.">
+    <rect x="250" y="10" width="260" height="50" rx="6" class="cpu"/>
+    <text x="380" y="32" class="mid mono">CameraHandle</text>
+    <text x="380" y="50" class="mid small">index = 3 · generation = 1</text>
+    <line x1="340" y1="60" x2="252" y2="108" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="268" y="84" class="end small">index → slot</text>
+
+    <text x="20" y="102" class="small">camera list</text>
+    <rect x="20"  y="110" width="70" height="44" rx="4" class="ghost"/><text x="55"  y="137" class="mid small t-faint">unused</text>
+    <rect x="98"  y="110" width="70" height="44" rx="4" class="box"/><text x="133" y="137" class="mid small">camera</text>
+    <rect x="176" y="110" width="70" height="44" rx="4" class="box"/><text x="211" y="137" class="mid small">camera</text>
+    <rect x="254" y="110" width="70" height="44" rx="4" class="cpu"/><text x="289" y="137" class="mid small">camera</text>
+    <rect x="332" y="110" width="70" height="44" rx="4" class="box"/><text x="367" y="137" class="mid small">camera</text>
+    <rect x="410" y="110" width="70" height="44" rx="4" class="box"/><text x="445" y="137" class="mid small">camera</text>
+    <rect x="488" y="110" width="70" height="44" rx="4" class="box"/><text x="523" y="137" class="mid small">camera</text>
+    <rect x="566" y="110" width="70" height="44" rx="4" class="box"/><text x="601" y="137" class="mid small">camera</text>
+    <rect x="660" y="110" width="80" height="44" rx="4" class="hot"/><text x="700" y="137" class="mid small t-hot">refused</text>
+
+    <text x="55"  y="172" class="mid mono">0</text><text x="133" y="172" class="mid mono">1</text><text x="211" y="172" class="mid mono">2</text>
+    <text x="289" y="172" class="mid mono">3</text><text x="367" y="172" class="mid mono">4</text><text x="445" y="172" class="mid mono">5</text>
+    <text x="523" y="172" class="mid mono">6</text><text x="601" y="172" class="mid mono">7</text><text x="700" y="172" class="mid mono t-hot">8</text>
+    <text x="700" y="190" class="mid small t-hot">≥ MAX_CAMERAS</text>
+
+    <text x="20" y="206" class="small">Each type counts its indices from 1, so slot 0 stays empty and {0, 0} means "no object".</text>
+    <text x="20" y="222" class="small">A limit of 8 holds 7 objects. A refused or failed create still uses up its index.</text>
+  </svg>
+  <figcaption>A handle is an index into one of the engine's lists. It holds no pointer, so it is cheap to copy and to store.</figcaption>
+</figure>
+
+<div class="api" id="Handle">
+  <pre class="sig">template &lt;typename Tag&gt;
+struct Handle
+{
+    uint64_t index      = 0;
+    uint64_t generation = 0;
+
+    [[nodiscard]] bool isValid() const { return generation != 0; }
+    bool operator==(const Handle&amp; other) const;
+};</pre>
+  <div class="body">
+    <p>The name of an engine object. <code>Tag</code> is an empty struct that makes each kind a different type, so a <code>MeshHandle</code> cannot be passed where a <code>TextureHandle</code> is expected.</p>
+    <dl>
+      <dt>index</dt><dd>The slot in the engine's list for that kind of object. Starts at 1.</dd>
+      <dt>generation</dt><dd>1 for every object the engine creates; 0 for a default-constructed handle.</dd>
+      <dt>isValid()</dt><dd><code>generation != 0</code>. Every create function returns an invalid (<code>{}</code>) handle on failure, so check it.</dd>
+      <dt>operator==</dt><dd>Equal when both <code>index</code> and <code>generation</code> are equal.</dd>
+    </dl>
+    <p><code>isValid()</code> does not tell you that an object still exists: handles are never reused or invalidated, and the generation is always 1 (<code>D4</code>).</p>
+  </div>
+</div>
+
+<div class="api" id="HandleHash">
+  <pre class="sig">struct HandleHash
+{
+    template &lt;typename Tag&gt;
+    std::size_t operator()(const Handle&lt;Tag&gt;&amp; handle) const;
+};</pre>
+  <div class="body">
+    <p>A hash for any handle, so handles can be keys: <code>std::unordered_map&lt;TextureHandle, uint32_t, HandleHash&gt;</code>. It combines the hashes of <code>index</code> and <code>generation</code> with <code>hashCombine</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="hashCombine">
+  <pre class="sig">inline std::size_t hashCombine(std::size_t seed, std::size_t value);</pre>
+  <div class="body">
+    <p>Mixes <code>value</code> into <code>seed</code> (the Boost formula with the 64-bit golden ratio). Used by <code>HandleHash</code> and the desc hashes in <code>src/rhi/resource.cpp</code>.</p>
+  </div>
+</div>
+
+<h3>Every handle type</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Alias</th><th>Names, and what makes it</th></tr>
+  <tr><td><code>SceneHandle</code></td><td>a scene: <a href="scene.html#createScene">createScene</a></td></tr>
+  <tr><td><code>EntityHandle</code></td><td>an entity: <a href="scene.html#createEntity">createEntity</a></td></tr>
+  <tr><td><code>MeshHandle</code></td><td>a mesh: <a href="scene.html#createMesh">createMesh</a>, <a href="scene.html#loadMesh">loadMesh</a>, <a href="scene.html#loadGLTF">loadGLTF</a></td></tr>
+  <tr><td><code>MaterialHandle</code></td><td>a material: <a href="materials.html#createMaterial">createMaterial</a></td></tr>
+  <tr><td><code>LightHandle</code></td><td>a light: <a href="scene.html#createLight">createLight</a></td></tr>
+  <tr><td><code>CameraHandle</code></td><td>a camera: <a href="camera.html#createCamera">createCamera</a></td></tr>
+  <tr><td><code>TextureHandle</code></td><td>a GPU texture: <a href="materials.html#loadTexture">loadTexture</a>, <a href="low-level.html#createTexture">createTexture</a>, render targets, swapchain images</td></tr>
+  <tr><td><code>BufferHandle</code></td><td>a GPU buffer: <a href="low-level.html#createBuffer">createBuffer</a></td></tr>
+  <tr><td><code>RenderTargetHandle</code></td><td>an offscreen color + depth target: <a href="render-graph.html#createRenderTarget">createRenderTarget</a></td></tr>
+  <tr><td><code>PipelineHandle</code></td><td>a graphics or compute pipeline: <a href="render-graph.html#createPipeline">createPipeline</a>, <a href="render-graph.html#createComputePipeline">createComputePipeline</a></td></tr>
+  <tr><td><code>ShaderHandle</code></td><td>a compiled shader: <a href="low-level.html#createShader">createShader</a></td></tr>
+  <tr><td><code>CommandBufferHandle</code></td><td>a command buffer: <a href="low-level.html#createCommandBuffer">createCommandBuffer</a>; the frame's one in <code>FrameResources</code></td></tr>
+  <tr><td><code>FenceHandle</code></td><td>a timeline fence: <a href="low-level.html#createFence">createFence</a></td></tr>
+  <tr><td><code>QueryPoolHandle</code></td><td>timestamp queries: <a href="low-level.html#createTimestampQueryPool">createTimestampQueryPool</a></td></tr>
+  <tr><td><code>DescriptorSetLayoutHandle</code></td><td>a descriptor set layout: <a href="low-level.html#createBindlessDescriptorSetLayout">createBindlessDescriptorSetLayout</a></td></tr>
+  <tr><td><code>DescriptorPoolHandle</code></td><td>a descriptor pool: <a href="low-level.html#createDescriptorPool">createDescriptorPool</a></td></tr>
+  <tr><td><code>DescriptorSetHandle</code></td><td>a descriptor set: <a href="low-level.html#allocateDescriptorSet">allocateDescriptorSet</a>; the engine's one from <a href="low-level.html#getBindlessDescriptorSet">getBindlessDescriptorSet</a></td></tr>
+  <tr><td><code>WindowHandle</code></td><td>the OS window, in <code>Window::handle</code>. Made by <a href="engine.html#createWindow">createWindow</a>; its <code>index</code> holds the SDL window pointer.</td></tr>
+  <tr><td><code>SwapchainHandle</code></td><td>declared, not used</td></tr>
+  <tr><td><code>ResourceHandle</code></td><td>declared, not used</td></tr>
+</table>
+</div>
+
+<p>Each alias is <code>Handle&lt;XTag&gt;</code> with its own tag: <code>MeshTag</code>, <code>BufferTag</code>, <code>TextureTag</code>, <code>MaterialTag</code>, <code>PipelineTag</code>, <code>CommandBufferTag</code>, <code>FenceTag</code>, <code>SwapchainTag</code>, <code>ShaderTag</code>, <code>SceneTag</code>, <code>EntityTag</code>, <code>CameraTag</code>, <code>WindowTag</code>, <code>ResourceTag</code>, <code>RenderTargetTag</code>, <code>LightTag</code>, <code>DescriptorSetLayoutTag</code>, <code>DescriptorPoolTag</code>, <code>DescriptorSetTag</code>, <code>QueryPoolTag</code>. The tags are only declared, never defined.</p>
+
+<div class="api" id="HandleManager">
+  <pre class="sig">class HandleManager
+{
+public:
+    MeshHandle                getNextMeshHandle();
+    ShaderHandle              getNextShaderHandle();
+    BufferHandle              getNextBufferHandle();
+    TextureHandle             getNextTextureHandle();
+    PipelineHandle            getNextPipelineHandle();
+    CommandBufferHandle       getNextCommandBufferHandle();
+    FenceHandle               getNextFenceHandle();
+    SwapchainHandle           getNextSwapchainHandle();
+    RenderTargetHandle        getNextRenderTargetHandle();
+    DescriptorSetLayoutHandle getNextDescriptorSetLayoutHandle();
+    DescriptorPoolHandle      getNextDescriptorPoolHandle();
+    DescriptorSetHandle       getNextDescriptorSetHandle();
+    QueryPoolHandle           getNextQueryPoolHandle();
+    MaterialHandle            getNextMaterialHandle();
+    CameraHandle              getNextCameraHandle();
+    EntityHandle              getNextEntityHandle();
+    LightHandle               getNextLightHandle();
+    SceneHandle               getNextSceneHandle();
+
+private:
+    HandleCounters nextHandle = {};
+};</pre>
+  <div class="body">
+    <p>The engine's handle source. Each <code>getNext…Handle</code> returns <code>{counter, 1}</code> and adds 1 to that kind's counter. Applications never call it: the engine owns one and the create functions use it.</p>
+  </div>
+</div>
+
+<div class="api" id="HandleCounters">
+  <pre class="sig">struct HandleCounters
+{
+    uint64_t scene               = 1;
+    uint64_t entity              = 1;
+    uint64_t mesh                = 1;
+    uint64_t texture             = 1;
+    uint64_t material            = 1;
+    uint64_t buffer              = 1;
+    uint64_t pipeline            = 1;
+    uint64_t shader              = 1;
+    uint64_t commandBuffer       = 1;
+    uint64_t fence               = 1;
+    uint64_t swapchain           = 1;
+    uint64_t renderTarget        = 1;
+    uint64_t descriptorSetLayout = 1;
+    uint64_t descriptorPool      = 1;
+    uint64_t descriptorSet       = 1;
+    uint64_t queryPool           = 1;
+    uint64_t camera              = 1;
+    uint64_t light               = 1;
+};</pre>
+  <div class="body">
+    <p>The next index of each handle kind, all starting at 1. This is why slot 0 is never used.</p>
+  </div>
+</div>
+
+<h2><span class="n">2</span>Enums in <code>rasm/types.h</code></h2>
+
+<div class="api" id="Format">
+  <pre class="sig">enum class Format
+{
+    R8G8B8A8_UNORM, R8G8B8A8_SRGB, B8G8R8A8_SRGB, R8G8B8_UNORM,
+    R16G16B16A16_SFLOAT, R32G32B32_SFLOAT, R32G32B32A32_SFLOAT,
+    D24_UNORM_S8_UINT, D32_SFLOAT, D32_SFLOAT_S8_UINT,
+    R32G32_SFLOAT, U16_UINT, U32_UINT, UNKNOWN
+};</pre>
+  <div class="body">
+    <p>Texture, attachment and index formats. Each maps to the Vulkan format of the same name (<code>R8G8B8A8_UNORM</code> → <code>VK_FORMAT_R8G8B8A8_UNORM</code>), except the index types.</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Value</th><th>Used for</th></tr>
+      <tr><td><code>R8G8B8A8_SRGB</code></td><td>color textures: albedo, emissive. The default of <code>loadTexture</code>. Gets a mip chain.</td></tr>
+      <tr><td><code>R8G8B8A8_UNORM</code></td><td>data textures: normal, metallic-roughness, occlusion. Gets a mip chain.</td></tr>
+      <tr><td><code>B8G8R8A8_SRGB</code></td><td>the swapchain format RASM asks for; use <code>getSwapchainImageFormat()</code> for the real one</td></tr>
+      <tr><td><code>D32_SFLOAT</code></td><td>the engine's depth format; needed by <code>drawScene</code> and <code>createPipeline</code></td></tr>
+      <tr><td><code>D24_UNORM_S8_UINT</code>, <code>D32_SFLOAT_S8_UINT</code></td><td>depth + stencil, for pipelines you build yourself</td></tr>
+      <tr><td><code>R8G8B8_UNORM</code>, <code>R16G16B16A16_SFLOAT</code>, <code>R32G32_SFLOAT</code>, <code>R32G32B32_SFLOAT</code>, <code>R32G32B32A32_SFLOAT</code></td><td>other texture formats; no engine path uses them. Only the RGBA8 formats get mips, and <code>fillTexture</code> expects 4 bytes per pixel.</td></tr>
+      <tr><td><code>U16_UINT</code>, <code>U32_UINT</code></td><td>index types for <code>bindIndexBuffer</code> only, not texture formats</td></tr>
+      <tr><td><code>UNKNOWN</code></td><td>no format (the default in descs; compute pipelines have no attachments)</td></tr>
+    </table>
+    </div>
+    <p>Color textures must be sRGB and data textures UNORM. Shaders work in linear color, and sampling an sRGB texture converts it.</p>
+  </div>
+</div>
+
+<div class="api" id="Backend">
+  <pre class="sig">enum class Backend { VULKAN, DX12, METAL, WEBGPU };</pre>
+  <div class="body">
+    <p><code>EngineConfig::preferredBackend</code>. Only <code>VULKAN</code> exists today. The others log <code>The … backend is not implemented yet.</code>, and the engine does not start (<code>running</code> returns false).</p>
+  </div>
+</div>
+
+<div class="api" id="ShaderType">
+  <pre class="sig">enum class ShaderType { VERTEX, FRAGMENT, VERTEX_FRAGMENT, COMPUTE };</pre>
+  <div class="body">
+    <p>A shader stage. <code>ShaderDesc::type</code> is <code>VERTEX</code>, <code>FRAGMENT</code> or <code>COMPUTE</code>. <code>pushConstants</code> takes <code>VERTEX_FRAGMENT</code> for graphics pipelines and <code>COMPUTE</code> for compute pipelines.</p>
+  </div>
+</div>
+
+<div class="api" id="PrimitiveTopology">
+  <pre class="sig">enum class PrimitiveTopology
+{
+    TRIANGLE_LIST,
+    LINE_LIST,
+    POINT_LIST,
+    TRIANGLE_STRIP,
+    LINE_STRIP,
+};</pre>
+  <div class="body">
+    <p>How vertices form primitives, in <code>PipelineDesc::topology</code>. <code>Engine::createPipeline</code> always uses <code>TRIANGLE_LIST</code>; the others need <code>RenderContext::createPipeline</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="CullMode">
+  <pre class="sig">enum class CullMode { NONE, FRONT, BACK };</pre>
+  <div class="body">
+    <p>Which triangles <code>setCullMode</code> skips. Front faces are counter-clockwise. Each pass starts with <code>NONE</code>. <code>drawScene</code> picks one per sub-mesh: <code>NONE</code> for a <code>doubleSided</code> material, else <code>BACK</code>, or <code>FRONT</code> when the transform mirrors the mesh.</p>
+  </div>
+</div>
+
+<div class="api" id="SwapchainStatus">
+  <pre class="sig">enum class SwapchainStatus { OK, SUBOPTIMAL, OUT_OF_DATE, FAILURE };</pre>
+  <div class="body">
+    <p>Result of acquire, present and swapchain re-creation.</p>
+    <dl>
+      <dt>OK</dt><dd>Done.</dd>
+      <dt>SUBOPTIMAL</dt><dd>The image was acquired or presented, but the swapchain should be re-created. The engine finishes the frame and re-creates it at the next <code>beginFrame</code>.</dd>
+      <dt>OUT_OF_DATE</dt><dd>The swapchain cannot be used (or the window is 0 × 0) until it is re-created. The engine skips the frame.</dd>
+      <dt>FAILURE</dt><dd>An error. When acquiring, the engine skips the frame.</dd>
+    </dl>
+  </div>
+</div>
+
+<h2><span class="n">3</span>Plain structs</h2>
+
+<div class="api" id="EngineConfig">
+  <pre class="sig">struct EngineConfig
+{
+    std::string appName               = {};
+    int         windowWidth           = 0;
+    int         windowHeight          = 0;
+    bool        enableValidation      = false;
+    Backend     preferredBackend      = Backend::VULKAN;
+    std::string assetRoot             = {};
+    std::string shaderDir             = {};
+    uint32_t    geometryPoolVertices  = 1u &lt;&lt; 21;
+    uint32_t    geometryPoolIndices   = 1u &lt;&lt; 23;
+    uint32_t    geometryPoolSubMeshes = 1u &lt;&lt; 14;
+    uint32_t    maxInstances          = 1u &lt;&lt; 16;
+    bool        showStats             = false;
+};</pre>
+  <div class="body">
+    <p>The engine's settings, given to its constructor. Every field is explained on the <a href="engine.html#EngineConfig">Engine page</a>.</p>
+  </div>
+</div>
+
+<div class="api" id="FrameResources">
+  <pre class="sig">struct FrameResources
+{
+    CommandBufferHandle commandBuffer;
+    TextureHandle       depthTexture;
+    uint64_t            fenceValue = 0;
+};</pre>
+  <div class="body">
+    <p>One frame slot's objects, from <a href="low-level.html#getCurrentFrameResources">getCurrentFrameResources</a>.</p>
+    <dl>
+      <dt>commandBuffer</dt><dd>The frame's command buffer. Record into it between <code>beginFrame</code> and <code>endFrame</code>.</dd>
+      <dt>depthTexture</dt><dd>The <code>D32_SFLOAT</code> depth of swapchain passes, swapchain-sized. Replaced when the window is resized.</dd>
+      <dt>fenceValue</dt><dd>The frame fence value that this slot's last submit signals; <code>beginFrame</code> waits for it.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="RenderTarget">
+  <pre class="sig">struct RenderTargetAttachments
+{
+    TextureHandle color;
+    TextureHandle depth;
+};
+
+struct RenderTarget
+{
+    RenderTargetAttachments attachments[rasm::MAX_FRAMES_IN_FLIGHT];
+    uint32_t                width;
+    uint32_t                height;
+    Format                  colorFormat;
+    Format                  depthFormat;
+    glm::vec4               clearColor;
+};</pre>
+  <div class="body">
+    <p>A render target as <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns it: the values of its <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>, plus one <code>RenderTargetAttachments</code> pair (color, depth) per frame slot. <code>getRenderTargetTexture</code> picks <code>attachments[slot].color</code> for the current slot.</p>
+  </div>
+</div>
+
+<div class="api" id="Swapchain">
+  <pre class="sig">struct Swapchain
+{
+    std::vector&lt;TextureHandle&gt; imageHandles;
+    Format                     imageFormat;
+    uint32_t                   width  = 0;
+    uint32_t                   height = 0;
+};</pre>
+  <div class="body">
+    <p>The engine's own copy of the swapchain state (images, format, size in pixels). It is not reachable from outside the engine; use <code>getSwapchainImages</code>, <code>getSwapchainImageFormat</code> and <code>getSwapchainExtent</code> on the <a href="low-level.html#getSwapchainImages">RenderContext</a>.</p>
+  </div>
+</div>
+
+<div class="api" id="TextureRaw">
+  <pre class="sig">struct TextureRaw
+{
+    uint32_t       width  = 0;
+    uint32_t       height = 0;
+    unsigned char* data   = nullptr;
+};</pre>
+  <div class="body">
+    <p>A decoded image: <code>loadTexture</code>'s worker thread fills it with RGBA8 pixels from stb_image, and the main thread uploads and frees it. <code>data</code> is null when decoding failed. Applications do not see it.</p>
+  </div>
+</div>
+
+<div class="api" id="Window">
+  <pre class="sig">struct Window
+{
+    WindowHandle handle;
+    uint32_t     width;
+    uint32_t     height;
+    uint32_t     pixelWidth;
+    uint32_t     pixelHeight;
+    bool         mouseDragActive;
+    bool         resized;
+    bool         minimized;
+    glm::vec2    lastMousePos = glm::vec2(0.0f);
+};</pre>
+  <div class="body">
+    <p>The state of the engine's one window, read with <a href="engine.html#getMainWindow">getMainWindow</a>. <code>pollEvents</code> keeps it up to date.</p>
+    <dl>
+      <dt>handle</dt><dd>Valid when the window exists.</dd>
+      <dt>width, height</dt><dd>Logical size, the units of mouse coordinates.</dd>
+      <dt>pixelWidth, pixelHeight</dt><dd>Drawable size in pixels. Larger than width and height on HiDPI displays. The swapchain, depth textures and camera aspect follow these. Use them for viewport math, as <code>examples/01_render_graph</code> does.</dd>
+      <dt>mouseDragActive</dt><dd>A mouse button is held down.</dd>
+      <dt>resized</dt><dd>The pixel size changed; <code>beginFrame</code> re-creates the swapchain and clears it.</dd>
+      <dt>minimized</dt><dd>The window is minimized; frames are skipped.</dd>
+      <dt>lastMousePos</dt><dd>The last drag position, in the NDC of <a href="camera.html#CameraInput">CameraInput</a>.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="VRAMStats">
+  <pre class="sig">struct VRAMStats
+{
+    uint64_t vramBudget = 0;
+    uint64_t vramUsage  = 0;
+    uint64_t hostBudget = 0;
+    uint64_t hostUsage  = 0;
+};</pre>
+  <div class="body">
+    <p>GPU memory in bytes, summed over the memory heaps, from <a href="low-level.html#queryVRAMStats">queryVRAMStats</a>, <code>Engine::queryMemoryStats</code> or <code>FrameStats::memory</code>.</p>
+    <dl>
+      <dt>vramBudget, vramUsage</dt><dd>Device-local heaps (video memory): how much this process may use now, and how much it uses.</dd>
+      <dt>hostBudget, hostUsage</dt><dd>The other heaps (system memory the GPU can reach).</dd>
+    </dl>
+  </div>
+</div>
+
+<h2><span class="n">4</span>Constants and limits</h2>
+
+<p>All are <code>constexpr</code> in the public headers. Exceeding a <code>create</code> limit logs a warning or error and returns an invalid handle. Because handle indices start at 1 and are never reused, the limits on handle indices hold one object less than their value, and a failed create uses up an index too (B13).</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Constant and header</th><th>Value</th><th>What it limits</th></tr>
+  <tr id="MAX_FRAMES_IN_FLIGHT"><td><code>MAX_FRAMES_IN_FLIGHT</code><br><code>rasm/types.h</code></td><td>2</td><td>Frame slots. The CPU records one frame while the GPU runs the other.</td></tr>
+  <tr id="MAX_BINDLESS_TEXTURES"><td><code>MAX_BINDLESS_TEXTURES</code><br><code>rasm/types.h</code></td><td>1024</td><td>Bindless texture slots in all. Each loaded texture takes 1, each render target 2. Slots are never freed.</td></tr>
+  <tr id="MAX_DESCRIPTOR_TYPES"><td><code>MAX_DESCRIPTOR_TYPES</code><br><code>rasm/types.h</code></td><td>1</td><td>Entries in <code>DescriptorPoolDesc::sizes</code>.</td></tr>
+  <tr id="PUSH_CONSTANTS_SIZE"><td><code>PUSH_CONSTANTS_SIZE</code><br><code>rasm/types.h</code></td><td>16</td><td>Push constant bytes of every pipeline.</td></tr>
+  <tr id="INVALID_TEXTURE_INDEX"><td><code>INVALID_TEXTURE_INDEX</code><br><code>rasm/types.h</code></td><td><code>0xFFFFFFFF</code></td><td>Not a limit: the bindless index written for a material slot with no texture. Shaders must not sample it.</td></tr>
+  <tr id="MAX_MATERIALS"><td><code>MAX_MATERIALS</code><br><code>rasm/engine.h</code></td><td>256</td><td>Materials: 255 fit, and the engine's default material takes one.</td></tr>
+  <tr id="MAX_CAMERAS"><td><code>MAX_CAMERAS</code><br><code>rasm/engine.h</code></td><td>8</td><td>Cameras: 7 fit.</td></tr>
+  <tr id="MAX_GPU_TIMERS"><td><code>MAX_GPU_TIMERS</code><br><code>rasm/engine.h</code></td><td>16</td><td>GPU timers per frame: the frame, culling, and 14 for passes and <code>beginGpuTimer</code>. <code>FrameStats::gpuTimers</code> has 15 entries.</td></tr>
+  <tr id="MAX_ENTITIES"><td><code>MAX_ENTITIES</code><br><code>rasm/entity.h</code></td><td>65536</td><td>Entities: 65535 fit.</td></tr>
+  <tr id="MAX_LIGHTS"><td><code>MAX_LIGHTS</code><br><code>rasm/light.h</code></td><td>8</td><td>Lights: 7 fit. Also the size of the light array the shader gets.</td></tr>
+  <tr id="MAX_TEXTURE_SLOTS"><td><code>MAX_TEXTURE_SLOTS</code><br><code>rasm/material.h</code></td><td>6 (<code>PbrSlot::COUNT</code>)</td><td>Textures per material, one per <a href="materials.html#PbrSlot">PbrSlot</a>.</td></tr>
+  <tr id="MAX_PARAM_SLOTS"><td><code>MAX_PARAM_SLOTS</code><br><code>rasm/material.h</code></td><td>10 (<code>PbrParam::COUNT</code>)</td><td>Floats in <code>Material::params</code>, indexed by <a href="materials.html#PbrParam">PbrParam</a>.</td></tr>
+  <tr id="MAX_MESHES"><td><code>MAX_MESHES</code><br><code>rasm/mesh.h</code></td><td>8</td><td>Meshes: 7 fit, and a failed load uses one up.</td></tr>
+  <tr id="MAX_VERTEX_UV_SETS"><td><code>MAX_VERTEX_UV_SETS</code><br><code>rasm/mesh.h</code></td><td>3</td><td>UV sets per <code>Vertex</code>. Mirrored in <code>shaders/lib/core.slang</code>.</td></tr>
+  <tr id="MAX_ENTITIES_PER_SCENE"><td><code>MAX_ENTITIES_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>= <code>MAX_ENTITIES</code></td><td><code>addEntityToScene</code> per scene.</td></tr>
+  <tr id="MAX_CAMERAS_PER_SCENE"><td><code>MAX_CAMERAS_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>8</td><td><code>addCameraToScene</code> per scene (the global camera limit is lower).</td></tr>
+  <tr id="MAX_LIGHTS_PER_SCENE"><td><code>MAX_LIGHTS_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>= <code>MAX_LIGHTS</code></td><td><code>addLightToScene</code> per scene (the global light limit is lower).</td></tr>
+  <tr id="MAX_SCENES"><td><code>MAX_SCENES</code><br><code>rasm/scene.h</code></td><td>16</td><td>Scenes: 15 fit.</td></tr>
+  <tr id="MAX_SCENE_DRAWS_PER_FRAME"><td><code>MAX_SCENE_DRAWS_PER_FRAME</code><br><code>rasm/scene.h</code></td><td>8</td><td><code>drawScene</code> calls per frame. More log an error and draw nothing.</td></tr>
+</table>
+</div>
+
+<p>Mesh and instance capacity on the GPU is not a constant: it comes from <code>EngineConfig::geometryPoolVertices</code>, <code>geometryPoolIndices</code>, <code>geometryPoolSubMeshes</code> and <code>maxInstances</code>.</p>
+
+<div class="callout warn">
+  <strong>Known limits</strong>
+  <p>The limits are fixed at compile time and spread over several headers (<code>D15</code>). Handles are never reused and objects cannot be destroyed (<code>D4</code>), so a long-running application that creates and drops objects runs into these limits.</p>
+</div>
+
+</main>
+</div>
+</body>
+</html>

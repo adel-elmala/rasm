@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting Started · RASM</title>
+<meta name="description" content="Build RASM, link it into your own CMake project, write a first program, and learn the handles and the three ways to run a frame.">
+<meta name="rasm-sources" content="include/rasm/rasm.h include/rasm/engine.h include/rasm/handle.h include/rasm/types.h src/engine.cpp src/core/handle.cpp src/renderer/renderGraph.cpp src/platform/paths.cpp examples/00_hello_scene/main.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp cmake/rasmConfig.cmake.in cmake/RasmInstall.cmake cmake/RasmRuntimeDlls.cmake CMakeLists.txt CMakePresets.json src/CMakeLists.txt">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="api/index.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">API reference</p>
+<h1>Getting started</h1>
+<p class="lead">RASM is a static C++20 library. Your program creates one <code>Engine</code>, asks it for scenes, meshes, materials, cameras and lights, and gets small handles back. Then it calls one function per frame. This page shows how to link RASM, a first program, and the three ways to run a frame.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Link with CMake: <code>find_package(rasm)</code> and <code>rasm::rasm</code>. Ship the shaders next to your executable.</li>
+    <li>Include one header: <code>rasm/rasm.h</code>. Everything is in <code>namespace rasm</code>.</li>
+    <li>Every object is a <b>handle</b>. A function that fails logs an error and returns an invalid handle (<code>isValid()</code> is false).</li>
+    <li>Files load in the background. You can use a mesh or texture handle at once; the object is drawn when its data is ready.</li>
+    <li>Call the engine from one thread only. It has no locks.</li>
+  </ul>
+</div>
+
+<h2 id="concepts"><span class="n">1</span>The objects you work with</h2>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU object in the engine</span>
+  <span><i class="mem"></i>GPU buffer</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 360" role="img" aria-label="The Engine keeps every object. A scene holds entities, cameras and lights. An entity has a mesh, a material and a transform. A mesh has sub-meshes, and a glTF sub-mesh has its own material. A material points to textures. beginFrame uploads what changed to the GPU tables.">
+    <text x="20" y="22" class="title">Engine</text>
+    <text x="80" y="22" class="small">keeps every object below; your code holds only handles</text>
+    <rect x="10" y="32" width="740" height="222" rx="8" class="zone"/>
+
+    <rect x="25" y="128" width="150" height="54" rx="6" class="cpu"/>
+    <text x="100" y="151" class="mid title">Scene</text>
+    <text x="100" y="169" class="mid small">entities, cameras, lights</text>
+
+    <rect x="240" y="48" width="160" height="54" rx="6" class="cpu"/>
+    <text x="320" y="71" class="mid title">Entity</text>
+    <text x="320" y="89" class="mid small">mesh, material, Transform</text>
+    <rect x="240" y="128" width="160" height="54" rx="6" class="cpu"/>
+    <text x="320" y="151" class="mid title">Camera</text>
+    <text x="320" y="169" class="mid small">projection + controller</text>
+    <rect x="240" y="190" width="160" height="54" rx="6" class="cpu"/>
+    <text x="320" y="213" class="mid title">Light</text>
+    <text x="320" y="231" class="mid small">directional or point</text>
+
+    <line x1="175" y1="145" x2="237" y2="84"  class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="175" y1="155" x2="237" y2="155" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="175" y1="165" x2="237" y2="210" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="180" y="96" class="small">holds</text>
+
+    <rect x="460" y="48" width="120" height="54" rx="6" class="cpu"/>
+    <text x="520" y="71" class="mid title">Mesh</text>
+    <text x="520" y="89" class="mid small">1..n sub-meshes</text>
+    <rect x="615" y="48" width="125" height="54" rx="6" class="cpu"/>
+    <text x="677" y="71" class="mid title">SubMesh</text>
+    <text x="677" y="89" class="mid small">geometry + material</text>
+    <rect x="460" y="168" width="120" height="54" rx="6" class="cpu"/>
+    <text x="520" y="191" class="mid title">Material</text>
+    <text x="520" y="209" class="mid small">PBR or UNLIT</text>
+    <rect x="615" y="168" width="125" height="54" rx="6" class="cpu"/>
+    <text x="677" y="191" class="mid title">Texture</text>
+    <text x="677" y="209" class="mid small">up to 6 per material</text>
+
+    <line x1="400" y1="68"  x2="457" y2="68"  class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="428" y="62" class="mid small">draws</text>
+    <line x1="400" y1="92"  x2="462" y2="166" class="arrow cpu dashed" marker-end="url(#ah-cpu)"/>
+    <text x="432" y="118" class="small">default</text>
+    <line x1="580" y1="75"  x2="612" y2="75"  class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="660" y1="102" x2="585" y2="166" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="640" y="140" class="small">glTF: wins</text>
+    <line x1="580" y1="195" x2="612" y2="195" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <line x1="380" y1="254" x2="380" y2="290" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="392" y="276" class="small">beginFrame uploads what changed</text>
+
+    <rect x="15"  y="294" width="135" height="50" rx="6" class="mem"/>
+    <text x="82"  y="316" class="mid">Draw lists</text>
+    <text x="82"  y="333" class="mid small">one per scene</text>
+    <rect x="165" y="294" width="135" height="50" rx="6" class="mem"/>
+    <text x="232" y="316" class="mid">Instance table</text>
+    <text x="232" y="333" class="mid small">row per sub-mesh</text>
+    <rect x="315" y="294" width="135" height="50" rx="6" class="mem"/>
+    <text x="382" y="316" class="mid">Geometry pool</text>
+    <text x="382" y="333" class="mid small">vertices + indices</text>
+    <rect x="465" y="294" width="135" height="50" rx="6" class="mem"/>
+    <text x="532" y="316" class="mid">Material table</text>
+    <text x="532" y="333" class="mid small">row per material</text>
+    <rect x="615" y="294" width="135" height="50" rx="6" class="mem"/>
+    <text x="682" y="316" class="mid">Bindless textures</text>
+    <text x="682" y="333" class="mid small">1024 slots</text>
+  </svg>
+  <figcaption>You create the blue objects through <code>Engine</code> functions and keep their handles. The engine keeps the GPU copies (amber) up to date. You never write the GPU tables yourself.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Object</th><th>Create it with</th><th>Details</th></tr>
+  <tr><td>Scene</td><td><code>createScene</code></td><td><a href="scene.html#createScene">scene.html</a></td></tr>
+  <tr><td>Entity (one object in the world)</td><td><code>createEntity</code></td><td><a href="scene.html#createEntity">scene.html</a></td></tr>
+  <tr><td>Mesh</td><td><code>loadMesh</code> (OBJ, glTF) or <code>createMesh</code> (your vertices)</td><td><a href="scene.html#loadMesh">scene.html</a></td></tr>
+  <tr><td>Light</td><td><code>createLight</code></td><td><a href="scene.html#createLight">scene.html</a></td></tr>
+  <tr><td>Material</td><td><code>createMaterial</code></td><td><a href="materials.html#createMaterial">materials.html</a></td></tr>
+  <tr><td>Texture</td><td><code>loadTexture</code></td><td><a href="materials.html#loadTexture">materials.html</a></td></tr>
+  <tr><td>Camera</td><td><code>createCamera</code></td><td><a href="camera.html#createCamera">camera.html</a></td></tr>
+</table>
+</div>
+
+<h2 id="build"><span class="n">2</span>Build RASM and link it</h2>
+
+<ol class="steps">
+  <li><b>Install the tools.</b> CMake 3.21 or newer, Ninja, Clang, the Vulkan SDK (1.4) and vcpkg, with the VCPKG_ROOT environment variable set to it. The step-by-step setup is in <code>docs/build_guide.md</code>.</li>
+  <li><b>Build and install RASM.</b> The presets use Ninja and <code>clang++</code>, and vcpkg builds the dependencies. <code>cmake --install</code> copies the library, the public headers and the shaders to <code>install/</code> in the repo. Debug and Release share that folder, so install both if your project builds both.
+<pre><code>cmake --preset x64-debug            # macOS: --preset macOS
+cmake --build --preset x64-debug
+cmake --install build/x64-debug
+cmake --install build/x64-release   # if you built it too</code></pre></li>
+  <li><b>Find it from your project.</b> Point CMake at the install folder with <code>-DCMAKE_PREFIX_PATH=&lt;repo&gt;/install</code>. To use a build folder without installing, set <code>rasm_DIR</code> to it instead (for example <code>-Drasm_DIR=&lt;repo&gt;/build/x64-debug</code>).
+<pre><code>cmake_minimum_required(VERSION 3.21)
+project(my_app CXX)
+
+find_package(rasm 0.1 CONFIG REQUIRED)
+
+add_executable(my_app main.cpp)
+target_link_libraries(my_app PRIVATE rasm::rasm)   # adds C++20, glm
+
+# Shaders are compiled at runtime: copy them next to the executable.
+add_custom_command(TARGET my_app POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${rasm_SHADER_DIR}" "$&lt;TARGET_FILE_DIR:my_app&gt;/shaders")</code></pre></li>
+  <li><b>Give your project RASM's dependencies.</b> RASM is static, so your executable links its dependencies too. <code>find_package(rasm)</code> looks for them. With vcpkg, add to your manifest: <code>vk-bootstrap</code>, <code>vulkan-memory-allocator</code>, <code>glm</code>, <code>sdl3[vulkan]</code>, <code>tracy[on-demand]</code>, <code>spdlog</code>, <code>tinyobjloader</code> and <code>shader-slang</code>. The Vulkan SDK provides Vulkan.</li>
+</ol>
+
+<div class="callout">
+  <strong>Other ways to add RASM</strong>
+  <p><code>add_subdirectory(rasm)</code> works too and gives the same <code>rasm::rasm</code> target. Then examples, tests and install rules are off by default. The options are <code>-DRASM_BUILD_EXAMPLES=ON</code>, <code>-DRASM_BUILD_TESTS=ON</code>, <code>-DRASM_INSTALL=ON</code>, <code>-DRASM_ENABLE_AVX2=ON</code> (x86 only) and <code>-DRASM_SHADER_DIR=&lt;path&gt;</code> (the default shader folder, <code>shaders</code> beside the executable).</p>
+  <p>On Windows the executable needs the dependency DLLs next to it. The examples copy them with <code>rasm_copy_runtime_dlls</code> in <code>cmake/RasmRuntimeDlls.cmake</code>, because vcpkg's own copy misses <code>TracyClient.dll</code> in Debug.</p>
+</div>
+
+<h2 id="first-program"><span class="n">3</span>A first program</h2>
+
+<p>This is <code>examples/00_hello_scene/main.cpp</code> made shorter. It loads a mesh and a texture, puts one entity, a camera and a light into a scene, and renders until the window closes (or <kbd>Esc</kbd>).</p>
+
+<pre><code>#include "rasm/rasm.h"
+
+int main()
+{
+    rasm::EngineConfig config = {
+        .appName = "my_app",
+        .windowWidth = 1280,
+        .windowHeight = 720,
+        .enableValidation = true,
+        .assetRoot = "assets",              // relative paths start beside the executable
+    };
+
+    rasm::Engine engine(config);
+    if (!engine.running())
+        return 1;                           // the reason is in the log
+
+    rasm::SceneHandle scene = engine.createScene();
+
+    // Both return at once. The files are read on a worker thread.
+    rasm::MeshHandle mesh = engine.loadMesh("models/obj/bunny/bunny.obj");
+    rasm::TextureHandle albedo = engine.loadTexture("models/obj/bunny/bunny-atlas.jpg");
+    if (!mesh.isValid() || !albedo.isValid())
+        return 1;                           // unknown format or missing file
+
+    rasm::MaterialHandle material = engine.createMaterial(rasm::MaterialType::PBR, {albedo});
+    rasm::EntityHandle bunny = engine.createEntity("bunny", mesh, material,
+        rasm::Transform{.position = glm::vec3(0.0f, 0.0f, -10.0f), .scale = glm::vec3(0.005f)});
+
+    rasm::CameraHandle camera = engine.createCamera(
+        rasm::CameraProjection{.type = rasm::CameraProjection::Type::PERSPECTIVE,
+                               .perspective{.fovY = 45.0f, .aspect = 1280.0f / 720.0f, .nearZ = 0.1f}},
+        rasm::Transform{.position = glm::vec3(0.0f, 0.0f, 4.0f)});
+
+    const glm::vec3 sunDirection = glm::normalize(glm::vec3(-0.5f, -0.8f, -1.0f));
+    rasm::LightHandle sun = engine.createLight(rasm::LightType::DIRECTIONAL, glm::vec3(1.0f),
+                                               glm::vec3(0.0f), sunDirection, 3.0f);
+
+    engine.addEntityToScene(scene, bunny);
+    engine.addCameraToScene(scene, camera);
+    engine.addLightToScene(scene, sun);
+
+    while (engine.running())
+        engine.render(scene, camera);       // the bunny appears once its files are loaded
+    return 0;
+}</code></pre>
+
+<div class="split">
+  <div>
+    <h4>What you see</h4>
+    <p>The first frames are empty (dark gray). The bunny appears when its mesh and its texture are both loaded. Drag with the mouse to orbit the camera, scroll to zoom. <kbd>F1</kbd> shows the stats overlay.</p>
+  </div>
+  <div>
+    <h4>What to check when it fails</h4>
+    <p>Read the log (spdlog, on the console). Common causes: no <code>shaders/</code> folder beside the executable, a wrong <code>assetRoot</code>, or a GPU without Vulkan 1.4. Keep <code>enableValidation</code> on while you develop.</p>
+  </div>
+</div>
+
+<h2 id="handles"><span class="n">4</span>Handles</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Fact</th><th>What it means for you</th></tr>
+  <tr><td>A handle is two numbers, <code>index</code> and <code>generation</code></td><td>Copy it freely, store it, compare it with <code>==</code>. It is not a pointer.</td></tr>
+  <tr><td><code>{}</code> is the invalid handle</td><td><code>isValid()</code> is false. Many functions take one as "none", for example <code>createEntity</code> without a material.</td></tr>
+  <tr><td>Errors return the invalid handle</td><td>The function logs the reason and returns <code>{}</code>. Check <code>isValid()</code> after creating or loading.</td></tr>
+  <tr><td>Each kind has its own type</td><td><code>MeshHandle</code> and <code>TextureHandle</code> do not convert into each other, so you cannot pass the wrong kind.</td></tr>
+  <tr><td>Handles stay valid until the engine is destroyed</td><td>Scenes, entities, meshes, materials, cameras and lights cannot be destroyed, and entities cannot leave a scene (<code>D4</code> in <code>docs/code_review.md</code>). Create objects once and reuse them.</td></tr>
+</table>
+</div>
+<p>All handle types are listed in <a href="types.html#Handle">Types, handles and limits</a>, with every limit.</p>
+
+<h2 id="frames"><span class="n">5</span>Three ways to run a frame</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="A: render calls beginFrame, beginPass, drawScene, endPass and endFrame for you. B: you call the same functions yourself and can add your own draws. C: RenderGraph execute calls beginFrame, then beginPass, your lambda and endPass for each pass, then endFrame.">
+    <text x="130" y="24" class="mid title">A · render()</text>
+    <text x="130" y="42" class="mid small">one call, one scene pass</text>
+    <text x="380" y="24" class="mid title">B · beginFrame / endFrame</text>
+    <text x="380" y="42" class="mid small">your own passes and draws</text>
+    <text x="622" y="24" class="mid title">C · RenderGraph::execute</text>
+    <text x="622" y="42" class="mid small">passes sorted by what they read</text>
+
+    <rect x="15" y="56"  width="230" height="28" rx="5" class="cpu"/><text x="130" y="75"  class="mid mono">beginFrame(camera)</text>
+    <rect x="15" y="92"  width="230" height="28" rx="5" class="cpu"/><text x="130" y="111" class="mid mono">beginPass("Scene")</text>
+    <rect x="15" y="128" width="230" height="28" rx="5" class="cpu"/><text x="130" y="147" class="mid mono">drawScene(scene, camera)</text>
+    <rect x="15" y="164" width="230" height="28" rx="5" class="cpu"/><text x="130" y="183" class="mid mono">endPass()</text>
+    <rect x="15" y="200" width="230" height="28" rx="5" class="cpu"/><text x="130" y="219" class="mid mono">endFrame()</text>
+
+    <rect x="265" y="56"  width="230" height="28" rx="5" class="box"/><text x="380" y="75"  class="mid mono">if (beginFrame(camera))</text>
+    <rect x="265" y="92"  width="230" height="28" rx="5" class="box"/><text x="380" y="111" class="mid mono">beginPass("Main")</text>
+    <rect x="265" y="128" width="230" height="28" rx="5" class="box"/><text x="380" y="147" class="mid mono">drawScene(scene, camera)</text>
+    <rect x="265" y="164" width="230" height="28" rx="5" class="box"/><text x="380" y="183" class="mid">your draws through RenderContext</text>
+    <rect x="265" y="200" width="230" height="28" rx="5" class="box"/><text x="380" y="219" class="mid mono">endPass()</text>
+    <rect x="265" y="236" width="230" height="28" rx="5" class="box"/><text x="380" y="255" class="mid mono">endFrame()</text>
+
+    <rect x="515" y="56"  width="215" height="28" rx="5" class="cpu"/><text x="622" y="75"  class="mid mono">beginFrame(camera)</text>
+    <rect x="515" y="92"  width="215" height="28" rx="5" class="cpu"/><text x="622" y="111" class="mid mono">beginPass(name)</text>
+    <rect x="515" y="128" width="215" height="28" rx="5" class="box"/><text x="622" y="147" class="mid">your execute lambda</text>
+    <rect x="515" y="164" width="215" height="28" rx="5" class="cpu"/><text x="622" y="183" class="mid mono">endPass()</text>
+    <rect x="515" y="200" width="215" height="28" rx="5" class="ghost"/><text x="622" y="219" class="mid small">next pass in sorted order</text>
+    <rect x="515" y="236" width="215" height="28" rx="5" class="cpu"/><text x="622" y="255" class="mid mono">endFrame()</text>
+    <path d="M730,214 H748 V106 H733" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+
+    <rect x="15" y="272" width="14" height="14" rx="3" class="cpu"/><text x="36" y="283" class="small">the engine calls it</text>
+    <rect x="160" y="272" width="14" height="14" rx="3" class="box"/><text x="181" y="283" class="small">you call or write it</text>
+    <text x="330" y="283" class="small">Compute passes in C skip beginPass/endPass and get a barrier instead.</text>
+  </svg>
+  <figcaption>All three run the same frame steps. They differ in who calls them. In B, call nothing when <code>beginFrame</code> returns false: the frame is skipped (window minimized, swapchain out of date).</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Way</th><th>Use it for</th><th>Example</th><th>Reference</th></tr>
+  <tr><td>A · <code>render</code></td><td>One scene, one camera, straight to the window.</td><td><code>00_hello_scene</code>, <code>02_gltf</code>, <code>03_instances</code></td><td><a href="engine.html#render">engine.html#render</a></td></tr>
+  <tr><td>B · <code>beginFrame</code> / <code>endFrame</code></td><td>A few passes in a fixed order, your own pipelines.</td><td>none</td><td><a href="engine.html#beginFrame">engine.html#beginFrame</a></td></tr>
+  <tr><td>C · <code>RenderGraph</code></td><td>Offscreen render targets, post effects, compute work. The graph orders the passes and adds compute barriers.</td><td><code>01_render_graph</code>, <code>04_compute</code></td><td><a href="render-graph.html">render-graph.html</a></td></tr>
+</table>
+</div>
+
+<pre><code>// B: your own frame. Inside a pass, record with the frame's command buffer.
+while (engine.running())
+{
+    if (!engine.beginFrame(camera))
+        continue;                           // skipped: record nothing, no endFrame
+    engine.beginPass("Main");
+    engine.drawScene(scene, camera);
+    // engine.getRenderContext() records more draws into
+    // engine.getCurrentFrameResources().commandBuffer here
+    engine.endPass();
+    engine.endFrame();
+}</code></pre>
+
+<h2 id="next"><span class="n">6</span>Where to go next</h2>
+
+<div class="cards">
+  <a class="card" href="engine.html"><b>Engine</b><span>EngineConfig, the frame functions, loading, frame stats, and an index of every method.</span></a>
+  <a class="card" href="scene.html"><b>Scenes, entities, meshes, lights</b><span>What goes into a scene and when changes reach the GPU.</span></a>
+  <a class="card" href="materials.html"><b>Materials and textures</b><span>PBR and unlit materials, texture formats, bindless slots.</span></a>
+  <a class="card" href="camera.html"><b>Cameras and input</b><span>Projections, controllers and the default mouse and keyboard controls.</span></a>
+  <a class="card" href="render-graph.html"><b>Render graph and custom passes</b><span>Passes, render targets and your own Slang pipelines.</span></a>
+  <a class="card" href="low-level.html"><b>RenderContext and resources</b><span>Buffers, textures, barriers and draw calls.</span></a>
+  <a class="card" href="types.html"><b>Types, handles and limits</b><span>Every handle type, enum and <code>MAX_*</code> constant.</span></a>
+  <a class="card" href="../guides/big-picture.html"><b>How the engine works</b><span>The guides explain the inside, for engine developers.</span></a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

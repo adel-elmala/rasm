@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One Frame · RASM</title>
+<meta name="description" content="Engine::render, beginFrame and endFrame step by step: two frame slots, the timeline frame fence, swapchain acquire, submit and present, skipped frames, resize, and where loads, scene sync, stats and culling run.">
+<meta name="rasm-sources" content="src/engine.cpp include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/renderContext.h src/rhi/renderContext.cpp src/rhi/uploadManager.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/platform/window.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/frameStats.cpp src/renderer/frameStats.h src/renderer/statsOverlay.cpp src/renderer/renderGraph.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/frame-loop.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Foundations</p>
+<h1>One frame, step by step</h1>
+<p class="lead">A frame is <code>beginFrame</code>, some passes, and <code>endFrame</code>. The CPU records the next frame while the GPU still runs the last one, so there are two frame slots. One timeline fence tells the CPU when a slot is free again.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU work</span>
+  <span><i class="gpu"></i>GPU work</span>
+  <span><i class="mem"></i>GPU buffer</span>
+  <span><i class="shader"></i>shader entry point</span>
+</div>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li><code>Engine::render</code> = <code>beginFrame</code> + <code>beginPass</code> + <code>drawScene</code> + <code>endPass</code> + <code>endFrame</code>.</li>
+    <li><code>frameCount</code> is the <b>slot</b> (0 or 1), not a frame counter. <code>MAX_FRAMES_IN_FLIGHT</code> = 2.</li>
+    <li>Each submit signals the next value of <code>frameFence</code>. Before a slot is reused, <code>beginFrame</code> waits for the value its last submit signaled.</li>
+    <li>Everything that rewrites a slot's buffers runs right after that wait: frame stats, overlay text, <code>syncGpuScene</code>.</li>
+    <li><code>beginFrame</code> returns false to skip a frame (minimized, swapchain out of date). Then record nothing and do not call <code>endFrame</code>.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>Three ways to run a frame</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 196" role="img" aria-label="Engine::render, a manual frame and RenderGraph::execute all call beginFrame first and endFrame last, with passes in between.">
+    <rect x="10" y="10" width="236" height="176" rx="8" class="zone"/>
+    <text x="24" y="32" class="title mono">render(scene, camera)</text>
+    <rect x="262" y="10" width="236" height="176" rx="8" class="zone"/>
+    <text x="276" y="32" class="title">Your own frame</text>
+    <rect x="514" y="10" width="236" height="176" rx="8" class="zone"/>
+    <text x="528" y="32" class="title mono">RenderGraph::execute</text>
+
+    <rect x="24" y="44" width="208" height="26" rx="4" class="cpu"/><text x="128" y="61" class="mid mono">beginFrame(camera)</text>
+    <rect x="24" y="76" width="208" height="26" rx="4" class="cpu"/><text x="128" y="93" class="mid mono">beginPass("Scene")</text>
+    <rect x="24" y="108" width="208" height="26" rx="4" class="cpu"/><text x="128" y="125" class="mid mono">drawScene · endPass</text>
+    <rect x="24" y="148" width="208" height="26" rx="4" class="cpu"/><text x="128" y="165" class="mid mono">endFrame()</text>
+
+    <rect x="276" y="44" width="208" height="26" rx="4" class="cpu"/><text x="380" y="61" class="mid mono">if (!beginFrame) skip</text>
+    <rect x="276" y="76" width="208" height="58" rx="4" class="ghost"/>
+    <text x="380" y="98" class="mid small">your passes: beginPass,</text>
+    <text x="380" y="114" class="mid small">drawScene or own draws, endPass</text>
+    <rect x="276" y="148" width="208" height="26" rx="4" class="cpu"/><text x="380" y="165" class="mid mono">endFrame()</text>
+
+    <rect x="528" y="44" width="208" height="26" rx="4" class="cpu"/><text x="632" y="61" class="mid mono">beginFrame(camera)</text>
+    <rect x="528" y="76" width="208" height="58" rx="4" class="ghost"/>
+    <text x="632" y="98" class="mid small">each pass in sorted order,</text>
+    <text x="632" y="114" class="mid small">compute passes with barriers</text>
+    <rect x="528" y="148" width="208" height="26" rx="4" class="cpu"/><text x="632" y="165" class="mid mono">endFrame()</text>
+  </svg>
+  <figcaption>All three use the same frame functions. The stepper below walks <code>Engine::render</code>; the other two differ only in the passes between <code>beginFrame</code> and <code>endFrame</code>.</figcaption>
+</figure>
+
+<h2><span class="n">2</span>One frame, step by step</h2>
+
+<p>This is frame 7 of an app that calls <code>render(scene, camera)</code>. Frame 7 uses slot 0. Click through the steps (or use the arrow keys). The strip at the top of each picture shows where we are.</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. Input and finished loads</h4>
+    <svg viewBox="0 0 730 268" role="img" aria-label="pollEvents reads SDL events and updates the camera. finishLoads uploads finished background loads until 4 ms are spent; the load that crosses 4 ms still finishes, the next waits for the next frame.">
+      <!--strip 0-->
+      <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><rect x="8" y="6" width="102" height="32" rx="7" class="hot"/><text x="59" y="26" class="mid small title">input · loads</text>
+      <rect x="112" y="8" width="98" height="28" rx="5" class="ghost"/><text x="161" y="26" class="mid small t-faint">skip checks</text>
+      <rect x="214" y="8" width="98" height="28" rx="5" class="ghost"/><text x="263" y="26" class="mid small t-faint">fence wait</text>
+      <rect x="316" y="8" width="98" height="28" rx="5" class="ghost"/><text x="365" y="26" class="mid small t-faint">stats · sync</text>
+      <rect x="418" y="8" width="98" height="28" rx="5" class="ghost"/><text x="467" y="26" class="mid small t-faint">acquire</text>
+      <rect x="520" y="8" width="98" height="28" rx="5" class="ghost"/><text x="569" y="26" class="mid small t-faint">record</text>
+      <rect x="622" y="8" width="98" height="28" rx="5" class="ghost"/><text x="671" y="26" class="mid small t-faint">submit · present</text>
+      <!--/strip-->
+      <rect x="10" y="56" width="340" height="112" rx="6" class="cpu"/>
+      <text x="24" y="78" class="title mono">pollEvents(camera)</text>
+      <text x="24" y="100" class="small">deltaTime = time since the last frame (at most 0.1 s)</text>
+      <text x="24" y="118" class="small">SDL events: quit, Esc, F1, resize, minimize</text>
+      <text x="24" y="136" class="small">W A S D, mouse drag and wheel → CameraInput</text>
+      <text x="24" y="154" class="small">updateCamera(camera, input)</text>
+      <line x1="350" y1="112" x2="378" y2="112" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <rect x="380" y="56" width="340" height="112" rx="6" class="cpu"/>
+      <text x="394" y="78" class="title mono">finishLoads(false)</text>
+      <text x="394" y="100" class="small">textures first, then meshes</text>
+      <text x="394" y="118" class="small">only loads whose worker is done</text>
+      <text x="394" y="136" class="small">uploads them (fillTexture, geometry pool)</text>
+      <text x="394" y="154" class="small">stops once LOAD_BUDGET (4 ms) is spent</text>
+
+      <text x="10" y="214" class="small">main-thread time</text>
+      <rect x="120" y="198" width="168" height="26" rx="4" class="cpu"/>
+      <text x="204" y="215" class="mid small">load A</text>
+      <rect x="292" y="198" width="308" height="26" rx="4" class="cpu"/>
+      <text x="400" y="215" class="mid small">load B: still finishes</text>
+      <rect x="610" y="198" width="110" height="26" rx="4" class="ghost"/>
+      <text x="665" y="215" class="mid small t-faint">load C: next frame</text>
+      <line x1="520" y1="188" x2="520" y2="236" class="hot"/>
+      <text x="520" y="252" class="mid small t-hot">4 ms</text>
+      <text x="120" y="252" class="mid small">0 ms</text>
+    </svg>
+    <p>Loads that end together spread over several frames. <code>finishLoads</code> runs before anything binds the bindless set or the geometry pool, so what it writes is ready for this frame's draws. See <a href="asset-loading.html">asset loading</a>.</p>
+  </div>
+
+  <div class="step">
+    <h4>2. Skip checks and resize</h4>
+    <svg viewBox="0 0 730 280" role="img" aria-label="A minimized or zero-size window skips the frame. A resized window or an out-of-date swapchain recreates the swapchain; if that fails the frame is skipped.">
+      <!--strip 1-->
+      <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
+      <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><rect x="110" y="6" width="102" height="32" rx="7" class="hot"/><text x="161" y="26" class="mid small title">skip checks</text>
+      <rect x="214" y="8" width="98" height="28" rx="5" class="ghost"/><text x="263" y="26" class="mid small t-faint">fence wait</text>
+      <rect x="316" y="8" width="98" height="28" rx="5" class="ghost"/><text x="365" y="26" class="mid small t-faint">stats · sync</text>
+      <rect x="418" y="8" width="98" height="28" rx="5" class="ghost"/><text x="467" y="26" class="mid small t-faint">acquire</text>
+      <rect x="520" y="8" width="98" height="28" rx="5" class="ghost"/><text x="569" y="26" class="mid small t-faint">record</text>
+      <rect x="622" y="8" width="98" height="28" rx="5" class="ghost"/><text x="671" y="26" class="mid small t-faint">submit · present</text>
+      <!--/strip-->
+      <rect x="10" y="60" width="210" height="50" rx="6" class="box"/>
+      <text x="115" y="81" class="mid">minimized, or</text>
+      <text x="115" y="99" class="mid">0 × 0 pixels?</text>
+      <rect x="260" y="60" width="210" height="50" rx="6" class="box"/>
+      <text x="365" y="81" class="mid mono">resized or</text>
+      <text x="365" y="99" class="mid mono">swapchainOutOfDate?</text>
+      <rect x="510" y="60" width="210" height="50" rx="6" class="cpu"/>
+      <text x="615" y="90" class="mid">go on to the fence wait</text>
+
+      <line x1="220" y1="85" x2="258" y2="85" class="arrow" marker-end="url(#ah)"/>
+      <text x="239" y="78" class="mid small">no</text>
+      <line x1="470" y1="85" x2="508" y2="85" class="arrow" marker-end="url(#ah)"/>
+      <text x="489" y="78" class="mid small">no</text>
+
+      <line x1="115" y1="110" x2="115" y2="148" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="123" y="133" class="small">yes</text>
+      <rect x="10" y="150" width="210" height="40" rx="6" class="ghost"/>
+      <text x="115" y="175" class="mid t-hot">return false (skip)</text>
+
+      <line x1="365" y1="110" x2="365" y2="148" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <text x="373" y="133" class="small">yes</text>
+      <rect x="260" y="150" width="210" height="40" rx="6" class="cpu"/>
+      <text x="365" y="175" class="mid mono">recreateSwapchain()</text>
+      <line x1="365" y1="190" x2="365" y2="224" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="373" y="212" class="small">fails</text>
+      <rect x="260" y="226" width="210" height="40" rx="6" class="ghost"/>
+      <text x="365" y="251" class="mid t-hot">return false (skip)</text>
+      <path d="M470,170 H615 V112" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <text x="540" y="164" class="mid small">ok</text>
+    </svg>
+    <p>While the window is minimized, <code>pollEvents</code> waits up to 100 ms for an event (<code>SDL_WaitEventTimeout</code>), so skipped frames do not spin the CPU. A failed recreation keeps <code>swapchainOutOfDate</code> set, so the next frame tries again.</p>
+  </div>
+
+  <div class="step">
+    <h4>3. Wait until the slot is free</h4>
+    <svg viewBox="0 0 730 260" role="img" aria-label="Slot 0 last signaled 5. The GPU has reached 4. The CPU waits on the frame fence until it reaches 5.">
+      <!--strip 2-->
+      <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
+      <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
+      <rect x="214" y="8" width="98" height="28" rx="5" class="cpu"/><rect x="212" y="6" width="102" height="32" rx="7" class="hot"/><text x="263" y="26" class="mid small title">fence wait</text>
+      <rect x="316" y="8" width="98" height="28" rx="5" class="ghost"/><text x="365" y="26" class="mid small t-faint">stats · sync</text>
+      <rect x="418" y="8" width="98" height="28" rx="5" class="ghost"/><text x="467" y="26" class="mid small t-faint">acquire</text>
+      <rect x="520" y="8" width="98" height="28" rx="5" class="ghost"/><text x="569" y="26" class="mid small t-faint">record</text>
+      <rect x="622" y="8" width="98" height="28" rx="5" class="ghost"/><text x="671" y="26" class="mid small t-faint">submit · present</text>
+      <!--/strip-->
+      <rect x="10" y="64" width="270" height="50" rx="6" class="cpu"/>
+      <rect x="8" y="62" width="274" height="54" rx="8" class="hot"/>
+      <text x="24" y="85" class="mono">frameResources[0]</text>
+      <text x="24" y="104" class="small">fenceValue = 5 (frame 5) · frameCount = 0</text>
+      <rect x="10" y="128" width="270" height="50" rx="6" class="cpu"/>
+      <text x="24" y="149" class="mono">frameResources[1]</text>
+      <text x="24" y="168" class="small">fenceValue = 6 (frame 6)</text>
+
+      <text x="330" y="70" class="mono">ctx.waitForFence(frameFence, 5)</text>
+      <line x1="340" y1="130" x2="700" y2="130" class="arrow"/>
+      <rect x="340" y="122" width="180" height="16" rx="3" class="gpu"/>
+      <line x1="565" y1="112" x2="565" y2="146" class="hot"/>
+      <path d="M282,89 H565 V110" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+      <line x1="610" y1="122" x2="610" y2="138" class="arrow cpu"/>
+      <text x="340" y="160" class="mid small mono">0</text>
+      <text x="385" y="160" class="mid small mono">1</text>
+      <text x="430" y="160" class="mid small mono">2</text>
+      <text x="475" y="160" class="mid small mono">3</text>
+      <text x="520" y="160" class="mid small mono">4</text>
+      <text x="565" y="160" class="mid small mono">5</text>
+      <text x="610" y="160" class="mid small mono">6</text>
+      <text x="655" y="160" class="mid small mono">7</text>
+      <text x="700" y="160" class="mid small mono">8</text>
+      <text x="700" y="114" class="end small">frameFence values</text>
+
+      <rect x="330" y="186" width="14" height="12" rx="2" class="gpu"/>
+      <text x="352" y="196" class="small">the GPU has reached 4: frame 5 still runs</text>
+      <line x1="330" y1="214" x2="344" y2="214" class="hot"/>
+      <text x="352" y="218" class="small">slot 0 waits for 5, then it is free</text>
+      <line x1="337" y1="230" x2="337" y2="242" class="arrow cpu"/>
+      <text x="352" y="240" class="small">frameFenceValue = 6: the last value a submit signals</text>
+    </svg>
+    <p><code>beginFrame</code> waits for <code>frameResources[frameCount].fenceValue</code>. Then the GPU is done with everything slot 0 used: its command buffers, its per-slot buffers, its timestamp queries. At start both slots hold 0 and the fence starts at 0, so the first waits return at once.</p>
+  </div>
+
+  <div class="step">
+    <h4>4. Rewrite the slot: stats, overlay, scene</h4>
+    <svg viewBox="0 0 730 250" role="img" aria-label="After the wait, updateFrameStats, updateStatsOverlay and syncGpuScene run in this order and write only slot 0's buffers.">
+      <!--strip 3-->
+      <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
+      <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
+      <rect x="214" y="8" width="98" height="28" rx="5" class="cpu"/><text x="263" y="26" class="mid small">fence wait</text>
+      <rect x="316" y="8" width="98" height="28" rx="5" class="cpu"/><rect x="314" y="6" width="102" height="32" rx="7" class="hot"/><text x="365" y="26" class="mid small title">stats · sync</text>
+      <rect x="418" y="8" width="98" height="28" rx="5" class="ghost"/><text x="467" y="26" class="mid small t-faint">acquire</text>
+      <rect x="520" y="8" width="98" height="28" rx="5" class="ghost"/><text x="569" y="26" class="mid small t-faint">record</text>
+      <rect x="622" y="8" width="98" height="28" rx="5" class="ghost"/><text x="671" y="26" class="mid small t-faint">submit · present</text>
+      <!--/strip-->
+      <rect x="10" y="56" width="710" height="28" rx="6" class="zone"/>
+      <text x="365" y="75" class="mid small">slot 0 is free: the GPU finished frame 5, the last frame that used it</text>
+      <rect x="10" y="96" width="226" height="112" rx="6" class="cpu"/>
+      <text x="24" y="118" class="title mono">updateFrameStats()</text>
+      <text x="24" y="140" class="small">reads frame 5's timestamps</text>
+      <text x="24" y="158" class="small">and the slot's cull stats buffer</text>
+      <text x="24" y="176" class="small">resets the queries, zeros counts</text>
+      <text x="24" y="194" class="small">(only while stats are measured)</text>
+      <line x1="236" y1="152" x2="250" y2="152" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <rect x="252" y="96" width="226" height="112" rx="6" class="cpu"/>
+      <text x="266" y="118" class="title mono">updateStatsOverlay()</text>
+      <text x="266" y="140" class="small">writes the overlay text into</text>
+      <text x="266" y="158" class="small">the slot's text buffer</text>
+      <text x="266" y="176" class="small">(only when the overlay is on)</text>
+      <line x1="478" y1="152" x2="492" y2="152" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <rect x="494" y="96" width="226" height="112" rx="6" class="cpu"/>
+      <text x="508" y="118" class="title mono">syncGpuScene()</text>
+      <text x="508" y="140" class="small">rows for entities with a ready mesh</text>
+      <text x="508" y="158" class="small">checks entities waiting for textures</text>
+      <text x="508" y="176" class="small">rebuilds dirty draw lists</text>
+      <text x="508" y="194" class="small">uploads the slot's dirty rows</text>
+      <text x="10" y="236" class="small">All three write only this slot's buffers. Doing it here is safe: the GPU no longer reads them.</text>
+    </svg>
+    <p>A change made after <code>beginFrame</code> (for example <code>updateTransform</code> during the passes) reaches the GPU in the next frame. See <a href="gpu-scene.html">the GPU scene tables</a> and <a href="stats-overlay.html">frame stats</a>.</p>
+  </div>
+
+  <div class="step">
+    <h4>5. Acquire a swapchain image</h4>
+    <svg viewBox="0 0 730 252" role="img" aria-label="acquireNextImage returns OK, SUBOPTIMAL, OUT_OF_DATE or FAILURE. OK and SUBOPTIMAL go on; OUT_OF_DATE and FAILURE skip the frame.">
+      <!--strip 4-->
+      <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
+      <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
+      <rect x="214" y="8" width="98" height="28" rx="5" class="cpu"/><text x="263" y="26" class="mid small">fence wait</text>
+      <rect x="316" y="8" width="98" height="28" rx="5" class="cpu"/><text x="365" y="26" class="mid small">stats · sync</text>
+      <rect x="418" y="8" width="98" height="28" rx="5" class="cpu"/><rect x="416" y="6" width="102" height="32" rx="7" class="hot"/><text x="467" y="26" class="mid small title">acquire</text>
+      <rect x="520" y="8" width="98" height="28" rx="5" class="ghost"/><text x="569" y="26" class="mid small t-faint">record</text>
+      <rect x="622" y="8" width="98" height="28" rx="5" class="ghost"/><text x="671" y="26" class="mid small t-faint">submit · present</text>
+      <!--/strip-->
+      <rect x="10" y="106" width="230" height="50" rx="6" class="cpu"/>
+      <text x="125" y="128" class="mid mono">acquireNextImage(</text>
+      <text x="125" y="146" class="mid mono">imageIdx)</text>
+      <rect x="290" y="56" width="430" height="34" rx="6" class="cpu"/>
+      <text x="304" y="78" class="mono">OK</text>
+      <text x="440" y="78" class="small">go on</text>
+      <rect x="290" y="98" width="430" height="34" rx="6" class="cpu"/>
+      <text x="304" y="120" class="mono">SUBOPTIMAL</text>
+      <text x="440" y="120" class="small">go on; set swapchainOutOfDate, recreate next frame</text>
+      <rect x="290" y="140" width="430" height="34" rx="6" class="ghost"/>
+      <text x="304" y="162" class="mono">OUT_OF_DATE</text>
+      <text x="440" y="162" class="small t-hot">set swapchainOutOfDate, return false</text>
+      <rect x="290" y="182" width="430" height="34" rx="6" class="ghost"/>
+      <text x="304" y="204" class="mono">FAILURE</text>
+      <text x="440" y="204" class="small t-hot">return false</text>
+      <line x1="240" y1="122" x2="288" y2="74" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <line x1="240" y1="127" x2="288" y2="115" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <line x1="240" y1="135" x2="288" y2="157" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="240" y1="140" x2="288" y2="199" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="10" y="240" class="small">SUBOPTIMAL still renders: the image is acquired and its semaphore will be signaled.</text>
+    </svg>
+    <p>Acquire comes after the scene sync, so a skip here wastes nothing: the uploads it queued go out with the next submit. The swapchain picks its own acquire semaphore; see <a href="rhi.html">the RHI</a>.</p>
+  </div>
+
+  <div class="step">
+    <h4>6. Start recording: beginPass</h4>
+    <svg viewBox="0 0 730 250" role="img" aria-label="The frame command buffer gets: begin, frame timestamp, pass timestamp, two layout barriers, beginRendering with clear, viewport, scissor and cull mode NONE.">
+      <!--strip 5-->
+      <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
+      <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
+      <rect x="214" y="8" width="98" height="28" rx="5" class="cpu"/><text x="263" y="26" class="mid small">fence wait</text>
+      <rect x="316" y="8" width="98" height="28" rx="5" class="cpu"/><text x="365" y="26" class="mid small">stats · sync</text>
+      <rect x="418" y="8" width="98" height="28" rx="5" class="cpu"/><text x="467" y="26" class="mid small">acquire</text>
+      <rect x="520" y="8" width="98" height="28" rx="5" class="cpu"/><rect x="518" y="6" width="102" height="32" rx="7" class="hot"/><text x="569" y="26" class="mid small title">record</text>
+      <rect x="622" y="8" width="98" height="28" rx="5" class="ghost"/><text x="671" y="26" class="mid small t-faint">submit · present</text>
+      <!--/strip-->
+      <text x="14" y="64" class="mono">Frame Command Buffer 0</text>
+      <rect x="10" y="72" width="710" height="44" rx="6" class="zone"/>
+      <rect x="14"  y="80" width="50"  height="28" rx="4" class="cpu"/><text x="39"  y="98" class="mid small">begin</text>
+      <rect x="68"  y="80" width="64"  height="28" rx="4" class="cpu"/><text x="100" y="98" class="mid small">ts Frame</text>
+      <rect x="136" y="80" width="64"  height="28" rx="4" class="cpu"/><text x="168" y="98" class="mid small">ts Scene</text>
+      <rect x="204" y="80" width="96"  height="28" rx="4" class="cpu"/><text x="252" y="98" class="mid small">barrier: image</text>
+      <rect x="304" y="80" width="96"  height="28" rx="4" class="cpu"/><text x="352" y="98" class="mid small">barrier: depth</text>
+      <rect x="404" y="80" width="100" height="28" rx="4" class="cpu"/><text x="454" y="98" class="mid small">beginRendering</text>
+      <rect x="508" y="80" width="64"  height="28" rx="4" class="cpu"/><text x="540" y="98" class="mid small">viewport</text>
+      <rect x="576" y="80" width="56"  height="28" rx="4" class="cpu"/><text x="604" y="98" class="mid small">scissor</text>
+      <rect x="636" y="80" width="70"  height="28" rx="4" class="cpu"/><text x="671" y="98" class="mid small">cull NONE</text>
+      <path d="M14,122 V128 H132 V122" class="arrow"/>
+      <text x="73" y="144" class="mid small mono">beginFrame</text>
+      <path d="M136,122 V128 H706 V122" class="arrow"/>
+      <text x="421" y="144" class="mid small mono">beginPass("Scene")</text>
+      <text x="14" y="174" class="small">barrier: image — swapchain image UNKNOWN → COLOR_ATTACHMENT; it waits at color output, after the acquire.</text>
+      <text x="14" y="192" class="small">barrier: depth — the slot's depth texture UNKNOWN → DEPTH_STENCIL_ATTACHMENT.</text>
+      <text x="14" y="210" class="small">beginRendering — clears color to SWAPCHAIN_CLEAR_COLOR and depth to 0 (reversed-Z).</text>
+      <text x="14" y="228" class="small">ts — a GPU timestamp, only while frame stats are measured.</text>
+    </svg>
+    <p><code>beginFrame</code> sets <code>swapchainRendered</code> to false and <code>sceneDrawCount</code> to 0, then begins the slot's command buffer. Each command buffer has its own pool, and <code>begin</code> resets it. That is safe because of the wait in step 3.</p>
+  </div>
+
+  <div class="step">
+    <h4>7. drawScene records the scene</h4>
+    <svg viewBox="0 0 730 262" role="img" aria-label="drawScene writes this call's SceneData, binds the pipeline, the bindless set and the index buffer, then per run sets the cull mode, pushes the SceneData address and records one indirect count draw.">
+      <!--strip 5-->
+      <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
+      <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
+      <rect x="214" y="8" width="98" height="28" rx="5" class="cpu"/><text x="263" y="26" class="mid small">fence wait</text>
+      <rect x="316" y="8" width="98" height="28" rx="5" class="cpu"/><text x="365" y="26" class="mid small">stats · sync</text>
+      <rect x="418" y="8" width="98" height="28" rx="5" class="cpu"/><text x="467" y="26" class="mid small">acquire</text>
+      <rect x="520" y="8" width="98" height="28" rx="5" class="cpu"/><rect x="518" y="6" width="102" height="32" rx="7" class="hot"/><text x="569" y="26" class="mid small title">record</text>
+      <rect x="622" y="8" width="98" height="28" rx="5" class="ghost"/><text x="671" y="26" class="mid small t-faint">submit · present</text>
+      <!--/strip-->
+      <path d="M128,64 V58 H706 V64" class="arrow"/>
+      <text x="128" y="52" class="small mono">drawScene(scene, camera)</text>
+      <rect x="10" y="70" width="710" height="44" rx="6" class="zone"/>
+      <rect x="14"  y="78" width="110" height="28" rx="4" class="ghost"/><text x="69"  y="96" class="mid small t-faint">… beginPass</text>
+      <rect x="128" y="78" width="90"  height="28" rx="4" class="cpu"/><text x="173" y="96" class="mid small">bind pipeline</text>
+      <rect x="222" y="78" width="64"  height="28" rx="4" class="cpu"/><text x="254" y="96" class="mid small">bind set</text>
+      <rect x="290" y="78" width="72"  height="28" rx="4" class="cpu"/><text x="326" y="96" class="mid small">bind index</text>
+      <rect x="366" y="78" width="70"  height="28" rx="4" class="cpu"/><text x="401" y="96" class="mid small">cull BACK</text>
+      <rect x="440" y="78" width="44"  height="28" rx="4" class="cpu"/><text x="462" y="96" class="mid small">push</text>
+      <rect x="488" y="78" width="120" height="28" rx="4" class="gpu"/><text x="548" y="96" class="mid small">draw indirect count</text>
+      <text x="622" y="96" class="mid small">…</text>
+      <rect x="636" y="78" width="70"  height="28" rx="4" class="cpu"/><text x="671" y="96" class="mid small">cull NONE</text>
+      <path d="M366,112 V118 H608 V112" class="arrow"/>
+      <text x="474" y="134" class="small">once per run of equal cull mode</text>
+
+      <rect x="10" y="150" width="300" height="50" rx="6" class="mem"/>
+      <text x="24" y="170" class="mono">sceneData[frameCount]</text>
+      <text x="24" y="190" class="small">this call's SceneData: camera, planes, lights</text>
+      <path d="M310,175 H462 V108" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <text x="470" y="166" class="small">its address goes in the push constant</text>
+      <text x="10" y="232" class="small">The draws read the visible-draw list and counts. Culling fills them on the GPU before these draws run (step 9).</text>
+      <text x="10" y="250" class="small">A frame can make MAX_SCENE_DRAWS_PER_FRAME (8) drawScene calls; each has its own SceneData and lists.</text>
+    </svg>
+    <p><code>drawScene</code> takes the index <code>sceneDrawCount</code> for this call. The details are in <a href="uber-shader.html">drawing with the uber shader</a> and <a href="culling.html">GPU frustum culling</a>.</p>
+  </div>
+
+  <div class="step">
+    <h4>8. endPass, and the end of the frame's command buffer</h4>
+    <svg viewBox="0 0 730 232" role="img" aria-label="endPass records the overlay, endRendering and the barrier to PRESENT_SRC. endFrame closes the frame timer and ends the command buffer.">
+      <!--strip 5-->
+      <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
+      <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
+      <rect x="214" y="8" width="98" height="28" rx="5" class="cpu"/><text x="263" y="26" class="mid small">fence wait</text>
+      <rect x="316" y="8" width="98" height="28" rx="5" class="cpu"/><text x="365" y="26" class="mid small">stats · sync</text>
+      <rect x="418" y="8" width="98" height="28" rx="5" class="cpu"/><text x="467" y="26" class="mid small">acquire</text>
+      <rect x="520" y="8" width="98" height="28" rx="5" class="cpu"/><rect x="518" y="6" width="102" height="32" rx="7" class="hot"/><text x="569" y="26" class="mid small title">record</text>
+      <rect x="622" y="8" width="98" height="28" rx="5" class="ghost"/><text x="671" y="26" class="mid small t-faint">submit · present</text>
+      <!--/strip-->
+      <path d="M128,64 V58 H514 V64" class="arrow"/>
+      <text x="321" y="52" class="mid small mono">endPass()</text>
+      <path d="M518,64 V58 H650 V64" class="arrow"/>
+      <text x="584" y="52" class="mid small mono">endFrame()</text>
+      <rect x="10" y="70" width="710" height="44" rx="6" class="zone"/>
+      <rect x="14"  y="78" width="110" height="28" rx="4" class="ghost"/><text x="69"  y="96" class="mid small t-faint">… drawScene</text>
+      <rect x="128" y="78" width="60"  height="28" rx="4" class="cpu"/><text x="158" y="96" class="mid small">overlay</text>
+      <rect x="192" y="78" width="90"  height="28" rx="4" class="cpu"/><text x="237" y="96" class="mid small">endRendering</text>
+      <rect x="286" y="78" width="140" height="28" rx="4" class="cpu"/><text x="356" y="96" class="mid small">barrier: → PRESENT_SRC</text>
+      <rect x="430" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="472" y="96" class="mid small">ts Scene end</text>
+      <rect x="518" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="560" y="96" class="mid small">ts Frame end</text>
+      <rect x="606" y="78" width="44"  height="28" rx="4" class="cpu"/><text x="628" y="96" class="mid small">end</text>
+      <text x="14" y="146" class="small">overlay — the stats overlay, only in a swapchain pass and only when it is shown (F1).</text>
+      <text x="14" y="164" class="small">barrier — the image goes COLOR_ATTACHMENT → PRESENT_SRC, and swapchainRendered becomes true.</text>
+      <text x="14" y="182" class="small">A render target pass instead moves its color texture to SAMPLED, for later passes.</text>
+      <text x="14" y="212" class="small t-hot">No pass drew to the swapchain? endFrame first records an empty pass named "Clear", so present still works.</text>
+    </svg>
+    <p>Present needs the image in <code>PRESENT_SRC</code>. A frame that only draws into render targets gets the empty <code>"Clear"</code> pass, so it presents the clear color (there is no offscreen-only frame yet, <b>D7</b>).</p>
+  </div>
+
+  <div class="step">
+    <h4>9. recordCulling fills the cull command buffer</h4>
+    <svg viewBox="0 0 730 262" role="img" aria-label="After the frame's command buffer is ended, recordCulling records the cull command buffer: per drawScene call countMain, a compute barrier and writeMain, then one barrier to graphics and host.">
+      <!--strip 5-->
+      <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
+      <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
+      <rect x="214" y="8" width="98" height="28" rx="5" class="cpu"/><text x="263" y="26" class="mid small">fence wait</text>
+      <rect x="316" y="8" width="98" height="28" rx="5" class="cpu"/><text x="365" y="26" class="mid small">stats · sync</text>
+      <rect x="418" y="8" width="98" height="28" rx="5" class="cpu"/><text x="467" y="26" class="mid small">acquire</text>
+      <rect x="520" y="8" width="98" height="28" rx="5" class="cpu"/><rect x="518" y="6" width="102" height="32" rx="7" class="hot"/><text x="569" y="26" class="mid small title">record</text>
+      <rect x="622" y="8" width="98" height="28" rx="5" class="ghost"/><text x="671" y="26" class="mid small t-faint">submit · present</text>
+      <!--/strip-->
+      <text x="14" y="64" class="mono">Frame Command Buffer 0</text>
+      <rect x="10" y="72" width="710" height="36" rx="6" class="ghost"/>
+      <text x="365" y="95" class="mid small t-faint">recorded and ended (steps 6 to 8)</text>
+      <text x="14" y="136" class="mono">Cull Command Buffer 0</text>
+      <rect x="10" y="144" width="710" height="44" rx="6" class="zone"/>
+      <rect x="14"  y="152" width="50"  height="28" rx="4" class="cpu"/><text x="39"  y="170" class="mid small">begin</text>
+      <rect x="68"  y="152" width="70"  height="28" rx="4" class="cpu"/><text x="103" y="170" class="mid small">ts Culling</text>
+      <rect x="142" y="152" width="72"  height="28" rx="4" class="shader"/><text x="178" y="170" class="mid small">countMain</text>
+      <rect x="218" y="152" width="84"  height="28" rx="4" class="cpu"/><text x="260" y="170" class="mid small">barrier C→C</text>
+      <rect x="306" y="152" width="72"  height="28" rx="4" class="shader"/><text x="342" y="170" class="mid small">writeMain</text>
+      <rect x="382" y="152" width="130" height="28" rx="4" class="ghost"/><text x="447" y="170" class="mid small t-faint">… next drawScene call</text>
+      <rect x="516" y="152" width="96"  height="28" rx="4" class="cpu"/><text x="564" y="170" class="mid small">barrier C→G|H</text>
+      <rect x="616" y="152" width="50"  height="28" rx="4" class="cpu"/><text x="641" y="170" class="mid small">ts end</text>
+      <rect x="670" y="152" width="40"  height="28" rx="4" class="cpu"/><text x="690" y="170" class="mid small">end</text>
+      <text x="14" y="214" class="small">C = COMPUTE, G = GRAPHICS, H = HOST. The last barrier makes the visible draws and counts visible to the draws, and the stats to the CPU.</text>
+      <text x="14" y="232" class="small">No culled call this frame → nothing is recorded, and only the frame's command buffer is submitted.</text>
+      <text x="14" y="250" class="small t-hot">The cull command buffer can't be begun → the frame is not submitted: its draws would read stale counts.</text>
+    </svg>
+    <p>Dispatches are not allowed inside a render pass, and <code>drawScene</code> records inside one. So culling gets its own command buffer, recorded last but submitted first.</p>
+  </div>
+
+  <div class="step">
+    <h4>10. Submit and present</h4>
+    <svg viewBox="0 0 730 286" role="img" aria-label="submit first flushes the pending uploads as their own submit, then submits the cull and frame command buffers as one submission that waits for the acquired image and signals frame fence value 7. On success it presents.">
+      <!--strip 6-->
+      <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
+      <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
+      <rect x="214" y="8" width="98" height="28" rx="5" class="cpu"/><text x="263" y="26" class="mid small">fence wait</text>
+      <rect x="316" y="8" width="98" height="28" rx="5" class="cpu"/><text x="365" y="26" class="mid small">stats · sync</text>
+      <rect x="418" y="8" width="98" height="28" rx="5" class="cpu"/><text x="467" y="26" class="mid small">acquire</text>
+      <rect x="520" y="8" width="98" height="28" rx="5" class="cpu"/><text x="569" y="26" class="mid small">record</text>
+      <rect x="622" y="8" width="98" height="28" rx="5" class="cpu"/><rect x="620" y="6" width="102" height="32" rx="7" class="hot"/><text x="671" y="26" class="mid small title">submit · present</text>
+      <!--/strip-->
+      <text x="110" y="66" class="mono">uploads.flush()</text>
+      <text x="270" y="66" class="mono">submit({cull, frame}, frameFence, 7)</text>
+      <text x="10" y="98" class="title t-gpu">queue</text>
+      <rect x="110" y="76" width="140" height="36" rx="6" class="gpu"/>
+      <text x="180" y="99" class="mid small">upload copies</text>
+      <rect x="270" y="76" width="150" height="36" rx="6" class="gpu"/>
+      <text x="345" y="99" class="mid small">Cull Command Buffer 0</text>
+      <rect x="426" y="76" width="170" height="36" rx="6" class="gpu"/>
+      <text x="511" y="99" class="mid small">Frame Command Buffer 0</text>
+      <line x1="596" y1="94" x2="626" y2="94" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <rect x="628" y="76" width="92" height="36" rx="6" class="box"/>
+      <text x="674" y="99" class="mid small">fence → 7</text>
+      <path d="M270,118 V124 H596 V118" class="arrow"/>
+      <text x="433" y="140" class="mid small">one submission; waits for the acquired image at color output</text>
+
+      <rect x="10" y="158" width="350" height="112" rx="6" class="cpu"/>
+      <text x="24" y="180" class="title">submit succeeded</text>
+      <text x="24" y="202" class="small">frameFenceValue = 7</text>
+      <text x="24" y="220" class="small">frameResources[0].fenceValue = 7</text>
+      <text x="24" y="238" class="small">present(): SUBOPTIMAL or OUT_OF_DATE</text>
+      <text x="24" y="256" class="small">→ swapchainOutOfDate, recreate next frame</text>
+      <rect x="370" y="158" width="350" height="112" rx="6" class="ghost"/>
+      <text x="384" y="180" class="title t-hot">submit failed (or culling failed)</text>
+      <text x="384" y="202" class="small">no present; fence values stay as they were</text>
+      <text x="384" y="220" class="small">the image stays acquired: the next acquire</text>
+      <text x="384" y="238" class="small">hands out the same image again</text>
+      <text x="384" y="256" class="small">a value nothing signals is never waited for</text>
+    </svg>
+    <p>The upload copies go out first on the same queue, so the frame sees their data (<a href="gpu-memory.html">how data reaches the GPU</a>). A slot takes the new fence value only after a successful submit: waiting for a value that nothing signals would block forever.</p>
+  </div>
+
+  <div class="step">
+    <h4>11. Move to the other slot</h4>
+    <svg viewBox="0 0 730 190" role="img" aria-label="frameCount flips from 0 to 1. The next beginFrame waits for slot 1's value 6.">
+      <!--strip 6-->
+      <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
+      <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
+      <rect x="214" y="8" width="98" height="28" rx="5" class="cpu"/><text x="263" y="26" class="mid small">fence wait</text>
+      <rect x="316" y="8" width="98" height="28" rx="5" class="cpu"/><text x="365" y="26" class="mid small">stats · sync</text>
+      <rect x="418" y="8" width="98" height="28" rx="5" class="cpu"/><text x="467" y="26" class="mid small">acquire</text>
+      <rect x="520" y="8" width="98" height="28" rx="5" class="cpu"/><text x="569" y="26" class="mid small">record</text>
+      <rect x="622" y="8" width="98" height="28" rx="5" class="cpu"/><rect x="620" y="6" width="102" height="32" rx="7" class="hot"/><text x="671" y="26" class="mid small title">submit · present</text>
+      <!--/strip-->
+      <rect x="10" y="70" width="270" height="50" rx="6" class="cpu"/>
+      <text x="24" y="91" class="mono">frameResources[0]</text>
+      <text x="24" y="110" class="small">fenceValue = 7 (frame 7)</text>
+      <rect x="450" y="70" width="270" height="50" rx="6" class="cpu"/>
+      <rect x="448" y="68" width="274" height="54" rx="8" class="hot"/>
+      <text x="464" y="91" class="mono">frameResources[1]</text>
+      <text x="464" y="110" class="small">fenceValue = 6 → frame 8 waits for 6</text>
+      <line x1="280" y1="95" x2="446" y2="95" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="363" y="88" class="mid small mono">frameCount: 0 → 1</text>
+      <text x="10" y="152" class="mono">frameCount = (frameCount + 1) % MAX_FRAMES_IN_FLIGHT</text>
+      <text x="10" y="176" class="small">Then the Tracy frame mark. The slot moves even after a failed submit; a skipped frame (beginFrame false) does not move it.</text>
+    </svg>
+    <p>Frame 8 can start at once if the GPU already reached 6. Otherwise the CPU waits in step 3 of frame 8.</p>
+  </div>
+</div>
+
+<h2><span class="n">3</span>Two slots over time</h2>
+
+<p>With two slots, the CPU can record frame N+1 while the GPU runs frame N. It cannot get further ahead: frame N+2 uses the same slot as frame N, so it waits for frame N's fence value.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="The CPU records frames 1 and 2 at once. Frame 3 waits until the GPU finishes frame 1 and the fence reaches 1. Frame 4 waits for 2, frame 5 for 3.">
+    <text x="10" y="24" class="small">time →</text>
+    <line x1="90" y1="20" x2="740" y2="20" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="10" y="58" class="title t-cpu">CPU</text>
+    <text x="10" y="74" class="small">records</text>
+    <rect x="90"  y="42" width="90" height="36" rx="5" class="cpu"/><text x="135" y="65" class="mid">F1 · slot 0</text>
+    <rect x="186" y="42" width="90" height="36" rx="5" class="cpu"/><text x="231" y="65" class="mid">F2 · slot 1</text>
+    <rect x="280" y="48" width="36" height="24" rx="4" class="ghost"/><text x="298" y="64" class="mid small t-faint">wait</text>
+    <rect x="320" y="42" width="90" height="36" rx="5" class="cpu"/><text x="365" y="65" class="mid">F3 · slot 0</text>
+    <rect x="414" y="48" width="32" height="24" rx="4" class="ghost"/><text x="430" y="64" class="mid small t-faint">wait</text>
+    <rect x="450" y="42" width="90" height="36" rx="5" class="cpu"/><text x="495" y="65" class="mid">F4 · slot 1</text>
+    <rect x="544" y="48" width="32" height="24" rx="4" class="ghost"/><text x="560" y="64" class="mid small t-faint">wait</text>
+    <rect x="580" y="42" width="90" height="36" rx="5" class="cpu"/><text x="625" y="65" class="mid">F5 · slot 0</text>
+
+    <line x1="180" y1="78" x2="194" y2="128" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="160" y="108" class="end small">submit</text>
+
+    <text x="10" y="148" class="title t-gpu">GPU</text>
+    <text x="10" y="164" class="small">runs</text>
+    <rect x="190" y="132" width="130" height="36" rx="5" class="gpu"/><text x="255" y="155" class="mid">F1</text>
+    <rect x="320" y="132" width="130" height="36" rx="5" class="gpu"/><text x="385" y="155" class="mid">F2</text>
+    <rect x="450" y="132" width="130" height="36" rx="5" class="gpu"/><text x="515" y="155" class="mid">F3</text>
+    <rect x="580" y="132" width="130" height="36" rx="5" class="gpu"/><text x="645" y="155" class="mid">F4</text>
+
+    <line x1="320" y1="208" x2="320" y2="80" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <text x="326" y="104" class="small t-hot">F3 waits ≥ 1</text>
+    <line x1="450" y1="208" x2="450" y2="80" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <text x="456" y="104" class="small t-hot">F4 waits ≥ 2</text>
+    <line x1="580" y1="208" x2="580" y2="80" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <text x="586" y="104" class="small t-hot">F5 waits ≥ 3</text>
+
+    <text x="10" y="214" class="small mono">frameFence</text>
+    <line x1="90" y1="210" x2="740" y2="210" class="arrow"/>
+    <text x="96"  y="230" class="small mono">0</text>
+    <text x="320" y="230" class="mid small mono">1</text>
+    <text x="450" y="230" class="mid small mono">2</text>
+    <text x="580" y="230" class="mid small mono">3</text>
+    <text x="710" y="230" class="mid small mono">4</text>
+  </svg>
+  <figcaption>A GPU-bound app: the CPU spends the gaps in <code>waitForFence</code>. Each CPU box ends with a submit; the GPU runs the frames in submit order, on the one queue.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Frame</th><th><code>frameCount</code> (slot)</th><th>Waits for</th><th>Signals</th></tr>
+  <tr><td>F1</td><td>0</td><td>0 (passes at once)</td><td>1</td></tr>
+  <tr><td>F2</td><td>1</td><td>0 (passes at once)</td><td>2</td></tr>
+  <tr><td>F3</td><td>0</td><td>1</td><td>3</td></tr>
+  <tr><td>F4</td><td>1</td><td>2</td><td>4</td></tr>
+  <tr><td>F5</td><td>0</td><td>3</td><td>5</td></tr>
+</table>
+</div>
+
+<p>Nothing is reset: the fence values only grow. A skipped frame needs no cleanup, because it signaled nothing and changed no slot value.</p>
+
+<h3>What has one copy per slot</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>Per slot</th><th>Where</th></tr>
+  <tr><td>frame command buffer, depth texture, fence value</td><td><code>FrameResources</code> in <code>Engine::frameResources</code></td></tr>
+  <tr><td>cull command buffer</td><td><code>GpuScene::cullCommandBuffers</code></td></tr>
+  <tr><td><code>SceneData</code> (one per <code>drawScene</code> call), visible draws, draw counts, cull stats</td><td><code>GpuScene</code></td></tr>
+  <tr><td>instance and material table buffers, draw list buffers</td><td><code>GpuTable</code>, <code>SceneDrawList::buffers</code></td></tr>
+  <tr><td>GPU timestamp query pool</td><td><code>FrameStatsSlot</code></td></tr>
+  <tr><td>render target color and depth textures</td><td><code>RenderTarget::attachments</code></td></tr>
+</table>
+</div>
+<p>All of them are indexed by <code>frameCount</code>. A render target's texture changes every frame, so fetch it with <code>getRenderTargetTexture</code> each frame.</p>
+
+<h2><span class="n">4</span>Swapchain results and skipped frames</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Call</th><th><code>OK</code></th><th><code>SUBOPTIMAL</code></th><th><code>OUT_OF_DATE</code></th><th><code>FAILURE</code></th></tr>
+  <tr><td><code>acquireNextImage</code></td><td>go on</td><td>go on, recreate next frame</td><td>skip, recreate next frame</td><td>skip</td></tr>
+  <tr><td><code>present</code></td><td>—</td><td>recreate next frame</td><td>recreate next frame</td><td>logged</td></tr>
+  <tr><td><code>recreateSwapchain</code></td><td>go on</td><td>—</td><td>0 × 0 surface: keep the old swapchain, skip</td><td>skip, try again next frame</td></tr>
+</table>
+</div>
+<p>"Recreate next frame" means <code>swapchainOutOfDate</code> is set, and step 2 of the next frame recreates the swapchain.</p>
+
+<div class="split">
+  <div>
+    <h4>A skipped frame (<code>beginFrame</code> returns false)</h4>
+    <p>Nothing is recorded or submitted. <code>frameCount</code> does not move, and there is no Tracy frame mark. What ran before the skip still counts: input, finished loads, and (when acquire skips) the scene sync, whose uploads go out with the next submit.</p>
+  </div>
+  <div>
+    <h4>A frame that fails to submit</h4>
+    <p>It was recorded, but the slot keeps its old fence value, so the next wait on it passes at once. <code>frameCount</code> still moves. The image stays acquired, and the next acquire returns it again. Its timestamps are not read, because the slot's value did not change.</p>
+  </div>
+</div>
+
+<h2><span class="n">5</span>Resize</h2>
+
+<ol class="steps">
+  <li><b>SDL reports a new pixel size.</b> <code>SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED</code> sets <code>resized</code> and the new <code>pixelWidth</code> and <code>pixelHeight</code> in <code>pollEvents</code>.</li>
+  <li><b>The next <code>beginFrame</code> recreates.</b> It calls <code>Engine::recreateSwapchain</code>, which calls <code>RenderContext::recreateSwapchain</code>.</li>
+  <li><b>The swapchain is rebuilt.</b> A 0 × 0 surface returns <code>OUT_OF_DATE</code> and keeps the old swapchain. Otherwise it releases pending semaphores, waits until the device is idle, and builds the new swapchain.</li>
+  <li><b>Image handles change.</b> The old swapchain image handles are dropped and new ones are registered. Handles from an earlier <code>getSwapchainImages</code> are no longer valid.</li>
+  <li><b>Sizes follow.</b> <code>createSwapchainResources</code> recreates both depth textures at the new size and calls <code>updateCameraAspectRatio</code>. The device is idle, so the old depth textures can be destroyed at once.</li>
+</ol>
+
+<p>Everything swapchain-sized uses the swapchain extent in pixels. <code>Window::width</code> and <code>height</code> are the logical size, used only for the mouse. They differ on HiDPI screens.</p>
+
+<h2><span class="n">6</span>Where each job runs in the frame</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Job</th><th>When</th><th>Why there</th></tr>
+  <tr><td><code>finishLoads</code></td><td>start of <code>beginFrame</code></td><td>before anything binds the bindless set or the geometry pool</td></tr>
+  <tr><td><code>updateFrameStats</code></td><td>after the fence wait</td><td>reads what the slot's last frame measured, then resets the slot</td></tr>
+  <tr><td><code>updateStatsOverlay</code></td><td>after <code>updateFrameStats</code></td><td>writes the slot's text buffer, which the GPU no longer reads</td></tr>
+  <tr><td><code>syncGpuScene</code></td><td>after the fence wait, before acquire</td><td>writes the slot's tables and draw lists</td></tr>
+  <tr><td><code>drawScene</code></td><td>inside a pass</td><td>records draws; needs a rendering scope</td></tr>
+  <tr><td><code>recordCulling</code></td><td><code>endFrame</code>, after the frame's command buffer ends</td><td>dispatches are not allowed inside a render pass</td></tr>
+  <tr><td>upload flush</td><td>inside <code>RenderContext::submit</code></td><td>the copies must run before the frame that reads them</td></tr>
+</table>
+</div>
+
+<div class="callout warn">
+  <strong>Known issues</strong>
+  <p><b>D18</b>: culling runs before all other GPU work of the frame, even compute passes recorded earlier. Nothing breaks today, but GPU work that changes what culling reads would.</p>
+  <p><b>D7</b>: the engine owns the event loop: <code>pollEvents</code> runs inside <code>beginFrame</code>, and there is no offscreen-only frame.</p>
+  <p><b>B21</b>: the swapchain always uses <code>VK_PRESENT_MODE_FIFO_KHR</code>, so the frame rate is capped at the display refresh rate.</p>
+</div>
+
+<h2><span class="n">7</span>Where it lives in code</h2>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Frame functions</td><td><code>Engine::render</code>, <code>Engine::beginFrame</code>, <code>Engine::endFrame</code>, <code>Engine::beginPass</code>, <code>Engine::endPass</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Load budget</td><td><code>Engine::finishLoads</code>, <code>LOAD_BUDGET</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Frame slot state</td><td><code>FrameResources</code> in <code>include/rasm/types.h</code>; <code>frameFence</code>, <code>frameFenceValue</code>, <code>frameCount</code> in <code>include/rasm/engine.h</code></td></tr>
+  <tr><td>Resize</td><td><code>Engine::recreateSwapchain</code>, <code>Engine::createSwapchainResources</code> in <code>src/engine.cpp</code>; <code>RenderContext::recreateSwapchain</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Events and minimize</td><td><code>Engine::pollEvents</code> in <code>src/platform/window.cpp</code></td></tr>
+  <tr><td>Scene sync, culling</td><td><code>Engine::syncGpuScene</code>, <code>Engine::recordCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Stats</td><td><code>Engine::updateFrameStats</code> in <code>src/renderer/frameStats.cpp</code></td></tr>
+  <tr><td>Acquire, submit, present</td><td><code>VulkanSwapchain</code> in <code>src/rhi/vulkan/vulkanSwapchain.cpp</code>, <code>VulkanQueue::submit</code> in <code>src/rhi/vulkan/vulkanQueue.cpp</code></td></tr>
+  <tr><td>Graph frame</td><td><code>RenderGraph::execute</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+</table>
+</div>
+
+<h2><span class="n">8</span>Rules when you change it</h2>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li><code>frameCount</code> is the frame-in-flight slot (0 or 1). Per-frame mutable buffers are indexed by it.</li>
+    <li>A slot's buffers are written only after that slot's fence wait. GPU scene tables are written only in <code>syncGpuScene</code>.</li>
+    <li>A slot takes a new fence value only when a submit that signals it succeeded.</li>
+    <li>When <code>beginFrame</code> returns false, record nothing and do not call <code>endFrame</code>.</li>
+    <li>Every swapchain call handles <code>SUBOPTIMAL</code> and <code>OUT_OF_DATE</code> explicitly.</li>
+    <li>Swapchain-sized resources use the swapchain extent in pixels, not the window's logical size.</li>
+    <li>Run the examples with <code>enableValidation</code> on after a frame-loop change. A change that adds validation messages is not done.</li>
+  </ul>
+</div>
+
+</main>
+</div>
+</body>
+</html>

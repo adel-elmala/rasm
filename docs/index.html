@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RASM Docs</title>
+<meta name="description" content="Visual guides to how the RASM engine works, and the API reference for building applications with it.">
+<meta name="rasm-sources" content="">
+<link rel="stylesheet" href="assets/style.css">
+<script src="assets/sync.js"></script>
+<script defer src="assets/site.js"></script>
+</head>
+<body data-root="" data-page="index.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow" data-fixed="1">Documentation</p>
+<h1>RASM docs</h1>
+<p class="lead">RASM (رسم) is a GPU-driven rendering engine in C++20 with a Vulkan 1.4 backend and Slang shaders. These pages explain how it works inside, with pictures first, and how to build an application with it.</p>
+
+<div class="cards">
+  <a class="card" href="guides/big-picture.html"><b>Guides →</b><span>For engine developers. One topic per page: how data reaches the GPU, how culling works, how a frame runs.</span></a>
+  <a class="card" href="api/index.html"><b>API reference →</b><span>For application developers. Every public type and function, with examples.</span></a>
+</div>
+
+<h2>The engine on one page</h2>
+<p>Each box is a guide. Click one to open it. The top row runs on the CPU, the bottom row on the GPU.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU work</span>
+  <span><i class="gpu"></i>GPU work</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Map of the guides. CPU: your app, asset loading, materials, GPU scene tables, upload. GPU: culling, uber shader, render graph passes, stats overlay, present. Foundations below.">
+    <text x="10" y="20" class="small t-cpu">CPU · every frame and on change</text>
+    <a href="api/index.html"><rect x="10" y="30" width="130" height="58" rx="6" class="cpu"/><text x="75" y="54" class="mid title">Your app</text><text x="75" y="72" class="mid small">API reference</text></a>
+    <line x1="140" y1="59" x2="158" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <a href="guides/asset-loading.html"><rect x="160" y="30" width="130" height="58" rx="6" class="cpu"/><text x="225" y="54" class="mid title">6 · Load assets</text><text x="225" y="72" class="mid small">worker threads</text></a>
+    <line x1="290" y1="59" x2="308" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <a href="guides/materials-textures.html"><rect x="310" y="30" width="130" height="58" rx="6" class="cpu"/><text x="375" y="54" class="mid title">7 · Materials</text><text x="375" y="72" class="mid small">bindless textures</text></a>
+    <line x1="440" y1="59" x2="458" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <a href="guides/gpu-scene.html"><rect x="460" y="30" width="130" height="58" rx="6" class="cpu"/><text x="525" y="54" class="mid title">5 · GPU scene</text><text x="525" y="72" class="mid small">tables, draw lists</text></a>
+    <line x1="590" y1="59" x2="608" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <a href="guides/gpu-memory.html"><rect x="610" y="30" width="140" height="58" rx="6" class="cpu"/><text x="680" y="54" class="mid title">4 · Upload</text><text x="680" y="72" class="mid small">staging, dirty rows</text></a>
+
+    <path d="M680,88 V118 H75 V146" class="arrow" marker-end="url(#ah)"/>
+    <text x="380" y="112" class="mid small">one submit per frame</text>
+
+    <text x="90" y="140" class="small t-gpu">GPU · every frame</text>
+    <a href="guides/culling.html"><rect x="10" y="150" width="130" height="58" rx="6" class="gpu"/><text x="75" y="174" class="mid title">9 · Culling</text><text x="75" y="192" class="mid small">compute</text></a>
+    <line x1="140" y1="179" x2="158" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <a href="guides/uber-shader.html"><rect x="160" y="150" width="130" height="58" rx="6" class="gpu"/><text x="225" y="174" class="mid title">8 · Uber shader</text><text x="225" y="192" class="mid small">indirect draws</text></a>
+    <line x1="290" y1="179" x2="308" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <a href="guides/render-graph.html"><rect x="310" y="150" width="130" height="58" rx="6" class="gpu"/><text x="375" y="174" class="mid title">11 · Passes</text><text x="375" y="192" class="mid small">render graph</text></a>
+    <line x1="440" y1="179" x2="458" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <a href="guides/stats-overlay.html"><rect x="460" y="150" width="130" height="58" rx="6" class="gpu"/><text x="525" y="174" class="mid title">12 · Overlay</text><text x="525" y="192" class="mid small">frame stats</text></a>
+    <line x1="590" y1="179" x2="608" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <a href="guides/frame-loop.html"><rect x="610" y="150" width="140" height="58" rx="6" class="gpu"/><text x="680" y="174" class="mid title">2 · Present</text><text x="680" y="192" class="mid small">the frame loop</text></a>
+
+    <text x="10" y="248" class="small">Foundations under everything</text>
+    <a href="guides/big-picture.html"><rect x="10" y="258" width="175" height="50" rx="6" class="box"/><text x="97" y="288" class="mid title">1 · Big picture</text></a>
+    <a href="guides/rhi.html"><rect x="200" y="258" width="175" height="50" rx="6" class="box"/><text x="287" y="288" class="mid title">3 · RHI / Vulkan</text></a>
+    <a href="guides/camera-depth.html"><rect x="390" y="258" width="175" height="50" rx="6" class="box"/><text x="477" y="288" class="mid title">10 · Camera, depth</text></a>
+    <a href="guides/shaders-structs.html"><rect x="580" y="258" width="170" height="50" rx="6" class="box"/><text x="665" y="288" class="mid title">13 · Shaders, structs</text></a>
+  </svg>
+  <figcaption>The path of a frame: assets become rows in GPU tables, the CPU uploads what changed, the GPU culls, draws, adds the overlay and presents.</figcaption>
+</figure>
+
+<h2>Where to start</h2>
+<div class="table-wrap">
+<table>
+  <tr><th>You want to…</th><th>Read</th></tr>
+  <tr><td>write an app with RASM</td><td><a href="api/index.html">Getting started</a>, then the <a href="api/engine.html">Engine</a> page</td></tr>
+  <tr><td>understand the engine before changing it</td><td>Guides 1 → 2 → 4 → 5 → 8, in that order</td></tr>
+  <tr><td>add a render pass or post effect</td><td><a href="guides/render-graph.html">The render graph</a>, <a href="api/render-graph.html">its API</a></td></tr>
+  <tr><td>change a GPU struct or a shader</td><td><a href="guides/shaders-structs.html">Shaders and the struct contract</a></td></tr>
+  <tr><td>find why something is slow</td><td><a href="guides/stats-overlay.html">Frame stats and the overlay</a></td></tr>
+</table>
+</div>
+
+<h2>Other project docs</h2>
+<p>These Markdown files hold the full technical record. The guides are the friendly way in; these are the reference.</p>
+<ul>
+  <li><a href="architecture.md">architecture.md</a> — every detail of how the engine works today.</li>
+  <li><a href="code_review.md">code_review.md</a> — known bugs and design issues, by ID (<code>B1</code>, <code>D4</code>, …).</li>
+  <li><a href="development_plan.md">development_plan.md</a> — the roadmap.</li>
+  <li><a href="coding_style.md">coding_style.md</a> and <a href="build_guide.md">build_guide.md</a>.</li>
+</ul>
+
+<div class="callout">
+  <strong>Reading these pages</strong>
+  <p>Open <code>docs/index.html</code> in a browser. The pages need no server and no build. They work offline.</p>
+</div>
+
+</main>
+</div>
+</body>
+</html>

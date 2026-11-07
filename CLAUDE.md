@@ -13,6 +13,16 @@ RASM is an early-stage C++20 GPU-driven rendering engine (static lib target `ras
 - [docs/code_review.md](docs/code_review.md) — known bugs/design issues with IDs (`B1`, `D4`, `P1`, `C3`, ...). Check it before "fixing" odd behaviour; reference IDs in commits.
 - [docs/development_plan.md](docs/development_plan.md) — phased roadmap; phase 0 (stabilization) comes first.
 - [docs/build_guide.md](docs/build_guide.md) — toolchain setup (vcpkg, Vulkan SDK, Ninja, Clang).
+- [docs/index.html](docs/index.html) — HTML docs for humans: visual guides, one topic each (`docs/guides/`), and the API reference for application developers (`docs/api/`). Open in a browser; no build.
+
+## Keep the HTML docs in sync with main
+
+The guides and the API reference must always describe the code on `main`. Use the `sync-docs` skill:
+
+- Every change to `include/`, `src/`, `shaders/`, `examples/` or `cmake/` updates the pages that describe it, in the same change (`finish-task` runs `sync-docs`). A new public function or type gets its API entry; changed behaviour gets its diagram fixed, not only its text.
+- At the start of a session, run `python .claude/skills/sync-docs/scripts/docsync.py status --target main`. If it lists changed code, tell the user the docs are behind main and offer to sync them.
+- `docsync.py check` must pass before the docs are called done. `docs/assets/sync.js` (the stamp) is written only by `docsync.py stamp`.
+- New pages are added to `SECTIONS` in `docs/assets/site.js`, the one list of pages, and follow the house style in the skill (visual first, plain short English, classes from `docs/assets/style.css` only).
 
 ## Build & run
 

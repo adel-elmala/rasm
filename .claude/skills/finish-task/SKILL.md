@@ -53,6 +53,10 @@ Get the date with `date +%F`. Never guess it.
 
 **`docs/architecture.md`**: describes how the engine works *today*, in present tense, with no history. Update the sections whose behavior changed (frame loop, uploads, struct contract sizes, materials, limits, Tracy zones).
 
+**HTML docs (`docs/guides/`, `docs/api/`)**: run the `sync-docs` skill. It lists the pages that describe the
+files this change touched, and its `check` must pass. Every change to engine code, shaders, examples or the
+public API goes through it, so the HTML docs never fall behind `main`.
+
 **`CLAUDE.md`, `docs/coding_style.md`**: only when a rule or workflow changed.
 
 **Skills** that quote engine facts: `frame-debug` (SceneData offsets, resource names), `tracy-profile` (zone list), `gpu-struct-sync` (places, `B23`/`C11`/`C12` notes), `verify-change` (GFXR filter).
