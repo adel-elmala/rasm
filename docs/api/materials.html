@@ -300,7 +300,7 @@ engine.updateMaterial(pulse, values);</code></pre>
 
 <h2 id="bindless"><span class="n">5</span>Bindless textures</h2>
 
-<p>All textures that shaders can sample sit in one descriptor set: an array of <code>MAX_BINDLESS_TEXTURES</code> (1024) slots, binding 0 of set 0, seen by fragment shaders. Materials fill it for you. You need these functions only for your own shaders, like the overlay of <code>examples/01_render_graph/main.cpp</code>:</p>
+<p>All textures that shaders can sample sit in one descriptor set: an array of <code>MAX_BINDLESS_TEXTURES</code> (1024) slots, binding 0 of set 0, seen by every shader stage, compute included. Materials fill it for you. You need these functions only for your own shaders, like the overlay of <code>examples/01_render_graph/main.cpp</code>:</p>
 
 <pre><code>// Slang: the array the engine binds
 [[vk::binding(0, 0)]]

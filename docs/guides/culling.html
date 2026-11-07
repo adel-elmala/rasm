@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GPU Frustum Culling · RASM</title>
-<meta name="description" content="How RASM removes draws outside the camera view with two compute dispatches, and keeps the draw order stable.">
+<title>GPU Culling · RASM</title>
+<meta name="description" content="How RASM removes draws outside the camera view and draws hidden behind others with compute dispatches, and keeps the draw order stable.">
 <meta name="rasm-sources" content="shaders/passes/cull.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/engine.cpp shaders/lib/core.slang">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
@@ -27,8 +27,8 @@
 <main>
 
 <p class="eyebrow">Rendering</p>
-<h1>GPU frustum culling</h1>
-<p class="lead">Before the scene is drawn, a compute shader tests every draw against the camera view. Draws that are fully outside are removed. The CPU never sees which draws survive. The GPU writes the list and the count, and the draw call reads them.</p>
+<h1>GPU culling</h1>
+<p class="lead">Before the scene is drawn, a compute shader tests every draw against the camera view. Draws that are fully outside are removed, and so are draws hidden behind what is already drawn (<a href="#occlusion">occlusion culling</a>). The CPU never sees which draws survive. The GPU writes the list and the count, and the draw call reads them.</p>
 
 <div class="legend">
   <span><i class="cpu"></i>CPU work</span>
@@ -45,6 +45,7 @@
     <li>Test: a bounding sphere that is fully behind one of the 6 frustum planes is culled.</li>
     <li>The visible draws keep the draw list's order, every frame. No count needs to be cleared.</li>
     <li>The culling is recorded <i>after</i> the frame, in its own command buffer, but it runs <i>before</i> the frame on the GPU.</li>
+    <li>Occlusion culling runs the same two dispatches twice: <b>early</b> (what was visible last time) before the frame, and <b>late</b> (the rest, tested against a Hi-Z of the early draws' depth) in the middle of the pass.</li>
   </ul>
 </div>
 
@@ -58,10 +59,10 @@
     <text x="20" y="70" class="small">records</text>
     <rect x="120" y="25" width="300" height="56" rx="6" class="cpu"/>
     <text x="270" y="48" class="mid title">Frame command buffer</text>
-    <text x="270" y="68" class="mid small">beginPass · drawScene (indirect draws) · endPass</text>
+    <text x="270" y="68" class="mid small">beginPass · drawScene · endPass</text>
     <rect x="440" y="25" width="300" height="56" rx="6" class="cpu"/>
     <text x="590" y="48" class="mid title">Cull command buffer</text>
-    <text x="590" y="68" class="mid small">countMain · barrier · writeMain · barrier</text>
+    <text x="590" y="68" class="mid small">barrier · countMain · barrier · writeMain · barrier</text>
     <line x1="120" y1="12" x2="740" y2="12" class="arrow" marker-end="url(#ah)"/>
     <text x="20" y="16" class="small">time →</text>
 
@@ -80,7 +81,7 @@
     <text x="590" y="188" class="mid title">Frame</text>
     <text x="590" y="208" class="mid small">draws read those draws + counts</text>
   </svg>
-  <figcaption>Recording order and GPU order are opposite. The last barrier of the cull command buffer makes its writes visible to the indirect draws, and to the CPU for the frame stats.</figcaption>
+  <figcaption>Recording order and GPU order are opposite. The first barrier waits for the previous frame's late culling. The last barrier of the cull command buffer makes its writes visible to the indirect draws, and to the CPU for the frame stats.</figcaption>
 </figure>
 
 <p>This works because <code>drawScene</code> does not need the results while recording. It only records <i>"draw from this buffer, with the count in that buffer"</i>. The buffers are filled later on the GPU, before the draws run.</p>
@@ -252,7 +253,7 @@
   <figcaption>Groups of run 0 come first, then run 1, and so on. A thread finds its group's run with <code>getCullGroup</code>.</figcaption>
 </figure>
 
-<p>The CPU counts the groups of each call in <code>drawScene</code> (<code>cullGroupCounts</code>). <code>recordCulling</code> dispatches that many groups for both entry points.</p>
+<p>The CPU counts the groups of each call in <code>drawScene</code> (<code>cullGroupCounts</code>). <code>recordCulling</code> dispatches that many groups for both entry points, and so does <code>recordOcclusionCulling</code> for the late cull.</p>
 
 <h2><span class="n">5</span>Worked example: one run, step by step</h2>
 
@@ -397,7 +398,240 @@
   </div>
 </div>
 
-<h2><span class="n">6</span>When culling is off</h2>
+<h2 id="occlusion"><span class="n">6</span>Occlusion culling</h2>
+
+<p>A draw inside the frustum can still be hidden behind a wall. Occlusion culling removes it. RASM uses the <b>two-pass Hi-Z</b> scheme. It is on by default; <code>EngineConfig::occlusionCulling</code> turns it off.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Early cull runs before the frame and reads the visibility buffer. The early draws write the depth texture. The pass pauses: hizMain builds the Hi-Z buffer from the depth, and the late cull reads it and writes the visibility buffer. The pass resumes with its attachments loaded and the late draws run.">
+    <rect x="280" y="10" width="340" height="96" rx="8" class="zone"/>
+    <rect x="10"  y="30" width="125" height="58" rx="28" class="shader"/>
+    <text x="72"  y="54" class="mid title">Early cull</text>
+    <text x="72"  y="72" class="mid small">before the frame</text>
+    <line x1="135" y1="59" x2="153" y2="59" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+
+    <rect x="155" y="30" width="110" height="58" rx="6" class="gpu"/>
+    <text x="210" y="54" class="mid title">Early draws</text>
+    <text x="210" y="72" class="mid small">inside the pass</text>
+    <line x1="265" y1="59" x2="288" y2="59" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+
+    <text x="450" y="24" class="mid small">pass paused: endRendering, depth → SAMPLED</text>
+    <rect x="292" y="34" width="140" height="58" rx="28" class="shader"/>
+    <text x="362" y="58" class="mid title">hizMain</text>
+    <text x="362" y="76" class="mid small">one dispatch per level</text>
+    <line x1="432" y1="63" x2="455" y2="63" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="457" y="34" width="150" height="58" rx="28" class="shader"/>
+    <text x="532" y="58" class="mid title">Late cull</text>
+    <text x="532" y="76" class="mid small">countMain + writeMain</text>
+    <line x1="620" y1="59" x2="638" y2="59" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+
+    <rect x="640" y="30" width="110" height="58" rx="6" class="gpu"/>
+    <text x="695" y="54" class="mid title">Late draws</text>
+    <text x="695" y="72" class="mid small">resumed with LOAD</text>
+
+    <rect x="10"  y="150" width="125" height="46" rx="6" class="mem"/>
+    <text x="72"  y="170" class="mid">Visibility</text>
+    <text x="72"  y="187" class="mid small">u32 per instance row</text>
+    <line x1="72" y1="150" x2="72" y2="90" class="arrow mem" marker-end="url(#ah-mem)"/>
+
+    <rect x="155" y="150" width="110" height="46" rx="6" class="mem"/>
+    <text x="210" y="170" class="mid">Depth texture</text>
+    <text x="210" y="187" class="mid small">the pass's depth</text>
+    <line x1="210" y1="88" x2="210" y2="148" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="265" y1="160" x2="330" y2="94" class="arrow mem" marker-end="url(#ah-mem)"/>
+
+    <rect x="300" y="150" width="125" height="46" rx="6" class="mem"/>
+    <text x="362" y="170" class="mid">Hi-Z</text>
+    <text x="362" y="187" class="mid small">all levels, one buffer</text>
+    <line x1="362" y1="92" x2="362" y2="148" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="425" y1="160" x2="490" y2="94" class="arrow mem" marker-end="url(#ah-mem)"/>
+
+    <path d="M560,92 V225 H100 V198" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
+    <text x="330" y="242" class="mid small">late cull writes 1 = seen, 0 = not seen; the next early cull reads it</text>
+  </svg>
+  <figcaption>One <code>drawScene</code> call. The green boxes run in this order on the GPU. The amber boxes are what they read and write.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th></th><th>Early cull (<code>CULL_EARLY</code>)</th><th>Late cull (<code>CULL_LATE</code>)</th></tr>
+  <tr><td>Runs</td><td>in the cull command buffer, before the frame</td><td>in the frame, between the early and late draws (<code>recordOcclusionCulling</code>)</td></tr>
+  <tr><td>Keeps a draw when</td><td>it is in the frustum and its <b>visibility</b> flag is 1</td><td>it is in the frustum, not occluded by the Hi-Z, <b>and</b> the early cull did not keep it</td></tr>
+  <tr><td>Writes visibility</td><td>no</td><td>yes: 1 if in the frustum and not occluded, else 0</td></tr>
+  <tr><td>Output</td><td colspan="2">the same visible-draw list and counts; the late draws reuse the early draws' indirect calls</td></tr>
+</table>
+</div>
+
+<p>The push constant's <code>argument</code> tells <code>countMain</code> the phase. The late cull knows what the early cull kept from <code>cullSlotsPtr</code>: it reads the draw's old slot before it writes the new one.</p>
+
+<h3>The Hi-Z</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="A depth texture of 8 by 6 pixels becomes Hi-Z level 0 of 4 by 3 texels, level 1 of 2 by 2 and level 2 of 1 by 1. Each texel is the farthest depth of the 2 by 2 under it.">
+    <text x="20"  y="24" class="small">depth texture · 8 × 6 px</text>
+    <rect x="20" y="40" width="14" height="14" class="box"/>
+    <rect x="34" y="40" width="14" height="14" class="box"/>
+    <rect x="48" y="40" width="14" height="14" class="box"/>
+    <rect x="62" y="40" width="14" height="14" class="box"/>
+    <rect x="76" y="40" width="14" height="14" class="box"/>
+    <rect x="90" y="40" width="14" height="14" class="box"/>
+    <rect x="104" y="40" width="14" height="14" class="box"/>
+    <rect x="118" y="40" width="14" height="14" class="box"/>
+    <rect x="20" y="54" width="14" height="14" class="box"/>
+    <rect x="34" y="54" width="14" height="14" class="box"/>
+    <rect x="48" y="54" width="14" height="14" class="box"/>
+    <rect x="62" y="54" width="14" height="14" class="box"/>
+    <rect x="76" y="54" width="14" height="14" class="box"/>
+    <rect x="90" y="54" width="14" height="14" class="box"/>
+    <rect x="104" y="54" width="14" height="14" class="box"/>
+    <rect x="118" y="54" width="14" height="14" class="box"/>
+    <rect x="20" y="68" width="14" height="14" class="box"/>
+    <rect x="34" y="68" width="14" height="14" class="box"/>
+    <rect x="48" y="68" width="14" height="14" class="box"/>
+    <rect x="62" y="68" width="14" height="14" class="box"/>
+    <rect x="76" y="68" width="14" height="14" class="box"/>
+    <rect x="90" y="68" width="14" height="14" class="box"/>
+    <rect x="104" y="68" width="14" height="14" class="box"/>
+    <rect x="118" y="68" width="14" height="14" class="box"/>
+    <rect x="20" y="82" width="14" height="14" class="box"/>
+    <rect x="34" y="82" width="14" height="14" class="box"/>
+    <rect x="48" y="82" width="14" height="14" class="box"/>
+    <rect x="62" y="82" width="14" height="14" class="box"/>
+    <rect x="76" y="82" width="14" height="14" class="box"/>
+    <rect x="90" y="82" width="14" height="14" class="box"/>
+    <rect x="104" y="82" width="14" height="14" class="box"/>
+    <rect x="118" y="82" width="14" height="14" class="box"/>
+    <rect x="20" y="96" width="14" height="14" class="box"/>
+    <rect x="34" y="96" width="14" height="14" class="box"/>
+    <rect x="48" y="96" width="14" height="14" class="box"/>
+    <rect x="62" y="96" width="14" height="14" class="box"/>
+    <rect x="76" y="96" width="14" height="14" class="box"/>
+    <rect x="90" y="96" width="14" height="14" class="box"/>
+    <rect x="104" y="96" width="14" height="14" class="box"/>
+    <rect x="118" y="96" width="14" height="14" class="box"/>
+    <rect x="20" y="110" width="14" height="14" class="box"/>
+    <rect x="34" y="110" width="14" height="14" class="box"/>
+    <rect x="48" y="110" width="14" height="14" class="box"/>
+    <rect x="62" y="110" width="14" height="14" class="box"/>
+    <rect x="76" y="110" width="14" height="14" class="box"/>
+    <rect x="90" y="110" width="14" height="14" class="box"/>
+    <rect x="104" y="110" width="14" height="14" class="box"/>
+    <rect x="118" y="110" width="14" height="14" class="box"/>
+    <rect x="20" y="40" width="28" height="28" class="hot dashed"/>
+    <line x1="140" y1="82" x2="188" y2="82" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+
+    <text x="200" y="24" class="small">level 0 · 4 × 3</text>
+    <rect x="200" y="40" width="24" height="24" class="box"/>
+    <rect x="224" y="40" width="24" height="24" class="box"/>
+    <rect x="248" y="40" width="24" height="24" class="box"/>
+    <rect x="272" y="40" width="24" height="24" class="box"/>
+    <rect x="200" y="64" width="24" height="24" class="box"/>
+    <rect x="224" y="64" width="24" height="24" class="box"/>
+    <rect x="248" y="64" width="24" height="24" class="box"/>
+    <rect x="272" y="64" width="24" height="24" class="box"/>
+    <rect x="200" y="88" width="24" height="24" class="box"/>
+    <rect x="224" y="88" width="24" height="24" class="box"/>
+    <rect x="248" y="88" width="24" height="24" class="box"/>
+    <rect x="272" y="88" width="24" height="24" class="box"/>
+    <rect x="200" y="40" width="24" height="24" class="hot dashed"/>
+    <line x1="304" y1="82" x2="352" y2="82" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+
+    <text x="364" y="24" class="small">level 1 · 2 × 2</text>
+    <rect x="364" y="40" width="30" height="30" class="box"/>
+    <rect x="394" y="40" width="30" height="30" class="box"/>
+    <rect x="364" y="70" width="30" height="30" class="box"/>
+    <rect x="394" y="70" width="30" height="30" class="box"/>
+    <line x1="432" y1="82" x2="470" y2="82" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+
+    <text x="482" y="24" class="small">level 2 · 1 × 1</text>
+    <rect x="482" y="64" width="36" height="36" class="box"/>
+
+    <text x="550" y="70"  class="small">texel = the farthest depth of the 2 × 2</text>
+    <text x="550" y="88"  class="small">under it: min(a, b, c, d), because</text>
+    <text x="550" y="106" class="small">reversed-Z puts far at 0.</text>
+
+    <text x="20"  y="160" class="small">Level 0 is half the pass's size, rounded up. Each level halves the one before, down to 1 × 1.</text>
+    <text x="20"  y="178" class="small">An odd size repeats its last row or column, so every pixel is under some texel (level 0's 3 rows → level 1's 2 rows).</text>
+    <text x="20"  y="196" class="small">A level-L texel covers a square of 2^(L+1) pixels. hizMain reads level 0 from the depth texture, the others from the level before.</text>
+  </svg>
+  <figcaption>The Hi-Z is a buffer of <code>float</code>s, all levels one after another (<code>hizPtr</code>). <code>getHizLevelCount</code> on the CPU and <code>getHizLevel0Size</code> in the shader agree on the sizes.</figcaption>
+</figure>
+
+<h3>The test</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 260" role="img" aria-label="The bounding sphere gets a box around it in view space. Its 8 corners project to a rectangle on the screen and a nearest depth. The test picks the first Hi-Z level where the rectangle covers at most 2 by 2 texels, and compares the nearest depth with the farthest of those 4 texels.">
+    <circle cx="40" cy="200" r="6" class="cpu"/>
+    <text x="40" y="226" class="mid small">camera</text>
+    <line x1="46" y1="196" x2="300" y2="40"  class="arrow dashed"/>
+    <line x1="46" y1="204" x2="300" y2="250" class="arrow dashed"/>
+    <rect x="150" y="100" width="90" height="90" class="ghost dashed"/>
+    <circle cx="195" cy="145" r="45" class="gpu"/>
+    <text x="195" y="149" class="mid small">sphere</text>
+    <line x1="150" y1="100" x2="150" y2="190" class="hot"/>
+    <text x="146" y="94" class="end small t-hot">nearest face</text>
+    <text x="195" y="212" class="mid small">box around it, in view space</text>
+
+    <line x1="270" y1="145" x2="372" y2="145" class="arrow" marker-end="url(#ah)"/>
+    <text x="321" y="136" class="mid small">8 corners</text>
+    <text x="321" y="162" class="mid small">× projection</text>
+
+    <rect x="380" y="40" width="40" height="40" class="box"/>
+    <rect x="420" y="40" width="40" height="40" class="box"/>
+    <rect x="460" y="40" width="40" height="40" class="box"/>
+    <rect x="500" y="40" width="40" height="40" class="box"/>
+    <rect x="540" y="40" width="40" height="40" class="box"/>
+    <rect x="380" y="80" width="40" height="40" class="box"/>
+    <rect x="420" y="80" width="40" height="40" class="box"/>
+    <rect x="460" y="80" width="40" height="40" class="box"/>
+    <rect x="500" y="80" width="40" height="40" class="box"/>
+    <rect x="540" y="80" width="40" height="40" class="box"/>
+    <rect x="380" y="120" width="40" height="40" class="box"/>
+    <rect x="420" y="120" width="40" height="40" class="box"/>
+    <rect x="460" y="120" width="40" height="40" class="box"/>
+    <rect x="500" y="120" width="40" height="40" class="box"/>
+    <rect x="540" y="120" width="40" height="40" class="box"/>
+    <rect x="380" y="160" width="40" height="40" class="box"/>
+    <rect x="420" y="160" width="40" height="40" class="box"/>
+    <rect x="460" y="160" width="40" height="40" class="box"/>
+    <rect x="500" y="160" width="40" height="40" class="box"/>
+    <rect x="540" y="160" width="40" height="40" class="box"/>
+    <rect x="380" y="80" width="40" height="40" class="gpu"/>
+    <rect x="420" y="80" width="40" height="40" class="gpu"/>
+    <rect x="380" y="120" width="40" height="40" class="gpu"/>
+    <rect x="420" y="120" width="40" height="40" class="gpu"/>
+    <rect x="398" y="92" width="52" height="58" class="hot dashed"/>
+    <text x="490" y="30" class="mid small">the first level where the rectangle covers ≤ 2 × 2 texels</text>
+
+    <text x="600" y="90"  class="small">nearest = max corner depth</text>
+    <text x="600" y="108" class="small">farthest = min of the 4 texels</text>
+    <text x="600" y="140" class="small t-hot">nearest &lt; farthest → occluded</text>
+    <text x="600" y="158" class="small">else → visible</text>
+
+    <text x="380" y="222" class="small">A box that reaches behind the camera or past the near plane is visible.</text>
+    <text x="380" y="240" class="small">The 1 × 1 top level always qualifies, so the loop always stops.</text>
+  </svg>
+  <figcaption><code>isOccluded</code> in <code>cull.slang</code>. The box is bigger than the sphere and nearer, so the test only says "occluded" when the sphere surely is. It works for perspective and orthographic cameras.</figcaption>
+</figure>
+
+<h3>Why it stays correct</h3>
+<div class="split">
+  <div>
+    <h4>History only saves work</h4>
+    <p>The visibility flags are a guess from last time. Whatever the early cull skips, the late cull tests against the depth that is really there, and draws it if it is visible. A wrong guess costs time, never pixels.</p>
+  </div>
+  <div>
+    <h4>Shared flags</h4>
+    <p>There is one flag per instance row (<code>Visibility Buffer</code>, <code>EngineConfig::maxInstances</code> rows), shared by both frame slots and every call. Rows start at 0, so a new instance is drawn by the late cull first. Two cameras that draw one scene overwrite each other's flags: slower, still correct.</p>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>The cost of the pause</strong>
+  <p>The pass ends after the early draws and begins again with <code>load</code>, so depth attachments are always stored. The Hi-Z build and the late cull get their own GPU timer, <code>"Hi-Z"</code>, in the <a href="stats-overlay.html">stats overlay</a>.</p>
+</div>
+
+<h2><span class="n">7</span>When culling is off</h2>
 
 <p>If <code>cull.slang</code> fails to compile, <code>drawScene</code> does not leave the screen black. It draws the whole draw list with plain <code>drawIndexedIndirect</code> and logs the error. It tries to build the culling pipelines again next frame, so a fixed shader on disk is picked up while the app runs.</p>
 
@@ -412,27 +646,32 @@
   </div>
 </div>
 
-<h2><span class="n">7</span>Where it lives in code</h2>
+<p>Occlusion culling falls back to frustum culling alone (<code>hizLevelCount</code> = 0, no late pass) when <code>EngineConfig::occlusionCulling</code> is false, when <code>hizMain</code> fails to compile, or when the depth texture gets no bindless slot or the Hi-Z buffer cannot be created. The image is the same either way; only the number of draws changes.</p>
+
+<h2><span class="n">8</span>Where it lives in code</h2>
 
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Frustum planes</td><td><code>getFrustumPlanes</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Per-call setup, group count</td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Dispatches and barriers</td><td><code>Engine::recordCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Early dispatches and barriers</td><td><code>Engine::recordCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Pause, Hi-Z, late dispatches</td><td><code>Engine::recordOcclusionCulling</code>, <code>getHizLevelCount</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Visibility and Hi-Z buffers</td><td><code>GpuScene::visibility</code>, <code>GpuScene::hiz</code> in <code>src/renderer/gpuScene.h</code></td></tr>
   <tr><td>Submit order {cull, frame}</td><td><code>Engine::endFrame</code> in <code>src/engine.cpp</code></td></tr>
-  <tr><td>Test, count, pack</td><td><code>isVisible</code>, <code>countMain</code>, <code>writeMain</code>, <code>getCullGroup</code> in <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>Test, count, pack</td><td><code>getWorldSphere</code>, <code>isInFrustum</code>, <code>isOccluded</code>, <code>countMain</code>, <code>writeMain</code>, <code>getCullGroup</code> in <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>Hi-Z build</td><td><code>hizMain</code>, <code>getHizLevel0Size</code> in <code>shaders/passes/cull.slang</code></td></tr>
   <tr><td>Pointers it uses</td><td><code>SceneData</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
 </table>
 </div>
 
-<h2><span class="n">8</span>Rules when you change it</h2>
+<h2><span class="n">9</span>Rules when you change it</h2>
 
 <div class="callout rule">
   <strong>Keep these true</strong>
   <ul>
-    <li><code>CULL_GROUP_SIZE</code> is in two places: <code>cull.slang</code> and <code>gpuScene.cpp</code>. Change both.</li>
-    <li>The test must stay conservative. Removing a draw that is partly visible makes objects pop.</li>
+    <li><code>CULL_GROUP_SIZE</code>, <code>HIZ_GROUP_SIZE</code>, <code>CULL_EARLY</code> and <code>CULL_LATE</code> are in two places: <code>cull.slang</code> and <code>gpuScene.cpp</code>. Change both. So are the Hi-Z level sizes (<code>getHizLevelCount</code>, <code>getHizLevel0Size</code>).</li>
+    <li>Both tests must stay conservative. Removing a draw that is partly visible makes objects pop. Compare the image with <code>EngineConfig::occlusionCulling</code> on and off: it must not change.</li>
     <li>Do not record a dispatch inside a render pass. <code>RenderContext::dispatch</code> refuses it.</li>
     <li>A new pointer in <code>SceneData</code> is a CPU↔GPU struct change: follow <a href="shaders-structs.html">the struct contract</a>.</li>
   </ul>
@@ -440,7 +679,7 @@
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>There is no occlusion culling (hidden behind other objects) and no per-triangle culling. Only the frustum test runs today.</p>
+  <p>There is no per-triangle or per-cluster culling: a draw is kept or removed whole. The Hi-Z is built with one dispatch per level, not in a single pass.</p>
 </div>
 
 </main>

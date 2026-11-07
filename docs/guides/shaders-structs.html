@@ -128,8 +128,8 @@
 <div class="table-wrap">
 <table>
   <tr><th>Struct</th><th>Size</th><th>Written by (C++)</th><th>Read by (Slang)</th></tr>
-  <tr><td><code>PushConstants</code></td><td>16</td><td><code>drawScene</code>, <code>recordCulling</code></td><td><code>rasm.slang</code>, <code>cull.slang</code></td></tr>
-  <tr><td><code>SceneData</code></td><td>728</td><td><code>drawScene</code></td><td><code>rasm.slang</code>, <code>cull.slang</code></td></tr>
+  <tr><td><code>PushConstants</code></td><td>16</td><td><code>drawScene</code>, <code>recordCulling</code>, <code>recordOcclusionCulling</code></td><td><code>rasm.slang</code>, <code>cull.slang</code></td></tr>
+  <tr><td><code>SceneData</code></td><td>760</td><td><code>drawScene</code></td><td><code>rasm.slang</code>, <code>cull.slang</code></td></tr>
   <tr><td><code>Light</code></td><td>48</td><td><code>drawScene</code></td><td><code>pbr.slang</code></td></tr>
   <tr><td><code>DrawInfo</code></td><td>20</td><td><code>rebuildDrawList</code></td><td><code>rasm.slang</code>, <code>cull.slang</code>, the GPU's indirect draw</td></tr>
   <tr><td><code>InstanceData</code></td><td>108</td><td><code>writeInstanceRows</code></td><td><code>rasm.slang</code>, <code>cull.slang</code></td></tr>
@@ -204,7 +204,7 @@
     <text x="132" y="52" class="mid title">C++ side</text>
     <text x="132" y="70" class="mid small">src/renderer/uberMaterialTypes.h</text>
     <text x="28" y="96"  class="small">struct SceneData { … }</text>
-    <text x="28" y="116" class="small">static_assert(sizeof(SceneData) == 728)</text>
+    <text x="28" y="116" class="small">static_assert(sizeof(SceneData) == 760)</text>
     <text x="28" y="136" class="small">static_assert(offsetof(…) == 144)</text>
 
     <rect x="510" y="30" width="235" height="130" rx="6" class="shader"/>
@@ -259,15 +259,16 @@ Assertion failed: validateRasmStructs(...)</code></pre>
 <h2><span class="n">5</span>The 16-byte push constant</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 170" role="img" aria-label="The push constant is 16 bytes: the 8-byte SceneData address at 0, firstDraw at 8 and padding at 12.">
+  <svg viewBox="0 0 760 170" role="img" aria-label="The push constant is 16 bytes: the 8-byte SceneData address at 0, firstDraw at 8 and argument at 12.">
     <rect x="60"  y="30" width="320" height="46" rx="4" class="mem"/>
     <text x="220" y="52" class="mid title">scene</text>
     <text x="220" y="68" class="mid small">SceneData* / uint64_t device address</text>
     <rect x="380" y="30" width="160" height="46" rx="4" class="mem"/>
     <text x="460" y="52" class="mid title">firstDraw</text>
     <text x="460" y="68" class="mid small">uint32_t</text>
-    <rect x="540" y="30" width="160" height="46" rx="4" class="ghost"/>
-    <text x="620" y="58" class="mid t-faint">padding</text>
+    <rect x="540" y="30" width="160" height="46" rx="4" class="mem"/>
+    <text x="620" y="52" class="mid title">argument</text>
+    <text x="620" y="68" class="mid small">uint32_t, compute only</text>
     <text x="60"  y="94" class="mid mono">0</text><text x="380" y="94" class="mid mono">8</text>
     <text x="540" y="94" class="mid mono">12</text><text x="700" y="94" class="mid mono">16</text>
     <text x="60" y="126" class="small">One byte = 40 px. PUSH_CONSTANTS_SIZE = 16 is the range of every pipeline layout, graphics and compute.</text>
@@ -277,6 +278,7 @@ Assertion failed: validateRasmStructs(...)</code></pre>
 </figure>
 
 <ul>
+  <li><code>argument</code> is for compute only. In <code>countMain</code> and <code>writeMain</code> it is the cull phase (0 early, 1 late). In <code>hizMain</code> it is the Hi-Z level to build. Draws do not read it.</li>
   <li><code>static_assert(sizeof(PushConstants) == PUSH_CONSTANTS_SIZE)</code> ties the C++ struct to the constant, and <code>validateRasmStructs</code> checks the Slang side.</li>
   <li>A custom pass brings its own push-constant struct of at most 16 bytes. The stats overlay's <code>OverlayPushConstants</code> has its own <code>static_assert</code> against <code>PUSH_CONSTANTS_SIZE</code>. See <a href="render-graph.html">the render graph</a>.</li>
   <li>Growing the push constant means raising <code>PUSH_CONSTANTS_SIZE</code>, which changes every pipeline layout.</li>

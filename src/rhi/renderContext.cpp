@@ -458,7 +458,8 @@ namespace rasm
             .width = desc.width,
             .height = desc.height,
             .format = desc.depthFormat,
-            .usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT};
+            // drawScene builds its Hi-Z from D32 depth. A depth/stencil view can't be sampled.
+            .usage = desc.depthFormat == Format::D32_SFLOAT ? TextureUsage::SAMPLED_DEPTH_ATTACHMENT : TextureUsage::DEPTH_STENCIL_ATTACHMENT};
 
         RenderTarget rt = {
             .attachments = {},
@@ -720,7 +721,7 @@ namespace rasm
         return rhiCommandBuffer && rhiTexture && rhiCommandBuffer->transitionTexture(rhiTexture, oldUsage, newUsage);
     }
 
-    bool RenderContext::beginRendering(const CommandBufferHandle &commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment, const glm::vec4 &clearColor)
+    bool RenderContext::beginRendering(const CommandBufferHandle &commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment, const glm::vec4 &clearColor, bool load)
     {
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         auto *color = lookup(impl->textures, colorAttachment, __func__);
@@ -728,7 +729,7 @@ namespace rasm
         if (!rhiCommandBuffer || !color || !depth)
             return false;
 
-        rhiCommandBuffer->beginRendering(color, depth, clearColor);
+        rhiCommandBuffer->beginRendering(color, depth, clearColor, load);
         impl->passColorFormat = color->desc.format;
         impl->passDepthFormat = depth->desc.format;
         impl->skipDraws = false;

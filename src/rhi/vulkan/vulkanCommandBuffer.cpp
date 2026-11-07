@@ -49,7 +49,8 @@ namespace rasm::rhi
                 // The contents are discarded, but the last use still has to finish, and it could be any of these.
                 // The color output stage also chains the barrier to the acquire semaphore of a swapchain image.
                 srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR |
-                               VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                               VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
                 return true;
             case TextureUsage::COLOR_ATTACHMENT:
@@ -62,7 +63,7 @@ namespace rasm::rhi
                 return true;
             case TextureUsage::SAMPLED:
                 // Reads make nothing available, so only their stage is waited on.
-                srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 srcAccessMask = VK_ACCESS_2_NONE;
                 return true;
             default:
@@ -73,11 +74,12 @@ namespace rasm::rhi
 
         bool getDstScope(TextureUsage newUsage, VkAccessFlags2 &dstAccessMask, VkPipelineStageFlags2 &dstStageMask)
         {
+            // Attachments are read too, by a pass that loads what an earlier one drew.
             switch (newUsage)
             {
             case TextureUsage::COLOR_ATTACHMENT:
                 dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
                 return true;
             case TextureUsage::PRESENT_SRC:
                 dstStageMask = VK_PIPELINE_STAGE_2_NONE;
@@ -85,10 +87,10 @@ namespace rasm::rhi
                 return true;
             case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
                 dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR;
-                dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
                 return true;
             case TextureUsage::SAMPLED:
-                dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
                 return true;
             default:
@@ -258,16 +260,17 @@ namespace rasm::rhi
         return true;
     }
 
-    void VulkanCommandBuffer::beginRendering(Texture *colorAttachment, Texture *depthAttachment, const glm::vec4 &clearColor)
+    void VulkanCommandBuffer::beginRendering(Texture *colorAttachment, Texture *depthAttachment, const glm::vec4 &clearColor, bool load)
     {
         auto *color = static_cast<VulkanTexture *>(colorAttachment);
         auto *depth = static_cast<VulkanTexture *>(depthAttachment);
+        const VkAttachmentLoadOp loadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
 
         VkRenderingAttachmentInfo colorAttachmentInfo{
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .imageView = color->view,
             .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .loadOp = loadOp,
             .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
             .clearValue{.color{clearColor.r, clearColor.g, clearColor.b, clearColor.a}}};
 
@@ -275,8 +278,9 @@ namespace rasm::rhi
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .imageView = depth->view,
             .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .loadOp = loadOp,
+            // Stored: drawScene builds its Hi-Z from it in the middle of the pass.
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
             // Reversed-Z: the far plane is depth 0. Pairs with the GREATER_OR_EQUAL compare in createGraphicsPipeline.
             .clearValue = {.depthStencil = {0.0f, 0}}};
 

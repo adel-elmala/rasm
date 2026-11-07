@@ -110,7 +110,7 @@ namespace rasm
 
         // Create bindless texture descriptor set layout, pool, and set
         bindlessDescriptorSetLayout = ctx.createBindlessDescriptorSetLayout({.name = "BindlessDescriptorSetLayout",
-                                                                             .stage = ShaderType::FRAGMENT,
+                                                                             .stage = ShaderType::ALL,
                                                                              .count = MAX_BINDLESS_TEXTURES,
                                                                              .type = DescriptorType::COMBINED_IMAGE_SAMPLER});
         if (!bindlessDescriptorSetLayout.isValid())
@@ -471,11 +471,14 @@ namespace rasm
                                                   .width = swapchain.width,
                                                   .height = swapchain.height,
                                                   .format = DEPTH_FORMAT,
-                                                  .usage = TextureUsage::DEPTH_STENCIL_ATTACHMENT};
+                                                  .usage = TextureUsage::SAMPLED_DEPTH_ATTACHMENT};
 
-            // The device is idle, so the old texture is unused.
+            // The device is idle, so the old texture is unused. drawScene puts the new one in the old one's bindless slot.
             if (frameResources[i].depthTexture.isValid())
+            {
+                registry.bindlessTextureIndexMap.erase(frameResources[i].depthTexture);
                 ctx.destroyTexture(frameResources[i].depthTexture);
+            }
             frameResources[i].depthTexture = ctx.createTexture(depthTextureDesc);
             if (!frameResources[i].depthTexture.isValid())
             {

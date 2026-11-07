@@ -124,10 +124,16 @@ namespace rasm::gfx
         uint64_t         cullSlotsPtr;
         uint64_t         groupCountsPtr;
         uint64_t         cullStatsPtr;
+        uint64_t         visibilityPtr;
+        uint64_t         hizPtr;
         glm::vec4        frustumPlanes[6];
         uint32_t         drawCount;
         uint32_t         runCount;
         uint32_t         runFirst[MAX_DRAW_RUNS];
+        uint32_t         hizLevelCount;
+        uint32_t         depthTexture;
+        uint32_t         viewportWidth;
+        uint32_t         viewportHeight;
         uint32_t         padding;
     };
 
@@ -135,7 +141,7 @@ namespace rasm::gfx
     {
         uint64_t         scene;
         uint32_t         firstDraw;
-        uint32_t         padding;
+        uint32_t         argument;
     };
 
     // These structs are read by shaders/passes/rasm.slang through buffer-device-address pointers,
@@ -155,7 +161,7 @@ namespace rasm::gfx
     static_assert(sizeof(GeometryData) == 28, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, boundsCenter) == 12, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, boundsRadius) == 24, "GeometryData must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 728, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 760, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, lights) == 144, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, vertsPtr) == 528, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, instancesPtr) == 544, "SceneData must match the shader's scalar layout");
@@ -165,11 +171,17 @@ namespace rasm::gfx
     static_assert(offsetof(SceneData, cullSlotsPtr) == 584, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, groupCountsPtr) == 592, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, cullStatsPtr) == 600, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, frustumPlanes) == 608, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, drawCount) == 704, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, runCount) == 708, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, runFirst) == 712, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, padding) == 724, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, visibilityPtr) == 608, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, hizPtr) == 616, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, frustumPlanes) == 624, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, drawCount) == 720, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, runCount) == 724, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, runFirst) == 728, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, hizLevelCount) == 740, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, depthTexture) == 744, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, viewportWidth) == 748, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, viewportHeight) == 752, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, padding) == 756, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(PushConstants) == PUSH_CONSTANTS_SIZE, "PushConstants must fill the pipelines' push-constant range");
 
 

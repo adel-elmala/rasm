@@ -123,7 +123,7 @@ namespace rasm::rhi
         virtual bool                begin() = 0;
         virtual bool                end() = 0;
         virtual bool                transitionTexture(Texture* texture, TextureUsage oldUsage, TextureUsage newUsage) = 0;
-        virtual void                beginRendering(Texture* colorAttachment, Texture* depthAttachment, const glm::vec4& clearColor) = 0;
+        virtual void                beginRendering(Texture* colorAttachment, Texture* depthAttachment, const glm::vec4& clearColor, bool load) = 0;
         virtual void                endRendering() = 0;
         virtual void                setViewport(float x, float y, float width, float height, float minDepth, float maxDepth) = 0;
         virtual void                setScissor(int32_t x, int32_t y, uint32_t width, uint32_t height) = 0;

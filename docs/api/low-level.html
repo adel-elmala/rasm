@@ -77,7 +77,7 @@
 <div class="api" id="getBindlessDescriptorSet">
   <pre class="sig">DescriptorSetHandle getBindlessDescriptorSet();</pre>
   <div class="body">
-    <p>The engine's bindless texture set: <code>MAX_BINDLESS_TEXTURES</code> combined image samplers at set 0, binding 0, visible to fragment shaders. Pipelines from <code>createPipeline</code> use its layout. Bind it with <code>bindDescriptorSet(commandBuffer, pipeline, set, 0)</code> before drawing with a pipeline that samples textures. See <a href="materials.html">Materials and textures</a> for how textures get a slot.</p>
+    <p>The engine's bindless texture set: <code>MAX_BINDLESS_TEXTURES</code> combined image samplers at set 0, binding 0, visible to every shader stage (<code>ShaderType::ALL</code>). Pipelines from <code>createPipeline</code> and <code>createComputePipeline</code> use its layout. Bind it with <code>bindDescriptorSet(commandBuffer, pipeline, set, 0)</code> before drawing or dispatching with a pipeline that samples textures. See <a href="materials.html">Materials and textures</a> for how textures get a slot.</p>
   </div>
 </div>
 
@@ -272,9 +272,14 @@ constexpr bool          hasStage(PipelineStage stages, PipelineStage stage);</pr
   <pre class="sig">bool beginRendering(const CommandBufferHandle&amp; commandBuffer,
                     TextureHandle colorAttachment,
                     TextureHandle depthAttachment,
-                    const glm::vec4&amp; clearColor);</pre>
+                    const glm::vec4&amp; clearColor,
+                    bool load = false);</pre>
   <div class="body">
-    <p>Starts a render pass into one color and one depth texture. Color is cleared to <code>clearColor</code> and kept; depth is cleared to 0 and not kept. Both attachments are required. <code>Engine::beginPass</code> calls this after the layout transitions and also sets the viewport, scissor and cull mode, so use <code>beginPass</code> unless you build the whole frame yourself.</p>
+    <p>Starts a render pass into one color and one depth texture. Color is cleared to <code>clearColor</code>, and depth to 0. Both are kept (stored) at the end of the pass. Both attachments are required.</p>
+    <dl>
+      <dt>load</dt><dd><code>false</code>: clear both attachments. <code>true</code>: keep what is in them, and ignore <code>clearColor</code>. Use it to go on drawing after a pause, as <code>drawScene</code> does after its Hi-Z build. Before a load, transition the attachments to <code>COLOR_ATTACHMENT</code> and <code>DEPTH_STENCIL_ATTACHMENT</code>, even when they are already in that layout: the barrier orders the earlier writes before the load.</dd>
+    </dl>
+    <p><code>Engine::beginPass</code> calls this (without <code>load</code>) after the layout transitions and also sets the viewport, scissor and cull mode, so use <code>beginPass</code> unless you build the whole frame yourself.</p>
   </div>
 </div>
 
@@ -290,7 +295,7 @@ constexpr bool          hasStage(PipelineStage stages, PipelineStage stage);</pr
                            TextureHandle texture, TextureUsage oldUsage,
                            TextureUsage newUsage);</pre>
   <div class="body">
-    <p>Records a barrier that moves a texture from one use to another. The barrier waits for <code>oldUsage</code> and blocks <code>newUsage</code>.</p>
+    <p>Records a barrier that moves a texture from one use to another. The barrier waits for <code>oldUsage</code> and blocks <code>newUsage</code>. <code>SAMPLED</code> covers fragment and compute shaders. The attachment usages cover reads too, for a <code>beginRendering</code> with <code>load</code>.</p>
     <dl>
       <dt>oldUsage</dt><dd><code>UNKNOWN</code> (the contents are thrown away), <code>COLOR_ATTACHMENT</code>, <code>DEPTH_STENCIL_ATTACHMENT</code> or <code>SAMPLED</code>.</dd>
       <dt>newUsage</dt><dd><code>COLOR_ATTACHMENT</code>, <code>DEPTH_STENCIL_ATTACHMENT</code>, <code>SAMPLED</code> or <code>PRESENT_SRC</code>.</dd>
@@ -509,6 +514,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
     COLOR_ATTACHMENT,
     DEPTH_STENCIL_ATTACHMENT,
     SAMPLED_COLOR_ATTACHMENT,
+    SAMPLED_DEPTH_ATTACHMENT,
     TRANSIENT_ATTACHMENT,
     INPUT_ATTACHMENT,
     PRESENT_SRC,
@@ -523,6 +529,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <tr><td><code>COLOR_ATTACHMENT</code></td><td>drawn into</td><td>old and new</td></tr>
       <tr><td><code>DEPTH_STENCIL_ATTACHMENT</code></td><td>depth buffer</td><td>old and new</td></tr>
       <tr><td><code>SAMPLED_COLOR_ATTACHMENT</code></td><td>drawn into, then read (render target color)</td><td>–</td></tr>
+      <tr><td><code>SAMPLED_DEPTH_ATTACHMENT</code></td><td>depth buffer that shaders can also read (swapchain depth, and render target depth in <code>D32_SFLOAT</code>)</td><td>–</td></tr>
       <tr><td><code>TRANSFER_SRC</code>, <code>TRANSFER_DST</code>, <code>STORAGE</code>, <code>TRANSIENT_ATTACHMENT</code>, <code>INPUT_ATTACHMENT</code></td><td>only passed on to the backend; no RASM call uses them</td><td>–</td></tr>
       <tr><td><code>PRESENT_SRC</code></td><td>–</td><td>new only (swapchain image before present)</td></tr>
       <tr><td><code>UNKNOWN</code></td><td>–</td><td>old only (contents thrown away)</td></tr>
@@ -672,7 +679,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
 };</pre>
   <div class="body">
     <dl>
-      <dt>stage</dt><dd>Which shaders see the array. The engine's layout uses <code>FRAGMENT</code>.</dd>
+      <dt>stage</dt><dd>Which shaders see the array. The engine's layout uses <code>ALL</code>, so compute shaders can sample too.</dd>
       <dt>count</dt><dd>Array size. The engine's layout uses <code>MAX_BINDLESS_TEXTURES</code>.</dd>
     </dl>
   </div>

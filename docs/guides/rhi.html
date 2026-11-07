@@ -159,6 +159,7 @@
 </div>
 
 <p>A <code>PipelineDesc</code> with <code>computeShader</code> set is a compute pipeline; otherwise it needs <code>vertexShader</code> and <code>fragmentShader</code>. <code>RenderContext::createPipeline</code> calls <code>createComputePipeline</code> or <code>createGraphicsPipeline</code>, and refuses a desc that sets both kinds. Every pipeline layout is the bindless set plus one <code>PUSH_CONSTANTS_SIZE</code> (16 bytes) push-constant range.</p>
+<p>The engine creates the bindless set layout for <code>ShaderType::ALL</code> (<code>VK_SHADER_STAGE_ALL</code>), so compute shaders can sample textures too. Bind the set to the compute pipeline with <code>bindDescriptorSet</code>, as the Hi-Z build does. Compute writes buffers only: there are no storage images.</p>
 
 <h2><span class="n">2</span>Command buffers</h2>
 
@@ -167,8 +168,8 @@
 <div class="table-wrap">
 <table>
   <tr><th>Command buffers</th><th>Count</th><th>Recorded in</th><th>Safe to reset because</th></tr>
-  <tr><td>Frame Command Buffer</td><td>one per frame slot</td><td><code>beginFrame</code> to <code>endFrame</code></td><td><code>beginFrame</code> waits for the slot's fence value</td></tr>
-  <tr><td>Cull Command Buffer</td><td>one per frame slot</td><td><code>recordCulling</code> in <code>endFrame</code></td><td>the same wait</td></tr>
+  <tr><td>Frame Command Buffer</td><td>one per frame slot</td><td><code>beginFrame</code> to <code>endFrame</code>; the Hi-Z build and the late culling too, inside <code>drawScene</code></td><td><code>beginFrame</code> waits for the slot's fence value</td></tr>
+  <tr><td>Cull Command Buffer</td><td>one per frame slot</td><td><code>recordCulling</code> in <code>endFrame</code>: the early culling</td><td>the same wait</td></tr>
   <tr><td>Upload Command Buffer</td><td>2, used in turn</td><td><code>UploadManager::flush</code></td><td>it waits for that batch's Upload Fence value first</td></tr>
 </table>
 </div>
@@ -200,7 +201,7 @@
     <text x="416" y="178" class="small t-hot">✗ dispatch</text>
     <text x="416" y="196" class="small t-hot">✗ memoryBarrier</text>
   </svg>
-  <figcaption>Vulkan forbids dispatches and barriers inside dynamic rendering. <code>RenderContext</code> checks it with <code>checkArgument</code>: an error log, an assert in debug builds, and the call does nothing.</figcaption>
+  <figcaption>Vulkan forbids dispatches and barriers inside dynamic rendering. <code>RenderContext</code> checks it with <code>checkArgument</code>: an error log, an assert in debug builds, and the call does nothing. For its occlusion culling, <code>drawScene</code> ends the scope, records its dispatches, and begins the scope again with <code>load</code>.</figcaption>
 </figure>
 
 <p><code>RenderContext</code> keeps three flags for the command buffer being recorded, and <code>beginCommandBuffer</code> resets them:</p>
@@ -212,6 +213,7 @@
   <tr><td><code>skipDraws</code></td><td><code>bindPipeline</code> with a missing pipeline, or one whose formats differ from the pass</td><td>draws are dropped until a matching pipeline is bound</td></tr>
 </table>
 </div>
+<p><code>beginRendering</code> clears color and depth, or keeps them when <code>load</code> is true (<code>VK_ATTACHMENT_LOAD_OP_LOAD</code>). Both attachments are always stored, because <code>drawScene</code> reads depth in the middle of a pass.</p>
 <p><code>pushConstants</code> must name <code>COMPUTE</code> for a compute pipeline and <code>VERTEX_FRAGMENT</code> for a graphics one, and fit in <code>PUSH_CONSTANTS_SIZE</code>. Binding a compute pipeline leaves the pass's graphics pipeline bound.</p>
 
 <h2><span class="n">3</span>Barriers: <code>memoryBarrier</code> and <code>PipelineStage</code></h2>
@@ -252,13 +254,14 @@
 <div class="table-wrap">
 <table>
   <tr><th><code>TextureUsage</code></th><th>Layout</th><th>As old usage, waits for</th><th>As new usage, blocks</th></tr>
-  <tr><td><code>UNKNOWN</code></td><td>undefined (contents discarded)</td><td>color output, depth tests, fragment shader</td><td>—</td></tr>
-  <tr><td><code>COLOR_ATTACHMENT</code></td><td>color attachment</td><td>color output writes</td><td>color output</td></tr>
-  <tr><td><code>DEPTH_STENCIL_ATTACHMENT</code></td><td>depth stencil attachment</td><td>depth test writes</td><td>depth tests</td></tr>
-  <tr><td><code>SAMPLED</code></td><td>shader read only</td><td>fragment shader (reads)</td><td>fragment shader reads</td></tr>
+  <tr><td><code>UNKNOWN</code></td><td>undefined (contents discarded)</td><td>color output, depth tests, fragment and compute shaders</td><td>—</td></tr>
+  <tr><td><code>COLOR_ATTACHMENT</code></td><td>color attachment</td><td>color output writes</td><td>color output reads and writes</td></tr>
+  <tr><td><code>DEPTH_STENCIL_ATTACHMENT</code></td><td>depth stencil attachment</td><td>depth test writes</td><td>depth test reads and writes</td></tr>
+  <tr><td><code>SAMPLED</code></td><td>shader read only</td><td>fragment and compute shaders (reads)</td><td>fragment and compute shader reads</td></tr>
   <tr><td><code>PRESENT_SRC</code></td><td>present source</td><td>—</td><td>nothing</td></tr>
 </table>
 </div>
+<p>The attachment usages include reads, for a <code>beginRendering</code> with <code>load</code>. A transition to the same layout (<code>COLOR_ATTACHMENT</code> → <code>COLOR_ATTACHMENT</code>) therefore orders earlier color writes before the load; <code>drawScene</code> does this in its pause.</p>
 <p>Waiting at color output from <code>UNKNOWN</code> also chains the barrier to the swapchain's acquire semaphore, which the submit waits for at the same stage. Any other usage has no scope: the call logs an error, records nothing and returns false.</p>
 
 <h2><span class="n">4</span>Timestamps</h2>

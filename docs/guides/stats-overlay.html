@@ -105,7 +105,7 @@
   <tr><td><code>gpuFrameMs</code></td><td>timestamps</td><td>from the earliest timestamp of the frame to the latest</td></tr>
   <tr><td><code>gpuTimers</code>, <code>gpuTimerCount</code></td><td>timestamps</td><td>one entry per timer except "Frame", sorted by start time, so "Culling" comes first</td></tr>
   <tr><td><code>draws</code>, <code>triangles</code></td><td><code>DrawTotals</code></td><td>CPU sums over the frame's <code>drawScene</code> calls: draw list size and <code>triangleCount</code></td></tr>
-  <tr><td><code>drawsVisible</code>, <code>trianglesVisible</code></td><td>Cull Stats Buffer + <code>DrawTotals</code></td><td>what culling kept, plus every draw of a call drawn without culling (<code>unculledDraws</code>, <code>unculledTriangles</code>)</td></tr>
+  <tr><td><code>drawsVisible</code>, <code>trianglesVisible</code></td><td>Cull Stats Buffer + <code>DrawTotals</code></td><td>what the early and the late culling kept (in the frustum and, with occlusion culling, not occluded), plus every draw of a call drawn without culling (<code>unculledDraws</code>, <code>unculledTriangles</code>)</td></tr>
   <tr><td><code>memory</code></td><td><code>queryVRAMStats</code></td><td><code>VRAMStats</code>: device-local and host-visible budget and usage, in bytes</td></tr>
 </table>
 </div>
@@ -169,9 +169,9 @@
     <text x="20" y="275" class="title t-gpu">GPU</text>
     <rect x="90" y="228" width="240" height="90" rx="6" class="gpu"/>
     <text x="210" y="250" class="mid title">frame N runs</text>
-    <text x="102" y="272" class="small">Culling: atomics into Cull Stats[s]</text>
+    <text x="102" y="272" class="small">early + late culling: Cull Stats[s]</text>
     <text x="102" y="290" class="small">passes: timestamps into pool s</text>
-    <text x="102" y="308" class="small">COMPUTE → GRAPHICS | HOST barrier</text>
+    <text x="102" y="308" class="small">COMPUTE → GRAPHICS | HOST barriers</text>
 
     <rect x="340" y="228" width="140" height="90" rx="6" class="ghost"/>
     <text x="410" y="277" class="mid small t-faint">other slot</text>
@@ -180,7 +180,7 @@
     <text x="620" y="262" class="mid title">frame N+2 runs</text>
     <text x="620" y="282" class="mid small">the overlay shows frame N's numbers</text>
   </svg>
-  <figcaption>A slot's buffers are read only after the fence wait, so the GPU values are <code>MAX_FRAMES_IN_FLIGHT</code> (2) frames old. The barrier at the end of the cull command buffer includes <code>HOST</code>, so the CPU sees the counters once the fence is reached.</figcaption>
+  <figcaption>A slot's buffers are read only after the fence wait, so the GPU values are <code>MAX_FRAMES_IN_FLIGHT</code> (2) frames old. The barrier at the end of the cull command buffer includes <code>HOST</code>, and so does the one after the late culling in the frame's command buffer, so the CPU sees the counters once the fence is reached.</figcaption>
 </figure>
 
 <p>A frame that was recorded but not submitted (a failed submit) does not move the slot's fence value. <code>updateFrameStats</code> compares that value with <code>readFenceValue</code>, the one it read last time, and skips the slot when they are equal: its queries were never written.</p>
@@ -188,7 +188,7 @@
 <h2><span class="n">4</span>GPU timers</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 270" role="img" aria-label="Top: the query pool of one slot holds 32 timestamps, a begin and end pair per timer: Frame, Scene and Culling here. Bottom: on the GPU, culling runs first, then the frame with the Scene pass inside it. gpuFrameMs is the time from the earliest to the latest timestamp.">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Top: the query pool of one slot holds 32 timestamps, a begin and end pair per timer: Frame, Scene, Hi-Z and Culling here. Bottom: on the GPU, culling runs first, then the frame with the Scene pass inside it, and the Hi-Z timer inside the Scene pass. gpuFrameMs is the time from the earliest to the latest timestamp.">
     <text x="15" y="20" class="small">Query pool of slot s: 2 × MAX_GPU_TIMERS = 32 timestamps</text>
     <rect x="15"  y="30" width="44" height="30" rx="3" class="mem"/><text x="37"  y="50" class="mid mono small">0</text>
     <rect x="61"  y="30" width="44" height="30" rx="3" class="mem"/><text x="83"  y="50" class="mid mono small">1</text>
@@ -196,13 +196,15 @@
     <rect x="157" y="30" width="44" height="30" rx="3" class="mem"/><text x="179" y="50" class="mid mono small">3</text>
     <rect x="207" y="30" width="44" height="30" rx="3" class="mem"/><text x="229" y="50" class="mid mono small">4</text>
     <rect x="253" y="30" width="44" height="30" rx="3" class="mem"/><text x="275" y="50" class="mid mono small">5</text>
-    <rect x="303" y="30" width="44" height="30" rx="3" class="ghost"/><rect x="349" y="30" width="44" height="30" rx="3" class="ghost"/>
+    <rect x="303" y="30" width="44" height="30" rx="3" class="mem"/><text x="325" y="50" class="mid mono small">6</text>
+    <rect x="349" y="30" width="44" height="30" rx="3" class="mem"/><text x="371" y="50" class="mid mono small">7</text>
     <text x="420" y="50" class="small t-faint">…</text>
     <rect x="440" y="30" width="44" height="30" rx="3" class="ghost"/><text x="462" y="50" class="mid mono small t-faint">30</text>
     <rect x="486" y="30" width="44" height="30" rx="3" class="ghost"/><text x="508" y="50" class="mid mono small t-faint">31</text>
     <text x="60"  y="76" class="mid small">timer 0 "Frame"</text>
     <text x="156" y="76" class="mid small">timer 1 "Scene"</text>
-    <text x="252" y="76" class="mid small">timer 2 "Culling"</text>
+    <text x="252" y="76" class="mid small">timer 2 "Hi-Z"</text>
+    <text x="348" y="76" class="mid small">timer 3 "Culling"</text>
     <text x="545" y="44" class="small">timer i → begin 2i, end 2i+1</text>
     <text x="545" y="62" class="small">passes may use timers 0 to 14;</text>
     <text x="545" y="80" class="small">timer 15 is kept for culling</text>
@@ -215,14 +217,17 @@
     <rect x="130" y="146" width="610" height="34" rx="4" class="gpu"/>
     <text x="435" y="168" class="mid small">Frame (its command buffer)</text>
     <rect x="140" y="190" width="560" height="30" rx="4" class="gpu"/>
-    <text x="420" y="210" class="mid small">Scene pass (overlay drawn at its end)</text>
+    <text x="235" y="210" class="mid small">Scene: early draws</text>
+    <rect x="330" y="194" width="100" height="22" rx="3" class="box"/>
+    <text x="380" y="209" class="mid small">Hi-Z 0.08</text>
+    <text x="565" y="210" class="mid small">late draws, overlay at the end</text>
     <text x="80"  y="240" class="mid mono small">0.00</text>
     <text x="125" y="240" class="mid mono small">0.05</text>
     <text x="700" y="240" class="mid mono small">1.25</text>
     <text x="740" y="240" class="mid mono small">1.31</text>
-    <text x="15" y="262" class="small">gpuFrameMs = 1.31 − 0.00 = 1.31 · listed: Culling 0.04, Scene 1.18 (sorted by start time; "Frame" is not listed)</text>
+    <text x="15" y="262" class="small">gpuFrameMs = 1.31 − 0.00 = 1.31 · listed: Culling 0.04, Scene 1.18, Hi-Z 0.08 (sorted by start time; "Frame" is not listed)</text>
   </svg>
-  <figcaption>Culling is recorded last (in <code>endFrame</code>) but runs first, because its command buffer is submitted first. That is why <code>gpuFrameMs</code> spans all timestamps, not only timer 0.</figcaption>
+  <figcaption>The early culling is recorded last (in <code>endFrame</code>) but runs first, because its command buffer is submitted first. The Hi-Z timer covers the pause in the middle of the pass. That is why <code>gpuFrameMs</code> spans all timestamps, not only timer 0.</figcaption>
 </figure>
 
 <div class="table-wrap">
@@ -231,7 +236,8 @@
   <tr><td>The frame's command buffer</td><td><code>beginFrame</code>, ended in <code>endFrame</code></td><td>"Frame" (always timer 0)</td></tr>
   <tr><td>Each graphics pass</td><td><code>beginPass</code> / <code>endPass</code></td><td>the pass name: "Scene" in <code>Engine::render</code>, "Clear" for the empty swapchain pass, the pass name in a render graph</td></tr>
   <tr><td>Each render graph compute pass</td><td><code>RenderGraph::execute</code></td><td>the pass name</td></tr>
-  <tr><td>Culling</td><td><code>beginCullingTimer</code> in <code>recordCulling</code></td><td>"Culling"</td></tr>
+  <tr><td>Hi-Z build and late culling, per occlusion-culled <code>drawScene</code> call</td><td><code>beginGpuTimer</code> in <code>recordOcclusionCulling</code>, inside the pass's timer</td><td>"Hi-Z"</td></tr>
+  <tr><td>Early culling</td><td><code>beginCullingTimer</code> in <code>recordCulling</code></td><td>"Culling"</td></tr>
   <tr><td>Your own GPU work</td><td><code>beginGpuTimer</code> / <code>endGpuTimer</code> (public)</td><td>your name</td></tr>
 </table>
 </div>
@@ -240,7 +246,7 @@
 
 <h2><span class="n">5</span>Cull counters and the 64-bit carry</h2>
 
-<p>The Cull Stats Buffer of a slot is 3 × <code>uint</code>: visible draws, triangles low word, triangles high word. It is host-visible and host-readable, so the CPU reads it with <code>readBuffer</code> and zeroes it with <code>fillBuffer</code>. The last thread of each <code>countMain</code> group adds the group's numbers:</p>
+<p>The Cull Stats Buffer of a slot is 3 × <code>uint</code>: visible draws, triangles low word, triangles high word. It is host-visible and host-readable, so the CPU reads it with <code>readBuffer</code> and zeroes it with <code>fillBuffer</code>. The last thread of each <code>countMain</code> group adds the group's numbers. The early and the late <code>countMain</code> both do it. A draw is still counted once, because the late culling keeps only draws the early one did not draw.</p>
 
 <div class="stepper">
   <div class="step">
@@ -582,7 +588,7 @@
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>The GPU timers do not reach Tracy (<code>D16</code>). Culling runs before all other GPU work of the frame (D18), so when there is culling, its timer is the first one listed.</p>
+  <p>The GPU timers do not reach Tracy (<code>D16</code>). The early culling runs before all other GPU work of the frame (D18), so when there is culling, its timer is the first one listed.</p>
 </div>
 
 </main>

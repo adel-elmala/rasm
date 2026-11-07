@@ -170,6 +170,7 @@ if (!engine.running())
   <tr><td><code>geometryPoolSubMeshes</code></td><td>2<sup>14</sup> = 16,384</td><td>Sub-meshes of all meshes together (28 bytes each).</td></tr>
   <tr><td><code>maxInstances</code></td><td>2<sup>16</sup> = 65,536</td><td>Instance rows: one per sub-mesh of every entity. 108 bytes each, two copies (one per frame slot).</td></tr>
   <tr><td><code>showStats</code></td><td><code>false</code></td><td>Shows the stats overlay from the first frame. <kbd>F1</kbd> toggles it at runtime.</td></tr>
+  <tr><td><code>occlusionCulling</code></td><td><code>true</code></td><td>Two-pass Hi-Z occlusion culling in <code>drawScene</code>: draws hidden behind others are not drawn. <code>false</code> keeps frustum culling only. See <a href="../guides/culling.html#occlusion">occlusion culling</a>.</td></tr>
 </table>
 </div>
 
@@ -188,7 +189,7 @@ if (!engine.running())
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 306" role="img" aria-label="beginFrame polls events, finishes loads for up to 4 milliseconds, waits for the frame slot, uploads scene changes and acquires a swapchain image. It returns false when the window is minimized, the swapchain cannot be rebuilt, or acquire fails. Then your passes run. endFrame clears the swapchain if no pass drew to it, records culling, submits and presents.">
+  <svg viewBox="0 0 760 306" role="img" aria-label="beginFrame polls events, finishes loads for up to 4 milliseconds, waits for the frame slot, uploads scene changes and acquires a swapchain image. It returns false when the window is minimized, the swapchain cannot be rebuilt, or acquire fails. Then your passes run. endFrame clears the swapchain if no pass drew to it, records the early culling, submits and presents.">
     <text x="10" y="22" class="title mono">beginFrame(camera)</text>
     <rect x="10"  y="34" width="132" height="50" rx="6" class="cpu"/><text x="76"  y="55" class="mid">pollEvents</text><text x="76"  y="72" class="mid small">input, camera, quit</text>
     <rect x="157" y="34" width="132" height="50" rx="6" class="cpu"/><text x="223" y="55" class="mid">finishLoads</text><text x="223" y="72" class="mid small">up to 4 ms of loads</text>
@@ -214,7 +215,7 @@ if (!engine.running())
     <text x="175" y="180" class="title mono">endFrame()</text>
     <rect x="10"  y="188" width="150" height="50" rx="6" class="box"/><text x="85"  y="209" class="mid">your passes</text><text x="85"  y="226" class="mid small">beginPass … endPass</text>
     <rect x="175" y="188" width="132" height="50" rx="6" class="cpu"/><text x="241" y="209" class="mid">clear if unused</text><text x="241" y="226" class="mid small">no pass drew the window</text>
-    <rect x="322" y="188" width="132" height="50" rx="6" class="cpu"/><text x="388" y="209" class="mid">record culling</text><text x="388" y="226" class="mid small">one per drawScene</text>
+    <rect x="322" y="188" width="132" height="50" rx="6" class="cpu"/><text x="388" y="209" class="mid">early culling</text><text x="388" y="226" class="mid small">recorded per drawScene</text>
     <rect x="469" y="188" width="132" height="50" rx="6" class="cpu"/><text x="535" y="209" class="mid">submit</text><text x="535" y="226" class="mid small">culling, then frame</text>
     <rect x="616" y="188" width="132" height="50" rx="6" class="cpu"/><text x="682" y="209" class="mid">present</text><text x="682" y="226" class="mid small">image to the window</text>
     <line x1="160" y1="213" x2="173" y2="213" class="arrow cpu" marker-end="url(#ah-cpu)"/>
@@ -256,7 +257,7 @@ if (!engine.running())
 <div class="api" id="endFrame">
   <pre class="sig">void endFrame();</pre>
   <div class="body">
-    <p>Ends the frame's command buffer and sends the frame to the GPU, then shows it in the window. If no pass drew to the window this frame (for example, all passes drew to render targets), it adds a pass that clears the window first. It also records the frustum culling of every <code>drawScene</code> call of the frame, which runs on the GPU before the frame's draws (see <a href="../guides/culling.html">GPU frustum culling</a>).</p>
+    <p>Ends the frame's command buffer and sends the frame to the GPU, then shows it in the window. If no pass drew to the window this frame (for example, all passes drew to render targets), it adds a pass that clears the window first. It also records the early culling of every <code>drawScene</code> call of the frame, which runs on the GPU before the frame's draws (see <a href="../guides/culling.html">culling</a>).</p>
     <p>Call it only after a <code>beginFrame</code> that returned true, and after the last <code>endPass</code>.</p>
   </div>
 </div>
@@ -275,7 +276,7 @@ if (!engine.running())
 <div class="api" id="endPass">
   <pre class="sig">void endPass();</pre>
   <div class="body">
-    <p>Ends the pass. On the window, it first draws the stats overlay (when shown). On a render target, it makes the color image ready to be sampled by later passes (see <a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a>). The depth image is not kept for later passes.</p>
+    <p>Ends the pass. On the window, it first draws the stats overlay (when shown). On a render target, it makes the color image ready to be sampled by later passes (see <a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a>). The depth image stays a depth attachment, so later passes cannot sample it.</p>
   </div>
 </div>
 
@@ -288,13 +289,14 @@ if (!engine.running())
       <dt>camera</dt><dd>The view. Invalid: logs an error and draws nothing.</dd>
     </dl>
     <p>Draws nothing, with no error, while the scene is empty or all its entities still load: the pass keeps its clear color.</p>
+    <p>The GPU culls the draws first: those outside the camera's view are skipped. With <code>EngineConfig::occlusionCulling</code> it draws in two parts. First come the draws that were visible last time. Then it ends the pass, builds a Hi-Z from their depth, tests the other draws against it, starts the pass again with its color and depth kept, and draws the ones it found visible. What you drew before <code>drawScene</code> in the same pass is kept. See <a href="../guides/culling.html#occlusion">occlusion culling</a>.</p>
     <div class="table-wrap">
     <table>
       <tr><th>Rule</th><th>What happens otherwise</th></tr>
       <tr><td>At most <code>MAX_SCENE_DRAWS_PER_FRAME</code> (8) calls per frame</td><td>"Exceeded maximum number of drawScene calls per frame." and nothing drawn</td></tr>
       <tr><td>A render target must have the window's color format and <code>D32_SFLOAT</code> depth</td><td>An error is logged and the pass stays cleared</td></tr>
       <tr><td>The scene shader <code>passes/rasm.slang</code> must compile</td><td>An error is logged; the engine tries again next frame, so a fixed shader file is picked up while the program runs</td></tr>
-      <tr><td>The culling shader <code>passes/cull.slang</code> should compile</td><td>The scene is still drawn, only without culling</td></tr>
+      <tr><td>The culling shader <code>passes/cull.slang</code> should compile</td><td>The scene is still drawn, only without culling. Without its <code>hizMain</code> entry point it is frustum culled only.</td></tr>
     </table>
     </div>
   </div>
@@ -396,10 +398,10 @@ for (uint32_t i = 0; i &lt; stats.gpuTimerCount; ++i)
     <dl>
       <dt>cpuFrameMs</dt><dd>Time between the last two frames on the CPU, in ms. Capped at 100 ms. Updated every frame, even when not measuring.</dd>
       <dt>gpuFrameMs</dt><dd>GPU time of the whole frame (culling and all passes), in ms. 0 on a GPU without timestamps.</dd>
-      <dt>gpuTimers</dt><dd>One <code>GpuTimer</code> per pass, compute pass, culling and your own timers, in GPU start order. Room for <code>MAX_GPU_TIMERS - 1</code> (15).</dd>
+      <dt>gpuTimers</dt><dd>One <code>GpuTimer</code> per pass, compute pass, culling, Hi-Z build ("Hi-Z", one per occlusion-culled <code>drawScene</code> call) and your own timers, in GPU start order. Room for <code>MAX_GPU_TIMERS - 1</code> (15).</dd>
       <dt>gpuTimerCount</dt><dd>How many entries of <code>gpuTimers</code> are filled.</dd>
       <dt>draws</dt><dd>Draws of all <code>drawScene</code> calls of the frame, before culling (one per sub-mesh of each entity).</dd>
-      <dt>drawsVisible</dt><dd>Draws that passed frustum culling.</dd>
+      <dt>drawsVisible</dt><dd>Draws that passed culling: inside the view, and with occlusion culling also not hidden. Draws of a call drawn without culling all count.</dd>
       <dt>triangles</dt><dd>Triangles before culling.</dd>
       <dt>trianglesVisible</dt><dd>Triangles of the visible draws.</dd>
       <dt>memory</dt><dd><code>VRAMStats</code> of that frame (see <a href="#queryMemoryStats"><code>queryMemoryStats</code></a>).</dd>
@@ -426,7 +428,7 @@ for (uint32_t i = 0; i &lt; stats.gpuTimerCount; ++i)
       <dt>name</dt><dd>Label in the stats.</dd>
       <dt>returns</dt><dd>The timer id, or <code>UINT32_MAX</code> when nothing is measured: measuring is off, the GPU has no timestamps, or the frame used all its timers (a warning is logged once).</dd>
     </dl>
-    <p>A frame has <code>MAX_GPU_TIMERS</code> (16) timers: one for the whole frame, one kept for culling, and 14 for passes and your timers together.</p>
+    <p>A frame has <code>MAX_GPU_TIMERS</code> (16) timers: one for the whole frame, one kept for culling, and 14 for passes, Hi-Z builds and your timers together.</p>
   </div>
 </div>
 
