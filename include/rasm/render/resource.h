@@ -91,6 +91,7 @@ namespace rasm
     {
         std::string                 name;
         ShaderType                  type                            = ShaderType::VERTEX;
+        std::string                 entryPoint;
         std::vector<uint8_t>        code;
 
         bool                        operator==(const ShaderDesc&) const = default;

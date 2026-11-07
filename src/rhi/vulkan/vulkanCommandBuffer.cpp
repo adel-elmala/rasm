@@ -97,18 +97,20 @@ namespace rasm::rhi
             }
         }
 
-        // Shaders read and write buffers through device addresses, which count as storage buffer access.
-        void getStageScope(PipelineStage stage, VkPipelineStageFlags2 &stageMask, VkAccessFlags2 &writeMask, VkAccessFlags2 &readMask)
+        VkPipelineStageFlags2 toVkStageMask(PipelineStage stage)
         {
-            writeMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
             if (stage == PipelineStage::COMPUTE)
-            {
-                stageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                readMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-                return;
-            }
-            stageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-            readMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+                return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            return VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        }
+
+        // Every way a stage can read a buffer: device addresses count as storage access, and graphics
+        // also reads indirect commands, indices and uniforms.
+        VkAccessFlags2 toVkReadMask(PipelineStage stage)
+        {
+            if (stage == PipelineStage::COMPUTE)
+                return VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_UNIFORM_READ_BIT;
+            return VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_UNIFORM_READ_BIT;
         }
 
         VkCullModeFlags toVkCullMode(CullMode cullMode)
@@ -350,21 +352,13 @@ namespace rasm::rhi
 
     void VulkanCommandBuffer::memoryBarrier(PipelineStage before, PipelineStage after)
     {
-        VkPipelineStageFlags2 srcStageMask = 0;
-        VkPipelineStageFlags2 dstStageMask = 0;
-        VkAccessFlags2 srcWrites = 0;
-        VkAccessFlags2 srcReads = 0;
-        VkAccessFlags2 dstWrites = 0;
-        VkAccessFlags2 dstReads = 0;
-        getStageScope(before, srcStageMask, srcWrites, srcReads);
-        getStageScope(after, dstStageMask, dstWrites, dstReads);
-
-        // Only writes need to be made available. Reads before the barrier just have to finish, which the stage mask covers.
+        // Shaders write buffers only through storage access. Only writes need to be made available: reads
+        // before the barrier just have to finish, which the stage mask covers.
         VkMemoryBarrier2 barrier = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
-                                    .srcStageMask = srcStageMask,
-                                    .srcAccessMask = srcWrites,
-                                    .dstStageMask = dstStageMask,
-                                    .dstAccessMask = dstReads | dstWrites};
+                                    .srcStageMask = toVkStageMask(before),
+                                    .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                                    .dstStageMask = toVkStageMask(after),
+                                    .dstAccessMask = toVkReadMask(after) | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
         VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
         vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
     }

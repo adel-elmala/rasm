@@ -137,12 +137,11 @@ int main()
             auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
             const AnimatePushConstants pushConstants = {.positions = particlesAddress, .count = PARTICLE_COUNT, .time = frame * FRAME_TIME};
 
-            // Both frame slots share the buffer, so the previous frame's draw must be done reading it.
-            ctx.memoryBarrier(commandBuffer, rasm::PipelineStage::GRAPHICS, rasm::PipelineStage::COMPUTE);
+            // The graph puts barriers around the pass, so the previous frame's draw is done reading the
+            // buffer (both frame slots share it) and this frame's draw sees the new positions.
             ctx.bindPipeline(commandBuffer, animatePipeline);
             ctx.pushConstants(commandBuffer, animatePipeline, rasm::ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants));
             ctx.dispatch(commandBuffer, (PARTICLE_COUNT + GROUP_SIZE - 1) / GROUP_SIZE);
-            ctx.memoryBarrier(commandBuffer, rasm::PipelineStage::COMPUTE, rasm::PipelineStage::GRAPHICS);
         });
 
     graph.addPass(

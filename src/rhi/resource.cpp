@@ -17,6 +17,7 @@ namespace rasm
         std::string_view code(reinterpret_cast<const char *>(desc.code.data()), desc.code.size());
         std::size_t hash = std::hash<std::string>()(desc.name);
         hash = hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.type)));
+        hash = hashCombine(hash, std::hash<std::string>()(desc.entryPoint));
         return hashCombine(hash, std::hash<std::string_view>()(code));
     }
 

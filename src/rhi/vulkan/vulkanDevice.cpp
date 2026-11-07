@@ -582,13 +582,13 @@ namespace rasm::rhi
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                 .stage = VK_SHADER_STAGE_VERTEX_BIT,
                 .module = static_cast<VulkanShader *>(vertexShader)->module,
-                .pName = "vertMain",
+                .pName = vertexShader->desc.entryPoint.c_str(),
             },
             {
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                 .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
                 .module = static_cast<VulkanShader *>(fragmentShader)->module,
-                .pName = "fragMain",
+                .pName = fragmentShader->desc.entryPoint.c_str(),
             }};
 
         VkPipelineViewportStateCreateInfo viewportStateInfo = {
@@ -705,7 +705,7 @@ namespace rasm::rhi
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                 .stage = VK_SHADER_STAGE_COMPUTE_BIT,
                 .module = static_cast<VulkanShader *>(computeShader)->module,
-                .pName = "compMain",
+                .pName = computeShader->desc.entryPoint.c_str(),
             },
             .layout = pipelineLayout};
 

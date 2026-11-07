@@ -15,7 +15,7 @@ is the working reference (forward pass into a render target, then an overlay pas
 | **Full-screen / post** (tone map, blur, debug view) | own pipeline, `ctx.draw(cmd, 3)`, samples an earlier render target | the common case. Template below. |
 | **Scene into a render target** | `engine.drawScene(scene, camera)` in the pass | uses the uber shader. The target must have the swapchain color format + `D32_SFLOAT`, else `drawScene` logs and skips. |
 | **Scene with its own shader** (shadow map, normals view, ID buffer) | ✗ not possible from the app | the custom shader can't get the `SceneData` address. Needs an engine change: propose it first. |
-| **Compute** (culling, particles, buffer processing) | `engine.createComputePipeline` (`compMain`), `graph.addComputePass`, `ctx.dispatch`; record `ctx.memoryBarrier` yourself | reads and writes **buffers** through device addresses only. No storage images and no bindless textures in compute yet (the set is `FRAGMENT`-only), so Hi-Z needs RHI work first. Reference: `examples/04_compute`. |
+| **Compute** (culling, particles, buffer processing) | `engine.createComputePipeline` (`compMain`), `graph.addComputePass`, `ctx.dispatch`; the graph adds the barriers around the pass | reads and writes **buffers** through device addresses only. No storage images and no bindless textures in compute yet (the set is `FRAGMENT`-only), so Hi-Z needs RHI work first. Reference: `examples/04_compute`. |
 | **Pass built into the engine** (every app gets it) | ✗ `Engine::render` records one fixed pass | phase 3 ("graph-driven frame"). Propose first. |
 
 ## 2. Current limits (check before designing)
@@ -29,7 +29,7 @@ is the working reference (forward pass into a render target, then an overlay pas
 | Cull mode | dynamic: `beginPass` sets `NONE`, `ctx.setCullMode(commandBuffer, CullMode::BACK)` changes it for the pass | `VulkanCommandBuffer::setCullMode` |
 | Every pass **clears** its target | two passes can't accumulate into one target | `VulkanCommandBuffer::beginRendering`, review §3 |
 | Readable outputs | only the **color** of an earlier render target, through its bindless index. Depth isn't stored. | `Engine::endPass` |
-| Ordering | from `builder.read`/`write` only, topologically sorted. No automatic barriers beyond the render target begin/end transitions: a compute pass records `ctx.memoryBarrier` before and after its dispatches | `RenderGraph::compile` |
+| Ordering | from `builder.read`/`write` only, topologically sorted. The graph adds a global `memoryBarrier` before every compute pass and before the first graphics pass after one, plus the render target begin/end transitions. Dependent dispatches inside one compute pass need `ctx.memoryBarrier(COMPUTE, COMPUTE)` between them | `RenderGraph::compile` |
 | Camera | `execute(camera)` passes it to `beginFrame` (input and delta time); each pass picks its own camera for `drawScene` | `RenderGraph::execute` |
 
 If a design needs to go past a limit (blending, more push constants, depth reads, MRT), that's an
