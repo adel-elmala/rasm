@@ -9,7 +9,7 @@
 namespace rasm
 {
 
-    constexpr uint32_t MAX_ENTITIES = 1u << 16;
+    constexpr uint32_t MAX_ENTITIES = 1u << 18;
 
     // an entity represent a model in the scene, containing references to its mesh and material.
     struct Entity

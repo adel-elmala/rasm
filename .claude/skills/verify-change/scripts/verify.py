@@ -221,7 +221,7 @@ def run_example(name, preset, frame, out_dir, keep):
     if os.name != "nt" and sdk and os.path.isdir(os.path.join(sdk, "share", "vulkan", "explicit_layer.d")):
         env["VK_ADD_LAYER_PATH"] = os.path.join(sdk, "share", "vulkan", "explicit_layer.d")
     try:
-        proc = subprocess.run([exe], cwd=os.path.dirname(exe), env=env, capture_output=True, text=True, errors="replace", timeout=180)
+        proc = subprocess.run([exe, "--fixed-step"], cwd=os.path.dirname(exe), env=env, capture_output=True, text=True, errors="replace", timeout=180)
         log, code = proc.stdout + proc.stderr, proc.returncode
     except subprocess.TimeoutExpired as e:
         log, code = ((e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")), "timeout"

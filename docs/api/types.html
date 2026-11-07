@@ -431,7 +431,7 @@ struct RenderTarget
   <tr id="MAX_MATERIALS"><td><code>MAX_MATERIALS</code><br><code>rasm/engine.h</code></td><td>256</td><td>Materials: 255 fit, and the engine's default material takes one.</td></tr>
   <tr id="MAX_CAMERAS"><td><code>MAX_CAMERAS</code><br><code>rasm/engine.h</code></td><td>8</td><td>Cameras: 7 fit.</td></tr>
   <tr id="MAX_GPU_TIMERS"><td><code>MAX_GPU_TIMERS</code><br><code>rasm/engine.h</code></td><td>16</td><td>GPU timers per frame: the frame, culling, and 14 for passes and <code>beginGpuTimer</code>. <code>FrameStats::gpuTimers</code> has 15 entries.</td></tr>
-  <tr id="MAX_ENTITIES"><td><code>MAX_ENTITIES</code><br><code>rasm/entity.h</code></td><td>65536</td><td>Entities: 65535 fit.</td></tr>
+  <tr id="MAX_ENTITIES"><td><code>MAX_ENTITIES</code><br><code>rasm/entity.h</code></td><td>262144 (2<sup>18</sup>)</td><td>Entities: 262143 fit.</td></tr>
   <tr id="MAX_LIGHTS"><td><code>MAX_LIGHTS</code><br><code>rasm/light.h</code></td><td>8</td><td>Lights: 7 fit. Also the size of the light array the shader gets.</td></tr>
   <tr id="MAX_TEXTURE_SLOTS"><td><code>MAX_TEXTURE_SLOTS</code><br><code>rasm/material.h</code></td><td>6 (<code>PbrSlot::COUNT</code>)</td><td>Textures per material, one per <a href="materials.html#PbrSlot">PbrSlot</a>.</td></tr>
   <tr id="MAX_PARAM_SLOTS"><td><code>MAX_PARAM_SLOTS</code><br><code>rasm/material.h</code></td><td>10 (<code>PbrParam::COUNT</code>)</td><td>Floats in <code>Material::params</code>, indexed by <a href="materials.html#PbrParam">PbrParam</a>.</td></tr>
