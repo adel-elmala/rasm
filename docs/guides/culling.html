@@ -725,6 +725,7 @@ distance = |sphere center − camera| − sphere radius     (≤ 0: the camera i
   <div>
     <h4>Settings</h4>
     <p><code>EngineConfig::meshLods</code> (on) builds the LODs as meshes load. <code>EngineConfig::lodErrorPixels</code> (1 pixel) is the limit; 0 always draws LOD 0. An unculled <code>drawScene</code> call draws LOD 0.</p>
+<p>For debugging, <code>EngineConfig::forcedLod</code> skips the distance test: from 0 up, every draw uses that LOD, or its mesh's coarsest one if it has fewer. -1 (the default) picks by distance. <kbd>F2</kbd> cycles it at runtime: by distance, LOD 0, 1, … 7, by distance. The <a href="stats-overlay.html">stats overlay</a> shows the mode.</p>
   </div>
 </div>
 
@@ -762,6 +763,7 @@ distance = |sphere center − camera| − sphere radius     (≤ 0: the camera i
   <tr><td>Hi-Z build</td><td><code>hizMain</code> in <code>shaders/passes/hiz.slang</code></td></tr>
   <tr><td>LOD choice</td><td><code>selectLod</code> in <code>shaders/lib/lodSelection.slang</code></td></tr>
   <tr><td>LOD threshold</td><td><code>SceneData::lodErrorPixels</code>, set from <code>EngineConfig::lodErrorPixels</code> in <code>Engine::drawScene</code></td></tr>
+  <tr><td>Forced LOD (debug)</td><td><code>SceneData::forcedLod</code>, set from <code>EngineConfig::forcedLod</code>; <kbd>F2</kbd> in <code>pollEvents</code> (<code>src/platform/window.cpp</code>)</td></tr>
   <tr><td>Pointers it uses</td><td><code>SceneData</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
 </table>
 </div>

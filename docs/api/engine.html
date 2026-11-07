@@ -173,6 +173,7 @@ if (!engine.running())
   <tr><td><code>occlusionCulling</code></td><td><code>true</code></td><td>Two-pass Hi-Z occlusion culling in <code>drawScene</code>: draws hidden behind others are not drawn. <code>false</code> keeps frustum culling only. See <a href="../guides/culling.html#occlusion">occlusion culling</a>.</td></tr>
   <tr><td><code>meshLods</code></td><td><code>true</code></td><td>Builds coarser levels of detail (<a href="scene.html#MeshLod">LODs</a>) of every sub-mesh with 1024 triangles or more as meshes load, on the worker thread for <code>loadMesh</code>. <code>false</code>: meshes have LOD 0 only.</td></tr>
   <tr><td><code>lodErrorPixels</code></td><td><code>1.0f</code></td><td>Culling draws the coarsest LOD whose error stays under this many pixels on screen. Larger is faster and coarser; 0 always draws LOD 0. See <a href="../guides/culling.html#lod">level of detail</a>.</td></tr>
+  <tr><td><code>forcedLod</code></td><td><code>-1</code></td><td>For debugging. From 0 up, every draw uses this LOD (or its mesh's coarsest one), whatever the distance. -1 picks by distance. <kbd>F2</kbd> cycles it at runtime.</td></tr>
 </table>
 </div>
 
@@ -486,7 +487,7 @@ engine.endGpuTimer(commandBuffer, timer);</code></pre>
 <div class="split">
   <div>
     <h4>Built-in keys</h4>
-    <p><kbd>Esc</kbd> or closing the window: <code>running()</code> becomes false.<br><kbd>F1</kbd>: shows or hides the stats overlay.<br>Mouse and <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>: move the camera passed to <code>beginFrame</code> (see <a href="camera.html#pollEvents">camera.html</a>).</p>
+    <p><kbd>Esc</kbd> or closing the window: <code>running()</code> becomes false.<br><kbd>F1</kbd>: shows or hides the stats overlay.<br><kbd>F2</kbd>: cycles <code>forcedLod</code>: by distance, LOD 0, 1, … 7, by distance.<br>Mouse and <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>: move the camera passed to <code>beginFrame</code> (see <a href="camera.html#pollEvents">camera.html</a>).</p>
   </div>
   <div>
     <h4>Two sizes</h4>

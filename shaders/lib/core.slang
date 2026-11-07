@@ -142,6 +142,8 @@ struct SceneData
     uint32_t            viewportWidth;      // the pass's size in pixels
     uint32_t            viewportHeight;
     float               lodErrorPixels;     // culling picks the coarsest LOD whose error stays under this on screen
+    int32_t             forcedLod;          // >= 0: every draw uses this LOD (or its mesh's coarsest), for debugging
+    uint32_t            padding;
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.

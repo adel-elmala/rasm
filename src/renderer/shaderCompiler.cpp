@@ -173,7 +173,9 @@ namespace rasm
                                      {"depthTexture", offsetof(gfx::SceneData, depthTexture)},
                                      {"viewportWidth", offsetof(gfx::SceneData, viewportWidth)},
                                      {"viewportHeight", offsetof(gfx::SceneData, viewportHeight)},
-                                     {"lodErrorPixels", offsetof(gfx::SceneData, lodErrorPixels)}});
+                                     {"lodErrorPixels", offsetof(gfx::SceneData, lodErrorPixels)},
+                                     {"forcedLod", offsetof(gfx::SceneData, forcedLod)},
+                                     {"padding", offsetof(gfx::SceneData, padding)}});
 
             valid &= validateStruct(fieldStruct(scene, "lights"), "Light", sizeof(gfx::Light),
                                     {{"position", offsetof(gfx::Light, position)},

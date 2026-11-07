@@ -319,8 +319,8 @@
 <h2><span class="n">6</span>From numbers to a text grid</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 270" role="img" aria-label="buildText formats FrameStats into lines every 250 milliseconds, buildGrid pads them into a grid of 29 columns and 10 rows, and every frame the grid is copied into the slot's text buffer.">
-    <rect x="15" y="20" width="300" height="230" rx="6" class="box"/>
+  <svg viewBox="0 0 760 290" role="img" aria-label="buildText formats FrameStats into lines every 250 milliseconds, buildGrid pads them into a grid of 29 columns and 11 rows, and every frame the grid is copied into the slot's text buffer.">
+    <rect x="15" y="20" width="300" height="250" rx="6" class="box"/>
     <text x="27" y="44"  class="mono small">Frame&#160;&#160;&#160;&#160;&#160;&#160;16.67&#160;ms&#160;&#160;&#160;&#160;60&#160;fps</text>
     <text x="27" y="64"  class="mono small">GPU&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;1.31&#160;ms</text>
     <text x="27" y="84"  class="mono small">&#160;Culling&#160;&#160;&#160;&#160;0.04&#160;ms</text>
@@ -328,10 +328,11 @@
     <text x="27" y="124" class="mono small">Draws&#160;&#160;&#160;&#160;&#160;812&#160;/&#160;2048</text>
     <text x="27" y="144" class="mono small">Culled&#160;&#160;&#160;&#160;1236</text>
     <text x="27" y="164" class="mono small">Triangles&#160;1.25M&#160;/&#160;3.40M</text>
-    <text x="27" y="184" class="mono small">LOD&#160;saved&#160;850.0K&#160;(40%)</text>
-    <text x="27" y="204" class="mono small">LOD&#160;draws&#160;430&#160;260&#160;98&#160;24</text>
-    <text x="27" y="224" class="mono small">VRAM&#160;&#160;&#160;&#160;&#160;&#160;1430&#160;/&#160;7920&#160;MiB</text>
-    <text x="165" y="242" class="mid small">10 rows · 29 columns (the longest line)</text>
+    <text x="27" y="184" class="mono small">LOD&#160;&#160;&#160;&#160;&#160;&#160;&#160;by&#160;distance&#160;(F2)</text>
+    <text x="27" y="204" class="mono small">LOD&#160;saved&#160;850.0K&#160;(40%)</text>
+    <text x="27" y="224" class="mono small">LOD&#160;draws&#160;430&#160;260&#160;98&#160;24</text>
+    <text x="27" y="244" class="mono small">VRAM&#160;&#160;&#160;&#160;&#160;&#160;1430&#160;/&#160;7920&#160;MiB</text>
+    <text x="165" y="262" class="mid small">11 rows · 29 columns (the longest line)</text>
 
     <line x1="315" y1="80" x2="373" y2="80" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <rect x="375" y="44" width="170" height="72" rx="6" class="cpu"/>
@@ -360,11 +361,11 @@
 <div class="stepper">
   <div class="step">
     <h4>1. The panel</h4>
-    <svg viewBox="0 0 720 250" role="img" aria-label="The panel sits 8 pixels from the window's top-left corner. With scale 2 it is 480 by 176 pixels. The text starts 8 more pixels in. The pixel at 34, 42 is inside the second character of the second row.">
+    <svg viewBox="0 0 720 250" role="img" aria-label="The panel sits 8 pixels from the window's top-left corner. With scale 2 it is 480 by 192 pixels. The text starts 8 more pixels in. The pixel at 34, 42 is inside the second character of the second row.">
       <rect x="10" y="10" width="700" height="230" class="zone"/>
       <text x="16" y="236" class="small t-faint">window, top-left corner</text>
-      <rect x="18" y="18" width="480" height="176" class="box"/>
-      <rect x="26" y="26" width="464" height="160" class="ghost"/>
+      <rect x="18" y="18" width="480" height="192" class="box"/>
+      <rect x="26" y="26" width="464" height="176" class="ghost"/>
       <text x="26" y="38"  class="mono small" textLength="464" lengthAdjust="spacing">Frame&#160;&#160;&#160;&#160;&#160;&#160;16.67&#160;ms&#160;&#160;&#160;&#160;60&#160;fps</text>
       <text x="26" y="54"  class="mono small" textLength="304" lengthAdjust="spacing">GPU&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;1.31&#160;ms</text>
       <text x="26" y="70"  class="mono small" textLength="304" lengthAdjust="spacing">&#160;Culling&#160;&#160;&#160;&#160;0.04&#160;ms</text>
@@ -372,17 +373,18 @@
       <text x="26" y="102" class="mono small" textLength="320" lengthAdjust="spacing">Draws&#160;&#160;&#160;&#160;&#160;812&#160;/&#160;2048</text>
       <text x="26" y="118" class="mono small" textLength="224" lengthAdjust="spacing">Culled&#160;&#160;&#160;&#160;1236</text>
       <text x="26" y="134" class="mono small" textLength="368" lengthAdjust="spacing">Triangles&#160;1.25M&#160;/&#160;3.40M</text>
-      <text x="26" y="150" class="mono small" textLength="352" lengthAdjust="spacing">LOD&#160;saved&#160;850.0K&#160;(40%)</text>
-      <text x="26" y="166" class="mono small" textLength="368" lengthAdjust="spacing">LOD&#160;draws&#160;430&#160;260&#160;98&#160;24</text>
-      <text x="26" y="182" class="mono small" textLength="400" lengthAdjust="spacing">VRAM&#160;&#160;&#160;&#160;&#160;&#160;1430&#160;/&#160;7920&#160;MiB</text>
+      <text x="26" y="150" class="mono small" textLength="416" lengthAdjust="spacing">LOD&#160;&#160;&#160;&#160;&#160;&#160;&#160;by&#160;distance&#160;(F2)</text>
+      <text x="26" y="166" class="mono small" textLength="352" lengthAdjust="spacing">LOD&#160;saved&#160;850.0K&#160;(40%)</text>
+      <text x="26" y="182" class="mono small" textLength="368" lengthAdjust="spacing">LOD&#160;draws&#160;430&#160;260&#160;98&#160;24</text>
+      <text x="26" y="198" class="mono small" textLength="400" lengthAdjust="spacing">VRAM&#160;&#160;&#160;&#160;&#160;&#160;1430&#160;/&#160;7920&#160;MiB</text>
       <circle cx="44" cy="52" r="5" class="hot"/>
-      <line x1="48" y1="56" x2="120" y2="210" class="arrow hot"/>
-      <text x="124" y="220" class="t-hot">pixel (34, 42)</text>
+      <line x1="48" y1="56" x2="120" y2="218" class="arrow hot"/>
+      <text x="124" y="226" class="t-hot">pixel (34, 42)</text>
       <text x="520" y="40"  class="small">MARGIN = 8 px from the corner</text>
       <text x="520" y="58"  class="small">PADDING = 4 font px = 8 px</text>
       <text x="520" y="76"  class="small">scale = max(1, 2160 / 1080) = 2</text>
       <text x="520" y="94"  class="small">width = (29 · 8 + 2 · 4) · 2 = 480</text>
-      <text x="520" y="112" class="small">height = (10 · 8 + 2 · 4) · 2 = 176</text>
+      <text x="520" y="112" class="small">height = (11 · 8 + 2 · 4) · 2 = 192</text>
       <text x="520" y="138" class="small">z = 1: the near plane, so it</text>
       <text x="520" y="154" class="small">passes the depth test</text>
     </svg>
@@ -551,8 +553,8 @@
     <rect x="580" y="30" width="160" height="50" class="mem"/>
     <text x="660" y="52" class="mid mono">screen</text>
     <text x="660" y="70" class="mid small">width | height&lt;&lt;16</text>
-    <text x="420" y="108" class="mono small">29 | 10&lt;&lt;8 | 2&lt;&lt;16</text>
-    <text x="420" y="126" class="mono small">= 0x00020A1D</text>
+    <text x="420" y="108" class="mono small">29 | 11&lt;&lt;8 | 2&lt;&lt;16</text>
+    <text x="420" y="126" class="mono small">= 0x00020B1D</text>
     <text x="580" y="108" class="mono small">3840 | 2160&lt;&lt;16</text>
     <text x="580" y="126" class="mono small">= 0x08700F00</text>
     <text x="20" y="108" class="small">OverlayPushConstants in statsOverlay.cpp mirrors</text>
@@ -566,7 +568,7 @@
 
 <ol class="steps">
   <li><b>At startup</b><code>createStatsOverlay</code> makes one host-visible text buffer per frame slot (<code>MAX_TEXT_COLUMNS</code> × <code>MAX_TEXT_ROWS</code> = 960 bytes) and builds the pipeline from <code>passes/statsOverlay.slang</code> with <code>createPipeline</code>. If the shader fails to compile, the error is logged and the overlay stays off; the engine still runs.</li>
-  <li><b>Toggle</b><kbd>F1</kbd> flips <code>showStats</code> in <code>pollEvents</code> (key repeats are ignored). Applications can set <code>EngineConfig::showStats</code> at start.</li>
+  <li><b>Toggle</b><kbd>F1</kbd> flips <code>showStats</code> in <code>pollEvents</code> (key repeats are ignored). <kbd>F2</kbd> cycles <code>forcedLod</code>, which the "LOD" line shows. Applications can set <code>EngineConfig::showStats</code> at start.</li>
   <li><b>Every frame, after the fence wait</b><code>updateFrameStats</code>, then <code>updateStatsOverlay</code>, which sets the slot's <code>columns</code> and <code>rows</code>, or 0 rows when the overlay is off.</li>
   <li><b>At the end of every swapchain pass</b><code>endPass</code> calls <code>drawStatsOverlay</code> before <code>endRendering</code>. Every pass clears its target, so drawing in each swapchain pass keeps the panel on the presented image.</li>
   <li><b>The draw</b>It sets a full-swapchain viewport and scissor (the panel is placed in window pixels, whatever the pass set) and <code>CullMode::NONE</code> (its triangles wind clockwise on screen), binds the pipeline, pushes the 16 bytes and draws 6 vertices.</li>

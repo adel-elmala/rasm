@@ -42,7 +42,7 @@ namespace rasm
             return text;
         }
 
-        std::string buildText(const FrameStats &stats)
+        std::string buildText(const FrameStats &stats, int32_t forcedLod)
         {
             char line[128];
             std::string text;
@@ -66,6 +66,11 @@ namespace rasm
             std::snprintf(line, sizeof(line), "Triangles %s / %s\n", formatCount(stats.trianglesVisible).c_str(), formatCount(stats.triangles).c_str());
             text += line;
 
+            if (forcedLod >= 0)
+                std::snprintf(line, sizeof(line), "LOD       forced %d (F2)\n", forcedLod);
+            else
+                std::snprintf(line, sizeof(line), "LOD       by distance (F2)\n");
+            text += line;
             const uint64_t saved = stats.trianglesVisibleLod0 > stats.trianglesVisible ? stats.trianglesVisibleLod0 - stats.trianglesVisible : 0;
             const double savedPercent = stats.trianglesVisibleLod0 > 0 ? 100.0 * static_cast<double>(saved) / static_cast<double>(stats.trianglesVisibleLod0) : 0.0;
             std::snprintf(line, sizeof(line), "LOD saved %s (%.0f%%)\n", formatCount(saved).c_str(), savedPercent);
@@ -149,7 +154,7 @@ namespace rasm
         if (statsOverlay->grid.empty() || now - statsOverlay->gridTime >= TEXT_REFRESH)
         {
             statsOverlay->gridTime = now;
-            buildGrid(buildText(frameStats->stats), statsOverlay->grid, statsOverlay->columns, statsOverlay->rows);
+            buildGrid(buildText(frameStats->stats, config.forcedLod), statsOverlay->grid, statsOverlay->columns, statsOverlay->rows);
         }
         if (ctx.fillBuffer(slot.text, statsOverlay->grid.data(), statsOverlay->grid.size()))
         {

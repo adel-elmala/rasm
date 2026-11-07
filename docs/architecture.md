@@ -224,6 +224,7 @@ cull command buffer (before the frame)   frame command buffer, inside the pass t
  distance = |sphere center − camera| − sphere radius     (≤ 0: the camera is inside, LOD 0)
 ```
 
+- `EngineConfig::forcedLod` (`SceneData::forcedLod`, -1 by default) overrides the distance for debugging: from 0 up, every draw uses that LOD, or its mesh's coarsest one if it has fewer. F2 cycles it at runtime through -1, 0, …, `MAX_MESH_LODS - 1` (`pollEvents`), and the stats overlay shows the mode.
 - `sphere.scale` is the world matrix's largest stretch, the same bound the frustum test uses for the radius. An orthographic projection (`projection[3][3] == 1`) skips the division by distance.
 - All LODs of a sub-mesh share its vertices, so `vertexOffset` stays the same and the vertex shader needs no change. An unculled `drawScene` call draws LOD 0.
 
@@ -250,7 +251,7 @@ In `vertMain`:
 
 ### CPU/GPU struct contract
 
-The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `shaders/lib/core.slang` must match byte for byte under **scalar layout**. The C++ side `static_assert`s the sizes and key offsets (`SceneData` = 760 bytes, `InstanceData` = 108, `MaterialData` = 84, `GeometryData` = 120 with `MAX_MESH_LODS` = 8, …), and `rasm::Vertex` is asserted equal to `gfx::VertexFull`. Those asserts only pin the C++ side, so debug builds also run `validateRasmStructs` (`shaderCompiler.cpp`), which asserts each struct's size and field offsets against Slang reflection after linking. Read shader layouts by walking from `pc` through the pointers: `ProgramLayout::getTypeLayout` reports std140/std430 padding instead. When you change a struct, change both sides, the asserts and the `validateRasmStructs` tables.
+The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `shaders/lib/core.slang` must match byte for byte under **scalar layout**. The C++ side `static_assert`s the sizes and key offsets (`SceneData` = 768 bytes, `InstanceData` = 108, `MaterialData` = 84, `GeometryData` = 120 with `MAX_MESH_LODS` = 8, …), and `rasm::Vertex` is asserted equal to `gfx::VertexFull`. Those asserts only pin the C++ side, so debug builds also run `validateRasmStructs` (`shaderCompiler.cpp`), which asserts each struct's size and field offsets against Slang reflection after linking. Read shader layouts by walking from `pc` through the pointers: `ProgramLayout::getTypeLayout` reports std140/std430 padding instead. When you change a struct, change both sides, the asserts and the `validateRasmStructs` tables.
 
 ## 5. Materials and textures
 

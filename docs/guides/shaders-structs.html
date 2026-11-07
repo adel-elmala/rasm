@@ -129,7 +129,7 @@
 <table>
   <tr><th>Struct</th><th>Size</th><th>Written by (C++)</th><th>Read by (Slang)</th></tr>
   <tr><td><code>PushConstants</code></td><td>16</td><td><code>drawScene</code>, <code>recordCulling</code>, <code>recordOcclusionCulling</code></td><td><code>rasm.slang</code>, <code>cull.slang</code>, <code>hiz.slang</code></td></tr>
-  <tr><td><code>SceneData</code></td><td>760</td><td><code>drawScene</code></td><td><code>rasm.slang</code>, <code>cull.slang</code>, <code>hiz.slang</code></td></tr>
+  <tr><td><code>SceneData</code></td><td>768</td><td><code>drawScene</code></td><td><code>rasm.slang</code>, <code>cull.slang</code>, <code>hiz.slang</code></td></tr>
   <tr><td><code>Light</code></td><td>48</td><td><code>drawScene</code></td><td><code>pbr.slang</code></td></tr>
   <tr><td><code>DrawInfo</code></td><td>20</td><td><code>rebuildDrawList</code></td><td><code>rasm.slang</code>, <code>cull.slang</code>, the GPU's indirect draw</td></tr>
   <tr><td><code>InstanceData</code></td><td>108</td><td><code>writeInstanceRows</code></td><td><code>rasm.slang</code>, <code>cull.slang</code></td></tr>
@@ -203,7 +203,7 @@
     <text x="132" y="52" class="mid title">C++ side</text>
     <text x="132" y="70" class="mid small">src/renderer/uberMaterialTypes.h</text>
     <text x="28" y="96"  class="small">struct SceneData { … }</text>
-    <text x="28" y="116" class="small">static_assert(sizeof(SceneData) == 760)</text>
+    <text x="28" y="116" class="small">static_assert(sizeof(SceneData) == 768)</text>
     <text x="28" y="136" class="small">static_assert(offsetof(…) == 144)</text>
 
     <rect x="510" y="30" width="235" height="130" rx="6" class="shader"/>

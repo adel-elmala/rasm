@@ -97,6 +97,7 @@ namespace rasm
         bool        occlusionCulling        = true;     // two-pass Hi-Z culling in drawScene; false keeps frustum culling only
         bool        meshLods                = true;
         float       lodErrorPixels          = 1.0f;
+        int32_t     forcedLod               = -1;
     };
 
     struct FrameResources

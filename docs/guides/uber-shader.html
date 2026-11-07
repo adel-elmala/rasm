@@ -116,7 +116,7 @@
 <p>This is the whole data path of the shader. One address in the push constant leads to <code>SceneData</code>. <code>SceneData</code> holds the addresses of the tables. Rows of one table point to rows of the next by index.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 546" role="img" aria-label="The 16-byte push constant holds the SceneData address, firstDraw and an argument that only compute passes read. SceneData holds the camera, the lights and pointers. vertsPtr, drawInfoPtr, instancesPtr and materialsPtr lead to the vertex pool, the visible draws, the instance table and the material table. A draw's firstInstance picks an instance row, vertexOffset moves into the vertex pool, the instance's materialIndex picks a material row, and the material's texture indices pick slots in gTextures.">
+  <svg viewBox="0 0 760 580" role="img" aria-label="The 16-byte push constant holds the SceneData address, firstDraw and an argument that only compute passes read. SceneData holds the camera, the lights and pointers. vertsPtr, drawInfoPtr, instancesPtr and materialsPtr lead to the vertex pool, the visible draws, the instance table and the material table. A draw's firstInstance picks an instance row, vertexOffset moves into the vertex pool, the instance's materialIndex picks a material row, and the material's texture indices pick slots in gTextures.">
     <rect x="15" y="40" width="170" height="104" rx="6" class="box"/>
     <text x="100" y="60" class="mid title">push constant</text>
     <text x="28" y="84"  class="mono t-faint">0</text><text x="56" y="84"  class="small">scene</text><text x="174" y="84" class="end small">SceneData*</text>
@@ -133,8 +133,8 @@
     <text x="15" y="260" class="small">the Hi-Z level, read only by</text>
     <text x="15" y="276" class="small">cull.slang, hiz.slang. Draws ignore it.</text>
 
-    <rect x="225" y="20" width="250" height="506" rx="6" class="mem"/>
-    <text x="350" y="42" class="mid title">SceneData · 760 B</text>
+    <rect x="225" y="20" width="250" height="540" rx="6" class="mem"/>
+    <text x="350" y="42" class="mid title">SceneData · 768 B</text>
     <text x="237" y="66" class="mono t-faint">0</text><text x="275" y="66">projection</text>
     <text x="237" y="83" class="mono t-faint">64</text><text x="275" y="83">view</text>
     <text x="237" y="100" class="mono t-faint">128</text><text x="275" y="100">cameraWorldPosition</text>
@@ -161,7 +161,9 @@
     <text x="237" y="457" class="mono t-faint">748</text><text x="275" y="457" class="t-faint">viewportWidth</text>
     <text x="237" y="474" class="mono t-faint">752</text><text x="275" y="474" class="t-faint">viewportHeight</text>
     <text x="237" y="491" class="mono t-faint">756</text><text x="275" y="491" class="t-faint">lodErrorPixels</text>
-    <text x="350" y="514" class="mid t-faint">grey: only the culling shaders read these</text>
+    <text x="237" y="508" class="mono t-faint">760</text><text x="275" y="508" class="t-faint">forcedLod</text>
+    <text x="237" y="525" class="mono t-faint">764</text><text x="275" y="525" class="t-faint">padding</text>
+    <text x="350" y="548" class="mid t-faint">grey: only the culling shaders read these</text>
 
     <path d="M475,147 L543,55" class="arrow mem" marker-end="url(#ah-mem)"/>
     <path d="M475,164 L543,145" class="arrow mem" marker-end="url(#ah-mem)"/>
