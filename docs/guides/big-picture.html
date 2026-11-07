@@ -262,11 +262,11 @@
 <div class="table-wrap">
 <table>
   <tr><th>Owner</th><th>Type</th><th>Limit</th><th>Where the limit is</th></tr>
-  <tr><td rowspan="6"><code>Engine</code> registry</td><td><code>Entity</code></td><td><code>MAX_ENTITIES</code> = 65536</td><td><code>rasm/entity.h</code></td></tr>
+  <tr><td rowspan="6"><code>Engine</code> registry</td><td><code>Entity</code></td><td><code>MAX_ENTITIES</code> = 262144</td><td><code>rasm/entity.h</code></td></tr>
   <tr><td><code>Mesh</code></td><td><code>MAX_MESHES</code> = 8 (7 usable)</td><td><code>rasm/mesh.h</code></td></tr>
   <tr><td><code>Material</code></td><td><code>MAX_MATERIALS</code> = 256</td><td><code>rasm/engine.h</code></td></tr>
   <tr><td><code>Camera</code></td><td><code>MAX_CAMERAS</code> = 8</td><td><code>rasm/engine.h</code></td></tr>
-  <tr><td><code>Light</code></td><td><code>MAX_LIGHTS</code> = 8</td><td><code>rasm/light.h</code></td></tr>
+  <tr><td><code>Light</code></td><td><code>MAX_LIGHTS</code> = 8 (7 usable)</td><td><code>rasm/light.h</code></td></tr>
   <tr><td><code>Scene</code></td><td><code>MAX_SCENES</code> = 16</td><td><code>rasm/scene.h</code></td></tr>
   <tr><td><code>RenderContext</code> tables</td><td>buffers, textures, ...</td><td>no count limit; bindless slots stop at <code>MAX_BINDLESS_TEXTURES</code> = 1024</td><td><code>rasm/types.h</code></td></tr>
 </table>

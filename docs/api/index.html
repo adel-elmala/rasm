@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Getting Started · RASM</title>
 <meta name="description" content="Build RASM, link it into your own CMake project, write a first program, and learn the handles and the three ways to run a frame.">
-<meta name="rasm-sources" content="include/rasm/rasm.h include/rasm/engine.h include/rasm/handle.h include/rasm/types.h src/engine.cpp src/core/handle.cpp src/renderer/renderGraph.cpp src/platform/paths.cpp examples/00_hello_scene/main.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp cmake/rasmConfig.cmake.in cmake/RasmInstall.cmake cmake/RasmRuntimeDlls.cmake CMakeLists.txt CMakePresets.json src/CMakeLists.txt">
+<meta name="rasm-sources" content="include/rasm/rasm.h include/rasm/engine.h include/rasm/handle.h include/rasm/types.h src/engine.cpp src/core/handle.cpp src/renderer/renderGraph.cpp src/platform/paths.cpp examples/00_hello_scene/main.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp examples/05_city/main.cpp cmake/rasmConfig.cmake.in cmake/RasmInstall.cmake cmake/RasmRuntimeDlls.cmake CMakeLists.txt CMakePresets.json src/CMakeLists.txt">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -277,7 +277,7 @@ int main()
 <div class="table-wrap">
 <table>
   <tr><th>Way</th><th>Use it for</th><th>Example</th><th>Reference</th></tr>
-  <tr><td>A · <code>render</code></td><td>One scene, one camera, straight to the window.</td><td><code>00_hello_scene</code>, <code>02_gltf</code>, <code>03_instances</code></td><td><a href="engine.html#render">engine.html#render</a></td></tr>
+  <tr><td>A · <code>render</code></td><td>One scene, one camera, straight to the window.</td><td><code>00_hello_scene</code>, <code>02_gltf</code>, <code>03_instances</code>, <code>05_city</code></td><td><a href="engine.html#render">engine.html#render</a></td></tr>
   <tr><td>B · <code>beginFrame</code> / <code>endFrame</code></td><td>A few passes in a fixed order, your own pipelines.</td><td>none</td><td><a href="engine.html#beginFrame">engine.html#beginFrame</a></td></tr>
   <tr><td>C · <code>RenderGraph</code></td><td>Offscreen render targets, post effects, compute work. The graph orders the passes and adds compute barriers.</td><td><code>01_render_graph</code>, <code>04_compute</code></td><td><a href="render-graph.html">render-graph.html</a></td></tr>
 </table>

@@ -61,7 +61,8 @@ namespace rasm
                 if (!textureHandle.isValid())
                     continue;
                 material.textures[i] = textureHandle;
-                addBindlessTexture(bindlessDescriptorSet, textureHandle);
+                if (getBindlessTextureIndex(textureHandle) == UINT32_MAX)
+                    addBindlessTexture(bindlessDescriptorSet, textureHandle);
             }
         }
 

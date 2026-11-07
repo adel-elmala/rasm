@@ -334,10 +334,10 @@ The C++ structs in `src/renderer/uberMaterialTypes.h` and the Slang structs in `
 | `MAX_FRAMES_IN_FLIGHT` | 2 | `rasm/types.h` |
 | `MAX_BINDLESS_TEXTURES` | 1024 | `rasm/types.h` |
 | `MAX_MESHES` | 8 (7 usable) | `rasm/mesh.h` |
-| `MAX_ENTITIES` / `MAX_ENTITIES_PER_SCENE` | 65536 | `rasm/entity.h`, `rasm/scene.h` |
+| `MAX_ENTITIES` / `MAX_ENTITIES_PER_SCENE` | 262144 (2¹⁸) | `rasm/entity.h`, `rasm/scene.h` |
 | `MAX_MATERIALS` | 256 | `rasm/engine.h` |
 | `MAX_CAMERAS` | 8 | `rasm/engine.h` |
-| `MAX_LIGHTS` (global) / per scene | 8 / 8 | `rasm/light.h`, `rasm/scene.h` |
+| `MAX_LIGHTS` (global) / per scene | 8 (7 usable) / 8 | `rasm/light.h`, `rasm/scene.h` |
 | `MAX_SCENES` | 16 | `rasm/scene.h` |
 | `MAX_SCENE_DRAWS_PER_FRAME` | 8 | `rasm/scene.h` |
 | `MAX_GPU_TIMERS` | 16 (the frame, culling and the passes) | `rasm/engine.h` |
