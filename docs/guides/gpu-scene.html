@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU Scene Tables · RASM</title>
+<meta name="description" content="The GPU scene tables (geometry, material, instance, draw lists), how an entity gets its rows and joins the draw lists, syncGpuScene step by step, and cull-mode runs.">
+<meta name="rasm-sources" content="src/renderer/gpuScene.h src/renderer/gpuScene.cpp src/renderer/gpuTable.h src/renderer/gpuTable.cpp src/renderer/geometryPool.h src/renderer/geometryPool.cpp src/renderer/uberMaterialTypes.h shaders/lib/core.slang src/engine.cpp include/rasm/engine.h src/scene/entity.cpp src/scene/scene.cpp src/scene/transform.cpp src/assets/material.cpp src/assets/mesh.cpp include/rasm/types.h include/rasm/scene.h include/rasm/mesh.h include/rasm/transform.h">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/gpu-scene.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Data</p>
+<h1>The GPU scene tables</h1>
+<p class="lead">The scene lives on the GPU as a few tables of fixed-size rows. A draw names an instance row, and the instance row names a geometry row and a material row. The CPU changes a row only when something changed, and <code>syncGpuScene</code> uploads the changed rows once per frame.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU work</span>
+  <span><i class="gpu"></i>GPU work / drawn</span>
+  <span><i class="mem"></i>GPU buffer</span>
+</div>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Engine-wide tables: <b>geometry</b> (one row per sub-mesh), <b>material</b> (one row per material), <b>instance</b> (one row per entity × sub-mesh). Per scene: a <b>draw list</b> of <code>DrawInfo</code>.</li>
+    <li>An entity gets its instance rows once its mesh is loaded. It joins the draw lists once every texture it uses is loaded. Nothing is drawn half-loaded.</li>
+    <li><code>syncGpuScene</code> runs once per frame, after the fence wait. It gives rows to new entities, rebuilds the draw lists that changed, and uploads this frame slot's dirty rows.</li>
+    <li>A draw list is sorted into up to 3 <b>runs</b> by cull mode, because cull mode is set per indirect draw.</li>
+    <li>A row's cull mode comes from its material (<code>doubleSided</code>) and the sign of its matrix's determinant.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>The tables and their row pointers</h2>
+
+<p>Rows point to other rows by index. Follow one draw, <code>d1</code>, through the tables:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 410" role="img" aria-label="Draw d1 names instance row 3 with firstInstance. Instance row 3 names geometry row 7 and material row 2. The draw's firstIndex and vertexOffset point into the index pool and the vertex pool.">
+    <text x="30" y="22" class="title">Draw list</text>
+    <text x="30" y="38" class="small">per scene and frame slot</text>
+    <rect x="30" y="50" width="200" height="24" rx="4" class="mem"/><text x="42" y="66" class="mono">d0</text>
+    <rect x="30" y="78" width="200" height="104" rx="4" class="mem"/>
+    <rect x="30" y="78" width="200" height="104" rx="4" class="hot"/>
+    <text x="42" y="96"  class="mono title">d1</text>
+    <text x="42" y="116" class="mono">indexCount = 36</text>
+    <text x="42" y="134" class="mono">firstIndex = 120</text>
+    <text x="42" y="152" class="mono">vertexOffset = 48</text>
+    <text x="42" y="170" class="mono">firstInstance = 3</text>
+    <rect x="30" y="186" width="200" height="24" rx="4" class="mem"/><text x="42" y="202" class="mono">d2</text>
+    <text x="30" y="228" class="small">DrawInfo, 20 B</text>
+
+    <text x="280" y="22" class="title">Instance table</text>
+    <text x="280" y="38" class="small">GpuTable, one copy per frame slot</text>
+    <rect x="280" y="50"  width="220" height="24" rx="4" class="mem"/><text x="292" y="66"  class="mono">row 0</text>
+    <rect x="280" y="78"  width="220" height="24" rx="4" class="mem"/><text x="292" y="94"  class="mono">row 1</text>
+    <rect x="280" y="106" width="220" height="24" rx="4" class="mem"/><text x="292" y="122" class="mono">row 2</text>
+    <rect x="280" y="134" width="220" height="104" rx="4" class="mem"/>
+    <rect x="280" y="134" width="220" height="104" rx="4" class="hot"/>
+    <text x="292" y="152" class="mono title">row 3</text>
+    <text x="292" y="172" class="mono">worldMatrix</text>
+    <text x="292" y="190" class="mono">normalMatrix</text>
+    <text x="292" y="208" class="mono">geometryIndex = 7</text>
+    <text x="292" y="226" class="mono">materialIndex = 2</text>
+    <rect x="280" y="242" width="220" height="24" rx="4" class="mem"/><text x="292" y="258" class="mono">row 4</text>
+    <text x="280" y="284" class="small">InstanceData, 108 B</text>
+
+    <text x="550" y="22" class="title">Geometry table</text>
+    <text x="550" y="38" class="small">one copy, in the geometry pool</text>
+    <rect x="550" y="50" width="190" height="24" rx="4" class="mem"/><text x="562" y="66" class="mono">rows 0 … 6</text>
+    <rect x="550" y="78" width="190" height="118" rx="4" class="mem"/>
+    <rect x="550" y="78" width="190" height="118" rx="4" class="hot"/>
+    <text x="562" y="96"  class="mono title">row 7</text>
+    <text x="562" y="116" class="mono">firstIndex</text>
+    <text x="562" y="134" class="mono">indexCount</text>
+    <text x="562" y="152" class="mono">vertexOffset</text>
+    <text x="562" y="170" class="mono">boundsCenter</text>
+    <text x="562" y="188" class="mono">boundsRadius</text>
+    <rect x="550" y="200" width="190" height="24" rx="4" class="mem"/><text x="562" y="216" class="mono">rows 8 …</text>
+
+    <text x="550" y="258" class="title">Material table</text>
+    <text x="550" y="274" class="small">GpuTable, row = material index</text>
+    <rect x="550" y="284" width="190" height="24" rx="4" class="mem"/><text x="562" y="300" class="mono">rows 0 … 1</text>
+    <rect x="550" y="312" width="190" height="84" rx="4" class="mem"/>
+    <rect x="550" y="312" width="190" height="84" rx="4" class="hot"/>
+    <text x="562" y="330" class="mono title">row 2</text>
+    <text x="562" y="350" class="mono">material</text>
+    <text x="562" y="366" class="small">factors + bindless texture slots</text>
+    <text x="562" y="386" class="mono">materialId</text>
+
+    <path d="M230,166 H254 V152 H278" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <path d="M500,204 H516 V96 H548" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <path d="M500,222 H532 V330 H548" class="arrow hot" marker-end="url(#ah-hot)"/>
+
+    <path d="M30,130 H16 V320 H28" class="arrow" marker-end="url(#ah)"/>
+    <path d="M30,148 H22 V370 H28" class="arrow" marker-end="url(#ah)"/>
+    <rect x="30" y="300" width="200" height="40" rx="4" class="mem"/>
+    <text x="130" y="318" class="mid">Geometry Index Pool</text>
+    <text x="130" y="333" class="mid small">fetched by the draw</text>
+    <rect x="30" y="350" width="200" height="40" rx="4" class="mem"/>
+    <text x="130" y="368" class="mid">Geometry Vertex Pool</text>
+    <text x="130" y="383" class="mid small">pulled by vertMain</text>
+  </svg>
+  <figcaption>The draw itself carries the index range and the vertex offset, so drawing does not read the geometry table. Only <code>cull.slang</code> reads it, for the bounding sphere. A material row holds bindless slot numbers, not textures.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Table</th><th>Buffers</th><th>Rows</th><th>Written by</th></tr>
+  <tr><td>Geometry<br><code>GeometryData</code>, 28 B</td><td>one, <code>GeometryPool::tableBuffer</code></td><td><code>geometryPoolSubMeshes</code> (2<sup>14</sup>)</td><td><code>GeometryPool::upload</code>, once per sub-mesh. No frame has read a new row yet, so one copy is enough.</td></tr>
+  <tr><td>Material<br><code>MaterialData</code>, 84 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>MAX_MATERIALS</code> = 256; row = material handle index</td><td><code>writeMaterialRow</code></td></tr>
+  <tr><td>Instance<br><code>InstanceData</code>, 108 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>maxInstances</code> (2<sup>16</sup>), bump-allocated</td><td><code>writeInstanceRows</code></td></tr>
+  <tr><td>Draw list<br><code>DrawInfo</code>, 20 B</td><td><code>SceneDrawList::buffers</code>, one per frame slot and scene</td><td>grows ×2 when too small</td><td><code>rebuildDrawList</code>, then <code>uploadDrawList</code></td></tr>
+  <tr><td>Visible draws</td><td><code>visibleDraws</code>, per frame slot and <code>drawScene</code> call</td><td>grows ×2 when too small</td><td>the GPU (<a href="culling.html">culling</a>)</td></tr>
+  <tr><td>Draw counts</td><td><code>drawCounts</code>, one per frame slot</td><td><code>MAX_DRAW_RUNS</code> per <code>drawScene</code> call</td><td>the GPU (culling)</td></tr>
+  <tr><td>Scene data</td><td><code>sceneData</code>, one per frame slot, <code>hostVisible</code></td><td><code>MAX_SCENE_DRAWS_PER_FRAME</code> = 8 <code>SceneData</code></td><td><code>drawScene</code>, every call</td></tr>
+</table>
+</div>
+
+<p>All of these are created once, in <code>createGpuScene</code> and <code>GeometryPool::create</code>, except the draw-list and visible-draw buffers, which grow on demand. How a <code>GpuTable</code> uploads only its dirty rows, per frame slot, is in <a href="gpu-memory.html">How data reaches the GPU</a>.</p>
+
+<h2><span class="n">2</span>The life of an entity</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 395" role="img" aria-label="An entity created with a mesh waits for the mesh. When the mesh is ready it gets its rows. If a texture still loads it waits for textures, otherwise it joins the draw lists. A failed mesh or a full instance table means it is never drawn.">
+    <rect x="20" y="50" width="140" height="56" rx="6" class="cpu"/>
+    <text x="90" y="73" class="mid mono">createEntity</text>
+    <text x="90" y="92" class="mid small">with a valid mesh</text>
+    <line x1="160" y1="78" x2="228" y2="78" class="arrow" marker-end="url(#ah)"/>
+    <text x="194" y="70" class="mid small">queued</text>
+
+    <rect x="230" y="50" width="190" height="56" rx="6" class="box"/>
+    <text x="325" y="73" class="mid title">waiting for mesh</text>
+    <text x="325" y="92" class="mid small">entitiesWaitingForMesh</text>
+    <path d="M300,50 C300,16 350,16 350,48" class="arrow" marker-end="url(#ah)"/>
+    <text x="360" y="26" class="small">mesh still LOADING: check next frame</text>
+
+    <line x1="325" y1="106" x2="325" y2="143" class="arrow" marker-end="url(#ah)"/>
+    <polygon points="245,175 325,145 405,175 325,205" class="box"/>
+    <text x="325" y="179" class="mid">mesh state?</text>
+    <line x1="245" y1="175" x2="202" y2="175" class="arrow" marker-end="url(#ah)"/>
+    <text x="224" y="167" class="mid small">FAILED</text>
+    <rect x="20" y="140" width="180" height="70" rx="6" class="ghost"/>
+    <text x="110" y="162" class="mid title t-faint">never drawn</text>
+    <text x="110" y="181" class="mid small">mesh FAILED: warning</text>
+    <text x="110" y="197" class="mid small">no room in table: error</text>
+
+    <line x1="325" y1="205" x2="325" y2="238" class="arrow" marker-end="url(#ah)"/>
+    <text x="335" y="226" class="small">READY</text>
+    <rect x="240" y="240" width="170" height="56" rx="6" class="cpu"/>
+    <text x="325" y="263" class="mid title">gets its rows</text>
+    <text x="325" y="282" class="mid small">one per sub-mesh, written</text>
+    <path d="M240,268 H110 V212" class="arrow" marker-end="url(#ah)"/>
+    <text x="175" y="260" class="mid small">table full</text>
+
+    <rect x="560" y="50" width="180" height="56" rx="6" class="box"/>
+    <text x="650" y="73" class="mid title">waiting for textures</text>
+    <text x="650" y="92" class="mid small">entitiesWaitingForTextures</text>
+    <path d="M410,255 H540 V78 H558" class="arrow" marker-end="url(#ah)"/>
+    <text x="532" y="160" class="end small">a texture</text>
+    <text x="532" y="174" class="end small">still loads</text>
+
+    <rect x="500" y="300" width="220" height="56" rx="6" class="gpu"/>
+    <text x="610" y="323" class="mid title">in the draw lists</text>
+    <text x="610" y="342" class="mid small">of every scene that holds it</text>
+    <path d="M325,296 V328 H498" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="410" y="320" class="mid small">all loaded</text>
+    <line x1="600" y1="106" x2="600" y2="298" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="608" y="200" class="small">all loaded</text>
+    <line x1="700" y1="300" x2="700" y2="108" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="706" y="190" class="small t-hot">a new</text>
+    <text x="706" y="204" class="small t-hot">texture</text>
+    <text x="706" y="218" class="small t-hot">loads</text>
+    <path d="M560,356 C560,388 620,388 620,358" class="arrow" marker-end="url(#ah)"/>
+    <text x="552" y="384" class="end small">updateTransform: rows rewritten, same state</text>
+  </svg>
+  <figcaption>The states are lists and flags in <code>GpuScene</code>. Rows are never freed: an entity cannot be destroyed yet (D4). An entity with an invalid mesh handle is never queued and never gets rows.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>State</th><th>Where it is stored</th><th>Leaves it when</th></tr>
+  <tr><td>Waiting for mesh</td><td><code>entitiesWaitingForMesh</code> (from <code>queueInstanceRows</code>)</td><td>its mesh is no longer <code>MeshState::LOADING</code></td></tr>
+  <tr><td>Has rows</td><td><code>EntityDrawState</code>: <code>firstInstance</code>, <code>instanceCount</code></td><td>never (rows stay for the engine's life)</td></tr>
+  <tr><td>Waiting for textures</td><td><code>waitingForTextures</code> = true, and <code>entitiesWaitingForTextures</code></td><td>a texture load finished (<code>texturesFinished</code>) and all of its textures are loaded</td></tr>
+  <tr><td>In the draw lists</td><td>the entity's <code>scenes</code> bits (one per scene that holds it)</td><td><code>updateMaterial</code> gives it a texture that still loads</td></tr>
+</table>
+</div>
+
+<p>"Its textures" means every texture of every sub-mesh's material: the primitive's material, or else the entity's. An invalid material handle resolves to the default material (<code>getSubMeshMaterial</code>, <code>getMaterial</code>). An entity that is in no scene still gets rows, but no draw list holds it.</p>
+
+<h2><span class="n">3</span><code>syncGpuScene</code>, step by step</h2>
+
+<p>It runs in <code>beginFrame</code>: <code>finishLoads</code> → fence wait for this slot → <code>updateFrameStats</code> → <code>updateStatsOverlay</code> → <code>syncGpuScene</code>. Here is one call, in a scene with four entities. Click through (or use the arrow keys).</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. Before: what is waiting</h4>
+    <svg viewBox="0 0 720 230" role="img" aria-label="e1, e2 and e3 wait for their meshes; e1 and e2 are ready, e3 still loads. e4 waits for textures, and a texture finished. e4 has rows 0 and 1.">
+      <text x="20"  y="20" class="small">entitiesWaitingForMesh</text>
+      <text x="260" y="20" class="small">entitiesWaitingForTextures</text>
+      <text x="500" y="20" class="small">scene 1 draw list</text>
+      <rect x="20"  y="28" width="220" height="56" rx="6" class="zone"/>
+      <rect x="260" y="28" width="220" height="56" rx="6" class="zone"/>
+      <rect x="500" y="28" width="200" height="56" rx="6" class="zone"/>
+      <rect x="30" y="34" width="44" height="28" rx="4" class="box"/><text x="52" y="53" class="mid mono">e1</text><text x="52" y="77" class="mid small">ready</text>
+      <rect x="82" y="34" width="44" height="28" rx="4" class="box"/><text x="104" y="53" class="mid mono">e2</text><text x="104" y="77" class="mid small">ready</text>
+      <rect x="134" y="34" width="44" height="28" rx="4" class="box"/><text x="156" y="53" class="mid mono">e3</text><text x="156" y="77" class="mid small t-faint">loading</text>
+      <rect x="270" y="34" width="44" height="28" rx="4" class="box"/><text x="292" y="53" class="mid mono">e4</text><text x="292" y="77" class="mid small">loaded</text>
+      <text x="512" y="52" class="mono">rebuild = false</text>
+      <text x="512" y="72" class="mono">staleSlots = 00</text>
+      <text x="262" y="102" class="mono t-hot">texturesFinished = true</text>
+
+      <text x="20" y="112" class="small">instance table rows (instanceCount = 2)</text>
+      <rect x="20"  y="120" width="52" height="30" rx="3" class="mem"/><text x="46"  y="140" class="mid mono">e4</text>
+      <rect x="78"  y="120" width="52" height="30" rx="3" class="mem"/><text x="104" y="140" class="mid mono">e4</text>
+      <rect x="136" y="120" width="52" height="30" rx="3" class="box"/><rect x="194" y="120" width="52" height="30" rx="3" class="box"/>
+      <rect x="252" y="120" width="52" height="30" rx="3" class="box"/><rect x="310" y="120" width="52" height="30" rx="3" class="box"/>
+      <text x="46" y="166" class="mid small">0</text><text x="104" y="166" class="mid small">1</text><text x="162" y="166" class="mid small">2</text><text x="220" y="166" class="mid small">3</text><text x="278" y="166" class="mid small">4</text><text x="336" y="166" class="mid small">5</text>
+      <text x="20" y="196" class="small">Scene 1 holds e1, e2, e3, e4 (in that order). e1's mesh has 2 sub-meshes, e2's has 1. e4 got rows 0 and 1</text>
+      <text x="20" y="212" class="small">in an earlier frame, but one of its textures was still loading. That texture finished in this frame's finishLoads.</text>
+    </svg>
+    <p><code>finishLoads</code> made the meshes of e1 and e2 READY and set <code>texturesFinished</code>, at the start of <code>beginFrame</code>.</p>
+  </div>
+
+  <div class="step">
+    <h4>2. Entities whose mesh is ready get rows</h4>
+    <svg viewBox="0 0 720 230" role="img" aria-label="e1 gets rows 2 and 3 and its textures are loaded, so scene 1 must rebuild. e2 gets row 4 but a texture still loads, so it moves to the textures list. e3 stays.">
+      <text x="20"  y="20" class="small">entitiesWaitingForMesh</text>
+      <text x="260" y="20" class="small">entitiesWaitingForTextures</text>
+      <text x="500" y="20" class="small">scene 1 draw list</text>
+      <rect x="20"  y="28" width="220" height="56" rx="6" class="zone"/>
+      <rect x="260" y="28" width="220" height="56" rx="6" class="zone"/>
+      <rect x="500" y="28" width="200" height="56" rx="6" class="zone"/>
+      <rect x="30" y="34" width="44" height="28" rx="4" class="box"/><text x="52" y="53" class="mid mono">e3</text><text x="52" y="77" class="mid small t-faint">loading</text>
+      <rect x="270" y="34" width="44" height="28" rx="4" class="box"/><text x="292" y="53" class="mid mono">e4</text><text x="292" y="77" class="mid small">loaded</text>
+      <rect x="322" y="34" width="44" height="28" rx="4" class="box"/><rect x="322" y="34" width="44" height="28" rx="4" class="hot"/><text x="344" y="53" class="mid mono">e2</text><text x="344" y="77" class="mid small t-faint">loading</text>
+      <text x="512" y="52" class="mono t-hot">rebuild = true</text>
+      <text x="512" y="72" class="mono">staleSlots = 00</text>
+      <text x="262" y="102" class="mono">texturesFinished = true</text>
+
+      <text x="20" y="112" class="small">instance table rows (instanceCount = 5)</text>
+      <rect x="20"  y="120" width="52" height="30" rx="3" class="mem"/><text x="46"  y="140" class="mid mono">e4</text>
+      <rect x="78"  y="120" width="52" height="30" rx="3" class="mem"/><text x="104" y="140" class="mid mono">e4</text>
+      <rect x="136" y="120" width="52" height="30" rx="3" class="mem"/><rect x="136" y="120" width="52" height="30" rx="3" class="hot"/><text x="162" y="140" class="mid mono">e1</text>
+      <rect x="194" y="120" width="52" height="30" rx="3" class="mem"/><rect x="194" y="120" width="52" height="30" rx="3" class="hot"/><text x="220" y="140" class="mid mono">e1</text>
+      <rect x="252" y="120" width="52" height="30" rx="3" class="mem"/><rect x="252" y="120" width="52" height="30" rx="3" class="hot"/><text x="278" y="140" class="mid mono">e2</text>
+      <rect x="310" y="120" width="52" height="30" rx="3" class="box"/>
+      <text x="46" y="166" class="mid small">0</text><text x="104" y="166" class="mid small">1</text><text x="162" y="166" class="mid small">2</text><text x="220" y="166" class="mid small">3</text><text x="278" y="166" class="mid small">4</text><text x="336" y="166" class="mid small">5</text>
+      <text x="20" y="196" class="small">e1: rows 2–3, written with setRow (both slots dirty). All its textures are loaded, so markDrawListsDirty sets scene 1's rebuild.</text>
+      <text x="20" y="212" class="small">e2: row 4, written too, but a texture still loads: it moves to the textures list. e3's mesh still loads: it stays.</text>
+    </svg>
+    <p>Rows are a bump allocation: <code>firstInstance</code> = <code>instanceCount</code>, then <code>instanceCount</code> grows by the sub-mesh count. If the table has no room, the entity logs an error and leaves the list without rows.</p>
+  </div>
+
+  <div class="step">
+    <h4>3. A texture finished: check the waiting entities</h4>
+    <svg viewBox="0 0 720 230" role="img" aria-label="Because a texture finished, the textures list is checked. e4 has all textures now and leaves the list. e2 stays.">
+      <text x="20"  y="20" class="small">entitiesWaitingForMesh</text>
+      <text x="260" y="20" class="small">entitiesWaitingForTextures</text>
+      <text x="500" y="20" class="small">scene 1 draw list</text>
+      <rect x="20"  y="28" width="220" height="56" rx="6" class="zone"/>
+      <rect x="260" y="28" width="220" height="56" rx="6" class="zone"/>
+      <rect x="500" y="28" width="200" height="56" rx="6" class="zone"/>
+      <rect x="30" y="34" width="44" height="28" rx="4" class="box"/><text x="52" y="53" class="mid mono">e3</text><text x="52" y="77" class="mid small t-faint">loading</text>
+      <rect x="270" y="34" width="44" height="28" rx="4" class="box"/><text x="292" y="53" class="mid mono">e2</text><text x="292" y="77" class="mid small t-faint">loading</text>
+      <rect x="370" y="34" width="44" height="28" rx="4" class="ghost"/><text x="392" y="53" class="mid mono t-faint">e4</text><text x="392" y="77" class="mid small t-hot">drawable</text>
+      <text x="512" y="52" class="mono t-hot">rebuild = true</text>
+      <text x="512" y="72" class="mono">staleSlots = 00</text>
+      <text x="262" y="102" class="mono">texturesFinished = false</text>
+
+      <text x="20" y="112" class="small">instance table rows (instanceCount = 5)</text>
+      <rect x="20"  y="120" width="52" height="30" rx="3" class="mem"/><text x="46"  y="140" class="mid mono">e4</text>
+      <rect x="78"  y="120" width="52" height="30" rx="3" class="mem"/><text x="104" y="140" class="mid mono">e4</text>
+      <rect x="136" y="120" width="52" height="30" rx="3" class="mem"/><text x="162" y="140" class="mid mono">e1</text>
+      <rect x="194" y="120" width="52" height="30" rx="3" class="mem"/><text x="220" y="140" class="mid mono">e1</text>
+      <rect x="252" y="120" width="52" height="30" rx="3" class="mem"/><text x="278" y="140" class="mid mono">e2</text>
+      <rect x="310" y="120" width="52" height="30" rx="3" class="box"/>
+      <text x="46" y="166" class="mid small">0</text><text x="104" y="166" class="mid small">1</text><text x="162" y="166" class="mid small">2</text><text x="220" y="166" class="mid small">3</text><text x="278" y="166" class="mid small">4</text><text x="336" y="166" class="mid small">5</text>
+      <text x="20" y="196" class="small">The list is checked only when texturesFinished is set, and the flag is cleared first. e4: all loaded → waitingForTextures = false,</text>
+      <text x="20" y="212" class="small">markDrawListsDirty. e2's texture still loads: it stays. A frame with no finished texture skips this step.</text>
+    </svg>
+    <p>The rows of e4 do not change here. Only its draw-list membership does.</p>
+  </div>
+
+  <div class="step">
+    <h4>4. Rebuild the dirty draw lists</h4>
+    <svg viewBox="0 0 720 230" role="img" aria-label="Scene 1 rebuilds: e1 gives two draws and e4 gives two draws. e2 waits and e3 has no rows, so they give none. Both slots are now stale.">
+      <text x="20"  y="20" class="small">entitiesWaitingForMesh</text>
+      <text x="260" y="20" class="small">entitiesWaitingForTextures</text>
+      <text x="500" y="20" class="small">scene 1 draw list</text>
+      <rect x="20"  y="28" width="220" height="56" rx="6" class="zone"/>
+      <rect x="260" y="28" width="220" height="56" rx="6" class="zone"/>
+      <rect x="500" y="28" width="200" height="56" rx="6" class="zone"/>
+      <rect x="30" y="34" width="44" height="28" rx="4" class="box"/><text x="52" y="53" class="mid mono">e3</text><text x="52" y="77" class="mid small t-faint">loading</text>
+      <rect x="270" y="34" width="44" height="28" rx="4" class="box"/><text x="292" y="53" class="mid mono">e2</text><text x="292" y="77" class="mid small t-faint">loading</text>
+      <text x="512" y="52" class="mono">rebuild = false</text>
+      <text x="512" y="72" class="mono t-hot">staleSlots = 11</text>
+
+      <text x="20" y="112" class="small">scene 1 draw list (CPU), in scene order, then sorted into runs</text>
+      <rect x="20"  y="120" width="80" height="30" rx="3" class="cpu"/><text x="60"  y="140" class="mid mono">row 2</text>
+      <rect x="106" y="120" width="80" height="30" rx="3" class="cpu"/><text x="146" y="140" class="mid mono">row 3</text>
+      <rect x="192" y="120" width="80" height="30" rx="3" class="cpu"/><text x="232" y="140" class="mid mono">row 0</text>
+      <rect x="278" y="120" width="80" height="30" rx="3" class="cpu"/><text x="318" y="140" class="mid mono">row 1</text>
+      <text x="103" y="166" class="mid small">e1</text><text x="275" y="166" class="mid small">e4</text>
+      <text x="380" y="140" class="small">e2 waits for textures, e3 has no rows: no draws</text>
+      <text x="20" y="196" class="small">rebuildDrawList walks the scene's entities in order and adds one DrawInfo per drawable sub-mesh (firstInstance = its row).</text>
+      <text x="20" y="212" class="small">Then it stable-sorts by cull mode into runs, and marks the list stale in both frame slots.</text>
+    </svg>
+    <p>The whole list is rebuilt, not patched. Its cost grows with the number of entities in the scene (P7). Only scenes with the <code>rebuild</code> flag do it.</p>
+  </div>
+
+  <div class="step">
+    <h4>5. Upload this frame slot</h4>
+    <svg viewBox="0 0 720 230" role="img" aria-label="In slot 0, the instance table uploads rows 2 to 4 as one range, the material table uploads its dirty rows, and the draw list is written to slot 0's buffer. Slot 1 does the same next frame.">
+      <text x="20" y="20" class="small">frame slot 0 (frameCount = 0)</text>
+      <rect x="20" y="30" width="210" height="60" rx="6" class="cpu"/>
+      <text x="125" y="54" class="mid mono">instances.upload</text>
+      <text x="125" y="74" class="mid small">rows 2, 3, 4 → one range</text>
+      <rect x="250" y="30" width="210" height="60" rx="6" class="cpu"/>
+      <text x="355" y="54" class="mid mono">materials.upload</text>
+      <text x="355" y="74" class="mid small">dirty rows, if any</text>
+      <rect x="480" y="30" width="220" height="60" rx="6" class="cpu"/>
+      <text x="590" y="54" class="mid mono">uploadDrawList</text>
+      <text x="590" y="74" class="mid small">every list stale in this slot</text>
+      <line x1="125" y1="90" x2="125" y2="126" class="arrow" marker-end="url(#ah)"/>
+      <line x1="355" y1="90" x2="355" y2="126" class="arrow" marker-end="url(#ah)"/>
+      <line x1="590" y1="90" x2="590" y2="126" class="arrow" marker-end="url(#ah)"/>
+      <rect x="20" y="128" width="210" height="40" rx="6" class="mem"/><text x="125" y="153" class="mid">Instance Table 0</text>
+      <rect x="250" y="128" width="210" height="40" rx="6" class="mem"/><text x="355" y="153" class="mid">Material Table 0</text>
+      <rect x="480" y="128" width="220" height="40" rx="6" class="mem"/><text x="590" y="153" class="mid">Draw Info Buffer, slot 0</text>
+      <text x="20" y="196" class="small">Each goes through fillBuffer. After the upload, scene 1's staleSlots = 10: slot 1 still has the old list.</text>
+      <text x="20" y="212" class="small">The next frame runs in slot 1, and the same three calls bring slot 1 up to date.</text>
+    </svg>
+    <p>The upload runs after the fence wait for this slot, so no GPU work still reads these buffers. A change made after <code>beginFrame</code> (for example <code>updateTransform</code> while recording) reaches the GPU in the next frame.</p>
+  </div>
+</div>
+
+<h2><span class="n">4</span>Draw lists and cull-mode runs</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 225" role="img" aria-label="Six draws in scene order are stable-sorted by cull mode. They form three runs: NONE with 2 draws, FRONT with 1, BACK with 3.">
+    <text x="20" y="54" class="small">draw list, scene order</text>
+    <rect x="170" y="30" width="88" height="40" rx="4" class="mem"/><text x="214" y="47" class="mid mono">e1 · 0</text><text x="214" y="63" class="mid small">BACK</text>
+    <rect x="265" y="30" width="88" height="40" rx="4" class="mem"/><text x="309" y="47" class="mid mono">e1 · 1</text><text x="309" y="63" class="mid small">NONE</text>
+    <rect x="360" y="30" width="88" height="40" rx="4" class="mem"/><text x="404" y="47" class="mid mono">e2 · 0</text><text x="404" y="63" class="mid small">BACK</text>
+    <rect x="455" y="30" width="88" height="40" rx="4" class="mem"/><text x="499" y="47" class="mid mono">e3 · 0</text><text x="499" y="63" class="mid small">FRONT</text>
+    <rect x="550" y="30" width="88" height="40" rx="4" class="mem"/><text x="594" y="47" class="mid mono">e3 · 1</text><text x="594" y="63" class="mid small">BACK</text>
+    <rect x="645" y="30" width="88" height="40" rx="4" class="mem"/><text x="689" y="47" class="mid mono">e4 · 0</text><text x="689" y="63" class="mid small">NONE</text>
+
+    <line x1="450" y1="78" x2="450" y2="118" class="arrow" marker-end="url(#ah)"/>
+    <text x="462" y="102" class="small">stable sort by cull mode: NONE, FRONT, BACK</text>
+
+    <text x="20" y="148" class="small">after the sort</text>
+    <rect x="170" y="124" width="88" height="40" rx="4" class="mem"/><text x="214" y="141" class="mid mono">e1 · 1</text><text x="214" y="157" class="mid small">NONE</text>
+    <rect x="265" y="124" width="88" height="40" rx="4" class="mem"/><text x="309" y="141" class="mid mono">e4 · 0</text><text x="309" y="157" class="mid small">NONE</text>
+    <rect x="360" y="124" width="88" height="40" rx="4" class="mem"/><text x="404" y="141" class="mid mono">e3 · 0</text><text x="404" y="157" class="mid small">FRONT</text>
+    <rect x="455" y="124" width="88" height="40" rx="4" class="mem"/><text x="499" y="141" class="mid mono">e1 · 0</text><text x="499" y="157" class="mid small">BACK</text>
+    <rect x="550" y="124" width="88" height="40" rx="4" class="mem"/><text x="594" y="141" class="mid mono">e2 · 0</text><text x="594" y="157" class="mid small">BACK</text>
+    <rect x="645" y="124" width="88" height="40" rx="4" class="mem"/><text x="689" y="141" class="mid mono">e3 · 1</text><text x="689" y="157" class="mid small">BACK</text>
+
+    <path d="M170,172 V178 H353 V172" class="arrow gpu"/>
+    <path d="M360,172 V178 H448 V172" class="arrow gpu"/>
+    <path d="M455,172 V178 H733 V172" class="arrow gpu"/>
+    <text x="261" y="196" class="mid small">run 0 · NONE</text><text x="261" y="212" class="mid small">first 0, count 2</text>
+    <text x="404" y="196" class="mid small">run 1 · FRONT</text><text x="404" y="212" class="mid small">first 2, count 1</text>
+    <text x="594" y="196" class="mid small">run 2 · BACK</text><text x="594" y="212" class="mid small">first 3, count 3</text>
+  </svg>
+  <figcaption>The sort order is the order of the <code>CullMode</code> values. Within a run, draws keep their scene order. <code>drawScene</code> sets the cull mode and issues one indirect draw per run.</figcaption>
+</figure>
+
+<p>A run is a <code>DrawRun</code> <code>{cullMode, first, count}</code>. There are at most <code>MAX_DRAW_RUNS</code> = 3 runs, one per cull mode (a <code>static_assert</code> ties the two together). A draw is skipped, with a warning when the entity gets its rows, if its sub-mesh has no vertices or no indices.</p>
+
+<h3>When a draw list is rebuilt</h3>
+
+<p><code>SceneDrawList::rebuild</code> is set in two places:</p>
+<ul>
+  <li><code>addEntityToDrawList</code>, from <code>addEntityToScene</code>: only if the entity already has rows and does not wait for textures. Otherwise it joins later, when it becomes drawable.</li>
+  <li><code>markDrawListsDirty</code>: the entity becomes drawable, starts waiting for a texture again, or one of its rows changes cull mode. It marks only the scenes in the entity's <code>scenes</code> bits.</li>
+</ul>
+
+<h3>How a draw list reaches the GPU</h3>
+
+<ol class="steps">
+  <li><b>Rebuild sets <code>staleSlots</code> to both bits.</b> The CPU list in <code>draws</code> is now newer than both slot buffers.</li>
+  <li><b>Each slot uploads in its own frame.</b> <code>uploadDrawList</code> writes <code>draws</code> into <code>buffers[frame]</code> and clears that slot's bit. If the buffer is too small, it destroys it and creates one with <code>max(drawCount, capacity × 2)</code> rows. Only this slot's last frame used the old buffer, and the fence wait covered it.</li>
+  <li><b><code>drawScene</code> skips a list that is not ready.</b> If the list is empty, or this slot's bit is still set (the upload failed), the scene draws nothing this frame and the pass keeps its clear color.</li>
+</ol>
+
+<h2><span class="n">5</span>The cull mode of a row</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="A triangle 0, 1, 2 turns counter-clockwise. Mirrored with scale.x of minus one, it turns clockwise, so its front faces must be culled as FRONT instead of BACK.">
+    <polygon points="70,160 190,160 130,60" class="gpu"/>
+    <text x="62" y="178" class="mid mono">0</text><text x="198" y="178" class="mid mono">1</text><text x="130" y="50" class="mid mono">2</text>
+    <text x="130" y="128" class="mid small">counter-</text><text x="130" y="142" class="mid small">clockwise</text>
+    <text x="130" y="200" class="mid small">front face → cull BACK</text>
+
+    <line x1="215" y1="110" x2="285" y2="110" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="250" y="100" class="mid small t-hot">scale.x = −1</text>
+
+    <polygon points="310,160 430,160 370,60" class="gpu"/>
+    <text x="302" y="178" class="mid mono">1</text><text x="438" y="178" class="mid mono">0</text><text x="370" y="50" class="mid mono">2</text>
+    <text x="370" y="128" class="mid small">clockwise</text>
+    <text x="370" y="200" class="mid small">front face → cull FRONT</text>
+
+    <rect x="480" y="30" width="260" height="150" rx="6" class="zone"/>
+    <text x="496" y="54" class="title">getCullMode</text>
+    <text x="496" y="80" class="mono">doubleSided</text><text x="724" y="80" class="end mono">NONE</text>
+    <text x="496" y="104" class="mono">det &lt; 0</text><text x="724" y="104" class="end mono">FRONT</text>
+    <text x="496" y="128" class="mono">otherwise</text><text x="724" y="128" class="end mono">BACK</text>
+    <text x="496" y="156" class="small">det = scale.x · scale.y · scale.z</text>
+    <text x="496" y="172" class="small">      · det(mat3(sub-mesh transform))</text>
+  </svg>
+  <figcaption>Front faces are counter-clockwise. A mirroring transform (negative determinant) turns them clockwise, as glTF specifies, so the row culls <code>FRONT</code> instead.</figcaption>
+</figure>
+
+<p>The determinant needs no matrix multiply: the entity's <code>Transform</code> is translate × rotate × scale (<code>Transform::toMatrix</code>), and a rotation has determinant 1. The cull mode is kept per row on the CPU in <code>instanceCullModes</code>; the GPU never sees it. <code>updateCullModes</code> recomputes it when the transform or the material changes, and marks the draw lists dirty only if some row's mode changed.</p>
+
+<h2><span class="n">6</span>You call X → this gets uploaded</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>You call</th><th>CPU side</th><th>Reaches the GPU</th></tr>
+  <tr><td><code>createEntity</code> with a mesh</td><td><code>queueInstanceRows</code>: onto the mesh list</td><td>Its instance rows, once the mesh is READY. Its scenes' draw lists, once its textures are loaded.</td></tr>
+  <tr><td><code>addEntityToScene</code></td><td>sets the scene's bit in <code>scenes</code></td><td>That scene's draw list, if the entity is already drawable.</td></tr>
+  <tr><td><code>updateTransform</code></td><td><code>writeInstanceRows</code>: <code>setRow</code> for each sub-mesh, then <code>updateCullModes</code></td><td>Only that entity's rows, in each slot's next frame. Draw lists only if a cull mode changed.</td></tr>
+  <tr><td><code>createMaterial</code>, glTF <code>loadMaterial</code></td><td><code>writeMaterialRow</code></td><td>One material row.</td></tr>
+  <tr><td><code>updateMaterial</code></td><td><code>writeMaterialRow</code>; <code>refreshEntitiesAfterMaterialChange</code> if <code>doubleSided</code> changed or a texture still loads</td><td>The material row (same row index, so no instance row changes). Draw lists of entities that change cull mode or start waiting.</td></tr>
+  <tr><td>a texture load finishes</td><td><code>finishLoads</code> sets <code>texturesFinished</code></td><td>Draw lists of entities that become drawable.</td></tr>
+  <tr><td>a mesh load finishes</td><td><code>finishMeshLoad</code>: <code>GeometryPool::upload</code></td><td>Geometry, index and vertex data, and the geometry rows, once.</td></tr>
+  <tr><td><code>drawScene</code></td><td>fills one <code>SceneData</code></td><td>At once (the scene data buffer is <code>hostVisible</code>).</td></tr>
+</table>
+</div>
+
+<p>A row is uploaded twice, once per frame slot, and only its newest value is sent. Moving one entity in a scene of ten thousand uploads that entity's rows, not the table. Material changes are rare, so <code>refreshEntitiesAfterMaterialChange</code> checks every entity instead of tracking who uses the material.</p>
+
+<h2><span class="n">7</span>Where it lives in code</h2>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>State: tables, lists, draw lists</td><td><code>GpuScene</code>, <code>EntityDrawState</code>, <code>SceneDrawList</code>, <code>DrawRun</code> in <code>src/renderer/gpuScene.h</code></td></tr>
+  <tr><td>Creating the tables</td><td><code>Engine::createGpuScene</code> in <code>src/renderer/gpuScene.cpp</code>; <code>GeometryPool::create</code> in <code>src/renderer/geometryPool.cpp</code></td></tr>
+  <tr><td>The per-frame sync</td><td><code>Engine::syncGpuScene</code>, called from <code>Engine::beginFrame</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Rows</td><td><code>queueInstanceRows</code>, <code>writeInstanceRows</code>, <code>updateCullModes</code>, <code>writeMaterialRow</code>, <code>getCullMode</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Draw lists</td><td><code>addEntityToDrawList</code>, <code>markDrawListsDirty</code>, <code>rebuildDrawList</code>, <code>uploadDrawList</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Callers</td><td><code>src/scene/entity.cpp</code>, <code>src/scene/scene.cpp</code>, <code>src/assets/material.cpp</code></td></tr>
+  <tr><td>Row structs</td><td><code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
+</table>
+</div>
+
+<h2><span class="n">8</span>Rules when you change it</h2>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Change table rows only through <code>GpuTable::setRow</code> (or set a draw list's <code>rebuild</code>). Slot buffers are written only in <code>syncGpuScene</code>, after that slot's fence wait.</li>
+    <li>Only <code>gpuScene.cpp</code> touches <code>GpuScene</code>. Other files call the <code>Engine</code> methods (<code>queueInstanceRows</code>, <code>writeInstanceRows</code>, <code>writeMaterialRow</code>, <code>addEntityToDrawList</code>, <code>refreshEntitiesAfterMaterialChange</code>).</li>
+    <li>An entity joins a draw list only with rows and all textures loaded. Keep that check in both <code>addEntityToDrawList</code> and <code>rebuildDrawList</code>.</li>
+    <li><code>EntityDrawState::scenes</code> has one bit per scene, so <code>MAX_SCENES</code> must stay at most 16 (a <code>static_assert</code> checks it).</li>
+    <li>The run order is the order of <code>CullMode</code>, and <code>MAX_DRAW_RUNS</code> must equal the number of cull modes.</li>
+    <li>Changing <code>InstanceData</code>, <code>MaterialData</code>, <code>GeometryData</code> or <code>DrawInfo</code> is a CPU↔GPU struct change: follow <a href="shaders-structs.html">the struct contract</a>.</li>
+  </ul>
+</div>
+
+<div class="callout warn">
+  <strong>Known limits</strong>
+  <p>Rows, geometry and materials are never freed, and entities and meshes cannot be destroyed (D4). A scene with a changed entity rebuilds its whole draw list (P7). Scene handles start at 1, so 15 of the <code>MAX_SCENES</code> scenes are usable.</p>
+</div>
+
+</main>
+</div>
+</body>
+</html>

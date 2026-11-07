@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Uber Shader · RASM</title>
+<meta name="description" content="How drawScene records a whole scene with one pipeline and a few indirect draws, and how rasm.slang finds every vertex, matrix, material and texture through pointers from a 16-byte push constant.">
+<meta name="rasm-sources" content="src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/uberMaterialTypes.h src/engine.cpp include/rasm/engine.h include/rasm/types.h shaders/passes/rasm.slang shaders/lib/core.slang shaders/lib/pbr.slang shaders/lib/unlit.slang src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/renderContext.cpp src/renderer/geometryPool.h">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/uber-shader.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Rendering</p>
+<h1>Drawing with the uber shader</h1>
+<p class="lead">Every object in a scene is drawn by one pipeline, <code>rasm.slang</code>, with at most three indirect draw calls. The draw calls carry no vertex buffers and no per-object state. The shader finds everything it needs by following pointers that start in a 16-byte push constant.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU work / recorded commands</span>
+  <span><i class="gpu"></i>GPU work</span>
+  <span><i class="mem"></i>GPU buffer</span>
+  <span><i class="shader"></i>shader entry point</span>
+</div>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li><code>drawScene</code> binds the pipeline, the bindless texture set and the geometry pool's index buffer once. Then, per cull-mode run: <code>setCullMode</code>, a push constant, one indirect draw.</li>
+    <li>The push constant is <code>{SceneData address, firstDraw}</code>. <code>SceneData</code> holds the camera, the lights and the addresses of all GPU tables.</li>
+    <li><b>Vertex pulling:</b> <code>vertMain</code> finds its draw (<code>DrawIndex</code> + <code>firstDraw</code>), its instance (<code>firstInstance</code>) and its vertex (<code>SV_VertexID</code> + <code>vertexOffset</code>) itself. The pipeline has no vertex input.</li>
+    <li><code>fragMain</code> reads the material row and branches: <code>shadeUnlit</code> or <code>shadePBR</code>.</li>
+    <li><code>shadePBR</code>: glTF metallic-roughness, up to 8 lights, normal mapping, Reinhard tone mapping. The sRGB swapchain encodes the output.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>What drawScene records</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="drawScene records three binds once, then for each cull-mode run a setCullMode, a push constant and an indirect draw, then sets the cull mode back to NONE.">
+    <line x1="120" y1="12" x2="740" y2="12" class="arrow" marker-end="url(#ah)"/>
+    <text x="15" y="16" class="small">record order →</text>
+
+    <text x="15" y="54" class="title">once</text>
+    <text x="15" y="70" class="small">per call</text>
+    <rect x="120" y="32" width="200" height="50" rx="6" class="cpu"/>
+    <text x="220" y="53" class="mid title">bindPipeline</text>
+    <text x="220" y="71" class="mid small">the uber pipeline</text>
+    <rect x="332" y="32" width="200" height="50" rx="6" class="cpu"/>
+    <text x="432" y="53" class="mid title">bindDescriptorSet</text>
+    <text x="432" y="71" class="mid small">bindless textures, set 0</text>
+    <rect x="544" y="32" width="200" height="50" rx="6" class="cpu"/>
+    <text x="644" y="53" class="mid title">bindIndexBuffer</text>
+    <text x="644" y="71" class="mid small">geometry pool, U32_UINT</text>
+
+    <text x="15" y="142" class="title">per run</text>
+    <text x="15" y="158" class="small">(1 to 3)</text>
+    <rect x="120" y="100" width="200" height="104" rx="6" class="zone"/>
+    <text x="220" y="120" class="mid title">run 0 · NONE</text>
+    <text x="134" y="144" class="small">setCullMode(NONE)</text>
+    <text x="134" y="164" class="small">push {scene, firstDraw = 0}</text>
+    <text x="134" y="184" class="small">indirect draw, max 120</text>
+    <rect x="332" y="100" width="200" height="104" rx="6" class="zone"/>
+    <text x="432" y="120" class="mid title">run 1 · FRONT</text>
+    <text x="346" y="144" class="small">setCullMode(FRONT)</text>
+    <text x="346" y="164" class="small">push {scene, firstDraw = 120}</text>
+    <text x="346" y="184" class="small">indirect draw, max 30</text>
+    <rect x="544" y="100" width="200" height="104" rx="6" class="zone"/>
+    <text x="644" y="120" class="mid title">run 2 · BACK</text>
+    <text x="558" y="144" class="small">setCullMode(BACK)</text>
+    <text x="558" y="164" class="small">push {scene, firstDraw = 150}</text>
+    <text x="558" y="184" class="small">indirect draw, max 10</text>
+
+    <text x="120" y="228" class="small">Then setCullMode(NONE) again: the state beginPass sets for every other pipeline. Example list: 120 + 30 + 10 draws.</text>
+  </svg>
+  <figcaption>A scene of any size costs 3 binds and at most 3 draw calls on the CPU. The draw list is sorted by cull mode, and cull mode is dynamic state, so each run needs its own call.</figcaption>
+</figure>
+
+<p>The indirect draw is <code>drawIndexedIndirectCount</code>. It reads <code>DrawInfo</code> rows from the call's visible-draw buffer, starting at the run's first draw, and the number of rows from the count that culling wrote. Without the culling pipelines, it is <code>drawIndexedIndirect</code> over the whole run. See <a href="culling.html">GPU frustum culling</a>.</p>
+
+<h3>Before recording, drawScene checks</h3>
+<ol class="steps">
+  <li><b>Valid camera and scene.</b> Otherwise it logs an error and draws nothing.</li>
+  <li><b>Something to draw.</b> An empty draw list, or one not yet uploaded to this frame slot, draws nothing. The pass keeps its clear color.</li>
+  <li><b>The pipeline exists.</b> On first use, <code>Engine::createPipeline</code> compiles <code>shaders/passes/rasm.slang</code> (<code>vertMain</code>, <code>fragMain</code>). If that fails, it logs and tries again next frame, so a shader fixed on disk is picked up while the app runs.</li>
+  <li><b>Matching formats.</b> A render target must have the swapchain's color format and <code>D32_SFLOAT</code> depth, like the pipeline.</li>
+  <li><b>A free call slot.</b> At most <code>MAX_SCENE_DRAWS_PER_FRAME</code> (8) calls per frame. Each call writes its own <code>SceneData</code>, because the GPU reads them only after the whole frame is recorded.</li>
+</ol>
+
+<h2><span class="n">2</span>From the push constant to every table</h2>
+
+<p>This is the whole data path of the shader. One address in the push constant leads to <code>SceneData</code>. <code>SceneData</code> holds the addresses of the tables. Rows of one table point to rows of the next by index.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 530" role="img" aria-label="The 16-byte push constant holds the SceneData address and firstDraw. SceneData holds the camera, the lights and pointers. vertsPtr, drawInfoPtr, instancesPtr and materialsPtr lead to the vertex pool, the visible draws, the instance table and the material table. A draw's firstInstance picks an instance row, vertexOffset moves into the vertex pool, the instance's materialIndex picks a material row, and the material's texture indices pick slots in gTextures.">
+    <rect x="15" y="40" width="170" height="104" rx="6" class="box"/>
+    <text x="100" y="60" class="mid title">push constant</text>
+    <text x="28" y="84"  class="mono t-faint">0</text><text x="56" y="84"  class="small">scene</text><text x="174" y="84" class="end small">SceneData*</text>
+    <text x="28" y="104" class="mono t-faint">8</text><text x="56" y="104" class="small">firstDraw</text><text x="174" y="104" class="end small">uint32_t</text>
+    <text x="28" y="124" class="mono t-faint">12</text><text x="56" y="124" class="small">padding</text>
+    <text x="100" y="30" class="mid small">16 bytes, PUSH_CONSTANTS_SIZE</text>
+    <line x1="185" y1="81" x2="223" y2="81" class="arrow mem" marker-end="url(#ah-mem)"/>
+
+    <text x="15" y="180" class="small">firstDraw + DrawIndex</text>
+    <text x="15" y="196" class="small">= the draw's row in</text>
+    <text x="15" y="212" class="small">drawInfoPtr (section 3).</text>
+
+    <rect x="225" y="20" width="250" height="490" rx="6" class="mem"/>
+    <text x="350" y="42" class="mid title">SceneData · 728 B</text>
+    <text x="237" y="68"  class="mono t-faint">0</text>  <text x="275" y="68" >projection</text>
+    <text x="237" y="89"  class="mono t-faint">64</text> <text x="275" y="89" >view</text>
+    <text x="237" y="110" class="mono t-faint">128</text><text x="275" y="110">cameraWorldPosition</text>
+    <text x="237" y="131" class="mono t-faint">140</text><text x="275" y="131">numLights</text>
+    <text x="237" y="152" class="mono t-faint">144</text><text x="275" y="152">lights[8] · 48 B each</text>
+    <text x="237" y="173" class="mono t-faint">528</text><text x="275" y="173" class="title">vertsPtr</text>
+    <text x="237" y="194" class="mono t-faint">536</text><text x="275" y="194" class="title">drawInfoPtr</text>
+    <text x="237" y="215" class="mono t-faint">544</text><text x="275" y="215" class="title">instancesPtr</text>
+    <text x="237" y="236" class="mono t-faint">552</text><text x="275" y="236" class="title">materialsPtr</text>
+    <text x="237" y="257" class="mono t-faint">560</text><text x="275" y="257" class="t-faint">geometryPtr</text>
+    <text x="237" y="278" class="mono t-faint">568</text><text x="275" y="278" class="t-faint">allDrawsPtr</text>
+    <text x="237" y="299" class="mono t-faint">576</text><text x="275" y="299" class="t-faint">drawCountsPtr</text>
+    <text x="237" y="320" class="mono t-faint">584</text><text x="275" y="320" class="t-faint">cullSlotsPtr</text>
+    <text x="237" y="341" class="mono t-faint">592</text><text x="275" y="341" class="t-faint">groupCountsPtr</text>
+    <text x="237" y="362" class="mono t-faint">600</text><text x="275" y="362" class="t-faint">cullStatsPtr</text>
+    <text x="237" y="383" class="mono t-faint">608</text><text x="275" y="383" class="t-faint">frustumPlanes[6]</text>
+    <text x="237" y="404" class="mono t-faint">704</text><text x="275" y="404" class="t-faint">drawCount</text>
+    <text x="237" y="425" class="mono t-faint">708</text><text x="275" y="425" class="t-faint">runCount</text>
+    <text x="237" y="446" class="mono t-faint">712</text><text x="275" y="446" class="t-faint">runFirst[3]</text>
+    <text x="237" y="467" class="mono t-faint">724</text><text x="275" y="467" class="t-faint">padding</text>
+    <text x="350" y="496" class="mid t-faint">grey: only cull.slang reads these</text>
+
+    <path d="M475,169 L543,55"  class="arrow mem" marker-end="url(#ah-mem)"/>
+    <path d="M475,190 L543,145" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <path d="M475,211 L543,235" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <path d="M475,232 L543,325" class="arrow mem" marker-end="url(#ah-mem)"/>
+
+    <rect x="545" y="25" width="200" height="60" rx="6" class="mem"/>
+    <text x="645" y="49" class="mid title">VertexFull[] · 64 B</text>
+    <text x="645" y="69" class="mid small">geometry pool vertices</text>
+    <rect x="545" y="115" width="200" height="60" rx="6" class="mem"/>
+    <text x="645" y="139" class="mid title">DrawInfo[] · 20 B</text>
+    <text x="645" y="159" class="mid small">this call's visible draws</text>
+    <rect x="545" y="205" width="200" height="60" rx="6" class="mem"/>
+    <text x="645" y="229" class="mid title">InstanceData[] · 108 B</text>
+    <text x="645" y="249" class="mid small">matrices, geometry, material</text>
+    <rect x="545" y="295" width="200" height="60" rx="6" class="mem"/>
+    <text x="645" y="319" class="mid title">MaterialData[] · 84 B</text>
+    <text x="645" y="339" class="mid small">the material table</text>
+    <rect x="545" y="385" width="200" height="60" rx="6" class="mem"/>
+    <text x="645" y="409" class="mid title">gTextures[] · 1024</text>
+    <text x="645" y="429" class="mid small">descriptor set 0, binding 0</text>
+
+    <line x1="600" y1="115" x2="600" y2="87"  class="arrow" marker-end="url(#ah)"/>
+    <text x="608" y="105" class="small">vertexOffset</text>
+    <line x1="600" y1="175" x2="600" y2="203" class="arrow" marker-end="url(#ah)"/>
+    <text x="608" y="194" class="small">firstInstance</text>
+    <line x1="600" y1="265" x2="600" y2="293" class="arrow" marker-end="url(#ah)"/>
+    <text x="608" y="284" class="small">materialIndex</text>
+    <line x1="600" y1="355" x2="600" y2="383" class="arrow" marker-end="url(#ah)"/>
+    <text x="608" y="374" class="small">…TextureIndex (slot)</text>
+
+    <text x="545" y="478" class="small">gTextures is not behind a pointer:</text>
+    <text x="545" y="494" class="small">drawScene binds it as a descriptor set.</text>
+  </svg>
+  <figcaption>Bold fields are the four pointers <code>rasm.slang</code> follows. Every arrow is a buffer device address (64-bit) or a row index. <code>SceneData</code> itself is in a host-visible buffer that <code>drawScene</code> writes with <code>fillBuffer</code>.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Field in <code>SceneData</code></th><th>Points to</th><th>Buffer</th></tr>
+  <tr><td><code>vertsPtr</code></td><td>all vertices of all meshes</td><td>the geometry pool's vertex buffer</td></tr>
+  <tr><td><code>drawInfoPtr</code></td><td>this call's visible draws, packed per run (or the draw list itself when culling is off)</td><td><code>visibleDraws[frame][call]</code></td></tr>
+  <tr><td><code>instancesPtr</code></td><td>the instance table of this frame slot</td><td><code>instances.buffer(frame)</code></td></tr>
+  <tr><td><code>materialsPtr</code></td><td>the material table of this frame slot</td><td><code>materials.buffer(frame)</code></td></tr>
+</table>
+</div>
+<p>The tables are explained in <a href="gpu-scene.html">the GPU scene tables</a>. The byte layout rules are in <a href="shaders-structs.html">the struct contract</a>.</p>
+
+<h2><span class="n">3</span>Vertex pulling: one vertex, step by step</h2>
+
+<p>The pipeline has no vertex buffers. The vertex shader reads its vertex from memory itself. Here is one vertex of one draw, with small numbers. The draw is the 3rd draw of run 1, and run 1 starts at draw 120.</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. Which draw am I?</h4>
+    <svg viewBox="0 0 720 170" role="img" aria-label="DrawIndex 2 plus firstDraw 120 gives draw 122.">
+      <rect x="20" y="40" width="190" height="60" rx="6" class="gpu"/>
+      <text x="115" y="64" class="mid title">DrawIndex = 2</text>
+      <text x="115" y="84" class="mid small">built-in, 0 at each indirect call</text>
+      <text x="236" y="76" class="mid title">+</text>
+      <rect x="262" y="40" width="190" height="60" rx="6" class="box"/>
+      <text x="357" y="64" class="mid title">pc.firstDraw = 120</text>
+      <text x="357" y="84" class="mid small">pushed for run 1</text>
+      <line x1="452" y1="70" x2="498" y2="70" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <rect x="500" y="40" width="200" height="60" rx="6" class="shader"/>
+      <text x="600" y="64" class="mid title">getDrawIndex() = 122</text>
+      <text x="600" y="84" class="mid small">core.slang</text>
+      <text x="20" y="134" class="small">DrawIndex is read with spirv_asm (SPV_KHR_shader_draw_parameters).</text>
+      <text x="20" y="152" class="small">It restarts at 0 in every indirect call, so firstDraw adds the run's start back.</text>
+    </svg>
+    <p>All vertices of the draw get the same draw index. It is the draw's row in the call's <code>DrawInfo</code> buffer.</p>
+  </div>
+
+  <div class="step">
+    <h4>2. Read the draw</h4>
+    <svg viewBox="0 0 720 170" role="img" aria-label="drawInfoPtr row 122 holds indexCount 36, instanceCount 1, firstIndex 4800, vertexOffset 9000 and firstInstance 57.">
+      <text x="20" y="28" class="small">pc.scene-&gt;drawInfoPtr + 122</text>
+      <rect x="20"  y="40" width="130" height="56" rx="4" class="mem"/><text x="85"  y="62" class="mid small">indexCount</text><text x="85"  y="84" class="mid mono">36</text>
+      <rect x="156" y="40" width="130" height="56" rx="4" class="mem"/><text x="221" y="62" class="mid small">instanceCount</text><text x="221" y="84" class="mid mono">1</text>
+      <rect x="292" y="40" width="130" height="56" rx="4" class="mem"/><text x="357" y="62" class="mid small">firstIndex</text><text x="357" y="84" class="mid mono">4800</text>
+      <rect x="428" y="40" width="130" height="56" rx="4" class="mem"/><rect x="424" y="36" width="138" height="64" rx="6" class="hot"/><text x="493" y="62" class="mid small">vertexOffset</text><text x="493" y="84" class="mid mono">9000</text>
+      <rect x="564" y="40" width="130" height="56" rx="4" class="mem"/><rect x="560" y="36" width="138" height="64" rx="6" class="hot"/><text x="629" y="62" class="mid small">firstInstance</text><text x="629" y="84" class="mid mono">57</text>
+      <text x="20" y="128" class="small">DrawInfo has the layout of VkDrawIndexedIndirectCommand, so the GPU's draw command reads the same row.</text>
+      <text x="20" y="148" class="small">The shader uses the two marked fields itself.</text>
+    </svg>
+    <p><code>firstInstance</code> is the instance row of this sub-mesh. <code>vertexOffset</code> is where the sub-mesh's vertices start in the geometry pool.</p>
+  </div>
+
+  <div class="step">
+    <h4>3. The index buffer gives a local index</h4>
+    <svg viewBox="0 0 720 190" role="img" aria-label="The 5th index of the draw is at 4804 and holds 5. The hardware adds vertexOffset 9000. Slang's SV_VertexID removes it again and gives 5.">
+      <rect x="20" y="40" width="190" height="60" rx="6" class="mem"/>
+      <text x="115" y="64" class="mid title">index buffer[4804]</text>
+      <text x="115" y="84" class="mid small">firstIndex 4800 + 4 → value 5</text>
+      <line x1="210" y1="70" x2="256" y2="70" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <rect x="258" y="40" width="200" height="60" rx="6" class="gpu"/>
+      <text x="358" y="64" class="mid title">VertexIndex = 9005</text>
+      <text x="358" y="84" class="mid small">hardware: 5 + vertexOffset</text>
+      <line x1="458" y1="70" x2="498" y2="70" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <rect x="500" y="40" width="200" height="60" rx="6" class="shader"/>
+      <text x="600" y="64" class="mid title">SV_VertexID = 5</text>
+      <text x="600" y="84" class="mid small">Slang: VertexIndex − BaseVertex</text>
+      <text x="20" y="134" class="small">Indices are local to their sub-mesh (0, 1, 2, …). Slang lowers SV_VertexID to VertexIndex − BaseVertex, as D3D does,</text>
+      <text x="20" y="152" class="small">so the shader sees the raw index-buffer value, not the place in the pool.</text>
+    </svg>
+    <p>The hardware adds <code>vertexOffset</code>, then Slang takes it away again. So the shader must add it back in the next step.</p>
+  </div>
+
+  <div class="step">
+    <h4>4. Fetch the vertex</h4>
+    <svg viewBox="0 0 720 190" role="img" aria-label="vertsPtr at 5 plus 9000 is vertex 9005, a 64-byte VertexFull with pos, normal, three UV sets and tangent.">
+      <text x="20" y="28" class="mono">vertsPtr[input.vertexID + draw-&gt;vertexOffset] = vertsPtr[5 + 9000]</text>
+      <rect x="20"  y="44" width="132" height="56" rx="4" class="mem"/><text x="86"  y="66" class="mid small">pos (12 B)</text><text x="86"  y="86" class="mid mono small t-faint">0</text>
+      <rect x="156" y="44" width="132" height="56" rx="4" class="mem"/><text x="222" y="66" class="mid small">normal (12 B)</text><text x="222" y="86" class="mid mono small t-faint">12</text>
+      <rect x="292" y="44" width="264" height="56" rx="4" class="mem"/><text x="424" y="66" class="mid small">uv[3] (24 B)</text><text x="424" y="86" class="mid mono small t-faint">24</text>
+      <rect x="560" y="44" width="140" height="56" rx="4" class="mem"/><text x="630" y="66" class="mid small">tangent (16 B)</text><text x="630" y="86" class="mid mono small t-faint">48</text>
+      <text x="20" y="134" class="small">VertexFull, 64 bytes: the same layout as rasm::Vertex. Unused UV sets are zero.</text>
+      <text x="20" y="152" class="small">tangent.w is the bitangent sign (±1), or 0 when the mesh has no tangents.</text>
+    </svg>
+    <p>This is the vertex at place 9005 of the geometry pool: vertex 5 of this sub-mesh.</p>
+  </div>
+
+  <div class="step">
+    <h4>5. Transform with the instance</h4>
+    <svg viewBox="0 0 720 210" role="img" aria-label="Instance row 57 gives worldMatrix, normalMatrix and materialIndex. The shader computes clip position, world position, normal, tangent and passes materialIndex flat.">
+      <rect x="20" y="30" width="220" height="110" rx="6" class="mem"/>
+      <text x="130" y="52" class="mid title">instancesPtr[57]</text>
+      <text x="34" y="78"  class="small">worldMatrix (M)</text>
+      <text x="34" y="98"  class="small">normalMatrix (N)</text>
+      <text x="34" y="118" class="small">materialIndex = 4</text>
+      <line x1="240" y1="85" x2="278" y2="85" class="arrow" marker-end="url(#ah)"/>
+      <rect x="280" y="30" width="420" height="110" rx="6" class="shader"/>
+      <text x="490" y="52" class="mid title">vertMain outputs</text>
+      <text x="294" y="78"  class="small">clipPosition = projection × view × M × pos</text>
+      <text x="294" y="98"  class="small">worldNormal = normalize(N × normal) · worldPosition = M × pos</text>
+      <text x="294" y="118" class="small">worldTangent = (M × tangent.xyz, tangent.w × handedness)</text>
+      <text x="20" y="170" class="small">handedness = −1 when det(M) &lt; 0 (a mirroring transform). materialIndex and handedness are passed with nointerpolation.</text>
+      <text x="20" y="190" class="small">A zero-length normal becomes (0, 0, 1) instead of NaN.</text>
+    </svg>
+    <p>The shader uses <code>draw-&gt;firstInstance</code> directly, not an instance built-in. The GPU scene's <code>normalMatrix</code> is computed on the CPU (<code>writeInstanceRows</code>) as the inverse-transpose of the world matrix.</p>
+  </div>
+</div>
+
+<h2><span class="n">4</span>vertMain to fragMain</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th><code>VSOutput</code> field</th><th>Value</th><th>Interpolated?</th></tr>
+  <tr><td><code>clipPosition</code></td><td>projection × view × world × pos</td><td>(rasterizer)</td></tr>
+  <tr><td><code>worldPosition</code>, <code>worldNormal</code></td><td>world space</td><td>yes</td></tr>
+  <tr><td><code>worldTangent</code></td><td>world tangent, w = bitangent sign × handedness</td><td>yes</td></tr>
+  <tr><td><code>uv0</code>, <code>uv1</code>, <code>uv2</code></td><td>all three UV sets; the material picks one per texture</td><td>yes</td></tr>
+  <tr><td><code>worldCameraPosition</code></td><td>copied from <code>SceneData</code></td><td>yes (constant)</td></tr>
+  <tr><td><code>materialIndex</code></td><td>the instance's material row</td><td>no (<code>nointerpolation</code>)</td></tr>
+  <tr><td><code>handedness</code></td><td>−1 under a mirroring transform, else 1</td><td>no (<code>nointerpolation</code>)</td></tr>
+</table>
+</div>
+
+<h2><span class="n">5</span>fragMain: the material branch</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="fragMain reads the MaterialData row through a pointer. If materialId is UNLIT it calls shadeUnlit with the base color part only. Otherwise it fills a PBRInfo and calls shadePBR.">
+    <rect x="15" y="95" width="150" height="56" rx="28" class="shader"/>
+    <text x="90" y="119" class="mid title">fragMain</text>
+    <text x="90" y="137" class="mid small">per pixel</text>
+    <line x1="165" y1="123" x2="203" y2="123" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="205" y="90" width="190" height="66" rx="6" class="mem"/>
+    <text x="300" y="112" class="mid title">MaterialData *model</text>
+    <text x="300" y="130" class="mid small">materialsPtr + materialIndex</text>
+    <text x="300" y="146" class="mid small">a pointer: nothing copied yet</text>
+
+    <path d="M395,110 L455,58" class="arrow" marker-end="url(#ah)"/>
+    <path d="M395,136 L455,188" class="arrow" marker-end="url(#ah)"/>
+    <text x="400" y="74" class="small">UNLIT</text>
+    <text x="400" y="184" class="small">else</text>
+
+    <rect x="457" y="22" width="288" height="70" rx="6" class="shader"/>
+    <text x="601" y="44" class="mid title">shadeUnlit</text>
+    <text x="601" y="62" class="mid small">loads only material.metallicRoughness</text>
+    <text x="601" y="80" class="mid small">base color factor × texture, no tone mapping</text>
+
+    <rect x="457" y="152" width="288" height="86" rx="6" class="shader"/>
+    <text x="601" y="174" class="mid title">shadePBR</text>
+    <text x="601" y="192" class="mid small">fragMain first copies the whole material</text>
+    <text x="601" y="208" class="mid small">and all 8 lights into a PBRInfo (P9)</text>
+    <text x="601" y="226" class="mid small">lights + normal map + Reinhard</text>
+  </svg>
+  <figcaption>The branch is uniform across a draw (one instance has one material), so it costs very little. The <code>materialId</code> comes from <code>getGfxMaterialId</code>; see <a href="materials-textures.html">materials and textures</a>.</figcaption>
+</figure>
+
+<p>Each texture samples its own UV set: <code>selectUV</code> picks <code>uv0</code>, <code>uv1</code> or <code>uv2</code> from the texture's <code>…TextureCoordinate</code> field. The unlit path reads <code>baseColorTextureCoordinate</code> the same way.</p>
+
+<h2><span class="n">6</span>The PBR shading in pbr.slang</h2>
+
+<ol class="steps">
+  <li><b>Sample the textures.</b> Each texture is used only when its index is not <code>INVALID_TEXTURE_INDEX</code> (<code>hasTexture</code>). Base color = factor × texture. Roughness = G channel × factor, metallic = B channel × factor (glTF packing). Occlusion = R channel, mixed with 1 by <code>strength</code>. Emissive = factor × texture.</li>
+  <li><b>Find the normal.</b> With a normal texture, <code>getNormalFromMap</code> bends the normal (below). A back face of a double-sided surface uses the reversed normal.</li>
+  <li><b>Base reflectance.</b> <code>f0</code> = 0.04 for non-metals, the base color for metals (<code>lerp</code> by metallic). Roughness is clamped to [0.045, 1].</li>
+  <li><b>Loop over the lights.</b> Up to <code>numLights</code>, at most <code>MAX_LIGHTS</code> = 8. Cook-Torrance: <code>D_GGX</code> × <code>V_SmithGGXCorrelated</code> × <code>F_Schlick</code> for specular, Lambert for diffuse, times color × intensity × attenuation × N·L.</li>
+  <li><b>Ambient.</b> A flat 0.03 × diffuse color × occlusion. There is no image-based lighting.</li>
+  <li><b>Tone map.</b> Reinhard: <i>c / (c + 1)</i>. Alpha is the base color alpha. The sRGB swapchain encodes the result; the shader never applies the sRGB curve.</li>
+</ol>
+
+<div class="split">
+  <div>
+    <h4>Directional light</h4>
+    <p>L = −<code>direction</code>. No attenuation. <code>direction</code> points from the light toward the surface.</p>
+  </div>
+  <div>
+    <h4>Point light</h4>
+    <p>L = toward <code>position</code>. Attenuation = 1 / distance². When <code>range</code> &gt; 0, a smooth window brings it to 0 at <code>range</code>. A range of 0 means no limit.</p>
+  </div>
+</div>
+
+<h3>Normal mapping and the tangent sign</h3>
+
+<div class="split">
+  <div>
+    <h4>Mesh has tangents (|w| = 1)</h4>
+    <p>Use the authored frame. T is made orthogonal to N again (interpolation bends it). B = cross(N, T) × sign(w), as glTF defines. The vertex shader already multiplied w by the handedness, so mirrored instances stay correct.</p>
+  </div>
+  <div>
+    <h4>No tangents (w = 0)</h4>
+    <p>Build T and B from screen-space derivatives of the position and the UV (<code>ddx</code>, <code>ddy</code>). B points toward decreasing v, because glTF normal maps store +Y as "up" in the image. Mirrored UV islands keep the right handedness.</p>
+  </div>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Which side is the back?</th><th><code>handedness</code> = 1</th><th><code>handedness</code> = −1 (mirrored)</th></tr>
+  <tr><td><code>isFrontFace</code> = true</td><td>front</td><td>back</td></tr>
+  <tr><td><code>isFrontFace</code> = false</td><td>back</td><td>front</td></tr>
+</table>
+</div>
+<p>A mirroring transform turns the authored front faces clockwise, so it swaps what the rasterizer calls "front". Only double-sided draws (cull mode <code>NONE</code>) ever show a back face. See <a href="camera-depth.html">camera, coordinates and depth</a>.</p>
+
+<h3>When a texture is missing</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>Missing texture</th><th>The shader uses</th></tr>
+  <tr><td>base color</td><td><code>baseColorFactor</code> alone (alpha 1)</td></tr>
+  <tr><td>metallic-roughness</td><td><code>metallicFactor</code>, <code>roughnessFactor</code></td></tr>
+  <tr><td>normal</td><td>the interpolated vertex normal</td></tr>
+  <tr><td>occlusion</td><td>1 (no occlusion)</td></tr>
+  <tr><td>emissive</td><td><code>emissiveFactor</code> alone (0 for <code>createMaterial</code>)</td></tr>
+</table>
+</div>
+
+<h2><span class="n">7</span>Why one pipeline serves everything</h2>
+
+<div class="split">
+  <div>
+    <h4>What changes per draw: data</h4>
+    <p>Mesh, transform and material are rows in GPU tables, found by index. Textures are slots in one descriptor array. Cull mode is dynamic state (<code>setCullMode</code>). So no draw needs another pipeline, another vertex layout or another descriptor set.</p>
+  </div>
+  <div>
+    <h4>What is fixed: pipeline state</h4>
+    <p>Triangle list, no vertex input, depth test and write with <code>GREATER_OR_EQUAL</code> (reversed-Z), no blending, one color attachment in the swapchain format, <code>D32_SFLOAT</code> depth, front faces counter-clockwise.</p>
+  </div>
+</div>
+
+<p>The cost of this design is that every pixel runs the general shader, and the fixed state limits what a material can be. There is no blending, so there is no transparency today: alpha is written, not blended.</p>
+
+<div class="callout warn">
+  <strong>Known issues</strong>
+  <ul>
+    <li><code>P9</code>: <code>fragMain</code> copies the whole material and all 8 lights into a <code>PBRInfo</code> local, which raises register pressure.</li>
+    <li><code>P8</code>: the shaders are compiled from source at every launch, with no pipeline cache.</li>
+    <li>D12: the shader is Vulkan-only. <code>getDrawIndex</code> uses <code>spirv_asm</code>, and all data access uses raw pointers (buffer device address).</li>
+  </ul>
+</div>
+
+<h2><span class="n">8</span>Where it lives in code</h2>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Recording, SceneData fill</td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Pipeline creation</td><td><code>Engine::createPipeline</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Fixed pipeline state</td><td><code>VulkanDevice::createGraphicsPipeline</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>Vertex and fragment entry points</td><td><code>vertMain</code>, <code>fragMain</code>, <code>VSOutput</code> in <code>shaders/passes/rasm.slang</code></td></tr>
+  <tr><td>Push constant, draw index, structs</td><td><code>PushConstants</code>, <code>getDrawIndex</code>, <code>SceneData</code> in <code>shaders/lib/core.slang</code></td></tr>
+  <tr><td>PBR and unlit shading</td><td><code>shadePBR</code>, <code>getNormalFromMap</code>, <code>PBRInfo</code> in <code>shaders/lib/pbr.slang</code>; <code>shadeUnlit</code> in <code>shaders/lib/unlit.slang</code></td></tr>
+  <tr><td>C++ mirrors of the structs</td><td><code>src/renderer/uberMaterialTypes.h</code></td></tr>
+</table>
+</div>
+
+<h2><span class="n">9</span>Rules when you change it</h2>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Any change to <code>SceneData</code>, <code>DrawInfo</code>, <code>InstanceData</code>, <code>MaterialData</code>, <code>VertexFull</code> or <code>PushConstants</code> changes both sides: <code>uberMaterialTypes.h</code>, <code>core.slang</code>, the <code>static_assert</code>s and <code>validateRasmStructs</code>. Follow <a href="shaders-structs.html">the struct contract</a>.</li>
+    <li>The push constant stays 16 bytes (<code>PUSH_CONSTANTS_SIZE</code>). Add new per-call data to <code>SceneData</code>, not to the push constant.</li>
+    <li>Shaders output linear color. The sRGB swapchain does the encoding.</li>
+    <li><code>vertMain</code> must add <code>draw-&gt;vertexOffset</code> to <code>SV_VertexID</code>; Slang has already removed it.</li>
+    <li>Verify shader changes by running the examples with <code>enableValidation = true</code>. A change that adds validation messages is not done. Shaders load at startup, so no rebuild is needed.</li>
+  </ul>
+</div>
+
+</main>
+</div>
+</body>
+</html>

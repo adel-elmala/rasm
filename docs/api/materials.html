@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Materials and Textures · RASM</title>
+<meta name="description" content="MaterialType, createMaterial, the Material record with PbrSlot and PbrParam, updateMaterial and getMaterial, loadTexture and its format rules, bindless texture slots and SamplerType.">
+<meta name="rasm-sources" content="include/rasm/material.h include/rasm/engine.h include/rasm/types.h include/rasm/mesh.h include/rasm/render/resource.h src/assets/material.cpp src/assets/texture.cpp src/assets/mesh.cpp src/engine.cpp src/renderer/gpuScene.cpp src/rhi/renderContext.cpp src/rhi/vulkan/vulkanDevice.cpp shaders/lib/pbr.slang shaders/lib/unlit.slang shaders/lib/core.slang shaders/passes/rasm.slang examples/00_hello_scene/main.cpp examples/01_render_graph/main.cpp examples/03_instances/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="api/materials.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">API reference</p>
+<h1>Materials and textures</h1>
+<p class="lead">A material says how a surface looks: PBR (lit) or unlit, up to six textures, and a few numbers such as base color and roughness. Every material is one row in a GPU table, and every texture gets a slot in one big bindless texture array. One shader reads both for all objects.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li><code>createMaterial(MaterialType::PBR, {albedo})</code> makes a material; the vector order is <code>PbrSlot</code>.</li>
+    <li>Change a material: copy it with <code>getMaterial</code>, edit, <code>updateMaterial</code>. Every object that uses it changes in the next frame.</li>
+    <li><code>loadTexture</code> loads in the background. Color textures are sRGB (the default); normal, metallic-roughness and occlusion maps must be <code>R8G8B8A8_UNORM</code>.</li>
+    <li>An entity waits, undrawn, until all its textures are loaded.</li>
+    <li>Limits: 256 materials (<code>MAX_MATERIALS</code>), 1024 texture slots (<code>MAX_BINDLESS_TEXTURES</code>). Neither is ever freed.</li>
+  </ul>
+</div>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU record</span>
+  <span><i class="mem"></i>GPU buffer or descriptor set</span>
+  <span><i class="shader"></i>shader entry point</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="The Material record lists textures and numbers. Each texture gets a slot in the bindless set. writeMaterialRow writes the slot numbers and the numbers into the material's row of the material table. fragMain reads the row and samples the bindless set at those slots.">
+    <path d="M115,40 V22 H640 V37" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="380" y="15" class="mid small">writeMaterialRow: the row is uploaded at the next beginFrame</text>
+
+    <rect x="10" y="40" width="210" height="170" rx="8" class="cpu"/>
+    <text x="115" y="62" class="mid title">Material</text>
+    <text x="26" y="90"  class="mono">type</text><text x="204" y="90" class="end small">PBR / UNLIT</text>
+    <text x="26" y="114" class="mono">textures[6]</text><text x="204" y="114" class="end small">handles</text>
+    <text x="26" y="138" class="mono">texCoords[6]</text><text x="204" y="138" class="end small">UV set</text>
+    <text x="26" y="162" class="mono">params[10]</text><text x="204" y="162" class="end small">floats</text>
+    <text x="26" y="186" class="mono">doubleSided</text><text x="204" y="186" class="end small">bool</text>
+
+    <rect x="300" y="40" width="150" height="170" rx="8" class="mem"/>
+    <text x="375" y="62" class="mid title">Bindless set</text>
+    <rect x="316" y="74"  width="118" height="22" rx="3" class="box"/><text x="375" y="89"  class="mid small">slot 0</text>
+    <rect x="316" y="100" width="118" height="22" rx="3" class="box"/><text x="375" y="115" class="mid small">slot 1</text>
+    <rect x="316" y="126" width="118" height="22" rx="3" class="box"/><text x="375" y="141" class="mid small">slot 2</text>
+    <text x="375" y="166" class="mid">…</text>
+    <rect x="316" y="178" width="118" height="22" rx="3" class="box"/><text x="375" y="193" class="mid small">slot 1023</text>
+
+    <line x1="220" y1="114" x2="313" y2="111" class="arrow" marker-end="url(#ah)"/>
+    <text x="260" y="134" class="mid small">a slot each</text>
+
+    <rect x="530" y="40" width="220" height="170" rx="8" class="mem"/>
+    <text x="640" y="62" class="mid title">Material table</text>
+    <text x="640" y="80" class="mid small">row = the material's handle index</text>
+    <text x="546" y="106" class="mono small">baseColorTextureIndex</text>
+    <text x="546" y="128" class="mono small">normalTextureIndex</text>
+    <text x="546" y="150" class="mono small">metallicFactor</text>
+    <text x="546" y="172" class="mono small">roughnessFactor</text>
+    <text x="546" y="194" class="mono small">materialId</text>
+    <line x1="434" y1="111" x2="540" y2="103" class="arrow" marker-end="url(#ah)"/>
+    <text x="490" y="128" class="mid small">slot number</text>
+
+    <rect x="300" y="236" width="150" height="40" rx="20" class="shader"/>
+    <text x="375" y="261" class="mid mono">fragMain</text>
+    <line x1="375" y1="210" x2="375" y2="233" class="arrow" marker-end="url(#ah)"/>
+    <text x="366" y="226" class="end small">samples gTextures[slot]</text>
+    <path d="M640,210 V256 H453" class="arrow" marker-end="url(#ah)"/>
+    <text x="560" y="250" class="mid small">reads the row</text>
+  </svg>
+  <figcaption>The shader never sees a <code>TextureHandle</code>. It sees slot numbers in the material row. A slot of <code>INVALID_TEXTURE_INDEX</code> (0xFFFFFFFF) means "no texture": the shader uses the factor alone.</figcaption>
+</figure>
+
+<h2 id="create"><span class="n">1</span>Create a material</h2>
+
+<div class="api" id="MaterialType">
+  <pre class="sig">enum class MaterialType { PBR, UNLIT, COUNT };</pre>
+  <div class="body">
+    <dl>
+      <dt>PBR</dt><dd>Lit by the scene's lights (metallic-roughness model), tone mapped. Reads the texture slots listed in <a href="#PbrSlot">the slot table</a>.</dd>
+      <dt>UNLIT</dt><dd>Only the base color (texture × factor), not lit and not tone mapped, so authored colors reach the screen unchanged.</dd>
+      <dt>COUNT</dt><dd>Not a type; it counts the values.</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="api" id="createMaterial">
+  <pre class="sig">MaterialHandle createMaterial(MaterialType type, std::vector&lt;TextureHandle&gt; textures = {}, bool doubleSided = false);</pre>
+  <div class="body">
+    <p>Creates a material with the default values below and writes its row. Each valid texture is added to the bindless set. Entities that use the material can be drawn from the next frame on.</p>
+    <dl>
+      <dt>type</dt><dd><code>PBR</code> or <code>UNLIT</code>.</dd>
+      <dt>textures</dt><dd>In <code>PbrSlot</code> order: albedo, metallic, roughness, normal, occlusion, emissive. Leave the end out, or pass <code>{}</code> for an empty slot. Entries after the sixth are ignored. Textures that still load are fine.</dd>
+      <dt>doubleSided</dt><dd>True: back faces are drawn too (no culling) and lit with the flipped normal.</dd>
+    </dl>
+    <p>Returns an invalid handle and logs a warning after <code>MAX_MATERIALS</code> materials (256; 254 are left for you and glTF files, because indices start at 1 and the default material takes one).</p>
+    <pre><code>// examples/00_hello_scene
+rasm::TextureHandle albedo = engine.loadTexture("models/obj/bunny/bunny-atlas.jpg");
+rasm::MaterialHandle material =
+    engine.createMaterial(rasm::MaterialType::PBR, {albedo});
+
+// Your own normal map: data, so UNORM. It goes in slot 3 (NORMAL),
+// so slots 1 and 2 stay empty.
+rasm::TextureHandle normal =
+    engine.loadTexture("brick_normal.png", rasm::Format::R8G8B8A8_UNORM);
+std::vector&lt;rasm::TextureHandle&gt; textures = {albedo, {}, {}, normal};
+rasm::MaterialHandle brick = engine.createMaterial(rasm::MaterialType::PBR, textures);</code></pre>
+  </div>
+</div>
+
+<h3 id="defaults">Default values</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 140" role="img" aria-label="params has 10 floats. Index 0 to 2 albedo, default 1 1 1. Index 3 metallic, default 0. Index 4 roughness, default 1. Index 5 normal scale, default 1. Index 6 occlusion strength, default 1. Index 7 to 9 emissive factor, default 0 0 0.">
+    <text x="65"  y="22" class="mid small">0</text><text x="135" y="22" class="mid small">1</text><text x="205" y="22" class="mid small">2</text>
+    <text x="275" y="22" class="mid small">3</text><text x="345" y="22" class="mid small">4</text><text x="415" y="22" class="mid small">5</text>
+    <text x="485" y="22" class="mid small">6</text><text x="555" y="22" class="mid small">7</text><text x="625" y="22" class="mid small">8</text>
+    <text x="695" y="22" class="mid small">9</text>
+    <rect x="30"  y="30" width="70" height="40" class="cpu"/><text x="65"  y="55" class="mid mono">1.0</text>
+    <rect x="100" y="30" width="70" height="40" class="cpu"/><text x="135" y="55" class="mid mono">1.0</text>
+    <rect x="170" y="30" width="70" height="40" class="cpu"/><text x="205" y="55" class="mid mono">1.0</text>
+    <rect x="240" y="30" width="70" height="40" class="cpu"/><text x="275" y="55" class="mid mono">0.0</text>
+    <rect x="310" y="30" width="70" height="40" class="cpu"/><text x="345" y="55" class="mid mono">1.0</text>
+    <rect x="380" y="30" width="70" height="40" class="cpu"/><text x="415" y="55" class="mid mono">1.0</text>
+    <rect x="450" y="30" width="70" height="40" class="cpu"/><text x="485" y="55" class="mid mono">1.0</text>
+    <rect x="520" y="30" width="70" height="40" class="cpu"/><text x="555" y="55" class="mid mono">0.0</text>
+    <rect x="590" y="30" width="70" height="40" class="cpu"/><text x="625" y="55" class="mid mono">0.0</text>
+    <rect x="660" y="30" width="70" height="40" class="cpu"/><text x="695" y="55" class="mid mono">0.0</text>
+    <path d="M32,78 V84 H238 V78" class="arrow"/><text x="135" y="100" class="mid mono small">ALBEDO (r, g, b)</text>
+    <text x="275" y="100" class="mid mono small">METALLIC</text>
+    <text x="345" y="120" class="mid mono small">ROUGHNESS</text>
+    <text x="415" y="100" class="mid mono small">NORMAL_SCALE</text>
+    <text x="485" y="120" class="mid mono small">OCCLUSION_STRENGTH</text>
+    <path d="M522,78 V84 H728 V78" class="arrow"/><text x="625" y="100" class="mid mono small">EMISSIVE_FACTOR</text>
+  </svg>
+  <figcaption><code>params</code> after <code>createMaterial</code>: white, not metallic, fully rough, so a texture alone decides the color. Index a value with <code>static_cast&lt;uint32_t&gt;(PbrParam::ROUGHNESS)</code>; a color is three floats from its index.</figcaption>
+</figure>
+
+<p>Entities without a material, and sub-meshes whose material is missing, use the <b>default material</b> that the engine makes at start. It follows glTF: white, metallic 1, roughness 1.</p>
+
+<h2 id="record"><span class="n">2</span>The Material record</h2>
+
+<div class="api" id="Material">
+  <pre class="sig">struct Material
+{
+    const char*    name{};
+    MaterialHandle handle{};
+    MaterialType   type{};
+    TextureHandle  textures[MAX_TEXTURE_SLOTS];
+    uint32_t       texCoords[MAX_TEXTURE_SLOTS];
+    float          params[MAX_PARAM_SLOTS];
+    bool           doubleSided{};
+};</pre>
+  <div class="body">
+    <dl>
+      <dt>name</dt><dd>A label: "pbr", "unlit", or "default". The engine keeps only the pointer, so point it at a string that lives as long as the engine (a string literal).</dd>
+      <dt>handle</dt><dd>The material's own handle. <code>updateMaterial</code> keeps the right one, whatever you put here.</dd>
+      <dt>type</dt><dd><code>PBR</code> or <code>UNLIT</code>.</dd>
+      <dt>textures</dt><dd>One texture per <code>PbrSlot</code>; an invalid handle means none.</dd>
+      <dt>texCoords</dt><dd>Which UV set (0, 1 or 2) each texture uses. Default 0. A value of 3 or more uses set 0.</dd>
+      <dt>params</dt><dd>The numbers, indexed by <code>PbrParam</code> (diagram above). All are linear values.</dd>
+      <dt>doubleSided</dt><dd>Draw back faces too.</dd>
+    </dl>
+    <p>The flat <code>params</code> array is easy to index wrongly; <code>docs/code_review.md</code> plans a typed struct (<code>C9</code>).</p>
+  </div>
+</div>
+
+<div class="api" id="PbrSlot">
+  <pre class="sig">enum class PbrSlot { ALBEDO, METALLIC, ROUGHNESS, NORMAL, OCCLUSION, EMISSIVE, COUNT };</pre>
+  <div class="body">
+    <p>Index into <code>textures</code> and <code>texCoords</code>. <code>MAX_TEXTURE_SLOTS</code> = 6 (<code>PbrSlot::COUNT</code>).</p>
+  </div>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Slot</th><th>Format</th><th>What the shader reads</th></tr>
+  <tr><td><code>ALBEDO</code></td><td><code>R8G8B8A8_SRGB</code></td><td>RGB × albedo factor. Alpha is passed through but nothing is blended.</td></tr>
+  <tr><td><code>METALLIC</code></td><td><code>R8G8B8A8_UNORM</code></td><td>The glTF metallic-roughness texture: G × roughness factor, B × metallic factor.</td></tr>
+  <tr><td><code>ROUGHNESS</code></td><td><code>R8G8B8A8_UNORM</code></td><td>Nothing: roughness comes from the <code>METALLIC</code> texture's G. glTF import puts the same texture in both slots.</td></tr>
+  <tr><td><code>NORMAL</code></td><td><code>R8G8B8A8_UNORM</code></td><td>Tangent-space normal, scaled by <code>NORMAL_SCALE</code>. Uses the vertex tangent, or builds one from the UVs.</td></tr>
+  <tr><td><code>OCCLUSION</code></td><td><code>R8G8B8A8_UNORM</code></td><td>R, mixed in by <code>OCCLUSION_STRENGTH</code>. It darkens only the ambient light.</td></tr>
+  <tr><td><code>EMISSIVE</code></td><td><code>R8G8B8A8_SRGB</code></td><td>RGB × emissive factor, added to the result. The factor alone glows without a texture.</td></tr>
+</table>
+</div>
+<p><code>UNLIT</code> materials read only <code>ALBEDO</code>. The format column is a rule: a data texture in an sRGB format gives wrong values, and nothing checks it.</p>
+
+<div class="api" id="PbrParam">
+  <pre class="sig">enum class PbrParam : uint32_t
+{
+    ALBEDO              = 0,   // vec3
+    METALLIC            = 3,   // float
+    ROUGHNESS           = 4,   // float
+    NORMAL_SCALE        = 5,   // float
+    OCCLUSION_STRENGTH  = 6,   // float
+    EMISSIVE_FACTOR     = 7,   // vec3
+    COUNT = 10,
+};</pre>
+  <div class="body">
+    <p>Offsets into <code>params</code>. <code>MAX_PARAM_SLOTS</code> = 10 (<code>PbrParam::COUNT</code>). Roughness is clamped to 0.045 – 1 and metallic to 0 – 1 in the shader.</p>
+  </div>
+</div>
+
+<h2 id="change"><span class="n">3</span>Read and change a material</h2>
+
+<ol class="steps">
+  <li><b>Copy it.</b> <code>getMaterial</code> returns a reference into the engine's list. Copy it into a local variable (<code>auto values = ...</code>): the reference can move when another material is created.</li>
+  <li><b>Edit the copy.</b> Change factors, textures, the type or <code>doubleSided</code>.</li>
+  <li><b>Call <code>updateMaterial</code>.</b> It replaces the whole record. New textures get bindless slots now, and the row is rewritten in CPU memory.</li>
+  <li><b>Next <code>beginFrame</code>.</b> The row is uploaded, so every entity that uses the material shows the change in that frame. It costs one row, however many entities use it.</li>
+  <li><b>If a new texture still loads,</b> the entities that use the material are not drawn until it finishes, so nothing is drawn half-loaded. A changed <code>doubleSided</code> rebuilds the draw lists of their scenes.</li>
+</ol>
+
+<pre><code>// examples/03_instances: one material; the 10 spinning cubes and up to
+// 2,000 spawned cubes that use it change color every frame.
+auto values = engine.getMaterial(pulse);
+const auto albedo = static_cast&lt;uint32_t&gt;(rasm::PbrParam::ALBEDO);
+values.params[albedo] = 0.5f + 0.5f * std::sin(t);
+values.params[albedo + 1] = 0.5f + 0.5f * std::sin(t + 2.1f);
+values.params[albedo + 2] = 0.5f + 0.5f * std::sin(t + 4.2f);
+engine.updateMaterial(pulse, values);</code></pre>
+
+<div class="api" id="getMaterial">
+  <pre class="sig">const Material&amp; getMaterial(const MaterialHandle&amp; handle);</pre>
+  <div class="body">
+    <p>The material's current values. An invalid handle returns the default material. A handle that looks valid but is unknown logs an error and also returns the default material.</p>
+  </div>
+</div>
+
+<div class="api" id="updateMaterial">
+  <pre class="sig">void updateMaterial(MaterialHandle material, const Material&amp; values);</pre>
+  <div class="body">
+    <p>Replaces the material's values (steps above). Every entity and glTF sub-mesh that uses it changes in the next frame.</p>
+    <dl>
+      <dt>material</dt><dd>The material to change. Invalid: logs "Invalid material handle for updating material." and does nothing.</dd>
+      <dt>values</dt><dd>The whole new record. Its <code>handle</code> field is ignored.</dd>
+    </dl>
+  </div>
+</div>
+
+<h2 id="textures"><span class="n">4</span>Textures</h2>
+
+<div class="split">
+  <div>
+    <h4>At the call</h4>
+    <p>Reads only the image header (width, height), creates the texture with that size, and returns its handle. You can put it in a material at once.</p>
+  </div>
+  <div>
+    <h4>Later</h4>
+    <p>A worker decodes the pixels to RGBA8. A later <code>beginFrame</code> uploads them and builds all mip levels on the CPU. Then <code>isLoaded</code> is true and waiting entities are drawn.</p>
+  </div>
+</div>
+
+<div class="api" id="loadTexture">
+  <pre class="sig">TextureHandle loadTexture(const std::string&amp; path, Format format = Format::R8G8B8A8_SRGB);</pre>
+  <div class="body">
+    <p>Starts loading a <code>.png</code>, <code>.jpg</code> or <code>.jpeg</code> image. Images with fewer channels are expanded to RGBA.</p>
+    <dl>
+      <dt>path</dt><dd>Relative to <code>EngineConfig::assetRoot</code>, or absolute. The extension is checked in lower case only.</dd>
+      <dt>format</dt><dd><code>R8G8B8A8_SRGB</code> (default) for color: albedo and emissive. <code>R8G8B8A8_UNORM</code> for data: normal, metallic-roughness and occlusion maps. Any other format logs "loadTexture requires RGBA8 sRGB or UNORM format." and returns an invalid handle.</dd>
+    </dl>
+    <p><span class="tag async">loads in the background</span> The same path with the same format returns the same handle. The same file as sRGB and as UNORM gives two textures.</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Problem</th><th>When</th><th>Result</th></tr>
+      <tr><td>Wrong format, unknown extension, or a header that cannot be read (missing file)</td><td>at the call</td><td>error logged, invalid handle</td></tr>
+      <tr><td>The pixels do not decode</td><td>in a later <code>beginFrame</code></td><td>error logged, the texture stays white; <code>isLoaded</code> becomes true</td></tr>
+    </table>
+    </div>
+  </div>
+</div>
+
+<div class="api" id="isLoaded-texture">
+  <pre class="sig">bool isLoaded(TextureHandle texture) const;</pre>
+  <div class="body">
+    <p>True when the texture's pixels are uploaded (also after a failed decode, which leaves it white). False while it loads and for an invalid handle. Textures that did not come from <code>loadTexture</code> (glTF textures, <code>createTexture</code>) are always loaded.</p>
+  </div>
+</div>
+
+<h2 id="bindless"><span class="n">5</span>Bindless textures</h2>
+
+<p>All textures that shaders can sample sit in one descriptor set: an array of <code>MAX_BINDLESS_TEXTURES</code> (1024) slots, binding 0 of set 0, seen by fragment shaders. Materials fill it for you. You need these functions only for your own shaders, like the overlay of <code>examples/01_render_graph/main.cpp</code>:</p>
+
+<pre><code>// Slang: the array the engine binds
+[[vk::binding(0, 0)]]
+Sampler2D gTextures[];
+
+// C++: find the slot, then pass it in a push constant
+const rasm::TextureHandle texture = engine.getRenderTargetTexture(rtHandle);
+uint32_t textureIndex = engine.getBindlessTextureIndex(texture);
+ctx.bindDescriptorSet(commandBuffer, overlayPipeline,
+                      engine.getBindlessDescriptorSet(), 0);
+ctx.pushConstants(commandBuffer, overlayPipeline, rasm::ShaderType::VERTEX_FRAGMENT,
+                  &amp;textureIndex, sizeof(textureIndex), 0);</code></pre>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Who adds textures</th><th>Sampler</th></tr>
+  <tr><td><code>createMaterial</code>, <code>updateMaterial</code></td><td><code>LINEAR_REPEAT</code></td></tr>
+  <tr><td>glTF import</td><td>from the glTF sampler (see below)</td></tr>
+  <tr><td><code>createRenderTarget</code> (one slot per frame slot)</td><td><code>LINEAR_CLAMP</code></td></tr>
+  <tr><td>you, with <code>addBindlessTexture</code></td><td>your choice</td></tr>
+</table>
+</div>
+
+<div class="api" id="addBindlessTexture">
+  <pre class="sig">uint32_t addBindlessTexture(const DescriptorSetHandle&amp; bindlessSet, const TextureHandle&amp; texture, SamplerType sampler = SamplerType::LINEAR_REPEAT, uint32_t slot = MAX_BINDLESS_TEXTURES);</pre>
+  <div class="body">
+    <p>Writes the texture into a slot of the bindless set, with one of the shared samplers. The slot is usable at once.</p>
+    <dl>
+      <dt>bindlessSet</dt><dd>Pass <a href="low-level.html#getBindlessDescriptorSet"><code>getBindlessDescriptorSet()</code></a>.</dd>
+      <dt>texture</dt><dd>Any texture created as sampled.</dd>
+      <dt>sampler</dt><dd>Filter and edge mode, see <a href="#SamplerType"><code>SamplerType</code></a>.</dd>
+      <dt>slot</dt><dd><code>MAX_BINDLESS_TEXTURES</code> (the default): the next free slot. A number below it: that slot, replacing what was there.</dd>
+      <dt>returns</dt><dd>The slot, or <code>UINT32_MAX</code> on error ("Failed to add bindless texture." is logged): all 1024 slots used, a bad slot or sampler, or an unknown texture.</dd>
+    </dl>
+    <p>Each call without a slot takes a new slot, even for a texture that already has one. Slots are never freed. <code>getBindlessTextureIndex</code> then returns the newest slot.</p>
+  </div>
+</div>
+
+<div class="api" id="getBindlessTextureIndex">
+  <pre class="sig">uint32_t getBindlessTextureIndex(const TextureHandle&amp; texture);</pre>
+  <div class="body">
+    <p>The texture's slot in the bindless set, or <code>UINT32_MAX</code> if it was never added. For a render target, ask with <code>getRenderTargetTexture</code> every frame, because each frame slot has its own color texture.</p>
+  </div>
+</div>
+
+<div class="api" id="SamplerType">
+  <pre class="sig">enum class SamplerType
+{
+    LINEAR_REPEAT,
+    LINEAR_MIRRORED_REPEAT,
+    LINEAR_CLAMP,
+    NEAREST_REPEAT,
+    NEAREST_MIRRORED_REPEAT,
+    NEAREST_CLAMP,
+    COUNT,
+};</pre>
+  <div class="body">
+    <p>The six samplers that all bindless textures share (in <code>rasm/render/resource.h</code>; also on <a href="low-level.html#SamplerType">low-level.html</a>). <code>LINEAR_*</code> filter smoothly between pixels and mip levels, with 8× anisotropic filtering. <code>NEAREST_*</code> take the closest pixel (pixel art, data). The <code>*_REPEAT</code> samplers tile the image, <code>*_MIRRORED_REPEAT</code> tile it with every other copy flipped, and <code>*_CLAMP</code> stretch the edge pixels. <code>COUNT</code> is not a sampler.</p>
+  </div>
+</div>
+
+<h2 id="gltf"><span class="n">6</span>What glTF import creates</h2>
+
+<p><a href="scene.html#loadGLTF"><code>loadGLTF</code></a> turns each glTF material into a <code>Material</code> and each image into a texture. This runs on the main thread when the file's upload starts, in <code>beginFrame</code>.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>glTF</th><th>RASM</th></tr>
+  <tr><td>a material</td><td>one <code>PBR</code> material per file (shared by every primitive that uses it)</td></tr>
+  <tr><td><code>KHR_materials_unlit</code></td><td><code>UNLIT</code>, and only the base color texture is uploaded</td></tr>
+  <tr><td><code>doubleSided</code></td><td><code>doubleSided</code></td></tr>
+  <tr><td>base color, metallic, roughness, emissive factors; normal scale; occlusion strength</td><td>the matching <code>PbrParam</code> values</td></tr>
+  <tr><td>base color and emissive textures</td><td><code>R8G8B8A8_SRGB</code></td></tr>
+  <tr><td>metallic-roughness, normal, occlusion textures</td><td><code>R8G8B8A8_UNORM</code>; metallic-roughness goes in both <code>METALLIC</code> and <code>ROUGHNESS</code></td></tr>
+  <tr><td><code>texCoord</code> of each texture</td><td><code>texCoords</code>; a set above 2 logs a warning and uses set 0</td></tr>
+  <tr><td>a sampler</td><td><code>wrapS</code> picks repeat, mirrored repeat or clamp for both axes; <code>magFilter</code> picks nearest or linear</td></tr>
+  <tr><td>an image</td><td>one texture per (image, color space, sampler) in a file; not 8-bit per channel: error, no texture</td></tr>
+</table>
+</div>
+
+<div class="callout warn">
+  <strong>Every import uses up limits</strong>
+  <p>Each glTF material takes one of the 254 free materials and each image one or more bindless slots, and they are never freed (<code>D4</code>). Two files that share a material or image create it twice. A primitive without a material uses the entity's material.</p>
+</div>
+
+<h2 id="limits"><span class="n">7</span>Limits</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Constant</th><th>Value</th><th>Meaning</th></tr>
+  <tr><td><code>MAX_MATERIALS</code></td><td>256</td><td>material table rows; 255 usable handles, one is the default material</td></tr>
+  <tr><td><code>MAX_BINDLESS_TEXTURES</code></td><td>1024</td><td>texture slots, shared by materials, glTF images, render targets and you</td></tr>
+  <tr><td><code>MAX_TEXTURE_SLOTS</code></td><td>6</td><td>textures per material</td></tr>
+  <tr><td><code>MAX_PARAM_SLOTS</code></td><td>10</td><td>floats in <code>params</code></td></tr>
+  <tr><td><code>INVALID_TEXTURE_INDEX</code></td><td>0xFFFFFFFF</td><td>"no texture" in a material row</td></tr>
+</table>
+</div>
+<p>How the slots and rows work inside: <a href="../guides/materials-textures.html">Materials and bindless textures</a>.</p>
+
+</main>
+</div>
+</body>
+</html>
