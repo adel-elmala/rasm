@@ -111,6 +111,17 @@ namespace rasm
             return it->second;
         }
 
+        rhi::QueryPool *lookup(const std::unordered_map<QueryPoolHandle, rhi::QueryPool *, HandleHash> &objects, const QueryPoolHandle &handle, const char *caller)
+        {
+            auto it = objects.find(handle);
+            if (it == objects.end())
+            {
+                spdlog::error("{}: query pool handle not found.", caller);
+                return nullptr;
+            }
+            return it->second;
+        }
+
         rhi::DescriptorSetLayout *lookup(const std::unordered_map<DescriptorSetLayoutHandle, rhi::DescriptorSetLayout *, HandleHash> &objects, const DescriptorSetLayoutHandle &handle, const char *caller)
         {
             auto it = objects.find(handle);
@@ -160,6 +171,7 @@ namespace rasm
         std::unordered_map<PipelineHandle, rhi::Pipeline*, HandleHash>                                                          pipelines;
         std::unordered_map<CommandBufferHandle, rhi::CommandBuffer*, HandleHash>                                                commandBuffers;
         std::unordered_map<FenceHandle, rhi::Fence*, HandleHash>                                                                fences;
+        std::unordered_map<QueryPoolHandle, rhi::QueryPool*, HandleHash>                                                        queryPools;
         std::unordered_map<DescriptorSetLayoutHandle, rhi::DescriptorSetLayout*, HandleHash>                                    descriptorSetLayouts;
         std::unordered_map<DescriptorPoolHandle, rhi::DescriptorPool*, HandleHash>                                              descriptorPools;
         std::unordered_map<DescriptorSetHandle, rhi::DescriptorSet*, HandleHash>                                                descriptorSets;
@@ -254,6 +266,8 @@ namespace rasm
             device.destroyCommandBuffer(rhiCommandBuffer);
         for (const auto &[handle, fence] : impl->fences)
             device.destroyFence(fence);
+        for (const auto &[handle, pool] : impl->queryPools)
+            device.destroyQueryPool(pool);
         for (const auto &[handle, buffer] : impl->buffers)
             device.destroyBuffer(buffer);
         impl->unregisterSwapchainImages();
@@ -419,6 +433,17 @@ namespace rasm
         return handle;
     }
 
+    QueryPoolHandle RenderContext::createTimestampQueryPool(const std::string &name, uint32_t count)
+    {
+        auto *pool = impl->device->createTimestampQueryPool(count, name);
+        if (!pool)
+            return {};
+
+        QueryPoolHandle handle = engine->handleManager.getNextQueryPoolHandle();
+        impl->queryPools[handle] = pool;
+        return handle;
+    }
+
     RenderTargetHandle RenderContext::createRenderTarget(const RenderTargetDesc &desc)
     {
         const TextureDesc colorDesc = {
@@ -550,6 +575,41 @@ namespace rasm
         if (rhiBuffer->mapped)
             return impl->device->fillBuffer(rhiBuffer, data, size, offset);
         return impl->uploads.upload(rhiBuffer, data, size, offset);
+    }
+
+    bool RenderContext::readBuffer(const BufferHandle &buffer, void *data, size_t size, size_t offset)
+    {
+        if (!checkArgument(data != nullptr && size > 0, __func__, "data must be non-null and size greater than zero."))
+            return false;
+
+        auto *rhiBuffer = lookup(impl->buffers, buffer, __func__);
+        if (!rhiBuffer || !checkArgument(offset + size <= rhiBuffer->desc.size, __func__, "the range is outside the buffer.") ||
+            !checkArgument(rhiBuffer->desc.hostVisible, __func__, "only host-visible buffers can be read."))
+            return false;
+        return impl->device->readBuffer(rhiBuffer, data, size, offset);
+    }
+
+    void RenderContext::resetQueries(const QueryPoolHandle &pool)
+    {
+        auto *rhiPool = lookup(impl->queryPools, pool, __func__);
+        if (rhiPool)
+            impl->device->resetQueries(rhiPool);
+    }
+
+    bool RenderContext::getTimestamps(const QueryPoolHandle &pool, uint32_t count, uint64_t *nanoseconds)
+    {
+        auto *rhiPool = lookup(impl->queryPools, pool, __func__);
+        if (!rhiPool || !checkArgument(count <= rhiPool->count && (count == 0 || nanoseconds != nullptr), __func__, "count is past the pool's queries."))
+            return false;
+        return impl->device->getTimestamps(rhiPool, count, nanoseconds);
+    }
+
+    void RenderContext::writeTimestamp(const CommandBufferHandle &commandBuffer, const QueryPoolHandle &pool, uint32_t index)
+    {
+        auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        auto *rhiPool = lookup(impl->queryPools, pool, __func__);
+        if (rhiCommandBuffer && rhiPool && checkArgument(index < rhiPool->count, __func__, "index is past the pool's queries."))
+            rhiCommandBuffer->writeTimestamp(rhiPool, index);
     }
 
     bool RenderContext::fillTexture(const TextureHandle &texture, const void *data)

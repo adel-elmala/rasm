@@ -106,5 +106,5 @@ graph.addPass(
 
 1. `verify-change` skill: baseline before, `run` after, with `--sync` (passes add barriers and layout transitions). New example → its screenshot has no baseline yet, so look at it (Read) and judge.
 2. Wrong output → `frame-debug` skill: `rdc.py actions` shows each pass's begin/draw, and `targets <eid>` shows what each pass wrote.
-3. Cost → `tracy-profile` (CPU only. GPU pass timing isn't instrumented yet: `D16`).
+3. Cost → GPU time per pass: run with `EngineConfig::showStats = true` (F1 toggles it) or read `Engine::getFrameStats()`; every pass gets a timer named after it. CPU cost → `tracy-profile`.
 4. `finish-task` skill: architecture.md §9 if graph behavior changed, the plan item if it closes one.

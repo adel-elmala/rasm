@@ -19,6 +19,7 @@ set(RASM_SRC
             "renderer/gpuTable.cpp"
             "renderer/renderGraph.cpp"
             "renderer/shaderCompiler.cpp"
+            "renderer/statsOverlay.cpp"
             "rhi/device.cpp"
             "rhi/renderContext.cpp"
             "rhi/resource.cpp"

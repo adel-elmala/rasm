@@ -101,6 +101,8 @@ namespace rasm::rhi
         {
             if (stage == PipelineStage::COMPUTE)
                 return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            if (stage == PipelineStage::HOST)
+                return VK_PIPELINE_STAGE_2_HOST_BIT;
             return VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
         }
 
@@ -110,6 +112,8 @@ namespace rasm::rhi
         {
             if (stage == PipelineStage::COMPUTE)
                 return VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_UNIFORM_READ_BIT;
+            if (stage == PipelineStage::HOST)
+                return VK_ACCESS_2_HOST_READ_BIT;
             return VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_UNIFORM_READ_BIT;
         }
 
@@ -358,12 +362,13 @@ namespace rasm::rhi
     void VulkanCommandBuffer::memoryBarrier(PipelineStage before, PipelineStage after)
     {
         // Shaders write buffers only through storage access. Only writes need to be made available: reads
-        // before the barrier just have to finish, which the stage mask covers.
+        // before the barrier just have to finish, which the stage mask covers. The host only reads.
+        const VkAccessFlags2 afterWrites = after == PipelineStage::HOST ? VK_ACCESS_2_NONE : VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
         VkMemoryBarrier2 barrier = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
                                     .srcStageMask = toVkStageMask(before),
                                     .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                                     .dstStageMask = toVkStageMask(after),
-                                    .dstAccessMask = toVkReadMask(after) | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
+                                    .dstAccessMask = toVkReadMask(after) | afterWrites};
         VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
         vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
     }
@@ -396,6 +401,13 @@ namespace rasm::rhi
                                   .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT};
         dependencyInfo.pMemoryBarriers = &after;
         vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+    }
+
+    // Written once all earlier commands are done, so the time between two timestamps covers the commands
+    // between them, without overlap from earlier work.
+    void VulkanCommandBuffer::writeTimestamp(QueryPool *pool, uint32_t index)
+    {
+        vkCmdWriteTimestamp2(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, static_cast<VulkanQueryPool *>(pool)->pool, index);
     }
 
     VkCommandBuffer VulkanCommandBuffer::getVkCommandBuffer() const

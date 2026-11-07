@@ -176,11 +176,13 @@ namespace rasm
 
             if (pass.compute)
             {
+                const uint32_t timer = engine->beginGpuTimer(commandBuffer, pass.name);
                 pass.execute(ctx);
+                engine->endGpuTimer(commandBuffer, timer);
                 continue;
             }
             engine->setRenderTarget(pass.outputRenderTarget);
-            engine->beginPass();
+            engine->beginPass(pass.name);
             pass.execute(ctx);
             engine->endPass();
             engine->resetRenderTarget();

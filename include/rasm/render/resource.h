@@ -46,6 +46,7 @@ namespace rasm
     {
         COMPUTE,
         GRAPHICS,
+        HOST,
     };
 
     enum class DescriptorType

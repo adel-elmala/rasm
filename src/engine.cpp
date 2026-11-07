@@ -3,6 +3,7 @@
 #include "renderer/geometryPool.h"
 #include "renderer/gpuScene.h"
 #include "renderer/shaderCompiler.h"
+#include "renderer/statsOverlay.h"
 
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
@@ -42,7 +43,7 @@ namespace rasm
         }
     }
 
-    Engine::Engine(const EngineConfig &config) : config(config), geometryPool(std::make_unique<GeometryPool>()), gpuScene(std::make_unique<GpuScene>()), ctx(this), shaderCompiler(std::make_unique<ShaderCompiler>())
+    Engine::Engine(const EngineConfig &config) : config(config), geometryPool(std::make_unique<GeometryPool>()), gpuScene(std::make_unique<GpuScene>()), statsOverlay(std::make_unique<StatsOverlay>()), ctx(this), shaderCompiler(std::make_unique<ShaderCompiler>())
     {
         // In a real implementation, this is where we'd initialize the window, graphics context, etc.
         spdlog::info("initializing engine with config: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
@@ -102,7 +103,7 @@ namespace rasm
             return;
         }
 
-        if (!geometryPool->create(ctx, this->config) || !createGpuScene())
+        if (!geometryPool->create(ctx, this->config) || !createGpuScene() || !createStatsOverlay())
             return;
 
         // Create bindless texture descriptor set layout, pool, and set
@@ -295,7 +296,8 @@ namespace rasm
         if (!ctx.waitForFence(frameFence, currentFrame.fenceValue))
             return false;
 
-        // After the wait: it rewrites this slot's tables, which the slot's last frame read.
+        // After the wait: they read what the slot's last frame measured and rewrite the tables it read.
+        updateFrameStats();
         syncGpuScene();
 
         // B4
@@ -315,6 +317,7 @@ namespace rasm
 
         // record commands for the current frame
         ctx.beginCommandBuffer(currentFrame.commandBuffer);
+        statsOverlay->frameTimer = beginGpuTimer(currentFrame.commandBuffer, "Frame");
         return true;
     }
 
@@ -329,11 +332,12 @@ namespace rasm
         {
             auto renderTarget = currentRenderTarget;
             resetRenderTarget();
-            beginPass();
+            beginPass("Clear");
             endPass();
             setRenderTarget(renderTarget);
         }
 
+        endGpuTimer(currentFrame.commandBuffer, statsOverlay->frameTimer);
         ctx.endCommandBuffer(currentFrame.commandBuffer);
 
         // The frame's scene draws read what culling writes, so its command buffer goes first. A frame whose culling
@@ -362,9 +366,10 @@ namespace rasm
         FrameMark;
     }
 
-    void Engine::beginPass()
+    void Engine::beginPass(const std::string &name)
     {
         auto currentFrame = frameResources[frameCount];
+        statsOverlay->passTimer = beginGpuTimer(currentFrame.commandBuffer, name);
         uint32_t width = swapchain.width;
         uint32_t height = swapchain.height;
 
@@ -397,6 +402,8 @@ namespace rasm
     void Engine::endPass()
     {
         auto currentFrame = frameResources[frameCount];
+        if (!currentRenderTarget.isValid())
+            drawStatsOverlay();
         ctx.endRendering(currentFrame.commandBuffer);
 
         if (currentRenderTarget.isValid())
@@ -411,6 +418,7 @@ namespace rasm
             ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::COLOR_ATTACHMENT, TextureUsage::PRESENT_SRC);
             swapchainRendered = true;
         }
+        endGpuTimer(currentFrame.commandBuffer, statsOverlay->passTimer);
     }
 
     void Engine::setRenderTarget(const RenderTargetHandle &renderTarget)
@@ -479,7 +487,7 @@ namespace rasm
 
         if (!beginFrame(camera))
             return;
-        beginPass();
+        beginPass("Scene");
         drawScene(scene, camera);
         endPass();
         endFrame();

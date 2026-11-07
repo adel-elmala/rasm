@@ -162,6 +162,7 @@ namespace rasm
                                      {"drawCountsPtr", offsetof(gfx::SceneData, drawCountsPtr)},
                                      {"cullSlotsPtr", offsetof(gfx::SceneData, cullSlotsPtr)},
                                      {"groupCountsPtr", offsetof(gfx::SceneData, groupCountsPtr)},
+                                     {"cullStatsPtr", offsetof(gfx::SceneData, cullStatsPtr)},
                                      {"frustumPlanes", offsetof(gfx::SceneData, frustumPlanes)},
                                      {"drawCount", offsetof(gfx::SceneData, drawCount)},
                                      {"runCount", offsetof(gfx::SceneData, runCount)},

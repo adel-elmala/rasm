@@ -51,6 +51,7 @@ namespace rasm
     struct DescriptorSetLayoutTag;
     struct DescriptorPoolTag;
     struct DescriptorSetTag;
+    struct QueryPoolTag;
 
     using MeshHandle                = Handle<MeshTag>;
     using BufferHandle              = Handle<BufferTag>;
@@ -71,6 +72,7 @@ namespace rasm
     using DescriptorSetLayoutHandle = Handle<DescriptorSetLayoutTag>;
     using DescriptorPoolHandle      = Handle<DescriptorPoolTag>;
     using DescriptorSetHandle       = Handle<DescriptorSetTag>;
+    using QueryPoolHandle           = Handle<QueryPoolTag>;
 
 
     struct HandleCounters
@@ -90,6 +92,7 @@ namespace rasm
         uint64_t descriptorSetLayout    = 1;
         uint64_t descriptorPool         = 1;
         uint64_t descriptorSet          = 1;
+        uint64_t queryPool              = 1;
         uint64_t camera                 = 1;
         uint64_t light                  = 1;
     };
@@ -113,6 +116,7 @@ namespace rasm
         DescriptorSetLayoutHandle   getNextDescriptorSetLayoutHandle();
         DescriptorPoolHandle        getNextDescriptorPoolHandle();
         DescriptorSetHandle         getNextDescriptorSetHandle();
+        QueryPoolHandle             getNextQueryPoolHandle();
         MaterialHandle              getNextMaterialHandle();
         CameraHandle                getNextCameraHandle();
         EntityHandle                getNextEntityHandle();

@@ -28,10 +28,19 @@ namespace rasm
         uint32_t                        count                                                               = 0;
     };
 
+    struct DrawTotals
+    {
+        uint32_t                        draws                                                               = 0;
+        uint64_t                        triangles                                                           = 0;
+        uint32_t                        unculledDraws                                                       = 0;
+        uint64_t                        unculledTriangles                                                   = 0;
+    };
+
     struct SceneDrawList
     {
         std::vector<gfx::DrawInfo>      draws;
         std::vector<DrawRun>            runs;
+        uint64_t                        triangleCount                                                       = 0;
         BufferHandle                    buffers[MAX_FRAMES_IN_FLIGHT]                                       = {};
         uint32_t                        bufferCapacity[MAX_FRAMES_IN_FLIGHT]                                = {};
         uint8_t                         staleSlots                                                          = 0;
@@ -51,6 +60,8 @@ namespace rasm
         BufferHandle                    visibleDraws[MAX_FRAMES_IN_FLIGHT][MAX_SCENE_DRAWS_PER_FRAME]       = {};
         uint32_t                        visibleCapacity[MAX_FRAMES_IN_FLIGHT][MAX_SCENE_DRAWS_PER_FRAME]    = {};
         uint32_t                        cullGroupCounts[MAX_SCENE_DRAWS_PER_FRAME]                          = {};
+        BufferHandle                    cullStats[MAX_FRAMES_IN_FLIGHT]                                     = {};
+        DrawTotals                      drawTotals[MAX_FRAMES_IN_FLIGHT]                                    = {};
         std::vector<EntityDrawState>    entities;
         std::vector<CullMode>           instanceCullModes;
         uint32_t                        instanceCount                                                       = 0;
