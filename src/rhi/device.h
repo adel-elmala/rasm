@@ -111,6 +111,11 @@ namespace rasm::rhi
     {
     };
 
+    struct QueryPool
+    {
+        uint32_t                            count               = 0;
+    };
+
     class CommandBuffer
     {
     public:
@@ -134,6 +139,7 @@ namespace rasm::rhi
         virtual void                dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
         virtual void                memoryBarrier(PipelineStage before, PipelineStage after) = 0;
         virtual void                copyBuffers(Buffer* src, const BufferCopy* copies, uint32_t copyCount) = 0;
+        virtual void                writeTimestamp(QueryPool* pool, uint32_t index) = 0;
     };
 
     class Swapchain
@@ -183,6 +189,7 @@ namespace rasm::rhi
         virtual CommandBuffer*          createCommandBuffer(QueueType queueType, const std::string& name) = 0;
         virtual Fence*                  createFence(uint64_t initialValue, const std::string& name) = 0;
         virtual Swapchain*              createSwapchain(const SwapchainDesc& desc) = 0;
+        virtual QueryPool*              createTimestampQueryPool(uint32_t count, const std::string& name) = 0;
         virtual void                    destroyBuffer(Buffer* buffer) = 0;
         virtual void                    destroyTexture(Texture* texture) = 0;
         virtual void                    destroySampler(Sampler* sampler) = 0;
@@ -194,8 +201,12 @@ namespace rasm::rhi
         virtual void                    destroyCommandBuffer(CommandBuffer* commandBuffer) = 0;
         virtual void                    destroyFence(Fence* fence) = 0;
         virtual void                    destroySwapchain(Swapchain* swapchain) = 0;
+        virtual void                    destroyQueryPool(QueryPool* pool) = 0;
         virtual Queue*                  getQueue(QueueType queueType) = 0;
         virtual bool                    fillBuffer(Buffer* buffer, const void* data, size_t size, size_t offset) = 0;
+        virtual bool                    readBuffer(Buffer* buffer, void* data, size_t size, size_t offset) = 0;
+        virtual void                    resetQueries(QueryPool* pool) = 0;
+        virtual bool                    getTimestamps(QueryPool* pool, uint32_t count, uint64_t* nanoseconds) = 0;
         virtual bool                    fillTexture(Texture* texture, const void* data) = 0;
         virtual void                    updateBindlessTexture(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, Sampler* sampler) = 0;
         virtual bool                    waitForFence(Fence* fence, uint64_t value, uint64_t timeout) = 0;

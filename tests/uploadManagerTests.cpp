@@ -59,6 +59,7 @@ namespace
             src = source;
             copies.insert(copies.end(), list, list + count);
         }
+        void writeTimestamp(QueryPool *, uint32_t) override {}
 
         Buffer *src = nullptr;
         std::vector<BufferCopy> copies;
@@ -145,6 +146,7 @@ namespace
             return fence;
         }
         rhi::Swapchain *createSwapchain(const SwapchainDesc &) override { return nullptr; }
+        QueryPool *createTimestampQueryPool(uint32_t, const std::string &) override { return nullptr; }
         void destroyBuffer(Buffer *buffer) override
         {
             std::erase(buffers, buffer);
@@ -168,6 +170,7 @@ namespace
             delete static_cast<FakeFence *>(fence);
         }
         void destroySwapchain(rhi::Swapchain *) override {}
+        void destroyQueryPool(QueryPool *) override {}
         Queue *getQueue(QueueType) override { return &queue; }
         bool fillBuffer(Buffer *buffer, const void *data, size_t size, size_t offset) override
         {
@@ -180,6 +183,9 @@ namespace
             std::memcpy(fake->bytes.data() + offset, data, size);
             return true;
         }
+        bool readBuffer(Buffer *, void *, size_t, size_t) override { return false; }
+        void resetQueries(QueryPool *) override {}
+        bool getTimestamps(QueryPool *, uint32_t, uint64_t *) override { return false; }
         bool fillTexture(Texture *, const void *) override { return false; }
         void updateBindlessTexture(DescriptorSet *, uint32_t, Texture *, Sampler *) override {}
         bool waitForFence(Fence *fence, uint64_t value, uint64_t) override

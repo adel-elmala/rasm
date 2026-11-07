@@ -46,7 +46,7 @@ Put traces in the scratchpad directory. `zones`/`frames` cache CSVs next to the 
 
 - **Thread 1 is the main thread.** Other threads are `std::async` loaders (`importMeshFile`, `decodeTexture`).
 - **Frame zones**: `render` → `beginFrame` (contains `waitForFence`, `syncGpuScene` with `rebuildDrawList` and `GpuTable::upload` when something changed, `acquireNextImage`) → `drawScene` (`createPipeline` on first use) → `endFrame` (`recordCulling`, `submit`, `present`, then `FrameMark`).
-- **`waitForFence` big = GPU bound.** The CPU waits for the frame-in-flight slot. Tracy has **no GPU zones** in RASM yet (`D16` in `docs/code_review.md`), so GPU cost only shows up as this wait. For GPU-side questions use the `frame-debug` skill, or propose adding Tracy Vulkan GPU zones (ask first, it is a new subsystem).
+- **`waitForFence` big = GPU bound.** The CPU waits for the frame-in-flight slot. Tracy has **no GPU zones** in RASM yet (`D16` in `docs/code_review.md`), so GPU cost only shows up as this wait. GPU time per pass is in the stats overlay (`EngineConfig::showStats`, F1) and `Engine::getFrameStats()`. For deeper GPU-side questions use the `frame-debug` skill, or propose adding Tracy Vulkan GPU zones (ask first, it is a new subsystem).
 - **Present mode matters**: with vsync, `waitForFence`/`acquireNextImage` include waiting for the display, so frame time is capped (16.7 ms at 60 Hz).
 - **Noise**: two runs of the same build differ by about 5-8% on sub-0.1 ms zones. Before calling a change faster, repeat the capture, or only trust differences clearly above that.
 - **Untracked time** in `frames` = main-thread time inside the frame not covered by any zone. If it is large, add zones there.

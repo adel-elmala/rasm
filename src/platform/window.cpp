@@ -95,6 +95,8 @@ namespace rasm
                     spdlog::info("Escape key pressed, closing window.");
                     isRunning = false;
                 }
+                if (event.key.key == SDLK_F1 && !event.key.repeat)
+                    config.showStats = !config.showStats;
                 break;
             }
             case SDL_EVENT_MOUSE_BUTTON_DOWN:

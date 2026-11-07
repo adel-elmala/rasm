@@ -86,4 +86,9 @@ namespace rasm
     {
         return SceneHandle{nextHandle.scene++, 1};
     }
+
+    QueryPoolHandle HandleManager::getNextQueryPoolHandle()
+    {
+        return QueryPoolHandle{nextHandle.queryPool++, 1};
+    }
 } // namespace rasm
