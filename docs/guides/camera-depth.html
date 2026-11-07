@@ -260,7 +260,7 @@
     <text x="510" y="152" class="small">speed 12, dt 1/60 → t = 0.18</text>
     <text x="510" y="170" class="small">speed ≤ 0, or dt = 0 → snap to the target</text>
   </svg>
-  <figcaption>The same <code>easingSpeed</code> gives the same motion in seconds at 30 or 144 fps, because <code>t</code> comes from the frame time. The default is 12; the examples use 6.</figcaption>
+  <figcaption>The same <code>easingSpeed</code> gives the same motion in seconds at 30 or 144 fps, because <code>t</code> comes from the frame time. The default is 12; the examples use 6. Once the pose is within float precision of the target (about one millionth), <code>easeCamera</code> snaps to it: easing between equal values still rounds by an amount that depends on the frame time, and a camera at rest must not move (<code>B24</code>).</figcaption>
 </figure>
 
 <p>The trackball does not mix positions in a straight line. A straight line would cut across the orbit and move the camera closer to the center. It eases the rotation, then puts the camera at <code>center + radius · (rotation · +Z)</code> with an eased radius.</p>

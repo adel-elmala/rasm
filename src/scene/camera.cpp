@@ -121,7 +121,13 @@ namespace rasm
         void easeCamera(Camera &cam, float deltaTime)
         {
             const float easingSpeed = cam.controller.easingSpeed;
-            if (easingSpeed <= 0.0f || deltaTime <= 0.0f)
+            // Easing between (nearly) equal values still rounds by an amount that depends on deltaTime, so a
+            // camera at rest would move by float noise every frame. Close enough, it snaps to the target (B24).
+            const glm::quat remaining = glm::conjugate(cam.transform.rotation) * cam.targetTransform.rotation;
+            const bool settled = glm::length(cam.targetTransform.position - cam.transform.position) <= 1e-6f * glm::max(1.0f, glm::length(cam.targetTransform.position)) &&
+                                 glm::length(glm::vec3(remaining.x, remaining.y, remaining.z)) <= 1e-6f &&
+                                 glm::length(cam.targetTransform.scale - cam.transform.scale) <= 1e-6f;
+            if (easingSpeed <= 0.0f || deltaTime <= 0.0f || settled)
             {
                 cam.transform = cam.targetTransform;
                 return;

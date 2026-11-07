@@ -201,6 +201,8 @@ Next steps, in order:
 
 **B23 — The CPU/GPU struct check only runs in debug builds.** `validateRasmStructs` is called inside `assert(...)` ([shaderCompiler.cpp:391](../src/renderer/shaderCompiler.cpp#L391)), so with `NDEBUG` the call is compiled out. A Release build with mismatched structs starts normally and the GPU reads shifted data, or hits a device lost when a pointer field moves. Call it unconditionally, log the mismatch and fail the shader or pipeline creation. The check runs once per linked program, so it costs nothing at runtime. *Confirmed.*
 
+**B24 — A camera at rest moved by float noise that depended on the frame time.** *Fixed 2026-11-07:* `easeCamera` snaps the rendered transform to the target once position, rotation and scale are within 1e-6 of it (relative for the position). The original finding follows. `easeCamera` ([camera.cpp:121-156](../src/scene/camera.cpp#L121-L156)) ran `slerp`, `normalize` and `mix` toward the target every frame, even when the camera was already there. With `t` taken from `deltaTime`, the rounding differed from run to run, so frame N of an example without input was not the same on every run. Frustum culling hid it. With occlusion culling, a test that sits right on the edge can flip, which moves a draw between the early and late pass and changes which face wins on equal depth: `03_instances` frame 60 differed in 480 pixels on cube edges in about half the runs. After the fix, 6 full captures out of 6 were identical. *Confirmed.*
+
 ---
 
 ## 3. Design and architecture
