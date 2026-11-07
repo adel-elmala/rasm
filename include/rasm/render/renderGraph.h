@@ -37,13 +37,6 @@ namespace rasm
         uint32_t producerIdx = static_cast<uint32_t>(-1); // Which pass writes this resource?
     };
 
-    // How passes used a buffer since its last write, across frames.
-    struct BufferAccess
-    {
-        PipelineStage           writeStages = {};   // the last write's stages, none before the first write
-        PipelineStage           readStages  = {};   // stages that have read it since, behind a barrier from the write
-    };
-
     class RenderGraph;
 
     class PassBuilder
@@ -82,6 +75,12 @@ namespace rasm
         void execute(CameraHandle camera);
 
     protected:
+        struct BufferAccess
+        {
+            PipelineStage   writeStages = {};
+            PipelineStage   readStages  = {};
+        };
+
         void                analyzeDependencies();
         bool                bufferBarrier(const Pass& pass, PipelineStage& before, PipelineStage& after);
         TextureHandle       createTexture(const TextureDesc& desc);

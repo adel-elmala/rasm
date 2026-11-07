@@ -268,7 +268,7 @@ if (!engine.running())
 <div class="api" id="beginPass">
   <pre class="sig">void beginPass(const std::string&amp; name = "Pass");</pre>
   <div class="body">
-    <p>Starts rendering into the current target: the window, or the render target set with <a href="render-graph.html#setRenderTarget"><code>setRenderTarget</code></a>. It clears color and depth, sets the viewport and scissor to the whole target, and sets cull mode to none. Only between <code>beginFrame</code> and <code>endFrame</code>.</p>
+    <p>Starts rendering into the current target: the window, or the render target set with <a href="render-graph.html#setRenderTarget"><code>setRenderTarget</code></a>. It clears color and depth (their old contents are dropped, so nothing is kept from an earlier pass), sets the viewport and scissor to the whole target, and sets cull mode to none. Only between <code>beginFrame</code> and <code>endFrame</code>.</p>
     <dl>
       <dt>name</dt><dd>Label of the pass. It names the pass's GPU timer in <code>getFrameStats</code> and the stats overlay.</dd>
     </dl>
@@ -279,7 +279,7 @@ if (!engine.running())
 <div class="api" id="endPass">
   <pre class="sig">void endPass();</pre>
   <div class="body">
-    <p>Ends the pass. On the window, it first draws the stats overlay (when shown). Color and depth stay attachments. A render graph pass that reads the render target gets its color in the sampled layout; outside a graph, call <a href="low-level.html#transitionImageLayout"><code>transitionImageLayout</code></a> first (see <a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a>). Depth is never sampled by later passes. <code>endFrame</code> moves the swapchain image to the present layout.</p>
+    <p>Ends the pass. On the window, it first draws the stats overlay (when shown). On a render target, it moves the color image to the sampled layout, so later passes can sample it (see <a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a>). The depth image stays a depth attachment, so later passes cannot sample it. <code>endFrame</code> moves the swapchain image to the present layout.</p>
   </div>
 </div>
 

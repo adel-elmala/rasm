@@ -300,11 +300,12 @@ constexpr bool          hasStage(PipelineStage stages, PipelineStage stage);</pr
 </div>
 
 <div class="api" id="transitionImageLayout">
-  <pre class="sig">bool transitionImageLayout(const CommandBufferHandle&amp; commandBuffer, TextureHandle texture, TextureUsage newUsage);</pre>
+  <pre class="sig">bool transitionImageLayout(const CommandBufferHandle&amp; commandBuffer, TextureHandle texture, TextureUsage newUsage, bool discard = false);</pre>
   <div class="body">
     <p>Records a barrier that moves a texture from the use it is in now to <code>newUsage</code>. The context remembers each texture's use, so you name only the new one. The barrier waits for the old use and blocks the new one. <code>SAMPLED</code> covers fragment and compute shaders. The attachment usages cover reads too, for a <code>beginRendering</code> with <code>load</code>.</p>
     <dl>
       <dt>newUsage</dt><dd><code>COLOR_ATTACHMENT</code>, <code>DEPTH_STENCIL_ATTACHMENT</code>, <code>SAMPLED</code> or <code>PRESENT_SRC</code>.</dd>
+      <dt>discard</dt><dd><code>true</code> drops the contents: the barrier starts from <code>UNKNOWN</code>, which still waits for every earlier use. Use it before a pass that clears the texture. <code>beginPass</code> does it for its attachments.</dd>
     </dl>
     <figure class="diagram">
       <svg viewBox="0 0 700 150" role="img" aria-label="A texture starts UNKNOWN. fillTexture makes it SAMPLED. Each transition records a barrier and remembers the new usage, except SAMPLED to SAMPLED, which records nothing. Acquiring a swapchain image makes it UNKNOWN again.">
@@ -329,8 +330,8 @@ constexpr bool          hasStage(PipelineStage stages, PipelineStage stage);</pr
       </svg>
       <figcaption>Every arrow can go the other way too, except into <code>UNKNOWN</code>. Only <code>SAMPLED</code> to <code>SAMPLED</code> records nothing: reads after reads need no barrier.</figcaption>
     </figure>
-    <p>The use changes when the barrier is recorded, so it assumes the command buffer is submitted, and command buffers that touch the same texture are submitted in the order they were recorded.</p>
-    <p><span class="tag">errors</span> Another usage logs an error, records nothing and returns <code>false</code>. Inside a render pass it records nothing (barriers are not allowed there). <code>beginPass</code> moves its attachments, <code>endFrame</code> moves the swapchain image to <code>PRESENT_SRC</code>, and a render graph pass that reads a texture or render target gets it in <code>SAMPLED</code>. Call it yourself only to sample a render target outside a graph.</p>
+    <p>The use changes when the barrier is recorded. A successful <a href="#submit"><code>submit</code></a> keeps it; for commands that will not run, call <a href="#discardRecording"><code>discardRecording</code></a>. Command buffers that touch the same texture must be submitted in the order they were recorded.</p>
+    <p><span class="tag">errors</span> Another usage logs an error, records nothing and returns <code>false</code>. Inside a render pass it records nothing (barriers are not allowed there). <code>beginPass</code> moves its attachments, <code>endPass</code> moves a render target's color to <code>SAMPLED</code>, <code>endFrame</code> moves the swapchain image to <code>PRESENT_SRC</code>, and a render graph pass that reads a texture gets it in <code>SAMPLED</code>. Call it yourself only for your own textures outside those steps.</p>
   </div>
 </div>
 
@@ -847,6 +848,14 @@ struct BindlessDescriptorSetLayoutDescHash
       <dt>signalFence, signalValue</dt><dd>The fence is set to <code>signalValue</code> when the work is done. An invalid handle signals nothing.</dd>
       <dt>presentsSwapchainImage</dt><dd><code>true</code> only for the frame that draws the acquired swapchain image: it waits for the acquire and signals the present.</dd>
     </dl>
+    <p>On success the texture states the commands recorded are kept (see <a href="#transitionImageLayout"><code>transitionImageLayout</code></a>). On failure it returns <code>false</code>: call <code>discardRecording</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="discardRecording">
+  <pre class="sig">void discardRecording();</pre>
+  <div class="body">
+    <p>Says that the commands recorded since the last successful <code>submit</code> will not run, a failed submit included. Every texture they moved goes back to the usage it had before them, which is still the GPU's layout. <code>endFrame</code> calls it for a frame it does not submit. Without it, the next barrier on such a texture would start from a layout the texture never reached.</p>
   </div>
 </div>
 

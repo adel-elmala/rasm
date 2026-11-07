@@ -368,6 +368,10 @@ namespace rasm
             if (status == SwapchainStatus::SUBOPTIMAL || status == SwapchainStatus::OUT_OF_DATE)
                 swapchainOutOfDate = true;
         }
+        else
+        {
+            ctx.discardRecording();
+        }
 
         frameCount = (frameCount + 1) % MAX_FRAMES_IN_FLIGHT; // Toggle between 0 and 1 for double buffering
 
@@ -389,14 +393,15 @@ namespace rasm
             width = renderTargetData.width;
             height = renderTargetData.height;
 
-            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::COLOR_ATTACHMENT);
-            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
+            // The pass clears both, so their contents are dropped.
+            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::COLOR_ATTACHMENT, true);
+            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT, true);
             ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, renderTargetData.attachments[frameCount].depth, renderTargetData.clearColor, false, storeDepth);
         }
         else
         {
-            ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::COLOR_ATTACHMENT);
-            ctx.transitionImageLayout(currentFrame.commandBuffer, currentFrame.depthTexture, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
+            ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::COLOR_ATTACHMENT, true);
+            ctx.transitionImageLayout(currentFrame.commandBuffer, currentFrame.depthTexture, TextureUsage::DEPTH_STENCIL_ATTACHMENT, true);
             ctx.beginRendering(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], currentFrame.depthTexture, SWAPCHAIN_CLEAR_COLOR, false, storeDepth);
         }
 
@@ -414,10 +419,18 @@ namespace rasm
             drawStatsOverlay();
         ctx.endRendering(currentFrame.commandBuffer);
 
-        // The attachments stay attachments. A pass that samples one moves it to SAMPLED first (the render graph
-        // does it for the render targets a pass reads), and endFrame moves the swapchain image to PRESENT_SRC.
-        if (!currentRenderTarget.isValid())
+        if (currentRenderTarget.isValid())
+        {
+            // Later passes sample the color attachment through the bindless set, whose descriptors promise
+            // this layout (B10). Depth stays an attachment: only drawScene's Hi-Z reads it, inside the pass.
+            const auto &renderTargetData = ctx.getRenderTarget(currentRenderTarget);
+            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::SAMPLED);
+        }
+        else
+        {
+            // endFrame moves it to PRESENT_SRC.
             swapchainRendered = true;
+        }
         endGpuTimer(currentFrame.commandBuffer, frameStats->passTimer);
     }
 

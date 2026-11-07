@@ -38,7 +38,7 @@
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 310" role="img" aria-label="Once: createRenderGraph, then addPass or addComputePass, whose setup runs at once, then compile. Every frame, execute calls beginFrame, then for each pass in order either setRenderTarget, beginPass, your execute and endPass for a graphics pass, or a GPU timer and your execute for a compute pass. Both start with the barriers their reads and writes need. Then endFrame.">
+  <svg viewBox="0 0 760 310" role="img" aria-label="Once: createRenderGraph, then addPass or addComputePass, whose setup runs at once, then compile. Every frame, execute calls beginFrame, then for each pass in order either setRenderTarget, beginPass, your execute and endPass for a graphics pass, or a GPU timer and your execute for a compute pass. Both start with the barriers their reads and writes need. endPass leaves a render target sampled. Then endFrame.">
     <text x="10" y="16" class="small">once, before the loop</text>
     <rect x="10" y="26" width="200" height="54" rx="6" class="cpu"/>
     <text x="110" y="48" class="mid mono">createRenderGraph</text>
@@ -75,7 +75,7 @@
     <text x="542" y="202" class="mid small">your lambda</text>
     <rect x="588" y="166" width="60" height="46" rx="6" class="cpu"/>
     <text x="618" y="185" class="mid mono">endPass</text>
-    <text x="618" y="202" class="mid small">overlay</text>
+    <text x="618" y="202" class="mid small">SAMPLED</text>
 
     <text x="200" y="230" class="small">compute pass</text>
     <rect x="200" y="236" width="76" height="46" rx="6" class="gpu"/>
@@ -103,7 +103,7 @@
   <ul>
     <li>Create targets and buffers in the setup callback, and declare them with <code>read</code> / <code>write</code>. Only these declarations order the passes.</li>
     <li>A graphics pass draws into the render target it writes, or into the swapchain if it writes none. Every graphics pass <b>clears</b> its target first.</li>
-    <li>The graph records the barriers and layout changes from what the passes declare. A buffer or texture a pass uses but does not declare gets none.</li>
+    <li>The graph records the barriers and layout changes from what the passes declare. <b>Declare every buffer and texture a pass uses</b>: an undeclared one gets no barrier.</li>
     <li>A compute pass runs outside any render pass, so it can <code>dispatch</code>.</li>
     <li>Inside a callback, record with the <a href="low-level.html">RenderContext</a> and the frame's command buffer: <code>engine.getCurrentFrameResources().commandBuffer</code>.</li>
     <li>Pipelines for your own shaders come from <code>createPipeline</code> and <code>createComputePipeline</code>, compiled from Slang source at run time.</li>
@@ -159,7 +159,7 @@ public:
          std::function&lt;void(RenderContext&amp;)&gt; execute);</pre>
   <div class="body">
     <p>Adds a compute pass. It is sorted like any other pass. <code>execute</code> runs outside any render pass, so <code>dispatch</code> and <code>memoryBarrier</code> are allowed and draws are not. There is no target, no clear and no layout transition.</p>
-    <p><span class="tag">errors</span> A render target written in <code>setup</code> logs <code>Compute pass '…' cannot write a render target; the write is ignored.</code> and is dropped.</p>
+    <p><span class="tag">errors</span> A render target written in <code>setup</code> logs <code>Compute pass '…' cannot write a render target; the write is ignored.</code> and is dropped. A compute pass must <code>write</code> at least one buffer, since compute writes only buffers: without one, <code>compile</code> fails with <code>Compute pass '…' declares no buffer write; declare every buffer it uses.</code></p>
     <p>The graph adds a barrier before the pass only for a buffer it declares that another pass (or the previous frame) wrote or read; see <a href="#barriers">Barriers</a>. A pass with several dependent dispatches records <code>ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE)</code> between them itself.</p>
   </div>
 </div>
@@ -253,11 +253,11 @@ void write(BufferHandle handle);</pre>
 <div class="api" id="BufferAccess">
   <pre class="sig">struct BufferAccess
 {
-    PipelineStage           writeStages = {};
-    PipelineStage           readStages  = {};
+    PipelineStage   writeStages = {};
+    PipelineStage   readStages  = {};
 };</pre>
   <div class="body">
-    <p>What the graph remembers about each buffer a pass declares: the stage of the last write (none before the first), and the stages that have read it since, behind a barrier. It is kept across frames, and only <code>execute</code> changes it. You never build one yourself.</p>
+    <p>A protected type inside <code>RenderGraph</code>: what the graph remembers about each buffer a pass declares. <code>writeStages</code> is the stage of the last write (none before the first), and <code>readStages</code> the stages that have read it since, behind a barrier. It is kept across frames, and only <code>execute</code> changes it. You never build one yourself.</p>
   </div>
 </div>
 
@@ -329,15 +329,16 @@ void write(BufferHandle handle);</pre>
 <table>
   <tr><th>The pass declares</th><th>Recorded before it</th><th>When</th></tr>
   <tr><td><code>read(texture)</code></td><td><code>transitionImageLayout(texture, SAMPLED)</code></td><td>unless it is <code>SAMPLED</code> already</td></tr>
-  <tr><td><code>read(renderTarget)</code></td><td>the same, for this frame slot's color texture</td><td>after the pass that drew it: color attachment → sampled</td></tr>
-  <tr><td><code>write(renderTarget)</code>, or no target</td><td><code>beginPass</code> moves color and depth to attachments</td><td>always: the pass writes them</td></tr>
+  <tr><td><code>read(renderTarget)</code></td><td>nothing</td><td><code>endPass</code> of the pass that drew it left the color sampled</td></tr>
+  <tr><td><code>write(renderTarget)</code>, or no target</td><td><code>beginPass</code> moves color and depth to attachments, dropping their contents</td><td>always: the pass clears and writes them</td></tr>
   <tr><td><code>read(buffer)</code></td><td><code>memoryBarrier</code>: last write's stage → this pass's stage</td><td>once per stage after each write</td></tr>
   <tr><td><code>write(buffer)</code></td><td><code>memoryBarrier</code>: last write and the reads since → this pass's stage</td><td>if any pass used the buffer before, also in the previous frame</td></tr>
   <tr><td><code>write(texture)</code></td><td>nothing</td><td>it only orders passes</td></tr>
 </table>
 </div>
 
-<p>All of a pass's buffers share one global barrier. A buffer or texture the pass uses without declaring it gets nothing, so declare everything another pass also touches. The graph knows only its own passes: a buffer shared with another graph, or with work outside the graph, is not ordered.</p>
+<p>All of a pass's buffers share one global barrier. A buffer or texture the pass uses without declaring it gets nothing, so declare everything it touches. The graph knows only its own passes: a buffer shared with another graph, or with work outside the graph, is not ordered.</p>
+<p><span class="tag">errors</span> <code>compile</code> fails, like on a cycle, for declarations that cannot be right: a pass that reads the render target it draws to (<code>Pass '…' reads the render target it draws to.</code>), and a compute pass with no buffer write. The frames then draw no passes until the graph changes.</p>
 
 <h3>What one frame records: <code>examples/04_compute</code></h3>
 
@@ -384,7 +385,7 @@ void write(BufferHandle handle);</pre>
 <div class="table-wrap">
 <table>
   <tr><th>What <code>createRenderTarget</code> makes</th><th>Per frame slot (2)</th><th>Notes</th></tr>
-  <tr><td>Color texture</td><td>1, usage <code>SAMPLED_COLOR_ATTACHMENT</code></td><td>Added to the bindless set with <code>LINEAR_CLAMP</code>. It stays a color attachment after the pass. A pass that <code>read</code>s the target gets it in the sampled layout.</td></tr>
+  <tr><td>Color texture</td><td>1, usage <code>SAMPLED_COLOR_ATTACHMENT</code></td><td>Added to the bindless set with <code>LINEAR_CLAMP</code>. <code>endPass</code> leaves it in the sampled layout, so later passes can read it.</td></tr>
   <tr><td>Depth texture</td><td>1, usage <code>SAMPLED_DEPTH_ATTACHMENT</code> for <code>D32_SFLOAT</code>, else <code>DEPTH_STENCIL_ATTACHMENT</code></td><td>Cleared to 0 by every pass, and stored. <code>drawScene</code> adds it to the bindless set (<code>NEAREST_CLAMP</code>) the first time it occlusion-culls into the target, and builds its Hi-Z from it. It stays a depth attachment, so later passes cannot sample it.</td></tr>
   <tr><td>Bindless slots used</td><td colspan="2">2 of <code>MAX_BINDLESS_TEXTURES</code> (1024), and 2 more once <code>drawScene</code> occlusion-culls into both slots' depth</td></tr>
 </table>
@@ -425,7 +426,7 @@ void write(BufferHandle handle);</pre>
 <div class="api" id="getRenderTargetTexture">
   <pre class="sig">TextureHandle getRenderTargetTexture(const RenderTargetHandle&amp; renderTarget);</pre>
   <div class="body">
-    <p>The color texture of the <b>current frame slot</b>. The slot changes every frame, so fetch it every frame, inside the pass that reads it. Pass it to <a href="materials.html#getBindlessTextureIndex">getBindlessTextureIndex</a> to get the index a shader samples with. In a graph, declare <code>read(rt)</code> and the texture is in the sampled layout when the pass runs; outside a graph, call <a href="low-level.html#transitionImageLayout">transitionImageLayout</a>(…, <code>SAMPLED</code>) before the pass that samples it. An unknown handle logs <code>Render target handle not found.</code> and returns an invalid handle.</p>
+    <p>The color texture of the <b>current frame slot</b>. The slot changes every frame, so fetch it every frame, inside the pass that reads it. Pass it to <a href="materials.html#getBindlessTextureIndex">getBindlessTextureIndex</a> to get the index a shader samples with. <code>endPass</code> leaves it in the sampled layout. In a graph, declare <code>read(rt)</code> so the pass sorts after the one that draws it. An unknown handle logs <code>Render target handle not found.</code> and returns an invalid handle.</p>
   </div>
 </div>
 
@@ -450,11 +451,7 @@ if (engine.beginFrame(camera))
     engine.beginPass("Offscreen");
     engine.drawScene(scene, camera);
     engine.endPass();
-    engine.resetRenderTarget();
-
-    // The graph does this for a pass that reads rt.
-    auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
-    engine.getRenderContext().transitionImageLayout(commandBuffer, engine.getRenderTargetTexture(rt), rasm::TextureUsage::SAMPLED);
+    engine.resetRenderTarget(); // endPass left rt's color ready to sample
 
     engine.beginPass("Present"); // swapchain; sample rt here
     // ... bind a pipeline and draw

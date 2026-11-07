@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The RHI · RASM</title>
 <meta name="description" content="The backend-neutral rhi::Device interface and its Vulkan implementation: resource structs and derivation, command buffers, memoryBarrier and PipelineStage, timestamps, timeline fences, swapchain semaphores, the one queue, and how to add a backend.">
-<meta name="rasm-sources" content="src/rhi/device.h src/rhi/device.cpp src/rhi/renderContext.cpp src/rhi/uploadManager.h src/rhi/uploadManager.cpp src/rhi/vulkan/vulkanTypes.h src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.h src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanQueue.h src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanUtils.h src/rhi/vulkan/vulkanUtils.cpp include/rasm/render/renderContext.h include/rasm/render/resource.h include/rasm/types.h src/engine.cpp src/platform/windowSurface.h src/CMakeLists.txt">
+<meta name="rasm-sources" content="src/rhi/device.h src/rhi/device.cpp src/rhi/renderContext.cpp src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/uploadManager.h src/rhi/uploadManager.cpp src/rhi/vulkan/vulkanTypes.h src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.h src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanQueue.h src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanUtils.h src/rhi/vulkan/vulkanUtils.cpp include/rasm/render/renderContext.h include/rasm/render/resource.h include/rasm/types.h src/engine.cpp src/platform/windowSurface.h src/CMakeLists.txt">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -250,7 +250,28 @@
 <p>Source scope: the <i>before</i> stages and their writes. Destination scope: the <i>after</i> stages and their reads and writes. Reads before a barrier only have to finish, which the stage mask covers.</p>
 
 <h3>Image layout transitions</h3>
-<p><code>transitionImageLayout(cmd, texture, newUsage)</code> records one image barrier. <code>RenderContext</code> keeps each texture's current usage in <code>rhi::Texture::state</code> and passes it to <code>CommandBuffer::transitionTexture</code> as the old usage. The source scope comes from the old usage only, and the destination scope from the new usage only. <code>SAMPLED</code> → <code>SAMPLED</code> records nothing. A texture starts <code>UNKNOWN</code>, <code>fillTexture</code> leaves it <code>SAMPLED</code>, and <code>acquireNextImage</code> sets the acquired swapchain image back to <code>UNKNOWN</code>.</p>
+<p><code>transitionImageLayout(cmd, texture, newUsage, discard)</code> records one image barrier. Each texture's current usage is in <code>rhi::Texture::state</code>, and <code>rhi::TextureStates</code> passes it to <code>CommandBuffer::transitionTexture</code> as the old usage, or <code>UNKNOWN</code> with <code>discard</code>. The source scope comes from the old usage only, and the destination scope from the new usage only. <code>SAMPLED</code> → <code>SAMPLED</code> records nothing. A texture starts <code>UNKNOWN</code>, <code>fillTexture</code> leaves it <code>SAMPLED</code>, and <code>acquireNextImage</code> sets the acquired swapchain image back to <code>UNKNOWN</code>.</p>
+<figure class="diagram">
+  <svg viewBox="0 0 760 150" role="img" aria-label="Recording a barrier changes the texture's state at once, and TextureStates remembers the state from before its first barrier since the last submit. A successful submit forgets these. discardRecording, for commands that will not run, puts them back.">
+    <rect x="10" y="50" width="180" height="50" rx="6" class="cpu"/>
+    <text x="100" y="72" class="mid mono">transitionImageLayout</text>
+    <text x="100" y="90" class="mid small">state = new usage</text>
+    <line x1="190" y1="75" x2="268" y2="75" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="229" y="66" class="mid small">first time</text>
+    <rect x="270" y="50" width="200" height="50" rx="6" class="mem"/>
+    <text x="370" y="72" class="mid mono">unsubmitted</text>
+    <text x="370" y="90" class="mid small">texture, state before it</text>
+    <line x1="470" y1="62" x2="568" y2="35" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="470" y1="88" x2="568" y2="115" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <rect x="570" y="12" width="180" height="46" rx="6" class="gpu"/>
+    <text x="660" y="32" class="mid mono">submit succeeds</text>
+    <text x="660" y="49" class="mid small">forget them: the GPU runs it</text>
+    <rect x="570" y="92" width="180" height="46" rx="6" class="box"/>
+    <text x="660" y="112" class="mid mono">discardRecording</text>
+    <text x="660" y="129" class="mid small">put the old states back</text>
+  </svg>
+  <figcaption>Commands that never run do not change the GPU. <code>endFrame</code> calls <code>discardRecording</code> when it does not submit (culling failed to record, or the submit failed), so the next frame's barriers start from the layouts the GPU really has.</figcaption>
+</figure>
 <div class="table-wrap">
 <table>
   <tr><th><code>TextureUsage</code></th><th>Layout</th><th>As old usage, waits for</th><th>As new usage, blocks</th></tr>

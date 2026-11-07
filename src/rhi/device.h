@@ -75,7 +75,7 @@ namespace rasm::rhi
     struct Texture
     {
         TextureDesc                         desc;
-        TextureUsage                        state               = TextureUsage::UNKNOWN;   // what the last recorded transition left it in, kept by RenderContext
+        TextureUsage                        state               = TextureUsage::UNKNOWN;
     };
 
     struct Sampler

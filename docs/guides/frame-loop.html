@@ -317,8 +317,8 @@
       <text x="73" y="144" class="mid small mono">beginFrame</text>
       <path d="M136,122 V128 H706 V122" class="arrow"/>
       <text x="421" y="144" class="mid small mono">beginPass("Scene")</text>
-      <text x="14" y="174" class="small">barrier: image — swapchain image UNKNOWN (set by the acquire) → COLOR_ATTACHMENT; it waits at color output.</text>
-      <text x="14" y="192" class="small">barrier: depth — the slot's depth texture, from its remembered state (UNKNOWN at first) → DEPTH_STENCIL_ATTACHMENT.</text>
+      <text x="14" y="174" class="small">barrier: image — swapchain image UNKNOWN → COLOR_ATTACHMENT; it waits at color output, after the acquire.</text>
+      <text x="14" y="192" class="small">barrier: depth — the slot's depth texture UNKNOWN → DEPTH_STENCIL_ATTACHMENT. Both discard: the pass clears them.</text>
       <text x="14" y="210" class="small">beginRendering — clears color to SWAPCHAIN_CLEAR_COLOR and depth to 0 (reversed-Z).</text>
       <text x="14" y="228" class="small">ts — a GPU timestamp, only while frame stats are measured.</text>
     </svg>
@@ -426,7 +426,7 @@
       <rect x="518" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="560" y="96" class="mid small">ts Frame end</text>
       <rect x="606" y="78" width="44"  height="28" rx="4" class="cpu"/><text x="628" y="96" class="mid small">end</text>
       <text x="14" y="146" class="small">overlay — the stats overlay, only in a swapchain pass and only when it is shown (F1).</text>
-      <text x="14" y="164" class="small">endPass leaves the attachments as they are and sets swapchainRendered. A render target is moved to SAMPLED by the pass that reads it.</text>
+      <text x="14" y="164" class="small">endPass sets swapchainRendered. A render target pass instead moves its color texture to SAMPLED, for later passes.</text>
       <text x="14" y="182" class="small">barrier — in endFrame, once per frame: the image goes COLOR_ATTACHMENT → PRESENT_SRC.</text>
       <text x="14" y="212" class="small t-hot">No pass drew to the swapchain? endFrame first records an empty pass named "Clear", so present still works.</text>
     </svg>
@@ -635,7 +635,7 @@
   </div>
   <div>
     <h4>A frame that fails to submit</h4>
-    <p>It was recorded, but the slot keeps its old fence value, so the next wait on it passes at once. <code>frameCount</code> still moves. The image stays acquired, and the next acquire returns it again. Its timestamps are not read, because the slot's value did not change.</p>
+    <p>It was recorded, but the slot keeps its old fence value, so the next wait on it passes at once. <code>frameCount</code> still moves. The image stays acquired, and the next acquire returns it again. Its timestamps are not read, because the slot's value did not change. <code>endFrame</code> calls <code>discardRecording</code>, so the textures it moved go back to the layouts they still have on the GPU. The same happens when culling fails to record.</p>
   </div>
 </div>
 

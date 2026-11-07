@@ -214,6 +214,39 @@ TEST_CASE("adding a pass after compiling triggers a new sort")
     CHECK(graph.order() == std::vector<uint32_t>{1, 0});
 }
 
+TEST_CASE("a pass that reads the render target it draws to fails to compile")
+{
+    const rasm::RenderTargetHandle renderTarget{1, 1};
+
+    TestGraph graph;
+    graph.addPass(
+        "feedback",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.read(renderTarget);
+            builder.write(renderTarget);
+        },
+        [](rasm::RenderContext &) {});
+
+    graph.compile();
+
+    CHECK_FALSE(graph.isCompiled());
+    CHECK(graph.order().empty());
+}
+
+TEST_CASE("a compute pass that declares no buffer write fails to compile")
+{
+    const rasm::BufferHandle buffer{1, 1};
+
+    TestGraph graph;
+    graph.addBufferPass(true, {buffer}, {});
+
+    graph.compile();
+
+    CHECK_FALSE(graph.isCompiled());
+    CHECK(graph.order().empty());
+}
+
 TEST_CASE("a compute pass sorts by its resources and writes no render target")
 {
     const rasm::BufferHandle buffer{1, 1};

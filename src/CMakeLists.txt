@@ -25,6 +25,7 @@ set(RASM_SRC
             "rhi/device.cpp"
             "rhi/renderContext.cpp"
             "rhi/resource.cpp"
+            "rhi/textureStates.cpp"
             "rhi/uploadManager.cpp"
             "rhi/vulkan/vulkanCommandBuffer.cpp"
             "rhi/vulkan/vulkanDevice.cpp"

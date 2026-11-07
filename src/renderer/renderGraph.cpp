@@ -4,16 +4,12 @@
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
 
-#include <unordered_map>
+#include <algorithm>
 #include <queue>
+#include <unordered_map>
 
 namespace rasm
 {
-    namespace
-    {
-        bool hasAnyStage(PipelineStage stages) { return static_cast<uint32_t>(stages) != 0; }
-    }
-
     void RenderGraph::addPass(std::string name, std::function<void(PassBuilder &)> setup, std::function<void(RenderContext &)> execute)
     {
         uint32_t passIdx = static_cast<uint32_t>(passes.size());
@@ -44,6 +40,30 @@ namespace rasm
     {
         if (compiled)
             return;
+
+        // 0. Barriers come only from what the passes declare, so reject what they can't have declared right.
+        // Both fail the compile like a cycle does, so the frames draw no passes.
+        bool valid = true;
+        for (const auto &pass : passes)
+        {
+            // Its color would be sampled while it is an attachment.
+            if (pass.outputRenderTarget.isValid() && std::find(pass.inputRenderTargets.begin(), pass.inputRenderTargets.end(), pass.outputRenderTarget) != pass.inputRenderTargets.end())
+            {
+                spdlog::error("Pass '{}' reads the render target it draws to.", pass.name);
+                valid = false;
+            }
+            // Compute writes only buffers, so a compute pass that declares no write is missing its buffers.
+            if (pass.compute && pass.outputBuffers.empty())
+            {
+                spdlog::error("Compute pass '{}' declares no buffer write; declare every buffer it uses.", pass.name);
+                valid = false;
+            }
+        }
+        if (!valid)
+        {
+            executionOrder.clear();
+            return;
+        }
 
         // Reset in-degrees and successors for all passes
         for (auto &pass : passes)
@@ -171,16 +191,14 @@ namespace rasm
         {
             auto &pass = passes[passIdx];
 
-            // Barriers are not allowed inside a render pass, so all of them go before the pass begins. The
-            // attachments of the render target it writes are moved by beginPass.
+            // Barriers are not allowed inside a render pass, so all of them go before the pass begins. beginPass
+            // moves the attachments it draws to, and endPass leaves a render target's color SAMPLED for its readers.
             PipelineStage before = {};
             PipelineStage after = {};
             if (bufferBarrier(pass, before, after))
                 ctx.memoryBarrier(commandBuffer, before, after);
             for (auto texture : pass.inputTextures)
                 ctx.transitionImageLayout(commandBuffer, texture, TextureUsage::SAMPLED);
-            for (auto renderTarget : pass.inputRenderTargets)
-                ctx.transitionImageLayout(commandBuffer, engine->getRenderTargetTexture(renderTarget), TextureUsage::SAMPLED);
 
             if (pass.compute)
             {
@@ -211,7 +229,7 @@ namespace rasm
         for (auto buffer : pass.inputBuffers)
         {
             auto &access = bufferAccess[buffer];
-            if (hasAnyStage(access.writeStages) && !hasStage(access.readStages, stage))
+            if (access.writeStages != PipelineStage{} && !hasStage(access.readStages, stage))
             {
                 before = before | access.writeStages;
                 after = after | stage;
@@ -224,14 +242,14 @@ namespace rasm
         {
             auto &access = bufferAccess[buffer];
             const PipelineStage used = access.writeStages | access.readStages;
-            if (hasAnyStage(used))
+            if (used != PipelineStage{})
             {
                 before = before | used;
                 after = after | stage;
             }
             access = {.writeStages = stage};
         }
-        return hasAnyStage(after);
+        return after != PipelineStage{};
     }
 
     TextureHandle RenderGraph::createTexture(const TextureDesc &desc)
