@@ -7,7 +7,6 @@
 
 #include <cstdint>
 #include <string>
-#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -20,9 +19,6 @@ namespace rasm
     // Sentinel written by the CPU when a material slot has no texture bound; the shader must
     // never sample the bindless array with this index.
     constexpr uint32_t  INVALID_TEXTURE_INDEX   = 0xFFFFFFFF;
-
-    const static std::unordered_set<std::string> supportedMeshExtensions    = {"obj", "gltf", "glb"};
-    const static std::unordered_set<std::string> supportedTextureExtensions = {"png", "jpg", "jpeg"};
 
     enum class Backend
     {

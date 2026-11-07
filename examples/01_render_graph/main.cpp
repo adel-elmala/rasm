@@ -164,7 +164,7 @@ int main()
 
     while (engine.running())
     {
-        graph.execute();
+        graph.execute(camera);
     }
 
     return 0;

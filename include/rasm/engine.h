@@ -10,9 +10,9 @@
 #include "rasm/light.h"
 #include "rasm/mesh.h"
 #include "rasm/handle.h"
-#include "rasm/profiler.h"
 #include "rasm/render/renderContext.h"
 
+#include <chrono>
 #include <cstdint>
 #include <future>
 #include <memory>
@@ -25,6 +25,7 @@ namespace tinygltf { class Model; }
 namespace rasm
 {
 
+    class GeometryPool;
     class ShaderCompiler;
     struct GpuScene;
     struct SceneDrawList;
@@ -34,7 +35,6 @@ namespace rasm
 
     class Engine
     {
-        friend class RenderGraph;
         friend class RenderContext;
 
     public:
@@ -98,8 +98,6 @@ namespace rasm
         bool                        recreateSwapchain();
         void                        setRenderTarget(const RenderTargetHandle& renderTarget);
         void                        resetRenderTarget();
-        void                        setScene(SceneHandle scene);
-        SceneHandle                 getScene() const;
         DescriptorSetHandle         getBindlessDescriptorSet();
         const FrameResources&       getCurrentFrameResources();
         EngineConfig                getConfig() const;
@@ -107,7 +105,7 @@ namespace rasm
         const Window&               getMainWindow() const;
         RenderContext&              getRenderContext();
         MeshSize                    getMeshByteSize(const MeshHandle& handle) const;
-        void                        queryMemoryStats();
+        VRAMStats                   queryMemoryStats();
         uint32_t                    addBindlessTexture(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, SamplerType sampler = SamplerType::LINEAR_REPEAT, uint32_t slot = MAX_BINDLESS_TEXTURES);
         uint32_t                    getBindlessTextureIndex(const TextureHandle& texture);
         // The render target's color texture for the current frame slot, so fetch it every frame.
@@ -122,18 +120,11 @@ namespace rasm
         bool                                                        createSwapchainResources();
 
         EngineConfig                                                config                                  = {};
-        Profiler                                                    profiler                                = {};
         FrameResources                                              frameResources[MAX_FRAMES_IN_FLIGHT]    = {}; // Double buffering
         FenceHandle                                                 frameFence                              = {};
         uint64_t                                                    frameFenceValue                         = 0;  // last value a frame submit signaled
         Swapchain                                                   swapchain                               = {};
-        TextureHandle                                               depthTexture                            = {};
-        BufferHandle                                                geometryVertexBuffer                    = {};
-        BufferHandle                                                geometryIndexBuffer                     = {};
-        BufferHandle                                                geometryTableBuffer                     = {};
-        uint32_t                                                    geometryVertexCount                     = 0;
-        uint32_t                                                    geometryIndexCount                      = 0;
-        uint32_t                                                    geometryCount                           = 0;
+        std::unique_ptr<GeometryPool>                               geometryPool                            = {};
         std::unique_ptr<GpuScene>                                   gpuScene                                = {};
         RenderContext                                               ctx;
         std::unique_ptr<ShaderCompiler>                             shaderCompiler                          = {};
@@ -143,11 +134,12 @@ namespace rasm
         DescriptorPoolHandle                                        bindlessDescriptorPool                  = {};
         DescriptorSetHandle                                         bindlessDescriptorSet                   = {};
         MaterialHandle                                              defaultMaterial                         = {}; // used for invalid material handles
-        SceneHandle                                                 currentScene                            = {};
         RenderTargetHandle                                          currentRenderTarget                     = {};
         uint64_t                                                    frameCount                              = 0;
         uint32_t                                                    imageIdx                                = 0;
         uint32_t                                                    sceneDrawCount                          = 0; // drawScene calls this frame
+        float                                                       deltaTime                               = 0.0f; // seconds since the previous frame
+        std::chrono::steady_clock::time_point                       lastFrameTime                           = {};
         bool                                                        isRunning                               = false;
         bool                                                        swapchainOutOfDate                      = false;
         bool                                                        swapchainRendered                       = false; // a pass rendered to the swapchain this frame
@@ -170,15 +162,16 @@ namespace rasm
         };
 
         MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
-        bool                        geometryFits(size_t vertexCount, size_t indexCount, size_t subMeshCount) const;
-        bool                        uploadGeometry(const ObjRaw& raw, MeshGeometry& geometry);
         void                        finishMeshLoad(PendingMeshLoad& load);
         void                        finishTextureLoad(PendingTextureLoad& load);
         void                        finishLoads(bool wait);
         bool                        createGpuScene();
         void                        syncGpuScene();
+        void                        queueInstanceRows(EntityHandle entity);
         void                        writeInstanceRows(EntityHandle entity);
+        void                        rewriteAllInstanceRows();
         void                        writeMaterialRow(MaterialHandle material);
+        void                        markDrawListDirty(SceneHandle scene);
         void                        markDrawListsDirty();
         void                        rebuildDrawList(SceneHandle scene);
         void                        uploadDrawList(SceneDrawList& drawList);

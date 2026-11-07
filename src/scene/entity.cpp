@@ -1,6 +1,5 @@
 #include "rasm/engine.h"
 #include "rasm/entity.h"
-#include "renderer/gpuScene.h"
 
 #include "spdlog/spdlog.h"
 
@@ -25,9 +24,8 @@ namespace rasm
         registry.entities.resize(id.index + 1);
         registry.entities[id.index] = entity;
 
-        // Its instance rows are allocated once the mesh is ready (syncGpuScene).
         if (mesh.isValid())
-            gpuScene->entitiesWaitingForMesh.push_back(id);
+            queueInstanceRows(id);
 
         return id;
     }

@@ -30,7 +30,7 @@ is the working reference (forward pass into a render target, then an overlay pas
 | Every pass **clears** its target | two passes can't accumulate into one target | `VulkanCommandBuffer::beginRendering`, review §3 |
 | Readable outputs | only the **color** of an earlier render target, through its bindless index. Depth isn't stored. | `Engine::endPass` |
 | Ordering | from `builder.read`/`write` only, topologically sorted. No automatic barriers beyond the render target begin/end transitions | `RenderGraph::compile` |
-| Camera | `execute()` uses the current scene's first camera for `beginFrame` | `RenderGraph::execute` |
+| Camera | `execute(camera)` passes it to `beginFrame` (input and delta time); each pass picks its own camera for `drawScene` | `RenderGraph::execute` |
 
 If a design needs to go past a limit (blending, more push constants, depth reads, MRT), that's an
 RHI/engine change: propose it in a sentence and wait (CLAUDE.md).

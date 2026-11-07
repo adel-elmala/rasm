@@ -61,3 +61,16 @@ TEST_CASE("rotate ignores a zero axis")
 
     CHECK(transform.rotation == glm::identity<glm::quat>());
 }
+
+TEST_CASE("toMatrix scales, then rotates, then translates")
+{
+    rasm::Transform transform;
+    transform.position = glm::vec3(10.0f, 0.0f, 0.0f);
+    transform.scale = glm::vec3(2.0f);
+    transform.rotate(glm::vec3(0.0f, 0.0f, 1.0f), glm::half_pi<float>());
+
+    // (1, 0, 0) scaled to (2, 0, 0), turned 90 degrees around Z to (0, 2, 0), then moved by (10, 0, 0).
+    const glm::vec4 point = transform.toMatrix() * glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+    CHECK(isNear(glm::vec3(point), glm::vec3(10.0f, 2.0f, 0.0f)));
+    CHECK(point.w == doctest::Approx(1.0f));
+}

@@ -26,17 +26,17 @@ cmake/RasmExample.cmake         rasm_add_example()
 include/rasm/                   public API (still includes third-party and private headers, see §1.1)
   rasm.h                        umbrella header
   engine.h scene.h entity.h transform.h camera.h light.h material.h mesh.h
-  handle.h types.h window.h profiler.h
+  handle.h types.h window.h
   render/                       low-level API: renderContext.h, renderGraph.h, resource.h
 src/
   CMakeLists.txt                target `rasm`, alias `rasm::rasm`
   engine.cpp                    frame loop (not yet split into renderer/)
-  core/                         handle, profiler, utils
+  core/                         handle, utils
   platform/                     window.cpp (SDL3 window + input)
   assets/                       material.cpp (incl. glTF material import), mesh.cpp (mesh API, async loads),
                                   meshImport (glTF + OBJ parsing), texture.cpp (texture loads)
   scene/                        scene, entity, transform, camera, light
-  renderer/                     gpuScene.cpp (prepareScene, drawScene), renderGraph, shaderCompiler,
+  renderer/                     gpuScene (GPU scene tables, drawScene), gpuTable, geometryPool, renderGraph, shaderCompiler,
                                   uberMaterialTypes.h (shader ABI)
   rhi/                          device.h (backend-neutral interface), renderContext.cpp (handle tables)
     vulkan/                     vulkanDevice, vulkanCommandBuffer, vulkanQueue, vulkanSwapchain, vulkanTypes.h, vulkanUtils
@@ -211,9 +211,9 @@ Next steps, in order:
 - a pool per object type with generational handles.
 
 **D2 — The public API leaks its implementation.** *Mostly fixed 2026-11-01:* the header split is done (see §1.1). `createSurfaceVk` became the private `createWindowSurface` in `src/platform/`, so the backend does not depend on SDL, `convertToGfxMaterial` is a helper in `gpuScene.cpp`, and the glTF import functions are private. Still open:
-- `Engine` keeps a large public surface that mixes the high-level API with lower-level calls such as `updateUniforms`, `addBindlessTexture`, `createWindow` and `pollEvents`.
-- `RenderGraph` and `RenderContext` are friends of `Engine`.
-- Import and renderer internals are public types: `ObjRaw`, `SubGLTFRaw`, `GLTFRaw` (with its `tinygltf::Model`) and `GltfImportCache` in [mesh.h](../include/rasm/mesh.h), `SceneDraw` and `PreparedScene` in [scene.h](../include/rasm/scene.h). Applications never use them, but `Engine` holds them by value (`std::future<GLTFRaw>` in `PendingMeshLoad`, the `preparedScenes` map), so `engine.h` needs their full definitions. Moving them to private headers needs the private-`Impl` approach `RenderContext` uses, which is part of `D3`.
+- `Engine` keeps a large public surface that mixes the high-level API with lower-level calls such as `addBindlessTexture`, `getCurrentFrameResources`, `createWindow` and `pollEvents`.
+- `RenderContext` is a friend of `Engine`: it reads `Engine`'s handle manager and bindless map, and calls `addBindlessTexture` for render targets. (*Fixed 2026-11-07* for `RenderGraph`: `execute(camera)` takes the camera, so it no longer reads the registry.)
+- Import and renderer internals are public types: `ObjRaw`, `SubGLTFRaw`, `GLTFRaw` (with its `tinygltf::Model`) and `GltfImportCache` in [mesh.h](../include/rasm/mesh.h). Applications never use them, but `Engine` holds them by value (`std::future<GLTFRaw>` in `PendingMeshLoad`), so `engine.h` needs their full definitions. (The scene-preparation types left `scene.h` on 2026-11-07: the GPU scene state is a private `GpuScene` behind a `unique_ptr`.) Moving them to private headers needs the private-`Impl` approach `RenderContext` uses, which is part of `D3`.
 
 **D3 — `Engine` is a god object.** It owns the window, input, assets, scene registry, cameras, the frame loop and the renderer. Split it into subsystems that `Engine` composes: `Platform`, `AssetManager`, `Scene`, `Renderer`, `rhi::Device`. Then integrators can use only the pieces they need, for example the renderer with their own window and asset pipeline.
 
@@ -313,15 +313,16 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 - **C3 — Dead or placeholder code.**
   - *Fixed 2026-11-04:* `setUniform` (a no-op) was removed with the backend-neutral device interface (`D1`).
   - *Fixed 2026-11-04:* the glTF branch of `getMeshByteSize` (every mesh is now a list of sub-meshes).
-  - `VertexFormat::POS_ONLY`, `MAX_DESCRIPTOR_TYPES`, `compile-shaders.bat`.
+  - *Fixed 2026-11-07:* `VertexFormat` (it was written but never read).
+  - `gfx::VertexPosOnly` and its Slang mirror, `MAX_DESCRIPTOR_TYPES`, `compile-shaders.bat`.
 - **C4 — Duplication.**
   - `readFile` and `loadFileToString`.
-  - *Fixed 2026-11-07:* the model-matrix composition appeared twice, in `prepareScene` and `updateUniforms`. It is now one helper, `getModelMatrix` in `gpuScene.cpp`. A `Transform::toMatrix()` would still be the better home.
+  - *Fixed 2026-11-07:* the model-matrix composition appeared twice, in `prepareScene` and `updateUniforms`. It is now `Transform::toMatrix()`.
   - The glTF index-reading loop appears twice.
 - **C5 — Copies instead of references.** `auto mesh = registry.meshes[...]`, `auto entity = ...`, `auto _scene = ...`.
 - **C6 — An unused check.** *Resolved:* `validateRasmStructs` was never called because its sizes did not match. It asked `ProgramLayout::getTypeLayout` for the layout, and no `LayoutRules` value selects the layout of data behind a pointer, so it reported std140/std430 padding (`Modeldata` 240 bytes instead of 188). It now walks `pc` -> `scene` -> the pointer fields, which agrees with the `Offset` decorations in the SPIR-V, and asserts sizes and field offsets after linking any shader that uses `SceneData`.
 - **C7 — A misplaced define.** *Resolved in the folder-layout change:* the ineffective `VMA_VULKAN_VERSION` define (it came after `vk_mem_alloc.h` was already included) was dropped. VMA's default, derived from the Vulkan headers, is the same 1004000 for every translation unit. If you ever need to pin it, set it in CMake.
-- **C8 — Header-level objects.** `const static std::unordered_set<std::string>` lives in `types.h`, which makes one copy per translation unit and runs static initializers. Make it `inline constexpr` arrays or move it into the `.cpp`.
+- **C8 — Header-level objects.** *Fixed 2026-11-07:* the sets moved into the unnamed namespaces of `mesh.cpp` and `texture.cpp`, the only files that use them. The original finding follows. `const static std::unordered_set<std::string>` lives in `types.h`, which makes one copy per translation unit and runs static initializers. Make it `inline constexpr` arrays or move it into the `.cpp`.
 - **C9 — A fragile material layout.** `Material::params` is a flat `float[]` indexed by hand-maintained `PbrParam` offsets, and `name` is a `const char*`. Use a typed `PbrMaterialParams` struct instead.
 - **C10 — Single-header implementations are spread out.** *Resolved in the folder-layout change:* all `*_IMPLEMENTATION` defines now live in [src/thirdparty_impl.cpp](../src/thirdparty_impl.cpp).
 - **C11 — The struct check compares layout, not types.** `validateStruct` checks each struct's size and field offsets ([shaderCompiler.cpp:82-117](../src/renderer/shaderCompiler.cpp#L82-L117)). A `uint32_t` on one side and a `float` on the other, or two swapped fields of the same size, pass and the shader reads garbage. Compare the field's scalar type and element count from the reflection (`getType()->getScalarType()`, `getElementCount()`) against the C++ side in the same table.

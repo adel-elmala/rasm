@@ -4,6 +4,7 @@
 #include "rasm/engine.h"
 #include "core/utils.h"
 #include "platform/paths.h"
+#include "renderer/geometryPool.h"
 #include "renderer/uberMaterialTypes.h"
 
 #include "spdlog/spdlog.h"
@@ -27,13 +28,6 @@ namespace rasm
             return determinant < 0.0f ? CullMode::FRONT : CullMode::BACK;
         }
 
-        glm::mat4 getModelMatrix(const Transform &transform)
-        {
-            return glm::translate(glm::mat4(1.0f), transform.position) *
-                   glm::mat4_cast(transform.rotation) *
-                   glm::scale(glm::mat4(1.0f), transform.scale);
-        }
-
         bool texturesLoaded(Engine &engine, MaterialHandle material)
         {
             for (auto texture : engine.getMaterial(material).textures)
@@ -43,25 +37,63 @@ namespace rasm
             }
             return true;
         }
-    }
 
-    // The mega vertex buffer is written with Vertex and read in the shader as gfx::VertexFull
-    // (scalar layout); the two must not drift apart.
-    static_assert(sizeof(Vertex) == sizeof(gfx::VertexFull), "Vertex must match the shader's VertexFull");
-    static_assert(offsetof(Vertex, uv) == offsetof(gfx::VertexFull, uv), "Vertex must match the shader's VertexFull");
-    static_assert(offsetof(Vertex, tangent) == offsetof(gfx::VertexFull, tangent), "Vertex must match the shader's VertexFull");
+        gfx::MaterialId getGfxMaterialId(MaterialType type)
+        {
+            switch (type)
+            {
+            case MaterialType::UNLIT:
+                return gfx::MaterialId::UNLIT;
+            default:
+                return gfx::MaterialId::PBR;
+            }
+        }
+
+        gfx::Material convertToGfxMaterial(Engine &engine, const Material &mat)
+        {
+            gfx::Material gmat{};
+
+            // base color (albedo)
+            gmat.pbr.baseColorFactor[0] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO)];
+            gmat.pbr.baseColorFactor[1] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 1];
+            gmat.pbr.baseColorFactor[2] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 2];
+
+            // glTF texCoord set per texture; the shader selects the matching interpolated UV set.
+            auto texCoordOf = [](uint32_t texCoord) -> uint32_t
+            { return texCoord < MAX_VERTEX_UV_SETS ? texCoord : 0u; };
+
+            gmat.pbr.baseColorTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::ALBEDO)]);
+            gmat.pbr.baseColorTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::ALBEDO)]);
+            gmat.pbr.metallicRoughnessTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::METALLIC)]);
+            gmat.pbr.metallicRoughnessTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::METALLIC)]);
+
+            gmat.pbr.metallicFactor = mat.params[static_cast<uint32_t>(PbrParam::METALLIC)];
+            gmat.pbr.roughnessFactor = mat.params[static_cast<uint32_t>(PbrParam::ROUGHNESS)];
+
+            // normal map
+            gmat.normal.normalTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::NORMAL)]);
+            gmat.normal.normalTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::NORMAL)]);
+            gmat.normal.scale = mat.params[static_cast<uint32_t>(PbrParam::NORMAL_SCALE)];
+
+            // occlusion map
+            gmat.occlusion.occlusionTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::OCCLUSION)]);
+            gmat.occlusion.occlusionTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::OCCLUSION)]);
+            gmat.occlusion.strength = mat.params[static_cast<uint32_t>(PbrParam::OCCLUSION_STRENGTH)];
+
+            // emissive map
+            gmat.emissive.emissiveTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::EMISSIVE)]);
+            gmat.emissive.emissiveTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::EMISSIVE)]);
+            gmat.emissive.emissiveFactor[0] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR)];
+            gmat.emissive.emissiveFactor[1] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + 1];
+            gmat.emissive.emissiveFactor[2] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + 2];
+
+            return gmat;
+        }
+    }
 
     bool Engine::createGpuScene()
     {
-        if (config.geometryPoolSubMeshes == 0)
-        {
-            spdlog::error("The geometry pool needs room for at least one sub-mesh.");
-            return false;
-        }
-        geometryTableBuffer = ctx.createBuffer({.name = "Geometry Table", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(config.geometryPoolSubMeshes) * sizeof(gfx::GeometryData)});
-
-        if (!geometryTableBuffer.isValid() ||
-            !gpuScene->instances.create(ctx, "Instance Table", sizeof(gfx::InstanceData), config.maxInstances) ||
+        if (!gpuScene->instances.create(ctx, "Instance Table", sizeof(gfx::InstanceData), config.maxInstances) ||
             !gpuScene->materials.create(ctx, "Material Table", sizeof(gfx::MaterialData), MAX_MATERIALS))
         {
             spdlog::error("Failed to create the GPU scene tables.");
@@ -141,6 +173,12 @@ namespace rasm
             uploadDrawList(drawList);
     }
 
+    // Its rows are allocated once the mesh is ready (syncGpuScene).
+    void Engine::queueInstanceRows(EntityHandle entity)
+    {
+        gpuScene->entitiesWaitingForMesh.push_back(entity);
+    }
+
     void Engine::writeInstanceRows(EntityHandle entity)
     {
         if (entity.index >= gpuScene->entityInstances.size())
@@ -151,7 +189,7 @@ namespace rasm
 
         const Entity &entityRef = registry.entities[entity.index];
         const Mesh &mesh = registry.meshes[entityRef.mesh.index];
-        const glm::mat4 entityMatrix = getModelMatrix(entityRef.transform);
+        const glm::mat4 entityMatrix = entityRef.transform.toMatrix();
 
         bool cullModeChanged = false;
         for (uint32_t i = 0; i < range.count; ++i)
@@ -176,6 +214,27 @@ namespace rasm
 
         if (cullModeChanged)
             markDrawListsDirty();
+    }
+
+    void Engine::rewriteAllInstanceRows()
+    {
+        for (size_t i = 0; i < gpuScene->entityInstances.size(); ++i)
+        {
+            if (gpuScene->entityInstances[i].count > 0)
+                writeInstanceRows(registry.entities[i].handle);
+        }
+    }
+
+    void Engine::writeMaterialRow(MaterialHandle material)
+    {
+        const Material &materialRef = registry.materials[material.index];
+        const gfx::MaterialData row{.material = convertToGfxMaterial(*this, materialRef), .materialId = getGfxMaterialId(materialRef.type)};
+        gpuScene->materials.setRow(static_cast<uint32_t>(material.index), &row);
+    }
+
+    void Engine::markDrawListDirty(SceneHandle scene)
+    {
+        gpuScene->drawLists[scene.index].rebuild = true;
     }
 
     void Engine::markDrawListsDirty()
@@ -328,8 +387,8 @@ namespace rasm
         sceneData.projection = getProjectionMatrix(camera, static_cast<float>(width) / static_cast<float>(height));
         sceneData.view = getViewMatrix(camera);
         sceneData.cameraWorldPosition = cameraRef.transform.position;
-        sceneData.numLights = sceneRef.lightCount;
-        for (uint32_t i = 0; i < sceneRef.lightCount; ++i)
+        sceneData.numLights = static_cast<uint32_t>(sceneRef.lights.size());
+        for (uint32_t i = 0; i < sceneData.numLights; ++i)
         {
             const Light &sceneLight = registry.lights[sceneRef.lights[i].index];
 
@@ -343,16 +402,16 @@ namespace rasm
 
             sceneData.lights[i] = light;
         }
-        sceneData.vertsPtr = ctx.getBufferDeviceAddress(geometryVertexBuffer);
+        sceneData.vertsPtr = ctx.getBufferDeviceAddress(geometryPool->vertexBuffer());
         sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(drawList.buffers[frame]);
         sceneData.instancesPtr = ctx.getBufferDeviceAddress(gpuScene->instances.buffer(frame));
         sceneData.materialsPtr = ctx.getBufferDeviceAddress(gpuScene->materials.buffer(frame));
-        sceneData.geometryPtr = ctx.getBufferDeviceAddress(geometryTableBuffer);
+        sceneData.geometryPtr = ctx.getBufferDeviceAddress(geometryPool->tableBuffer());
         ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), sceneDataOffset);
 
         ctx.bindPipeline(commandBuffer, gpuScene->pipeline);
         ctx.bindDescriptorSet(commandBuffer, gpuScene->pipeline, bindlessDescriptorSet, 0);
-        ctx.bindIndexBuffer(commandBuffer, geometryIndexBuffer, 0, Format::U32_UINT);
+        ctx.bindIndexBuffer(commandBuffer, geometryPool->indexBuffer(), 0, Format::U32_UINT);
 
         gfx::PushConstants pushConstants{};
         pushConstants.scene = ctx.getBufferDeviceAddress(gpuScene->sceneData[frame]) + sceneDataOffset;

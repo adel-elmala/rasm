@@ -1,6 +1,5 @@
 #include "rasm/scene.h"
 #include "rasm/engine.h"
-#include "renderer/gpuScene.h"
 
 #include "spdlog/spdlog.h"
 
@@ -16,17 +15,8 @@ namespace rasm
             return {};
         }
 
-        auto scene = Scene{.handle = id,
-                           .entities = {},
-                           .cameras = {},
-                           .cameraCount = 0,
-                           .lights = {},
-                           .lightCount = 0};
-
         registry.scenes.resize(id.index + 1);
-        registry.scenes[id.index] = scene;
-
-        currentScene = id;
+        registry.scenes[id.index] = Scene{.handle = id};
 
         return id;
     }
@@ -54,7 +44,7 @@ namespace rasm
         }
 
         sceneRef.entities.push_back(entity);
-        gpuScene->drawLists[scene.index].rebuild = true;
+        markDrawListDirty(scene);
     }
 
     void Engine::addCameraToScene(SceneHandle scene, CameraHandle camera)
@@ -73,13 +63,13 @@ namespace rasm
 
         auto &sceneRef = registry.scenes[scene.index];
 
-        if (sceneRef.cameraCount + 1 > MAX_CAMERAS_PER_SCENE)
+        if (sceneRef.cameras.size() >= MAX_CAMERAS_PER_SCENE)
         {
             spdlog::warn("Exceeded maximum cameras per scene.");
             return;
         }
 
-        sceneRef.cameras[sceneRef.cameraCount++] = camera;
+        sceneRef.cameras.push_back(camera);
     }
 
     void Engine::addLightToScene(SceneHandle scene, LightHandle light)
@@ -98,13 +88,13 @@ namespace rasm
 
         auto &sceneRef = registry.scenes[scene.index];
 
-        if (sceneRef.lightCount + 1 > MAX_LIGHTS_PER_SCENE)
+        if (sceneRef.lights.size() >= MAX_LIGHTS_PER_SCENE)
         {
             spdlog::warn("Exceeded maximum lights per scene.");
             return;
         }
 
-        sceneRef.lights[sceneRef.lightCount++] = light;
+        sceneRef.lights.push_back(light);
     }
 
 } // namespace rasm

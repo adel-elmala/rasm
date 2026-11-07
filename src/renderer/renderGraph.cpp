@@ -136,7 +136,7 @@ namespace rasm
         spdlog::info("Successfully compiled {} passes.", executionOrder.size());
     }
 
-    void RenderGraph::execute()
+    void RenderGraph::execute(CameraHandle camera)
     {
         ZoneScoped;
 
@@ -144,8 +144,6 @@ namespace rasm
             compile();
 
         auto &ctx = engine->getRenderContext();
-
-        auto camera = engine->registry.scenes[engine->currentScene.index].cameras[0]; // TODO: handle multi-cameras
 
         if (!engine->beginFrame(camera))
             return;

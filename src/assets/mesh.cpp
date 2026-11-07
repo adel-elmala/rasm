@@ -2,45 +2,23 @@
 #include "rasm/engine.h"
 #include "assets/meshImport.h"
 #include "platform/paths.h"
-#include "renderer/uberMaterialTypes.h"
+#include "renderer/geometryPool.h"
 
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
 
-#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <future>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace rasm
 {
     namespace
     {
-        // A sphere around the bounding box: not the tightest, but one pass and good enough to cull with.
-        void computeBounds(const std::vector<Vertex> &vertices, MeshGeometry &geometry)
-        {
-            if (vertices.empty())
-                return;
-
-            glm::vec3 minPos = vertices[0].pos;
-            glm::vec3 maxPos = vertices[0].pos;
-            for (const auto &vertex : vertices)
-            {
-                minPos = glm::min(minPos, vertex.pos);
-                maxPos = glm::max(maxPos, vertex.pos);
-            }
-
-            geometry.boundsCenter = (minPos + maxPos) * 0.5f;
-            float radius2 = 0.0f;
-            for (const auto &vertex : vertices)
-            {
-                const glm::vec3 d = vertex.pos - geometry.boundsCenter;
-                radius2 = std::max(radius2, glm::dot(d, d));
-            }
-            geometry.boundsRadius = glm::sqrt(radius2);
-        }
+        const std::unordered_set<std::string> supportedMeshExtensions = {"obj", "gltf", "glb"};
     }
 
     MeshHandle Engine::createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices)
@@ -53,7 +31,7 @@ namespace rasm
         }
 
         Mesh mesh{.state = MeshState::READY, .subMeshes = {SubMesh{.transform = glm::mat4(1.0f)}}};
-        if (!uploadGeometry({std::move(vertices), std::move(indices)}, mesh.subMeshes[0].geometry))
+        if (!geometryPool->upload(ctx, {std::move(vertices), std::move(indices)}, mesh.subMeshes[0].geometry))
             return {};
 
         registry.meshes.resize(handle.index + 1);
@@ -77,7 +55,7 @@ namespace rasm
 
         // find if the model extension is supported, if not return invalid handle
         auto extension = path.substr(path.find_last_of(".") + 1);
-        if (supportedMeshExtensions.find(extension) == supportedMeshExtensions.end())
+        if (!supportedMeshExtensions.contains(extension))
         {
             spdlog::error("Unsupported mesh format: {}", extension);
             return MeshHandle{};
@@ -120,39 +98,6 @@ namespace rasm
         return mesh.isValid() && mesh.index < registry.meshes.size() && registry.meshes[mesh.index].state == MeshState::READY;
     }
 
-    // Appends to the engine-wide geometry pool and its geometry table. Nothing is ever freed from them: meshes
-    // are not destroyed yet (D4). No frame has read the new row yet, so the table needs one copy, not one per slot.
-    bool Engine::uploadGeometry(const ObjRaw &raw, MeshGeometry &geometry)
-    {
-        if (!geometryFits(raw.vertices.size(), raw.indices.size(), 1))
-            return false;
-
-        geometry = {.firstVertex = geometryVertexCount,
-                    .vertexCount = static_cast<uint32_t>(raw.vertices.size()),
-                    .firstIndex = geometryIndexCount,
-                    .indexCount = static_cast<uint32_t>(raw.indices.size()),
-                    .geometryIndex = geometryCount};
-        computeBounds(raw.vertices, geometry);
-
-        if (!raw.vertices.empty() && !ctx.fillBuffer(geometryVertexBuffer, raw.vertices.data(), raw.vertices.size() * sizeof(Vertex), static_cast<size_t>(geometry.firstVertex) * sizeof(Vertex)))
-            return false;
-        if (!raw.indices.empty() && !ctx.fillBuffer(geometryIndexBuffer, raw.indices.data(), raw.indices.size() * sizeof(uint32_t), static_cast<size_t>(geometry.firstIndex) * sizeof(uint32_t)))
-            return false;
-
-        const gfx::GeometryData row{.firstIndex = geometry.firstIndex,
-                                    .indexCount = geometry.indexCount,
-                                    .vertexOffset = static_cast<int32_t>(geometry.firstVertex),
-                                    .boundsCenter = geometry.boundsCenter,
-                                    .boundsRadius = geometry.boundsRadius};
-        if (!ctx.fillBuffer(geometryTableBuffer, &row, sizeof(row), static_cast<size_t>(geometryCount) * sizeof(row)))
-            return false;
-
-        geometryVertexCount += geometry.vertexCount;
-        geometryIndexCount += geometry.indexCount;
-        ++geometryCount;
-        return true;
-    }
-
     void Engine::finishMeshLoad(PendingMeshLoad &load)
     {
         ZoneScoped;
@@ -173,7 +118,7 @@ namespace rasm
             vertexCount += sub.objRaw.vertices.size();
             indexCount += sub.objRaw.indices.size();
         }
-        if (!geometryFits(vertexCount, indexCount, raw.subGltfRaws.size()))
+        if (!geometryPool->fits(vertexCount, indexCount, raw.subGltfRaws.size()))
         {
             spdlog::error("Failed to upload mesh: {}", load.path);
             return;
@@ -185,7 +130,7 @@ namespace rasm
             SubMesh subMesh{.transform = sub.transform};
             if (raw.model)
                 subMesh.material = loadMaterial(*raw.model, sub.materialIndex, cache);
-            if (!uploadGeometry(sub.objRaw, subMesh.geometry))
+            if (!geometryPool->upload(ctx, sub.objRaw, subMesh.geometry))
             {
                 spdlog::error("Failed to upload mesh: {}", load.path);
                 mesh.subMeshes.clear();
@@ -196,19 +141,7 @@ namespace rasm
 
         mesh.state = MeshState::READY;
         spdlog::info("Loaded mesh {}: {} sub-meshes, geometry pool at {}/{} vertices and {}/{} indices.",
-                     load.path, mesh.subMeshes.size(), geometryVertexCount, config.geometryPoolVertices, geometryIndexCount, config.geometryPoolIndices);
-    }
-
-    bool Engine::geometryFits(size_t vertexCount, size_t indexCount, size_t subMeshCount) const
-    {
-        if (vertexCount <= config.geometryPoolVertices - geometryVertexCount && indexCount <= config.geometryPoolIndices - geometryIndexCount &&
-            subMeshCount <= config.geometryPoolSubMeshes - geometryCount)
-            return true;
-        spdlog::error("The geometry pool is full: {} vertices, {} indices and {} sub-meshes do not fit ({}/{} vertices, {}/{} indices and {}/{} sub-meshes in use). "
-                      "EngineConfig::geometryPoolVertices, geometryPoolIndices and geometryPoolSubMeshes set its size.",
-                      vertexCount, indexCount, subMeshCount, geometryVertexCount, config.geometryPoolVertices, geometryIndexCount, config.geometryPoolIndices,
-                      geometryCount, config.geometryPoolSubMeshes);
-        return false;
+                     load.path, mesh.subMeshes.size(), geometryPool->vertexCount(), config.geometryPoolVertices, geometryPool->indexCount(), config.geometryPoolIndices);
     }
 
     MeshSize Engine::getMeshByteSize(const MeshHandle &handle) const
