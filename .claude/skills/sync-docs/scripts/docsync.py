@@ -5,12 +5,12 @@
   python docsync.py check                    problems in the pages: unknown names in <code>, missing paths,
                                              broken links and anchors, pages missing from site.js, public
                                              API names no API page mentions
-  python docsync.py stamp [--rev HEAD]       record that the docs now match the code at --rev
+  python docsync.py stamp [--rev main]       record that the docs now match the code at --rev, a commit on main
                                              (writes docs/assets/sync.js)
 
 Each page lists the files it describes in <meta name="rasm-sources" content="a.cpp b.h">. The stamp in
-docs/assets/sync.js is the commit whose code the docs describe. status diffs that commit's tree against
---target, so it works after a squash merge too.
+docs/assets/sync.js is the full hash of the commit on main whose code the docs describe. Only main commits are
+stamped: a branch commit leaves the history after a squash merge.
 """
 
 import argparse
@@ -26,9 +26,10 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..",
 DOCS = os.path.join(REPO, "docs")
 SYNC_JS = os.path.join(DOCS, "assets", "sync.js")
 SITE_JS = os.path.join(DOCS, "assets", "site.js")
+MAIN = "main"
 CODE_DIRS = ("src", "include", "shaders", "examples", "tests", "cmake", "tools")
 CODE_EXT = (".h", ".hpp", ".cpp", ".slang", ".txt", ".cmake", ".in", ".bat", ".json")
-# Changes to these never make a page stale on their own.
+# Changes to these never make a page stale on their own, unless a page lists them in rasm-sources.
 IGNORED = ("docs/", ".claude/", ".github/", "assets/", "ports/", "README.md", "CLAUDE.md", "LICENSE", ".gitignore", ".clang-format")
 
 
@@ -111,6 +112,16 @@ def read_stamp():
     return m.group(1) if m else None
 
 
+def resolve(rev):
+    code, full = git("rev-parse", "--verify", "--quiet", rev + "^{commit}")
+    return full if code == 0 else None
+
+
+def on_main(commit):
+    code, _ = git("merge-base", "--is-ancestor", commit, MAIN)
+    return code == 0
+
+
 def covers(source, changed):
     source = source.rstrip("/")
     return changed == source or changed.startswith(source + "/")
@@ -121,65 +132,67 @@ def covers(source, changed):
 def cmd_status(args):
     stamp = read_stamp()
     worktree = args.target is None
-    if worktree:
-        _, target = git("rev-parse", "--short", "HEAD")
-        label = "working tree"
-    else:
-        code, target = git("rev-parse", "--short", args.target)
-        if code != 0:
-            sys.exit(f"unknown target {args.target}")
-        label = args.target
-    print(f"docs stamp   : {stamp or '(none)'}")
-    print(f"{label:<13}: {target}{' + uncommitted changes' if worktree else ''}")
+    rev = "HEAD" if worktree else args.target
+    target = resolve(rev)
+    if target is None:
+        sys.exit(f"unknown target {rev}")
+    label = "working tree" if worktree else rev
+    print(f"docs stamp   : {stamp[:10] if stamp else '(none)'}")
+    print(f"{label:<13}: {target[:10]}{' + uncommitted changes' if worktree else ''}")
     if not stamp:
-        print("\nNo stamp: review every page against the code, then run `stamp`.")
+        print(f"\nNo stamp: review every page against the code, then run `stamp --rev {MAIN}`.")
         return
-    code, _ = git("cat-file", "-e", stamp + "^{commit}")
-    if code != 0:
-        print(f"\nThe stamped commit {stamp} is not in this clone (deleted branch?). Review every page, then run `stamp`.")
+    stamp = resolve(stamp)
+    if stamp is None:
+        print(f"\nThe stamped commit is not in this clone. Review every page, then run `stamp --rev {MAIN}`.")
         return
 
-    _, log = git("log", "--oneline", f"{stamp}..{'HEAD' if worktree else args.target}")
+    _, log = git("log", "--oneline", f"{stamp}..{target}")
     if worktree:
         _, diff = git("diff", "--name-status", stamp)
         _, untracked = git("ls-files", "--others", "--exclude-standard")
         diff += "".join(f"\nA\t{p}" for p in untracked.splitlines())
     else:
-        _, diff = git("diff", "--name-status", stamp, args.target)
+        _, diff = git("diff", "--name-status", stamp, target)
     changed = []
     for line in diff.splitlines():
         if not line.strip():
             continue
         parts = line.split("\t")
-        status, path = parts[0], parts[-1]
-        if not path.startswith(IGNORED):
-            changed.append((status[0], path))
-            if status[0] == "R":
-                changed.append(("D", parts[1]))
+        changed.append((parts[0][0], parts[-1]))
+        if parts[0][0] == "R":
+            changed.append(("D", parts[1]))
 
-    rev = "HEAD" if worktree else args.target
+    parsed = {rel(p): parse(p) for p in pages()}
+    hits = {}
+    for _, path in changed:
+        hits[path] = [name for name, page in parsed.items() if any(covers(s, path) for s in (page.sources or []))]
+    changed = [(status, path) for status, path in changed if hits[path] or not path.startswith(IGNORED)]
+
+    if worktree or not on_main(target):
+        next_step = f"commit, merge, then run `status --target {MAIN}` and `stamp --rev {MAIN}` on {MAIN} (stamp only main commits)."
+    else:
+        next_step = f"run: python {rel(__file__)} stamp --rev {rev}"
     if not changed:
         print("\nUp to date: no code changed since the stamp.")
         if stamp != target:
-            print(f"Run `stamp --rev {rev}` to move the stamp.")
+            print(f"To move the stamp, {next_step}")
         return
 
     print(f"\nCommits since the stamp ({len(log.splitlines()) if log else 0}):")
     for line in log.splitlines()[:40]:
         print("  " + line)
 
-    parsed = {rel(p): parse(p) for p in pages()}
     print("\nChanged code -> pages that describe it:")
     uncovered = []
     stale = {}
     for status, path in changed:
-        hits = [name for name, page in parsed.items() if any(covers(s, path) for s in (page.sources or []))]
-        for h in hits:
+        for h in hits[path]:
             stale.setdefault(h, []).append(path)
         print(f"  {status} {path}")
-        for h in hits:
+        for h in hits[path]:
             print(f"      -> {h}")
-        if not hits:
+        if not hits[path]:
             uncovered.append((status, path))
 
     print("\nPages to review:")
@@ -189,7 +202,7 @@ def cmd_status(args):
         print("\nChanged files no page lists in rasm-sources (new topic? add it to a page's sources, or say why not):")
         for status, path in uncovered:
             print(f"  {status} {path}")
-    print(f"\nWhen every page matches the code (and the code is committed), run: python {rel(__file__)} stamp --rev {rev}")
+    print(f"\nWhen every page matches the code, {next_step}")
 
 
 # ---------------------------------------------------------------- check
@@ -284,7 +297,11 @@ def check_snippet_format(path, name, problems):
         except FileNotFoundError:
             problems.append("clang-format not found: snippet formatting was not checked")
             return False
-        if result.returncode == 0 and result.stdout.rstrip("\n") != text.rstrip("\n"):
+        if result.returncode != 0:
+            error = (result.stderr.strip().splitlines() or ["no message"])[0]
+            problems.append(f"clang-format failed ({error}): snippet formatting was not checked")
+            return False
+        if result.stdout.rstrip("\n") != text.rstrip("\n"):
             line = src.count("\n", 0, m.start()) + 1
             first = text.strip().splitlines()[0][:60] if text.strip() else ""
             problems.append(f"{name}:{line}: code snippet is not clang-formatted (`{first}`)")
@@ -336,7 +353,7 @@ def cmd_check(args):
         if formatter:
             formatter = check_snippet_format(p, name, problems)
     for short in sorted(listed):
-        if short.endswith(".html") and not os.path.isfile(os.path.join(DOCS, short)):
+        if not os.path.isfile(os.path.join(DOCS, short.partition("#")[0])):
             problems.append(f"docs/assets/site.js: lists `{short}`, which does not exist")
 
     api_text = " ".join(" ".join(pg.text) + " " + " ".join(pg.ids) for n, pg in parsed.items() if n.startswith("docs/api/"))
@@ -357,14 +374,16 @@ def cmd_check(args):
 # ---------------------------------------------------------------- stamp
 
 def cmd_stamp(args):
-    code, commit = git("rev-parse", "--short", args.rev)
-    if code != 0:
+    commit = resolve(args.rev)
+    if commit is None:
         sys.exit(f"unknown revision {args.rev}")
-    _, date = git("log", "-1", "--format=%cs", args.rev)
+    if not on_main(commit):
+        sys.exit(f"{args.rev} is not on {MAIN}: stamp only main commits (a branch commit is lost in a squash merge)")
+    _, date = git("log", "-1", "--format=%cs", commit)
     with open(SYNC_JS, "w", encoding="utf-8", newline="\n") as f:
         f.write("// Written by .claude/skills/sync-docs/scripts/docsync.py. Do not edit by hand.\n")
         f.write(f'window.RASM_DOCS_SYNC = {{ commit: "{commit}", date: "{date}" }};\n')
-    print(f"stamped {commit} ({date})")
+    print(f"stamped {commit[:10]} ({date})")
 
 
 def main():
@@ -374,7 +393,7 @@ def main():
     s.add_argument("--target", default=None, help="commit or branch to compare with (default: the working tree)")
     sub.add_parser("check")
     st = sub.add_parser("stamp")
-    st.add_argument("--rev", default="HEAD")
+    st.add_argument("--rev", default=MAIN)
     args = parser.parse_args()
     {"status": cmd_status, "check": cmd_check, "stamp": cmd_stamp}[args.cmd](args)
 

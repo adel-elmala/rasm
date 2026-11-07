@@ -5,22 +5,28 @@ description: Keep RASM's HTML docs (docs/index.html, the visual guides in docs/g
 
 # Sync docs
 
-The HTML docs must describe the code on `main`. `docs/assets/sync.js` holds the stamp: the commit whose code the
-pages describe (shown at the bottom of every page). Each page lists the files it describes in
+The HTML docs must describe the code on `main`. `docs/assets/sync.js` holds the stamp: the commit on `main` whose
+code the pages describe (shown at the bottom of every page). Each page lists the files it describes in
 `<meta name="rasm-sources" content="...">`.
 
 ```sh
 python .claude/skills/sync-docs/scripts/docsync.py status [--target main]   # what changed, which pages
 python .claude/skills/sync-docs/scripts/docsync.py check                    # names, paths, links, API coverage
-python .claude/skills/sync-docs/scripts/docsync.py stamp [--rev HEAD]       # docs now match --rev
+python .claude/skills/sync-docs/scripts/docsync.py stamp [--rev main]       # docs now match --rev (a main commit)
 ```
+
+| Where | Find stale pages | Stamp |
+|---|---|---|
+| Feature branch (from `finish-task`) | `status`: the working tree, uncommitted changes included | no: update the pages in the feature's change |
+| `main` (session start, after a merge) | `status --target main` | `stamp --rev main`, committed as `docs: ...` |
 
 ## 1. Find what is stale
 
-- **On a feature branch** (normal case, from `finish-task`): run `status --target HEAD`. It diffs the stamp's tree
-  against your branch, so it lists the code your branch changed (plus anything main changed since the last sync).
-- **Catching up main**: run `status` (target `main`). Use it when a session starts with the stamp behind main.
-- If the stamp commit is missing (a deleted branch), review the pages whose sources changed in `git log`.
+- **On a feature branch** (normal case, from `finish-task`): run `status` with no `--target`. It diffs the stamp
+  against the working tree, so it lists your uncommitted and committed changes (and anything main changed since
+  the last sync).
+- **On main**: run `status --target main`. Pages a merged branch already updated only need a quick look.
+- If the stamp commit is missing from the clone, review every page.
 
 `status` prints, for each changed file, the pages that list it. Files under "no page lists" are either a new topic
 (add it to the closest page's `rasm-sources`, or write a new guide) or something no page needs (tests, cmake
@@ -54,8 +60,9 @@ Read the diff of each changed source (`git diff <stamp> <target> -- <file>`) and
   `addPass(` with the name and each lambda on their own lines as in `examples/01_render_graph`); signatures like
   the headers they are copied from (`&`/`*` on the type). C++/Slang is the default and CMake/shell are detected; mark output, logs or
   math with `<code class="lang-text">` (or force a language with `lang-cmake`, `lang-shell`, `lang-slang`).
-- Every identifier in `<code>` must exist in the code; never invent names or numbers. Example values that are not
-  repo names (an asset path in a snippet, a user's file name) go in `<samp>`, which `check` does not test.
+- Every identifier in inline `<code>` must exist in the code; never invent names or numbers. In running text,
+  example values that are not repo names (an asset path, a user's file name) go in `<samp>`, which `check` does not
+  test. Inside a code block they stay plain text: `check` does not test names there, and `site.js` would drop the tag.
 
 ## 3. Check
 
@@ -76,12 +83,12 @@ Use a smaller window (900x1600) to see diagram details; the image is shown downs
 
 ## 4. Stamp
 
-Only when every page in the `status` list was reviewed and `check` passes:
+Only on `main`, and only when every page in the `status --target main` list was reviewed and `check` passes:
+`stamp --rev main`. Commit `docs/assets/sync.js` (with any page fixes) as `docs: ...`.
 
-- on a branch: `stamp --rev HEAD` (the branch's code is what main will get),
-- catching up main: `stamp --rev main`.
-
-Commit the page changes and `docs/assets/sync.js` together, `docs: ...` type, or inside the feature's own commit.
+Never stamp on a branch: `stamp` refuses a commit that is not on `main`, because a squash merge drops branch
+commits from the history. On a branch, the page updates go in the feature's own change, and the stamp moves after
+the merge.
 
 ## 5. Report
 

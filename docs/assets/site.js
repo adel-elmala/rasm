@@ -99,7 +99,8 @@ const SECTIONS = [
 
         const toggle = document.getElementById("theme-toggle");
         toggle.addEventListener("click", function () {
-            const dark = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() === "#16171a";
+            const theme = document.documentElement.dataset.theme;
+            const dark = theme ? theme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
             const next = dark ? "light" : "dark";
             document.documentElement.dataset.theme = next;
             storageSet("rasm-docs-theme", next);
@@ -134,7 +135,7 @@ const SECTIONS = [
     if (main && window.RASM_DOCS_SYNC) {
         const stamp = document.createElement("p");
         stamp.className = "sync-stamp";
-        stamp.textContent = `These docs match the code at commit ${window.RASM_DOCS_SYNC.commit} (${window.RASM_DOCS_SYNC.date}).`;
+        stamp.textContent = `These docs match the code at commit ${window.RASM_DOCS_SYNC.commit.slice(0, 7)} (${window.RASM_DOCS_SYNC.date}).`;
         main.appendChild(stamp);
     }
 
@@ -227,7 +228,6 @@ function highlightC(src) {
     let out = "";
     let i = 0;
     let lineStart = true;
-    let previous = "";
     while (i < src.length) {
         // a preprocessor line: #include "x" keeps its string colored
         if (lineStart && src[i] === "#") {
@@ -251,12 +251,10 @@ function highlightC(src) {
                 out += escapeHtml(text);
                 if (text.indexOf("\n") >= 0) lineStart = true;
             } else if (kind === "id") {
-                out += token(classifyIdentifier(text, src, i + text.length, previous), text);
-                previous = text;
+                out += token(classifyIdentifier(text, src, i + text.length), text);
                 lineStart = false;
             } else {
                 out += token(kind, text);
-                previous = text;
                 lineStart = false;
             }
             i += text.length;
@@ -264,7 +262,6 @@ function highlightC(src) {
             break;
         }
         if (!matched) {
-            previous = src[i];
             out += escapeHtml(src[i]);
             lineStart = false;
             i += 1;
@@ -273,7 +270,7 @@ function highlightC(src) {
     return out;
 }
 
-function classifyIdentifier(name, src, end, previous) {
+function classifyIdentifier(name, src, end) {
     if (C_KEYWORDS.has(name)) return "kw";
     if (C_TYPES.has(name)) return "type";
     const after = src.slice(end, end + 2);
