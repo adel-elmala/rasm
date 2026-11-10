@@ -212,6 +212,7 @@ Next steps, in order:
 **B28 — A render graph that fails to compile logs the same error every frame.** When the up-front checks fail or the graph has a cycle, `RenderGraph::compile` leaves `compiled` false ([renderGraph.cpp:164-168](../src/renderer/renderGraph.cpp#L164-L168)), and `execute` calls `compile` again whenever `compiled` is false ([renderGraph.cpp:181-182](../src/renderer/renderGraph.cpp#L181-L182)). The graph cannot change between frames, so it fails the same way and floods the log once per frame. Remember the failure until a pass is added. *Confirmed.*
 
 **B29 — glTF samplers ignore `wrapT` and `minFilter`.** `toSamplerType` ([material.cpp:14-30](../src/assets/material.cpp#L14-L30)) picks the sampler from `wrapS` and `magFilter` alone. A texture that repeats in u but clamps in v, or that asks for nearest minification, is sampled with the wrong mode. The six shared samplers have one wrap mode for both axes, so a fix needs either more samplers or a nearest match with a warning. *Confirmed.*
+
 ---
 
 ## 3. Design and architecture

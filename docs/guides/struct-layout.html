@@ -607,7 +607,7 @@ static_assert(offsetof(Light, intensity) == 12);</code></pre>
     <text x="20" y="138" class="small">The last field, padding at 764, makes the size 768, a multiple of 8, on both sides.</text>
     <text x="20" y="158" class="small">Scale: 700 px for 768 bytes.</text>
   </svg>
-  <figcaption>The <code>static_assert</code>s in <code>uberMaterialTypes.h</code> pin every one of these offsets.</figcaption>
+  <figcaption>The <code>static_assert</code>s in <code>uberMaterialTypes.h</code> check the size and the offsets 144, 528, 624 and 720. They do not check the camera fields at 128 or the <code>drawInfoPtr</code> and <code>materialsPtr</code> pointers; only the debug-build reflection check covers those.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>

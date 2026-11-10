@@ -512,17 +512,17 @@ void bindTexture(TextureHandle texture);</code></pre>
 <div class="table-wrap">
 <table>
   <tr><th>Owner</th><th>Type</th><th>Limit</th><th>Where the limit is</th></tr>
-  <tr><td rowspan="6"><code>Engine</code> registry</td><td><code>Entity</code></td><td><code>MAX_ENTITIES</code> = 262,144 (2<sup>18</sup>)</td><td><code>include/rasm/entity.h</code></td></tr>
+  <tr><td rowspan="6"><code>Engine</code> registry</td><td><code>Entity</code></td><td><code>MAX_ENTITIES</code> = 262,144 (2<sup>18</sup>) (262,143 usable)</td><td><code>include/rasm/entity.h</code></td></tr>
   <tr><td><code>Mesh</code></td><td><code>MAX_MESHES</code> = 8 (7 usable)</td><td><code>include/rasm/mesh.h</code></td></tr>
-  <tr><td><code>Material</code></td><td><code>MAX_MATERIALS</code> = 256</td><td><code>include/rasm/engine.h</code></td></tr>
-  <tr><td><code>Camera</code></td><td><code>MAX_CAMERAS</code> = 8</td><td><code>include/rasm/engine.h</code></td></tr>
+  <tr><td><code>Material</code></td><td><code>MAX_MATERIALS</code> = 256 (255 usable)</td><td><code>include/rasm/engine.h</code></td></tr>
+  <tr><td><code>Camera</code></td><td><code>MAX_CAMERAS</code> = 8 (7 usable)</td><td><code>include/rasm/engine.h</code></td></tr>
   <tr><td><code>Light</code></td><td><code>MAX_LIGHTS</code> = 8 (7 usable)</td><td><code>include/rasm/light.h</code></td></tr>
-  <tr><td><code>Scene</code></td><td><code>MAX_SCENES</code> = 16</td><td><code>include/rasm/scene.h</code></td></tr>
+  <tr><td><code>Scene</code></td><td><code>MAX_SCENES</code> = 16 (15 usable)</td><td><code>include/rasm/scene.h</code></td></tr>
   <tr><td><code>RenderContext</code> maps</td><td>buffers, textures, pipelines, ...</td><td>no count limit; bindless texture slots stop at <code>MAX_BINDLESS_TEXTURES</code> = 1024</td><td><code>include/rasm/types.h</code></td></tr>
 </table>
 </div>
 
-<p>Indices start at 1 and the check is <code>index &gt;= MAX_*</code>, so slot 0 is never used. That is why only 7 meshes fit in 8.</p>
+<p>Indices start at 1 and the check is <code>index &gt;= MAX_*</code>, so slot 0 is never used. That is why every registry holds one less than its limit: 7 meshes fit in 8.</p>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
 

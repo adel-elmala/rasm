@@ -777,7 +777,7 @@ auto textureIndex = engine.getBindlessTextureIndex(
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Phases</td><td>setup, compile, execute; often every frame</td><td>Retained. <code>setup</code> runs at once inside <code>RenderGraph::addPass</code>; <code>RenderGraph::compile</code> runs once (again only after a new pass); <code>RenderGraph::execute</code> runs every frame.</td></tr>
+  <tr><td>Phases</td><td>setup, compile, execute; often every frame</td><td>Retained. <code>setup</code> runs at once inside <code>RenderGraph::addPass</code>; <code>RenderGraph::compile</code> runs once when it succeeds (again only after a new pass), but a failed compile is tried again every frame (B28); <code>RenderGraph::execute</code> runs every frame.</td></tr>
   <tr><td>Resources</td><td>virtual handles; transient or imported</td><td>Real resources, created at once by <code>PassBuilder::createTexture</code>, <code>createBuffer</code> and <code>createRenderTarget</code>, and kept forever. The swapchain is the implicit target of a pass with no render target.</td></tr>
   <tr><td>Edges</td><td>every hazard, with versions</td><td>Read after write only, from the <b>last added</b> writer of each resource. No versions: a second writer of a resource is not ordered against the first, and a write after a read adds no edge.</td></tr>
   <tr><td>Sort</td><td>Kahn's algorithm</td><td>Kahn's algorithm with a FIFO queue that starts in the order passes were added, so independent passes keep that order. A cycle logs <samp>Frame Graph contains a cycle!</samp> and the frames draw no passes.</td></tr>
