@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camera Controllers · RASM</title>
+<meta name="description" content="How mouse and keys become a camera pose: fly (FPS) cameras, orbit cameras (turntable and arcball), pitch clamping, frame-time scaling, and frame-rate independent exponential easing. Then how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/window.h src/scene/camera.cpp src/platform/window.cpp src/engine.cpp tests/cameraTests.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/camera-controllers.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Camera controllers and easing</h1>
+<p class="lead">A camera controller turns mouse moves, the wheel and held keys into a camera position and rotation, once per frame. This page explains the two common kinds, the fly camera and the orbit camera, and how to smooth their motion so it looks the same at any frame rate. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A controller keeps its own state (angles, a center, a distance) and writes a <b>target pose</b>. Smoothing then moves the <b>rendered pose</b> toward it.</li>
+    <li>A <b>fly camera</b> stores yaw and pitch. Yaw turns around the world's up axis, pitch around the camera's right axis. Pitch is clamped short of ±90°.</li>
+    <li>An <b>orbit camera</b> turns around a center point. A <b>turntable</b> uses yaw and pitch; an <b>arcball</b> maps the mouse onto a sphere.</li>
+    <li>Mouse moves are distances: never multiply them by the frame time. Held keys are speeds: always multiply them by it.</li>
+    <li>Exponential easing with <var>t</var> = 1 − e<sup>−<var>k</var>·<var>dt</var></sup> gives the same motion at 30 or 144 frames per second. A fixed factor per frame does not.</li>
+  </ul>
+</div>
+
+<h2 id="two-poses"><span class="n">1</span>What a controller does</h2>
+
+<p>Each frame, the controller reads the input of that frame and updates a pose: a position and a rotation. The view matrix is then built from the pose (see <a href="coordinate-spaces.html#view">the view matrix</a>). Good controllers split this into two poses:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 220" role="img" aria-label="Input of the frame goes into the controller, which keeps its own state and writes a target pose. Smoothing moves the current pose part of the way to the target. The view matrix is built from the current pose.">
+    <rect x="15" y="40" width="140" height="70" rx="6" class="box"/>
+    <text x="85" y="66" class="mid title">Input</text>
+    <text x="85" y="84" class="mid small">mouse move, wheel,</text>
+    <text x="85" y="98" class="mid small">held keys, frame time</text>
+    <line x1="155" y1="75" x2="183" y2="75" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="185" y="40" width="150" height="70" rx="6" class="cpu"/>
+    <text x="260" y="66" class="mid title">Controller</text>
+    <text x="260" y="84" class="mid small">state: yaw, pitch,</text>
+    <text x="260" y="98" class="mid small">center, distance</text>
+    <line x1="335" y1="75" x2="363" y2="75" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="365" y="40" width="120" height="70" rx="6" class="box"/>
+    <text x="425" y="66" class="mid title">Target pose</text>
+    <text x="425" y="84" class="mid small">where the camera</text>
+    <text x="425" y="98" class="mid small">should be</text>
+    <line x1="485" y1="75" x2="513" y2="75" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="515" y="40" width="110" height="70" rx="6" class="cpu"/>
+    <text x="570" y="66" class="mid title">Smoothing</text>
+    <text x="570" y="84" class="mid small">a part of the</text>
+    <text x="570" y="98" class="mid small">way each frame</text>
+    <line x1="625" y1="75" x2="653" y2="75" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="655" y="40" width="95" height="70" rx="6" class="box"/>
+    <text x="702" y="66" class="mid title">Current</text>
+    <text x="702" y="84" class="mid small">pose, used</text>
+    <text x="702" y="98" class="mid small">to render</text>
+
+    <path d="M702,110 V150" class="arrow" marker-end="url(#ah)"/>
+    <rect x="620" y="152" width="130" height="44" rx="6" class="mem"/>
+    <text x="685" y="179" class="mid">view matrix</text>
+
+    <text x="15" y="150" class="small">The controller never touches the current pose.</text>
+    <text x="15" y="168" class="small">To jump without smoothing (a cut, a teleport), set both poses.</text>
+    <text x="15" y="186" class="small">The rendered camera is always a little behind the target.</text>
+  </svg>
+  <figcaption>Two poses keep the controller simple: it reacts at once and exactly. The smoothing step alone decides how soft the motion looks.</figcaption>
+</figure>
+
+<h2><span class="n">2</span>Reading the input</h2>
+
+<h3>Mouse positions in units that do not depend on the window</h3>
+
+<p>A mouse move arrives in pixels. A move of 100 pixels is a big part of a small window and a small part of a big one. So controllers first map pixels to a resolution-independent range, often −1..1 like NDC. Windows report <var>y</var> growing down, so <var>y</var> is flipped at the same time.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="A 1600 by 900 window. Left: both axes divided by the smaller side, 900. The range is minus 1.78 to 1.78 across and minus 1 to 1 down, and a circle of radius 1 is round. A 90 pixel move gives 0.2 in both directions. Right: each axis divided by its own size. The range is minus 1 to 1 on both, the unit circle becomes a wide ellipse, and a 90 pixel move gives 0.11 across but 0.2 down.">
+    <text x="200" y="22" class="mid title">Divide by the smaller side</text>
+    <rect x="40" y="40" width="320" height="180" class="box"/>
+    <circle cx="200" cy="130" r="90" class="hot"/>
+    <line x1="200" y1="210" x2="200" y2="52" class="arrow" marker-end="url(#ah)"/>
+    <line x1="52" y1="130" x2="350" y2="130" class="arrow" marker-end="url(#ah)"/>
+    <text x="44" y="122" class="small">−1.78</text>
+    <text x="356" y="122" class="end small">1.78</text>
+    <text x="206" y="54" class="small">+1</text>
+    <text x="206" y="216" class="small">−1</text>
+    <text x="200" y="244" class="mid small">a circle stays round</text>
+    <text x="200" y="260" class="mid small">90 px → 0.2 across, 0.2 down</text>
+
+    <text x="560" y="22" class="mid title">Divide each axis by its own size</text>
+    <rect x="400" y="40" width="320" height="180" class="box"/>
+    <ellipse cx="560" cy="130" rx="160" ry="90" class="hot"/>
+    <line x1="560" y1="210" x2="560" y2="52" class="arrow" marker-end="url(#ah)"/>
+    <line x1="412" y1="130" x2="710" y2="130" class="arrow" marker-end="url(#ah)"/>
+    <text x="404" y="122" class="small">−1</text>
+    <text x="716" y="122" class="end small">1</text>
+    <text x="566" y="54" class="small">+1</text>
+    <text x="566" y="216" class="small">−1</text>
+    <text x="560" y="244" class="mid small">the "unit circle" is stretched</text>
+    <text x="560" y="260" class="mid small">90 px → 0.11 across, 0.2 down</text>
+  </svg>
+  <figcaption>A 1600 × 900 window. Dividing both axes by the smaller side keeps one unit the same length in both directions. That matters for an arcball, which needs a round sphere, and for look speed, which should not depend on the direction.</figcaption>
+</figure>
+
+<pre><code class="lang-text">s   = min(width, height)
+x_n = (2 · x_px − width) / s
+y_n = (height − 2 · y_px) / s          (flipped: up is positive)</code></pre>
+
+<h3>Mouse moves are distances, keys are speeds</h3>
+
+<p>This is the most common mistake in camera code. A mouse move of 0.2 units is a distance the hand moved. At a high frame rate, the same hand motion is split into more, smaller moves; the sum is the same. So the turn angle is <var>Δ</var> · <var>sensitivity</var>, with <b>no</b> frame time in it.</p>
+
+<p>A held key is different. It says "move while I am down", which is a speed. One frame at 144 fps is a quarter as long as one frame at 36 fps, so it must move a quarter as far: <var>distance</var> = <var>speed</var> · <var>dt</var>.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Input</th><th>Kind</th><th>Per frame</th><th>Wrong version</th></tr>
+  <tr><td>Mouse move</td><td>distance</td><td>angle = <var>Δ</var> · sensitivity</td><td>× <var>dt</var>: looking gets slower as the frame rate rises</td></tr>
+  <tr><td>Wheel</td><td>distance (notches)</td><td>zoom by notches · step</td><td>× <var>dt</var>: the same</td></tr>
+  <tr><td>Held key</td><td>speed</td><td>move = speed · <var>dt</var></td><td>no <var>dt</var>: moving gets faster as the frame rate rises</td></tr>
+</table>
+</div>
+
+<h3>Frame time, and held keys</h3>
+<ul>
+  <li><b>Frame time</b> <var>dt</var> is the time since the previous frame, from a monotonic clock. A debugger stop or a window drag can make one frame last seconds, so engines cap <var>dt</var> (for example to 0.1 s). Otherwise the camera jumps far on the next frame.</li>
+  <li><b>Held keys</b> are read as a state ("is W down now?"), not as events. Read the <b>physical key</b> (a scancode), not the letter: WASD then sits in the same place on an AZERTY keyboard.</li>
+  <li>When the window loses focus, it misses the key-up event. Reset the key state then, or the camera keeps flying.</li>
+</ul>
+
+<h2><span class="n">3</span>The fly camera</h2>
+
+<p>A fly camera (also called FPS or free camera) turns where the mouse goes and moves with the keys. Its state is two angles, <b>yaw</b> and <b>pitch</b>, plus a position. There is no roll: the horizon stays level.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 280" role="img" aria-label="Left, seen from above: yaw turns the view direction around the world up axis. Right, seen from the side: pitch tilts the view up or down, and is clamped to plus or minus 89 degrees, so the view never points straight up or down.">
+    <rect x="10" y="10" width="360" height="260" rx="8" class="zone"/>
+    <text x="24" y="34" class="title">Yaw: seen from above</text>
+    <circle cx="190" cy="160" r="80" class="ghost"/>
+    <circle cx="190" cy="160" r="6" class="cpu"/>
+    <line x1="190" y1="160" x2="190" y2="86" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="196" y="80" class="small">yaw = 0: −Z</text>
+    <line x1="190" y1="160" x2="134" y2="104" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <path d="M190,118 A42,42 0 0,0 160,130" class="arrow hot"/>
+    <text x="150" y="112" class="end small t-hot">yaw</text>
+    <text x="24" y="250" class="small">Turns around the world's up axis, so it never tilts.</text>
+
+    <rect x="390" y="10" width="360" height="260" rx="8" class="zone"/>
+    <text x="404" y="34" class="title">Pitch: seen from the side</text>
+    <circle cx="520" cy="160" r="6" class="cpu"/>
+    <line x1="520" y1="160" x2="610" y2="160" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="616" y="164" class="small">pitch = 0</text>
+    <line x1="520" y1="160" x2="584" y2="96" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <path d="M570,160 A50,50 0 0,0 555,125" class="arrow hot"/>
+    <text x="580" y="140" class="small t-hot">pitch</text>
+    <polygon points="520,160 517,62 523,62" class="mem"/>
+    <polygon points="520,160 517,258 523,258" class="mem"/>
+    <text x="530" y="72" class="small t-mem">±90°: not allowed</text>
+    <text x="404" y="250" class="small">Clamped to about ±89°, short of straight up or down.</text>
+  </svg>
+  <figcaption>The rotation is rebuilt from the two angles every frame: <var>R</var> = yaw(world up) · pitch(right). Building it from scratch, instead of adding small turns to the last rotation, keeps the horizon level forever.</figcaption>
+</figure>
+
+<h3>Why pitch is clamped</h3>
+
+<p>At pitch ±90° the view direction is parallel to the up axis. Then yaw and roll turn around the same line, and one degree of freedom is lost: this is <b>gimbal lock</b>. In practice the view flips over or spins when the mouse crosses the pole, and a lookAt built from this direction gets a zero cross product (<a href="coordinate-spaces.html#view">lookAt</a>). Clamping to a value a little below 90° avoids all of it.</p>
+
+<h3>Moving with the keys</h3>
+
+<p>The forward and right directions come from the rotation: <var>forward</var> = <var>R</var> · (0, 0, −1), <var>right</var> = <var>R</var> · (1, 0, 0). Each held key adds or subtracts one of them. Two keys at once (W and D) give a diagonal of length √2 ≈ 1.41, so the sum is normalized first; otherwise diagonal moves are 41% faster.</p>
+
+<pre><code class="lang-text">move = 0
+if W: move += forward      if S: move −= forward
+if D: move += right        if A: move −= right
+if |move| > 0:  position += normalize(move) · speed · dt</code></pre>
+
+<div class="split">
+  <div>
+    <h4>Fly or walk</h4>
+    <p>With <var>forward</var> taken from the full rotation, looking down and pressing W moves down: a fly camera. A walking camera uses the yaw alone for movement, so it stays on the ground, and adds separate keys for up and down.</p>
+  </div>
+  <div>
+    <h4>Drag or capture</h4>
+    <p>Games capture the mouse: it is hidden, and every move turns the view. Tools and viewers usually turn only while a button is held, so the mouse stays free for the rest of the user interface.</p>
+  </div>
+</div>
+
+<h2><span class="n">4</span>The orbit camera</h2>
+
+<p>An orbit camera looks at a center point (a model, a map location) from a distance. Dragging turns the camera around the center; the wheel changes the distance. There are two classic ways to map the drag to a rotation.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Left: a turntable. The camera moves on a sphere around the center with yaw around the world's up axis and a clamped pitch; the horizon stays level. Right: an arcball. The drag is mapped onto a sphere, and the camera turns around any axis, including roll.">
+    <rect x="10" y="10" width="360" height="280" rx="8" class="zone"/>
+    <text x="24" y="34" class="title">Turntable</text>
+    <circle cx="190" cy="150" r="90" class="ghost"/>
+    <ellipse cx="190" cy="150" rx="90" ry="24" class="ghost"/>
+    <line x1="190" y1="240" x2="190" y2="50" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="196" y="58" class="small">world up</text>
+    <circle cx="190" cy="150" r="4" class="box"/>
+    <text x="182" y="166" class="end small">center</text>
+    <circle cx="258" cy="91" r="7" class="cpu"/>
+    <line x1="252" y1="96" x2="214" y2="129" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <path d="M120,165 A90,24 0 0,0 260,165" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="190" y="196" class="mid small t-cpu">drag x: yaw around up</text>
+    <text x="270" y="84" class="small t-cpu">drag y: pitch</text>
+    <text x="24" y="252" class="small">position = center + distance · dir(yaw, pitch)</text>
+    <text x="24" y="270" class="small">The horizon stays level. Pitch is clamped.</text>
+
+    <rect x="390" y="10" width="360" height="280" rx="8" class="zone"/>
+    <text x="404" y="34" class="title">Arcball (virtual trackball)</text>
+    <circle cx="570" cy="150" r="90" class="ghost"/>
+    <circle cx="570" cy="150" r="4" class="box"/>
+    <path d="M518,186 Q570,212 624,186" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <circle cx="518" cy="186" r="4" class="hot"/>
+    <text x="510" y="184" class="end small t-hot">p₀</text>
+    <text x="632" y="184" class="small t-hot">p₁</text>
+    <line x1="570" y1="146" x2="570" y2="80" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="578" y="88" class="small t-cpu">axis = p₀ × p₁</text>
+    <text x="404" y="252" class="small">Grab the sphere and turn it. Any axis is possible,</text>
+    <text x="404" y="270" class="small">so the camera can roll. No pole, no clamp.</text>
+  </svg>
+  <figcaption>A turntable suits scenes with a clear up direction (buildings, terrain, characters). An arcball suits objects with no natural up (molecules, parts in a CAD viewer).</figcaption>
+</figure>
+
+<h3>How an arcball maps the mouse to a sphere</h3>
+
+<p>Imagine a glass ball of radius 1 under the screen, centered in the window. Each mouse point is lifted straight up onto the ball. Two points <var>p</var><sub>0</sub> (where the drag started this frame) and <var>p</var><sub>1</sub> (where it is now) give a rotation: around the axis <var>p</var><sub>0</sub> × <var>p</var><sub>1</sub>, by the angle between them.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 260" role="img" aria-label="Side view of the arcball: a half circle of radius 1 over the screen line. A mouse point at x 0.5 inside the circle is lifted to the sphere at height 0.87. A mouse point at x 1.3 outside the circle is moved to the rim at height 0.">
+    <line x1="40" y1="200" x2="400" y2="200" class="arrow"/>
+    <text x="400" y="218" class="end small">screen (mouse x)</text>
+    <path d="M110,200 A100,100 0 0,1 310,200" class="gpu"/>
+    <text x="210" y="218" class="mid small">0</text>
+    <text x="110" y="218" class="mid small">−1</text>
+    <text x="310" y="218" class="mid small">1</text>
+    <circle cx="260" cy="200" r="4" class="cpu"/>
+    <line x1="260" y1="196" x2="260" y2="118" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <circle cx="260" cy="113.4" r="5" class="hot"/>
+    <text x="252" y="108" class="end small t-hot">(0.5, 0, 0.87)</text>
+    <circle cx="340" cy="200" r="4" class="cpu"/>
+    <path d="M336,192 Q325,180 316,196" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <circle cx="310" cy="200" r="5" class="hot"/>
+    <text x="350" y="186" class="small">x = 1.3: outside</text>
+
+    <text x="450" y="50"  class="title">Lift a point (x, y)</text>
+    <text x="450" y="76"  class="mono">r² = x² + y²</text>
+    <text x="450" y="100" class="mono">r² ≤ 1: z = √(1 − r²)</text>
+    <text x="450" y="124" class="mono">r² > 1: (x, y) / r, z = 0</text>
+    <text x="450" y="156" class="small">Inside the circle: onto the ball.</text>
+    <text x="450" y="174" class="small">Outside: onto the rim. Moving along the</text>
+    <text x="450" y="190" class="small">rim then rolls the view around the</text>
+    <text x="450" y="206" class="small">screen's center.</text>
+  </svg>
+  <figcaption>This is Shoemake's arcball mapping. Bell's trackball uses a hyperbola outside the circle instead of the rim, which avoids the sharp change at the edge.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Detail</th><th>Choices</th></tr>
+  <tr><td>The angle</td><td>Shoemake's arcball turns by <b>twice</b> the angle between the points (it uses the quaternion <var>p</var><sub>1</sub> · <var>p</var><sub>0</sub>*). Many simple trackballs use the angle itself, times a sensitivity.</td></tr>
+  <tr><td>Turn the object or the camera</td><td>"Grab" feel: the scene follows the cursor. For a camera, that means turning the camera the <b>opposite</b> way: by −<var>angle</var>, in its own frame.</td></tr>
+  <tr><td>Roll</td><td>Small circles with the mouse add up to a roll. A turntable cannot roll; an arcball can.</td></tr>
+  <tr><td>Zoom</td><td>Additive (<var>distance</var> −= <var>notches</var> · <var>step</var>) feels slow far away and too fast up close. Multiplicative (<var>distance</var> ×= 0.9 per notch) feels the same at any distance. Clamp at a minimum either way.</td></tr>
+  <tr><td>Position</td><td>Always <var>center</var> + <var>distance</var> · (<var>R</var> · (0, 0, 1)): the camera's +Z points away from what it looks at.</td></tr>
+</table>
+</div>
+
+<h2 id="easing"><span class="n">5</span>Smoothing: exponential easing</h2>
+
+<p>Raw input is jumpy: a mouse reports whole pixels, and frames are not evenly spaced. Smoothing moves the current pose a fraction <var>t</var> of the remaining way to the target each frame:</p>
+
+<pre><code class="lang-text">current = current + (target − current) · t</code></pre>
+
+<p>The question is how to choose <var>t</var>. A fixed number (say 0.1) looks right at one frame rate and wrong at all others: at 144 fps it runs 144 times a second, at 30 fps only 30 times. The fix comes from asking what the smoothing should do in <b>time</b>, not in frames: the remaining distance should shrink by the same factor every second.</p>
+
+<pre><code class="lang-text">remaining(time) = remaining(0) · e^(−k · time)
+
+one frame of length dt:   remaining ← remaining · e^(−k · dt)
+so                         t = 1 − e^(−k · dt)</code></pre>
+
+<p>Many frames multiply: e<sup>−<var>k</var>·<var>dt</var><sub>1</sub></sup> · e<sup>−<var>k</var>·<var>dt</var><sub>2</sub></sup> · … = e<sup>−<var>k</var>·(<var>dt</var><sub>1</sub> + <var>dt</var><sub>2</sub> + …)</sup>. Only the total time matters, not how it was cut into frames. <var>k</var> is the speed: half the distance is gone after ln 2 / <var>k</var> seconds (0.12 s for <var>k</var> = 6).</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="Distance left over half a second. Exponential easing with k equal to 6 follows one curve at any frame rate; its 30 fps steps lie on the curve and end at 5 percent. A fixed factor of 0.1 per frame ends at 21 percent at 30 fps and at 0.05 percent at 144 fps.">
+    <line x1="80" y1="190" x2="470" y2="190" class="arrow"/>
+    <line x1="80" y1="190" x2="80"  y2="22"  class="arrow"/>
+    <text x="72" y="34"  class="end small">100%</text>
+    <text x="72" y="114" class="end small">50%</text>
+    <text x="72" y="194" class="end small">0</text>
+    <text x="80"  y="208" class="mid small">0</text>
+    <text x="270" y="208" class="mid small">0.25 s</text>
+    <text x="460" y="208" class="mid small">0.5 s</text>
+    <text x="270" y="228" class="mid small">time</text>
+
+    <polyline points="80.0,30.0 105.3,46.0 130.7,60.4 156.0,73.4 181.3,85.0 206.7,95.5 232.0,105.0 257.3,113.5 282.7,121.1 308.0,128.0 333.3,134.2 358.7,139.8 384.0,144.8 409.3,149.3 434.7,153.4 460.0,157.1" class="arrow dashed"/>
+    <polyline points="80.0,30.0 101.1,85.0 122.2,121.1 143.3,144.8 164.4,160.4 185.6,170.5 206.7,177.2 227.8,181.6 248.9,184.5 270.0,186.4 291.1,187.6 312.2,188.4 333.3,189.0 354.4,189.3 375.6,189.6 396.7,189.7 417.8,189.8 438.9,189.9 460.0,189.9" class="arrow dashed"/>
+    <polyline points="80.0,30.0 95.2,48.1 110.4,64.1 125.6,78.4 140.8,91.0 156.0,102.2 171.2,112.1 186.4,120.9 201.6,128.7 216.8,135.7 232.0,141.8 247.2,147.3 262.4,152.1 277.6,156.4 292.8,160.2 308.0,163.6 323.2,166.5 338.4,169.2 353.6,171.5 368.8,173.6 384.0,175.5 399.2,177.1 414.4,178.6 429.6,179.9 444.8,181.0 460.0,182.0" class="arrow hot"/>
+    <circle cx="105.3" cy="59.0"  r="3" class="hot"/>
+    <circle cx="130.7" cy="82.7"  r="3" class="hot"/>
+    <circle cx="156.0" cy="102.2" r="3" class="hot"/>
+    <circle cx="181.3" cy="118.1" r="3" class="hot"/>
+    <circle cx="206.7" cy="131.1" r="3" class="hot"/>
+    <circle cx="232.0" cy="141.8" r="3" class="hot"/>
+    <circle cx="257.3" cy="150.5" r="3" class="hot"/>
+    <circle cx="282.7" cy="157.7" r="3" class="hot"/>
+    <circle cx="308.0" cy="163.6" r="3" class="hot"/>
+    <circle cx="333.3" cy="168.3" r="3" class="hot"/>
+    <circle cx="358.7" cy="172.3" r="3" class="hot"/>
+    <circle cx="384.0" cy="175.5" r="3" class="hot"/>
+    <circle cx="409.3" cy="178.1" r="3" class="hot"/>
+    <circle cx="434.7" cy="180.3" r="3" class="hot"/>
+    <text x="482" y="160" class="small">fixed 0.1, 30 fps: 21%</text>
+    <text x="482" y="180" class="small t-hot">e^(−k·dt), any fps: 5%</text>
+    <text x="482" y="198" class="small">fixed 0.1, 144 fps: 0.05%</text>
+  </svg>
+  <figcaption><var>k</var> = 6. The dots are the frames at 30 fps; they sit on the same curve that 144 fps would follow. With a fixed factor the result depends on the frame rate by a factor of 400.</figcaption>
+</figure>
+
+<h3>Rotations and orbits</h3>
+
+<p>Positions blend with a straight mix. Rotations should not: mixing two quaternions number by number and normalizing moves at an uneven speed. <b>Slerp</b> (spherical linear interpolation) moves along the arc at a constant speed, and takes the same <var>t</var>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="An orbit around a center. Mixing the current and the target position in a straight line cuts through the inside of the sphere and brings the camera closer to the center. Easing the rotation and the distance separately keeps the camera on the sphere.">
+    <circle cx="200" cy="170" r="110" class="ghost"/>
+    <circle cx="200" cy="170" r="4" class="box"/>
+    <text x="200" y="190" class="mid small">center</text>
+    <circle cx="104.7" cy="115" r="7" class="cpu"/>
+    <text x="96" y="104" class="end small">current</text>
+    <circle cx="295.3" cy="115" r="7" class="cpu"/>
+    <text x="304" y="104" class="small">target</text>
+    <line x1="112" y1="115" x2="288" y2="115" class="arrow dashed"/>
+    <circle cx="200" cy="115" r="4" class="ghost"/>
+    <text x="200" y="134" class="mid small t-faint">straight mix: too close</text>
+    <path d="M104.7,115 A110,110 0 0,1 295.3,115" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="200" y="50" class="mid small t-hot">eased rotation, eased distance</text>
+
+    <text x="420" y="60"  class="title">Orbit easing</text>
+    <text x="420" y="86"  class="small">1. slerp the rotation by t.</text>
+    <text x="420" y="104" class="small">2. mix the distance by t.</text>
+    <text x="420" y="122" class="small">3. position = center + distance · (R · +Z).</text>
+    <text x="420" y="156" class="small">Halfway, a straight mix of positions is only</text>
+    <text x="420" y="172" class="small">half the distance from the center: the view</text>
+    <text x="420" y="188" class="small">zooms in and out during every turn.</text>
+  </svg>
+  <figcaption>A 120° turn. Halfway along the straight line the camera is at half the orbit distance; along the arc it keeps its distance.</figcaption>
+</figure>
+
+<div class="split">
+  <div>
+    <h4>Stop when close enough</h4>
+    <p>Exponential easing never reaches the target exactly. Worse, mixing two nearly equal values still rounds a little, by an amount that depends on <var>dt</var>, so a camera "at rest" moves by float noise. Snap to the target once the difference is below a tiny threshold.</p>
+  </div>
+  <div>
+    <h4>A smoother option: a spring</h4>
+    <p>Exponential easing starts at full speed and then slows down. A <b>critically damped spring</b> also keeps a velocity, so the camera speeds up gently too. It costs a few more lines and one more state variable per value.</p>
+  </div>
+</div>
+
+<h2><span class="n">6</span>Worked example</h2>
+
+<p>A 1600 × 900 window, running at 60 fps (<var>dt</var> = 1/60 s). A fly camera with a sensitivity of 1 radian per unit and a speed of 5 units per second, and easing with <var>k</var> = 6.</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. The mouse moves 90 pixels right</h4>
+    <svg viewBox="0 0 760 170" role="img" aria-label="90 pixels divided by half the smaller side, 450, is 0.2 units. At 1 radian per unit the yaw changes by 0.2 radians, 11.5 degrees.">
+      <text x="20" y="34"  class="mono">Δx = 2 · 90 / min(1600, 900) = 180 / 900 = 0.2</text>
+      <text x="20" y="62"  class="mono">yaw change = 0.2 · 1 rad = 0.2 rad = 11.5°</text>
+      <text x="20" y="98"  class="small">No dt here: at 144 fps the same hand motion arrives as smaller moves over more frames,</text>
+      <text x="20" y="116" class="small">and adds up to the same 11.5°.</text>
+      <circle cx="640" cy="110" r="5" class="cpu"/>
+      <line x1="640" y1="110" x2="640" y2="40" class="arrow dashed"/>
+      <line x1="640" y1="110" x2="654" y2="41" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="664" y="64" class="small t-hot">turns right 11.5°</text>
+    </svg>
+    <p>Whether the yaw grows or shrinks for a move to the right depends on the sign convention; turning right is a negative turn around +Y in a right-handed world.</p>
+  </div>
+  <div class="step">
+    <h4>2. W and D are held for one frame</h4>
+    <svg viewBox="0 0 760 170" role="img" aria-label="Forward plus right has length 1.41. Normalized, it has length 1. Times speed 5 times one sixtieth of a second, the camera moves 0.083 units, 0.059 along each direction.">
+      <circle cx="100" cy="130" r="5" class="cpu"/>
+      <line x1="100" y1="130" x2="100" y2="50" class="arrow" marker-end="url(#ah)"/>
+      <text x="92" y="60" class="end small">W: forward</text>
+      <line x1="100" y1="130" x2="180" y2="130" class="arrow" marker-end="url(#ah)"/>
+      <text x="186" y="134" class="small">D: right</text>
+      <line x1="100" y1="130" x2="178" y2="52" class="arrow dashed" marker-end="url(#ah)"/>
+      <text x="184" y="52" class="small">sum: 1.41</text>
+      <line x1="100" y1="130" x2="155" y2="75" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="160" y="92" class="small t-hot">normalized: 1</text>
+      <text x="320" y="50"  class="mono">move = normalize(forward + right)</text>
+      <text x="320" y="76"  class="mono">step = 5 · 1/60 = 0.083 units</text>
+      <text x="320" y="102" class="mono">per axis: 0.083 / √2 = 0.059</text>
+      <text x="320" y="134" class="small">Without the normalize: 0.118 units, 41% too far.</text>
+    </svg>
+    <p>At 30 fps the step is 0.167 units, twice as far, in a frame twice as long: the same speed.</p>
+  </div>
+  <div class="step">
+    <h4>3. Easing toward the new target</h4>
+    <svg viewBox="0 0 760 170" role="img" aria-label="t is 1 minus e to the minus 6 over 60, 0.095. After half a second 5 percent of the distance is left at 30, 60 and 144 fps alike.">
+      <text x="20" y="34" class="mono">t = 1 − e^(−6 · 1/60) = 0.095</text>
+      <text x="20" y="60" class="small">Each frame covers 9.5% of what is left. After 0.5 s (30 frames):</text>
+      <text x="20" y="84" class="mono">(1 − 0.095)^30 = e^(−3) = 0.050  → 5% left</text>
+    </svg>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Frame rate</th><th><var>t</var> per frame, <var>k</var> = 6</th><th>Left after 0.5 s</th><th>Fixed <var>t</var> = 0.1: left after 0.5 s</th></tr>
+      <tr><td>30 fps</td><td>0.181</td><td>5.0%</td><td>20.6%</td></tr>
+      <tr><td>60 fps</td><td>0.095</td><td>5.0%</td><td>4.2%</td></tr>
+      <tr><td>144 fps</td><td>0.041</td><td>5.0%</td><td>0.05%</td></tr>
+    </table>
+    </div>
+  </div>
+  <div class="step">
+    <h4>4. An arcball drag from the center to x = 0.5</h4>
+    <svg viewBox="0 0 760 170" role="img" aria-label="The start point lifts to (0, 0, 1), the end point to (0.5, 0, 0.87). The axis is (0, 0.5, 0), so plus Y, and the angle is 30 degrees.">
+      <text x="20" y="34"  class="mono">p₀ = (0, 0, 1)          p₁ = (0.5, 0, √(1 − 0.25)) = (0.5, 0, 0.866)</text>
+      <text x="20" y="62"  class="mono">p₀ × p₁ = (0, 0.5, 0)   → axis +Y</text>
+      <text x="20" y="90"  class="mono">angle = acos(p₀ · p₁) = acos(0.866) = 30°</text>
+      <text x="20" y="126" class="small">A horizontal drag turns around the camera's up axis. Grab style: the camera turns by −30°,</text>
+      <text x="20" y="144" class="small">so it moves to the left around the center and the scene seems to turn right with the cursor.</text>
+    </svg>
+    <p>A drag to the rim (<var>x</var> = 1) would give 90°, so half the window's height is a quarter turn.</p>
+  </div>
+</div>
+
+<h2><span class="n">7</span>Pitfalls</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Symptom</th><th>Usual cause</th></tr>
+  <tr><td>Looking around is slower at a high frame rate</td><td>Mouse moves multiplied by <var>dt</var>.</td></tr>
+  <tr><td>Walking is faster at a high frame rate</td><td>Key movement not multiplied by <var>dt</var>.</td></tr>
+  <tr><td>Smoothing feels different on another machine</td><td>A fixed smoothing factor per frame instead of 1 − e<sup>−<var>k</var>·<var>dt</var></sup>.</td></tr>
+  <tr><td>The camera jumps after a breakpoint or a window drag</td><td><var>dt</var> not capped.</td></tr>
+  <tr><td>The view flips at the top or bottom</td><td>Pitch not clamped below 90°.</td></tr>
+  <tr><td>The horizon slowly tilts in a fly camera</td><td>Small turns added to the last rotation instead of rebuilding it from yaw and pitch.</td></tr>
+  <tr><td>The camera keeps moving after alt-tab</td><td>The key-up event was lost; the key state was not reset on focus loss.</td></tr>
+  <tr><td>The orbit zooms in and out while turning</td><td>The position eased in a straight line instead of along the sphere.</td></tr>
+</table>
+</div>
+
+<h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
+
+<p>RASM has both kinds of controller: <code>FREE_FLY</code> (a fly camera, turned while a mouse button is held) and <code>TRACK_BALL</code> (an arcball-style orbit camera). The engine reads the input itself, once per frame, inside <code>beginFrame</code>. Easing is the exponential kind of <a href="#easing">section 5</a>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="SDL events go to pollEvents, which fills a CameraInput: mouseStart and mouseEnd in NDC divided by the smaller side, the summed wheel delta, W A S D, and deltaTime capped at 0.1 seconds. updateCamera runs updateFreeFlyCamera or updateTrackballCamera, which write targetTransform. easeCamera moves transform toward it. getViewMatrix reads transform.">
+    <rect x="15"  y="20" width="160" height="58" rx="6" class="box"/>
+    <text x="95"  y="44" class="mid title">SDL events</text>
+    <text x="95"  y="62" class="mid small">mouse, wheel, keys</text>
+    <line x1="175" y1="49" x2="206" y2="49" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="208" y="20" width="160" height="58" rx="6" class="cpu"/>
+    <text x="288" y="44" class="mid mono">pollEvents</text>
+    <text x="288" y="62" class="mid small">in beginFrame</text>
+    <line x1="368" y1="49" x2="399" y2="49" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="401" y="20" width="160" height="58" rx="6" class="box"/>
+    <text x="481" y="44" class="mid mono">CameraInput</text>
+    <text x="481" y="62" class="mid small">one frame's input</text>
+    <line x1="561" y1="49" x2="592" y2="49" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="594" y="20" width="160" height="58" rx="6" class="cpu"/>
+    <text x="674" y="44" class="mid mono">updateCamera</text>
+    <text x="674" y="62" class="mid small">controller, then easing</text>
+
+    <path d="M674,78 V100 H95 V118" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="384" y="94" class="mid small">updateFreeFlyCamera or updateTrackballCamera writes</text>
+
+    <rect x="15"  y="120" width="160" height="58" rx="6" class="box"/>
+    <text x="95"  y="144" class="mid mono">targetTransform</text>
+    <text x="95"  y="162" class="mid small">the target pose</text>
+    <line x1="175" y1="149" x2="206" y2="149" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="208" y="120" width="160" height="58" rx="6" class="cpu"/>
+    <text x="288" y="144" class="mid mono">easeCamera</text>
+    <text x="288" y="162" class="mid small">t = 1 − exp(−speed · dt)</text>
+    <line x1="368" y1="149" x2="399" y2="149" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="401" y="120" width="160" height="58" rx="6" class="box"/>
+    <text x="481" y="144" class="mid mono">transform</text>
+    <text x="481" y="162" class="mid small">the rendered pose</text>
+    <line x1="561" y1="149" x2="592" y2="149" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="594" y="120" width="160" height="58" rx="6" class="cpu"/>
+    <text x="674" y="144" class="mid mono">getViewMatrix</text>
+    <text x="674" y="162" class="mid small">read by drawScene</text>
+
+    <text x="15" y="214" class="small">pollEvents: mouseStart is last frame's drag position, mouseEnd the newest one, both from toNDC.</text>
+    <text x="15" y="232" class="small">wheelDelta is summed over the frame. W, A, S, D are scancodes from SDL_GetKeyboardState.</text>
+    <text x="15" y="250" class="small">deltaTime comes from steady_clock: 0 on the first frame, at most 0.1 s.</text>
+    <text x="15" y="268" class="small">A lost focus calls SDL_ResetKeyboard, so no key stays held.</text>
+  </svg>
+  <figcaption>The two-pose split of <a href="#two-poses">section 1</a>: controllers write <code>targetTransform</code>, rendering reads <code>transform</code>. <code>setCameraTransform</code> sets both, so the camera jumps there.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Mouse units</td><td>divide by the smaller side, flip <var>y</var></td><td>The same, in <code>toNDC</code>, with the logical window size (<code>Window</code>'s <code>width</code>, <code>height</code>), the units of SDL mouse positions.</td></tr>
+  <tr><td>Fly: angles</td><td>yaw around world up, pitch around right, clamp</td><td><code class="lang-text">yaw -= dx * lookSensitivity</code>, <code class="lang-text">pitch += dy * lookSensitivity</code>, pitch clamped to ±89°, rotation <code class="lang-text">angleAxis(yaw, +Y) * angleAxis(pitch, +X)</code>. <code>lookSensitivity</code> is radians per NDC unit.</td></tr>
+  <tr><td>Fly: moving</td><td>normalized sum × speed × <var>dt</var></td><td>The same. It flies along the full view direction, and has no keys for up, down or a faster speed.</td></tr>
+  <tr><td>Fly: mouse</td><td>drag or capture</td><td>Drag: the view turns only while a mouse button (any) is held.</td></tr>
+  <tr><td>Orbit kind</td><td>turntable or arcball</td><td>An arcball-style trackball only (<code>projectOnSphere</code>: Shoemake's lift, rim outside). It can roll. There is no turntable mode.</td></tr>
+  <tr><td>Orbit angle</td><td>2 × or 1 × the angle between the points</td><td>1 × the angle, times <code>orbitSensitivity</code>, applied as <code class="lang-text">rotation * angleAxis(-angle, axis)</code>: in the camera's frame, grab style.</td></tr>
+  <tr><td>Zoom</td><td>additive or multiplicative</td><td>Additive: <code class="lang-text">radius -= wheelDelta</code>, one unit per wheel notch, clamped at 0. At 0 the camera sits on the center.</td></tr>
+  <tr><td>Easing</td><td><var>t</var> = 1 − e<sup>−<var>k</var>·<var>dt</var></sup>, slerp, orbit on the sphere</td><td>All three, in <code>easeCamera</code>. <var>k</var> is <code>easingSpeed</code>: 12 by default, 6 in the examples, ≤ 0 turns easing off. A trackball eases its radius and keeps the camera on the sphere; free-fly mixes the position.</td></tr>
+  <tr><td>Stop when close</td><td>snap below a threshold</td><td>Snaps once position, rotation and scale are within 1e-6 (relative for the position), so a camera at rest does not move (<code>B24</code>).</td></tr>
+  <tr><td>Long frames</td><td>cap <var>dt</var></td><td>Capped at 0.1 s in <code>pollEvents</code>.</td></tr>
+  <tr><td>Switching controllers</td><td>—</td><td><code>setCameraController</code> starts from the rendered pose. For free-fly it computes <code class="lang-text">pitch = asin(forward.y)</code> and <code class="lang-text">yaw = atan2(-forward.x, -forward.z)</code>, so the view does not jump; a roll is dropped.</td></tr>
+  <tr><td>Who owns input</td><td>the application, usually</td><td>The engine: <code>pollEvents</code> runs inside <code>beginFrame</code> for the camera passed to it (<code>D7</code>).</td></tr>
+</table>
+</div>
+
+<p>A new camera from <code>createCamera</code> is a trackball whose center is one unit in front of it, with radius 1, so the first update keeps the given pose. The fields are described in the API reference: <a href="../api/camera.html#CameraController">CameraController</a> and <a href="../api/camera.html#CameraInput">CameraInput</a>.</p>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Types</td><td><code>CameraInput</code>, <code>CameraController</code>, <code>Camera</code> in <code>include/rasm/camera.h</code></td></tr>
+  <tr><td>Input to <code>CameraInput</code></td><td><code>Engine::pollEvents</code>, <code>toNDC</code> in <code>src/platform/window.cpp</code></td></tr>
+  <tr><td>Called each frame</td><td><code>Engine::beginFrame</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Controllers</td><td><code>updateFreeFlyCamera</code>, <code>updateTrackballCamera</code>, <code>projectOnSphere</code> in <code>src/scene/camera.cpp</code></td></tr>
+  <tr><td>Easing</td><td><code>easeCamera</code>, <code>Engine::updateCamera</code> in <code>src/scene/camera.cpp</code></td></tr>
+  <tr><td>Setup and switching</td><td><code>Engine::createCamera</code>, <code>Engine::setCameraController</code>, <code>Engine::setCameraTransform</code> in <code>src/scene/camera.cpp</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/cameraTests.cpp</code>: frame-time movement, diagonal speed, the pitch clamp, orbit sphere, easing</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Controllers write <code>targetTransform</code> only. <code>transform</code> is written by easing and by <code>setCameraTransform</code>.</li>
+    <li>Mouse deltas are never multiplied by <code>deltaTime</code>; key movement always is.</li>
+    <li>The easing factor comes from <code class="lang-text">1 - exp(-easingSpeed * deltaTime)</code>, never a fixed number per frame.</li>
+    <li>A camera at rest must stay bit-for-bit still: keep the snap in <code>easeCamera</code> (<code>B24</code>).</li>
+    <li>Run <code>ctest --preset x64-debug</code> after a change; <code>tests/cameraTests.cpp</code> covers the controllers.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>The application cannot see input events or drive the controllers with its own input: the engine owns the event loop (<code>D7</code>). The development plan (phase 5) lists a replaceable platform layer and optional controller helpers that the application drives.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Ken Shoemake, <i>ARCBALL: A User Interface for Specifying Three-Dimensional Orientation Using a Mouse</i>, Graphics Interface 1992.</li>
+  <li>Michael Chen, S. Joy Mountford and Abigail Sellen, <i>A Study in Interactive 3-D Rotation Using 2-D Control Devices</i>, SIGGRAPH 1988.</li>
+  <li>Mark Haigh-Hutchinson, <i>Real-Time Cameras</i> (2009).</li>
+  <li>Thomas Lowe, <i>Critically Damped Ease-In/Ease-Out Smoothing</i>, in <i>Game Programming Gems 4</i> (2004).</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

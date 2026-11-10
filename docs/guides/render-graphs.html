@@ -1,0 +1,838 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Render Graphs · RASM</title>
+<meta name="description" content="How render graphs (frame graphs) work: passes that declare reads and writes, the dependency graph, Kahn's topological sort, culling unused passes, automatic barriers and layout transitions, transient resources and memory aliasing, async compute, and what RASM's render graph does and does not do.">
+<meta name="rasm-sources" content="include/rasm/render/renderGraph.h src/renderer/renderGraph.cpp src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/renderContext.cpp src/engine.cpp tests/renderGraphTests.cpp tests/textureStatesTests.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/render-graphs.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Culling and the frame</p>
+<h1>Render graphs</h1>
+<p class="lead">A frame is many passes: shadows, a G-buffer, lighting, post effects, UI. Each one reads what earlier ones wrote. A render graph (or frame graph) lets every pass declare what it reads and writes, and works out the rest: the order of the passes, which passes are not needed, the barriers between them and, in bigger engines, where in memory each texture lives. This page explains how. The <a href="#in-rasm">last part</a> shows what RASM's graph does.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Each pass declares the resources it <b>reads</b> and <b>writes</b>. Passes never name each other.</li>
+    <li>"B reads what A writes" becomes an edge A → B. The passes and edges form a <b>directed acyclic graph</b> (DAG).</li>
+    <li>A <b>topological sort</b> (for example <b>Kahn's algorithm</b>) gives an order where every writer runs before its readers. A cycle means the frame cannot be ordered.</li>
+    <li>Passes whose results nobody reads can be <b>culled</b>.</li>
+    <li>Knowing every use of every resource, the graph emits the <b>barriers and layout transitions</b> itself.</li>
+    <li>Knowing every resource's <b>lifetime</b>, it can place short-lived (<b>transient</b>) textures in the same memory, one after another: <b>aliasing</b>.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>The problem</h2>
+
+<p>Without a graph, a frame is a hand-written list of passes. Each pass also carries the synchronization it needs, written by hand: "wait for the shadow map to be written, then move it to a layout for sampling". This works for three passes. With twenty, it breaks in quiet ways.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 236" role="img" aria-label="A hand-written frame: Shadow, barrier, GBuffer, barrier, Lighting, barrier, Post. Adding an SSAO pass means finding the right place for it, adding its barriers and fixing the ones around it.">
+    <text x="20" y="24" class="title">A frame written by hand</text>
+    <rect x="20" y="40" width="120" height="46" rx="6" class="gpu"/>
+    <text x="80" y="68" class="mid title">Shadow</text>
+    <line x1="155" y1="34" x2="155" y2="92" class="hot"/>
+    <rect x="170" y="40" width="120" height="46" rx="6" class="gpu"/>
+    <text x="230" y="68" class="mid title">GBuffer</text>
+    <line x1="305" y1="34" x2="305" y2="92" class="hot"/>
+    <rect x="320" y="40" width="120" height="46" rx="6" class="gpu"/>
+    <text x="380" y="68" class="mid title">Lighting</text>
+    <line x1="455" y1="34" x2="455" y2="92" class="hot"/>
+    <rect x="470" y="40" width="120" height="46" rx="6" class="gpu"/>
+    <text x="530" y="68" class="mid title">Post</text>
+    <text x="155" y="110" class="mid small t-hot">barrier</text>
+    <text x="305" y="110" class="mid small t-hot">barrier</text>
+    <text x="455" y="110" class="mid small t-hot">barrier</text>
+
+    <rect x="240" y="140" width="120" height="40" rx="6" class="ghost"/>
+    <text x="300" y="165" class="mid t-faint">SSAO?</text>
+    <line x1="300" y1="140" x2="300" y2="96" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <text x="380" y="152" class="small">A new pass: where does it go? Which barriers does</text>
+    <text x="380" y="168" class="small">it need, and which old ones are now wrong?</text>
+    <text x="20" y="214" class="small">Every orange line is code someone wrote and must keep right. A missing one is a race the validation layers may not catch.</text>
+  </svg>
+  <figcaption>The order, the barriers, and the memory of every texture are all global knowledge, spread over many places.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>By hand, you must</th><th>What goes wrong</th></tr>
+  <tr><td>order the passes</td><td>a pass reads a texture before it is written: last frame's data, or garbage</td></tr>
+  <tr><td>place every barrier and layout transition</td><td>too few: races and flicker; too many: the GPU sits idle</td></tr>
+  <tr><td>decide which passes run</td><td>a debug pass keeps running after its view is turned off</td></tr>
+  <tr><td>give every texture its own memory</td><td>memory for textures that are only alive for part of the frame</td></tr>
+</table>
+</div>
+
+<h2><span class="n">2</span>The idea: declare, compile, execute</h2>
+
+<p>The <b>frame graph</b> was presented by Yuriy O'Donnell for Frostbite at GDC 2017, and most engines now have one. It splits the frame into three phases.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Setup: each pass declares the resources it creates, reads and writes. Compile: the graph builds edges, sorts, culls, computes lifetimes and plans barriers and memory. Execute: the passes run in order, each with its barriers before it.">
+    <rect x="20" y="30" width="220" height="110" rx="8" class="cpu"/>
+    <text x="130" y="54" class="mid title">1. Setup</text>
+    <text x="130" y="78" class="mid small">each pass declares:</text>
+    <text x="130" y="96" class="mid small">create, read, write</text>
+    <text x="130" y="122" class="mid small">no GPU work yet</text>
+    <line x1="240" y1="85" x2="268" y2="85" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="270" y="30" width="220" height="110" rx="8" class="cpu"/>
+    <text x="380" y="54" class="mid title">2. Compile</text>
+    <text x="380" y="78" class="mid small">edges, sort, cull</text>
+    <text x="380" y="96" class="mid small">lifetimes, barriers,</text>
+    <text x="380" y="114" class="mid small">memory placement</text>
+    <line x1="490" y1="85" x2="518" y2="85" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="520" y="30" width="220" height="110" rx="8" class="gpu"/>
+    <text x="630" y="54" class="mid title">3. Execute</text>
+    <text x="630" y="78" class="mid small">for each pass in order:</text>
+    <text x="630" y="96" class="mid small">its barriers, then its</text>
+    <text x="630" y="114" class="mid small">callback records commands</text>
+    <text x="20" y="176" class="small">Frostbite runs all three every frame. That is cheap: a frame has tens to hundreds of passes, not millions.</text>
+    <text x="20" y="192" class="small">Other engines compile once and only redo it when the passes change.</text>
+  </svg>
+  <figcaption>A pass is two pieces of code: a <b>setup</b> function that declares, and an <b>execute</b> function (often a lambda) that records commands later.</figcaption>
+</figure>
+
+<p>During setup, resources are only <b>virtual</b>: a handle and a description (size, format), no memory yet. A pass can <b>create</b> one (it lives only inside this frame: a <b>transient</b> resource), or <b>import</b> one from outside (the swapchain image, or last frame's color for temporal effects). Only compile decides where each transient resource really lives.</p>
+
+<h2><span class="n">3</span>Passes and resources</h2>
+
+<p>Here is a small frame used in the rest of the page. Passes are green, resources amber. An arrow into a resource is a write, an arrow out of it a read.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Shadow writes the shadow map, which Lighting reads. GBuffer writes the G-buffer, which Lighting and Debug read. Lighting writes HDR, which Post reads. Post writes the imported backbuffer. Debug writes a debug view that nobody reads.">
+    <rect x="20" y="30" width="120" height="44" rx="6" class="gpu"/><text x="80" y="57" class="mid title">Shadow</text>
+    <rect x="20" y="140" width="120" height="44" rx="6" class="gpu"/><text x="80" y="167" class="mid title">GBuffer</text>
+    <rect x="340" y="30" width="120" height="44" rx="6" class="gpu"/><text x="400" y="57" class="mid title">Lighting</text>
+    <rect x="340" y="140" width="120" height="44" rx="6" class="gpu"/><text x="400" y="167" class="mid title">Debug</text>
+    <rect x="630" y="30" width="110" height="44" rx="6" class="gpu"/><text x="685" y="57" class="mid title">Post</text>
+
+    <rect x="190" y="37" width="110" height="30" rx="15" class="mem"/><text x="245" y="56" class="mid small">shadow map</text>
+    <rect x="190" y="147" width="110" height="30" rx="15" class="mem"/><text x="245" y="166" class="mid small">G-buffer</text>
+    <rect x="490" y="37" width="110" height="30" rx="15" class="mem"/><text x="545" y="56" class="mid small">HDR</text>
+    <rect x="490" y="147" width="110" height="30" rx="15" class="mem"/><text x="545" y="166" class="mid small">debug view</text>
+    <rect x="630" y="140" width="110" height="44" rx="6" class="box"/><text x="685" y="160" class="mid small">backbuffer</text><text x="685" y="175" class="mid small">(imported)</text>
+
+    <line x1="140" y1="52" x2="188" y2="52" class="arrow" marker-end="url(#ah)"/>
+    <line x1="300" y1="52" x2="338" y2="52" class="arrow" marker-end="url(#ah)"/>
+    <line x1="140" y1="162" x2="188" y2="162" class="arrow" marker-end="url(#ah)"/>
+    <line x1="300" y1="156" x2="338" y2="68" class="arrow" marker-end="url(#ah)"/>
+    <line x1="300" y1="162" x2="338" y2="162" class="arrow" marker-end="url(#ah)"/>
+    <line x1="460" y1="52" x2="488" y2="52" class="arrow" marker-end="url(#ah)"/>
+    <line x1="600" y1="52" x2="628" y2="52" class="arrow" marker-end="url(#ah)"/>
+    <line x1="685" y1="74" x2="685" y2="138" class="arrow" marker-end="url(#ah)"/>
+    <line x1="460" y1="162" x2="488" y2="162" class="arrow" marker-end="url(#ah)"/>
+    <text x="545" y="200" class="mid small t-hot">no reader</text>
+    <text x="20" y="236" class="small">Passes only meet through resources. Adding SSAO means one new pass that reads the G-buffer and writes an AO texture, plus one read in Lighting.</text>
+  </svg>
+  <figcaption>The backbuffer is imported: it comes from outside the graph and must be written, so the pass that writes it is the graph's goal.</figcaption>
+</figure>
+
+<h3>Versions: writing the same resource twice</h3>
+
+<p>Sometimes two passes write the same texture: transparent objects are drawn on top of the lit image. If both writes go to "HDR", the graph cannot tell whether Post wants the image before or after the transparent pass. So each write makes a new <b>version</b> of the resource, and a read names the version it wants.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 136" role="img" aria-label="Lighting writes HDR version 1. Transparent reads version 1 and writes version 2. Post reads version 2. The order Lighting, Transparent, Post follows.">
+    <rect x="20" y="40" width="120" height="44" rx="6" class="gpu"/><text x="80" y="67" class="mid title">Lighting</text>
+    <line x1="140" y1="62" x2="168" y2="62" class="arrow" marker-end="url(#ah)"/>
+    <rect x="170" y="47" width="100" height="30" rx="15" class="mem"/><text x="220" y="66" class="mid small">HDR v1</text>
+    <line x1="270" y1="62" x2="298" y2="62" class="arrow" marker-end="url(#ah)"/>
+    <rect x="300" y="40" width="130" height="44" rx="6" class="gpu"/><text x="365" y="67" class="mid title">Transparent</text>
+    <line x1="430" y1="62" x2="458" y2="62" class="arrow" marker-end="url(#ah)"/>
+    <rect x="460" y="47" width="100" height="30" rx="15" class="mem"/><text x="510" y="66" class="mid small">HDR v2</text>
+    <line x1="560" y1="62" x2="588" y2="62" class="arrow" marker-end="url(#ah)"/>
+    <rect x="590" y="40" width="120" height="44" rx="6" class="gpu"/><text x="650" y="67" class="mid title">Post</text>
+    <text x="20" y="120" class="small">Same memory, two versions. Each version has exactly one writer, so "who wrote what I read" always has one answer.</text>
+  </svg>
+  <figcaption>Versions turn every hazard into a plain read-after-write edge. They are only names: both versions live in the same texture.</figcaption>
+</figure>
+
+<h2><span class="n">4</span>From declarations to edges</h2>
+
+<p>Two passes must be ordered when they touch the same resource and at least one of them writes it. These are the classic <b>hazards</b>:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Hazard</th><th>Example</th><th>Edge</th></tr>
+  <tr><td>Read after write (RAW)</td><td>Lighting reads the shadow map that Shadow wrote</td><td>Shadow → Lighting</td></tr>
+  <tr><td>Write after read (WAR)</td><td>Post reads HDR, then a UI pass draws into HDR. If UI ran first, Post would read the image with the UI in it.</td><td>reader → next writer</td></tr>
+  <tr><td>Write after write (WAW)</td><td>two passes write the same texture</td><td>first writer → second writer</td></tr>
+  <tr><td>Read after read</td><td>Lighting and Debug both read the G-buffer</td><td>none: they can run in any order</td></tr>
+</table>
+</div>
+
+<p>With versions, all three hazards become read-after-write edges between versions. The algorithm is then short: map each resource version to the pass that writes it, and for every read, add an edge from that writer to the reader. For the frame above:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Resource</th><th>Writer</th><th>Readers</th><th>Edges</th></tr>
+  <tr><td>shadow map</td><td>Shadow</td><td>Lighting</td><td>Shadow → Lighting</td></tr>
+  <tr><td>G-buffer</td><td>GBuffer</td><td>Lighting, Debug</td><td>GBuffer → Lighting, GBuffer → Debug</td></tr>
+  <tr><td>HDR</td><td>Lighting</td><td>Post</td><td>Lighting → Post</td></tr>
+  <tr><td>debug view</td><td>Debug</td><td>–</td><td>–</td></tr>
+</table>
+</div>
+
+<h2 id="kahn"><span class="n">5</span>Sorting: Kahn's algorithm</h2>
+
+<p>A <b>topological sort</b> lists the nodes of a DAG so that every edge points forward. Kahn's algorithm (1962) does it by counting. A pass's <b>in-degree</b> is the number of edges into it: how many writers it still waits for. A pass with in-degree 0 can run now.</p>
+
+<pre><code class="lang-text">for each pass p:  inDegree[p] = number of edges into p
+queue = every pass with inDegree 0, in the order they were added
+while queue is not empty:
+    p = queue.popFront()
+    order.append(p)
+    for each edge p → s:
+        inDegree[s] -= 1
+        if inDegree[s] == 0: queue.pushBack(s)
+if order has fewer passes than the graph: there is a cycle</code></pre>
+
+<p>The five passes were added in the order Post, Lighting, Shadow, GBuffer, Debug (<b>#0</b> to <b>#4</b>), on purpose: the order of adding does not matter, only the edges. Click through the sort.</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. Count the incoming edges</h4>
+    <svg viewBox="0 0 760 260" role="img" aria-label="In-degrees: Shadow 0, GBuffer 0, Lighting 2, Debug 1, Post 1. Shadow and GBuffer go into the queue.">
+    <line x1="170" y1="42" x2="298" y2="42" class="arrow" marker-end="url(#ah)"/>
+    <line x1="170" y1="142" x2="298" y2="42" class="arrow" marker-end="url(#ah)"/>
+    <line x1="170" y1="142" x2="298" y2="142" class="arrow" marker-end="url(#ah)"/>
+    <line x1="450" y1="42" x2="578" y2="42" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20" y="20" width="150" height="44" rx="6" class="box"/>
+    <text x="95" y="40" class="mid title">Shadow</text>
+    <text x="95" y="56" class="mid small">added #2</text>
+    <text x="95" y="82" class="mid mono small t-hot">in 0</text>
+    <rect x="20" y="120" width="150" height="44" rx="6" class="box"/>
+    <text x="95" y="140" class="mid title">GBuffer</text>
+    <text x="95" y="156" class="mid small">added #3</text>
+    <text x="95" y="182" class="mid mono small t-hot">in 0</text>
+    <rect x="300" y="20" width="150" height="44" rx="6" class="box"/>
+    <text x="375" y="40" class="mid title">Lighting</text>
+    <text x="375" y="56" class="mid small">added #1</text>
+    <text x="375" y="82" class="mid mono small ">in 2</text>
+    <rect x="300" y="120" width="150" height="44" rx="6" class="box"/>
+    <text x="375" y="140" class="mid title">Debug</text>
+    <text x="375" y="156" class="mid small">added #4</text>
+    <text x="375" y="182" class="mid mono small ">in 1</text>
+    <rect x="580" y="20" width="150" height="44" rx="6" class="box"/>
+    <text x="655" y="40" class="mid title">Post</text>
+    <text x="655" y="56" class="mid small">added #0</text>
+    <text x="655" y="82" class="mid mono small ">in 1</text>
+    <text x="20" y="222" class="mono">queue: [Shadow, GBuffer]</text>
+    <text x="20" y="246" class="mono">order: []</text>
+    </svg>
+    <p>Shadow and GBuffer wait for nobody. They enter the queue in the order they were added: Shadow (#2) before GBuffer (#3).</p>
+  </div>
+  <div class="step">
+    <h4>2. Take Shadow</h4>
+    <svg viewBox="0 0 760 260" role="img" aria-label="Shadow is placed first. Lighting's in-degree drops from 2 to 1.">
+    <line x1="170" y1="42" x2="298" y2="42" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="170" y1="142" x2="298" y2="42" class="arrow" marker-end="url(#ah)"/>
+    <line x1="170" y1="142" x2="298" y2="142" class="arrow" marker-end="url(#ah)"/>
+    <line x1="450" y1="42" x2="578" y2="42" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20" y="20" width="150" height="44" rx="6" class="gpu"/>
+    <text x="95" y="40" class="mid title">Shadow</text>
+    <text x="95" y="56" class="mid small">added #2</text>
+    <rect x="17" y="17" width="156" height="50" rx="8" class="hot"/>
+    <text x="95" y="82" class="mid mono small t-faint">done</text>
+    <rect x="20" y="120" width="150" height="44" rx="6" class="box"/>
+    <text x="95" y="140" class="mid title">GBuffer</text>
+    <text x="95" y="156" class="mid small">added #3</text>
+    <text x="95" y="182" class="mid mono small ">in 0</text>
+    <rect x="300" y="20" width="150" height="44" rx="6" class="box"/>
+    <text x="375" y="40" class="mid title">Lighting</text>
+    <text x="375" y="56" class="mid small">added #1</text>
+    <text x="375" y="82" class="mid mono small t-hot">2 → 1</text>
+    <rect x="300" y="120" width="150" height="44" rx="6" class="box"/>
+    <text x="375" y="140" class="mid title">Debug</text>
+    <text x="375" y="156" class="mid small">added #4</text>
+    <text x="375" y="182" class="mid mono small ">in 1</text>
+    <rect x="580" y="20" width="150" height="44" rx="6" class="box"/>
+    <text x="655" y="40" class="mid title">Post</text>
+    <text x="655" y="56" class="mid small">added #0</text>
+    <text x="655" y="82" class="mid mono small ">in 1</text>
+    <text x="20" y="222" class="mono">queue: [GBuffer]</text>
+    <text x="20" y="246" class="mono">order: [Shadow]</text>
+    </svg>
+    <p>Each successor of the taken pass loses one incoming edge. Lighting still waits for GBuffer.</p>
+  </div>
+  <div class="step">
+    <h4>3. Take GBuffer</h4>
+    <svg viewBox="0 0 760 260" role="img" aria-label="GBuffer is placed second. Lighting and Debug drop to 0 and enter the queue.">
+    <line x1="170" y1="42" x2="298" y2="42" class="arrow" marker-end="url(#ah)"/>
+    <line x1="170" y1="142" x2="298" y2="42" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="170" y1="142" x2="298" y2="142" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="450" y1="42" x2="578" y2="42" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20" y="20" width="150" height="44" rx="6" class="gpu"/>
+    <text x="95" y="40" class="mid title">Shadow</text>
+    <text x="95" y="56" class="mid small">added #2</text>
+    <text x="95" y="82" class="mid mono small t-faint">done</text>
+    <rect x="20" y="120" width="150" height="44" rx="6" class="gpu"/>
+    <text x="95" y="140" class="mid title">GBuffer</text>
+    <text x="95" y="156" class="mid small">added #3</text>
+    <rect x="17" y="117" width="156" height="50" rx="8" class="hot"/>
+    <text x="95" y="182" class="mid mono small t-faint">done</text>
+    <rect x="300" y="20" width="150" height="44" rx="6" class="box"/>
+    <text x="375" y="40" class="mid title">Lighting</text>
+    <text x="375" y="56" class="mid small">added #1</text>
+    <text x="375" y="82" class="mid mono small t-hot">1 → 0</text>
+    <rect x="300" y="120" width="150" height="44" rx="6" class="box"/>
+    <text x="375" y="140" class="mid title">Debug</text>
+    <text x="375" y="156" class="mid small">added #4</text>
+    <text x="375" y="182" class="mid mono small t-hot">1 → 0</text>
+    <rect x="580" y="20" width="150" height="44" rx="6" class="box"/>
+    <text x="655" y="40" class="mid title">Post</text>
+    <text x="655" y="56" class="mid small">added #0</text>
+    <text x="655" y="82" class="mid mono small ">in 1</text>
+    <text x="20" y="222" class="mono">queue: [Lighting, Debug]</text>
+    <text x="20" y="246" class="mono">order: [Shadow, GBuffer]</text>
+    </svg>
+    <p>Two passes become ready at once. Either order is correct; this one keeps the order of the edges.</p>
+  </div>
+  <div class="step">
+    <h4>4. Take Lighting</h4>
+    <svg viewBox="0 0 760 260" role="img" aria-label="Lighting is placed third. Post drops to 0 and joins the queue after Debug.">
+    <line x1="170" y1="42" x2="298" y2="42" class="arrow" marker-end="url(#ah)"/>
+    <line x1="170" y1="142" x2="298" y2="42" class="arrow" marker-end="url(#ah)"/>
+    <line x1="170" y1="142" x2="298" y2="142" class="arrow" marker-end="url(#ah)"/>
+    <line x1="450" y1="42" x2="578" y2="42" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <rect x="20" y="20" width="150" height="44" rx="6" class="gpu"/>
+    <text x="95" y="40" class="mid title">Shadow</text>
+    <text x="95" y="56" class="mid small">added #2</text>
+    <text x="95" y="82" class="mid mono small t-faint">done</text>
+    <rect x="20" y="120" width="150" height="44" rx="6" class="gpu"/>
+    <text x="95" y="140" class="mid title">GBuffer</text>
+    <text x="95" y="156" class="mid small">added #3</text>
+    <text x="95" y="182" class="mid mono small t-faint">done</text>
+    <rect x="300" y="20" width="150" height="44" rx="6" class="gpu"/>
+    <text x="375" y="40" class="mid title">Lighting</text>
+    <text x="375" y="56" class="mid small">added #1</text>
+    <rect x="297" y="17" width="156" height="50" rx="8" class="hot"/>
+    <text x="375" y="82" class="mid mono small t-faint">done</text>
+    <rect x="300" y="120" width="150" height="44" rx="6" class="box"/>
+    <text x="375" y="140" class="mid title">Debug</text>
+    <text x="375" y="156" class="mid small">added #4</text>
+    <text x="375" y="182" class="mid mono small ">in 0</text>
+    <rect x="580" y="20" width="150" height="44" rx="6" class="box"/>
+    <text x="655" y="40" class="mid title">Post</text>
+    <text x="655" y="56" class="mid small">added #0</text>
+    <text x="655" y="82" class="mid mono small t-hot">1 → 0</text>
+    <text x="20" y="222" class="mono">queue: [Debug, Post]</text>
+    <text x="20" y="246" class="mono">order: [Shadow, GBuffer, Lighting]</text>
+    </svg>
+    <p>Post becomes ready, behind Debug in the queue.</p>
+  </div>
+  <div class="step">
+    <h4>5. Take Debug, then Post</h4>
+    <svg viewBox="0 0 760 260" role="img" aria-label="All five passes are sorted: Shadow, GBuffer, Lighting, Debug, Post.">
+    <line x1="170" y1="42" x2="298" y2="42" class="arrow" marker-end="url(#ah)"/>
+    <line x1="170" y1="142" x2="298" y2="42" class="arrow" marker-end="url(#ah)"/>
+    <line x1="170" y1="142" x2="298" y2="142" class="arrow" marker-end="url(#ah)"/>
+    <line x1="450" y1="42" x2="578" y2="42" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20" y="20" width="150" height="44" rx="6" class="gpu"/>
+    <text x="95" y="40" class="mid title">Shadow</text>
+    <text x="95" y="56" class="mid small">added #2</text>
+    <text x="95" y="82" class="mid mono small t-faint">done</text>
+    <rect x="20" y="120" width="150" height="44" rx="6" class="gpu"/>
+    <text x="95" y="140" class="mid title">GBuffer</text>
+    <text x="95" y="156" class="mid small">added #3</text>
+    <text x="95" y="182" class="mid mono small t-faint">done</text>
+    <rect x="300" y="20" width="150" height="44" rx="6" class="gpu"/>
+    <text x="375" y="40" class="mid title">Lighting</text>
+    <text x="375" y="56" class="mid small">added #1</text>
+    <text x="375" y="82" class="mid mono small t-faint">done</text>
+    <rect x="300" y="120" width="150" height="44" rx="6" class="gpu"/>
+    <text x="375" y="140" class="mid title">Debug</text>
+    <text x="375" y="156" class="mid small">added #4</text>
+    <text x="375" y="182" class="mid mono small t-faint">done</text>
+    <rect x="580" y="20" width="150" height="44" rx="6" class="gpu"/>
+    <text x="655" y="40" class="mid title">Post</text>
+    <text x="655" y="56" class="mid small">added #0</text>
+    <text x="655" y="82" class="mid mono small t-faint">done</text>
+    <text x="20" y="222" class="mono">queue: []</text>
+    <text x="20" y="246" class="mono">order: [Shadow, GBuffer, Lighting, Debug, Post]   5 of 5: no cycle</text>
+    </svg>
+    <p>All 5 passes are in the order, so the graph has no cycle. The work is one visit per pass and one per edge: O(passes + edges).</p>
+  </div>
+  <div class="step">
+    <h4>6. When there is a cycle</h4>
+    <svg viewBox="0 0 760 190" role="img" aria-label="A reads what B writes and B reads what A writes. Both have in-degree 1, the queue starts empty, and nothing is sorted.">
+      <rect x="120" y="40" width="140" height="44" rx="6" class="box"/><text x="190" y="67" class="mid title">A</text>
+      <rect x="440" y="40" width="140" height="44" rx="6" class="box"/><text x="510" y="67" class="mid title">B</text>
+      <path d="M260,52 H438" class="arrow" marker-end="url(#ah)"/>
+      <path d="M440,74 H262" class="arrow" marker-end="url(#ah)"/>
+      <text x="350" y="46" class="mid small">B reads A's output</text>
+      <text x="350" y="94" class="mid small">A reads B's output</text>
+      <text x="190" y="114" class="mid mono small t-hot">in 1</text>
+      <text x="510" y="114" class="mid mono small t-hot">in 1</text>
+      <text x="20" y="150" class="mono">queue: []   order: []   0 of 2 sorted</text>
+      <text x="20" y="174" class="t-hot">Each waits for the other: no valid order exists.</text>
+    </svg>
+    <p>No pass can start. A graph should report this as an error with the pass names, because it is always a mistake in the declarations.</p>
+  </div>
+</div>
+
+<h3>Which order, among the valid ones</h3>
+
+<p>A DAG usually has many valid orders. Here, Debug could also run right after GBuffer. Kahn's algorithm with a FIFO queue in "order added" gives a stable, predictable answer. Engines that care pick on purpose:</p>
+
+<div class="split">
+  <div>
+    <h4>Short lifetimes</h4>
+    <p>Run a reader soon after its writer. The texture between them dies sooner, and its memory can be reused sooner (section 8).</p>
+  </div>
+  <div>
+    <h4>Fewer stalls</h4>
+    <p>Put independent work between a writer and its reader, so the barrier between them waits for work that is already done.</p>
+  </div>
+</div>
+
+<h2 id="cull"><span class="n">6</span>Culling unused passes</h2>
+
+<p>A pass whose outputs nobody reads does not change the image. The graph can skip it. Start from the passes that write something that leaves the graph (an imported resource such as the backbuffer), and walk the edges backwards. Every pass that is never reached is culled.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 256" role="img" aria-label="Walking back from Post reaches Lighting, then Shadow and GBuffer. Debug writes a view nobody reads and is never reached, so it is culled.">
+    <line x1="170" y1="42" x2="298" y2="42" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="170" y1="142" x2="298" y2="42" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="170" y1="142" x2="298" y2="142" class="arrow" marker-end="url(#ah)"/>
+    <line x1="450" y1="42" x2="578" y2="42" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <rect x="20" y="20" width="150" height="44" rx="6" class="gpu"/>
+    <text x="95" y="40" class="mid title">Shadow</text>
+    <text x="95" y="56" class="mid small">added #2</text>
+    <rect x="20" y="120" width="150" height="44" rx="6" class="gpu"/>
+    <text x="95" y="140" class="mid title">GBuffer</text>
+    <text x="95" y="156" class="mid small">added #3</text>
+    <rect x="300" y="20" width="150" height="44" rx="6" class="gpu"/>
+    <text x="375" y="40" class="mid title">Lighting</text>
+    <text x="375" y="56" class="mid small">added #1</text>
+    <rect x="300" y="120" width="150" height="44" rx="6" class="ghost"/>
+    <text x="375" y="140" class="mid t-faint title">Debug</text>
+    <text x="375" y="156" class="mid small">added #4</text>
+    <text x="375" y="182" class="mid mono small t-hot">culled: nobody reads</text>
+    <rect x="580" y="20" width="150" height="44" rx="6" class="gpu"/>
+    <text x="655" y="40" class="mid title">Post</text>
+    <text x="655" y="56" class="mid small">added #0</text>
+    <text x="655" y="82" class="mid mono small t-gpu">sink</text>
+    <text x="20" y="222" class="small">Start at Post: it writes the backbuffer, which leaves the graph.</text>
+    <text x="20" y="240" class="small">Walk the edges backwards: Lighting, then Shadow and GBuffer. Debug is never reached.</text>
+  </svg>
+  <figcaption>Frostbite does the same with reference counts: a resource with no readers drops its writer's count, and a pass with count 0 is culled, which may free more resources in turn.</figcaption>
+</figure>
+
+<p>This is what makes debug views free when they are off: the pass is still declared, but nothing reads its output. A pass with effects the graph cannot see, such as a readback to the CPU, must be marked so that it is never culled.</p>
+
+<h2 id="barriers"><span class="n">7</span>Barriers and layout transitions</h2>
+
+<p>The GPU runs commands in parallel and keeps data in caches. A <b>barrier</b> makes later work wait for earlier work and makes its writes visible (see <a href="gpu-sync.html">GPU synchronization</a>). An image also has a <b>layout</b>: how its memory is arranged for one kind of use. The graph knows, for each pass in order, how it uses each resource, so it can work out both:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 214" role="img" aria-label="The G-buffer across the sorted passes. Before GBuffer: undefined to color attachment, contents dropped. Before Lighting: color attachment to shader read. Before Debug: nothing, a read after a read. Next frame: back to undefined.">
+    <text x="20" y="22" class="small">the G-buffer's state, pass by pass</text>
+    <rect x="20" y="34" width="110" height="46" rx="6" class="box"/>
+    <text x="75" y="54" class="mid title">Shadow</text>
+    <text x="75" y="70" class="mid small">not used</text>
+    <rect x="170" y="34" width="130" height="46" rx="6" class="gpu"/>
+    <text x="235" y="54" class="mid title">GBuffer</text>
+    <text x="235" y="70" class="mid small">writes: attachment</text>
+    <rect x="340" y="34" width="130" height="46" rx="6" class="gpu"/>
+    <text x="405" y="54" class="mid title">Lighting</text>
+    <text x="405" y="70" class="mid small">reads: sampled</text>
+    <rect x="510" y="34" width="110" height="46" rx="6" class="gpu"/>
+    <text x="565" y="54" class="mid title">Debug</text>
+    <text x="565" y="70" class="mid small">reads: sampled</text>
+    <rect x="650" y="34" width="90" height="46" rx="6" class="box"/>
+    <text x="695" y="54" class="mid title">Post</text>
+    <text x="695" y="70" class="mid small">not used</text>
+    <line x1="150" y1="28" x2="150" y2="88" class="hot"/>
+    <line x1="320" y1="28" x2="320" y2="88" class="hot"/>
+    <line x1="490" y1="28" x2="490" y2="88" class="arrow dashed"/>
+    <text x="150" y="108" class="mid small t-hot">UNDEFINED →</text>
+    <text x="150" y="124" class="mid small t-hot">COLOR_ATTACHMENT</text>
+    <text x="150" y="140" class="mid small">old contents dropped</text>
+    <text x="320" y="108" class="mid small t-hot">COLOR_ATTACHMENT →</text>
+    <text x="320" y="124" class="mid small t-hot">SHADER_READ_ONLY</text>
+    <text x="320" y="140" class="mid small">waits for the color writes</text>
+    <text x="490" y="108" class="mid small">no barrier</text>
+    <text x="490" y="124" class="mid small">read after read</text>
+    <text x="20" y="178" class="small">The first use of a transient texture starts from UNDEFINED: nothing in it is worth keeping, so the GPU may skip loading it.</text>
+    <text x="20" y="196" class="small">All barriers a pass needs go into one call before the pass, so the GPU drains its work once, not once per resource.</text>
+  </svg>
+  <figcaption>The graph keeps one state per resource (layout, and the stages and accesses of its last use), and compares it with what the next pass needs.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Declared use</th><th>Vulkan layout</th><th>Stage and access to wait for or block</th></tr>
+  <tr><td>render into (color)</td><td><samp>COLOR_ATTACHMENT_OPTIMAL</samp></td><td>color attachment output · color attachment write</td></tr>
+  <tr><td>render into (depth)</td><td><samp>DEPTH_ATTACHMENT_OPTIMAL</samp></td><td>early and late fragment tests · depth write</td></tr>
+  <tr><td>sample in a shader</td><td><samp>SHADER_READ_ONLY_OPTIMAL</samp></td><td>the shader stages that read · shader read</td></tr>
+  <tr><td>write in a compute shader</td><td><samp>GENERAL</samp> (images) · buffers have no layout</td><td>compute shader · shader write</td></tr>
+  <tr><td>present</td><td><samp>PRESENT_SRC_KHR</samp></td><td>nothing after it: the present engine waits on a semaphore</td></tr>
+</table>
+</div>
+
+<p>Two refinements are common. <b>Split barriers</b> signal at the end of the writer and wait just before the reader, so the GPU can work in between. And a pass is either all graphics or all compute, so the graph only needs to know the stage of the pass, not of every draw inside it.</p>
+
+<h2 id="aliasing"><span class="n">8</span>Transient resources and memory aliasing</h2>
+
+<p>After sorting, the graph knows each transient resource's <b>lifetime</b>: from the first pass that uses it to the last. Two resources whose lifetimes do not overlap can share the same memory. This is <b>aliasing</b>. Here is another small frame, a post-processing chain, with made-up but typical sizes:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Pass (sorted)</th><th>0 GBuffer</th><th>1 Lighting</th><th>2 DoF</th><th>3 MotionBlur</th><th>4 Tonemap</th></tr>
+  <tr><td>G-buffer, 32 MiB</td><td>write</td><td>read</td><td>read (depth)</td><td></td><td></td></tr>
+  <tr><td>HDR, 16 MiB</td><td></td><td>write</td><td>read</td><td></td><td></td></tr>
+  <tr><td>DoF, 16 MiB</td><td></td><td></td><td>write</td><td>read</td><td></td></tr>
+  <tr><td>MB, 16 MiB</td><td></td><td></td><td></td><td>write</td><td>read</td></tr>
+</table>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Left: without aliasing, the four textures are stacked in 80 MiB. Right: with aliasing, MB is placed at offset 0, where the G-buffer was until pass 2, and the heap is 64 MiB.">
+    <text x="60" y="24" class="title">No aliasing: 80 MiB</text>
+    <rect x="60" y="40" width="270" height="208" class="zone"/>
+    <text x="87" y="264" class="mid small">0</text>
+    <text x="141" y="264" class="mid small">1</text>
+    <text x="195" y="264" class="mid small">2</text>
+    <text x="249" y="264" class="mid small">3</text>
+    <text x="303" y="264" class="mid small">4</text>
+    <rect x="62" y="41" width="158" height="81.2" rx="4" class="mem"/>
+    <text x="141" y="85.6" class="mid small">G-buffer 32</text>
+    <rect x="116" y="124.2" width="104" height="39.6" rx="4" class="mem"/>
+    <text x="168" y="148" class="mid small">HDR 16</text>
+    <rect x="170" y="165.8" width="104" height="39.6" rx="4" class="mem"/>
+    <text x="222" y="189.6" class="mid small">DoF 16</text>
+    <rect x="224" y="207.4" width="104" height="39.6" rx="4" class="mem"/>
+    <text x="276" y="231.2" class="mid small">MB 16</text>
+    <text x="54" y="50" class="end small">0</text>
+    <text x="54" y="248" class="end small">80</text>
+    <text x="440" y="24" class="title">Aliasing: 64 MiB</text>
+    <rect x="440" y="40" width="270" height="166.4" class="zone"/>
+    <text x="467" y="222.4" class="mid small">0</text>
+    <text x="521" y="222.4" class="mid small">1</text>
+    <text x="575" y="222.4" class="mid small">2</text>
+    <text x="629" y="222.4" class="mid small">3</text>
+    <text x="683" y="222.4" class="mid small">4</text>
+    <rect x="442" y="41" width="158" height="81.2" rx="4" class="mem"/>
+    <text x="521" y="85.6" class="mid small">G-buffer 32</text>
+    <rect x="496" y="124.2" width="104" height="39.6" rx="4" class="mem"/>
+    <text x="548" y="148" class="mid small">HDR 16</text>
+    <rect x="550" y="165.8" width="104" height="39.6" rx="4" class="mem"/>
+    <text x="602" y="189.6" class="mid small">DoF 16</text>
+    <rect x="604" y="41" width="104" height="39.6" rx="4" class="hot"/>
+    <text x="656" y="64.8" class="mid small">MB 16</text>
+    <text x="434" y="50" class="end small">0</text>
+    <text x="434" y="206.4" class="end small">64</text>
+    <text x="60" y="290" class="small">x: pass index in the sorted order · y: offset in one memory heap, in MiB</text>
+    <text x="440" y="262" class="small">MB lives in passes 3 and 4. The G-buffer is</text>
+    <text x="440" y="278" class="small">dead after pass 2, so MB reuses its memory.</text>
+  </svg>
+  <figcaption>The heap only needs to hold the largest set of textures alive at the same time: here pass 2, with the G-buffer, HDR and DoF, 64 MiB. Real frames with many post effects save much more.</figcaption>
+</figure>
+
+<p>Placing the resources is an interval packing problem. A simple greedy method works well: sort the resources by size, largest first, and put each one at the lowest offset where it overlaps no already-placed resource that is alive at the same time.</p>
+
+<div class="split">
+  <div>
+    <h4>What aliasing needs</h4>
+    <p>The resources come from one memory heap, with compatible memory types and alignment. Each one is created on that memory, not with its own allocation.</p>
+  </div>
+  <div>
+    <h4>The catch</h4>
+    <p>When a resource takes over memory, its old contents are garbage. Its first use must fully overwrite it (a clear, or a discard and a full write), and a barrier must separate the last use of the old resource from the first use of the new one.</p>
+  </div>
+</div>
+
+<h2><span class="n">9</span>Async compute</h2>
+
+<p>Many GPUs can run a compute queue next to the graphics queue. Compute work that does not depend on the graphics work in flight can fill the gaps in it. The graph knows the dependencies, so it can move a compute pass to the other queue and put a semaphore on each edge that crosses between queues.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="Graphics queue: Shadow, GBuffer, Lighting, Post. Compute queue: a particle simulation runs during Shadow and GBuffer. A semaphore makes Lighting, which draws the particles, wait for it.">
+    <text x="20" y="44" class="title">graphics</text>
+    <rect x="110" y="24" width="140" height="36" rx="6" class="gpu"/><text x="180" y="47" class="mid">Shadow</text>
+    <rect x="254" y="24" width="140" height="36" rx="6" class="gpu"/><text x="324" y="47" class="mid">GBuffer</text>
+    <rect x="398" y="24" width="160" height="36" rx="6" class="gpu"/><text x="478" y="47" class="mid">Lighting</text>
+    <rect x="562" y="24" width="120" height="36" rx="6" class="gpu"/><text x="622" y="47" class="mid">Post</text>
+    <text x="20" y="114" class="title">compute</text>
+    <rect x="110" y="94" width="260" height="36" rx="18" class="shader"/><text x="240" y="117" class="mid">particle simulation</text>
+    <path d="M370,112 H398 V64" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="410" y="96" class="small t-hot">semaphore: Lighting waits</text>
+    <text x="20" y="158" class="small">Time goes right. The simulation is hidden behind Shadow and GBuffer instead of adding to the frame.</text>
+  </svg>
+  <figcaption>It only pays when the two kinds of work use different parts of the GPU. Shadow maps (raster heavy) next to a compute pass (math heavy) is the classic pair.</figcaption>
+</figure>
+
+<h2><span class="n">10</span>Variants and pitfalls</h2>
+
+<ul>
+  <li><b>Undeclared use is invisible.</b> A pass that reads a texture without declaring it gets no edge and no barrier. Most graph bugs are missing declarations.</li>
+  <li><b>Persistent resources.</b> Textures that live across frames (last frame's color for TAA, an exposure value) are imported, not transient. With <a href="frames-in-flight.html">frames in flight</a>, they often need one copy per frame.</li>
+  <li><b>Rebuild or retain.</b> Rebuilding the graph every frame makes dynamic frames easy (a pass is declared or not). Compiling once is cheaper, but every change needs a recompile.</li>
+  <li><b>Render pass merging.</b> On tile-based mobile GPUs, passes that read the previous pass's output at the same pixel can be merged into one render pass with subpasses, keeping the data on chip.</li>
+  <li><b>One queue or many.</b> Async compute adds cross-queue semaphores and makes resource ownership harder: a resource used on two queues needs a queue ownership transfer or concurrent sharing.</li>
+</ul>
+
+<h2 id="in-rasm"><span class="n">11</span>In RASM</h2>
+
+<p>RASM's render graph is a small one. It sorts passes with Kahn's algorithm, and records the texture transitions and buffer barriers that their declarations need. It does not cull passes, does not manage memory, and runs on one queue. The graph is <b>retained</b>: you add the passes once, and <code>RenderGraph::execute</code> runs them every frame.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Example 01: Forward draws the scene into offscreen_rt, overlay samples it and draws to the swapchain. Example 04: Animate is a compute pass that writes Particle Positions, Draw reads them and draws to the swapchain, with a barrier before Animate and one before Draw.">
+    <text x="15" y="22" class="title">examples/01_render_graph</text>
+    <rect x="15" y="36" width="150" height="54" rx="6" class="gpu"/>
+    <text x="90" y="58" class="mid title">Forward</text>
+    <text x="90" y="76" class="mid small">drawScene</text>
+    <line x1="165" y1="63" x2="223" y2="63" class="arrow" marker-end="url(#ah)"/>
+    <text x="194" y="56" class="mid small">writes</text>
+    <rect x="225" y="46" width="130" height="34" rx="17" class="mem"/>
+    <text x="290" y="68" class="mid small">offscreen_rt</text>
+    <line x1="355" y1="63" x2="413" y2="63" class="arrow" marker-end="url(#ah)"/>
+    <text x="384" y="56" class="mid small">reads</text>
+    <rect x="415" y="36" width="150" height="54" rx="6" class="gpu"/>
+    <text x="490" y="58" class="mid title">overlay</text>
+    <text x="490" y="76" class="mid small">full-screen triangle</text>
+    <line x1="565" y1="63" x2="603" y2="63" class="arrow" marker-end="url(#ah)"/>
+    <rect x="605" y="46" width="140" height="34" rx="6" class="box"/>
+    <text x="675" y="68" class="mid small">swapchain</text>
+    <text x="15" y="112" class="small">Forward's endPass moves offscreen_rt's color to SAMPLED; read(rt) sorts overlay after it. The target is 1920 × 1080; the overlay fits it into the window.</text>
+
+    <line x1="10" y1="130" x2="750" y2="130" class="arrow dashed"/>
+
+    <text x="15" y="156" class="title">examples/04_compute</text>
+    <line x1="22" y1="168" x2="22" y2="226" class="hot"/>
+    <rect x="35" y="170" width="150" height="54" rx="6" class="gpu"/>
+    <text x="110" y="192" class="mid title">Animate</text>
+    <text x="110" y="210" class="mid small">compute pass</text>
+    <line x1="185" y1="197" x2="243" y2="197" class="arrow" marker-end="url(#ah)"/>
+    <text x="214" y="190" class="mid small">writes</text>
+    <rect x="245" y="180" width="150" height="34" rx="17" class="mem"/>
+    <text x="320" y="202" class="mid small">Particle Positions</text>
+    <line x1="395" y1="197" x2="463" y2="197" class="arrow" marker-end="url(#ah)"/>
+    <text x="422" y="190" class="mid small">reads</text>
+    <line x1="452" y1="168" x2="452" y2="226" class="hot"/>
+    <rect x="465" y="170" width="140" height="54" rx="6" class="gpu"/>
+    <text x="535" y="192" class="mid title">Draw</text>
+    <text x="535" y="210" class="mid small">3 vertices per particle</text>
+    <line x1="605" y1="197" x2="633" y2="197" class="arrow" marker-end="url(#ah)"/>
+    <rect x="635" y="180" width="110" height="34" rx="6" class="box"/>
+    <text x="690" y="202" class="mid small">swapchain</text>
+    <text x="15" y="244" class="small t-hot">COMPUTE | GRAPHICS → COMPUTE before Animate (the previous frame's passes) · COMPUTE → GRAPHICS before Draw</text>
+  </svg>
+  <figcaption>The two examples that use the graph. A pass with no render target draws to the swapchain.</figcaption>
+</figure>
+
+<pre><code>graph.addPass(
+    "Forward",
+    [&amp;](rasm::PassBuilder &amp;builder) // setup: runs once, inside addPass
+    {
+        rtHandle = builder.createRenderTarget({...});
+        builder.write(rtHandle);
+    },
+    [&amp;](rasm::RenderContext &amp;) // execute: every frame
+    {
+        engine.drawScene(scene, camera);
+    });</code></pre>
+
+<h3>One frame</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="execute compiles if needed, calls beginFrame, then for each pass in order: the barriers its reads and writes need, then either the graphics path (setRenderTarget, beginPass, execute, endPass, resetRenderTarget) or the compute path (beginGpuTimer, execute, endGpuTimer). After the last pass, endFrame moves the swapchain image to PRESENT_SRC, submits and presents.">
+    <rect x="15" y="20" width="150" height="44" rx="6" class="cpu"/>
+    <text x="90" y="40" class="mid title">compile()</text>
+    <text x="90" y="56" class="mid small">only if not compiled</text>
+    <line x1="165" y1="42" x2="193" y2="42" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="195" y="20" width="170" height="44" rx="6" class="cpu"/>
+    <text x="280" y="40" class="mid title">beginFrame(camera)</text>
+    <text x="280" y="56" class="mid small">false → return, no passes</text>
+    <line x1="365" y1="42" x2="393" y2="42" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="395" y="20" width="350" height="44" rx="6" class="zone"/>
+    <text x="570" y="40" class="mid title">for each pass in executionOrder</text>
+    <text x="570" y="56" class="mid small">barriers first, from its reads and writes</text>
+
+    <line x1="480" y1="64" x2="200" y2="100" class="arrow" marker-end="url(#ah)"/>
+    <line x1="660" y1="64" x2="580" y2="100" class="arrow" marker-end="url(#ah)"/>
+    <text x="200" y="84" class="small">graphics pass</text>
+    <text x="640" y="90" class="small">compute pass</text>
+
+    <rect x="15" y="104" width="420" height="120" rx="8" class="zone"/>
+    <text x="30" y="128" class="mono">setRenderTarget(pass.outputRenderTarget)</text>
+    <text x="30" y="150" class="mono">beginPass(pass.name)</text>
+    <text x="250" y="150" class="small">timer, attachments, clear</text>
+    <text x="30" y="172" class="mono t-gpu">pass.execute(ctx)</text>
+    <text x="250" y="172" class="small">your draws</text>
+    <text x="30" y="194" class="mono">endPass()</text>
+    <text x="250" y="194" class="small">overlay, or RT color → SAMPLED</text>
+    <text x="30" y="216" class="mono">resetRenderTarget()</text>
+
+    <rect x="455" y="104" width="290" height="120" rx="8" class="zone"/>
+    <text x="470" y="128" class="mono">beginGpuTimer(cmd, pass.name)</text>
+    <text x="470" y="150" class="mono t-gpu">pass.execute(ctx)</text>
+    <text x="620" y="150" class="small">your dispatches</text>
+    <text x="470" y="172" class="mono">endGpuTimer(cmd, timer)</text>
+    <text x="470" y="200" class="small">No render target, no rendering</text>
+    <text x="470" y="216" class="small">scope, no clear.</text>
+
+    <rect x="15" y="244" width="420" height="44" rx="6" class="cpu"/>
+    <text x="225" y="264" class="mid title">after the last pass</text>
+    <text x="225" y="280" class="mid small">no barrier: the next frame's passes wait for this one</text>
+    <line x1="435" y1="266" x2="453" y2="266" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="455" y="244" width="290" height="44" rx="6" class="cpu"/>
+    <text x="600" y="264" class="mid title">endFrame()</text>
+    <text x="600" y="280" class="mid small">→ PRESENT_SRC, culling, submit</text>
+  </svg>
+  <figcaption>Everything is recorded into the frame's one command buffer (see <a href="frame-loop.html">the frame loop</a>). Each pass gets a <a href="gpu-timing.html">GPU timer</a> named after it.</figcaption>
+</figure>
+
+<h3>Barriers in RASM</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>The pass declares</th><th>Recorded before it</th><th>When</th></tr>
+  <tr><td><code>read(texture)</code></td><td><code>transitionImageLayout(texture, SAMPLED)</code></td><td>unless it is <code>SAMPLED</code> already (read after read)</td></tr>
+  <tr><td><code>read(renderTarget)</code></td><td>nothing: the drawing pass's <code>endPass</code> left its color <code>SAMPLED</code></td><td>–</td></tr>
+  <tr><td><code>write(renderTarget)</code>, or no target</td><td><code>beginPass</code> moves color and depth to attachments with <code>discard</code>: from <code>UNKNOWN</code>, contents dropped</td><td>always</td></tr>
+  <tr><td><code>read(buffer)</code></td><td>one <code>memoryBarrier</code>: the last write's stage → this pass's stage</td><td>once per stage after each write</td></tr>
+  <tr><td><code>write(buffer)</code></td><td>one <code>memoryBarrier</code>: the last write and the reads since → this pass's stage</td><td>if any pass used it before</td></tr>
+  <tr><td><code>write(texture)</code></td><td>nothing</td><td>only orders passes (compute writes buffers only)</td></tr>
+</table>
+</div>
+
+<p>Texture state lives in <code>RenderContext</code>: <code>rhi::TextureStates</code> remembers each texture's last usage, so <code>transitionImageLayout</code> takes only the new one. If a recorded frame is never submitted, <code>RenderContext::discardRecording</code> puts the old states back. Buffers are reached through <a href="device-addresses.html">device addresses</a>, so the graph cannot see them; it trusts the declarations. For each declared buffer it keeps a <code>BufferAccess</code>: the stage of the last write and the stages that read since. All of a pass's buffers fold into one global <code>memoryBarrier</code>. This is <code>examples/04_compute</code> over two frames:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Frame N: before Animate, a barrier from compute and graphics to compute; Animate writes, so the buffer's state is write COMPUTE, no reads. Before Draw, a barrier from compute to graphics; after Draw the state is write COMPUTE, reads GRAPHICS. Frame N plus 1 repeats the same two barriers, because the state carried over.">
+    <text x="30" y="20" class="title">frame N</text>
+    <text x="400" y="20" class="title">frame N+1</text>
+    <line x1="372" y1="10" x2="372" y2="190" class="arrow dashed"/>
+
+    <line x1="20" y1="34" x2="20" y2="96" class="hot"/>
+    <rect x="30" y="40" width="150" height="50" rx="6" class="gpu"/>
+    <text x="105" y="61" class="mid title">Animate</text>
+    <text x="105" y="79" class="mid small">COMPUTE · write</text>
+    <line x1="195" y1="34" x2="195" y2="96" class="hot"/>
+    <rect x="205" y="40" width="150" height="50" rx="6" class="gpu"/>
+    <text x="280" y="61" class="mid title">Draw</text>
+    <text x="280" y="79" class="mid small">GRAPHICS · read</text>
+
+    <line x1="390" y1="34" x2="390" y2="96" class="hot"/>
+    <rect x="400" y="40" width="150" height="50" rx="6" class="gpu"/>
+    <text x="475" y="61" class="mid title">Animate</text>
+    <text x="475" y="79" class="mid small">COMPUTE · write</text>
+    <line x1="565" y1="34" x2="565" y2="96" class="hot"/>
+    <rect x="575" y="40" width="150" height="50" rx="6" class="gpu"/>
+    <text x="650" y="61" class="mid title">Draw</text>
+    <text x="650" y="79" class="mid small">GRAPHICS · read</text>
+
+    <text x="12" y="114" class="small t-hot">C | G → C</text>
+    <text x="195" y="114" class="mid small t-hot">C → G</text>
+    <text x="382" y="114" class="small t-hot">C | G → C</text>
+    <text x="565" y="114" class="mid small t-hot">C → G</text>
+
+    <text x="12" y="140" class="small">BufferAccess after the pass:</text>
+    <rect x="30" y="148" width="150" height="36" rx="4" class="mem"/>
+    <text x="105" y="171" class="mid small">write C · reads none</text>
+    <rect x="205" y="148" width="150" height="36" rx="4" class="mem"/>
+    <text x="280" y="171" class="mid small">write C · reads G</text>
+    <rect x="400" y="148" width="150" height="36" rx="4" class="mem"/>
+    <text x="475" y="171" class="mid small">write C · reads none</text>
+    <rect x="575" y="148" width="150" height="36" rx="4" class="mem"/>
+    <text x="650" y="171" class="mid small">write C · reads G</text>
+  </svg>
+  <figcaption>C = <code>COMPUTE</code>, G = <code>GRAPHICS</code>. The state carries over to the next frame, so Animate waits for the previous frame's draw, which read the same buffer. A barrier's first scope includes earlier submissions on the queue, so no fence is needed for that.</figcaption>
+</figure>
+
+<h3>Render targets: one set per frame slot</h3>
+
+<p>RASM has no transient textures. A render target from <code>PassBuilder::createRenderTarget</code> is a normal, permanent resource, and it holds <b>two</b> sets of attachments, one per <a href="frames-in-flight.html">frame slot</a>, so the CPU can record frame N+1 into one while the GPU still reads the other. Each color texture is in the bindless set; <code>Engine::getRenderTargetTexture</code> returns the current slot's. A reading pass looks it up in <code>execute</code>, every frame:</p>
+
+<pre><code>auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
+// Each frame slot renders to its own attachment.
+auto textureIndex = engine.getBindlessTextureIndex(
+    engine.getRenderTargetTexture(rtHandle));</code></pre>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Phases</td><td>setup, compile, execute; often every frame</td><td>Retained. <code>setup</code> runs at once inside <code>RenderGraph::addPass</code>; <code>RenderGraph::compile</code> runs once when it succeeds (again only after a new pass), but a failed compile is tried again every frame (B28); <code>RenderGraph::execute</code> runs every frame.</td></tr>
+  <tr><td>Resources</td><td>virtual handles; transient or imported</td><td>Real resources, created at once by <code>PassBuilder::createTexture</code>, <code>createBuffer</code> and <code>createRenderTarget</code>, and kept forever. The swapchain is the implicit target of a pass with no render target.</td></tr>
+  <tr><td>Edges</td><td>every hazard, with versions</td><td>Read after write only, from the <b>last added</b> writer of each resource. No versions: a second writer of a resource is not ordered against the first, and a write after a read adds no edge.</td></tr>
+  <tr><td>Sort</td><td>Kahn's algorithm</td><td>Kahn's algorithm with a FIFO queue that starts in the order passes were added, so independent passes keep that order. A cycle logs <samp>Frame Graph contains a cycle!</samp> and the frames draw no passes.</td></tr>
+  <tr><td>Checks</td><td>–</td><td><code>compile</code> also fails for a pass that reads the render target it draws to, and for a compute pass that declares no buffer write.</td></tr>
+  <tr><td>Pass culling</td><td>walk back from the outputs</td><td>None: every pass runs.</td></tr>
+  <tr><td>Texture barriers</td><td>from each resource's state</td><td>The same idea, with a remembered state per texture. Only reads are declared; attachments are moved by <code>beginPass</code> and <code>endPass</code>.</td></tr>
+  <tr><td>Buffer barriers</td><td>per resource</td><td>One global <code>memoryBarrier</code> per pass, from the declared buffers' last write and reads. The state carries across frames.</td></tr>
+  <tr><td>Transient memory, aliasing</td><td>one heap, lifetimes</td><td>None (<code>D9</code>).</td></tr>
+  <tr><td>Load and store</td><td>per pass</td><td>Every graphics pass clears its target, so two passes that draw to the swapchain overwrite each other (<code>D9</code>).</td></tr>
+  <tr><td>Async compute</td><td>a second queue</td><td>One graphics queue (<code>D13</code>).</td></tr>
+  <tr><td>Everything in the graph</td><td>the whole frame</td><td>The scene's culling is not a graph pass. Its early half runs before all the frame's work, compute passes included (<code>D18</code>); see <a href="stream-compaction.html#in-rasm">stream compaction</a>. <code>Engine::render</code> does not use the graph.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Graph, pass, builder types</td><td><code>RenderGraph</code>, <code>Pass</code>, <code>PassBuilder</code> in <code>include/rasm/render/renderGraph.h</code></td></tr>
+  <tr><td>Add, sort, run</td><td><code>RenderGraph::addPass</code>, <code>RenderGraph::addComputePass</code>, <code>RenderGraph::compile</code>, <code>RenderGraph::execute</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>Buffer barriers</td><td><code>RenderGraph::bufferBarrier</code>, <code>BufferAccess</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>Texture state</td><td><code>rhi::TextureStates</code> in <code>src/rhi/textureStates.cpp</code>; <code>RenderContext::transitionImageLayout</code>, <code>RenderContext::discardRecording</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Pass begin and end, frame end</td><td><code>Engine::beginPass</code>, <code>Engine::endPass</code>, <code>Engine::endFrame</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Render targets per frame slot</td><td><code>RenderContext::createRenderTarget</code> in <code>src/rhi/renderContext.cpp</code>; <code>Engine::getRenderTargetTexture</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/renderGraphTests.cpp</code> (sort, checks, buffer barriers), <code>tests/textureStatesTests.cpp</code></td></tr>
+  <tr><td>Examples</td><td><code>examples/01_render_graph/main.cpp</code>, <code>examples/04_compute/main.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Declare every resource a pass reads or writes with <code>PassBuilder</code>. An undeclared use is not sorted and gets no barrier.</li>
+    <li>Look up <code>getRenderTargetTexture</code> and its bindless index inside <code>execute</code>, every frame. They differ per frame slot.</li>
+    <li>No dispatch or <code>memoryBarrier</code> inside a graphics pass: <code>RenderContext</code> refuses both. Use <code>addComputePass</code>.</li>
+    <li>Change a texture's layout only through <code>transitionImageLayout</code>, which keeps the remembered state right. Recorded commands that are not submitted must be followed by <code>discardRecording</code>, as <code>endFrame</code> does.</li>
+    <li>Sorting, the compile checks and buffer barriers run on the CPU only. Add a test in <code>tests/renderGraphTests.cpp</code> when you change <code>compile</code> or <code>bufferBarrier</code>.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>Transient resources and aliasing, pass culling, load and store per pass, and moving the scene's culling into the graph (<code>D9</code>, <code>D18</code> in <code>docs/code_review.md</code>; phase 3 of <code>docs/development_plan.md</code>). For writing your own passes, see <a href="../api/render-graph.html">the render graph API</a>.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Yuriy O'Donnell, <i>FrameGraph: Extensible Rendering Architecture in Frostbite</i>, GDC 2017.</li>
+  <li>Arthur B. Kahn, <i>Topological Sorting of Large Networks</i>, Communications of the ACM (1962).</li>
+  <li>Thomas H. Cormen and others, <i>Introduction to Algorithms</i>: the chapter on elementary graph algorithms (topological sort).</li>
+  <li>The Vulkan specification, chapter <i>Synchronization and Cache Control</i>: pipeline barriers, image layouts and memory aliasing.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

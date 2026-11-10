@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Color Spaces: sRGB and Linear · RASM</title>
+<meta name="description" content="How sRGB and linear color work: the sRGB transfer function, why lighting, filtering and blending must happen in linear light, which textures are color and which are data, how _SRGB formats convert in hardware, tone mapping, and how RASM does it.">
+<meta name="rasm-sources" content="src/assets/material.cpp src/assets/texture.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/engine.cpp include/rasm/types.h include/rasm/engine.h shaders/lib/pbr.slang shaders/lib/unlit.slang shaders/lib/core.slang shaders/passes/rasm.slang shaders/passes/statsOverlay.slang examples/05_city/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/color-spaces.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">GPU data</p>
+<h1>Color spaces: sRGB and linear</h1>
+<p class="lead">A color value can mean two different things: an <b>amount of light</b>, or a <b>code</b> chosen to look even to the eye. Images are stored as codes (sRGB). Light must be computed as amounts (linear). This page explains the sRGB curve, why the math must happen in linear, which textures are colors and which are data, and how the GPU converts between the two for free. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A <b>linear</b> value is proportional to the light: 0.5 is half as much light as 1.0.</li>
+    <li>An <b>sRGB</b> value is a code on a curve that spends more of the 256 steps on dark tones, where eyes are sensitive. Linear 0.5 is sRGB <b>0.735</b> (byte 188); sRGB 0.5 is only <b>21%</b> of the light.</li>
+    <li>Lighting, blending, filtering and averaging must use <b>linear</b> values. Doing them on sRGB codes gives wrong, usually too dark, results.</li>
+    <li><b>Color</b> textures (base color, emissive) are sRGB. <b>Data</b> textures (normals, roughness, metalness, occlusion) are plain numbers and must not be converted.</li>
+    <li>Formats ending in <b>_SRGB</b> make the GPU decode on read and encode on write, in hardware. The shader sees and writes linear values only.</li>
+    <li>Light can be brighter than 1.0. <b>Tone mapping</b> squeezes it into 0 to 1 before the final encode.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>Two kinds of numbers</h2>
+
+<p>Light is made of photons. Twice the photons is twice the light, and two lamps together give the sum of both. A number that works like that is <b>linear</b>: it is proportional to the physical amount of light. All of physics, and so all lighting math, works on linear numbers.</p>
+
+<p>Eyes do not work like that. They notice <b>ratios</b>: going from 1% to 2% of the light looks like a big step, going from 50% to 51% looks like nothing. If an 8-bit image stored linear values, most of its 256 steps would be spent on bright tones that look the same, and the dark tones would show visible bands.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Two bars showing amounts of light from 0 to 1. On the top bar, every 16th code of 8-bit linear storage is marked: the marks are evenly spaced. On the bottom bar, every 16th code of 8-bit sRGB is marked: the marks are crowded near 0, in the dark tones, and spread out in the bright tones.">
+    <text x="130" y="30" class="small">0 (black)</text>
+    <text x="730" y="30" class="end small">1 (full light)</text>
+    <text x="430" y="30" class="mid small">amount of light (linear) →</text>
+
+    <text x="20" y="66" class="small">linear codes</text>
+    <rect x="130" y="50" width="600" height="28" class="zone"/>
+    <path d="M130.0,50 v28 M167.6,50 v28 M205.3,50 v28 M242.9,50 v28 M280.6,50 v28 M318.2,50 v28 M355.9,50 v28 M393.5,50 v28 M431.2,50 v28 M468.8,50 v28 M506.5,50 v28 M544.1,50 v28 M581.8,50 v28 M619.4,50 v28 M657.1,50 v28 M694.7,50 v28 M730.0,50 v28" class="arrow mem"/>
+    <text x="20" y="98" class="small t-faint">evenly spaced</text>
+
+    <text x="20" y="136" class="small">sRGB codes</text>
+    <rect x="130" y="120" width="600" height="28" class="zone"/>
+    <path d="M130.0,120 v28 M133.1,120 v28 M138.7,120 v28 M147.7,120 v28 M160.8,120 v28 M178.1,120 v28 M200.2,120 v28 M227.2,120 v28 M259.5,120 v28 M297.3,120 v28 M340.9,120 v28 M390.5,120 v28 M446.3,120 v28 M508.5,120 v28 M577.2,120 v28 M652.8,120 v28 M730.0,120 v28" class="arrow gpu"/>
+    <text x="20" y="168" class="small t-faint">dense in the dark</text>
+
+    <rect x="130" y="44" width="60" height="110" class="hot"/>
+    <text x="198" y="172" class="small t-hot">below 10% of the light: 26 of the 256 linear codes, but 90 of the 256 sRGB codes</text>
+    <text x="20" y="206" class="small">Each mark is every 16th code (0, 16, 32 … 255), placed at the amount of light it stands for.</text>
+    <text x="20" y="222" class="small">sRGB puts its steps where eyes can tell them apart.</text>
+  </svg>
+  <figcaption>Same 8 bits, same 256 codes. sRGB is a smarter way to spend them, not a different set of colors.</figcaption>
+</figure>
+
+<p>So images are stored as <b>codes</b> on a curve that roughly matches the eye. The curve used by almost every screen, photo and web page is <b>sRGB</b>. A program that wants to do math on light must first <b>decode</b> the code to a linear value, do the math, and <b>encode</b> the result for the screen.</p>
+
+<h2><span class="n">2</span>The sRGB curve</h2>
+
+<p>The sRGB standard (IEC 61966-2-1) defines the curve exactly. It is a power curve with a short straight piece near black, so that the slope at 0 is not infinite. Values are between 0 and 1 (divide a byte by 255).</p>
+
+<pre><code class="lang-text">decode (sRGB code s → linear light L):
+    L = s / 12.92                          if s ≤ 0.04045
+    L = ((s + 0.055) / 1.055) ^ 2.4        otherwise
+
+encode (linear light L → sRGB code s):
+    s = 12.92 · L                          if L ≤ 0.0031308
+    s = 1.055 · L ^ (1 / 2.4) − 0.055      otherwise</code></pre>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Plot of the sRGB encode curve, linear light on the x axis and sRGB code on the y axis, both 0 to 1. The curve rises steeply near 0 and flattens. Linear 0.5 maps to code 0.735. A dashed straight line shows where linear equals code.">
+    <rect x="60" y="40" width="220" height="220" class="zone"/>
+    <line x1="60" y1="260" x2="280" y2="40" class="arrow dashed"/>
+    <path d="M60.0,260.0 L60.2,257.2 L60.7,251.1 L61.3,244.6 L62.2,238.0 L64.4,226.6 L67.7,214.7 L71.0,205.5 L76.5,193.2 L82.0,183.2 L93.0,166.8 L104.0,153.4 L115.0,141.8 L126.0,131.6 L148.0,113.7 L170.0,98.2 L192.0,84.5 L214.0,72.1 L236.0,60.6 L258.0,50.0 L280.0,40.0" class="arrow gpu"/>
+    <path d="M170,260 V98.2 H60" class="arrow hot dashed"/>
+    <circle cx="170" cy="98.2" r="4" class="hot"/>
+    <text x="170" y="278" class="mid small t-hot">0.5</text>
+    <text x="54" y="102" class="end small t-hot">0.735</text>
+    <text x="54" y="264" class="end small">0</text><text x="54" y="44" class="end small">1</text>
+    <text x="280" y="278" class="mid small">1</text>
+    <text x="170" y="296" class="mid small">linear light L</text>
+    <text x="20" y="150" class="small">code s</text>
+    <text x="230" y="128" class="small t-faint">s = L</text>
+    <text x="96" y="140" class="small t-gpu">encode</text>
+
+    <text x="330" y="50" class="title">Values to remember</text>
+    <text x="330" y="76" class="small">linear</text><text x="420" y="76" class="small">sRGB code</text><text x="540" y="76" class="end small">byte</text>
+    <text x="330" y="96" class="mono small">0.0</text><text x="420" y="96" class="mono small">0.000</text><text x="540" y="96" class="end mono small">0</text>
+    <text x="330" y="114" class="mono small">0.01</text><text x="420" y="114" class="mono small">0.100</text><text x="540" y="114" class="end mono small">25</text>
+    <text x="330" y="132" class="mono small">0.18</text><text x="420" y="132" class="mono small">0.461</text><text x="540" y="132" class="end mono small">118</text><text x="556" y="132" class="small">"middle gray"</text>
+    <text x="330" y="150" class="mono small">0.214</text><text x="420" y="150" class="mono small">0.500</text><text x="540" y="150" class="end mono small">128</text>
+    <text x="330" y="168" class="mono small">0.5</text><text x="420" y="168" class="mono small">0.735</text><text x="540" y="168" class="end mono small">188</text>
+    <text x="330" y="186" class="mono small">1.0</text><text x="420" y="186" class="mono small">1.000</text><text x="540" y="186" class="end mono small">255</text>
+    <text x="330" y="220" class="small">A plain power of 2.2 is a common shortcut: 0.5 ^ (1/2.2) = 0.730,</text>
+    <text x="330" y="236" class="small">close to 0.735. It differs most near black, where the real curve</text>
+    <text x="330" y="252" class="small">is a straight line.</text>
+  </svg>
+  <figcaption>The two directions are exact inverses. The knee at <var>L</var> = 0.0031308 and <var>s</var> = 0.04045 is where the straight piece meets the power curve.</figcaption>
+</figure>
+
+<p>The value people find surprising: a pixel stored as byte <b>128</b>, "half" of 255, shows only <b>21%</b> of full light. And half of full light is byte <b>188</b>.</p>
+
+<h2><span class="n">3</span>Why the math must be linear</h2>
+
+<p>Lighting is adding and scaling amounts of light: a surface under two lamps gets the sum of both, a surface turned away gets a fraction. That is only true for linear values. On sRGB codes, "half" and "plus" mean something else, and every result comes out wrong.</p>
+
+<p>Follow one texel from the texture to the screen. The texture says the surface is gray, stored as byte 128. Two lamps each give it half of full light.</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. The texel: byte 128, an sRGB code</h4>
+    <svg viewBox="0 0 720 170" role="img" aria-label="The texel stores byte 128, which is the sRGB code 0.502.">
+      <rect x="20" y="40" width="160" height="70" rx="6" class="mem"/>
+      <rect x="16" y="36" width="168" height="78" rx="8" class="hot"/>
+      <text x="100" y="66" class="mid title">texel</text>
+      <text x="100" y="92" class="mid mono">128 → s = 0.502</text>
+      <rect x="210" y="40" width="160" height="70" rx="6" class="ghost"/><text x="290" y="80" class="mid small t-faint">decode</text>
+      <rect x="400" y="40" width="140" height="70" rx="6" class="ghost"/><text x="470" y="80" class="mid small t-faint">light</text>
+      <rect x="570" y="40" width="130" height="70" rx="6" class="ghost"/><text x="635" y="80" class="mid small t-faint">encode</text>
+      <text x="20" y="150" class="small">The number is a code, not an amount of light. Nothing can be computed with it yet.</text>
+    </svg>
+    <p>This is what the artist's image file holds: a code chosen so that it looks like a mid gray on screen.</p>
+  </div>
+
+  <div class="step">
+    <h4>2. Decode to linear</h4>
+    <svg viewBox="0 0 720 170" role="img" aria-label="Decoding 0.502 gives 0.216 linear.">
+      <rect x="20" y="40" width="160" height="70" rx="6" class="mem"/>
+      <text x="100" y="66" class="mid title">texel</text>
+      <text x="100" y="92" class="mid mono">s = 0.502</text>
+      <line x1="180" y1="75" x2="208" y2="75" class="arrow" marker-end="url(#ah)"/>
+      <rect x="210" y="40" width="160" height="70" rx="6" class="gpu"/>
+      <rect x="206" y="36" width="168" height="78" rx="8" class="hot"/>
+      <text x="290" y="66" class="mid title">decode</text>
+      <text x="290" y="92" class="mid mono">L = 0.216</text>
+      <rect x="400" y="40" width="140" height="70" rx="6" class="ghost"/><text x="470" y="80" class="mid small t-faint">light</text>
+      <rect x="570" y="40" width="130" height="70" rx="6" class="ghost"/><text x="635" y="80" class="mid small t-faint">encode</text>
+      <text x="20" y="150" class="mono small">((0.502 + 0.055) / 1.055) ^ 2.4 = 0.216: the surface reflects 21.6% of the light.</text>
+    </svg>
+    <p>Now the number means something physical: the fraction of light the surface reflects (its <b>albedo</b>).</p>
+  </div>
+
+  <div class="step">
+    <h4>3. Light it: two lamps, half light each</h4>
+    <svg viewBox="0 0 720 170" role="img" aria-label="Lamp A gives 0.216 times 0.5 equals 0.108, lamp B the same, together 0.216.">
+      <rect x="20" y="40" width="160" height="70" rx="6" class="mem"/>
+      <text x="100" y="66" class="mid title">texel</text>
+      <text x="100" y="92" class="mid mono">s = 0.502</text>
+      <line x1="180" y1="75" x2="208" y2="75" class="arrow" marker-end="url(#ah)"/>
+      <rect x="210" y="40" width="160" height="70" rx="6" class="gpu"/>
+      <text x="290" y="66" class="mid title">decode</text>
+      <text x="290" y="92" class="mid mono">L = 0.216</text>
+      <line x1="370" y1="75" x2="398" y2="75" class="arrow" marker-end="url(#ah)"/>
+      <rect x="400" y="40" width="140" height="70" rx="6" class="shader"/>
+      <rect x="396" y="36" width="148" height="78" rx="8" class="hot"/>
+      <text x="470" y="62" class="mid title">light</text>
+      <text x="470" y="82" class="mid mono small">A: 0.216 · 0.5 = 0.108</text>
+      <text x="470" y="100" class="mid mono small">+ B: 0.108 = 0.216</text>
+      <rect x="570" y="40" width="130" height="70" rx="6" class="ghost"/><text x="635" y="80" class="mid small t-faint">encode</text>
+      <text x="20" y="150" class="small">Two half lamps make one full lamp, and the surface sends back exactly its albedo: 0.216.</text>
+    </svg>
+    <p>Adding and scaling linear values is just physics. This is the part the shader does.</p>
+  </div>
+
+  <div class="step">
+    <h4>4. Encode for the screen</h4>
+    <svg viewBox="0 0 720 170" role="img" aria-label="Encoding 0.216 gives 0.502, byte 128. With only lamp A, encoding 0.108 gives byte 92.">
+      <rect x="20" y="40" width="160" height="70" rx="6" class="mem"/>
+      <text x="100" y="66" class="mid title">texel</text>
+      <text x="100" y="92" class="mid mono">s = 0.502</text>
+      <line x1="180" y1="75" x2="208" y2="75" class="arrow" marker-end="url(#ah)"/>
+      <rect x="210" y="40" width="160" height="70" rx="6" class="gpu"/>
+      <text x="290" y="66" class="mid title">decode</text>
+      <text x="290" y="92" class="mid mono">L = 0.216</text>
+      <line x1="370" y1="75" x2="398" y2="75" class="arrow" marker-end="url(#ah)"/>
+      <rect x="400" y="40" width="140" height="70" rx="6" class="shader"/>
+      <text x="470" y="66" class="mid title">light</text>
+      <text x="470" y="92" class="mid mono">0.216</text>
+      <line x1="540" y1="75" x2="568" y2="75" class="arrow" marker-end="url(#ah)"/>
+      <rect x="570" y="40" width="130" height="70" rx="6" class="gpu"/>
+      <rect x="566" y="36" width="138" height="78" rx="8" class="hot"/>
+      <text x="635" y="66" class="mid title">encode</text>
+      <text x="635" y="92" class="mid mono">0.502 → 128</text>
+      <text x="20" y="144" class="small">Full light gives back the texture's own color, as it should.</text>
+      <text x="20" y="162" class="small">With lamp A alone: encode(0.108) = 0.362 → byte 92.</text>
+    </svg>
+    <p>The screen's own curve then turns the code back into light. The round trip is exact.</p>
+  </div>
+</div>
+
+<p>Now the same with one lamp, done right and done wrong:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Way</th><th>Steps</th><th>Byte on screen</th><th>Light on screen</th></tr>
+  <tr><td><b>Right</b>: linear math</td><td>decode 128 → 0.216, × 0.5 = 0.108, encode → 0.362</td><td><b>92</b></td><td>10.8%: half of 21.6%</td></tr>
+  <tr><td><b>Wrong</b>: math on codes</td><td>0.502 × 0.5 = 0.251, written as is</td><td>64</td><td>5.1%: a quarter, not half</td></tr>
+</table>
+</div>
+
+<p>Math on codes makes every shadow and every falloff too dark, and makes light sources add up wrongly: two lamps that each give a mid gray do not add to the brightness one lamp twice as strong would give. The look is harsh, with sudden dark edges. Linear lighting gives soft, physically plausible falloff.</p>
+
+<h2 id="color-vs-data"><span class="n">4</span>Color textures and data textures</h2>
+
+<p>Only textures that hold <b>colors meant to be seen</b> are stored as sRGB. Many textures hold <b>numbers</b>: a direction, a roughness, a mask. Those are already linear, and decoding them as sRGB changes the numbers.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Texture</th><th>Holds</th><th>Store as</th></tr>
+  <tr><td>Base color (albedo, diffuse)</td><td>a color</td><td><b>sRGB</b></td></tr>
+  <tr><td>Emissive</td><td>a color</td><td><b>sRGB</b></td></tr>
+  <tr><td>UI images, sprites, photos</td><td>colors</td><td><b>sRGB</b></td></tr>
+  <tr><td>Normal map</td><td>a direction: (x, y, z) mapped from −1…1 to 0…1</td><td>linear (UNORM)</td></tr>
+  <tr><td>Metallic-roughness</td><td>two factors from 0 to 1</td><td>linear (UNORM)</td></tr>
+  <tr><td>Ambient occlusion</td><td>a fraction of light</td><td>linear (UNORM)</td></tr>
+  <tr><td>Height, masks, lookup tables</td><td>numbers</td><td>linear (UNORM)</td></tr>
+  <tr><td>Alpha channel of any texture</td><td>coverage</td><td>always linear, even in an sRGB format</td></tr>
+  <tr><td>HDR images, light maps</td><td>amounts of light above 1</td><td>linear float (16-bit)</td></tr>
+</table>
+</div>
+
+<p>What happens when a normal map is loaded as sRGB by mistake:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="A normal map texel stores 128 for a flat x component and 200 for a tilted one. Read as UNORM, 128 gives 0.004 and 200 gives 0.569. Decoded as sRGB first, 128 gives minus 0.568 and 200 gives 0.155: every normal bends.">
+    <text x="20" y="24" class="title">stored byte</text>
+    <text x="230" y="24" class="title t-gpu">read as UNORM (right)</text>
+    <text x="500" y="24" class="title t-hot">decoded as sRGB (wrong)</text>
+
+    <rect x="20" y="40" width="160" height="60" rx="6" class="mem"/>
+    <text x="100" y="64" class="mid mono">128</text>
+    <text x="100" y="84" class="mid small">"flat": x = 0</text>
+    <line x1="180" y1="70" x2="228" y2="70" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="230" y="40" width="230" height="60" rx="6" class="gpu"/>
+    <text x="345" y="64" class="mid mono small">128/255 = 0.502</text>
+    <text x="345" y="84" class="mid mono small">· 2 − 1 = 0.004  ✓</text>
+    <rect x="500" y="40" width="240" height="60" rx="6" class="ghost"/>
+    <text x="620" y="64" class="mid mono small">decode → 0.216</text>
+    <text x="620" y="84" class="mid mono small t-hot">· 2 − 1 = −0.568  ✗</text>
+
+    <rect x="20" y="120" width="160" height="60" rx="6" class="mem"/>
+    <text x="100" y="144" class="mid mono">200</text>
+    <text x="100" y="164" class="mid small">tilted</text>
+    <line x1="180" y1="150" x2="228" y2="150" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="230" y="120" width="230" height="60" rx="6" class="gpu"/>
+    <text x="345" y="144" class="mid mono small">200/255 = 0.784</text>
+    <text x="345" y="164" class="mid mono small">· 2 − 1 = 0.569  ✓</text>
+    <rect x="500" y="120" width="240" height="60" rx="6" class="ghost"/>
+    <text x="620" y="144" class="mid mono small">decode → 0.578</text>
+    <text x="620" y="164" class="mid mono small t-hot">· 2 − 1 = 0.155  ✗</text>
+    <text x="20" y="204" class="small">A flat surface now leans strongly to one side. The whole model looks lit from the wrong direction.</text>
+  </svg>
+  <figcaption>The same mistake on a roughness map makes every surface shinier than intended, because decoding pushes values toward 0.</figcaption>
+</figure>
+
+<h2 id="hardware"><span class="n">5</span>The GPU converts for free</h2>
+
+<p>Modern GPUs do the sRGB curve in hardware. The <b>format</b> of an image says whether its bytes are sRGB codes. A format ending in <b>_SRGB</b> (for example <samp>R8G8B8A8_SRGB</samp>) means: decode when read, encode when written. The same bytes in a <b>_UNORM</b> format are read as plain numbers divided by 255.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A color texture in an sRGB format is read by the sampler, which decodes to linear and then filters. The shader does all math in linear. The result is written to an sRGB render target or swapchain image, which blends in linear and encodes. The display turns codes back into light. A data texture in a UNORM format is read with no conversion.">
+    <rect x="20" y="40" width="130" height="60" rx="6" class="mem"/>
+    <text x="85" y="64" class="mid">color texture</text>
+    <text x="85" y="84" class="mid mono small">…_SRGB bytes</text>
+    <rect x="20" y="130" width="130" height="60" rx="6" class="mem"/>
+    <text x="85" y="154" class="mid">data texture</text>
+    <text x="85" y="174" class="mid mono small">…_UNORM bytes</text>
+
+    <line x1="150" y1="70" x2="188" y2="70" class="arrow" marker-end="url(#ah)"/>
+    <rect x="190" y="40" width="130" height="60" rx="6" class="gpu"/>
+    <text x="255" y="64" class="mid">sampler</text>
+    <text x="255" y="84" class="mid small">decode, then filter</text>
+    <line x1="150" y1="160" x2="188" y2="160" class="arrow" marker-end="url(#ah)"/>
+    <rect x="190" y="130" width="130" height="60" rx="6" class="gpu"/>
+    <text x="255" y="154" class="mid">sampler</text>
+    <text x="255" y="174" class="mid small">÷ 255, filter</text>
+
+    <line x1="320" y1="70"  x2="358" y2="100" class="arrow" marker-end="url(#ah)"/>
+    <line x1="320" y1="160" x2="358" y2="130" class="arrow" marker-end="url(#ah)"/>
+    <rect x="360" y="80" width="130" height="70" rx="35" class="shader"/>
+    <text x="425" y="110" class="mid title">shader</text>
+    <text x="425" y="128" class="mid small">linear only</text>
+
+    <line x1="490" y1="115" x2="518" y2="115" class="arrow" marker-end="url(#ah)"/>
+    <rect x="520" y="80" width="110" height="70" rx="6" class="mem"/>
+    <text x="575" y="104" class="mid">target</text>
+    <text x="575" y="122" class="mid mono small">…_SRGB</text>
+    <text x="575" y="138" class="mid small">blend, encode</text>
+    <line x1="630" y1="115" x2="658" y2="115" class="arrow" marker-end="url(#ah)"/>
+    <rect x="660" y="80" width="80" height="70" rx="6" class="box"/>
+    <text x="700" y="110" class="mid">display</text>
+    <text x="700" y="128" class="mid small">code → light</text>
+
+    <path d="M190,215 H490" class="arrow hot" marker-start="url(#ah-hot)" marker-end="url(#ah-hot)"/>
+    <text x="340" y="236" class="mid small t-hot">the only place values are linear: the shader never sees an sRGB code</text>
+  </svg>
+  <figcaption>The decode happens <b>before</b> filtering, and the encode <b>after</b> blending. That order is what makes filtering and blending correct.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Step</th><th>What the hardware does with an _SRGB format</th></tr>
+  <tr><td>Sample</td><td>Decodes each texel it reads to linear, then filters (bilinear, trilinear) the linear values. Alpha is not decoded.</td></tr>
+  <tr><td>Write</td><td>Encodes the shader's linear output to sRGB codes as it stores them.</td></tr>
+  <tr><td>Blend</td><td>Reads the stored code, decodes it, blends in linear, encodes the result.</td></tr>
+  <tr><td>Copy, clear</td><td>A copy moves bytes unchanged. A clear color is given in linear and encoded.</td></tr>
+</table>
+</div>
+
+<p>Converting in the shader instead (reading a UNORM texture and calling <var>pow</var>) works for a single read but is wrong with filtering: the GPU then filters the codes, before the shader can decode them. Use the _SRGB format and let the sampler do it.</p>
+
+<h2><span class="n">6</span>Filtering and blending are math too</h2>
+
+<p>Any operation that mixes colors must mix linear values. The same black-and-white example comes up again and again:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Operation</th><th>Mixing white and black 50/50</th><th>On codes</th><th>In linear</th></tr>
+  <tr><td>Bilinear filtering</td><td>a sample between a black and a white texel</td><td>128 (21% light)</td><td><b>188</b> (50% light)</td></tr>
+  <tr><td>Mipmap generation</td><td>a 2×2 block of black and white (see <a href="mipmaps-sampling.html#linear-mips">mipmaps</a>)</td><td>128</td><td><b>188</b></td></tr>
+  <tr><td>Alpha blending</td><td>white at 50% opacity over black</td><td>128</td><td><b>188</b></td></tr>
+  <tr><td>Anti-aliasing (MSAA resolve)</td><td>an edge pixel half covered</td><td>128</td><td><b>188</b></td></tr>
+</table>
+</div>
+
+<p>On codes, every mix is too dark. Thin bright lines (text, wires, stars) look thinner and darker than they should, and edges look jagged even with anti-aliasing.</p>
+
+<h2 id="tone-mapping"><span class="n">7</span>Light above 1.0: tone mapping</h2>
+
+<p>Linear light has no upper limit. A lamp-lit white wall can be 4.0, a spot of sunlight 20.0. The screen's codes stop at 1.0. Simply clipping everything above 1 turns all bright areas into the same flat white. <b>Tone mapping</b> is a curve that squeezes the whole range into 0 to 1, keeping the order of brightness. It runs on linear values, <b>before</b> the sRGB encode.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="Plot of light from 0 to 8 on the x axis and display value from 0 to 1 on the y axis. Clipping rises in a straight line to 1 at x equals 1, then stays flat. The Reinhard curve x over 1 plus x rises smoothly and approaches 1 without reaching it.">
+    <rect x="60" y="30" width="320" height="170" class="zone"/>
+    <path d="M60,200 L100,30 L380,30" class="arrow hot dashed"/>
+    <path d="M60,200.0 L70,166.0 L80,143.3 L90,127.1 L100,115.0 L120,98.0 L140,86.7 L160,78.6 L180,72.5 L220,64.0 L260,58.3 L300,54.3 L340,51.2 L380,48.9" class="arrow gpu"/>
+    <text x="54" y="204" class="end small">0</text><text x="54" y="34" class="end small">1</text>
+    <text x="60" y="216" class="mid small">0</text><text x="100" y="216" class="mid small">1</text><text x="140" y="216" class="mid small">2</text><text x="220" y="216" class="mid small">4</text><text x="380" y="216" class="mid small">8</text>
+    <text x="220" y="234" class="mid small">linear light</text>
+    <text x="230" y="24" class="small t-hot">clip: everything above 1 is the same white</text>
+    <text x="240" y="84" class="small t-gpu">Reinhard: x / (1 + x)</text>
+
+    <text x="420" y="44" class="title">Reinhard, then encode</text>
+    <text x="420" y="70" class="small">light</text><text x="480" y="70" class="small">mapped</text><text x="580" y="70" class="end small">byte</text><text x="680" y="70" class="end small">if clipped</text>
+    <text x="420" y="90" class="mono small">0.5</text><text x="480" y="90" class="mono small">0.333</text><text x="580" y="90" class="end mono small">156</text><text x="680" y="90" class="end mono small">188</text>
+    <text x="420" y="108" class="mono small">1.0</text><text x="480" y="108" class="mono small">0.500</text><text x="580" y="108" class="end mono small">188</text><text x="680" y="108" class="end mono small">255</text>
+    <text x="420" y="126" class="mono small">2.0</text><text x="480" y="126" class="mono small">0.667</text><text x="580" y="126" class="end mono small">213</text><text x="680" y="126" class="end mono small">255</text>
+    <text x="420" y="144" class="mono small">4.0</text><text x="480" y="144" class="mono small">0.800</text><text x="580" y="144" class="end mono small">231</text><text x="680" y="144" class="end mono small">255</text>
+    <text x="420" y="162" class="mono small">8.0</text><text x="480" y="162" class="mono small">0.889</text><text x="580" y="162" class="end mono small">242</text><text x="680" y="162" class="end mono small">255</text>
+    <text x="420" y="194" class="small">Every brightness keeps its own value.</text>
+    <text x="420" y="210" class="small">The price: mid tones get darker and colors</text>
+    <text x="420" y="226" class="small">lose saturation.</text>
+  </svg>
+  <figcaption>Reinhard is the simplest tone map. Film-like curves (filmic, ACES, AgX) keep more contrast in the mid tones and handle saturated colors better. Most also multiply by an <b>exposure</b> first, like a camera.</figcaption>
+</figure>
+
+<p>To have values above 1 to map, the scene must be rendered into a target that can store them: a 16-bit float format, not an 8-bit one. A typical frame renders the scene in linear float, applies exposure and tone mapping in one full-screen pass, and writes the result to the sRGB swapchain.</p>
+
+<h2><span class="n">8</span>Pitfalls</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Mistake</th><th>What you see</th><th>Numbers</th></tr>
+  <tr><td>Encode twice: the shader applies the curve, and the _SRGB target encodes again</td><td>Washed out, gray, low contrast</td><td>linear 0.5 → 0.735 → 0.873 (byte 223 instead of 188)</td></tr>
+  <tr><td>Never encode: linear output to a UNORM target</td><td>Too dark, harsh shadows</td><td>linear 0.5 stored as 128, shown as 21% light</td></tr>
+  <tr><td>Data texture loaded as sRGB</td><td>Bent normals, too-shiny surfaces</td><td>see <a href="#color-vs-data">section 4</a></td></tr>
+  <tr><td>Color texture loaded as UNORM</td><td>Pale, washed-out materials</td><td>byte 128 used as 0.502 albedo instead of 0.216</td></tr>
+  <tr><td>Color from a color picker used as a linear factor</td><td>Tints too bright</td><td>picker's 128 is 0.216 linear, not 0.5; decode it first</td></tr>
+  <tr><td>Lighting into an 8-bit linear target</td><td>Banding in dark gradients</td><td>only 26 codes below 10% light (section 1)</td></tr>
+  <tr><td>Tone mapping after the encode</td><td>Wrong contrast</td><td>tone map in linear, then encode</td></tr>
+</table>
+</div>
+
+<div class="callout">
+  <strong>sRGB is also a set of colors</strong>
+  <p>This page is about the <b>transfer function</b>: the curve between light and code. A color space also fixes its <b>primaries</b>: which exact red, green and blue the channels mean. sRGB shares its primaries with Rec. 709 (HDTV). Wide-gamut and HDR displays use other primaries (Display P3, Rec. 2020) and other curves (PQ for HDR10). The rule stays the same: decode to linear, compute, encode for the display.</p>
+</div>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p>RASM follows the textbook pipeline with 8-bit textures and an 8-bit sRGB swapchain. The GPU decodes color textures and encodes the output. Shaders work in linear only, and the PBR shader tone maps each pixel itself.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Base color and emissive textures are created as R8G8B8A8_SRGB; metallic-roughness, normal and occlusion as R8G8B8A8_UNORM. Their mips are made in linear light. The sampler decodes sRGB textures. shadePBR lights in linear with linear glTF factors and applies Reinhard. shadeUnlit returns factor times texture with no tone map. The swapchain, B8G8R8A8_SRGB, encodes on write.">
+    <text x="20" y="22" class="title t-cpu">CPU · texture formats</text>
+    <rect x="20" y="34" width="200" height="56" rx="6" class="mem"/>
+    <text x="120" y="56" class="mid mono small">R8G8B8A8_SRGB</text>
+    <text x="120" y="76" class="mid small">base color, emissive</text>
+    <rect x="20" y="104" width="200" height="56" rx="6" class="mem"/>
+    <text x="120" y="126" class="mid mono small">R8G8B8A8_UNORM</text>
+    <text x="120" y="146" class="mid small">metallic-roughness, normal, AO</text>
+    <text x="120" y="182" class="mid small">mips in linear light</text>
+
+    <line x1="220" y1="62"  x2="268" y2="90"  class="arrow" marker-end="url(#ah)"/>
+    <line x1="220" y1="132" x2="268" y2="110" class="arrow" marker-end="url(#ah)"/>
+    <rect x="270" y="70" width="120" height="56" rx="6" class="gpu"/>
+    <text x="330" y="92" class="mid">sampler</text>
+    <text x="330" y="112" class="mid small">decodes _SRGB</text>
+
+    <line x1="390" y1="98" x2="418" y2="98" class="arrow" marker-end="url(#ah)"/>
+    <text x="510" y="22" class="title t-shader">GPU · fragMain</text>
+    <rect x="420" y="34" width="180" height="56" rx="28" class="shader"/>
+    <text x="510" y="56" class="mid mono">shadePBR</text>
+    <text x="510" y="76" class="mid small">linear light, then Reinhard</text>
+    <rect x="420" y="104" width="180" height="56" rx="28" class="shader"/>
+    <text x="510" y="126" class="mid mono">shadeUnlit</text>
+    <text x="510" y="146" class="mid small">factor × texture, no tone map</text>
+
+    <line x1="600" y1="62"  x2="638" y2="88"  class="arrow" marker-end="url(#ah)"/>
+    <line x1="600" y1="132" x2="638" y2="108" class="arrow" marker-end="url(#ah)"/>
+    <rect x="640" y="70" width="100" height="56" rx="6" class="mem"/>
+    <text x="690" y="92" class="mid small">swapchain</text>
+    <text x="690" y="112" class="mid mono small">B8G8R8A8_SRGB</text>
+
+    <rect x="20" y="210" width="720" height="44" rx="6" class="zone"/>
+    <text x="380" y="230" class="mid small">glTF factors (base color, emissive, metallic, roughness) are linear in the file and are copied as they are.</text>
+    <text x="380" y="246" class="mid small">No shader applies the sRGB curve: the formats do it.</text>
+  </svg>
+  <figcaption>Blending is off in every RASM pipeline, so the alpha the shaders return is not used for transparency.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Color vs data textures</td><td>section 4</td><td>glTF: base color and emissive are uploaded as <code>R8G8B8A8_SRGB</code>, metallic-roughness, normal and occlusion as <code>R8G8B8A8_UNORM</code> (<code>loadMaterial</code>). <code>loadTexture</code> takes the format from the caller, <code>R8G8B8A8_SRGB</code> by default, and refuses any other format than these two.</td></tr>
+  <tr><td>Decoding</td><td>by the format, before filtering</td><td>The same: the sampler decodes <samp>_SRGB</samp> textures. No shader calls the curve.</td></tr>
+  <tr><td>Mips</td><td>averaged in linear</td><td>Yes, for sRGB formats (see <a href="mipmaps-sampling.html#in-rasm">mipmaps</a>).</td></tr>
+  <tr><td>Factors</td><td>linear</td><td>glTF factors are linear and copied as they are. Hand-made materials start with white base color (<code>createMaterial</code>); a color typed in by hand must be linear.</td></tr>
+  <tr><td>Lighting</td><td>linear</td><td>Yes: <code>shadePBR</code> in <code>shaders/lib/pbr.slang</code>.</td></tr>
+  <tr><td>HDR target</td><td>16-bit float, tone map in a final pass</td><td>None. The scene draws straight into the 8-bit swapchain (or a render target of the same format), so each material shader tone maps its own result.</td></tr>
+  <tr><td>Tone mapping</td><td>exposure + a curve, before the encode</td><td>Reinhard, <code class="lang-text">c / (c + 1)</code> per channel, at the end of <code>shadePBR</code>; no exposure. <code>shadeUnlit</code> does not tone map: an unlit texture shows its own colors.</td></tr>
+  <tr><td>Output and encode</td><td>an _SRGB target encodes</td><td>The swapchain asks for <code>VK_FORMAT_B8G8R8A8_SRGB</code> with <code>VK_COLOR_SPACE_SRGB_NONLINEAR_KHR</code>. Render targets that <code>drawScene</code> draws into must have the swapchain's color format, so they are sRGB too, and are decoded again when a later pass samples them.</td></tr>
+  <tr><td>Blending</td><td>in linear, by the _SRGB target</td><td>Not used: every pipeline has blending off.</td></tr>
+  <tr><td>Linear constants</td><td>clear colors are linear</td><td><code>SWAPCHAIN_CLEAR_COLOR</code> is 0.018 linear, which the encode turns into byte 36. The stats overlay's colors in <code>statsOverlay.slang</code> are linear too.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Formats</td><td><code>Format</code> in <code>include/rasm/types.h</code></td></tr>
+  <tr><td>glTF color vs data</td><td><code>Engine::loadMaterial</code> (its texture upload, with an sRGB flag per texture) in <code>src/assets/material.cpp</code></td></tr>
+  <tr><td>Loading a texture file</td><td><code>Engine::loadTexture</code> in <code>src/assets/texture.cpp</code>; its default format in <code>include/rasm/engine.h</code></td></tr>
+  <tr><td>sRGB-correct mips</td><td><code>VulkanDevice::fillTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>Swapchain format</td><td><code>buildSwapchain</code> in <code>src/rhi/vulkan/vulkanSwapchain.cpp</code></td></tr>
+  <tr><td>Lighting and tone mapping</td><td><code>shadePBR</code> in <code>shaders/lib/pbr.slang</code>; <code>shadeUnlit</code> in <code>shaders/lib/unlit.slang</code></td></tr>
+  <tr><td>Hand-made textures, both kinds</td><td><code>createFilledTexture</code> calls in <code>examples/05_city/main.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Normal, metallic-roughness and occlusion textures are <code>R8G8B8A8_UNORM</code>; color and emissive textures are <code>R8G8B8A8_SRGB</code>.</li>
+    <li>Shaders output linear color. Never apply the sRGB curve in a shader: the swapchain format encodes.</li>
+    <li>The swapchain and any render target that <code>drawScene</code> draws into must be an sRGB format; with a UNORM one, the image comes out too dark.</li>
+    <li>Material factors are linear. Convert a color from an sRGB color picker before storing it.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>No HDR render target, no exposure, and no tone-mapping pass: Reinhard runs per material, and the unlit path is not tone mapped. The swapchain format is a request: <code>set_desired_format</code> asks vk-bootstrap for <code>VK_FORMAT_B8G8R8A8_SRGB</code>, and nothing checks the format it really chose.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>IEC 61966-2-1:1999, <i>Default RGB colour space – sRGB</i>: the standard that defines the curve.</li>
+  <li>Larry Gritz and Eugene d'Eon, <i>The Importance of Being Linear</i>, in <i>GPU Gems 3</i> (2007), chapter 24.</li>
+  <li>Charles Poynton, <i>Digital Video and HD: Algorithms and Interfaces</i>, 2nd edition (2012): transfer functions and gamma.</li>
+  <li>Erik Reinhard and others, <i>Photographic Tone Reproduction for Digital Images</i>, SIGGRAPH 2002.</li>
+  <li>The Vulkan specification: "sRGB EOTF" in the chapter on formats, and the texel input and output operations.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

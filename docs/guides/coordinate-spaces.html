@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coordinate Spaces · RASM</title>
+<meta name="description" content="How a vertex travels from object space to world, view, clip, NDC and pixels: handedness, axis conventions, the model and view matrices, lookAt, quaternions, and the Y flip of Vulkan. Then how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/transform.h include/rasm/camera.h src/scene/transform.cpp src/scene/camera.cpp src/renderer/gpuScene.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/platform/window.cpp shaders/passes/rasm.slang shaders/passes/statsOverlay.slang src/CMakeLists.txt">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/coordinate-spaces.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Coordinate spaces and the view matrix</h1>
+<p class="lead">A vertex is stored in its mesh's own coordinates. Before it becomes a pixel, it passes through five more coordinate systems. Each step is one matrix or one simple formula. This page explains every space, which way its axes point, and how the camera's view matrix is built. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>The chain is <b>object → world → view → clip → NDC → pixels</b>. The model, view and projection matrices do the first three steps. The GPU does the last two.</li>
+    <li>A <b>right-handed, Y-up</b> world has X right, Y up and Z toward you. A camera there looks down its own <b>−Z</b>.</li>
+    <li>The model matrix is <var>T</var> · <var>R</var> · <var>S</var>: scale first, then rotate, then move.</li>
+    <li>The <b>view matrix</b> is the inverse of the camera's own world matrix. For a camera without scale it is <var>R</var><sup>T</sup> · translate(−eye).</li>
+    <li>A <b>quaternion</b> stores a rotation in 4 numbers. Its inverse is its conjugate, and it blends smoothly (slerp).</li>
+    <li>Vulkan's clip space has <b>Y down</b>; OpenGL, Direct3D and Metal have Y up. Engines fix this with a <b>negative viewport height</b> or a flip in the projection.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>The chain of spaces</h2>
+
+<p>A space is a coordinate system: an origin and three axes. The same point has different numbers in different spaces. Rendering moves every vertex through a fixed chain of them. Each arrow below is one transform.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="Object space goes by the model matrix to world space, by the view matrix to view space, by the projection matrix to clip space, by the divide by w to NDC, and by the viewport transform to pixels. The first three steps run in the vertex shader, the last two in fixed-function hardware.">
+    <rect x="20"  y="40" width="170" height="64" rx="6" class="box"/>
+    <text x="105" y="66" class="mid title">Object space</text>
+    <text x="105" y="86" class="mid small">the mesh file's numbers</text>
+    <line x1="190" y1="72" x2="293" y2="72" class="arrow" marker-end="url(#ah)"/>
+    <text x="242" y="64" class="mid mono">model</text>
+    <rect x="295" y="40" width="170" height="64" rx="6" class="box"/>
+    <text x="380" y="66" class="mid title">World space</text>
+    <text x="380" y="86" class="mid small">one space for the scene</text>
+    <line x1="465" y1="72" x2="568" y2="72" class="arrow" marker-end="url(#ah)"/>
+    <text x="517" y="64" class="mid mono">view</text>
+    <rect x="570" y="40" width="170" height="64" rx="6" class="box"/>
+    <text x="655" y="66" class="mid title">View space</text>
+    <text x="655" y="86" class="mid small">camera at 0, looks −Z</text>
+
+    <path d="M655,104 V150" class="arrow" marker-end="url(#ah)"/>
+    <text x="664" y="134" class="mono">projection</text>
+
+    <rect x="570" y="152" width="170" height="64" rx="6" class="box"/>
+    <text x="655" y="178" class="mid title">Clip space</text>
+    <text x="655" y="198" class="mid small">4D: (x, y, z, w)</text>
+    <line x1="570" y1="184" x2="467" y2="184" class="arrow" marker-end="url(#ah)"/>
+    <text x="517" y="176" class="mid mono">÷ w</text>
+    <rect x="295" y="152" width="170" height="64" rx="6" class="box"/>
+    <text x="380" y="178" class="mid title">NDC</text>
+    <text x="380" y="198" class="mid small">a cube: x, y in −1..1</text>
+    <line x1="295" y1="184" x2="192" y2="184" class="arrow" marker-end="url(#ah)"/>
+    <text x="242" y="176" class="mid mono">viewport</text>
+    <rect x="20"  y="152" width="170" height="64" rx="6" class="box"/>
+    <text x="105" y="178" class="mid title">Pixels</text>
+    <text x="105" y="198" class="mid small">framebuffer, plus depth</text>
+
+    <rect x="20" y="244" width="14" height="14" rx="3" class="shader"/>
+    <text x="42" y="256" class="small">model, view, projection: in the vertex shader (your code)</text>
+    <rect x="420" y="244" width="14" height="14" rx="3" class="gpu"/>
+    <text x="442" y="256" class="small">÷ w and viewport: fixed GPU hardware</text>
+  </svg>
+  <figcaption>The vertex shader outputs a clip-space position. Everything after that is done by the GPU itself, with settings the application gives it (the viewport).</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Space</th><th>Origin</th><th>What it is for</th></tr>
+  <tr><td>Object (model, local)</td><td>the mesh's own pivot</td><td>The numbers in the file. One mesh can be placed many times.</td></tr>
+  <tr><td>World</td><td>the scene's origin</td><td>All objects, lights and cameras in one space. Lighting and physics often work here.</td></tr>
+  <tr><td>View (eye, camera)</td><td>the camera</td><td>The world as the camera sees it. The camera sits at 0 and looks down −Z.</td></tr>
+  <tr><td>Clip</td><td>—</td><td>4D homogeneous coordinates. The GPU clips triangles against <var>−w</var> ≤ <var>x</var>, <var>y</var> ≤ <var>w</var> here.</td></tr>
+  <tr><td>NDC (normalized device coordinates)</td><td>the screen's center</td><td>Clip divided by <var>w</var>. The visible part is a cube: <var>x</var> and <var>y</var> in −1..1, depth in 0..1 (or −1..1 in OpenGL).</td></tr>
+  <tr><td>Framebuffer (window, screen)</td><td>a corner of the image</td><td>Pixel coordinates, and a depth value for the depth test.</td></tr>
+</table>
+</div>
+
+<h2><span class="n">2</span>Axes and handedness</h2>
+
+<p>Three axes at right angles can be arranged in two ways that are mirror images of each other. Point X to the right and Y up. Then Z points either toward you or away from you. The first is <b>right-handed</b>, the second <b>left-handed</b>. Curl the fingers of that hand from X to Y, and the thumb shows Z.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 280" role="img" aria-label="Left: a right-handed system, X right, Y up, Z toward the viewer; a camera in it looks down minus Z. Right: a left-handed system, X right, Y up, Z away from the viewer; a camera in it looks down plus Z.">
+    <rect x="10" y="10" width="360" height="260" rx="8" class="zone"/>
+    <text x="24" y="34" class="title">Right-handed, Y-up</text>
+    <line x1="170" y1="160" x2="170" y2="60"  class="arrow" marker-end="url(#ah)"/>
+    <text x="178" y="70">+Y</text>
+    <line x1="170" y1="160" x2="290" y2="160" class="arrow" marker-end="url(#ah)"/>
+    <text x="296" y="164">+X</text>
+    <line x1="170" y1="160" x2="100" y2="222" class="arrow" marker-end="url(#ah)"/>
+    <text x="72" y="240">+Z (toward you)</text>
+    <line x1="170" y1="160" x2="232" y2="106" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="238" y="104" class="t-hot">view: −Z</text>
+    <circle cx="170" cy="160" r="4" class="cpu"/>
+    <text x="24" y="260" class="small">X × Y = Z with the right-hand rule.</text>
+
+    <rect x="390" y="10" width="360" height="260" rx="8" class="zone"/>
+    <text x="404" y="34" class="title">Left-handed, Y-up</text>
+    <line x1="550" y1="160" x2="550" y2="60"  class="arrow" marker-end="url(#ah)"/>
+    <text x="558" y="70">+Y</text>
+    <line x1="550" y1="160" x2="670" y2="160" class="arrow" marker-end="url(#ah)"/>
+    <text x="676" y="164">+X</text>
+    <line x1="550" y1="160" x2="612" y2="106" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="618" y="104">+Z (away)</text>
+    <text x="618" y="120" class="small t-hot">view: +Z</text>
+    <circle cx="550" cy="160" r="4" class="cpu"/>
+    <text x="404" y="260" class="small">The same picture, with Z mirrored.</text>
+  </svg>
+  <figcaption>In both, a camera with no rotation shows +X to the right and +Y up on the screen. Only the sign of the view direction differs.</figcaption>
+</figure>
+
+<p>Neither choice is better. What matters is that every part of a program agrees. Tools and file formats chose differently:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Tool or format</th><th>Handedness</th><th>Up axis</th></tr>
+  <tr><td>glTF 2.0</td><td>right</td><td>+Y (a model's front faces +Z)</td></tr>
+  <tr><td>OpenGL tradition, Maya</td><td>right</td><td>+Y</td></tr>
+  <tr><td>Blender, 3ds Max</td><td>right</td><td>+Z</td></tr>
+  <tr><td>Unity</td><td>left</td><td>+Y</td></tr>
+  <tr><td>Unreal Engine</td><td>left</td><td>+Z</td></tr>
+</table>
+</div>
+
+<p>Converting between two of them is a fixed matrix: a rotation for a different up axis, and a mirror (one negated axis) for a different handedness. A mirror also reverses the winding of every triangle, so it changes face culling. See <a href="face-culling.html">Face culling and winding order</a>.</p>
+
+<h2><span class="n">3</span>Object to world: the model matrix</h2>
+
+<p>An object is placed in the world with three parts: a <b>scale</b> <var>S</var>, a <b>rotation</b> <var>R</var> and a <b>translation</b> <var>T</var>. With column vectors (the convention of OpenGL, glm and most math books), a point is transformed as <var>p</var>′ = <var>M</var> · <var>p</var>, and the model matrix is</p>
+
+<pre><code class="lang-text">M = T · R · S        p_world = T · (R · (S · p_object))</code></pre>
+
+<p>Read it from right to left: the matrix next to the point acts first. So the object is scaled around its own pivot, then turned, then moved. The order matters:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="An arrow shape in object space pointing along plus X. Scaled by 2 along X it becomes longer. Rotated by 90 degrees it points up along plus Y. Translated by (2, 0.5) it moves to the right and up.">
+    <text x="95"  y="22" class="mid title">Object space</text>
+    <text x="285" y="22" class="mid title">1. scale (2, 1)</text>
+    <text x="475" y="22" class="mid title">2. rotate 90°</text>
+    <text x="665" y="22" class="mid title">3. translate (2, 0.5)</text>
+
+    <line x1="20"  y1="190" x2="175" y2="190" class="arrow" marker-end="url(#ah)"/>
+    <line x1="45"  y1="215" x2="45"  y2="40"  class="arrow" marker-end="url(#ah)"/>
+    <polygon points="45,196 70,196 70,202 85,190 70,178 70,184 45,184" class="gpu"/>
+
+    <line x1="210" y1="190" x2="365" y2="190" class="arrow" marker-end="url(#ah)"/>
+    <line x1="235" y1="215" x2="235" y2="40"  class="arrow" marker-end="url(#ah)"/>
+    <polygon points="235,196 285,196 285,202 315,190 285,178 285,184 235,184" class="gpu"/>
+
+    <line x1="400" y1="190" x2="555" y2="190" class="arrow" marker-end="url(#ah)"/>
+    <line x1="425" y1="215" x2="425" y2="40"  class="arrow" marker-end="url(#ah)"/>
+    <polygon points="431,190 431,140 437,140 425,110 413,140 419,140 419,190" class="gpu"/>
+
+    <line x1="590" y1="190" x2="745" y2="190" class="arrow" marker-end="url(#ah)"/>
+    <line x1="615" y1="215" x2="615" y2="40"  class="arrow" marker-end="url(#ah)"/>
+    <polygon points="621,190 621,140 627,140 615,110 603,140 609,140 609,190" class="ghost"/>
+    <polygon points="671,177.5 671,127.5 677,127.5 665,97.5 653,127.5 659,127.5 659,177.5" class="gpu"/>
+    <circle cx="665" cy="177.5" r="3" class="cpu"/>
+
+    <text x="95"  y="232" class="mid small">pivot at the origin</text>
+    <text x="285" y="232" class="mid small">twice as long</text>
+    <text x="475" y="232" class="mid small">turns around the pivot</text>
+    <text x="665" y="232" class="mid small">pivot now at (2, 0.5)</text>
+  </svg>
+  <figcaption>Seen along the Z axis, 25 pixels per unit. Scale first: if the rotation came first, scaling X would stretch the turned arrow sideways instead of along its length.</figcaption>
+</figure>
+
+<p>A <b>hierarchy</b> (a wheel on a car, a node tree in a glTF file) multiplies the matrices of all parents: <var>M</var><sub>wheel</sub> = <var>M</var><sub>car</sub> · <var>M</var><sub>wheel in car</sub>. A child under a parent with a non-uniform scale can end up with shear, which no single <var>T</var> · <var>R</var> · <var>S</var> can describe. That is why engines often store full matrices for world transforms.</p>
+
+<div class="split">
+  <div>
+    <h4>Row or column vectors</h4>
+    <p>Some texts (classic Direct3D, DirectXMath) write <var>p</var>′ = <var>p</var> · <var>M</var>, with the point as a row. Then every matrix is the transpose, and products are read left to right: <var>M</var> = <var>S</var> · <var>R</var> · <var>T</var>. It is the same math with the other notation.</p>
+  </div>
+  <div>
+    <h4>Row-major or column-major</h4>
+    <p>A separate question: how the 16 numbers sit in memory. glm and GLSL store columns one after the other, so <var>m</var>[3] is the translation column. Mixing up the storage order transposes the matrix without any error message.</p>
+  </div>
+</div>
+
+<h2><span class="n">4</span>Storing a rotation: quaternions</h2>
+
+<p>A rotation can be stored in several ways. Games most often use a <b>unit quaternion</b>: four numbers (<var>w</var>, <var>x</var>, <var>y</var>, <var>z</var>) with length 1. A rotation by the angle <var>θ</var> around the unit axis <var>a</var> is</p>
+
+<pre><code class="lang-text">q = ( cos(θ/2),  sin(θ/2) · a )        rotate a vector:  v' = q · v · q*</code></pre>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="A unit axis a and a vector v that turns around it by the angle theta, sweeping a cone. The quaternion holds cos of half theta and sin of half theta times a.">
+    <line x1="160" y1="200" x2="160" y2="30" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="168" y="40" class="t-hot">axis a</text>
+    <ellipse cx="160" cy="80" rx="90" ry="22" class="ghost"/>
+    <line x1="160" y1="200" x2="70"  y2="80" class="arrow" marker-end="url(#ah)"/>
+    <text x="52" y="76" class="end">v</text>
+    <line x1="160" y1="200" x2="215" y2="98" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="222" y="104" class="t-gpu">v′</text>
+    <path d="M72,90 Q110,112 205,100" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="130" y="128" class="mid small">θ</text>
+
+    <text x="320" y="40"  class="title">Why a quaternion</text>
+    <text x="320" y="64"  class="small">4 numbers, no special angles where it breaks.</text>
+    <text x="320" y="84"  class="small">Combine two rotations: q₂ · q₁ (q₁ acts first).</text>
+    <text x="320" y="104" class="small">Undo a rotation: the conjugate q* = (w, −x, −y, −z).</text>
+    <text x="320" y="124" class="small">Blend two rotations: slerp, at an even speed.</text>
+    <text x="320" y="144" class="small">Rounding makes the length drift from 1 after many</text>
+    <text x="320" y="160" class="small">products: normalize it from time to time.</text>
+    <text x="320" y="190" class="small">q and −q are the same rotation (θ and θ + 360°).</text>
+  </svg>
+  <figcaption>The half angle is not a typo: <var>q</var> · <var>v</var> · <var>q</var>* applies <var>q</var> twice, once on each side.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Form</th><th>Numbers</th><th>Good for</th><th>Problem</th></tr>
+  <tr><td>Euler angles (yaw, pitch, roll)</td><td>3</td><td>user input, editors</td><td><b>Gimbal lock</b>: at pitch ±90° two axes line up and one degree of freedom is lost. Blending is uneven.</td></tr>
+  <tr><td>3×3 matrix</td><td>9</td><td>transforming many points; the GPU</td><td>Drifts away from a pure rotation; hard to blend.</td></tr>
+  <tr><td>Axis and angle</td><td>4</td><td>building a rotation</td><td>Combining two is awkward.</td></tr>
+  <tr><td>Unit quaternion</td><td>4</td><td>storing, combining and blending</td><td>Must be turned into a matrix for the GPU.</td></tr>
+</table>
+</div>
+
+<h2 id="view"><span class="n">5</span>The view matrix</h2>
+
+<p>A camera is an object like any other. It has a position <var>eye</var> and a rotation <var>R</var>, so it has a world matrix <var>C</var> = <var>T</var>(<var>eye</var>) · <var>R</var>. That matrix takes points from the camera's space to the world. Rendering needs the opposite: points from the world into the camera's space. So the <b>view matrix</b> is the inverse:</p>
+
+<pre><code class="lang-text">V = C⁻¹ = (T · R)⁻¹ = R⁻¹ · T⁻¹ = Rᵀ · T(−eye)</code></pre>
+
+<p>Two facts make this cheap. The inverse of a translation is the translation by the negative vector. The inverse of a rotation matrix is its transpose (for a quaternion: its conjugate). No general 4×4 inverse is needed.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Top view. Left: in world space the camera is at (5, 0, 0) and looks along minus X toward the origin; an object is at (0, 0, minus 3). Right: in view space the camera is at the origin and looks up the page along minus Z; the same object is at (3, 0, minus 5), to the right and 5 units ahead.">
+    <rect x="10" y="10" width="360" height="280" rx="8" class="zone"/>
+    <text x="24" y="34" class="title">World space (seen from above)</text>
+    <line x1="40" y1="200" x2="350" y2="200" class="arrow" marker-end="url(#ah)"/>
+    <text x="344" y="218" class="end small">+X</text>
+    <line x1="150" y1="270" x2="150" y2="50" class="arrow" marker-end="url(#ah)"/>
+    <text x="158" y="60" class="small">−Z</text>
+    <text x="142" y="216" class="end small">origin</text>
+    <circle cx="150" cy="134" r="8" class="gpu"/>
+    <text x="164" y="130" class="small">object (0, 0, −3)</text>
+    <circle cx="260" cy="200" r="7" class="cpu"/>
+    <line x1="252" y1="200" x2="212" y2="200" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="260" y1="192" x2="260" y2="155" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="266" y="162" class="small t-cpu">camera right</text>
+    <text x="214" y="192" class="small t-hot">looks</text>
+    <text x="260" y="226" class="mid small">camera (5, 0, 0)</text>
+
+    <line x1="372" y1="150" x2="418" y2="150" class="arrow" marker-end="url(#ah)"/>
+    <text x="395" y="140" class="mid mono">V</text>
+
+    <rect x="420" y="10" width="330" height="280" rx="8" class="zone"/>
+    <text x="434" y="34" class="title">View space</text>
+    <line x1="460" y1="230" x2="730" y2="230" class="arrow" marker-end="url(#ah)"/>
+    <text x="724" y="248" class="end small">+X (camera right)</text>
+    <line x1="560" y1="280" x2="560" y2="50" class="arrow" marker-end="url(#ah)"/>
+    <text x="568" y="60" class="small">−Z (forward)</text>
+    <circle cx="560" cy="230" r="7" class="cpu"/>
+    <text x="552" y="250" class="end small">camera (0, 0, 0)</text>
+    <circle cx="626" cy="120" r="8" class="gpu"/>
+    <text x="640" y="116" class="small">object (3, 0, −5)</text>
+    <line x1="626" y1="230" x2="626" y2="128" class="arrow dashed"/>
+    <text x="632" y="180" class="small">5 ahead</text>
+    <line x1="560" y1="120" x2="618" y2="120" class="arrow dashed"/>
+    <text x="589" y="112" class="mid small">3 right</text>
+  </svg>
+  <figcaption>The view matrix does not move the camera. It moves the whole world, so that the camera ends up at the origin, looking down −Z. 22 pixels per unit.</figcaption>
+</figure>
+
+<h3>Building it with lookAt</h3>
+
+<p>Often the camera is given as "stand at <var>eye</var>, look at <var>target</var>, with <var>up</var> roughly up". The three axes of the camera follow from cross products:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="The eye, the target, and three vectors at the eye: forward f toward the target, right r equal to f cross up, and the true up u equal to r cross f. The world up is only a hint.">
+    <circle cx="140" cy="170" r="7" class="cpu"/>
+    <text x="154" y="190" class="small">eye</text>
+    <circle cx="330" cy="120" r="7" class="gpu"/>
+    <text x="342" y="116" class="small">target</text>
+    <line x1="147" y1="168" x2="250" y2="141" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="210" y="134" class="small t-hot">f</text>
+    <line x1="140" y1="163" x2="140" y2="70" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="148" y="80" class="small">up (hint)</text>
+    <line x1="140" y1="170" x2="96" y2="222" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="80" y="238" class="small t-cpu">r</text>
+    <line x1="140" y1="163" x2="117" y2="78" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="108" y="84" class="end small t-cpu">u</text>
+
+    <text x="420" y="40"  class="title">Steps</text>
+    <text x="420" y="66"  class="mono">f = normalize(target − eye)</text>
+    <text x="420" y="90"  class="mono">r = normalize(f × up)</text>
+    <text x="420" y="114" class="mono">u = r × f</text>
+    <text x="420" y="146" class="small">r, u, −f are the camera's X, Y, Z in world space.</text>
+    <text x="420" y="166" class="small">u is at right angles to f, even when the up hint</text>
+    <text x="420" y="182" class="small">is not. If f is parallel to up, f × up is zero:</text>
+    <text x="420" y="198" class="small">looking straight up or down breaks lookAt.</text>
+  </svg>
+  <figcaption>The picture is 3D: <var>r</var> points out of the page toward you. In a right-handed system, forward × up gives right.</figcaption>
+</figure>
+
+<p>The rows of <var>R</var><sup>T</sup> are the camera's axes, and the last column is <var>R</var><sup>T</sup> · (−<var>eye</var>):</p>
+
+<pre><code class="lang-text">      |  r.x   r.y   r.z   −r·eye |
+V  =  |  u.x   u.y   u.z   −u·eye |
+      | −f.x  −f.y  −f.z    f·eye |
+      |  0     0     0      1     |</code></pre>
+
+<p>Each row asks one question about a world point <var>p</var>: how far is it to the right (<var>r</var>), up (<var>u</var>), and behind (−<var>f</var>) the camera? A point in front of the camera gets a negative <var>z</var>.</p>
+
+<h2><span class="n">6</span>Clip space, NDC and pixels</h2>
+
+<p>The projection matrix turns view space into clip space. Its main job is to put the distance in front of the camera into <var>w</var>, so that the GPU can divide by it: far things get smaller. The details are in <a href="projection-depth.html">Projection and reversed-Z depth</a>. Here we only need the last two steps, which the GPU does after the vertex shader:</p>
+
+<pre><code class="lang-text">NDC:     (x_n, y_n, z_n) = (x_c, y_c, z_c) / w_c
+
+pixels:  x_p = vx + (x_n + 1) / 2 · width
+         y_p = vy + (y_n + 1) / 2 · height        (the API's own y direction)
+         depth = minDepth + z_n · (maxDepth − minDepth)</code></pre>
+
+<p>The viewport rectangle (<var>vx</var>, <var>vy</var>, <var>width</var>, <var>height</var>) and the depth range come from the application. Pixel centers sit at half-integers: the top-left pixel covers 0..1 and its center is (0.5, 0.5).</p>
+
+<h2 id="y-flip"><span class="n">7</span>Y up or Y down</h2>
+
+<p>The APIs do not agree on which way NDC <var>y</var> points:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>API</th><th>NDC y = +1 is</th><th>NDC depth</th><th>Pixel row 0</th></tr>
+  <tr><td>OpenGL</td><td>top</td><td>−1..1</td><td>bottom</td></tr>
+  <tr><td>Direct3D 11/12</td><td>top</td><td>0..1</td><td>top</td></tr>
+  <tr><td>Metal</td><td>top</td><td>0..1</td><td>top</td></tr>
+  <tr><td>Vulkan</td><td><b>bottom</b></td><td>0..1</td><td>top</td></tr>
+</table>
+</div>
+
+<p>Most math libraries (glm among them) build OpenGL-style matrices, where +Y is up in clip space. Feed such a matrix to Vulkan unchanged and the image comes out upside down. There are three common fixes:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Clip space with Y up. Without a fix, Vulkan maps y equal to 1 to the bottom row, so the picture is upside down. Fix A: a negative viewport height maps y equal to 1 to the top row. Fix B: negate y in the projection matrix, so clip space itself is Y-down.">
+    <text x="100" y="24" class="mid title">Y-up clip space</text>
+    <rect x="35" y="40" width="130" height="130" class="box"/>
+    <polygon points="100,62 73,148 127,148" class="gpu"/>
+    <line x1="49" y1="160" x2="49" y2="56" class="arrow" marker-end="url(#ah)"/>
+    <text x="55" y="66" class="small">+y</text>
+    <text x="100" y="190" class="mid small">a triangle pointing up</text>
+
+    <line x1="170" y1="105" x2="228" y2="105" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="305" y="24" class="mid title">No fix</text>
+    <rect x="240" y="40" width="130" height="130" class="ghost"/>
+    <polygon points="305,148 278,62 332,62" class="ghost"/>
+    <text x="305" y="190" class="mid small t-faint">upside down on screen</text>
+    <text x="305" y="206" class="mid small t-faint">and every winding reversed</text>
+
+    <text x="505" y="24" class="mid title">A: viewport flip</text>
+    <rect x="440" y="40" width="130" height="130" class="box"/>
+    <polygon points="505,62 478,148 532,148" class="gpu"/>
+    <text x="505" y="190" class="mid small">upright</text>
+    <text x="505" y="206" class="mid mono small">y = top + h, height = −h</text>
+
+    <text x="680" y="24" class="mid title">B: projection flip</text>
+    <rect x="615" y="40" width="130" height="130" class="box"/>
+    <polygon points="680,62 653,148 707,148" class="gpu"/>
+    <text x="680" y="190" class="mid small">upright</text>
+    <text x="680" y="206" class="mid mono small">P[1][1] = −P[1][1]</text>
+
+    <text x="20"  y="242" class="title">A</text>
+    <text x="40"  y="242" class="small">Clip space stays Y-up, the same as on the other APIs. Shaders that compute clip positions by hand</text>
+    <text x="40"  y="258" class="small">need no change. Needs Vulkan 1.1 (or VK_KHR_maintenance1).</text>
+    <text x="20"  y="282" class="title">B</text>
+    <text x="40"  y="282" class="small">Clip space becomes Y-down. Any full-screen pass or hand-written clip position must flip y too.</text>
+  </svg>
+  <figcaption>The third fix, rendering upside down and flipping the final image, costs a copy and is rarely used. Fixes A and B both give an upright image, so a counter-clockwise triangle stays counter-clockwise on screen.</figcaption>
+</figure>
+
+<p>Mouse positions have the same problem the other way round: windows report <var>y</var> growing downward. Code that maps the mouse into NDC-like coordinates flips it: <var>y</var><sub>n</sub> = 1 − 2 · <var>y</var><sub>mouse</sub> / <var>height</var>.</p>
+
+<h2><span class="n">8</span>Worked example</h2>
+
+<p>One vertex, all the way to its pixel. The mesh point is <var>p</var> = (1, 0, 0). The object stands at (0, 0, −2), turned 90° around +Y. The camera is at (5, 0, 0) and looks at the origin. The projection has a 90° vertical field of view, aspect 2, near 1 and far 100 (standard 0..1 depth). The image is 800 × 400 pixels.</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. Object space</h4>
+    <svg viewBox="0 0 760 200" role="img" aria-label="Top view of object space. The point p is one unit along plus X from the object's pivot.">
+      <line x1="40" y1="150" x2="300" y2="150" class="arrow" marker-end="url(#ah)"/>
+      <text x="294" y="168" class="end small">+X</text>
+      <line x1="120" y1="190" x2="120" y2="20" class="arrow" marker-end="url(#ah)"/>
+      <text x="128" y="30" class="small">−Z</text>
+      <circle cx="120" cy="150" r="5" class="cpu"/>
+      <text x="112" y="168" class="end small">pivot</text>
+      <circle cx="160" cy="150" r="6" class="hot"/>
+      <text x="160" y="138" class="mid small t-hot">p</text>
+      <text x="360" y="60" class="mono">p = (1, 0, 0)</text>
+      <text x="360" y="90" class="small">The number stored in the mesh.</text>
+      <text x="360" y="108" class="small">Top view: X right, −Z up the page. 40 pixels per unit.</text>
+    </svg>
+    <p>The point is one unit to the right of the mesh's pivot.</p>
+  </div>
+  <div class="step">
+    <h4>2. World space</h4>
+    <svg viewBox="0 0 760 200" role="img" aria-label="The rotation turns p from plus X to minus Z, then the translation moves it to (0, 0, minus 3).">
+      <line x1="40" y1="170" x2="300" y2="170" class="arrow" marker-end="url(#ah)"/>
+      <text x="294" y="188" class="end small">+X</text>
+      <line x1="120" y1="195" x2="120" y2="10" class="arrow" marker-end="url(#ah)"/>
+      <text x="128" y="20" class="small">−Z</text>
+      <text x="112" y="186" class="end small">origin</text>
+      <circle cx="120" cy="130" r="5" class="cpu"/>
+      <text x="128" y="134" class="small">pivot (0, 0, −2)</text>
+      <circle cx="120" cy="90" r="6" class="hot"/>
+      <text x="128" y="86" class="small t-hot">p (0, 0, −3)</text>
+      <text x="360" y="44"  class="mono">R · p = (cos 90°, 0, −sin 90°) = (0, 0, −1)</text>
+      <text x="360" y="70"  class="mono">T · (R · p) = (0, 0, −1) + (0, 0, −2)</text>
+      <text x="360" y="94"  class="mono">p_world = (0, 0, −3)</text>
+      <text x="360" y="124" class="small">A turn by +90° around +Y takes +X to −Z:</text>
+      <text x="360" y="140" class="small">counter-clockwise, seen from above.</text>
+    </svg>
+    <p>First the rotation (the scale is 1), then the translation, as in <var>M</var> = <var>T</var> · <var>R</var> · <var>S</var>.</p>
+  </div>
+  <div class="step">
+    <h4>3. View space</h4>
+    <svg viewBox="0 0 760 200" role="img" aria-label="The lookAt axes of the camera at (5, 0, 0) are r = (0, 0, minus 1), u = (0, 1, 0), f = (minus 1, 0, 0). The point becomes (3, 0, minus 5).">
+      <text x="20" y="30"  class="mono">f = normalize((0,0,0) − (5,0,0)) = (−1, 0, 0)</text>
+      <text x="20" y="54"  class="mono">r = f × (0,1,0) = (0, 0, −1)</text>
+      <text x="20" y="78"  class="mono">u = r × f = (0, 1, 0)</text>
+      <text x="20" y="114" class="mono">x =  r·p − r·eye = 3 − 0  = 3</text>
+      <text x="20" y="138" class="mono">y =  u·p − u·eye = 0 − 0  = 0</text>
+      <text x="20" y="162" class="mono">z = −f·p + f·eye = 0 − 5  = −5</text>
+      <text x="460" y="114" class="mono t-hot">p_view = (3, 0, −5)</text>
+      <text x="460" y="140" class="small">3 units to the right of the camera,</text>
+      <text x="460" y="156" class="small">5 units in front of it (z is negative).</text>
+    </svg>
+    <p>This is the picture in <a href="#view">section 5</a>.</p>
+  </div>
+  <div class="step">
+    <h4>4. Clip space</h4>
+    <svg viewBox="0 0 760 200" role="img" aria-label="The projection gives clip coordinates (1.5, 0, 4.04, 5).">
+      <text x="20" y="30"  class="mono">focal = 1 / tan(90° / 2) = 1</text>
+      <text x="20" y="56"  class="mono">x_c = focal / aspect · x = 0.5 · 3 = 1.5</text>
+      <text x="20" y="80"  class="mono">y_c = focal · y = 0</text>
+      <text x="20" y="104" class="mono">z_c = −100/99 · z − 100/99 = 4.0404</text>
+      <text x="20" y="128" class="mono">w_c = −z = 5</text>
+      <text x="460" y="80" class="mono t-hot">p_clip = (1.5, 0, 4.04, 5)</text>
+      <text x="460" y="106" class="small">Inside: −5 ≤ 1.5 ≤ 5, and 0 ≤ 4.04 ≤ 5.</text>
+      <text x="20" y="170" class="small">The z row is the standard 0..1 depth for near 1, far 100 (see the projection page).</text>
+    </svg>
+    <p><var>w</var> is now the distance in front of the camera. The GPU clips against it.</p>
+  </div>
+  <div class="step">
+    <h4>5. NDC</h4>
+    <svg viewBox="0 0 760 200" role="img" aria-label="Dividing by w gives NDC (0.3, 0, 0.808). In the NDC square the point is a little right of the center.">
+      <rect x="40" y="20" width="160" height="160" class="box"/>
+      <line x1="40" y1="100" x2="200" y2="100" class="arrow dashed"/>
+      <line x1="120" y1="20" x2="120" y2="180" class="arrow dashed"/>
+      <text x="36" y="196" class="small">(−1, −1)</text>
+      <text x="204" y="16" class="end small">(1, 1)</text>
+      <circle cx="144" cy="100" r="6" class="hot"/>
+      <text x="360" y="60" class="mono">(1.5, 0, 4.04) / 5</text>
+      <text x="360" y="90" class="mono t-hot">p_ndc = (0.3, 0, 0.808)</text>
+      <text x="360" y="120" class="small">x = 0.3: a bit right of the center.</text>
+      <text x="360" y="138" class="small">Depth 0.808 for a point at distance 5.</text>
+    </svg>
+    <p>Depth 0.808 at distance 5 of 100 already: depth values crowd toward the far end. That is the topic of the projection page.</p>
+  </div>
+  <div class="step">
+    <h4>6. Pixels</h4>
+    <svg viewBox="0 0 760 200" role="img" aria-label="The viewport maps NDC to pixel (520, 200) in an 800 by 400 image, right of the center on the middle row.">
+      <rect x="40" y="30" width="300" height="150" class="box"/>
+      <text x="40" y="22" class="small">(0, 0)</text>
+      <text x="340" y="196" class="end small">(800, 400)</text>
+      <circle cx="235" cy="105" r="6" class="hot"/>
+      <text x="245" y="98" class="small t-hot">(520, 200)</text>
+      <text x="400" y="60" class="mono">x_p = (0.3 + 1) / 2 · 800 = 520</text>
+      <text x="400" y="84" class="mono">y_p = (1 − 0) / 2 · 400 = 200</text>
+      <text x="400" y="116" class="small">Row 0 at the top, so y is flipped:</text>
+      <text x="400" y="132" class="small">the API or the viewport does this.</text>
+    </svg>
+    <p>The vertex lands at pixel (520, 200), with depth 0.808.</p>
+  </div>
+</div>
+
+<h2><span class="n">9</span>Pitfalls</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Symptom</th><th>Usual cause</th></tr>
+  <tr><td>The image is upside down, or every face is culled</td><td>A Y-up projection on Vulkan without a flip (<a href="#y-flip">section 7</a>), or a flip done twice.</td></tr>
+  <tr><td>Objects turn around the world origin instead of their center</td><td>The matrix order is wrong: <var>R</var> · <var>T</var> instead of <var>T</var> · <var>R</var>.</td></tr>
+  <tr><td>The model is mirrored, or inside out</td><td>Data from a tool with the other handedness, converted with a rotation only.</td></tr>
+  <tr><td>A matrix "does nothing" or does something strange</td><td>Row-major data read as column-major: the matrix is transposed.</td></tr>
+  <tr><td>Lighting looks wrong on scaled objects</td><td>Normals transformed with the model matrix. They need the inverse transpose (<a href="normal-mapping.html">Normal mapping</a>).</td></tr>
+  <tr><td>Far from the origin, vertices jitter</td><td>A 32-bit float has only 24 bits of precision: at 100 km, steps are about 8 mm. Large worlds render relative to the camera.</td></tr>
+  <tr><td>The camera spins wildly at the top or bottom</td><td>lookAt with forward parallel to up, or Euler angles at gimbal lock. Clamp the pitch (<a href="camera-controllers.html">Camera controllers</a>).</td></tr>
+</table>
+</div>
+
+<h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
+
+<p>RASM uses the glTF convention: a right-handed, Y-up world, and a camera that looks down its local −Z. Transforms are a position, a quaternion and a scale. Clip space is Y-up on every backend; the Vulkan backend flips Y with a negative viewport height (fix A).</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="On the CPU, Transform toMatrix times the sub-mesh transform becomes the instance row's worldMatrix. getViewMatrix and getProjectionMatrix fill SceneData. On the GPU, vertMain multiplies projection, view and worldMatrix with the vertex position. The Vulkan setViewport passes a negative height so that the Y-up clip space lands upright in the framebuffer.">
+    <text x="20" y="24" class="title t-cpu">CPU</text>
+    <rect x="20" y="36" width="220" height="56" rx="6" class="cpu"/>
+    <text x="130" y="60" class="mid mono">Transform::toMatrix</text>
+    <text x="130" y="78" class="mid small">entity T · R · S, × sub-mesh matrix</text>
+    <rect x="20" y="104" width="220" height="56" rx="6" class="cpu"/>
+    <text x="130" y="128" class="mid mono">getViewMatrix</text>
+    <text x="130" y="146" class="mid small">conjugate(rotation) · T(−position)</text>
+    <rect x="20" y="172" width="220" height="56" rx="6" class="cpu"/>
+    <text x="130" y="196" class="mid mono">getProjectionMatrix</text>
+    <text x="130" y="214" class="mid small">fitted to the pass's aspect</text>
+
+    <line x1="240" y1="64"  x2="288" y2="64"  class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="240" y1="132" x2="288" y2="146" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="240" y1="200" x2="288" y2="168" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="290" y="36" width="200" height="56" rx="6" class="mem"/>
+    <text x="390" y="60" class="mid">Instance row</text>
+    <text x="390" y="78" class="mid mono small">worldMatrix</text>
+    <rect x="290" y="128" width="200" height="56" rx="6" class="mem"/>
+    <text x="390" y="152" class="mid">SceneData</text>
+    <text x="390" y="170" class="mid mono small">view · projection</text>
+
+    <line x1="490" y1="64"  x2="538" y2="96"  class="arrow" marker-end="url(#ah)"/>
+    <line x1="490" y1="156" x2="538" y2="124" class="arrow" marker-end="url(#ah)"/>
+    <text x="645" y="24" class="mid title t-gpu">GPU</text>
+    <rect x="540" y="80" width="210" height="56" rx="28" class="shader"/>
+    <text x="645" y="104" class="mid mono">vertMain</text>
+    <text x="645" y="122" class="mid small">projection · view · world · pos</text>
+    <line x1="645" y1="136" x2="645" y2="174" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="540" y="176" width="210" height="56" rx="6" class="gpu"/>
+    <text x="645" y="200" class="mid">Viewport, height &lt; 0</text>
+    <text x="645" y="218" class="mid small">Y-up clip → rows top-down</text>
+
+    <text x="20" y="262" class="small">The camera's scale is ignored. The world matrix of an instance is the entity's Transform times the</text>
+    <text x="20" y="278" class="small">sub-mesh's own matrix (for glTF, the node hierarchy, baked at import).</text>
+  </svg>
+  <figcaption>The CPU writes the matrices into GPU tables; the vertex shader multiplies them for every vertex. See <a href="gpu-scene.html">The GPU scene</a> for the tables.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Handedness, up axis</td><td>a choice; glTF is right-handed, Y-up</td><td>Right-handed, Y-up, like glTF. Imported glTF and OBJ data is used as it is, with no mirroring (<code>D8</code>).</td></tr>
+  <tr><td>Camera direction</td><td>looks down −Z</td><td>The same. Free-fly and trackball code use <code class="lang-text">rotation * (0, 0, -1)</code> as forward.</td></tr>
+  <tr><td>Model matrix</td><td><var>T</var> · <var>R</var> · <var>S</var>, column vectors</td><td><code>Transform::toMatrix</code> builds exactly <var>T</var> · <var>R</var> · <var>S</var> with glm (column vectors, column-major). The instance's world matrix is that times <code>SubMesh</code>'s <code>transform</code>.</td></tr>
+  <tr><td>Rotation</td><td>a unit quaternion</td><td><code>Transform</code> holds a <code>glm::quat</code>, identity by default (<code>B22</code>). <code>Transform::rotate</code> multiplies the new turn on the left, so it turns around a world axis.</td></tr>
+  <tr><td>View matrix</td><td><var>R</var><sup>T</sup> · <var>T</var>(−<var>eye</var>), or lookAt</td><td><code>getViewMatrix</code>: <code class="lang-text">mat4_cast(conjugate(rotation)) * translate(-position)</code>. No general inverse, and no lookAt: the controllers produce the rotation directly. The camera's scale is not used.</td></tr>
+  <tr><td>Y flip for Vulkan</td><td>fix A, B or a final flip</td><td>Fix A, inside <code>VulkanCommandBuffer::setViewport</code>: <code class="lang-text">y = y + height</code>, <code class="lang-text">height = -height</code>. Callers pass a normal top-left rectangle.</td></tr>
+  <tr><td>Hand-written clip positions</td><td>must follow the clip convention</td><td>Clip space is Y-up, so <code>statsOverlay.slang</code> maps pixel rows with <code class="lang-text">1.0 - pixel.y / screen.y * 2.0</code>, and occlusion culling maps NDC back to rows with <code class="lang-text">0.5 - y * 0.5</code>.</td></tr>
+  <tr><td>Mouse</td><td>flip <var>y</var></td><td><code>toNDC</code> in <code>window.cpp</code> flips it, so mouse motion is Y-up too (<a href="camera-controllers.html#in-rasm">Camera controllers</a>).</td></tr>
+  <tr><td>Normals</td><td>inverse transpose</td><td>Computed once per instance on the CPU (<code>normalMatrix</code> in the instance row), not per vertex.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Position, rotation, scale</td><td><code>Transform</code> in <code>include/rasm/transform.h</code>; <code>Transform::toMatrix</code>, <code>Transform::rotate</code> in <code>src/scene/transform.cpp</code></td></tr>
+  <tr><td>Instance world matrix</td><td><code>Engine::writeInstanceRows</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>View matrix</td><td><code>Engine::getViewMatrix</code> in <code>src/scene/camera.cpp</code></td></tr>
+  <tr><td>Matrices into the frame</td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code> (<code>SceneData</code>'s <code>view</code> and <code>projection</code>)</td></tr>
+  <tr><td>Object to clip</td><td><code>vertMain</code> in <code>shaders/passes/rasm.slang</code></td></tr>
+  <tr><td>The Y flip</td><td><code>VulkanCommandBuffer::setViewport</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
+  <tr><td>glm's depth range</td><td><code>GLM_FORCE_DEPTH_ZERO_TO_ONE</code> in <code>src/CMakeLists.txt</code> (<code>B2</code>)</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Clip space is Y-up everywhere. Pass a normal, top-left rectangle to <code>setViewport</code>; the backend flips it. Do not flip again in a projection.</li>
+    <li>A shader that writes a clip position by hand uses Y-up (+1 is the top row).</li>
+    <li>Do not mirror imported data to change handedness. A mirror flips the winding, and face culling depends on it (<a href="face-culling.html#in-rasm">Face culling</a>).</li>
+    <li>glm config macros belong in CMake, not in a <code>.cpp</code> (<code>B2</code>).</li>
+    <li>Transform math is covered by <code>tests/transformTests.cpp</code> and <code>tests/cameraTests.cpp</code>.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>All positions are 32-bit floats in world space. Large worlds need double precision on the CPU and camera-relative rendering (development plan, phase 5, map engines).</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Tomas Akenine-Möller and others, <i>Real-Time Rendering</i>, 4th edition: chapter 4, Transforms.</li>
+  <li>Eric Lengyel, <i>Foundations of Game Engine Development, Volume 1: Mathematics</i> (2016).</li>
+  <li>Ken Shoemake, <i>Animating Rotation with Quaternion Curves</i>, SIGGRAPH 1985: quaternions and slerp.</li>
+  <li>The Vulkan specification: the sections "Coordinate Transformations" and "Controlling the Viewport".</li>
+  <li>The glTF 2.0 specification: "Coordinate System and Units".</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

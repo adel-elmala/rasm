@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frustum Culling · RASM</title>
+<meta name="description" content="How frustum culling works: the six planes of the view, bounding volumes, the sphere and box tests, getting the planes from the view-projection matrix, and how RASM does it.">
+<meta name="rasm-sources" content="shaders/lib/frustumCulling.slang shaders/passes/cull.slang src/renderer/gpuScene.cpp src/renderer/geometryPool.cpp src/scene/camera.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/frustum-culling.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Culling and the frame</p>
+<h1>Frustum culling</h1>
+<p class="lead">Frustum culling skips the objects that are outside the camera's view, before the GPU does any work for them. It needs three things: the six planes that bound the view, a simple shape around each object, and a test of one against the other. This page explains each part. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>The camera sees a <b>frustum</b>: a pyramid with its top cut off, bounded by 6 planes (near, far, left, right, top, bottom).</li>
+    <li>A plane gives every point a <b>signed distance</b>: positive inside, negative outside.</li>
+    <li>Each object gets a <b>bounding volume</b>, usually a sphere or a box. Testing it is much cheaper than testing triangles.</li>
+    <li>A sphere is outside when its center is more than one radius behind <b>any one</b> plane. If it passes all 6, it is kept.</li>
+    <li>The 6 planes come straight from the rows of the <b>view-projection matrix</b> (Gribb and Hartmann).</li>
+    <li>The test is <b>conservative</b>: it may keep an object that is not visible, but it never removes one that is.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>Why cull at all</h2>
+
+<p>The GPU already throws away triangles outside the view. It does this in <b>clipping</b>, after the vertex shader. So an object behind the camera never shows up on screen, even without culling. But by then the GPU has already done work: it read the object's vertices, ran the vertex shader on each one, and built its triangles. All of that is wasted.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="Without culling, an object off screen goes through the vertex shader and clipping, which drops every triangle, and makes no pixels. With frustum culling, one test per object removes it before the draw, and the rest of the pipeline is skipped.">
+    <text x="20" y="54" class="title">No culling</text>
+    <rect x="130" y="30" width="130" height="46" rx="6" class="box"/>
+    <text x="195" y="50" class="mid">Object</text>
+    <text x="195" y="66" class="mid small">off screen</text>
+    <line x1="260" y1="53" x2="288" y2="53" class="arrow" marker-end="url(#ah)"/>
+    <rect x="290" y="30" width="140" height="46" rx="6" class="gpu"/>
+    <text x="360" y="50" class="mid">Vertex shader</text>
+    <text x="360" y="66" class="mid small">runs on every vertex</text>
+    <line x1="430" y1="53" x2="458" y2="53" class="arrow" marker-end="url(#ah)"/>
+    <rect x="460" y="30" width="140" height="46" rx="6" class="gpu"/>
+    <text x="530" y="50" class="mid">Clipping</text>
+    <text x="530" y="66" class="mid small">drops every triangle</text>
+    <line x1="600" y1="53" x2="628" y2="53" class="arrow" marker-end="url(#ah)"/>
+    <rect x="630" y="30" width="110" height="46" rx="6" class="ghost"/>
+    <text x="685" y="58" class="mid small t-faint">no pixels</text>
+
+    <text x="20" y="144" class="title">Frustum</text>
+    <text x="20" y="160" class="title">culling</text>
+    <rect x="130" y="120" width="130" height="46" rx="6" class="box"/>
+    <text x="195" y="140" class="mid">Object</text>
+    <text x="195" y="156" class="mid small">off screen</text>
+    <line x1="260" y1="143" x2="288" y2="143" class="arrow" marker-end="url(#ah)"/>
+    <rect x="290" y="120" width="140" height="46" rx="23" class="shader"/>
+    <text x="360" y="140" class="mid title">Cull test</text>
+    <text x="360" y="156" class="mid small">one test per object</text>
+    <line x1="430" y1="143" x2="458" y2="143" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <rect x="460" y="120" width="280" height="46" rx="6" class="ghost"/>
+    <text x="600" y="140" class="mid small t-faint">vertex shader, clipping, pixels:</text>
+    <text x="600" y="156" class="mid small t-faint">all skipped</text>
+    <text x="20" y="198" class="small">One test per object replaces thousands of vertex shader runs.</text>
+  </svg>
+  <figcaption>Culling works on whole objects. It saves the work that clipping would throw away later.</figcaption>
+</figure>
+
+<p>This also tells us the one rule of culling. It is only a way to save time. The GPU would get the same image without it. So a culling test may <b>keep</b> an object that turns out to be invisible (that only costs a little time), but it must <b>never remove</b> an object that is visible (that would make it vanish from the screen). A test with this property is called <b>conservative</b>.</p>
+
+<h2><span class="n">2</span>The view frustum</h2>
+
+<p>A perspective camera sees everything inside a pyramid that starts at the eye. The pyramid is cut off twice: at the <b>near plane</b>, close to the eye, and at the <b>far plane</b>, far away. What is left is called a <b>frustum</b>. It has 6 faces, and each face lies on a plane.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 310" role="img" aria-label="Left: a frustum in 3D, a pyramid from the camera cut by a small near rectangle and a big far rectangle. Right: the same frustum seen from above, a trapezoid with the near, far, left and right planes, each normal pointing inside.">
+    <text x="190" y="20" class="mid title">In 3D: a cut-off pyramid</text>
+    <circle cx="40" cy="160" r="6" class="cpu"/>
+    <text x="40" y="185" class="mid small">camera</text>
+    <line x1="46" y1="158" x2="120" y2="128" class="arrow dashed"/>
+    <line x1="46" y1="158" x2="140" y2="120" class="arrow dashed"/>
+    <line x1="46" y1="162" x2="140" y2="192" class="arrow dashed"/>
+    <line x1="46" y1="162" x2="120" y2="200" class="arrow dashed"/>
+    <polygon points="300,60 350,40 350,260 300,280" class="zone"/>
+    <line x1="120" y1="128" x2="300" y2="60"  class="arrow"/>
+    <line x1="140" y1="120" x2="350" y2="40"  class="arrow"/>
+    <line x1="140" y1="192" x2="350" y2="260" class="arrow"/>
+    <line x1="120" y1="200" x2="300" y2="280" class="arrow"/>
+    <polygon points="120,128 140,120 140,192 120,200" class="gpu"/>
+    <text x="96" y="222" class="mid small">near plane</text>
+    <text x="325" y="300" class="mid small">far plane</text>
+    <text x="235" y="168" class="mid small">left, right, top,</text>
+    <text x="235" y="182" class="mid small">bottom: the 4 sides</text>
+
+    <text x="560" y="20" class="mid title">Seen from above</text>
+    <polygon points="540,250 580,250 700,50 420,50" class="zone"/>
+    <line x1="540" y1="250" x2="420" y2="50"  class="arrow"/>
+    <line x1="580" y1="250" x2="700" y2="50"  class="arrow"/>
+    <line x1="540" y1="250" x2="580" y2="250" class="arrow"/>
+    <line x1="420" y1="50"  x2="700" y2="50"  class="arrow"/>
+    <circle cx="560" cy="290" r="6" class="cpu"/>
+    <line x1="557" y1="285" x2="540" y2="250" class="arrow dashed"/>
+    <line x1="563" y1="285" x2="580" y2="250" class="arrow dashed"/>
+    <line x1="480" y1="150" x2="506" y2="135" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="640" y1="150" x2="614" y2="135" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="560" y1="250" x2="560" y2="224" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="560" y1="50"  x2="560" y2="76"  class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="470" y="154" class="end small">left</text>
+    <text x="650" y="154" class="small">right</text>
+    <text x="588" y="262" class="small">near</text>
+    <text x="706" y="54"  class="small">far</text>
+    <text x="560" y="150" class="mid small t-hot">normals point inside</text>
+  </svg>
+  <figcaption>The top and bottom planes look the same from the side as left and right look from above. An orthographic camera has a box instead of a pyramid, but it is still 6 planes, and everything on this page works the same.</figcaption>
+</figure>
+
+<p>A point is inside the frustum when it is on the inner side of <b>all 6</b> planes. So to work with the frustum, we first need a way to ask "which side of this plane is this point on?".</p>
+
+<h2><span class="n">3</span>A plane, and the distance to it</h2>
+
+<p>A plane is stored as 4 numbers: a <b>normal</b> <var>n</var> = (<var>a</var>, <var>b</var>, <var>c</var>), the direction the plane faces, and an offset <var>d</var>. A point <var>p</var> is on the plane when <var>n</var> · <var>p</var> + <var>d</var> = 0. For any other point, the same expression gives a number that is not zero, and its sign tells the side.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 260" role="img" aria-label="A plane seen edge-on, with its normal pointing up. A point above it has distance +2, a point on it has distance 0, and a point below it has distance minus 1.">
+    <rect x="40" y="40" width="400" height="120" class="zone"/>
+    <text x="50" y="58" class="small">inside: distance &gt; 0</text>
+    <line x1="40" y1="160" x2="440" y2="160" class="hot"/>
+    <text x="445" y="164" class="small t-hot">plane</text>
+    <line x1="250" y1="160" x2="250" y2="118" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="258" y="126" class="small t-hot">n</text>
+    <text x="50" y="238" class="small">outside: distance &lt; 0</text>
+
+    <circle cx="140" cy="80" r="5" class="gpu"/>
+    <line x1="140" y1="85" x2="140" y2="160" class="arrow dashed"/>
+    <text x="148" y="84" class="small">+2</text>
+    <circle cx="350" cy="160" r="5" class="gpu"/>
+    <text x="350" y="182" class="mid small">0</text>
+    <circle cx="400" cy="200" r="5" class="cpu"/>
+    <line x1="400" y1="195" x2="400" y2="160" class="arrow dashed"/>
+    <text x="408" y="204" class="small">−1</text>
+
+    <text x="480" y="60" class="mono">distance(p) = n·p + d</text>
+    <text x="480" y="92"  class="small">&gt; 0  on the side n points to</text>
+    <text x="480" y="110" class="small">= 0  on the plane</text>
+    <text x="480" y="128" class="small">&lt; 0  on the other side</text>
+    <text x="480" y="162" class="small">When n has length 1, the number is the</text>
+    <text x="480" y="180" class="small">real distance, in the same units as p.</text>
+    <text x="480" y="210" class="small">To get there, divide all 4 numbers</text>
+    <text x="480" y="228" class="small">(a, b, c, d) by the length of (a, b, c).</text>
+  </svg>
+  <figcaption>The convention used on this page and in most engines: the normals of the frustum planes point <b>into</b> the frustum, so inside is positive.</figcaption>
+</figure>
+
+<p>For a single point, only the sign matters, so the length of <var>n</var> does not matter either. For a sphere it does: we will compare the distance with the radius, so both must be in the same units. That is why frustum planes are almost always <b>normalized</b>: scaled so that <var>n</var> has length 1.</p>
+
+<h2><span class="n">4</span>Bounding volumes</h2>
+
+<p>A mesh can have millions of triangles. Testing each one against the frustum would cost more than drawing them. Instead, every object gets a simple shape that fully contains it, a <b>bounding volume</b>. If the bounding volume is outside, the object inside it is outside too.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="The same long, tilted object three times. A bounding sphere around it is loose. An axis-aligned box around it is a little tighter. An oriented box that turns with it is tight.">
+    <text x="130" y="18" class="mid title">Sphere</text>
+    <circle cx="130" cy="125" r="90" class="hot"/>
+    <polygon points="66,175 206,95 194,75 54,155" class="box"/>
+    <circle cx="130" cy="125" r="3" class="cpu"/>
+    <text x="130" y="238" class="mid small">center + radius: 4 numbers</text>
+    <text x="130" y="254" class="mid small">cheapest test · loose on long shapes</text>
+
+    <text x="380" y="18" class="mid title">Axis-aligned box (AABB)</text>
+    <rect x="304" y="75" width="152" height="100" class="hot"/>
+    <polygon points="316,175 456,95 444,75 304,155" class="box"/>
+    <text x="380" y="238" class="mid small">min + max corner: 6 numbers</text>
+    <text x="380" y="254" class="mid small">cheap · grows when the object turns</text>
+
+    <text x="630" y="18" class="mid title">Oriented box (OBB)</text>
+    <polygon points="562,178 710,94 698,72 550,156" class="hot"/>
+    <polygon points="566,175 706,95 694,75 554,155" class="box"/>
+    <text x="630" y="238" class="mid small">center, 3 axes, 3 sizes: 15 numbers</text>
+    <text x="630" y="254" class="mid small">tightest · costliest test</text>
+  </svg>
+  <figcaption>A tighter shape culls more often, but costs more to store and to test. A loose shape is still correct, only less useful.</figcaption>
+</figure>
+
+<p>Spheres are the most common choice for frustum culling. They are small, they do not change when the object rotates, and the test is one line. Boxes are a good second choice (<a href="#boxes">see below</a>).</p>
+
+<h3>How to build a bounding sphere</h3>
+
+<p>The sphere is built once, when the mesh is loaded, from its vertex positions. The smallest possible sphere is not needed; any sphere that contains every vertex is correct.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Method</th><th>How</th><th>Result</th></tr>
+  <tr><td>Box center</td><td>Find the min and max of all positions. The center is halfway between them. The radius is the distance to the farthest vertex.</td><td>Two passes over the vertices. A bit bigger than needed, simple.</td></tr>
+  <tr><td>Ritter's method</td><td>Start with a sphere through two far-apart points. Walk the vertices; when one is outside, grow the sphere just enough to hold it.</td><td>Two or three passes. Usually close to the smallest sphere.</td></tr>
+  <tr><td>Welzl's algorithm</td><td>A randomized recursive algorithm that finds the exact smallest sphere.</td><td>The smallest sphere. More code, and slower in practice.</td></tr>
+</table>
+</div>
+
+<h2 id="sphere-test"><span class="n">5</span>The test: a sphere against the frustum</h2>
+
+<p>Take a sphere with center <var>c</var> and radius <var>r</var>, and one plane. Compute the signed distance of the center, <var>s</var> = <var>n</var> · <var>c</var> + <var>d</var>. There are three cases:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="A plane with inside above. Sphere A is fully above it. Sphere B crosses it. Sphere C is fully below it. A and B are kept, C is culled.">
+    <rect x="20" y="20" width="720" height="130" class="zone"/>
+    <text x="30" y="38" class="small">inside</text>
+    <text x="30" y="170" class="small">outside</text>
+    <line x1="20" y1="150" x2="740" y2="150" class="hot"/>
+    <text x="735" y="142" class="end small t-hot">plane</text>
+
+    <circle cx="150" cy="70" r="40" class="gpu"/>
+    <text x="150" y="74" class="mid title">A</text>
+    <line x1="150" y1="110" x2="150" y2="150" class="arrow dashed"/>
+    <circle cx="380" cy="170" r="40" class="gpu"/>
+    <text x="380" y="174" class="mid title">B</text>
+    <circle cx="610" cy="200" r="40" class="ghost"/>
+    <text x="610" y="204" class="mid title t-faint">C</text>
+    <line x1="610" y1="150" x2="610" y2="186" class="arrow dashed"/>
+
+    <text x="150" y="276" class="mid small">s = +80, more than r</text>
+    <text x="150" y="258" class="mid small t-gpu">fully inside → keep</text>
+    <text x="380" y="258" class="mid small t-gpu">crosses the plane → keep</text>
+    <text x="380" y="276" class="mid small">s = −20, between −r and 0</text>
+    <text x="610" y="276" class="mid small">s = −50, less than −r</text>
+    <text x="610" y="258" class="mid small t-hot">fully outside → cull</text>
+  </svg>
+  <figcaption>All three spheres have radius <var>r</var> = 40. The only case that removes the object is "the whole sphere is behind the plane": <var>s</var> &lt; −<var>r</var>.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Distance of the center</th><th>Meaning</th><th>For culling</th></tr>
+  <tr><td><var>s</var> ≥ <var>r</var></td><td>the whole sphere is inside this plane</td><td>keep testing the other planes</td></tr>
+  <tr><td>−<var>r</var> ≤ <var>s</var> &lt; <var>r</var></td><td>the sphere crosses the plane</td><td>keep testing the other planes</td></tr>
+  <tr><td><var>s</var> &lt; −<var>r</var></td><td>the whole sphere is outside this plane</td><td><b>cull</b>, stop: no other plane can bring it back</td></tr>
+</table>
+</div>
+
+<p>For the whole frustum, run this for all 6 planes. One "fully outside" is enough to cull. The sphere is kept only when no plane rejects it:</p>
+
+<pre><code class="lang-slang">bool sphereInFrustum(float4 planes[6], float3 center, float radius)
+{
+    for (int i = 0; i < 6; ++i)
+    {
+        if (dot(planes[i].xyz, center) + planes[i].w < -radius)
+            return false;
+    }
+    return true;
+}</code></pre>
+
+<p>That is 6 dot products and 6 compares per object. Each plane is stored as a <code class="lang-text">float4</code>: the normal in <code class="lang-text">xyz</code>, <var>d</var> in <code class="lang-text">w</code>.</p>
+
+<h2 id="planes"><span class="n">6</span>Where the planes come from</h2>
+
+<p>One way to get the planes is geometry: take the camera's position, direction, field of view and aspect ratio, build the 8 corners of the frustum, and make a plane from three corners of each face. It works, but it is a lot of code and easy to get wrong. There is a shorter way that needs only the matrix the camera already has.</p>
+
+<h3>The idea: the frustum is a box in clip space</h3>
+
+<p>The view matrix <var>V</var> moves the world into the camera's space. The projection matrix <var>P</var> then moves it into <b>clip space</b>. A point <var>p</var> = (<var>x</var>, <var>y</var>, <var>z</var>, 1) becomes <var>q</var> = <var>P</var> · <var>V</var> · <var>p</var> = (<var>q<sub>x</sub></var>, <var>q<sub>y</sub></var>, <var>q<sub>z</sub></var>, <var>q<sub>w</sub></var>). The projection is built so that the frustum becomes a simple box there. A point is visible when (with the depth range of Vulkan and Direct3D)</p>
+
+<pre><code class="lang-text">−qw ≤ qx ≤ qw      −qw ≤ qy ≤ qw      0 ≤ qz ≤ qw</code></pre>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Right: the frustum in world space. Left: the same frustum after multiplying by P times V, a box in clip space. Each side of the box is one simple inequality, and each matching frustum plane is a sum or difference of two rows of the matrix.">
+    <text x="160" y="20" class="mid title">Clip space: a box</text>
+    <rect x="60" y="50" width="200" height="160" class="zone"/>
+    <rect x="60" y="50" width="200" height="160" class="gpu"/>
+    <text x="55"  y="134" class="end mono small">x ≥ −w</text>
+    <text x="265" y="134" class="mono small">x ≤ w</text>
+    <text x="160" y="42"  class="mid mono small">z ≤ w (far)</text>
+    <text x="160" y="228" class="mid mono small">z ≥ 0 (near)</text>
+
+    <line x1="410" y1="130" x2="320" y2="130" class="arrow" marker-end="url(#ah)"/>
+    <text x="365" y="120" class="mid mono">P · V</text>
+    <text x="365" y="148" class="mid small">maps one</text>
+    <text x="365" y="162" class="mid small">onto the other</text>
+
+    <text x="550" y="20" class="mid title">World space: the frustum</text>
+    <polygon points="520,210 580,210 650,50 450,50" class="zone"/>
+    <polygon points="520,210 580,210 650,50 450,50" class="gpu"/>
+    <text x="478" y="134" class="end mono small t-hot">r3 + r0</text>
+    <text x="622" y="134" class="mono small t-hot">r3 − r0</text>
+    <text x="550" y="42"  class="mid mono small t-hot">r3 − r2</text>
+    <text x="550" y="228" class="mid mono small t-hot">r2</text>
+    <circle cx="550" cy="250" r="5" class="cpu"/>
+    <text x="560" y="254" class="small">camera</text>
+  </svg>
+  <figcaption>Seen from above, so the top and bottom sides (<var>q<sub>y</sub></var>) are not drawn. <code class="lang-text">r0</code> … <code class="lang-text">r3</code> are the four rows of <var>M</var> = <var>P</var> · <var>V</var>.</figcaption>
+</figure>
+
+<h3>From an inequality to a plane</h3>
+
+<p>Call the rows of <var>M</var> = <var>P</var> · <var>V</var> <var>r</var><sub>0</sub> to <var>r</var><sub>3</sub>. Each part of <var>q</var> is one row times the point: <var>q<sub>x</sub></var> = <var>r</var><sub>0</sub> · <var>p</var> and <var>q<sub>w</sub></var> = <var>r</var><sub>3</sub> · <var>p</var>. Now take the left side of the box:</p>
+
+<pre><code class="lang-text">−qw ≤ qx
+⇔  0 ≤ qw + qx
+⇔  0 ≤ r3·p + r0·p
+⇔  0 ≤ (r3 + r0)·p</code></pre>
+
+<p>The last line is exactly "<var>p</var> is on the inner side of a plane", with the plane's 4 numbers equal to <var>r</var><sub>3</sub> + <var>r</var><sub>0</sub>. No angles, no corners: just add two rows. This trick was published by Gil Gribb and Klaus Hartmann in 2001, and almost every engine uses it. Each side of the box gives one plane:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Plane</th><th>Clip-space side</th><th>Plane = </th></tr>
+  <tr><td>Left</td><td><var>q<sub>x</sub></var> ≥ −<var>q<sub>w</sub></var></td><td><var>r</var><sub>3</sub> + <var>r</var><sub>0</sub></td></tr>
+  <tr><td>Right</td><td><var>q<sub>x</sub></var> ≤ <var>q<sub>w</sub></var></td><td><var>r</var><sub>3</sub> − <var>r</var><sub>0</sub></td></tr>
+  <tr><td>Bottom, top</td><td><var>q<sub>y</sub></var> ≥ −<var>q<sub>w</sub></var>, <var>q<sub>y</sub></var> ≤ <var>q<sub>w</sub></var></td><td><var>r</var><sub>3</sub> + <var>r</var><sub>1</sub>, <var>r</var><sub>3</sub> − <var>r</var><sub>1</sub> (which one is "top" depends on the API's y direction; Vulkan's points down)</td></tr>
+  <tr><td>Near, far</td><td colspan="2">depend on the depth range, see the next table</td></tr>
+</table>
+</div>
+
+<h3>Near and far depend on the depth convention</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Depth convention</th><th>Clip-space range</th><th>Near plane</th><th>Far plane</th></tr>
+  <tr><td>OpenGL</td><td>−<var>q<sub>w</sub></var> ≤ <var>q<sub>z</sub></var> ≤ <var>q<sub>w</sub></var></td><td><var>r</var><sub>3</sub> + <var>r</var><sub>2</sub></td><td><var>r</var><sub>3</sub> − <var>r</var><sub>2</sub></td></tr>
+  <tr><td>Vulkan, Direct3D, Metal</td><td>0 ≤ <var>q<sub>z</sub></var> ≤ <var>q<sub>w</sub></var>, near at 0</td><td><var>r</var><sub>2</sub></td><td><var>r</var><sub>3</sub> − <var>r</var><sub>2</sub></td></tr>
+  <tr><td>Reversed-Z (0 to 1 range)</td><td>0 ≤ <var>q<sub>z</sub></var> ≤ <var>q<sub>w</sub></var>, near at <var>q<sub>w</sub></var></td><td><var>r</var><sub>3</sub> − <var>r</var><sub>2</sub></td><td><var>r</var><sub>2</sub></td></tr>
+</table>
+</div>
+
+<p>The two inequalities are the same in the last two rows; only their names swap. The code that builds the planes can stay the same. Only the names "near" and "far" change.</p>
+
+<div class="split">
+  <div>
+    <h4>An infinite far plane</h4>
+    <p>Some projections have no far plane: the depth only gets closer to its far value and never reaches it. Then the far plane comes out as (0, 0, 0, <var>k</var>) with <var>k</var> &gt; 0. It has no direction, and every point gets the distance <var>k</var>, so every sphere passes it. That is correct: nothing is beyond infinity. Do not divide this plane by the length of its normal, which is 0.</p>
+  </div>
+  <div>
+    <h4>Which space the planes are in</h4>
+    <p>The planes are in the space that the matrix starts from. Use <var>P</var> alone and they are in view space. Use <var>P</var> · <var>V</var> and they are in world space, which is the usual choice. Use <var>P</var> · <var>V</var> · <var>W</var> (with one object's world matrix <var>W</var>) and they are in that object's own space.</p>
+  </div>
+</div>
+
+<pre><code>void extractPlanes(const glm::mat4 &viewProjection, glm::vec4 planes[6])
+{
+    // glm stores columns: transpose to get the rows.
+    const glm::mat4 rows = glm::transpose(viewProjection);
+    planes[0] = rows[3] + rows[0];
+    planes[1] = rows[3] - rows[0];
+    planes[2] = rows[3] + rows[1];
+    planes[3] = rows[3] - rows[1];
+    planes[4] = rows[2];
+    planes[5] = rows[3] - rows[2];
+    for (int i = 0; i < 6; ++i)
+    {
+        const float length = glm::length(glm::vec3(planes[i]));
+        if (length > 0.0f)
+            planes[i] /= length;
+    }
+}</code></pre>
+
+<p>Left, right, bottom, top, then the two depth planes for a 0 to <var>q<sub>w</sub></var> depth range. A plane with no direction (an infinite far plane) is left as it is.</p>
+
+<h2><span class="n">7</span>Worked example</h2>
+
+<p>A small case you can check by hand. The camera sits at the origin and looks down −<var>Z</var>, with a 90° field of view and the near plane at distance 1. With 90°, the side planes are at 45°, so their normals are (±0.707, 0, −0.707). Four spheres, each with radius 1:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Top view. The camera at the origin looks up the page. The frustum widens at 45 degrees. Sphere A is in the middle, inside. Sphere B crosses the right plane. Sphere C is fully to the right of the right plane. Sphere D is behind the camera.">
+    <polygon points="350,220 410,220 590,40 170,40" class="zone"/>
+    <line x1="350" y1="220" x2="170" y2="40" class="arrow"/>
+    <line x1="410" y1="220" x2="590" y2="40" class="arrow"/>
+    <line x1="350" y1="220" x2="410" y2="220" class="arrow"/>
+    <text x="164" y="58" class="end small">left plane</text>
+    <text x="596" y="58" class="small">right plane</text>
+    <text x="418" y="232" class="small">near plane (z = −1)</text>
+    <circle cx="380" cy="250" r="5" class="cpu"/>
+    <text x="392" y="262" class="small">camera (0, 0, 0)</text>
+    <line x1="60" y1="300" x2="60" y2="250" class="arrow" marker-end="url(#ah)"/>
+    <text x="68" y="262" class="small">−Z: the view direction</text>
+    <line x1="60" y1="300" x2="110" y2="300" class="arrow" marker-end="url(#ah)"/>
+    <text x="116" y="304" class="small">+X</text>
+
+    <circle cx="380" cy="100" r="30" class="gpu"/>
+    <text x="380" y="104" class="mid title">A</text>
+    <circle cx="485" cy="160" r="30" class="gpu"/>
+    <text x="485" y="164" class="mid title">B</text>
+    <circle cx="560" cy="160" r="30" class="ghost"/>
+    <text x="560" y="164" class="mid title t-faint">C</text>
+    <circle cx="320" cy="280" r="30" class="ghost"/>
+    <text x="320" y="284" class="mid title t-faint">D</text>
+  </svg>
+  <figcaption>30 pixels per unit. Top and bottom planes are left out; all four spheres sit at <var>y</var> = 0 and pass them.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Sphere</th><th>Center</th><th>Near<br><small>(0, 0, −1, −1)</small></th><th>Left<br><small>(0.707, 0, −0.707, 0)</small></th><th>Right<br><small>(−0.707, 0, −0.707, 0)</small></th><th>Result</th></tr>
+  <tr><td>A</td><td>(0, 0, −5)</td><td>4.00</td><td>3.54</td><td>3.54</td><td>keep: inside all</td></tr>
+  <tr><td>B</td><td>(3.5, 0, −3)</td><td>2.00</td><td>4.60</td><td>−0.35</td><td>keep: −0.35 ≥ −1, it crosses the right plane</td></tr>
+  <tr><td>C</td><td>(6, 0, −3)</td><td>2.00</td><td>6.36</td><td><b>−2.12</b></td><td><b>cull</b>: −2.12 &lt; −1, fully right of the view</td></tr>
+  <tr><td>D</td><td>(−2, 0, 1)</td><td><b>−2.00</b></td><td>−2.12</td><td>0.71</td><td><b>cull</b>: behind the near plane (the test stops there)</td></tr>
+</table>
+</div>
+
+<p>For example, C against the right plane: −0.707 · 6 + (−0.707) · (−3) + 0 = −4.24 + 2.12 = −2.12.</p>
+
+<h2><span class="n">8</span>Moving the sphere into world space</h2>
+
+<p>The sphere is built in the mesh's own space. The planes are in world space. So each frame, the sphere is moved with the object's world matrix <var>W</var>. The center is easy: it is a point, so it is <var>W</var> · (<var>c</var>, 1). The radius is harder, because <var>W</var> can scale the object.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="Left: a mesh inside its bounding sphere of radius 1. Right: the mesh scaled 3 times along x and 1 time along y becomes a long ellipse. A sphere of radius 1 does not hold it. A sphere of radius 3, the largest stretch, does.">
+    <text x="130" y="20" class="mid title">Mesh space</text>
+    <circle cx="130" cy="125" r="30" class="hot"/>
+    <circle cx="130" cy="125" r="25" class="box"/>
+    <line x1="130" y1="125" x2="160" y2="125" class="arrow"/>
+    <text x="130" y="86" class="mid small">r = 1</text>
+
+    <line x1="210" y1="125" x2="268" y2="125" class="arrow" marker-end="url(#ah)"/>
+    <text x="239" y="115" class="mid small">scale</text>
+    <text x="239" y="145" class="mid small">(3, 1)</text>
+
+    <text x="470" y="20" class="mid title">World space</text>
+    <circle cx="470" cy="125" r="90" class="hot"/>
+    <ellipse cx="470" cy="125" rx="75" ry="25" class="box"/>
+    <circle cx="470" cy="125" r="30" class="ghost"/>
+    <line x1="470" y1="125" x2="500" y2="125" class="arrow dashed"/>
+    <text x="470" y="178" class="mid small t-faint">r × 1: too small,</text>
+    <text x="470" y="192" class="mid small t-faint">the mesh pokes out</text>
+    <text x="580" y="100" class="small t-hot">r × 3 = 3</text>
+    <text x="580" y="116" class="small">the largest stretch:</text>
+    <text x="580" y="132" class="small">always holds it</text>
+  </svg>
+  <figcaption>The radius must grow by the <b>largest</b> stretch of the matrix in any direction. Using a smaller number makes the sphere too small, and objects at the edge of the screen vanish too early.</figcaption>
+</figure>
+
+<p>The exact largest stretch of a matrix is its largest singular value. Computing that is too slow for every object every frame, so engines use a cheap number that is never smaller than it:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Way to get the stretch</th><th>Cost</th><th>Correct?</th></tr>
+  <tr><td>Longest column of the 3×3 part of <var>W</var></td><td>3 dot products</td><td>Exact for rotate + scale. <b>Can be too small</b> when the matrix also has shear, for example a child rotated under a parent with a non-uniform scale.</td></tr>
+  <tr><td>Frobenius norm: the square root of the sum of all 9 entries squared</td><td>9 multiplies</td><td>Always safe, but up to 1.73 (√3) times too big.</td></tr>
+  <tr><td>Gershgorin bound on <var>W</var><sup>T</sup><var>W</var>: take the dot products of the columns, and the largest row sum of their absolute values</td><td>6 dot products</td><td>Always safe. Exact for rotate + scale, because then the columns are at right angles and the off-diagonal products are 0.</td></tr>
+</table>
+</div>
+
+<h2 id="boxes"><span class="n">9</span>Boxes instead of spheres</h2>
+
+<p>A box is tested almost the same way as a sphere. Store the box as a center <var>c</var> and a half-size <var>e</var> (half its width, height and depth). For one plane, the part of the box that reaches furthest towards the plane is a corner. How far that corner reaches depends on the plane's direction, so the box acts like a sphere whose radius changes per plane:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="A tilted plane with inside at the top left. One box is fully below the plane: even its corner that is farthest toward the inside is outside, so it is culled. Another box crosses the plane: its farthest corner is inside, so it is kept.">
+    <polygon points="40,40 440,40 440,60 40,260" class="zone"/>
+    <line x1="40" y1="260" x2="440" y2="60" class="hot"/>
+    <text x="446" y="64" class="small t-hot">plane</text>
+    <line x1="240" y1="160" x2="222" y2="124" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="212" y="120" class="end small t-hot">n</text>
+
+    <rect x="140" y="140" width="80" height="60" class="gpu"/>
+    <circle cx="140" cy="140" r="5" class="cpu"/>
+    <text x="50" y="112" class="small">the corner farthest along n</text>
+    <text x="50" y="126" class="small">is inside</text>
+    <text x="180" y="226" class="mid small t-gpu">crosses → keep</text>
+
+    <rect x="320" y="170" width="100" height="60" class="ghost"/>
+    <circle cx="320" cy="170" r="5" class="cpu"/>
+    <text x="370" y="250" class="mid small">even that corner is outside</text>
+    <text x="370" y="266" class="mid small t-hot">→ cull</text>
+
+    <text x="490" y="60" class="title">For one plane</text>
+    <text x="490" y="90" class="mono small">s = n·c + d</text>
+    <text x="490" y="112" class="mono small">r = e.x·|n.x| + e.y·|n.y| + e.z·|n.z|</text>
+    <text x="490" y="134" class="mono small">s &lt; −r  →  cull</text>
+    <text x="490" y="168" class="small">The same test as the sphere, with a</text>
+    <text x="490" y="184" class="small">radius that depends on the plane.</text>
+    <text x="490" y="214" class="small">r is how far the box reaches along n.</text>
+    <text x="490" y="230" class="small">It is the distance from c to the corner</text>
+    <text x="490" y="246" class="small">farthest along n (the "p-vertex").</text>
+  </svg>
+  <figcaption>The p-vertex test. If even the corner that reaches furthest into the inside is outside, every corner is outside.</figcaption>
+</figure>
+
+<p>Boxes have one more nice property. The test only needs the <b>sign</b> of the corner's distance, not its size. So the planes do not need to be normalized, and they can be moved into the object's own space instead of moving the box into world space: a plane <var>π</var> becomes <var>W</var><sup>T</sup> · <var>π</var>. The box then stays exact under any rotation and scale, with no stretch bound.</p>
+
+<h2><span class="n">10</span>The corner problem: false positives</h2>
+
+<p>The test asks one plane at a time: "is the sphere fully behind <i>this</i> plane?". Near a corner of the frustum, a sphere can be outside the frustum and still cross each plane on its own. Then no plane rejects it, and it is kept.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="Top view of a frustum. A sphere sits outside its far-left corner. It crosses the far plane extended and the left plane extended, but touches neither face of the frustum. No single plane rejects it, so it is kept, though it is invisible.">
+    <polygon points="340,270 420,270 560,80 200,80" class="zone"/>
+    <line x1="340" y1="270" x2="200" y2="80" class="arrow"/>
+    <line x1="420" y1="270" x2="560" y2="80" class="arrow"/>
+    <line x1="200" y1="80" x2="560" y2="80" class="arrow"/>
+    <line x1="340" y1="270" x2="420" y2="270" class="arrow"/>
+    <line x1="200" y1="80" x2="40"  y2="80" class="hot dashed"/>
+    <line x1="200" y1="80" x2="141" y2="0"  class="hot dashed"/>
+    <text x="45" y="98" class="small t-hot">far plane, extended</text>
+    <text x="170" y="14" class="small t-hot">left plane, extended</text>
+    <circle cx="157" cy="58" r="30" class="mem"/>
+    <circle cx="200" cy="80" r="4" class="cpu"/>
+    <text x="380" y="180" class="mid small">frustum</text>
+
+    <text x="590" y="70"  class="title">Kept, but not visible</text>
+    <text x="590" y="98"  class="small">far plane: s = −0.7 r → crosses</text>
+    <text x="590" y="116" class="small">left plane: s = −0.7 r → crosses</text>
+    <text x="590" y="134" class="small">no plane rejects it → kept</text>
+    <text x="590" y="168" class="small">The sphere crosses each plane</text>
+    <text x="590" y="184" class="small">outside the frustum's faces,</text>
+    <text x="590" y="200" class="small">past the corner.</text>
+    <text x="590" y="234" class="small">This costs one wasted draw.</text>
+    <text x="590" y="250" class="small">It never removes a visible object.</text>
+  </svg>
+  <figcaption>A <b>false positive</b>: the object is kept but nothing of it is on screen. The test stays conservative, so this is a cost, not a bug.</figcaption>
+</figure>
+
+<p>False positives happen most for big objects and near sharp corners. Most engines accept them. When they matter, there are two fixes. The first is a second test the other way round: also check the frustum's 8 corners against the object's box (if all 8 are outside one face of the box, the box is outside). The second is a full separating-axis test, which is exact but costs much more.</p>
+
+<h2><span class="n">11</span>Fewer tests: hierarchies, and the GPU</h2>
+
+<p>The test is cheap, but a big scene has many objects. There are two common ways to keep the total cost low.</p>
+
+<h3>Test groups first</h3>
+
+<p>Put objects into a tree: a scene graph, an octree, or a bounding volume hierarchy (BVH). Each node has a bounding volume around all its children. Test the node first:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 280" role="img" aria-label="Top view of a frustum with three groups of four objects. Group A is fully outside: it and its children are skipped. Group B is fully inside: its children are kept with no tests. Group C crosses the right plane: each of its children is tested.">
+    <polygon points="380,270 610,30 150,30" class="zone"/>
+    <line x1="380" y1="270" x2="150" y2="30" class="arrow"/>
+    <line x1="380" y1="270" x2="610" y2="30" class="arrow"/>
+    <circle cx="380" cy="270" r="5" class="cpu"/>
+
+    <rect x="40"  y="150" width="100" height="70" class="ghost"/>
+    <rect x="48"  y="158" width="38" height="24" class="ghost"/><rect x="94" y="158" width="38" height="24" class="ghost"/>
+    <rect x="48"  y="188" width="38" height="24" class="ghost"/><rect x="94" y="188" width="38" height="24" class="ghost"/>
+    <text x="90" y="240" class="mid small">A: outside</text>
+    <text x="90" y="256" class="mid small">skip it and all children</text>
+
+    <rect x="330" y="90" width="100" height="70" class="gpu"/>
+    <rect x="338" y="98" width="38" height="24" class="box"/><rect x="384" y="98" width="38" height="24" class="box"/>
+    <rect x="338" y="128" width="38" height="24" class="box"/><rect x="384" y="128" width="38" height="24" class="box"/>
+    <text x="380" y="180" class="mid small">B: inside all planes</text>
+    <text x="380" y="196" class="mid small">keep all, no more tests</text>
+
+    <rect x="520" y="60" width="110" height="70" class="hot dashed"/>
+    <rect x="528" y="68" width="42" height="24" class="gpu"/><rect x="580" y="68" width="42" height="24" class="ghost"/>
+    <rect x="528" y="98" width="42" height="24" class="gpu"/><rect x="580" y="98" width="42" height="24" class="ghost"/>
+    <text x="640" y="150" class="small">C: crosses</text>
+    <text x="640" y="166" class="small">test each child</text>
+  </svg>
+  <figcaption>One test can accept or reject a whole group. Only groups that cross a plane go one level down.</figcaption>
+</figure>
+
+<p>A related trick is the <b>plane mask</b>. If a node is fully inside, say, the left plane, all its children are too. So the node passes down a mask of the planes still worth testing, and its children skip the others.</p>
+
+<h3>Test everything at once on the GPU</h3>
+
+<p>A GPU can run the flat test for every object in parallel, one thread per object. For tens of thousands of objects this takes a fraction of a millisecond, often less than walking a tree on the CPU. The tree tricks matter less there, because the GPU does not branch well and wants the same work on every thread. The hard part on the GPU is what comes next: packing the kept objects into a list that a single indirect draw can read. That is <a href="stream-compaction.html">stream compaction</a>, which has its own guide.</p>
+
+<h3>Other views use the same code</h3>
+<p>Shadow maps, reflections and split screens each have their own camera, so each gets its own 6 planes and its own culling. Nothing else changes.</p>
+
+<h2 id="in-rasm"><span class="n">12</span>In RASM</h2>
+
+<p>RASM frustum-culls every draw (one sub-mesh of one entity) on the GPU, every frame, inside <code>drawScene</code>. It uses the plain sphere test from <a href="#sphere-test">section 5</a>, with planes taken from the matrix as in <a href="#planes">section 6</a>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="At load, computeBounds builds a sphere per sub-mesh into the geometry table. Each drawScene call, the CPU builds 6 world-space planes from projection times view into SceneData. On the GPU, countMain runs one thread per draw: getWorldSphere moves the sphere with the instance's world matrix, and isInFrustum tests it against the planes.">
+    <text x="20" y="30" class="title t-cpu">CPU · at load</text>
+    <rect x="20" y="40" width="200" height="56" rx="6" class="cpu"/>
+    <text x="120" y="63" class="mid mono">computeBounds</text>
+    <text x="120" y="82" class="mid small">box center + farthest vertex</text>
+    <line x1="220" y1="68" x2="248" y2="68" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="250" y="40" width="230" height="56" rx="6" class="mem"/>
+    <text x="365" y="63" class="mid">Geometry table</text>
+    <text x="365" y="82" class="mid mono small">boundsCenter · boundsRadius</text>
+
+    <text x="20" y="130" class="title t-cpu">CPU · per drawScene</text>
+    <rect x="20" y="140" width="200" height="56" rx="6" class="cpu"/>
+    <text x="120" y="163" class="mid mono">getFrustumPlanes</text>
+    <text x="120" y="182" class="mid small">projection × view</text>
+    <line x1="220" y1="168" x2="248" y2="168" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="250" y="140" width="230" height="56" rx="6" class="mem"/>
+    <text x="365" y="163" class="mid">SceneData</text>
+    <text x="365" y="182" class="mid mono small">frustumPlanes[6]</text>
+
+    <line x1="480" y1="68"  x2="528" y2="100" class="arrow" marker-end="url(#ah)"/>
+    <line x1="480" y1="168" x2="528" y2="136" class="arrow" marker-end="url(#ah)"/>
+    <text x="640" y="30" class="mid title t-gpu">GPU · countMain, one thread per draw</text>
+    <rect x="530" y="56" width="220" height="56" rx="28" class="shader"/>
+    <text x="640" y="80" class="mid mono">getWorldSphere</text>
+    <text x="640" y="98" class="mid small">× world matrix, radius × stretch</text>
+    <line x1="640" y1="112" x2="640" y2="128" class="arrow" marker-end="url(#ah)"/>
+    <rect x="530" y="130" width="220" height="56" rx="28" class="shader"/>
+    <text x="640" y="154" class="mid mono">isInFrustum</text>
+    <text x="640" y="172" class="mid small">6 planes: keep or cull</text>
+  </svg>
+  <figcaption>The sphere is built once, the planes once per <code>drawScene</code> call, and the test runs once per draw.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Bounding volume</td><td>sphere or box</td><td>A sphere per sub-mesh only (<code>boundsCenter</code>, <code>boundsRadius</code>). No boxes, so no p-vertex test.</td></tr>
+  <tr><td>Building the sphere</td><td>box center, Ritter or Welzl</td><td>Box center, radius to the farthest vertex (<code>computeBounds</code>). Not the smallest sphere.</td></tr>
+  <tr><td>Planes</td><td>Gribb–Hartmann rows</td><td>The same, from <code>projection * view</code>, in world space, normalized (<code>getFrustumPlanes</code>).</td></tr>
+  <tr><td>Depth convention</td><td>see the table in section 6</td><td>Vulkan's 0 to <var>q<sub>w</sub></var> range with reversed-Z. So plane 4 (<var>r</var><sub>2</sub>) is the <b>far</b> plane and plane 5 (<var>r</var><sub>3</sub> − <var>r</var><sub>2</sub>) is the <b>near</b> plane. See <a href="projection-depth.html">Projection and reversed-Z depth</a>.</td></tr>
+  <tr><td>Infinite far plane</td><td>(0, 0, 0, <var>k</var>)</td><td>The default camera has one. Plane 4 comes out as (0, 0, 0, <code>nearZ</code>), is not normalized, and every sphere passes it.</td></tr>
+  <tr><td>Radius under scale</td><td>three ways in section 8</td><td>The Gershgorin bound (<code>getWorldSphere</code>). Safe for any matrix, exact for rotate + scale.</td></tr>
+  <tr><td>Hierarchy, plane masks</td><td>section 11</td><td>None. Every draw is tested against all 6 planes, flat, one GPU thread each.</td></tr>
+  <tr><td>Corner false positives</td><td>accept, or add a second test</td><td>Accepted. Many of them are then removed by <a href="occlusion-culling.html">occlusion culling</a>, which runs the frustum test first.</td></tr>
+  <tr><td>Planes per view</td><td>one set per camera</td><td>One set per <code>drawScene</code> call, in that call's <code>SceneData</code>. Two passes with two cameras cull separately.</td></tr>
+</table>
+</div>
+
+<p>After the test, the kept draws are packed into one list and drawn with one indirect call per cull-mode run. That part is <a href="stream-compaction.html#in-rasm">stream compaction</a>. The <a href="occlusion-culling.html#in-rasm">occlusion</a> and <a href="lod-selection.html#in-rasm">LOD</a> steps run in the same shader.</p>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Bounding sphere per sub-mesh</td><td><code>computeBounds</code> in <code>src/renderer/geometryPool.cpp</code></td></tr>
+  <tr><td>Planes from the matrix</td><td><code>getFrustumPlanes</code> in <code>src/renderer/gpuScene.cpp</code>, called by <code>Engine::drawScene</code></td></tr>
+  <tr><td>Where the planes are stored</td><td><code>SceneData::frustumPlanes</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
+  <tr><td>Sphere into world space</td><td><code>getWorldSphere</code> in <code>shaders/lib/frustumCulling.slang</code></td></tr>
+  <tr><td>The test</td><td><code>isInFrustum</code> in <code>shaders/lib/frustumCulling.slang</code></td></tr>
+  <tr><td>Where it is called</td><td><code>countMain</code> in <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>The projection (reversed-Z, infinite far)</td><td><code>toProjectionMatrix</code> in <code>src/scene/camera.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>The test must stay conservative. A smaller radius or a tighter stretch bound that can be too small makes objects vanish at the screen's edges.</li>
+    <li>Plane normals point inside, and inside is <code class="lang-text">dot(xyz, p) + w >= 0</code>, as the comment on <code>frustumPlanes</code> in <code>core.slang</code> says. <code>getFrustumPlanes</code> and <code>isInFrustum</code> must agree.</li>
+    <li>Do not normalize a plane whose normal has length 0. That is the infinite far plane.</li>
+    <li><code>SceneData</code> is a CPU↔GPU struct: a change to it follows <a href="struct-layout.html#in-rasm">the struct layout rules</a>.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Gil Gribb and Klaus Hartmann, <i>Fast Extraction of Viewing Frustum Planes from the World-View-Projection Matrix</i> (2001).</li>
+  <li>Tomas Akenine-Möller and others, <i>Real-Time Rendering</i>, 4th edition: the chapters on intersection tests and on culling.</li>
+  <li>Jack Ritter, <i>An Efficient Bounding Sphere</i>, in <i>Graphics Gems</i> (1990).</li>
+  <li>Christer Ericson, <i>Real-Time Collision Detection</i> (2004): bounding volumes, and the box-plane test.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

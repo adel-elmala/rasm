@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Buffer Device Addresses · RASM</title>
+<meta name="description" content="How buffer device addresses work: GPU pointers instead of descriptor bindings, getting an address in Vulkan, pointer arithmetic in shaders, alignment, lifetime and safety, the root pointer pattern, trade-offs against descriptors, and how RASM does it.">
+<meta name="rasm-sources" content="shaders/lib/core.slang src/renderer/uberMaterialTypes.h src/renderer/gpuScene.cpp src/rhi/renderContext.cpp include/rasm/render/renderContext.h src/rhi/device.h src/rhi/vulkan/vulkanDevice.cpp shaders/passes/rasm.slang shaders/passes/cull.slang shaders/passes/hiz.slang shaders/passes/statsOverlay.slang src/renderer/statsOverlay.cpp include/rasm/types.h include/rasm/scene.h">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/device-addresses.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">GPU data</p>
+<h1>Buffer device addresses</h1>
+<p class="lead">A shader usually finds its buffers through numbered binding slots. With <b>buffer device addresses</b> it gets a 64-bit pointer instead, and reads memory through it like C code does. This page explains how that works, what it costs, and what can go wrong. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Every buffer lives at some <b>GPU virtual address</b>. The API can tell you that address as a plain 64-bit number.</li>
+    <li>A shader can treat the number as a <b>pointer</b>: <var>p</var>[<var>i</var>], <var>p</var>-&gt;<var>field</var>, <var>p</var> + <var>n</var>. No descriptor, no binding slot.</li>
+    <li>Pointers can be stored inside buffers, so data can link to other data: a tree of tables reached from <b>one root pointer</b> in a push constant.</li>
+    <li>The price: <b>no bounds checks</b>, no type checks, and the address dies with the buffer. A bad pointer reads garbage or loses the device.</li>
+    <li>Textures and samplers still need descriptors. Buffer addresses replace only the buffer bindings.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>How shaders usually find buffers</h2>
+
+<p>In the classic model, a shader declares buffers at fixed <b>binding slots</b>: "set 0, binding 2 is the material buffer". Before a draw, the CPU fills a <b>descriptor</b> for each slot (which buffer, which range) and binds the descriptor set.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Classic binding: the shader declares binding 0, 1 and 2. A descriptor set layout describes the slots. The CPU writes a descriptor set that points each slot at a buffer, and binds the set before the draw.">
+    <rect x="20" y="30" width="200" height="130" rx="6" class="shader"/>
+    <text x="120" y="54" class="mid title">shader</text>
+    <text x="36" y="82" class="mono small">binding 0: camera</text>
+    <text x="36" y="104" class="mono small">binding 1: instances</text>
+    <text x="36" y="126" class="mono small">binding 2: materials</text>
+    <text x="120" y="150" class="mid small">fixed at compile time</text>
+
+    <rect x="280" y="30" width="200" height="130" rx="6" class="cpu"/>
+    <text x="380" y="54" class="mid title">descriptor set</text>
+    <rect x="296" y="66" width="168" height="24" rx="3" class="box"/><text x="380" y="83" class="mid small">slot 0 → buffer A</text>
+    <rect x="296" y="96" width="168" height="24" rx="3" class="box"/><text x="380" y="113" class="mid small">slot 1 → buffer B</text>
+    <rect x="296" y="126" width="168" height="24" rx="3" class="box"/><text x="380" y="143" class="mid small">slot 2 → buffer C</text>
+
+    <rect x="560" y="30" width="180" height="36" rx="4" class="mem"/><text x="650" y="53" class="mid">buffer A</text>
+    <rect x="560" y="80" width="180" height="36" rx="4" class="mem"/><text x="650" y="103" class="mid">buffer B</text>
+    <rect x="560" y="130" width="180" height="36" rx="4" class="mem"/><text x="650" y="153" class="mid">buffer C</text>
+    <line x1="220" y1="95" x2="278" y2="95" class="arrow" marker-end="url(#ah)"/>
+    <line x1="464" y1="78" x2="558" y2="50" class="arrow" marker-end="url(#ah)"/>
+    <line x1="464" y1="108" x2="558" y2="98" class="arrow" marker-end="url(#ah)"/>
+    <line x1="464" y1="138" x2="558" y2="148" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="20" y="196" class="small">To use a different buffer, the CPU writes or binds another set. Each pipeline needs a layout that matches the shader's slots.</text>
+    <text x="20" y="214" class="small">The number of slots is limited, and a shader can only reach buffers that were bound before the draw.</text>
+    <text x="20" y="232" class="small">Fine for a few buffers per draw. Awkward when a GPU-driven frame wants one draw to reach every table of the scene.</text>
+  </svg>
+  <figcaption>The binding model: the CPU decides, before each draw, which buffers the shader can see.</figcaption>
+</figure>
+
+<h2><span class="n">2</span>The idea: a GPU pointer</h2>
+
+<p>The GPU has a virtual address space, just like a CPU process. Every buffer is placed somewhere in it. A <b>device address</b> is the 64-bit number where the buffer starts. A shader that knows the number can read the buffer directly, with no descriptor in between.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="The GPU virtual address space as a long strip. Buffer A starts at address 0x1_0000_0000, buffer B at 0x1_0010_0000 and buffer C at 0x1_0020_0000. A pointer is just one of these numbers.">
+    <text x="20" y="22" class="title">GPU virtual address space</text>
+    <rect x="20" y="40" width="720" height="50" rx="4" class="box"/>
+    <rect x="80" y="40" width="140" height="50" rx="4" class="mem"/><text x="150" y="70" class="mid">buffer A</text>
+    <rect x="300" y="40" width="100" height="50" rx="4" class="mem"/><text x="350" y="70" class="mid">buffer B</text>
+    <rect x="480" y="40" width="200" height="50" rx="4" class="mem"/><text x="580" y="70" class="mid">buffer C</text>
+    <line x1="80" y1="120" x2="80" y2="94" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="80" y="136" class="mid mono">0x1_0000_0000</text>
+    <line x1="300" y1="120" x2="300" y2="94" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="300" y="136" class="mid mono">0x1_0010_0000</text>
+    <line x1="480" y1="120" x2="480" y2="94" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="480" y="136" class="mid mono">0x1_0020_0000</text>
+    <text x="20" y="174" class="small">A pointer is one of these numbers, stored as a 64-bit integer. The shader can keep it in a variable, in a push constant,</text>
+    <text x="20" y="192" class="small">or inside another buffer. Adding to it moves inside the buffer, exactly like pointer math in C. (Addresses here are made up.)</text>
+  </svg>
+  <figcaption>Descriptors say "the buffer in slot 2". An address says "the bytes at 0x1_0020_0000". The second needs no setup per draw.</figcaption>
+</figure>
+
+<h2><span class="n">3</span>Getting an address in Vulkan</h2>
+
+<p>The feature is <b>buffer device address</b>. It started as the extension VK_KHR_buffer_device_address and is core since Vulkan 1.2. Four steps:</p>
+
+<ol class="steps">
+  <li><b>Enable the feature.</b> Turn on <var>bufferDeviceAddress</var> when the device is created. Shaders that use 64-bit pointers usually also need <var>shaderInt64</var>.</li>
+  <li><b>Mark the buffer.</b> Create it with the usage bit <var>SHADER_DEVICE_ADDRESS</var>.</li>
+  <li><b>Mark the memory.</b> Allocate its memory with the flag <var>DEVICE_ADDRESS</var> (a memory allocator library can do this for you).</li>
+  <li><b>Ask.</b> <code>vkGetBufferDeviceAddress</code> returns the 64-bit address. It does not change while the buffer lives, so ask once and keep it.</li>
+</ol>
+
+<div class="table-wrap">
+<table>
+  <tr><th>API</th><th>Name</th><th>Shader side</th></tr>
+  <tr><td>Vulkan</td><td>buffer device address (core 1.2)</td><td>GLSL: <var>buffer_reference</var> blocks. Slang, HLSL for Vulkan: pointer types <var>T</var>*. SPIR-V: the <var>PhysicalStorageBuffer</var> storage class.</td></tr>
+  <tr><td>Direct3D 12</td><td>GPU virtual address of a resource</td><td>Used for root descriptors and indirect arguments. HLSL itself has no general pointers.</td></tr>
+  <tr><td>Metal</td><td><var>gpuAddress</var> of a buffer (Metal 3)</td><td>MSL has real <var>device</var> pointers; addresses can be written into argument buffers.</td></tr>
+  <tr><td>CUDA</td><td>every allocation is a pointer</td><td>C++ pointers, the model this feature copies.</td></tr>
+  <tr><td>WebGPU</td><td>none</td><td>Only bindings.</td></tr>
+</table>
+</div>
+
+<h2><span class="n">4</span>Pointers in a shader</h2>
+
+<p>Here is a compute shader in Slang that moves particles. The push constant holds a pointer to the particle array and a count. There are no buffer bindings at all.</p>
+
+<pre><code class="lang-slang">struct Particle
+{
+    float3 position;
+    float3 velocity;
+};
+
+struct Params
+{
+    Particle *particles;
+    uint count;
+    float deltaTime;
+};
+
+[[vk::push_constant]]
+ConstantBuffer&lt;Params&gt; params;
+
+void update(uint index)
+{
+    if (index &gt;= params.count)
+        return;
+    Particle *p = params.particles + index;
+    p-&gt;position += p-&gt;velocity * params.deltaTime;
+}</code></pre>
+
+<p>The pointer math is the same as in C. <var>particles</var> + <var>index</var> means "<var>index</var> elements further", so the byte address is the base plus <var>index</var> × the size of one <var>Particle</var>. The size comes from the struct layout the shader is compiled with; see <a href="struct-layout.html">Struct layout rules</a>.</p>
+
+<h3>A worked example</h3>
+
+<p>A table of rows that are 108 bytes each, in a buffer at address 0x1_0020_0000. The shader wants field <var>m</var> of row 5. The field starts 64 bytes into the row.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="Rows of 108 bytes start at 0x1_0020_0000. Row 5 starts 540 bytes later, at 0x1_0020_021C. Its field at offset 64 is at 0x1_0020_025C.">
+    <rect x="20" y="40" width="720" height="44" rx="4" class="box"/>
+    <rect x="20"  y="40" width="100" height="44" rx="3" class="mem"/><text x="70"  y="67" class="mid small">row 0</text>
+    <rect x="120" y="40" width="100" height="44" rx="3" class="mem"/><text x="170" y="67" class="mid small">row 1</text>
+    <rect x="220" y="40" width="100" height="44" rx="3" class="mem"/><text x="270" y="67" class="mid small">row 2</text>
+    <rect x="320" y="40" width="100" height="44" rx="3" class="mem"/><text x="370" y="67" class="mid small">row 3</text>
+    <rect x="420" y="40" width="100" height="44" rx="3" class="mem"/><text x="470" y="67" class="mid small">row 4</text>
+    <rect x="520" y="40" width="100" height="44" rx="3" class="hot"/><text x="570" y="67" class="mid small">row 5</text>
+    <rect x="620" y="40" width="100" height="44" rx="3" class="mem"/><text x="670" y="67" class="mid small">row 6</text>
+    <line x1="579" y1="30" x2="579" y2="40" class="hot"/>
+    <text x="579" y="24" class="mid small t-hot">field m</text>
+    <line x1="20" y1="110" x2="20" y2="88" class="arrow" marker-end="url(#ah)"/>
+    <text x="24" y="124" class="mono small">base = 0x1_0020_0000</text>
+    <line x1="520" y1="110" x2="520" y2="88" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="516" y="124" class="end mono small t-hot">row 5 = base + 540</text>
+    <text x="20" y="160" class="mono">row 5:   base + 5 × 108      = base + 540 = 0x1_0020_021C</text>
+    <text x="20" y="184" class="mono">field m: base + 540 + 64     = base + 604 = 0x1_0020_025C</text>
+  </svg>
+  <figcaption>All the shader does is multiply and add. It does not know where the table ends, and it does not check that row 5 exists.</figcaption>
+</figure>
+
+<h2><span class="n">5</span>The root pointer pattern</h2>
+
+<p>Pointers can be stored in buffers too. So one small struct can hold the addresses of every table in the scene, and the shader needs only the address of that struct. Push constants are the cheapest way to pass a few bytes per draw, so the usual design is:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A push constant of a few bytes holds one pointer to a frame struct. The frame struct holds the camera and pointers to the vertex, instance and material tables. A shader follows push constant, then frame, then table, then row.">
+    <rect x="20" y="95" width="160" height="60" rx="6" class="box"/>
+    <text x="100" y="118" class="mid title">push constant</text>
+    <text x="100" y="138" class="mid mono small">frame (8 bytes)</text>
+    <line x1="180" y1="125" x2="238" y2="125" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="240" y="30" width="210" height="190" rx="6" class="mem"/>
+    <text x="345" y="52" class="mid title">frame struct</text>
+    <text x="345" y="68" class="mid small">one per frame or per view</text>
+    <text x="258" y="98" class="mono small">camera matrices</text>
+    <text x="258" y="122" class="mono small">vertices  *</text>
+    <text x="258" y="146" class="mono small">instances *</text>
+    <text x="258" y="170" class="mono small">materials *</text>
+    <text x="258" y="194" class="mono small">draws     *</text>
+
+    <line x1="350" y1="118" x2="528" y2="62"  class="arrow" marker-end="url(#ah)"/>
+    <line x1="350" y1="142" x2="528" y2="106" class="arrow" marker-end="url(#ah)"/>
+    <line x1="350" y1="166" x2="528" y2="150" class="arrow" marker-end="url(#ah)"/>
+    <line x1="350" y1="190" x2="528" y2="194" class="arrow" marker-end="url(#ah)"/>
+    <rect x="530" y="44"  width="210" height="34" rx="4" class="mem"/><text x="635" y="66"  class="mid">vertex buffer</text>
+    <rect x="530" y="88"  width="210" height="34" rx="4" class="mem"/><text x="635" y="110" class="mid">instance table</text>
+    <rect x="530" y="132" width="210" height="34" rx="4" class="mem"/><text x="635" y="154" class="mid">material table</text>
+    <rect x="530" y="176" width="210" height="34" rx="4" class="mem"/><text x="635" y="198" class="mid">draw list</text>
+    <text x="20" y="242" class="small">The CPU changes what a whole pass sees by writing a few addresses, not by building and binding descriptor sets.</text>
+  </svg>
+  <figcaption>One pointer in, everything reachable. A different camera or a different scene is just a different frame struct.</figcaption>
+</figure>
+
+<div class="split">
+  <div>
+    <h4>The cost: dependent loads</h4>
+    <p>Each arrow is a memory read that must finish before the next address is known. A deep chain adds latency. In practice the first two levels are the same for every thread of a draw, so they stay in the cache and cost little.</p>
+  </div>
+  <div>
+    <h4>Sub-arrays in one buffer</h4>
+    <p>Because a pointer can point anywhere inside a buffer, one allocation can hold several arrays one after another. Each gets its own pointer: the base plus the size of the arrays before it.</p>
+  </div>
+</div>
+
+<h2><span class="n">6</span>Alignment</h2>
+
+<p>A load through a pointer must be <b>aligned</b>: the address of a value must be a multiple of that value's alignment. A <var>float</var> needs a multiple of 4, a 64-bit integer or pointer a multiple of 8. A misaligned access is undefined behaviour: on some GPUs it works, on others it reads the wrong bytes.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Case</th><th>Aligned?</th><th>Why</th></tr>
+  <tr><td>Buffer start</td><td>yes</td><td>Buffers are placed at the memory alignment the driver asks for, at least 16 bytes in practice.</td></tr>
+  <tr><td>Row <var>i</var> of 108-byte rows of floats</td><td>yes</td><td>108 is a multiple of 4, and floats need 4.</td></tr>
+  <tr><td>Packed 12-byte rows: a 64-bit pointer, then a 4-byte count</td><td><b>no</b></td><td>Row 1, and so its pointer, starts at 12: not a multiple of 8. Pad the row to 16 bytes (C++ does this by itself; a hand-packed layout may not).</td></tr>
+  <tr><td>A sub-array of <var>uint</var> after <var>N</var> 20-byte records</td><td>yes</td><td>20 × <var>N</var> is a multiple of 4.</td></tr>
+  <tr><td>A <var>float4</var> loaded as one 16-byte load</td><td>depends</td><td>Some compilers emit one wide load only when they can prove 16-byte alignment. GLSL lets you state it with <var>buffer_reference_align</var>.</td></tr>
+</table>
+</div>
+
+<h2><span class="n">7</span>Lifetime and safety</h2>
+
+<p>An address is just a number. Nothing ties it to the buffer it came from, so all the classic pointer bugs are possible:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Bug</th><th>What happens</th><th>How engines avoid it</th></tr>
+  <tr><td><b>Out of bounds</b>: index past the end</td><td>Reads another buffer's bytes, or faults. The robust-access features do not cover pointer access.</td><td>Pass counts next to pointers and check them; size tables from known limits.</td></tr>
+  <tr><td><b>Use after free</b>: the buffer was destroyed</td><td>The address may now belong to another buffer, or to nothing: garbage, or a lost device.</td><td>Destroy only after the frames that could use it are done (<a href="frames-in-flight.html">Frames in flight</a>).</td></tr>
+  <tr><td><b>Stale address</b>: the buffer was recreated (for example to grow it)</td><td>The new buffer has a new address. Old copies of the old one point at freed memory.</td><td>Write the addresses again every frame, from the current buffers.</td></tr>
+  <tr><td><b>Null</b>: an unused pointer left at 0</td><td>Reading address 0 faults, usually a lost device.</td><td>A flag or count next to the pointer says whether it may be read.</td></tr>
+  <tr><td><b>Wrong type</b></td><td>The shader reads the bytes as a different struct. No error.</td><td>Keep CPU and GPU struct definitions in sync, and check them (<a href="struct-layout.html">Struct layout rules</a>).</td></tr>
+</table>
+</div>
+
+<p>Tools help a little. The Vulkan validation layers have a GPU-assisted mode that can check some pointer accesses at run time. Capture tools such as RenderDoc need the <var>bufferDeviceAddressCaptureReplay</var> feature to replay a frame with the same addresses.</p>
+
+<h2><span class="n">8</span>Addresses or descriptors?</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th></th><th>Descriptors (bindings)</th><th>Device addresses</th></tr>
+  <tr><td>Setup per draw</td><td>write or bind a set</td><td>none: write a number</td></tr>
+  <tr><td>How many buffers one shader can reach</td><td>the bound slots</td><td>any buffer whose address it can find</td></tr>
+  <tr><td>Links between data</td><td>indices into other bound arrays</td><td>real pointers, stored in buffers</td></tr>
+  <tr><td>Bounds checks</td><td>the descriptor knows the range; robust access can clamp</td><td>none</td></tr>
+  <tr><td>Pipeline layouts</td><td>must match each shader's slots</td><td>one small push constant for all</td></tr>
+  <tr><td>Textures and samplers</td><td>yes</td><td>no: images still need descriptors</td></tr>
+  <tr><td>Debugging</td><td>tools show which buffer is bound</td><td>tools see only numbers</td></tr>
+</table>
+</div>
+
+<p>Modern GPU-driven renderers usually mix the two: device addresses for all buffers, and one big array of texture descriptors for all images (see <a href="bindless.html">Bindless resources</a>).</p>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p>RASM binds no buffer through a descriptor. Every buffer gets a device address at creation, and shaders reach all scene data from one root pointer in a 16-byte push constant: the pattern of section 5. Textures go through the bindless descriptor set.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 400" role="img" aria-label="The push constant holds scene, firstDraw and argument. scene points to one SceneData in the Scene Data Buffer of this frame slot, at slot address plus call times 768. SceneData holds twelve pointers: vertsPtr to the geometry vertex pool, drawInfoPtr to the visible draw buffer, instancesPtr and materialsPtr to this slot's tables, geometryPtr to the geometry table, allDrawsPtr to the draw info buffer, drawCountsPtr into the draw count buffer, cullSlotsPtr and groupCountsPtr into the visible draw buffer after the draws, cullStatsPtr, visibilityPtr and hizPtr.">
+    <rect x="20" y="160" width="150" height="76" rx="6" class="box"/>
+    <text x="95" y="182" class="mid title">PushConstants</text>
+    <text x="95" y="202" class="mid mono small">scene</text>
+    <text x="95" y="218" class="mid mono small">firstDraw · argument</text>
+    <line x1="170" y1="190" x2="208" y2="190" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="210" y="20" width="200" height="370" rx="6" class="mem"/>
+    <text x="310" y="42" class="mid title">SceneData</text>
+    <text x="310" y="58" class="mid small">768 bytes, one per drawScene call</text>
+    <text x="226" y="84" class="small">projection, view, camera,</text>
+    <text x="226" y="100" class="small">lights, frustum planes, ...</text>
+    <text x="226" y="128" class="mono small">vertsPtr</text>
+    <text x="226" y="150" class="mono small">drawInfoPtr</text>
+    <text x="226" y="172" class="mono small">instancesPtr</text>
+    <text x="226" y="194" class="mono small">materialsPtr</text>
+    <text x="226" y="216" class="mono small">geometryPtr</text>
+    <text x="226" y="238" class="mono small">allDrawsPtr</text>
+    <text x="226" y="260" class="mono small">drawCountsPtr</text>
+    <text x="226" y="282" class="mono small">cullSlotsPtr</text>
+    <text x="226" y="304" class="mono small">groupCountsPtr</text>
+    <text x="226" y="326" class="mono small">cullStatsPtr</text>
+    <text x="226" y="348" class="mono small">visibilityPtr</text>
+    <text x="226" y="370" class="mono small">hizPtr</text>
+
+    <line x1="340" y1="124" x2="508" y2="124" class="arrow" marker-end="url(#ah)"/>
+    <rect x="510" y="112" width="230" height="22" rx="3" class="mem"/><text x="625" y="127" class="mid small">Geometry Vertex Pool</text>
+    <line x1="340" y1="168" x2="508" y2="168" class="arrow" marker-end="url(#ah)"/>
+    <rect x="510" y="157" width="230" height="22" rx="3" class="mem"/><text x="625" y="172" class="mid small">Instance Table, this slot</text>
+    <line x1="340" y1="190" x2="508" y2="190" class="arrow" marker-end="url(#ah)"/>
+    <rect x="510" y="179" width="230" height="22" rx="3" class="mem"/><text x="625" y="194" class="mid small">Material Table, this slot</text>
+    <line x1="340" y1="212" x2="508" y2="212" class="arrow" marker-end="url(#ah)"/>
+    <rect x="510" y="201" width="230" height="22" rx="3" class="mem"/><text x="625" y="216" class="mid small">Geometry Table</text>
+    <line x1="350" y1="234" x2="508" y2="234" class="arrow" marker-end="url(#ah)"/>
+    <rect x="510" y="223" width="230" height="22" rx="3" class="mem"/><text x="625" y="238" class="mid small">Draw Info Buffer, this slot</text>
+    <line x1="350" y1="256" x2="508" y2="256" class="arrow" marker-end="url(#ah)"/>
+    <rect x="510" y="245" width="230" height="22" rx="3" class="mem"/><text x="625" y="260" class="mid small">Draw Count Buffer + call offset</text>
+
+    <rect x="510" y="20" width="230" height="84" rx="4" class="mem"/>
+    <text x="625" y="38" class="mid small title">Visible Draw Buffer (one buffer)</text>
+    <rect x="522" y="46" width="206" height="16" rx="2" class="box"/><text x="625" y="58" class="mid small">draws: capacity × 20 B</text>
+    <rect x="522" y="64" width="206" height="16" rx="2" class="box"/><text x="625" y="76" class="mid small">cull slots: capacity × 4 B</text>
+    <rect x="522" y="82" width="206" height="16" rx="2" class="box"/><text x="625" y="94" class="mid small">group counts</text>
+    <path d="M330,146 H470 V54 H520" class="arrow" marker-end="url(#ah)"/>
+    <path d="M350,278 H480 V72 H520" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <path d="M360,300 H490 V90 H520" class="arrow hot" marker-end="url(#ah-hot)"/>
+
+    <rect x="510" y="300" width="230" height="22" rx="3" class="mem"/><text x="625" y="315" class="mid small">Cull Stats Buffer, this slot</text>
+    <line x1="340" y1="322" x2="508" y2="312" class="arrow" marker-end="url(#ah)"/>
+    <rect x="510" y="330" width="230" height="22" rx="3" class="mem"/><text x="625" y="345" class="mid small">Visibility Buffer, this call</text>
+    <line x1="340" y1="344" x2="508" y2="341" class="arrow" marker-end="url(#ah)"/>
+    <rect x="510" y="360" width="230" height="22" rx="3" class="mem"/><text x="625" y="375" class="mid small">Hi-Z Buffer, this slot and call</text>
+    <line x1="300" y1="366" x2="508" y2="371" class="arrow" marker-end="url(#ah)"/>
+  </svg>
+  <figcaption>Twelve pointers. The two orange ones are computed on the CPU by pointer math into one buffer (section 5, "sub-arrays"). The last five are set only for a culled call (the normal case), and the last two only with occlusion culling. Otherwise they stay 0. <code>drawInfoPtr</code> points at the visible draws of a culled call, and at the whole draw list otherwise.</figcaption>
+</figure>
+
+<p>The vertex shader in <code>shaders/passes/rasm.slang</code> follows the chain like this (spacing changed):</p>
+
+<pre><code class="lang-slang">DrawInfo *draw = pc.scene-&gt;drawInfoPtr + getDrawIndex();
+InstanceData *instance = pc.scene-&gt;instancesPtr + draw-&gt;firstInstance;
+VertexFull vert = pc.scene-&gt;vertsPtr[input.vertexID + draw-&gt;vertexOffset];</code></pre>
+
+<p>And <code>drawScene</code> in <code>src/renderer/gpuScene.cpp</code> does the CPU-side pointer math for the sub-arrays (line breaks added):</p>
+
+<pre><code>sceneData.cullSlotsPtr =
+    sceneData.drawInfoPtr + static_cast&lt;uint64_t&gt;(visibleCapacity) * sizeof(gfx::DrawInfo);
+sceneData.groupCountsPtr =
+    sceneData.cullSlotsPtr + static_cast&lt;uint64_t&gt;(visibleCapacity) * sizeof(uint32_t);</code></pre>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Enabling it</td><td>feature + usage bit + memory flag</td><td>The device requires <var>bufferDeviceAddress</var>, <var>shaderInt64</var> and <var>scalarBlockLayout</var>. <code>toVkBufferUsageFlags</code> adds the device-address bit to <b>every</b> buffer. The VMA allocator is created with <code>VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT</code>, which handles the memory flag.</td></tr>
+  <tr><td>Asking once</td><td>keep the address</td><td><code>VulkanDevice::createBuffer</code> calls <code>vkGetBufferDeviceAddress</code> once and stores it in <code>Buffer::deviceAddress</code>. <code>RenderContext::getBufferDeviceAddress</code> returns it, or logs an error and returns 0.</td></tr>
+  <tr><td>Root pointer</td><td>a push constant with one pointer</td><td><code>PushConstants</code>: <code>scene</code> (8 bytes), plus <code>firstDraw</code> and <code>argument</code>: 16 bytes, <code>PUSH_CONSTANTS_SIZE</code>.</td></tr>
+  <tr><td>Frame struct</td><td>one per frame or view</td><td>One <code>SceneData</code> per <code>drawScene</code> call. Each frame slot has one "Scene Data Buffer" with room for <code>MAX_SCENE_DRAWS_PER_FRAME</code> = 8 of them; call <var>c</var> uses the buffer's address + <var>c</var> × 768.</td></tr>
+  <tr><td>Sub-arrays</td><td>base + size of what comes before</td><td><code>cullSlotsPtr</code> and <code>groupCountsPtr</code> point into the visible draw buffer; <code>drawCountsPtr</code> adds the call's offset into the draw count buffer.</td></tr>
+  <tr><td>Stale addresses</td><td>write them again every frame</td><td>The same: <code>drawScene</code> writes every address in every call, from the current buffers. A buffer that grew (draw lists, visible draws, Hi-Z) is picked up at once.</td></tr>
+  <tr><td>Null pointers</td><td>a flag says whether to read</td><td>Unused pointers stay 0 (<code>SceneData</code> starts as <code>{}</code>). <code>countMain</code> reads <code>visibilityPtr</code> and <code>hizPtr</code> only when <code>hizLevelCount</code> is not 0.</td></tr>
+  <tr><td>Bounds</td><td>pass counts and check them</td><td>Counts travel with the data (<code>drawCount</code>, <code>runFirst</code>, <code>numLights</code>, sizes from <code>EngineConfig</code>), but shaders trust them: there is no bounds check on any pointer.</td></tr>
+  <tr><td>Images</td><td>descriptors</td><td>Textures use one bindless descriptor set. The Hi-Z pyramid is <i>not</i> an image: it is a float buffer read through <code>hizPtr</code>, with its levels packed one after another.</td></tr>
+  <tr><td>Other passes</td><td>—</td><td>The stats overlay has its own 16-byte push constants, with the address of its text buffer (<code>textPtr</code> in <code>statsOverlay.slang</code>).</td></tr>
+  <tr><td>Classic bindings</td><td>—</td><td>Not all gone: the index buffer is bound with <code>bindIndexBuffer</code>, and indirect draws take their buffers as handles (<code>drawIndexedIndirectCount</code>). Fixed-function stages cannot read through pointers.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Features, usage bit, VMA flag</td><td><code>src/rhi/vulkan/vulkanDevice.cpp</code>: device selection, <code>toVkBufferUsageFlags</code>, the allocator creation</td></tr>
+  <tr><td>Getting the address</td><td><code>VulkanDevice::createBuffer</code>; <code>RenderContext::getBufferDeviceAddress</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>The pointer structs</td><td><code>SceneData</code>, <code>PushConstants</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
+  <tr><td>Writing the addresses</td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Reading through them</td><td><code>vertMain</code>, <code>fragMain</code> in <code>shaders/passes/rasm.slang</code>; <code>countMain</code>, <code>writeMain</code> in <code>shaders/passes/cull.slang</code>; <code>hizMain</code> in <code>shaders/passes/hiz.slang</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Write every address in <code>SceneData</code> from the current buffers in each <code>drawScene</code> call; never cache an address across a buffer that can be recreated.</li>
+    <li>Destroy a buffer only when no frame in flight can still read its address.</li>
+    <li>A pointer that is 0 must not be read. Guard it with a count or a flag, like <code>hizLevelCount</code>.</li>
+    <li>Keep 64-bit fields at 8-byte aligned offsets in every shared struct. <code>SceneData</code> and <code>PushConstants</code> are CPU↔GPU structs: follow <a href="struct-layout.html#in-rasm">the struct contract</a>.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>The Vulkan specification: "Buffer Device Addresses" and the <var>VK_KHR_buffer_device_address</var> appendix.</li>
+  <li>The GLSL extension <var>GL_EXT_buffer_reference</var> specification.</li>
+  <li>The Slang user guide: the section on pointers.</li>
+  <li>Khronos Vulkan-Samples: the "buffer_device_address" extension sample (a tree of pointers driven from push constants).</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

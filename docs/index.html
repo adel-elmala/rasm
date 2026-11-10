@@ -29,12 +29,12 @@
 <p class="lead">RASM (رسم) is a GPU-driven rendering engine in C++20 with a Vulkan 1.4 backend and Slang shaders. These pages explain how it works inside, with pictures first, and how to build an application with it.</p>
 
 <div class="cards">
-  <a class="card" href="guides/big-picture.html"><b>Guides →</b><span>For engine developers. One topic per page: how data reaches the GPU, how culling works, how a frame runs.</span></a>
+  <a class="card" href="guides/big-picture.html"><b>Guides →</b><span>For engine developers. An engine tour, then one idea per page (culling, bindless, render graphs, …), each explained on its own and then tied back to RASM's code.</span></a>
   <a class="card" href="api/index.html"><b>API reference →</b><span>For application developers. Every public type and function, with examples.</span></a>
 </div>
 
 <h2>The engine on one page</h2>
-<p>Each box is a guide. Click one to open it. The top row runs on the CPU, the bottom row on the GPU.</p>
+<p>Each box is a guide. Click one to open it. The top row runs on the CPU, the middle row on the GPU. Boxes with an orange border are tour pages that show how RASM fits together; the others explain one idea each.</p>
 
 <div class="legend">
   <span><i class="cpu"></i>CPU work</span>
@@ -42,39 +42,44 @@
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="Map of the guides. CPU: your app, asset loading, materials, GPU scene tables, upload. GPU: culling, uber shader, render graph passes, stats overlay, present. Foundations below.">
+  <svg viewBox="0 0 760 340" role="img" aria-label="Map of the guides. CPU: your app, streaming assets, bindless materials, the GPU scene tables, uploads. GPU: frustum culling, occlusion culling, indirect draws, PBR shading, render graph passes, present. Under everything: big picture, one frame, frames in flight, the RHI, GPU sync, struct layout.">
     <text x="10" y="20" class="small t-cpu">CPU · every frame and on change</text>
     <a href="api/index.html"><rect x="10" y="30" width="130" height="58" rx="6" class="cpu"/><text x="75" y="54" class="mid title">Your app</text><text x="75" y="72" class="mid small">API reference</text></a>
     <line x1="140" y1="59" x2="158" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <a href="guides/asset-loading.html"><rect x="160" y="30" width="130" height="58" rx="6" class="cpu"/><text x="225" y="54" class="mid title">6 · Load assets</text><text x="225" y="72" class="mid small">worker threads</text></a>
+    <a href="guides/asset-streaming.html"><rect x="160" y="30" width="130" height="58" rx="6" class="cpu"/><text x="225" y="54" class="mid title">Load assets</text><text x="225" y="72" class="mid small">worker threads</text></a>
     <line x1="290" y1="59" x2="308" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <a href="guides/materials-textures.html"><rect x="310" y="30" width="130" height="58" rx="6" class="cpu"/><text x="375" y="54" class="mid title">7 · Materials</text><text x="375" y="72" class="mid small">bindless textures</text></a>
+    <a href="guides/bindless.html"><rect x="310" y="30" width="130" height="58" rx="6" class="cpu"/><text x="375" y="54" class="mid title">Materials</text><text x="375" y="72" class="mid small">bindless textures</text></a>
     <line x1="440" y1="59" x2="458" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <a href="guides/gpu-scene.html"><rect x="460" y="30" width="130" height="58" rx="6" class="cpu"/><text x="525" y="54" class="mid title">5 · GPU scene</text><text x="525" y="72" class="mid small">tables, draw lists</text></a>
+    <a href="guides/gpu-scene.html"><rect x="460" y="30" width="130" height="58" rx="6" class="cpu"/><rect x="460" y="30" width="130" height="58" rx="6" class="hot"/><text x="525" y="54" class="mid title">GPU scene</text><text x="525" y="72" class="mid small">tables, draw lists</text></a>
     <line x1="590" y1="59" x2="608" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <a href="guides/gpu-memory.html"><rect x="610" y="30" width="140" height="58" rx="6" class="cpu"/><text x="680" y="54" class="mid title">4 · Upload</text><text x="680" y="72" class="mid small">staging, dirty rows</text></a>
+    <a href="guides/gpu-memory.html"><rect x="610" y="30" width="140" height="58" rx="6" class="cpu"/><text x="680" y="54" class="mid title">Upload</text><text x="680" y="72" class="mid small">staging, dirty rows</text></a>
 
-    <path d="M680,88 V118 H75 V146" class="arrow" marker-end="url(#ah)"/>
+    <path d="M680,88 V118 H62 V146" class="arrow" marker-end="url(#ah)"/>
     <text x="380" y="112" class="mid small">one submit per frame</text>
 
     <text x="90" y="140" class="small t-gpu">GPU · every frame</text>
-    <a href="guides/culling.html"><rect x="10" y="150" width="130" height="58" rx="6" class="gpu"/><text x="75" y="174" class="mid title">9 · Culling</text><text x="75" y="192" class="mid small">compute</text></a>
-    <line x1="140" y1="179" x2="158" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <a href="guides/uber-shader.html"><rect x="160" y="150" width="130" height="58" rx="6" class="gpu"/><text x="225" y="174" class="mid title">8 · Uber shader</text><text x="225" y="192" class="mid small">indirect draws</text></a>
-    <line x1="290" y1="179" x2="308" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <a href="guides/render-graph.html"><rect x="310" y="150" width="130" height="58" rx="6" class="gpu"/><text x="375" y="174" class="mid title">11 · Passes</text><text x="375" y="192" class="mid small">render graph</text></a>
-    <line x1="440" y1="179" x2="458" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <a href="guides/stats-overlay.html"><rect x="460" y="150" width="130" height="58" rx="6" class="gpu"/><text x="525" y="174" class="mid title">12 · Overlay</text><text x="525" y="192" class="mid small">frame stats</text></a>
-    <line x1="590" y1="179" x2="608" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <a href="guides/frame-loop.html"><rect x="610" y="150" width="140" height="58" rx="6" class="gpu"/><text x="680" y="174" class="mid title">2 · Present</text><text x="680" y="192" class="mid small">the frame loop</text></a>
+    <a href="guides/frustum-culling.html"><rect x="10" y="150" width="105" height="58" rx="6" class="gpu"/><text x="62" y="174" class="mid title">Frustum</text><text x="62" y="192" class="mid small">cull</text></a>
+    <line x1="115" y1="179" x2="131" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <a href="guides/occlusion-culling.html"><rect x="133" y="150" width="105" height="58" rx="6" class="gpu"/><text x="185" y="174" class="mid title">Occlusion</text><text x="185" y="192" class="mid small">Hi-Z cull</text></a>
+    <line x1="238" y1="179" x2="254" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <a href="guides/gpu-driven.html"><rect x="256" y="150" width="105" height="58" rx="6" class="gpu"/><text x="308" y="174" class="mid title">Draw</text><text x="308" y="192" class="mid small">indirect</text></a>
+    <line x1="361" y1="179" x2="377" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <a href="guides/pbr.html"><rect x="379" y="150" width="105" height="58" rx="6" class="gpu"/><text x="431" y="174" class="mid title">Shade</text><text x="431" y="192" class="mid small">PBR</text></a>
+    <line x1="484" y1="179" x2="500" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <a href="guides/render-graphs.html"><rect x="502" y="150" width="105" height="58" rx="6" class="gpu"/><text x="554" y="174" class="mid title">Passes</text><text x="554" y="192" class="mid small">render graph</text></a>
+    <line x1="607" y1="179" x2="623" y2="179" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <a href="guides/swapchain.html"><rect x="625" y="150" width="125" height="58" rx="6" class="gpu"/><text x="687" y="174" class="mid title">Present</text><text x="687" y="192" class="mid small">swapchain</text></a>
 
-    <text x="10" y="248" class="small">Foundations under everything</text>
-    <a href="guides/big-picture.html"><rect x="10" y="258" width="175" height="50" rx="6" class="box"/><text x="97" y="288" class="mid title">1 · Big picture</text></a>
-    <a href="guides/rhi.html"><rect x="200" y="258" width="175" height="50" rx="6" class="box"/><text x="287" y="288" class="mid title">3 · RHI / Vulkan</text></a>
-    <a href="guides/camera-depth.html"><rect x="390" y="258" width="175" height="50" rx="6" class="box"/><text x="477" y="288" class="mid title">10 · Camera, depth</text></a>
-    <a href="guides/shaders-structs.html"><rect x="580" y="258" width="170" height="50" rx="6" class="box"/><text x="665" y="288" class="mid title">13 · Shaders, structs</text></a>
+    <text x="10" y="248" class="small">Under everything</text>
+    <a href="guides/big-picture.html"><rect x="10" y="258" width="115" height="50" rx="6" class="box"/><rect x="10" y="258" width="115" height="50" rx="6" class="hot"/><text x="67" y="288" class="mid title">Big picture</text></a>
+    <a href="guides/frame-loop.html"><rect x="135" y="258" width="115" height="50" rx="6" class="box"/><rect x="135" y="258" width="115" height="50" rx="6" class="hot"/><text x="192" y="288" class="mid title">One frame</text></a>
+    <a href="guides/frames-in-flight.html"><rect x="260" y="258" width="115" height="50" rx="6" class="box"/><text x="317" y="288" class="mid title">Frames in flight</text></a>
+    <a href="guides/graphics-apis-rhi.html"><rect x="385" y="258" width="115" height="50" rx="6" class="box"/><text x="442" y="288" class="mid title">The RHI</text></a>
+    <a href="guides/gpu-sync.html"><rect x="510" y="258" width="115" height="50" rx="6" class="box"/><text x="567" y="288" class="mid title">GPU sync</text></a>
+    <a href="guides/struct-layout.html"><rect x="635" y="258" width="115" height="50" rx="6" class="box"/><text x="692" y="288" class="mid title">Struct layout</text></a>
+    <text x="10" y="332" class="small">The sidebar lists every guide, grouped: Engine tour, Foundations, GPU data, Drawing, Culling and the frame.</text>
   </svg>
-  <figcaption>The path of a frame: assets become rows in GPU tables, the CPU uploads what changed, the GPU culls, draws, adds the overlay and presents.</figcaption>
+  <figcaption>The path of a frame: assets become rows in GPU tables, the CPU uploads what changed, the GPU culls, draws, shades, runs the passes and presents.</figcaption>
 </figure>
 
 <h2>Where to start</h2>
@@ -82,10 +87,11 @@
 <table>
   <tr><th>You want to…</th><th>Read</th></tr>
   <tr><td>write an app with RASM</td><td><a href="api/index.html">Getting started</a>, then the <a href="api/engine.html">Engine</a> page</td></tr>
-  <tr><td>understand the engine before changing it</td><td>Guides 1 → 2 → 4 → 5 → 8, in that order</td></tr>
-  <tr><td>add a render pass or post effect</td><td><a href="guides/render-graph.html">The render graph</a>, <a href="api/render-graph.html">its API</a></td></tr>
-  <tr><td>change a GPU struct or a shader</td><td><a href="guides/shaders-structs.html">Shaders and the struct contract</a></td></tr>
-  <tr><td>find why something is slow</td><td><a href="guides/stats-overlay.html">Frame stats and the overlay</a></td></tr>
+  <tr><td>understand the engine before changing it</td><td>The tour: <a href="guides/big-picture.html">The big picture</a> → <a href="guides/frame-loop.html">One frame</a> → <a href="guides/gpu-scene.html">The GPU scene tables</a>, then the guides they link to</td></tr>
+  <tr><td>learn one technique</td><td>Its guide in the sidebar. Each one explains the idea first and ends with an "In RASM" part.</td></tr>
+  <tr><td>add a render pass or post effect</td><td><a href="guides/render-graphs.html">Render graphs</a>, <a href="api/render-graph.html">its API</a></td></tr>
+  <tr><td>change a GPU struct or a shader</td><td><a href="guides/struct-layout.html">Struct layout rules</a></td></tr>
+  <tr><td>find why something is slow</td><td><a href="guides/gpu-timing.html">GPU timing and frame statistics</a></td></tr>
 </table>
 </div>
 
