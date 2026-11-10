@@ -75,6 +75,7 @@ namespace rasm::rhi
     struct Texture
     {
         TextureDesc                         desc;
+        TextureUsage                        state               = TextureUsage::UNKNOWN;
     };
 
     struct Sampler

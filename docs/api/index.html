@@ -269,7 +269,7 @@ int main()
 
     <rect x="15" y="272" width="14" height="14" rx="3" class="cpu"/><text x="36" y="283" class="small">the engine calls it</text>
     <rect x="160" y="272" width="14" height="14" rx="3" class="box"/><text x="181" y="283" class="small">you call or write it</text>
-    <text x="330" y="283" class="small">Compute passes in C skip beginPass/endPass and get a barrier instead.</text>
+    <text x="330" y="283" class="small">In C, barriers come from each pass's reads and writes.</text>
   </svg>
   <figcaption>All three run the same frame steps. They differ in who calls them. In B, call nothing when <code>beginFrame</code> returns false: the frame is skipped (window minimized, swapchain out of date).</figcaption>
 </figure>
@@ -279,7 +279,7 @@ int main()
   <tr><th>Way</th><th>Use it for</th><th>Example</th><th>Reference</th></tr>
   <tr><td>A · <code>render</code></td><td>One scene, one camera, straight to the window.</td><td><code>00_hello_scene</code>, <code>02_gltf</code>, <code>03_instances</code>, <code>05_city</code></td><td><a href="engine.html#render">engine.html#render</a></td></tr>
   <tr><td>B · <code>beginFrame</code> / <code>endFrame</code></td><td>A few passes in a fixed order, your own pipelines.</td><td>none</td><td><a href="engine.html#beginFrame">engine.html#beginFrame</a></td></tr>
-  <tr><td>C · <code>RenderGraph</code></td><td>Offscreen render targets, post effects, compute work. The graph orders the passes and adds compute barriers.</td><td><code>01_render_graph</code>, <code>04_compute</code></td><td><a href="render-graph.html">render-graph.html</a></td></tr>
+  <tr><td>C · <code>RenderGraph</code></td><td>Offscreen render targets, post effects, compute work. The graph orders the passes and records their barriers.</td><td><code>01_render_graph</code>, <code>04_compute</code></td><td><a href="render-graph.html">render-graph.html</a></td></tr>
 </table>
 </div>
 

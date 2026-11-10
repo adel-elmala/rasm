@@ -44,7 +44,7 @@ namespace rasm
         [[nodiscard]] SwapchainStatus       acquireNextImage(uint32_t& imageIndex);
         bool                                beginCommandBuffer(const CommandBufferHandle& commandBuffer);
         bool                                endCommandBuffer(const CommandBufferHandle& commandBuffer);
-        bool                                transitionImageLayout(const CommandBufferHandle& commandBuffer, TextureHandle texture, TextureUsage oldUsage, TextureUsage newUsage);
+        bool                                transitionImageLayout(const CommandBufferHandle& commandBuffer, TextureHandle texture, TextureUsage newUsage, bool discard = false);
         bool                                fillBuffer(const BufferHandle& buffer, const void* data, size_t size, size_t offset = 0);
         bool                                readBuffer(const BufferHandle& buffer, void* data, size_t size, size_t offset = 0);
         void                                resetQueries(const QueryPoolHandle& pool);
@@ -59,6 +59,7 @@ namespace rasm
         bool                                setScissor(const CommandBufferHandle& commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height);
         bool                                setCullMode(const CommandBufferHandle& commandBuffer, CullMode cullMode);
         bool                                submit(const CommandBufferHandle* commandBuffers, uint32_t commandBufferCount, FenceHandle signalFence, uint64_t signalValue, bool presentsSwapchainImage);
+        void                                discardRecording();
         [[nodiscard]] SwapchainStatus       present();
         void                                destroyTexture(const TextureHandle& texture);
         void                                destroyBuffer(const BufferHandle& buffer);
