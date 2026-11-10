@@ -48,8 +48,15 @@ Read the diff of each changed source (`git diff <stamp> <target> -- <file>`) and
 
 ### House style (keep every page consistent)
 
-- Copy the structure of an existing page (`docs/guides/culling.html` for guides, any `docs/api/` page for the
-  reference): same `<head>`, shared arrowhead `<defs>`, `layout`/`sidebar`/`main`, eyebrow, `h1`, `lead`.
+- Copy the structure of an existing page (`docs/guides/frustum-culling.html` for guides, any `docs/api/` page for
+  the reference): same `<head>`, shared arrowhead `<defs>`, `layout`/`sidebar`/`main`, eyebrow, `h1`, `lead`.
+- Two kinds of guide. **Concept guides** (Foundations, GPU data, Drawing, Culling and the frame) explain one idea
+  each, like a textbook: the problem, how it works, the math, variants, pitfalls, a worked example, with no RASM
+  names. Their last section, `<h2 id="in-rasm">`, ties back to the code: a diagram of what RASM does, a
+  "This page / RASM" table of where it differs, a code map, the rules to keep, further reading. A code change
+  usually only touches that section. **Engine tour** pages (`big-picture`, `frame-loop`, `gpu-scene`) are about
+  RASM itself and link to the concept guides instead of explaining concepts again.
+- One idea per guide. A new technique gets its own concept guide, not a new section in a neighbour's page.
 - Visual first; short, plain sentences (the main reader's English is a second language). Present tense, today's
   code only, no history. Known issues by ID from `docs/code_review.md`.
 - Only classes from `docs/assets/style.css`; no inline styles, no `<style>`/`<script>` inside SVGs, no libraries.

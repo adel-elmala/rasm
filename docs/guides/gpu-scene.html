@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GPU Scene Tables · RASM</title>
 <meta name="description" content="The GPU scene tables (geometry, material, instance, draw lists), how an entity gets its rows and joins the draw lists, syncGpuScene step by step, and cull-mode runs.">
-<meta name="rasm-sources" content="src/renderer/gpuScene.h src/renderer/gpuScene.cpp src/renderer/gpuTable.h src/renderer/gpuTable.cpp src/renderer/geometryPool.h src/renderer/geometryPool.cpp src/renderer/uberMaterialTypes.h shaders/lib/core.slang src/engine.cpp include/rasm/engine.h src/scene/entity.cpp src/scene/scene.cpp src/scene/transform.cpp src/assets/material.cpp src/assets/mesh.cpp include/rasm/types.h include/rasm/scene.h include/rasm/mesh.h include/rasm/transform.h">
+<meta name="rasm-sources" content="src/renderer/gpuScene.h src/renderer/gpuScene.cpp src/renderer/gpuTable.h src/renderer/gpuTable.cpp src/renderer/geometryPool.h src/renderer/geometryPool.cpp src/renderer/uberMaterialTypes.h shaders/lib/core.slang src/engine.cpp include/rasm/engine.h src/scene/entity.cpp src/scene/scene.cpp src/scene/transform.cpp src/assets/material.cpp src/assets/mesh.cpp include/rasm/types.h include/rasm/scene.h include/rasm/mesh.h include/rasm/transform.h shaders/passes/cull.slang shaders/passes/rasm.slang src/assets/meshLod.cpp src/assets/meshLod.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -26,9 +26,10 @@
 <nav id="sidebar"></nav>
 <main>
 
-<p class="eyebrow">Data</p>
+<p class="eyebrow">Engine tour</p>
 <h1>The GPU scene tables</h1>
 <p class="lead">The scene lives on the GPU as a few tables of fixed-size rows. A draw names an instance row, and the instance row names a geometry row and a material row. The CPU changes a row only when something changed, and <code>syncGpuScene</code> uploads the changed rows once per frame.</p>
+<p>This is stop 3 of the engine tour, after <a href="big-picture.html">the big picture</a> and <a href="frame-loop.html">one frame</a>. It shows RASM's tables and how the objects you create get into them. Why a renderer keeps its scene on the GPU like this is in <a href="gpu-driven.html">GPU-driven rendering and indirect draws</a>.</p>
 
 <div class="legend">
   <span><i class="cpu"></i>CPU work</span>
@@ -117,25 +118,75 @@
     <text x="130" y="368" class="mid">Geometry Vertex Pool</text>
     <text x="130" y="383" class="mid small">pulled by vertMain</text>
   </svg>
-  <figcaption>The draw itself carries the index range and the vertex offset, so drawing does not read the geometry table. Only <code>cull.slang</code> reads it, for the bounding sphere and the <a href="culling.html#lod">LOD</a> ranges: culling swaps the draw's <code>firstIndex</code> and <code>indexCount</code> for the chosen LOD's. A material row holds bindless slot numbers, not textures.</figcaption>
+  <figcaption>The draw itself carries the index range and the vertex offset, so drawing does not read the geometry table. Only <code>cull.slang</code> reads it, for the bounding sphere and the LOD ranges: culling swaps the draw's <code>firstIndex</code> and <code>indexCount</code> for the chosen LOD's (<a href="lod-selection.html#in-rasm">LOD selection</a>). <code>vertMain</code> pulls its vertices from the pool by index (<a href="vertex-pulling.html">vertex pulling</a>). A material row holds <a href="bindless.html">bindless</a> slot numbers, not textures.</figcaption>
 </figure>
 
 <div class="table-wrap">
 <table>
   <tr><th>Table</th><th>Buffers</th><th>Rows</th><th>Written by</th></tr>
-  <tr><td>Geometry<br><code>GeometryData</code>, 120 B</td><td>one, <code>GeometryPool::tableBuffer</code></td><td><code>geometryPoolSubMeshes</code> (2<sup>14</sup>)</td><td><code>GeometryPool::upload</code>, once per sub-mesh, with one <code>GeometryLod</code> per LOD. No frame has read a new row yet, so one copy is enough.</td></tr>
+  <tr><td>Geometry<br><code>GeometryData</code>, 120 B</td><td>one, in the geometry pool (<code>tableBuffer</code>)</td><td><code>geometryPoolSubMeshes</code> (2<sup>14</sup>)</td><td><code>upload</code> of the geometry pool, once per sub-mesh, with one <code>GeometryLod</code> per LOD. No frame has read a new row yet, so one copy is enough.</td></tr>
   <tr><td>Material<br><code>MaterialData</code>, 84 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>MAX_MATERIALS</code> = 256; row = material handle index</td><td><code>writeMaterialRow</code></td></tr>
   <tr><td>Instance<br><code>InstanceData</code>, 108 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>maxInstances</code> (2<sup>16</sup>), bump-allocated</td><td><code>writeInstanceRows</code></td></tr>
-  <tr><td>Draw list<br><code>DrawInfo</code>, 20 B</td><td><code>SceneDrawList::buffers</code>, one per frame slot and scene</td><td>grows ×2 when too small</td><td><code>rebuildDrawList</code>, then <code>uploadDrawList</code></td></tr>
-  <tr><td>Visible draws</td><td><code>visibleDraws</code>, per frame slot and <code>drawScene</code> call</td><td>grows ×2 when too small</td><td>the GPU (<a href="culling.html">culling</a>)</td></tr>
-  <tr><td>Draw counts</td><td><code>drawCounts</code>, one per frame slot</td><td><code>MAX_DRAW_RUNS</code> per <code>drawScene</code> call</td><td>the GPU (culling)</td></tr>
-  <tr><td>Visibility</td><td><code>visibility</code>, one for both frame slots</td><td><code>maxInstances</code> <code>uint32_t</code>s, one per instance row, 0 at start</td><td>the GPU (late <code>countMain</code>, <a href="culling.html#occlusion">occlusion culling</a>)</td></tr>
+  <tr><td>Draw list<br><code>DrawInfo</code>, 20 B</td><td><code>buffers</code> in <code>SceneDrawList</code>, one per frame slot and scene</td><td>grows ×2 when too small</td><td><code>rebuildDrawList</code>, then <code>uploadDrawList</code></td></tr>
+  <tr><td>Visible draws</td><td><code>visibleDraws</code>, per frame slot and <code>drawScene</code> call</td><td>grows ×2 when too small; culling's scratch follows the draws</td><td>the GPU: <code>writeMain</code> packs the kept draws (<a href="stream-compaction.html#in-rasm">stream compaction</a>)</td></tr>
+  <tr><td>Draw counts</td><td><code>drawCounts</code>, one per frame slot</td><td><code>MAX_DRAW_RUNS</code> per <code>drawScene</code> call</td><td>the GPU (<code>writeMain</code>)</td></tr>
+  <tr><td>Visibility</td><td><code>visibility</code>, one per <code>drawScene</code> call, shared by both frame slots</td><td><code>maxInstances</code> <code>uint32_t</code>s, one per instance row, 0 at start</td><td>the GPU (late <code>countMain</code>, <a href="occlusion-culling.html#in-rasm">occlusion culling</a>)</td></tr>
   <tr><td>Hi-Z</td><td><code>hiz</code>, per frame slot and <code>drawScene</code> call</td><td><code>float</code>s, all levels of the pass's size; grows when the pass is bigger</td><td>the GPU (<code>hizMain</code>)</td></tr>
   <tr><td>Scene data</td><td><code>sceneData</code>, one per frame slot, <code>hostVisible</code></td><td><code>MAX_SCENE_DRAWS_PER_FRAME</code> = 8 <code>SceneData</code></td><td><code>drawScene</code>, every call</td></tr>
 </table>
 </div>
 
-<p>All of these are created once, in <code>createGpuScene</code> and <code>GeometryPool::create</code>, except the draw-list, visible-draw and Hi-Z buffers, which grow on demand. How a <code>GpuTable</code> uploads only its dirty rows, per frame slot, is in <a href="gpu-memory.html">How data reaches the GPU</a>.</p>
+<p>All of these are created once, in <code>createGpuScene</code> and <code>GeometryPool::create</code>, except the draw-list, visible-draw and Hi-Z buffers, which grow on demand. How a <code>GpuTable</code> uploads only its dirty rows, per frame slot, is in <a href="gpu-memory.html#in-rasm">GPU memory and uploads</a>.</p>
+
+<h3>How a shader finds the tables</h3>
+
+<p>No table is bound. The push constant points to this call's <code>SceneData</code>, and <code>SceneData</code> points to every table of this frame slot. So a shader follows two pointers to reach any row (<a href="device-addresses.html#in-rasm">Buffer device addresses</a>).</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="The push constant holds the address of this drawScene call's SceneData. SceneData holds one pointer per table: vertsPtr to the vertex pool, geometryPtr to the geometry table, instancesPtr and materialsPtr to this slot's instance and material tables, allDrawsPtr to the scene's draw list, drawInfoPtr to the call's visible draws, drawCountsPtr to its draw counts, visibilityPtr and hizPtr to its visibility flags and Hi-Z.">
+    <rect x="20" y="130" width="160" height="70" rx="6" class="cpu"/>
+    <text x="100" y="152" class="mid title">PushConstants</text>
+    <text x="100" y="172" class="mid mono">scene</text>
+    <text x="100" y="189" class="mid small">+ firstDraw, argument</text>
+    <line x1="180" y1="165" x2="228" y2="165" class="arrow mem" marker-end="url(#ah-mem)"/>
+
+    <rect x="230" y="20" width="210" height="290" rx="6" class="mem"/>
+    <text x="335" y="40" class="mid title">SceneData</text>
+    <text x="335" y="56" class="mid small">one per drawScene call</text>
+    <text x="246" y="84"  class="mono">vertsPtr</text>
+    <text x="246" y="110" class="mono">geometryPtr</text>
+    <text x="246" y="136" class="mono">instancesPtr</text>
+    <text x="246" y="162" class="mono">materialsPtr</text>
+    <text x="246" y="188" class="mono">allDrawsPtr</text>
+    <text x="246" y="214" class="mono">drawInfoPtr</text>
+    <text x="246" y="240" class="mono">drawCountsPtr</text>
+    <text x="246" y="266" class="mono">visibilityPtr</text>
+    <text x="246" y="292" class="mono">hizPtr</text>
+
+    <line x1="400" y1="80"  x2="518" y2="80"  class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="400" y1="106" x2="518" y2="106" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="400" y1="132" x2="518" y2="132" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="400" y1="158" x2="518" y2="158" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="400" y1="184" x2="518" y2="184" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="400" y1="210" x2="518" y2="210" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="400" y1="236" x2="518" y2="236" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="400" y1="262" x2="518" y2="262" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="400" y1="288" x2="518" y2="288" class="arrow mem" marker-end="url(#ah-mem)"/>
+
+    <rect x="520" y="70"  width="220" height="22" rx="4" class="mem"/><text x="530" y="85"  class="small">Geometry Vertex Pool</text>
+    <rect x="520" y="96"  width="220" height="22" rx="4" class="mem"/><text x="530" y="111" class="small">Geometry table</text>
+    <rect x="520" y="122" width="220" height="22" rx="4" class="mem"/><text x="530" y="137" class="small">Instance table, this slot</text>
+    <rect x="520" y="148" width="220" height="22" rx="4" class="mem"/><text x="530" y="163" class="small">Material table, this slot</text>
+    <rect x="520" y="174" width="220" height="22" rx="4" class="mem"/><text x="530" y="189" class="small">the scene's draw list, this slot</text>
+    <rect x="520" y="200" width="220" height="22" rx="4" class="mem"/><text x="530" y="215" class="small">visible draws, this call</text>
+    <rect x="520" y="226" width="220" height="22" rx="4" class="mem"/><text x="530" y="241" class="small">draw counts, this call's part</text>
+    <rect x="520" y="252" width="220" height="22" rx="4" class="mem"/><text x="530" y="267" class="small">visibility flags, this call</text>
+    <rect x="520" y="278" width="220" height="22" rx="4" class="mem"/><text x="530" y="293" class="small">Hi-Z, this call</text>
+    <text x="520" y="40" class="small">The index pool is bound as the</text>
+    <text x="520" y="54" class="small">index buffer, not reached by pointer.</text>
+  </svg>
+  <figcaption>Culling also gets <code>cullSlotsPtr</code> and <code>groupCountsPtr</code> (its scratch, after the visible draws in the same buffer) and <code>cullStatsPtr</code>. Without culling, <code>drawInfoPtr</code> points to the draw list itself. Every row struct has a twin in <code>core.slang</code> with the same bytes: see <a href="struct-layout.html#in-rasm">Struct layout rules</a>.</figcaption>
+</figure>
 
 <h2><span class="n">2</span>The life of an entity</h2>
 
@@ -354,7 +405,7 @@
   </div>
 </div>
 
-<h2><span class="n">4</span>Draw lists and cull-mode runs</h2>
+<h2 id="runs"><span class="n">4</span>Draw lists and cull-mode runs</h2>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 225" role="img" aria-label="Six draws in scene order are stable-sorted by cull mode. They form three runs: NONE with 2 draws, FRONT with 1, BACK with 3.">
@@ -407,28 +458,40 @@
 
 <h2><span class="n">5</span>The cull mode of a row</h2>
 
+<p>Each instance row gets one of the three cull modes. Why a mirrored object must cull its front faces is in <a href="face-culling.html">Face culling and winding order</a>. Here is how RASM picks the mode:</p>
+
 <figure class="diagram">
-  <svg viewBox="0 0 760 210" role="img" aria-label="A triangle 0, 1, 2 turns counter-clockwise. Mirrored with scale.x of minus one, it turns clockwise, so its front faces must be culled as FRONT instead of BACK.">
-    <polygon points="70,160 190,160 130,60" class="gpu"/>
-    <text x="62" y="178" class="mid mono">0</text><text x="198" y="178" class="mid mono">1</text><text x="130" y="50" class="mid mono">2</text>
-    <text x="130" y="128" class="mid small">counter-</text><text x="130" y="142" class="mid small">clockwise</text>
-    <text x="130" y="200" class="mid small">front face → cull BACK</text>
+  <svg viewBox="0 0 760 216" role="img" aria-label="getCullMode asks two questions. A double-sided material gives NONE. Otherwise a negative determinant, a mirroring transform, gives FRONT. Otherwise BACK. The determinant is the product of the entity's scale and the determinant of the sub-mesh transform.">
+    <rect x="20" y="20" width="150" height="50" rx="6" class="cpu"/>
+    <text x="95" y="41" class="mid mono">getCullMode</text>
+    <text x="95" y="59" class="mid small">per sub-mesh row</text>
+    <line x1="170" y1="45" x2="208" y2="45" class="arrow cpu" marker-end="url(#ah-cpu)"/>
 
-    <line x1="215" y1="110" x2="285" y2="110" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="250" y="100" class="mid small t-hot">scale.x = −1</text>
+    <polygon points="210,45 300,15 390,45 300,75" class="box"/>
+    <text x="300" y="43" class="mid small">material</text>
+    <text x="300" y="57" class="mid mono">doubleSided?</text>
+    <line x1="390" y1="45" x2="548" y2="45" class="arrow" marker-end="url(#ah)"/>
+    <text x="470" y="37" class="mid small">yes</text>
+    <rect x="550" y="25" width="190" height="40" rx="6" class="box"/>
+    <text x="645" y="50" class="mid mono">NONE</text>
 
-    <polygon points="310,160 430,160 370,60" class="gpu"/>
-    <text x="302" y="178" class="mid mono">1</text><text x="438" y="178" class="mid mono">0</text><text x="370" y="50" class="mid mono">2</text>
-    <text x="370" y="128" class="mid small">clockwise</text>
-    <text x="370" y="200" class="mid small">front face → cull FRONT</text>
+    <line x1="300" y1="75" x2="300" y2="103" class="arrow" marker-end="url(#ah)"/>
+    <text x="308" y="93" class="small">no</text>
+    <polygon points="210,135 300,105 390,135 300,165" class="box"/>
+    <text x="300" y="133" class="mid mono">det &lt; 0?</text>
+    <text x="300" y="147" class="mid small">mirrors</text>
+    <line x1="390" y1="135" x2="548" y2="135" class="arrow" marker-end="url(#ah)"/>
+    <text x="470" y="127" class="mid small">yes</text>
+    <rect x="550" y="115" width="190" height="40" rx="6" class="box"/>
+    <text x="645" y="140" class="mid mono">FRONT</text>
 
-    <rect x="480" y="30" width="260" height="150" rx="6" class="zone"/>
-    <text x="496" y="54" class="title">getCullMode</text>
-    <text x="496" y="80" class="mono">doubleSided</text><text x="724" y="80" class="end mono">NONE</text>
-    <text x="496" y="104" class="mono">det &lt; 0</text><text x="724" y="104" class="end mono">FRONT</text>
-    <text x="496" y="128" class="mono">otherwise</text><text x="724" y="128" class="end mono">BACK</text>
-    <text x="496" y="156" class="small">det = scale.x · scale.y · scale.z</text>
-    <text x="496" y="172" class="small">      · det(mat3(sub-mesh transform))</text>
+    <path d="M300,165 V190 H548" class="arrow" marker-end="url(#ah)"/>
+    <text x="308" y="183" class="small">no</text>
+    <rect x="550" y="170" width="190" height="40" rx="6" class="box"/>
+    <text x="645" y="195" class="mid mono">BACK</text>
+
+    <text x="20" y="110" class="small">det = scale.x · scale.y · scale.z</text>
+    <text x="20" y="126" class="small">· det(mat3(sub-mesh transform))</text>
   </svg>
   <figcaption>Front faces are counter-clockwise. A mirroring transform (negative determinant) turns them clockwise, as glTF specifies, so the row culls <code>FRONT</code> instead.</figcaption>
 </figure>
@@ -446,7 +509,7 @@
   <tr><td><code>createMaterial</code>, glTF <code>loadMaterial</code></td><td><code>writeMaterialRow</code></td><td>One material row.</td></tr>
   <tr><td><code>updateMaterial</code></td><td><code>writeMaterialRow</code>; <code>refreshEntitiesAfterMaterialChange</code> if <code>doubleSided</code> changed or a texture still loads</td><td>The material row (same row index, so no instance row changes). Draw lists of entities that change cull mode or start waiting.</td></tr>
   <tr><td>a texture load finishes</td><td><code>finishLoads</code> sets <code>texturesFinished</code></td><td>Draw lists of entities that become drawable.</td></tr>
-  <tr><td>a mesh load finishes</td><td><code>finishMeshLoad</code>: <code>GeometryPool::upload</code></td><td>Geometry, index and vertex data, and the geometry rows, once.</td></tr>
+  <tr><td>a mesh load finishes, or <code>createMesh</code></td><td><code>finishMeshLoad</code> or <code>createMesh</code>: <code>GeometryPool::upload</code>. The LODs were built before, by <code>buildMeshLods</code>.</td><td>The vertices, the indices of every LOD, and one geometry row per sub-mesh, once.</td></tr>
   <tr><td><code>drawScene</code></td><td>fills one <code>SceneData</code></td><td>At once (the scene data buffer is <code>hostVisible</code>).</td></tr>
 </table>
 </div>
@@ -465,6 +528,8 @@
   <tr><td>Draw lists</td><td><code>addEntityToDrawList</code>, <code>markDrawListsDirty</code>, <code>rebuildDrawList</code>, <code>uploadDrawList</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Callers</td><td><code>src/scene/entity.cpp</code>, <code>src/scene/scene.cpp</code>, <code>src/assets/material.cpp</code></td></tr>
   <tr><td>Row structs</td><td><code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
+  <tr><td>Table pointers</td><td><code>Engine::drawScene</code> fills <code>SceneData</code> in <code>src/renderer/gpuScene.cpp</code>; read by <code>shaders/passes/rasm.slang</code> and <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>LODs of a mesh</td><td><code>buildMeshLods</code> in <code>src/assets/meshLod.cpp</code>; the rows in <code>GeometryPool::upload</code></td></tr>
 </table>
 </div>
 
@@ -478,7 +543,7 @@
     <li>An entity joins a draw list only with rows and all textures loaded. Keep that check in both <code>addEntityToDrawList</code> and <code>rebuildDrawList</code>.</li>
     <li><code>EntityDrawState::scenes</code> has one bit per scene, so <code>MAX_SCENES</code> must stay at most 16 (a <code>static_assert</code> checks it).</li>
     <li>The run order is the order of <code>CullMode</code>, and <code>MAX_DRAW_RUNS</code> must equal the number of cull modes.</li>
-    <li>Changing <code>InstanceData</code>, <code>MaterialData</code>, <code>GeometryData</code> or <code>DrawInfo</code> is a CPU↔GPU struct change: follow <a href="shaders-structs.html">the struct contract</a>.</li>
+    <li>Changing <code>InstanceData</code>, <code>MaterialData</code>, <code>GeometryData</code> or <code>DrawInfo</code> is a CPU↔GPU struct change: follow <a href="struct-layout.html#in-rasm">the struct contract</a>.</li>
   </ul>
 </div>
 

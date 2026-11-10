@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Graphics APIs and the RHI · RASM</title>
+<meta name="description" content="What the explicit graphics APIs (Vulkan, Direct3D 12, Metal, WebGPU) share and where they differ, why engines put a render hardware interface on top, the design choices of such a layer, how to add a backend, and how RASM does it.">
+<meta name="rasm-sources" content="src/rhi/device.h src/rhi/device.cpp src/rhi/resource.cpp src/rhi/renderContext.cpp src/rhi/textureStates.h src/rhi/uploadManager.h src/rhi/vulkan/vulkanTypes.h src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.h src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanSwapchain.h include/rasm/render/resource.h include/rasm/render/renderContext.h include/rasm/types.h src/engine.cpp src/platform/windowSurface.h tests/uploadManagerTests.cpp tests/textureStatesTests.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/graphics-apis-rhi.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Foundations</p>
+<h1>Graphics APIs and the RHI</h1>
+<p class="lead">A graphics API is how a program talks to the GPU. The modern ones (Vulkan, Direct3D 12, Metal, WebGPU) share one model, with different names and different details. An engine that wants to run on several of them puts its own thin layer on top: a <b>render hardware interface</b>, or RHI. This page explains the shared model, the differences, and the choices an RHI has to make. The <a href="#in-rasm">last part</a> shows RASM's RHI.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li><b>Explicit APIs</b> move work from the driver to the application: memory, synchronization, pipeline creation and command recording.</li>
+    <li>All four have the same pieces: a <b>device</b>, <b>queues</b>, <b>command buffers</b>, <b>pipelines</b>, <b>resources</b>, a <b>binding model</b>, <b>sync objects</b> and a <b>swapchain</b>.</li>
+    <li>They differ most in binding, barriers, shader language and the platforms they run on.</li>
+    <li>An <b>RHI</b> is one interface above all of them. The engine is written once, against it. Each API gets a <b>backend</b> below it.</li>
+    <li>The main choices: how <b>thin</b> the layer is, <b>virtual interfaces</b> or a <b>compile-time</b> backend, how resources are named (handles or pointers), and who places the <b>barriers</b>.</li>
+    <li>A good RHI exposes what every planned backend can do, and never lets native types leak above it.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>What a graphics API does</h2>
+
+<p>A GPU is a separate processor with its own memory and its own command stream. A program cannot call it like a function. It writes commands into memory, hands them to the driver, and the GPU runs them later. The <b>graphics API</b> is the contract for this: how to create objects on the GPU, how to record commands, and how to know when they are done.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Left: an older API. A thin application calls the API, and a thick driver tracks state, inserts barriers, manages memory and compiles shaders late. Right: an explicit API. A thick application records commands, places barriers, manages memory and builds pipelines up front, and the driver is thin.">
+    <text x="190" y="22" class="mid title">Older APIs: OpenGL, Direct3D 11</text>
+    <rect x="40" y="36" width="300" height="44" rx="6" class="cpu"/>
+    <text x="190" y="56" class="mid">Application</text>
+    <text x="190" y="72" class="mid small">"draw this mesh with this texture"</text>
+    <line x1="190" y1="80" x2="190" y2="98" class="arrow" marker-end="url(#ah)"/>
+    <rect x="40" y="100" width="300" height="26" rx="6" class="box"/>
+    <text x="190" y="118" class="mid small">API calls: set state, draw</text>
+    <line x1="190" y1="126" x2="190" y2="144" class="arrow" marker-end="url(#ah)"/>
+    <rect x="40" y="146" width="300" height="120" rx="6" class="box"/>
+    <rect x="40" y="146" width="300" height="120" rx="6" class="hot"/>
+    <text x="190" y="168" class="mid title">Driver: does a lot, hidden</text>
+    <text x="60" y="192" class="small">· tracks every bound state</text>
+    <text x="60" y="210" class="small">· inserts barriers and cache flushes</text>
+    <text x="60" y="228" class="small">· places resources in memory</text>
+    <text x="60" y="246" class="small">· compiles shaders when first used (hitches)</text>
+    <line x1="190" y1="266" x2="190" y2="284" class="arrow" marker-end="url(#ah)"/>
+    <rect x="40" y="286" width="300" height="34" rx="6" class="gpu"/>
+    <text x="190" y="308" class="mid">GPU</text>
+
+    <text x="570" y="22" class="mid title">Explicit APIs: Vulkan, D3D12, Metal</text>
+    <rect x="420" y="36" width="300" height="120" rx="6" class="cpu"/>
+    <rect x="420" y="36" width="300" height="120" rx="6" class="hot"/>
+    <text x="570" y="58" class="mid title">Application (or engine): does a lot</text>
+    <text x="440" y="82" class="small">· records commands, on any thread</text>
+    <text x="440" y="100" class="small">· places barriers between uses</text>
+    <text x="440" y="118" class="small">· allocates memory, places resources</text>
+    <text x="440" y="136" class="small">· builds pipelines up front, at load time</text>
+    <line x1="570" y1="156" x2="570" y2="174" class="arrow" marker-end="url(#ah)"/>
+    <rect x="420" y="176" width="300" height="26" rx="6" class="box"/>
+    <text x="570" y="194" class="mid small">API calls: record, submit, wait</text>
+    <line x1="570" y1="202" x2="570" y2="220" class="arrow" marker-end="url(#ah)"/>
+    <rect x="420" y="222" width="300" height="44" rx="6" class="box"/>
+    <text x="570" y="242" class="mid">Driver: thin</text>
+    <text x="570" y="258" class="mid small">translates, does not guess</text>
+    <line x1="570" y1="266" x2="570" y2="284" class="arrow" marker-end="url(#ah)"/>
+    <rect x="420" y="286" width="300" height="34" rx="6" class="gpu"/>
+    <text x="570" y="308" class="mid">GPU</text>
+  </svg>
+  <figcaption>The same work has to happen in both. Explicit APIs only move it to the side that knows what the program will do next.</figcaption>
+</figure>
+
+<p>An older driver has to guess. When a texture is drawn into and then sampled, it must notice that, and flush caches in between. It does not know which shader combinations will be used, so it compiles them on the first draw, and the frame stutters. Explicit APIs remove the guessing: the application says what it needs, when it needs it. That makes the driver smaller and faster, and it makes the application longer. An engine absorbs that extra code once, so games and tools built on it do not have to.</p>
+
+<h2><span class="n">2</span>The shared model</h2>
+
+<p>Vulkan, Direct3D 12, Metal and WebGPU were designed in the same years, for the same GPUs. Underneath their names, they have the same parts:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 280" role="img" aria-label="The device creates resources, pipelines and bindings. A command buffer records commands that use them. A queue runs submitted command buffers on the GPU, signals a fence the CPU can wait on, and presents swapchain images.">
+    <rect x="20" y="110" width="120" height="56" rx="6" class="cpu"/>
+    <text x="80" y="134" class="mid title">Device</text>
+    <text x="80" y="152" class="mid small">creates objects</text>
+
+    <line x1="140" y1="122" x2="198" y2="58"  class="arrow" marker-end="url(#ah)"/>
+    <line x1="140" y1="138" x2="198" y2="138" class="arrow" marker-end="url(#ah)"/>
+    <line x1="140" y1="154" x2="198" y2="218" class="arrow" marker-end="url(#ah)"/>
+    <rect x="200" y="30" width="190" height="56" rx="6" class="mem"/>
+    <text x="295" y="54" class="mid">Resources</text>
+    <text x="295" y="72" class="mid small">buffers, textures, samplers</text>
+    <rect x="200" y="110" width="190" height="56" rx="6" class="shader"/>
+    <text x="295" y="134" class="mid">Pipelines</text>
+    <text x="295" y="152" class="mid small">shaders + fixed state</text>
+    <rect x="200" y="190" width="190" height="56" rx="6" class="box"/>
+    <text x="295" y="214" class="mid">Bindings</text>
+    <text x="295" y="232" class="mid small">which resources a shader sees</text>
+
+    <line x1="390" y1="58"  x2="438" y2="122" class="arrow dashed"/>
+    <line x1="390" y1="138" x2="438" y2="138" class="arrow dashed"/>
+    <line x1="390" y1="218" x2="438" y2="154" class="arrow dashed"/>
+    <text x="412" y="130" class="mid small">used by</text>
+    <rect x="440" y="104" width="136" height="68" rx="6" class="cpu"/>
+    <text x="508" y="126" class="mid">Command buffer</text>
+    <text x="508" y="144" class="mid small">bind, draw, dispatch,</text>
+    <text x="508" y="160" class="mid small">copy, barrier</text>
+
+    <line x1="576" y1="138" x2="626" y2="138" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="601" y="128" class="mid small">submit</text>
+    <rect x="628" y="110" width="112" height="56" rx="6" class="gpu"/>
+    <text x="684" y="134" class="mid">Queue</text>
+    <text x="684" y="152" class="mid small">runs it on the GPU</text>
+
+    <line x1="684" y1="166" x2="684" y2="198" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="628" y="200" width="112" height="46" rx="6" class="mem"/>
+    <text x="684" y="220" class="mid">Fence</text>
+    <text x="684" y="236" class="mid small">"done" for the CPU</text>
+    <line x1="684" y1="110" x2="684" y2="76" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="628" y="30" width="112" height="46" rx="6" class="mem"/>
+    <text x="684" y="50" class="mid">Swapchain</text>
+    <text x="684" y="66" class="mid small">present an image</text>
+    <text x="20" y="272" class="small">Blue: work on the CPU. Green: the GPU. Amber: memory and sync objects. Purple: shaders.</text>
+  </svg>
+  <figcaption>The CPU creates objects once and records commands every frame. The GPU only sees command buffers that were submitted to a queue.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Concept</th><th>Vulkan</th><th>Direct3D 12</th><th>Metal</th><th>WebGPU</th></tr>
+  <tr><td>Device</td><td>VkDevice</td><td>ID3D12Device</td><td>MTLDevice</td><td>GPUDevice</td></tr>
+  <tr><td>Queue</td><td>VkQueue</td><td>ID3D12CommandQueue</td><td>MTLCommandQueue</td><td>GPUQueue</td></tr>
+  <tr><td>Command recording</td><td>VkCommandBuffer, from a VkCommandPool</td><td>ID3D12GraphicsCommandList, from an allocator</td><td>MTLCommandBuffer with encoders</td><td>GPUCommandEncoder with pass encoders</td></tr>
+  <tr><td>Pipeline</td><td>VkPipeline + pipeline layout</td><td>pipeline state object + root signature</td><td>MTLRenderPipelineState</td><td>GPURenderPipeline</td></tr>
+  <tr><td>Binding</td><td>descriptor sets</td><td>descriptor heaps and tables</td><td>argument buffers, or direct set calls</td><td>bind groups</td></tr>
+  <tr><td>Resources</td><td>VkBuffer, VkImage + memory</td><td>ID3D12Resource in heaps</td><td>MTLBuffer, MTLTexture</td><td>GPUBuffer, GPUTexture</td></tr>
+  <tr><td>CPU waits for GPU</td><td>VkFence, timeline semaphore</td><td>ID3D12Fence (a counter)</td><td>MTLSharedEvent, completion handlers</td><td>onSubmittedWorkDone (a promise)</td></tr>
+  <tr><td>Ordering between uses</td><td>pipeline barriers, image layouts</td><td>resource barriers, resource states</td><td>automatic by default</td><td>automatic, always</td></tr>
+  <tr><td>Window output</td><td>VkSwapchainKHR</td><td>DXGI swap chain</td><td>CAMetalLayer drawables</td><td>canvas context</td></tr>
+  <tr><td>Shader format</td><td>SPIR-V</td><td>DXIL (from HLSL)</td><td>MSL, or compiled metallib</td><td>WGSL</td></tr>
+</table>
+</div>
+
+<h3>One frame, in any of them</h3>
+<ol class="steps">
+  <li><b>At load time.</b> Create resources, upload data, and build pipelines from shaders.</li>
+  <li><b>Wait.</b> Each frame, wait until the GPU is done with the memory this frame will reuse (see <a href="frames-in-flight.html">frames in flight</a>).</li>
+  <li><b>Get an image.</b> Take one from the swapchain to draw into (see <a href="swapchain.html">the swapchain</a>).</li>
+  <li><b>Record.</b> Fill a command buffer: begin a render pass, bind a pipeline and its resources, draw, end. Put barriers between uses of the same memory (see <a href="gpu-sync.html">GPU synchronization</a>).</li>
+  <li><b>Submit and present.</b> Hand the command buffer to a queue, with a fence to signal. Then present the image.</li>
+</ol>
+
+<h2><span class="n">3</span>Where they differ</h2>
+
+<p>The shared model hides real differences. These are the ones an engine feels most:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Area</th><th>How they differ</th><th>What it means for an engine</th></tr>
+  <tr><td>Binding model</td><td>Vulkan has descriptor sets and layouts. D3D12 has one big descriptor heap and a root signature. Metal binds by slot or through argument buffers. WebGPU has fixed bind groups with strict limits.</td><td>The hardest part to abstract. Many engines go <a href="bindless.html">bindless</a> on the APIs that allow it, so there is little to bind per draw.</td></tr>
+  <tr><td>Synchronization</td><td>Vulkan and D3D12 make the application place every barrier. Metal tracks hazards itself unless a resource opts out. WebGPU always tracks them.</td><td>The interface needs barriers for two backends, and the other two can ignore them.</td></tr>
+  <tr><td>GPU pointers</td><td>Vulkan (buffer device address) and Metal let a shader follow a raw 64-bit buffer address. HLSL on D3D12 and WGSL on WebGPU have no pointers: buffers are reached through descriptors or bindings.</td><td>A data layout built on pointers needs another way to reach buffers on D3D12 and WebGPU, such as indices into a bindless array.</td></tr>
+  <tr><td>Shader language</td><td>Four different formats.</td><td>Write shaders once and cross-compile (Slang, HLSL with a converter, or similar).</td></tr>
+  <tr><td>Render passes</td><td>Metal and WebGPU need explicit pass objects with load and store actions. Vulkan has render pass objects and, since 1.3, the simpler dynamic rendering. D3D12 has optional render passes.</td><td>Model passes with load and store actions: that maps to every API.</td></tr>
+  <tr><td>Memory</td><td>Vulkan lists memory types and heaps. D3D12 has heap types. Metal has storage modes. WebGPU hides memory.</td><td>Ask for intent ("GPU only", "CPU writes often", "CPU reads back") and let each backend pick.</td></tr>
+  <tr><td>Platforms</td><td>Vulkan: Windows, Linux, Android (macOS through a layer). D3D12: Windows, Xbox. Metal: Apple only. WebGPU: browsers and native libraries.</td><td>Covering every platform natively needs more than one backend.</td></tr>
+</table>
+</div>
+
+<h2><span class="n">4</span>Why put a layer on top</h2>
+
+<p>An engine could call Vulkan directly everywhere. Then every renderer feature, every pass and every upload is written in Vulkan terms, and a second API means rewriting all of them. An <b>RHI</b> puts a line through the engine instead. Above the line, code knows only neutral types: a buffer, a texture, a pipeline, a command buffer. Below it, one <b>backend</b> per API turns them into native objects.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Renderer, passes and the scene sit above an RHI interface. Below it are four backends, one for each API, each talking to its own native API.">
+    <rect x="20" y="20" width="720" height="56" rx="6" class="cpu"/>
+    <text x="380" y="44" class="mid title">Engine code</text>
+    <text x="380" y="62" class="mid small">renderer, passes, scene, uploads: written once, with neutral types</text>
+    <line x1="380" y1="76" x2="380" y2="98" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20" y="100" width="720" height="44" rx="6" class="box"/>
+    <rect x="20" y="100" width="720" height="44" rx="6" class="hot"/>
+    <text x="380" y="120" class="mid title">RHI interface</text>
+    <text x="380" y="136" class="mid small">device, buffer, texture, pipeline, command buffer, queue, fence, swapchain</text>
+
+    <line x1="110" y1="144" x2="110" y2="168" class="arrow" marker-end="url(#ah)"/>
+    <line x1="290" y1="144" x2="290" y2="168" class="arrow" marker-end="url(#ah)"/>
+    <line x1="470" y1="144" x2="470" y2="168" class="arrow" marker-end="url(#ah)"/>
+    <line x1="650" y1="144" x2="650" y2="168" class="arrow" marker-end="url(#ah)"/>
+    <rect x="30"  y="170" width="160" height="40" rx="6" class="box"/><text x="110" y="195" class="mid">Vulkan backend</text>
+    <rect x="210" y="170" width="160" height="40" rx="6" class="box"/><text x="290" y="195" class="mid">D3D12 backend</text>
+    <rect x="390" y="170" width="160" height="40" rx="6" class="box"/><text x="470" y="195" class="mid">Metal backend</text>
+    <rect x="570" y="170" width="160" height="40" rx="6" class="box"/><text x="650" y="195" class="mid">WebGPU backend</text>
+    <line x1="110" y1="210" x2="110" y2="228" class="arrow" marker-end="url(#ah)"/>
+    <line x1="290" y1="210" x2="290" y2="228" class="arrow" marker-end="url(#ah)"/>
+    <line x1="470" y1="210" x2="470" y2="228" class="arrow" marker-end="url(#ah)"/>
+    <line x1="650" y1="210" x2="650" y2="228" class="arrow" marker-end="url(#ah)"/>
+    <rect x="30"  y="230" width="160" height="30" rx="6" class="gpu"/><text x="110" y="250" class="mid small">vkCmd…, VkImage</text>
+    <rect x="210" y="230" width="160" height="30" rx="6" class="gpu"/><text x="290" y="250" class="mid small">ID3D12…</text>
+    <rect x="390" y="230" width="160" height="30" rx="6" class="gpu"/><text x="470" y="250" class="mid small">MTL…</text>
+    <rect x="570" y="230" width="160" height="30" rx="6" class="gpu"/><text x="650" y="250" class="mid small">GPU…, WGSL</text>
+  </svg>
+  <figcaption>Native types appear only below the line. Adding an API means writing one more box at the bottom, not touching the engine.</figcaption>
+</figure>
+
+<div class="split">
+  <div>
+    <h4>What an RHI gives</h4>
+    <ul>
+      <li>Portability: one engine, several APIs.</li>
+      <li>One place for the API's rules, so passes do not each get them slightly wrong.</li>
+      <li>A smaller surface: only the features the engine uses.</li>
+      <li>Tests: a fake backend can stand in for the GPU.</li>
+    </ul>
+  </div>
+  <div>
+    <h4>What it costs</h4>
+    <ul>
+      <li>A feature can only be used once every backend can implement it, or behind a "supported?" check.</li>
+      <li>Each backend is real code to write, test and keep in step.</li>
+      <li>A bad split (Vulkan ideas in the interface) makes the next backend hard.</li>
+      <li>A small cost per call, usually much less than the driver's.</li>
+    </ul>
+  </div>
+</div>
+
+<h2><span class="n">5</span>Design choices</h2>
+
+<h3>How thin?</h3>
+
+<p>The first choice is the level of the interface. It ranges from "the same objects as the APIs" to "draw this mesh with this material".</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="A line from thin to thick. Thin: the same objects as the APIs, the engine places barriers. Middle: resources and passes, the layer places barriers from declared uses. Thick: meshes, materials and lights, the layer is a renderer.">
+    <line x1="40" y1="50" x2="720" y2="50" class="arrow" marker-start="url(#ah)" marker-end="url(#ah)"/>
+    <text x="40" y="30" class="title">Thin</text>
+    <text x="720" y="30" class="end title">Thick</text>
+    <circle cx="140" cy="50" r="7" class="cpu"/>
+    <circle cx="380" cy="50" r="7" class="cpu"/>
+    <circle cx="620" cy="50" r="7" class="cpu"/>
+
+    <rect x="40" y="76" width="200" height="140" rx="6" class="box"/>
+    <text x="140" y="98" class="mid title">Mirror the APIs</text>
+    <text x="54" y="122" class="small">createBuffer, createPipeline,</text>
+    <text x="54" y="138" class="small">barrier, draw, submit</text>
+    <text x="54" y="162" class="small">+ full control, little overhead</text>
+    <text x="54" y="180" class="small">− the engine places barriers</text>
+    <text x="54" y="198" class="small">− close to one API's shape</text>
+
+    <rect x="280" y="76" width="200" height="140" rx="6" class="box"/>
+    <text x="380" y="98" class="mid title">Resources and passes</text>
+    <text x="294" y="122" class="small">"this pass reads A, writes B"</text>
+    <text x="294" y="138" class="small">barriers come from that</text>
+    <text x="294" y="162" class="small">+ hard to get sync wrong</text>
+    <text x="294" y="180" class="small">+ maps well to every API</text>
+    <text x="294" y="198" class="small">− some tracking cost</text>
+
+    <rect x="520" y="76" width="200" height="140" rx="6" class="box"/>
+    <text x="620" y="98" class="mid title">A renderer</text>
+    <text x="534" y="122" class="small">drawMesh, setMaterial,</text>
+    <text x="534" y="138" class="small">addLight</text>
+    <text x="534" y="162" class="small">+ each backend can optimize</text>
+    <text x="534" y="180" class="small">− every feature written N times</text>
+    <text x="534" y="198" class="small">− not really a hardware layer</text>
+  </svg>
+  <figcaption>Most engines pick the left or the middle. The thick end is a renderer per API, which is exactly the duplication an RHI should avoid.</figcaption>
+</figure>
+
+<p>A common mix: a thin RHI with explicit barriers, and above it a <a href="render-graphs.html">render graph</a> that turns "reads" and "writes" into those barriers. The RHI stays simple, and passes still do not write barriers by hand.</p>
+
+<h3>Virtual interfaces or a compile-time backend?</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 220" role="img" aria-label="Left: runtime choice. The engine holds a pointer to an abstract device; a virtual call goes to the Vulkan or the D3D12 implementation, both in one program. Right: compile-time choice. The build picks one implementation file per platform, and calls are direct.">
+    <text x="190" y="22" class="mid title">Runtime: virtual functions</text>
+    <rect x="110" y="36" width="160" height="40" rx="6" class="cpu"/>
+    <text x="190" y="61" class="mid mono">device-&gt;createBuffer</text>
+    <line x1="190" y1="76" x2="190" y2="100" class="arrow" marker-end="url(#ah)"/>
+    <text x="200" y="93" class="small">vtable</text>
+    <line x1="190" y1="100" x2="100" y2="130" class="arrow" marker-end="url(#ah)"/>
+    <line x1="190" y1="100" x2="280" y2="130" class="arrow" marker-end="url(#ah)"/>
+    <rect x="30"  y="132" width="140" height="40" rx="6" class="box"/><text x="100" y="157" class="mid">Vulkan device</text>
+    <rect x="210" y="132" width="140" height="40" rx="6" class="box"/><text x="280" y="157" class="mid">D3D12 device</text>
+    <text x="190" y="196" class="mid small">both in one program; choose when it starts</text>
+    <text x="190" y="212" class="mid small">a fake device for tests is easy</text>
+
+    <text x="570" y="22" class="mid title">Compile time: one per build</text>
+    <rect x="490" y="36" width="160" height="40" rx="6" class="cpu"/>
+    <text x="570" y="61" class="mid mono">createBuffer</text>
+    <line x1="570" y1="76" x2="486" y2="130" class="arrow" marker-end="url(#ah)"/>
+    <text x="536" y="112" class="small">direct call</text>
+    <rect x="410" y="132" width="140" height="40" rx="6" class="box"/><text x="480" y="157" class="mid">device_vk.cpp</text>
+    <rect x="590" y="132" width="140" height="40" rx="6" class="ghost"/><text x="660" y="157" class="mid t-faint">device_d3d12.cpp</text>
+    <text x="570" y="196" class="mid small">the build links one; calls can be inlined</text>
+    <text x="570" y="212" class="mid small">switching API means another build</text>
+  </svg>
+  <figcaption>A virtual call costs a few nanoseconds. A frame makes thousands of calls at most, so either choice is fast enough. The real question is whether one program must carry several backends.</figcaption>
+</figure>
+
+<h3>Describing and naming resources</h3>
+
+<p>Almost every RHI creates objects from a plain <b>descriptor struct</b>: a list of fields such as size, format and usage. It is easy to read, easy to hash (for caches) and easy to store for debugging. The object it creates can be named in two ways:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Name</th><th>What the engine holds</th><th>Good</th><th>Bad</th></tr>
+  <tr><td>Pointer</td><td>a pointer to the RHI object</td><td>no lookup, simple</td><td>a stale pointer crashes, or worse, works on a new object</td></tr>
+  <tr><td>Handle</td><td>a small integer, looked up in a table</td><td>can be checked; safe to copy and store; fits in GPU data</td><td>one lookup per use</td></tr>
+</table>
+</div>
+
+<p>A handle with a <b>generation</b> counter can tell a live object from a destroyed one: see <a href="generational-handles.html">generational handles</a>. Under the handle, a backend usually keeps a neutral base struct and <b>derives</b> its own from it, adding the native members:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 190" role="img" aria-label="A neutral buffer struct holds the descriptor and a GPU address. The Vulkan buffer derives from it and adds the native buffer and its memory allocation. The engine passes the neutral pointer; the backend casts it back, because it created it.">
+    <rect x="20" y="30" width="230" height="70" rx="6" class="mem"/>
+    <text x="135" y="52" class="mid title">Buffer (neutral)</text>
+    <text x="135" y="72" class="mid small">desc: size, usage</text>
+    <text x="135" y="88" class="mid small">GPU address</text>
+    <rect x="330" y="30" width="250" height="70" rx="6" class="mem"/>
+    <text x="455" y="52" class="mid title">Vulkan buffer</text>
+    <text x="455" y="72" class="mid small">everything in Buffer, plus</text>
+    <text x="455" y="88" class="mid small">the native buffer and its memory</text>
+    <line x1="330" y1="65" x2="252" y2="65" class="arrow" marker-end="url(#ah)"/>
+    <text x="291" y="57" class="mid small">derives</text>
+
+    <rect x="20" y="130" width="230" height="40" rx="6" class="cpu"/>
+    <text x="135" y="155" class="mid small">engine: passes a Buffer pointer</text>
+    <line x1="250" y1="150" x2="328" y2="150" class="arrow" marker-end="url(#ah)"/>
+    <rect x="330" y="130" width="250" height="40" rx="6" class="box"/>
+    <text x="455" y="155" class="mid small">backend: casts back, no check needed</text>
+    <text x="600" y="62" class="small">Only the backend</text>
+    <text x="600" y="78" class="small">knows the right side.</text>
+    <text x="600" y="150" class="small">It made every object,</text>
+    <text x="600" y="166" class="small">so the cast is safe.</text>
+  </svg>
+  <figcaption>The engine never sees a native type. A second backend derives its own struct from the same base.</figcaption>
+</figure>
+
+<h3>Recording commands</h3>
+
+<div class="split">
+  <div>
+    <h4>Direct</h4>
+    <p>Each RHI call records the native command at once: <var>draw</var> becomes the API's draw. Simple and fast. The RHI's command buffer is a thin wrapper around the native one.</p>
+  </div>
+  <div>
+    <h4>Deferred</h4>
+    <p>RHI calls write a compact list of the engine's own commands. Later, often on another thread, the backend translates the list. Costs a second pass, but the list can be sorted, merged, or replayed, and the engine does not depend on the API's threading rules.</p>
+  </div>
+</div>
+
+<h3>Who places the barriers?</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Choice</th><th>How</th><th>Trade-off</th></tr>
+  <tr><td>The caller</td><td>The RHI has a barrier call, close to Vulkan's.</td><td>Fast and flexible. Every caller must know the rules from <a href="gpu-sync.html">GPU synchronization</a>.</td></tr>
+  <tr><td>The RHI tracks state</td><td>Each resource remembers its last use. Each use records a barrier if needed.</td><td>Hard to get wrong. Costs a lookup per use, and knows only the past, not the future.</td></tr>
+  <tr><td>A render graph</td><td>Passes declare reads and writes up front. The graph places barriers for the whole frame.</td><td>Sees the whole frame, so it can batch and move barriers. Needs a graph. See <a href="render-graphs.html">render graphs</a>.</td></tr>
+</table>
+</div>
+
+<h2><span class="n">6</span>How to add a backend</h2>
+
+<ol class="steps">
+  <li><b>Check the shaders first.</b> Can the shader compiler target the new API, and does the shader code use only features it has (pointers, bindless arrays, subgroup operations)? This is usually the biggest job.</li>
+  <li><b>Implement each interface.</b> Device, command buffer, queue, swapchain, and one derived struct per resource. Keep native types in the backend's own files.</li>
+  <li><b>Map the enums.</b> Formats, usages, stages, filter modes: one function per enum, in one file, with an error for values the API does not have.</li>
+  <li><b>Keep the contracts.</b> The interface promises things the native API may not: for example "a fence is a growing 64-bit value". Build that from what the API has.</li>
+  <li><b>Hook up the window.</b> Each API connects to a window in its own way (a surface, a swap chain, a layer).</li>
+  <li><b>Register it.</b> Add it to the place that picks the backend, and to the build.</li>
+  <li><b>Compare images.</b> Render the same frames on the old and the new backend and diff them. Run each API's validation layer.</li>
+</ol>
+
+<h2><span class="n">7</span>Pitfalls</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Pitfall</th><th>What happens</th><th>Instead</th></tr>
+  <tr><td>One API's shape in the interface</td><td>Vulkan's layouts or descriptor sets appear above the line. The next backend has to fake them.</td><td>Design each call from what all planned APIs can do. Ask "how would Metal do this?"</td></tr>
+  <tr><td>Native types leak up</td><td>A <var>VkImage</var> in an engine header. Now the engine depends on Vulkan again.</td><td>Native types only in the backend's files.</td></tr>
+  <tr><td>Lowest common denominator</td><td>The engine cannot use a feature because one API lacks it.</td><td>Capability tiers: a "supported?" query, and a fallback path.</td></tr>
+  <tr><td>Hidden work in the RHI</td><td>A simple-looking call allocates, waits or flushes.</td><td>Make expensive things look expensive: separate calls, clear names.</td></tr>
+  <tr><td>Only one backend tested</td><td>The interface "works", but only for the API that exists.</td><td>A fake backend in unit tests, image tests per backend.</td></tr>
+</table>
+</div>
+
+<h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
+
+<p>RASM has a thin RHI with virtual interfaces and one backend, Vulkan 1.4. Above it sits <code>RenderContext</code>, which turns handles into RHI pointers and checks every call. The engine and the render graph use only <code>RenderContext</code>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 400" role="img" aria-label="The application calls Engine and RenderGraph. They call RenderContext, which maps handles to rhi pointers, checks arguments, deduplicates shaders and pipelines, owns render targets, tracks texture states and batches uploads. Below it is the rhi interface in src/rhi/device.h: Device, CommandBuffer, Queue and Swapchain with virtual functions. createDevice picks VulkanDevice; the other three backends return null. The Vulkan backend uses Vulkan 1.4, VMA and vk-bootstrap.">
+    <rect x="20" y="16" width="720" height="40" rx="6" class="cpu"/>
+    <text x="380" y="34" class="mid title">Application</text>
+    <text x="380" y="49" class="mid small">examples, games, tools</text>
+    <line x1="380" y1="56" x2="380" y2="72" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20" y="74" width="350" height="40" rx="6" class="cpu"/>
+    <text x="195" y="99" class="mid mono">Engine</text>
+    <rect x="390" y="74" width="350" height="40" rx="6" class="cpu"/>
+    <text x="565" y="99" class="mid mono">RenderGraph</text>
+    <line x1="195" y1="114" x2="195" y2="130" class="arrow" marker-end="url(#ah)"/>
+    <line x1="565" y1="114" x2="565" y2="130" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="20" y="132" width="720" height="84" rx="6" class="cpu"/>
+    <text x="380" y="152" class="mid mono title">RenderContext · handles in, rhi pointers out</text>
+    <text x="40"  y="176" class="small">· handle → rhi pointer tables</text>
+    <text x="40"  y="194" class="small">· argument checks (checkArgument)</text>
+    <text x="280" y="176" class="small">· dedup of shaders, pipelines, layouts</text>
+    <text x="280" y="194" class="small">· render targets, bindless slots, samplers</text>
+    <text x="530" y="176" class="small">· TextureStates</text>
+    <text x="530" y="194" class="small">· UploadManager</text>
+    <line x1="380" y1="216" x2="380" y2="232" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="20" y="234" width="720" height="56" rx="6" class="box"/>
+    <rect x="20" y="234" width="720" height="56" rx="6" class="hot"/>
+    <text x="380" y="256" class="mid mono title">rhi:: · src/rhi/device.h</text>
+    <text x="380" y="276" class="mid small">Device, CommandBuffer, Queue, Swapchain: virtual · Buffer, Texture, Pipeline, Fence, ...: plain structs</text>
+
+    <line x1="110" y1="290" x2="110" y2="310" class="arrow" marker-end="url(#ah)"/>
+    <text x="210" y="304" class="mid small mono">createDevice(backend)</text>
+    <rect x="20" y="312" width="200" height="74" rx="6" class="box"/>
+    <text x="120" y="334" class="mid mono">VulkanDevice ...</text>
+    <text x="120" y="352" class="mid small">src/rhi/vulkan/</text>
+    <text x="120" y="370" class="mid small">Vulkan 1.4, VMA, vk-bootstrap</text>
+    <rect x="250" y="312" width="150" height="74" rx="6" class="ghost"/>
+    <text x="325" y="345" class="mid mono t-faint">DX12</text>
+    <text x="325" y="363" class="mid small t-faint">logs, returns null</text>
+    <rect x="420" y="312" width="150" height="74" rx="6" class="ghost"/>
+    <text x="495" y="345" class="mid mono t-faint">METAL</text>
+    <text x="495" y="363" class="mid small t-faint">logs, returns null</text>
+    <rect x="590" y="312" width="150" height="74" rx="6" class="ghost"/>
+    <text x="665" y="345" class="mid mono t-faint">WEBGPU</text>
+    <text x="665" y="363" class="mid small t-faint">logs, returns null</text>
+  </svg>
+  <figcaption><code>EngineConfig::preferredBackend</code> picks the backend when the engine starts. Vulkan headers stay in the Vulkan files, with three exceptions: <code>src/rhi/device.cpp</code>, the surface hook in <code>src/platform/windowSurface.h</code>, and <code>src/thirdparty_impl.cpp</code>.</figcaption>
+</figure>
+
+<p>Here is one buffer, from creation to use. The handle lives above the line; the native buffer lives below it.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Create: RenderContext::createBuffer calls the virtual Device::createBuffer, VulkanDevice makes a VulkanBuffer, and RenderContext stores its pointer under a new BufferHandle. Use: bindIndexBuffer looks the handle up, passes the rhi::Buffer pointer to VulkanCommandBuffer, which casts it to VulkanBuffer and records vkCmdBindIndexBuffer.">
+    <text x="20" y="20" class="small">create</text>
+    <rect x="20"  y="30" width="160" height="50" rx="6" class="cpu"/>
+    <text x="100" y="52" class="mid mono small">createBuffer(desc)</text>
+    <text x="100" y="70" class="mid small">RenderContext</text>
+    <line x1="180" y1="55" x2="208" y2="55" class="arrow" marker-end="url(#ah)"/>
+    <rect x="210" y="30" width="160" height="50" rx="6" class="box"/>
+    <text x="290" y="52" class="mid mono small">Device::createBuffer</text>
+    <text x="290" y="70" class="mid small">virtual call</text>
+    <line x1="370" y1="55" x2="398" y2="55" class="arrow" marker-end="url(#ah)"/>
+    <rect x="400" y="30" width="160" height="50" rx="6" class="mem"/>
+    <text x="480" y="52" class="mid mono small">new VulkanBuffer</text>
+    <text x="480" y="70" class="mid small">VMA memory, address</text>
+    <line x1="560" y1="55" x2="588" y2="55" class="arrow" marker-end="url(#ah)"/>
+    <rect x="590" y="30" width="150" height="50" rx="6" class="cpu"/>
+    <text x="665" y="52" class="mid mono small">BufferHandle</text>
+    <text x="665" y="70" class="mid small">→ rhi::Buffer*</text>
+
+    <text x="20" y="116" class="small">use</text>
+    <rect x="20"  y="126" width="160" height="50" rx="6" class="cpu"/>
+    <text x="100" y="148" class="mid mono small">bindIndexBuffer(h)</text>
+    <text x="100" y="166" class="mid small">RenderContext</text>
+    <line x1="180" y1="151" x2="208" y2="151" class="arrow" marker-end="url(#ah)"/>
+    <rect x="210" y="126" width="160" height="50" rx="6" class="cpu"/>
+    <text x="290" y="148" class="mid mono small">lookup(buffers, h)</text>
+    <text x="290" y="166" class="mid small">error if unknown</text>
+    <line x1="370" y1="151" x2="398" y2="151" class="arrow" marker-end="url(#ah)"/>
+    <rect x="400" y="126" width="160" height="50" rx="6" class="box"/>
+    <text x="480" y="148" class="mid mono small">VulkanCommandBuffer</text>
+    <text x="480" y="166" class="mid small">static_cast to VulkanBuffer</text>
+    <line x1="560" y1="151" x2="588" y2="151" class="arrow" marker-end="url(#ah)"/>
+    <rect x="590" y="126" width="150" height="50" rx="6" class="gpu"/>
+    <text x="665" y="148" class="mid mono small">vkCmdBindIndexBuffer</text>
+    <text x="665" y="166" class="mid small">recorded at once</text>
+  </svg>
+  <figcaption>Recording is direct: each call records its Vulkan command right away. There is no RASM command list in between.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Thickness</td><td>thin, middle or thick</td><td>Thin, shaped like Vulkan 1.3+ with dynamic rendering. Two things are simpler than Vulkan: barriers name three coarse <code>PipelineStage</code> sets, and textures name a <code>TextureUsage</code> instead of a layout.</td></tr>
+  <tr><td>Polymorphism</td><td>virtual or compile time</td><td>Virtual: <code>Device</code>, <code>CommandBuffer</code>, <code>Queue</code> and <code>Swapchain</code> are abstract classes. <code>rhi::createDevice</code> switches on <code>Backend</code> at runtime.</td></tr>
+  <tr><td>Resources</td><td>descriptor struct, derived backend struct</td><td>The same. <code>rhi::Buffer</code> keeps its <code>BufferDesc</code>; <code>VulkanBuffer</code> adds <code>VkBuffer</code> and its <code>VmaAllocation</code>. The backend casts back with <code>static_cast</code>.</td></tr>
+  <tr><td>Naming</td><td>pointers or handles</td><td>Both: handles (<code>BufferHandle</code>) above <code>RenderContext</code>, pointers below it. Handles never become invalid yet (<b>D4</b>).</td></tr>
+  <tr><td>Recording</td><td>direct or deferred</td><td>Direct. Each <code>VulkanCommandBuffer</code> owns its own command pool, reset in <code>begin</code>.</td></tr>
+  <tr><td>Barriers</td><td>caller, state tracking, or graph</td><td>All three, in layers. The RHI has explicit <code>memoryBarrier</code> and <code>transitionTexture</code>. <code>RenderContext</code> tracks each texture's state (<code>TextureStates</code>). <code>RenderGraph</code> derives barriers from declared reads and writes. See <a href="gpu-sync.html#in-rasm">GPU synchronization</a>.</td></tr>
+  <tr><td>CPU–GPU sync</td><td>fences or counters</td><td>Only counters: an <code>rhi::Fence</code> is a timeline, a Vulkan timeline semaphore. See <a href="frames-in-flight.html#in-rasm">frames in flight</a>.</td></tr>
+  <tr><td>Swapchain sync</td><td>semaphores in the interface</td><td>None cross it. <code>VulkanSwapchain</code> owns its semaphores, and a <code>SubmitDesc</code> just names the swapchain. See <a href="swapchain.html#in-rasm">the swapchain</a>.</td></tr>
+  <tr><td>Queues</td><td>graphics, compute, transfer</td><td>One: <code>QueueType</code> has only <code>GRAPHICS</code> (<b>D13</b>).</td></tr>
+  <tr><td>Shaders</td><td>one language, cross-compiled</td><td>Slang, compiled at runtime. <code>getShaderCompilerTarget</code> in <code>src/engine.cpp</code> maps each backend to SPIR-V, HLSL, MSL or WGSL. But the shaders use device addresses and <code>spirv_asm</code>, so only SPIR-V works today (<b>D12</b>).</td></tr>
+  <tr><td>Window</td><td>one hook per API</td><td><code>createWindowSurface</code> takes a <code>VkInstance</code>, so the window hook is Vulkan-only (<b>D7</b>).</td></tr>
+  <tr><td>Checks</td><td>one place for the rules</td><td><code>RenderContext</code> checks public API misuse with <code>checkArgument</code>: an error log, an assert in debug builds, and the call does nothing. For example, no draw outside a rendering scope and no barrier or dispatch inside one.</td></tr>
+  <tr><td>Tests</td><td>a fake backend</td><td><code>tests/uploadManagerTests.cpp</code> and <code>tests/textureStatesTests.cpp</code> implement a fake <code>Device</code> or <code>CommandBuffer</code>, with no GPU.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The interface</td><td><code>src/rhi/device.h</code></td></tr>
+  <tr><td>Descriptor structs, <code>TextureUsage</code>, <code>PipelineStage</code></td><td><code>include/rasm/render/resource.h</code>; their hashes in <code>src/rhi/resource.cpp</code></td></tr>
+  <tr><td>Backend choice</td><td><code>rhi::createDevice</code> in <code>src/rhi/device.cpp</code></td></tr>
+  <tr><td>Handle tables, checks, caches</td><td><code>RenderContext</code> in <code>src/rhi/renderContext.cpp</code>, public header <code>include/rasm/render/renderContext.h</code></td></tr>
+  <tr><td>Native structs</td><td><code>src/rhi/vulkan/vulkanTypes.h</code></td></tr>
+  <tr><td>Device and resources</td><td><code>VulkanDevice</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>Recording</td><td><code>VulkanCommandBuffer</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
+  <tr><td>Submit</td><td><code>VulkanQueue::submit</code> in <code>src/rhi/vulkan/vulkanQueue.cpp</code></td></tr>
+  <tr><td>Shader target per backend</td><td><code>getShaderCompilerTarget</code> in <code>src/engine.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Vulkan calls and types stay under <code>src/rhi/vulkan/</code>. From outside, only <code>src/rhi/device.cpp</code>, the surface hook in <code>src/platform/</code> and <code>src/thirdparty_impl.cpp</code> (the VMA implementation) include them.</li>
+    <li>A new GPU feature goes into <code>src/rhi/device.h</code> in terms that Vulkan, D3D12, Metal and WebGPU can all implement, never as a Vulkan-only path above the RHI.</li>
+    <li>Public API misuse is checked in <code>RenderContext</code> with <code>checkArgument</code>. Inside the backend, use plain <code>assert</code>.</li>
+    <li>Check every <code>VkResult</code> and log it with <code>toVkResultString</code>. Every Vulkan object gets a debug name (<code>setObjectName</code>).</li>
+    <li>Test with <code>enableValidation</code> on. A change that adds validation messages is not done.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>A second backend needs, in this order: shaders without raw pointers and <code>spirv_asm</code> (<b>D12</b>), a window hook that takes native handles (<b>D7</b>), and more queue types (<b>D13</b>). Objects are destroyed at once, so only when the GPU is idle or a fence covered their last use; there is no deferred destruction (<b>D4</b>). There is no pipeline cache (<b>P8</b>).</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>The Khronos Group, <i>Vulkan 1.4 Specification</i>; Microsoft, <i>Direct3D 12 Programming Guide</i>; Apple, <i>Metal Programming Guide</i>; W3C, <i>WebGPU</i> specification.</li>
+  <li>Branimir Karadžić, <i>bgfx</i>: an open-source, cross-API rendering library with a deferred command model.</li>
+  <li>NVIDIA, <i>NVRHI</i>: an open-source RHI over Vulkan and D3D12 with automatic state tracking.</li>
+  <li>Epic Games, <i>Unreal Engine</i> documentation on its RHI and render dependency graph.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

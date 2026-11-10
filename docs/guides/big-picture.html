@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Big Picture · RASM</title>
-<meta name="description" content="The layers of RASM from the application down to Vulkan, the source folders, public and private headers, handles and registries, creation dedup, and how scenes, entities, meshes and materials relate.">
-<meta name="rasm-sources" content="include/rasm/rasm.h include/rasm/engine.h include/rasm/handle.h include/rasm/types.h include/rasm/entity.h include/rasm/scene.h include/rasm/mesh.h include/rasm/material.h include/rasm/light.h include/rasm/camera.h include/rasm/transform.h include/rasm/window.h include/rasm/render/renderContext.h include/rasm/render/renderGraph.h include/rasm/render/resource.h src/engine.cpp src/core/handle.cpp src/rhi/renderContext.cpp src/rhi/resource.cpp src/rhi/device.h src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanTypes.h src/scene/scene.cpp src/scene/entity.cpp src/scene/camera.cpp src/scene/light.cpp src/assets/mesh.cpp src/assets/material.cpp src/assets/texture.cpp src/renderer/gpuScene.h src/CMakeLists.txt">
+<meta name="description" content="The first stop of the engine tour: the layers of RASM from the application down to Vulkan, the source folders, public and private headers, who owns which object, creation dedup, how scenes, entities, meshes and materials relate, and which example shows what.">
+<meta name="rasm-sources" content="include/rasm/rasm.h include/rasm/engine.h include/rasm/handle.h include/rasm/types.h include/rasm/entity.h include/rasm/scene.h include/rasm/mesh.h include/rasm/material.h include/rasm/light.h include/rasm/camera.h include/rasm/transform.h include/rasm/window.h include/rasm/render/renderContext.h include/rasm/render/renderGraph.h include/rasm/render/resource.h src/engine.cpp src/core/handle.cpp src/rhi/renderContext.cpp src/rhi/resource.cpp src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/device.h src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanTypes.h src/scene/scene.cpp src/scene/entity.cpp src/scene/camera.cpp src/scene/light.cpp src/assets/mesh.cpp src/assets/meshLod.cpp src/assets/material.cpp src/assets/texture.cpp src/renderer/gpuScene.h src/renderer/renderGraph.cpp src/CMakeLists.txt examples/CMakeLists.txt examples/00_hello_scene/main.cpp examples/01_render_graph/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/04_compute/main.cpp examples/05_city/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -26,9 +26,10 @@
 <nav id="sidebar"></nav>
 <main>
 
-<p class="eyebrow">Foundations</p>
+<p class="eyebrow">Engine tour</p>
 <h1>The big picture</h1>
 <p class="lead">RASM is a stack of a few layers. The application talks to one class, <code>Engine</code>, and gets small handles back. Under it, <code>RenderContext</code> turns handles into GPU objects, and <code>rhi::Device</code> hides the graphics API. Vulkan is the only backend today.</p>
+<p>This is the first stop of a three-page tour of the engine. It shows the parts and how they fit together. Each idea behind a part (handles, bindless, culling, ...) has its own guide, linked where it comes up.</p>
 
 <div class="legend">
   <span><i class="cpu"></i>CPU work</span>
@@ -45,6 +46,11 @@
     <li>CPU objects (entities, meshes, materials, cameras, lights, scenes) live in <code>Engine</code>'s registry. GPU objects (buffers, textures, pipelines, ...) live in <code>RenderContext</code>'s tables.</li>
     <li>Shaders, pipelines and descriptor set layouts are deduplicated by their descriptor. Buffers and textures are always new.</li>
   </ul>
+</div>
+
+<div class="cards">
+  <a class="card" href="frame-loop.html"><span class="num">Stop 2</span><b>One frame, step by step</b><span>What happens between beginFrame and endFrame, and where each job runs.</span></a>
+  <a class="card" href="gpu-scene.html"><span class="num">Stop 3</span><b>The GPU scene tables</b><span>The tables the GPU draws from, and how an entity gets into them.</span></a>
 </div>
 
 <h2><span class="n">1</span>The layers</h2>
@@ -88,7 +94,7 @@
 
     <rect x="10" y="133" width="116" height="48" rx="6" class="cpu"/>
     <text x="68" y="153" class="mid title">RenderGraph</text>
-    <text x="68" y="171" class="mid small">orders passes</text>
+    <text x="68" y="171" class="mid small">passes, barriers</text>
     <path d="M150,40 H68 V131" class="arrow dashed" marker-end="url(#ah)"/>
     <text x="74" y="96" class="small">optional</text>
     <line x1="126" y1="146" x2="148" y2="128" class="arrow cpu" marker-end="url(#ah-cpu)"/>
@@ -98,22 +104,22 @@
     <text x="430" y="52" class="small">Calls render(), or runs a render graph, each frame.</text>
     <text x="430" y="114" class="small">CPU objects in its registry, the frame loop,</text>
     <text x="430" y="130" class="small">asset loads, the GPU scene tables, culling.</text>
-    <text x="430" y="192" class="small">Handle → rhi object tables, dedup caches,</text>
-    <text x="430" y="208" class="small">render targets, bindless slots, argument checks.</text>
+    <text x="430" y="192" class="small">Handle → rhi object tables, dedup caches, the</text>
+    <text x="430" y="208" class="small">layout of each texture, render targets, bindless.</text>
     <text x="430" y="270" class="small">Backend-neutral interface: resources, command</text>
     <text x="430" y="286" class="small">buffers, the queue, the swapchain, fences.</text>
     <text x="430" y="348" class="small">Vulkan objects through vk-bootstrap and VMA.</text>
     <text x="430" y="364" class="small">Also VulkanCommandBuffer, Queue, Swapchain.</text>
     <text x="430" y="430" class="small">Runs what the queue submitted.</text>
   </svg>
-  <figcaption>The render graph is an optional path. It calls <code>Engine</code> for the frame and the passes, and gives each pass the <code>RenderContext</code> to record with. See <a href="render-graph.html">the render graph</a>.</figcaption>
+  <figcaption>The render graph is an optional path. It calls <code>Engine</code> for the frame and the passes, records the barriers between them, and gives each pass the <code>RenderContext</code> to record with. See <a href="render-graphs.html">Render graphs</a>. Why there is an <code>rhi::Device</code> layer at all is in <a href="graphics-apis-rhi.html">Graphics APIs and the RHI</a>.</figcaption>
 </figure>
 
 <div class="table-wrap">
 <table>
   <tr><th>Layer</th><th>Knows</th><th>Does not know</th></tr>
   <tr><td><code>Engine</code></td><td>scenes, entities, meshes, materials, cameras, lights; the frame loop</td><td>any Vulkan type</td></tr>
-  <tr><td><code>RenderContext</code></td><td>handles and the <code>rhi::</code> object behind each one</td><td>scenes, entities, the frame loop</td></tr>
+  <tr><td><code>RenderContext</code></td><td>handles and the <code>rhi::</code> object behind each one; the layout each texture is in (<code>TextureStates</code>)</td><td>scenes, entities, the frame loop</td></tr>
   <tr><td><code>rhi::Device</code></td><td>neutral resources, command buffers, the queue, the swapchain</td><td>handles, which backend is under it</td></tr>
   <tr><td><code>VulkanDevice</code></td><td><code>VkDevice</code>, VMA, vk-bootstrap</td><td>handles, the engine</td></tr>
 </table>
@@ -133,9 +139,11 @@
   <tr><td><code>src/assets/</code></td><td>mesh, texture and material loading, glTF and OBJ import, mesh LODs</td><td><code>mesh.cpp</code>, <code>meshImport.cpp</code>, <code>meshLod.cpp</code>, <code>texture.cpp</code>, <code>material.cpp</code></td></tr>
   <tr><td><code>src/scene/</code></td><td>scenes, entities, cameras, lights, transforms</td><td><code>scene.cpp</code>, <code>entity.cpp</code>, <code>camera.cpp</code></td></tr>
   <tr><td><code>src/renderer/</code></td><td>GPU scene tables, culling, frame stats, overlay, render graph, shader compiler, GPU structs</td><td><code>gpuScene.cpp</code>, <code>gpuTable.cpp</code>, <code>geometryPool.cpp</code>, <code>shaderCompiler.cpp</code></td></tr>
-  <tr><td><code>src/rhi/</code></td><td><code>RenderContext</code>, the <code>rhi::Device</code> interface, uploads</td><td><code>renderContext.cpp</code>, <code>device.h</code>, <code>uploadManager.cpp</code></td></tr>
+  <tr><td><code>src/rhi/</code></td><td><code>RenderContext</code>, the <code>rhi::Device</code> interface, uploads, texture layouts</td><td><code>renderContext.cpp</code>, <code>device.h</code>, <code>uploadManager.cpp</code>, <code>textureStates.cpp</code></td></tr>
   <tr><td><code>src/rhi/vulkan/</code></td><td>the Vulkan backend</td><td><code>vulkanDevice.cpp</code>, <code>vulkanCommandBuffer.cpp</code>, <code>vulkanSwapchain.cpp</code>, <code>vulkanQueue.cpp</code></td></tr>
-  <tr><td><code>shaders/lib/</code>, <code>shaders/passes/</code></td><td>Slang modules and pass entry points, compiled at run time</td><td><code>core.slang</code>, <code>rasm.slang</code>, <code>cull.slang</code></td></tr>
+  <tr><td><code>shaders/lib/</code>, <code>shaders/passes/</code></td><td>Slang modules and pass entry points, compiled at run time</td><td><code>core.slang</code>, <code>rasm.slang</code>, <code>cull.slang</code>, <code>hiz.slang</code></td></tr>
+  <tr><td><code>examples/</code></td><td>one program per feature (<a href="#examples">section 7</a>)</td><td><code>examples/05_city/main.cpp</code>, <code>examples/CMakeLists.txt</code></td></tr>
+  <tr><td><code>tests/</code></td><td><code>rasm_tests</code>: doctest unit tests of CPU code, no GPU</td><td><code>handleTests.cpp</code>, <code>renderGraphTests.cpp</code>, <code>textureStatesTests.cpp</code></td></tr>
 </table>
 </div>
 
@@ -190,7 +198,7 @@
 
 <h2><span class="n">4</span>Handles and the two kinds of owner</h2>
 
-<p>A handle is two numbers: <code>index</code> and <code>generation</code>. <code>generation == 0</code> means invalid, so a default-constructed handle is invalid and <code>isValid</code> returns false. The tag type makes each handle a different C++ type, so a <code>MeshHandle</code> cannot be passed where a <code>TextureHandle</code> is expected.</p>
+<p>The application never holds a pointer. It holds a handle: <code>Handle</code>, an <code>index</code> and a <code>generation</code>. A default handle has <code>generation == 0</code> and is invalid (<code>isValid</code>). Its tag makes each handle its own C++ type, so a <code>MeshHandle</code> cannot go where a <code>TextureHandle</code> is expected. Why handles, and what the generation is for, is in <a href="generational-handles.html">Generational handles</a>. This section shows who owns what in RASM.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 320" role="img" aria-label="HandleManager in Engine gives out handles. CPU objects are stored in vectors in Engine's registry at handle.index. GPU objects are stored in unordered maps in RenderContext::Impl, from handle to an rhi object pointer.">
@@ -245,7 +253,7 @@
     <text x="406" y="272" class="small">+ shaders, commandBuffers, fences, queryPools,</text>
     <text x="406" y="290" class="small">descriptor layouts, pools, sets, renderTargets</text>
   </svg>
-  <figcaption><code>RenderContext</code> is a friend of <code>Engine</code>, and takes its handles from the same <code>HandleManager</code>. The map values are typed as <code>rhi::</code> pointers; the objects behind them are the backend's derived structs (see <a href="rhi.html">the RHI</a>).</figcaption>
+  <figcaption><code>RenderContext</code> is a friend of <code>Engine</code>, and takes its handles from the same <code>HandleManager</code>. The map values are typed as <code>rhi::</code> pointers; the objects behind them are the backend's derived structs (see <a href="graphics-apis-rhi.html#in-rasm">Graphics APIs and the RHI</a>).</figcaption>
 </figure>
 
 <div class="split">
@@ -276,7 +284,7 @@
 
 <div class="callout warn">
   <strong>Known issues</strong>
-  <p><b>D4</b>: nothing can be destroyed before shutdown, and <code>generation</code> is always 1, so a stale handle cannot be detected. Registry slots and bindless slots are never reused.</p>
+  <p><b>D4</b>: nothing can be destroyed before shutdown, and <code>generation</code> is always 1, so a stale handle cannot be detected. Registry slots and bindless slots are never reused. <a href="generational-handles.html#in-rasm">Generational handles</a> shows what is missing.</p>
   <p><b>B13</b>: a handle index is taken before validation, so a failed create still uses up an index.</p>
 </div>
 
@@ -405,9 +413,27 @@
 </table>
 </div>
 
-<p>An entity without a valid material, or a sub-mesh without one, draws with the default material: <code>getMaterial</code> resolves an invalid handle to it. On the GPU each entity becomes one instance row per sub-mesh. See <a href="gpu-scene.html">the GPU scene tables</a> for how these objects reach the GPU, and <a href="asset-loading.html">asset loading</a> for how meshes and textures are loaded.</p>
+<p>An entity without a valid material, or a sub-mesh without one, draws with the default material: <code>getMaterial</code> resolves an invalid handle to it. On the GPU each entity becomes one instance row per sub-mesh, and a material becomes one row that names its textures by <a href="bindless.html">bindless</a> slot. <a href="gpu-scene.html">The GPU scene tables</a> (stop 3) show how these objects reach the GPU. <a href="asset-streaming.html">Streaming assets in the background</a> shows how meshes and textures load, and <a href="mesh-simplification.html">Mesh simplification</a> how a mesh gets its LODs.</p>
 
-<h2><span class="n">7</span>Where it lives in code</h2>
+<h2 id="examples"><span class="n">7</span>Follow the examples</h2>
+
+<p>Each example puts a few parts of the engine to work. Read its <code>main.cpp</code> next to the pages in the last column.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Example</th><th>What it does</th><th>Engine parts it uses</th><th>Read</th></tr>
+  <tr><td><code>00_hello_scene</code></td><td>three bunnies from one OBJ mesh and one texture, three lights</td><td><code>loadMesh</code>, <code>loadTexture</code>, <code>createEntity</code>, <code>render</code></td><td><a href="frame-loop.html">stop 2</a>, <a href="gpu-scene.html">stop 3</a>, <a href="gpu-driven.html">GPU-driven rendering</a></td></tr>
+  <tr><td><code>01_render_graph</code></td><td>the scene into a render target, then a pass that samples it onto the swapchain</td><td><code>RenderGraph</code>, <code>drawScene</code>, <code>createPipeline</code></td><td><a href="render-graphs.html">Render graphs</a>, <a href="gpu-sync.html">GPU synchronization</a></td></tr>
+  <tr><td><code>02_gltf</code></td><td>three glTF models with their PBR materials</td><td><code>loadGLTF</code>, sub-meshes, material rows</td><td><a href="asset-streaming.html">Streaming assets</a>, <a href="pbr.html">PBR</a>, <a href="bindless.html">Bindless</a></td></tr>
+  <tr><td><code>03_instances</code></td><td>10 000 cubes; a few spin, new ones appear, one material pulses</td><td><code>createMesh</code>, <code>updateTransform</code>, <code>updateMaterial</code></td><td><a href="gpu-scene.html">stop 3</a>, <a href="gpu-memory.html">GPU memory and uploads</a></td></tr>
+  <tr><td><code>04_compute</code></td><td>a compute pass moves 4096 particles in a buffer that a draw then reads</td><td><code>addComputePass</code>, <code>createComputePipeline</code></td><td><a href="device-addresses.html">Buffer device addresses</a>, <a href="gpu-sync.html">GPU synchronization</a></td></tr>
+  <tr><td><code>05_city</code></td><td>a night city of about 146 000 instances; 5000 cars move every frame</td><td>culling, Hi-Z, LODs, <code>fillTexture</code></td><td><a href="frustum-culling.html">Frustum</a> and <a href="occlusion-culling.html">occlusion culling</a>, <a href="lod-selection.html">LOD selection</a></td></tr>
+</table>
+</div>
+
+<p>Every example sets <code>enableValidation</code>, <code>assetRoot</code> and <code>shaderDir</code>, so it runs from any folder and picks up shader edits at its next start. A new one is added with <code>rasm_add_example</code> in <code>examples/CMakeLists.txt</code>.</p>
+
+<h2><span class="n">8</span>Where it lives in code</h2>
 
 <div class="table-wrap">
 <table class="code-map">
@@ -418,12 +444,14 @@
   <tr><td>Handle → GPU object tables</td><td><code>RenderContext::Impl</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>Descriptors</td><td><code>include/rasm/render/resource.h</code></td></tr>
   <tr><td>Dedup hashes</td><td><code>src/rhi/resource.cpp</code></td></tr>
+  <tr><td>Texture layouts</td><td><code>TextureStates</code> in <code>src/rhi/textureStates.cpp</code>, used by <code>RenderContext::transitionImageLayout</code></td></tr>
   <tr><td>Pick the backend</td><td><code>rhi::createDevice</code> in <code>src/rhi/device.cpp</code></td></tr>
   <tr><td>Source list</td><td><code>RASM_SRC</code> in <code>src/CMakeLists.txt</code></td></tr>
+  <tr><td>Examples</td><td>one folder each, such as <code>examples/05_city/main.cpp</code>, listed with <code>rasm_add_example</code> in <code>examples/CMakeLists.txt</code></td></tr>
 </table>
 </div>
 
-<h2><span class="n">8</span>Rules when you change it</h2>
+<h2><span class="n">9</span>Rules when you change it</h2>
 
 <div class="callout rule">
   <strong>Keep these true</strong>

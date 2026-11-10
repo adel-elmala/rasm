@@ -1,0 +1,650 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mipmaps and Texture Sampling · RASM</title>
+<meta name="description" content="How texture sampling works: aliasing when a texture is shrunk, the mip chain and its memory cost, generating mips correctly, how the GPU picks a mip level from derivatives, nearest, bilinear, trilinear and anisotropic filtering, wrap modes, and how RASM does it.">
+<meta name="rasm-sources" content="src/rhi/vulkan/vulkanDevice.cpp src/rhi/renderContext.cpp src/rhi/device.h src/assets/material.cpp src/assets/texture.cpp include/rasm/render/resource.h shaders/lib/core.slang shaders/passes/hiz.slang">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/mipmaps-sampling.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">GPU data</p>
+<h1>Mipmaps and texture sampling</h1>
+<p class="lead">When a pixel shader reads a texture, the GPU does not just fetch one texel. It works out how big the pixel is on the texture, picks a smaller copy of the texture that matches, and blends a few texels together. This page explains each step: why shrinking a texture flickers, how a mip chain fixes it, how mips are made, how the GPU chooses a level, and the filters and wrap modes that a sampler controls. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>When one pixel covers many texels, a single sample picks one of them almost at random. The result flickers and shows patterns: <b>aliasing</b>.</li>
+    <li>A <b>mip chain</b> stores the texture again at 1/2, 1/4, 1/8 … of its size, each level filtered from the one above. It costs only <b>1/3 more memory</b>.</li>
+    <li>The GPU measures how fast the texture coordinates change between neighboring pixels (the <b>derivatives</b>) and picks the level <b>λ = log2(texels per pixel)</b>.</li>
+    <li><b>Bilinear</b> blends 4 texels inside one level; <b>trilinear</b> also blends two levels; <b>anisotropic</b> takes several samples along a stretched footprint.</li>
+    <li>Color mips must be averaged in <b>linear light</b>, not on the stored sRGB values.</li>
+    <li>The <b>wrap mode</b> decides what is read outside 0 to 1: repeat, mirror, or clamp.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>The problem: shrinking a texture</h2>
+
+<p>A texture is a grid of <b>texels</b>. The screen is a grid of <b>pixels</b>. When an object is close, one texel covers several pixels (<b>magnification</b>). When it is far away, one pixel covers many texels (<b>minification</b>). Minification is the hard case.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Left: a black and white checker texture with three pixel footprints drawn on it, each covering 4 by 4 texels. One sample at the center of each footprint lands on a dark or a light texel by chance. Right: the screen row that results flickers between dark and light, while the correct answer, the average of each footprint, is the same gray for all.">
+    <text x="110" y="22" class="mid title">texture, far away</text>
+    <rect x="30"  y="40" width="160" height="160" class="zone"/>
+    <path d="M30,40 h10 v10 h-10 z M50,40 h10 v10 h-10 z M70,40 h10 v10 h-10 z M90,40 h10 v10 h-10 z M110,40 h10 v10 h-10 z M130,40 h10 v10 h-10 z M150,40 h10 v10 h-10 z M170,40 h10 v10 h-10 z
+             M40,50 h10 v10 h-10 z M60,50 h10 v10 h-10 z M80,50 h10 v10 h-10 z M100,50 h10 v10 h-10 z M120,50 h10 v10 h-10 z M140,50 h10 v10 h-10 z M160,50 h10 v10 h-10 z M180,50 h10 v10 h-10 z
+             M30,60 h10 v10 h-10 z M50,60 h10 v10 h-10 z M70,60 h10 v10 h-10 z M90,60 h10 v10 h-10 z M110,60 h10 v10 h-10 z M130,60 h10 v10 h-10 z M150,60 h10 v10 h-10 z M170,60 h10 v10 h-10 z
+             M40,70 h10 v10 h-10 z M60,70 h10 v10 h-10 z M80,70 h10 v10 h-10 z M100,70 h10 v10 h-10 z M120,70 h10 v10 h-10 z M140,70 h10 v10 h-10 z M160,70 h10 v10 h-10 z M180,70 h10 v10 h-10 z
+             M30,80 h10 v10 h-10 z M50,80 h10 v10 h-10 z M70,80 h10 v10 h-10 z M90,80 h10 v10 h-10 z M110,80 h10 v10 h-10 z M130,80 h10 v10 h-10 z M150,80 h10 v10 h-10 z M170,80 h10 v10 h-10 z
+             M40,90 h10 v10 h-10 z M60,90 h10 v10 h-10 z M80,90 h10 v10 h-10 z M100,90 h10 v10 h-10 z M120,90 h10 v10 h-10 z M140,90 h10 v10 h-10 z M160,90 h10 v10 h-10 z M180,90 h10 v10 h-10 z
+             M30,100 h10 v10 h-10 z M50,100 h10 v10 h-10 z M70,100 h10 v10 h-10 z M90,100 h10 v10 h-10 z M110,100 h10 v10 h-10 z M130,100 h10 v10 h-10 z M150,100 h10 v10 h-10 z M170,100 h10 v10 h-10 z
+             M40,110 h10 v10 h-10 z M60,110 h10 v10 h-10 z M80,110 h10 v10 h-10 z M100,110 h10 v10 h-10 z M120,110 h10 v10 h-10 z M140,110 h10 v10 h-10 z M160,110 h10 v10 h-10 z M180,110 h10 v10 h-10 z
+             M30,120 h10 v10 h-10 z M50,120 h10 v10 h-10 z M70,120 h10 v10 h-10 z M90,120 h10 v10 h-10 z M110,120 h10 v10 h-10 z M130,120 h10 v10 h-10 z M150,120 h10 v10 h-10 z M170,120 h10 v10 h-10 z
+             M40,130 h10 v10 h-10 z M60,130 h10 v10 h-10 z M80,130 h10 v10 h-10 z M100,130 h10 v10 h-10 z M120,130 h10 v10 h-10 z M140,130 h10 v10 h-10 z M160,130 h10 v10 h-10 z M180,130 h10 v10 h-10 z
+             M30,140 h10 v10 h-10 z M50,140 h10 v10 h-10 z M70,140 h10 v10 h-10 z M90,140 h10 v10 h-10 z M110,140 h10 v10 h-10 z M130,140 h10 v10 h-10 z M150,140 h10 v10 h-10 z M170,140 h10 v10 h-10 z
+             M40,150 h10 v10 h-10 z M60,150 h10 v10 h-10 z M80,150 h10 v10 h-10 z M100,150 h10 v10 h-10 z M120,150 h10 v10 h-10 z M140,150 h10 v10 h-10 z M160,150 h10 v10 h-10 z M180,150 h10 v10 h-10 z
+             M30,160 h10 v10 h-10 z M50,160 h10 v10 h-10 z M70,160 h10 v10 h-10 z M90,160 h10 v10 h-10 z M110,160 h10 v10 h-10 z M130,160 h10 v10 h-10 z M150,160 h10 v10 h-10 z M170,160 h10 v10 h-10 z
+             M40,170 h10 v10 h-10 z M60,170 h10 v10 h-10 z M80,170 h10 v10 h-10 z M100,170 h10 v10 h-10 z M120,170 h10 v10 h-10 z M140,170 h10 v10 h-10 z M160,170 h10 v10 h-10 z M180,170 h10 v10 h-10 z
+             M30,180 h10 v10 h-10 z M50,180 h10 v10 h-10 z M70,180 h10 v10 h-10 z M90,180 h10 v10 h-10 z M110,180 h10 v10 h-10 z M130,180 h10 v10 h-10 z M150,180 h10 v10 h-10 z M170,180 h10 v10 h-10 z
+             M40,190 h10 v10 h-10 z M60,190 h10 v10 h-10 z M80,190 h10 v10 h-10 z M100,190 h10 v10 h-10 z M120,190 h10 v10 h-10 z M140,190 h10 v10 h-10 z M160,190 h10 v10 h-10 z M180,190 h10 v10 h-10 z" class="mem"/>
+    <rect x="38"  y="58"  width="40" height="40" class="hot"/>
+    <rect x="82"  y="102" width="40" height="40" class="hot"/>
+    <rect x="128" y="146" width="40" height="40" class="hot"/>
+    <circle cx="58"  cy="78"  r="3" class="cpu"/>
+    <circle cx="102" cy="122" r="3" class="cpu"/>
+    <circle cx="148" cy="166" r="3" class="cpu"/>
+    <text x="110" y="222" class="mid small t-hot">orange: what one pixel covers</text>
+    <text x="110" y="238" class="mid small">blue dot: the one texel it samples</text>
+    <text x="110" y="254" class="mid small t-faint">amber and gray: two texel values</text>
+
+    <line x1="210" y1="120" x2="268" y2="120" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="300" y="60" class="title">One sample per pixel</text>
+    <rect x="300" y="72"  width="40" height="40" class="mem"/>
+    <rect x="344" y="72"  width="40" height="40" class="zone"/>
+    <rect x="388" y="72"  width="40" height="40" class="zone"/>
+    <rect x="432" y="72"  width="40" height="40" class="mem"/>
+    <rect x="476" y="72"  width="40" height="40" class="zone"/>
+    <rect x="520" y="72"  width="40" height="40" class="mem"/>
+    <rect x="564" y="72"  width="40" height="40" class="mem"/>
+    <rect x="608" y="72"  width="40" height="40" class="zone"/>
+    <text x="660" y="90"  class="small t-hot">flickers when</text>
+    <text x="660" y="106" class="small t-hot">the camera moves</text>
+
+    <text x="300" y="160" class="title">Average of each footprint</text>
+    <rect x="300" y="172" width="40" height="40" class="box"/>
+    <rect x="344" y="172" width="40" height="40" class="box"/>
+    <rect x="388" y="172" width="40" height="40" class="box"/>
+    <rect x="432" y="172" width="40" height="40" class="box"/>
+    <rect x="476" y="172" width="40" height="40" class="box"/>
+    <rect x="520" y="172" width="40" height="40" class="box"/>
+    <rect x="564" y="172" width="40" height="40" class="box"/>
+    <rect x="608" y="172" width="40" height="40" class="box"/>
+    <text x="660" y="190" class="small">steady gray:</text>
+    <text x="660" y="206" class="small">the right answer</text>
+    <text x="300" y="242" class="small">The texture holds more detail than the screen can show.</text>
+    <text x="300" y="258" class="small">That extra detail must be averaged away, not skipped.</text>
+  </svg>
+  <figcaption>Each pixel's dot moves a little when the camera moves, so it jumps between dark and light texels. On a regular pattern this makes <b>moiré</b>: large false stripes.</figcaption>
+</figure>
+
+<p>The right color for a pixel is the <b>average</b> of all texels under it. But a far-away pixel may cover hundreds of texels, and averaging hundreds of texels for every pixel is far too slow. The fix is to do the averaging <b>once, ahead of time</b>.</p>
+
+<h2><span class="n">2</span>The mip chain</h2>
+
+<p>A <b>mipmap</b> (from the Latin <i>multum in parvo</i>, "much in a small place") is a list of copies of the texture. Level 0 is the original. Each next level is half as wide and half as high, and each of its texels is the average of 2×2 texels of the level above. The chain stops at 1×1.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 260" role="img" aria-label="Level 0 is a large square of 1024 by 1024 texels. Level 1 is half as wide, 512. Level 2 is 256, level 3 is 128, and so on down to level 10, one texel. Each texel of a level is the average of a 2 by 2 block of the level above.">
+    <rect x="20"  y="20" width="192" height="192" class="mem"/>
+    <rect x="232" y="116" width="96" height="96" class="mem"/>
+    <rect x="348" y="164" width="48" height="48" class="mem"/>
+    <rect x="416" y="188" width="24" height="24" class="mem"/>
+    <rect x="460" y="200" width="12" height="12" class="mem"/>
+    <rect x="490" y="206" width="6" height="6" class="mem"/>
+    <rect x="512" y="209" width="3" height="3" class="mem"/>
+    <text x="116" y="232" class="mid small">level 0 · 1024×1024</text>
+    <text x="280" y="232" class="mid small">1 · 512</text>
+    <text x="372" y="232" class="mid small">2 · 256</text>
+    <text x="428" y="232" class="mid small">3 · 128</text>
+    <text x="490" y="232" class="mid small">… 10 · 1</text>
+
+    <rect x="20"  y="20" width="12" height="12" class="hot"/>
+    <rect x="232" y="116" width="6" height="6" class="hot"/>
+    <path d="M32,26 C120,40 200,90 232,118" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <text x="116" y="120" class="mid small t-hot">2×2 texels → 1 texel</text>
+
+    <text x="560" y="40" class="title">Memory</text>
+    <text x="560" y="64" class="mono small">1 + 1/4 + 1/16 + 1/64 + …</text>
+    <text x="560" y="84" class="mono small">= 4/3</text>
+    <text x="560" y="112" class="small">The whole chain is 1/3 bigger</text>
+    <text x="560" y="128" class="small">than level 0 alone.</text>
+    <text x="560" y="160" class="title">Levels</text>
+    <text x="560" y="184" class="mono small">⌊log2(max(w, h))⌋ + 1</text>
+    <text x="560" y="204" class="small">1024 → 11 levels</text>
+  </svg>
+  <figcaption>Drawn to scale for the first levels. Each level holds a quarter of the texels of the one above.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Level</th><th>Size</th><th>Memory (4 bytes per texel)</th><th>A pixel at this level covers about</th></tr>
+  <tr><td>0</td><td>1024 × 1024</td><td>4 MiB</td><td>1 texel of level 0</td></tr>
+  <tr><td>1</td><td>512 × 512</td><td>1 MiB</td><td>2 × 2 texels of level 0</td></tr>
+  <tr><td>2</td><td>256 × 256</td><td>256 KiB</td><td>4 × 4</td></tr>
+  <tr><td>3</td><td>128 × 128</td><td>64 KiB</td><td>8 × 8</td></tr>
+  <tr><td>…</td><td>…</td><td>…</td><td>…</td></tr>
+  <tr><td>10</td><td>1 × 1</td><td>4 bytes</td><td>the whole texture</td></tr>
+  <tr><td colspan="2"><b>all 11 levels</b></td><td><b>5.33 MiB</b> (4 MiB × 4/3)</td><td></td></tr>
+</table>
+</div>
+
+<p>Sizes that are not a power of two work the same way: each level is the size above divided by 2, rounded down, but never below 1. A 1000 × 600 texture has 10 levels: 1000×600, 500×300, 250×150, 125×75, 62×37, 31×18, 15×9, 7×4, 3×2, 1×1. Rounding down means a level does not cover exactly 2×2 texels at the edges, which a good filter takes into account.</p>
+
+<h2><span class="n">3</span>Making the mips</h2>
+
+<h3>The filter</h3>
+
+<p>The simplest filter is the <b>box filter</b>: each new texel is the plain average of the 2×2 texels above it. It is fast and good enough for many textures. Wider filters look at more texels and give sharper, cleaner results:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Filter</th><th>Texels per output (1D)</th><th>Result</th></tr>
+  <tr><td>Box</td><td>2</td><td>Slightly blurry; can keep some aliasing</td></tr>
+  <tr><td>Tent (triangle)</td><td>4</td><td>Smoother</td></tr>
+  <tr><td>Mitchell–Netravali, Kaiser, Lanczos</td><td>4 to 8</td><td>Sharper, less aliasing; Lanczos can add faint halos</td></tr>
+</table>
+</div>
+
+<p>Each level can be made from the level above (fast; small errors add up) or from level 0 directly (better; more work for the small levels). Near the edges a wide filter needs texels from outside the image. For a texture that <b>tiles</b> (a brick wall that repeats), it should take them from the opposite edge; otherwise the small levels show a seam.</p>
+
+<h3 id="linear-mips">Color must be averaged in linear light</h3>
+
+<p>Color textures are stored in <b>sRGB</b>: the stored number is not proportional to the light (see <a href="color-spaces.html">color spaces</a>). Averaging the stored numbers gives the wrong brightness. The right way is: decode each texel to linear, average, encode the result.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="A 2 by 2 block of black (0) and white (255) texels is averaged. Averaging the stored sRGB numbers gives 128, which shows only 21 percent of the light. Decoding to linear first gives 0 and 1, the average 0.5, which encodes to 188: half the light, the true average.">
+    <text x="90" y="22" class="mid title">2×2 texels, stored as sRGB</text>
+    <rect x="40"  y="36" width="50" height="50" class="box"/><text x="65"  y="66" class="mid mono">0</text>
+    <rect x="90"  y="36" width="50" height="50" class="box"/><text x="115" y="66" class="mid mono">255</text>
+    <rect x="40"  y="86" width="50" height="50" class="box"/><text x="65"  y="116" class="mid mono">255</text>
+    <rect x="90"  y="86" width="50" height="50" class="box"/><text x="115" y="116" class="mid mono">0</text>
+
+    <line x1="150" y1="70"  x2="248" y2="56"  class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="150" y1="104" x2="248" y2="170" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+
+    <rect x="250" y="30" width="250" height="56" rx="6" class="ghost"/>
+    <text x="375" y="52" class="mid">average the stored numbers</text>
+    <text x="375" y="72" class="mid mono">(0 + 255 + 255 + 0) / 4 = 128</text>
+    <line x1="500" y1="58" x2="548" y2="58" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="560" y="54" class="title t-hot">128 = 21% of the light</text>
+    <text x="560" y="72" class="small">too dark: far mips go darker</text>
+
+    <rect x="250" y="130" width="250" height="80" rx="6" class="gpu"/>
+    <text x="375" y="152" class="mid">decode → average → encode</text>
+    <text x="375" y="172" class="mid mono">0, 1, 1, 0 → 0.5</text>
+    <text x="375" y="192" class="mid mono">encode(0.5) = 0.735 → 188</text>
+    <line x1="500" y1="170" x2="548" y2="170" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="560" y="166" class="title t-gpu">188 = 50% of the light</text>
+    <text x="560" y="184" class="small">the true average</text>
+  </svg>
+  <figcaption>With the wrong average, a fine black-and-white pattern turns visibly darker as it moves away. With the right one, its brightness stays the same.</figcaption>
+</figure>
+
+<h3>Textures that are not plain color</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Texture</th><th>How to make its mips</th></tr>
+  <tr><td>Color (sRGB)</td><td>Decode, average, encode (above).</td></tr>
+  <tr><td>Color with alpha</td><td>Weight each color by its alpha before averaging (<b>premultiply</b>), so that invisible texels do not bleed their color into the edges. Alpha itself is linear. For cut-out foliage, small levels lose coverage and leaves thin out; some tools rescale alpha per level to keep it.</td></tr>
+  <tr><td>Data (roughness, metalness, occlusion)</td><td>Average the stored numbers directly: they are already linear.</td></tr>
+  <tr><td>Normal maps</td><td>Average the vectors, then <b>renormalize</b>; the average of unit vectors is shorter than 1. Better tools also store the lost length as extra roughness.</td></tr>
+</table>
+</div>
+
+<h3>Where to make them</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Where</th><th>How</th><th>Good for</th><th>Cost</th></tr>
+  <tr><td>Offline, in the asset tool</td><td>Store all levels in the file (KTX2, DDS), often block-compressed</td><td>Shipping games and apps</td><td>None at load time; best filters</td></tr>
+  <tr><td>CPU, at load</td><td>Resize level by level in memory, upload all levels</td><td>Loading plain PNG and JPEG files</td><td>CPU time per texture</td></tr>
+  <tr><td>GPU, blit chain</td><td>Copy level <var>i</var> into level <var>i</var>+1 with a linear filter, one command per level, a barrier between each</td><td>Render targets, runtime textures</td><td>Fast; box-like filter only</td></tr>
+  <tr><td>GPU, compute</td><td>One shader makes many levels at once (single-pass downsamplers)</td><td>Many textures per frame, depth pyramids</td><td>Fast; any filter</td></tr>
+</table>
+</div>
+
+<h2 id="lod"><span class="n">4</span>How the GPU picks a level</h2>
+
+<p>The GPU must know how many texels one pixel covers. It finds out from the neighbors. Pixel shaders always run in blocks of <b>2×2 pixels</b> (a <b>quad</b>). Every pixel of the quad computes its texture coordinate <var>uv</var>, and the GPU subtracts them: the difference between horizontal neighbors is ∂<var>uv</var>/∂<var>x</var>, between vertical neighbors ∂<var>uv</var>/∂<var>y</var>. These are the <b>derivatives</b>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="Left: a 2 by 2 quad of pixels with their uv values. Going right, u grows by 0.002; going down, v grows by 0.002. Right: in texel space of a 1024 texture, one pixel's footprint is a square of 2.048 by 2.048 texels, so lambda is log2 of 2.048, about 1.03.">
+    <text x="130" y="22" class="mid title">A quad of pixels on screen</text>
+    <rect x="40"  y="40" width="90" height="70" class="gpu"/>
+    <rect x="130" y="40" width="90" height="70" class="gpu"/>
+    <rect x="40"  y="110" width="90" height="70" class="gpu"/>
+    <rect x="130" y="110" width="90" height="70" class="gpu"/>
+    <text x="85"  y="70"  class="mid mono small">u 0.500</text><text x="85"  y="88"  class="mid mono small">v 0.300</text>
+    <text x="175" y="70"  class="mid mono small">u 0.502</text><text x="175" y="88"  class="mid mono small">v 0.300</text>
+    <text x="85"  y="140" class="mid mono small">u 0.500</text><text x="85"  y="158" class="mid mono small">v 0.302</text>
+    <text x="175" y="140" class="mid mono small">u 0.502</text><text x="175" y="158" class="mid mono small">v 0.302</text>
+    <line x1="60" y1="198" x2="200" y2="198" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="130" y="216" class="mid mono small t-hot">∂uv/∂x = (0.002, 0)</text>
+    <line x1="232" y1="50" x2="232" y2="170" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="240" y="236" class="end mono small t-hot">∂uv/∂y = (0, 0.002)</text>
+
+    <line x1="270" y1="120" x2="328" y2="120" class="arrow" marker-end="url(#ah)"/>
+    <text x="299" y="108" class="mid small">× 1024</text>
+
+    <text x="440" y="22" class="mid title">One pixel, in texels</text>
+    <rect x="340" y="40" width="200" height="200" class="zone"/>
+    <path d="M365,40 V240 M390,40 V240 M415,40 V240 M440,40 V240 M465,40 V240 M490,40 V240 M515,40 V240 M340,65 H540 M340,90 H540 M340,115 H540 M340,140 H540 M340,165 H540 M340,190 H540 M340,215 H540" class="arrow dashed"/>
+    <rect x="390" y="90" width="51" height="51" class="hot"/>
+    <text x="440" y="262" class="mid small">2.048 × 2.048 texels of level 0</text>
+
+    <text x="570" y="70"  class="mono small">ρ = 0.002 × 1024</text>
+    <text x="570" y="88"  class="mono small">  = 2.048 texels</text>
+    <text x="570" y="122" class="mono small">λ = log2(2.048)</text>
+    <text x="570" y="140" class="mono small">  = 1.03</text>
+    <text x="570" y="174" class="small">level 1 has texels twice as</text>
+    <text x="570" y="190" class="small">big: one of them is about</text>
+    <text x="570" y="206" class="small">one pixel. That is the match.</text>
+  </svg>
+  <figcaption>The derivatives are free: the 4 pixels of a quad run together, so each one can see its neighbors' values.</figcaption>
+</figure>
+
+<p>The full rule, as the Vulkan and Direct3D specifications give it, for a texture of <var>w</var> × <var>h</var> texels:</p>
+
+<pre><code class="lang-text">ρx = sqrt( (∂u/∂x · w)² + (∂v/∂x · h)² )     texels per pixel, along screen x
+ρy = sqrt( (∂u/∂y · w)² + (∂v/∂y · h)² )     texels per pixel, along screen y
+
+λ  = log2( max(ρx, ρy) ) + bias
+λ  = clamp(λ, minLod, maxLod)
+
+λ ≤ 0   magnification: use level 0 with the magnification filter
+λ > 0   minification: use level λ with the minification filter</code></pre>
+
+<p>Each step of λ by 1 is one level, because each level halves the size. λ is rarely a whole number; what happens with the fraction is the <b>mip filter</b> (<a href="#filters">section 5</a>). The <b>bias</b> shifts every choice: a negative bias makes textures sharper (and noisier), a positive one blurrier.</p>
+
+<div class="split">
+  <div>
+    <h4>Derivatives can break</h4>
+    <p>The neighbors must run the same code. Inside an <code class="lang-text">if</code> that differs between the 4 pixels of a quad, some neighbors do not compute <var>uv</var>, and the derivative is undefined. A jump in <var>uv</var> also breaks it: at the seam of a texture atlas, or where <var>uv</var> wraps from 0.99 to 0.01, the GPU sees a huge change and picks the smallest level, which shows as a thin line of wrong color.</p>
+  </div>
+  <div>
+    <h4>When there are no neighbors</h4>
+    <p>Compute shaders and vertex shaders have no quads, so they have no automatic derivatives. There the shader names the level itself: <samp>SampleLevel(uv, lod)</samp>, or passes its own derivatives: <samp>SampleGrad(uv, ddx, ddy)</samp>. A plain <samp>Load(x, y, level)</samp> reads one texel with no filter at all.</p>
+  </div>
+</div>
+
+<h2 id="filters"><span class="n">5</span>Filtering: nearest, bilinear, trilinear</h2>
+
+<p>The sample point almost never lands on the center of a texel. The <b>filter</b> decides what to return.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="A 4 by 4 texture with the sample point at uv 0.3, 0.6. Nearest returns the one texel that contains it, texel 1, 2. Bilinear blends the 4 nearest texel centers 0,1 and 1,1 and 0,2 and 1,2 with weights 0.03, 0.07, 0.27 and 0.63.">
+    <text x="130" y="22" class="mid title">4×4 texture, sample at (0.3, 0.6)</text>
+    <rect x="30" y="40" width="200" height="200" class="zone"/>
+    <path d="M80,40 V240 M130,40 V240 M180,40 V240 M30,90 H230 M30,140 H230 M30,190 H230" class="arrow"/>
+    <text x="55"  y="58" class="mid small t-faint">0,0</text><text x="105" y="58" class="mid small t-faint">1,0</text><text x="155" y="58" class="mid small t-faint">2,0</text><text x="205" y="58" class="mid small t-faint">3,0</text>
+    <circle cx="55"  cy="115" r="4" class="mem"/><circle cx="105" cy="115" r="4" class="mem"/>
+    <circle cx="55"  cy="165" r="4" class="mem"/><circle cx="105" cy="165" r="4" class="mem"/>
+    <rect x="80" y="140" width="50" height="50" class="hot"/>
+    <circle cx="90" cy="160" r="5" class="cpu"/>
+    <text x="130" y="262" class="mid small">blue: the sample · amber: texel centers</text>
+    <text x="130" y="280" class="mid small t-hot">orange: the texel that nearest returns</text>
+
+    <text x="300" y="44" class="title">Nearest</text>
+    <text x="300" y="64" class="small">Return the texel that holds the point: texel (1, 2).</text>
+    <text x="300" y="80" class="small">1 read. Blocky up close, which suits pixel art.</text>
+
+    <text x="300" y="118" class="title">Bilinear</text>
+    <text x="300" y="138" class="mono small">x = 0.3 · 4 − 0.5 = 0.7   →  between texels 0 and 1, 70% of the way</text>
+    <text x="300" y="156" class="mono small">y = 0.6 · 4 − 0.5 = 1.9   →  between texels 1 and 2, 90% of the way</text>
+    <text x="300" y="182" class="small">Weights of the 4 texel centers around the point:</text>
+    <text x="300" y="202" class="mono small">(0,1): 0.3 · 0.1 = 0.03     (1,1): 0.7 · 0.1 = 0.07</text>
+    <text x="300" y="220" class="mono small">(0,2): 0.3 · 0.9 = 0.27     (1,2): 0.7 · 0.9 = 0.63</text>
+    <text x="300" y="246" class="small">4 reads, weights add up to 1. Smooth, but a level is still chosen</text>
+    <text x="300" y="262" class="small">for the whole sample, so a visible line appears where λ crosses</text>
+    <text x="300" y="278" class="small">a whole number.</text>
+  </svg>
+  <figcaption>The −0.5 moves from "texel edges" to "texel centers": the center of texel <var>i</var> is at (<var>i</var> + 0.5) / <var>w</var>.</figcaption>
+</figure>
+
+<p>The <b>mip filter</b> adds a second choice: what to do with the fraction of λ. <b>Nearest</b> takes the closer level. <b>Linear</b> samples the two levels around λ and blends them by the fraction. Bilinear inside each level plus linear between levels is called <b>trilinear</b> filtering.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Min filter</th><th>Mip filter</th><th>Common name</th><th>Reads</th><th>Look</th></tr>
+  <tr><td>nearest</td><td>none (level 0 only)</td><td>point</td><td>1</td><td>sharp, aliases when far</td></tr>
+  <tr><td>linear</td><td>none</td><td>bilinear, no mips</td><td>4</td><td>smooth up close, aliases when far</td></tr>
+  <tr><td>nearest</td><td>nearest</td><td>point, mipmapped</td><td>1</td><td>blocky, no shimmer</td></tr>
+  <tr><td>linear</td><td>nearest</td><td>bilinear</td><td>4</td><td>smooth, visible lines between levels</td></tr>
+  <tr><td>linear</td><td>linear</td><td><b>trilinear</b></td><td>8</td><td>smooth, no lines</td></tr>
+</table>
+</div>
+
+<h2><span class="n">6</span>Anisotropic filtering</h2>
+
+<p>On a floor seen at a low angle, a pixel's footprint is not a square: it is long and thin. It covers few texels across, but many texels along the view direction. λ uses the <b>longer</b> side, so the whole sample comes from a small, blurry level, even though the short side wanted a sharp one.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Left: a floor seen at a low angle; one pixel covers a long thin strip of the texture. Middle: isotropic filtering uses a circle as large as the long side, which blurs across. Right: anisotropic filtering takes several small samples along the strip, at a sharper level.">
+    <text x="130" y="22" class="mid title">Floor at a grazing angle</text>
+    <polygon points="20,230 240,230 170,60 90,60" class="zone"/>
+    <ellipse cx="130" cy="120" rx="8" ry="44" class="hot"/>
+    <text x="130" y="252" class="mid small">one pixel covers a long, thin strip</text>
+
+    <text x="380" y="22" class="mid title">Isotropic: one big sample</text>
+    <circle cx="380" cy="140" r="80" class="gpu"/>
+    <ellipse cx="380" cy="140" rx="10" ry="80" class="hot"/>
+    <text x="380" y="252" class="mid small">level from the long side: blurry</text>
+
+    <text x="630" y="22" class="mid title">Anisotropic: N small samples</text>
+    <ellipse cx="630" cy="140" rx="10" ry="80" class="hot"/>
+    <circle cx="630" cy="70"  r="10" class="gpu"/>
+    <circle cx="630" cy="93"  r="10" class="gpu"/>
+    <circle cx="630" cy="117" r="10" class="gpu"/>
+    <circle cx="630" cy="140" r="10" class="gpu"/>
+    <circle cx="630" cy="163" r="10" class="gpu"/>
+    <circle cx="630" cy="187" r="10" class="gpu"/>
+    <circle cx="630" cy="210" r="10" class="gpu"/>
+    <text x="630" y="252" class="mid small">level from the short side: sharp</text>
+  </svg>
+  <figcaption>Green: the area each sample averages. Orange: the area the pixel really covers.</figcaption>
+</figure>
+
+<p>The usual rule (from the anisotropic filtering extension that most GPUs follow):</p>
+
+<pre><code class="lang-text">ρmax = max(ρx, ρy)      ρmin = min(ρx, ρy)
+N    = min( ceil(ρmax / ρmin), maxAnisotropy )     number of samples
+λ    = log2( ρmax / N )                            level of each sample</code></pre>
+
+<p>Each of the <var>N</var> samples is itself trilinear, so 16× anisotropy can mean up to 128 texel reads. GPUs are good at this, and they take fewer samples where the footprint is nearly square. The sampler sets <var>maxAnisotropy</var>; 8 or 16 is common.</p>
+
+<h2 id="wrap"><span class="n">7</span>Wrap modes</h2>
+
+<p>Texture coordinates outside 0 to 1 are allowed. The <b>wrap mode</b> (or address mode) of the sampler decides which texel they read. It also matters inside the range: bilinear filtering at the edge reads one texel beyond it.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A texture of 4 texels A B C D, shown for u from minus 1 to 2. Repeat: A B C D A B C D A B C D. Mirrored repeat: D C B A A B C D D C B A. Clamp to edge: A A A A A B C D D D D D. Clamp to border: border color, then A B C D, then border color.">
+    <text x="200" y="196" class="mid small">−1</text><text x="304" y="196" class="mid small">0</text><text x="408" y="196" class="mid small">1</text><text x="512" y="196" class="mid small">2</text>
+    <text x="356" y="216" class="mid small">u</text>
+    <rect x="302" y="26" width="108" height="156" rx="4" class="hot"/>
+
+    <text x="20" y="54" class="small">repeat</text>
+    <g>
+      <rect x="200" y="36" width="26" height="30" class="mem"/><text x="213" y="56" class="mid mono">A</text>
+      <rect x="226" y="36" width="26" height="30" class="mem"/><text x="239" y="56" class="mid mono">B</text>
+      <rect x="252" y="36" width="26" height="30" class="mem"/><text x="265" y="56" class="mid mono">C</text>
+      <rect x="278" y="36" width="26" height="30" class="mem"/><text x="291" y="56" class="mid mono">D</text>
+      <rect x="304" y="36" width="26" height="30" class="mem"/><text x="317" y="56" class="mid mono">A</text>
+      <rect x="330" y="36" width="26" height="30" class="mem"/><text x="343" y="56" class="mid mono">B</text>
+      <rect x="356" y="36" width="26" height="30" class="mem"/><text x="369" y="56" class="mid mono">C</text>
+      <rect x="382" y="36" width="26" height="30" class="mem"/><text x="395" y="56" class="mid mono">D</text>
+      <rect x="408" y="36" width="26" height="30" class="mem"/><text x="421" y="56" class="mid mono">A</text>
+      <rect x="434" y="36" width="26" height="30" class="mem"/><text x="447" y="56" class="mid mono">B</text>
+      <rect x="460" y="36" width="26" height="30" class="mem"/><text x="473" y="56" class="mid mono">C</text>
+      <rect x="486" y="36" width="26" height="30" class="mem"/><text x="499" y="56" class="mid mono">D</text>
+    </g>
+    <text x="540" y="56" class="small">tiles: bricks, floors, terrain</text>
+
+    <text x="20" y="92" class="small">mirrored repeat</text>
+    <rect x="200" y="74" width="26" height="30" class="mem"/><text x="213" y="94" class="mid mono">D</text>
+    <rect x="226" y="74" width="26" height="30" class="mem"/><text x="239" y="94" class="mid mono">C</text>
+    <rect x="252" y="74" width="26" height="30" class="mem"/><text x="265" y="94" class="mid mono">B</text>
+    <rect x="278" y="74" width="26" height="30" class="mem"/><text x="291" y="94" class="mid mono">A</text>
+    <rect x="304" y="74" width="26" height="30" class="mem"/><text x="317" y="94" class="mid mono">A</text>
+    <rect x="330" y="74" width="26" height="30" class="mem"/><text x="343" y="94" class="mid mono">B</text>
+    <rect x="356" y="74" width="26" height="30" class="mem"/><text x="369" y="94" class="mid mono">C</text>
+    <rect x="382" y="74" width="26" height="30" class="mem"/><text x="395" y="94" class="mid mono">D</text>
+    <rect x="408" y="74" width="26" height="30" class="mem"/><text x="421" y="94" class="mid mono">D</text>
+    <rect x="434" y="74" width="26" height="30" class="mem"/><text x="447" y="94" class="mid mono">C</text>
+    <rect x="460" y="74" width="26" height="30" class="mem"/><text x="473" y="94" class="mid mono">B</text>
+    <rect x="486" y="74" width="26" height="30" class="mem"/><text x="499" y="94" class="mid mono">A</text>
+    <text x="540" y="94" class="small">tiles with no visible seam</text>
+
+    <text x="20" y="130" class="small">clamp to edge</text>
+    <rect x="200" y="112" width="26" height="30" class="box"/><text x="213" y="132" class="mid mono">A</text>
+    <rect x="226" y="112" width="26" height="30" class="box"/><text x="239" y="132" class="mid mono">A</text>
+    <rect x="252" y="112" width="26" height="30" class="box"/><text x="265" y="132" class="mid mono">A</text>
+    <rect x="278" y="112" width="26" height="30" class="box"/><text x="291" y="132" class="mid mono">A</text>
+    <rect x="304" y="112" width="26" height="30" class="mem"/><text x="317" y="132" class="mid mono">A</text>
+    <rect x="330" y="112" width="26" height="30" class="mem"/><text x="343" y="132" class="mid mono">B</text>
+    <rect x="356" y="112" width="26" height="30" class="mem"/><text x="369" y="132" class="mid mono">C</text>
+    <rect x="382" y="112" width="26" height="30" class="mem"/><text x="395" y="132" class="mid mono">D</text>
+    <rect x="408" y="112" width="26" height="30" class="box"/><text x="421" y="132" class="mid mono">D</text>
+    <rect x="434" y="112" width="26" height="30" class="box"/><text x="447" y="132" class="mid mono">D</text>
+    <rect x="460" y="112" width="26" height="30" class="box"/><text x="473" y="132" class="mid mono">D</text>
+    <rect x="486" y="112" width="26" height="30" class="box"/><text x="499" y="132" class="mid mono">D</text>
+    <text x="540" y="132" class="small">UI, sprites, render targets</text>
+
+    <text x="20" y="168" class="small">clamp to border</text>
+    <rect x="200" y="150" width="104" height="30" class="ghost"/><text x="252" y="170" class="mid small t-faint">border color</text>
+    <rect x="304" y="150" width="26" height="30" class="mem"/><text x="317" y="170" class="mid mono">A</text>
+    <rect x="330" y="150" width="26" height="30" class="mem"/><text x="343" y="170" class="mid mono">B</text>
+    <rect x="356" y="150" width="26" height="30" class="mem"/><text x="369" y="170" class="mid mono">C</text>
+    <rect x="382" y="150" width="26" height="30" class="mem"/><text x="395" y="170" class="mid mono">D</text>
+    <rect x="408" y="150" width="104" height="30" class="ghost"/><text x="460" y="170" class="mid small t-faint">border color</text>
+    <text x="540" y="170" class="small">shadow maps, decals</text>
+
+    <text x="20" y="240" class="small">Orange: the texture itself, u from 0 to 1. The same choice is made for v (and w for 3D textures), often separately.</text>
+  </svg>
+  <figcaption>With <b>repeat</b>, bilinear filtering at u = 0 blends texel A with texel D from the other side. That is right for a tiling texture, and a thin wrong-colored edge for a texture that does not tile.</figcaption>
+</figure>
+
+<h2><span class="n">8</span>Worked example</h2>
+
+<p>A floor uses a 1024 × 1024 texture, trilinear filtering and up to 8× anisotropy. Three pixels at three distances; click through them.</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>Pixel A: close to the camera</h4>
+    <svg viewBox="0 0 720 220" role="img" aria-label="Pixel A covers 0.512 by 0.512 texels. Lambda is minus 0.97, so the texture is magnified: level 0 with the magnification filter.">
+      <rect x="30" y="30" width="160" height="160" class="zone"/>
+      <path d="M70,30 V190 M110,30 V190 M150,30 V190 M30,70 H190 M30,110 H190 M30,150 H190" class="arrow dashed"/>
+      <rect x="90" y="90" width="20" height="20" class="hot"/>
+      <text x="110" y="210" class="mid small">level 0 texels (40 px each); orange: the pixel</text>
+      <text x="240" y="50"  class="mono small">∂uv/∂x = (0.0005, 0)    ∂uv/∂y = (0, 0.0005)</text>
+      <text x="240" y="76"  class="mono small">ρx = ρy = 0.0005 × 1024 = 0.512 texels</text>
+      <text x="240" y="102" class="mono small">λ = log2(0.512) = −0.97</text>
+      <text x="240" y="138" class="title">λ ≤ 0: magnification</text>
+      <text x="240" y="160" class="small">Level 0, with the magnification filter (bilinear here).</text>
+      <text x="240" y="178" class="small">One texel spreads over about 2 × 2 pixels. Mips cannot add</text>
+      <text x="240" y="196" class="small">detail that the texture does not have.</text>
+    </svg>
+    <p>Up close, the only question is how to blend between texels. Bilinear gives smooth gradients; nearest gives visible squares.</p>
+  </div>
+
+  <div class="step">
+    <h4>Pixel B: in the middle</h4>
+    <svg viewBox="0 0 720 220" role="img" aria-label="Pixel B covers 2.048 by 2.048 texels. Lambda is 1.03: trilinear blends level 1 at 97 percent with level 2 at 3 percent.">
+      <rect x="30" y="30" width="160" height="160" class="zone"/>
+      <path d="M50,30 V190 M70,30 V190 M90,30 V190 M110,30 V190 M130,30 V190 M150,30 V190 M170,30 V190 M30,50 H190 M30,70 H190 M30,90 H190 M30,110 H190 M30,130 H190 M30,150 H190 M30,170 H190" class="arrow dashed"/>
+      <rect x="90" y="90" width="41" height="41" class="hot"/>
+      <text x="110" y="210" class="mid small">level 0 texels (20 px each)</text>
+      <text x="240" y="50"  class="mono small">∂uv/∂x = (0.002, 0)    ∂uv/∂y = (0, 0.002)</text>
+      <text x="240" y="76"  class="mono small">ρx = ρy = 0.002 × 1024 = 2.048 texels</text>
+      <text x="240" y="102" class="mono small">λ = log2(2.048) = 1.03</text>
+      <text x="240" y="138" class="title">Trilinear: levels 1 and 2</text>
+      <text x="240" y="160" class="mono small">level 1 (512²): weight 1 − 0.03 = 0.97</text>
+      <text x="240" y="178" class="mono small">level 2 (256²): weight 0.03</text>
+      <text x="240" y="196" class="small">4 bilinear reads in each level: 8 reads in all.</text>
+    </svg>
+    <p>The pixel is a little bigger than a level 1 texel, so the result is almost all level 1. As the floor moves away, the weight slides smoothly toward level 2: no line where the level changes.</p>
+  </div>
+
+  <div class="step">
+    <h4>Pixel C: far away, at a grazing angle</h4>
+    <svg viewBox="0 0 720 220" role="img" aria-label="Pixel C covers 4.1 texels across and 32.8 texels along. Isotropic lambda would be 5.03, level 5, 32 by 32, very blurry. With 8 times anisotropy, 8 samples along the long side each use lambda 2.03, level 2.">
+      <rect x="30" y="30" width="160" height="160" class="zone"/>
+      <path d="M70,30 V190 M110,30 V190 M150,30 V190 M30,70 H190 M30,110 H190 M30,150 H190" class="arrow dashed"/>
+      <rect x="102" y="44" width="16" height="131" class="hot"/>
+      <text x="110" y="210" class="mid small">level 0, 4 px per texel: 4.1 × 32.8 texels</text>
+      <text x="240" y="40"  class="mono small">∂uv/∂x = (0.004, 0)    ∂uv/∂y = (0, 0.032)</text>
+      <text x="240" y="62"  class="mono small">ρx = 4.10     ρy = 32.77 texels</text>
+      <text x="240" y="92"  class="title">Without anisotropy</text>
+      <text x="240" y="112" class="mono small">λ = log2(32.77) = 5.03 → level 5, only 32 × 32: a smear</text>
+      <text x="240" y="144" class="title">With 8× anisotropy</text>
+      <text x="240" y="164" class="mono small">N = min(ceil(32.77 / 4.10), 8) = 8</text>
+      <text x="240" y="184" class="mono small">λ = log2(32.77 / 8) = 2.03 → level 2 (256 × 256)</text>
+      <text x="240" y="204" class="small">8 trilinear samples spread along the long side: 64 reads.</text>
+    </svg>
+    <p>Anisotropy keeps the floor sharp across the view, three levels finer than plain trilinear. This is why distant roads and floors look much better with it switched on.</p>
+  </div>
+</div>
+
+<h2><span class="n">9</span>Pitfalls</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Mistake</th><th>What you see</th><th>Fix</th></tr>
+  <tr><td>No mips</td><td>Shimmer and moiré on distant surfaces</td><td>Make the full chain</td></tr>
+  <tr><td>Mips allocated but not filled</td><td>Black or garbage far away</td><td>Fill every level, or limit the view to the levels that exist</td></tr>
+  <tr><td>Sampler's maximum level left at 0</td><td>Mips are never used (in Vulkan, the default <var>maxLod</var> is 0)</td><td>Set it to the number of levels, or "no limit"</td></tr>
+  <tr><td>sRGB color averaged as stored numbers</td><td>Fine patterns get darker with distance</td><td><a href="#linear-mips">Average in linear light</a></td></tr>
+  <tr><td>Atlas without padding</td><td>Neighbor's colors bleed in at a distance</td><td>Pad each tile; stop the chain before tiles merge</td></tr>
+  <tr><td>Texture sampled inside divergent branches</td><td>Random wrong levels, lines at material edges</td><td>Sample before the branch, or use explicit level or derivatives</td></tr>
+  <tr><td>Repeat mode on a non-tiling texture</td><td>A thin line of the opposite edge's color</td><td>Clamp to edge</td></tr>
+</table>
+</div>
+
+<h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
+
+<p>RASM makes the full mip chain on the CPU, when the texture's pixels arrive, and uploads all levels in one host copy. Sampling uses six fixed samplers: trilinear with 8× anisotropy, or nearest, each with three wrap modes.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="createTexture computes the level count. When the pixels arrive, fillTexture on the main thread resizes level by level with stb_image_resize2: the sRGB path for sRGB formats, the linear path for UNORM. Then vkCopyMemoryToImage copies every level into the image from the host. Shaders sample it through one of six samplers.">
+    <text x="20" y="22" class="title t-cpu">CPU · createTexture</text>
+    <rect x="20" y="34" width="210" height="56" rx="6" class="cpu"/>
+    <text x="125" y="56" class="mid">levels = ⌊log2(max)⌋ + 1</text>
+    <text x="125" y="76" class="mid small">sampled RGBA8 textures only</text>
+
+    <text x="260" y="22" class="title t-cpu">CPU · fillTexture, main thread</text>
+    <rect x="260" y="34" width="70" height="56" rx="4" class="mem"/><text x="295" y="58" class="mid small">level 0</text><text x="295" y="76" class="mid small">pixels in</text>
+    <line x1="330" y1="62" x2="352" y2="62" class="arrow" marker-end="url(#ah)"/>
+    <rect x="354" y="44" width="50" height="36" rx="4" class="mem"/><text x="379" y="67" class="mid small">1</text>
+    <line x1="404" y1="62" x2="426" y2="62" class="arrow" marker-end="url(#ah)"/>
+    <rect x="428" y="50" width="34" height="24" rx="4" class="mem"/><text x="445" y="67" class="mid small">2</text>
+    <line x1="462" y1="62" x2="484" y2="62" class="arrow" marker-end="url(#ah)"/>
+    <text x="500" y="67" class="small">… 1×1</text>
+    <text x="400" y="112" class="mid small">each level resized from the one above</text>
+
+    <rect x="260" y="128" width="230" height="44" rx="6" class="cpu"/>
+    <text x="375" y="147" class="mid small">sRGB formats: linear light,</text>
+    <text x="375" y="163" class="mid small">alpha-weighted (stbir_resize_uint8_srgb)</text>
+    <rect x="500" y="128" width="240" height="44" rx="6" class="cpu"/>
+    <text x="620" y="147" class="mid small">UNORM: the stored numbers,</text>
+    <text x="620" y="163" class="mid small">no alpha weighting (…_uint8_linear)</text>
+
+    <line x1="540" y1="62" x2="588" y2="62" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="590" y="34" width="150" height="56" rx="6" class="mem"/>
+    <text x="665" y="56" class="mid mono small">vkCopyMemoryToImage</text>
+    <text x="665" y="76" class="mid small">all levels, no staging</text>
+
+    <line x1="230" y1="62" x2="258" y2="62" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="20" y="196" width="720" height="40" rx="20" class="shader"/>
+    <text x="380" y="221" class="mid">fragMain: gTextures[i].Sample(uv) · the GPU picks λ from derivatives · one of six samplers</text>
+  </svg>
+  <figcaption>The same path serves <code>loadTexture</code> (pixels decoded on a worker thread, filled in <code>finishTextureLoad</code>), glTF textures (filled in <code>loadMaterial</code>) and textures the app fills with <code>RenderContext::fillTexture</code>.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Which textures get mips</td><td>any minified texture</td><td>Only <code>TextureUsage::SAMPLED</code> textures in <code>R8G8B8A8_UNORM</code>, <code>R8G8B8A8_SRGB</code> or <code>B8G8R8A8_SRGB</code> get the full chain (<code>VulkanDevice::createTexture</code>). Render targets and depth textures have 1 level.</td></tr>
+  <tr><td>Where mips are made</td><td>offline, CPU or GPU</td><td>CPU, on the main thread, inside <code>VulkanDevice::fillTexture</code>, every time a texture is filled. No offline mips, no GPU blits, no compressed formats.</td></tr>
+  <tr><td>Filter</td><td>box or wider</td><td>stb_image_resize2's default for shrinking (Mitchell), each level made from the level above.</td></tr>
+  <tr><td>Linear-light color</td><td>section 3</td><td>Yes: <samp>_SRGB</samp> formats go through <code>stbir_resize_uint8_srgb</code> with <code>STBIR_RGBA</code>, which decodes to linear, weights by alpha, and keeps alpha linear.</td></tr>
+  <tr><td>Data and normal maps</td><td>average directly; renormalize normals</td><td>UNORM textures use <code>stbir_resize_uint8_linear</code> with <code>STBIR_4CHANNEL</code>: plain averages, no alpha weighting. Normal mips are not renormalized; the shader normalizes after sampling.</td></tr>
+  <tr><td>Edges of tiling textures</td><td>wrap when filtering</td><td>The resizer clamps at the edges, also for textures sampled with repeat. Small levels of a tiling texture can show a faint seam.</td></tr>
+  <tr><td>Upload</td><td>staging buffer and copy</td><td>Host image copy (Vulkan 1.4 <code>hostImageCopy</code>): <code>vkTransitionImageLayout</code> moves the image to the shader-read layout and <code>vkCopyMemoryToImage</code> writes every level from CPU memory.</td></tr>
+  <tr><td>Level choice</td><td>λ from derivatives, clamped</td><td>The hardware rule. Every sampler has <code>maxLod</code> = <code>VK_LOD_CLAMP_NONE</code>, minimum 0 and no bias, so one sampler serves textures with any number of levels.</td></tr>
+  <tr><td>Filters</td><td>nearest to anisotropic</td><td><code>LINEAR_*</code> samplers: linear mag, min and mip filter (trilinear) with 8× anisotropy, capped by the device's limit. <code>NEAREST_*</code>: nearest everything, nearest mip, no anisotropy.</td></tr>
+  <tr><td>Wrap modes</td><td>4 modes, per axis</td><td>Repeat, mirrored repeat and clamp to edge; no border. The same mode on every axis.</td></tr>
+  <tr><td>glTF samplers</td><td>separate wrap per axis, separate min and mag filters</td><td><code>toSamplerType</code> reads only <code>wrapS</code> (used for both axes) and <code>magFilter</code> (nearest or linear for everything). <samp>wrapT</samp> and <code>minFilter</code> are ignored.</td></tr>
+  <tr><td>Explicit levels</td><td><var>SampleLevel</var>, <var>Load</var></td><td>The material shaders use <code class="lang-text">Sample</code> with automatic derivatives. The Hi-Z build reads depth with <code class="lang-text">Load</code>, and builds its own depth pyramid with a minimum instead of an average (see <a href="occlusion-culling.html">occlusion culling</a>).</td></tr>
+</table>
+</div>
+
+<h3>The six samplers</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th><code>SamplerType</code></th><th>Mag / min / mip filter</th><th>Wrap</th><th>Anisotropy</th><th>Used for</th></tr>
+  <tr><td><code>LINEAR_REPEAT</code></td><td>linear / linear / linear</td><td>repeat</td><td>8×</td><td>the default for material textures</td></tr>
+  <tr><td><code>LINEAR_MIRRORED_REPEAT</code></td><td>linear / linear / linear</td><td>mirrored repeat</td><td>8×</td><td>glTF textures that ask for it</td></tr>
+  <tr><td><code>LINEAR_CLAMP</code></td><td>linear / linear / linear</td><td>clamp to edge</td><td>8×</td><td>render target color attachments</td></tr>
+  <tr><td><code>NEAREST_REPEAT</code></td><td>nearest / nearest / nearest</td><td>repeat</td><td>off</td><td>glTF textures with a nearest <code>magFilter</code></td></tr>
+  <tr><td><code>NEAREST_MIRRORED_REPEAT</code></td><td>nearest / nearest / nearest</td><td>mirrored repeat</td><td>off</td><td>the same, mirrored</td></tr>
+  <tr><td><code>NEAREST_CLAMP</code></td><td>nearest / nearest / nearest</td><td>clamp to edge</td><td>off</td><td>depth textures for occlusion culling</td></tr>
+</table>
+</div>
+
+<p>The sampler is chosen per bindless slot, when the slot is written (see <a href="bindless.html#in-rasm">bindless resources</a>).</p>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Level count, image and view</td><td><code>VulkanDevice::createTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>Mip generation and upload</td><td><code>VulkanDevice::fillTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>, called by <code>RenderContext::fillTexture</code></td></tr>
+  <tr><td>Sampler objects</td><td><code>VulkanDevice::createSampler</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; <code>rhi::SamplerDesc</code> in <code>src/rhi/device.h</code></td></tr>
+  <tr><td>The six sampler settings</td><td><code>samplerDesc</code> in <code>src/rhi/renderContext.cpp</code>; <code>SamplerType</code> in <code>include/rasm/render/resource.h</code></td></tr>
+  <tr><td>glTF sampler mapping</td><td><code>toSamplerType</code> in <code>src/assets/material.cpp</code></td></tr>
+  <tr><td>When pixels arrive</td><td><code>Engine::finishTextureLoad</code> in <code>src/assets/texture.cpp</code>; <code>Engine::loadMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li><code>fillTexture</code> must fill every level that <code>createTexture</code> allocated: the view covers all of them, and an unfilled level is read as garbage at a distance.</li>
+    <li>Color textures (<samp>_SRGB</samp>) take the sRGB resize path; data textures (<samp>_UNORM</samp>) take the linear one. The format decides, so a texture must be created with the right one (see <a href="color-spaces.html#in-rasm">color spaces</a>).</li>
+    <li>Keep <code>maxLod</code> at <code>VK_LOD_CLAMP_NONE</code>. A sampler with the Vulkan default of 0 would use level 0 only.</li>
+    <li>Sample with automatic derivatives only outside branches that differ within a quad.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>Mips are made on the CPU, on the main thread, and every sampled image gets a dedicated allocation; there are no compressed textures (KTX2 with BCn or ASTC), and host image copy narrows hardware support (<code>P2</code>).</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Lance Williams, <i>Pyramidal Parametrics</i>, SIGGRAPH 1983: the paper that introduced mipmaps.</li>
+  <li>The Vulkan specification, chapter "Image Operations": level-of-detail selection, filtering and addressing.</li>
+  <li>Tomas Akenine-Möller and others, <i>Real-Time Rendering</i>, 4th edition: the chapter on texturing.</li>
+  <li>Don Mitchell and Arun Netravali, <i>Reconstruction Filters in Computer Graphics</i>, SIGGRAPH 1988.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

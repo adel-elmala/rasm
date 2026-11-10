@@ -1,0 +1,683 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Struct Layout Rules · RASM</title>
+<meta name="description" content="How the CPU and the GPU agree on the bytes of a struct: size, alignment and offsets, C++ padding, the std140, std430 and scalar layouts byte by byte, vec3 and matrix traps, push constant limits, and the checks that catch a mismatch, and how RASM does it.">
+<meta name="rasm-sources" content="src/renderer/uberMaterialTypes.h shaders/lib/core.slang src/renderer/shaderCompiler.cpp src/renderer/shaderCompiler.h src/renderer/geometryPool.cpp src/renderer/statsOverlay.cpp src/rhi/renderContext.cpp src/rhi/vulkan/vulkanDevice.cpp include/rasm/types.h include/rasm/mesh.h include/rasm/light.h tools/compile-shaders.bat .claude/skills/gpu-struct-sync/SKILL.md">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/struct-layout.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">GPU data</p>
+<h1>Struct layout rules</h1>
+<p class="lead">The CPU writes a struct into a buffer, and a shader reads it. Two different compilers decide where each field goes, and they must agree on every byte. This page explains the rules each side uses, where they differ, and how to check that they match. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Every type has a <b>size</b> and an <b>alignment</b>. A field goes at the next offset that is a multiple of its alignment; the gap before it is <b>padding</b>.</li>
+    <li>C++ aligns each type to its own size (a <var>float</var> to 4, a <var>double</var> to 8). A <var>vec3</var> of floats is 12 bytes, aligned to 4.</li>
+    <li>GPU languages have several rule sets. <b>std140</b> aligns a <var>vec3</var> to 16 and pads arrays to 16. <b>std430</b> drops the array padding. <b>scalar</b> aligns everything to its scalar, like C++.</li>
+    <li>The same struct can be 112, 96 or 72 bytes depending on the rules. A mismatch does not crash; the shader just reads the wrong bytes.</li>
+    <li>Check it: <var>static_assert</var> the C++ offsets, and compare them with the shader compiler's reflection at startup.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>The problem: two compilers, one buffer</h2>
+
+<p>A C++ compiler lays out the CPU struct. A shader compiler lays out the GPU struct. Nothing connects the two. The bytes in the buffer are whatever the CPU wrote; the shader reads each field at the offset <i>its</i> compiler chose.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="The CPU writes a struct of a float and a vec3 with the vec3 at offset 4. The shader expects the vec3 at offset 16. It reads bytes 16 to 28, which belong to the next field, so it sees wrong values without any error.">
+    <text x="20" y="28" class="title t-cpu">CPU writes (C++)</text>
+    <rect x="160" y="12" width="40" height="30" rx="2" class="cpu"/><text x="180" y="32" class="mid small">a</text>
+    <rect x="200" y="12" width="120" height="30" rx="2" class="cpu"/><text x="260" y="32" class="mid small">b = (1, 2, 3)</text>
+    <rect x="320" y="12" width="40" height="30" rx="2" class="cpu"/><text x="340" y="32" class="mid small">c</text>
+    <rect x="360" y="12" width="160" height="30" rx="2" class="cpu"/><text x="440" y="32" class="mid small">next fields …</text>
+    <text x="160" y="58" class="mid mono small">0</text><text x="200" y="58" class="mid mono small">4</text><text x="320" y="58" class="mid mono small">16</text><text x="360" y="58" class="mid mono small">20</text>
+
+    <text x="20" y="110" class="title t-shader">shader reads (std430)</text>
+    <rect x="160" y="94" width="40" height="30" rx="2" class="shader"/><text x="180" y="114" class="mid small">a</text>
+    <rect x="200" y="94" width="120" height="30" rx="2" class="ghost"/><text x="260" y="114" class="mid small t-faint">padding</text>
+    <rect x="320" y="94" width="120" height="30" rx="2" class="hot"/><text x="380" y="114" class="mid small">b ?</text>
+    <text x="160" y="140" class="mid mono small">0</text><text x="320" y="140" class="mid mono small">16</text><text x="440" y="140" class="mid mono small">28</text>
+    <line x1="410" y1="90" x2="410" y2="46" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <text x="540" y="110" class="small t-hot">b is read from bytes 16–28:</text>
+    <text x="540" y="126" class="small t-hot">c and the next field</text>
+    <text x="20" y="184" class="small">The shader's b is (c, next, next). The values are real floats from the wrong place, so there is no error and no crash.</text>
+    <text x="20" y="202" class="small">The picture is simply wrong, or, if a pointer field moves, the GPU follows a garbage address and the device is lost.</text>
+    <text x="20" y="226" class="small">Scale: 10 px per byte.</text>
+  </svg>
+  <figcaption>The most common layout bug: a three-component vector after a scalar. C++ puts it at 4, std140 and std430 put it at 16.</figcaption>
+</figure>
+
+<h2><span class="n">2</span>Size, alignment and offset</h2>
+
+<p>Every layout rule set, CPU or GPU, uses the same algorithm. Only the numbers in it differ.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Word</th><th>Meaning</th></tr>
+  <tr><td><b>size</b></td><td>how many bytes the value takes</td></tr>
+  <tr><td><b>alignment</b></td><td>its offset must be a multiple of this number</td></tr>
+  <tr><td><b>offset</b></td><td>where the field starts, from the start of the struct</td></tr>
+  <tr><td><b>padding</b></td><td>unused bytes added so the next field is aligned, or so the struct size is</td></tr>
+  <tr><td><b>stride</b></td><td>the distance from one array element to the next</td></tr>
+</table>
+</div>
+
+<pre><code class="lang-text">offset = 0
+maxAlign = 1
+for each field:
+    offset = roundUp(offset, align(field))      // padding goes here
+    field.offset = offset
+    offset = offset + size(field)
+    maxAlign = max(maxAlign, align(field))
+structSize  = roundUp(offset, maxAlign)          // padding at the end
+structAlign = maxAlign</code></pre>
+
+<p><var>roundUp</var>(<var>x</var>, <var>a</var>) is the smallest multiple of <var>a</var> that is ≥ <var>x</var>. The padding at the end makes the size a multiple of the alignment, so that in an array every element is aligned too: the array stride is the struct size.</p>
+
+<h2><span class="n">3</span>C++ layout</h2>
+
+<p>On every desktop platform, C++ aligns each scalar to its size: <var>int32_t</var> and <var>float</var> to 4, <var>double</var>, <var>int64_t</var> and pointers to 8. A struct aligns to its largest member. Order matters: the same fields can need more or less padding.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="A struct of a float, a double and an int is 24 bytes: 4 bytes of padding after the float and 4 at the end. The same fields with the double first is 16 bytes, with no padding.">
+    <text x="20" y="28" class="title">float, double, int</text>
+    <text x="20" y="44" class="small">24 bytes</text>
+    <rect x="180" y="16" width="64" height="34" rx="2" class="cpu"/><text x="212" y="38" class="mid small">float</text>
+    <rect x="244" y="16" width="64" height="34" rx="2" class="ghost"/><text x="276" y="38" class="mid small t-faint">pad</text>
+    <rect x="308" y="16" width="128" height="34" rx="2" class="cpu"/><text x="372" y="38" class="mid small">double</text>
+    <rect x="436" y="16" width="64" height="34" rx="2" class="cpu"/><text x="468" y="38" class="mid small">int</text>
+    <rect x="500" y="16" width="64" height="34" rx="2" class="ghost"/><text x="532" y="38" class="mid small t-faint">pad</text>
+    <text x="180" y="66" class="mid mono small">0</text><text x="244" y="66" class="mid mono small">4</text><text x="308" y="66" class="mid mono small">8</text><text x="436" y="66" class="mid mono small">16</text><text x="500" y="66" class="mid mono small">20</text><text x="564" y="66" class="mid mono small">24</text>
+
+    <text x="20" y="118" class="title">double, float, int</text>
+    <text x="20" y="134" class="small">16 bytes</text>
+    <rect x="180" y="106" width="128" height="34" rx="2" class="cpu"/><text x="244" y="128" class="mid small">double</text>
+    <rect x="308" y="106" width="64" height="34" rx="2" class="cpu"/><text x="340" y="128" class="mid small">float</text>
+    <rect x="372" y="106" width="64" height="34" rx="2" class="cpu"/><text x="404" y="128" class="mid small">int</text>
+    <text x="180" y="156" class="mid mono small">0</text><text x="308" y="156" class="mid mono small">8</text><text x="372" y="156" class="mid mono small">12</text><text x="436" y="156" class="mid mono small">16</text>
+    <text x="20" y="188" class="small">Scale: 16 px per byte. The end padding of the first struct is there so that a second element of an array starts at 24, a multiple of 8.</text>
+  </svg>
+  <figcaption>Sorting fields from the biggest alignment to the smallest removes most padding. It does not change what the fields mean, only where they are.</figcaption>
+</figure>
+
+<p>Math libraries follow the same rules. In <var>glm</var> (by default), a <var>vec3</var> is three floats: 12 bytes, aligned to 4. A <var>mat3</var> is three <var>vec3</var> columns: 36 bytes. A <var>vec4</var> is 16 bytes but also aligned to only 4. Some libraries (and glm with special options) align <var>vec4</var>, or even <var>vec3</var>, to 16 for SIMD; that changes every offset after them.</p>
+
+<p>The C++ side can be pinned with checks the compiler runs:</p>
+
+<pre><code>struct Light
+{
+    glm::vec3 position;
+    float intensity;
+};
+
+static_assert(sizeof(Light) == 16);
+static_assert(offsetof(Light, intensity) == 12);</code></pre>
+
+<h2><span class="n">4</span>GPU layouts: std140, std430, scalar</h2>
+
+<p>Vulkan GLSL and SPIR-V know three rule sets for buffer memory. They differ in two places: how a three-component vector aligns, and whether arrays and structs are rounded up to 16 bytes.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Type</th><th>std140</th><th>std430</th><th>scalar</th></tr>
+  <tr><td><var>float</var>, <var>int</var>, <var>uint</var></td><td>size 4, align 4</td><td>size 4, align 4</td><td>size 4, align 4</td></tr>
+  <tr><td><var>vec2</var></td><td>size 8, align 8</td><td>size 8, align 8</td><td>size 8, align <b>4</b></td></tr>
+  <tr><td><var>vec3</var></td><td>size 12, align <b>16</b></td><td>size 12, align <b>16</b></td><td>size 12, align <b>4</b></td></tr>
+  <tr><td><var>vec4</var></td><td>size 16, align 16</td><td>size 16, align 16</td><td>size 16, align <b>4</b></td></tr>
+  <tr><td>array of <var>T</var></td><td>stride and align rounded up to <b>16</b></td><td>stride = size of <var>T</var> (rounded to its align)</td><td>stride = size of <var>T</var></td></tr>
+  <tr><td>struct</td><td>align = largest member, rounded up to <b>16</b></td><td>align = largest member</td><td>align = largest member</td></tr>
+  <tr><td>matrix (column-major)</td><td>an array of column vectors: <var>mat3</var> = 3 × 16 = 48 bytes</td><td>the same: <var>mat3</var> = 48 bytes</td><td>3 × 12 = 36 bytes</td></tr>
+  <tr><td>64-bit (<var>uint64_t</var>, <var>double</var>, a pointer)</td><td>size 8, align 8</td><td>size 8, align 8</td><td>size 8, align 8</td></tr>
+</table>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Rule set</th><th>Where it is used</th></tr>
+  <tr><td><b>std140</b></td><td>The oldest. The default for uniform buffers in GLSL. Wastes the most space.</td></tr>
+  <tr><td><b>std430</b></td><td>The default for storage buffers and push constants in Vulkan GLSL.</td></tr>
+  <tr><td><b>scalar</b></td><td>Needs the Vulkan feature <var>scalarBlockLayout</var> (core in 1.2 as an optional feature, required since 1.4). Can be turned on per block, or for a whole shader by a compiler option. Closest to C++.</td></tr>
+</table>
+</div>
+
+<h2><span class="n">5</span>One struct, three layouts</h2>
+
+<p>Here is one struct, laid out under all three rule sets. <var>d</var> is an array of two <var>vec2</var>; <var>m</var> is a 3 × 3 matrix stored as three columns (c0, c1, c2).</p>
+
+<pre><code class="lang-slang">struct Example
+{
+    float a;
+    float3 b;
+    float c;
+    float2 d[2];
+    float3x3 m;
+};</code></pre>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Under std140 the struct is 112 bytes: b at 16, c at 28, each element of d padded to 16 bytes from 32, and each matrix column padded to 16 bytes from 64. Under std430 it is 96 bytes: the array is packed, d at 32 to 48, matrix columns still padded, from 48. Under scalar layout it is 72 bytes with no padding: b at 4, c at 16, d at 20, m at 36.">
+    <text x="20" y="32" class="title">std140 · 112 bytes</text>
+    <rect x="60" y="40" width="24" height="36" rx="2" class="mem"/>
+    <text x="72" y="62" class="mid small">a</text>
+    <rect x="84" y="40" width="72" height="36" rx="2" class="ghost"/>
+    <text x="120" y="62" class="mid small t-faint">pad</text>
+    <rect x="156" y="40" width="72" height="36" rx="2" class="mem"/>
+    <text x="192" y="62" class="mid small">b</text>
+    <rect x="228" y="40" width="24" height="36" rx="2" class="mem"/>
+    <text x="240" y="62" class="mid small">c</text>
+    <rect x="252" y="40" width="48" height="36" rx="2" class="mem"/>
+    <text x="276" y="62" class="mid small">d0</text>
+    <rect x="300" y="40" width="48" height="36" rx="2" class="ghost"/>
+    <rect x="348" y="40" width="48" height="36" rx="2" class="mem"/>
+    <text x="372" y="62" class="mid small">d1</text>
+    <rect x="396" y="40" width="48" height="36" rx="2" class="ghost"/>
+    <rect x="444" y="40" width="72" height="36" rx="2" class="mem"/>
+    <text x="480" y="62" class="mid small">m c0</text>
+    <rect x="516" y="40" width="24" height="36" rx="2" class="ghost"/>
+    <rect x="540" y="40" width="72" height="36" rx="2" class="mem"/>
+    <text x="576" y="62" class="mid small">m c1</text>
+    <rect x="612" y="40" width="24" height="36" rx="2" class="ghost"/>
+    <rect x="636" y="40" width="72" height="36" rx="2" class="mem"/>
+    <text x="672" y="62" class="mid small">m c2</text>
+    <rect x="708" y="40" width="24" height="36" rx="2" class="ghost"/>
+    <text x="60" y="92" class="mid mono small">0</text>
+    <text x="156" y="92" class="mid mono small">16</text>
+    <text x="252" y="92" class="mid mono small">32</text>
+    <text x="348" y="92" class="mid mono small">48</text>
+    <text x="444" y="92" class="mid mono small">64</text>
+    <text x="540" y="92" class="mid mono small">80</text>
+    <text x="636" y="92" class="mid mono small">96</text>
+    <text x="732" y="92" class="mid mono small">112</text>
+    <text x="20" y="122" class="title">std430 · 96 bytes</text>
+    <rect x="60" y="130" width="24" height="36" rx="2" class="mem"/>
+    <text x="72" y="152" class="mid small">a</text>
+    <rect x="84" y="130" width="72" height="36" rx="2" class="ghost"/>
+    <text x="120" y="152" class="mid small t-faint">pad</text>
+    <rect x="156" y="130" width="72" height="36" rx="2" class="mem"/>
+    <text x="192" y="152" class="mid small">b</text>
+    <rect x="228" y="130" width="24" height="36" rx="2" class="mem"/>
+    <text x="240" y="152" class="mid small">c</text>
+    <rect x="252" y="130" width="48" height="36" rx="2" class="mem"/>
+    <text x="276" y="152" class="mid small">d0</text>
+    <rect x="300" y="130" width="48" height="36" rx="2" class="mem"/>
+    <text x="324" y="152" class="mid small">d1</text>
+    <rect x="348" y="130" width="72" height="36" rx="2" class="mem"/>
+    <text x="384" y="152" class="mid small">m c0</text>
+    <rect x="420" y="130" width="24" height="36" rx="2" class="ghost"/>
+    <rect x="444" y="130" width="72" height="36" rx="2" class="mem"/>
+    <text x="480" y="152" class="mid small">m c1</text>
+    <rect x="516" y="130" width="24" height="36" rx="2" class="ghost"/>
+    <rect x="540" y="130" width="72" height="36" rx="2" class="mem"/>
+    <text x="576" y="152" class="mid small">m c2</text>
+    <rect x="612" y="130" width="24" height="36" rx="2" class="ghost"/>
+    <text x="60" y="182" class="mid mono small">0</text>
+    <text x="156" y="182" class="mid mono small">16</text>
+    <text x="252" y="182" class="mid mono small">32</text>
+    <text x="348" y="182" class="mid mono small">48</text>
+    <text x="444" y="182" class="mid mono small">64</text>
+    <text x="540" y="182" class="mid mono small">80</text>
+    <text x="636" y="182" class="mid mono small">96</text>
+    <text x="20" y="212" class="title">scalar · 72 bytes</text>
+    <rect x="60" y="220" width="24" height="36" rx="2" class="mem"/>
+    <text x="72" y="242" class="mid small">a</text>
+    <rect x="84" y="220" width="72" height="36" rx="2" class="mem"/>
+    <text x="120" y="242" class="mid small">b</text>
+    <rect x="156" y="220" width="24" height="36" rx="2" class="mem"/>
+    <text x="168" y="242" class="mid small">c</text>
+    <rect x="180" y="220" width="48" height="36" rx="2" class="mem"/>
+    <text x="204" y="242" class="mid small">d0</text>
+    <rect x="228" y="220" width="48" height="36" rx="2" class="mem"/>
+    <text x="252" y="242" class="mid small">d1</text>
+    <rect x="276" y="220" width="72" height="36" rx="2" class="mem"/>
+    <text x="312" y="242" class="mid small">m c0</text>
+    <rect x="348" y="220" width="72" height="36" rx="2" class="mem"/>
+    <text x="384" y="242" class="mid small">m c1</text>
+    <rect x="420" y="220" width="72" height="36" rx="2" class="mem"/>
+    <text x="456" y="242" class="mid small">m c2</text>
+    <text x="60" y="272" class="mid mono small">0</text>
+    <text x="84" y="272" class="mid mono small">4</text>
+    <text x="156" y="272" class="mid mono small">16</text>
+    <text x="180" y="272" class="mid mono small">20</text>
+    <text x="276" y="272" class="mid mono small">36</text>
+    <text x="492" y="272" class="mid mono small">72</text>
+    <text x="20" y="296" class="small">Scale: 6 px per byte. Dashed boxes are padding. The C++ struct with glm's default vec3 and mat3 is exactly the scalar row.</text>
+  </svg>
+  <figcaption>The same five fields: 112, 96 or 72 bytes. Only the scalar layout matches what a C++ compiler makes from the same struct.</figcaption>
+</figure>
+
+<p>Click through the std430 row, field by field, with the algorithm of section 2.</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. a: float</h4>
+    <svg viewBox="0 0 760 190" role="img" aria-label="std430 layout of Example, step 1: a: float.">
+      <rect x="40" y="30" width="672" height="40" rx="2" class="box"/>
+      <rect x="40" y="30" width="28" height="40" rx="2" class="hot"/>
+      <text x="54" y="54" class="mid small">a</text>
+      <text x="40" y="88" class="mid mono small">0</text>
+      <line x1="68" y1="122" x2="68" y2="98" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="76" y="124" class="small t-hot">next free byte = 4</text>
+      <text x="40" y="156">a is a float: size 4, align 4. offset = roundUp(0, 4) = 0.</text>
+      <text x="40" y="178">Next free byte: 4. maxAlign = 4.</text>
+    </svg>
+    <p>The first field always starts at 0.</p>
+  </div>
+  <div class="step">
+    <h4>2. b: float3</h4>
+    <svg viewBox="0 0 760 190" role="img" aria-label="std430 layout of Example, step 2: b: float3.">
+      <rect x="40" y="30" width="672" height="40" rx="2" class="box"/>
+      <rect x="40" y="30" width="28" height="40" rx="2" class="mem"/>
+      <text x="54" y="54" class="mid small">a</text>
+      <rect x="68" y="30" width="84" height="40" rx="2" class="ghost"/>
+      <text x="110" y="54" class="mid small t-faint">pad</text>
+      <rect x="152" y="30" width="84" height="40" rx="2" class="hot"/>
+      <text x="194" y="54" class="mid small">b</text>
+      <text x="40" y="88" class="mid mono small">0</text>
+      <text x="68" y="88" class="mid mono small">4</text>
+      <text x="152" y="88" class="mid mono small">16</text>
+      <line x1="236" y1="122" x2="236" y2="98" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="244" y="124" class="small t-hot">next free byte = 28</text>
+      <text x="40" y="156">b is a float3: size 12, but align 16 in std430. offset = roundUp(4, 16) = 16.</text>
+      <text x="40" y="178">Bytes 4 to 16 become padding. Next free byte: 28. maxAlign = 16.</text>
+    </svg>
+    <p>The only padding between fields in this struct: 12 bytes before <var>b</var>.</p>
+  </div>
+  <div class="step">
+    <h4>3. c: float</h4>
+    <svg viewBox="0 0 760 190" role="img" aria-label="std430 layout of Example, step 3: c: float.">
+      <rect x="40" y="30" width="672" height="40" rx="2" class="box"/>
+      <rect x="40" y="30" width="28" height="40" rx="2" class="mem"/>
+      <text x="54" y="54" class="mid small">a</text>
+      <rect x="68" y="30" width="84" height="40" rx="2" class="ghost"/>
+      <text x="110" y="54" class="mid small t-faint">pad</text>
+      <rect x="152" y="30" width="84" height="40" rx="2" class="mem"/>
+      <text x="194" y="54" class="mid small">b</text>
+      <rect x="236" y="30" width="28" height="40" rx="2" class="hot"/>
+      <text x="250" y="54" class="mid small">c</text>
+      <text x="40" y="88" class="mid mono small">0</text>
+      <text x="152" y="88" class="mid mono small">16</text>
+      <text x="236" y="88" class="mid mono small">28</text>
+      <line x1="264" y1="122" x2="264" y2="98" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="272" y="124" class="small t-hot">next free byte = 32</text>
+      <text x="40" y="156">c is a float: align 4. offset = roundUp(28, 4) = 28.</text>
+      <text x="40" y="178">It fills the last 4 bytes of the 16-byte slot that b started.</text>
+    </svg>
+    <p>No padding: a scalar fits right after a <var>float3</var>.</p>
+  </div>
+  <div class="step">
+    <h4>4. d: float2[2]</h4>
+    <svg viewBox="0 0 760 190" role="img" aria-label="std430 layout of Example, step 4: d: float2[2].">
+      <rect x="40" y="30" width="672" height="40" rx="2" class="box"/>
+      <rect x="40" y="30" width="28" height="40" rx="2" class="mem"/>
+      <text x="54" y="54" class="mid small">a</text>
+      <rect x="68" y="30" width="84" height="40" rx="2" class="ghost"/>
+      <text x="110" y="54" class="mid small t-faint">pad</text>
+      <rect x="152" y="30" width="84" height="40" rx="2" class="mem"/>
+      <text x="194" y="54" class="mid small">b</text>
+      <rect x="236" y="30" width="28" height="40" rx="2" class="mem"/>
+      <text x="250" y="54" class="mid small">c</text>
+      <rect x="264" y="30" width="56" height="40" rx="2" class="hot"/>
+      <text x="292" y="54" class="mid small">d0</text>
+      <rect x="320" y="30" width="56" height="40" rx="2" class="hot"/>
+      <text x="348" y="54" class="mid small">d1</text>
+      <text x="40" y="88" class="mid mono small">0</text>
+      <text x="152" y="88" class="mid mono small">16</text>
+      <text x="264" y="88" class="mid mono small">32</text>
+      <text x="376" y="88" class="mid mono small">48</text>
+      <line x1="376" y1="122" x2="376" y2="98" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="384" y="124" class="small t-hot">next free byte = 48</text>
+      <text x="40" y="156">d is an array of float2: align 8, stride 8 (std140 would make both 16).</text>
+      <text x="40" y="178">offset = roundUp(32, 8) = 32. Two elements: 32 to 48.</text>
+    </svg>
+    <p>In std140, each <var>float2</var> would take 16 bytes, and <var>d</var> would end at 64.</p>
+  </div>
+  <div class="step">
+    <h4>5. m: float3x3</h4>
+    <svg viewBox="0 0 760 190" role="img" aria-label="std430 layout of Example, step 5: m: float3x3.">
+      <rect x="40" y="30" width="672" height="40" rx="2" class="box"/>
+      <rect x="40" y="30" width="28" height="40" rx="2" class="mem"/>
+      <text x="54" y="54" class="mid small">a</text>
+      <rect x="68" y="30" width="84" height="40" rx="2" class="ghost"/>
+      <text x="110" y="54" class="mid small t-faint">pad</text>
+      <rect x="152" y="30" width="84" height="40" rx="2" class="mem"/>
+      <text x="194" y="54" class="mid small">b</text>
+      <rect x="236" y="30" width="28" height="40" rx="2" class="mem"/>
+      <text x="250" y="54" class="mid small">c</text>
+      <rect x="264" y="30" width="56" height="40" rx="2" class="mem"/>
+      <text x="292" y="54" class="mid small">d0</text>
+      <rect x="320" y="30" width="56" height="40" rx="2" class="mem"/>
+      <text x="348" y="54" class="mid small">d1</text>
+      <rect x="376" y="30" width="84" height="40" rx="2" class="hot"/>
+      <text x="418" y="54" class="mid small">m c0</text>
+      <rect x="460" y="30" width="28" height="40" rx="2" class="ghost"/>
+      <rect x="488" y="30" width="84" height="40" rx="2" class="hot"/>
+      <text x="530" y="54" class="mid small">m c1</text>
+      <rect x="572" y="30" width="28" height="40" rx="2" class="ghost"/>
+      <rect x="600" y="30" width="84" height="40" rx="2" class="hot"/>
+      <text x="642" y="54" class="mid small">m c2</text>
+      <rect x="684" y="30" width="28" height="40" rx="2" class="ghost"/>
+      <text x="40" y="88" class="mid mono small">0</text>
+      <text x="152" y="88" class="mid mono small">16</text>
+      <text x="264" y="88" class="mid mono small">32</text>
+      <text x="376" y="88" class="mid mono small">48</text>
+      <text x="488" y="88" class="mid mono small">64</text>
+      <text x="600" y="88" class="mid mono small">80</text>
+      <text x="712" y="88" class="mid mono small">96</text>
+      <line x1="712" y1="122" x2="712" y2="98" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="704" y="124" class="end small t-hot">next free byte = 96</text>
+      <text x="40" y="156">m is 3 columns, each a float3: align 16, so the column stride is 16, not 12.</text>
+      <text x="40" y="178">offset = roundUp(48, 16) = 48. 3 × 16 bytes: 48 to 96.</text>
+    </svg>
+    <p>Each column of a <var>float3x3</var> wastes 4 bytes in std430 and std140, but not in scalar layout.</p>
+  </div>
+  <div class="step">
+    <h4>6. The end: size and alignment</h4>
+    <svg viewBox="0 0 760 190" role="img" aria-label="std430 layout of Example, step 6: The end: size and alignment.">
+      <rect x="40" y="30" width="672" height="40" rx="2" class="box"/>
+      <rect x="40" y="30" width="28" height="40" rx="2" class="mem"/>
+      <text x="54" y="54" class="mid small">a</text>
+      <rect x="68" y="30" width="84" height="40" rx="2" class="ghost"/>
+      <text x="110" y="54" class="mid small t-faint">pad</text>
+      <rect x="152" y="30" width="84" height="40" rx="2" class="mem"/>
+      <text x="194" y="54" class="mid small">b</text>
+      <rect x="236" y="30" width="28" height="40" rx="2" class="mem"/>
+      <text x="250" y="54" class="mid small">c</text>
+      <rect x="264" y="30" width="56" height="40" rx="2" class="mem"/>
+      <text x="292" y="54" class="mid small">d0</text>
+      <rect x="320" y="30" width="56" height="40" rx="2" class="mem"/>
+      <text x="348" y="54" class="mid small">d1</text>
+      <rect x="376" y="30" width="84" height="40" rx="2" class="mem"/>
+      <text x="418" y="54" class="mid small">m c0</text>
+      <rect x="460" y="30" width="28" height="40" rx="2" class="ghost"/>
+      <rect x="488" y="30" width="84" height="40" rx="2" class="mem"/>
+      <text x="530" y="54" class="mid small">m c1</text>
+      <rect x="572" y="30" width="28" height="40" rx="2" class="ghost"/>
+      <rect x="600" y="30" width="84" height="40" rx="2" class="mem"/>
+      <text x="642" y="54" class="mid small">m c2</text>
+      <rect x="684" y="30" width="28" height="40" rx="2" class="ghost"/>
+      <text x="40" y="88" class="mid mono small">0</text>
+      <text x="152" y="88" class="mid mono small">16</text>
+      <text x="264" y="88" class="mid mono small">32</text>
+      <text x="376" y="88" class="mid mono small">48</text>
+      <text x="488" y="88" class="mid mono small">64</text>
+      <text x="600" y="88" class="mid mono small">80</text>
+      <text x="712" y="88" class="mid mono small">96</text>
+      <line x1="712" y1="122" x2="712" y2="98" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="704" y="124" class="end small t-hot">next free byte = 96</text>
+      <text x="40" y="156">maxAlign is 16 (from b and m). structSize = roundUp(96, 16) = 96.</text>
+      <text x="40" y="178">No padding at the end. In an array, element 1 starts at 96.</text>
+    </svg>
+    <p>The size is 96. The C++ struct is 72, so the two sides disagree from <var>b</var> on.</p>
+  </div>
+</div>
+
+<h2><span class="n">6</span>The usual traps</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Trap</th><th>What goes wrong</th><th>Fix</th></tr>
+  <tr><td><var>vec3</var> after a scalar</td><td>std140/std430 move it to the next 16; C++ does not (section 1).</td><td>Use scalar layout, or put a <var>float</var> <i>after</i> each <var>vec3</var> (a <var>vec3</var> + <var>float</var> pair fills 16 bytes in every rule set), or use <var>vec4</var>.</td></tr>
+  <tr><td>Two <var>vec3</var> in a row</td><td>std430: the second starts at 16, not 12.</td><td>The same: pair each <var>vec3</var> with a scalar.</td></tr>
+  <tr><td>Arrays of scalars in std140</td><td><var>float</var> <var>x</var>[4] has a stride of 16: 64 bytes, not 16.</td><td>Use <var>vec4</var> <var>x</var>[1], or std430/scalar.</td></tr>
+  <tr><td><var>mat3</var></td><td>48 bytes in std140/std430, 36 in C++.</td><td>Scalar layout, or store a <var>mat3x4</var> / three <var>vec4</var>.</td></tr>
+  <tr><td>Row-major vs column-major</td><td>The matrix arrives transposed.</td><td>Pick one majorness for the shader compiler and match the math library (glm is column-major).</td></tr>
+  <tr><td><var>bool</var></td><td>1 byte in C++, 4 bytes in GLSL, HLSL and Slang.</td><td>Use <var>uint32_t</var> on the CPU side.</td></tr>
+  <tr><td><var>size_t</var>, <var>long</var>, <var>int</var></td><td>Their size depends on the platform.</td><td>Use fixed-size types: <var>uint32_t</var>, <var>int32_t</var>, <var>uint64_t</var>.</td></tr>
+  <tr><td>A 64-bit field after an odd number of 4-byte fields</td><td>Both sides insert 4 hidden padding bytes. Fine if both do it, but a hand-written offset table forgets them.</td><td>Keep 64-bit fields at offsets that are multiples of 8, with explicit padding fields.</td></tr>
+  <tr><td>The struct's end</td><td>A struct with a 64-bit field rounds its size up to 8 in C++. A GPU rule may round differently.</td><td>Add an explicit padding field so the size is a multiple of 8 (or 16) on both sides.</td></tr>
+  <tr><td>Enums</td><td>The size of a plain C++ enum is up to the compiler.</td><td><var>enum class</var> <var>E</var> : <var>uint32_t</var> on both sides.</td></tr>
+</table>
+</div>
+
+<h2><span class="n">7</span>Other APIs</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>API, memory kind</th><th>Rule</th><th>Our <var>Example</var>: where is <var>b</var>?</th></tr>
+  <tr><td>Vulkan GLSL, uniform buffer</td><td>std140</td><td>16</td></tr>
+  <tr><td>Vulkan GLSL, storage buffer</td><td>std430</td><td>16</td></tr>
+  <tr><td>Vulkan with scalar layout</td><td>scalar</td><td>4</td></tr>
+  <tr><td>HLSL constant buffer</td><td>16-byte "registers": a vector may not cross a 16-byte boundary; arrays and structs start a new register</td><td>4 (4 + 12 = 16 does not cross)</td></tr>
+  <tr><td>HLSL structured buffer</td><td>packed, like scalar</td><td>4</td></tr>
+  <tr><td>Metal</td><td><var>float3</var> is 16 bytes, aligned to 16; <var>packed_float3</var> is 12, aligned to 4</td><td>16 (or 4 with <var>packed_float3</var>)</td></tr>
+  <tr><td>WGSL (WebGPU)</td><td><var>vec3</var> aligned to 16; uniform buffers add std140-like array rules</td><td>16</td></tr>
+</table>
+</div>
+
+<h2><span class="n">8</span>Push constants</h2>
+
+<p><b>Push constants</b> are a few bytes written straight into the command buffer, the fastest way to give a draw small per-draw values. Their layout follows the same rules (std430 by default in Vulkan GLSL). Two extra limits apply:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Limit</th><th>Value</th></tr>
+  <tr><td>Total size (<var>maxPushConstantsSize</var>)</td><td>at least 128 bytes in Vulkan 1.0 to 1.3, at least 256 in Vulkan 1.4. Many desktop GPUs allow 256.</td></tr>
+  <tr><td>Ranges</td><td>The pipeline layout declares which byte ranges each shader stage sees. A push must stay inside a declared range.</td></tr>
+  <tr><td>Offsets and sizes</td><td>multiples of 4</td></tr>
+  <tr><td>Direct3D 12 equivalent</td><td>root constants: the whole root signature is 64 DWORDs (256 bytes), shared with root descriptors and tables</td></tr>
+</table>
+</div>
+
+<p>Because the space is small, a common design puts just one pointer (8 bytes) and a couple of indices there, and everything else in buffers. See <a href="device-addresses.html">Buffer device addresses</a>.</p>
+
+<h2><span class="n">9</span>Making sure both sides agree</h2>
+
+<p>A layout mismatch gives no error by itself. So each project picks one or more ways to catch it:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="The C++ struct is pinned by static_asserts at compile time. The shader struct is described by the compiler's reflection. A check at startup compares sizes and offsets from both. A third option generates one side from the other.">
+    <rect x="15" y="30" width="235" height="120" rx="6" class="cpu"/>
+    <text x="132" y="54" class="mid title">C++ struct</text>
+    <text x="30" y="82" class="small">sizeof, offsetof</text>
+    <text x="30" y="104" class="small">static_assert: fails the build</text>
+    <text x="30" y="126" class="small">if a number changes</text>
+
+    <rect x="510" y="30" width="235" height="120" rx="6" class="shader"/>
+    <text x="627" y="54" class="mid title">shader struct</text>
+    <text x="525" y="82" class="small">the compiler's reflection API</text>
+    <text x="525" y="104" class="small">reports each field's offset</text>
+    <text x="525" y="126" class="small">and the struct's size</text>
+
+    <rect x="280" y="40" width="200" height="100" rx="6" class="hot"/>
+    <text x="380" y="66" class="mid title">compare at startup</text>
+    <text x="380" y="90" class="mid small">after each shader compile:</text>
+    <text x="380" y="108" class="mid small">size and every offset equal?</text>
+    <text x="380" y="126" class="mid small">if not: log and refuse</text>
+    <line x1="250" y1="90" x2="278" y2="90" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="510" y1="90" x2="482" y2="90" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="15" y="186" class="title">Other ways</text>
+    <text x="15" y="208" class="small">Generate one side from the other: a tool writes the C++ header from the shader's reflection, or the shader from a shared</text>
+    <text x="15" y="226" class="small">description. Or write the struct once in a header that both compilers read (HLSL and C++ can share simple structs).</text>
+  </svg>
+  <figcaption>Offsets and sizes catch a moved field. They do not catch a <var>uint</var> on one side and a <var>float</var> on the other, or two swapped fields of the same size. For that, also compare each field's type.</figcaption>
+</figure>
+
+<h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
+
+<p>RASM uses <b>scalar layout</b> for everything, so its C++ structs (with glm's default packing) and its Slang structs follow the same rules. The structs live twice: in <code>src/renderer/uberMaterialTypes.h</code> (namespace <code>rasm::gfx</code>) and in <code>shaders/lib/core.slang</code>. Two checks hold them together.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="The Slang session uses GLSLForceScalarLayout and column-major matrices. uberMaterialTypes.h holds the C++ structs and static_asserts. core.slang holds the Slang structs. After each link, validateRasmStructs walks from the push constant pc to scene and its pointers, and compares each struct's size and field offsets with the C++ offsetof values. It runs inside assert, so only in debug builds.">
+    <rect x="15" y="20" width="235" height="140" rx="6" class="cpu"/>
+    <text x="132" y="42" class="mid title">uberMaterialTypes.h</text>
+    <text x="132" y="58" class="mid small">C++, glm default packing</text>
+    <text x="28" y="84" class="small">struct SceneData { … }</text>
+    <text x="28" y="104" class="small">static_assert(sizeof(SceneData) == 768)</text>
+    <text x="28" y="124" class="small">static_assert(offsetof(…) == …)</text>
+    <text x="28" y="146" class="small">compile time: pins the C++ side</text>
+
+    <rect x="510" y="20" width="235" height="140" rx="6" class="shader"/>
+    <text x="627" y="42" class="mid title">core.slang</text>
+    <text x="627" y="58" class="mid small">Slang, compiled at startup</text>
+    <text x="523" y="84" class="small">struct SceneData { … }</text>
+    <text x="523" y="104" class="small">session options:</text>
+    <text x="523" y="122" class="small">GLSLForceScalarLayout</text>
+    <text x="523" y="140" class="small">MatrixLayoutColumn</text>
+
+    <rect x="281" y="26" width="198" height="128" rx="8" class="hot"/>
+    <text x="380" y="50" class="mid title">validateRasmStructs</text>
+    <text x="380" y="72" class="mid small">after each link:</text>
+    <text x="380" y="90" class="mid small">reflection size + offsets</text>
+    <text x="380" y="108" class="mid small">vs C++ sizeof / offsetof</text>
+    <text x="380" y="130" class="mid small">inside assert(): debug only</text>
+    <line x1="250" y1="90" x2="279" y2="90" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="510" y1="90" x2="481" y2="90" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="15" y="196" class="title">How it finds the Slang layout</text>
+    <rect x="15" y="210" width="90" height="30" rx="4" class="box"/><text x="60" y="230" class="mid mono small">pc</text>
+    <line x1="105" y1="225" x2="128" y2="225" class="arrow" marker-end="url(#ah)"/>
+    <rect x="130" y="210" width="110" height="30" rx="4" class="mem"/><text x="185" y="230" class="mid mono small">scene</text>
+    <line x1="240" y1="225" x2="263" y2="225" class="arrow" marker-end="url(#ah)"/>
+    <rect x="265" y="210" width="480" height="30" rx="4" class="mem"/><text x="505" y="230" class="mid small">lights, vertsPtr, drawInfoPtr, instancesPtr, geometryPtr → lods, materialsPtr → material → 4 parts</text>
+    <text x="15" y="266" class="small">Slang reports scalar offsets only along this path. Asked directly, a type behind a pointer gets std140/std430 padding,</text>
+    <text x="15" y="282" class="small">so the check starts at the push constant and follows the fields (fieldStruct). A shader whose pc.scene is not SceneData is skipped.</text>
+  </svg>
+  <figcaption>The two checks together catch a wrong size or a moved field, in a debug build. Field types are not compared.</figcaption>
+</figure>
+
+<h3>The shared structs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Struct</th><th>Bytes</th><th>Read through</th></tr>
+  <tr><td><code>PushConstants</code></td><td>16</td><td>the push constant <code>pc</code></td></tr>
+  <tr><td><code>SceneData</code></td><td>768</td><td><code>pc.scene</code></td></tr>
+  <tr><td><code>Light</code></td><td>48</td><td><code>SceneData::lights</code>, 8 of them</td></tr>
+  <tr><td><code>VertexFull</code></td><td>64</td><td><code>vertsPtr</code>; also tied to <code>rasm::Vertex</code></td></tr>
+  <tr><td><code>DrawInfo</code></td><td>20</td><td><code>drawInfoPtr</code>, <code>allDrawsPtr</code>; also the indirect draw command</td></tr>
+  <tr><td><code>InstanceData</code></td><td>108</td><td><code>instancesPtr</code></td></tr>
+  <tr><td><code>GeometryData</code>, <code>GeometryLod</code></td><td>120, 12</td><td><code>geometryPtr</code></td></tr>
+  <tr><td><code>MaterialData</code>, <code>Material</code></td><td>84, 80</td><td><code>materialsPtr</code></td></tr>
+  <tr><td><code>MetallicRoughnessMaterial</code>, <code>NormalMaterial</code>, <code>OcclusionMaterial</code>, <code>EmissiveMaterial</code></td><td>36, 12, 12, 20</td><td>the four parts of <code>Material</code></td></tr>
+</table>
+</div>
+
+<h3>What scalar layout buys: two real structs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Struct</th><th>Scalar (used)</th><th>std430 would give</th><th>Where the difference comes from</th></tr>
+  <tr><td><code>GeometryData</code></td><td>120 bytes</td><td>144 bytes</td><td><code>boundsCenter</code> (a <var>float3</var> at offset 4) would move to 16, and the size would round up to 16</td></tr>
+  <tr><td><code>InstanceData</code></td><td>108 bytes</td><td>128 bytes</td><td><code>normalMatrix</code> (a <var>float3x3</var>) would be 48 bytes, not 36, and the size would round up to 16</td></tr>
+</table>
+</div>
+
+<h3>SceneData, byte by byte</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="SceneData is 768 bytes: two matrices from 0 to 128, the camera position and numLights to 144, eight lights to 528, twelve 8-byte pointers to 624, six frustum planes to 720, then twelve 4-byte values, the last one an explicit padding field at 764.">
+    <rect x="20"  y="30" width="117" height="40" rx="2" class="mem"/><text x="78"  y="54" class="mid small">2 matrices</text>
+    <rect x="137" y="30" width="14"  height="40" rx="2" class="mem"/>
+    <rect x="151" y="30" width="350" height="40" rx="2" class="mem"/><text x="326" y="54" class="mid small">lights[8] · 8 × 48</text>
+    <rect x="501" y="30" width="88"  height="40" rx="2" class="hot"/><text x="545" y="54" class="mid small">12 pointers</text>
+    <rect x="589" y="30" width="87"  height="40" rx="2" class="mem"/><text x="632" y="54" class="mid small">planes[6]</text>
+    <rect x="676" y="30" width="40"  height="40" rx="2" class="mem"/>
+    <rect x="716" y="30" width="4"   height="40" rx="1" class="ghost"/>
+    <text x="20"  y="88" class="mid mono small">0</text>
+    <text x="137" y="88" class="mid mono small">128</text>
+    <text x="501" y="88" class="mid mono small">528</text>
+    <text x="589" y="88" class="mid mono small">624</text>
+    <text x="676" y="88" class="mid mono small">720</text>
+    <text x="728" y="88" class="mid mono small">768</text>
+    <text x="144" y="22" class="mid small">camera, numLights</text>
+    <text x="720" y="22" class="end small">counts, sizes, LOD</text>
+    <text x="20" y="120" class="small">The pointers start at 528 = 144 + 8 × 48, a multiple of 8, so no hidden padding is needed before them.</text>
+    <text x="20" y="138" class="small">The last field, padding at 764, makes the size 768, a multiple of 8, on both sides.</text>
+    <text x="20" y="158" class="small">Scale: 700 px for 768 bytes.</text>
+  </svg>
+  <figcaption>The <code>static_assert</code>s in <code>uberMaterialTypes.h</code> pin every one of these offsets.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Rule set</td><td>std140, std430 or scalar</td><td>Scalar for every buffer and the push constant: the Slang session option <code>GLSLForceScalarLayout</code>, and the device feature <var>scalarBlockLayout</var>.</td></tr>
+  <tr><td>Matrices</td><td>pick one majorness</td><td>Column-major on both sides: <code>MatrixLayoutColumn</code> in the session, glm on the CPU.</td></tr>
+  <tr><td>C++ side</td><td>a math library's default packing</td><td>glm with no alignment options: <var>vec3</var> is 12 bytes, <var>mat3</var> 36.</td></tr>
+  <tr><td>One definition or two</td><td>generate, or share, or check</td><td>Two hand-written copies, checked. Field names may differ: C++ <code>Material::pbr</code> is Slang <code>metallicRoughness</code>.</td></tr>
+  <tr><td>Compile-time check</td><td><var>static_assert</var></td><td>The <code>static_assert</code>s at the end of <code>uberMaterialTypes.h</code>, more in <code>geometryPool.cpp</code> (tying <code>rasm::Vertex</code> to <code>VertexFull</code>), and one per push-constant struct.</td></tr>
+  <tr><td>Reflection check</td><td>at startup, refuse on mismatch</td><td><code>validateRasmStructs</code>, after each link in <code>ShaderCompiler::compileFromString</code>. It logs each mismatch, then the <code>assert</code> stops the program. In a Release build the whole call is compiled out (B23).</td></tr>
+  <tr><td>Type check</td><td>also compare types</td><td>Not done (C11): a <code>uint32_t</code> against a <var>float</var> passes.</td></tr>
+  <tr><td>Explicit padding</td><td>keep the end a multiple of 8</td><td><code>SceneData::padding</code>.</td></tr>
+  <tr><td>Push constants</td><td>≤ 128 or 256 bytes</td><td>16 bytes, <code>PUSH_CONSTANTS_SIZE</code>, the one range of every pipeline layout. <code>RenderContext::pushConstants</code> refuses a push past it. The stats overlay's <code>OverlayPushConstants</code> is 16 bytes too.</td></tr>
+  <tr><td>Shared constants</td><td>—</td><td><code>MAX_LIGHTS</code>, <code>MAX_VERTEX_UV_SETS</code>, <code>MAX_MESH_LODS</code>, <code>MAX_DRAW_RUNS</code>, <code>MaterialId</code>, <code>LightType</code> are written on both sides with the same values. Nothing checks them.</td></tr>
+</table>
+</div>
+
+<p>A mismatch shows up at startup, in a debug build, with messages in this form (from <code>validateStruct</code>):</p>
+
+<pre><code class="lang-text">Size mismatch for &lt;struct&gt;: C++ &lt;bytes&gt;, shader &lt;bytes&gt;
+Offset mismatch for &lt;struct&gt;.&lt;field&gt;: C++ &lt;offset&gt;, shader &lt;offset&gt;</code></pre>
+
+<h3>Shaders are compiled at startup</h3>
+
+<p>RASM compiles its Slang shaders when the engine starts, from <code>EngineConfig::shaderDir</code>. So the check runs on every start of a debug build, and a shader edit needs no build step. <code>tools/compile-shaders.bat</code> compiles every pass offline with the same flags (<samp>-force-glsl-scalar-layout</samp>, <samp>-matrix-layout-column-major</samp>), only as a syntax check; the engine does not use its output.</p>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>C++ structs and <code>static_assert</code>s</td><td><code>src/renderer/uberMaterialTypes.h</code></td></tr>
+  <tr><td>Slang structs</td><td><code>shaders/lib/core.slang</code></td></tr>
+  <tr><td>Session options</td><td><code>ShaderCompiler::initialize</code> in <code>src/renderer/shaderCompiler.cpp</code></td></tr>
+  <tr><td>The reflection check</td><td><code>validateRasmStructs</code>, <code>validateStruct</code>, <code>fieldStruct</code> in <code>src/renderer/shaderCompiler.cpp</code></td></tr>
+  <tr><td>Vertex ties</td><td><code>src/renderer/geometryPool.cpp</code></td></tr>
+  <tr><td>Push-constant size</td><td><code>PUSH_CONSTANTS_SIZE</code> in <code>include/rasm/types.h</code>; <code>createPipelineLayout</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; <code>RenderContext::pushConstants</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Offline compile check</td><td><code>tools/compile-shaders.bat</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Change a shared struct on both sides in the same change: the C++ struct, the Slang struct, the <code>static_assert</code>s, and the table in <code>validateRasmStructs</code>. The <code>gpu-struct-sync</code> skill lists every place.</li>
+    <li>Run a debug build after the change: only it runs the reflection check.</li>
+    <li>Never use <var>bool</var>, <var>size_t</var>, <var>int</var> or glm's aligned types in a shared struct.</li>
+    <li>Keep 64-bit fields at offsets that are multiples of 8, and the struct size a multiple of 8.</li>
+    <li>Compare the two definitions field by field by eye: types are not checked.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p><b>B23</b>: the reflection check runs only in debug builds. <b>C11</b>: it compares sizes and offsets, not types. The shared constants and enums are not checked at all.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>The Vulkan specification: "Offset and Stride Assignment" in the chapter on shader interfaces (std140, std430 and scalar alignment).</li>
+  <li>The OpenGL 4.6 specification, section 7.6.2.2 "Standard Uniform Block Layout": the original std140 and std430 rules.</li>
+  <li>The Vulkan extension <var>VK_EXT_scalar_block_layout</var>.</li>
+  <li>Microsoft, "Packing Rules for Constant Variables" in the HLSL documentation.</li>
+  <li>The Slang user guide: reflection, and target-specific layout options.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

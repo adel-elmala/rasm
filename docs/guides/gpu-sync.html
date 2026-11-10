@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU Synchronization · RASM</title>
+<meta name="description" content="Why GPU work needs barriers: hazards, execution and memory dependencies, pipeline stages and access masks, Vulkan synchronization2, image layouts and transitions, queues and the host, and how RASM places its barriers.">
+<meta name="rasm-sources" content="include/rasm/render/resource.h src/rhi/device.h src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/renderContext.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/uploadManager.cpp src/renderer/renderGraph.cpp src/renderer/gpuScene.cpp src/engine.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/gpu-sync.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Foundations</p>
+<h1>GPU synchronization: barriers, stages, layouts</h1>
+<p class="lead">A GPU runs the commands of a command buffer in order, but not one after the other: they overlap, and their results sit in caches for a while. When one command reads what another wrote, the program has to say so, with a <b>barrier</b>. This page explains what a barrier does, how to write one well, and how images add <b>layouts</b> on top. The <a href="#in-rasm">last part</a> shows RASM's barriers.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Two uses of the same memory, where at least one writes, form a <b>hazard</b>: read after write, write after read, or write after write.</li>
+    <li>A barrier is an <b>execution dependency</b> (later work waits for earlier work) plus, for writes, a <b>memory dependency</b> (the write is flushed from caches and made visible to the reader).</li>
+    <li>Both halves are scoped by <b>pipeline stages</b> and <b>access types</b>: "wait for these stages, and make these writes visible to those reads".</li>
+    <li>Narrow scopes keep the GPU busy. Too wide is slow but correct; too narrow is a bug that may only show on another GPU.</li>
+    <li>Images also have a <b>layout</b>, the way their memory is arranged for one kind of use. A barrier changes it, and the old contents can be <b>discarded</b> at the same time.</li>
+    <li>Across submissions and queues, <b>semaphores</b> order GPU work and <b>fences</b> tell the CPU. A <a href="render-graphs.html">render graph</a> can write all of this from declared reads and writes.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>Why the GPU needs to be told</h2>
+
+<p>Commands in one command buffer start in the order they were recorded. But a GPU is a pipeline with many cores: the next command starts as soon as there is room, long before the last one is done. Without a barrier, a command that reads a buffer can run at the same time as the command that writes it.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Top: without a barrier, dispatch B starts while dispatch A still writes the buffer, so B reads old data. Bottom: with a barrier between them, B starts only after A has finished and its writes were flushed, so B reads the new data.">
+    <text x="20" y="22" class="title">No barrier</text>
+    <rect x="120" y="36" width="300" height="30" rx="4" class="shader"/>
+    <text x="270" y="56" class="mid small">dispatch A: writes buffer X</text>
+    <rect x="260" y="74" width="300" height="30" rx="4" class="shader"/>
+    <rect x="260" y="74" width="300" height="30" rx="4" class="hot"/>
+    <text x="410" y="94" class="mid small">dispatch B: reads buffer X</text>
+    <text x="580" y="94" class="small t-hot">reads half-old data</text>
+
+    <text x="20" y="142" class="title">With a barrier</text>
+    <rect x="120" y="156" width="300" height="30" rx="4" class="shader"/>
+    <text x="270" y="176" class="mid small">dispatch A: writes buffer X</text>
+    <line x1="430" y1="148" x2="430" y2="232" class="hot dashed"/>
+    <text x="436" y="150" class="small t-hot">barrier</text>
+    <rect x="440" y="194" width="300" height="30" rx="4" class="shader"/>
+    <text x="590" y="214" class="mid small">dispatch B: reads buffer X</text>
+    <text x="270" y="214" class="mid small">B waits for A, and A's writes are flushed</text>
+    <line x1="120" y1="242" x2="740" y2="242" class="arrow" marker-end="url(#ah)"/>
+    <text x="740" y="260" class="end small">time on the GPU</text>
+  </svg>
+  <figcaption>The barrier costs the overlap between A and B. That is the price of correct data, and the reason to make barriers no wider than needed.</figcaption>
+</figure>
+
+<p>Older APIs found these cases themselves. Vulkan and Direct3D 12 do not: the program says where they are. A missing barrier is not an error the driver reports. It is a race, and it may only show up on another GPU, another driver, or under more load.</p>
+
+<h2><span class="n">2</span>Hazards</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Hazard</th><th>Order</th><th>Example</th><th>What the barrier must do</th></tr>
+  <tr><td><b>RAW</b>, read after write</td><td>A writes, B reads</td><td>culling writes a draw list, the draw reads it</td><td>wait for A, and make A's writes <b>visible</b> to B</td></tr>
+  <tr><td><b>WAR</b>, write after read</td><td>A reads, B writes</td><td>a pass samples a texture, the next frame draws into it</td><td>only wait for A. A read leaves nothing in a cache to flush.</td></tr>
+  <tr><td><b>WAW</b>, write after write</td><td>A writes, B writes</td><td>two passes draw into the same target</td><td>wait for A, and order the writes, so the last one wins</td></tr>
+  <tr><td>RAR, read after read</td><td>both read</td><td>two passes sample the same texture</td><td>nothing. Reads never conflict (but an image may still need a layout change).</td></tr>
+</table>
+</div>
+
+<h2><span class="n">3</span>Two halves: execution and memory</h2>
+
+<p>"Wait for A" is only half of the job. The other half is caches. A GPU has a small cache next to each group of cores, a larger shared one, and then memory. A write first lands in a cache near the core that made it. Another core may hold an old copy of the same bytes in its own cache.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Core 1 writes the value 7 into its own cache. Memory and core 2's cache still hold the old value 3. Making the write available flushes it from core 1's cache to the shared cache. Making it visible drops core 2's old copy, so its next read gets 7.">
+    <rect x="40"  y="20" width="180" height="40" rx="6" class="shader"/><text x="130" y="45" class="mid">core 1: writes 7</text>
+    <rect x="540" y="20" width="180" height="40" rx="6" class="shader"/><text x="630" y="45" class="mid">core 2: reads</text>
+    <rect x="40"  y="90" width="180" height="40" rx="6" class="mem"/><text x="130" y="115" class="mid">cache 1: <tspan class="t-hot">7</tspan></text>
+    <rect x="540" y="90" width="180" height="40" rx="6" class="mem"/><text x="630" y="115" class="mid">cache 2: 3 (old)</text>
+    <rect x="240" y="170" width="280" height="40" rx="6" class="mem"/><text x="380" y="195" class="mid">shared cache</text>
+    <rect x="240" y="240" width="280" height="40" rx="6" class="mem"/><text x="380" y="265" class="mid">memory: 3</text>
+    <line x1="130" y1="60" x2="130" y2="88" class="arrow" marker-end="url(#ah)"/>
+    <line x1="630" y1="88" x2="630" y2="62" class="arrow" marker-end="url(#ah)"/>
+    <line x1="380" y1="210" x2="380" y2="238" class="arrow"/>
+    <path d="M130,130 L130,190 L238,190" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="140" y="150" class="small t-hot">1. make available:</text>
+    <text x="140" y="164" class="small t-hot">flush to shared cache</text>
+    <path d="M522,190 L630,190 L630,132" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="620" y="150" class="end small t-hot">2. make visible:</text>
+    <text x="620" y="164" class="end small t-hot">drop the old copy, read again</text>
+  </svg>
+  <figcaption>The real cache layout differs per GPU. The API hides it behind these two words: a write is made <b>available</b>, then made <b>visible</b> to a set of readers.</figcaption>
+</figure>
+
+<div class="split">
+  <div>
+    <h4>Execution dependency</h4>
+    <p>"Work after the barrier, in these stages, does not start before work before the barrier, in those stages, has finished." Enough for write after read.</p>
+  </div>
+  <div>
+    <h4>Memory dependency</h4>
+    <p>"Writes of these kinds, before the barrier, are made available, and then visible to accesses of those kinds after it." Needed for read after write and write after write.</p>
+  </div>
+</div>
+
+<h2><span class="n">4</span>Pipeline stages: what to wait for</h2>
+
+<p>A command passes through <b>stages</b>. A draw goes through the graphics pipeline; a dispatch through the compute stage; a copy through the transfer stage. A barrier names stages on both sides:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="The graphics pipeline stages in order: draw indirect, vertex input, vertex shader, early fragment tests, fragment shader, late fragment tests, color attachment output. Separate stages: compute shader, copy, host. Pseudo-stages: none, which is nothing, and all commands.">
+    <text x="20" y="20" class="title">A draw, stage by stage</text>
+    <rect x="20"  y="32" width="96" height="48" rx="6" class="box"/><text x="68"  y="52" class="mid small">draw</text><text x="68"  y="68" class="mid small">indirect</text>
+    <rect x="124" y="32" width="96" height="48" rx="6" class="box"/><text x="172" y="52" class="mid small">index and</text><text x="172" y="68" class="mid small">vertex input</text>
+    <rect x="228" y="32" width="96" height="48" rx="6" class="shader"/><text x="276" y="52" class="mid small">vertex</text><text x="276" y="68" class="mid small">shader</text>
+    <rect x="332" y="32" width="96" height="48" rx="6" class="box"/><text x="380" y="52" class="mid small">early</text><text x="380" y="68" class="mid small">depth tests</text>
+    <rect x="436" y="32" width="96" height="48" rx="6" class="shader"/><text x="484" y="52" class="mid small">fragment</text><text x="484" y="68" class="mid small">shader</text>
+    <rect x="540" y="32" width="96" height="48" rx="6" class="box"/><text x="588" y="52" class="mid small">late</text><text x="588" y="68" class="mid small">depth tests</text>
+    <rect x="644" y="32" width="96" height="48" rx="6" class="box"/><text x="692" y="52" class="mid small">color</text><text x="692" y="68" class="mid small">output</text>
+    <line x1="116" y1="56" x2="124" y2="56" class="arrow"/>
+    <line x1="220" y1="56" x2="228" y2="56" class="arrow"/>
+    <line x1="324" y1="56" x2="332" y2="56" class="arrow"/>
+    <line x1="428" y1="56" x2="436" y2="56" class="arrow"/>
+    <line x1="532" y1="56" x2="540" y2="56" class="arrow"/>
+    <line x1="636" y1="56" x2="644" y2="56" class="arrow"/>
+
+    <text x="20" y="140" class="title">Other work</text>
+    <rect x="20"  y="152" width="140" height="40" rx="6" class="shader"/><text x="90"  y="177" class="mid small">compute shader</text>
+    <rect x="170" y="152" width="140" height="40" rx="6" class="box"/><text x="240" y="177" class="mid small">copy (transfer)</text>
+    <rect x="320" y="152" width="140" height="40" rx="6" class="cpu"/><text x="390" y="177" class="mid small">host (the CPU)</text>
+    <rect x="490" y="152" width="250" height="40" rx="6" class="ghost"/><text x="615" y="170" class="mid small">pseudo-stages: NONE (nothing),</text><text x="615" y="184" class="mid small">ALL_COMMANDS (everything)</text>
+  </svg>
+  <figcaption>The <b>source</b> stages are the ones to wait for, in commands before the barrier. The <b>destination</b> stages are the ones that wait, in commands after it. Stages of later commands that are not named still run.</figcaption>
+</figure>
+
+<p>That last sentence is where the speed comes from. Name the <b>latest</b> source stage that really writes, and the <b>earliest</b> destination stage that really reads. Everything else can overlap:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="An earlier pass writes color; a later pass reads it in its fragment shader. With the destination stage set to fragment shader, the later pass's vertex shader runs during the earlier pass, and only its fragment shader waits. With the destination stage set to all commands, the whole later pass waits.">
+    <text x="20" y="22" class="title">src = color output, dst = fragment shader</text>
+    <text x="110" y="52" class="end small">earlier pass</text>
+    <rect x="120" y="38" width="120" height="22" rx="3" class="shader"/><text x="180" y="53" class="mid small">vertex</text>
+    <rect x="240" y="38" width="120" height="22" rx="3" class="shader"/><text x="300" y="53" class="mid small">fragment</text>
+    <rect x="360" y="38" width="80" height="22" rx="3" class="box"/><text x="400" y="53" class="mid small">color out</text>
+    <text x="110" y="86" class="end small">later pass</text>
+    <rect x="240" y="72" width="120" height="22" rx="3" class="shader"/><text x="300" y="87" class="mid small">vertex</text>
+    <rect x="360" y="72" width="80" height="22" rx="3" class="ghost"/><text x="400" y="87" class="mid small t-faint">waits</text>
+    <rect x="440" y="72" width="120" height="22" rx="3" class="shader"/><text x="500" y="87" class="mid small">fragment</text>
+    <rect x="560" y="72" width="80" height="22" rx="3" class="box"/><text x="600" y="87" class="mid small">color out</text>
+    <line x1="440" y1="30" x2="440" y2="104" class="hot dashed"/>
+    <text x="650" y="87" class="small t-gpu">done sooner</text>
+
+    <text x="20" y="142" class="title">src = color output, dst = ALL_COMMANDS</text>
+    <text x="110" y="172" class="end small">earlier pass</text>
+    <rect x="120" y="158" width="120" height="22" rx="3" class="shader"/><text x="180" y="173" class="mid small">vertex</text>
+    <rect x="240" y="158" width="120" height="22" rx="3" class="shader"/><text x="300" y="173" class="mid small">fragment</text>
+    <rect x="360" y="158" width="80" height="22" rx="3" class="box"/><text x="400" y="173" class="mid small">color out</text>
+    <text x="110" y="206" class="end small">later pass</text>
+    <rect x="240" y="192" width="200" height="22" rx="3" class="ghost"/><text x="340" y="207" class="mid small t-faint">waits</text>
+    <rect x="440" y="192" width="120" height="22" rx="3" class="shader"/><text x="500" y="207" class="mid small">vertex</text>
+    <rect x="560" y="192" width="120" height="22" rx="3" class="shader"/><text x="620" y="207" class="mid small">fragment</text>
+    <rect x="680" y="192" width="60" height="22" rx="3" class="box"/><text x="710" y="207" class="mid small">out</text>
+    <line x1="440" y1="150" x2="440" y2="224" class="hot dashed"/>
+    <text x="20" y="252" class="small">Both are correct. The second one throws away the time the later vertex shader could have run.</text>
+  </svg>
+  <figcaption>Real stages overlap much more than these blocks suggest, across many draws. The rule stays the same: a late destination stage means more overlap.</figcaption>
+</figure>
+
+<h2><span class="n">5</span>Access types: what to flush and make visible</h2>
+
+<p>Stages say <i>when</i>. <b>Access types</b> say <i>which memory traffic</i> the memory dependency covers. Each access type belongs to certain stages:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Stage</th><th>Reads</th><th>Writes</th></tr>
+  <tr><td>draw indirect</td><td>indirect command read</td><td>—</td></tr>
+  <tr><td>index input, vertex input</td><td>index read, vertex attribute read</td><td>—</td></tr>
+  <tr><td>vertex, fragment, compute shader</td><td>uniform read, shader sampled read, shader storage read</td><td>shader storage write</td></tr>
+  <tr><td>early and late depth tests</td><td>depth attachment read</td><td>depth attachment write</td></tr>
+  <tr><td>color output</td><td>color attachment read (blending, load)</td><td>color attachment write</td></tr>
+  <tr><td>copy</td><td>transfer read</td><td>transfer write</td></tr>
+  <tr><td>host</td><td>host read</td><td>host write</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>The access rule</strong>
+  <ul>
+    <li><b>Source access</b>: only the <b>writes</b> before the barrier. A read leaves nothing to flush, so naming it does nothing.</li>
+    <li><b>Destination access</b>: every read <b>and write</b> after the barrier that must see the earlier writes (or come after them).</li>
+    <li>Write after read: source access is empty. The stages alone are enough.</li>
+  </ul>
+</div>
+
+<h2><span class="n">6</span>Writing a barrier: Vulkan synchronization2</h2>
+
+<p>Vulkan 1.3 made <b>synchronization2</b> core. It packs stage and access together for each side of each barrier, which is easier to read than the original call. One call, <var>vkCmdPipelineBarrier2</var>, takes a list of barriers of three kinds:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Kind</th><th>Covers</th><th>Use it for</th></tr>
+  <tr><td>Memory barrier</td><td>all memory</td><td>buffers. Drivers rarely do better with a per-buffer barrier, and a global one also covers memory read through GPU pointers.</td></tr>
+  <tr><td>Buffer barrier</td><td>one range of one buffer</td><td>passing a buffer between queue families (section 9).</td></tr>
+  <tr><td>Image barrier</td><td>some mips and layers of one image</td><td>images: it is the only kind that can change a <b>layout</b>.</td></tr>
+</table>
+</div>
+
+<p>A memory barrier for the example on this page's first picture, where a compute shader writes the draw commands of a later indirect draw:</p>
+
+<pre><code>// A compute pass wrote draw commands; the next draw reads them as indirect arguments.
+VkMemoryBarrier2 barrier = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                            .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                            .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                            .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT};
+VkDependencyInfo dependency = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
+vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
+
+<p>Put several barriers into one call when they sit at the same point: the driver can then do one wait instead of several. And never put a barrier between two draws "just in case": every barrier drains part of the pipeline.</p>
+
+<h2><span class="n">7</span>Image layouts</h2>
+
+<p>GPUs store images in different arrangements for different uses: tiled and compressed for drawing into, a different tiling for sampling, plain lines for the display. Vulkan calls the arrangement a <b>layout</b>, and it is part of the image's state. An image barrier changes it, between the source and the destination scopes.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Layout (Vulkan)</th><th>For</th></tr>
+  <tr><td>UNDEFINED</td><td>"I do not care about the contents". Only valid as the old layout: changing from it may throw the contents away.</td></tr>
+  <tr><td>COLOR_ATTACHMENT_OPTIMAL</td><td>drawing into the image</td></tr>
+  <tr><td>DEPTH_STENCIL_ATTACHMENT_OPTIMAL</td><td>depth testing and writing</td></tr>
+  <tr><td>SHADER_READ_ONLY_OPTIMAL</td><td>sampling in shaders</td></tr>
+  <tr><td>TRANSFER_SRC / TRANSFER_DST_OPTIMAL</td><td>copies and blits</td></tr>
+  <tr><td>GENERAL</td><td>anything, including storage writes; possibly slower</td></tr>
+  <tr><td>PRESENT_SRC</td><td>handing a swapchain image to the display</td></tr>
+</table>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="The life of an offscreen color target over one frame: from UNDEFINED, discarding, to color attachment for drawing, to shader read only for a later pass that samples it, and back to UNDEFINED at the next frame. A swapchain image goes from UNDEFINED to color attachment to present.">
+    <text x="20" y="22" class="title">An offscreen color target, each frame</text>
+    <rect x="20"  y="36" width="150" height="56" rx="6" class="ghost"/><text x="95"  y="60" class="mid mono small">UNDEFINED</text><text x="95"  y="78" class="mid small">old frame, not needed</text>
+    <rect x="240" y="36" width="190" height="56" rx="6" class="gpu"/><text x="335" y="60" class="mid mono small">COLOR_ATTACHMENT</text><text x="335" y="78" class="mid small">a pass draws into it</text>
+    <rect x="500" y="36" width="240" height="56" rx="6" class="shader"/><text x="620" y="60" class="mid mono small">SHADER_READ_ONLY</text><text x="620" y="78" class="mid small">a later pass samples it</text>
+    <line x1="170" y1="64" x2="238" y2="64" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="204" y="56" class="mid small t-hot">discard</text>
+    <line x1="430" y1="64" x2="498" y2="64" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="464" y="56" class="mid small t-hot">RAW</text>
+    <path d="M620,92 V118 H95 V94" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="358" y="134" class="mid small">next frame: WAR, the new draw must wait for the old samples</text>
+
+    <text x="20" y="172" class="title">A swapchain image</text>
+    <rect x="20"  y="184" width="150" height="36" rx="6" class="ghost"/><text x="95"  y="207" class="mid mono small">UNDEFINED</text>
+    <rect x="240" y="184" width="190" height="36" rx="6" class="gpu"/><text x="335" y="207" class="mid mono small">COLOR_ATTACHMENT</text>
+    <rect x="500" y="184" width="240" height="36" rx="6" class="cpu"/><text x="620" y="207" class="mid mono small">PRESENT_SRC</text>
+    <line x1="170" y1="202" x2="238" y2="202" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="430" y1="202" x2="498" y2="202" class="arrow hot" marker-end="url(#ah-hot)"/>
+  </svg>
+  <figcaption>Each orange arrow is one image barrier. "Discard" means the old layout is UNDEFINED: a free way to tell the GPU the old contents can go, which also saves the work of decompressing them.</figcaption>
+</figure>
+
+<p>Two details catch people out. First, an image barrier is a <b>full</b> barrier: even a "discard" must still wait for the last use of the image (a write after read), so its source stages are not empty. Second, the layout belongs to each mip level and array layer. A barrier can change only some of them, and the program must then track each one.</p>
+
+<h2><span class="n">8</span>Worked example: the barriers of a small frame</h2>
+
+<p>A frame with four steps: a compute pass builds a draw list, a pass draws the scene into an offscreen target using that list, a post pass samples the target and draws into the swapchain image, and the image is presented. Click through the barriers (or use the arrow keys).</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. Draw list: compute writes, the draw reads</h4>
+    <svg viewBox="0 0 730 220" role="img" aria-label="A compute pass writes the draw list buffer. Before the scene draw reads it as indirect arguments, a memory barrier: source compute shader with shader storage write, destination draw indirect with indirect command read.">
+      <rect x="20" y="40" width="170" height="50" rx="6" class="shader"/><text x="105" y="62" class="mid">cull (compute)</text><text x="105" y="80" class="mid small">writes the draw list</text>
+      <rect x="20" y="130" width="170" height="50" rx="6" class="mem"/><text x="105" y="160" class="mid">draw list buffer</text>
+      <line x1="105" y1="90" x2="105" y2="128" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <rect x="230" y="40" width="20" height="140" rx="3" class="hot"/>
+      <rect x="290" y="40" width="170" height="50" rx="6" class="gpu"/><text x="375" y="62" class="mid">scene draw</text><text x="375" y="80" class="mid small">reads it as indirect args</text>
+      <line x1="190" y1="155" x2="300" y2="92" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <text x="490" y="40" class="title">Memory barrier (RAW)</text>
+      <text x="490" y="66" class="mono small">src stage   COMPUTE_SHADER</text>
+      <text x="490" y="84" class="mono small">src access  SHADER_STORAGE_WRITE</text>
+      <text x="490" y="110" class="mono small">dst stage   DRAW_INDIRECT</text>
+      <text x="490" y="128" class="mono small">dst access  INDIRECT_COMMAND_READ</text>
+      <text x="490" y="162" class="small">If the vertex shader also reads the list,</text>
+      <text x="490" y="178" class="small">add VERTEX_SHADER + SHADER_STORAGE_READ</text>
+      <text x="490" y="194" class="small">to the destination.</text>
+    </svg>
+    <p>A global memory barrier is enough: no layout is involved. The destination is the earliest stage that reads the list.</p>
+  </div>
+  <div class="step">
+    <h4>2. Offscreen target: discard, then draw</h4>
+    <svg viewBox="0 0 730 220" role="img" aria-label="Before drawing into the offscreen target, an image barrier from UNDEFINED to color attachment. Source: the stage that last used it, the post pass's fragment shader of the previous frame, with no access. Destination: color output, color attachment read and write.">
+      <rect x="20" y="40" width="170" height="50" rx="6" class="ghost"/><text x="105" y="62" class="mid small">last frame's post pass</text><text x="105" y="80" class="mid small">sampled the target</text>
+      <rect x="230" y="40" width="20" height="140" rx="3" class="hot"/>
+      <rect x="290" y="40" width="170" height="50" rx="6" class="gpu"/><text x="375" y="62" class="mid">scene draw</text><text x="375" y="80" class="mid small">draws into the target</text>
+      <rect x="290" y="130" width="170" height="50" rx="6" class="mem"/><text x="375" y="152" class="mid">offscreen target</text><text x="375" y="170" class="mid mono small">UNDEFINED → COLOR</text>
+      <text x="490" y="40" class="title">Image barrier (WAR + discard)</text>
+      <text x="490" y="66" class="mono small">src stage   FRAGMENT_SHADER</text>
+      <text x="490" y="84" class="mono small">src access  NONE</text>
+      <text x="490" y="110" class="mono small">dst stage   COLOR_ATTACHMENT_OUTPUT</text>
+      <text x="490" y="128" class="mono small">dst access  COLOR_ATTACHMENT_WRITE</text>
+      <text x="490" y="146" class="mono small">layout      UNDEFINED → COLOR_ATT.</text>
+      <text x="490" y="178" class="small">The source is a read: no access to flush,</text>
+      <text x="490" y="194" class="small">only a stage to wait for.</text>
+    </svg>
+    <p>The pass clears the target, so the old contents can go: the old layout is UNDEFINED. The source stage still makes the draw wait for last frame's samples.</p>
+  </div>
+  <div class="step">
+    <h4>3. Post pass: the target becomes a texture</h4>
+    <svg viewBox="0 0 730 220" role="img" aria-label="Before the post pass samples the target, an image barrier from color attachment to shader read only. Source: color output with color attachment write. Destination: fragment shader with shader sampled read.">
+      <rect x="20" y="40" width="170" height="50" rx="6" class="gpu"/><text x="105" y="62" class="mid">scene draw</text><text x="105" y="80" class="mid small">wrote the target</text>
+      <rect x="230" y="40" width="20" height="140" rx="3" class="hot"/>
+      <rect x="290" y="40" width="170" height="50" rx="6" class="gpu"/><text x="375" y="62" class="mid">post pass</text><text x="375" y="80" class="mid small">samples the target</text>
+      <rect x="20" y="130" width="440" height="50" rx="6" class="mem"/><text x="240" y="152" class="mid">offscreen target</text><text x="240" y="170" class="mid mono small">COLOR_ATTACHMENT → SHADER_READ_ONLY</text>
+      <text x="490" y="40" class="title">Image barrier (RAW)</text>
+      <text x="490" y="66" class="mono small">src stage   COLOR_ATTACHMENT_OUTPUT</text>
+      <text x="490" y="84" class="mono small">src access  COLOR_ATTACHMENT_WRITE</text>
+      <text x="490" y="110" class="mono small">dst stage   FRAGMENT_SHADER</text>
+      <text x="490" y="128" class="mono small">dst access  SHADER_SAMPLED_READ</text>
+      <text x="490" y="146" class="mono small">layout      COLOR → SHADER_READ</text>
+      <text x="490" y="178" class="small">The post pass's vertex shader may</text>
+      <text x="490" y="194" class="small">already run during the scene draw.</text>
+    </svg>
+    <p>This is the code snippet's twin, for an image. In the same call goes the barrier for the swapchain image: UNDEFINED to color attachment, waiting at color output, where the acquire semaphore waits too (see <a href="swapchain.html">the swapchain</a>).</p>
+  </div>
+  <div class="step">
+    <h4>4. Present</h4>
+    <svg viewBox="0 0 730 220" role="img" aria-label="Before present, an image barrier from color attachment to present. Source: color output with color attachment write. Destination: none. The present semaphore of the submission does the rest.">
+      <rect x="20" y="40" width="170" height="50" rx="6" class="gpu"/><text x="105" y="62" class="mid">post pass</text><text x="105" y="80" class="mid small">wrote the swapchain image</text>
+      <rect x="230" y="40" width="20" height="140" rx="3" class="hot"/>
+      <rect x="290" y="40" width="170" height="50" rx="6" class="cpu"/><text x="375" y="62" class="mid">present</text><text x="375" y="80" class="mid small">after the semaphore</text>
+      <rect x="20" y="130" width="440" height="50" rx="6" class="mem"/><text x="240" y="152" class="mid">swapchain image</text><text x="240" y="170" class="mid mono small">COLOR_ATTACHMENT → PRESENT_SRC</text>
+      <text x="490" y="40" class="title">Image barrier</text>
+      <text x="490" y="66" class="mono small">src stage   COLOR_ATTACHMENT_OUTPUT</text>
+      <text x="490" y="84" class="mono small">src access  COLOR_ATTACHMENT_WRITE</text>
+      <text x="490" y="110" class="mono small">dst stage   NONE</text>
+      <text x="490" y="128" class="mono small">dst access  NONE</text>
+      <text x="490" y="146" class="mono small">layout      COLOR → PRESENT_SRC</text>
+      <text x="490" y="178" class="small">Nothing on this queue waits: the</text>
+      <text x="490" y="194" class="small">semaphore signal at submit end covers it.</text>
+    </svg>
+    <p>Four barriers for four uses. In a bigger frame, the same reasoning repeats per resource: who wrote it last, who reads it next, which layout.</p>
+  </div>
+</div>
+
+<h2><span class="n">9</span>Beyond one command buffer</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Between</th><th>Use</th><th>Notes</th></tr>
+  <tr><td>Commands on one queue, even in different submissions</td><td>a pipeline barrier</td><td>A barrier's first scope covers everything submitted earlier to the same queue, and its second scope everything later. Submission order is enough; no semaphore needed.</td></tr>
+  <tr><td>Two queues (graphics and async compute, or transfer)</td><td>a semaphore</td><td>The signaling submit finishes and makes its writes available; the waiting submit waits at the stages it names.</td></tr>
+  <tr><td>GPU → CPU</td><td>a fence (or timeline value), plus a barrier to the host stage</td><td>The barrier makes the GPU's writes available to the host; the fence says they are done. For memory that is not host-coherent, also invalidate the CPU's range before reading.</td></tr>
+  <tr><td>CPU → GPU</td><td>the submit itself</td><td>Host writes made before a submit are visible to it. For memory that is not host-coherent, flush the range first.</td></tr>
+</table>
+</div>
+
+<h3>Passing a resource between queue families</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="A buffer written on the compute queue and read on the graphics queue. The compute queue records a release barrier, then signals a semaphore. The graphics queue waits on the semaphore, then records an acquire barrier, then reads.">
+    <text x="20" y="54" class="title">compute queue</text>
+    <text x="20" y="144" class="title">graphics queue</text>
+    <rect x="140" y="32" width="150" height="40" rx="6" class="shader"/><text x="215" y="57" class="mid small">write the buffer</text>
+    <rect x="300" y="32" width="150" height="40" rx="6" class="hot"/><text x="375" y="50" class="mid small">release barrier</text><text x="375" y="64" class="mid small">compute → graphics</text>
+    <rect x="460" y="32" width="110" height="40" rx="6" class="mem"/><text x="515" y="57" class="mid small">signal sem.</text>
+    <rect x="460" y="122" width="110" height="40" rx="6" class="mem"/><text x="515" y="147" class="mid small">wait sem.</text>
+    <rect x="580" y="122" width="150" height="40" rx="6" class="hot"/><text x="655" y="140" class="mid small">acquire barrier</text><text x="655" y="154" class="mid small">compute → graphics</text>
+    <line x1="515" y1="72" x2="515" y2="120" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="580" y="186" class="small">then the graphics queue reads it</text>
+  </svg>
+  <figcaption>With exclusive sharing, each resource belongs to one queue family at a time. The ownership change is a pair of barriers with the same family indices. Concurrent sharing skips the pair, and may be slower. One queue needs none of this.</figcaption>
+</figure>
+
+<h2><span class="n">10</span>Other APIs</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>API</th><th>Who places barriers</th><th>How</th></tr>
+  <tr><td>Vulkan</td><td>the program</td><td>pipeline barriers with stages, accesses and layouts; events for split barriers</td></tr>
+  <tr><td>Direct3D 12</td><td>the program</td><td>resource barriers between <b>resource states</b> (a state is roughly layout + access); "enhanced barriers" add Vulkan-like stages and accesses; split barriers with begin and end</td></tr>
+  <tr><td>Metal</td><td>the driver, by default</td><td>tracks hazards per resource; resources can opt out ("untracked") and use fences or events instead</td></tr>
+  <tr><td>WebGPU</td><td>the implementation, always</td><td>tracks every use inside and between passes; the program never writes a barrier</td></tr>
+</table>
+</div>
+
+<h2><span class="n">11</span>Automating it, and pitfalls</h2>
+
+<p>Writing every barrier by hand does not scale. Two common helpers:</p>
+
+<div class="split">
+  <div>
+    <h4>Track the state of each resource</h4>
+    <p>Each image remembers its current layout and last use. A call like "make this texture readable" records the right barrier, or none. Simple, but each call only knows the past.</p>
+  </div>
+  <div>
+    <h4>A render graph</h4>
+    <p>Passes declare what they read and write before anything is recorded. The graph knows the whole frame, so it can place, merge and move barriers. See <a href="render-graphs.html">render graphs</a>.</p>
+  </div>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Pitfall</th><th>What happens</th></tr>
+  <tr><td>Read access in the source mask</td><td>Does nothing. The intended write is not flushed if it was left out.</td></tr>
+  <tr><td>Forgetting write after read</td><td>A pass overwrites a texture while the previous pass still samples it.</td></tr>
+  <tr><td>ALL_COMMANDS on both sides, everywhere</td><td>Correct but slow: the GPU drains at every barrier.</td></tr>
+  <tr><td>Wrong old layout</td><td>Undefined contents, or a validation error. UNDEFINED as old layout when the contents are needed loses them.</td></tr>
+  <tr><td>A barrier inside a render pass</td><td>Not allowed in Vulkan's dynamic rendering, except for special self-dependencies. End the pass first.</td></tr>
+  <tr><td>Testing on one GPU</td><td>Some GPUs flush caches anyway, and hide the missing barrier. Use the validation layer's <b>synchronization validation</b>.</td></tr>
+</table>
+</div>
+
+<h2 id="in-rasm"><span class="n">12</span>In RASM</h2>
+
+<p>RASM uses synchronization2 and one queue. The RHI offers two barrier calls, deliberately coarse: a global <code>memoryBarrier</code> between sets of <code>PipelineStage</code>, and an image transition between two <code>TextureUsage</code> values. <code>RenderContext</code> remembers each texture's usage, and the <code>RenderGraph</code> derives barriers from what passes declare.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Four paths to a Vulkan barrier. memoryBarrier(before, after) records one global VkMemoryBarrier2. transitionImageLayout(texture, usage) goes through TextureStates, which knows the old usage, to CommandBuffer::transitionTexture, which records one VkImageMemoryBarrier2. copyBuffers records two global barriers around the upload copies. A submit that names the swapchain waits on the acquire semaphore at color attachment output.">
+    <text x="20" y="20" class="small">caller (engine, render graph)</text>
+    <text x="300" y="20" class="small">RenderContext, rhi</text>
+    <text x="560" y="20" class="small">Vulkan</text>
+
+    <rect x="20" y="32" width="240" height="44" rx="6" class="cpu"/>
+    <text x="140" y="52" class="mid mono small">memoryBarrier(cmd,</text>
+    <text x="140" y="68" class="mid mono small">before, after)</text>
+    <line x1="260" y1="54" x2="548" y2="54" class="arrow" marker-end="url(#ah)"/>
+    <text x="400" y="46" class="mid small">stages and accesses from PipelineStage</text>
+    <rect x="550" y="32" width="190" height="44" rx="6" class="gpu"/>
+    <text x="645" y="52" class="mid mono small">VkMemoryBarrier2</text>
+    <text x="645" y="68" class="mid small">global, one per call</text>
+
+    <rect x="20" y="96" width="240" height="44" rx="6" class="cpu"/>
+    <text x="140" y="116" class="mid mono small">transitionImageLayout(cmd,</text>
+    <text x="140" y="132" class="mid mono small">texture, usage, discard)</text>
+    <line x1="260" y1="118" x2="288" y2="118" class="arrow" marker-end="url(#ah)"/>
+    <rect x="290" y="96" width="230" height="44" rx="6" class="cpu"/>
+    <text x="405" y="116" class="mid mono small">TextureStates</text>
+    <text x="405" y="132" class="mid small">old usage = texture's state</text>
+    <line x1="520" y1="118" x2="548" y2="118" class="arrow" marker-end="url(#ah)"/>
+    <rect x="550" y="96" width="190" height="44" rx="6" class="gpu"/>
+    <text x="645" y="116" class="mid mono small">VkImageMemoryBarrier2</text>
+    <text x="645" y="132" class="mid small">all mips, layer 0</text>
+
+    <rect x="20" y="160" width="240" height="44" rx="6" class="cpu"/>
+    <text x="140" y="180" class="mid mono small">UploadManager::flush</text>
+    <text x="140" y="196" class="mid small">staging copies</text>
+    <line x1="260" y1="182" x2="548" y2="182" class="arrow" marker-end="url(#ah)"/>
+    <text x="400" y="174" class="mid small">copyBuffers: barrier, copies, barrier</text>
+    <rect x="550" y="160" width="190" height="44" rx="6" class="gpu"/>
+    <text x="645" y="180" class="mid small">ALL_COMMANDS → COPY,</text>
+    <text x="645" y="196" class="mid small">COPY → ALL_COMMANDS</text>
+
+    <rect x="20" y="224" width="240" height="44" rx="6" class="cpu"/>
+    <text x="140" y="244" class="mid mono small">submit(...,</text>
+    <text x="140" y="260" class="mid mono small">presentsSwapchainImage)</text>
+    <line x1="260" y1="246" x2="548" y2="246" class="arrow" marker-end="url(#ah)"/>
+    <text x="400" y="238" class="mid small">VulkanSwapchain adds the semaphores</text>
+    <rect x="550" y="224" width="190" height="44" rx="6" class="gpu"/>
+    <text x="645" y="244" class="mid small">wait acquire semaphore</text>
+    <text x="645" y="260" class="mid small">at COLOR_ATTACHMENT_OUTPUT</text>
+    <text x="20" y="292" class="small">RenderContext refuses memoryBarrier and transitionImageLayout between beginRendering and endRendering.</text>
+  </svg>
+  <figcaption>Every <code>vkCmdPipelineBarrier2</code> in RASM comes from <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code>. Textures filled from the CPU skip the GPU entirely: <code>fillTexture</code> changes their layout on the host (<code>vkTransitionImageLayout</code>, host image copy) and leaves them <code>SAMPLED</code>.</figcaption>
+</figure>
+
+<h3>The three stage sets</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th><code>PipelineStage</code></th><th>Vulkan stages</th><th>Accesses as <i>before</i> (writes only)</th><th>Accesses as <i>after</i></th></tr>
+  <tr><td><code>COMPUTE</code></td><td>compute shader</td><td>shader storage write</td><td>shader storage read and write, uniform read</td></tr>
+  <tr><td><code>GRAPHICS</code></td><td>draw indirect, index input, vertex shader, fragment shader</td><td>shader storage write</td><td>indirect command, index, shader storage and uniform read; shader storage write</td></tr>
+  <tr><td><code>HOST</code></td><td>host</td><td>host write</td><td>host read and write</td></tr>
+</table>
+</div>
+
+<p><code>PipelineStage</code> is a set of flags, so one barrier can name several with <code>|</code>. Culling ends with <code>COMPUTE</code> → <code>GRAPHICS | HOST</code>: the draws read the lists, and the CPU reads the cull stats after the fence.</p>
+
+<h3>Texture usages and their scopes</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th><code>TextureUsage</code></th><th>Vulkan layout</th><th>As old usage, waits for</th><th>As new usage, blocks</th></tr>
+  <tr><td><code>UNKNOWN</code></td><td>undefined</td><td>color output, depth tests, fragment and compute shaders; flushes color and depth writes</td><td>— (not a target)</td></tr>
+  <tr><td><code>COLOR_ATTACHMENT</code></td><td>color attachment</td><td>color output writes</td><td>color output reads and writes</td></tr>
+  <tr><td><code>DEPTH_STENCIL_ATTACHMENT</code></td><td>depth attachment</td><td>depth test writes</td><td>depth test reads and writes</td></tr>
+  <tr><td><code>SAMPLED</code></td><td>shader read only</td><td>fragment and compute shaders (no access: reads)</td><td>fragment and compute shader reads</td></tr>
+  <tr><td><code>PRESENT_SRC</code></td><td>present</td><td>— (not a source)</td><td>nothing</td></tr>
+</table>
+</div>
+
+<p>Any other usage has no scope: the transition logs an error, records nothing and returns false. The source scope comes only from the old usage and the destination only from the new one, so each table row is written once. <code>UNKNOWN</code> as the old usage is the "discard" of section 7: it waits for every stage that could have used the image, because the last use is not known. Its color output stage also chains the barrier to the swapchain's acquire semaphore.</p>
+
+<h3>Remembering texture states</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="Recording a transition changes the texture's state at once, and TextureStates remembers the state from before its first transition since the last submit. A successful submit forgets these. discardRecording, for commands that will not run, puts the old states back.">
+    <rect x="20" y="50" width="200" height="56" rx="6" class="cpu"/>
+    <text x="120" y="72" class="mid mono small">TextureStates::transition</text>
+    <text x="120" y="90" class="mid small">texture state = new usage</text>
+    <line x1="220" y1="78" x2="288" y2="78" class="arrow" marker-end="url(#ah)"/>
+    <text x="254" y="70" class="mid small">first time</text>
+    <rect x="290" y="50" width="190" height="56" rx="6" class="mem"/>
+    <text x="385" y="72" class="mid mono small">unsubmitted</text>
+    <text x="385" y="90" class="mid small">texture, state before it</text>
+    <line x1="480" y1="66" x2="548" y2="40" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="480" y1="92" x2="548" y2="122" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <rect x="550" y="14" width="190" height="50" rx="6" class="gpu"/>
+    <text x="645" y="34" class="mid mono small">submitted</text>
+    <text x="645" y="52" class="mid small">forget them: the GPU runs it</text>
+    <rect x="550" y="100" width="190" height="50" rx="6" class="ghost"/>
+    <text x="645" y="120" class="mid mono small">discardUnsubmitted</text>
+    <text x="645" y="138" class="mid small">put the old states back</text>
+  </svg>
+  <figcaption><code>SAMPLED</code> → <code>SAMPLED</code> records nothing (read after read). Any other same-usage transition is still recorded, because attachments are written: <code>COLOR_ATTACHMENT</code> → <code>COLOR_ATTACHMENT</code> orders earlier draws before a pass that loads the image. <code>endFrame</code> calls <code>discardRecording</code> when it does not submit, so the next frame starts from the layouts the GPU really has.</figcaption>
+</figure>
+
+<h3>The barriers of one frame</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 504" role="img" aria-label="The barriers of one frame of Engine::render with occlusion culling. Cull command buffer: compute to compute for last frame's visibility, then per drawScene call count, compute to compute, write, and at the end compute to graphics or host. Frame command buffer: swapchain image and depth to attachments, discarding; early draws; end rendering; depth to sampled; graphics or compute to compute; Hi-Z levels each followed by compute to compute; late count, compute to compute, late write; compute to graphics or host; depth back to attachment; color attachment to color attachment; begin rendering with load; late draws; swapchain image to present.">
+    <text x="20" y="22" class="title">cull command buffer · runs first</text>
+    <rect x="20"  y="34"  width="330" height="28" rx="4" class="hot"/><text x="30" y="53" class="small mono">COMPUTE → COMPUTE</text><text x="340" y="53" class="end small">last frame's visibility</text>
+    <rect x="20"  y="70"  width="330" height="28" rx="4" class="shader"/><text x="30" y="89" class="small">countMain, early</text><text x="340" y="89" class="end small">per drawScene call</text>
+    <rect x="20"  y="106" width="330" height="28" rx="4" class="hot"/><text x="30" y="125" class="small mono">COMPUTE → COMPUTE</text>
+    <rect x="20"  y="142" width="330" height="28" rx="4" class="shader"/><text x="30" y="161" class="small">writeMain, early</text>
+    <rect x="20"  y="178" width="330" height="28" rx="4" class="hot"/><text x="30" y="197" class="small mono">COMPUTE → GRAPHICS | HOST</text><text x="340" y="197" class="end small">lists for draws</text>
+
+    <text x="20" y="246" class="small">Uploads go out before both, in their own</text>
+    <text x="20" y="262" class="small">submit, with the copyBuffers barriers.</text>
+    <text x="20" y="294" class="small">Legend:</text>
+    <rect x="20" y="304" width="20" height="14" rx="3" class="hot"/><text x="48" y="315" class="small">memory barrier (global)</text>
+    <rect x="20" y="326" width="20" height="14" rx="3" class="mem"/><text x="48" y="337" class="small">image transition (TextureUsage)</text>
+    <rect x="20" y="348" width="20" height="14" rx="3" class="shader"/><text x="48" y="359" class="small">compute work</text>
+    <rect x="20" y="370" width="20" height="14" rx="3" class="gpu"/><text x="48" y="381" class="small">rendering</text>
+
+    <text x="400" y="22" class="title">frame command buffer</text>
+    <rect x="400" y="34"  width="340" height="28" rx="4" class="mem"/><text x="410" y="53" class="small mono">image, depth: UNKNOWN → attachment</text>
+    <rect x="400" y="70"  width="340" height="28" rx="4" class="gpu"/><text x="410" y="89" class="small">beginRendering, early draws, endRendering</text>
+    <rect x="400" y="106" width="340" height="28" rx="4" class="mem"/><text x="410" y="125" class="small mono">depth → SAMPLED</text>
+    <rect x="400" y="142" width="340" height="28" rx="4" class="hot"/><text x="410" y="161" class="small mono">GRAPHICS | COMPUTE → COMPUTE</text>
+    <rect x="400" y="178" width="340" height="28" rx="4" class="shader"/><text x="410" y="197" class="small">Hi-Z: one dispatch per level</text><text x="730" y="197" class="end small mono">+ C → C each</text>
+    <rect x="400" y="214" width="340" height="28" rx="4" class="shader"/><text x="410" y="233" class="small">countMain, late</text>
+    <rect x="400" y="250" width="340" height="28" rx="4" class="hot"/><text x="410" y="269" class="small mono">COMPUTE → COMPUTE</text>
+    <rect x="400" y="286" width="340" height="28" rx="4" class="shader"/><text x="410" y="305" class="small">writeMain, late</text>
+    <rect x="400" y="322" width="340" height="28" rx="4" class="hot"/><text x="410" y="341" class="small mono">COMPUTE → GRAPHICS | HOST</text>
+    <rect x="400" y="358" width="340" height="28" rx="4" class="mem"/><text x="410" y="377" class="small mono">depth → DEPTH_STENCIL_ATTACHMENT</text>
+    <rect x="400" y="394" width="340" height="28" rx="4" class="mem"/><text x="410" y="413" class="small mono">color: COLOR_ATTACHMENT → same</text>
+    <rect x="400" y="430" width="340" height="28" rx="4" class="gpu"/><text x="410" y="449" class="small">beginRendering (load), late draws, endRendering</text>
+    <rect x="400" y="466" width="340" height="28" rx="4" class="mem"/><text x="410" y="485" class="small mono">image → PRESENT_SRC</text>
+    <text x="20" y="420" class="small">Right column, from the first "endRendering"</text>
+    <text x="20" y="436" class="small">to "beginRendering (load)":</text>
+    <text x="20" y="452" class="small mono">recordOcclusionCulling</text>
+  </svg>
+  <figcaption>One <code>drawScene</code> call in <code>Engine::render</code>, with <code>EngineConfig::occlusionCulling</code> on. Barriers cannot be recorded inside a rendering scope, so <code>recordOcclusionCulling</code> ends the pass, records its compute work, and begins the pass again with <code>load</code>. See <a href="occlusion-culling.html#in-rasm">occlusion culling</a>.</figcaption>
+</figure>
+
+<h3>The render graph's part</h3>
+
+<p>Before each pass, <code>RenderGraph::execute</code> records at most one <code>memoryBarrier</code> and moves the textures the pass reads to <code>SAMPLED</code>. <code>bufferBarrier</code> keeps, per buffer, the stages of the last write and of the reads since. Its rules are the hazards of section 2: a read after a write waits for the write (once per reading stage), and a write waits for every use since the last write. The state carries over to the next frame. See <a href="render-graphs.html#in-rasm">render graphs</a>.</p>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Stages</td><td>name the latest source and earliest destination</td><td>Three coarse sets. <code>GRAPHICS</code> always means four stages, so a barrier into <code>GRAPHICS</code> waits from draw indirect on: correct, sometimes wider than needed.</td></tr>
+  <tr><td>Access rule</td><td>source: writes; destination: reads and writes</td><td>The same, in <code>memoryBarrier</code>.</td></tr>
+  <tr><td>Buffer barriers</td><td>global memory barriers are fine</td><td>Only global ones. Shaders reach buffers through device addresses, which a per-buffer barrier could not name anyway.</td></tr>
+  <tr><td>Image barriers</td><td>per mip and layer</td><td>Always the whole mip chain, layer 0. No per-mip tracking.</td></tr>
+  <tr><td>Batching</td><td>several barriers per call</td><td>One barrier per <code>vkCmdPipelineBarrier2</code> call.</td></tr>
+  <tr><td>State tracking</td><td>per resource, or a render graph</td><td>Both: <code>TextureStates</code> for textures, <code>RenderGraph::bufferAccess</code> for buffers used by graph passes. Engine-internal passes (culling, Hi-Z) place their own.</td></tr>
+  <tr><td>Discard</td><td>UNDEFINED as old layout</td><td>The <code>discard</code> flag, or <code>UNKNOWN</code> as the state. <code>beginPass</code> discards both attachments, since it clears them.</td></tr>
+  <tr><td>Split barriers, events</td><td>possible</td><td>None.</td></tr>
+  <tr><td>Queues</td><td>semaphores, ownership transfers</td><td>One queue, so submission order and barriers do it all. Uploads need no semaphore: <code>copyBuffers</code> brackets them with all-commands barriers (<b>D13</b>).</td></tr>
+  <tr><td>Host reads</td><td>barrier to host, fence, invalidate</td><td>All three: <code>COMPUTE</code> → <code>GRAPHICS | HOST</code>, the frame fence, and <code>readBuffer</code> invalidates the range.</td></tr>
+  <tr><td>Host-side layout change</td><td>—</td><td>Loaded textures use host image copy: <code>fillTexture</code> transitions and fills them on the CPU, with no GPU barrier.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td><code>PipelineStage</code>, <code>TextureUsage</code></td><td><code>include/rasm/render/resource.h</code></td></tr>
+  <tr><td>Stage and access masks, image scopes, upload barriers</td><td><code>toVkStageMask</code>, <code>getSrcScope</code>, <code>getDstScope</code>, <code>copyBuffers</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
+  <tr><td>Texture state tracking</td><td><code>TextureStates</code> in <code>src/rhi/textureStates.cpp</code></td></tr>
+  <tr><td>Checks: no barrier inside a pass</td><td><code>RenderContext::memoryBarrier</code>, <code>transitionImageLayout</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Graph barriers</td><td><code>RenderGraph::bufferBarrier</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>Culling and Hi-Z barriers</td><td><code>recordCulling</code>, <code>recordOcclusionCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Pass and frame transitions</td><td><code>Engine::beginPass</code>, <code>endPass</code>, <code>endFrame</code> in <code>src/engine.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Use synchronization2 (<code>vkCmdPipelineBarrier2</code>) and dynamic rendering; no render pass objects.</li>
+    <li>No barrier, dispatch or layout change between <code>beginRendering</code> and <code>endRendering</code>; <code>RenderContext</code> checks it.</li>
+    <li>A texture's layout changes only through <code>transitionImageLayout</code>, so <code>Texture::state</code> stays true. A frame that is not submitted calls <code>discardRecording</code>.</li>
+    <li>A new <code>TextureUsage</code> that textures move into needs a source and a destination scope in <code>getSrcScope</code> and <code>getDstScope</code>.</li>
+    <li>A graph pass declares every buffer and texture it uses, or the graph cannot place its barriers.</li>
+    <li>Test with <code>enableValidation</code> on; a change that adds validation messages is not done.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>There is one queue: no async compute or transfer queue, and a <code>SubmitDesc</code> cannot wait on a fence (<b>D13</b>). The render graph places barriers but has no transient resources or aliasing (<b>D9</b>).</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>The Khronos Group, <i>Vulkan Specification</i>: the chapter "Synchronization and Cache Control".</li>
+  <li>The Khronos Group, <i>Synchronization Examples</i>, on the Vulkan-Docs wiki: barriers for common cases.</li>
+  <li>Hans-Kristian Arntzen, <i>Yet another blog explaining Vulkan synchronization</i> (2019).</li>
+  <li>Matthäus Chajdas, <i>Vulkan barriers explained</i>, GPUOpen (2017).</li>
+  <li>Microsoft, <i>Direct3D 12</i> documentation: "Using resource barriers to synchronize resource states", and "Enhanced barriers".</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,1164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stream Compaction · RASM</title>
+<meta name="description" content="How a GPU keeps the items that pass a test, packed and in order: atomic append, prefix sums (scan), Hillis–Steele and Blelloch scans, wave intrinsics, multi-level and decoupled look-back scans, writing a count for indirect draws, and how RASM packs its visible draws.">
+<meta name="rasm-sources" content="shaders/passes/cull.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/engine.cpp shaders/lib/core.slang src/renderer/uberMaterialTypes.h">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/stream-compaction.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Culling and the frame</p>
+<h1>Stream compaction</h1>
+<p class="lead">Stream compaction takes a long list, keeps only the items that pass a test, and writes them into a new list with no gaps. On one CPU thread this is a simple loop. On a GPU, thousands of threads test at the same time, and each kept item must find its place without waiting for the others. This page explains the two answers: an atomic counter, and the prefix sum. The <a href="#in-rasm">last part</a> shows how RASM packs its visible draws.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>The goal: the kept items, <b>packed</b> (no gaps) and often <b>in order</b> (the same order as the input), plus their <b>count</b>.</li>
+    <li><b>Atomic append</b>: every kept item takes the next slot from a shared counter. Simple and fast, but the order changes from run to run.</li>
+    <li><b>Prefix sum</b> (scan): the place of an item is the number of kept items before it. It keeps the order, and needs no atomics.</li>
+    <li>Inside a workgroup the scan runs in shared memory (<b>Hillis–Steele</b> or <b>Blelloch</b>), or with one <b>wave instruction</b> per wave.</li>
+    <li>Across workgroups it needs a second level: scan the group counts, then add each group's base. Or one pass with <b>decoupled look-back</b>.</li>
+    <li>The count goes into a buffer that an <b>indirect draw</b> reads, so the CPU never waits for it.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>The problem</h2>
+
+<p>A GPU culling pass tests every object and keeps the visible ones. A particle system removes dead particles. A ray tracer keeps the rays that still bounce. Each time, the input is an array, the test gives a yes or no per item, and the next step wants only the yes items, side by side, so it can work on them without checking again.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 220" role="img" aria-label="Eight items a to h. Items a, c, d and g pass the test. The output holds a, c, d, g side by side, and the count is 4.">
+    <text x="20" y="26" class="small">test</text>
+    <text x="20" y="53" class="title">input</text>
+    <text x="20" y="163" class="title">output</text>
+    <text x="180" y="22" class="mid small t-gpu">pass</text>
+    <text x="250" y="22" class="mid small t-faint">fail</text>
+    <text x="320" y="22" class="mid small t-gpu">pass</text>
+    <text x="390" y="22" class="mid small t-gpu">pass</text>
+    <text x="460" y="22" class="mid small t-faint">fail</text>
+    <text x="530" y="22" class="mid small t-faint">fail</text>
+    <text x="600" y="22" class="mid small t-gpu">pass</text>
+    <text x="670" y="22" class="mid small t-faint">fail</text>
+    <rect x="150" y="30" width="60" height="36" rx="4" class="gpu"/><text x="180" y="52" class="mid mono">a</text>
+    <rect x="220" y="30" width="60" height="36" rx="4" class="ghost"/><text x="250" y="52" class="mid mono t-faint">b</text>
+    <rect x="290" y="30" width="60" height="36" rx="4" class="gpu"/><text x="320" y="52" class="mid mono">c</text>
+    <rect x="360" y="30" width="60" height="36" rx="4" class="gpu"/><text x="390" y="52" class="mid mono">d</text>
+    <rect x="430" y="30" width="60" height="36" rx="4" class="ghost"/><text x="460" y="52" class="mid mono t-faint">e</text>
+    <rect x="500" y="30" width="60" height="36" rx="4" class="ghost"/><text x="530" y="52" class="mid mono t-faint">f</text>
+    <rect x="570" y="30" width="60" height="36" rx="4" class="gpu"/><text x="600" y="52" class="mid mono">g</text>
+    <rect x="640" y="30" width="60" height="36" rx="4" class="ghost"/><text x="670" y="52" class="mid mono t-faint">h</text>
+    <rect x="150" y="140" width="60" height="36" rx="4" class="mem"/><text x="180" y="162" class="mid mono">a</text>
+    <rect x="220" y="140" width="60" height="36" rx="4" class="mem"/><text x="250" y="162" class="mid mono">c</text>
+    <rect x="290" y="140" width="60" height="36" rx="4" class="mem"/><text x="320" y="162" class="mid mono">d</text>
+    <rect x="360" y="140" width="60" height="36" rx="4" class="mem"/><text x="390" y="162" class="mid mono">g</text>
+    <line x1="180" y1="68" x2="180" y2="138" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="320" y1="68" x2="250" y2="138" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="390" y1="68" x2="320" y2="138" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="600" y1="68" x2="390" y2="138" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="440" y="163" class="mono">count = 4</text>
+    <text x="20" y="206" class="small">Packed: no gaps. In order: a before c before d before g. The count is known only after every test has run.</text>
+  </svg>
+  <figcaption>Stream compaction: test, then pack. The output is shorter than the input, and nobody knows how much shorter until all tests are done.</figcaption>
+</figure>
+
+<p>On one thread, compaction is a loop with a write index that grows by one for each kept item. On a GPU each item has its own thread, and all of them run at once. Thread 6 (item <var>g</var>) cannot know that it goes to place 3 without knowing how many of threads 0 to 5 kept their item. That is the whole problem.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Property</th><th>Meaning</th><th>Why it can matter</th></tr>
+  <tr><td><b>Packed</b></td><td>no gaps between kept items</td><td>The next step runs one thread per kept item, or one draw per kept item, with no wasted work.</td></tr>
+  <tr><td><b>Stable</b> (in order)</td><td>kept items keep their input order</td><td>The same input gives the same output every time. For draws, order decides which of two surfaces at equal depth wins, and how blending adds up.</td></tr>
+  <tr><td><b>Counted</b></td><td>the number of kept items is written somewhere</td><td>The next step must know where the list ends.</td></tr>
+</table>
+</div>
+
+<h2><span class="n">2</span>The simple way: an atomic counter</h2>
+
+<p>Put one counter in memory, set to 0. Every thread whose item passes does an <b>atomic add</b> of 1 on it. The atomic returns the old value, which is a slot nobody else got. The thread writes its item there.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 256" role="img" aria-label="Threads t0, t2, t3 and t6 keep their items and each does an atomic add on one counter, which goes from 0 to 4. Three runs of the same input give the outputs c a g d, a c d g and d c a g.">
+    <text x="40" y="26" class="small">8 threads, one item each</text>
+    <rect x="40" y="36" width="42" height="34" rx="4" class="gpu"/><text x="61" y="57" class="mid mono">t0</text>
+    <rect x="90" y="36" width="42" height="34" rx="4" class="ghost"/><text x="111" y="57" class="mid mono t-faint">t1</text>
+    <rect x="140" y="36" width="42" height="34" rx="4" class="gpu"/><text x="161" y="57" class="mid mono">t2</text>
+    <rect x="190" y="36" width="42" height="34" rx="4" class="gpu"/><text x="211" y="57" class="mid mono">t3</text>
+    <rect x="240" y="36" width="42" height="34" rx="4" class="ghost"/><text x="261" y="57" class="mid mono t-faint">t4</text>
+    <rect x="290" y="36" width="42" height="34" rx="4" class="ghost"/><text x="311" y="57" class="mid mono t-faint">t5</text>
+    <rect x="340" y="36" width="42" height="34" rx="4" class="gpu"/><text x="361" y="57" class="mid mono">t6</text>
+    <rect x="390" y="36" width="42" height="34" rx="4" class="ghost"/><text x="411" y="57" class="mid mono t-faint">t7</text>
+    <rect x="110" y="150" width="160" height="50" rx="6" class="mem"/>
+    <text x="190" y="171" class="mid title">counter</text>
+    <text x="190" y="188" class="mid mono small">0 → 4</text>
+    <line x1="61" y1="72" x2="150" y2="148" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="161" y1="72" x2="177" y2="148" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="211" y1="72" x2="203" y2="148" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="361" y1="72" x2="230" y2="148" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="40" y="226" class="mono small">slot = atomicAdd(counter, 1)</text>
+    <text x="40" y="242" class="small">Then the counter must go back to 0 before the next use.</text>
+    <text x="470" y="26" class="title">Same input, three runs</text>
+    <text x="470" y="62" class="small">run 1</text>
+    <rect x="520" y="40" width="44" height="34" rx="4" class="mem"/><text x="542" y="61" class="mid mono">c</text>
+    <rect x="572" y="40" width="44" height="34" rx="4" class="mem"/><text x="594" y="61" class="mid mono">a</text>
+    <rect x="624" y="40" width="44" height="34" rx="4" class="mem"/><text x="646" y="61" class="mid mono">g</text>
+    <rect x="676" y="40" width="44" height="34" rx="4" class="mem"/><text x="698" y="61" class="mid mono">d</text>
+    <text x="470" y="110" class="small">run 2</text>
+    <rect x="520" y="88" width="44" height="34" rx="4" class="mem"/><text x="542" y="109" class="mid mono">a</text>
+    <rect x="572" y="88" width="44" height="34" rx="4" class="mem"/><text x="594" y="109" class="mid mono">c</text>
+    <rect x="624" y="88" width="44" height="34" rx="4" class="mem"/><text x="646" y="109" class="mid mono">d</text>
+    <rect x="676" y="88" width="44" height="34" rx="4" class="mem"/><text x="698" y="109" class="mid mono">g</text>
+    <text x="470" y="158" class="small">run 3</text>
+    <rect x="520" y="136" width="44" height="34" rx="4" class="mem"/><text x="542" y="157" class="mid mono">d</text>
+    <rect x="572" y="136" width="44" height="34" rx="4" class="mem"/><text x="594" y="157" class="mid mono">c</text>
+    <rect x="624" y="136" width="44" height="34" rx="4" class="mem"/><text x="646" y="157" class="mid mono">a</text>
+    <rect x="676" y="136" width="44" height="34" rx="4" class="mem"/><text x="698" y="157" class="mid mono">g</text>
+    <text x="470" y="200" class="small">No gaps: every slot is unique.</text>
+    <text x="470" y="218" class="small t-hot">But the order is the order in which</text>
+    <text x="470" y="234" class="small t-hot">the threads reach the atomic.</text>
+  </svg>
+  <figcaption>Atomic append. The counter also ends up holding the count. The order inside the output is a race.</figcaption>
+</figure>
+
+<div class="split">
+  <div>
+    <h4>Good</h4>
+    <p>One pass, a few lines, and fast when few items pass. The counter is the count, ready for the next step.</p>
+  </div>
+  <div>
+    <h4>Not so good</h4>
+    <p>The output order is <b>not stable</b>. When many threads hit one counter, the atomics are serialized, which costs time. The counter must be cleared before each use, which is one more command and one more barrier.</p>
+  </div>
+</div>
+
+<p>A common fix for the contention is to do one atomic per <b>wave</b> instead of one per thread (see <a href="#waves">section 5</a>). The order is then stable inside each wave, but the waves still race. When order does not matter, for example for particles that are drawn with additive blending, atomic append is the right choice. When it does, use a prefix sum.</p>
+
+<h2><span class="n">3</span>Prefix sums</h2>
+
+<p>A <b>prefix sum</b>, also called a <b>scan</b>, replaces each item of an array with the sum of the items before it. There are two kinds. The <b>exclusive</b> scan does not count the item itself; the <b>inclusive</b> scan does.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 236" role="img" aria-label="Input 3 1 7 0 4 1 6 3. Exclusive scan 0 3 4 11 11 15 16 22. Inclusive scan 3 4 11 11 15 16 22 25.">
+    <text x="20" y="50" class="title">input x</text>
+    <text x="20" y="105" class="title">exclusive scan</text>
+    <text x="20" y="121" class="small">sum of the items before i</text>
+    <text x="20" y="160" class="title">inclusive scan</text>
+    <text x="20" y="176" class="small">sum up to and with i</text>
+    <text x="226" y="24" class="mid small">i = 0</text>
+    <text x="290" y="24" class="mid small">i = 1</text>
+    <text x="354" y="24" class="mid small">i = 2</text>
+    <text x="418" y="24" class="mid small">i = 3</text>
+    <text x="482" y="24" class="mid small">i = 4</text>
+    <text x="546" y="24" class="mid small">i = 5</text>
+    <text x="610" y="24" class="mid small">i = 6</text>
+    <text x="674" y="24" class="mid small">i = 7</text>
+    <rect x="200" y="30" width="52" height="30" rx="4" class="box"/><text x="226" y="49" class="mid mono">3</text>
+    <rect x="264" y="30" width="52" height="30" rx="4" class="box"/><text x="290" y="49" class="mid mono">1</text>
+    <rect x="328" y="30" width="52" height="30" rx="4" class="box"/><text x="354" y="49" class="mid mono">7</text>
+    <rect x="392" y="30" width="52" height="30" rx="4" class="box"/><text x="418" y="49" class="mid mono">0</text>
+    <rect x="456" y="30" width="52" height="30" rx="4" class="box"/><text x="482" y="49" class="mid mono">4</text>
+    <rect x="520" y="30" width="52" height="30" rx="4" class="box"/><text x="546" y="49" class="mid mono">1</text>
+    <rect x="584" y="30" width="52" height="30" rx="4" class="box"/><text x="610" y="49" class="mid mono">6</text>
+    <rect x="648" y="30" width="52" height="30" rx="4" class="box"/><text x="674" y="49" class="mid mono">3</text>
+    <rect x="200" y="90" width="52" height="30" rx="4" class="hot"/><text x="226" y="109" class="mid mono">0</text>
+    <rect x="264" y="90" width="52" height="30" rx="4" class="gpu"/><text x="290" y="109" class="mid mono">3</text>
+    <rect x="328" y="90" width="52" height="30" rx="4" class="gpu"/><text x="354" y="109" class="mid mono">4</text>
+    <rect x="392" y="90" width="52" height="30" rx="4" class="gpu"/><text x="418" y="109" class="mid mono">11</text>
+    <rect x="456" y="90" width="52" height="30" rx="4" class="gpu"/><text x="482" y="109" class="mid mono">11</text>
+    <rect x="520" y="90" width="52" height="30" rx="4" class="gpu"/><text x="546" y="109" class="mid mono">15</text>
+    <rect x="584" y="90" width="52" height="30" rx="4" class="gpu"/><text x="610" y="109" class="mid mono">16</text>
+    <rect x="648" y="90" width="52" height="30" rx="4" class="gpu"/><text x="674" y="109" class="mid mono">22</text>
+    <rect x="200" y="145" width="52" height="30" rx="4" class="gpu"/><text x="226" y="164" class="mid mono">3</text>
+    <rect x="264" y="145" width="52" height="30" rx="4" class="gpu"/><text x="290" y="164" class="mid mono">4</text>
+    <rect x="328" y="145" width="52" height="30" rx="4" class="gpu"/><text x="354" y="164" class="mid mono">11</text>
+    <rect x="392" y="145" width="52" height="30" rx="4" class="gpu"/><text x="418" y="164" class="mid mono">11</text>
+    <rect x="456" y="145" width="52" height="30" rx="4" class="gpu"/><text x="482" y="164" class="mid mono">15</text>
+    <rect x="520" y="145" width="52" height="30" rx="4" class="gpu"/><text x="546" y="164" class="mid mono">16</text>
+    <rect x="584" y="145" width="52" height="30" rx="4" class="gpu"/><text x="610" y="164" class="mid mono">22</text>
+    <rect x="648" y="145" width="52" height="30" rx="4" class="gpu"/><text x="674" y="164" class="mid mono">25</text>
+    <text x="200" y="206" class="mono small">exclusive[i] = x[0] + … + x[i−1]   (exclusive[0] = 0)</text>
+    <text x="200" y="224" class="mono small">inclusive[i] = x[0] + … + x[i]   = exclusive[i] + x[i]</text>
+  </svg>
+  <figcaption>The inclusive scan is the exclusive scan shifted left by one, with the total at the end. A scan works for any associative operation (+, max, min, …); compaction uses +.</figcaption>
+</figure>
+
+<h3>Compaction is a scan of the flags</h3>
+
+<p>Give each item a <b>flag</b>: 1 if it passes, 0 if not. The exclusive scan of the flags tells each kept item how many kept items come before it. That number is its place in the output. The count is the last scan value plus the last flag.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 280" role="img" aria-label="Items a to h with flags 1 0 1 1 0 0 1 0. The exclusive scan of the flags is 0 1 1 2 3 3 3 4. Item a goes to place 0, c to 1, d to 2, g to 3. The count is 4.">
+    <text x="20" y="50" class="title">items</text>
+    <text x="20" y="100" class="title">1. flag</text>
+    <text x="20" y="116" class="small">1 = keep</text>
+    <text x="20" y="150" class="title">2. exclusive</text>
+    <text x="20" y="166" class="small">scan of flags</text>
+    <text x="20" y="250" class="title">3. scatter</text>
+    <text x="20" y="266" class="small">out[scan[i]] = item[i]</text>
+    <rect x="200" y="30" width="52" height="30" rx="4" class="box"/><text x="226" y="49" class="mid mono">a</text>
+    <rect x="264" y="30" width="52" height="30" rx="4" class="box"/><text x="290" y="49" class="mid mono">b</text>
+    <rect x="328" y="30" width="52" height="30" rx="4" class="box"/><text x="354" y="49" class="mid mono">c</text>
+    <rect x="392" y="30" width="52" height="30" rx="4" class="box"/><text x="418" y="49" class="mid mono">d</text>
+    <rect x="456" y="30" width="52" height="30" rx="4" class="box"/><text x="482" y="49" class="mid mono">e</text>
+    <rect x="520" y="30" width="52" height="30" rx="4" class="box"/><text x="546" y="49" class="mid mono">f</text>
+    <rect x="584" y="30" width="52" height="30" rx="4" class="box"/><text x="610" y="49" class="mid mono">g</text>
+    <rect x="648" y="30" width="52" height="30" rx="4" class="box"/><text x="674" y="49" class="mid mono">h</text>
+    <rect x="200" y="82" width="52" height="30" rx="4" class="gpu"/><text x="226" y="101" class="mid mono">1</text>
+    <rect x="264" y="82" width="52" height="30" rx="4" class="ghost"/><text x="290" y="101" class="mid mono t-faint">0</text>
+    <rect x="328" y="82" width="52" height="30" rx="4" class="gpu"/><text x="354" y="101" class="mid mono">1</text>
+    <rect x="392" y="82" width="52" height="30" rx="4" class="gpu"/><text x="418" y="101" class="mid mono">1</text>
+    <rect x="456" y="82" width="52" height="30" rx="4" class="ghost"/><text x="482" y="101" class="mid mono t-faint">0</text>
+    <rect x="520" y="82" width="52" height="30" rx="4" class="ghost"/><text x="546" y="101" class="mid mono t-faint">0</text>
+    <rect x="584" y="82" width="52" height="30" rx="4" class="gpu"/><text x="610" y="101" class="mid mono">1</text>
+    <rect x="648" y="82" width="52" height="30" rx="4" class="ghost"/><text x="674" y="101" class="mid mono t-faint">0</text>
+    <rect x="200" y="134" width="52" height="30" rx="4" class="mem"/><text x="226" y="153" class="mid mono">0</text>
+    <rect x="264" y="134" width="52" height="30" rx="4" class="ghost"/><text x="290" y="153" class="mid mono t-faint">1</text>
+    <rect x="328" y="134" width="52" height="30" rx="4" class="mem"/><text x="354" y="153" class="mid mono">1</text>
+    <rect x="392" y="134" width="52" height="30" rx="4" class="mem"/><text x="418" y="153" class="mid mono">2</text>
+    <rect x="456" y="134" width="52" height="30" rx="4" class="ghost"/><text x="482" y="153" class="mid mono t-faint">3</text>
+    <rect x="520" y="134" width="52" height="30" rx="4" class="ghost"/><text x="546" y="153" class="mid mono t-faint">3</text>
+    <rect x="584" y="134" width="52" height="30" rx="4" class="mem"/><text x="610" y="153" class="mid mono">3</text>
+    <rect x="648" y="134" width="52" height="30" rx="4" class="ghost"/><text x="674" y="153" class="mid mono t-faint">4</text>
+    <rect x="200" y="232" width="52" height="30" rx="4" class="mem"/><text x="226" y="251" class="mid mono">a</text>
+    <rect x="264" y="232" width="52" height="30" rx="4" class="mem"/><text x="290" y="251" class="mid mono">c</text>
+    <rect x="328" y="232" width="52" height="30" rx="4" class="mem"/><text x="354" y="251" class="mid mono">d</text>
+    <rect x="392" y="232" width="52" height="30" rx="4" class="mem"/><text x="418" y="251" class="mid mono">g</text>
+    <line x1="226" y1="166" x2="226" y2="230" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="354" y1="166" x2="290" y2="230" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="418" y1="166" x2="354" y2="230" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="610" y1="166" x2="418" y2="230" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="456" y="252" class="mono small">count = scan[7] + flag[7] = 4 + 0 = 4</text>
+  </svg>
+  <figcaption>Three steps: flag, scan, scatter. Every kept item gets a different place, and the places grow in input order, so the result is packed <b>and</b> stable.</figcaption>
+</figure>
+
+<p>Steps 1 and 3 are trivially parallel: each thread works alone. All the difficulty is in step 2, computing a scan with many threads. The next two sections do that, first inside one workgroup, then across many.</p>
+
+<h2><span class="n">4</span>A scan inside one workgroup</h2>
+
+<p>The threads of one workgroup share a small, fast <b>shared memory</b> (<i>groupshared</i> in HLSL and Slang) and can wait for each other with a <b>barrier</b>. Each thread puts its value into an array in shared memory, and the group then computes the scan in place, in a few steps with a barrier after each one.</p>
+
+<h3>The naive way</h3>
+
+<p>Each thread loops over the items before it and adds them up. Thread <var>i</var> does <var>i</var> additions, so the last thread of a 64-thread group does 63, and the whole group waits for it. The total work is <var>n</var>(<var>n</var> − 1) / 2. This is fine for small groups and very simple, but it does not scale.</p>
+
+<h3>Hillis–Steele: few steps, more work</h3>
+
+<p>In step <var>k</var> (<var>k</var> = 0, 1, 2, …), every item adds the item 2<sup><var>k</var></sup> places to its left, if there is one. After log<sub>2</sub> <var>n</var> steps each item holds the sum of everything up to it: the inclusive scan.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 306" role="img" aria-label="Eight values 3 1 7 0 4 1 6 3. Step 1 adds the neighbour 1 to the left, step 2 the one 2 to the left, step 3 the one 4 to the left. The last row is 3 4 11 11 15 16 22 25.">
+    <text x="20" y="44" class="title">input</text>
+    <rect x="200" y="30" width="52" height="28" rx="4" class="box"/><text x="226" y="48" class="mid mono">3</text>
+    <rect x="264" y="30" width="52" height="28" rx="4" class="box"/><text x="290" y="48" class="mid mono">1</text>
+    <rect x="328" y="30" width="52" height="28" rx="4" class="box"/><text x="354" y="48" class="mid mono">7</text>
+    <rect x="392" y="30" width="52" height="28" rx="4" class="box"/><text x="418" y="48" class="mid mono">0</text>
+    <rect x="456" y="30" width="52" height="28" rx="4" class="box"/><text x="482" y="48" class="mid mono">4</text>
+    <rect x="520" y="30" width="52" height="28" rx="4" class="box"/><text x="546" y="48" class="mid mono">1</text>
+    <rect x="584" y="30" width="52" height="28" rx="4" class="box"/><text x="610" y="48" class="mid mono">6</text>
+    <rect x="648" y="30" width="52" height="28" rx="4" class="box"/><text x="674" y="48" class="mid mono">3</text>
+    <text x="20" y="114" class="title">step 1</text>
+    <text x="20" y="130" class="small">add the item 1 to the left</text>
+    <rect x="200" y="100" width="52" height="28" rx="4" class="ghost"/><text x="226" y="118" class="mid mono t-faint">3</text>
+    <rect x="264" y="100" width="52" height="28" rx="4" class="gpu"/><text x="290" y="118" class="mid mono">4</text>
+    <rect x="328" y="100" width="52" height="28" rx="4" class="gpu"/><text x="354" y="118" class="mid mono">8</text>
+    <rect x="392" y="100" width="52" height="28" rx="4" class="gpu"/><text x="418" y="118" class="mid mono">7</text>
+    <rect x="456" y="100" width="52" height="28" rx="4" class="gpu"/><text x="482" y="118" class="mid mono">4</text>
+    <rect x="520" y="100" width="52" height="28" rx="4" class="gpu"/><text x="546" y="118" class="mid mono">5</text>
+    <rect x="584" y="100" width="52" height="28" rx="4" class="gpu"/><text x="610" y="118" class="mid mono">7</text>
+    <rect x="648" y="100" width="52" height="28" rx="4" class="gpu"/><text x="674" y="118" class="mid mono">9</text>
+    <line x1="226" y1="58" x2="286" y2="99" class="arrow" marker-end="url(#ah)"/>
+    <line x1="290" y1="58" x2="350" y2="99" class="arrow" marker-end="url(#ah)"/>
+    <line x1="354" y1="58" x2="414" y2="99" class="arrow" marker-end="url(#ah)"/>
+    <line x1="418" y1="58" x2="478" y2="99" class="arrow" marker-end="url(#ah)"/>
+    <line x1="482" y1="58" x2="542" y2="99" class="arrow" marker-end="url(#ah)"/>
+    <line x1="546" y1="58" x2="606" y2="99" class="arrow" marker-end="url(#ah)"/>
+    <line x1="610" y1="58" x2="670" y2="99" class="arrow" marker-end="url(#ah)"/>
+    <text x="20" y="184" class="title">step 2</text>
+    <text x="20" y="200" class="small">add the item 2 to the left</text>
+    <rect x="200" y="170" width="52" height="28" rx="4" class="ghost"/><text x="226" y="188" class="mid mono t-faint">3</text>
+    <rect x="264" y="170" width="52" height="28" rx="4" class="ghost"/><text x="290" y="188" class="mid mono t-faint">4</text>
+    <rect x="328" y="170" width="52" height="28" rx="4" class="gpu"/><text x="354" y="188" class="mid mono">11</text>
+    <rect x="392" y="170" width="52" height="28" rx="4" class="gpu"/><text x="418" y="188" class="mid mono">11</text>
+    <rect x="456" y="170" width="52" height="28" rx="4" class="gpu"/><text x="482" y="188" class="mid mono">12</text>
+    <rect x="520" y="170" width="52" height="28" rx="4" class="gpu"/><text x="546" y="188" class="mid mono">12</text>
+    <rect x="584" y="170" width="52" height="28" rx="4" class="gpu"/><text x="610" y="188" class="mid mono">11</text>
+    <rect x="648" y="170" width="52" height="28" rx="4" class="gpu"/><text x="674" y="188" class="mid mono">14</text>
+    <line x1="226" y1="128" x2="350" y2="169" class="arrow" marker-end="url(#ah)"/>
+    <line x1="290" y1="128" x2="414" y2="169" class="arrow" marker-end="url(#ah)"/>
+    <line x1="354" y1="128" x2="478" y2="169" class="arrow" marker-end="url(#ah)"/>
+    <line x1="418" y1="128" x2="542" y2="169" class="arrow" marker-end="url(#ah)"/>
+    <line x1="482" y1="128" x2="606" y2="169" class="arrow" marker-end="url(#ah)"/>
+    <line x1="546" y1="128" x2="670" y2="169" class="arrow" marker-end="url(#ah)"/>
+    <text x="20" y="254" class="title">step 3</text>
+    <text x="20" y="270" class="small">add the item 4 to the left</text>
+    <rect x="200" y="240" width="52" height="28" rx="4" class="ghost"/><text x="226" y="258" class="mid mono t-faint">3</text>
+    <rect x="264" y="240" width="52" height="28" rx="4" class="ghost"/><text x="290" y="258" class="mid mono t-faint">4</text>
+    <rect x="328" y="240" width="52" height="28" rx="4" class="ghost"/><text x="354" y="258" class="mid mono t-faint">11</text>
+    <rect x="392" y="240" width="52" height="28" rx="4" class="ghost"/><text x="418" y="258" class="mid mono t-faint">11</text>
+    <rect x="456" y="240" width="52" height="28" rx="4" class="gpu"/><text x="482" y="258" class="mid mono">15</text>
+    <rect x="520" y="240" width="52" height="28" rx="4" class="gpu"/><text x="546" y="258" class="mid mono">16</text>
+    <rect x="584" y="240" width="52" height="28" rx="4" class="gpu"/><text x="610" y="258" class="mid mono">22</text>
+    <rect x="648" y="240" width="52" height="28" rx="4" class="gpu"/><text x="674" y="258" class="mid mono">25</text>
+    <line x1="226" y1="198" x2="478" y2="239" class="arrow" marker-end="url(#ah)"/>
+    <line x1="290" y1="198" x2="542" y2="239" class="arrow" marker-end="url(#ah)"/>
+    <line x1="354" y1="198" x2="606" y2="239" class="arrow" marker-end="url(#ah)"/>
+    <line x1="418" y1="198" x2="670" y2="239" class="arrow" marker-end="url(#ah)"/>
+    <text x="200" y="292" class="small">Faint cells only copy their value. The last row is the inclusive scan.</text>
+  </svg>
+  <figcaption>Hillis and Steele (1986). Each arrow is one addition. Every step reads values that other threads change in the same step, so it needs two arrays (read from one, write the other) or a barrier between the read and the write.</figcaption>
+</figure>
+
+<h3>Blelloch: two sweeps, less work</h3>
+
+<p>Blelloch's scan works like a tree. The <b>up-sweep</b> adds pairs, then pairs of pairs, and so on, until the last item holds the total. Then it sets the last item to 0 and the <b>down-sweep</b> walks back down the tree: at each node, the left child gets the parent's value, and the right child gets the parent's value plus the old left child. The result is the exclusive scan.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 400" role="img" aria-label="Blelloch scan of 3 1 7 0 4 1 6 3. Up-sweep with d equal to 1, 2 and 4 builds partial sums until the last item is 25. The last item is set to 0. Down-sweep with d equal to 4, 2 and 1 swaps and adds pairs. The result is 0 3 4 11 11 15 16 22.">
+    <rect x="12" y="70" width="736" height="132" rx="8" class="zone"/>
+    <rect x="12" y="210" width="736" height="180" rx="8" class="zone"/>
+    <text x="24" y="46" class="title">input</text>
+    <rect x="200" y="30" width="52" height="24" rx="4" class="box"/><text x="226" y="46" class="mid mono">3</text>
+    <rect x="264" y="30" width="52" height="24" rx="4" class="box"/><text x="290" y="46" class="mid mono">1</text>
+    <rect x="328" y="30" width="52" height="24" rx="4" class="box"/><text x="354" y="46" class="mid mono">7</text>
+    <rect x="392" y="30" width="52" height="24" rx="4" class="box"/><text x="418" y="46" class="mid mono">0</text>
+    <rect x="456" y="30" width="52" height="24" rx="4" class="box"/><text x="482" y="46" class="mid mono">4</text>
+    <rect x="520" y="30" width="52" height="24" rx="4" class="box"/><text x="546" y="46" class="mid mono">1</text>
+    <rect x="584" y="30" width="52" height="24" rx="4" class="box"/><text x="610" y="46" class="mid mono">6</text>
+    <rect x="648" y="30" width="52" height="24" rx="4" class="box"/><text x="674" y="46" class="mid mono">3</text>
+    <text x="100" y="92" class="small">up, d = 1</text>
+    <rect x="200" y="76" width="52" height="24" rx="4" class="ghost"/><text x="226" y="92" class="mid mono t-faint">3</text>
+    <rect x="264" y="76" width="52" height="24" rx="4" class="hot"/><text x="290" y="92" class="mid mono">4</text>
+    <rect x="328" y="76" width="52" height="24" rx="4" class="ghost"/><text x="354" y="92" class="mid mono t-faint">7</text>
+    <rect x="392" y="76" width="52" height="24" rx="4" class="hot"/><text x="418" y="92" class="mid mono">7</text>
+    <rect x="456" y="76" width="52" height="24" rx="4" class="ghost"/><text x="482" y="92" class="mid mono t-faint">4</text>
+    <rect x="520" y="76" width="52" height="24" rx="4" class="hot"/><text x="546" y="92" class="mid mono">5</text>
+    <rect x="584" y="76" width="52" height="24" rx="4" class="ghost"/><text x="610" y="92" class="mid mono t-faint">6</text>
+    <rect x="648" y="76" width="52" height="24" rx="4" class="hot"/><text x="674" y="92" class="mid mono">9</text>
+    <line x1="226" y1="54" x2="284" y2="75" class="arrow" marker-end="url(#ah)"/>
+    <line x1="290" y1="54" x2="290" y2="75" class="arrow" marker-end="url(#ah)"/>
+    <line x1="354" y1="54" x2="412" y2="75" class="arrow" marker-end="url(#ah)"/>
+    <line x1="418" y1="54" x2="418" y2="75" class="arrow" marker-end="url(#ah)"/>
+    <line x1="482" y1="54" x2="540" y2="75" class="arrow" marker-end="url(#ah)"/>
+    <line x1="546" y1="54" x2="546" y2="75" class="arrow" marker-end="url(#ah)"/>
+    <line x1="610" y1="54" x2="668" y2="75" class="arrow" marker-end="url(#ah)"/>
+    <line x1="674" y1="54" x2="674" y2="75" class="arrow" marker-end="url(#ah)"/>
+    <text x="100" y="138" class="small">up, d = 2</text>
+    <rect x="200" y="122" width="52" height="24" rx="4" class="ghost"/><text x="226" y="138" class="mid mono t-faint">3</text>
+    <rect x="264" y="122" width="52" height="24" rx="4" class="ghost"/><text x="290" y="138" class="mid mono t-faint">4</text>
+    <rect x="328" y="122" width="52" height="24" rx="4" class="ghost"/><text x="354" y="138" class="mid mono t-faint">7</text>
+    <rect x="392" y="122" width="52" height="24" rx="4" class="hot"/><text x="418" y="138" class="mid mono">11</text>
+    <rect x="456" y="122" width="52" height="24" rx="4" class="ghost"/><text x="482" y="138" class="mid mono t-faint">4</text>
+    <rect x="520" y="122" width="52" height="24" rx="4" class="ghost"/><text x="546" y="138" class="mid mono t-faint">5</text>
+    <rect x="584" y="122" width="52" height="24" rx="4" class="ghost"/><text x="610" y="138" class="mid mono t-faint">6</text>
+    <rect x="648" y="122" width="52" height="24" rx="4" class="hot"/><text x="674" y="138" class="mid mono">14</text>
+    <line x1="290" y1="100" x2="412" y2="121" class="arrow" marker-end="url(#ah)"/>
+    <line x1="418" y1="100" x2="418" y2="121" class="arrow" marker-end="url(#ah)"/>
+    <line x1="546" y1="100" x2="668" y2="121" class="arrow" marker-end="url(#ah)"/>
+    <line x1="674" y1="100" x2="674" y2="121" class="arrow" marker-end="url(#ah)"/>
+    <text x="100" y="184" class="small">up, d = 4</text>
+    <rect x="200" y="168" width="52" height="24" rx="4" class="ghost"/><text x="226" y="184" class="mid mono t-faint">3</text>
+    <rect x="264" y="168" width="52" height="24" rx="4" class="ghost"/><text x="290" y="184" class="mid mono t-faint">4</text>
+    <rect x="328" y="168" width="52" height="24" rx="4" class="ghost"/><text x="354" y="184" class="mid mono t-faint">7</text>
+    <rect x="392" y="168" width="52" height="24" rx="4" class="ghost"/><text x="418" y="184" class="mid mono t-faint">11</text>
+    <rect x="456" y="168" width="52" height="24" rx="4" class="ghost"/><text x="482" y="184" class="mid mono t-faint">4</text>
+    <rect x="520" y="168" width="52" height="24" rx="4" class="ghost"/><text x="546" y="184" class="mid mono t-faint">5</text>
+    <rect x="584" y="168" width="52" height="24" rx="4" class="ghost"/><text x="610" y="184" class="mid mono t-faint">6</text>
+    <rect x="648" y="168" width="52" height="24" rx="4" class="hot"/><text x="674" y="184" class="mid mono">25</text>
+    <line x1="418" y1="146" x2="668" y2="167" class="arrow" marker-end="url(#ah)"/>
+    <line x1="674" y1="146" x2="674" y2="167" class="arrow" marker-end="url(#ah)"/>
+    <text x="100" y="230" class="small">last = 0</text>
+    <rect x="200" y="214" width="52" height="24" rx="4" class="ghost"/><text x="226" y="230" class="mid mono t-faint">3</text>
+    <rect x="264" y="214" width="52" height="24" rx="4" class="ghost"/><text x="290" y="230" class="mid mono t-faint">4</text>
+    <rect x="328" y="214" width="52" height="24" rx="4" class="ghost"/><text x="354" y="230" class="mid mono t-faint">7</text>
+    <rect x="392" y="214" width="52" height="24" rx="4" class="ghost"/><text x="418" y="230" class="mid mono t-faint">11</text>
+    <rect x="456" y="214" width="52" height="24" rx="4" class="ghost"/><text x="482" y="230" class="mid mono t-faint">4</text>
+    <rect x="520" y="214" width="52" height="24" rx="4" class="ghost"/><text x="546" y="230" class="mid mono t-faint">5</text>
+    <rect x="584" y="214" width="52" height="24" rx="4" class="ghost"/><text x="610" y="230" class="mid mono t-faint">6</text>
+    <rect x="648" y="214" width="52" height="24" rx="4" class="hot"/><text x="674" y="230" class="mid mono">0</text>
+    <line x1="674" y1="192" x2="674" y2="213" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="100" y="276" class="small">down, d = 4</text>
+    <rect x="200" y="260" width="52" height="24" rx="4" class="ghost"/><text x="226" y="276" class="mid mono t-faint">3</text>
+    <rect x="264" y="260" width="52" height="24" rx="4" class="ghost"/><text x="290" y="276" class="mid mono t-faint">4</text>
+    <rect x="328" y="260" width="52" height="24" rx="4" class="ghost"/><text x="354" y="276" class="mid mono t-faint">7</text>
+    <rect x="392" y="260" width="52" height="24" rx="4" class="hot"/><text x="418" y="276" class="mid mono">0</text>
+    <rect x="456" y="260" width="52" height="24" rx="4" class="ghost"/><text x="482" y="276" class="mid mono t-faint">4</text>
+    <rect x="520" y="260" width="52" height="24" rx="4" class="ghost"/><text x="546" y="276" class="mid mono t-faint">5</text>
+    <rect x="584" y="260" width="52" height="24" rx="4" class="ghost"/><text x="610" y="276" class="mid mono t-faint">6</text>
+    <rect x="648" y="260" width="52" height="24" rx="4" class="hot"/><text x="674" y="276" class="mid mono">11</text>
+    <line x1="670" y1="238" x2="422" y2="259" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="422" y1="238" x2="666" y2="259" class="arrow" marker-end="url(#ah)"/>
+    <line x1="674" y1="238" x2="674" y2="259" class="arrow" marker-end="url(#ah)"/>
+    <text x="100" y="322" class="small">down, d = 2</text>
+    <rect x="200" y="306" width="52" height="24" rx="4" class="ghost"/><text x="226" y="322" class="mid mono t-faint">3</text>
+    <rect x="264" y="306" width="52" height="24" rx="4" class="hot"/><text x="290" y="322" class="mid mono">0</text>
+    <rect x="328" y="306" width="52" height="24" rx="4" class="ghost"/><text x="354" y="322" class="mid mono t-faint">7</text>
+    <rect x="392" y="306" width="52" height="24" rx="4" class="hot"/><text x="418" y="322" class="mid mono">4</text>
+    <rect x="456" y="306" width="52" height="24" rx="4" class="ghost"/><text x="482" y="322" class="mid mono t-faint">4</text>
+    <rect x="520" y="306" width="52" height="24" rx="4" class="hot"/><text x="546" y="322" class="mid mono">11</text>
+    <rect x="584" y="306" width="52" height="24" rx="4" class="ghost"/><text x="610" y="322" class="mid mono t-faint">6</text>
+    <rect x="648" y="306" width="52" height="24" rx="4" class="hot"/><text x="674" y="322" class="mid mono">16</text>
+    <line x1="414" y1="284" x2="294" y2="305" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="294" y1="284" x2="410" y2="305" class="arrow" marker-end="url(#ah)"/>
+    <line x1="418" y1="284" x2="418" y2="305" class="arrow" marker-end="url(#ah)"/>
+    <line x1="670" y1="284" x2="550" y2="305" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="550" y1="284" x2="666" y2="305" class="arrow" marker-end="url(#ah)"/>
+    <line x1="674" y1="284" x2="674" y2="305" class="arrow" marker-end="url(#ah)"/>
+    <text x="100" y="368" class="small">down, d = 1</text>
+    <rect x="200" y="352" width="52" height="24" rx="4" class="hot"/><text x="226" y="368" class="mid mono">0</text>
+    <rect x="264" y="352" width="52" height="24" rx="4" class="hot"/><text x="290" y="368" class="mid mono">3</text>
+    <rect x="328" y="352" width="52" height="24" rx="4" class="hot"/><text x="354" y="368" class="mid mono">4</text>
+    <rect x="392" y="352" width="52" height="24" rx="4" class="hot"/><text x="418" y="368" class="mid mono">11</text>
+    <rect x="456" y="352" width="52" height="24" rx="4" class="hot"/><text x="482" y="368" class="mid mono">11</text>
+    <rect x="520" y="352" width="52" height="24" rx="4" class="hot"/><text x="546" y="368" class="mid mono">15</text>
+    <rect x="584" y="352" width="52" height="24" rx="4" class="hot"/><text x="610" y="368" class="mid mono">16</text>
+    <rect x="648" y="352" width="52" height="24" rx="4" class="hot"/><text x="674" y="368" class="mid mono">22</text>
+    <line x1="286" y1="330" x2="230" y2="351" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="230" y1="330" x2="282" y2="351" class="arrow" marker-end="url(#ah)"/>
+    <line x1="290" y1="330" x2="290" y2="351" class="arrow" marker-end="url(#ah)"/>
+    <line x1="414" y1="330" x2="358" y2="351" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="358" y1="330" x2="410" y2="351" class="arrow" marker-end="url(#ah)"/>
+    <line x1="418" y1="330" x2="418" y2="351" class="arrow" marker-end="url(#ah)"/>
+    <line x1="542" y1="330" x2="486" y2="351" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="486" y1="330" x2="538" y2="351" class="arrow" marker-end="url(#ah)"/>
+    <line x1="546" y1="330" x2="546" y2="351" class="arrow" marker-end="url(#ah)"/>
+    <line x1="670" y1="330" x2="614" y2="351" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="614" y1="330" x2="666" y2="351" class="arrow" marker-end="url(#ah)"/>
+    <line x1="674" y1="330" x2="674" y2="351" class="arrow" marker-end="url(#ah)"/>
+    <text x="24" y="140" class="title t-hot">up-sweep</text>
+    <text x="24" y="304" class="title t-hot">down-sweep</text>
+  </svg>
+  <figcaption>Orange cells change in that row. Up-sweep: the right item of each pair adds the left one. Down-sweep: the left item takes the right one's value (green), and the right one adds the old left value.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Method</th><th>Steps (barriers)</th><th>Additions for <var>n</var> items</th><th>Result</th><th>Good when</th></tr>
+  <tr><td>Naive loop</td><td>1</td><td><var>n</var>(<var>n</var> − 1) / 2</td><td>either</td><td>tiny groups, simplest code</td></tr>
+  <tr><td>Hillis–Steele</td><td>log<sub>2</sub> <var>n</var></td><td>about <var>n</var> log<sub>2</sub> <var>n</var></td><td>inclusive</td><td>the group is small and has many threads per item anyway</td></tr>
+  <tr><td>Blelloch</td><td>2 log<sub>2</sub> <var>n</var></td><td>about 2<var>n</var></td><td>exclusive</td><td>large arrays, where total work matters</td></tr>
+</table>
+</div>
+
+<p>For 64 items: the naive loop does 2016 additions, Hillis–Steele 321 in 6 steps, Blelloch 126 in 12 steps. On a GPU, the number of barriers often matters more than the number of additions, which is why the next idea wins.</p>
+
+<h2 id="waves"><span class="n">5</span>Wave intrinsics</h2>
+
+<p>A GPU runs threads in fixed bundles called <b>waves</b> (AMD), <b>warps</b> (NVIDIA) or <b>subgroups</b> (Vulkan): usually 32 or 64 threads, called lanes, that run the same instruction together. Modern APIs let the lanes of a wave share values directly, with no shared memory and no barrier. Two of these instructions are made for compaction.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 262" role="img" aria-label="A wave of 8 lanes. Lanes 0, 2, 3 and 6 keep their item. The ballot is a bit mask with those bits set, the same in every lane. Each lane counts the set bits in the lanes below it: 0 1 1 2 3 3 3 4.">
+    <text x="20" y="48" class="title">lane</text>
+    <text x="20" y="92" class="title">keep</text>
+    <text x="20" y="142" class="title">ballot</text>
+    <text x="20" y="158" class="small">the same mask in every lane</text>
+    <text x="20" y="206" class="title">prefix count</text>
+    <text x="20" y="222" class="small">set bits in lower lanes</text>
+    <text x="226" y="48" class="mid mono">0</text>
+    <text x="290" y="48" class="mid mono">1</text>
+    <text x="354" y="48" class="mid mono">2</text>
+    <text x="418" y="48" class="mid mono">3</text>
+    <text x="482" y="48" class="mid mono">4</text>
+    <text x="546" y="48" class="mid mono">5</text>
+    <text x="610" y="48" class="mid mono">6</text>
+    <text x="674" y="48" class="mid mono">7</text>
+    <rect x="200" y="74" width="52" height="28" rx="4" class="gpu"/><text x="226" y="92" class="mid mono">1</text>
+    <rect x="264" y="74" width="52" height="28" rx="4" class="ghost"/><text x="290" y="92" class="mid mono t-faint">0</text>
+    <rect x="328" y="74" width="52" height="28" rx="4" class="gpu"/><text x="354" y="92" class="mid mono">1</text>
+    <rect x="392" y="74" width="52" height="28" rx="4" class="gpu"/><text x="418" y="92" class="mid mono">1</text>
+    <rect x="456" y="74" width="52" height="28" rx="4" class="ghost"/><text x="482" y="92" class="mid mono t-faint">0</text>
+    <rect x="520" y="74" width="52" height="28" rx="4" class="ghost"/><text x="546" y="92" class="mid mono t-faint">0</text>
+    <rect x="584" y="74" width="52" height="28" rx="4" class="gpu"/><text x="610" y="92" class="mid mono">1</text>
+    <rect x="648" y="74" width="52" height="28" rx="4" class="ghost"/><text x="674" y="92" class="mid mono t-faint">0</text>
+    <rect x="196" y="124" width="516" height="36" rx="6" class="mem"/>
+    <text x="226" y="147" class="mid mono">1</text>
+    <text x="290" y="147" class="mid mono">0</text>
+    <text x="354" y="147" class="mid mono">1</text>
+    <text x="418" y="147" class="mid mono">1</text>
+    <text x="482" y="147" class="mid mono">0</text>
+    <text x="546" y="147" class="mid mono">0</text>
+    <text x="610" y="147" class="mid mono">1</text>
+    <text x="674" y="147" class="mid mono">0</text>
+    <rect x="200" y="188" width="52" height="28" rx="4" class="gpu"/><text x="226" y="206" class="mid mono">0</text>
+    <rect x="264" y="188" width="52" height="28" rx="4" class="ghost"/><text x="290" y="206" class="mid mono t-faint">1</text>
+    <rect x="328" y="188" width="52" height="28" rx="4" class="gpu"/><text x="354" y="206" class="mid mono">1</text>
+    <rect x="392" y="188" width="52" height="28" rx="4" class="gpu"/><text x="418" y="206" class="mid mono">2</text>
+    <rect x="456" y="188" width="52" height="28" rx="4" class="ghost"/><text x="482" y="206" class="mid mono t-faint">3</text>
+    <rect x="520" y="188" width="52" height="28" rx="4" class="ghost"/><text x="546" y="206" class="mid mono t-faint">3</text>
+    <rect x="584" y="188" width="52" height="28" rx="4" class="gpu"/><text x="610" y="206" class="mid mono">3</text>
+    <rect x="648" y="188" width="52" height="28" rx="4" class="ghost"/><text x="674" y="206" class="mid mono t-faint">4</text>
+    <line x1="610" y1="162" x2="610" y2="186" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="596" y="180" class="end small t-hot">lane 6: bits 0 to 5 hold three 1s → 3</text>
+    <text x="200" y="250" class="small">Total in the wave = all set bits = 4. Both are one instruction, with no shared memory and no barrier.</text>
+  </svg>
+  <figcaption>A <b>ballot</b> gathers one bit from every lane into a mask. Counting the set bits below your own lane is an exclusive scan of the flags, in one instruction.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>What</th><th>HLSL and Slang · GLSL (Vulkan subgroups)</th></tr>
+  <tr><td>Kept lanes below me</td><td><samp>WavePrefixCountBits(keep)</samp><br><samp>subgroupBallotExclusiveBitCount(b)</samp>, with <samp>b = subgroupBallot(keep)</samp></td></tr>
+  <tr><td>Kept lanes in the wave</td><td><samp>WaveActiveCountBits(keep)</samp><br><samp>subgroupBallotBitCount(b)</samp></td></tr>
+  <tr><td>Exclusive scan of any value</td><td><samp>WavePrefixSum(x)</samp><br><samp>subgroupExclusiveAdd(x)</samp></td></tr>
+</table>
+</div>
+
+<p>A workgroup of 256 threads holds several waves. Each wave scans itself with one instruction and writes its total to shared memory. After a barrier, one wave scans those few totals, and after a second barrier, each lane adds its wave's base:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 282" role="img" aria-label="Four waves with totals 5, 2, 7 and 3 write them to shared memory. One wave scans them into bases 0, 5, 7 and 14.">
+    <rect x="30" y="30" width="160" height="56" rx="6" class="gpu"/>
+    <text x="110" y="52" class="mid title">wave 0</text>
+    <text x="110" y="72" class="mid small">prefix in wave · total 5</text>
+    <line x1="110" y1="86" x2="110" y2="116" class="arrow mem" marker-end="url(#ah-mem)"/>
+<rect x="80" y="118" width="60" height="30" rx="4" class="mem"/><text x="110" y="137" class="mid mono">5</text>
+    <line x1="110" y1="186" x2="110" y2="214" class="arrow mem" marker-end="url(#ah-mem)"/>
+<rect x="80" y="216" width="60" height="30" rx="4" class="hot"/><text x="110" y="235" class="mid mono">0</text>
+    <rect x="210" y="30" width="160" height="56" rx="6" class="gpu"/>
+    <text x="290" y="52" class="mid title">wave 1</text>
+    <text x="290" y="72" class="mid small">prefix in wave · total 2</text>
+    <line x1="290" y1="86" x2="290" y2="116" class="arrow mem" marker-end="url(#ah-mem)"/>
+<rect x="260" y="118" width="60" height="30" rx="4" class="mem"/><text x="290" y="137" class="mid mono">2</text>
+    <line x1="290" y1="186" x2="290" y2="214" class="arrow mem" marker-end="url(#ah-mem)"/>
+<rect x="260" y="216" width="60" height="30" rx="4" class="hot"/><text x="290" y="235" class="mid mono">5</text>
+    <rect x="390" y="30" width="160" height="56" rx="6" class="gpu"/>
+    <text x="470" y="52" class="mid title">wave 2</text>
+    <text x="470" y="72" class="mid small">prefix in wave · total 7</text>
+    <line x1="470" y1="86" x2="470" y2="116" class="arrow mem" marker-end="url(#ah-mem)"/>
+<rect x="440" y="118" width="60" height="30" rx="4" class="mem"/><text x="470" y="137" class="mid mono">7</text>
+    <line x1="470" y1="186" x2="470" y2="214" class="arrow mem" marker-end="url(#ah-mem)"/>
+<rect x="440" y="216" width="60" height="30" rx="4" class="hot"/><text x="470" y="235" class="mid mono">7</text>
+    <rect x="570" y="30" width="160" height="56" rx="6" class="gpu"/>
+    <text x="650" y="52" class="mid title">wave 3</text>
+    <text x="650" y="72" class="mid small">prefix in wave · total 3</text>
+    <line x1="650" y1="86" x2="650" y2="116" class="arrow mem" marker-end="url(#ah-mem)"/>
+<rect x="620" y="118" width="60" height="30" rx="4" class="mem"/><text x="650" y="137" class="mid mono">3</text>
+    <line x1="650" y1="186" x2="650" y2="214" class="arrow mem" marker-end="url(#ah-mem)"/>
+<rect x="620" y="216" width="60" height="30" rx="4" class="hot"/><text x="650" y="235" class="mid mono">14</text>
+    <rect x="30" y="160" width="700" height="24" rx="12" class="shader"/>
+    <text x="380" y="177" class="mid small">barrier · one wave scans the 4 totals in shared memory · barrier</text>
+    <text x="20" y="270" class="small">Each lane's slot = its wave's base + its prefix in the wave. The group's total = 14 + 3 = 17.</text>
+  </svg>
+  <figcaption>Two barriers for any group size, instead of 6 to 12. The wave size depends on the GPU (and on Vulkan, it can be asked for), so code must not assume 32 or 64.</figcaption>
+</figure>
+
+<p>Here is a compaction kernel in Slang that is in order inside each wave and uses one atomic per wave. It is the common "good enough" version when the order of the waves does not matter:</p>
+
+<pre><code class="lang-slang">// One thread per item. In order inside a wave; the waves
+// take their places in the order they reach the atomic.
+void compactMain(uint3 id : SV_DispatchThreadID)
+{
+    bool keep = id.x < itemCount && passes(items[id.x]);
+    // Kept lanes below this one, and kept lanes in the whole wave.
+    uint slot = WavePrefixCountBits(keep);
+    uint count = WaveActiveCountBits(keep);
+    uint base = 0;
+    if (WaveIsFirstLane())
+        InterlockedAdd(counter[0], count, base);
+    base = WaveReadLaneFirst(base);
+    if (keep)
+        output[base + slot] = items[id.x];
+}</code></pre>
+
+<p>A thread past the end of the array gets <var>keep</var> = false instead of returning early. Here an early return would be harmless, because wave instructions skip inactive lanes, but a kernel with a group barrier must keep every thread running until the barrier.</p>
+
+<h2><span class="n">6</span>More than one workgroup</h2>
+
+<p>A workgroup can only see its own shared memory. To scan a million items, the groups must also learn how many items all earlier groups kept. The classic way is three passes, or two when the last pass also scans the block totals itself:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 324" role="img" aria-label="Pass 1: four blocks scan their items and write their totals 3, 1, 3 and 2. Pass 2: one small dispatch scans the totals into 0, 3, 4 and 7. Pass 3: each block adds its base to its local slots.">
+    <rect x="40" y="30" width="150" height="48" rx="6" class="gpu"/>
+    <text x="115" y="50" class="mid title">block 0</text>
+    <text x="115" y="67" class="mid small">scan inside, total</text>
+    <line x1="115" y1="78" x2="115" y2="108" class="arrow mem" marker-end="url(#ah-mem)"/>
+<rect x="90" y="110" width="50" height="28" rx="4" class="mem"/><text x="115" y="128" class="mid mono">3</text>
+<rect x="90" y="180" width="50" height="28" rx="4" class="mem"/><text x="115" y="198" class="mid mono">0</text>
+    <line x1="115" y1="208" x2="115" y2="238" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="40" y="240" width="150" height="48" rx="6" class="gpu"/>
+    <text x="115" y="260" class="mid title">block 0</text>
+    <text x="115" y="277" class="mid small">base 0 + local slot</text>
+    <rect x="220" y="30" width="150" height="48" rx="6" class="gpu"/>
+    <text x="295" y="50" class="mid title">block 1</text>
+    <text x="295" y="67" class="mid small">scan inside, total</text>
+    <line x1="295" y1="78" x2="295" y2="108" class="arrow mem" marker-end="url(#ah-mem)"/>
+<rect x="270" y="110" width="50" height="28" rx="4" class="mem"/><text x="295" y="128" class="mid mono">1</text>
+<rect x="270" y="180" width="50" height="28" rx="4" class="mem"/><text x="295" y="198" class="mid mono">3</text>
+    <line x1="295" y1="208" x2="295" y2="238" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="220" y="240" width="150" height="48" rx="6" class="gpu"/>
+    <text x="295" y="260" class="mid title">block 1</text>
+    <text x="295" y="277" class="mid small">base 3 + local slot</text>
+    <rect x="400" y="30" width="150" height="48" rx="6" class="gpu"/>
+    <text x="475" y="50" class="mid title">block 2</text>
+    <text x="475" y="67" class="mid small">scan inside, total</text>
+    <line x1="475" y1="78" x2="475" y2="108" class="arrow mem" marker-end="url(#ah-mem)"/>
+<rect x="450" y="110" width="50" height="28" rx="4" class="mem"/><text x="475" y="128" class="mid mono">3</text>
+<rect x="450" y="180" width="50" height="28" rx="4" class="mem"/><text x="475" y="198" class="mid mono">4</text>
+    <line x1="475" y1="208" x2="475" y2="238" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="400" y="240" width="150" height="48" rx="6" class="gpu"/>
+    <text x="475" y="260" class="mid title">block 2</text>
+    <text x="475" y="277" class="mid small">base 4 + local slot</text>
+    <rect x="580" y="30" width="150" height="48" rx="6" class="gpu"/>
+    <text x="655" y="50" class="mid title">block 3</text>
+    <text x="655" y="67" class="mid small">scan inside, total</text>
+    <line x1="655" y1="78" x2="655" y2="108" class="arrow mem" marker-end="url(#ah-mem)"/>
+<rect x="630" y="110" width="50" height="28" rx="4" class="mem"/><text x="655" y="128" class="mid mono">2</text>
+<rect x="630" y="180" width="50" height="28" rx="4" class="mem"/><text x="655" y="198" class="mid mono">7</text>
+    <line x1="655" y1="208" x2="655" y2="238" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="580" y="240" width="150" height="48" rx="6" class="gpu"/>
+    <text x="655" y="260" class="mid title">block 3</text>
+    <text x="655" y="277" class="mid small">base 7 + local slot</text>
+    <rect x="40" y="146" width="690" height="26" rx="13" class="shader"/>
+    <text x="385" y="164" class="mid small">pass 2: exclusive scan of the block totals (one small dispatch)</text>
+    <text x="20" y="24" class="small t-hot">pass 1</text>
+    <text x="20" y="234" class="small t-hot">pass 3</text>
+    <text x="20" y="312" class="small">Pass 1 keeps each item's local slot. Pass 3 adds its block's base and scatters. Bigger inputs add one more level.</text>
+  </svg>
+  <figcaption>Scan, then propagate. Each level divides the size by the group size, so with groups of 1024, two levels cover a million items.</figcaption>
+</figure>
+
+<h3>One pass: decoupled look-back</h3>
+
+<p>Merrill and Garland (2016) showed how to do it in one pass. Each block posts a small status record for the blocks after it. To find its base, a block reads the records of earlier blocks, from right to left, adding as it goes, and stops at the first one that already knows its full prefix.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 282" role="img" aria-label="Blocks 0 and 1 have posted P, their full prefix 3 and 4. Block 2 has posted A, only its own total 3. Block 3 looks back: it adds block 2's 3, then block 1's 4, and stops, so its base is 7.">
+    <rect x="40" y="40" width="150" height="56" rx="6" class="gpu"/>
+    <text x="115" y="62" class="mid title">block 0</text>
+    <text x="115" y="82" class="mid small">inclusive 3</text>
+<rect x="85" y="110" width="60" height="28" rx="4" class="mem"/><text x="115" y="128" class="mid mono">P 3</text>
+    <rect x="220" y="40" width="150" height="56" rx="6" class="gpu"/>
+    <text x="295" y="62" class="mid title">block 1</text>
+    <text x="295" y="82" class="mid small">inclusive 4</text>
+<rect x="265" y="110" width="60" height="28" rx="4" class="mem"/><text x="295" y="128" class="mid mono">P 4</text>
+    <rect x="400" y="40" width="150" height="56" rx="6" class="gpu"/>
+    <text x="475" y="62" class="mid title">block 2</text>
+    <text x="475" y="82" class="mid small">own total 3</text>
+<rect x="445" y="110" width="60" height="28" rx="4" class="mem"/><text x="475" y="128" class="mid mono">A 3</text>
+    <rect x="580" y="40" width="150" height="56" rx="6" class="hot"/>
+    <text x="655" y="62" class="mid title">block 3</text>
+    <text x="655" y="82" class="mid small">looking back</text>
+    <path d="M580,96 C560,150 460,150 445,140" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="512" y="168" class="mid small t-hot">1. A: only its total, add 3</text>
+    <path d="M580,96 C560,210 280,210 265,140" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="400" y="214" class="mid small t-hot">2. P: a full prefix, add 4 and stop</text>
+    <text x="615" y="128" class="small mono">base = 3 + 4 = 7</text>
+    <text x="615" y="146" class="small">then it posts P 9</text>
+    <text x="20" y="250" class="small">Each block posts A (its own total) as soon as it has it, and P (total of everything up to it) once it knows its base.</text>
+    <text x="20" y="268" class="small">X means nothing posted yet: the block waits. Most blocks find a P one or two steps back, so one pass is enough.</text>
+  </svg>
+  <figcaption>Decoupled look-back. Each item is read once and written once, which is the least memory traffic a scan can have. It needs the blocks to start in order, so it takes a block index from an atomic counter instead of the built-in group ID.</figcaption>
+</figure>
+
+<h2><span class="n">7</span>Worked example</h2>
+
+<p>Here is the whole ordered compaction for 16 items in 4 groups of 4. Click through the steps (or use the arrow keys).</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. The input</h4>
+    <svg viewBox="0 0 760 136" role="img" aria-label="Sixteen items a to p in four groups of four.">
+    <path d="M30,30 V22 H192 V30" class="arrow"/>
+    <text x="111" y="16" class="mid small">group 0</text>
+    <path d="M212,30 V22 H374 V30" class="arrow"/>
+    <text x="293" y="16" class="mid small">group 1</text>
+    <path d="M394,30 V22 H556 V30" class="arrow"/>
+    <text x="475" y="16" class="mid small">group 2</text>
+    <path d="M576,30 V22 H738 V30" class="arrow"/>
+    <text x="657" y="16" class="mid small">group 3</text>
+    <rect x="30" y="34" width="36" height="32" rx="4" class="box"/><text x="48" y="54" class="mid mono">a</text>
+    <rect x="72" y="34" width="36" height="32" rx="4" class="box"/><text x="90" y="54" class="mid mono">b</text>
+    <rect x="114" y="34" width="36" height="32" rx="4" class="box"/><text x="132" y="54" class="mid mono">c</text>
+    <rect x="156" y="34" width="36" height="32" rx="4" class="box"/><text x="174" y="54" class="mid mono">d</text>
+    <rect x="212" y="34" width="36" height="32" rx="4" class="box"/><text x="230" y="54" class="mid mono">e</text>
+    <rect x="254" y="34" width="36" height="32" rx="4" class="box"/><text x="272" y="54" class="mid mono">f</text>
+    <rect x="296" y="34" width="36" height="32" rx="4" class="box"/><text x="314" y="54" class="mid mono">g</text>
+    <rect x="338" y="34" width="36" height="32" rx="4" class="box"/><text x="356" y="54" class="mid mono">h</text>
+    <rect x="394" y="34" width="36" height="32" rx="4" class="box"/><text x="412" y="54" class="mid mono">i</text>
+    <rect x="436" y="34" width="36" height="32" rx="4" class="box"/><text x="454" y="54" class="mid mono">j</text>
+    <rect x="478" y="34" width="36" height="32" rx="4" class="box"/><text x="496" y="54" class="mid mono">k</text>
+    <rect x="520" y="34" width="36" height="32" rx="4" class="box"/><text x="538" y="54" class="mid mono">l</text>
+    <rect x="576" y="34" width="36" height="32" rx="4" class="box"/><text x="594" y="54" class="mid mono">m</text>
+    <rect x="618" y="34" width="36" height="32" rx="4" class="box"/><text x="636" y="54" class="mid mono">n</text>
+    <rect x="660" y="34" width="36" height="32" rx="4" class="box"/><text x="678" y="54" class="mid mono">o</text>
+    <rect x="702" y="34" width="36" height="32" rx="4" class="box"/><text x="720" y="54" class="mid mono">p</text>
+    <text x="30" y="104" class="small">16 items, groups of 4 threads for the picture (a real group has 64 or 256).</text>
+    <text x="30" y="122" class="small">Each thread takes one item and runs the test.</text>
+    </svg>
+    <p>Nothing is known about the output yet, not even its size.</p>
+  </div>
+  <div class="step">
+    <h4>2. Test and flag</h4>
+    <svg viewBox="0 0 760 140" role="img" aria-label="Items a, c, d, g, i, j, l, n and o pass. Their flags are 1, the others 0.">
+    <path d="M30,30 V22 H192 V30" class="arrow"/>
+    <text x="111" y="16" class="mid small">group 0</text>
+    <path d="M212,30 V22 H374 V30" class="arrow"/>
+    <text x="293" y="16" class="mid small">group 1</text>
+    <path d="M394,30 V22 H556 V30" class="arrow"/>
+    <text x="475" y="16" class="mid small">group 2</text>
+    <path d="M576,30 V22 H738 V30" class="arrow"/>
+    <text x="657" y="16" class="mid small">group 3</text>
+    <rect x="30" y="34" width="36" height="32" rx="4" class="gpu"/><text x="48" y="54" class="mid mono">a</text>
+    <rect x="72" y="34" width="36" height="32" rx="4" class="ghost"/><text x="90" y="54" class="mid mono t-faint">b</text>
+    <rect x="114" y="34" width="36" height="32" rx="4" class="gpu"/><text x="132" y="54" class="mid mono">c</text>
+    <rect x="156" y="34" width="36" height="32" rx="4" class="gpu"/><text x="174" y="54" class="mid mono">d</text>
+    <rect x="212" y="34" width="36" height="32" rx="4" class="ghost"/><text x="230" y="54" class="mid mono t-faint">e</text>
+    <rect x="254" y="34" width="36" height="32" rx="4" class="ghost"/><text x="272" y="54" class="mid mono t-faint">f</text>
+    <rect x="296" y="34" width="36" height="32" rx="4" class="gpu"/><text x="314" y="54" class="mid mono">g</text>
+    <rect x="338" y="34" width="36" height="32" rx="4" class="ghost"/><text x="356" y="54" class="mid mono t-faint">h</text>
+    <rect x="394" y="34" width="36" height="32" rx="4" class="gpu"/><text x="412" y="54" class="mid mono">i</text>
+    <rect x="436" y="34" width="36" height="32" rx="4" class="gpu"/><text x="454" y="54" class="mid mono">j</text>
+    <rect x="478" y="34" width="36" height="32" rx="4" class="ghost"/><text x="496" y="54" class="mid mono t-faint">k</text>
+    <rect x="520" y="34" width="36" height="32" rx="4" class="gpu"/><text x="538" y="54" class="mid mono">l</text>
+    <rect x="576" y="34" width="36" height="32" rx="4" class="ghost"/><text x="594" y="54" class="mid mono t-faint">m</text>
+    <rect x="618" y="34" width="36" height="32" rx="4" class="gpu"/><text x="636" y="54" class="mid mono">n</text>
+    <rect x="660" y="34" width="36" height="32" rx="4" class="gpu"/><text x="678" y="54" class="mid mono">o</text>
+    <rect x="702" y="34" width="36" height="32" rx="4" class="ghost"/><text x="720" y="54" class="mid mono t-faint">p</text>
+    <rect x="30" y="76" width="36" height="24" rx="4" class="gpu"/><text x="48" y="92" class="mid mono">1</text>
+    <rect x="72" y="76" width="36" height="24" rx="4" class="ghost"/><text x="90" y="92" class="mid mono t-faint">0</text>
+    <rect x="114" y="76" width="36" height="24" rx="4" class="gpu"/><text x="132" y="92" class="mid mono">1</text>
+    <rect x="156" y="76" width="36" height="24" rx="4" class="gpu"/><text x="174" y="92" class="mid mono">1</text>
+    <rect x="212" y="76" width="36" height="24" rx="4" class="ghost"/><text x="230" y="92" class="mid mono t-faint">0</text>
+    <rect x="254" y="76" width="36" height="24" rx="4" class="ghost"/><text x="272" y="92" class="mid mono t-faint">0</text>
+    <rect x="296" y="76" width="36" height="24" rx="4" class="gpu"/><text x="314" y="92" class="mid mono">1</text>
+    <rect x="338" y="76" width="36" height="24" rx="4" class="ghost"/><text x="356" y="92" class="mid mono t-faint">0</text>
+    <rect x="394" y="76" width="36" height="24" rx="4" class="gpu"/><text x="412" y="92" class="mid mono">1</text>
+    <rect x="436" y="76" width="36" height="24" rx="4" class="gpu"/><text x="454" y="92" class="mid mono">1</text>
+    <rect x="478" y="76" width="36" height="24" rx="4" class="ghost"/><text x="496" y="92" class="mid mono t-faint">0</text>
+    <rect x="520" y="76" width="36" height="24" rx="4" class="gpu"/><text x="538" y="92" class="mid mono">1</text>
+    <rect x="576" y="76" width="36" height="24" rx="4" class="ghost"/><text x="594" y="92" class="mid mono t-faint">0</text>
+    <rect x="618" y="76" width="36" height="24" rx="4" class="gpu"/><text x="636" y="92" class="mid mono">1</text>
+    <rect x="660" y="76" width="36" height="24" rx="4" class="gpu"/><text x="678" y="92" class="mid mono">1</text>
+    <rect x="702" y="76" width="36" height="24" rx="4" class="ghost"/><text x="720" y="92" class="mid mono t-faint">0</text>
+    <text x="30" y="130" class="small">Top: the items. Bottom: their flags. 9 of 16 pass: a c d g i j l n o.</text>
+    </svg>
+    <p>Each thread runs the test on its own item and writes a flag into shared memory.</p>
+  </div>
+  <div class="step">
+    <h4>3. Scan inside each group</h4>
+    <svg viewBox="0 0 760 186" role="img" aria-label="Local slots: group 0 gives a 0, c 1, d 2, count 3. Group 1 gives g 0, count 1. Group 2 gives i 0, j 1, l 2, count 3. Group 3 gives n 0, o 1, count 2.">
+    <path d="M30,30 V22 H192 V30" class="arrow"/>
+    <text x="111" y="16" class="mid small">group 0</text>
+    <path d="M212,30 V22 H374 V30" class="arrow"/>
+    <text x="293" y="16" class="mid small">group 1</text>
+    <path d="M394,30 V22 H556 V30" class="arrow"/>
+    <text x="475" y="16" class="mid small">group 2</text>
+    <path d="M576,30 V22 H738 V30" class="arrow"/>
+    <text x="657" y="16" class="mid small">group 3</text>
+    <rect x="30" y="34" width="36" height="32" rx="4" class="gpu"/><text x="48" y="54" class="mid mono">a</text>
+    <rect x="72" y="34" width="36" height="32" rx="4" class="ghost"/><text x="90" y="54" class="mid mono t-faint">b</text>
+    <rect x="114" y="34" width="36" height="32" rx="4" class="gpu"/><text x="132" y="54" class="mid mono">c</text>
+    <rect x="156" y="34" width="36" height="32" rx="4" class="gpu"/><text x="174" y="54" class="mid mono">d</text>
+    <rect x="212" y="34" width="36" height="32" rx="4" class="ghost"/><text x="230" y="54" class="mid mono t-faint">e</text>
+    <rect x="254" y="34" width="36" height="32" rx="4" class="ghost"/><text x="272" y="54" class="mid mono t-faint">f</text>
+    <rect x="296" y="34" width="36" height="32" rx="4" class="gpu"/><text x="314" y="54" class="mid mono">g</text>
+    <rect x="338" y="34" width="36" height="32" rx="4" class="ghost"/><text x="356" y="54" class="mid mono t-faint">h</text>
+    <rect x="394" y="34" width="36" height="32" rx="4" class="gpu"/><text x="412" y="54" class="mid mono">i</text>
+    <rect x="436" y="34" width="36" height="32" rx="4" class="gpu"/><text x="454" y="54" class="mid mono">j</text>
+    <rect x="478" y="34" width="36" height="32" rx="4" class="ghost"/><text x="496" y="54" class="mid mono t-faint">k</text>
+    <rect x="520" y="34" width="36" height="32" rx="4" class="gpu"/><text x="538" y="54" class="mid mono">l</text>
+    <rect x="576" y="34" width="36" height="32" rx="4" class="ghost"/><text x="594" y="54" class="mid mono t-faint">m</text>
+    <rect x="618" y="34" width="36" height="32" rx="4" class="gpu"/><text x="636" y="54" class="mid mono">n</text>
+    <rect x="660" y="34" width="36" height="32" rx="4" class="gpu"/><text x="678" y="54" class="mid mono">o</text>
+    <rect x="702" y="34" width="36" height="32" rx="4" class="ghost"/><text x="720" y="54" class="mid mono t-faint">p</text>
+    <rect x="30" y="76" width="36" height="24" rx="4" class="mem"/><text x="48" y="92" class="mid mono">0</text>
+    <rect x="72" y="76" width="36" height="24" rx="4" class="ghost"/><text x="90" y="92" class="mid mono t-faint">–</text>
+    <rect x="114" y="76" width="36" height="24" rx="4" class="mem"/><text x="132" y="92" class="mid mono">1</text>
+    <rect x="156" y="76" width="36" height="24" rx="4" class="mem"/><text x="174" y="92" class="mid mono">2</text>
+    <rect x="212" y="76" width="36" height="24" rx="4" class="ghost"/><text x="230" y="92" class="mid mono t-faint">–</text>
+    <rect x="254" y="76" width="36" height="24" rx="4" class="ghost"/><text x="272" y="92" class="mid mono t-faint">–</text>
+    <rect x="296" y="76" width="36" height="24" rx="4" class="mem"/><text x="314" y="92" class="mid mono">0</text>
+    <rect x="338" y="76" width="36" height="24" rx="4" class="ghost"/><text x="356" y="92" class="mid mono t-faint">–</text>
+    <rect x="394" y="76" width="36" height="24" rx="4" class="mem"/><text x="412" y="92" class="mid mono">0</text>
+    <rect x="436" y="76" width="36" height="24" rx="4" class="mem"/><text x="454" y="92" class="mid mono">1</text>
+    <rect x="478" y="76" width="36" height="24" rx="4" class="ghost"/><text x="496" y="92" class="mid mono t-faint">–</text>
+    <rect x="520" y="76" width="36" height="24" rx="4" class="mem"/><text x="538" y="92" class="mid mono">2</text>
+    <rect x="576" y="76" width="36" height="24" rx="4" class="ghost"/><text x="594" y="92" class="mid mono t-faint">–</text>
+    <rect x="618" y="76" width="36" height="24" rx="4" class="mem"/><text x="636" y="92" class="mid mono">0</text>
+    <rect x="660" y="76" width="36" height="24" rx="4" class="mem"/><text x="678" y="92" class="mid mono">1</text>
+    <rect x="702" y="76" width="36" height="24" rx="4" class="ghost"/><text x="720" y="92" class="mid mono t-faint">–</text>
+    <text x="752" y="118" class="end small">local slot</text>
+<rect x="60" y="124" width="108" height="26" rx="4" class="mem"/><text x="114" y="141" class="mid mono">count 3</text>
+<rect x="242" y="124" width="108" height="26" rx="4" class="mem"/><text x="296" y="141" class="mid mono">count 1</text>
+<rect x="424" y="124" width="108" height="26" rx="4" class="mem"/><text x="478" y="141" class="mid mono">count 3</text>
+<rect x="606" y="124" width="108" height="26" rx="4" class="mem"/><text x="660" y="141" class="mid mono">count 2</text>
+    <text x="30" y="176" class="small">Inside each group: an exclusive scan of the flags in shared memory. The last value + the last flag is the group's count.</text>
+    </svg>
+    <p>After a barrier, each thread knows its <b>local slot</b> (its place among its group's kept items), and the group knows its count. The groups still do not know about each other.</p>
+  </div>
+  <div class="step">
+    <h4>4. Scan the group counts</h4>
+    <svg viewBox="0 0 760 170" role="img" aria-label="Group counts 3, 1, 3, 2 become bases 0, 3, 4, 7. The total is 9.">
+<rect x="60" y="20" width="108" height="26" rx="4" class="mem"/><text x="114" y="37" class="mid mono">count 3</text>
+    <line x1="114" y1="46" x2="114" y2="82" class="arrow" marker-end="url(#ah)"/>
+<rect x="60" y="84" width="108" height="26" rx="4" class="hot"/><text x="114" y="101" class="mid mono">base 0</text>
+<rect x="242" y="20" width="108" height="26" rx="4" class="mem"/><text x="296" y="37" class="mid mono">count 1</text>
+    <line x1="296" y1="46" x2="296" y2="82" class="arrow" marker-end="url(#ah)"/>
+<rect x="242" y="84" width="108" height="26" rx="4" class="hot"/><text x="296" y="101" class="mid mono">base 3</text>
+<rect x="424" y="20" width="108" height="26" rx="4" class="mem"/><text x="478" y="37" class="mid mono">count 3</text>
+    <line x1="478" y1="46" x2="478" y2="82" class="arrow" marker-end="url(#ah)"/>
+<rect x="424" y="84" width="108" height="26" rx="4" class="hot"/><text x="478" y="101" class="mid mono">base 4</text>
+<rect x="606" y="20" width="108" height="26" rx="4" class="mem"/><text x="660" y="37" class="mid mono">count 2</text>
+    <line x1="660" y1="46" x2="660" y2="82" class="arrow" marker-end="url(#ah)"/>
+<rect x="606" y="84" width="108" height="26" rx="4" class="hot"/><text x="660" y="101" class="mid mono">base 7</text>
+    <text x="30" y="140" class="small">An exclusive scan of the counts: 3, 1, 3, 2 → 0, 3, 4, 7. The total is 7 + 2 = 9.</text>
+    <text x="30" y="158" class="small">A group's base is how many kept items all earlier groups have.</text>
+    </svg>
+    <p>This is a second, much smaller scan: one value per group. With a few groups it is one more workgroup; with many, it is the multi-level scheme of section 6.</p>
+  </div>
+  <div class="step">
+    <h4>5. Scatter</h4>
+    <svg viewBox="0 0 760 222" role="img" aria-label="Each kept item goes to its group's base plus its local slot. The output is a c d g i j l n o.">
+    <rect x="30" y="20" width="36" height="32" rx="4" class="gpu"/><text x="48" y="40" class="mid mono">a</text>
+    <rect x="72" y="20" width="36" height="32" rx="4" class="ghost"/><text x="90" y="40" class="mid mono t-faint">b</text>
+    <rect x="114" y="20" width="36" height="32" rx="4" class="gpu"/><text x="132" y="40" class="mid mono">c</text>
+    <rect x="156" y="20" width="36" height="32" rx="4" class="gpu"/><text x="174" y="40" class="mid mono">d</text>
+    <rect x="212" y="20" width="36" height="32" rx="4" class="ghost"/><text x="230" y="40" class="mid mono t-faint">e</text>
+    <rect x="254" y="20" width="36" height="32" rx="4" class="ghost"/><text x="272" y="40" class="mid mono t-faint">f</text>
+    <rect x="296" y="20" width="36" height="32" rx="4" class="gpu"/><text x="314" y="40" class="mid mono">g</text>
+    <rect x="338" y="20" width="36" height="32" rx="4" class="ghost"/><text x="356" y="40" class="mid mono t-faint">h</text>
+    <rect x="394" y="20" width="36" height="32" rx="4" class="gpu"/><text x="412" y="40" class="mid mono">i</text>
+    <rect x="436" y="20" width="36" height="32" rx="4" class="gpu"/><text x="454" y="40" class="mid mono">j</text>
+    <rect x="478" y="20" width="36" height="32" rx="4" class="ghost"/><text x="496" y="40" class="mid mono t-faint">k</text>
+    <rect x="520" y="20" width="36" height="32" rx="4" class="gpu"/><text x="538" y="40" class="mid mono">l</text>
+    <rect x="576" y="20" width="36" height="32" rx="4" class="ghost"/><text x="594" y="40" class="mid mono t-faint">m</text>
+    <rect x="618" y="20" width="36" height="32" rx="4" class="gpu"/><text x="636" y="40" class="mid mono">n</text>
+    <rect x="660" y="20" width="36" height="32" rx="4" class="gpu"/><text x="678" y="40" class="mid mono">o</text>
+    <rect x="702" y="20" width="36" height="32" rx="4" class="ghost"/><text x="720" y="40" class="mid mono t-faint">p</text>
+    <text x="48" y="72" class="mid small">0+0</text>
+    <text x="132" y="72" class="mid small">0+1</text>
+    <text x="174" y="72" class="mid small">0+2</text>
+    <text x="314" y="72" class="mid small">3+0</text>
+    <text x="412" y="72" class="mid small">4+0</text>
+    <text x="454" y="72" class="mid small">4+1</text>
+    <text x="538" y="72" class="mid small">4+2</text>
+    <text x="636" y="72" class="mid small">7+0</text>
+    <text x="678" y="72" class="mid small">7+1</text>
+    <line x1="48" y1="78" x2="48" y2="148" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="132" y1="78" x2="90" y2="148" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="174" y1="78" x2="132" y2="148" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="314" y1="78" x2="174" y2="148" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="412" y1="78" x2="216" y2="148" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="454" y1="78" x2="258" y2="148" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="538" y1="78" x2="300" y2="148" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="636" y1="78" x2="342" y2="148" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="678" y1="78" x2="384" y2="148" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="30" y="150" width="36" height="32" rx="4" class="mem"/><text x="48" y="170" class="mid mono">a</text>
+    <rect x="72" y="150" width="36" height="32" rx="4" class="mem"/><text x="90" y="170" class="mid mono">c</text>
+    <rect x="114" y="150" width="36" height="32" rx="4" class="mem"/><text x="132" y="170" class="mid mono">d</text>
+    <rect x="156" y="150" width="36" height="32" rx="4" class="mem"/><text x="174" y="170" class="mid mono">g</text>
+    <rect x="198" y="150" width="36" height="32" rx="4" class="mem"/><text x="216" y="170" class="mid mono">i</text>
+    <rect x="240" y="150" width="36" height="32" rx="4" class="mem"/><text x="258" y="170" class="mid mono">j</text>
+    <rect x="282" y="150" width="36" height="32" rx="4" class="mem"/><text x="300" y="170" class="mid mono">l</text>
+    <rect x="324" y="150" width="36" height="32" rx="4" class="mem"/><text x="342" y="170" class="mid mono">n</text>
+    <rect x="366" y="150" width="36" height="32" rx="4" class="mem"/><text x="384" y="170" class="mid mono">o</text>
+    <text x="418" y="171" class="mono small">out[base + local slot]</text>
+    <text x="30" y="210" class="small">Every group writes at once, with no atomics. The output keeps the input order.</text>
+    </svg>
+    <p>For example <var>l</var>: group 2 has base 4, and <var>l</var> has local slot 2, so it goes to place 6.</p>
+  </div>
+  <div class="step">
+    <h4>6. Write the count</h4>
+    <svg viewBox="0 0 760 170" role="img" aria-label="The output has 9 items. The last group writes count 9, its base 7 plus its count 2. The places after 9 are not written.">
+    <rect x="30" y="20" width="36" height="32" rx="4" class="mem"/><text x="48" y="40" class="mid mono">a</text>
+    <rect x="72" y="20" width="36" height="32" rx="4" class="mem"/><text x="90" y="40" class="mid mono">c</text>
+    <rect x="114" y="20" width="36" height="32" rx="4" class="mem"/><text x="132" y="40" class="mid mono">d</text>
+    <rect x="156" y="20" width="36" height="32" rx="4" class="mem"/><text x="174" y="40" class="mid mono">g</text>
+    <rect x="198" y="20" width="36" height="32" rx="4" class="mem"/><text x="216" y="40" class="mid mono">i</text>
+    <rect x="240" y="20" width="36" height="32" rx="4" class="mem"/><text x="258" y="40" class="mid mono">j</text>
+    <rect x="282" y="20" width="36" height="32" rx="4" class="mem"/><text x="300" y="40" class="mid mono">l</text>
+    <rect x="324" y="20" width="36" height="32" rx="4" class="mem"/><text x="342" y="40" class="mid mono">n</text>
+    <rect x="366" y="20" width="36" height="32" rx="4" class="mem"/><text x="384" y="40" class="mid mono">o</text>
+    <rect x="408" y="20" width="36" height="32" rx="4" class="ghost"/>
+    <rect x="450" y="20" width="36" height="32" rx="4" class="ghost"/>
+    <rect x="492" y="20" width="36" height="32" rx="4" class="ghost"/>
+    <rect x="534" y="20" width="36" height="32" rx="4" class="ghost"/>
+    <rect x="576" y="20" width="36" height="32" rx="4" class="ghost"/>
+    <rect x="618" y="20" width="36" height="32" rx="4" class="ghost"/>
+    <rect x="660" y="20" width="36" height="32" rx="4" class="ghost"/>
+    <text x="594" y="72" class="mid small t-faint">not written this time</text>
+    <path d="M30,60 V66 H402 V60" class="arrow gpu"/>
+    <text x="216" y="82" class="mid mono">count = 9</text>
+    <rect x="440" y="100" width="290" height="34" rx="4" class="mem"/>
+    <text x="585" y="122" class="mid mono">count = base 7 + count 2 = 9</text>
+    <text x="585" y="154" class="mid small">written by the last group</text>
+    <text x="30" y="122" class="small">A reader of the output reads only</text>
+    <text x="30" y="138" class="small">the first count entries.</text>
+    </svg>
+    <p>The last group knows the total without any extra work: its base plus its own count. The rest of the output buffer keeps whatever it held before.</p>
+  </div>
+</div>
+
+<h2 id="count"><span class="n">8</span>Writing a count for an indirect draw</h2>
+
+<p>In GPU-driven rendering the compacted items are draw commands, and the count tells the draw how many there are. An <b>indirect count draw</b> (<samp>vkCmdDrawIndexedIndirectCount</samp> in Vulkan, <samp>ExecuteIndirect</samp> with a count buffer in Direct3D 12) reads both from buffers when it runs, so the CPU records the call before the GPU has even culled.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 226" role="img" aria-label="An argument buffer with room for 12 draws holds 5 packed draws. A count buffer holds 5. The indirect count draw reads the count and draws the first 5 records; the old records after them are never read.">
+    <text x="20" y="26" class="small">argument buffer: room for 12 draws</text>
+    <rect x="20" y="34" width="48" height="34" rx="4" class="mem"/><text x="44" y="55" class="mid mono">d0</text>
+    <rect x="74" y="34" width="48" height="34" rx="4" class="mem"/><text x="98" y="55" class="mid mono">d2</text>
+    <rect x="128" y="34" width="48" height="34" rx="4" class="mem"/><text x="152" y="55" class="mid mono">d3</text>
+    <rect x="182" y="34" width="48" height="34" rx="4" class="mem"/><text x="206" y="55" class="mid mono">d6</text>
+    <rect x="236" y="34" width="48" height="34" rx="4" class="mem"/><text x="260" y="55" class="mid mono">d8</text>
+    <rect x="290" y="34" width="48" height="34" rx="4" class="ghost"/>
+    <rect x="344" y="34" width="48" height="34" rx="4" class="ghost"/>
+    <rect x="398" y="34" width="48" height="34" rx="4" class="ghost"/>
+    <rect x="452" y="34" width="48" height="34" rx="4" class="ghost"/>
+    <rect x="506" y="34" width="48" height="34" rx="4" class="ghost"/>
+    <rect x="560" y="34" width="48" height="34" rx="4" class="ghost"/>
+    <rect x="614" y="34" width="48" height="34" rx="4" class="ghost"/>
+    <path d="M20,76 V82 H284 V76" class="arrow gpu"/>
+    <text x="152" y="98" class="mid small t-gpu">the GPU reads 5</text>
+    <text x="500" y="98" class="mid small t-faint">old data from earlier frames: never read</text>
+    <rect x="20" y="130" width="120" height="46" rx="6" class="mem"/>
+    <text x="80" y="150" class="mid">count buffer</text>
+    <text x="80" y="167" class="mid mono">5</text>
+    <line x1="140" y1="153" x2="218" y2="153" class="arrow" marker-end="url(#ah)"/>
+    <rect x="220" y="124" width="360" height="58" rx="6" class="gpu"/>
+    <text x="400" y="147" class="mid mono">drawIndirectCount(args, count,</text>
+    <text x="400" y="166" class="mid mono">maxDrawCount = 12)</text>
+    <text x="600" y="146" class="small">draws = min(count,</text>
+    <text x="600" y="162" class="small">maxDrawCount)</text>
+    <text x="20" y="214" class="small">The CPU records one call with a maximum. The GPU writes the real number. The CPU never reads it back.</text>
+  </svg>
+  <figcaption>The maximum is the buffer's capacity, which the CPU knows. The GPU never reads past the count, so the old records after it do not matter.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Who writes the count</th><th>Needs a clear first?</th><th>Notes</th></tr>
+  <tr><td>Atomic append: the counter itself</td><td>yes, every frame</td><td>The clear must finish before the culling starts.</td></tr>
+  <tr><td>Ordered scan: the last group writes base + its count</td><td>no</td><td>Written fresh every time, so a stale value never survives.</td></tr>
+  <tr><td>No compaction: keep every draw, set its instance count to 0</td><td>no count at all</td><td>Simplest, but the GPU still reads and skips every culled command.</td></tr>
+</table>
+</div>
+
+<h2><span class="n">9</span>Choosing a method, and pitfalls</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Method</th><th>Order</th><th>Dispatches</th><th>Cost</th></tr>
+  <tr><td>Atomic per thread</td><td>random</td><td>1 (+ clear)</td><td>contention when many pass</td></tr>
+  <tr><td>Atomic per wave, wave prefix inside</td><td>stable inside a wave only</td><td>1 (+ clear)</td><td>low; the usual choice when order is free</td></tr>
+  <tr><td>Group scan + atomic per group</td><td>stable inside a group only</td><td>1 (+ clear)</td><td>low</td></tr>
+  <tr><td>Two or three passes (scan, then propagate)</td><td>fully stable</td><td>2 to 3</td><td>reads the data twice</td></tr>
+  <tr><td>Decoupled look-back</td><td>fully stable</td><td>1</td><td>the least traffic, the most code</td></tr>
+</table>
+</div>
+
+<ul>
+  <li><b>Threads past the end</b> must still run the group's barriers and wave instructions, with a flag of 0. An early <code class="lang-text">return</code> before a barrier is undefined behaviour.</li>
+  <li><b>Barriers between dispatches.</b> The pass that reads the group counts must wait for the pass that wrote them. The draw that reads the count must wait for the pass that wrote it.</li>
+  <li><b>Capacity.</b> The output buffer must hold the worst case: every item kept.</li>
+  <li><b>Segments.</b> When the input is several lists back to back (one per material, say), each list needs its own count. Either make groups that never cross a list boundary, or use a <b>segmented scan</b>, which restarts the sum at each boundary.</li>
+</ul>
+
+<h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
+
+<p>RASM uses ordered compaction to pack the draws that survive culling (see <a href="frustum-culling.html">frustum culling</a> and <a href="occlusion-culling.html">occlusion culling</a>). The input is a scene's draw list, one <code>DrawInfo</code> per sub-mesh, split into up to <code>MAX_DRAW_RUNS</code> <b>runs</b> of one cull mode each, because the cull mode is set once per indirect call. Each run is compacted on its own, and drawn with one <code>drawIndexedIndirectCount</code>. The scheme is two dispatches over groups of <code>CULL_GROUP_SIZE</code> = 64 draws, with no atomics for the positions.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="countMain reads the draw list, tests each draw and writes each draw's slot in its group to cullSlotsPtr and each group's count to groupCountsPtr. After a barrier, writeMain adds up the earlier groups' counts, copies the visible draws to drawInfoPtr, and the run's last group writes drawCountsPtr. The indirect count draw reads both.">
+    <rect x="10" y="40" width="150" height="56" rx="6" class="mem"/>
+    <text x="85" y="62" class="mid">draw list</text>
+    <text x="85" y="80" class="mid mono small">allDrawsPtr</text>
+    <line x1="160" y1="68" x2="178" y2="68" class="arrow" marker-end="url(#ah)"/>
+    <rect x="180" y="40" width="140" height="56" rx="28" class="shader"/>
+    <text x="250" y="62" class="mid title">countMain</text>
+    <text x="250" y="80" class="mid small">test · slot · count</text>
+    <line x1="320" y1="68" x2="338" y2="68" class="arrow" marker-end="url(#ah)"/>
+    <rect x="340" y="40" width="160" height="56" rx="6" class="mem"/>
+    <text x="420" y="62" class="mid mono small">cullSlotsPtr</text>
+    <text x="420" y="80" class="mid mono small">groupCountsPtr</text>
+    <line x1="500" y1="68" x2="578" y2="68" class="arrow" marker-end="url(#ah)"/>
+    <line x1="540" y1="30" x2="540" y2="106" class="hot"/>
+    <text x="540" y="22" class="mid small t-hot">barrier</text>
+    <rect x="580" y="40" width="170" height="56" rx="28" class="shader"/>
+    <text x="665" y="62" class="mid title">writeMain</text>
+    <text x="665" y="80" class="mid small">base · scatter · count</text>
+    <line x1="665" y1="96" x2="665" y2="128" class="arrow" marker-end="url(#ah)"/>
+    <rect x="560" y="130" width="190" height="56" rx="6" class="mem"/>
+    <text x="655" y="152" class="mid mono small">drawInfoPtr</text>
+    <text x="655" y="170" class="mid mono small">drawCountsPtr[run]</text>
+    <line x1="560" y1="158" x2="422" y2="158" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="160" y="130" width="260" height="56" rx="6" class="gpu"/>
+    <text x="290" y="152" class="mid mono">drawIndexedIndirectCount</text>
+    <text x="290" y="170" class="mid small">one per run, maximum = the run's size</text>
+  </svg>
+  <figcaption>The pointers live in each <code>drawScene</code> call's <code>SceneData</code>. <code>cullSlotsPtr</code> and <code>groupCountsPtr</code> are scratch space in the same buffer as the visible draws, right after them.</figcaption>
+</figure>
+
+<div class="split">
+  <div>
+    <h4>countMain: one thread per draw</h4>
+    <p>Each thread tests its draw and writes 1 or 0 to <code>visibleFlags</code> in shared memory. After <code>GroupMemoryBarrierWithGroupSync</code>, each thread adds up the flags of the threads below it: the <b>naive loop</b> of section 4. It stores its slot, with the chosen LOD above it (<code>slot | lod &lt;&lt; CULL_LOD_SHIFT</code>), or <code>CULLED</code>, in <code>cullSlotsPtr</code>. The group's last thread writes the group's count to <code>groupCountsPtr</code>.</p>
+  </div>
+  <div>
+    <h4>writeMain: one thread per draw again</h4>
+    <p>Each group finds its base by adding the counts of <b>all earlier groups of its run</b>: thread <var>t</var> adds groups <var>t</var>, <var>t</var> + 64, …, into <code>partialSums</code>, and after a barrier every thread adds the 64 partial sums. A visible draw goes to <code>drawInfoPtr[runFirst + base + slot]</code>, with its LOD's index range. Thread 0 of the run's last group writes <code>drawCountsPtr[run]</code> = base + its count.</p>
+  </div>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 214" role="img" aria-label="Group 5 of a run reads the counts of groups 0 to 4. Each of its threads reads at most a few counts into partialSums, then every thread adds all 64 partial sums to get the base.">
+    <text x="20" y="30" class="small">groupCountsPtr, one run</text>
+    <rect x="180" y="12" width="60" height="30" rx="4" class="mem"/><text x="210" y="32" class="mid mono">3</text>
+    <rect x="250" y="12" width="60" height="30" rx="4" class="mem"/><text x="280" y="32" class="mid mono">1</text>
+    <rect x="320" y="12" width="60" height="30" rx="4" class="mem"/><text x="350" y="32" class="mid mono">3</text>
+    <rect x="390" y="12" width="60" height="30" rx="4" class="mem"/><text x="420" y="32" class="mid mono">2</text>
+    <rect x="460" y="12" width="60" height="30" rx="4" class="mem"/><text x="490" y="32" class="mid mono">5</text>
+    <rect x="530" y="12" width="60" height="30" rx="4" class="hot"/><text x="560" y="32" class="mid mono">4</text>
+    <text x="210" y="58" class="mid small">g0</text><text x="280" y="58" class="mid small">g1</text><text x="350" y="58" class="mid small">g2</text>
+    <text x="420" y="58" class="mid small">g3</text><text x="490" y="58" class="mid small">g4</text><text x="560" y="58" class="mid small t-hot">g5: this group</text>
+    <line x1="210" y1="64" x2="210" y2="98" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="280" y1="64" x2="280" y2="98" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="350" y1="64" x2="350" y2="98" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="420" y1="64" x2="420" y2="98" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="490" y1="64" x2="490" y2="98" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="20" y="120" class="small">partialSums</text>
+    <rect x="180" y="100" width="60" height="30" rx="4" class="gpu"/><text x="210" y="120" class="mid mono">3</text>
+    <rect x="250" y="100" width="60" height="30" rx="4" class="gpu"/><text x="280" y="120" class="mid mono">1</text>
+    <rect x="320" y="100" width="60" height="30" rx="4" class="gpu"/><text x="350" y="120" class="mid mono">3</text>
+    <rect x="390" y="100" width="60" height="30" rx="4" class="gpu"/><text x="420" y="120" class="mid mono">2</text>
+    <rect x="460" y="100" width="60" height="30" rx="4" class="gpu"/><text x="490" y="120" class="mid mono">5</text>
+    <rect x="530" y="100" width="60" height="30" rx="4" class="ghost"/><text x="560" y="120" class="mid mono t-faint">0</text>
+    <rect x="600" y="100" width="60" height="30" rx="4" class="ghost"/><text x="630" y="120" class="mid mono t-faint">…</text>
+    <text x="210" y="146" class="mid small">t0</text><text x="280" y="146" class="mid small">t1</text><text x="350" y="146" class="mid small">t2</text>
+    <text x="420" y="146" class="mid small">t3</text><text x="490" y="146" class="mid small">t4</text><text x="595" y="146" class="mid small">t5 … t63: nothing to read</text>
+    <rect x="180" y="160" width="480" height="30" rx="15" class="shader"/>
+    <text x="420" y="180" class="mid small">barrier · every thread adds all 64: base = 3 + 1 + 3 + 2 + 5 = 14</text>
+    <text x="20" y="208" class="small">Group g reads g counts. A run of G groups reads G(G − 1) / 2 counts in total.</text>
+  </svg>
+  <figcaption>The cross-group step of <code>writeMain</code>. It is a flat sum, not a scan: every group repeats the work of the groups before it.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Draws in one run</th><th>Groups</th><th>Counts the last group reads</th><th>Per thread</th><th>Count reads, all groups</th></tr>
+  <tr><td>1,000</td><td>16</td><td>15</td><td>1</td><td>120</td></tr>
+  <tr><td>10,000</td><td>157</td><td>156</td><td>3</td><td>12,246</td></tr>
+  <tr><td>65,536 (the default <code>EngineConfig::maxInstances</code>)</td><td>1,024</td><td>1,023</td><td>16</td><td>523,776</td></tr>
+</table>
+</div>
+
+<p>At RASM's sizes the extra reads are small next to the draws, so the simple scheme is kept. It would stop scaling at millions of items, where section 6's levels or look-back are needed.</p>
+
+<h3>When it runs</h3>
+
+<p><code>drawScene</code> records its draws inside a render pass, and Vulkan does not allow dispatches there. So the early culling, both dispatches for every <code>drawScene</code> call of the frame, goes into its own <b>cull command buffer</b>. <code>Engine::recordCulling</code> records it at the end of the frame, and <code>Engine::endFrame</code> submits it first, in the same submit as the frame.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="The CPU records the frame command buffer first and the cull command buffer second. One submit puts the cull command buffer first, so the GPU runs the culling, then a barrier, then the frame.">
+    <text x="20" y="54" class="title t-cpu">CPU</text>
+    <text x="20" y="70" class="small">records</text>
+    <rect x="120" y="25" width="300" height="56" rx="6" class="cpu"/>
+    <text x="270" y="48" class="mid title">Frame command buffer</text>
+    <text x="270" y="68" class="mid small">beginPass · drawScene · endPass</text>
+    <rect x="440" y="25" width="300" height="56" rx="6" class="cpu"/>
+    <text x="590" y="46" class="mid title">Cull command buffer</text>
+    <text x="590" y="62" class="mid small">per call: countMain · barrier · writeMain</text>
+    <text x="590" y="76" class="mid small">a barrier first and last</text>
+    <line x1="120" y1="12" x2="740" y2="12" class="arrow" marker-end="url(#ah)"/>
+    <text x="20" y="16" class="small">time →</text>
+
+    <line x1="590" y1="81" x2="270" y2="160" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="270" y1="81" x2="590" y2="160" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="120" y="126" class="small">one submit: {cull, frame}</text>
+
+    <text x="20" y="194" class="title t-gpu">GPU</text>
+    <text x="20" y="210" class="small">runs</text>
+    <rect x="120" y="165" width="290" height="56" rx="6" class="gpu"/>
+    <text x="265" y="188" class="mid title">Culling</text>
+    <text x="265" y="208" class="mid small">writes visible draws + counts</text>
+    <line x1="425" y1="160" x2="425" y2="226" class="hot"/>
+    <text x="425" y="242" class="mid small t-hot">COMPUTE → GRAPHICS | HOST barrier</text>
+    <rect x="440" y="165" width="300" height="56" rx="6" class="gpu"/>
+    <text x="590" y="188" class="mid title">Frame</text>
+    <text x="590" y="208" class="mid small">draws read those draws + counts</text>
+  </svg>
+  <figcaption>Recording order and GPU order are opposite. The draws only need the buffers' addresses when they are recorded, not their contents. The late half of <a href="occlusion-culling.html#in-rasm">occlusion culling</a> runs the same two dispatches again, inside the frame.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Order</td><td>atomic append (random) or scan (stable)</td><td>Scan: fully stable. The visible draws keep the draw list's order every frame.</td></tr>
+  <tr><td>Scan inside a group</td><td>Hillis–Steele, Blelloch or wave intrinsics</td><td>The naive loop: each thread adds the <code>visibleFlags</code> below it, up to 63 reads. No wave intrinsics.</td></tr>
+  <tr><td>Across groups</td><td>scan the group counts (multi-level) or decoupled look-back</td><td>No scan: each <code>writeMain</code> group adds up the counts of every earlier group of its run. O(groups) per group, O(groups²) per run.</td></tr>
+  <tr><td>Dispatches</td><td>two or three</td><td>Two (<code>countMain</code>, <code>writeMain</code>). The scan of the group counts is folded into <code>writeMain</code>.</td></tr>
+  <tr><td>Segments</td><td>separate counts per list, or a segmented scan</td><td>Groups never cross a run (<code>getCullGroup</code>), and each run has its own count in <code>drawCountsPtr</code>.</td></tr>
+  <tr><td>Count</td><td>written by the last group, or an atomic counter</td><td>Written by thread 0 of the run's last group, every frame. Nothing is cleared.</td></tr>
+  <tr><td>Atomics</td><td>for positions, in the unordered methods</td><td>Only for the frame statistics (<code>cullStatsPtr</code>, with <code>InterlockedAdd</code>), never for positions.</td></tr>
+  <tr><td>Capacity</td><td>the worst case</td><td>The visible draw buffer holds at least as many draws as the draw list, then the scratch (<code>visibleCapacity</code> in <code>Engine::drawScene</code>).</td></tr>
+  <tr><td>What is copied</td><td>the item</td><td>The <code>DrawInfo</code>, with the index range of the LOD that <code>countMain</code> chose (<a href="lod-selection.html">LOD selection</a>). The LOD rides in the high bits of the slot.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Test, flags, slot in group, group count</td><td><code>countMain</code> in <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>Base from earlier groups, scatter, run count</td><td><code>writeMain</code> in <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>Which run and range a group covers</td><td><code>getCullGroup</code> in <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>Group size</td><td><code>CULL_GROUP_SIZE</code> in <code>shaders/passes/cull.slang</code> and <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Scratch pointers, buffer size, group count per call</td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code> (<code>cullGroupCounts</code>)</td></tr>
+  <tr><td>Recording the dispatches and barriers</td><td><code>Engine::recordCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Submit order {cull, frame}</td><td><code>Engine::endFrame</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Runs of one cull mode</td><td><code>Engine::rebuildDrawList</code> in <code>src/renderer/gpuScene.cpp</code>, <code>DrawRun</code> in <code>src/renderer/gpuScene.h</code></td></tr>
+  <tr><td>The pointers</td><td><code>SceneData</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li><code>CULL_GROUP_SIZE</code> is defined in <code>cull.slang</code> and in <code>gpuScene.cpp</code>. Change both, and the scratch size in <code>Engine::drawScene</code> (one count per group, at most one group per 64 draws plus one per run).</li>
+    <li>A group must never cross a run. <code>getCullGroup</code> and the CPU's group count in <code>Engine::drawScene</code> must agree.</li>
+    <li>Threads past the end of a run still reach every barrier, with <code>visible</code> = false. Do not return early in <code>countMain</code> or <code>writeMain</code>.</li>
+    <li>The count must be written every time the culling runs, by the run's last group. Nothing clears it.</li>
+    <li>A new pointer in <code>SceneData</code> is a CPU↔GPU struct change: follow <a href="struct-layout.html">the struct layout rules</a>.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>No wave intrinsics and no hierarchical scan: the cost above grows with the square of the group count. The early culling runs before every other GPU work of the frame, compute passes of the <a href="render-graphs.html">render graph</a> included (<code>D18</code> in <code>docs/code_review.md</code>).</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>W. Daniel Hillis and Guy L. Steele Jr., <i>Data Parallel Algorithms</i>, Communications of the ACM (1986).</li>
+  <li>Guy E. Blelloch, <i>Prefix Sums and Their Applications</i>, technical report CMU-CS-90-190 (1990).</li>
+  <li>Mark Harris, Shubhabrata Sengupta and John D. Owens, <i>Parallel Prefix Sum (Scan) with CUDA</i>, GPU Gems 3, chapter 39 (2007).</li>
+  <li>Duane Merrill and Michael Garland, <i>Single-pass Parallel Prefix Scan with Decoupled Look-back</i>, NVIDIA technical report (2016).</li>
+  <li>Graham Wihlidal, <i>Optimizing the Graphics Pipeline with Compute</i>, GDC 2016: GPU culling and compaction of draws.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

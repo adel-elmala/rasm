@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Face Culling · RASM</title>
+<meta name="description" content="How back-face culling works: winding order from the signed area on screen, front-face conventions, double-sided materials, and why mirrored transforms and a Y flip reverse the winding. Then how RASM does it.">
+<meta name="rasm-sources" content="src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/engine.cpp src/renderer/statsOverlay.cpp src/assets/material.cpp include/rasm/types.h include/rasm/material.h include/rasm/engine.h shaders/passes/rasm.slang shaders/lib/pbr.slang src/renderer/uberMaterialTypes.h">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/face-culling.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Face culling and winding order</h1>
+<p class="lead">In a closed mesh, about half the triangles face away from the camera and are hidden by the other half. Face culling throws them away before they are rasterized. The GPU decides which side a triangle shows from the order of its corners on screen. This page explains that test, the conventions around it, and the cases that reverse it. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A triangle's <b>winding</b> is the order of its three corners on screen: counter-clockwise or clockwise. Seen from behind, the same triangle has the opposite winding.</li>
+    <li>The GPU finds the winding from the sign of the triangle's <b>signed area</b> in screen space, after projection.</li>
+    <li>The application says which winding is the <b>front</b> (glTF and OpenGL use counter-clockwise), and which faces to cull: none, back or front.</li>
+    <li>A <b>mirroring transform</b> (negative determinant) reverses the winding of every triangle. So does showing the image upside down.</li>
+    <li><b>Double-sided</b> surfaces (leaves, cloth, glass panes) are not culled, and their back side is lit with the normal reversed.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>Why cull back faces</h2>
+
+<p>Every triangle of a closed mesh (a box, a character, a car body) has an outside. Its normal points out. From any camera position, the triangles whose normals point away from the camera are behind the ones that point toward it. Drawing them only costs time: the depth test hides them anyway.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 340" role="img" aria-label="A closed six-sided mesh seen from above, with a camera below it. The three faces whose normals point toward the camera are front faces. The three faces whose normals point away are back faces, hidden behind the front ones.">
+    <line x1="180" y1="320" x2="40"  y2="40" class="arrow dashed"/>
+    <line x1="180" y1="320" x2="320" y2="40" class="arrow dashed"/>
+    <polygon points="260,140 220,209.3 140,209.3 100,140 140,70.7 220,70.7" class="zone"/>
+    <line x1="100" y1="140" x2="140" y2="70.7" class="ghost"/>
+    <line x1="140" y1="70.7" x2="220" y2="70.7" class="ghost"/>
+    <line x1="220" y1="70.7" x2="260" y2="140" class="ghost"/>
+    <line x1="260" y1="140" x2="220" y2="209.3" class="hot"/>
+    <line x1="220" y1="209.3" x2="140" y2="209.3" class="hot"/>
+    <line x1="140" y1="209.3" x2="100" y2="140" class="hot"/>
+    <line x1="240" y1="174.6" x2="261.7" y2="187.1" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="180" y1="209.3" x2="180" y2="234.3" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="120" y1="174.6" x2="98.3" y2="187.1" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="120" y1="105.4" x2="98.3" y2="92.9" class="arrow" marker-end="url(#ah)"/>
+    <line x1="180" y1="70.7" x2="180" y2="45.7" class="arrow" marker-end="url(#ah)"/>
+    <line x1="240" y1="105.4" x2="261.7" y2="92.9" class="arrow" marker-end="url(#ah)"/>
+    <circle cx="180" cy="320" r="6" class="cpu"/>
+    <text x="192" y="324" class="small">camera</text>
+
+    <text x="400" y="60"  class="title">Front faces</text>
+    <text x="400" y="80"  class="small">normal points toward the camera</text>
+    <text x="400" y="96"  class="small t-hot">drawn (orange edges)</text>
+    <text x="400" y="132" class="title">Back faces</text>
+    <text x="400" y="152" class="small">normal points away</text>
+    <text x="400" y="168" class="small t-faint">hidden by the front faces: skip them</text>
+    <text x="400" y="210" class="small">Seen from above. In a closed mesh, about half</text>
+    <text x="400" y="226" class="small">of the triangles face away from any camera.</text>
+    <text x="400" y="256" class="small">Culling them saves their rasterization and</text>
+    <text x="400" y="272" class="small">their pixel shading, with no change to the image.</text>
+  </svg>
+  <figcaption>Back-face culling is only correct for closed meshes seen from outside. An open surface (a single wall, a leaf) has nothing behind its back side, so culling it makes it vanish when seen from behind.</figcaption>
+</figure>
+
+<h2><span class="n">2</span>Winding: the order of the corners</h2>
+
+<p>A triangle is stored as three indices into the vertex list, in a fixed order: 0, 1, 2. Look at the triangle and follow the corners in that order. You go either counter-clockwise or clockwise. Walk around to its back and look again: the same order now goes the other way.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Left: a triangle seen from its front side; corners 0, 1, 2 go counter-clockwise. Right: the same triangle seen from behind; the same corners go clockwise.">
+    <text x="130" y="24" class="mid title">Seen from the front</text>
+    <polygon points="130,50 70,170 190,170" class="gpu"/>
+    <text x="130" y="44"  class="mid mono">0</text>
+    <text x="58"  y="186" class="mid mono">1</text>
+    <text x="202" y="186" class="mid mono">2</text>
+    <path d="M118,92 A34,34 0 1,0 142,92" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="130" y="210" class="mid small">0 → 1 → 2: counter-clockwise</text>
+
+    <line x1="250" y1="120" x2="330" y2="120" class="arrow" marker-end="url(#ah)"/>
+    <text x="290" y="108" class="mid small">walk around</text>
+    <text x="290" y="140" class="mid small">to the back</text>
+
+    <text x="440" y="24" class="mid title">Seen from behind</text>
+    <polygon points="440,50 500,170 380,170" class="ghost"/>
+    <text x="440" y="44"  class="mid mono">0</text>
+    <text x="512" y="186" class="mid mono">1</text>
+    <text x="368" y="186" class="mid mono">2</text>
+    <path d="M452,92 A34,34 0 1,1 428,92" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="440" y="210" class="mid small">0 → 1 → 2: clockwise</text>
+
+    <text x="570" y="70"  class="small">The winding is not stored</text>
+    <text x="570" y="86"  class="small">anywhere. It comes from the</text>
+    <text x="570" y="102" class="small">index order and from where</text>
+    <text x="570" y="118" class="small">the camera is.</text>
+    <text x="570" y="150" class="small">Tools write the indices so</text>
+    <text x="570" y="166" class="small">that the outside is the front.</text>
+  </svg>
+  <figcaption>So "front" can be defined as "counter-clockwise on screen" (or clockwise, by convention). No normal is needed: the test uses only the three projected corners.</figcaption>
+</figure>
+
+<h2 id="signed-area"><span class="n">3</span>The test: the signed area</h2>
+
+<p>After the vertex shader, the divide by <var>w</var> and the viewport transform, each corner has a 2D screen position (<var>x</var><sub><var>i</var></sub>, <var>y</var><sub><var>i</var></sub>). The <b>shoelace formula</b> gives the area of the triangle with a sign:</p>
+
+<pre><code class="lang-text">a = ½ · [ (x0·y1 − x1·y0) + (x1·y2 − x2·y1) + (x2·y0 − x0·y2) ]
+
+    = ½ · ((x1 − x0)·(y2 − y0) − (x2 − x0)·(y1 − y0))</code></pre>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 260" role="img" aria-label="A triangle in a Y-up plane with corners p0 at (0, 0.5), p1 at (minus 0.5, minus 0.5) and p2 at (0.5, minus 0.5). Its signed area is plus 0.5, so it is counter-clockwise. The sign rules are listed on the right.">
+    <line x1="40" y1="150" x2="320" y2="150" class="arrow" marker-end="url(#ah)"/>
+    <line x1="180" y1="240" x2="180" y2="30" class="arrow" marker-end="url(#ah)"/>
+    <text x="314" y="168" class="end small">+x</text>
+    <text x="188" y="40" class="small">+y (up)</text>
+    <polygon points="180,90 120,210 240,210" class="gpu"/>
+    <text x="196" y="86"  class="small mono">p0 (0, 0.5)</text>
+    <text x="114" y="228" class="end small mono">p1 (−0.5, −0.5)</text>
+    <text x="246" y="228" class="small mono">p2 (0.5, −0.5)</text>
+    <path d="M168,132 A30,30 0 1,0 192,132" class="arrow hot" marker-end="url(#ah-hot)"/>
+
+    <text x="400" y="50"  class="title">With y pointing up</text>
+    <text x="400" y="74"  class="mono small">a &gt; 0  counter-clockwise</text>
+    <text x="400" y="94"  class="mono small">a &lt; 0  clockwise</text>
+    <text x="400" y="114" class="mono small">a = 0  a line: never drawn</text>
+    <text x="400" y="148" class="small">Here: ½ · (0.25 + 0.5 + 0.25) = +0.5</text>
+    <text x="400" y="164" class="small">→ counter-clockwise.</text>
+    <text x="400" y="198" class="small">With y pointing down (pixel rows), every</text>
+    <text x="400" y="214" class="small">sign flips. APIs with a Y-down framebuffer</text>
+    <text x="400" y="230" class="small">put a minus sign in front to compensate.</text>
+  </svg>
+  <figcaption>The same number is twice the 2D cross product of two edges. It is the test the rasterizer already needs: its edge functions use the same products.</figcaption>
+</figure>
+
+<p>The screen-space test gives the same answer as the 3D question "does the normal point toward the eye?", that is (<var>p</var><sub>0</sub> − <var>eye</var>) · <var>n</var> &lt; 0 for a front face, where <var>n</var> is the cross product of two edges. Projection keeps the side of the eye a plane is seen from. The 3D form is what a program uses before the GPU, for example to cull whole groups of triangles.</p>
+
+<h2><span class="n">4</span>Conventions: which winding is front</h2>
+
+<p>The GPU has two settings: which winding counts as <b>front</b>, and which faces to <b>cull</b>.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>API or format</th><th>Front-face setting</th><th>Default front</th></tr>
+  <tr><td>glTF 2.0, OpenGL tradition</td><td>— / <var>glFrontFace</var></td><td>counter-clockwise</td></tr>
+  <tr><td>Direct3D 11 and 12</td><td><var>FrontCounterClockwise</var> in the rasterizer state</td><td>clockwise (the flag is false)</td></tr>
+  <tr><td>Metal</td><td>front-facing winding on the render encoder</td><td>clockwise</td></tr>
+  <tr><td>Vulkan</td><td><var>frontFace</var> in the pipeline, or dynamic state (core since 1.3)</td><td>no default: the pipeline must say</td></tr>
+</table>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Cull mode</th><th>Drops</th><th>Used for</th></tr>
+  <tr><td>none</td><td>nothing</td><td>double-sided surfaces, 2D and UI, debug views</td></tr>
+  <tr><td>back</td><td>faces with the "back" winding</td><td>almost every closed, opaque mesh</td></tr>
+  <tr><td>front</td><td>faces with the "front" winding</td><td>mirrored meshes (section 5), inside-out volumes such as a sky box seen from inside, some shadow-map techniques</td></tr>
+  <tr><td>front and back</td><td>every triangle</td><td>rare: points and lines still draw</td></tr>
+</table>
+</div>
+
+<p>Mixing conventions is a common bug: a model exported clockwise into a counter-clockwise engine appears inside out, with its far inner walls visible and its near outer walls missing.</p>
+
+<h2 id="mirror"><span class="n">5</span>What reverses the winding</h2>
+
+<h3>A mirroring transform</h3>
+
+<p>A <b>mirror</b> (a reflection) turns a counter-clockwise triangle into a clockwise one. A scale of −1 along one axis is a mirror, and so is any matrix whose 3×3 part has a <b>negative determinant</b>. Two mirrors cancel: a scale of (−1, −1, 1) is a 180° rotation.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="A triangle with corners 0, 1, 2 counter-clockwise is a front face. After a transform with scale x of minus 1, the same triangle is clockwise on screen, so the rasterizer thinks it is a back face.">
+    <text x="130" y="24" class="mid title">As modeled</text>
+    <polygon points="130,50 70,170 190,170" class="gpu"/>
+    <text x="130" y="44"  class="mid mono">0</text>
+    <text x="58"  y="186" class="mid mono">1</text>
+    <text x="202" y="186" class="mid mono">2</text>
+    <path d="M118,92 A34,34 0 1,0 142,92" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="130" y="210" class="mid small">counter-clockwise: front</text>
+
+    <line x1="240" y1="120" x2="330" y2="120" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="285" y="108" class="mid t-cpu">scale.x = −1</text>
+    <text x="285" y="140" class="mid small">det = −1</text>
+
+    <text x="440" y="24" class="mid title">Mirrored, on screen</text>
+    <polygon points="440,50 500,170 380,170" class="gpu"/>
+    <text x="440" y="44"  class="mid mono">0</text>
+    <text x="512" y="186" class="mid mono">1</text>
+    <text x="368" y="186" class="mid mono">2</text>
+    <path d="M452,92 A34,34 0 1,1 428,92" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="440" y="210" class="mid small">clockwise: the GPU says "back"</text>
+
+    <text x="570" y="60"  class="title">The fix, per object</text>
+    <text x="570" y="86"  class="small">det ≥ 0 → cull back</text>
+    <text x="570" y="106" class="small">det &lt; 0 → cull front</text>
+    <text x="570" y="126" class="small">(or keep back culling and</text>
+    <text x="570" y="142" class="small">swap the front-face setting)</text>
+    <text x="570" y="176" class="small">For T · R · S, det = sx · sy · sz:</text>
+    <text x="570" y="192" class="small">a rotation has det = +1.</text>
+  </svg>
+  <figcaption>The side we see is the authored front, the outside. Only its on-screen winding changed. Without the fix, back culling removes exactly the faces that should be visible, and the object looks inside out.</figcaption>
+</figure>
+
+<p>Mirrors are common: a level designer reuses a left door as a right door with a negative scale, and glTF files may contain nodes with negative scale. Because the determinant is a product, a hierarchy is mirrored when an odd number of its matrices are.</p>
+
+<h3>An upside-down image</h3>
+
+<p>Showing an image upside down is also a mirror (across the horizontal axis). This is what happens when Y-up clip coordinates reach Vulkan, whose clip space is Y-down, without a fix: every winding reverses. Both usual fixes, a negative viewport height or a flipped projection, give an upright image and keep the windings as authored (<a href="coordinate-spaces.html#y-flip">Coordinate spaces</a>).</p>
+
+<h2><span class="n">6</span>Double-sided surfaces</h2>
+
+<p>A leaf, a flag or a sheet of paper is one layer of triangles. It must be visible from both sides, so its material turns culling off. The back side then needs care in lighting: its normal still points out of the front.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="A single-layer surface seen edge-on. A viewer on the front side sees the front face and uses the normal n. A viewer on the back side sees the back face; it is lit with minus n, which points toward that viewer.">
+    <line x1="80" y1="120" x2="400" y2="120" class="hot"/>
+    <text x="406" y="124" class="small t-hot">one-layer surface</text>
+    <line x1="240" y1="120" x2="240" y2="70" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="248" y="80" class="small t-gpu">n</text>
+    <line x1="240" y1="120" x2="240" y2="170" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="248" y="166" class="small t-cpu">−n for the back</text>
+    <circle cx="140" cy="40" r="6" class="cpu"/>
+    <text x="152" y="44" class="small">viewer A: sees the front</text>
+    <circle cx="140" cy="200" r="6" class="cpu"/>
+    <text x="152" y="204" class="small">viewer B: sees the back</text>
+
+    <text x="500" y="60"  class="title">In the pixel shader</text>
+    <text x="500" y="84"  class="small">The rasterizer tells each pixel</text>
+    <text x="500" y="100" class="small">whether its triangle was front-facing</text>
+    <text x="500" y="116" class="small">(SV_IsFrontFace, gl_FrontFacing).</text>
+    <text x="500" y="146" class="small">Back face: use −n, so the light</text>
+    <text x="500" y="162" class="small">falls on the side being looked at.</text>
+    <text x="500" y="192" class="small">glTF requires exactly this.</text>
+  </svg>
+  <figcaption>The "front-facing" flag is about the on-screen winding. Under a mirroring transform it reports the authored front as "back", so a shader that also handles mirrors must combine the flag with the sign of the determinant.</figcaption>
+</figure>
+
+<h2><span class="n">7</span>Where culling sits in the pipeline</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="The vertex shader runs first, then primitive assembly and clipping, then face culling, then rasterization, then the pixel shader. Face culling saves the last two steps for a culled triangle, but not the vertex shader.">
+    <rect x="15"  y="40" width="128" height="56" rx="28" class="shader"/>
+    <text x="79"  y="73" class="mid">Vertex shader</text>
+    <line x1="143" y1="68" x2="161" y2="68" class="arrow" marker-end="url(#ah)"/>
+    <rect x="163" y="40" width="128" height="56" rx="6" class="gpu"/>
+    <text x="227" y="64" class="mid">Assemble,</text>
+    <text x="227" y="82" class="mid">clip, ÷ w</text>
+    <line x1="291" y1="68" x2="309" y2="68" class="arrow" marker-end="url(#ah)"/>
+    <rect x="311" y="40" width="128" height="56" rx="6" class="gpu"/>
+    <rect x="311" y="40" width="128" height="56" rx="6" class="hot"/>
+    <text x="375" y="64" class="mid title">Face cull</text>
+    <text x="375" y="82" class="mid small">signed area</text>
+    <line x1="439" y1="68" x2="457" y2="68" class="arrow" marker-end="url(#ah)"/>
+    <rect x="459" y="40" width="128" height="56" rx="6" class="gpu"/>
+    <text x="523" y="73" class="mid">Rasterize</text>
+    <line x1="587" y1="68" x2="605" y2="68" class="arrow" marker-end="url(#ah)"/>
+    <rect x="607" y="40" width="128" height="56" rx="28" class="shader"/>
+    <text x="671" y="73" class="mid">Pixel shader</text>
+
+    <path d="M459,112 H735" class="arrow hot"/>
+    <text x="597" y="132" class="mid small t-hot">saved for a culled triangle</text>
+    <path d="M15,112 H291" class="arrow dashed"/>
+    <text x="153" y="132" class="mid small">already paid</text>
+    <text x="15" y="170" class="small">The vertices were already shaded: they may be shared with front-facing triangles. To skip vertex work too,</text>
+    <text x="15" y="186" class="small">engines cull whole clusters of triangles earlier, with a cone that bounds their normals (cluster cone culling).</text>
+  </svg>
+  <figcaption>Face culling is nearly free: the rasterizer computes the signed area anyway. It mostly saves pixel shading, which is where most of the cost of a triangle is.</figcaption>
+</figure>
+
+<h2><span class="n">8</span>Worked example</h2>
+
+<p>The triangle of section 3, drawn with Vulkan into an 800 × 600 image with back-face culling and a counter-clockwise front face. Vulkan computes the area in framebuffer coordinates (rows go down) with a minus sign in front: <var>a</var> = −½ · Σ (<var>x</var><sub><var>i</var></sub> · <var>y</var><sub><var>i</var>+1</sub> − <var>x</var><sub><var>i</var>+1</sub> · <var>y</var><sub><var>i</var></sub>). A positive <var>a</var> is counter-clockwise.</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. In Y-up clip space</h4>
+    <svg viewBox="0 0 760 140" role="img" aria-label="The corners (0, 0.5), (minus 0.5, minus 0.5), (0.5, minus 0.5) have a signed area of plus 0.5 with Y up: counter-clockwise.">
+      <text x="20" y="34" class="mono">p0 = (0, 0.5)   p1 = (−0.5, −0.5)   p2 = (0.5, −0.5)</text>
+      <text x="20" y="62" class="mono">a = ½ · (0.25 + 0.5 + 0.25) = +0.5   → counter-clockwise</text>
+      <text x="20" y="100" class="small">The triangle points up and was modeled as a front face.</text>
+    </svg>
+    <p>This is how the projection matrix produced it (clip space with Y up, as in OpenGL-style math).</p>
+  </div>
+  <div class="step">
+    <h4>2. With a negative viewport height</h4>
+    <svg viewBox="0 0 760 140" role="img" aria-label="The flipped viewport maps the corners to pixels (400, 150), (200, 450), (600, 450). Vulkan's area is plus 60000: front face, kept.">
+      <text x="20" y="34" class="mono">pixel y = (1 − y_ndc) / 2 · 600       (flipped: +1 is row 0)</text>
+      <text x="20" y="62" class="mono">(400, 150)   (200, 450)   (600, 450)</text>
+      <text x="20" y="90" class="mono">a = −½ · (150000 − 180000 − 90000) = +60000   → front: kept</text>
+      <text x="20" y="120" class="small">The image is upright and the front face is drawn.</text>
+    </svg>
+    <p>The flip of the viewport and the minus sign of Vulkan's formula cancel: Y-up counter-clockwise stays counter-clockwise.</p>
+  </div>
+  <div class="step">
+    <h4>3. Without the flip</h4>
+    <svg viewBox="0 0 760 140" role="img" aria-label="Without the flip the corners land at (400, 450), (200, 150), (600, 150). Vulkan's area is minus 60000: a back face, culled.">
+      <text x="20" y="34" class="mono">pixel y = (1 + y_ndc) / 2 · 600       (Vulkan's own direction)</text>
+      <text x="20" y="62" class="mono">(400, 450)   (200, 150)   (600, 150)</text>
+      <text x="20" y="90" class="mono">a = −60000   → back: culled</text>
+      <text x="20" y="120" class="small">The image is upside down, and back culling now removes the faces that should be seen.</text>
+    </svg>
+    <p>This is why a Y-up projection on Vulkan needs a fix, or a clockwise front face.</p>
+  </div>
+  <div class="step">
+    <h4>4. A mirrored object</h4>
+    <svg viewBox="0 0 760 140" role="img" aria-label="With scale x of minus 1 the corners are (0, 0.5), (0.5, minus 0.5), (minus 0.5, minus 0.5). The area is minus 0.5 in clip space and minus 60000 in pixels: the rasterizer calls the visible front a back face, so this object must cull front faces.">
+      <text x="20" y="34" class="mono">scale (−1, 1, 1): det = −1</text>
+      <text x="20" y="62" class="mono">p0 = (0, 0.5)   p1 = (0.5, −0.5)   p2 = (−0.5, −0.5)   a = −0.5</text>
+      <text x="20" y="90" class="mono">pixels: (400, 150) (600, 450) (200, 450)   a = −60000   → "back"</text>
+      <text x="20" y="120" class="small">It is the outside of the object, and it is in front. Cull front faces for this object instead.</text>
+    </svg>
+    <p>The determinant decides the cull mode per object, before drawing. Nothing about the triangle itself changes.</p>
+  </div>
+</div>
+
+<h2><span class="n">9</span>Pitfalls</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Symptom</th><th>Usual cause</th></tr>
+  <tr><td>A model looks inside out</td><td>Its winding convention differs from the engine's, or it has a mirroring transform and the cull mode was not flipped.</td></tr>
+  <tr><td>Everything vanishes on Vulkan</td><td>A Y-up projection without a Y flip, with a counter-clockwise front face.</td></tr>
+  <tr><td>A wall or a leaf disappears from one side</td><td>An open surface without a double-sided material.</td></tr>
+  <tr><td>The back of a double-sided surface is dark or lit from the wrong side</td><td>Its normal was not reversed for back faces.</td></tr>
+  <tr><td>Lighting is wrong only on mirrored double-sided objects</td><td>The front-facing flag used without the determinant's sign.</td></tr>
+  <tr><td>Holes in some models only</td><td>Mixed winding inside one mesh; it needs fixing in the tool, or a double-sided material.</td></tr>
+</table>
+</div>
+
+<h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
+
+<p>RASM uses glTF's convention: counter-clockwise is front. The cull mode is chosen per instance on the CPU from the material and the determinant, and the draw list is grouped so that each group of equal modes is one indirect draw. Because the Vulkan backend flips Y with a negative viewport height, clip space and the screen agree on the winding (<code>D8</code>).</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="On the CPU, getCullMode picks NONE for a double-sided material, FRONT for a negative determinant, else BACK, per instance. rebuildDrawList sorts the draws by cull mode into up to three runs. drawScene sets the cull mode and issues one indirect draw per run. The pipeline's front face is counter-clockwise with a negative viewport height. In the fragment shader, backFace is isFrontFace equal to handedness below 0, and pbr flips the normal for back faces.">
+    <text x="20" y="22" class="title t-cpu">CPU · when a transform or material changes</text>
+    <rect x="20" y="32" width="230" height="78" rx="6" class="cpu"/>
+    <text x="135" y="54" class="mid mono">getCullMode</text>
+    <text x="135" y="72" class="mid small">doubleSided → NONE</text>
+    <text x="135" y="86" class="mid small">sx · sy · sz · det(mesh) &lt; 0 → FRONT</text>
+    <text x="135" y="100" class="mid small">else → BACK</text>
+    <line x1="250" y1="71" x2="278" y2="71" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="280" y="44" width="180" height="54" rx="6" class="mem"/>
+    <text x="370" y="66" class="mid mono">instanceCullModes</text>
+    <text x="370" y="84" class="mid small">one per instance row</text>
+    <line x1="460" y1="71" x2="488" y2="71" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="490" y="44" width="250" height="54" rx="6" class="cpu"/>
+    <text x="615" y="66" class="mid mono">rebuildDrawList</text>
+    <text x="615" y="84" class="mid small">stable sort by mode → runs</text>
+
+    <text x="20" y="140" class="title">Draw list (one buffer, three runs)</text>
+    <rect x="20"  y="150" width="150" height="40" rx="4" class="box"/>
+    <text x="95"  y="175" class="mid mono small">NONE</text>
+    <rect x="170" y="150" width="120" height="40" rx="4" class="box"/>
+    <text x="230" y="175" class="mid mono small">FRONT</text>
+    <rect x="290" y="150" width="300" height="40" rx="4" class="box"/>
+    <text x="440" y="175" class="mid mono small">BACK (most draws)</text>
+    <text x="610" y="166" class="small">runs ≤ MAX_DRAW_RUNS (3)</text>
+    <text x="610" y="182" class="small">empty runs are left out</text>
+
+    <text x="20" y="222" class="title t-gpu">GPU · each drawScene</text>
+    <rect x="20" y="232" width="230" height="56" rx="6" class="gpu"/>
+    <text x="135" y="254" class="mid">per run: setCullMode,</text>
+    <text x="135" y="272" class="mid small">one indirect draw, then NONE</text>
+    <line x1="250" y1="260" x2="278" y2="260" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="280" y="232" width="200" height="56" rx="6" class="gpu"/>
+    <text x="380" y="254" class="mid">Rasterizer</text>
+    <text x="380" y="272" class="mid small">front = counter-clockwise</text>
+    <line x1="480" y1="260" x2="508" y2="260" class="arrow" marker-end="url(#ah)"/>
+    <rect x="510" y="232" width="230" height="56" rx="28" class="shader"/>
+    <text x="625" y="254" class="mid mono">fragMain</text>
+    <text x="625" y="272" class="mid small">backFace → normal reversed</text>
+    <text x="20" y="316" class="small">Cull mode is dynamic pipeline state, so the one uber pipeline serves all three runs.</text>
+  </svg>
+  <figcaption>The runs are in the order of <code>CullMode</code>: <code>NONE</code>, <code>FRONT</code>, <code>BACK</code>. GPU culling keeps each run's visible draws at the start of its range (<a href="gpu-driven.html">GPU-driven rendering</a>).</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Front face</td><td>a convention</td><td>Counter-clockwise (<code>VK_FRONT_FACE_COUNTER_CLOCKWISE</code> in <code>createGraphicsPipeline</code>), like glTF. Imported data is not mirrored (<code>D8</code>).</td></tr>
+  <tr><td>Y flip</td><td>keeps the winding if done right</td><td>A negative viewport height in <code>VulkanCommandBuffer::setViewport</code>, so Y-up counter-clockwise stays counter-clockwise on screen.</td></tr>
+  <tr><td>Cull mode</td><td>a pipeline setting</td><td>Dynamic state (<code>VK_DYNAMIC_STATE_CULL_MODE</code>, core since Vulkan 1.3). Pipelines are created with <code>VK_CULL_MODE_NONE</code>; <code>RenderContext::setCullMode</code> sets it while recording.</td></tr>
+  <tr><td>Mirrors</td><td>cull front, or swap the front face</td><td>Cull front: <code>getCullMode</code> returns <code>FRONT</code> when <code class="lang-text">scale.x * scale.y * scale.z * det(mat3(subMesh.transform)) &lt; 0</code>. The front-face setting never changes. This is the full determinant of the instance's world matrix, because the entity's rotation has determinant 1.</td></tr>
+  <tr><td>Double-sided</td><td>no culling, reversed normal on the back</td><td><code>NONE</code> when the material's <code>doubleSided</code> is set (glTF <code>doubleSided</code>, or <code>createMaterial</code>'s last argument). <code>fragMain</code> sets <code class="lang-text">backFace = isFrontFace == (handedness &lt; 0)</code>, and the PBR shader then uses −<var>n</var>.</td></tr>
+  <tr><td>Mirror + front-facing flag</td><td>combine with the determinant</td><td>Done: <code>vertMain</code> passes <code>handedness</code>, the sign of <code class="lang-text">determinant(modelMat3)</code>, to the fragment shader.</td></tr>
+  <tr><td>Granularity</td><td>per object</td><td>Per instance row (one sub-mesh of one entity). <code>updateCullModes</code> recomputes it after <code>updateTransform</code> and after a material change; a changed mode rebuilds the draw lists of the entity's scenes.</td></tr>
+  <tr><td>Draw calls</td><td>one state per draw</td><td>Draws are sorted into at most three runs, one indirect draw per run, instead of one draw per object.</td></tr>
+  <tr><td>Other passes</td><td>—</td><td><code>beginPass</code> sets <code>NONE</code>, <code>drawScene</code> restores <code>NONE</code> after its runs, and the stats overlay draws with <code>NONE</code>.</td></tr>
+  <tr><td>Cluster cone culling</td><td>section 7</td><td>Not done. Culling on the GPU works per draw (frustum, occlusion), not per cluster of triangles.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The modes</td><td><code>CullMode</code> in <code>include/rasm/types.h</code></td></tr>
+  <tr><td>Choosing a mode</td><td><code>getCullMode</code>, <code>Engine::updateCullModes</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Runs in the draw list</td><td><code>Engine::rebuildDrawList</code> in <code>src/renderer/gpuScene.cpp</code>; <code>DrawRun</code> in <code>src/renderer/gpuScene.h</code>; <code>MAX_DRAW_RUNS</code> in <code>src/renderer/uberMaterialTypes.h</code></td></tr>
+  <tr><td>Drawing the runs</td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Front face, dynamic cull mode</td><td><code>VulkanDevice::createGraphicsPipeline</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>Setting the mode, the Y flip</td><td><code>VulkanCommandBuffer::setCullMode</code>, <code>VulkanCommandBuffer::setViewport</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
+  <tr><td>Double-sided flag</td><td><code>Material</code> in <code>include/rasm/material.h</code>; read from glTF in <code>src/assets/material.cpp</code></td></tr>
+  <tr><td>Back-face lighting</td><td><code>vertMain</code>, <code>fragMain</code> in <code>shaders/passes/rasm.slang</code>; the normal flip in <code>shaders/lib/pbr.slang</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>The counter-clockwise front face and the negative-height viewport are a pair. Change the Y flip, and the winding rule changes with it.</li>
+    <li><code>getCullMode</code> and the shader's <code>handedness</code> must agree: both come from the sign of the world matrix's determinant.</li>
+    <li>Every pipeline takes its cull mode from the command buffer. A pass that draws must set it (<code>beginPass</code> sets <code>NONE</code>); code that changes it puts <code>NONE</code> back.</li>
+    <li>Anything that changes a transform or a material's <code>doubleSided</code> must go through <code>updateCullModes</code>, or a draw stays in the wrong run.</li>
+    <li>The draw list has one run per cull mode: adding a mode means changing <code>MAX_DRAW_RUNS</code> on both the C++ and the Slang side (<a href="struct-layout.html">Struct layout</a>).</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Tomas Akenine-Möller and others, <i>Real-Time Rendering</i>, 4th edition: section 19.3, Backface Culling.</li>
+  <li>The Vulkan specification: "Basic Polygon Rasterization" (the signed area and <var>frontFace</var>).</li>
+  <li>The glTF 2.0 specification: "Double-sided" materials and the rule for negative-determinant node transforms.</li>
+  <li>Christer Ericson, <i>Real-Time Collision Detection</i> (2004): orientation tests and signed areas.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

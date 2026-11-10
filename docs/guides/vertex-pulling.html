@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vertex pulling and mega-buffers · RASM</title>
+<meta name="description" content="How vertex pulling works: the fixed-function vertex input it replaces, reading vertices by index from a buffer, why the index buffer stays, one big vertex and index buffer for all meshes, vertex layouts and compression, performance, and how RASM does it.">
+<meta name="rasm-sources" content="src/renderer/geometryPool.cpp src/renderer/geometryPool.h shaders/passes/rasm.slang shaders/lib/core.slang src/renderer/uberMaterialTypes.h include/rasm/mesh.h include/rasm/types.h src/rhi/vulkan/vulkanDevice.cpp src/assets/meshLod.cpp src/renderer/gpuScene.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/vertex-pulling.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Vertex pulling and mega-buffers</h1>
+<p class="lead">Normally the GPU's fixed-function hardware reads vertices from vertex buffers and hands them to the vertex shader. With <b>vertex pulling</b>, the vertex shader gets only a number, and reads the vertex from memory itself. Together with one big buffer for all meshes, a <b>mega-buffer</b>, this removes all per-mesh bindings, which GPU-driven rendering needs. This page explains both. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>The classic path: the pipeline describes the vertex layout, the CPU binds vertex buffers, and fixed-function hardware fetches and converts each vertex.</li>
+    <li>Vertex pulling: the pipeline has <b>no vertex input</b>. The shader gets the <b>vertex index</b> and reads a struct from a storage buffer.</li>
+    <li>The <b>index buffer stays</b>. It still decides which vertex each corner uses, and lets the GPU reuse shaded vertices.</li>
+    <li>A <b>mega-buffer</b> holds every mesh. A mesh is a range in it; a draw finds it with <var>firstIndex</var> and <var>vertexOffset</var>.</li>
+    <li>The shader decides the vertex format, so any packing or compression is possible, decoded in a few instructions.</li>
+    <li>Speed is about the same on most desktop GPUs. The real gain is flexibility, and no bindings between draws.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>How the GPU usually gets its vertices</h2>
+
+<p>A vertex is a small record: a position, a normal, texture coordinates, maybe more. A mesh stores its vertices in a <b>vertex buffer</b>. In the classic path, the application tells the pipeline what one vertex looks like, with a <b>vertex input layout</b>: how many bytes per vertex (the <b>stride</b>), and for each attribute, its format and its byte offset. Then, before each draw, it binds the vertex buffer.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="The index buffer gives the index of each corner. The vertex input layout in the pipeline says: stride 32 bytes, position at offset 0 as three floats, normal at 12 as three floats, uv at 24 as two floats. Fixed-function vertex fetch uses the index, the bound vertex buffer and the layout to read and convert the attributes, and passes them to the vertex shader as inputs.">
+    <rect x="20" y="30" width="170" height="56" rx="6" class="mem"/>
+    <text x="105" y="53" class="mid title">Index buffer</text>
+    <text x="105" y="72" class="mid small">which vertex, per corner</text>
+    <rect x="20" y="110" width="170" height="56" rx="6" class="mem"/>
+    <text x="105" y="133" class="mid title">Vertex buffer</text>
+    <text x="105" y="152" class="mid small">bound by the CPU per mesh</text>
+    <rect x="20" y="190" width="170" height="64" rx="6" class="cpu"/>
+    <text x="105" y="212" class="mid title">Vertex input layout</text>
+    <text x="105" y="230" class="mid small">part of the pipeline,</text>
+    <text x="105" y="245" class="mid small">fixed at creation</text>
+
+    <line x1="190" y1="58"  x2="268" y2="120" class="arrow" marker-end="url(#ah)"/>
+    <line x1="190" y1="138" x2="268" y2="138" class="arrow" marker-end="url(#ah)"/>
+    <line x1="190" y1="222" x2="268" y2="156" class="arrow" marker-end="url(#ah)"/>
+    <rect x="270" y="96" width="170" height="84" rx="6" class="gpu"/>
+    <text x="355" y="122" class="mid title">Vertex fetch</text>
+    <text x="355" y="142" class="mid small">fixed-function hardware:</text>
+    <text x="355" y="158" class="mid small">reads and converts</text>
+    <line x1="440" y1="138" x2="478" y2="138" class="arrow" marker-end="url(#ah)"/>
+    <rect x="480" y="90" width="260" height="96" rx="48" class="shader"/>
+    <text x="610" y="116" class="mid title">Vertex shader</text>
+    <text x="610" y="136" class="mid mono">in float3 position</text>
+    <text x="610" y="152" class="mid mono">in float3 normal</text>
+    <text x="610" y="168" class="mid mono">in float2 uv</text>
+
+    <text x="480" y="222" class="small">The layout for this vertex:</text>
+    <text x="480" y="240" class="mono">stride 32</text>
+    <text x="480" y="258" class="mono">0: 3×f32  12: 3×f32  24: 2×f32</text>
+  </svg>
+  <figcaption>The shader declares inputs. It never sees the buffer, the stride or the offsets. Hardware does the reading.</figcaption>
+</figure>
+
+<p>The fetch hardware also <b>converts</b>. An attribute stored as 4 bytes of 0 to 255 can arrive in the shader as a <code>float4</code> from 0 to 1. The shader does not know how the data was stored.</p>
+
+<h3>What the classic path costs you</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Limit</th><th>Why it hurts</th></tr>
+  <tr><td>The layout is part of the pipeline</td><td>Meshes with different vertex formats need different pipelines, even with the same shaders. Each one splits a draw list (see <a href="gpu-driven.html#runs">runs</a>).</td></tr>
+  <tr><td>Vertex buffers are bound per draw</td><td>Each mesh in its own buffer means a bind between draws. One indirect call over many meshes cannot do that.</td></tr>
+  <tr><td>Only listed formats</td><td>The hardware converts a fixed set of formats. Custom packing, such as octahedral normals, needs shader code anyway.</td></tr>
+  <tr><td>Limits on attributes and bindings</td><td>A pipeline has a maximum number of attributes and buffer bindings.</td></tr>
+</table>
+</div>
+
+<h2><span class="n">2</span>Vertex pulling: the shader reads its own vertex</h2>
+
+<p>The idea is simple. Give the pipeline an <b>empty</b> vertex input layout. The vertex shader still runs once per vertex, and it still gets one built-in input: the <b>vertex index</b>, the number of the vertex it must produce. It uses that number to read the vertex from a storage buffer, like any other array.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="With vertex pulling, the index buffer still gives a vertex index to the vertex shader. The shader reads vertices at that index from a storage buffer. There is no vertex input layout and no fixed-function fetch.">
+    <rect x="20" y="30" width="170" height="56" rx="6" class="mem"/>
+    <text x="105" y="53" class="mid title">Index buffer</text>
+    <text x="105" y="72" class="mid small">which vertex, per corner</text>
+    <line x1="190" y1="58" x2="278" y2="58" class="arrow" marker-end="url(#ah)"/>
+    <text x="234" y="48" class="mid small">vertex index</text>
+    <rect x="280" y="24" width="250" height="68" rx="34" class="shader"/>
+    <text x="405" y="50" class="mid title">Vertex shader</text>
+    <text x="405" y="72" class="mid mono">v = vertices[index]</text>
+    <line x1="405" y1="92" x2="405" y2="138" class="arrow mem" marker-start="url(#ah-mem)"/>
+    <text x="413" y="120" class="small">a normal buffer read</text>
+    <rect x="280" y="140" width="250" height="56" rx="6" class="mem"/>
+    <text x="405" y="163" class="mid title">Storage buffer</text>
+    <text x="405" y="182" class="mid small">an array of vertex structs</text>
+    <rect x="570" y="24" width="170" height="68" rx="6" class="ghost"/>
+    <text x="655" y="52" class="mid small t-faint">vertex input layout:</text>
+    <text x="655" y="70" class="mid small t-faint">empty</text>
+    <rect x="570" y="140" width="170" height="56" rx="6" class="ghost"/>
+    <text x="655" y="165" class="mid small t-faint">fixed-function fetch:</text>
+    <text x="655" y="182" class="mid small t-faint">not used</text>
+  </svg>
+  <figcaption>The arrow points from the buffer into the shader: the shader <b>pulls</b> its data. In the classic path, the hardware <b>pushes</b> it in.</figcaption>
+</figure>
+
+<p>In Slang or HLSL, a minimal vertex shader looks like this:</p>
+
+<pre><code class="lang-slang">struct Vertex
+{
+    float3 position;
+    float3 normal;
+    float2 uv;
+};
+
+StructuredBuffer&lt;Vertex&gt; vertices;
+
+float4 vertexMain(uint vertexIndex : SV_VertexID) : SV_Position
+{
+    Vertex v = vertices[vertexIndex];
+    return mul(viewProjection, float4(v.position, 1.0));
+}</code></pre>
+
+<p>The struct is now a contract between the code that writes the buffer and the shader that reads it. Both sides must agree on every byte: see <a href="struct-layout.html">struct layout rules</a>. The buffer can be a descriptor binding, as here, or a raw GPU address (see <a href="device-addresses.html">buffer device addresses</a>).</p>
+
+<h2><span class="n">3</span>The index buffer still does its job</h2>
+
+<p>Vertex pulling replaces the reading of vertex data. It does not replace the <b>index buffer</b>. Indexed drawing works as before: the hardware reads one index per triangle corner, and that index becomes the vertex index the shader receives.</p>
+
+<p>This matters for speed. A vertex is usually shared by several triangles. The GPU keeps the results of recent vertex shader runs in a small cache, keyed by the index. When the same index comes again soon, it reuses the result instead of running the shader again. With pulling, the cache still works, because the hardware still sees the index.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="A quad made of two triangles has 4 vertices and 6 indices: 0 1 2 and 0 2 3. Vertices 0 and 2 are used twice. With the index cache the vertex shader runs 4 times, not 6.">
+    <polygon points="60,180 220,180 220,40 60,40" class="zone"/>
+    <polygon points="60,180 220,180 220,40" class="gpu"/>
+    <polygon points="60,180 220,40 60,40" class="cpu"/>
+    <circle cx="60"  cy="180" r="5" class="hot"/><text x="50"  y="200" class="mid mono">0</text>
+    <circle cx="220" cy="180" r="5" class="mem"/><text x="230" y="200" class="mid mono">1</text>
+    <circle cx="220" cy="40"  r="5" class="hot"/><text x="232" y="36"  class="mid mono">2</text>
+    <circle cx="60"  cy="40"  r="5" class="mem"/><text x="48"  y="36"  class="mid mono">3</text>
+    <text x="175" y="150" class="mid small">triangle A</text>
+    <text x="105" y="80"  class="mid small">triangle B</text>
+
+    <text x="290" y="54" class="title">Index buffer</text>
+    <rect x="290" y="64"  width="40" height="34" rx="3" class="mem"/><text x="310" y="86" class="mid mono t-hot">0</text>
+    <rect x="334" y="64"  width="40" height="34" rx="3" class="mem"/><text x="354" y="86" class="mid mono">1</text>
+    <rect x="378" y="64"  width="40" height="34" rx="3" class="mem"/><text x="398" y="86" class="mid mono t-hot">2</text>
+    <rect x="430" y="64"  width="40" height="34" rx="3" class="mem"/><text x="450" y="86" class="mid mono t-hot">0</text>
+    <rect x="474" y="64"  width="40" height="34" rx="3" class="mem"/><text x="494" y="86" class="mid mono t-hot">2</text>
+    <rect x="518" y="64"  width="40" height="34" rx="3" class="mem"/><text x="538" y="86" class="mid mono">3</text>
+    <text x="354" y="116" class="mid small">triangle A</text>
+    <text x="494" y="116" class="mid small">triangle B</text>
+
+    <text x="290" y="156" class="small">6 corners, but only 4 different indices.</text>
+    <text x="290" y="174" class="small">Corners with index 0 and 2 can reuse the shaded vertex:</text>
+    <text x="290" y="192" class="small">the vertex shader runs 4 times instead of 6.</text>
+    <text x="290" y="216" class="small">For a typical closed mesh, a vertex is shared by about 6 triangles.</text>
+  </svg>
+  <figcaption>The reuse needs the index. That is why vertex pulling keeps indexed draws, and does not read the index buffer itself in the shader.</figcaption>
+</figure>
+
+<h3>Which number the shader receives</h3>
+
+<p>Indexed draws add <var>vertexOffset</var> (also called <b>base vertex</b>) to every index value. Whether the vertex-index built-in includes it depends on the API, and on how the shading language maps its built-in. Check before you index a buffer with it:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>API, built-in</th><th>Value for an indexed draw</th></tr>
+  <tr><td>Vulkan, <samp>VertexIndex</samp></td><td>index value + <var>vertexOffset</var></td></tr>
+  <tr><td>Direct3D, <samp>SV_VertexID</samp></td><td>index value only: the base vertex is <b>not</b> added</td></tr>
+  <tr><td>A shading language that targets both</td><td>picks one meaning, and may subtract the base vertex on Vulkan to match Direct3D</td></tr>
+</table>
+</div>
+
+<p>Non-indexed draws are simpler: the vertex index counts from <var>firstVertex</var> upward, one per vertex.</p>
+
+<h2 id="mega-buffer"><span class="n">4</span>One buffer for every mesh</h2>
+
+<p>Vertex pulling removes the vertex layout from the pipeline. The second half of the job is to remove the <b>bind</b> between draws. The usual answer is a <b>mega-buffer</b>: one big vertex buffer and one big index buffer for all meshes. Each mesh is a range in each of them. The buffers are bound once, and every draw finds its mesh with two numbers from its draw record.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="One vertex buffer holds mesh A in vertices 0 to 23, mesh B in 24 to 27 and mesh C from 28 to 1027, then free space. One index buffer holds A's 36 indices from 0, B's 6 from 36 and C's 4800 from 42. A mesh table stores each mesh's firstVertex, vertexCount, firstIndex and indexCount. The draw of mesh B uses firstIndex 36 and vertexOffset 24.">
+    <text x="20" y="22" class="title">Vertex buffer</text>
+    <rect x="20"  y="32" width="80"  height="44" rx="4" class="mem"/><text x="60"  y="52" class="mid title">A</text><text x="60"  y="68" class="mid small">0 … 23</text>
+    <rect x="100" y="32" width="60"  height="44" rx="4" class="mem"/><text x="130" y="52" class="mid title t-hot">B</text><text x="130" y="68" class="mid small">24 … 27</text>
+    <rect x="160" y="32" width="380" height="44" rx="4" class="mem"/><text x="350" y="52" class="mid title">C</text><text x="350" y="68" class="mid small">28 … 1027</text>
+    <rect x="540" y="32" width="200" height="44" rx="4" class="ghost"/><text x="640" y="59" class="mid small t-faint">free</text>
+
+    <text x="20" y="108" class="title">Index buffer</text>
+    <rect x="20"  y="118" width="90"  height="44" rx="4" class="mem"/><text x="65"  y="138" class="mid title">A</text><text x="65"  y="154" class="mid small">0 … 35</text>
+    <rect x="110" y="118" width="60"  height="44" rx="4" class="mem"/><text x="140" y="138" class="mid title t-hot">B</text><text x="140" y="154" class="mid small">36 … 41</text>
+    <rect x="170" y="118" width="420" height="44" rx="4" class="mem"/><text x="380" y="138" class="mid title">C</text><text x="380" y="154" class="mid small">42 … 4841</text>
+    <rect x="590" y="118" width="150" height="44" rx="4" class="ghost"/><text x="665" y="145" class="mid small t-faint">free</text>
+
+    <rect x="20" y="190" width="440" height="88" rx="6" class="cpu"/>
+    <text x="34" y="210" class="title">Mesh table</text>
+    <text x="70" y="230" class="small">firstVertex</text>
+    <text x="170" y="230" class="small">vertexCount</text>
+    <text x="270" y="230" class="small">firstIndex</text>
+    <text x="360" y="230" class="small">indexCount</text>
+    <text x="34" y="248" class="mono">A</text>
+    <text x="70" y="248" class="mono">0</text>
+    <text x="170" y="248" class="mono">24</text>
+    <text x="270" y="248" class="mono">0</text>
+    <text x="360" y="248" class="mono">36</text>
+    <text x="34" y="266" class="mono t-hot">B</text>
+    <text x="70" y="266" class="mono t-hot">24</text>
+    <text x="170" y="266" class="mono t-hot">4</text>
+    <text x="270" y="266" class="mono t-hot">36</text>
+    <text x="360" y="266" class="mono t-hot">6</text>
+    <rect x="490" y="190" width="250" height="88" rx="6" class="mem"/>
+    <text x="615" y="210" class="mid title">Draw record for B</text>
+    <text x="504" y="232" class="small">indexCount 6, firstIndex 36</text>
+    <text x="504" y="250" class="small">vertexOffset 24 (= firstVertex)</text>
+    <text x="504" y="268" class="small">B's indices are 0 … 3, local</text>
+  </svg>
+  <figcaption>The sizes are an example: A is a cube with one quad per face (24 vertices, 36 indices), B a single quad, C a larger mesh. The buffers are not to scale.</figcaption>
+</figure>
+
+<h3>Local or global indices</h3>
+
+<p>Mesh B's indices can be stored in two ways. <b>Local</b>: as the mesh was made, 0 to 3, and the draw adds <var>vertexOffset</var> = 24. <b>Global</b>: already moved, 24 to 27, with <var>vertexOffset</var> = 0. Local is the usual choice:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th></th><th>Local indices + vertexOffset</th><th>Global indices</th></tr>
+  <tr><td>Moving a mesh in the buffer</td><td>change one number in the table</td><td>rewrite every index</td></tr>
+  <tr><td>Index size</td><td>a mesh under 65,536 vertices can use 16-bit indices, wherever it sits in the buffer</td><td>32-bit as soon as the buffer passes 65,536 vertices</td></tr>
+  <tr><td>Uploading</td><td>copy the mesh's indices as they are</td><td>add the offset to each index first</td></tr>
+</table>
+</div>
+
+<h3>Sharing out the space</h3>
+
+<p>A mega-buffer is created once, with a fixed size. Giving a mesh a range of it is <b>sub-allocation</b>, the same problem as a memory allocator:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Strategy</th><th>How</th><th>Good for</th><th>Problem</th></tr>
+  <tr><td>Bump (linear)</td><td>Each mesh goes right after the last one. Nothing is freed.</td><td>Content loaded once: a level, a model viewer</td><td>The buffer only fills up.</td></tr>
+  <tr><td>Free list</td><td>Freed ranges go into a list; a new mesh takes the first range that fits.</td><td>Meshes that come and go</td><td>Holes: the free space splits into pieces too small to use (<b>fragmentation</b>).</td></tr>
+  <tr><td>Buddy or TLSF allocators</td><td>Ranges in size classes, merged with their neighbours when freed.</td><td>Streaming worlds, map tiles</td><td>More code. Some space is lost to rounding.</td></tr>
+  <tr><td>Defragment</td><td>Move live meshes together on the GPU, then fix their table rows.</td><td>Long sessions</td><td>Every draw record and table row that names a moved range must change in the same frame.</td></tr>
+</table>
+</div>
+
+<p>Freeing a range is also a timing problem: the GPU may still be drawing from it in a frame that is in flight. See <a href="frames-in-flight.html">frames in flight</a>.</p>
+
+<h2><span class="n">5</span>Worked example: one vertex of mesh B</h2>
+
+<p>Use the buffers from the picture above, with vertices of 64 bytes. The GPU is drawing mesh B, and it reaches the 6th corner (corner 5).</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. The index</h4>
+    <svg viewBox="0 0 720 170" role="img" aria-label="Corner 5 of the draw reads the index buffer at firstIndex 36 plus 5, which is 41. It holds the local index 3.">
+      <rect x="20" y="40" width="200" height="60" rx="6" class="box"/>
+      <text x="120" y="64" class="mid title">corner 5 of the draw</text>
+      <text x="120" y="84" class="mid small">B's 2nd triangle, 3rd corner</text>
+      <line x1="220" y1="70" x2="268" y2="70" class="arrow" marker-end="url(#ah)"/>
+      <rect x="270" y="40" width="200" height="60" rx="6" class="mem"/>
+      <text x="370" y="64" class="mid title">index buffer[36 + 5]</text>
+      <text x="370" y="84" class="mid small">= index buffer[41]</text>
+      <line x1="470" y1="70" x2="518" y2="70" class="arrow" marker-end="url(#ah)"/>
+      <rect x="520" y="40" width="180" height="60" rx="6" class="gpu"/>
+      <text x="610" y="64" class="mid title">value 3</text>
+      <text x="610" y="84" class="mid small">a local index of B</text>
+      <text x="20" y="136" class="small">B's indices are 0 1 2 0 2 3, stored at 36 … 41. The hardware reads them in order: firstIndex + corner.</text>
+    </svg>
+    <p>The hardware reads the index. The shader is not involved yet.</p>
+  </div>
+
+  <div class="step">
+    <h4>2. The vertex index</h4>
+    <svg viewBox="0 0 720 170" role="img" aria-label="The local index 3 plus vertexOffset 24 gives vertex 27.">
+      <rect x="20" y="40" width="180" height="60" rx="6" class="gpu"/>
+      <text x="110" y="64" class="mid title">index 3</text>
+      <text x="110" y="84" class="mid small">from the index buffer</text>
+      <text x="226" y="76" class="mid title">+</text>
+      <rect x="252" y="40" width="180" height="60" rx="6" class="mem"/>
+      <text x="342" y="64" class="mid title">vertexOffset 24</text>
+      <text x="342" y="84" class="mid small">from the draw record</text>
+      <line x1="432" y1="70" x2="478" y2="70" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <rect x="480" y="40" width="220" height="60" rx="6" class="shader"/>
+      <text x="590" y="64" class="mid title">vertex 27</text>
+      <text x="590" y="84" class="mid small">its place in the vertex buffer</text>
+      <text x="20" y="136" class="small">On Vulkan the built-in already holds 27. If the language gives the raw index (3), the shader adds the offset itself.</text>
+    </svg>
+    <p>The local index becomes a place in the shared buffer.</p>
+  </div>
+
+  <div class="step">
+    <h4>3. The address</h4>
+    <svg viewBox="0 0 720 170" role="img" aria-label="Vertex 27 times 64 bytes is byte 1728 from the start of the vertex buffer.">
+      <text x="20" y="40" class="mono">address = buffer start + 27 × 64 = buffer start + 1728</text>
+      <rect x="20"  y="60" width="120" height="40" rx="4" class="ghost"/><text x="80"  y="85" class="mid small t-faint">vertex 25</text>
+      <rect x="144" y="60" width="120" height="40" rx="4" class="ghost"/><text x="204" y="85" class="mid small t-faint">vertex 26</text>
+      <rect x="268" y="60" width="120" height="40" rx="4" class="mem"/><rect x="264" y="56" width="128" height="48" rx="6" class="hot"/><text x="328" y="85" class="mid">vertex 27</text>
+      <rect x="392" y="60" width="120" height="40" rx="4" class="ghost"/><text x="452" y="85" class="mid small t-faint">vertex 28 (C)</text>
+      <text x="268" y="124" class="mono t-faint">1728</text>
+      <text x="392" y="124" class="mono t-faint">1792</text>
+      <text x="20" y="156" class="small">Vertex 27 is B's last vertex. Vertex 28 is already mesh C: a wrong offset reads another mesh, with no error.</text>
+    </svg>
+    <p>An array read: element 27 of an array of 64-byte structs.</p>
+  </div>
+
+  <div class="step">
+    <h4>4. The shader has its vertex</h4>
+    <svg viewBox="0 0 720 170" role="img" aria-label="The 64 bytes are read as a struct: position, normal, uv and so on. The shader transforms the position and outputs it.">
+      <rect x="20"  y="40" width="150" height="50" rx="4" class="mem"/><text x="95"  y="62" class="mid small">position</text><text x="95"  y="80" class="mid mono t-faint">1728</text>
+      <rect x="174" y="40" width="150" height="50" rx="4" class="mem"/><text x="249" y="62" class="mid small">normal</text><text x="249" y="80" class="mid mono t-faint">1740</text>
+      <rect x="328" y="40" width="150" height="50" rx="4" class="mem"/><text x="403" y="62" class="mid small">uv, …</text><text x="403" y="80" class="mid mono t-faint">1752</text>
+      <line x1="478" y1="65" x2="518" y2="65" class="arrow" marker-end="url(#ah)"/>
+      <rect x="520" y="35" width="180" height="60" rx="30" class="shader"/>
+      <text x="610" y="60" class="mid title">vertex shader</text>
+      <text x="610" y="78" class="mid small">transform, output</text>
+      <text x="20" y="130" class="small">Index 3 appears once in B's indices, so this vertex is shaded once. Indices 0 and 2 appear twice: their results can be reused.</text>
+    </svg>
+    <p>From here on, the shader is an ordinary vertex shader.</p>
+  </div>
+</div>
+
+<h2><span class="n">6</span>One interleaved struct, or separate streams</h2>
+
+<p>With pulling, the shader decides how vertices are laid out in memory. There are two basic choices:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="Interleaved: one buffer of structs, position normal uv for vertex 0, then for vertex 1, and so on. Separate streams: one buffer of positions, one of normals, one of uvs. A depth-only pass reads only the position stream.">
+    <text x="20" y="22" class="title">Interleaved (array of structs)</text>
+    <rect x="20"  y="32" width="70" height="36" rx="3" class="mem"/><text x="55"  y="55" class="mid small">pos 0</text>
+    <rect x="90"  y="32" width="70" height="36" rx="3" class="mem"/><text x="125" y="55" class="mid small">nrm 0</text>
+    <rect x="160" y="32" width="50" height="36" rx="3" class="mem"/><text x="185" y="55" class="mid small">uv 0</text>
+    <rect x="214" y="32" width="70" height="36" rx="3" class="mem"/><text x="249" y="55" class="mid small">pos 1</text>
+    <rect x="284" y="32" width="70" height="36" rx="3" class="mem"/><text x="319" y="55" class="mid small">nrm 1</text>
+    <rect x="354" y="32" width="50" height="36" rx="3" class="mem"/><text x="379" y="55" class="mid small">uv 1</text>
+    <text x="414" y="55" class="small">…</text>
+    <text x="440" y="46" class="small">One read brings all of a vertex.</text>
+    <text x="440" y="62" class="small">A pass that needs only positions still loads the rest.</text>
+
+    <text x="20" y="104" class="title">Separate streams (struct of arrays)</text>
+    <rect x="20"  y="114" width="70" height="30" rx="3" class="mem"/><text x="55"  y="134" class="mid small">pos 0</text>
+    <rect x="90"  y="114" width="70" height="30" rx="3" class="mem"/><text x="125" y="134" class="mid small">pos 1</text>
+    <rect x="160" y="114" width="70" height="30" rx="3" class="mem"/><text x="195" y="134" class="mid small">pos 2</text>
+    <text x="240" y="134" class="small">…</text>
+    <rect x="20"  y="150" width="70" height="30" rx="3" class="mem"/><text x="55"  y="170" class="mid small">nrm 0</text>
+    <rect x="90"  y="150" width="70" height="30" rx="3" class="mem"/><text x="125" y="170" class="mid small">nrm 1</text>
+    <rect x="160" y="150" width="70" height="30" rx="3" class="mem"/><text x="195" y="170" class="mid small">nrm 2</text>
+    <text x="240" y="170" class="small">…</text>
+    <rect x="20"  y="186" width="50" height="30" rx="3" class="mem"/><text x="45"  y="206" class="mid small">uv 0</text>
+    <rect x="70"  y="186" width="50" height="30" rx="3" class="mem"/><text x="95"  y="206" class="mid small">uv 1</text>
+    <rect x="120" y="186" width="50" height="30" rx="3" class="mem"/><text x="145" y="206" class="mid small">uv 2</text>
+    <text x="180" y="206" class="small">…</text>
+    <rect x="14" y="110" width="246" height="38" rx="4" class="hot"/>
+    <text x="440" y="128" class="small">A depth-only or shadow pass reads only</text>
+    <text x="440" y="144" class="small t-hot">the position stream: less memory traffic.</text>
+    <text x="440" y="170" class="small">A full pass reads 3 places per vertex.</text>
+    <text x="440" y="186" class="small">Each stream can have its own format.</text>
+  </svg>
+  <figcaption>Many engines use a mix: positions in one stream, everything else interleaved in a second one.</figcaption>
+</figure>
+
+<h2 id="compression"><span class="n">7</span>Smaller vertices</h2>
+
+<p>Vertex data is read for every vertex of every draw. Smaller vertices mean less memory, and less memory traffic each frame. With pulling, the shader can decode any packing it likes, so engines often store far less than full 32-bit floats:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Attribute</th><th>Full</th><th>Packed</th><th>How it is decoded</th></tr>
+  <tr><td>Position</td><td>3 × float32 = 12 B</td><td>3 × 16-bit + 2 B padding = 8 B</td><td>Quantized inside the mesh's bounding box: <var>p</var> = <var>min</var> + <var>q</var> / 65535 × (<var>max</var> − <var>min</var>). The box is stored once per mesh.</td></tr>
+  <tr><td>Normal</td><td>3 × float32 = 12 B</td><td>2 × 16-bit = 4 B</td><td><b>Octahedral</b> encoding: the unit sphere is folded onto a square, so 2 numbers are enough.</td></tr>
+  <tr><td>Tangent + sign</td><td>4 × float32 = 16 B</td><td>2 × 8-bit + sign, 4 B</td><td>Octahedral too, with the bitangent sign in a spare byte.</td></tr>
+  <tr><td>Texture coordinate</td><td>2 × float32 = 8 B</td><td>2 × 16-bit = 4 B</td><td>Unsigned normalized 16-bit for UVs in 0 to 1; half floats for UVs that repeat.</td></tr>
+</table>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Octahedral encoding. A unit sphere of directions is mapped onto an octahedron, whose lower half is folded out over the corners, making a square. Each direction becomes a point in the square, two numbers.">
+    <circle cx="110" cy="96" r="62" class="gpu"/>
+    <line x1="110" y1="96" x2="150" y2="50" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="110" y="182" class="mid small">a direction: 3 numbers</text>
+    <line x1="190" y1="96" x2="258" y2="96" class="arrow" marker-end="url(#ah)"/>
+    <text x="224" y="86" class="mid small">project</text>
+    <polygon points="340,34 402,96 340,158 278,96" class="gpu"/>
+    <line x1="278" y1="96" x2="402" y2="96" class="arrow dashed"/>
+    <line x1="340" y1="34" x2="340" y2="158" class="arrow dashed"/>
+    <text x="340" y="182" class="mid small">octahedron, top view</text>
+    <line x1="422" y1="96" x2="490" y2="96" class="arrow" marker-end="url(#ah)"/>
+    <text x="456" y="86" class="mid small">fold the</text>
+    <text x="456" y="112" class="mid small">lower half out</text>
+    <rect x="510" y="34" width="124" height="124" class="mem"/>
+    <polygon points="572,34 634,96 572,158 510,96" class="gpu"/>
+    <circle cx="595" cy="70" r="4" class="hot"/>
+    <text x="572" y="182" class="mid small">a square: 2 numbers</text>
+    <text x="646" y="66" class="small">upper half:</text>
+    <text x="646" y="82" class="small">the diamond</text>
+    <text x="646" y="112" class="small">lower half:</text>
+    <text x="646" y="128" class="small">the 4 corners</text>
+  </svg>
+  <figcaption>Octahedral normals spread the error evenly over all directions. 2 × 16 bits give an angle error far below what lighting can show.</figcaption>
+</figure>
+
+<h3>Example: 64 bytes down to 20</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th></th><th>Full floats</th><th>Packed (table above, one UV set)</th></tr>
+  <tr><td>One vertex</td><td>position 12 + normal 12 + 3 UV sets 24 + tangent 16 = <b>64 B</b></td><td>8 + 4 + 4 + 4 = <b>20 B</b></td></tr>
+  <tr><td>1,000,000 vertices</td><td>64,000,000 B ≈ 61.0 MiB</td><td>20,000,000 B ≈ 19.1 MiB</td></tr>
+  <tr><td>Position step, mesh 10 m wide</td><td>float32: far below 0.01 mm</td><td>10 m / 65,535 ≈ 0.15 mm</td></tr>
+</table>
+</div>
+
+<div class="callout warn">
+  <strong>A trap: half-float UVs</strong>
+  <p>A 16-bit half float has 10 bits of fraction. Between 0.5 and 1.0, its step is 2<sup>−11</sup> ≈ 0.00049. On a 4096-texel texture, that is 4096 × 0.00049 = 2 texels: visible as wobbly, swimming textures. Unsigned normalized 16-bit has the same step everywhere, 1 / 65,535, which is 0.06 texels on the same texture.</p>
+</div>
+
+<h2><span class="n">8</span>Performance notes</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Topic</th><th>What to know</th></tr>
+  <tr><td>Fetch hardware vs shader loads</td><td>On many desktop GPUs, vertex fetch already runs as ordinary shader loads, so pulling costs about the same. Some GPUs, often mobile ones, still have fast fixed-function fetch. Measure before you depend on either.</td></tr>
+  <tr><td>Alignment</td><td>A struct whose size is a multiple of 16 bytes lets the compiler use wide 16-byte loads. A 12-byte <code>float3</code> at an odd offset may turn into several small loads.</td></tr>
+  <tr><td>Cache lines</td><td>Memory moves in lines of 64 or 128 bytes. A 64-byte vertex that starts on a line boundary costs one line; a 20-byte vertex costs a third of one.</td></tr>
+  <tr><td>Index order</td><td>Reorder the triangles so that shared vertices come close together. The vertex cache then hits more often (Forsyth's algorithm, meshoptimizer).</td></tr>
+  <tr><td>Vertex order</td><td>Reorder the vertices into the order the indices first use them. Reads then walk the buffer forward, line by line.</td></tr>
+  <tr><td>Robustness</td><td>A wrong vertex index in a pulled read is just a read of the wrong memory: another mesh, or past the end of the buffer. Debug builds can check the index against the mesh's range.</td></tr>
+</table>
+</div>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p>RASM uses vertex pulling for every graphics pipeline: no pipeline has a vertex input layout. All meshes live in one <b>geometry pool</b>: one vertex buffer, one index buffer and one table of sub-mesh rows, created at startup and sized by <code>EngineConfig</code>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 340" role="img" aria-label="GeometryPool holds three buffers. The vertex pool holds Vertex records of 64 bytes, read by vertMain through SceneData's vertsPtr. The index pool holds 32-bit indices: each sub-mesh's LOD 0 indices, then its coarser LODs. It is bound once with bindIndexBuffer. The geometry table holds one GeometryData row of 120 bytes per sub-mesh: vertexOffset, bounding sphere, lodCount and 8 LOD ranges. vertMain reads vertsPtr at SV_VertexID plus the draw's vertexOffset.">
+    <text x="20" y="22" class="title">GeometryPool, created once</text>
+
+    <rect x="20" y="34" width="360" height="64" rx="6" class="mem"/>
+    <text x="34" y="54" class="title">Geometry Vertex Pool</text>
+    <text x="34" y="72" class="small">Vertex = VertexFull, 64 B · STORAGE · read by pointer</text>
+    <text x="34" y="88" class="small">geometryPoolVertices = 2²¹ vertices = 128 MiB</text>
+
+    <rect x="20" y="110" width="360" height="64" rx="6" class="mem"/>
+    <text x="34" y="130" class="title">Geometry Index Pool</text>
+    <text x="34" y="148" class="small">uint32 · INDEX · bound once per drawScene</text>
+    <text x="34" y="164" class="small">geometryPoolIndices = 2²⁴ indices = 64 MiB</text>
+
+    <rect x="20" y="186" width="360" height="64" rx="6" class="mem"/>
+    <text x="34" y="206" class="title">Geometry Table</text>
+    <text x="34" y="224" class="small">GeometryData, 120 B per sub-mesh · read by pointer</text>
+    <text x="34" y="240" class="small">geometryPoolSubMeshes = 2¹⁴ rows</text>
+
+    <text x="420" y="22" class="title">One sub-mesh in the pool</text>
+    <rect x="420" y="34"  width="320" height="30" rx="3" class="mem"/>
+    <text x="580" y="54" class="mid small">vertices [firstVertex, + vertexCount)</text>
+    <rect x="420" y="110" width="130" height="30" rx="3" class="mem"/>
+    <text x="485" y="130" class="mid small">LOD 0 indices</text>
+    <rect x="550" y="110" width="70" height="30" rx="3" class="mem"/>
+    <text x="585" y="130" class="mid small">LOD 1</text>
+    <rect x="620" y="110" width="40" height="30" rx="3" class="mem"/>
+    <text x="640" y="130" class="mid small">2</text>
+    <rect x="660" y="110" width="26" height="30" rx="3" class="mem"/>
+    <text x="692" y="130" class="small">…</text>
+    <text x="420" y="160" class="small">All LODs index the same vertices.</text>
+    <rect x="420" y="186" width="320" height="64" rx="6" class="mem"/>
+    <text x="434" y="206" class="small">vertexOffset = firstVertex, the same for every LOD</text>
+    <text x="434" y="224" class="small">boundsCenter, boundsRadius, lodCount</text>
+    <text x="434" y="242" class="small">lods[8]: firstIndex, indexCount, error</text>
+
+    <rect x="20" y="276" width="720" height="52" rx="26" class="shader"/>
+    <text x="380" y="298" class="mid mono">vertMain: pc.scene-&gt;vertsPtr[input.vertexID + draw-&gt;vertexOffset]</text>
+    <text x="380" y="317" class="mid small">SV_VertexID is the raw index value here, so the shader adds the draw's vertexOffset back</text>
+  </svg>
+  <figcaption>Sizes are the <code>EngineConfig</code> defaults. The pool never frees anything: each upload appends after the last one.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Vertex input layout</td><td>empty</td><td>Empty for every graphics pipeline (<code>VulkanDevice::createGraphicsPipeline</code>). Core Vulkan, so it also runs where dynamic vertex input is missing, such as MoltenVK.</td></tr>
+  <tr><td>How the shader reaches the buffer</td><td>a descriptor or an address</td><td>A raw address: <code>SceneData::vertsPtr</code>, a <code>VertexFull</code> pointer. No descriptor. See <a href="device-addresses.html#in-rasm">buffer device addresses</a>.</td></tr>
+  <tr><td>The vertex index</td><td>depends on the API and language</td><td>Slang lowers <code>SV_VertexID</code> to <code>VertexIndex</code> − <code>BaseVertex</code>, as in Direct3D. So <code>vertMain</code> gets the local index and adds <code>draw-&gt;vertexOffset</code> itself. The hardware adds the offset, Slang removes it, the shader adds it back.</td></tr>
+  <tr><td>Index buffer</td><td>kept</td><td>Kept. One index buffer for all meshes, bound once per <code>drawScene</code> call with <code>bindIndexBuffer</code>, format <code>U32_UINT</code>.</td></tr>
+  <tr><td>Indices</td><td>local + <var>vertexOffset</var></td><td>Local to the sub-mesh. <code>vertexOffset</code> = <code>firstVertex</code>, set in <code>rebuildDrawList</code>. Always 32-bit, even for small meshes.</td></tr>
+  <tr><td>Sub-allocation</td><td>bump, free list, buddy…</td><td>Bump only. <code>GeometryPool::upload</code> appends; a full pool logs an error and the mesh is not uploaded (<code>GeometryPool::fits</code>). Nothing is freed (<code>D4</code>).</td></tr>
+  <tr><td>Layout</td><td>interleaved or streams</td><td>One interleaved 64-byte struct: <code>pos</code>, <code>normal</code>, <code>uv</code>[3], <code>tangent</code>. The same bytes as the public <code>Vertex</code>, checked by <code>static_assert</code>s. <code>VertexPosOnly</code> is declared but not used: there is no position-only stream.</td></tr>
+  <tr><td>Compression</td><td>16-bit, octahedral…</td><td>None. Full 32-bit floats, and all 3 UV sets are always stored (unused ones are zero).</td></tr>
+  <tr><td>Index and vertex order</td><td>optimize both</td><td>Only the coarser LODs go through <code>meshopt_optimizeVertexCache</code>. LOD 0 keeps the order of the import. No vertex fetch reordering.</td></tr>
+  <tr><td>LODs</td><td>—</td><td>All LODs of a sub-mesh share its vertices and cost only their indices, placed right after LOD 0's. Culling writes the chosen LOD's range into the draw. See <a href="mesh-simplification.html#in-rasm">mesh simplification</a> and <a href="lod-selection.html#in-rasm">LOD selection</a>.</td></tr>
+  <tr><td>Upload</td><td>—</td><td>Once, when the mesh finishes loading, with <code>fillBuffer</code> at the range's offset. The CPU copy is dropped afterwards (<code>P6</code>). See <a href="gpu-memory.html#in-rasm">GPU memory and uploads</a>.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The pool and its three buffers</td><td><code>GeometryPool::create</code>, <code>GeometryPool::upload</code>, <code>GeometryPool::fits</code> in <code>src/renderer/geometryPool.cpp</code></td></tr>
+  <tr><td>Pool sizes</td><td><code>geometryPoolVertices</code>, <code>geometryPoolIndices</code>, <code>geometryPoolSubMeshes</code> in <code>EngineConfig</code>, <code>include/rasm/types.h</code></td></tr>
+  <tr><td>The vertex struct</td><td><code>Vertex</code> in <code>include/rasm/mesh.h</code>; <code>gfx::VertexFull</code> in <code>src/renderer/uberMaterialTypes.h</code>; <code>VertexFull</code> in <code>shaders/lib/core.slang</code></td></tr>
+  <tr><td>A sub-mesh's ranges</td><td><code>MeshGeometry</code> in <code>include/rasm/mesh.h</code>; <code>GeometryData</code>, <code>GeometryLod</code> in <code>shaders/lib/core.slang</code></td></tr>
+  <tr><td>The empty vertex input</td><td><code>VulkanDevice::createGraphicsPipeline</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>The pull</td><td><code>vertMain</code> in <code>shaders/passes/rasm.slang</code></td></tr>
+  <tr><td>Binding the index buffer, setting <code>vertsPtr</code></td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>LOD indices</td><td><code>buildMeshLods</code> in <code>src/assets/meshLod.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li><code>Vertex</code>, <code>gfx::VertexFull</code> and the Slang <code>VertexFull</code> have the same 64 bytes. A change to one changes all three and the <code>static_assert</code>s (see <a href="struct-layout.html#in-rasm">struct layout</a>).</li>
+    <li><code>vertMain</code> adds <code>draw-&gt;vertexOffset</code> to <code>SV_VertexID</code>. Removing it makes every mesh read the first mesh's vertices.</li>
+    <li>Indices are local to their sub-mesh. Every LOD of a sub-mesh uses the same <code>vertexOffset</code>.</li>
+    <li>The index buffer is bound as <code>U32_UINT</code>. 16-bit indices would need a second index buffer and their own draws.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <ul>
+    <li><code>D4</code>: nothing is freed, so the pool only fills. Streaming needs a real allocator and frame-safe freeing.</li>
+    <li>No vertex compression and no position-only stream.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Daniel Rákos, <i>Programmable Vertex Pulling</i>, in <i>OpenGL Insights</i> (2012).</li>
+  <li>Zina Cigolle, Sam Donow, Daniel Evangelakos, Michael Mara, Morgan McGuire and Quirin Meyer, <i>A Survey of Efficient Representations for Independent Unit Vectors</i>, Journal of Computer Graphics Techniques (2014): octahedral encoding.</li>
+  <li>Tom Forsyth, <i>Linear-Speed Vertex Cache Optimisation</i> (2006).</li>
+  <li>Arseny Kapoulkine, <i>meshoptimizer</i>: the library and its documentation on vertex cache, fetch and quantization.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

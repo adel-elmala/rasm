@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Generational Handles · RASM</title>
+<meta name="description" content="How generational handles work: why not pointers or plain indices, index plus generation, free lists and slot maps, stale handle detection, bit budgets, type-safe tags, ownership and deferred destruction, dedup caches, and how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/handle.h src/core/handle.cpp include/rasm/engine.h src/rhi/renderContext.cpp src/rhi/resource.cpp include/rasm/render/resource.h include/rasm/render/renderContext.h src/scene/entity.cpp src/assets/mesh.cpp src/assets/material.cpp src/assets/texture.cpp src/renderer/gpuScene.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/scene.h include/rasm/types.h">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/generational-handles.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Foundations</p>
+<h1>Generational handles</h1>
+<p class="lead">An engine has many objects: meshes, textures, entities, buffers. Code outside the engine needs a way to name one of them, and to find out when the object it names is gone. A <b>generational handle</b> does both with two small numbers. This page explains how it works. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A raw pointer breaks when the object moves or is freed. A plain index breaks when its slot is reused for a new object.</li>
+    <li>A <b>handle</b> is an <b>index</b> into a table of slots plus a <b>generation</b>: a counter that goes up each time the slot is freed.</li>
+    <li>A lookup checks that the handle's generation equals the slot's generation. If not, the handle is <b>stale</b> and the lookup fails safely.</li>
+    <li>Freed slots go on a <b>free list</b> and are reused, so the table does not grow forever.</li>
+    <li>A <b>tag type</b> makes a mesh handle and a texture handle different types, so the compiler stops you from mixing them.</li>
+    <li>A handle does not own its object. The table does. Destroying an object the GPU still uses must wait until the GPU is done.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>The problem: naming an object</h2>
+
+<p>An application asks the engine to load a mesh. The engine must give back <i>something</i> the application can keep and pass back later: "draw this mesh". There are three common choices.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Three ways to name an object. A pointer dangles when the array grows and moves its elements. A plain index points to a new object after the old one was freed and its slot reused. A handle with a generation notices that the slot was reused.">
+    <text x="20" y="24" class="title">Pointer</text>
+    <text x="20" y="40" class="small">the address of the object</text>
+    <rect x="160" y="14" width="60" height="34" rx="4" class="cpu"/><text x="190" y="36" class="mid">A</text>
+    <rect x="220" y="14" width="60" height="34" rx="4" class="cpu"/><text x="250" y="36" class="mid">B</text>
+    <line x1="250" y1="76" x2="250" y2="52" class="arrow" marker-end="url(#ah)"/>
+    <text x="250" y="90" class="mid small">p = &amp;B</text>
+    <line x1="300" y1="31" x2="378" y2="31" class="arrow" marker-end="url(#ah)"/>
+    <text x="339" y="22" class="mid small">array grows</text>
+    <rect x="390" y="14" width="60" height="34" rx="4" class="ghost"/>
+    <rect x="450" y="14" width="60" height="34" rx="4" class="ghost"/>
+    <rect x="560" y="14" width="60" height="34" rx="4" class="cpu"/><text x="590" y="36" class="mid">A</text>
+    <rect x="620" y="14" width="60" height="34" rx="4" class="cpu"/><text x="650" y="36" class="mid">B</text>
+    <rect x="680" y="14" width="60" height="34" rx="4" class="cpu"/><text x="710" y="36" class="mid">C</text>
+    <line x1="480" y1="76" x2="480" y2="52" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="480" y="90" class="mid small t-hot">p points to freed memory</text>
+
+    <text x="20" y="124" class="title">Index</text>
+    <text x="20" y="140" class="small">a position in a table</text>
+    <rect x="160" y="114" width="60" height="34" rx="4" class="cpu"/><text x="190" y="136" class="mid">A</text>
+    <rect x="220" y="114" width="60" height="34" rx="4" class="cpu"/><text x="250" y="136" class="mid">B</text>
+    <line x1="250" y1="176" x2="250" y2="152" class="arrow" marker-end="url(#ah)"/>
+    <text x="250" y="190" class="mid small">i = 1</text>
+    <line x1="300" y1="131" x2="548" y2="131" class="arrow" marker-end="url(#ah)"/>
+    <text x="424" y="122" class="mid small">free B, then make D in the same slot</text>
+    <rect x="560" y="114" width="60" height="34" rx="4" class="cpu"/><text x="590" y="136" class="mid">A</text>
+    <rect x="620" y="114" width="60" height="34" rx="4" class="mem"/><text x="650" y="136" class="mid">D</text>
+    <line x1="650" y1="176" x2="650" y2="152" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="650" y="190" class="mid small t-hot">i = 1 now means D, silently</text>
+
+    <text x="20" y="224" class="title">Handle</text>
+    <text x="20" y="240" class="small">index + generation</text>
+    <rect x="160" y="214" width="60" height="34" rx="4" class="cpu"/><text x="190" y="236" class="mid">A · 1</text>
+    <rect x="220" y="214" width="60" height="34" rx="4" class="cpu"/><text x="250" y="236" class="mid">B · 1</text>
+    <line x1="250" y1="276" x2="250" y2="252" class="arrow" marker-end="url(#ah)"/>
+    <text x="250" y="290" class="mid small">h = {1, 1}</text>
+    <line x1="300" y1="231" x2="548" y2="231" class="arrow" marker-end="url(#ah)"/>
+    <text x="424" y="222" class="mid small">the same: free B, make D</text>
+    <rect x="560" y="214" width="60" height="34" rx="4" class="cpu"/><text x="590" y="236" class="mid">A · 1</text>
+    <rect x="620" y="214" width="60" height="34" rx="4" class="mem"/><text x="650" y="236" class="mid">D · 2</text>
+    <line x1="650" y1="276" x2="650" y2="252" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="650" y="290" class="mid small t-gpu">1 ≠ 2: "B is gone", safely</text>
+  </svg>
+  <figcaption>The number after each object is its slot's generation. Only the handle can tell "the object I meant" from "a new object in the same place".</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Choice</th><th>Good</th><th>Breaks when</th></tr>
+  <tr><td>Pointer</td><td>Fastest: no lookup at all.</td><td>The object moves (an array grows, a level is compacted) or is freed. Using it then is undefined behaviour: a crash, or worse, wrong data.</td></tr>
+  <tr><td>Index</td><td>Small (4 bytes), survives moves, easy to send to the GPU.</td><td>The slot is reused. The old index now names a different object, and nothing notices. This is called the <b>ABA problem</b>.</td></tr>
+  <tr><td>Generational handle</td><td>Small, survives moves, and detects reuse.</td><td>Only when the generation counter wraps around (section 4).</td></tr>
+</table>
+</div>
+
+<h2><span class="n">2</span>The idea: index plus generation</h2>
+
+<p>The engine keeps each kind of object in a table of <b>slots</b>. Each slot stores the object and a <b>generation</b> number. A handle stores two numbers: the slot's <b>index</b>, and the generation the slot had when the handle was made.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="A handle with index 2 and generation 5 looks up slot 2 of the table. The slot's generation is 5, the same, so the lookup returns the object. A second handle with index 2 and generation 4 finds generation 5 and fails as stale.">
+    <rect x="20" y="40" width="150" height="64" rx="6" class="cpu"/>
+    <text x="95" y="62" class="mid title">handle</text>
+    <text x="95" y="82" class="mid mono">index = 2</text>
+    <text x="95" y="98" class="mid mono">gen   = 5</text>
+
+    <rect x="20" y="160" width="150" height="64" rx="6" class="cpu"/>
+    <text x="95" y="182" class="mid title">old handle</text>
+    <text x="95" y="202" class="mid mono">index = 2</text>
+    <text x="95" y="218" class="mid mono">gen   = 4</text>
+
+    <text x="470" y="24" class="mid title">Table of slots</text>
+    <rect x="260" y="36" width="420" height="190" rx="8" class="zone"/>
+    <text x="300" y="58" class="mid small">index</text>
+    <text x="380" y="58" class="mid small">generation</text>
+    <text x="560" y="58" class="mid small">object</text>
+    <rect x="276" y="66" width="390" height="34" rx="4" class="box"/>
+    <text x="300" y="88" class="mid mono">0</text><text x="380" y="88" class="mid mono">1</text><text x="560" y="88" class="mid">mesh "rock"</text>
+    <rect x="276" y="104" width="390" height="34" rx="4" class="box"/>
+    <text x="300" y="126" class="mid mono">1</text><text x="380" y="126" class="mid mono">3</text><text x="560" y="126" class="mid t-faint">free</text>
+    <rect x="276" y="142" width="390" height="34" rx="4" class="mem"/>
+    <text x="300" y="164" class="mid mono">2</text><text x="380" y="164" class="mid mono t-hot">5</text><text x="560" y="164" class="mid">mesh "tree"</text>
+    <rect x="276" y="180" width="390" height="34" rx="4" class="box"/>
+    <text x="300" y="202" class="mid mono">3</text><text x="380" y="202" class="mid mono">1</text><text x="560" y="202" class="mid">mesh "car"</text>
+
+    <path d="M170,72 H220 V159 H274" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <path d="M170,192 H240 V166 H274" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="700" y="150" class="small t-gpu">5 = 5</text>
+    <text x="700" y="166" class="small t-gpu">→ "tree"</text>
+    <text x="700" y="190" class="small t-hot">4 ≠ 5</text>
+    <text x="700" y="206" class="small t-hot">→ stale</text>
+    <text x="20" y="258" class="small">The old handle was made for an object that lived in slot 2 before "tree". That object was destroyed, so the slot's generation went from 4 to 5.</text>
+  </svg>
+  <figcaption>The lookup is one array access and one compare. It is almost as cheap as a plain index.</figcaption>
+</figure>
+
+<p>The lookup in pseudo-code:</p>
+
+<pre><code class="lang-text">lookup(handle):
+    if handle.index >= slots.size:
+        return null                  // never made
+    slot = slots[handle.index]
+    if slot.generation != handle.generation:
+        return null                  // stale: freed, maybe reused
+    return slot.object</code></pre>
+
+<p>Two more rules make this complete:</p>
+<ul>
+  <li><b>Destroying</b> an object adds 1 to its slot's generation. Every handle made before is now stale, at once, without finding them.</li>
+  <li><b>Generation 0 means "no object".</b> Slots start at generation 1. So a handle that is all zeros, which is what a default-constructed handle is, never matches a slot. It is the handle version of a null pointer.</li>
+</ul>
+
+<h2><span class="n">3</span>Reusing slots: the free list</h2>
+
+<p>Without reuse, the table grows by one slot for every object ever made. A game that spawns and removes bullets would grow it forever. So a destroyed slot goes on a <b>free list</b>, and the next create takes a slot from it. The generation is what makes this reuse safe. Click through an example (or use the arrow keys).</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. Create A, B and C</h4>
+    <svg viewBox="0 0 760 190" role="img" aria-label="Three slots, each with generation 1, hold A, B and C. The free list is empty. The handles are 0,1 and 1,1 and 2,1.">
+      <text x="20" y="30" class="title">slots</text>
+      <rect x="120" y="14" width="120" height="50" rx="4" class="mem"/><text x="180" y="36" class="mid title">A</text><text x="180" y="54" class="mid small">gen 1</text>
+      <rect x="250" y="14" width="120" height="50" rx="4" class="mem"/><text x="310" y="36" class="mid title">B</text><text x="310" y="54" class="mid small">gen 1</text>
+      <rect x="380" y="14" width="120" height="50" rx="4" class="mem"/><text x="440" y="36" class="mid title">C</text><text x="440" y="54" class="mid small">gen 1</text>
+      <text x="180" y="80" class="mid small">0</text><text x="310" y="80" class="mid small">1</text><text x="440" y="80" class="mid small">2</text>
+      <text x="20" y="114" class="title">free list</text>
+      <text x="120" y="114" class="small t-faint">empty</text>
+      <text x="20" y="150" class="title">handles</text>
+      <text x="120" y="150" class="mono">A = {0, 1}</text><text x="250" y="150" class="mono">B = {1, 1}</text><text x="380" y="150" class="mono">C = {2, 1}</text>
+      <text x="20" y="178" class="small">The free list is empty, so each create adds a new slot at the end.</text>
+    </svg>
+    <p>Each handle copies its slot's current generation.</p>
+  </div>
+
+  <div class="step">
+    <h4>2. Destroy B</h4>
+    <svg viewBox="0 0 760 190" role="img" aria-label="Slot 1 is freed. Its generation goes from 1 to 2 and it goes on the free list. The handle of B, 1,1, is now stale.">
+      <text x="20" y="30" class="title">slots</text>
+      <rect x="120" y="14" width="120" height="50" rx="4" class="mem"/><text x="180" y="36" class="mid title">A</text><text x="180" y="54" class="mid small">gen 1</text>
+      <rect x="250" y="14" width="120" height="50" rx="4" class="ghost"/><text x="310" y="36" class="mid t-faint">free</text><text x="310" y="54" class="mid small t-hot">gen 2</text>
+      <rect x="380" y="14" width="120" height="50" rx="4" class="mem"/><text x="440" y="36" class="mid title">C</text><text x="440" y="54" class="mid small">gen 1</text>
+      <text x="180" y="80" class="mid small">0</text><text x="310" y="80" class="mid small">1</text><text x="440" y="80" class="mid small">2</text>
+      <text x="20" y="114" class="title">free list</text>
+      <text x="120" y="114" class="mono">[1]</text>
+      <text x="20" y="150" class="title">handles</text>
+      <text x="120" y="150" class="mono">A = {0, 1}</text><text x="250" y="150" class="mono">B = {1, 1}</text><text x="380" y="150" class="mono">C = {2, 1}</text>
+      <text x="250" y="168" class="small t-hot">stale: 1 ≠ 2</text>
+      <text x="20" y="184" class="small">Nobody had to find the copies of B's handle. The generation alone makes all of them stale.</text>
+    </svg>
+    <p>The object is destroyed, the generation goes up, the index goes on the free list.</p>
+  </div>
+
+  <div class="step">
+    <h4>3. Create D: it reuses slot 1</h4>
+    <svg viewBox="0 0 760 190" role="img" aria-label="Create takes slot 1 from the free list. D is stored there with generation 2, and its handle is 1,2.">
+      <text x="20" y="30" class="title">slots</text>
+      <rect x="120" y="14" width="120" height="50" rx="4" class="mem"/><text x="180" y="36" class="mid title">A</text><text x="180" y="54" class="mid small">gen 1</text>
+      <rect x="250" y="14" width="120" height="50" rx="4" class="mem"/><text x="310" y="36" class="mid title">D</text><text x="310" y="54" class="mid small">gen 2</text>
+      <rect x="380" y="14" width="120" height="50" rx="4" class="mem"/><text x="440" y="36" class="mid title">C</text><text x="440" y="54" class="mid small">gen 1</text>
+      <text x="180" y="80" class="mid small">0</text><text x="310" y="80" class="mid small">1</text><text x="440" y="80" class="mid small">2</text>
+      <text x="20" y="114" class="title">free list</text>
+      <text x="120" y="114" class="small t-faint">empty</text>
+      <text x="20" y="150" class="title">handles</text>
+      <text x="120" y="150" class="mono">A = {0, 1}</text><text x="250" y="150" class="mono">B = {1, 1}</text><text x="380" y="150" class="mono">C = {2, 1}</text><text x="510" y="150" class="mono">D = {1, 2}</text>
+      <text x="20" y="178" class="small">The table did not grow. B and D share index 1 but not the generation.</text>
+    </svg>
+    <p>Create pops an index from the free list and uses the slot's current generation.</p>
+  </div>
+
+  <div class="step">
+    <h4>4. Look up B and D</h4>
+    <svg viewBox="0 0 760 190" role="img" aria-label="Looking up B's handle 1,1 finds generation 2 and returns null. Looking up D's handle 1,2 finds generation 2 and returns D.">
+      <text x="20" y="30" class="title">slots</text>
+      <rect x="120" y="14" width="120" height="50" rx="4" class="mem"/><text x="180" y="36" class="mid title">A</text><text x="180" y="54" class="mid small">gen 1</text>
+      <rect x="250" y="14" width="120" height="50" rx="4" class="mem"/><text x="310" y="36" class="mid title">D</text><text x="310" y="54" class="mid small t-hot">gen 2</text>
+      <rect x="380" y="14" width="120" height="50" rx="4" class="mem"/><text x="440" y="36" class="mid title">C</text><text x="440" y="54" class="mid small">gen 1</text>
+      <text x="180" y="80" class="mid small">0</text><text x="310" y="80" class="mid small">1</text><text x="440" y="80" class="mid small">2</text>
+      <text x="20" y="118" class="mono">lookup({1, 1})</text>
+      <text x="200" y="118" class="small t-hot">slot 1 has gen 2, the handle has 1 → null: "B is gone"</text>
+      <text x="20" y="146" class="mono">lookup({1, 2})</text>
+      <text x="200" y="146" class="small t-gpu">slot 1 has gen 2, the handle has 2 → D</text>
+      <text x="20" y="178" class="small">Without the generation, lookup({1}) would return D to code that still means B. That is the bug handles exist to stop.</text>
+    </svg>
+    <p>The stale lookup fails in a defined way. The caller can log it, skip the work, or treat it as a bug.</p>
+  </div>
+</div>
+
+<div class="split">
+  <div>
+    <h4>Where the free list lives</h4>
+    <p>A free slot holds no object, so its memory can store the index of the next free slot. The free list then needs no extra memory: one "first free" index, and a chain through the free slots. This is an <b>intrusive</b> free list.</p>
+  </div>
+  <div>
+    <h4>Which slot to reuse first</h4>
+    <p>A stack (last freed, first reused) is simplest and keeps memory warm in the cache. A queue (first freed, first reused) spreads reuse over all free slots, so each generation grows more slowly. That delays the wrap-around of section 4.</p>
+  </div>
+</div>
+
+<h2><span class="n">4</span>How many bits</h2>
+
+<p>Handles are often packed into one 32-bit or 64-bit integer, so they are cheap to copy, hash and store in GPU buffers. The bits are split between the index and the generation. The index bits limit how many objects can live at once. The generation bits limit how many times one slot can be reused before its generation <b>wraps</b> back to an old value.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 180" role="img" aria-label="Three ways to split a handle's bits: 20 index and 12 generation bits in 32 bits, 24 and 8 in 32 bits, and 32 and 32 in 64 bits.">
+    <text x="20" y="40" class="title">32 bits</text>
+    <rect x="90" y="16" width="400" height="38" rx="3" class="cpu"/><text x="290" y="40" class="mid">index: 20 bits</text>
+    <rect x="490" y="16" width="240" height="38" rx="3" class="mem"/><text x="610" y="40" class="mid">generation: 12 bits</text>
+    <text x="20" y="96" class="title">32 bits</text>
+    <rect x="90" y="72" width="480" height="38" rx="3" class="cpu"/><text x="330" y="96" class="mid">index: 24 bits</text>
+    <rect x="570" y="72" width="160" height="38" rx="3" class="mem"/><text x="650" y="96" class="mid">gen: 8 bits</text>
+    <text x="20" y="152" class="title">64 bits</text>
+    <rect x="90" y="128" width="320" height="38" rx="3" class="cpu"/><text x="250" y="152" class="mid">index: 32 bits</text>
+    <rect x="410" y="128" width="320" height="38" rx="3" class="mem"/><text x="570" y="152" class="mid">generation: 32 bits</text>
+  </svg>
+  <figcaption>The 64-bit row is drawn at half the scale of the others: each of its halves is as big as a whole 32-bit handle.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Split</th><th>Objects alive at once</th><th>Reuses of one slot before a wrap</th><th>Worst case: one slot reused every frame at 60 fps</th></tr>
+  <tr><td>20 + 12 bits</td><td>2<sup>20</sup> = 1,048,576</td><td>2<sup>12</sup> = 4,096</td><td>wraps after 68 seconds</td></tr>
+  <tr><td>24 + 8 bits</td><td>2<sup>24</sup> = 16,777,216</td><td>2<sup>8</sup> = 256</td><td>wraps after 4.3 seconds</td></tr>
+  <tr><td>32 + 32 bits</td><td>2<sup>32</sup> ≈ 4.3 billion</td><td>2<sup>32</sup> ≈ 4.3 billion</td><td>wraps after 2.3 years</td></tr>
+</table>
+</div>
+
+<p>A wrap only causes a bug if old code still holds a handle from exactly one full cycle ago, and uses it. That is rare, but a small generation makes it possible. Two common fixes:</p>
+<ul>
+  <li><b>Retire the slot.</b> When its generation reaches the maximum, do not put it on the free list again. It is lost, but no handle can ever alias.</li>
+  <li><b>Spread the reuse.</b> A queue-ordered free list (section 3) reuses each slot less often.</li>
+</ul>
+
+<h2><span class="n">5</span>Dense storage for fast loops</h2>
+
+<p>A table with holes is slow to loop over: the loop must skip the free slots, and the live objects are spread out in memory. Systems that loop over every object each frame (all entities, all particles) often add one more layer. This is usually called a <b>slot map</b>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="A slot map. Handles index the sparse slot array, which holds a generation and the position of the object in a dense array. The dense array has no holes. A back array maps each dense position to its slot. Removing an object moves the last dense object into the hole.">
+    <text x="20" y="40" class="title">sparse slots</text>
+    <text x="20" y="56" class="small">what handles index</text>
+    <rect x="160" y="22" width="110" height="44" rx="4" class="box"/><text x="215" y="40" class="mid small">gen 1</text><text x="215" y="58" class="mid mono">→ 0</text>
+    <rect x="280" y="22" width="110" height="44" rx="4" class="ghost"/><text x="335" y="40" class="mid small t-faint">gen 2</text><text x="335" y="58" class="mid small t-faint">free</text>
+    <rect x="400" y="22" width="110" height="44" rx="4" class="box"/><text x="455" y="40" class="mid small">gen 1</text><text x="455" y="58" class="mid mono">→ 2</text>
+    <rect x="520" y="22" width="110" height="44" rx="4" class="box"/><text x="575" y="40" class="mid small">gen 3</text><text x="575" y="58" class="mid mono">→ 1</text>
+    <text x="215" y="84" class="mid small">slot 0</text><text x="335" y="84" class="mid small">slot 1</text><text x="455" y="84" class="mid small">slot 2</text><text x="575" y="84" class="mid small">slot 3</text>
+
+    <line x1="215" y1="90" x2="215" y2="150" class="arrow" marker-end="url(#ah)"/>
+    <line x1="455" y1="90" x2="455" y2="150" class="arrow" marker-end="url(#ah)"/>
+    <line x1="575" y1="90" x2="335" y2="150" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="20" y="176" class="title">dense objects</text>
+    <text x="20" y="192" class="small">what loops read</text>
+    <rect x="160" y="152" width="110" height="44" rx="4" class="mem"/><text x="215" y="179" class="mid">A</text>
+    <rect x="280" y="152" width="110" height="44" rx="4" class="mem"/><text x="335" y="179" class="mid">D</text>
+    <rect x="400" y="152" width="110" height="44" rx="4" class="mem"/><text x="455" y="179" class="mid">C</text>
+    <text x="215" y="214" class="mid small">0</text><text x="335" y="214" class="mid small">1</text><text x="455" y="214" class="mid small">2</text>
+    <text x="580" y="174" class="small">no holes: a loop</text>
+    <text x="580" y="190" class="small">reads 3 objects in a row</text>
+
+    <text x="20" y="246" class="small">A third array maps each dense position back to its slot (0 → 0, 1 → 3, 2 → 2). Removing an object moves the last dense object into</text>
+    <text x="20" y="262" class="small">the hole ("swap and pop"), and the back array says which slot to repoint. The order of the dense array is not kept.</text>
+  </svg>
+  <figcaption>Lookup is now two steps (slot, then dense position) instead of one. In exchange, loops are as fast as over a plain array.</figcaption>
+</figure>
+
+<h2><span class="n">6</span>Type-safe handles</h2>
+
+<p>A mesh handle and a texture handle are both "two integers". If they are the same C++ type, nothing stops code from passing a mesh handle to a function that wants a texture. The lookup then reads the wrong table, and may even pass the generation check by luck.</p>
+
+<p>The fix is a <b>tag type</b>: an empty type that is never defined and never used at runtime. It is only there to make each kind of handle a different type.</p>
+
+<pre><code>struct MeshTag;
+struct TextureTag;
+
+template &lt;typename Tag&gt;
+struct Handle
+{
+    uint32_t index = 0;
+    uint32_t generation = 0;
+};
+
+using MeshHandle = Handle&lt;MeshTag&gt;;
+using TextureHandle = Handle&lt;TextureTag&gt;;
+
+void bindTexture(TextureHandle texture);</code></pre>
+
+<p>Now <var>bindTexture</var>(<var>mesh</var>) is a compile error. The tag costs nothing: both types have the same two fields and the same size. This pattern is also called a <b>phantom type</b> or a <b>strong typedef</b>.</p>
+
+<h2><span class="n">7</span>Who owns the object</h2>
+
+<p>A handle is a <b>weak reference</b>. Holding it does not keep the object alive. The object belongs to its table, and it lives until someone calls destroy. This is different from a reference-counted pointer.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th></th><th>Raw pointer</th><th>Reference count (<var>shared_ptr</var>)</th><th>Generational handle</th></tr>
+  <tr><td>Who decides when it dies</td><td>Whoever calls delete</td><td>The last holder to let go</td><td>The owner of the table, by an explicit destroy</td></tr>
+  <tr><td>Using it after the object died</td><td>Undefined behaviour</td><td>Cannot happen: it is still alive</td><td>Detected: the lookup fails</td></tr>
+  <tr><td>Cost of a copy</td><td>Free</td><td>An atomic add and later an atomic sub</td><td>Free</td></tr>
+  <tr><td>Can go into a GPU buffer or a file</td><td>No, the address means nothing there</td><td>No</td><td>Yes, it is just numbers</td></tr>
+</table>
+</div>
+
+<h3>The GPU makes "destroy" harder</h3>
+
+<p>The CPU is usually one or two frames ahead of the GPU (see <a href="frames-in-flight.html">Frames in flight</a>). When the CPU destroys a buffer, a frame that the GPU has not finished yet may still read it. Freeing the memory at once would let the GPU read garbage, or crash it. So engines split destroy into two parts:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 220" role="img" aria-label="Frame 10 on the CPU calls destroy. The handle becomes stale at once, but the memory goes into a delete queue tagged with frame 10. The GPU still runs frames 9 and 10. When the fence of frame 10 is reached, at the start of CPU frame 12, the memory is really freed.">
+    <text x="20" y="40" class="title t-cpu">CPU</text>
+    <rect x="80" y="20" width="200" height="40" rx="6" class="cpu"/><text x="180" y="45" class="mid">frame 10: destroy(h)</text>
+    <rect x="290" y="20" width="200" height="40" rx="6" class="cpu"/><text x="390" y="45" class="mid">frame 11</text>
+    <rect x="500" y="20" width="240" height="40" rx="6" class="cpu"/><text x="620" y="45" class="mid">frame 12: wait for fence 10</text>
+
+    <text x="20" y="120" class="title t-gpu">GPU</text>
+    <rect x="200" y="100" width="180" height="40" rx="6" class="gpu"/><text x="290" y="125" class="mid">frame 9</text>
+    <rect x="390" y="100" width="180" height="40" rx="6" class="gpu"/><text x="480" y="125" class="mid">frame 10: may read h</text>
+
+    <line x1="140" y1="60" x2="140" y2="170" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <rect x="30" y="172" width="220" height="40" rx="6" class="mem"/>
+    <text x="140" y="190" class="mid small">1. generation + 1: h is stale</text>
+    <text x="140" y="204" class="mid small">memory → delete queue (frame 10)</text>
+    <line x1="570" y1="120" x2="620" y2="120" class="arrow" marker-end="url(#ah)"/>
+    <text x="625" y="116" class="small">fence 10</text>
+    <text x="625" y="130" class="small">signaled</text>
+    <line x1="620" y1="60" x2="620" y2="170" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <rect x="500" y="172" width="240" height="40" rx="6" class="mem"/>
+    <text x="620" y="190" class="mid small">2. the GPU is done with frame 10:</text>
+    <text x="620" y="204" class="mid small">free the memory and the slot</text>
+  </svg>
+  <figcaption><b>Deferred destruction.</b> The handle dies at once, so new code cannot use it. The memory dies only when the last frame that could use it has finished on the GPU.</figcaption>
+</figure>
+
+<p>The same delay matters for the slot. If the slot is reused too early, and the GPU still reads the old object's index from a buffer, the GPU reads the new object. So a slot whose index the GPU knows should also go back on the free list only after that fence.</p>
+
+<h2><span class="n">8</span>Handles for things made from a description</h2>
+
+<p>Some objects are fully described by their creation settings, and never change after. A compiled shader, a pipeline, a sampler and a descriptor layout are like this. If two parts of the program ask for the same one, they can share it. The table then keeps a second map: from the <b>description</b> to the handle. This is called <b>interning</b> or a <b>dedup cache</b>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 220" role="img" aria-label="create with a description first hashes it and looks it up in the cache. If an equal description is there, the cached handle is returned and nothing new is made. If not, the object is created, given a new handle, and the description is stored.">
+    <rect x="20" y="80" width="150" height="50" rx="6" class="cpu"/>
+    <text x="95" y="102" class="mid">create(desc)</text>
+    <text x="95" y="120" class="mid small">pipeline, shader, ...</text>
+    <line x1="170" y1="105" x2="218" y2="105" class="arrow" marker-end="url(#ah)"/>
+    <rect x="220" y="70" width="180" height="70" rx="6" class="box"/>
+    <text x="310" y="96" class="mid">hash(desc), then</text>
+    <text x="310" y="114" class="mid">compare every field</text>
+    <text x="310" y="130" class="mid small">in the cache map</text>
+    <path d="M400,90 H440 V45 H478" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="434" y="40" class="end small t-gpu">equal found</text>
+    <rect x="480" y="22" width="260" height="46" rx="6" class="gpu"/>
+    <text x="610" y="42" class="mid">return the cached handle</text>
+    <text x="610" y="58" class="mid small">nothing is created</text>
+    <path d="M400,120 H440 V165 H478" class="arrow" marker-end="url(#ah)"/>
+    <text x="434" y="180" class="end small">not found</text>
+    <rect x="480" y="142" width="260" height="46" rx="6" class="mem"/>
+    <text x="610" y="162" class="mid">create it, give a new handle</text>
+    <text x="610" y="178" class="mid small">store desc → handle in the cache</text>
+  </svg>
+  <figcaption>A hash finds the candidates fast. The full compare decides, because two different descriptions can have the same hash.</figcaption>
+</figure>
+
+<div class="split">
+  <div>
+    <h4>Dedup is right for immutable objects</h4>
+    <p>Shaders, pipelines, samplers, layouts. Nobody writes into them after creation, so sharing one is the same as having two. It saves memory and creation time; a pipeline can take milliseconds to compile.</p>
+  </div>
+  <div>
+    <h4>Dedup is wrong for mutable objects</h4>
+    <p>Buffers and textures. Two users that ask for "a 1 MiB storage buffer" want <i>two</i> buffers, because each will write its own data. Sharing one would make them overwrite each other.</p>
+  </div>
+</div>
+
+<p>Every field must take part in both the equality and the hash. A field that is left out of the compare makes two different descriptions look equal, and one user silently gets the other's object. A field left out of only the hash is still correct, just slower (more collisions).</p>
+
+<p>Asset loading often uses the same idea one level up: a map from the file path to the handle. Loading the same file twice then gives the same mesh, and the file is read once.</p>
+
+<h2><span class="n">9</span>Pitfalls</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Mistake</th><th>What happens</th><th>Fix</th></tr>
+  <tr><td>Lookup checks only the index</td><td>Stale handles find the new object: the ABA bug is back.</td><td>Always compare the generation.</td></tr>
+  <tr><td>Slots start at generation 0</td><td>A zero-initialized handle matches slot 0.</td><td>Start at 1; keep 0 for "invalid".</td></tr>
+  <tr><td>Keeping a reference to the object across a create</td><td>The table may grow and move every object; the reference dangles.</td><td>Look the handle up again after anything that can create.</td></tr>
+  <tr><td>Freeing memory the GPU still reads</td><td>Garbage on screen, or a lost device.</td><td>Deferred destruction, tied to the frame fence.</td></tr>
+  <tr><td>Reusing a slot whose index is in a GPU buffer</td><td>The GPU reads the new object for one or two frames.</td><td>Return the slot to the free list after the fence, too.</td></tr>
+  <tr><td>Using a counter as the index (never reusing)</td><td>Simple, and stale handles are found by a hash-map miss. But a table indexed by it grows forever.</td><td>Fine for objects that are rarely made. Use a free list for objects made every frame.</td></tr>
+</table>
+</div>
+
+<h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
+
+<p>RASM uses one handle type for every object, <code>Handle</code> in <code>include/rasm/handle.h</code>, with an <code>index</code> and a <code>generation</code>. It has the type-safe tags of section 6. It does <b>not</b> have the free list or the generation bump yet: indices only grow, and the generation is always 1.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="HandleManager in Engine has one counter per handle type. Each create takes the next index with generation 1. CPU objects go into vectors in Engine's registry, at handle.index. GPU objects go into unordered maps in RenderContext's Impl, from the handle to an rhi object pointer. Shaders, pipelines and layouts also go through a desc to handle cache.">
+    <rect x="230" y="12" width="300" height="62" rx="6" class="cpu"/>
+    <text x="380" y="32" class="mid title">HandleManager (in Engine)</text>
+    <text x="380" y="50" class="mid mono">{index = counter++, generation = 1}</text>
+    <text x="380" y="66" class="mid small">one counter per type, starts at 1, only grows</text>
+    <line x1="300" y1="74" x2="195" y2="98" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="226" y="88" class="end mono">getNextEntityHandle()</text>
+    <line x1="460" y1="74" x2="565" y2="98" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="534" y="88" class="mono">getNextBufferHandle()</text>
+
+    <rect x="20" y="100" width="350" height="218" rx="8" class="zone"/>
+    <text x="36" y="122" class="title">Engine::registry · CPU objects</text>
+    <text x="36" y="144" class="mono">entities[handle.index]</text>
+    <rect x="36"  y="156" width="60" height="40" rx="4" class="ghost"/>
+    <text x="66"  y="172" class="mid mono t-faint">[0]</text>
+    <text x="66"  y="188" class="mid small t-faint">unused</text>
+    <rect x="104" y="156" width="60" height="40" rx="4" class="cpu"/>
+    <text x="134" y="172" class="mid mono">[1]</text>
+    <text x="134" y="188" class="mid small">Entity</text>
+    <rect x="172" y="156" width="60" height="40" rx="4" class="cpu"/>
+    <text x="202" y="172" class="mid mono">[2]</text>
+    <text x="202" y="188" class="mid small">Entity</text>
+    <rect x="240" y="156" width="60" height="40" rx="4" class="cpu"/>
+    <text x="270" y="172" class="mid mono">[3]</text>
+    <text x="270" y="188" class="mid small">Entity</text>
+    <text x="316" y="182" class="mono">…</text>
+    <text x="36" y="222" class="small">Also materials, cameras, meshes, lights, scenes.</text>
+    <text x="36" y="240" class="small">Create checks index &lt; MAX_*. Lookups check</text>
+    <text x="36" y="256" class="small">index &lt; size, not the generation.</text>
+    <text x="36" y="280" class="small">Nothing here can be destroyed (D4).</text>
+    <text x="36" y="300" class="small">loadedMeshes, loadedTextures: path → handle</text>
+
+    <rect x="390" y="100" width="350" height="218" rx="8" class="zone"/>
+    <text x="406" y="122" class="title">RenderContext::Impl · GPU objects</text>
+    <text x="406" y="144" class="mono">unordered_map&lt;Handle, rhi::X*&gt;</text>
+    <rect x="406" y="156" width="120" height="26" rx="4" class="cpu"/>
+    <text x="466" y="173" class="mid mono">buffers</text>
+    <line x1="526" y1="169" x2="566" y2="169" class="arrow" marker-end="url(#ah)"/>
+    <rect x="568" y="156" width="156" height="26" rx="4" class="mem"/>
+    <text x="646" y="173" class="mid mono">rhi::Buffer*</text>
+    <rect x="406" y="190" width="120" height="26" rx="4" class="cpu"/>
+    <text x="466" y="207" class="mid mono">textures</text>
+    <line x1="526" y1="203" x2="566" y2="203" class="arrow" marker-end="url(#ah)"/>
+    <rect x="568" y="190" width="156" height="26" rx="4" class="mem"/>
+    <text x="646" y="207" class="mid mono">rhi::Texture*</text>
+    <text x="406" y="236" class="small">+ shaders, pipelines, command buffers, fences, ...</text>
+    <text x="406" y="258" class="small">Lookup is a map find: a missing handle logs</text>
+    <text x="406" y="274" class="small">"handle not found" and returns null.</text>
+    <text x="406" y="298" class="small">Buffers and textures can be destroyed.</text>
+  </svg>
+  <figcaption><code>RenderContext</code> takes its handles from the same <code>HandleManager</code> as <code>Engine</code>. The map values are <code>rhi::</code> pointers; the objects behind them are the backend's types (see <a href="graphics-apis-rhi.html">Graphics APIs and the RHI</a>).</figcaption>
+</figure>
+
+<h3>Two kinds of owner</h3>
+
+<div class="split">
+  <div>
+    <h4>CPU objects: <code>Engine</code>'s registry</h4>
+    <p><code>createEntity</code>: <code>getNextEntityHandle</code> gives <code>{3, 1}</code>. If <code>index &gt;= MAX_ENTITIES</code>, it warns and returns an invalid handle. Otherwise <code>registry.entities</code> grows to hold index 3. The handle <i>is</i> the position in a vector, as in section 2, but without the generation check.</p>
+  </div>
+  <div>
+    <h4>GPU objects: <code>RenderContext</code>'s maps</h4>
+    <p><code>createBuffer</code>: <code>rhi::Device::createBuffer</code> makes the object first (null on failure: an invalid handle). Then <code>getNextBufferHandle</code> gives a handle, and the map stores it. <code>destroyBuffer</code> and <code>destroyTexture</code> erase the map entry.</p>
+  </div>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Owner</th><th>Type</th><th>Limit</th><th>Where the limit is</th></tr>
+  <tr><td rowspan="6"><code>Engine</code> registry</td><td><code>Entity</code></td><td><code>MAX_ENTITIES</code> = 262,144 (2<sup>18</sup>)</td><td><code>include/rasm/entity.h</code></td></tr>
+  <tr><td><code>Mesh</code></td><td><code>MAX_MESHES</code> = 8 (7 usable)</td><td><code>include/rasm/mesh.h</code></td></tr>
+  <tr><td><code>Material</code></td><td><code>MAX_MATERIALS</code> = 256</td><td><code>include/rasm/engine.h</code></td></tr>
+  <tr><td><code>Camera</code></td><td><code>MAX_CAMERAS</code> = 8</td><td><code>include/rasm/engine.h</code></td></tr>
+  <tr><td><code>Light</code></td><td><code>MAX_LIGHTS</code> = 8 (7 usable)</td><td><code>include/rasm/light.h</code></td></tr>
+  <tr><td><code>Scene</code></td><td><code>MAX_SCENES</code> = 16</td><td><code>include/rasm/scene.h</code></td></tr>
+  <tr><td><code>RenderContext</code> maps</td><td>buffers, textures, pipelines, ...</td><td>no count limit; bindless texture slots stop at <code>MAX_BINDLESS_TEXTURES</code> = 1024</td><td><code>include/rasm/types.h</code></td></tr>
+</table>
+</div>
+
+<p>Indices start at 1 and the check is <code>index &gt;= MAX_*</code>, so slot 0 is never used. That is why only 7 meshes fit in 8.</p>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Handle layout</td><td>index + generation, often packed in 32 or 64 bits</td><td>Two separate <code>uint64_t</code> fields: 16 bytes per handle. They never wrap in practice.</td></tr>
+  <tr><td>Invalid handle</td><td>generation 0</td><td>The same: <code>isValid</code> is <code>generation != 0</code>, so <code>{}</code> is invalid.</td></tr>
+  <tr><td>Type safety</td><td>tag types</td><td>The same: <code>Handle&lt;Tag&gt;</code> with 20 tags, from <code>MeshHandle</code> to <code>QueryPoolHandle</code>. It is the only template RASM code may define.</td></tr>
+  <tr><td>Making a handle</td><td>pop the free list, or add a slot</td><td>A counter per type in <code>HandleCounters</code>. <code>getNextMeshHandle</code> returns <code>{counter++, 1}</code>. Nothing is ever reused (D4, B13).</td></tr>
+  <tr><td>Generation bump on destroy</td><td>yes</td><td>No. The generation is always 1 (<code>src/core/handle.cpp</code>).</td></tr>
+  <tr><td>Stale handle detection</td><td>compare generations</td><td><code>RenderContext</code>: indices are never reused, so a destroyed buffer or texture handle is simply missing from the map, and the lookup logs an error. This is the "counter as the index" row of section 9. <code>Engine</code> registry: no detection, but nothing there can be destroyed either.</td></tr>
+  <tr><td>Storage</td><td>slot array, or a slot map</td><td>CPU objects: a <code>std::vector</code> per type, indexed by <code>index</code>. GPU objects: a <code>std::unordered_map</code> per type, hashed by <code>HandleHash</code> (both fields, through <code>hashCombine</code>).</td></tr>
+  <tr><td>Deferred destruction</td><td>a delete queue tied to the frame fence</td><td>None. <code>destroyBuffer</code> frees at once. Callers destroy only what no frame in flight uses: for example, <code>uploadDrawList</code> replaces a too-small draw buffer of one frame slot right after that slot's fence wait. <code>destroyBuffer</code> also cancels the buffer's pending uploads (<code>cancelUploads</code>).</td></tr>
+  <tr><td>Dedup cache</td><td>immutable objects only</td><td><code>shaderDescCache</code>, <code>pipelineDescCache</code>, <code>descriptorSetLayoutDescCache</code>. Buffers and textures are always new (B1).</td></tr>
+  <tr><td>Path cache</td><td>file path → handle</td><td><code>loadedMeshes</code> (by path) and <code>loadedTextures</code> (by path and format) in the registry.</td></tr>
+</table>
+</div>
+
+<h3>The dedup caches</h3>
+
+<p>Every creation descriptor in <code>include/rasm/render/resource.h</code> (<code>ShaderDesc</code>, <code>PipelineDesc</code>, <code>BindlessDescriptorSetLayoutDesc</code>, ...) has a defaulted <code>operator==</code>, so equality always compares every field. The hashes are written by hand in <code>src/rhi/resource.cpp</code>. <code>ShaderDescHash</code> hashes the name, the type, the entry point and the SPIR-V bytes; <code>PipelineDescHash</code> hashes the name, the four handles (with <code>HandleHash</code>), the topology and both attachment formats.</p>
+
+<p>Because a pipeline's description holds shader <i>handles</i>, and equal shader descriptions give the same shader handle, two equal pipeline descriptions find each other too.</p>
+
+<h3>Two more details</h3>
+<ul>
+  <li><b>A texture handle can come before its pixels.</b> <code>loadTexture</code> creates the texture and returns its handle at once; the file is decoded in the background. <code>isLoaded</code> says when it is ready. See <a href="asset-streaming.html">Streaming assets in the background</a>.</li>
+  <li><b>Swapchain images are texture handles too.</b> <code>registerSwapchainImages</code> gives each image a handle, and <code>destroyTexture</code> refuses them: they belong to the swapchain.</li>
+</ul>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The handle, tags, aliases, hash</td><td><code>Handle</code>, <code>HandleHash</code>, <code>hashCombine</code> in <code>include/rasm/handle.h</code></td></tr>
+  <tr><td>Making handles</td><td><code>HandleManager</code>, <code>HandleCounters</code> in <code>include/rasm/handle.h</code>; <code>src/core/handle.cpp</code></td></tr>
+  <tr><td>CPU objects</td><td><code>Engine::Registry</code> in <code>include/rasm/engine.h</code>; <code>createEntity</code> in <code>src/scene/entity.cpp</code>, <code>loadMesh</code> in <code>src/assets/mesh.cpp</code>, <code>createMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
+  <tr><td>GPU objects and lookups</td><td><code>RenderContext::Impl</code>, <code>lookup</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Destroy</td><td><code>RenderContext::destroyBuffer</code>, <code>RenderContext::destroyTexture</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Dedup caches</td><td><code>createShader</code>, <code>createPipeline</code>, <code>createBindlessDescriptorSetLayout</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Descriptor hashes</td><td><code>ShaderDescHash</code>, <code>PipelineDescHash</code>, <code>BindlessDescriptorSetLayoutDescHash</code> in <code>src/rhi/resource.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>A new field in <code>ShaderDesc</code>, <code>PipelineDesc</code> or <code>BindlessDescriptorSetLayoutDesc</code> is compared by the defaulted <code>operator==</code> on its own, but must also be added to its hash in <code>src/rhi/resource.cpp</code>.</li>
+    <li>Never add dedup to <code>createBuffer</code> or <code>createTexture</code> (B1). Cache at the asset level, and destroy what you replace.</li>
+    <li>Destroy a buffer or texture only when no frame in flight can still use it: there is no delete queue yet.</li>
+    <li>A default handle (<code>{}</code>) means "none". Check <code>isValid</code> before using a handle that a create may have failed to fill.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p><b>D4</b>: CPU objects (entities, meshes, materials, ...) cannot be destroyed, the generation is always 1, and registry slots are never reused. Bindless slots are reused in one place only: a depth texture that is replaced on resize keeps its slot. Streaming worlds will need the full design of this page: a generation bump, free lists, and deferred destruction tied to the frame fences.</p>
+  <p><b>B13</b>: a handle index is taken before the create is checked, so a failed load still uses up an index. With only 7 mesh slots, this matters.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Jason Gregory, <i>Game Engine Architecture</i>, 3rd edition: the chapters on resource management and on handles.</li>
+  <li>Scott Bilas, <i>A Generic Handle-Based Resource Manager</i>, in <i>Game Programming Gems</i> (2000): handles with a "magic number" check, the ancestor of the generation.</li>
+  <li>The Bitsquid / Stingray engine blog, <i>Building a Data-Oriented Entity System</i> (2014): index plus generation for entities.</li>
+  <li>Allan Deutsch, the C++ standards proposal P0661, <i>slot_map</i> (2017): the dense slot map of section 5.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

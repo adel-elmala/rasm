@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Swapchain · RASM</title>
+<meta name="description" content="How a program shows its frames: the swapchain's ring of images, acquire, render and present, the semaphores between them, present modes and vsync, out-of-date swapchains and resize, and how RASM does it.">
+<meta name="rasm-sources" content="src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanQueue.cpp src/rhi/device.h src/rhi/renderContext.cpp src/engine.cpp include/rasm/types.h src/platform/window.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/swapchain.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Foundations</p>
+<h1>The swapchain and presenting</h1>
+<p class="lead">A program never draws straight onto the screen. It draws into an image, and hands the image to the system, which shows it at the next refresh. The <b>swapchain</b> is the small set of images that goes round between the two. This page explains the loop (acquire, render, present), the sync it needs, the present modes behind "vsync", and what to do when the window changes size. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A swapchain is a ring of 2 to 4 images owned by the <b>presentation engine</b> (the OS compositor or display).</li>
+    <li>Each frame: <b>acquire</b> an image, <b>render</b> into it, <b>present</b> it.</li>
+    <li>Acquire returns before the image is really free. An <b>acquire semaphore</b> makes the GPU wait; a <b>present semaphore</b> makes the present wait for the rendering.</li>
+    <li>The <b>present mode</b> decides what happens at the refresh: wait for it (FIFO, vsync), replace the waiting image (MAILBOX), or show at once and tear (IMMEDIATE).</li>
+    <li>When the window changes, the swapchain becomes <b>out of date</b> or <b>suboptimal</b>. The program then builds a new one, and everything sized like it.</li>
+    <li>A minimized window has size 0 × 0: no swapchain can exist for it, so frames are skipped.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>Why not draw onto the screen</h2>
+
+<p>The display reads its picture from memory, line by line, about 60 to 240 times per second. If the program drew into that same memory, the display would show half-drawn frames. So there are several images. The display shows one, while the program draws into another. When the new one is done, they swap. That is the old idea of <b>double buffering</b>, and a swapchain is its modern, explicit form.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Three swapchain images go round a cycle. A free image is acquired by the program, which draws into it. Present queues it for display. At the next refresh it goes on screen. When the next image replaces it, it is free again.">
+    <rect x="290" y="20" width="180" height="56" rx="6" class="box"/>
+    <text x="380" y="44" class="mid title">Free</text>
+    <text x="380" y="62" class="mid small">nobody uses it</text>
+    <rect x="550" y="120" width="190" height="56" rx="6" class="cpu"/>
+    <text x="645" y="144" class="mid title">Drawn into</text>
+    <text x="645" y="162" class="mid small">owned by the program</text>
+    <rect x="290" y="220" width="180" height="56" rx="6" class="mem"/>
+    <text x="380" y="244" class="mid title">Queued</text>
+    <text x="380" y="262" class="mid small">waits for a refresh</text>
+    <rect x="20" y="120" width="190" height="56" rx="6" class="gpu"/>
+    <text x="115" y="144" class="mid title">On screen</text>
+    <text x="115" y="162" class="mid small">the display reads it</text>
+
+    <path d="M470,48 Q630,48 640,118" class="arrow" marker-end="url(#ah)"/>
+    <text x="600" y="40" class="small">acquire</text>
+    <path d="M640,176 Q630,248 472,248" class="arrow" marker-end="url(#ah)"/>
+    <text x="560" y="266" class="small">present</text>
+    <path d="M290,248 Q130,248 120,178" class="arrow" marker-end="url(#ah)"/>
+    <text x="150" y="266" class="small">next refresh</text>
+    <path d="M120,120 Q130,48 288,48" class="arrow" marker-end="url(#ah)"/>
+    <text x="70" y="62" class="small">replaced</text>
+    <text x="380" y="150" class="mid small">The images never move or copy.</text>
+    <text x="380" y="166" class="mid small">Only their role changes.</text>
+  </svg>
+  <figcaption>With 3 images, one can be on screen, one queued and one drawn into, all at once. With 2, the program must wait whenever one is queued.</figcaption>
+</figure>
+
+<p>The images belong to the presentation engine, not to the program. The program asks for one, may draw into it until it gives it back, and must not touch it after that. The engine decides which image comes next, and when.</p>
+
+<h2><span class="n">2</span>The loop: acquire, render, present</h2>
+
+<ol class="steps">
+  <li><b>Acquire.</b> Ask the swapchain for the next image. The answer is an index into its images. It may block when every image is in use.</li>
+  <li><b>Render.</b> Record commands that draw into that image, and submit them.</li>
+  <li><b>Present.</b> Give the image back, with a request to show it.</li>
+</ol>
+
+<p>There is a catch in step 1. Acquire returns as soon as the swapchain <i>knows</i> which image comes next, which can be before the display has stopped reading it. So the index alone does not make it safe to draw. The image becomes free at some later moment, and only the GPU timeline knows when. Two <b>semaphores</b> handle this. A semaphore is a GPU-side signal: one submission signals it, and another one waits for it. The CPU never waits on it.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Three lanes: CPU, GPU queue and presentation engine. The CPU calls acquire, which returns an index at once. The presentation engine signals the acquire semaphore when the image is really free. The GPU work waits for it only at the color output stage, so work before drawing to the image already runs. The submit signals the present semaphore when it is done. Present waits for it, then the image goes on screen.">
+    <text x="20" y="54"  class="title t-cpu">CPU</text>
+    <text x="20" y="164" class="title t-gpu">GPU queue</text>
+    <text x="20" y="274" class="title">presentation</text>
+    <text x="20" y="290" class="small">engine</text>
+    <line x1="120" y1="50"  x2="740" y2="50"  class="arrow dashed"/>
+    <line x1="120" y1="160" x2="740" y2="160" class="arrow dashed"/>
+    <line x1="120" y1="270" x2="740" y2="270" class="arrow dashed"/>
+
+    <rect x="130" y="30" width="110" height="40" rx="6" class="cpu"/>
+    <text x="185" y="55" class="mid">acquire</text>
+    <rect x="300" y="30" width="110" height="40" rx="6" class="cpu"/>
+    <text x="355" y="55" class="mid">submit</text>
+    <rect x="620" y="30" width="110" height="40" rx="6" class="cpu"/>
+    <text x="675" y="55" class="mid">present</text>
+
+    <rect x="300" y="140" width="130" height="40" rx="6" class="gpu"/>
+    <text x="365" y="158" class="mid small">culling, shadows,</text>
+    <text x="365" y="172" class="mid small">other passes</text>
+    <rect x="430" y="140" width="150" height="40" rx="6" class="gpu"/>
+    <rect x="430" y="140" width="150" height="40" rx="6" class="hot"/>
+    <text x="505" y="165" class="mid small">draw into the image</text>
+
+    <rect x="160" y="250" width="160" height="40" rx="6" class="box"/>
+    <text x="240" y="268" class="mid small">display done with it:</text>
+    <text x="240" y="282" class="mid small">signal acquire sem.</text>
+    <rect x="620" y="250" width="120" height="40" rx="6" class="box"/>
+    <text x="680" y="275" class="mid small">show it</text>
+
+    <text x="185" y="88" class="mid small">returns an index at once</text>
+    <path d="M320,250 C380,230 420,210 440,184" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="352" y="222" class="small t-hot">wait</text>
+    <line x1="355" y1="70" x2="355" y2="136" class="arrow" marker-end="url(#ah)"/>
+    <path d="M580,170 C620,190 650,220 670,246" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="634" y="196" class="small t-hot">present sem.</text>
+  </svg>
+  <figcaption>The GPU waits for the acquire semaphore only at the stage that writes the image (color output). Everything before that stage in the same submission already runs while the display still holds the image.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Semaphore</th><th>Signaled by</th><th>Waited on by</th><th>Wait where</th></tr>
+  <tr><td><b>Acquire</b> ("image available")</td><td>the presentation engine, when the image is free</td><td>the submission that draws into the image</td><td>the color output stage, so earlier work is not held back</td></tr>
+  <tr><td><b>Present</b> ("render finished")</td><td>that submission, when it is done</td><td>the present call</td><td>the presentation engine, before it reads the image</td></tr>
+</table>
+</div>
+
+<p>Before present, the image must also be in the layout the display can read (in Vulkan: PRESENT_SRC). Its old contents do not matter at acquire, so the first barrier of the frame can discard them. See <a href="gpu-sync.html">GPU synchronization</a> for layouts and barriers.</p>
+
+<h3>When may a semaphore be used again?</h3>
+
+<p>A binary semaphore must be waited on once before it is signaled again. That makes reuse the most common swapchain bug:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Semaphore</th><th>Free again when</th><th>So keep</th></tr>
+  <tr><td>Acquire</td><td>the submission that waited on it has finished, which a fence tells the CPU</td><td>one per frame in flight, reused after that frame's fence wait</td></tr>
+  <tr><td>Present</td><td>the present has waited on it. The program cannot observe that directly (without an extension that gives present a fence).</td><td><b>one per swapchain image</b>. An image is acquired again only after its last present finished, so by then its semaphore is free.</td></tr>
+</table>
+</div>
+
+<p>Keeping one present semaphore per frame in flight looks right and works on many machines, but the present of frame <var>n</var> may still hold it when frame <var>n</var> + 2 signals it again. Validation layers now report this.</p>
+
+<h2><span class="n">3</span>Present modes and vsync</h2>
+
+<p>The display refreshes at fixed times, the <b>vertical blank</b> (vblank). The present mode says what happens to a presented image between two of them.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 360" role="img" aria-label="A 60 Hz display and a GPU that needs 10 ms per frame, over 100 ms. FIFO: the GPU renders one frame per refresh and waits; every frame is shown for one refresh. MAILBOX: the GPU renders all the time; at each refresh the newest finished frame is shown, so frames 1, 4, 6 and 9 are never shown. IMMEDIATE: each frame is shown as soon as it is done, in the middle of a refresh, so the screen shows a tear line.">
+    <text x="220" y="22" class="small">dashed: a vblank, every 16.7 ms</text>
+    <line x1="220" y1="42" x2="220" y2="102" class="arrow dashed"/>
+    <line x1="320" y1="42" x2="320" y2="102" class="arrow dashed"/>
+    <line x1="420" y1="42" x2="420" y2="102" class="arrow dashed"/>
+    <line x1="520" y1="42" x2="520" y2="102" class="arrow dashed"/>
+    <line x1="620" y1="42" x2="620" y2="102" class="arrow dashed"/>
+    <line x1="720" y1="42" x2="720" y2="102" class="arrow dashed"/>
+    <line x1="220" y1="142" x2="220" y2="202" class="arrow dashed"/>
+    <line x1="320" y1="142" x2="320" y2="202" class="arrow dashed"/>
+    <line x1="420" y1="142" x2="420" y2="202" class="arrow dashed"/>
+    <line x1="520" y1="142" x2="520" y2="202" class="arrow dashed"/>
+    <line x1="620" y1="142" x2="620" y2="202" class="arrow dashed"/>
+    <line x1="720" y1="142" x2="720" y2="202" class="arrow dashed"/>
+    <line x1="220" y1="242" x2="220" y2="302" class="arrow dashed"/>
+    <line x1="320" y1="242" x2="320" y2="302" class="arrow dashed"/>
+    <line x1="420" y1="242" x2="420" y2="302" class="arrow dashed"/>
+    <line x1="520" y1="242" x2="520" y2="302" class="arrow dashed"/>
+    <line x1="620" y1="242" x2="620" y2="302" class="arrow dashed"/>
+    <line x1="720" y1="242" x2="720" y2="302" class="arrow dashed"/>
+
+    <text x="20" y="40" class="title">FIFO</text>
+    <text x="110" y="62" class="end small t-gpu">GPU</text>
+    <rect x="120" y="48" width="60" height="20" rx="3" class="gpu"/><text x="150" y="62" class="mid small">0</text>
+    <rect x="220" y="48" width="60" height="20" rx="3" class="gpu"/><text x="250" y="62" class="mid small">1</text>
+    <rect x="320" y="48" width="60" height="20" rx="3" class="gpu"/><text x="350" y="62" class="mid small">2</text>
+    <rect x="420" y="48" width="60" height="20" rx="3" class="gpu"/><text x="450" y="62" class="mid small">3</text>
+    <rect x="520" y="48" width="60" height="20" rx="3" class="gpu"/><text x="550" y="62" class="mid small">4</text>
+    <rect x="620" y="48" width="60" height="20" rx="3" class="gpu"/><text x="650" y="62" class="mid small">5</text>
+    <text x="110" y="90" class="end small">screen</text>
+    <rect x="220" y="76" width="100" height="20" rx="3" class="box"/><text x="270" y="90" class="mid small">0</text>
+    <rect x="320" y="76" width="100" height="20" rx="3" class="box"/><text x="370" y="90" class="mid small">1</text>
+    <rect x="420" y="76" width="100" height="20" rx="3" class="box"/><text x="470" y="90" class="mid small">2</text>
+    <rect x="520" y="76" width="100" height="20" rx="3" class="box"/><text x="570" y="90" class="mid small">3</text>
+    <rect x="620" y="76" width="100" height="20" rx="3" class="box"/><text x="670" y="90" class="mid small">4</text>
+    <text x="120" y="114" class="small">every frame shown once, no tearing; the GPU idles 6.7 ms per refresh</text>
+
+    <text x="20" y="140" class="title">MAILBOX</text>
+    <text x="110" y="162" class="end small t-gpu">GPU</text>
+    <rect x="120" y="148" width="60" height="20" rx="3" class="gpu"/><text x="150" y="162" class="mid small">0</text>
+    <rect x="180" y="148" width="60" height="20" rx="3" class="ghost"/><text x="210" y="162" class="mid small t-faint">1</text>
+    <rect x="240" y="148" width="60" height="20" rx="3" class="gpu"/><text x="270" y="162" class="mid small">2</text>
+    <rect x="300" y="148" width="60" height="20" rx="3" class="gpu"/><text x="330" y="162" class="mid small">3</text>
+    <rect x="360" y="148" width="60" height="20" rx="3" class="ghost"/><text x="390" y="162" class="mid small t-faint">4</text>
+    <rect x="420" y="148" width="60" height="20" rx="3" class="gpu"/><text x="450" y="162" class="mid small">5</text>
+    <rect x="480" y="148" width="60" height="20" rx="3" class="ghost"/><text x="510" y="162" class="mid small t-faint">6</text>
+    <rect x="540" y="148" width="60" height="20" rx="3" class="gpu"/><text x="570" y="162" class="mid small">7</text>
+    <rect x="600" y="148" width="60" height="20" rx="3" class="gpu"/><text x="630" y="162" class="mid small">8</text>
+    <rect x="660" y="148" width="60" height="20" rx="3" class="ghost"/><text x="690" y="162" class="mid small t-faint">9</text>
+    <text x="110" y="190" class="end small">screen</text>
+    <rect x="220" y="176" width="100" height="20" rx="3" class="box"/><text x="270" y="190" class="mid small">0</text>
+    <rect x="320" y="176" width="100" height="20" rx="3" class="box"/><text x="370" y="190" class="mid small">2</text>
+    <rect x="420" y="176" width="100" height="20" rx="3" class="box"/><text x="470" y="190" class="mid small">3</text>
+    <rect x="520" y="176" width="100" height="20" rx="3" class="box"/><text x="570" y="190" class="mid small">5</text>
+    <rect x="620" y="176" width="100" height="20" rx="3" class="box"/><text x="670" y="190" class="mid small">7</text>
+    <text x="120" y="214" class="small">newest frame at each refresh, no tearing; dashed frames are drawn and never shown</text>
+
+    <text x="20" y="240" class="title">IMMEDIATE</text>
+    <text x="110" y="262" class="end small t-gpu">GPU</text>
+    <rect x="120" y="248" width="60" height="20" rx="3" class="gpu"/><text x="150" y="262" class="mid small">0</text>
+    <rect x="180" y="248" width="60" height="20" rx="3" class="gpu"/><text x="210" y="262" class="mid small">1</text>
+    <rect x="240" y="248" width="60" height="20" rx="3" class="gpu"/><text x="270" y="262" class="mid small">2</text>
+    <rect x="300" y="248" width="60" height="20" rx="3" class="gpu"/><text x="330" y="262" class="mid small">3</text>
+    <rect x="360" y="248" width="60" height="20" rx="3" class="gpu"/><text x="390" y="262" class="mid small">4</text>
+    <rect x="420" y="248" width="60" height="20" rx="3" class="gpu"/><text x="450" y="262" class="mid small">5</text>
+    <rect x="480" y="248" width="60" height="20" rx="3" class="gpu"/><text x="510" y="262" class="mid small">6</text>
+    <rect x="540" y="248" width="60" height="20" rx="3" class="gpu"/><text x="570" y="262" class="mid small">7</text>
+    <rect x="600" y="248" width="60" height="20" rx="3" class="gpu"/><text x="630" y="262" class="mid small">8</text>
+    <rect x="660" y="248" width="60" height="20" rx="3" class="gpu"/><text x="690" y="262" class="mid small">9</text>
+    <text x="110" y="290" class="end small">screen</text>
+    <rect x="180" y="276" width="60" height="20" rx="3" class="box"/><text x="210" y="290" class="mid small">0</text>
+    <rect x="240" y="276" width="60" height="20" rx="3" class="box"/><text x="270" y="290" class="mid small">1</text>
+    <rect x="300" y="276" width="60" height="20" rx="3" class="box"/><text x="330" y="290" class="mid small">2</text>
+    <rect x="360" y="276" width="60" height="20" rx="3" class="box"/><text x="390" y="290" class="mid small">3</text>
+    <rect x="420" y="276" width="60" height="20" rx="3" class="box"/><text x="450" y="290" class="mid small">4</text>
+    <rect x="480" y="276" width="60" height="20" rx="3" class="box"/><text x="510" y="290" class="mid small">5</text>
+    <rect x="540" y="276" width="60" height="20" rx="3" class="box"/><text x="570" y="290" class="mid small">6</text>
+    <rect x="600" y="276" width="60" height="20" rx="3" class="box"/><text x="630" y="290" class="mid small">7</text>
+    <rect x="660" y="276" width="60" height="20" rx="3" class="box"/><text x="690" y="290" class="mid small">8</text>
+    <line x1="180" y1="272" x2="180" y2="300" class="hot"/>
+    <line x1="240" y1="272" x2="240" y2="300" class="hot"/>
+    <line x1="300" y1="272" x2="300" y2="300" class="hot"/>
+    <line x1="360" y1="272" x2="360" y2="300" class="hot"/>
+    <line x1="480" y1="272" x2="480" y2="300" class="hot"/>
+    <line x1="540" y1="272" x2="540" y2="300" class="hot"/>
+    <line x1="600" y1="272" x2="600" y2="300" class="hot"/>
+    <line x1="660" y1="272" x2="660" y2="300" class="hot"/>
+    <text x="120" y="314" class="small">shown as soon as done: lowest latency, but a switch in the middle of a refresh is a <tspan class="t-hot">tear line</tspan></text>
+
+    <line x1="120" y1="340" x2="720" y2="340" class="arrow"/>
+    <text x="120" y="354" class="mid small">0</text>
+    <text x="220" y="354" class="mid small">16.7</text>
+    <text x="320" y="354" class="mid small">33.3</text>
+    <text x="420" y="354" class="mid small">50</text>
+    <text x="520" y="354" class="mid small">66.7</text>
+    <text x="620" y="354" class="mid small">83.3</text>
+    <text x="720" y="354" class="mid small">100 ms</text>
+  </svg>
+  <figcaption>A 60 Hz display and a GPU that needs 10 ms per frame, 6 pixels per millisecond. In FIFO with two images, the GPU starts the next frame only when a refresh frees an image. Orange lines: the screen switches images while the display is drawing it.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Mode (Vulkan name)</th><th>At a refresh</th><th>Tearing</th><th>Latency</th><th>Notes</th></tr>
+  <tr><td><b>FIFO</b></td><td>shows the oldest queued image; a full queue makes acquire or present block</td><td>no</td><td>higher</td><td>"vsync on". Always supported. Saves power: the GPU does not render frames nobody sees.</td></tr>
+  <tr><td><b>FIFO_RELAXED</b></td><td>like FIFO, but an image that arrives late is shown at once</td><td>only when late</td><td>higher</td><td>Avoids a whole lost refresh when a frame is a little late.</td></tr>
+  <tr><td><b>MAILBOX</b></td><td>shows the newest image; a new present replaces the queued one</td><td>no</td><td>low</td><td>"Triple buffering" in the classic sense. The GPU runs flat out; frames are wasted.</td></tr>
+  <tr><td><b>IMMEDIATE</b></td><td>does not wait for a refresh</td><td>yes</td><td>lowest</td><td>"vsync off". Liked by competitive games.</td></tr>
+</table>
+</div>
+
+<h3>Worked example: when the GPU is too slow for FIFO</h3>
+
+<p>A 60 Hz display refreshes every 16.7 ms. With FIFO, a frame can only appear at a refresh. These numbers come from stepping the rules above with a fixed GPU time per frame:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>GPU per frame</th><th>Images</th><th>Frames shown per second</th><th>Time each frame stays on screen</th></tr>
+  <tr><td>10 ms</td><td>2 or 3</td><td>60</td><td>16.7 ms, every time</td></tr>
+  <tr><td>20 ms</td><td>2</td><td><b>30</b></td><td>33.3 ms, every time</td></tr>
+  <tr><td>20 ms</td><td>3</td><td>about 50</td><td>mostly 16.7 ms, every fifth frame 33.3 ms</td></tr>
+</table>
+</div>
+
+<p>With 2 images and 20 ms frames, a finished frame waits for the next refresh, and the GPU has no free image during that wait. It loses the rest of each refresh, so it drops all the way to 30. A third image lets the GPU start the next frame during the wait. The average is close to the GPU's own 50, but the timing is uneven, which the eye notices as <b>judder</b>.</p>
+
+<h2><span class="n">4</span>When the swapchain no longer fits</h2>
+
+<p>A swapchain is built for one window size and one surface. When the window changes, acquire and present report it:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Result</th><th>Meaning</th><th>What to do</th></tr>
+  <tr><td><b>Suboptimal</b></td><td>The image was acquired or presented, but the swapchain no longer matches the surface exactly (for example, its size).</td><td>Finish and present this frame. Rebuild before the next one.</td></tr>
+  <tr><td><b>Out of date</b></td><td>The swapchain cannot be used any more. From acquire: no image was acquired.</td><td>Skip this frame. Rebuild.</td></tr>
+  <tr><td>Surface size 0 × 0</td><td>The window is minimized. No swapchain can be built for it.</td><td>Skip frames, ideally sleeping until a window event, until the size is back.</td></tr>
+</table>
+</div>
+
+<p>Most programs also listen to the window system's own resize event, because not every platform reports out of date in time. Rebuilding works like this:</p>
+
+<ol class="steps">
+  <li><b>Wait for the GPU.</b> The old images may still be in use by frames in flight. The simple way is to wait until the device is idle; resize is rare, so the stall does not matter.</li>
+  <li><b>Build the new swapchain</b> with the new size, passing the old one as "old swapchain". That lets the system hand over smoothly, and retires the old one even if the build fails.</li>
+  <li><b>Destroy the old swapchain</b> and its image views.</li>
+  <li><b>Rebuild what has the screen's size:</b> depth buffers, full-screen render targets, the viewport, and the camera's aspect ratio.</li>
+  <li><b>Use the swapchain's size, not the window's.</b> The surface picks the final size, and on high-DPI screens it is in pixels, while the window size may be in points.</li>
+</ol>
+
+<div class="callout">
+  <strong>Signaled semaphores across a rebuild</strong>
+  <p>A rebuild can happen between acquire and present. Then an acquire semaphore may be signaled and never waited on, and a binary semaphore in that state cannot be signaled again. A robust rebuild first makes sure every signaled semaphore is waited on (for example, with an empty submission that only waits), or destroys and recreates the semaphores.</p>
+</div>
+
+<h2><span class="n">5</span>Format and color space</h2>
+
+<p>The swapchain also fixes the pixel format and the color space the display expects. A common choice is an 8-bit BGRA or RGBA format with an <b>sRGB</b> encoding. With an sRGB format, the hardware converts the shader's linear output into sRGB when it writes. HDR displays need other color spaces and wider formats. See <a href="color-spaces.html">color spaces: sRGB and linear</a>.</p>
+
+<h2><span class="n">6</span>Pitfalls</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Pitfall</th><th>What happens</th></tr>
+  <tr><td>Drawing as soon as acquire returns, with no semaphore wait</td><td>The display may still read the image: flicker or garbage, on some machines only.</td></tr>
+  <tr><td>Present semaphores per frame in flight</td><td>A semaphore is signaled while a present still waits on it (section 2).</td></tr>
+  <tr><td>Treating the image index as the frame slot</td><td>The order of images is up to the swapchain, and their count is not the number of frames in flight. Index frame resources by the slot (see <a href="frames-in-flight.html">frames in flight</a>).</td></tr>
+  <tr><td>Ignoring suboptimal or out of date</td><td>A stretched picture after resize, or errors on every frame.</td></tr>
+  <tr><td>Forgetting the layout change to "present"</td><td>The display reads an image in a layout it does not understand.</td></tr>
+  <tr><td>Not presenting an acquired image</td><td>The image stays out of the ring. After a few such frames, acquire has no image left to give.</td></tr>
+</table>
+</div>
+
+<h2 id="in-rasm"><span class="n">7</span>In RASM</h2>
+
+<p><code>VulkanSwapchain</code> builds the swapchain with vk-bootstrap and owns all of its sync objects. No semaphore crosses the RHI: a submit only names the swapchain (<code>SubmitDesc::swapchain</code>), and the swapchain fills in the waits and signals. The engine's frame loop handles skipped frames and resize.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 390" role="img" aria-label="acquireNextImage first waits on the CPU until releaseTimeline reaches the value stored for its acquire slot, then acquires with acquireSemaphores of that slot. The presenting submit waits on that semaphore at color attachment output and signals presentSemaphores of the image, releaseTimeline with the next value, and the frame fence. present waits on the image's present semaphore.">
+    <text x="20" y="60"  class="title t-cpu">CPU</text>
+    <text x="20" y="206" class="title t-gpu">graphics queue</text>
+    <text x="20" y="336" class="title">presentation</text>
+    <text x="20" y="352" class="small">engine</text>
+
+    <rect x="130" y="34" width="180" height="50" rx="6" class="cpu"/>
+    <text x="220" y="56" class="mid mono">acquireNextImage</text>
+    <text x="220" y="74" class="mid small">vkAcquireNextImageKHR</text>
+    <rect x="360" y="34" width="160" height="50" rx="6" class="cpu"/>
+    <text x="440" y="56" class="mid mono">submit</text>
+    <text x="440" y="74" class="mid small">one vkQueueSubmit2</text>
+    <rect x="580" y="34" width="160" height="50" rx="6" class="cpu"/>
+    <text x="660" y="56" class="mid mono">present</text>
+    <text x="660" y="74" class="mid small">vkQueuePresentKHR</text>
+
+    <rect x="360" y="180" width="160" height="50" rx="6" class="gpu"/>
+    <text x="440" y="202" class="mid">frame work</text>
+    <text x="440" y="220" class="mid small">cull + frame command buffers</text>
+
+    <rect x="130" y="314" width="180" height="50" rx="6" class="box"/>
+    <text x="220" y="336" class="mid">image is free</text>
+    <text x="220" y="354" class="mid small">signals the acquire semaphore</text>
+    <rect x="580" y="314" width="160" height="50" rx="6" class="box"/>
+    <text x="660" y="336" class="mid">shows the image</text>
+    <text x="660" y="354" class="mid small">after the wait</text>
+
+    <rect x="130" y="250" width="180" height="34" rx="6" class="mem"/>
+    <text x="220" y="272" class="mid mono small">acquireSemaphores[slot]</text>
+    <rect x="560" y="250" width="180" height="34" rx="6" class="mem"/>
+    <text x="650" y="272" class="mid mono small">presentSemaphores[image]</text>
+    <rect x="130" y="110" width="180" height="34" rx="6" class="mem"/>
+    <text x="220" y="132" class="mid mono small">releaseTimeline</text>
+    <rect x="580" y="110" width="160" height="34" rx="6" class="mem"/>
+    <text x="660" y="132" class="mid mono small">frameFence</text>
+
+    <line x1="220" y1="314" x2="220" y2="286" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="228" y="304" class="small">signal</text>
+    <line x1="310" y1="267" x2="400" y2="234" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="300" y="300" class="small">wait at color output</text>
+    <line x1="480" y1="230" x2="560" y2="262" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="528" y="240" class="small">signal</text>
+    <line x1="650" y1="284" x2="650" y2="312" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="658" y="302" class="small">wait</text>
+    <line x1="400" y1="180" x2="312" y2="136" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="350" y="178" class="end small">signal next value</text>
+    <line x1="440" y1="84" x2="440" y2="178" class="arrow" marker-end="url(#ah)"/>
+    <line x1="480" y1="180" x2="600" y2="146" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="548" y="176" class="small">signal frame value</text>
+    <line x1="220" y1="110" x2="220" y2="86" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="228" y="102" class="small t-hot">a later acquire waits here (CPU)</text>
+  </svg>
+  <figcaption>One presenting submit waits on one semaphore and signals three. The release timeline tells <code>acquireNextImage</code> when an acquire semaphore is free again, without depending on how the engine paces its frames.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Sync object</th><th>Kind</th><th>How many</th><th>Free again when</th></tr>
+  <tr><td><code>acquireSemaphores</code></td><td>binary</td><td><code>MAX_FRAMES_IN_FLIGHT</code> (2), used in turn by <code>nextAcquireSlot</code></td><td><code>releaseTimeline</code> reaches the value in <code>acquireReleaseValues</code> for that slot: the submit that waited on it is done</td></tr>
+  <tr><td><code>presentSemaphores</code></td><td>binary</td><td>one per swapchain image</td><td>the image is acquired again. They survive a resize; a swapchain with more images only adds more.</td></tr>
+  <tr><td><code>releaseTimeline</code></td><td>timeline</td><td>1</td><td>— (values only grow; <code>releaseValue</code> is the last one signaled)</td></tr>
+</table>
+</div>
+
+<h3>The order is enforced</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 190" role="img" aria-label="Idle: acquire moves to Acquired. Acquired: a successful submit that names the swapchain moves to Submitted; acquiring again returns the same image. Submitted: present moves back to Idle, whatever its result.">
+    <rect x="20" y="56" width="200" height="64" rx="6" class="box"/>
+    <text x="120" y="80" class="mid title">Idle</text>
+    <text x="120" y="98" class="mid small mono">acquiredSlot = NO_ACQUIRE</text>
+    <text x="120" y="112" class="mid small mono">presentPending = false</text>
+    <rect x="300" y="56" width="160" height="64" rx="6" class="cpu"/>
+    <text x="380" y="80" class="mid title">Acquired</text>
+    <text x="380" y="100" class="mid small">acquiredSlot = the slot</text>
+    <rect x="560" y="56" width="160" height="64" rx="6" class="gpu"/>
+    <text x="640" y="80" class="mid title">Submitted</text>
+    <text x="640" y="100" class="mid small mono">presentPending = true</text>
+    <line x1="220" y1="76" x2="298" y2="76" class="arrow" marker-end="url(#ah)"/>
+    <text x="259" y="48" class="mid small">acquire: OK or</text>
+    <text x="259" y="62" class="mid small">SUBOPTIMAL</text>
+    <line x1="460" y1="76" x2="558" y2="76" class="arrow" marker-end="url(#ah)"/>
+    <text x="510" y="62" class="mid small mono">onSubmitted</text>
+    <path d="M640,120 V160 H120 V122" class="arrow" marker-end="url(#ah)"/>
+    <text x="380" y="178" class="mid small">present (any result)</text>
+    <path d="M350,56 C350,20 410,20 410,54" class="arrow" marker-end="url(#ah)"/>
+    <text x="380" y="16" class="mid small">acquire again → the same image</text>
+  </svg>
+  <figcaption>A call in the wrong state logs an error and fails: a submit that names the swapchain while <i>Idle</i>, an acquire while <i>Submitted</i> (<code>FAILURE</code>), a present that does not follow a successful submit. "Acquire again" happens after a failed submit: the image is still acquired and its semaphore still signaled, so it is handed out again.</figcaption>
+</figure>
+
+<h3>The frame loop around it</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="beginFrame: a minimized or zero-size window skips the frame. A resized window or swapchainOutOfDate recreates the swapchain; failure skips the frame. After the fence wait, acquire: OUT_OF_DATE sets the flag and skips; SUBOPTIMAL sets the flag and goes on. endFrame moves the image to PRESENT_SRC, submits, presents; SUBOPTIMAL or OUT_OF_DATE from present sets the flag.">
+    <text x="20" y="20" class="title t-cpu">beginFrame</text>
+    <rect x="20" y="32" width="170" height="56" rx="6" class="cpu"/>
+    <text x="105" y="54" class="mid small">minimized, or</text>
+    <text x="105" y="70" class="mid small">pixel size 0?</text>
+    <line x1="105" y1="88" x2="105" y2="114" class="arrow" marker-end="url(#ah)"/>
+    <text x="113" y="106" class="small">yes</text>
+    <rect x="40" y="116" width="130" height="30" rx="15" class="ghost"/>
+    <text x="105" y="135" class="mid small">skip the frame</text>
+
+    <line x1="190" y1="60" x2="218" y2="60" class="arrow" marker-end="url(#ah)"/>
+    <rect x="220" y="32" width="170" height="56" rx="6" class="cpu"/>
+    <text x="305" y="54" class="mid small">resized, or</text>
+    <text x="305" y="70" class="mid small mono">swapchainOutOfDate?</text>
+    <line x1="305" y1="88" x2="305" y2="114" class="arrow" marker-end="url(#ah)"/>
+    <text x="313" y="106" class="small">yes</text>
+    <rect x="220" y="116" width="170" height="40" rx="6" class="cpu"/>
+    <text x="305" y="140" class="mid mono small">recreateSwapchain</text>
+    <text x="305" y="174" class="mid small">fails → skip the frame</text>
+
+    <line x1="390" y1="60" x2="418" y2="60" class="arrow" marker-end="url(#ah)"/>
+    <rect x="420" y="32" width="150" height="56" rx="6" class="cpu"/>
+    <text x="495" y="54" class="mid small">fence wait, then</text>
+    <text x="495" y="70" class="mid mono small">acquireNextImage</text>
+    <line x1="570" y1="60" x2="598" y2="60" class="arrow" marker-end="url(#ah)"/>
+    <rect x="600" y="32" width="140" height="56" rx="6" class="box"/>
+    <text x="670" y="54" class="mid small">record passes</text>
+    <text x="670" y="70" class="mid small">into the image</text>
+    <line x1="495" y1="88" x2="495" y2="114" class="arrow" marker-end="url(#ah)"/>
+    <text x="420" y="132" class="small"><tspan class="mono">OUT_OF_DATE</tspan>: set the flag, skip</text>
+    <text x="420" y="150" class="small"><tspan class="mono">SUBOPTIMAL</tspan>: set the flag, go on</text>
+    <text x="420" y="168" class="small"><tspan class="mono">FAILURE</tspan>: skip</text>
+
+    <text x="20" y="220" class="title t-cpu">endFrame</text>
+    <rect x="20" y="232" width="200" height="56" rx="6" class="cpu"/>
+    <text x="120" y="254" class="mid small">nothing drew to the image?</text>
+    <text x="120" y="270" class="mid small">a "Clear" pass draws it</text>
+    <line x1="220" y1="260" x2="248" y2="260" class="arrow" marker-end="url(#ah)"/>
+    <rect x="250" y="232" width="160" height="56" rx="6" class="cpu"/>
+    <text x="330" y="254" class="mid small">image →</text>
+    <text x="330" y="270" class="mid mono small">PRESENT_SRC</text>
+    <line x1="410" y1="260" x2="438" y2="260" class="arrow" marker-end="url(#ah)"/>
+    <rect x="440" y="232" width="130" height="56" rx="6" class="gpu"/>
+    <text x="505" y="254" class="mid mono small">submit</text>
+    <text x="505" y="270" class="mid small">names the swapchain</text>
+    <line x1="570" y1="260" x2="598" y2="260" class="arrow" marker-end="url(#ah)"/>
+    <rect x="600" y="232" width="140" height="56" rx="6" class="cpu"/>
+    <text x="670" y="254" class="mid mono small">present</text>
+    <text x="670" y="270" class="mid small">if the submit worked</text>
+    <text x="740" y="312" class="end small"><tspan class="mono">SUBOPTIMAL</tspan> or <tspan class="mono">OUT_OF_DATE</tspan>: set the flag, rebuild next frame</text>
+  </svg>
+  <figcaption><code>swapchainOutOfDate</code> carries the news to the next <code>beginFrame</code>. The window sets <code>resized</code> on SDL's pixel-size event, so the swapchain follows the size in pixels (<b>B17</b>).</figcaption>
+</figure>
+
+<h3>Resize, step by step</h3>
+<ol class="steps">
+  <li><b>Ask the surface.</b> <code>VulkanSwapchain::resize</code> reads the surface size. A 0 × 0 surface returns <code>OUT_OF_DATE</code> and keeps the old swapchain (<b>B5</b>). A failed query returns <code>FAILURE</code> and keeps it too.</li>
+  <li><b>Consume pending signals.</b> <code>releasePendingSemaphores</code> submits a wait-only batch for an image that was acquired but not submitted, and for one submitted but not presented.</li>
+  <li><b>Go idle and rebuild.</b> The device waits idle, the old image views go, and the new swapchain is built with the old one as <code>oldSwapchain</code>. The old one is destroyed either way. If the build fails, there is no swapchain, and acquire reports <code>OUT_OF_DATE</code> until a rebuild works.</li>
+  <li><b>New handles.</b> <code>RenderContext::recreateSwapchain</code> registers the new images under new texture handles.</li>
+  <li><b>Screen-sized resources.</b> <code>Engine::createSwapchainResources</code> recreates the depth texture of each frame slot at the new size, keeps its bindless slot, and sets the camera aspect ratio from the swapchain's extent.</li>
+</ol>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Present mode</td><td>a choice: FIFO, MAILBOX, IMMEDIATE</td><td>Always <code>VK_PRESENT_MODE_FIFO_KHR</code>, so the frame rate is capped at the refresh rate. Other modes crashed <code>vkDestroyDevice</code> on NVIDIA (<b>B21</b>). There is no vsync option.</td></tr>
+  <tr><td>Image count</td><td>2 to 4</td><td>vk-bootstrap's default; RASM does not ask for a count.</td></tr>
+  <tr><td>Format</td><td>sRGB or HDR</td><td>Asks for <code>VK_FORMAT_B8G8R8A8_SRGB</code> with <code>VK_COLOR_SPACE_SRGB_NONLINEAR_KHR</code>. No HDR.</td></tr>
+  <tr><td>Acquire semaphores</td><td>one per frame in flight, freed by the frame fence</td><td>One per frame in flight, but the swapchain tracks their reuse with its own <code>releaseTimeline</code>, so it does not rely on the engine's frame fence.</td></tr>
+  <tr><td>Present semaphores</td><td>one per image</td><td>The same (<code>presentSemaphores</code>), kept across resizes.</td></tr>
+  <tr><td>Wait stage</td><td>color output</td><td>Color attachment output. The barrier that moves the image out of <code>UNKNOWN</code> waits at the same stage, so the layout change comes after the acquire.</td></tr>
+  <tr><td>Layout</td><td>discard at acquire, "present" before present</td><td><code>RenderContext::acquireNextImage</code> sets the image's state to <code>UNKNOWN</code>; <code>beginPass</code> moves it to <code>COLOR_ATTACHMENT</code>, discarding; <code>endFrame</code> moves it to <code>PRESENT_SRC</code>.</td></tr>
+  <tr><td>Every acquired image is presented</td><td>yes</td><td>Yes. A frame that only drew into render targets gets a "Clear" pass in <code>endFrame</code>. A failed submit keeps the image acquired for the next frame.</td></tr>
+  <tr><td>Suboptimal</td><td>finish the frame, rebuild</td><td>The same, through <code>swapchainOutOfDate</code>.</td></tr>
+  <tr><td>Minimized window</td><td>skip frames, sleep</td><td>The same: <code>beginFrame</code> skips, and <code>pollEvents</code> waits up to 100 ms for an event while minimized.</td></tr>
+  <tr><td>Rebuild</td><td>wait idle, old swapchain, release signals</td><td>All three.</td></tr>
+  <tr><td>Present queue</td><td>any queue that can present</td><td>The one graphics queue.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Building, acquire, present, resize</td><td><code>VulkanSwapchain</code> in <code>src/rhi/vulkan/vulkanSwapchain.cpp</code></td></tr>
+  <tr><td>Waits and signals of the presenting submit</td><td><code>getSubmitSemaphores</code>, <code>onSubmitted</code>; used by <code>VulkanQueue::submit</code> in <code>src/rhi/vulkan/vulkanQueue.cpp</code></td></tr>
+  <tr><td>Result codes</td><td><code>SwapchainStatus</code> in <code>include/rasm/types.h</code></td></tr>
+  <tr><td>Image handles, layout at acquire</td><td><code>RenderContext::acquireNextImage</code>, <code>recreateSwapchain</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Skips, resize, present</td><td><code>Engine::beginFrame</code>, <code>endFrame</code>, <code>recreateSwapchain</code>, <code>createSwapchainResources</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Resize and minimize events</td><td><code>pollEvents</code> in <code>src/platform/window.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Swapchain calls handle <code>VK_SUBOPTIMAL_KHR</code> and <code>VK_ERROR_OUT_OF_DATE_KHR</code> explicitly, and return a <code>SwapchainStatus</code> the engine acts on.</li>
+    <li>No semaphore crosses the RHI. The acquire → submit → present order lives inside <code>VulkanSwapchain</code>.</li>
+    <li>Everything sized like the screen comes from the swapchain's extent in pixels, not from the window's logical size.</li>
+    <li>Swapchain images belong to the swapchain: <code>RenderContext::destroyTexture</code> refuses them.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>The Khronos Group, <i>Vulkan Specification</i>: the chapter "Window System Integration (WSI)", and the extension VK_EXT_swapchain_maintenance1 (fences for present).</li>
+  <li>Alexander Overvoorde, <i>Vulkan Tutorial</i>: the chapters "Swap chain" and "Swap chain recreation".</li>
+  <li>Microsoft, <i>DXGI flip model</i> documentation, for the same ideas on Windows and Direct3D.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

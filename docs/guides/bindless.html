@@ -1,0 +1,716 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bindless Resources · RASM</title>
+<meta name="description" content="How bindless resources work: per-draw descriptor binding versus one big array indexed in the shader, descriptor indexing features, non-uniform indexing, slot allocation and free lists, slot lifetime with frames in flight, samplers, descriptor buffers, and how RASM does it.">
+<meta name="rasm-sources" content="src/engine.cpp src/assets/material.cpp src/assets/texture.cpp src/renderer/gpuScene.cpp src/renderer/uberMaterialTypes.h src/rhi/renderContext.cpp src/rhi/vulkan/vulkanDevice.cpp include/rasm/types.h include/rasm/engine.h include/rasm/material.h include/rasm/render/resource.h shaders/lib/core.slang shaders/lib/pbr.slang shaders/passes/rasm.slang shaders/passes/hiz.slang">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/bindless.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">GPU data</p>
+<h1>Bindless resources</h1>
+<p class="lead">In the classic model, the CPU tells the GPU which textures a draw may use, before each draw. In the <b>bindless</b> model, all textures sit in one big array that is bound once, and the shader picks a texture by its number. This page explains how that works, which GPU features it needs, and how to manage the numbers safely. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A <b>descriptor</b> is a small GPU record that says "this image, read with this sampler". Shaders reach textures only through descriptors.</li>
+    <li>Classic binding changes the bound descriptors before each draw. Bindless puts every descriptor in <b>one array</b>, binds it once, and stores <b>slot numbers</b> in the data the shader reads.</li>
+    <li>It needs <b>descriptor indexing</b>: an array with no fixed size, empty slots allowed (<b>partially bound</b>), writes while the array is bound (<b>update after bind</b>), and indexing that may differ per pixel (<b>non-uniform</b>).</li>
+    <li>Slots are handed out by a small allocator, usually a counter plus a <b>free list</b>.</li>
+    <li>A freed slot can be reused only after every frame that may still read it has <b>finished on the GPU</b>.</li>
+    <li>Bindless makes <a href="gpu-driven.html">GPU-driven rendering</a> possible: the GPU can choose the draws, because no draw needs the CPU to bind anything.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>The problem: binding per draw</h2>
+
+<p>A shader cannot read "texture number 7" by itself. It reads textures through <b>descriptors</b>: small records, prepared by the CPU, that hold an image view, a sampler and the layout the image is in. In the classic model, each draw gets its own small group of descriptors, and the CPU binds that group right before the draw.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 236" role="img" aria-label="Top: the classic model alternates a CPU bind and a draw, six times. Bottom: the bindless model binds one set once, then six draws follow, each draw finding its textures by numbers in its data.">
+    <text x="20" y="24" class="title">Classic: bind before every draw</text>
+    <rect x="20"  y="36" width="84" height="44" rx="6" class="cpu"/><text x="62"  y="55" class="mid small">bind set</text><text x="62"  y="70" class="mid mono">A</text>
+    <rect x="110" y="36" width="84" height="44" rx="6" class="gpu"/><text x="152" y="62" class="mid small">draw 1</text>
+    <rect x="200" y="36" width="84" height="44" rx="6" class="cpu"/><text x="242" y="55" class="mid small">bind set</text><text x="242" y="70" class="mid mono">B</text>
+    <rect x="290" y="36" width="84" height="44" rx="6" class="gpu"/><text x="332" y="62" class="mid small">draw 2</text>
+    <rect x="380" y="36" width="84" height="44" rx="6" class="cpu"/><text x="422" y="55" class="mid small">bind set</text><text x="422" y="70" class="mid mono">C</text>
+    <rect x="470" y="36" width="84" height="44" rx="6" class="gpu"/><text x="512" y="62" class="mid small">draw 3</text>
+    <rect x="560" y="36" width="84" height="44" rx="6" class="cpu"/><text x="602" y="55" class="mid small">bind set</text><text x="602" y="70" class="mid mono">D</text>
+    <rect x="650" y="36" width="90" height="44" rx="6" class="gpu"/><text x="695" y="62" class="mid small">draw 4</text>
+    <text x="20" y="100" class="small">One set per material. The CPU must know every draw, and its order, while it records.</text>
+
+    <text x="20" y="136" class="title">Bindless: bind once</text>
+    <rect x="20"  y="148" width="174" height="44" rx="6" class="cpu"/><text x="107" y="167" class="mid small">bind the one big set</text><text x="107" y="182" class="mid small">(all textures)</text>
+    <rect x="200" y="148" width="84" height="44" rx="6" class="gpu"/><text x="242" y="167" class="mid small">draw 1</text><text x="242" y="182" class="mid mono">3, 7</text>
+    <rect x="290" y="148" width="84" height="44" rx="6" class="gpu"/><text x="332" y="167" class="mid small">draw 2</text><text x="332" y="182" class="mid mono">3, 9</text>
+    <rect x="380" y="148" width="84" height="44" rx="6" class="gpu"/><text x="422" y="167" class="mid small">draw 3</text><text x="422" y="182" class="mid mono">12</text>
+    <rect x="470" y="148" width="84" height="44" rx="6" class="gpu"/><text x="512" y="167" class="mid small">draw 4</text><text x="512" y="182" class="mid mono">5, 7</text>
+    <rect x="560" y="148" width="180" height="44" rx="6" class="ghost"/><text x="650" y="174" class="mid small t-faint">… thousands more</text>
+    <text x="20" y="214" class="small">Each draw carries slot numbers (in mono) in its own data. Nothing is bound between draws,</text>
+    <text x="20" y="229" class="small">so the draws can be one indirect call that the GPU fills in itself.</text>
+  </svg>
+  <figcaption>Classic binding ties the CPU to every draw. Bindless removes the CPU from the loop.</figcaption>
+</figure>
+
+<p>Binding per draw has three costs:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Cost</th><th>Why</th></tr>
+  <tr><td>CPU time</td><td>Each bind is a driver call, and the driver checks and copies state. With 10,000 draws this adds up to milliseconds.</td></tr>
+  <tr><td>Many small sets</td><td>Every material needs its own set, allocated from a pool and kept alive. Changing a material means writing a new set.</td></tr>
+  <tr><td>No GPU-driven draws</td><td>If a compute shader decides which objects to draw (after <a href="frustum-culling.html">culling</a>, for example), the CPU does not know the draws. It cannot bind a set "before draw 517", because it never sees draw 517.</td></tr>
+</table>
+</div>
+
+<h2><span class="n">2</span>The idea: one array, and numbers in the data</h2>
+
+<p>Bindless turns the problem around. All textures go into <b>one big descriptor array</b>, created once and bound once. Each texture gets a fixed <b>slot</b> in it: a number from 0 to the array size minus 1. The data that the shader reads anyway (a material record, an instance record) stores slot numbers instead of textures. The shader reads the number and indexes the array.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="A material record in a GPU buffer holds slot numbers: base color 2, normal 5, roughness none. The shader reads the record and indexes the one texture array at slots 2 and 5. The array has slots 0 to 7, some filled, some empty.">
+    <text x="130" y="22" class="mid small t-mem">material record (in a GPU buffer)</text>
+    <rect x="20" y="32" width="220" height="112" rx="6" class="mem"/>
+    <text x="34" y="56"  class="small">base color texture</text><text x="226" y="56"  class="end title">2</text>
+    <text x="34" y="78"  class="small">normal texture</text><text x="226" y="78"  class="end title">5</text>
+    <text x="34" y="100" class="small">roughness texture</text><text x="226" y="100" class="end small t-faint">none</text>
+    <text x="34" y="122" class="small">base color factor</text><text x="226" y="122" class="end mono">1, 1, 1</text>
+
+    <line x1="240" y1="88" x2="318" y2="88" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="320" y="52" width="420" height="72" rx="36" class="shader"/>
+    <text x="530" y="76" class="mid title">shader</text>
+    <text x="530" y="96" class="mid mono">color = textures[m.baseColor].Sample(uv)</text>
+    <text x="530" y="113" class="mid mono">n     = textures[m.normal].Sample(uv)</text>
+
+    <text x="20" y="190" class="small">the one texture array, bound once</text>
+    <rect x="20"  y="200" width="80" height="50" rx="4" class="mem"/><text x="60"  y="220" class="mid small">slot 0</text><text x="60"  y="238" class="mid small">grass</text>
+    <rect x="110" y="200" width="80" height="50" rx="4" class="mem"/><text x="150" y="220" class="mid small">slot 1</text><text x="150" y="238" class="mid small">rock</text>
+    <rect x="200" y="200" width="80" height="50" rx="4" class="mem"/><text x="240" y="220" class="mid small">slot 2</text><text x="240" y="238" class="mid small">brick color</text>
+    <rect x="290" y="200" width="80" height="50" rx="4" class="mem"/><text x="330" y="220" class="mid small">slot 3</text><text x="330" y="238" class="mid small">sky</text>
+    <rect x="380" y="200" width="80" height="50" rx="4" class="ghost"/><text x="420" y="220" class="mid small t-faint">slot 4</text><text x="420" y="238" class="mid small t-faint">empty</text>
+    <rect x="470" y="200" width="80" height="50" rx="4" class="mem"/><text x="510" y="220" class="mid small">slot 5</text><text x="510" y="238" class="mid small">brick normal</text>
+    <rect x="560" y="200" width="80" height="50" rx="4" class="ghost"/><text x="600" y="220" class="mid small t-faint">slot 6</text><text x="600" y="238" class="mid small t-faint">empty</text>
+    <text x="652" y="230" class="small t-faint">… slot N−1</text>
+    <rect x="196" y="196" width="88" height="58" rx="6" class="hot"/>
+    <rect x="466" y="196" width="88" height="58" rx="6" class="hot"/>
+
+    <line x1="420" y1="124" x2="250" y2="194" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="560" y1="124" x2="510" y2="194" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="20" y="282" class="small">The record says "which"; the array says "what". A material change is a change of a few numbers in a buffer.</text>
+  </svg>
+  <figcaption>The slot numbers are plain integers. They can live in any buffer the shader reads: material tables, instance tables, push constants.</figcaption>
+</figure>
+
+<p>Now a draw needs nothing bound of its own. Two draws with different materials differ only in which record they read, and that is data. Data can be written by the GPU too, so a compute shader can build the whole list of draws.</p>
+
+<h2><span class="n">3</span>Descriptors, sets and pools</h2>
+
+<p>The words differ between APIs, but the pieces are the same. Here they are with the Vulkan names:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Piece</th><th>What it is</th><th>Classic use</th><th>Bindless use</th></tr>
+  <tr><td><b>Descriptor</b></td><td>A record of a few bytes: image view, sampler, layout (or a buffer range).</td><td>A handful per material</td><td>One per texture, for its whole life</td></tr>
+  <tr><td><b>Set layout</b></td><td>The shape of a group: "binding 0 is 4 textures, binding 1 is a buffer".</td><td>One per shader kind</td><td>One: "binding 0 is an array of <var>N</var> textures"</td></tr>
+  <tr><td><b>Set</b></td><td>One group of descriptors with that shape.</td><td>One per material, often per frame</td><td>One for the whole program</td></tr>
+  <tr><td><b>Pool</b></td><td>Memory that sets are carved from.</td><td>Large, often reset every frame</td><td>Sized for the one set</td></tr>
+  <tr><td><b>Bind</b></td><td>A command that makes a set visible to the next draws.</td><td>Before each draw</td><td>Once per pass (or per pipeline change)</td></tr>
+</table>
+</div>
+
+<p>Direct3D 12 calls the array a <b>descriptor heap</b> and Metal calls it an <b>argument buffer</b>. The idea is the same in all three.</p>
+
+<h2><span class="n">4</span>The GPU features it needs</h2>
+
+<p>The first versions of Vulkan and Direct3D had fixed-size arrays that had to be fully valid, and could not change while a command buffer used them. Bindless needs a few relaxations. In Vulkan they are called <b>descriptor indexing</b> (an extension first, core since Vulkan 1.2):</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Feature (Vulkan name)</th><th>What it allows</th><th>Why bindless needs it</th></tr>
+  <tr><td><b>Runtime array</b><br><small>runtimeDescriptorArray</small></td><td>A shader array with no size: <code>Sampler2D gTextures[]</code>.</td><td>The shader should not hard-code how many textures exist.</td></tr>
+  <tr><td><b>Partially bound</b><br><small>descriptorBindingPartiallyBound</small></td><td>Slots that were never written are allowed, as long as no shader reads them.</td><td>The array is big (thousands of slots) and mostly empty at the start.</td></tr>
+  <tr><td><b>Update after bind</b><br><small>descriptorBindingSampledImageUpdateAfterBind</small></td><td>Writing slots of a set that is bound, or used by work on the GPU, without breaking that work.</td><td>Textures arrive while frames are being recorded and run. Without it, every new texture would need a new set.</td></tr>
+  <tr><td><b>Variable count</b><br><small>descriptorBindingVariableDescriptorCount</small></td><td>The last binding's size is chosen when the set is allocated, not when the layout is made.</td><td>One layout can serve sets of different sizes. Optional.</td></tr>
+  <tr><td><b>Non-uniform indexing</b><br><small>shaderSampledImageArrayNonUniformIndexing</small></td><td>Index values that differ between the threads of one wave.</td><td>Neighboring pixels may belong to different materials. See below.</td></tr>
+</table>
+</div>
+
+<p>Each feature also has a limit. The important one is the size of the array: how many sampled images one set and one shader stage may see with update after bind. On current desktop GPUs this is hundreds of thousands to millions, so the array size is a choice, not a hard wall.</p>
+
+<h3 id="non-uniform">Non-uniform indexing</h3>
+
+<p>A GPU runs threads in groups of 32 or 64, called <b>waves</b> (or warps). A wave runs one instruction for all its threads at once. A descriptor is often loaded into <b>scalar</b> registers that the whole wave shares. That only works when every thread in the wave uses the same index. An index with this property is called <b>dynamically uniform</b>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 312" role="img" aria-label="Top: eight threads of a wave all use index 3, so one descriptor load serves them all. Middle: the threads use indices 3, 3, 7, 3, 9, 9, 3, 7. Marked non-uniform, the compiler loops three times, once per different index. Bottom: not marked, the hardware may use the first thread's index for all, and threads that wanted 7 or 9 read texture 3.">
+    <text x="20" y="22" class="title">Uniform: one load for the wave</text>
+    <rect x="20"  y="32" width="40" height="34" rx="4" class="gpu"/><text x="40"  y="54" class="mid mono">3</text>
+    <rect x="64"  y="32" width="40" height="34" rx="4" class="gpu"/><text x="84"  y="54" class="mid mono">3</text>
+    <rect x="108" y="32" width="40" height="34" rx="4" class="gpu"/><text x="128" y="54" class="mid mono">3</text>
+    <rect x="152" y="32" width="40" height="34" rx="4" class="gpu"/><text x="172" y="54" class="mid mono">3</text>
+    <rect x="196" y="32" width="40" height="34" rx="4" class="gpu"/><text x="216" y="54" class="mid mono">3</text>
+    <rect x="240" y="32" width="40" height="34" rx="4" class="gpu"/><text x="260" y="54" class="mid mono">3</text>
+    <rect x="284" y="32" width="40" height="34" rx="4" class="gpu"/><text x="304" y="54" class="mid mono">3</text>
+    <rect x="328" y="32" width="40" height="34" rx="4" class="gpu"/><text x="348" y="54" class="mid mono">3</text>
+    <line x1="376" y1="49" x2="418" y2="49" class="arrow" marker-end="url(#ah)"/>
+    <text x="426" y="45" class="small">load descriptor 3 once,</text>
+    <text x="426" y="60" class="small">every thread samples it</text>
+
+    <text x="20" y="104" class="title">Non-uniform, marked: the compiler loops</text>
+    <rect x="20"  y="114" width="40" height="34" rx="4" class="gpu"/><text x="40"  y="136" class="mid mono">3</text>
+    <rect x="64"  y="114" width="40" height="34" rx="4" class="gpu"/><text x="84"  y="136" class="mid mono">3</text>
+    <rect x="108" y="114" width="40" height="34" rx="4" class="mem"/><text x="128" y="136" class="mid mono">7</text>
+    <rect x="152" y="114" width="40" height="34" rx="4" class="gpu"/><text x="172" y="136" class="mid mono">3</text>
+    <rect x="196" y="114" width="40" height="34" rx="4" class="shader"/><text x="216" y="136" class="mid mono">9</text>
+    <rect x="240" y="114" width="40" height="34" rx="4" class="shader"/><text x="260" y="136" class="mid mono">9</text>
+    <rect x="284" y="114" width="40" height="34" rx="4" class="gpu"/><text x="304" y="136" class="mid mono">3</text>
+    <rect x="328" y="114" width="40" height="34" rx="4" class="mem"/><text x="348" y="136" class="mid mono">7</text>
+    <line x1="376" y1="131" x2="418" y2="131" class="arrow" marker-end="url(#ah)"/>
+    <text x="426" y="120" class="small">pass 1: threads with 3 load and sample 3</text>
+    <text x="426" y="136" class="small">pass 2: threads with 7 load and sample 7</text>
+    <text x="426" y="152" class="small">pass 3: threads with 9 load and sample 9</text>
+
+    <text x="20" y="190" class="title">Non-uniform, not marked: undefined</text>
+    <rect x="20"  y="200" width="40" height="34" rx="4" class="gpu"/><text x="40"  y="222" class="mid mono">3</text>
+    <rect x="64"  y="200" width="40" height="34" rx="4" class="gpu"/><text x="84"  y="222" class="mid mono">3</text>
+    <rect x="108" y="200" width="40" height="34" rx="4" class="mem"/><text x="128" y="222" class="mid mono">7</text>
+    <rect x="152" y="200" width="40" height="34" rx="4" class="gpu"/><text x="172" y="222" class="mid mono">3</text>
+    <rect x="196" y="200" width="40" height="34" rx="4" class="shader"/><text x="216" y="222" class="mid mono">9</text>
+    <rect x="240" y="200" width="40" height="34" rx="4" class="shader"/><text x="260" y="222" class="mid mono">9</text>
+    <rect x="284" y="200" width="40" height="34" rx="4" class="gpu"/><text x="304" y="222" class="mid mono">3</text>
+    <rect x="328" y="200" width="40" height="34" rx="4" class="mem"/><text x="348" y="222" class="mid mono">7</text>
+    <rect x="104" y="196" width="48" height="42" rx="6" class="hot"/>
+    <rect x="192" y="196" width="92" height="42" rx="6" class="hot"/>
+    <rect x="324" y="196" width="48" height="42" rx="6" class="hot"/>
+    <line x1="376" y1="217" x2="418" y2="217" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="426" y="212" class="small t-hot">the hardware may load one descriptor</text>
+    <text x="426" y="228" class="small t-hot">(often the first thread's) for all</text>
+
+    <text x="20" y="270" class="small">The bug is silent: on some GPUs it looks right, on others the marked threads show the wrong texture,</text>
+    <text x="20" y="286" class="small">usually in thin lines along the edges where two materials meet on screen. A wave covers a block of</text>
+    <text x="20" y="302" class="small">pixels, so only blocks that touch two materials go wrong.</text>
+  </svg>
+  <figcaption>Marking the index tells the compiler to handle each different value in turn. It costs a few extra instructions, and one pass per distinct index in the wave.</figcaption>
+</figure>
+
+<p>In HLSL and Slang the mark is <samp>NonUniformResourceIndex(i)</samp>; in GLSL it is <samp>nonuniformEXT(i)</samp>. When do you need it?</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Where the index comes from</th><th>Uniform?</th><th>Mark it?</th></tr>
+  <tr><td>A push constant, or a field of a uniform buffer</td><td>Yes: the same for the whole draw</td><td>No</td></tr>
+  <tr><td>A per-draw record, the same for every vertex and pixel of the draw</td><td>Yes, within one draw. In Vulkan each draw of a multi-draw indirect call is its own group for this rule.</td><td>No (marking is still safe, and cheap when all values are equal)</td></tr>
+  <tr><td>A per-pixel value: a material ID read from a G-buffer, a decal list, a visibility buffer</td><td>No</td><td>Yes</td></tr>
+  <tr><td>A compute shader thread that reads its own item</td><td>No</td><td>Yes</td></tr>
+</table>
+</div>
+
+<h2><span class="n">5</span>Handing out slots</h2>
+
+<p>A slot number is a small resource of its own. Something must decide which slot a new texture gets, and remember which slots are free. The usual allocator is a counter and a <b>free list</b>:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Slots 0 to 9. Slots 0, 1, 2, 3, 5, 6 and 7 are in use. Slots 4 and 8 were freed and wait in the free list. The counter points at slot 9, the first slot never used. A new texture first takes a slot from the free list, and only when the list is empty takes the counter's slot.">
+    <text x="45"  y="30" class="mid small t-faint">0</text><text x="113" y="30" class="mid small t-faint">1</text><text x="181" y="30" class="mid small t-faint">2</text>
+    <text x="249" y="30" class="mid small t-faint">3</text><text x="317" y="30" class="mid small t-faint">4</text><text x="385" y="30" class="mid small t-faint">5</text>
+    <text x="453" y="30" class="mid small t-faint">6</text><text x="521" y="30" class="mid small t-faint">7</text><text x="589" y="30" class="mid small t-faint">8</text>
+    <text x="657" y="30" class="mid small t-faint">9</text>
+    <rect x="16"  y="38" width="58" height="40" rx="4" class="mem"/><text x="45"  y="62" class="mid small">used</text>
+    <rect x="84"  y="38" width="58" height="40" rx="4" class="mem"/><text x="113" y="62" class="mid small">used</text>
+    <rect x="152" y="38" width="58" height="40" rx="4" class="mem"/><text x="181" y="62" class="mid small">used</text>
+    <rect x="220" y="38" width="58" height="40" rx="4" class="mem"/><text x="249" y="62" class="mid small">used</text>
+    <rect x="288" y="38" width="58" height="40" rx="4" class="box"/><text x="317" y="62" class="mid small">free</text>
+    <rect x="356" y="38" width="58" height="40" rx="4" class="mem"/><text x="385" y="62" class="mid small">used</text>
+    <rect x="424" y="38" width="58" height="40" rx="4" class="mem"/><text x="453" y="62" class="mid small">used</text>
+    <rect x="492" y="38" width="58" height="40" rx="4" class="mem"/><text x="521" y="62" class="mid small">used</text>
+    <rect x="560" y="38" width="58" height="40" rx="4" class="box"/><text x="589" y="62" class="mid small">free</text>
+    <rect x="628" y="38" width="58" height="40" rx="4" class="ghost"/><text x="657" y="62" class="mid small t-faint">never</text>
+    <text x="700" y="62" class="small t-faint">…</text>
+
+    <line x1="657" y1="120" x2="657" y2="84" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="650" y="136" class="end small t-hot">counter = 9: the first slot never used</text>
+
+    <rect x="16" y="110" width="200" height="60" rx="6" class="cpu"/>
+    <text x="116" y="132" class="mid title">free list</text>
+    <text x="116" y="154" class="mid mono">[ 4, 8 ]</text>
+    <path d="M317,84 V96 H180 V108" class="arrow dashed" marker-end="url(#ah)"/>
+    <path d="M589,84 V100 H200 V108" class="arrow dashed" marker-end="url(#ah)"/>
+
+    <text x="16" y="200" class="small">allocate: take from the free list if it has a slot, else take the counter and add 1.</text>
+    <text x="16" y="218" class="small">free: push the slot on the free list (after it is safe, see the next section).</text>
+  </svg>
+  <figcaption>The array never moves and never gets holes that need packing: a free slot simply waits for the next texture.</figcaption>
+</figure>
+
+<pre><code class="lang-text">allocate():
+    if freeList is not empty: return freeList.pop()
+    if counter == capacity:   fail ("array full")
+    counter = counter + 1
+    return counter - 1
+
+free(slot):
+    freeList.push(slot)       // only when no GPU work can still read it</code></pre>
+
+<p>Some engines also <b>reserve</b> the first slots for fixed textures: slot 0 for a white texture, slot 1 for a flat normal map, and so on. Then "slot 0" can mean "no texture", and the shader needs no special case (see <a href="#defaults">section 7</a>).</p>
+
+<h2 id="slot-lifetime"><span class="n">6</span>When a slot can be reused</h2>
+
+<p>The CPU runs ahead of the GPU by one or more frames (see <a href="frames-in-flight.html">frames in flight</a>). When the program frees a texture during frame <var>N</var>, the GPU may still be running frame <var>N</var> − 1, and frame <var>N</var> is not even submitted yet. Both may read that slot. If a new texture takes the slot now, those frames draw the new texture on the old objects, or read an image that no longer exists.</p>
+
+<p>The fix is a <b>retire list</b>: a freed slot first waits, tagged with the frame that freed it. Once the GPU has finished that frame (its fence has signaled), the slot moves to the free list. The image memory waits in the same way. Here is one slot, with 2 frames in flight:</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>Frame 10: the app frees texture T</h4>
+    <svg viewBox="0 0 720 200" role="img" aria-label="During frame 10 the app frees texture T in slot 4. Frame 9 runs on the GPU and frame 10 is being recorded, both may read slot 4. Slot 4 goes to the retire list tagged frame 10.">
+      <text x="20" y="22" class="title">GPU</text>
+      <rect x="80"  y="8" width="150" height="24" rx="4" class="gpu"/><text x="155" y="25" class="mid small">frame 9 runs</text>
+      <text x="20" y="58" class="title">CPU</text>
+      <rect x="240" y="44" width="150" height="24" rx="4" class="cpu"/><text x="315" y="61" class="mid small">frame 10 records</text>
+      <rect x="20" y="90" width="200" height="60" rx="6" class="mem"/>
+      <rect x="16" y="86" width="208" height="68" rx="8" class="hot"/>
+      <text x="120" y="112" class="mid title">slot 4</text>
+      <text x="120" y="134" class="mid small">still holds T's descriptor</text>
+      <rect x="260" y="90" width="200" height="60" rx="6" class="cpu"/>
+      <text x="360" y="112" class="mid title">retire list</text>
+      <text x="360" y="134" class="mid mono">slot 4, frame 10</text>
+      <rect x="500" y="90" width="200" height="60" rx="6" class="cpu"/>
+      <text x="600" y="112" class="mid title">free list</text>
+      <text x="600" y="134" class="mid mono">[ ]</text>
+      <text x="20" y="186" class="small">Frames 9 and 10 may both sample slot 4. Nothing about the slot changes yet.</text>
+    </svg>
+    <p>"Free" only records the wish. The descriptor and the image stay as they are.</p>
+  </div>
+
+  <div class="step">
+    <h4>Frame 11 starts: wait for frame 9</h4>
+    <svg viewBox="0 0 720 200" role="img" aria-label="Frame 11 starts by waiting for the fence of frame 9. Frame 10 still runs on the GPU, so slot 4 stays in the retire list.">
+      <text x="20" y="22" class="title">GPU</text>
+      <rect x="80"  y="8" width="150" height="24" rx="4" class="ghost"/><text x="155" y="25" class="mid small t-faint">frame 9 done</text>
+      <rect x="240" y="8" width="150" height="24" rx="4" class="gpu"/><text x="315" y="25" class="mid small">frame 10 runs</text>
+      <text x="20" y="58" class="title">CPU</text>
+      <rect x="400" y="44" width="150" height="24" rx="4" class="cpu"/><text x="475" y="61" class="mid small">frame 11 records</text>
+      <rect x="20" y="90" width="200" height="60" rx="6" class="mem"/>
+      <text x="120" y="112" class="mid title">slot 4</text>
+      <text x="120" y="134" class="mid small">frame 10 still reads it</text>
+      <rect x="260" y="90" width="200" height="60" rx="6" class="cpu"/>
+      <rect x="256" y="86" width="208" height="68" rx="8" class="hot"/>
+      <text x="360" y="112" class="mid title">retire list</text>
+      <text x="360" y="134" class="mid mono">slot 4, frame 10</text>
+      <rect x="500" y="90" width="200" height="60" rx="6" class="cpu"/>
+      <text x="600" y="112" class="mid title">free list</text>
+      <text x="600" y="134" class="mid mono">[ ]</text>
+      <text x="20" y="186" class="small">The finished frame (9) is older than the tag (10), so the slot keeps waiting.</text>
+    </svg>
+    <p>Each frame start checks the retire list against the newest finished frame.</p>
+  </div>
+
+  <div class="step">
+    <h4>Frame 12 starts: frame 10 is done</h4>
+    <svg viewBox="0 0 720 200" role="img" aria-label="Frame 12 waits for the fence of frame 10. Now no GPU work can read slot 4. It moves to the free list, and T's image is destroyed.">
+      <text x="20" y="22" class="title">GPU</text>
+      <rect x="240" y="8" width="150" height="24" rx="4" class="ghost"/><text x="315" y="25" class="mid small t-faint">frame 10 done</text>
+      <rect x="400" y="8" width="150" height="24" rx="4" class="gpu"/><text x="475" y="25" class="mid small">frame 11 runs</text>
+      <text x="20" y="58" class="title">CPU</text>
+      <rect x="560" y="44" width="150" height="24" rx="4" class="cpu"/><text x="635" y="61" class="mid small">frame 12 records</text>
+      <rect x="20" y="90" width="200" height="60" rx="6" class="ghost"/>
+      <text x="120" y="112" class="mid title t-faint">slot 4</text>
+      <text x="120" y="134" class="mid small">T's image destroyed now</text>
+      <rect x="260" y="90" width="200" height="60" rx="6" class="cpu"/>
+      <text x="360" y="112" class="mid title">retire list</text>
+      <text x="360" y="134" class="mid mono">[ ]</text>
+      <rect x="500" y="90" width="200" height="60" rx="6" class="cpu"/>
+      <rect x="496" y="86" width="208" height="68" rx="8" class="hot"/>
+      <text x="600" y="112" class="mid title">free list</text>
+      <text x="600" y="134" class="mid mono">[ 4 ]</text>
+      <text x="20" y="186" class="small">Frames 11 and 12 were recorded after the free, so no record they read may name slot 4 any more.</text>
+    </svg>
+    <p>This last condition is the program's job: every material that used T must have been changed before the free.</p>
+  </div>
+
+  <div class="step">
+    <h4>Frame 12: a new texture U takes slot 4</h4>
+    <svg viewBox="0 0 720 200" role="img" aria-label="A new texture U is allocated. The free list gives slot 4. The descriptor for U is written into slot 4, which is safe because no pending work reads it.">
+      <text x="20" y="22" class="title">GPU</text>
+      <rect x="400" y="8" width="150" height="24" rx="4" class="gpu"/><text x="475" y="25" class="mid small">frame 11 runs</text>
+      <text x="20" y="58" class="title">CPU</text>
+      <rect x="560" y="44" width="150" height="24" rx="4" class="cpu"/><text x="635" y="61" class="mid small">frame 12 records</text>
+      <rect x="20" y="90" width="200" height="60" rx="6" class="mem"/>
+      <rect x="16" y="86" width="208" height="68" rx="8" class="hot"/>
+      <text x="120" y="112" class="mid title">slot 4</text>
+      <text x="120" y="134" class="mid small">now holds U's descriptor</text>
+      <rect x="260" y="90" width="200" height="60" rx="6" class="cpu"/>
+      <text x="360" y="112" class="mid title">retire list</text>
+      <text x="360" y="134" class="mid mono">[ ]</text>
+      <rect x="500" y="90" width="200" height="60" rx="6" class="cpu"/>
+      <text x="600" y="112" class="mid title">free list</text>
+      <text x="600" y="134" class="mid mono">[ ]</text>
+      <text x="20" y="186" class="small">Writing a slot that no pending work reads is exactly what "update after bind" allows.</text>
+    </svg>
+    <p>The wait is <var>F</var> frames for <var>F</var> frames in flight. With 2 frames, a slot is reused at the earliest two frame starts after its free.</p>
+  </div>
+</div>
+
+<div class="callout rule">
+  <strong>The two rules of slot lifetime</strong>
+  <ul>
+    <li>Never write a slot that work on the GPU may still read. Update after bind allows writes to a bound set, not writes under a running read.</li>
+    <li>Never let a record keep a stale slot number. If material M still says "4" after slot 4 went to U, M draws with U. This is the same problem that <a href="generational-handles.html">generational handles</a> solve for CPU handles.</li>
+  </ul>
+</div>
+
+<h2 id="defaults"><span class="n">7</span>A material without a texture</h2>
+
+<p>Most materials do not use every texture slot. A rock may have a color and a normal map, but no emissive map. The shader must still produce the right result. There are two common ways:</p>
+
+<div class="split">
+  <div>
+    <h4>A "none" number and a branch</h4>
+    <p>Store a special value, such as 0xFFFFFFFF, for "no texture". The shader checks it and skips the sample, using the material's factor alone. No extra textures are needed. The cost is a branch per texture, and the special value must never reach the array.</p>
+  </div>
+  <div>
+    <h4>Default textures</h4>
+    <p>Reserve slots for tiny 1×1 textures that change nothing, and point empty slots at them. The shader always samples: no branch, one code path. The cost is a few slots and a sample that reads the same texel every time (it stays in the cache).</p>
+  </div>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Texture</th><th>Default texel</th><th>Why that value changes nothing</th></tr>
+  <tr><td>Base color</td><td>white (1, 1, 1, 1)</td><td>factor × 1 = factor</td></tr>
+  <tr><td>Metallic-roughness</td><td>white</td><td>factor × 1 = factor</td></tr>
+  <tr><td>Occlusion</td><td>white</td><td>1 means "not occluded"</td></tr>
+  <tr><td>Emissive</td><td>white</td><td>factor × 1 = factor; the emissive factor is 0 when the material does not glow</td></tr>
+  <tr><td>Normal map</td><td>(0.5, 0.5, 1.0)</td><td>decodes to (0, 0, 1): the surface normal itself (see <a href="normal-mapping.html">normal mapping</a>)</td></tr>
+</table>
+</div>
+
+<p>A third value is a <b>placeholder</b>: a gray or checker texture shown while the real one is still loading. A slot can also be pointed at the placeholder first and rewritten when the real texture is ready, because the slot number does not change.</p>
+
+<h2><span class="n">8</span>Samplers: combined or separate</h2>
+
+<p>A <b>sampler</b> holds how to read a texture: the filter (nearest, linear), the mip filter and the wrap mode (see <a href="mipmaps-sampling.html">mipmaps and sampling</a>). A bindless design has to decide where samplers live.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 236" role="img" aria-label="Left: combined image samplers, each slot of the array holds an image and its sampler. Right: separate arrays, a large array of images and a small array of samplers; the shader picks one of each.">
+    <text x="190" y="22" class="mid title">Combined image samplers</text>
+    <rect x="20"  y="36" width="100" height="56" rx="4" class="mem"/><text x="70"  y="58" class="mid small">image 0</text><text x="70"  y="78" class="mid small">+ linear repeat</text>
+    <rect x="130" y="36" width="100" height="56" rx="4" class="mem"/><text x="180" y="58" class="mid small">image 1</text><text x="180" y="78" class="mid small">+ linear clamp</text>
+    <rect x="240" y="36" width="100" height="56" rx="4" class="mem"/><text x="290" y="58" class="mid small">image 2</text><text x="290" y="78" class="mid small">+ linear repeat</text>
+    <rect x="20" y="120" width="320" height="40" rx="20" class="shader"/>
+    <text x="180" y="145" class="mid mono">textures[i].Sample(uv)</text>
+    <text x="20" y="190" class="small">One number per texture. The sampler is fixed</text>
+    <text x="20" y="206" class="small">when the slot is written: the same image with</text>
+    <text x="20" y="222" class="small">another sampler needs a second slot.</text>
+
+    <line x1="380" y1="20" x2="380" y2="226" class="arrow dashed"/>
+
+    <text x="570" y="22" class="mid title">Separate images and samplers</text>
+    <rect x="410" y="36" width="100" height="56" rx="4" class="mem"/><text x="460" y="68" class="mid small">image 0</text>
+    <rect x="520" y="36" width="100" height="56" rx="4" class="mem"/><text x="570" y="68" class="mid small">image 1</text>
+    <rect x="630" y="36" width="110" height="56" rx="4" class="mem"/><text x="685" y="68" class="mid small">image 2</text>
+    <rect x="410" y="100" width="160" height="26" rx="4" class="cpu"/><text x="490" y="118" class="mid small">sampler 0: linear repeat</text>
+    <rect x="580" y="100" width="160" height="26" rx="4" class="cpu"/><text x="660" y="118" class="mid small">sampler 1: linear clamp</text>
+    <rect x="410" y="140" width="330" height="40" rx="20" class="shader"/>
+    <text x="575" y="165" class="mid mono">images[i].Sample(samplers[s], uv)</text>
+    <text x="410" y="206" class="small">Two numbers, or a fixed sampler in the shader.</text>
+    <text x="410" y="222" class="small">Any image can be read with any sampler.</text>
+  </svg>
+  <figcaption>Engines need only a handful of samplers. APIs limit how many can exist: Vulkan only promises 4000.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th></th><th>Combined</th><th>Separate</th></tr>
+  <tr><td>Shader code</td><td>Simplest: one index</td><td>Two indices, or a sampler chosen in the shader</td></tr>
+  <tr><td>Same image, two samplers</td><td>Two slots</td><td>One slot, two sampler indices</td></tr>
+  <tr><td>Portability</td><td>Vulkan, OpenGL. Direct3D 12 and WebGPU have no combined type.</td><td>Works everywhere</td></tr>
+  <tr><td>Speed</td><td>About the same on current GPUs</td><td>About the same; a fixed sampler can be a constant</td></tr>
+</table>
+</div>
+
+<h2><span class="n">9</span>Other ways to build the array</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>API</th><th>The big array is</th><th>The shader writes</th></tr>
+  <tr><td>Vulkan, descriptor indexing</td><td>A descriptor set with one large, partially bound binding</td><td><samp>textures[i]</samp></td></tr>
+  <tr><td>Vulkan, descriptor buffers (<samp>VK_EXT_descriptor_buffer</samp>)</td><td>A plain GPU buffer. The app asks the driver for each descriptor's bytes and copies them in itself; no sets or pools.</td><td><samp>textures[i]</samp>, same as above</td></tr>
+  <tr><td>Direct3D 12</td><td>A shader-visible descriptor heap</td><td><samp>ResourceDescriptorHeap[i]</samp> (Shader Model 6.6), or an unbounded array</td></tr>
+  <tr><td>Metal</td><td>An argument buffer that holds texture references</td><td>a field of the argument buffer</td></tr>
+</table>
+</div>
+
+<p><b>Descriptor buffers</b> make the memory explicit: descriptors become bytes the app manages like any other buffer data, with the same frame-in-flight rules. That makes them a natural fit for engines that already manage GPU buffers by hand. They are newer, so their support is narrower than descriptor indexing.</p>
+
+<h2><span class="n">10</span>Trade-offs and pitfalls</h2>
+
+<div class="split">
+  <div>
+    <h4>What it gives</h4>
+    <ul>
+      <li>Very little CPU work per draw, and none between GPU-chosen draws.</li>
+      <li>One pipeline layout for every shader that reads textures.</li>
+      <li>Materials become plain data, easy to change and to upload.</li>
+      <li>Shaders can read any texture: decals, terrain splat maps, a visibility buffer that shades any material.</li>
+    </ul>
+  </div>
+  <div>
+    <h4>What it costs</h4>
+    <ul>
+      <li>The driver no longer checks which textures a draw uses. A wrong index reads the wrong texture or crashes the GPU, with no error.</li>
+      <li>Lifetime is the app's job: slots, retire lists and stale numbers.</li>
+      <li>The driver no longer knows which images a draw reads, so the app must put every image in the right layout itself (see <a href="gpu-sync.html">GPU synchronization</a>).</li>
+      <li>Debuggers show "an array of 1000 textures" instead of "this draw's 4 textures".</li>
+    </ul>
+  </div>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Pitfall</th><th>What you see</th><th>Fix</th></tr>
+  <tr><td>Per-pixel index not marked non-uniform</td><td>Wrong texture in thin lines along material edges, on some GPUs only</td><td>Mark the index (<a href="#non-uniform">section 4</a>)</td></tr>
+  <tr><td>Reading a slot that was never written</td><td>Garbage, black, or a lost device</td><td>"None" value with a branch, or default textures</td></tr>
+  <tr><td>Using 0 to mean "none" when slot 0 is a real texture</td><td>Objects without a texture show the first texture loaded</td><td>Use a value that is never a slot, or reserve slot 0 for white</td></tr>
+  <tr><td>Freeing a slot at once</td><td>The previous frame flickers with the new texture</td><td>Retire list (<a href="#slot-lifetime">section 6</a>)</td></tr>
+  <tr><td>Image in the wrong layout when sampled</td><td>Validation errors; corrupt texels on some GPUs</td><td>Move images to the read layout before the draws that read them</td></tr>
+</table>
+</div>
+
+<h2 id="in-rasm"><span class="n">11</span>In RASM</h2>
+
+<p>RASM has one bindless set for the whole engine: an array of 1024 combined image samplers. A material row on the GPU stores slot numbers, and a texture handle becomes a slot number the first time a material or a pass needs it. Slots are only handed out, never freed.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="A TextureHandle goes to addBindlessTexture, which calls updateBindlessDescriptorSet. That writes the descriptor at slot nextBindlessTextureIndex and returns the slot, which is stored in bindlessTextureIndexMap. Later writeMaterialRow calls convertToGfxMaterial, which asks getBindlessTextureIndex for each texture and writes the slot numbers into the MaterialData row. fragMain reads the row and samples gTextures at that slot.">
+    <text x="20" y="22" class="title t-cpu">CPU · when a material or pass first needs the texture</text>
+    <rect x="20" y="34" width="150" height="56" rx="6" class="cpu"/>
+    <text x="95" y="58" class="mid mono">TextureHandle</text>
+    <text x="95" y="76" class="mid small">from loadTexture, …</text>
+    <line x1="170" y1="62" x2="198" y2="62" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="200" y="34" width="250" height="56" rx="6" class="cpu"/>
+    <text x="325" y="58" class="mid mono">addBindlessTexture</text>
+    <text x="325" y="76" class="mid mono small">→ updateBindlessDescriptorSet</text>
+    <line x1="450" y1="62" x2="478" y2="62" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="480" y="34" width="260" height="56" rx="6" class="mem"/>
+    <text x="610" y="56" class="mid">descriptor at slot</text>
+    <text x="610" y="76" class="mid mono small">nextBindlessTextureIndex++</text>
+    <line x1="325" y1="90" x2="325" y2="118" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="200" y="120" width="250" height="44" rx="6" class="cpu"/>
+    <text x="325" y="140" class="mid mono">bindlessTextureIndexMap</text>
+    <text x="325" y="156" class="mid small">handle → slot</text>
+
+    <text x="20" y="200" class="title t-cpu">CPU · writeMaterialRow</text>
+    <rect x="20" y="212" width="250" height="44" rx="6" class="cpu"/>
+    <text x="145" y="232" class="mid mono">convertToGfxMaterial</text>
+    <text x="145" y="248" class="mid mono small">getBindlessTextureIndex × 5</text>
+    <line x1="330" y1="164" x2="240" y2="210" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="270" y1="234" x2="298" y2="234" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="300" y="212" width="190" height="44" rx="6" class="mem"/>
+    <text x="395" y="232" class="mid mono">MaterialData</text>
+    <text x="395" y="248" class="mid small">slot numbers, not handles</text>
+    <line x1="490" y1="234" x2="518" y2="234" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="520" y="212" width="220" height="44" rx="22" class="shader"/>
+    <text x="630" y="232" class="mid mono">fragMain</text>
+    <text x="630" y="248" class="mid mono small">gTextures[index].Sample(uv)</text>
+    <line x1="630" y1="212" x2="630" y2="94" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
+    <text x="638" y="160" class="small">reads the</text>
+    <text x="638" y="174" class="small">descriptor</text>
+
+    <text x="20" y="292" class="small">No slot: getBindlessTextureIndex returns UINT32_MAX, the same value as INVALID_TEXTURE_INDEX, and hasTexture()</text>
+    <text x="20" y="308" class="small">in the shader skips the sample. The row reaches the GPU through syncGpuScene, like every table row.</text>
+  </svg>
+  <figcaption>Two lookups: handle → slot on the CPU (a hash map), slot → descriptor on the GPU (the array).</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>The array</td><td>one large binding in one set</td><td>Binding 0 of set 0: <code>MAX_BINDLESS_TEXTURES</code> = 1024 <code>COMBINED_IMAGE_SAMPLER</code>s, visible to every stage (<code>ShaderType::ALL</code>). Made once in the <code>Engine</code> constructor. The shaders declare <code>Sampler2D gTextures[]</code> with <code>[[vk::binding(0, 0)]]</code>.</td></tr>
+  <tr><td>Features</td><td>section 4</td><td>All five are required at device creation. The binding has <code>VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT</code> and <code>VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT</code>; the layout and pool have the matching update-after-bind flags. The variable count is enabled but not used: the size is fixed.</td></tr>
+  <tr><td>Non-uniform indexing</td><td>mark per-pixel indices</td><td>Nothing is marked. The index comes from the draw's instance row (<code>materialIndex</code>, passed with <code>nointerpolation</code>), so it is the same for every pixel of one draw, and each draw of the indirect call is its own group. Other users index with a push constant (<code>01_render_graph</code>) or a <code>SceneData</code> field (<code>hiz.slang</code>).</td></tr>
+  <tr><td>Slot allocation</td><td>counter + free list</td><td>A counter only (<code>nextBindlessTextureIndex</code> in <code>RenderContext</code>). A caller may name a slot; the counter then moves past it, so automatic slots never land on a named one.</td></tr>
+  <tr><td>Freeing, retire list</td><td>section 6</td><td>None: slots are never freed (<code>D4</code>). <code>RenderContext::destroyTexture</code> frees the image but not its slot. The one reuse is a frame slot's depth texture on resize: the device is idle then, and the new texture takes the old slot.</td></tr>
+  <tr><td>Missing textures</td><td>"none" value or default textures</td><td>The "none" value: <code>INVALID_TEXTURE_INDEX</code> (0xFFFFFFFF) and a branch on <code>hasTexture</code>. No default textures. The shader uses the factor alone, which is the glTF rule. (The <i>default material</i> is a material, not a texture.)</td></tr>
+  <tr><td>Samplers</td><td>combined or separate</td><td>Combined. Six shared samplers, one per <code>SamplerType</code>, picked when the slot is written (<code>LINEAR_REPEAT</code> by default). One handle has one slot, so a glTF image used with two samplers is uploaded twice.</td></tr>
+  <tr><td>Placeholder while loading</td><td>gray or checker</td><td>None. A texture from <code>loadTexture</code> may get a slot before its pixels exist, but an entity is not drawn until every texture of its materials is loaded, so the empty image is never read.</td></tr>
+  <tr><td>Descriptor buffers</td><td>section 9</td><td>Not used.</td></tr>
+</table>
+</div>
+
+<h3>Who takes a slot</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Caller</th><th>Which textures</th><th>Sampler</th></tr>
+  <tr><td><code>createMaterial</code></td><td>each valid texture it gets that has no slot yet</td><td><code>LINEAR_REPEAT</code></td></tr>
+  <tr><td><code>updateMaterial</code></td><td>each valid texture of the new values that has no slot yet</td><td><code>LINEAR_REPEAT</code></td></tr>
+  <tr><td><code>loadMaterial</code> (glTF)</td><td>each uploaded image, once per image, sampler and color space</td><td>from the glTF sampler (<code>toSamplerType</code>)</td></tr>
+  <tr><td><code>RenderContext::createRenderTarget</code></td><td>both color attachments; with <code>occlusionCulling</code>, also <code>D32_SFLOAT</code> depth attachments</td><td><code>LINEAR_CLAMP</code>, depth <code>NEAREST_CLAMP</code></td></tr>
+  <tr><td><code>createSwapchainResources</code></td><td>with <code>occlusionCulling</code>: each frame slot's depth texture (keeps the old slot on resize)</td><td><code>NEAREST_CLAMP</code></td></tr>
+</table>
+</div>
+
+<p><code>loadTexture</code> and <code>Engine::createTexture</code> do not take a slot. When the counter reaches 1024, <code>updateBindlessDescriptorSet</code> logs "Slot index exceeds maximum bindless textures." and returns <code>UINT32_MAX</code>.</p>
+
+<h3>A material that waits for its texture</h3>
+
+<p>The slot is written at once, but the texture may still be decoding on a worker thread (see <a href="asset-streaming.html">streaming assets</a>). The engine therefore keeps every entity that uses it out of the draw lists until the pixels arrive. Here is what happens when the app gives material <b>M</b> of entity <b>E</b> a new texture <b>T</b> that is still loading:</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. updateMaterial(M, values)</h4>
+    <svg viewBox="0 0 720 190" role="img" aria-label="updateMaterial gives T the next slot, 8, and rewrites M's row. T is still loading.">
+      <rect x="20"  y="30" width="210" height="110" rx="6" class="mem"/>
+      <rect x="16"  y="26" width="218" height="118" rx="8" class="hot"/>
+      <text x="125" y="52" class="mid title">M's row</text>
+      <text x="125" y="78" class="mid mono small">baseColorTextureIndex</text>
+      <text x="125" y="98" class="mid mono">2 → 8</text>
+      <text x="125" y="124" class="mid small">setRow: dirty in both slots</text>
+      <rect x="255" y="30" width="210" height="110" rx="6" class="cpu"/>
+      <text x="360" y="52" class="mid title">Entity E</text>
+      <text x="360" y="84" class="mid mono small">waitingForTextures</text>
+      <text x="360" y="104" class="mid mono">false</text>
+      <rect x="490" y="30" width="210" height="110" rx="6" class="mem"/>
+      <text x="595" y="52" class="mid title">E's scene draw list</text>
+      <text x="595" y="94" class="mid small">E's draws are in</text>
+      <text x="20" y="172" class="small">T had no slot, so addBindlessTexture gives it slot 8. T is not loaded yet, so the material counts as "textures loading".</text>
+    </svg>
+    <p><code>updateMaterial</code> copies the new values over the record, keeps the handle, and calls <code>writeMaterialRow</code>. The row index does not change, so no instance row changes.</p>
+  </div>
+
+  <div class="step">
+    <h4>2. refreshEntitiesAfterMaterialChange</h4>
+    <svg viewBox="0 0 720 190" role="img" aria-label="E now waits for textures and leaves the draw list.">
+      <rect x="20"  y="30" width="210" height="110" rx="6" class="mem"/>
+      <text x="125" y="52" class="mid title">M's row</text>
+      <text x="125" y="78" class="mid mono small">baseColorTextureIndex</text>
+      <text x="125" y="98" class="mid mono">8</text>
+      <rect x="255" y="30" width="210" height="110" rx="6" class="cpu"/>
+      <rect x="251" y="26" width="218" height="118" rx="8" class="hot"/>
+      <text x="360" y="52" class="mid title">Entity E</text>
+      <text x="360" y="84" class="mid mono small">waitingForTextures</text>
+      <text x="360" y="104" class="mid mono">true</text>
+      <text x="360" y="126" class="mid mono small">entitiesWaitingForTextures</text>
+      <rect x="490" y="30" width="210" height="110" rx="6" class="mem"/>
+      <rect x="486" y="26" width="218" height="118" rx="8" class="hot"/>
+      <text x="595" y="52" class="mid title">E's scene draw list</text>
+      <text x="595" y="84" class="mid small">marked for rebuild:</text>
+      <text x="595" y="104" class="mid small">next syncGpuScene,</text>
+      <text x="595" y="122" class="mid small">E's draws are out</text>
+      <text x="20" y="172" class="small">It checks every entity (it also runs when doubleSided changed, to fix the cull modes).</text>
+    </svg>
+    <p>E disappears from the image until T is ready. No frame ever samples slot 8 before T has pixels.</p>
+  </div>
+
+  <div class="step">
+    <h4>3. finishLoads: T is decoded</h4>
+    <svg viewBox="0 0 720 190" role="img" aria-label="finishLoads fills T and sets texturesFinished.">
+      <rect x="20"  y="30" width="210" height="110" rx="6" class="mem"/>
+      <rect x="16"  y="26" width="218" height="118" rx="8" class="hot"/>
+      <text x="125" y="52" class="mid title">Texture T</text>
+      <text x="125" y="84" class="mid small">fillTexture: pixels + mips</text>
+      <text x="125" y="104" class="mid mono small">isLoaded(T) = true</text>
+      <rect x="255" y="30" width="210" height="110" rx="6" class="cpu"/>
+      <rect x="251" y="26" width="218" height="118" rx="8" class="hot"/>
+      <text x="360" y="52" class="mid title">GpuScene</text>
+      <text x="360" y="84" class="mid mono small">texturesFinished</text>
+      <text x="360" y="104" class="mid mono">true</text>
+      <rect x="490" y="30" width="210" height="110" rx="6" class="mem"/>
+      <text x="595" y="52" class="mid title">E's scene draw list</text>
+      <text x="595" y="94" class="mid small">E's draws are still out</text>
+      <text x="20" y="172" class="small">finishLoads runs at the start of beginFrame, before syncGpuScene.</text>
+    </svg>
+    <p>The flag tells <code>syncGpuScene</code> that it is worth checking the waiting entities again.</p>
+  </div>
+
+  <div class="step">
+    <h4>4. syncGpuScene: E comes back</h4>
+    <svg viewBox="0 0 720 190" role="img" aria-label="syncGpuScene finds all of E's textures loaded, clears waitingForTextures and rebuilds the draw list with E.">
+      <rect x="20"  y="30" width="210" height="110" rx="6" class="mem"/>
+      <text x="125" y="52" class="mid title">M's row</text>
+      <text x="125" y="84" class="mid small">uploaded since step 1</text>
+      <text x="125" y="104" class="mid small">base color: slot 8</text>
+      <rect x="255" y="30" width="210" height="110" rx="6" class="cpu"/>
+      <rect x="251" y="26" width="218" height="118" rx="8" class="hot"/>
+      <text x="360" y="52" class="mid title">Entity E</text>
+      <text x="360" y="84" class="mid mono small">waitingForTextures</text>
+      <text x="360" y="104" class="mid mono">false</text>
+      <rect x="490" y="30" width="210" height="110" rx="6" class="mem"/>
+      <rect x="486" y="26" width="218" height="118" rx="8" class="hot"/>
+      <text x="595" y="52" class="mid title">E's scene draw list</text>
+      <text x="595" y="84" class="mid small">rebuilt: E's draws are in,</text>
+      <text x="595" y="104" class="mid small">now sampling T</text>
+      <text x="20" y="172" class="small">markDrawListsDirty marks only the scenes that hold E.</text>
+    </svg>
+    <p>From this frame on, E draws with T. Changing only factors (colors, roughness) never makes an entity wait.</p>
+  </div>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Set layout, pool and set</td><td><code>Engine::Engine</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Handle → slot</td><td><code>Engine::addBindlessTexture</code>, <code>Engine::getBindlessTextureIndex</code>, <code>bindlessTextureIndexMap</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Slot counter, descriptor write</td><td><code>RenderContext::updateBindlessDescriptorSet</code> in <code>src/rhi/renderContext.cpp</code>; <code>VulkanDevice::updateBindlessTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>Layout flags and features</td><td><code>VulkanDevice::createBindlessDescriptorSetLayout</code>, <code>VulkanDevice::createDescriptorPool</code>, the device feature list in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>The six samplers</td><td><code>samplerDesc</code>, <code>RenderContext::initialize</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Slot numbers into the row</td><td><code>convertToGfxMaterial</code>, <code>Engine::writeMaterialRow</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Materials that take slots</td><td><code>Engine::createMaterial</code>, <code>Engine::updateMaterial</code>, <code>Engine::loadMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
+  <tr><td>Waiting for textures</td><td><code>texturesLoaded</code>, <code>Engine::refreshEntitiesAfterMaterialChange</code>, <code>Engine::syncGpuScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Shader side</td><td><code>gTextures</code> in <code>shaders/passes/rasm.slang</code> and <code>shaders/passes/hiz.slang</code>; <code>hasTexture</code>, <code>sampleBaseColor</code> in <code>shaders/lib/core.slang</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>"No texture" is <code>INVALID_TEXTURE_INDEX</code> in the row, never 0: slot 0 is a real texture. The shader must check <code>hasTexture</code> before it indexes <code>gTextures</code>.</li>
+    <li>An image must be in the shader-read layout whenever a draw may sample its slot: the descriptor promises <code>VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL</code>. That is why <code>endPass</code> moves a render target's color attachment there (<code>B10</code>).</li>
+    <li>Do not rewrite a slot that a frame in flight may read. Today only the depth slots are rewritten, with the device idle.</li>
+    <li>A new texture field in <code>gfx::Material</code> is a CPU↔GPU struct change: see <a href="struct-layout.html">struct layout</a>.</li>
+    <li>If an index ever comes from per-pixel data (a G-buffer, a decal list), mark it non-uniform.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>No material destruction, and no free list or retire list for slots (<code>D4</code>). <code>RenderContext::destroyTexture</code> exists, but it does not touch the slot or <code>bindlessTextureIndexMap</code>: a texture that a material still uses must not be destroyed. The array size and the 256 materials are fixed at compile time (<code>D15</code>). No default textures. See also <a href="../api/materials.html#bindless">the bindless API</a>.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>The Vulkan specification, chapter "Resource Descriptors", and the <i>VK_EXT_descriptor_indexing</i> and <i>VK_EXT_descriptor_buffer</i> extension specifications.</li>
+  <li>Khronos, <i>Vulkan Guide</i>: the chapter on descriptor indexing.</li>
+  <li>Microsoft, <i>HLSL Shader Model 6.6</i>: "Dynamic Resources" (<samp>ResourceDescriptorHeap</samp>).</li>
+  <li>Matt Pettineo, <i>Bindless Texturing for Deferred Rendering and Decals</i> (2016).</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

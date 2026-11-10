@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GPU Memory · RASM</title>
-<meta name="description" content="How RASM gets data into GPU buffers and textures: buffer kinds, the two fillBuffer paths, the staging ring, per-frame-slot GPU tables, device addresses, the geometry pool and host image copy.">
-<meta name="rasm-sources" content="src/rhi/uploadManager.h src/rhi/uploadManager.cpp src/rhi/renderContext.cpp include/rasm/render/renderContext.h include/rasm/render/resource.h src/rhi/device.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanTypes.h src/renderer/gpuTable.h src/renderer/gpuTable.cpp src/renderer/geometryPool.h src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp src/renderer/frameStats.cpp src/renderer/statsOverlay.cpp src/renderer/uberMaterialTypes.h include/rasm/types.h src/assets/texture.cpp">
+<title>GPU Memory and Uploads · RASM</title>
+<meta name="description" content="How data gets into GPU memory: heaps and memory types, mapping and coherence, staging buffers, ring allocators, batched copies, sub-allocation, per-frame copies, texture uploads, host image copy and readback, and how RASM does it.">
+<meta name="rasm-sources" content="src/rhi/uploadManager.h src/rhi/uploadManager.cpp src/rhi/renderContext.cpp include/rasm/render/renderContext.h include/rasm/render/resource.h src/rhi/device.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanTypes.h src/renderer/gpuTable.h src/renderer/gpuTable.cpp src/renderer/geometryPool.h src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp src/renderer/frameStats.cpp include/rasm/types.h src/assets/texture.cpp tests/uploadManagerTests.cpp tests/gpuTableTests.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -26,9 +26,9 @@
 <nav id="sidebar"></nav>
 <main>
 
-<p class="eyebrow">Data</p>
-<h1>How data reaches the GPU</h1>
-<p class="lead">The CPU puts data into GPU buffers in two ways. A mapped buffer gets a plain <code>memcpy</code> at once. Any other buffer gets its data through a staging ring, and a GPU copy moves it at the next submit. Textures are different again: the CPU writes them directly with host image copy.</p>
+<p class="eyebrow">GPU data</p>
+<h1>GPU memory and uploads</h1>
+<p class="lead">A GPU reads its data fastest from its own memory, but the data starts on the CPU. This page explains the kinds of GPU memory, how the CPU writes into them, and the usual ways to move data across: mapped writes, staging copies, ring buffers and per-frame copies. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
 
 <div class="legend">
   <span><i class="cpu"></i>CPU work / CPU memory</span>
@@ -39,284 +39,273 @@
 <div class="tldr">
   <h3>In short</h3>
   <ul>
-    <li>Three kinds of buffer: <code>hostVisible</code> (the CPU rewrites it), <code>hostReadable</code> (the CPU reads it back) and the default, device-local.</li>
-    <li><code>RenderContext::fillBuffer</code> asks one question: is the buffer mapped? Yes: <code>memcpy</code> now. No: <code>UploadManager::upload</code>, and the data arrives with the next submit.</li>
-    <li>The staging ring is 64 MiB (<code>RING_SIZE</code>). Writes are split into chunks of at most 16 MiB (<code>MAX_CHUNK_SIZE</code>). The upload fence tells when ring space is free again.</li>
-    <li>A <code>GpuTable</code> keeps a CPU copy of its rows and one buffer per frame slot. Each slot uploads only its dirty rows, merged into ranges.</li>
-    <li>Shaders find every buffer through its device address. Textures are filled on the CPU with <code>vkCopyMemoryToImage</code>, mips included.</li>
+    <li>A discrete GPU has its own fast memory (<b>VRAM</b>). The CPU reaches it only across the PCIe bus, if at all.</li>
+    <li>The API lists <b>memory types</b> with flags: <b>device-local</b> (fast for the GPU), <b>host-visible</b> (the CPU can map it), <b>coherent</b>, <b>cached</b>.</li>
+    <li>Memory the CPU cannot map is filled with a <b>staging</b> copy: the CPU writes a host-visible buffer, and the GPU copies it over.</li>
+    <li>A <b>ring buffer</b> reuses one staging buffer forever. A fence tells when the GPU has finished reading each part.</li>
+    <li>Many small copies go out in one <b>batch</b>. Barriers order them against the frames that read the data.</li>
+    <li>Data the GPU reads every frame and the CPU changes every frame needs <b>one copy per frame in flight</b>.</li>
+    <li>Engines <b>sub-allocate</b>: a few big memory blocks, with many buffers inside each.</li>
   </ul>
 </div>
 
-<h2><span class="n">1</span>Three kinds of buffer</h2>
+<h2><span class="n">1</span>Two memories, one bus</h2>
 
-<p>A buffer's kind is set by two flags in <code>BufferDesc</code>. <code>VulkanDevice::createBuffer</code> turns them into VMA flags, and VMA picks the memory type.</p>
+<p>A <b>discrete GPU</b> is a card with its own memory chips, called VRAM. VRAM is very fast for the GPU: hundreds of GB/s, sometimes more than 1 TB/s. The CPU's memory (system RAM) is on the other side of the <b>PCIe bus</b>, which is much slower: about 16 GB/s for PCIe 3.0 x16, about 32 GB/s for PCIe 4.0 x16. An <b>integrated GPU</b> (most laptops, phones, Apple silicon) has no VRAM: CPU and GPU share the same RAM.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 315" role="img" aria-label="hostReadable gives cached host memory, mapped. hostVisible gives host-visible memory, mapped. The default gives device-local memory, which is mapped only with ReBAR or an integrated GPU.">
-    <text x="120" y="20" class="mid title">BufferDesc</text>
-    <text x="370" y="20" class="mid title">VMA asks for</text>
-    <text x="630" y="20" class="mid title">Memory you get</text>
+  <svg viewBox="0 0 760 260" role="img" aria-label="Left: a discrete GPU. CPU and system RAM on one side, GPU and VRAM on the other, joined by PCIe at about 16 to 32 GB per second. The GPU reads VRAM at hundreds of GB per second. Right: an integrated GPU, where CPU and GPU share one RAM.">
+    <text x="210" y="20" class="mid title">Discrete GPU</text>
+    <rect x="20" y="40" width="140" height="50" rx="6" class="cpu"/><text x="90" y="70" class="mid">CPU</text>
+    <rect x="20" y="170" width="140" height="56" rx="6" class="cpu"/><text x="90" y="194" class="mid">system RAM</text><text x="90" y="212" class="mid small">e.g. 32 GB</text>
+    <line x1="90" y1="90" x2="90" y2="168" class="arrow cpu" marker-start="url(#ah-cpu)" marker-end="url(#ah-cpu)"/>
+    <rect x="260" y="40" width="140" height="50" rx="6" class="gpu"/><text x="330" y="70" class="mid">GPU</text>
+    <rect x="260" y="170" width="140" height="56" rx="6" class="mem"/><text x="330" y="194" class="mid">VRAM</text><text x="330" y="212" class="mid small">e.g. 12 GB</text>
+    <line x1="330" y1="90" x2="330" y2="168" class="arrow gpu" marker-start="url(#ah-gpu)" marker-end="url(#ah-gpu)"/>
+    <text x="338" y="134" class="small t-gpu">100s of GB/s</text>
+    <line x1="162" y1="65" x2="258" y2="65" class="arrow hot" marker-start="url(#ah-hot)" marker-end="url(#ah-hot)"/>
+    <text x="210" y="56" class="mid small t-hot">PCIe</text>
+    <text x="210" y="84" class="mid small t-hot">16–32 GB/s</text>
 
-    <rect x="20" y="34" width="200" height="56" rx="6" class="box"/>
-    <text x="120" y="57" class="mid mono">hostReadable = true</text>
-    <text x="120" y="77" class="mid small">the CPU reads it back</text>
-    <line x1="220" y1="62" x2="248" y2="62" class="arrow" marker-end="url(#ah)"/>
-    <rect x="250" y="34" width="240" height="56" rx="6" class="box"/>
-    <text x="370" y="57" class="mid mono">HOST_ACCESS_RANDOM</text>
-    <text x="370" y="77" class="mid small">+ MAPPED</text>
-    <line x1="490" y1="62" x2="513" y2="62" class="arrow" marker-end="url(#ah)"/>
-    <rect x="515" y="34" width="230" height="56" rx="6" class="mem"/>
-    <text x="630" y="57" class="mid">cached host memory</text>
-    <text x="630" y="77" class="mid small">mapped · readBuffer works</text>
+    <line x1="440" y1="20" x2="440" y2="240" class="arrow dashed"/>
 
-    <rect x="20" y="104" width="200" height="56" rx="6" class="box"/>
-    <text x="120" y="127" class="mid mono">hostVisible = true</text>
-    <text x="120" y="147" class="mid small">the CPU rewrites it often</text>
-    <line x1="220" y1="132" x2="248" y2="132" class="arrow" marker-end="url(#ah)"/>
-    <rect x="250" y="104" width="240" height="56" rx="6" class="box"/>
-    <text x="370" y="127" class="mid mono">HOST_ACCESS_SEQUENTIAL_WRITE</text>
-    <text x="370" y="147" class="mid small">+ MAPPED</text>
-    <line x1="490" y1="132" x2="513" y2="132" class="arrow" marker-end="url(#ah)"/>
-    <rect x="515" y="104" width="230" height="56" rx="6" class="mem"/>
-    <text x="630" y="127" class="mid">host-visible memory</text>
-    <text x="630" y="147" class="mid small">mapped · write-only</text>
-
-    <rect x="20" y="174" width="200" height="126" rx="6" class="box"/>
-    <text x="120" y="232" class="mid">neither flag</text>
-    <text x="120" y="252" class="mid small">the default</text>
-    <line x1="220" y1="237" x2="248" y2="237" class="arrow" marker-end="url(#ah)"/>
-    <rect x="250" y="174" width="240" height="126" rx="6" class="box"/>
-    <text x="370" y="214" class="mid mono">HOST_ACCESS_SEQUENTIAL_WRITE</text>
-    <text x="370" y="234" class="mid small">+ MAPPED</text>
-    <text x="370" y="256" class="mid mono">+ ALLOW_TRANSFER_INSTEAD</text>
-    <path d="M490,237 H500 V202 H513" class="arrow" marker-end="url(#ah)"/>
-    <path d="M500,237 V272 H513" class="arrow" marker-end="url(#ah)"/>
-    <rect x="515" y="174" width="230" height="56" rx="6" class="mem"/>
-    <text x="630" y="197" class="mid">device-local, host-visible</text>
-    <text x="630" y="217" class="mid small">ReBAR or integrated GPU → mapped</text>
-    <rect x="515" y="244" width="230" height="56" rx="6" class="mem"/>
-    <text x="630" y="267" class="mid">device-local only</text>
-    <text x="630" y="287" class="mid small">not mapped → staging ring</text>
+    <text x="600" y="20" class="mid title">Integrated GPU</text>
+    <rect x="490" y="40" width="100" height="50" rx="6" class="cpu"/><text x="540" y="70" class="mid">CPU</text>
+    <rect x="620" y="40" width="100" height="50" rx="6" class="gpu"/><text x="670" y="70" class="mid">GPU</text>
+    <rect x="490" y="170" width="230" height="56" rx="6" class="mem"/><text x="605" y="194" class="mid">one shared RAM</text><text x="605" y="212" class="mid small">both read and write it</text>
+    <line x1="540" y1="90" x2="560" y2="168" class="arrow" marker-start="url(#ah)" marker-end="url(#ah)"/>
+    <line x1="670" y1="90" x2="650" y2="168" class="arrow" marker-start="url(#ah)" marker-end="url(#ah)"/>
+    <text x="20" y="252" class="small">The bus is the narrow part. Every byte the CPU makes must cross it once; the GPU then reads it many times from VRAM.</text>
   </svg>
-  <figcaption>Only the default kind depends on the GPU. With ReBAR or an integrated GPU, VMA finds memory that is device-local <i>and</i> host-visible, so the buffer is mapped too. <code>hostReadable</code> replaces the flags, so it wins over <code>hostVisible</code>.</figcaption>
+  <figcaption>The rule that follows: put data the GPU reads often in VRAM, and move it across the bus as few times as possible.</figcaption>
 </figure>
 
-<p>After creation, <code>Buffer::mapped</code> says which case you got. It is true when VMA returned a mapped pointer (<code>pMappedData</code>). The engine's own buffers are:</p>
+<h2><span class="n">2</span>Heaps and memory types</h2>
+
+<p>Vulkan (and Direct3D 12 and Metal, with other names) describe the memory as <b>heaps</b> and <b>memory types</b>. A heap is a pool of physical memory with a size. A memory type is a way to use a heap, described by flags. Every allocation picks one memory type.</p>
 
 <div class="table-wrap">
 <table>
-  <tr><th>Buffer</th><th>Kind</th><th>Written by</th></tr>
-  <tr><td>Upload staging ring</td><td><code>hostVisible</code></td><td><code>UploadManager::upload</code></td></tr>
-  <tr><td>Scene data (one per frame slot)</td><td><code>hostVisible</code></td><td><code>drawScene</code>, once per call</td></tr>
-  <tr><td>Stats overlay text (one per frame slot)</td><td><code>hostVisible</code></td><td><code>updateStatsOverlay</code></td></tr>
-  <tr><td>Cull stats (one per frame slot)</td><td><code>hostVisible</code> + <code>hostReadable</code></td><td>the GPU; the CPU reads it in <code>updateFrameStats</code></td></tr>
-  <tr><td>Instance and material tables (two each)</td><td>default</td><td><code>GpuTable::upload</code></td></tr>
-  <tr><td>Geometry vertex pool, index pool, geometry table</td><td>default</td><td><code>GeometryPool::upload</code></td></tr>
-  <tr><td>Draw info (per scene and frame slot)</td><td>default</td><td><code>uploadDrawList</code></td></tr>
-  <tr><td>Visible draws, draw counts</td><td>default</td><td>only the GPU (<code>cull.slang</code>)</td></tr>
+  <tr><th>Flag</th><th>Meaning</th></tr>
+  <tr><td><b>device-local</b></td><td>Fast for the GPU. On a discrete GPU this is VRAM.</td></tr>
+  <tr><td><b>host-visible</b></td><td>The CPU can <b>map</b> it: get a normal pointer and write or read with <var>memcpy</var>.</td></tr>
+  <tr><td><b>host-coherent</b></td><td>CPU writes become visible to the GPU without an extra call (and the other way round).</td></tr>
+  <tr><td><b>host-cached</b></td><td>CPU reads go through the CPU cache, so reading is fast. Without it, reads are very slow.</td></tr>
 </table>
 </div>
 
-<p>Every buffer also gets <code>VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT</code> and both transfer bits, whatever its <code>BufferUsage</code> (<code>toVkBufferUsageFlags</code>). So any buffer can be a copy source, a copy target, and be read by a shader through its address.</p>
-
-<h2><span class="n">2</span>Which path does <code>fillBuffer</code> take?</h2>
+<p>A typical discrete GPU on a desktop PC shows something like this:</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 430" role="img" aria-label="fillBuffer checks its arguments, then whether the buffer is mapped. Mapped: VulkanDevice::fillBuffer copies at once. Not mapped: UploadManager::upload copies into the staging ring, and the data reaches the buffer at the next submit.">
-    <rect x="190" y="14" width="380" height="44" rx="6" class="cpu"/>
-    <text x="380" y="34" class="mid mono">fillBuffer(buffer, data, size, offset)</text>
-    <text x="380" y="50" class="mid small">RenderContext, main thread</text>
-    <line x1="380" y1="58" x2="380" y2="80" class="arrow" marker-end="url(#ah)"/>
+  <svg viewBox="0 0 760 300" role="img" aria-label="Heap 0 is VRAM, with two memory types: device-local only, and device-local plus host-visible, which is the BAR window: 256 MB, or all of VRAM with resizable BAR. Heap 1 is system RAM, with host-visible coherent memory and host-visible coherent cached memory.">
+    <rect x="20" y="20" width="350" height="250" rx="8" class="zone"/>
+    <text x="36" y="44" class="title">Heap 0 · VRAM · 12 GB</text>
+    <rect x="36" y="60" width="318" height="70" rx="6" class="mem"/>
+    <text x="195" y="84" class="mid title">device-local</text>
+    <text x="195" y="104" class="mid small">textures, vertex data, GPU-only buffers</text>
+    <text x="195" y="120" class="mid small">the CPU cannot map it</text>
+    <rect x="36" y="146" width="318" height="110" rx="6" class="mem"/>
+    <text x="195" y="170" class="mid title">device-local + host-visible</text>
+    <text x="195" y="190" class="mid small">the <tspan class="t-hot">BAR</tspan> window: the CPU writes into VRAM</text>
+    <text x="195" y="206" class="mid small">directly, across PCIe</text>
+    <text x="195" y="228" class="mid small">old: only 256 MB of it</text>
+    <text x="195" y="244" class="mid small">with <tspan class="t-hot">resizable BAR</tspan> (ReBAR): all of VRAM</text>
 
-    <polygon points="270,110 380,82 490,110 380,138" class="box"/>
-    <text x="380" y="114" class="mid">arguments valid?</text>
-    <line x1="270" y1="110" x2="222" y2="110" class="arrow" marker-end="url(#ah)"/>
-    <text x="246" y="102" class="mid small">no</text>
-    <rect x="30" y="88" width="190" height="44" rx="6" class="ghost"/>
-    <text x="125" y="107" class="mid">logs an error</text>
-    <text x="125" y="123" class="mid small">returns false</text>
-    <line x1="380" y1="138" x2="380" y2="160" class="arrow" marker-end="url(#ah)"/>
-    <text x="390" y="154" class="small">yes</text>
-
-    <polygon points="270,190 380,162 490,190 380,218" class="box"/>
-    <text x="380" y="194" class="mid mono">Buffer::mapped?</text>
-    <path d="M270,190 H190 V250" class="arrow" marker-end="url(#ah)"/>
-    <text x="230" y="182" class="mid small">yes</text>
-    <path d="M490,190 H570 V250" class="arrow" marker-end="url(#ah)"/>
-    <text x="530" y="182" class="mid small">no</text>
-
-    <rect x="40" y="252" width="300" height="56" rx="6" class="cpu"/>
-    <text x="190" y="275" class="mid mono">VulkanDevice::fillBuffer</text>
-    <text x="190" y="295" class="mid small">memcpy into the mapped memory + flush</text>
-    <rect x="420" y="252" width="300" height="56" rx="6" class="cpu"/>
-    <text x="570" y="275" class="mid mono">UploadManager::upload</text>
-    <text x="570" y="295" class="mid small">memcpy into the staging ring + a BufferCopy</text>
-    <line x1="190" y1="308" x2="190" y2="334" class="arrow" marker-end="url(#ah)"/>
-    <line x1="570" y1="308" x2="570" y2="334" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-
-    <rect x="40" y="336" width="300" height="56" rx="6" class="mem"/>
-    <text x="190" y="359" class="mid">in the buffer at once</text>
-    <text x="190" y="379" class="mid small">no ordering with GPU work in flight</text>
-    <rect x="420" y="336" width="300" height="56" rx="6" class="gpu"/>
-    <text x="570" y="359" class="mid">in the buffer after the next submit</text>
-    <text x="570" y="379" class="mid small">copyBuffers runs before the frame</text>
-
-    <text x="190" y="414" class="mid small">hostVisible · hostReadable · default with ReBAR</text>
-    <text x="570" y="414" class="mid small">default buffers without ReBAR</text>
+    <rect x="390" y="20" width="350" height="250" rx="8" class="zone"/>
+    <text x="406" y="44" class="title">Heap 1 · system RAM · 32 GB</text>
+    <rect x="406" y="60" width="318" height="90" rx="6" class="cpu"/>
+    <text x="565" y="84" class="mid title">host-visible + coherent</text>
+    <text x="565" y="104" class="mid small">write-combined: fast to write in order,</text>
+    <text x="565" y="120" class="mid small">very slow to read back</text>
+    <text x="565" y="138" class="mid small">staging buffers live here</text>
+    <rect x="406" y="166" width="318" height="90" rx="6" class="cpu"/>
+    <text x="565" y="190" class="mid title">host-visible + coherent + cached</text>
+    <text x="565" y="210" class="mid small">normal CPU memory: fast to read</text>
+    <text x="565" y="228" class="mid small">readback buffers live here</text>
+    <text x="565" y="244" class="mid small">the GPU reads it across PCIe</text>
+    <text x="20" y="292" class="small">An integrated GPU usually has one heap whose types are device-local and host-visible at the same time: everything can be mapped.</text>
   </svg>
-  <figcaption>The caller does not choose the path. The same call is a <code>memcpy</code> on one GPU and a staged copy on another. Code that calls <code>fillBuffer</code> must be correct on both.</figcaption>
+  <figcaption>The exact list differs per GPU and driver. Code should not hard-code type indices: it asks for the flags it needs and picks a matching type.</figcaption>
 </figure>
+
+<h3>Write-combined memory</h3>
+
+<p>Host-visible memory that is not cached is usually <b>write-combined</b>: the CPU collects writes in a small buffer and sends them over the bus in big pieces. Writing it in order, once, with <var>memcpy</var>, is fast. Reading it, or writing scattered bytes, or doing <var>x</var> += 1 on it, is very slow, because each read crosses the bus. So treat mapped upload memory as <b>write-only</b>.</p>
+
+<h3>Coherent or not</h3>
 
 <div class="split">
   <div>
-    <h4>Mapped: a direct write</h4>
-    <p><code>VulkanDevice::fillBuffer</code> copies into <code>mappedData</code> and calls <code>vmaFlushAllocation</code> (a no-op on coherent memory). The bytes are there when the call returns. Nothing orders this write with the GPU. If a frame in flight reads that range, it can see half old and half new data.</p>
+    <h4>Coherent</h4>
+    <p>After the CPU writes, the bytes are visible to the GPU at the next submit. Nothing else is needed.</p>
   </div>
   <div>
-    <h4>Not mapped: a staged copy</h4>
-    <p>The bytes go into the staging ring, and a <code>BufferCopy</code> is queued. The GPU copy runs at the next <code>RenderContext::submit</code>, before the frame. Its barriers wait for all earlier work on the queue, so it never overwrites data that an earlier frame still reads.</p>
+    <h4>Not coherent</h4>
+    <p>After writing, the CPU must <b>flush</b> the range (<var>vkFlushMappedMemoryRanges</var>). Before reading what the GPU wrote, it must <b>invalidate</b> the range. Ranges are rounded to <var>nonCoherentAtomSize</var>, a device limit of up to 256 bytes.</p>
   </div>
 </div>
 
-<p>The safe rule for both paths: <b>only write a range that no frame in flight reads.</b> The engine does that in two ways. GPU tables have one buffer per frame slot (section 5). The geometry pool only writes new ranges that no frame has used yet (section 7).</p>
+<h2><span class="n">3</span>Two ways to fill a buffer</h2>
 
-<h2><span class="n">3</span>The staging ring</h2>
+<p>There are two ways to get bytes from the CPU into a buffer that the GPU reads.</p>
 
-<p><code>UploadManager</code> owns one <code>hostVisible</code> buffer of <code>RING_SIZE</code> = 64 MiB. Two counters, <code>head</code> and <code>tail</code>, count bytes since the start and never wrap. <code>head - tail</code> bytes are in use, and <code>head % RING_SIZE</code> is where the next chunk goes. Click through a worked example (or use the arrow keys).</p>
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="Direct write: the CPU maps a host-visible buffer and copies into it; the GPU reads it, across PCIe if it is in system RAM. Staging: the CPU writes a staging buffer in system RAM, a GPU copy command moves the bytes into a device-local buffer in VRAM, and the GPU then reads VRAM.">
+    <text x="20" y="28" class="title">A. Direct write</text>
+    <rect x="20" y="44" width="150" height="50" rx="6" class="cpu"/><text x="95" y="66" class="mid">CPU</text><text x="95" y="84" class="mid small">memcpy</text>
+    <line x1="170" y1="69" x2="238" y2="69" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="240" y="44" width="200" height="50" rx="6" class="mem"/><text x="340" y="66" class="mid">host-visible buffer</text><text x="340" y="84" class="mid small">mapped pointer</text>
+    <line x1="440" y1="69" x2="558" y2="69" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="499" y="60" class="mid small">shader reads</text>
+    <rect x="560" y="44" width="180" height="50" rx="6" class="gpu"/><text x="650" y="66" class="mid">GPU</text><text x="650" y="84" class="mid small">draw or dispatch</text>
+    <text x="20" y="118" class="small">One step, no command. Good for small data that changes every frame. If the buffer is in system RAM, every GPU read crosses PCIe.</text>
+
+    <text x="20" y="160" class="title">B. Staging copy</text>
+    <rect x="20" y="176" width="110" height="50" rx="6" class="cpu"/><text x="75" y="198" class="mid">CPU</text><text x="75" y="216" class="mid small">memcpy</text>
+    <line x1="130" y1="201" x2="168" y2="201" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="170" y="176" width="150" height="50" rx="6" class="cpu"/><text x="245" y="198" class="mid">staging buffer</text><text x="245" y="216" class="mid small">system RAM, mapped</text>
+    <line x1="320" y1="201" x2="398" y2="201" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="359" y="192" class="mid small">copy cmd</text>
+    <rect x="400" y="176" width="150" height="50" rx="6" class="mem"/><text x="475" y="198" class="mid">device-local</text><text x="475" y="216" class="mid small">VRAM</text>
+    <line x1="550" y1="201" x2="618" y2="201" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="620" y="176" width="120" height="50" rx="6" class="gpu"/><text x="680" y="198" class="mid">GPU</text><text x="680" y="216" class="mid small">fast reads</text>
+    <text x="20" y="250" class="small">Two steps. The bytes cross PCIe once, during the copy; after that every read is from VRAM. The copy is a GPU command,</text>
+    <text x="20" y="266" class="small">so it must be recorded, submitted, and ordered before the work that reads the data.</text>
+  </svg>
+  <figcaption>With resizable BAR or an integrated GPU, path A can write straight into device-local memory, and the staging step is not needed.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Data</th><th>Size</th><th>Changes</th><th>Usual path</th></tr>
+  <tr><td>Per-frame constants (camera, lights)</td><td>bytes to KB</td><td>every frame</td><td>A, into host-visible memory, one copy per frame in flight</td></tr>
+  <tr><td>Meshes, static tables</td><td>MB to GB</td><td>once, at load</td><td>B, into device-local memory</td></tr>
+  <tr><td>Textures</td><td>MB to GB</td><td>once</td><td>B (images need a copy into their tiled layout, see section 8)</td></tr>
+  <tr><td>Big tables with a few changed rows</td><td>MB</td><td>a few rows per frame</td><td>B with only the changed rows, or A with ReBAR</td></tr>
+</table>
+</div>
+
+<h2><span class="n">4</span>The staging ring</h2>
+
+<p>Making a new staging buffer for every upload is slow, and freeing it needs to wait for the GPU copy. Instead, engines keep <b>one</b> big staging buffer and use it as a <b>ring</b>. Two counters describe it: <var>head</var>, where the next write goes, and <var>tail</var>, the oldest byte the GPU may still read. Bytes between them are in use. A fence (or a timeline value) per submitted batch tells when its bytes are free again.</p>
+
+<p>This example uses a 64 MiB ring. A piece is never split across the end of the ring; a piece that does not fit before the end skips to the start. Click through it.</p>
 
 <div class="stepper">
   <div class="step">
     <h4>1. An empty ring</h4>
-    <svg viewBox="0 0 720 180" role="img" aria-label="An empty 64 MiB ring. head and tail are both 0.">
+    <svg viewBox="0 0 760 180" role="img" aria-label="An empty 64 MiB ring. head and tail are both 0.">
       <rect x="40" y="36" width="640" height="40" rx="4" class="box"/>
       <text x="360" y="61" class="mid small t-faint">free</text>
       <text x="40" y="92" class="mid small">0</text><text x="200" y="92" class="mid small">16</text><text x="360" y="92" class="mid small">32</text><text x="520" y="92" class="mid small">48</text><text x="680" y="92" class="mid small">64 MiB</text>
       <line x1="40" y1="124" x2="40" y2="102" class="arrow hot" marker-end="url(#ah-hot)"/>
       <text x="48" y="128" class="small t-hot">tail = head = 0</text>
-      <text x="40" y="156" class="small">One mapped buffer of RING_SIZE = 64 MiB. Every upload copies into it first.</text>
-      <text x="40" y="172" class="small">A chunk is at most MAX_CHUNK_SIZE = RING_SIZE / 4 = 16 MiB, and a chunk never wraps.</text>
+      <text x="40" y="156" class="small">One mapped buffer, made once. Every upload copies into it first.</text>
+      <text x="40" y="172" class="small">head and tail only grow; the position in the ring is the counter modulo 64 MiB.</text>
     </svg>
-    <p><code>UploadManager::initialize</code> creates the ring, an upload fence (a timeline, value 0) and two command buffers.</p>
+    <p>Counters that never wrap make the math simple: <var>head</var> − <var>tail</var> is the space in use, and <var>head</var> mod size is the next position.</p>
   </div>
 
   <div class="step">
-    <h4>2. upload: 40 MiB into the vertex pool</h4>
-    <svg viewBox="0 0 720 180" role="img" aria-label="40 MiB are split into chunks of 16, 16 and 8 MiB at the start of the ring. head moves to 40 MiB. The chunks merge into one copy.">
+    <h4>2. Upload 40 MiB</h4>
+    <svg viewBox="0 0 760 180" role="img" aria-label="40 MiB are written at the start of the ring as chunks of 16, 16 and 8 MiB. head moves to 40 MiB. The three chunks become one copy command.">
       <rect x="40" y="36" width="640" height="40" rx="4" class="box"/>
       <rect x="40"  y="36" width="160" height="40" rx="4" class="mem"/><text x="120" y="61" class="mid small">16 MiB</text>
       <rect x="200" y="36" width="160" height="40" rx="4" class="mem"/><text x="280" y="61" class="mid small">16 MiB</text>
       <rect x="360" y="36" width="80"  height="40" rx="4" class="mem"/><text x="400" y="61" class="mid small">8 MiB</text>
-      <text x="40" y="26" class="small t-mem">pending: one BufferCopy of 40 MiB (the three chunks merge)</text>
+      <text x="40" y="26" class="small t-mem">pending: one copy of 40 MiB (the chunks are next to each other on both sides)</text>
       <text x="40" y="92" class="mid small">0</text><text x="200" y="92" class="mid small">16</text><text x="360" y="92" class="mid small">32</text><text x="520" y="92" class="mid small">48</text><text x="680" y="92" class="mid small">64 MiB</text>
       <line x1="40" y1="124" x2="40" y2="102" class="arrow" marker-end="url(#ah)"/>
       <text x="48" y="128" class="small">tail = 0</text>
       <line x1="440" y1="124" x2="440" y2="102" class="arrow hot" marker-end="url(#ah-hot)"/>
       <text x="448" y="128" class="small t-hot">head = 40 MiB</text>
-      <text x="40" y="156" class="small">upload() cuts the 40 MiB into chunks of at most 16 MiB, and allocate() places each one at head.</text>
-      <text x="40" y="172" class="small">addCopy merges a copy into the last one when it has the same dst and both offsets continue it.</text>
+      <text x="40" y="156" class="small">A big upload is cut into chunks of at most 16 MiB (a quarter of the ring), so one chunk plus any skipped</text>
+      <text x="40" y="172" class="small">space always fits in an empty ring. Neighbouring chunks to neighbouring destinations merge into one copy.</text>
     </svg>
-    <p>Nothing has reached the GPU yet. The copy waits in <code>pendingCopies</code>, and <code>pendingRanges</code> remembers which bytes of the vertex pool this batch writes.</p>
+    <p>Nothing has reached the GPU yet. The copy command waits in a list until the next submit.</p>
   </div>
 
   <div class="step">
-    <h4>3. submit: the batch goes to the GPU</h4>
-    <svg viewBox="0 0 720 180" role="img" aria-label="flush records and submits batch 0, which signals upload fence value 1. Its ring space stays in use until the fence reaches 1.">
+    <h4>3. Submit: the batch goes to the GPU</h4>
+    <svg viewBox="0 0 760 180" role="img" aria-label="The batch is submitted and will signal fence value 1. Its 40 MiB stay in use until the fence reaches 1.">
       <rect x="40" y="36" width="640" height="40" rx="4" class="box"/>
       <rect x="40" y="36" width="400" height="40" rx="4" class="gpu"/>
-      <text x="240" y="61" class="mid small">batch 0 · the GPU copies it</text>
-      <text x="40" y="26" class="small t-gpu">submitted: batch 0 signals upload fence value 1, ringEnd = 40 MiB</text>
+      <text x="240" y="61" class="mid small">batch 1 · the GPU copies it</text>
+      <text x="40" y="26" class="small t-gpu">submitted: batch 1 signals fence value 1; it ends at 40 MiB</text>
       <text x="40" y="92" class="mid small">0</text><text x="200" y="92" class="mid small">16</text><text x="360" y="92" class="mid small">32</text><text x="520" y="92" class="mid small">48</text><text x="680" y="92" class="mid small">64 MiB</text>
       <line x1="40" y1="124" x2="40" y2="102" class="arrow" marker-end="url(#ah)"/>
       <text x="48" y="128" class="small">tail = 0</text>
       <line x1="440" y1="124" x2="440" y2="102" class="arrow hot" marker-end="url(#ah-hot)"/>
       <text x="448" y="128" class="small t-hot">head = 40 MiB</text>
-      <text x="40" y="156" class="small">RenderContext::submit calls flush(): one command buffer with copyBuffers, submitted before the frame.</text>
-      <text x="40" y="172" class="small">The 40 MiB stay in use until the fence value 1 is reached.</text>
+      <text x="40" y="156" class="small">The batch remembers two numbers: its fence value (1) and where it ends in the ring (40 MiB).</text>
+      <text x="40" y="172" class="small">That is all the ring needs to free the space later.</text>
     </svg>
-    <p>The batch stores <code>fenceValue</code> = 1 and <code>ringEnd</code> = <code>head</code>. Those two numbers are all the ring needs to free the space later.</p>
+    <p>The CPU does not wait. It goes on recording the next frame.</p>
   </div>
 
   <div class="step">
-    <h4>4. Next frame: space comes back, a chunk skips to the start</h4>
-    <svg viewBox="0 0 720 180" role="img" aria-label="The fence reached 1, so tail moves to 40 MiB. Upload A of 16 MiB goes at 40 MiB. Upload B of 12 MiB does not fit before the end, so 8 MiB of padding are skipped and B goes at 0.">
+    <h4>4. Next frame: space comes back, a piece skips to the start</h4>
+    <svg viewBox="0 0 760 180" role="img" aria-label="The fence reached 1, so tail moves to 40 MiB. Upload A of 16 MiB goes at 40 MiB. Upload B of 12 MiB does not fit before the end, so 8 MiB are skipped and B goes at 0.">
       <rect x="40" y="36" width="640" height="40" rx="4" class="box"/>
       <rect x="40"  y="36" width="120" height="40" rx="4" class="mem"/><text x="100" y="61" class="mid small">B · 12 MiB</text>
       <text x="300" y="61" class="mid small t-faint">free</text>
       <rect x="440" y="36" width="160" height="40" rx="4" class="mem"/><text x="520" y="61" class="mid small">A · 16 MiB</text>
-      <rect x="600" y="36" width="80"  height="40" rx="4" class="ghost"/><text x="640" y="61" class="mid small t-faint">padding</text>
+      <rect x="600" y="36" width="80"  height="40" rx="4" class="ghost"/><text x="640" y="61" class="mid small t-faint">skipped</text>
       <text x="40" y="26" class="small t-mem">pending: A and B, two copies</text>
       <text x="40" y="92" class="mid small">0</text><text x="200" y="92" class="mid small">16</text><text x="360" y="92" class="mid small">32</text><text x="520" y="92" class="mid small">48</text><text x="680" y="92" class="mid small">64 MiB</text>
       <line x1="160" y1="124" x2="160" y2="102" class="arrow hot" marker-end="url(#ah-hot)"/>
-      <text x="168" y="128" class="small t-hot">head = 76 MiB (76 % 64 = 12)</text>
+      <text x="168" y="128" class="small t-hot">head = 76 MiB (76 mod 64 = 12)</text>
       <line x1="440" y1="124" x2="440" y2="102" class="arrow" marker-end="url(#ah)"/>
       <text x="448" y="128" class="small">tail = 40 MiB</text>
-      <text x="40" y="156" class="small">reclaim(): getFenceValue says 1 is done, so tail = batch 0's ringEnd. A goes at 40 MiB. B (12 MiB)</text>
-      <text x="40" y="172" class="small">would cross the end: head skips 8 MiB of padding, and B goes at 0. In use: 76 − 40 = 36 MiB.</text>
+      <text x="40" y="156" class="small">Fence value 1 is reached, so tail moves to batch 1's end. A goes at 40 MiB. B (12 MiB) would cross the end,</text>
+      <text x="40" y="172" class="small">so head skips 8 MiB and B goes at 0. In use: 76 − 40 = 36 MiB, the skipped part included.</text>
     </svg>
-    <p><code>reclaim</code> never blocks: <code>getFenceValue</code> only reads the fence. A and B are separate copies, because B's source does not continue A's.</p>
+    <p>Checking a fence value does not block. The ring only learns about finished batches; it never waits for them here.</p>
   </div>
 
   <div class="step">
     <h4>5. If the GPU is late: the ring is full</h4>
-    <svg viewBox="0 0 720 180" role="img" aria-label="If batch 0 is not done, B does not fit. allocate flushes A, waits for every copy, sets tail to head, and then places B at 0.">
+    <svg viewBox="0 0 760 180" role="img" aria-label="If batch 1 is not finished, B does not fit. The ring submits A, waits for every copy, sets tail to head, and then places B at 0.">
       <rect x="40" y="36" width="640" height="40" rx="4" class="box"/>
       <rect x="40"  y="36" width="120" height="40" rx="4" class="mem"/><text x="100" y="61" class="mid small">B · 12 MiB</text>
-      <text x="380" y="61" class="mid small t-faint">free (batch 0 and A are copied)</text>
-      <rect x="600" y="36" width="80"  height="40" rx="4" class="ghost"/><text x="640" y="61" class="mid small t-faint">padding</text>
-      <text x="40" y="26" class="small t-hot">full: flush, wait for every copy, then tail = head</text>
+      <text x="380" y="61" class="mid small t-faint">free (batch 1 and A are copied)</text>
+      <rect x="600" y="36" width="80"  height="40" rx="4" class="ghost"/><text x="640" y="61" class="mid small t-faint">skipped</text>
+      <text x="40" y="26" class="small t-hot">full: submit what is pending, wait for every copy, then tail = head</text>
       <text x="40" y="92" class="mid small">0</text><text x="200" y="92" class="mid small">16</text><text x="360" y="92" class="mid small">32</text><text x="520" y="92" class="mid small">48</text><text x="680" y="92" class="mid small">64 MiB</text>
       <line x1="160" y1="124" x2="160" y2="102" class="arrow hot" marker-end="url(#ah-hot)"/>
       <text x="168" y="128" class="small t-hot">head = 76 MiB</text>
       <line x1="600" y1="124" x2="600" y2="102" class="arrow" marker-end="url(#ah)"/>
       <text x="592" y="128" class="small end">tail = 56 MiB</text>
-      <text x="40" y="156" class="small">If the fence is still 0, tail is 0 and 56 + 8 + 12 − 0 = 76 MiB &gt; 64 MiB. allocate() flushes A as batch 1,</text>
-      <text x="40" y="172" class="small">waits for the fence to reach submittedValue, and sets tail = head = 56 MiB. Then B goes at 0.</text>
+      <text x="40" y="156" class="small">If fence value 1 is not reached, tail is still 0, and 56 + 8 + 12 − 0 = 76 MiB &gt; 64 MiB. So A is submitted as batch 2,</text>
+      <text x="40" y="172" class="small">the CPU waits for value 2, and tail jumps to head (56 MiB). Then B goes at 0.</text>
     </svg>
-    <p>This wait stalls the CPU. It happens only when more than about 64 MiB are uploaded in one go, for example a big glTF in one frame.</p>
+    <p>This wait stalls the CPU. It only happens when more than a ring's worth of data is uploaded before the GPU catches up, for example a big level loaded in one frame.</p>
   </div>
 </div>
 
-<h3>When a batch is submitted</h3>
+<p>The ring size is a trade-off. Bigger means fewer stalls but more memory that sits idle most of the time. As a rough number: at about 25 GB/s over PCIe, copying 64 MiB takes about 2.7 ms, so a 64 MiB ring can move a lot per frame before the bus itself becomes the limit.</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>When</th><th>Who calls <code>flush</code></th><th>Why</th></tr>
-  <tr><td>Every <code>RenderContext::submit</code></td><td><code>submit</code>, before the frame's command buffers</td><td>The frame must see the data it reads.</td></tr>
-  <tr><td>The ring is full</td><td><code>allocate</code></td><td>It then waits for every copy, which frees the whole ring.</td></tr>
-  <tr><td>A write overlaps bytes this batch already writes to the same buffer</td><td><code>upload</code></td><td>Copies in one batch have no barriers between them, so their order is not defined.</td></tr>
-</table>
-</div>
+<h2><span class="n">5</span>Batching and ordering the copies</h2>
 
-<div class="split">
-  <div>
-    <h4>Merged into one copy</h4>
-    <p>Same <code>dst</code>, and the new copy's <code>srcOffset</code> and <code>dstOffset</code> both start where the last copy ends. The usual case: one big upload in chunks, or rows written in ascending order.</p>
-  </div>
-  <div>
-    <h4>Starts a new batch</h4>
-    <p>The new range overlaps the span of everything written to that <code>dst</code> in this batch (<code>WrittenRange</code>: lowest begin to highest end). The span is exact for ascending writes. For other orders it can cause a spare flush, never a missed one.</p>
-  </div>
-</div>
-
-<h2><span class="n">4</span>Batches on the one queue</h2>
+<p>A copy command is cheap, but a submit is not. So uploads are collected and sent as one <b>batch</b>: one command buffer with many copies, submitted once per frame, before the frame's own work.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="The CPU records a frame and queues copies. submit first submits the upload batch, then the frame. On the GPU queue the copies run between two barriers, before the frame that reads them.">
+  <svg viewBox="0 0 760 250" role="img" aria-label="The CPU records frame N and collects copies. The submit sends the upload batch first and then the frame. On the GPU the copies run between two barriers: the first waits for earlier work, the second makes the copied data visible to later work.">
     <text x="20" y="50" class="title t-cpu">CPU</text>
     <rect x="100" y="28" width="250" height="48" rx="6" class="cpu"/>
     <text x="225" y="48" class="mid">frame N records</text>
-    <text x="225" y="66" class="mid small">fillBuffer → pendingCopies</text>
+    <text x="225" y="66" class="mid small">uploads → pending copies</text>
     <rect x="360" y="28" width="150" height="48" rx="6" class="cpu"/>
-    <text x="435" y="48" class="mid mono">submit()</text>
-    <text x="435" y="66" class="mid small">flush, then the frame</text>
+    <text x="435" y="48" class="mid">submit</text>
+    <text x="435" y="66" class="mid small">batch first, then frame</text>
     <rect x="520" y="28" width="225" height="48" rx="6" class="cpu"/>
     <text x="632" y="48" class="mid">frame N+1 records</text>
-    <text x="632" y="66" class="mid small">uses the other batch</text>
+    <text x="632" y="66" class="mid small">a new batch</text>
 
     <line x1="410" y1="76" x2="305" y2="146" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <line x1="460" y1="76" x2="470" y2="146" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <text x="300" y="112" class="end small">1st: upload batch</text>
-    <text x="476" y="112" class="small">2nd: cull + frame</text>
+    <text x="476" y="112" class="small">2nd: frame N</text>
 
     <text x="20" y="180" class="title t-gpu">GPU</text>
     <text x="20" y="196" class="small">one queue</text>
@@ -326,317 +315,305 @@
     <line x1="220" y1="144" x2="220" y2="212" class="hot"/>
     <rect x="230" y="150" width="140" height="56" rx="6" class="gpu"/>
     <text x="300" y="173" class="mid">copies</text>
-    <text x="300" y="192" class="mid small">then fence = 1</text>
+    <text x="300" y="192" class="mid small">then signal the fence</text>
     <line x1="380" y1="144" x2="380" y2="212" class="hot"/>
     <rect x="390" y="150" width="170" height="56" rx="6" class="gpu"/>
-    <text x="475" y="173" class="mid">cull + frame N</text>
+    <text x="475" y="173" class="mid">frame N</text>
     <text x="475" y="192" class="mid small">reads the new data</text>
-    <rect x="570" y="150" width="175" height="56" rx="6" class="ghost"/>
-    <text x="657" y="173" class="mid t-faint">next batch</text>
-    <text x="657" y="192" class="mid small">other command buffer</text>
 
-    <text x="215" y="230" class="end small t-hot">before: waits for all earlier work</text>
-    <text x="385" y="230" class="small t-hot">after: later work sees the copies</text>
+    <text x="215" y="230" class="end small t-hot">barrier: wait for earlier work</text>
+    <text x="385" y="230" class="small t-hot">barrier: later work sees the copies</text>
   </svg>
-  <figcaption>Uploads and frames share the graphics queue. The two barriers inside <code>copyBuffers</code> order the copies after earlier submits and before later ones, so the frame needs no semaphore. The fence only tells the CPU when ring space and the command buffer are free.</figcaption>
+  <figcaption>On one queue, two barriers are enough to order the copies. The first protects data that frame N−1 still reads. The second makes the copies visible to frame N.</figcaption>
 </figure>
-
-<ol class="steps">
-  <li><b>Two command buffers take turns.</b> <code>batches[2]</code> each hold a command buffer, the fence value of their last submit, the ring end and the buffers they wrote. Before <code>flush</code> reuses one, it waits until the fence reaches that batch's <code>fenceValue</code>.</li>
-  <li><b>Each submit signals the next value.</b> <code>submittedValue + 1</code>. Values only grow.</li>
-  <li><b>A failed submit keeps its copies.</b> They stay in <code>pendingCopies</code> and go out with the next flush. Their ring bytes are safe, because only a completed batch frees ring space.</li>
-  <li><b>Destroying a buffer cancels its copies.</b> <code>RenderContext::destroyBuffer</code> calls <code>cancelUploads</code>: pending copies to it are dropped, and it waits for a submitted batch that wrote it.</li>
-</ol>
-
-<h2><span class="n">5</span>GPU tables: one copy per frame slot</h2>
-
-<p>Two frames can be in flight (<code>MAX_FRAMES_IN_FLIGHT</code> = 2). A <code>GpuTable</code> has one buffer per frame slot, so the CPU can rewrite slot 0 while the GPU still reads slot 1. It also keeps a CPU copy of every row (<code>shadow</code>), and a dirty bit per row and slot (<code>dirtySlots</code>). The instance table and the material table are <code>GpuTable</code>s. Here is one with 8 rows.</p>
-
-<div class="stepper">
-  <div class="step">
-    <h4>1. setRow(5), setRow(6), setRow(2)</h4>
-    <svg viewBox="0 0 720 230" role="img" aria-label="Three rows change on the CPU copy. Both slot buffers still hold the old rows. Each slot lists rows 5, 6 and 2 as dirty.">
-      <text x="16" y="48" class="title">shadow (CPU)</text><text x="16" y="82" class="small">dirtySlots (bit 1, bit 0)</text>
-      <text x="16" y="116" class="title">slot 0 buffer</text><text x="16" y="160" class="title">slot 1 buffer</text>
-      <text x="178" y="20" class="mid small">0</text><text x="240" y="20" class="mid small">1</text><text x="302" y="20" class="mid small">2</text><text x="364" y="20" class="mid small">3</text><text x="426" y="20" class="mid small">4</text><text x="488" y="20" class="mid small">5</text><text x="550" y="20" class="mid small">6</text><text x="612" y="20" class="mid small">7</text>
-      <rect x="150" y="28" width="490" height="30" rx="3" class="cpu"/>
-      <rect x="274" y="28" width="56" height="30" rx="3" class="hot"/><rect x="460" y="28" width="56" height="30" rx="3" class="hot"/><rect x="522" y="28" width="56" height="30" rx="3" class="hot"/>
-      <text x="178" y="48" class="mid mono">v0</text><text x="240" y="48" class="mid mono">v0</text><text x="302" y="48" class="mid mono">v1</text><text x="364" y="48" class="mid mono">v0</text><text x="426" y="48" class="mid mono">v0</text><text x="488" y="48" class="mid mono">v1</text><text x="550" y="48" class="mid mono">v1</text><text x="612" y="48" class="mid mono">v0</text>
-      <text x="178" y="82" class="mid mono t-faint">00</text><text x="240" y="82" class="mid mono t-faint">00</text><text x="302" y="82" class="mid mono t-hot">11</text><text x="364" y="82" class="mid mono t-faint">00</text><text x="426" y="82" class="mid mono t-faint">00</text><text x="488" y="82" class="mid mono t-hot">11</text><text x="550" y="82" class="mid mono t-hot">11</text><text x="612" y="82" class="mid mono t-faint">00</text>
-      <rect x="150" y="96" width="490" height="30" rx="3" class="mem"/>
-      <text x="178" y="116" class="mid mono">v0</text><text x="240" y="116" class="mid mono">v0</text><text x="302" y="116" class="mid mono">v0</text><text x="364" y="116" class="mid mono">v0</text><text x="426" y="116" class="mid mono">v0</text><text x="488" y="116" class="mid mono">v0</text><text x="550" y="116" class="mid mono">v0</text><text x="612" y="116" class="mid mono">v0</text>
-      <rect x="150" y="140" width="490" height="30" rx="3" class="mem"/>
-      <text x="178" y="160" class="mid mono">v0</text><text x="240" y="160" class="mid mono">v0</text><text x="302" y="160" class="mid mono">v0</text><text x="364" y="160" class="mid mono">v0</text><text x="426" y="160" class="mid mono">v0</text><text x="488" y="160" class="mid mono">v0</text><text x="550" y="160" class="mid mono">v0</text><text x="612" y="160" class="mid mono">v0</text>
-      <text x="16" y="200" class="mono">dirtyRows[0] = {5, 6, 2}</text>
-      <text x="16" y="220" class="mono">dirtyRows[1] = {5, 6, 2}</text>
-    </svg>
-    <p><code>setRow</code> only touches CPU memory. It copies the row into <code>shadow</code> and, for each slot whose bit was clear, adds the row to that slot's <code>dirtyRows</code> list.</p>
-  </div>
-
-  <div class="step">
-    <h4>2. Frame in slot 0: upload(ctx, 0)</h4>
-    <svg viewBox="0 0 720 230" role="img" aria-label="Slot 0 sorts its dirty rows, merges them into two ranges, row 2 and rows 5 to 6, and writes them with two fillBuffer calls. Slot 0 bits are cleared.">
-      <text x="16" y="48" class="title">shadow (CPU)</text><text x="16" y="82" class="small">dirtySlots (bit 1, bit 0)</text>
-      <text x="16" y="116" class="title">slot 0 buffer</text><text x="16" y="160" class="title">slot 1 buffer</text>
-      <text x="178" y="20" class="mid small">0</text><text x="240" y="20" class="mid small">1</text><text x="302" y="20" class="mid small">2</text><text x="364" y="20" class="mid small">3</text><text x="426" y="20" class="mid small">4</text><text x="488" y="20" class="mid small">5</text><text x="550" y="20" class="mid small">6</text><text x="612" y="20" class="mid small">7</text>
-      <rect x="150" y="28" width="490" height="30" rx="3" class="cpu"/>
-      <text x="178" y="48" class="mid mono">v0</text><text x="240" y="48" class="mid mono">v0</text><text x="302" y="48" class="mid mono">v1</text><text x="364" y="48" class="mid mono">v0</text><text x="426" y="48" class="mid mono">v0</text><text x="488" y="48" class="mid mono">v1</text><text x="550" y="48" class="mid mono">v1</text><text x="612" y="48" class="mid mono">v0</text>
-      <text x="178" y="82" class="mid mono t-faint">00</text><text x="240" y="82" class="mid mono t-faint">00</text><text x="302" y="82" class="mid mono t-hot">10</text><text x="364" y="82" class="mid mono t-faint">00</text><text x="426" y="82" class="mid mono t-faint">00</text><text x="488" y="82" class="mid mono t-hot">10</text><text x="550" y="82" class="mid mono t-hot">10</text><text x="612" y="82" class="mid mono t-faint">00</text>
-      <rect x="150" y="96" width="490" height="30" rx="3" class="mem"/>
-      <rect x="274" y="96" width="56" height="30" rx="3" class="hot"/><rect x="460" y="96" width="118" height="30" rx="3" class="hot"/>
-      <text x="178" y="116" class="mid mono">v0</text><text x="240" y="116" class="mid mono">v0</text><text x="302" y="116" class="mid mono">v1</text><text x="364" y="116" class="mid mono">v0</text><text x="426" y="116" class="mid mono">v0</text><text x="488" y="116" class="mid mono">v1</text><text x="550" y="116" class="mid mono">v1</text><text x="612" y="116" class="mid mono">v0</text>
-      <text x="660" y="116" class="small t-hot">2 writes</text>
-      <rect x="150" y="140" width="490" height="30" rx="3" class="mem"/>
-      <text x="178" y="160" class="mid mono">v0</text><text x="240" y="160" class="mid mono">v0</text><text x="302" y="160" class="mid mono">v0</text><text x="364" y="160" class="mid mono">v0</text><text x="426" y="160" class="mid mono">v0</text><text x="488" y="160" class="mid mono">v0</text><text x="550" y="160" class="mid mono">v0</text><text x="612" y="160" class="mid mono">v0</text>
-      <text x="16" y="200" class="mono">dirtyRows[0] = {}</text>
-      <text x="300" y="200" class="small">mergeRows: {2, 5, 6} → ranges {first 2, count 1}, {first 5, count 2}</text>
-      <text x="16" y="220" class="mono">dirtyRows[1] = {5, 6, 2}</text>
-    </svg>
-    <p><code>mergeRows</code> sorts the rows and joins neighbours into <code>RowRange</code>s. Each range is one <code>fillBuffer</code> call from <code>shadow</code>. Slot 1 is still read by the GPU, so it is not touched.</p>
-  </div>
-
-  <div class="step">
-    <h4>3. setRow(6) again, before slot 1's frame</h4>
-    <svg viewBox="0 0 720 230" role="img" aria-label="Row 6 changes again. Its slot 0 bit was clear, so slot 0 lists row 6 again. Its slot 1 bit was still set, so slot 1's list does not change.">
-      <text x="16" y="48" class="title">shadow (CPU)</text><text x="16" y="82" class="small">dirtySlots (bit 1, bit 0)</text>
-      <text x="16" y="116" class="title">slot 0 buffer</text><text x="16" y="160" class="title">slot 1 buffer</text>
-      <text x="178" y="20" class="mid small">0</text><text x="240" y="20" class="mid small">1</text><text x="302" y="20" class="mid small">2</text><text x="364" y="20" class="mid small">3</text><text x="426" y="20" class="mid small">4</text><text x="488" y="20" class="mid small">5</text><text x="550" y="20" class="mid small">6</text><text x="612" y="20" class="mid small">7</text>
-      <rect x="150" y="28" width="490" height="30" rx="3" class="cpu"/>
-      <rect x="522" y="28" width="56" height="30" rx="3" class="hot"/>
-      <text x="178" y="48" class="mid mono">v0</text><text x="240" y="48" class="mid mono">v0</text><text x="302" y="48" class="mid mono">v1</text><text x="364" y="48" class="mid mono">v0</text><text x="426" y="48" class="mid mono">v0</text><text x="488" y="48" class="mid mono">v1</text><text x="550" y="48" class="mid mono">v2</text><text x="612" y="48" class="mid mono">v0</text>
-      <text x="178" y="82" class="mid mono t-faint">00</text><text x="240" y="82" class="mid mono t-faint">00</text><text x="302" y="82" class="mid mono t-hot">10</text><text x="364" y="82" class="mid mono t-faint">00</text><text x="426" y="82" class="mid mono t-faint">00</text><text x="488" y="82" class="mid mono t-hot">10</text><text x="550" y="82" class="mid mono t-hot">11</text><text x="612" y="82" class="mid mono t-faint">00</text>
-      <rect x="150" y="96" width="490" height="30" rx="3" class="mem"/>
-      <text x="178" y="116" class="mid mono">v0</text><text x="240" y="116" class="mid mono">v0</text><text x="302" y="116" class="mid mono">v1</text><text x="364" y="116" class="mid mono">v0</text><text x="426" y="116" class="mid mono">v0</text><text x="488" y="116" class="mid mono">v1</text><text x="550" y="116" class="mid mono">v1</text><text x="612" y="116" class="mid mono">v0</text>
-      <rect x="150" y="140" width="490" height="30" rx="3" class="mem"/>
-      <text x="178" y="160" class="mid mono">v0</text><text x="240" y="160" class="mid mono">v0</text><text x="302" y="160" class="mid mono">v0</text><text x="364" y="160" class="mid mono">v0</text><text x="426" y="160" class="mid mono">v0</text><text x="488" y="160" class="mid mono">v0</text><text x="550" y="160" class="mid mono">v0</text><text x="612" y="160" class="mid mono">v0</text>
-      <text x="16" y="200" class="mono">dirtyRows[0] = {6}</text>
-      <text x="300" y="200" class="small">the bit decides: a row is in each list at most once</text>
-      <text x="16" y="220" class="mono">dirtyRows[1] = {5, 6, 2}</text>
-    </svg>
-    <p>A row that changes ten times between two uploads is still sent once per slot. The upload always reads the newest value from <code>shadow</code>.</p>
-  </div>
-
-  <div class="step">
-    <h4>4. Frame in slot 1: upload(ctx, 1)</h4>
-    <svg viewBox="0 0 720 230" role="img" aria-label="Slot 1 writes row 2 and rows 5 to 6, getting the newest value v2 of row 6. Only row 6 is still dirty, in slot 0.">
-      <text x="16" y="48" class="title">shadow (CPU)</text><text x="16" y="82" class="small">dirtySlots (bit 1, bit 0)</text>
-      <text x="16" y="116" class="title">slot 0 buffer</text><text x="16" y="160" class="title">slot 1 buffer</text>
-      <text x="178" y="20" class="mid small">0</text><text x="240" y="20" class="mid small">1</text><text x="302" y="20" class="mid small">2</text><text x="364" y="20" class="mid small">3</text><text x="426" y="20" class="mid small">4</text><text x="488" y="20" class="mid small">5</text><text x="550" y="20" class="mid small">6</text><text x="612" y="20" class="mid small">7</text>
-      <rect x="150" y="28" width="490" height="30" rx="3" class="cpu"/>
-      <text x="178" y="48" class="mid mono">v0</text><text x="240" y="48" class="mid mono">v0</text><text x="302" y="48" class="mid mono">v1</text><text x="364" y="48" class="mid mono">v0</text><text x="426" y="48" class="mid mono">v0</text><text x="488" y="48" class="mid mono">v1</text><text x="550" y="48" class="mid mono">v2</text><text x="612" y="48" class="mid mono">v0</text>
-      <text x="178" y="82" class="mid mono t-faint">00</text><text x="240" y="82" class="mid mono t-faint">00</text><text x="302" y="82" class="mid mono t-faint">00</text><text x="364" y="82" class="mid mono t-faint">00</text><text x="426" y="82" class="mid mono t-faint">00</text><text x="488" y="82" class="mid mono t-faint">00</text><text x="550" y="82" class="mid mono t-hot">01</text><text x="612" y="82" class="mid mono t-faint">00</text>
-      <rect x="150" y="96" width="490" height="30" rx="3" class="mem"/>
-      <text x="178" y="116" class="mid mono">v0</text><text x="240" y="116" class="mid mono">v0</text><text x="302" y="116" class="mid mono">v1</text><text x="364" y="116" class="mid mono">v0</text><text x="426" y="116" class="mid mono">v0</text><text x="488" y="116" class="mid mono">v1</text><text x="550" y="116" class="mid mono">v1</text><text x="612" y="116" class="mid mono">v0</text>
-      <rect x="150" y="140" width="490" height="30" rx="3" class="mem"/>
-      <rect x="274" y="140" width="56" height="30" rx="3" class="hot"/><rect x="460" y="140" width="118" height="30" rx="3" class="hot"/>
-      <text x="178" y="160" class="mid mono">v0</text><text x="240" y="160" class="mid mono">v0</text><text x="302" y="160" class="mid mono">v1</text><text x="364" y="160" class="mid mono">v0</text><text x="426" y="160" class="mid mono">v0</text><text x="488" y="160" class="mid mono">v1</text><text x="550" y="160" class="mid mono">v2</text><text x="612" y="160" class="mid mono">v0</text>
-      <text x="660" y="160" class="small t-hot">2 writes</text>
-      <text x="16" y="200" class="mono">dirtyRows[0] = {6}</text>
-      <text x="16" y="220" class="mono">dirtyRows[1] = {}</text>
-      <text x="300" y="220" class="small">next frame in slot 0 sends row 6 (v2); then all is clean</text>
-    </svg>
-    <p>If a <code>fillBuffer</code> fails, <code>upload</code> keeps the rows dirty, and that slot sends them all again in its next frame.</p>
-  </div>
-</div>
-
-<p><code>upload</code> runs in <code>syncGpuScene</code>, after the fence wait for the frame's slot (<code>frameCount</code>). So the GPU is done with that slot's buffer, on both <code>fillBuffer</code> paths. See <a href="gpu-scene.html">The GPU scene tables</a> for what fills the rows.</p>
-
-<h2><span class="n">6</span>Device addresses: how shaders find the buffers</h2>
-
-<figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="The push constant holds the address of SceneData. SceneData holds the addresses of the vertex pool, the instance and material tables of this slot, the geometry table and the draw buffers.">
-    <rect x="20" y="95" width="170" height="60" rx="6" class="box"/>
-    <text x="105" y="117" class="mid title">push constant</text>
-    <text x="105" y="135" class="mid mono small">scene · firstDraw</text>
-    <text x="105" y="149" class="mid small">16 bytes</text>
-    <line x1="190" y1="125" x2="238" y2="125" class="arrow" marker-end="url(#ah)"/>
-    <text x="214" y="117" class="mid small">scene</text>
-
-    <rect x="240" y="20" width="200" height="214" rx="6" class="mem"/>
-    <text x="340" y="42" class="mid title">SceneData</text>
-    <text x="340" y="58" class="mid small">one per drawScene call</text>
-    <text x="260" y="88"  class="mono">vertsPtr</text>
-    <text x="260" y="110" class="mono">instancesPtr</text>
-    <text x="260" y="132" class="mono">materialsPtr</text>
-    <text x="260" y="154" class="mono">geometryPtr</text>
-    <text x="260" y="176" class="mono">drawInfoPtr</text>
-    <text x="260" y="198" class="mono">allDrawsPtr</text>
-    <text x="260" y="220" class="small">+ 4 culling pointers</text>
-
-    <line x1="400" y1="84"  x2="518" y2="84"  class="arrow" marker-end="url(#ah)"/>
-    <line x1="400" y1="106" x2="518" y2="106" class="arrow" marker-end="url(#ah)"/>
-    <line x1="400" y1="128" x2="518" y2="128" class="arrow" marker-end="url(#ah)"/>
-    <line x1="400" y1="150" x2="518" y2="150" class="arrow" marker-end="url(#ah)"/>
-    <line x1="400" y1="172" x2="518" y2="172" class="arrow" marker-end="url(#ah)"/>
-    <line x1="400" y1="194" x2="518" y2="194" class="arrow" marker-end="url(#ah)"/>
-    <rect x="520" y="74"  width="225" height="20" rx="4" class="mem"/><text x="632" y="89"  class="mid small">Geometry Vertex Pool</text>
-    <rect x="520" y="96"  width="225" height="20" rx="4" class="mem"/><text x="632" y="111" class="mid small">Instance Table, this slot</text>
-    <rect x="520" y="118" width="225" height="20" rx="4" class="mem"/><text x="632" y="133" class="mid small">Material Table, this slot</text>
-    <rect x="520" y="140" width="225" height="20" rx="4" class="mem"/><text x="632" y="155" class="mid small">Geometry Table</text>
-    <rect x="520" y="162" width="225" height="20" rx="4" class="mem"/><text x="632" y="177" class="mid small">Visible Draw Buffer</text>
-    <rect x="520" y="184" width="225" height="20" rx="4" class="mem"/><text x="632" y="199" class="mid small">Draw Info Buffer, this slot</text>
-  </svg>
-  <figcaption>No buffer is bound to a descriptor. The CPU writes 64-bit addresses into <code>SceneData</code>, and shaders read through them. Only textures go through a descriptor set (bindless).</figcaption>
-</figure>
-
-<p><code>VulkanDevice::createBuffer</code> asks for the address once (<code>vkGetBufferDeviceAddress</code>) and stores it in <code>Buffer::deviceAddress</code>. <code>RenderContext::getBufferDeviceAddress</code> returns it, or logs an error and returns 0. The address of a slot buffer is different from the other slot's, so <code>drawScene</code> writes this slot's addresses each call. The full chain is in <a href="uber-shader.html">Drawing with the uber shader</a>.</p>
-
-<h2><span class="n">7</span>The geometry pool</h2>
-
-<figure class="diagram">
-  <svg viewBox="0 0 760 210" role="img" aria-label="Three device-local buffers. Each sub-mesh is appended to the vertex pool, the index pool (LOD 0 and then its coarser LODs) and the geometry table. The used part grows; nothing is freed.">
-    <text x="20" y="38" class="title">Vertex pool</text>
-    <text x="20" y="54" class="small">Vertex, 64 B each</text>
-    <rect x="200" y="24" width="540" height="34" rx="4" class="box"/>
-    <rect x="200" y="24" width="90"  height="34" rx="4" class="mem"/><text x="245" y="46" class="mid small">A, sub 0</text>
-    <rect x="290" y="24" width="60"  height="34" rx="4" class="mem"/><text x="320" y="46" class="mid small">A, 1</text>
-    <rect x="350" y="24" width="110" height="34" rx="4" class="mem"/><text x="405" y="46" class="mid small">B, sub 0</text>
-    <text x="600" y="46" class="mid small t-faint">free</text>
-    <line x1="460" y1="70" x2="460" y2="60" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="468" y="74" class="small t-hot">usedVertices</text>
-
-    <text x="20" y="104" class="title">Index pool</text>
-    <text x="20" y="120" class="small">uint32_t, 4 B each</text>
-    <rect x="200" y="90" width="540" height="34" rx="4" class="box"/>
-    <rect x="200" y="90" width="130" height="34" rx="4" class="mem"/><text x="265" y="112" class="mid small">A, sub 0 + LODs</text>
-    <rect x="330" y="90" width="70"  height="34" rx="4" class="mem"/><text x="365" y="112" class="mid small">A, 1</text>
-    <rect x="400" y="90" width="160" height="34" rx="4" class="mem"/><text x="480" y="112" class="mid small">B, sub 0 + LODs</text>
-    <text x="650" y="112" class="mid small t-faint">free</text>
-    <line x1="560" y1="136" x2="560" y2="126" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="568" y="140" class="small t-hot">usedIndices</text>
-
-    <text x="20" y="170" class="title">Geometry table</text>
-    <text x="20" y="186" class="small">GeometryData, 120 B each</text>
-    <rect x="200" y="156" width="540" height="34" rx="4" class="box"/>
-    <rect x="200" y="156" width="44" height="34" rx="4" class="mem"/><text x="222" y="178" class="mid mono">0</text>
-    <rect x="244" y="156" width="44" height="34" rx="4" class="mem"/><text x="266" y="178" class="mid mono">1</text>
-    <rect x="288" y="156" width="44" height="34" rx="4" class="mem"/><text x="310" y="178" class="mid mono">2</text>
-    <text x="344" y="178" class="small">← one row per sub-mesh: vertexOffset, bounds, lods[8]</text>
-  </svg>
-  <figcaption>A bump allocator. Each sub-mesh starts at the current <code>usedVertices</code> and <code>usedIndices</code>, and gets the next geometry row. Its indices are LOD 0 followed by its coarser LODs; a small sub-mesh (<samp>A, 1</samp>) has none. Nothing is ever freed, because meshes cannot be destroyed yet (D4).</figcaption>
-</figure>
-
-<p>All meshes share these three default (device-local) buffers. They have one copy, not one per frame slot. That is safe because <code>GeometryPool::upload</code> only writes a new range at the end, which no frame has read yet. Their size is fixed when the engine starts:</p>
 
 <div class="table-wrap">
 <table>
-  <tr><th><code>EngineConfig</code> field</th><th>Default</th><th>Bytes</th></tr>
-  <tr><td><code>geometryPoolVertices</code></td><td>2<sup>21</sup> vertices</td><td>× 64 B = 128 MiB</td></tr>
-  <tr><td><code>geometryPoolIndices</code></td><td>2<sup>24</sup> indices</td><td>× 4 B = 64 MiB</td></tr>
-  <tr><td><code>geometryPoolSubMeshes</code></td><td>2<sup>14</sup> sub-meshes</td><td>× 120 B = 1.9 MiB</td></tr>
+  <tr><th>Topic</th><th>What to know</th></tr>
+  <tr><td>Merging</td><td>Two copies whose source and destination ranges both continue each other become one bigger copy.</td></tr>
+  <tr><td>Overlapping writes</td><td>Copies in one batch have no barrier between them, so their order is not defined. Two writes to the same bytes in one batch must go into two batches (or the second must replace the first on the CPU).</td></tr>
+  <tr><td>A transfer queue</td><td>Many GPUs have a separate copy queue that runs next to the graphics queue. Copies there do not slow the frame, but they need a <b>semaphore</b> to order them, and buffers may need a <b>queue ownership transfer</b>. See <a href="gpu-sync.html">GPU synchronization</a>.</td></tr>
+  <tr><td>Destroying a buffer with pending copies</td><td>Drop its pending copies, and wait for submitted batches that write it. Otherwise the GPU copies into freed memory.</td></tr>
 </table>
 </div>
 
-<h3>What LODs cost</h3>
+<h2><span class="n">6</span>Sub-allocation</h2>
 
-<p>The <a href="culling.html#lod">LODs</a> of a sub-mesh are index lists into its own vertices. So they cost only indices. Each LOD has about half the triangles of the one before, so all of them together take up to as many indices again as LOD 0. Measured on example <code>02_gltf</code>:</p>
+<p>Asking the driver for memory (<var>vkAllocateMemory</var>) is slow, and the number of live allocations is limited: the Vulkan spec only promises 4096 (<var>maxMemoryAllocationCount</var>). A scene can have far more buffers than that. So engines allocate a few big <b>blocks</b> and place many buffers inside each one: <b>sub-allocation</b>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 220" role="img" aria-label="Two 256 MiB memory blocks. Block 1 holds a vertex buffer, an index buffer, a table and some free gaps. Block 2 holds a texture and free space. Each buffer starts at an aligned offset, so small gaps appear between them.">
+    <text x="20" y="40" class="title">block 1</text>
+    <text x="20" y="56" class="small">256 MiB, one driver allocation</text>
+    <rect x="200" y="24" width="540" height="44" rx="4" class="box"/>
+    <rect x="200" y="24" width="180" height="44" rx="4" class="mem"/><text x="290" y="51" class="mid small">vertex buffer</text>
+    <rect x="386" y="24" width="100" height="44" rx="4" class="mem"/><text x="436" y="51" class="mid small">index buffer</text>
+    <rect x="496" y="24" width="60" height="44" rx="4" class="mem"/><text x="526" y="51" class="mid small">table</text>
+    <text x="650" y="51" class="mid small t-faint">free</text>
+    <line x1="383" y1="80" x2="383" y2="70" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="491" y1="80" x2="491" y2="70" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="437" y="94" class="mid small t-hot">alignment gaps</text>
+
+    <text x="20" y="140" class="title">block 2</text>
+    <text x="20" y="156" class="small">256 MiB</text>
+    <rect x="200" y="124" width="540" height="44" rx="4" class="box"/>
+    <rect x="200" y="124" width="260" height="44" rx="4" class="mem"/><text x="330" y="151" class="mid small">texture (optimal tiling)</text>
+    <text x="600" y="151" class="mid small t-faint">free</text>
+    <text x="20" y="200" class="small">Each resource asks for a size and an alignment. The allocator finds a free range, and binds the resource at that offset.</text>
+  </svg>
+  <figcaption>A very large or often-recreated resource (a full-screen render target, for example) may get a <b>dedicated</b> allocation of its own instead. Drivers sometimes ask for this.</figcaption>
+</figure>
 
 <div class="table-wrap">
 <table>
-  <tr><th></th><th>Without LODs</th><th>With LODs</th></tr>
-  <tr><td>Vertices</td><td>835,630</td><td>835,630</td></tr>
-  <tr><td>Indices</td><td>4.00 M</td><td>7.91 M</td></tr>
-  <tr><td>Pool memory used</td><td>69.5 MB</td><td>85.1 MB (+22%)</td></tr>
+  <tr><th>Allocator</th><th>How it works</th><th>Good for</th></tr>
+  <tr><td><b>Linear</b> (bump)</td><td>One pointer that only moves forward. Free all at once by resetting it.</td><td>Data that lives exactly one frame, or forever (load once, never free).</td></tr>
+  <tr><td><b>Ring</b></td><td>A linear allocator that wraps around, freed in the order it was used (section 4).</td><td>Staging, per-frame constants.</td></tr>
+  <tr><td><b>Free list</b> (or TLSF)</td><td>Keeps a list of free ranges; finds one big enough; merges neighbours on free.</td><td>General buffers and textures of mixed sizes and lifetimes.</td></tr>
+  <tr><td><b>Pool</b></td><td>Many slots of one fixed size.</td><td>Many objects of the same size.</td></tr>
 </table>
 </div>
 
-<p>A load checks that the whole mesh fits first (<code>GeometryPool::fits</code>), LODs included. How a load reaches the pool is in <a href="asset-loading.html">Loading assets in the background</a>.</p>
+<p>Most Vulkan engines do not write this themselves. The <b>Vulkan Memory Allocator</b> (VMA) library from AMD picks memory types from usage hints, manages blocks with a free-list allocator, and handles alignment, dedicated allocations and memory budgets. Direct3D 12 has the same idea in D3D12MA.</p>
 
-<h2><span class="n">8</span>Textures: host image copy and CPU mips</h2>
+<h2><span class="n">7</span>Changing data the GPU is reading</h2>
+
+<p>The CPU is usually a frame ahead of the GPU (see <a href="frames-in-flight.html">Frames in flight</a>). If the CPU writes a buffer while the GPU still reads it for the previous frame, the GPU can see half old and half new data. A staging copy is safe (its barrier waits), but a direct mapped write is not ordered at all.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 210" role="img" aria-label="The CPU builds every mip level by halving the previous one, then vkCopyMemoryToImage copies all levels into the image. A 1024 by 512 texture has 11 levels.">
-    <rect x="40"  y="30" width="160" height="80" rx="4" class="cpu"/>
-    <text x="120" y="75" class="mid small">level 0</text>
-    <rect x="230" y="50" width="80"  height="40" rx="4" class="cpu"/>
-    <text x="270" y="75" class="mid small">1</text>
-    <rect x="330" y="60" width="40"  height="20" rx="3" class="cpu"/>
-    <rect x="385" y="65" width="20"  height="10" rx="2" class="cpu"/>
-    <text x="425" y="74" class="mid">…</text>
-    <line x1="200" y1="70" x2="228" y2="70" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <line x1="310" y1="70" x2="328" y2="70" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <line x1="370" y1="70" x2="383" y2="70" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <text x="120" y="130" class="mid small">1024×512 (the decoded pixels)</text>
-    <text x="270" y="130" class="mid small">512×256</text>
-    <text x="380" y="130" class="mid small">… down to 1×1</text>
-    <text x="270" y="22" class="mid small t-cpu">each level: resize the one before</text>
+  <svg viewBox="0 0 760 240" role="img" aria-label="One buffer per frame in flight. In frame 10 the CPU writes copy 0 while the GPU reads copy 1 for frame 9. In frame 11 the CPU writes copy 1, after waiting for frame 9's fence. A CPU-side shadow copy plus a dirty list per copy means only changed rows are written.">
+    <text x="20" y="34" class="title">frame 10</text>
+    <rect x="120" y="14" width="200" height="40" rx="6" class="cpu"/><text x="220" y="39" class="mid">CPU writes copy 0</text>
+    <rect x="360" y="14" width="200" height="40" rx="6" class="gpu"/><text x="460" y="39" class="mid">GPU reads copy 1 (frame 9)</text>
+    <text x="20" y="94" class="title">frame 11</text>
+    <rect x="120" y="74" width="200" height="40" rx="6" class="cpu"/><text x="220" y="99" class="mid">CPU writes copy 1</text>
+    <rect x="360" y="74" width="200" height="40" rx="6" class="gpu"/><text x="460" y="99" class="mid">GPU reads copy 0 (frame 10)</text>
+    <text x="580" y="92" class="small">after the fence</text>
+    <text x="580" y="106" class="small">of frame 9</text>
 
-    <line x1="445" y1="70" x2="583" y2="70" class="arrow" marker-end="url(#ah)"/>
-    <text x="514" y="62" class="mid small">copy all levels</text>
-    <text x="514" y="88" class="mid small">on the CPU</text>
-    <rect x="585" y="30" width="155" height="80" rx="6" class="mem"/>
-    <text x="662" y="60" class="mid title">VkImage</text>
-    <text x="662" y="78" class="mid small">11 mip levels</text>
-    <text x="662" y="94" class="mid small">ready to sample</text>
-
-    <text x="40" y="168" class="small">sRGB formats are resized with stbir_resize_uint8_srgb (filtered in linear light), UNORM with stbir_resize_uint8_linear.</text>
-    <text x="40" y="188" class="small">Level count: 1 + one per halving of the larger side. 1024 → 512 → … → 1 is 10 halvings, so 11 levels.</text>
+    <text x="20" y="154" class="title">CPU shadow</text>
+    <rect x="120" y="138" width="440" height="28" rx="3" class="cpu"/>
+    <rect x="230" y="138" width="55" height="28" rx="3" class="hot"/><text x="257" y="157" class="mid small">row 2</text>
+    <rect x="395" y="138" width="110" height="28" rx="3" class="hot"/><text x="450" y="157" class="mid small">rows 5, 6</text>
+    <text x="20" y="196" class="small">dirty per copy</text>
+    <text x="120" y="196" class="mono">copy 0: {2, 5, 6}</text>
+    <text x="340" y="196" class="mono">copy 1: {2, 5, 6}</text>
+    <text x="20" y="226" class="small">Each copy gets the changed rows in its own frame, merged into ranges (row 2, rows 5–6). A row changed ten times is sent once per copy.</text>
   </svg>
-  <figcaption>No command buffer and no staging buffer. When <code>fillTexture</code> returns, the image is complete and in its final layout.</figcaption>
+  <figcaption>N copies for N frames in flight. The CPU keeps the newest values in a shadow array, and each copy catches up when its turn comes.</figcaption>
 </figure>
 
-<ol class="steps">
-  <li><b>Create.</b> <code>VulkanDevice::createTexture</code> gives a full mip chain only to <code>TextureUsage::SAMPLED</code> images in <code>R8G8B8A8_UNORM</code>, <code>R8G8B8A8_SRGB</code> or <code>B8G8R8A8_SRGB</code>. Render targets and other formats get one level. Sampled images use <code>VK_IMAGE_USAGE_HOST_TRANSFER_BIT</code> and a dedicated allocation.</li>
-  <li><b>Change the layout on the CPU.</b> <code>vkTransitionImageLayout</code> moves every level from <code>VK_IMAGE_LAYOUT_UNDEFINED</code> to <code>VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL</code>.</li>
-  <li><b>Build the mips on the CPU.</b> Level 0 is the input; each next level is half the size of the one before.</li>
-  <li><b>Copy.</b> <code>vkCopyMemoryToImage</code> with one <code>VkMemoryToImageCopy</code> per level. This needs <code>VK_EXT_host_image_copy</code> (core in Vulkan 1.4) and the <code>hostImageCopy</code> feature.</li>
-</ol>
-
-<p>The input must be RGBA8 and exactly <code>width × height × 4</code> bytes. Color and emissive textures are <code>R8G8B8A8_SRGB</code>; normal, metallic-roughness and occlusion maps are <code>R8G8B8A8_UNORM</code>. More in <a href="materials-textures.html">Materials and bindless textures</a>.</p>
-
-<div class="callout warn">
-  <strong>Known issue: P2</strong>
-  <p>Sampled images ask for host-access memory flags, which can push them out of the fastest memory. The mip chain is built on the main thread, inside <code>finishLoads</code>. There is no staging fallback for GPUs without the <code>hostImageCopy</code> feature.</p>
+<div class="split">
+  <div>
+    <h4>Per-frame copies</h4>
+    <p>Simple and fast. Costs N times the memory. Every change must be sent N times, once to each copy.</p>
+  </div>
+  <div>
+    <h4>Write only new ranges</h4>
+    <p>For data that only grows (a mesh pool), write each new range once, in a part no frame has read yet. One copy is enough.</p>
+  </div>
 </div>
 
-<h2><span class="n">9</span>Reading a buffer back</h2>
+<h2><span class="n">8</span>Textures</h2>
+
+<p>A texture is not stored row by row in GPU memory. The GPU uses an <b>optimal tiling</b>: a hidden, vendor-specific order (blocks, swizzles) that makes nearby texels close in memory. The CPU cannot write that order itself. So textures need either a copy command or a special CPU path.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Classic path: the CPU writes rows to a staging buffer; the GPU changes the image layout to transfer destination, copies the buffer into the image, makes the other mips by blits, and changes the layout to shader read. Host image copy path: the CPU changes the layout and copies the rows into the image directly, with no command buffer.">
+    <text x="20" y="28" class="title">Classic: staging + GPU copy</text>
+    <rect x="20" y="40" width="120" height="50" rx="6" class="cpu"/><text x="80" y="62" class="mid">rows</text><text x="80" y="80" class="mid small">to staging</text>
+    <line x1="140" y1="65" x2="168" y2="65" class="arrow" marker-end="url(#ah)"/>
+    <rect x="170" y="40" width="130" height="50" rx="6" class="gpu"/><text x="235" y="62" class="mid">layout</text><text x="235" y="80" class="mid small">→ copy destination</text>
+    <line x1="300" y1="65" x2="328" y2="65" class="arrow" marker-end="url(#ah)"/>
+    <rect x="330" y="40" width="130" height="50" rx="6" class="gpu"/><text x="395" y="62" class="mid">copy buffer</text><text x="395" y="80" class="mid small">→ image, level 0</text>
+    <line x1="460" y1="65" x2="488" y2="65" class="arrow" marker-end="url(#ah)"/>
+    <rect x="490" y="40" width="110" height="50" rx="6" class="gpu"/><text x="545" y="62" class="mid">blit mips</text><text x="545" y="80" class="mid small">level by level</text>
+    <line x1="600" y1="65" x2="628" y2="65" class="arrow" marker-end="url(#ah)"/>
+    <rect x="630" y="40" width="110" height="50" rx="6" class="gpu"/><text x="685" y="62" class="mid">layout</text><text x="685" y="80" class="mid small">→ shader read</text>
+
+    <text x="20" y="140" class="title">Host image copy</text>
+    <rect x="20" y="152" width="200" height="50" rx="6" class="cpu"/><text x="120" y="174" class="mid">layout on the CPU</text><text x="120" y="192" class="mid small">undefined → shader read</text>
+    <line x1="220" y1="177" x2="258" y2="177" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="260" y="152" width="230" height="50" rx="6" class="cpu"/><text x="375" y="174" class="mid">copy memory → image</text><text x="375" y="192" class="mid small">every mip level, from CPU memory</text>
+    <line x1="490" y1="177" x2="528" y2="177" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="530" y="152" width="210" height="50" rx="6" class="mem"/><text x="635" y="174" class="mid">ready to sample</text><text x="635" y="192" class="mid small">no command buffer, no staging</text>
+    <text x="20" y="232" class="small">Host image copy (Vulkan 1.4 core, before that VK_EXT_host_image_copy) lets the driver do the tiling on the CPU.</text>
+    <text x="20" y="250" class="small">The mips must then come from the CPU too: resized in software, or stored in the file.</text>
+  </svg>
+  <figcaption>The classic path works everywhere and uses the GPU's fast blit. Host image copy is simpler and needs no GPU time, but needs the feature, and the image may then need host-access memory.</figcaption>
+</figure>
+
+<p>Mip levels add about a third: a 4096 × 4096 RGBA8 texture is 64 MiB, and 85 MiB with all its mips. Formats with block compression (BC7, ASTC) cut that by 4× or more, and are usually made offline. See <a href="mipmaps-sampling.html">Mipmaps and texture sampling</a>.</p>
+
+<h2><span class="n">9</span>Reading data back</h2>
+
+<p>Sometimes the CPU needs a result the GPU computed: a count, a picked object, a timing. Reading back has its own steps, in this order:</p>
 
 <ol class="steps">
-  <li><b>Create it <code>hostReadable</code>.</b> <code>RenderContext::readBuffer</code> refuses any other buffer.</li>
-  <li><b>On the GPU: a barrier to the host.</b> <code>memoryBarrier(..., PipelineStage::HOST)</code> after the shader writes. Culling ends with <code>COMPUTE → GRAPHICS | HOST</code> for this.</li>
-  <li><b>On the CPU: wait for the fence</b> of the submit that wrote it.</li>
-  <li><b>Read.</b> <code>VulkanDevice::readBuffer</code> calls <code>vmaInvalidateAllocation</code>, then copies out.</li>
+  <li><b>Use host-cached memory.</b> Reading write-combined memory is very slow (section 2). Ask for host-visible <i>and</i> host-cached.</li>
+  <li><b>On the GPU: a barrier to the host.</b> After the shader or copy that writes the data, a barrier with the host as the destination stage makes the writes available to the CPU.</li>
+  <li><b>On the CPU: wait for the fence.</b> Wait for the fence of that submit. Until then the data may not be there yet.</li>
+  <li><b>Invalidate, then copy.</b> If the memory is not coherent, invalidate the range first. Then copy the bytes out.</li>
 </ol>
 
-<p>The engine does this for the cull stats: <code>updateFrameStats</code> reads the slot's <code>cullStats</code> buffer right after <code>beginFrame</code> waited for that slot's fence. See <a href="stats-overlay.html">Frame stats and the overlay</a>.</p>
+<p>Waiting for this frame's fence would stall the CPU until the GPU catches up. So engines read results <b>a frame or two late</b>: in frame <var>N</var> they read what frame <var>N</var> − 2 wrote, after the fence they already wait for anyway.</p>
 
-<h2><span class="n">10</span>Where it lives in code</h2>
+<h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
+
+<p>RASM uses VMA for all memory. A buffer is one of three kinds, set by two flags in <code>BufferDesc</code>. <code>RenderContext::fillBuffer</code> then picks path A or B of section 3 by itself: a mapped buffer gets a <var>memcpy</var>, any other buffer goes through the staging ring in <code>UploadManager</code>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 320" role="img" aria-label="hostReadable asks VMA for random host access and gets cached host memory, mapped. hostVisible asks for sequential write and gets host-visible memory, mapped. The default asks for sequential write with transfer allowed instead: memory that is both device-local and host-visible when there is some, mapped, or else device-local only, filled through the staging ring.">
+    <text x="120" y="20" class="mid title">BufferDesc</text>
+    <text x="370" y="20" class="mid title">VMA flags</text>
+    <text x="630" y="20" class="mid title">Memory you get</text>
+
+    <rect x="20" y="34" width="200" height="56" rx="6" class="box"/>
+    <text x="120" y="57" class="mid mono">hostReadable = true</text>
+    <text x="120" y="77" class="mid small">the CPU reads it back</text>
+    <line x1="220" y1="62" x2="248" y2="62" class="arrow" marker-end="url(#ah)"/>
+    <rect x="250" y="34" width="240" height="56" rx="6" class="box"/>
+    <text x="370" y="57" class="mid mono small">HOST_ACCESS_RANDOM</text>
+    <text x="370" y="77" class="mid small">+ MAPPED</text>
+    <line x1="490" y1="62" x2="513" y2="62" class="arrow" marker-end="url(#ah)"/>
+    <rect x="515" y="34" width="230" height="56" rx="6" class="mem"/>
+    <text x="630" y="57" class="mid">host-visible, cached</text>
+    <text x="630" y="77" class="mid small">mapped · readBuffer works</text>
+
+    <rect x="20" y="104" width="200" height="56" rx="6" class="box"/>
+    <text x="120" y="127" class="mid mono">hostVisible = true</text>
+    <text x="120" y="147" class="mid small">the CPU rewrites it often</text>
+    <line x1="220" y1="132" x2="248" y2="132" class="arrow" marker-end="url(#ah)"/>
+    <rect x="250" y="104" width="240" height="56" rx="6" class="box"/>
+    <text x="370" y="127" class="mid mono small">HOST_ACCESS_SEQUENTIAL_WRITE</text>
+    <text x="370" y="147" class="mid small">+ MAPPED</text>
+    <line x1="490" y1="132" x2="513" y2="132" class="arrow" marker-end="url(#ah)"/>
+    <rect x="515" y="104" width="230" height="56" rx="6" class="mem"/>
+    <text x="630" y="127" class="mid">host-visible</text>
+    <text x="630" y="147" class="mid small">mapped · write-only</text>
+
+    <rect x="20" y="174" width="200" height="126" rx="6" class="box"/>
+    <text x="120" y="232" class="mid">neither flag</text>
+    <text x="120" y="252" class="mid small">the default</text>
+    <line x1="220" y1="237" x2="248" y2="237" class="arrow" marker-end="url(#ah)"/>
+    <rect x="250" y="174" width="240" height="126" rx="6" class="box"/>
+    <text x="370" y="214" class="mid mono small">HOST_ACCESS_SEQUENTIAL_WRITE</text>
+    <text x="370" y="234" class="mid small">+ MAPPED</text>
+    <text x="370" y="256" class="mid mono small">+ ALLOW_TRANSFER_INSTEAD</text>
+    <path d="M490,237 H500 V202 H513" class="arrow" marker-end="url(#ah)"/>
+    <path d="M500,237 V272 H513" class="arrow" marker-end="url(#ah)"/>
+    <rect x="515" y="174" width="230" height="56" rx="6" class="mem"/>
+    <text x="630" y="197" class="mid">device-local + host-visible</text>
+    <text x="630" y="217" class="mid small">BAR, ReBAR, integrated → mapped</text>
+    <rect x="515" y="244" width="230" height="56" rx="6" class="mem"/>
+    <text x="630" y="267" class="mid">device-local only</text>
+    <text x="630" y="287" class="mid small">not mapped → staging ring</text>
+  </svg>
+  <figcaption><code>Buffer::mapped</code> says which case you got: it is true when VMA returned a mapped pointer. <code>hostReadable</code> replaces the other flags, so it wins over <code>hostVisible</code>.</figcaption>
+</figure>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="fillBuffer checks its arguments, then whether the buffer is mapped. Mapped: VulkanDevice::fillBuffer copies at once and flushes. Not mapped: UploadManager::upload copies into the staging ring, and the data reaches the buffer at the next submit.">
+    <rect x="190" y="10" width="380" height="40" rx="6" class="cpu"/>
+    <text x="380" y="35" class="mid mono">fillBuffer(buffer, data, size, offset)</text>
+    <line x1="380" y1="50" x2="380" y2="66" class="arrow" marker-end="url(#ah)"/>
+    <polygon points="290,92 380,68 470,92 380,116" class="box"/>
+    <text x="380" y="96" class="mid mono">mapped?</text>
+    <path d="M290,92 H190 V130" class="arrow" marker-end="url(#ah)"/>
+    <text x="240" y="84" class="mid small">yes</text>
+    <path d="M470,92 H570 V130" class="arrow" marker-end="url(#ah)"/>
+    <text x="520" y="84" class="mid small">no</text>
+    <rect x="40" y="132" width="300" height="56" rx="6" class="cpu"/>
+    <text x="190" y="155" class="mid mono">VulkanDevice::fillBuffer</text>
+    <text x="190" y="175" class="mid small">memcpy + vmaFlushAllocation: there at once</text>
+    <rect x="420" y="132" width="300" height="56" rx="6" class="cpu"/>
+    <text x="570" y="155" class="mid mono">UploadManager::upload</text>
+    <text x="570" y="175" class="mid small">into the ring: there after the next submit</text>
+  </svg>
+  <figcaption>The caller does not choose the path. The same call is a <var>memcpy</var> on one GPU and a staged copy on another, so code that calls <code>fillBuffer</code> must be correct on both.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Picking memory types</td><td>ask for flags, never hard-code types</td><td>VMA with <code>VMA_MEMORY_USAGE_AUTO</code> and host-access flags (<code>VulkanDevice::createBuffer</code>). The allocator is made with the memory-budget and device-address flags.</td></tr>
+  <tr><td>Sub-allocation</td><td>a few blocks, many buffers</td><td>VMA does it for buffers. Textures each get a dedicated allocation (<code>VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT</code>, P2).</td></tr>
+  <tr><td>Staging ring</td><td>one buffer, <var>head</var>/<var>tail</var>, a fence per batch</td><td>The same, in <code>UploadManager</code>: <code>RING_SIZE</code> = 64 MiB, chunks of at most <code>MAX_CHUNK_SIZE</code> = 16 MiB, counters that never wrap, one timeline fence. The stepper in section 4 is RASM's real behaviour.</td></tr>
+  <tr><td>Batches</td><td>one per frame, before the frame</td><td>Two command buffers take turns (<code>batches</code>). <code>RenderContext::submit</code> calls <code>flush</code> before every submit. <code>flush</code> also runs when the ring is full, and when a write overlaps bytes the batch already writes to the same buffer.</td></tr>
+  <tr><td>Merging</td><td>neighbouring copies become one</td><td>The same (<code>addCopy</code>).</td></tr>
+  <tr><td>Ordering</td><td>two barriers, or a transfer queue and a semaphore</td><td>Two global barriers in <code>VulkanCommandBuffer::copyBuffers</code>, all on the one graphics queue. No transfer queue (D13).</td></tr>
+  <tr><td>Destroy with pending copies</td><td>drop them, wait for submitted ones</td><td>The same: <code>destroyBuffer</code> calls <code>cancelUploads</code>.</td></tr>
+  <tr><td>The staging buffer's memory</td><td>system RAM</td><td>Created <code>hostVisible</code>. Every RASM buffer has the device-address usage bit, which VMA counts as GPU access, so VMA <i>prefers</i> device-local memory for it. On a GPU with a BAR heap the ring may land in VRAM.</td></tr>
+  <tr><td>Data the GPU reads every frame</td><td>one copy per frame in flight</td><td><code>GpuTable</code> (instance and material tables): a CPU <code>shadow</code>, one buffer per frame slot, dirty rows per slot merged into ranges by <code>mergeRows</code>, uploaded in <code>syncGpuScene</code> after that slot's fence wait. <code>SceneData</code>: one <code>hostVisible</code> buffer per slot. See <a href="gpu-scene.html">The GPU scene tables</a>.</td></tr>
+  <tr><td>Data that only grows</td><td>write only new ranges</td><td><code>GeometryPool</code>: a linear (bump) allocator over three device-local buffers (vertices, indices, the geometry table), sized from <code>EngineConfig</code>. Nothing is ever freed (D4).</td></tr>
+  <tr><td>Buffers that grow</td><td>—</td><td>Draw lists, visible draws and Hi-Z buffers are per frame slot. When one is too small, it is destroyed and a bigger one is made (draw buffers at least double), right after that slot's fence wait.</td></tr>
+  <tr><td>Textures</td><td>classic, or host image copy</td><td>Host image copy only: <code>VulkanDevice::fillTexture</code> changes the layout with <code>vkTransitionImageLayout</code>, builds every mip on the CPU with stb_image_resize, and copies all levels with <code>vkCopyMemoryToImage</code>. No staging fallback (P2).</td></tr>
+  <tr><td>Readback</td><td>cached memory, barrier, fence, invalidate</td><td>The same: a <code>hostReadable</code> buffer, <code>readBuffer</code> calls <code>vmaInvalidateAllocation</code>. <code>updateFrameStats</code> reads a slot's cull stats right after <code>beginFrame</code> waited for that slot's fence: the numbers of the slot's last frame, two frames ago.</td></tr>
+</table>
+</div>
+
+<h3>Which buffer is which kind</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Buffer</th><th>Kind</th><th>Copies</th><th>Written by</th></tr>
+  <tr><td>Upload staging ring</td><td><code>hostVisible</code></td><td>1</td><td><code>UploadManager::upload</code></td></tr>
+  <tr><td>Scene data</td><td><code>hostVisible</code></td><td>1 per frame slot, room for <code>MAX_SCENE_DRAWS_PER_FRAME</code> = 8 calls</td><td><code>drawScene</code></td></tr>
+  <tr><td>Cull stats</td><td><code>hostVisible</code> + <code>hostReadable</code></td><td>1 per frame slot</td><td>the GPU; read by <code>updateFrameStats</code></td></tr>
+  <tr><td>Instance and material tables</td><td>default</td><td>1 per frame slot</td><td><code>GpuTable::upload</code></td></tr>
+  <tr><td>Vertex pool, index pool, geometry table</td><td>default</td><td>1</td><td><code>GeometryPool::upload</code></td></tr>
+  <tr><td>Draw info</td><td>default</td><td>1 per scene and frame slot</td><td><code>uploadDrawList</code></td></tr>
+  <tr><td>Visible draws, draw counts, Hi-Z, visibility</td><td>default</td><td>per call (and slot)</td><td>only the GPU, except visibility's first fill</td></tr>
+</table>
+</div>
+
+<p>Every buffer also gets the device-address bit and both transfer bits, whatever its <code>BufferUsage</code> (<code>toVkBufferUsageFlags</code>). So any buffer can be a copy source or destination, and can be read by a shader through its address (see <a href="device-addresses.html">Buffer device addresses</a>).</p>
+
+<h3>Where it lives in code</h3>
 
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>Buffer kinds, memory flags, device address</td><td><code>VulkanDevice::createBuffer</code>, <code>toVkBufferUsageFlags</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>Memory flags, buffer and texture creation</td><td><code>VulkanDevice::createBuffer</code>, <code>VulkanDevice::createTexture</code>, <code>toVkBufferUsageFlags</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>The two flags</td><td><code>BufferDesc</code> in <code>include/rasm/render/resource.h</code>; <code>Buffer::mapped</code> in <code>src/rhi/device.h</code></td></tr>
-  <tr><td>The path choice</td><td><code>RenderContext::fillBuffer</code>, <code>readBuffer</code>, <code>submit</code>, <code>destroyBuffer</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Path choice, submit, destroy, readback</td><td><code>RenderContext::fillBuffer</code>, <code>submit</code>, <code>destroyBuffer</code>, <code>readBuffer</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>Direct write and read</td><td><code>VulkanDevice::fillBuffer</code>, <code>VulkanDevice::readBuffer</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
-  <tr><td>Staging ring, batches</td><td><code>UploadManager</code> in <code>src/rhi/uploadManager.h</code> and <code>src/rhi/uploadManager.cpp</code></td></tr>
+  <tr><td>Staging ring and batches</td><td><code>UploadManager</code> in <code>src/rhi/uploadManager.h</code>, <code>src/rhi/uploadManager.cpp</code></td></tr>
   <tr><td>Copy barriers</td><td><code>VulkanCommandBuffer::copyBuffers</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>Per-slot tables</td><td><code>GpuTable</code>, <code>mergeRows</code> in <code>src/renderer/gpuTable.cpp</code></td></tr>
   <tr><td>Geometry pool</td><td><code>GeometryPool</code> in <code>src/renderer/geometryPool.cpp</code></td></tr>
-  <tr><td>Texture upload and mips</td><td><code>VulkanDevice::createTexture</code>, <code>VulkanDevice::fillTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>Texture upload and mips</td><td><code>VulkanDevice::fillTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>Tests (no GPU)</td><td><code>tests/uploadManagerTests.cpp</code>, <code>tests/gpuTableTests.cpp</code></td></tr>
 </table>
 </div>
-
-<h2><span class="n">11</span>Rules when you change it</h2>
 
 <div class="callout rule">
   <strong>Keep these true</strong>
   <ul>
     <li>Never <code>fillBuffer</code> a range that a frame in flight reads. On a mapped buffer the write lands at once, with no ordering. Use one buffer per frame slot, or a new range.</li>
-    <li>GPU scene tables are written only in <code>syncGpuScene</code>, after that slot's fence wait. Change rows through <code>GpuTable::setRow</code>, never by writing a slot's buffer.</li>
-    <li>Staged data arrives with the next submit, not when <code>fillBuffer</code> returns. Do not read it back earlier.</li>
-    <li>Read only <code>hostReadable</code> buffers, and only after a barrier to <code>PipelineStage::HOST</code> and a fence wait.</li>
-    <li><code>createBuffer</code> always makes a new buffer (B1). Destroy the one you replace, and only when no frame in flight uses it. There is no deferred destruction (D4).</li>
-    <li>A chunk must never wrap in the ring. Keep <code>MAX_CHUNK_SIZE</code> at most a quarter of <code>RING_SIZE</code>, so padding plus a chunk always fit in an empty ring.</li>
+    <li>GPU scene tables are written only in <code>syncGpuScene</code>, after that slot's fence wait, through <code>GpuTable::setRow</code>.</li>
+    <li>Staged data arrives with the next submit, not when <code>fillBuffer</code> returns.</li>
+    <li>Read only <code>hostReadable</code> buffers, and only after a barrier to the host stage and a fence wait.</li>
+    <li><code>createBuffer</code> always makes a new buffer (B1). Destroy the one you replace, and only when no frame in flight uses it.</li>
+    <li>Keep <code>MAX_CHUNK_SIZE</code> at most a quarter of <code>RING_SIZE</code>, so a skipped end plus a chunk always fit in an empty ring.</li>
     <li>Normal, metallic-roughness and AO textures are <code>R8G8B8A8_UNORM</code>; color and emissive are <code>R8G8B8A8_SRGB</code>.</li>
   </ul>
 </div>
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>There is one queue for everything, and uploads are recorded on the main thread (D13). Some callers ignore the result of <code>fillBuffer</code> (D14).</p>
+  <p><b>D13</b>: one queue for everything, and uploads are recorded on the main thread. <b>P2</b>: sampled images ask for host-access memory flags, each has a dedicated allocation, mips are built on the main thread, and there is no staging path for GPUs without host image copy. <b>D14</b>: some callers ignore the result of <code>fillBuffer</code>. <b>D4</b>: nothing in the geometry pool is ever freed.</p>
 </div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>The Vulkan specification, chapter "Memory Allocation": heaps, memory types and their property flags.</li>
+  <li>AMD GPUOpen, <i>Vulkan Memory Allocator</i> documentation, especially "Recommended usage patterns".</li>
+  <li>Adam Sawicki, <i>Vulkan Memory Types on PC and How to Use Them</i> (2021).</li>
+  <li>Graham Sellers and John Kessenich, <i>Vulkan Programming Guide</i> (2016): memory and data transfer.</li>
+</ul>
 
 </main>
 </div>

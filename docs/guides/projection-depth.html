@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Projection and Depth · RASM</title>
+<meta name="description" content="How perspective and orthographic projection matrices are built, what the divide by w does, why depth precision is poor far away, and how reversed-Z with a float depth buffer and an infinite far plane fixes it. Then how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/engine.h src/scene/camera.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanDevice.cpp src/renderer/gpuScene.cpp src/engine.cpp src/CMakeLists.txt shaders/lib/occlusionCulling.slang shaders/passes/hiz.slang shaders/passes/statsOverlay.slang tests/cameraTests.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/projection-depth.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Projection and reversed-Z depth</h1>
+<p class="lead">The projection matrix turns the 3D view into a flat image, and it decides the depth value of every pixel. This page derives the perspective and orthographic matrices, explains why the usual depth mapping loses precision far away, and shows how <b>reversed-Z</b> fixes it. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Perspective divides by the distance. A matrix cannot divide, so it copies the distance into <var>w</var>, and the GPU divides by <var>w</var> after the vertex shader.</li>
+    <li>The depth after the divide is <var>a</var> + <var>b</var> / <var>distance</var>: linear in 1/<var>distance</var>, not in distance. Most of the depth range goes to the first few meters.</li>
+    <li>With the usual mapping (near → 0, far → 1), far objects get values close to 1, where floats are coarse. Surfaces far away <b>z-fight</b>.</li>
+    <li><b>Reversed-Z</b> maps near → 1 and far → 0. Floats are dense near 0, which balances the 1/<var>distance</var> crowding. With a 32-bit float depth buffer, precision becomes about equal at every distance.</li>
+    <li>Reversed-Z needs three changes together: the projection, a depth clear of 0, and a <b>greater</b> depth test.</li>
+    <li>An <b>infinite far plane</b> costs almost nothing with reversed-Z: depth = <var>near</var> / <var>distance</var>.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>Perspective: divide by the distance</h2>
+
+<p>A pinhole camera sees a point at height <var>y</var> and distance <var>D</var> in front of it at the image height <var>y</var> / <var>D</var> (similar triangles). Twice as far means half as big. In view space the camera looks down −Z, so <var>D</var> = −<var>z</var>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 320" role="img" aria-label="Side view. The eye on the left looks right. The field of view is bounded by two lines at plus and minus half of fovY. A point P at distance D and height y projects through the plane at distance 1 at the height y divided by D. The near and far planes cut the view.">
+    <circle cx="60" cy="160" r="6" class="cpu"/>
+    <text x="52" y="186" class="mid small">eye</text>
+    <line x1="60" y1="160" x2="320" y2="160" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="324" y="164" class="small">−Z</text>
+    <line x1="60" y1="160" x2="300" y2="21.4"  class="arrow"/>
+    <line x1="60" y1="160" x2="300" y2="298.6" class="arrow"/>
+    <polygon points="100,136.9 300,21.4 300,298.6 100,183.1" class="zone"/>
+    <line x1="100" y1="136.9" x2="100" y2="183.1" class="gpu"/>
+    <line x1="300" y1="21.4" x2="300" y2="298.6" class="gpu"/>
+    <text x="100" y="204" class="mid small">near</text>
+    <text x="300" y="316" class="mid small">far</text>
+    <path d="M100,160 A40,40 0 0,0 94.6,140" class="arrow hot"/>
+    <text x="106" y="150" class="small t-hot">fovY/2</text>
+
+    <line x1="140" y1="113.8" x2="140" y2="206.2" class="arrow hot"/>
+    <text x="140" y="226" class="mid small t-hot">plane at distance 1</text>
+    <circle cx="260" cy="80" r="6" class="gpu"/>
+    <text x="270" y="76" class="small">P (y, z)</text>
+    <line x1="60" y1="160" x2="255" y2="82" class="arrow dashed"/>
+    <circle cx="140" cy="128" r="4" class="hot"/>
+    <line x1="260" y1="86" x2="260" y2="160" class="arrow dashed"/>
+    <text x="266" y="130" class="small">y</text>
+    <text x="200" y="176" class="mid small">D = −z</text>
+
+    <text x="400" y="50"  class="title">Similar triangles</text>
+    <text x="400" y="76"  class="mono">y_image = y / D</text>
+    <text x="400" y="100" class="small">The view reaches tan(fovY/2) on the plane at</text>
+    <text x="400" y="116" class="small">distance 1. Scale that to 1 for NDC:</text>
+    <text x="400" y="144" class="mono">focal = 1 / tan(fovY / 2)</text>
+    <text x="400" y="168" class="mono">y_ndc = focal · y / D</text>
+    <text x="400" y="192" class="mono">x_ndc = focal / aspect · x / D</text>
+    <text x="400" y="224" class="small">aspect = width / height. Dividing x by it keeps</text>
+    <text x="400" y="240" class="small">square things square on a wide screen.</text>
+  </svg>
+  <figcaption>The vertical field of view <var>fovY</var> fixes how much of the scene fits on screen from top to bottom. The width follows from the aspect ratio.</figcaption>
+</figure>
+
+<h2><span class="n">2</span>Why the 4th coordinate: <var>w</var></h2>
+
+<p>A matrix can only multiply and add. It cannot divide by <var>D</var>. So the projection matrix puts <var>D</var> into a fourth coordinate, <var>w</var>, and the GPU divides <var>x</var>, <var>y</var> and <var>z</var> by it later. This is the <b>perspective divide</b>. The point before the divide is in <b>clip space</b>; after it, in <b>NDC</b> (see <a href="coordinate-spaces.html">Coordinate spaces</a>).</p>
+
+<pre><code class="lang-text">| x_c |   | focal/aspect   0     0   0 |   | x |
+| y_c | = |      0       focal   0   0 | · | y |
+| z_c |   |      0         0     A   B |   | z |
+| w_c |   |      0         0    −1   0 |   | 1 |
+
+w_c = −z = D        then   NDC = (x_c, y_c, z_c) / w_c</code></pre>
+
+<p>Keeping <var>w</var> until after the vertex shader has two more uses:</p>
+<ul>
+  <li><b>Clipping</b> happens before the divide, against −<var>w</var> ≤ <var>x</var>, <var>y</var> ≤ <var>w</var>. A point behind the camera has <var>w</var> &lt; 0; after a divide it would flip to the other side of the screen.</li>
+  <li><b>Perspective-correct interpolation.</b> Texture coordinates and colors are not linear across a triangle on screen. The GPU interpolates <var>value</var>/<var>w</var> and 1/<var>w</var>, which are linear on screen, and divides.</li>
+</ul>
+
+<h2 id="depth-row"><span class="n">3</span>The depth row</h2>
+
+<p>The third row, (0, 0, <var>A</var>, <var>B</var>), makes the depth. After the divide:</p>
+
+<pre><code class="lang-text">depth = z_c / w_c = (A · z + B) / D = −A + B / D        (z = −D)</code></pre>
+
+<p>So depth is a straight line in <b>1/<var>D</var></b>, not in <var>D</var>. That is on purpose: 1/<var>D</var> is linear across a triangle on screen, so the GPU can interpolate depth with no divide per pixel, and compress depth tiles well. Two conditions fix <var>A</var> and <var>B</var>: the depth at the near plane <var>n</var> and at the far plane <var>f</var>.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Convention</th><th>near → , far →</th><th><var>A</var></th><th><var>B</var></th><th>depth at distance <var>D</var></th></tr>
+  <tr><td>OpenGL</td><td>−1, +1</td><td>−(<var>f</var> + <var>n</var>) / (<var>f</var> − <var>n</var>)</td><td>−2<var>fn</var> / (<var>f</var> − <var>n</var>)</td><td>(<var>f</var> + <var>n</var> − 2<var>fn</var>/<var>D</var>) / (<var>f</var> − <var>n</var>)</td></tr>
+  <tr><td>Standard 0..1 (Direct3D, Vulkan, Metal)</td><td>0, 1</td><td>−<var>f</var> / (<var>f</var> − <var>n</var>)</td><td>−<var>fn</var> / (<var>f</var> − <var>n</var>)</td><td><var>f</var> (<var>D</var> − <var>n</var>) / (<var>D</var> (<var>f</var> − <var>n</var>))</td></tr>
+  <tr><td>Reversed 0..1</td><td>1, 0</td><td><var>n</var> / (<var>f</var> − <var>n</var>)</td><td><var>fn</var> / (<var>f</var> − <var>n</var>)</td><td><var>n</var> (<var>f</var> − <var>D</var>) / (<var>D</var> (<var>f</var> − <var>n</var>))</td></tr>
+  <tr><td>Reversed, infinite far</td><td>1, 0 (never reached)</td><td>0</td><td><var>n</var></td><td><var>n</var> / <var>D</var></td></tr>
+</table>
+</div>
+
+<p>The reversed row is the standard row with <var>n</var> and <var>f</var> swapped. So any library that builds a standard 0..1 matrix builds a reversed one when you pass the far distance as "near" and the near distance as "far".</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="Depth against distance on a log scale from 0.1 to 1000, near 0.1 and far 1000. The standard curve reaches 0.5 at distance 0.2 and 0.9 at distance 1; everything past distance 10 is above 0.99. The reversed curve is its mirror: 0.5 at 0.2, 0.1 at 1, 0.01 at 10.">
+    <line x1="90" y1="250" x2="700" y2="250" class="arrow"/>
+    <line x1="90" y1="250" x2="90"  y2="30"  class="arrow"/>
+    <text x="82" y="44"  class="end small">1</text>
+    <text x="82" y="149" class="end small">0.5</text>
+    <text x="82" y="254" class="end small">0</text>
+    <text x="90"  y="268" class="mid small">0.1</text>
+    <text x="240" y="268" class="mid small">1</text>
+    <text x="390" y="268" class="mid small">10</text>
+    <text x="540" y="268" class="mid small">100</text>
+    <text x="690" y="268" class="mid small">1000</text>
+    <text x="390" y="286" class="mid small">distance D (log scale), near 0.1, far 1000</text>
+    <text x="34" y="145" class="mid small" transform="rotate(-90 34 145)">depth</text>
+
+    <polyline points="90.0,250.0 105.0,206.8 120.0,172.5 135.0,145.2 150.0,123.6 165.0,106.4 180.0,92.7 195.0,81.9 210.0,73.3 225.0,66.4 240.0,61.0 255.0,56.7 270.0,53.2 285.0,50.5 300.0,48.3 315.0,46.6 330.0,45.3 345.0,44.2 360.0,43.3 375.0,42.6 390.0,42.1 405.0,41.6 420.0,41.3 435.0,41.0 450.0,40.8 465.0,40.6 480.0,40.5 495.0,40.4 510.0,40.3 525.0,40.2 540.0,40.2 555.0,40.1 570.0,40.1 585.0,40.1 600.0,40.1 615.0,40.0 630.0,40.0 645.0,40.0 660.0,40.0 675.0,40.0 690.0,40.0" class="arrow dashed"/>
+    <polyline points="90.0,40.0 105.0,83.2 120.0,117.5 135.0,144.8 150.0,166.4 165.0,183.6 180.0,197.3 195.0,208.1 210.0,216.7 225.0,223.6 240.0,229.0 255.0,233.3 270.0,236.8 285.0,239.5 300.0,241.7 315.0,243.4 330.0,244.7 345.0,245.8 360.0,246.7 375.0,247.4 390.0,247.9 405.0,248.4 420.0,248.7 435.0,249.0 450.0,249.2 465.0,249.4 480.0,249.5 495.0,249.6 510.0,249.7 525.0,249.8 540.0,249.8 555.0,249.9 570.0,249.9 585.0,249.9 600.0,249.9 615.0,250.0 630.0,250.0 645.0,250.0 660.0,250.0 675.0,250.0 690.0,250.0" class="arrow hot"/>
+    <circle cx="240" cy="61.0"  r="4" class="cpu"/>
+    <circle cx="390" cy="42.1"  r="4" class="cpu"/>
+    <circle cx="240" cy="229.0" r="4" class="hot"/>
+    <circle cx="390" cy="247.9" r="4" class="hot"/>
+    <text x="250" y="76"  class="small">standard: 1 → 0.900</text>
+    <text x="400" y="60"  class="small">10 → 0.990, then 0.999, 1.0</text>
+    <text x="250" y="222" class="small t-hot">reversed: 1 → 0.100</text>
+    <text x="400" y="236" class="small t-hot">10 → 0.010, then 0.001, 0</text>
+  </svg>
+  <figcaption>On paper the two curves are mirror images and carry the same information. The difference appears only when the numbers are stored in a float (next section).</figcaption>
+</figure>
+
+<h2><span class="n">4</span>Orthographic projection</h2>
+
+<p>An orthographic camera has no perspective: parallel lines stay parallel and size does not change with distance. The view volume is a box (<var>left</var>, <var>right</var>, <var>bottom</var>, <var>top</var>, <var>near</var>, <var>far</var>), and the matrix only scales and moves it onto the NDC box. <var>w</var> stays 1, so depth is linear in distance.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="Left: a perspective view volume is a frustum and depth is linear in one over distance. Right: an orthographic view volume is a box and depth is linear in distance.">
+    <text x="190" y="24" class="mid title">Perspective: a frustum</text>
+    <circle cx="40" cy="120" r="5" class="cpu"/>
+    <polygon points="90,100 330,40 330,200 90,140" class="zone"/>
+    <polygon points="90,100 330,40 330,200 90,140" class="gpu"/>
+    <rect x="130" y="100" width="22" height="22" class="box"/>
+    <rect x="270" y="100" width="22" height="22" class="box"/>
+    <text x="190" y="228" class="mid small">far things are smaller · w = distance</text>
+
+    <text x="570" y="24" class="mid title">Orthographic: a box</text>
+    <circle cx="420" cy="120" r="5" class="cpu"/>
+    <rect x="450" y="40" width="250" height="160" class="zone"/>
+    <rect x="450" y="40" width="250" height="160" class="gpu"/>
+    <rect x="490" y="100" width="22" height="22" class="box"/>
+    <rect x="630" y="100" width="22" height="22" class="box"/>
+    <text x="570" y="228" class="mid small">same size at any distance · w = 1</text>
+  </svg>
+  <figcaption>Orthographic views are used for CAD and map views, 2D and UI, and shadow maps of directional lights.</figcaption>
+</figure>
+
+<pre><code class="lang-text">x_ndc = (2x − (r + l)) / (r − l)
+y_ndc = (2y − (t + b)) / (t − b)
+depth = (D − n) / (f − n)       standard 0..1
+depth = (f − D) / (f − n)       reversed: again, swap n and f</code></pre>
+
+<h2 id="precision"><span class="n">5</span>Why depth precision is poor far away</h2>
+
+<p>A 32-bit float stores a number as 1.<var>m</var> × 2<sup><var>e</var></sup>, with 23 bits for <var>m</var>. So there are 2<sup>23</sup> floats between 0.5 and 1, another 2<sup>23</sup> between 0.25 and 0.5, another between 0.125 and 0.25, and so on. Floats are <b>dense near 0</b> and coarse near 1: the gap between neighbors just below 1 is 2<sup>−24</sup> ≈ 6 × 10<sup>−8</sup>, while near 0.001 it is about 10<sup>−10</sup>.</p>
+
+<p>Now put the standard depth curve on this number line. Every distance past a few times the near plane maps into the last band, [0.5, 1), and most of them into its very top end:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="A log-scale number line from 2 to the minus 14 up to 1, cut into 14 bands. Each band holds the same number of floats, 2 to the 23. Standard depth puts distances 1, 10, 100 and 1000 all in the last band, within a few pixels. Reversed depth puts them in bands 4, 7, 10 and 13 from the right, spread evenly.">
+    <text x="20" y="28" class="title">Floats between 2⁻¹⁴ and 1, one band per power of two (log scale)</text>
+    <rect x="80"    y="100" width="42.86" height="40" class="box"/>
+    <rect x="122.86" y="100" width="42.86" height="40" class="zone"/>
+    <rect x="165.71" y="100" width="42.86" height="40" class="box"/>
+    <rect x="208.57" y="100" width="42.86" height="40" class="zone"/>
+    <rect x="251.43" y="100" width="42.86" height="40" class="box"/>
+    <rect x="294.29" y="100" width="42.86" height="40" class="zone"/>
+    <rect x="337.14" y="100" width="42.86" height="40" class="box"/>
+    <rect x="380"    y="100" width="42.86" height="40" class="zone"/>
+    <rect x="422.86" y="100" width="42.86" height="40" class="box"/>
+    <rect x="465.71" y="100" width="42.86" height="40" class="zone"/>
+    <rect x="508.57" y="100" width="42.86" height="40" class="box"/>
+    <rect x="551.43" y="100" width="42.86" height="40" class="zone"/>
+    <rect x="594.29" y="100" width="42.86" height="40" class="box"/>
+    <rect x="637.14" y="100" width="42.86" height="40" class="zone"/>
+    <text x="80"  y="156" class="mid small">2⁻¹⁴</text>
+    <text x="337" y="156" class="mid small">2⁻⁸</text>
+    <text x="594" y="156" class="mid small">2⁻²</text>
+    <text x="637" y="156" class="mid small">0.5</text>
+    <text x="680" y="156" class="mid small">1</text>
+    <text x="80" y="90" class="small">each band holds 2²³ = 8,388,608 floats</text>
+
+    <text x="20" y="62" class="small t-cpu">standard</text>
+    <line x1="673.5" y1="96" x2="673.5" y2="70" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="679.4" y1="96" x2="679.4" y2="70" class="arrow cpu"/>
+    <text x="664" y="62" class="end small t-cpu">D = 1, 10, 100, 1000 all here: 0.9 … 1.0</text>
+
+    <text x="20" y="214" class="small t-hot">reversed</text>
+    <line x1="537.6" y1="144" x2="537.6" y2="196" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="395.3" y1="144" x2="395.3" y2="196" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="252.9" y1="144" x2="252.9" y2="196" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="110.5" y1="144" x2="110.5" y2="196" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="537.6" y="214" class="mid small t-hot">D = 1: 0.1</text>
+    <text x="395.3" y="214" class="mid small t-hot">D = 10: 0.01</text>
+    <text x="252.9" y="214" class="mid small t-hot">D = 100: 0.001</text>
+    <text x="110.5" y="232" class="mid small t-hot">D = 1000: 0.0001</text>
+    <text x="20" y="258" class="small">Near 0.1. Reversed uses the infinite form, depth = 0.1 / D: each 10× in distance moves 3.3 bands.</text>
+  </svg>
+  <figcaption>Standard depth packs the whole scene into one band of floats. Reversed depth spreads it over many bands, each with 8 million values.</figcaption>
+</figure>
+
+<p>Two surfaces whose depths round to the same float cannot be ordered: the depth test picks one at random per pixel, and the picture flickers in stripes. This is <b>z-fighting</b>. The smallest distance step the buffer can tell apart is the float gap divided by how fast depth changes with distance:</p>
+
+<pre><code class="lang-text">step(D) ≈ gap(depth(D)) / |d depth / dD|        with  |d depth / dD| ≈ n / D²  (both forms)</code></pre>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Distance <var>D</var></th><th>Standard depth</th><th>Smallest step, standard, 32-bit float</th><th>Smallest step, standard, 24-bit integer</th><th>Reversed depth</th><th>Smallest step, reversed, 32-bit float</th></tr>
+  <tr><td>1</td><td>0.900090</td><td>6.0 × 10<sup>−7</sup></td><td>6.0 × 10<sup>−7</sup></td><td>0.099910</td><td>7.5 × 10<sup>−8</sup></td></tr>
+  <tr><td>10</td><td>0.990099</td><td>6.0 × 10<sup>−5</sup></td><td>6.0 × 10<sup>−5</sup></td><td>0.009901</td><td>9.3 × 10<sup>−7</sup></td></tr>
+  <tr><td>100</td><td>0.999100</td><td>0.006</td><td>0.006</td><td>0.000900</td><td>5.8 × 10<sup>−6</sup></td></tr>
+  <tr><td>900</td><td>0.999989</td><td><b>0.48</b></td><td><b>0.48</b></td><td>0.000011</td><td>7.4 × 10<sup>−6</sup></td></tr>
+</table>
+</div>
+
+<p>Near 0.1, far 1000, in scene units (say meters). With standard depth, a wall at 900 m cannot be told apart from a poster 30 cm in front of it. With reversed-Z, the step stays below 0.01 mm everywhere.</p>
+
+<div class="split">
+  <div>
+    <h4>A float buffer alone does not help</h4>
+    <p>Standard depth in a 32-bit float buffer is no better than a 24-bit integer buffer: near 1, floats have the same 2<sup>−24</sup> spacing as the integers. The gain comes only from <b>reversed</b> depth <b>and</b> a float buffer together.</p>
+  </div>
+  <div>
+    <h4>The near plane matters most</h4>
+    <p>With standard depth, the step size is about <var>D</var>² / <var>n</var> × 6 × 10<sup>−8</sup>. Moving the near plane from 0.01 to 0.1 makes every step 10 times smaller. With reversed-Z, the near plane hardly matters.</p>
+  </div>
+</div>
+
+<h2 id="reversed"><span class="n">6</span>Reversed-Z</h2>
+
+<p>Reversed-Z maps the near plane to depth 1 and the far plane to 0. The 1/<var>D</var> curve crowds far distances toward 0, and floats are densest near 0. The two effects roughly cancel: the step size becomes about <var>D</var> × 10<sup>−7</sup>, a constant <b>relative</b> precision, at every distance.</p>
+
+<p>It is not one change but three, and all three must change together:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Setting</th><th>Standard</th><th>Reversed</th></tr>
+  <tr><td>Projection</td><td>near → 0, far → 1</td><td>near → 1, far → 0 (swap <var>n</var> and <var>f</var>)</td></tr>
+  <tr><td>Depth clear value</td><td>1 (the far plane)</td><td>0 (the far plane)</td></tr>
+  <tr><td>Depth test</td><td>LESS: nearer is smaller</td><td>GREATER: nearer is larger</td></tr>
+  <tr><td>Depth format</td><td>24-bit integer is enough</td><td>32-bit float, or there is no gain</td></tr>
+  <tr><td>Clip depth range</td><td>0..1 or −1..1</td><td>0..1. With OpenGL's −1..1, far values sit near −1, where floats are coarse, and the gain is lost; OpenGL needs <var>glClipControl</var>.</td></tr>
+</table>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A reversed depth scale from 1 at the top (near) to 0 at the bottom (far). The buffer is cleared to 0. A new fragment at 0.4 passes over a stored 0.1, because it is greater. A fragment at 0.1 behind a stored 0.4 fails.">
+    <rect x="60" y="20" width="36" height="200" rx="4" class="box"/>
+    <text x="78" y="14" class="mid small">near</text>
+    <text x="78" y="238" class="mid small">far</text>
+    <line x1="96" y1="20"  x2="120" y2="20"  class="arrow hot"/>
+    <text x="126" y="24"  class="small"><tspan class="t-hot">1.0</tspan>  the near plane</text>
+    <line x1="96" y1="140" x2="120" y2="140" class="arrow gpu"/>
+    <text x="126" y="144" class="small"><tspan class="t-gpu">0.4</tspan>  new fragment</text>
+    <line x1="96" y1="200" x2="120" y2="200" class="arrow"/>
+    <text x="126" y="204" class="small">0.1  stored, a farther surface</text>
+    <line x1="96" y1="220" x2="120" y2="220" class="arrow mem"/>
+    <text x="126" y="234" class="small"><tspan class="t-mem">0.0</tspan>  clear value, far plane, empty sky</text>
+
+    <rect x="380" y="30" width="360" height="56" rx="6" class="gpu"/>
+    <text x="560" y="54" class="mid mono">0.4 &gt; 0.1</text>
+    <text x="560" y="74" class="mid small">passes: the fragment is drawn and writes 0.4</text>
+    <rect x="380" y="104" width="360" height="56" rx="6" class="ghost"/>
+    <text x="560" y="128" class="mid mono t-faint">0.1 &gt; 0.4</text>
+    <text x="560" y="148" class="mid small">fails: hidden behind, discarded</text>
+    <text x="380" y="190" class="small">Nearer means larger. An empty pixel holds 0,</text>
+    <text x="380" y="206" class="small">so any visible fragment passes over it.</text>
+  </svg>
+  <figcaption>Everything that reads or writes depth by hand follows the same flip: "the farthest depth" in a tile is now the <b>minimum</b>, a sky written at the far plane uses depth 0, and a depth bias pushes the other way.</figcaption>
+</figure>
+
+<h2 id="infinite"><span class="n">7</span>The infinite far plane</h2>
+
+<p>A far plane clips away distant geometry, and choosing its value is a trade-off with standard depth. With reversed-Z there is little reason to have one. Let <var>f</var> go to infinity in the reversed row: <var>A</var> → 0 and <var>B</var> → <var>n</var>.</p>
+
+<pre><code class="lang-text">| focal/aspect   0     0   0 |
+|      0       focal   0   0 |          depth = n / D
+|      0         0     0   n |
+|      0         0    −1   0 |</code></pre>
+
+<p>The depth falls toward 0 but never reaches it, so nothing is ever clipped by distance. The step size stays about <var>D</var> × 7 × 10<sup>−8</sup>: 0.07 mm at 1 km and 0.9 mm at 10 km for <var>n</var> = 0.1. For frustum culling, the "far plane" of this matrix comes out as (0, 0, 0, <var>n</var>), which every point passes (<a href="frustum-culling.html#planes">Frustum culling</a>).</p>
+
+<p>The same limit with standard depth gives depth = 1 − <var>n</var> / <var>D</var>: the whole scene squeezed against 1, the worst case of section 5.</p>
+
+<h2><span class="n">8</span>Worked example</h2>
+
+<p>Near 0.1, far 1000, a 32-bit float depth buffer. Follow a surface at distance 10, then ask whether a second surface right behind it can be told apart.</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. The depth rows</h4>
+    <svg viewBox="0 0 760 150" role="img" aria-label="Standard: A is minus 1.0001, B is minus 0.10001. Reversed: A is 0.00010001, B is 0.10001.">
+      <text x="20"  y="34" class="title t-cpu">standard 0..1</text>
+      <text x="20"  y="60" class="mono">A = −f / (f − n)  = −1.0001</text>
+      <text x="20"  y="84" class="mono">B = −fn / (f − n) = −0.10001</text>
+      <text x="400" y="34" class="title t-hot">reversed 0..1</text>
+      <text x="400" y="60" class="mono">A = n / (f − n)  = 0.00010001</text>
+      <text x="400" y="84" class="mono">B = fn / (f − n) = 0.10001</text>
+      <text x="20" y="124" class="small">Reversed: the same formulas as standard with n and f swapped, and the signs follow.</text>
+    </svg>
+    <p>Only the third row of the matrix differs. The <var>x</var>, <var>y</var> and <var>w</var> rows are the same.</p>
+  </div>
+  <div class="step">
+    <h4>2. A point at distance 10</h4>
+    <svg viewBox="0 0 760 150" role="img" aria-label="z is minus 10 and w is 10. Standard: z_c is 9.901, depth 0.9901. Reversed: z_c is 0.099, depth 0.0099.">
+      <text x="20"  y="34" class="mono">z = −10   →   w_c = 10</text>
+      <text x="20"  y="70" class="mono t-cpu">standard: z_c = −1.0001 · (−10) − 0.10001 = 9.901</text>
+      <text x="20"  y="94" class="mono t-cpu">          depth = 9.901 / 10 = 0.9901</text>
+      <text x="20"  y="124" class="mono t-hot">reversed: z_c = 0.00010001 · (−10) + 0.10001 = 0.0990   depth = 0.0099</text>
+    </svg>
+    <p>Same distance, mirror-image depths: 0.9901 = 1 − 0.0099.</p>
+  </div>
+  <div class="step">
+    <h4>3. How finely each value is stored</h4>
+    <svg viewBox="0 0 760 150" role="img" aria-label="Near 0.99 floats are 6 times 10 to the minus 8 apart, which is 0.06 millimeters of distance at 10. Near 0.0099 floats are 9.3 times 10 to the minus 10 apart, which is under 0.001 millimeters.">
+      <text x="20" y="34" class="mono t-cpu">0.9901: float gap 6.0e−8  → distance step 6.0e−5  (0.06 mm)</text>
+      <text x="20" y="64" class="mono t-hot">0.0099: float gap 9.3e−10 → distance step 9.3e−7  (0.001 mm)</text>
+      <text x="20" y="104" class="small">Distance step = float gap / (n / D²) = gap · 1000. Both are fine at distance 10.</text>
+    </svg>
+    <p>At short range both work. The difference grows with distance, as the table in section 5 shows.</p>
+  </div>
+  <div class="step">
+    <h4>4. Two surfaces 30 cm apart, 900 away</h4>
+    <svg viewBox="0 0 760 150" role="img" aria-label="Standard depth at 900 and at 900.3 rounds to the same float, 0.99998891, so the surfaces z-fight. Reversed depth gives 1.1112e-5 and 1.1075e-5, two different floats.">
+      <text x="20" y="34" class="mono t-cpu">standard: 900 → 0.99998891   900.3 → 0.99998891   same float: z-fighting</text>
+      <text x="20" y="70" class="mono t-hot">reversed: 900 → 1.1112e−5    900.3 → 1.1075e−5    different: the nearer wins</text>
+      <text x="20" y="110" class="small">Rounded to 32-bit floats. The reversed values are about 40,000 float steps apart.</text>
+    </svg>
+    <p>With standard depth, the farther surface shows through in stripes that move with the camera.</p>
+  </div>
+</div>
+
+<h2><span class="n">9</span>Pitfalls</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Symptom</th><th>Usual cause</th></tr>
+  <tr><td>Nothing is drawn</td><td>Reversed projection with the old clear (1) or the old test (LESS). The three settings must change together.</td></tr>
+  <tr><td>Everything is drawn in the wrong order</td><td>Reversed clear and test, but a standard projection.</td></tr>
+  <tr><td>Far surfaces flicker in stripes</td><td>Standard depth with a small near plane. Move the near plane out, or use reversed-Z with a float buffer.</td></tr>
+  <tr><td>No gain from reversed-Z</td><td>A 24-bit integer buffer, or OpenGL's −1..1 clip range.</td></tr>
+  <tr><td>Objects stretched on a wide window</td><td>The aspect ratio is not updated when the window or the render target changes size.</td></tr>
+  <tr><td>Linear depth from the buffer is wrong</td><td>The inverse formula of the other convention. For reversed infinite: <var>D</var> = <var>n</var> / <var>depth</var>.</td></tr>
+  <tr><td>Shadows get acne or peter-panning after the switch</td><td>Depth bias still pushes toward larger depth.</td></tr>
+</table>
+</div>
+
+<h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
+
+<p>RASM uses reversed-Z everywhere, with a 32-bit float depth buffer, a 0..1 clip range, and by default an infinite far plane. The three settings of <a href="#reversed">section 6</a> are fixed for every pass and every pipeline.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="A CameraProjection goes into toProjectionMatrix, which picks one of three matrices: glm ortho with near and far swapped, glm perspective with near and far swapped, or a hand-written infinite reversed matrix when farZ is 0 or infinity. drawScene writes it into SceneData. vertMain uses it. The depth attachment is D32_SFLOAT, cleared to 0, tested with GREATER_OR_EQUAL. Frustum planes, occlusion culling and the stats overlay all follow reversed-Z.">
+    <rect x="15" y="20" width="170" height="56" rx="6" class="box"/>
+    <text x="100" y="44" class="mid mono">CameraProjection</text>
+    <text x="100" y="62" class="mid small">fovY in degrees</text>
+    <line x1="185" y1="48" x2="213" y2="48" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="215" y="20" width="190" height="56" rx="6" class="cpu"/>
+    <text x="310" y="44" class="mid mono">toProjectionMatrix</text>
+    <text x="310" y="62" class="mid small">one of three matrices</text>
+
+    <path d="M310,76 V96 H100 V112" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <path d="M310,76 V112" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <path d="M310,96 H520 V112" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="15"  y="114" width="170" height="62" rx="6" class="cpu"/>
+    <text x="100" y="136" class="mid small title">ORTHOGRAPHIC</text>
+    <text x="100" y="154" class="mid mono small">glm::ortho</text>
+    <text x="100" y="168" class="mid small">far, near swapped · linear</text>
+    <rect x="215" y="114" width="190" height="62" rx="6" class="cpu"/>
+    <text x="310" y="136" class="mid small title">PERSPECTIVE, finite farZ</text>
+    <text x="310" y="154" class="mid mono small">glm::perspective</text>
+    <text x="310" y="168" class="mid small">far, near swapped · 1 → 0</text>
+    <rect x="435" y="114" width="170" height="62" rx="6" class="cpu"/>
+    <text x="520" y="136" class="mid small title">farZ = 0 or infinity</text>
+    <text x="520" y="154" class="mid small">written by hand</text>
+    <text x="520" y="168" class="mid mono small">depth = nearZ / D</text>
+
+    <line x1="310" y1="176" x2="310" y2="204" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="215" y="206" width="190" height="50" rx="6" class="mem"/>
+    <text x="310" y="228" class="mid">SceneData</text>
+    <text x="310" y="245" class="mid mono small">projection</text>
+    <line x1="405" y1="231" x2="453" y2="231" class="arrow" marker-end="url(#ah)"/>
+    <rect x="455" y="206" width="150" height="50" rx="25" class="shader"/>
+    <text x="530" y="236" class="mid mono">vertMain</text>
+    <line x1="605" y1="231" x2="633" y2="231" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="635" y="196" width="115" height="70" rx="6" class="gpu"/>
+    <text x="692" y="218" class="mid mono small">D32_SFLOAT</text>
+    <text x="692" y="236" class="mid small">clear 0</text>
+    <text x="692" y="254" class="mid small">≥ passes</text>
+
+    <text x="15" y="288" class="small">Also reversed-Z: getFrustumPlanes (plane 4 is the far plane), occlusion culling (the Hi-Z keeps the minimum,</text>
+    <text x="15" y="304" class="small">the farthest), and the stats overlay, which writes depth 1 (the near plane) to stay on top.</text>
+    <text x="15" y="320" class="small">drawScene fits the aspect ratio to each pass's size; the stored camera does not change.</text>
+  </svg>
+  <figcaption>glm builds standard 0..1 matrices because <code>GLM_FORCE_DEPTH_ZERO_TO_ONE</code> is set in CMake (<code>B2</code>). Passing far as glm's near and near as glm's far reverses them, as in <a href="#depth-row">section 3</a>.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Depth convention</td><td>standard or reversed</td><td>Reversed for every camera kind: <code>toProjectionMatrix</code> in <code>camera.cpp</code>.</td></tr>
+  <tr><td>Far plane</td><td>finite or infinite</td><td>Infinite when <code>farZ</code> is 0 or infinity (<code>hasInfiniteFar</code>). A designated initializer that leaves out <code>farZ</code> gives 0, so the examples get an infinite far plane. Orthographic cameras have no infinite form.</td></tr>
+  <tr><td>Infinite matrix</td><td>third row = (0, 0, 0, <var>n</var>)</td><td>The same, written by hand because glm has no reversed infinite matrix: <code class="lang-text">m[2][3] = -1</code>, <code class="lang-text">m[3][2] = nearZ</code> (glm indexes column first).</td></tr>
+  <tr><td>Field of view</td><td>an angle</td><td><code>fovY</code> is in <b>degrees</b>; <code>toProjectionMatrix</code> converts it.</td></tr>
+  <tr><td>Depth format</td><td>32-bit float</td><td><code>D32_SFLOAT</code> (<code>DEPTH_FORMAT</code>), no stencil. Render targets used by <code>drawScene</code> must use it too.</td></tr>
+  <tr><td>Clear value</td><td>0</td><td>0.0 in <code>VulkanCommandBuffer::beginRendering</code>, for every pass that clears.</td></tr>
+  <tr><td>Depth test</td><td>GREATER</td><td><code>VK_COMPARE_OP_GREATER_OR_EQUAL</code>, depth test and write on, in <code>createGraphicsPipeline</code>, for every graphics pipeline. Equal depths pass.</td></tr>
+  <tr><td>Validation</td><td>—</td><td><code>isValidProjection</code> refuses a perspective <code>nearZ</code> that is not finite and &gt; 0, a finite <code>farZ</code> not &gt; <code>nearZ</code>, and an orthographic camera without finite <code>nearZ</code> &lt; <code>farZ</code>. NaN fails every check. <code>createCamera</code> then returns an invalid handle; <code>setCameraProjection</code> keeps the old projection.</td></tr>
+  <tr><td>Aspect ratio</td><td>update on resize</td><td><code>updateCameraAspectRatio</code> runs after the swapchain is (re)created. <code>drawScene</code> also fits a copy to each pass's size with <code>getProjectionMatrix(camera, aspect)</code>. An orthographic camera keeps its center and width; its height becomes width / aspect.</td></tr>
+  <tr><td>Depth bias, depth clamp</td><td>—</td><td>Neither is used (no shadow maps yet).</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Projection settings</td><td><code>CameraProjection</code> in <code>include/rasm/camera.h</code></td></tr>
+  <tr><td>The matrices</td><td><code>toProjectionMatrix</code>, <code>hasInfiniteFar</code>, <code>setProjectionAspect</code> in <code>src/scene/camera.cpp</code></td></tr>
+  <tr><td>Checks</td><td><code>isValidProjection</code> in <code>src/scene/camera.cpp</code></td></tr>
+  <tr><td>Per-pass aspect</td><td><code>Engine::getProjectionMatrix</code> (with an aspect), called by <code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Depth textures</td><td><code>DEPTH_FORMAT</code> in <code>include/rasm/engine.h</code>; created in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Clear to 0</td><td><code>VulkanCommandBuffer::beginRendering</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
+  <tr><td>Compare op</td><td><code>VulkanDevice::createGraphicsPipeline</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>glm's 0..1 range</td><td><code>GLM_FORCE_DEPTH_ZERO_TO_ONE</code> in <code>src/CMakeLists.txt</code></td></tr>
+  <tr><td>Readers of depth</td><td><code>isOccluded</code> in <code>shaders/lib/occlusionCulling.slang</code>; <code>vertMain</code> in <code>shaders/passes/statsOverlay.slang</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/cameraTests.cpp</code>: reversed [1, 0] ranges, the infinite limit, rejected projections</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>The projection, the clear value (0) and the compare op (<code>GREATER_OR_EQUAL</code>) are one decision. Change one, change all three.</li>
+    <li>A pass that writes its own depth follows reversed-Z: near is 1, far is 0. A sky at the far plane writes 0.</li>
+    <li>Code that reduces depth, like the Hi-Z build in <code>hiz.slang</code>, keeps the <b>minimum</b> as the farthest value.</li>
+    <li>Do not normalize the frustum plane with a zero-length normal: it is the infinite far plane (<a href="frustum-culling.html#in-rasm">Frustum culling</a>).</li>
+    <li>glm config macros stay in CMake (<code>B2</code>). Run <code>ctest --preset x64-debug</code> after a camera change.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Nathan Reed, <i>Depth Precision Visualized</i> (2015): the standard explanation of reversed-Z.</li>
+  <li>Emil Persson, <i>Creating Vast Game Worlds</i>, SIGGRAPH 2012: reversed depth and an infinite far plane in practice.</li>
+  <li>Kurt Akeley and Jonathan Su, <i>Minimum Triangle Separation for Correct Z-Buffer Occlusion</i>, Graphics Hardware 2006.</li>
+  <li>Tomas Akenine-Möller and others, <i>Real-Time Rendering</i>, 4th edition: section 4.7, Projections.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

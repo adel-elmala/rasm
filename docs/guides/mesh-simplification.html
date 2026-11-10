@@ -1,0 +1,731 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mesh Simplification · RASM</title>
+<meta name="description" content="How mesh simplification builds levels of detail: edge collapse, quadric error metrics (Garland and Heckbert), borders and UV seams, the error in object units, target counts, sloppy versus topology-preserving simplification, and sharing vertices between levels, and how RASM does it.">
+<meta name="rasm-sources" content="src/assets/meshLod.cpp src/assets/meshLod.h src/assets/mesh.cpp include/rasm/mesh.h include/rasm/types.h src/renderer/geometryPool.cpp shaders/lib/core.slang src/renderer/uberMaterialTypes.h tests/meshLodTests.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/mesh-simplification.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">GPU data</p>
+<h1>Mesh simplification</h1>
+<p class="lead">A far object covers a few pixels, but its mesh still has all the triangles it has up close. Mesh simplification makes coarser copies of a mesh, its <b>levels of detail</b> (LODs), that look almost the same from far away. This page explains the classic algorithm: edge collapse driven by quadric error metrics. The <a href="#in-rasm">last part</a> shows how RASM does it. Choosing a level each frame is a separate topic: see <a href="lod-selection.html">LOD selection</a>.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>An <b>edge collapse</b> merges the two ends of an edge into one vertex. The two triangles on that edge disappear.</li>
+    <li>A <b>quadric</b> is a 4×4 matrix per vertex. It gives the sum of squared distances from any point to the planes of the triangles around that vertex.</li>
+    <li>The algorithm collapses the <b>cheapest</b> edge first, adds the quadrics of the two ends, and repeats until a target count or an error limit.</li>
+    <li>The cost is a <b>distance</b>: how far the surface moved, in the mesh's own units. That is what makes it usable for choosing a level later.</li>
+    <li><b>Borders</b> and <b>UV seams</b> need extra care, or holes grow and textures tear.</li>
+    <li>If every collapse keeps one of the two old vertices, all levels can <b>share one vertex buffer</b>. Then a level costs only its indices.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>Why fewer triangles</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Four versions of a round shape, each with half the triangles of the one before: 24, 12, 6 and 3. Each is drawn smaller, as it would look further away. At its size on screen, each looks about as round as the first.">
+    <polygon points="110,38 129,40 146,48 161,59 172,74 180,91 182,110 180,129 172,146 161,161 146,172 129,180 110,182 91,180 74,172 59,161 48,146 40,129 38,110 40,91 48,74 59,59 74,48 91,40" class="gpu"/>
+    <path d="M110,110 L110,38 M110,110 L129,40 M110,110 L146,48 M110,110 L161,59 M110,110 L172,74 M110,110 L180,91 M110,110 L182,110 M110,110 L180,129 M110,110 L172,146 M110,110 L161,161 M110,110 L146,172 M110,110 L129,180 M110,110 L110,182 M110,110 L91,180 M110,110 L74,172 M110,110 L59,161 M110,110 L48,146 M110,110 L40,129 M110,110 L38,110 M110,110 L40,91 M110,110 L48,74 M110,110 L59,59 M110,110 L74,48 M110,110 L91,40" class="arrow"/>
+    <text x="110" y="212" class="mid title">LOD 0</text>
+    <text x="110" y="228" class="mid small">24 triangles · up close</text>
+
+    <polygon points="300,58 326,65 345,84 352,110 345,136 326,155 300,162 274,155 255,136 248,110 255,84 274,65" class="gpu"/>
+    <path d="M300,110 L300,58 M300,110 L326,65 M300,110 L345,84 M300,110 L352,110 M300,110 L345,136 M300,110 L326,155 M300,110 L300,162 M300,110 L274,155 M300,110 L255,136 M300,110 L248,110 M300,110 L255,84 M300,110 L274,65" class="arrow"/>
+    <text x="300" y="212" class="mid title">LOD 1</text>
+    <text x="300" y="228" class="mid small">12 triangles</text>
+
+    <polygon points="470,74 501,92 501,128 470,146 439,128 439,92" class="gpu"/>
+    <path d="M470,110 L470,74 M470,110 L501,92 M470,110 L501,128 M470,110 L470,146 M470,110 L439,128 M470,110 L439,92" class="arrow"/>
+    <text x="470" y="212" class="mid title">LOD 2</text>
+    <text x="470" y="228" class="mid small">6 triangles</text>
+
+    <polygon points="610,86 631,122 589,122" class="gpu"/>
+    <path d="M610,110 L610,86 M610,110 L631,122 M610,110 L589,122" class="arrow"/>
+    <text x="610" y="212" class="mid title">LOD 3</text>
+    <text x="610" y="228" class="mid small">3 triangles · far away</text>
+
+    <line x1="200" y1="20" x2="700" y2="20" class="arrow" marker-end="url(#ah)"/>
+    <text x="700" y="14" class="end small">further from the camera →</text>
+  </svg>
+  <figcaption>A <b>LOD chain</b>: each level has about half the triangles of the one before. A level is used when the object is so small on screen that the missing detail is smaller than a pixel.</figcaption>
+</figure>
+
+<p>Drawing a far object with all its triangles wastes work in three places:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Cost</th><th>Why tiny triangles hurt</th></tr>
+  <tr><td>Vertex work</td><td>Every vertex is fetched and shaded, even when 50 vertices land in one pixel.</td></tr>
+  <tr><td>Pixel work</td><td>GPUs shade pixels in 2 × 2 blocks (quads). A triangle that covers one pixel still runs the pixel shader up to 4 times. Many tiny triangles can cost several times the pixels they cover.</td></tr>
+  <tr><td>Aliasing</td><td>Detail smaller than a pixel flickers as the camera moves. A coarser mesh can even look <i>better</i>.</td></tr>
+</table>
+</div>
+
+<p>The LODs are built once, offline or when the mesh loads. Each frame, the renderer only picks one per object (see <a href="lod-selection.html">LOD selection</a>).</p>
+
+<h2><span class="n">2</span>Ways to simplify</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Family</th><th>Idea</th><th>Good</th><th>Bad</th></tr>
+  <tr><td><b>Vertex clustering</b></td><td>Lay a grid over the mesh. All vertices in one cell become one vertex. Triangles that end up with two corners in one cell vanish.</td><td>Very fast, one pass. Reaches any target.</td><td>Ignores the shape: merges things that are only close, closes holes, makes ugly results. See <a href="#sloppy">section 9</a>.</td></tr>
+  <tr><td><b>Vertex removal</b></td><td>Remove one vertex and its triangles, then fill the hole with new triangles.</td><td>Keeps the original vertices.</td><td>Filling a hole in 3D well is hard.</td></tr>
+  <tr><td><b>Edge collapse</b></td><td>Merge the two ends of one edge. Repeat, cheapest first.</td><td>Local, simple, high quality. Keeps the topology when checked.</td><td>Slower than clustering. Needs a good cost: that is the quadric.</td></tr>
+</table>
+</div>
+
+<p>Edge collapse with quadric error metrics, published by Michael Garland and Paul Heckbert in 1997, is the standard. The rest of this page explains it.</p>
+
+<h2><span class="n">3</span>Edge collapse</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Left: a vertex u and its neighbour v, with 10 triangles around them. The edge u–v and its two triangles are highlighted. Right: after the collapse, v is gone. The triangles that used v now use u, and the two triangles on the edge have disappeared, leaving 8.">
+    <text x="200" y="22" class="mid title">Before: 10 triangles</text>
+    <polygon points="120,70 200,60 280,70 310,130 280,190 200,200 120,190 90,130" class="zone"/>
+    <polygon points="160,130 240,130 200,60" class="hot"/>
+    <polygon points="160,130 240,130 200,200" class="hot"/>
+    <path d="M160,130 L120,70 M160,130 L200,60 M160,130 L200,200 M160,130 L120,190 M160,130 L90,130 M240,130 L200,60 M240,130 L280,70 M240,130 L310,130 M240,130 L280,190 M240,130 L200,200" class="arrow"/>
+    <line x1="160" y1="130" x2="240" y2="130" class="hot"/>
+    <circle cx="160" cy="130" r="6" class="cpu"/>
+    <circle cx="240" cy="130" r="6" class="cpu"/>
+    <text x="150" y="152" class="end title">u</text>
+    <text x="250" y="152" class="title">v</text>
+    <text x="200" y="230" class="mid small">the edge u–v and its two triangles (orange)</text>
+
+    <line x1="330" y1="130" x2="430" y2="130" class="arrow" marker-end="url(#ah)"/>
+    <text x="380" y="120" class="mid small">collapse</text>
+    <text x="380" y="148" class="mid small">v onto u</text>
+
+    <text x="560" y="22" class="mid title">After: 8 triangles</text>
+    <polygon points="480,70 560,60 640,70 670,130 640,190 560,200 480,190 450,130" class="zone"/>
+    <path d="M520,130 L480,70 M520,130 L560,60 M520,130 L640,70 M520,130 L670,130 M520,130 L640,190 M520,130 L560,200 M520,130 L480,190 M520,130 L450,130" class="arrow"/>
+    <circle cx="600" cy="130" r="6" class="ghost"/>
+    <text x="608" y="122" class="small t-faint">v was here</text>
+    <circle cx="520" cy="130" r="6" class="cpu"/>
+    <text x="510" y="152" class="end title">u</text>
+    <text x="560" y="230" class="mid small">v's triangles now use u: they stretch</text>
+  </svg>
+  <figcaption>One collapse removes one vertex and two triangles (one, if the edge is on a border). Halving a mesh of <var>N</var> triangles takes about <var>N</var> / 4 collapses.</figcaption>
+</figure>
+
+<p>Where does the merged vertex go? There are two choices:</p>
+
+<div class="split">
+  <div>
+    <h4>Full collapse</h4>
+    <p>Both ends move to a <b>new</b> point, chosen to fit the old surface best (section 5 shows how to compute it). Best quality. But the result has new vertices, so each level needs its own vertex data.</p>
+  </div>
+  <div>
+    <h4>Half-edge collapse</h4>
+    <p>One end moves onto the <b>other</b> end, which stays where it is. A little lower quality. But every vertex of every level is one of the original vertices, so all levels can <b>share one vertex buffer</b> (<a href="#sharing">section 10</a>).</p>
+  </div>
+</div>
+
+<h3>Collapses that must be refused</h3>
+
+<p>Some collapses break the mesh. Before each one, the algorithm checks:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Check</th><th>What goes wrong without it</th></tr>
+  <tr><td><b>Flip</b>: does any triangle around the moved vertex turn over (its normal points the other way)?</td><td>A fold in the surface: a dark crease or a hole in the silhouette.</td></tr>
+  <tr><td><b>Link condition</b>: do u and v share neighbours other than the two triangles on their edge?</td><td>Two surfaces get glued at one point; the mesh is no longer a clean surface (non-manifold).</td></tr>
+  <tr><td><b>Border and seam rules</b> (<a href="#borders">section 7</a>)</td><td>Holes grow, cracks open, textures tear.</td></tr>
+</table>
+</div>
+
+<h2><span class="n">4</span>The cost: how far would the surface move?</h2>
+
+<p>We need a number for each possible collapse: how much it changes the shape. Measuring the true distance between the old and the new surface is slow. The quadric trick estimates it with a few multiplications.</p>
+
+<p>Start from one triangle. Its plane is 4 numbers <var>p</var> = (<var>a</var>, <var>b</var>, <var>c</var>, <var>d</var>), with a unit normal (<var>a</var>, <var>b</var>, <var>c</var>). Write a point as <var>v</var> = (<var>x</var>, <var>y</var>, <var>z</var>, 1). The distance from the point to the plane is <var>p</var> · <var>v</var>. Its square can be written as a matrix product:</p>
+
+<pre><code class="lang-text">distance²(v) = (p · v)²
+             = vᵀ (p pᵀ) v
+             = vᵀ K v          K = p pᵀ, a symmetric 4×4 matrix</code></pre>
+
+<p>Now the trick. Each vertex gets the <b>sum</b> of the <var>K</var> of the triangles around it:</p>
+
+<pre><code class="lang-text">Q(vertex) = K1 + K2 + … + Kn      one K per triangle that uses the vertex
+cost(v)   = vᵀ Q v                sum of squared distances to them</code></pre>
+
+<p>Q is still one 4×4 symmetric matrix: 10 numbers, no matter how many planes it sums. At the vertex's own position the cost is 0, because the vertex lies on all its planes. Moving it away costs more in some directions than others:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Three cross-sections. Left: a vertex on a flat floor. Lines of equal cost run parallel to the floor, so sliding along the floor costs nothing. Middle: a vertex at the corner of a floor and a wall. Lines of equal cost are circles around it, so every move costs. Right: the formulas: K equals p times p transposed, Q is the sum of the K of the planes around the vertex, and the cost is v transposed Q v.">
+    <text x="130" y="22" class="mid title">On a flat floor</text>
+    <line x1="30" y1="80" x2="230" y2="80" class="arrow dashed"/>
+    <line x1="30" y1="115" x2="230" y2="115" class="arrow dashed"/>
+    <line x1="30" y1="150" x2="230" y2="150" class="gpu"/>
+    <text x="236" y="84" class="small">y = 2</text>
+    <text x="236" y="119" class="small">y = 1</text>
+    <circle cx="130" cy="150" r="6" class="cpu"/>
+    <line x1="136" y1="150" x2="196" y2="150" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="124" y1="150" x2="64" y2="150" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="130" y="176" class="mid small t-gpu">slide along it: cost 0</text>
+    <text x="130" y="210" class="mid mono small">cost = y²</text>
+    <text x="130" y="230" class="mid small">dashed: points of equal cost</text>
+
+    <text x="390" y="22" class="mid title">At a corner</text>
+    <line x1="330" y1="150" x2="500" y2="150" class="gpu"/>
+    <line x1="330" y1="40" x2="330" y2="150" class="gpu"/>
+    <circle cx="330" cy="150" r="25" class="ghost"/>
+    <circle cx="330" cy="150" r="50" class="ghost"/>
+    <circle cx="330" cy="150" r="6" class="cpu"/>
+    <text x="440" y="142" class="small">floor</text>
+    <text x="338" y="56" class="small">wall</text>
+    <text x="388" y="176" class="small t-hot">every move here costs</text>
+    <text x="390" y="210" class="mid mono small">cost = x² + y²</text>
+    <text x="390" y="230" class="mid small">along the crease (into the page): free</text>
+
+    <rect x="530" y="40" width="210" height="160" rx="6" class="zone"/>
+    <text x="545" y="64" class="mono small">p = (a, b, c, d)</text>
+    <text x="545" y="86" class="mono small">K = p pᵀ</text>
+    <text x="545" y="108" class="mono small">Q = K1 + K2 + … + Kn</text>
+    <text x="545" y="130" class="mono small">cost(v) = vᵀ Q v</text>
+    <text x="545" y="158" class="small">floor p = (0, 1, 0, 0) → y²</text>
+    <text x="545" y="176" class="small">wall p = (1, 0, 0, 0) → x²</text>
+    <text x="545" y="194" class="small">corner: both → x² + y²</text>
+  </svg>
+  <figcaption>The quadric "knows" the local shape. Flat areas and straight creases can be simplified for free; corners and curved parts resist. This is exactly what we want: detail is removed where it is not visible first.</figcaption>
+</figure>
+
+<h3>The cost of one collapse</h3>
+
+<p>To collapse the edge (<var>u</var>, <var>v</var>), add the two quadrics and evaluate them at the place where the merged vertex will be:</p>
+
+<pre><code class="lang-text">Q      = Q(u) + Q(v)
+cost   = targetᵀ Q target
+target = u for a half-edge collapse, the best new point for a full one</code></pre>
+
+<p>After the collapse, the merged vertex keeps <var>Q</var> = <var>Q</var>(<var>u</var>) + <var>Q</var>(<var>v</var>). So a vertex's quadric always holds the planes of <b>all the original triangles</b> it replaced. Later costs are measured against the original surface, not against the last simplified one. That is why errors do not quietly add up step after step.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Corner vertex at (0, 0, 0), <var>Q</var> = floor + wall</th><th>Move it to</th><th>Cost <var>x</var>² + <var>y</var>²</th><th>As a distance (√cost)</th></tr>
+  <tr><td>a neighbour along the crease</td><td>(0, 0, 1)</td><td>0</td><td>0: free</td></tr>
+  <tr><td>a neighbour on the floor</td><td>(1, 0, 0)</td><td>1</td><td>1: the wall moves by 1</td></tr>
+  <tr><td>a neighbour on the wall</td><td>(0, 1, 0)</td><td>1</td><td>1: the floor moves by 1</td></tr>
+  <tr><td>somewhere in between</td><td>(0.3, 0.1, 2)</td><td>0.09 + 0.01 = 0.1</td><td>0.32</td></tr>
+</table>
+</div>
+
+<h2><span class="n">5</span>The algorithm</h2>
+
+<ol class="steps">
+  <li><b>Quadrics.</b> For every triangle, compute its plane and <var>K</var>. Add <var>K</var> to the quadric of each of its 3 vertices. Many implementations weight <var>K</var> by the triangle's area, so big triangles count more.</li>
+  <li><b>Costs.</b> For every edge, compute the cost of collapsing it. Put the edges in a <b>priority queue</b> (a min-heap), cheapest first.</li>
+  <li><b>Collapse.</b> Take the cheapest edge. If a check from section 3 refuses it, skip it. Otherwise collapse it and add the two quadrics.</li>
+  <li><b>Update.</b> The edges around the merged vertex changed: compute their costs again and fix their place in the queue.</li>
+  <li><b>Stop</b> when the triangle count reaches the target, or the next cost is above an error limit, or the queue is empty.</li>
+</ol>
+
+<p>The same idea works in 2D, on a line instead of a surface. There, each point's "planes" are the lines of its two segments. Click through a simplification of 7 points down to 4. The numbers are the cost of each point's cheapest collapse, as a distance (the drawing is 6 units wide).</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. Every point gets a quadric and a cost</h4>
+    <svg viewBox="0 0 760 240" role="img" aria-label="Seven points on a line. The two end points are locked. The five inner points have costs 0.10, 0.49, 0.49, 0.46 and 0.25. P1, with 0.10, is the cheapest.">
+      <polyline points="60,190 160,170 260,160 360,90 460,80 560,120 660,190" class="arrow"/>
+      <circle cx="60" cy="190" r="6" class="box"/><text x="60" y="214" class="mid small">P0 · locked</text>
+      <circle cx="160" cy="170" r="6" class="cpu"/><text x="160" y="194" class="mid small">P1</text><text x="160" y="154" class="mid title t-hot">0.10</text>
+      <circle cx="260" cy="160" r="6" class="cpu"/><text x="260" y="184" class="mid small">P2</text><text x="260" y="144" class="mid">0.49</text>
+      <circle cx="360" cy="90" r="6" class="cpu"/><text x="360" y="114" class="mid small">P3</text><text x="360" y="74" class="mid">0.49</text>
+      <circle cx="460" cy="80" r="6" class="cpu"/><text x="460" y="104" class="mid small">P4</text><text x="460" y="64" class="mid">0.46</text>
+      <circle cx="560" cy="120" r="6" class="cpu"/><text x="560" y="144" class="mid small">P5</text><text x="560" y="104" class="mid">0.25</text>
+      <circle cx="660" cy="190" r="6" class="box"/><text x="660" y="214" class="mid small">P6 · locked</text>
+      <text x="20" y="30" class="small">7 points, target 4</text>
+    </svg>
+    <p>P1 sits almost on the straight line from P0 to P2, so it can go for 0.10. P3 and P4 are the top of the hill: removing either changes the shape a lot.</p>
+  </div>
+
+  <div class="step">
+    <h4>2. Collapse the cheapest: P1 onto P2</h4>
+    <svg viewBox="0 0 760 240" role="img" aria-label="P1 is gone. The line goes from P0 straight to P2. P2 now carries P1's quadric, so its cost rose from 0.49 to 0.91. P5, with 0.25, is now the cheapest.">
+      <polyline points="60,190 160,170 260,160" class="ghost"/>
+      <polyline points="60,190 260,160 360,90 460,80 560,120 660,190" class="arrow"/>
+      <circle cx="60" cy="190" r="6" class="box"/><text x="60" y="214" class="mid small">P0</text>
+      <circle cx="160" cy="170" r="6" class="ghost"/><text x="160" y="194" class="mid small t-faint">P1</text>
+      <circle cx="260" cy="160" r="6" class="cpu"/><text x="260" y="184" class="mid small">P2</text><text x="252" y="146" class="end">0.91 (was 0.49)</text>
+      <circle cx="360" cy="90" r="6" class="cpu"/><text x="360" y="114" class="mid small">P3</text><text x="360" y="74" class="mid">0.49</text>
+      <circle cx="460" cy="80" r="6" class="cpu"/><text x="460" y="104" class="mid small">P4</text><text x="460" y="64" class="mid">0.46</text>
+      <circle cx="560" cy="120" r="6" class="cpu"/><text x="560" y="144" class="mid small">P5</text><text x="560" y="104" class="mid title t-hot">0.25</text>
+      <circle cx="660" cy="190" r="6" class="box"/><text x="660" y="214" class="mid small">P6</text>
+      <text x="20" y="30" class="small">6 points · removed so far: 0.10</text>
+    </svg>
+    <p>P2 now holds the quadric of P1 too, so it "remembers" the original line through P1. Its cost went up: moving it now would also move the part of the line that P1 used to hold.</p>
+  </div>
+
+  <div class="step">
+    <h4>3. Next: P5 onto P4</h4>
+    <svg viewBox="0 0 760 240" role="img" aria-label="P5 is gone. The line goes from P4 straight to P6. P4's cost rose to 1.12 and P3's to 0.55. P3 is now the cheapest.">
+      <polyline points="60,190 160,170 260,160" class="ghost"/>
+      <polyline points="460,80 560,120 660,190" class="ghost"/>
+      <polyline points="60,190 260,160 360,90 460,80 660,190" class="arrow"/>
+      <circle cx="60" cy="190" r="6" class="box"/><text x="60" y="214" class="mid small">P0</text>
+      <circle cx="160" cy="170" r="6" class="ghost"/>
+      <circle cx="260" cy="160" r="6" class="cpu"/><text x="260" y="184" class="mid small">P2</text><text x="260" y="144" class="mid">0.91</text>
+      <circle cx="360" cy="90" r="6" class="cpu"/><text x="360" y="114" class="mid small">P3</text><text x="360" y="74" class="mid title t-hot">0.55</text>
+      <circle cx="460" cy="80" r="6" class="cpu"/><text x="460" y="104" class="mid small">P4</text><text x="460" y="64" class="mid">1.12</text>
+      <circle cx="560" cy="120" r="6" class="ghost"/><text x="560" y="144" class="mid small t-faint">P5</text>
+      <circle cx="660" cy="190" r="6" class="box"/><text x="660" y="214" class="mid small">P6</text>
+      <text x="20" y="30" class="small">5 points · removed so far: 0.10, 0.25</text>
+    </svg>
+    <p>Only the neighbours of the merged point get new costs. Everything else stays in the queue as it was.</p>
+  </div>
+
+  <div class="step">
+    <h4>4. P3 onto P4, then stop</h4>
+    <svg viewBox="0 0 760 240" role="img" aria-label="P3 is gone. Four points are left: P0, P2, P4 and P6, which is the target. The original line is drawn dashed behind. The error of this level is 0.55, the largest collapse.">
+      <polyline points="60,190 160,170 260,160 360,90 460,80 560,120 660,190" class="ghost"/>
+      <polyline points="60,190 260,160 460,80 660,190" class="hot"/>
+      <circle cx="60" cy="190" r="6" class="box"/><text x="60" y="214" class="mid small">P0</text>
+      <circle cx="260" cy="160" r="6" class="cpu"/><text x="260" y="184" class="mid small">P2</text>
+      <circle cx="460" cy="80" r="6" class="cpu"/><text x="460" y="104" class="mid small">P4</text>
+      <circle cx="660" cy="190" r="6" class="box"/><text x="660" y="214" class="mid small">P6</text>
+      <text x="20" y="30" class="small">4 points: the target · collapses 0.10, 0.25, 0.55</text>
+      <text x="740" y="30" class="end title t-hot">error of this level: 0.55</text>
+    </svg>
+    <p>The level's error is the cost of its <b>largest</b> collapse, 0.55. Because the quadrics remember the original line, this number already compares the result with the original, not with the last step.</p>
+  </div>
+</div>
+
+<h3>The best new position</h3>
+
+<p>For a full collapse, the best target is where <var>v</var><sup>T</sup> <var>Q</var> <var>v</var> is smallest. Split <var>Q</var> into its top-left 3×3 part <var>A</var>, the first three numbers of its last column <var>b</var>, and its bottom-right number <var>c</var>. The cost is <var>x</var><sup>T</sup><var>A</var><var>x</var> + 2 <var>b</var><sup>T</sup><var>x</var> + <var>c</var>, and its minimum is where <var>A</var> <var>x</var> = −<var>b</var>. That is one 3×3 linear system. When <var>A</var> cannot be inverted, for example on a flat area where every point of the plane costs 0, fall back to the cheapest of the two ends or the midpoint.</p>
+
+<h2><span class="n">6</span>The error, in object units</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Left: an original curved outline and a simplified one made of straight segments. The largest gap between them is the error e. Right: a chain of levels. LOD 1 is simplified from LOD 0 with error e1, LOD 2 from LOD 1 with error e2. LOD 2 is at most e1 plus e2 from LOD 0.">
+    <path d="M30,170 C90,60 170,40 240,90 S330,170 360,120" class="arrow gpu"/>
+    <polyline points="30,170 120,72 240,90 360,120" class="hot"/>
+    <line x1="322" y1="112" x2="322" y2="143" class="arrow" marker-start="url(#ah)" marker-end="url(#ah)"/>
+    <text x="330" y="134" class="title">e</text>
+    <text x="40" y="206" class="small t-gpu">original surface</text>
+    <text x="160" y="206" class="small t-hot">simplified surface</text>
+    <text x="40" y="222" class="small">e: the largest distance between them, in the mesh's units</text>
+
+    <rect x="420" y="40" width="90" height="44" rx="6" class="gpu"/>
+    <text x="465" y="67" class="mid title">LOD 0</text>
+    <line x1="510" y1="62" x2="538" y2="62" class="arrow" marker-end="url(#ah)"/>
+    <text x="524" y="54" class="mid small">e1</text>
+    <rect x="540" y="40" width="90" height="44" rx="6" class="gpu"/>
+    <text x="585" y="67" class="mid title">LOD 1</text>
+    <line x1="630" y1="62" x2="658" y2="62" class="arrow" marker-end="url(#ah)"/>
+    <text x="644" y="54" class="mid small">e2</text>
+    <rect x="660" y="40" width="80" height="44" rx="6" class="gpu"/>
+    <text x="700" y="67" class="mid title">LOD 2</text>
+    <path d="M465,84 V110 H700 V86" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="582" y="128" class="mid small t-hot">LOD 2 is at most e1 + e2 from LOD 0</text>
+    <text x="420" y="168" class="small">When each level is made from the one before,</text>
+    <text x="420" y="184" class="small">its error against LOD 0 is not measured. The sum</text>
+    <text x="420" y="200" class="small">is a safe upper bound (the triangle inequality).</text>
+  </svg>
+  <figcaption>The error tells how far a level's surface may be from the original. Seen from far enough, a distance of <var>e</var> is under one pixel. That is how <a href="lod-selection.html">LOD selection</a> picks a level.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Choice</th><th>Options</th><th>Note</th></tr>
+  <tr><td>Absolute or relative</td><td>In the mesh's units (meters, if the mesh is in meters), or divided by the mesh's size (0.01 = 1% of its size)</td><td>Choosing a level on screen needs <b>absolute</b> units. Relative is handy as a quality setting: "at most 1% deformation".</td></tr>
+  <tr><td>Each level from</td><td>the original (LOD 0), or the level before</td><td>From the original: exact error, more work for coarse levels. From the level before: faster, and the errors add up (e.g. steps of 0.004, 0.006 and 0.011 give levels with 0.004, 0.010 and 0.021).</td></tr>
+  <tr><td>What the error covers</td><td>position only, or also normals and UVs</td><td>Position only can hide a big change in shading. See the next section.</td></tr>
+</table>
+</div>
+
+<p>A quadric gives the <b>sum</b> of squared distances to many planes, so its square root is an estimate, not an exact distance. In practice it is close to the largest deviation, and it is the number simplifiers usually report.</p>
+
+<h2 id="borders"><span class="n">7</span>Borders, seams and attributes</h2>
+
+<h3>Open borders</h3>
+
+<p>A <b>border edge</b> has a triangle on one side only: the edge of a sheet, or the rim of a hole. Here the quadric fails. On a flat sheet, every point of the plane costs 0, so a border vertex can slide <b>into</b> the sheet for free. The border is eaten away.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="Left: a flat sheet seen from above. Its top edge is a border. Collapsing border vertex B onto inner vertex I costs nothing, because the sheet is flat, and cuts a notch into the edge. Right: a border plane stands on the edge, at right angles to the sheet. Now moving B off the edge costs a lot, and B can only slide along the edge.">
+    <text x="180" y="22" class="mid title">Plain quadrics: the edge is eaten</text>
+    <polygon points="40,50 140,50 180,110 220,50 320,50 320,190 40,190" class="zone"/>
+    <polyline points="40,50 140,50 180,110 220,50 320,50" class="hot"/>
+    <line x1="140" y1="50" x2="220" y2="50" class="arrow dashed"/>
+    <circle cx="180" cy="50" r="6" class="ghost"/>
+    <text x="180" y="40" class="mid small t-faint">B was here</text>
+    <circle cx="180" cy="110" r="6" class="cpu"/>
+    <text x="192" y="128" class="small">I</text>
+    <circle cx="100" cy="130" r="4" class="cpu"/><circle cx="260" cy="130" r="4" class="cpu"/>
+    <circle cx="100" cy="170" r="4" class="cpu"/><circle cx="180" cy="170" r="4" class="cpu"/><circle cx="260" cy="170" r="4" class="cpu"/>
+    <text x="180" y="214" class="mid small">cost of B → I: 0 (the sheet is flat)</text>
+    <text x="180" y="230" class="mid small t-hot">a notch is cut into the border</text>
+
+    <text x="560" y="22" class="mid title">Border planes, or a lock</text>
+    <rect x="420" y="50" width="280" height="140" class="zone"/>
+    <line x1="420" y1="50" x2="700" y2="50" class="hot"/>
+    <text x="694" y="68" class="end small t-hot">border plane</text>
+    <circle cx="560" cy="50" r="6" class="cpu"/>
+    <text x="548" y="44" class="end small">B</text>
+    <line x1="566" y1="50" x2="632" y2="50" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="612" y="40" class="mid small t-gpu">along the edge: cheap</text>
+    <circle cx="560" cy="110" r="6" class="cpu"/>
+    <text x="572" y="114" class="small">I</text>
+    <line x1="560" y1="56" x2="560" y2="100" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <text x="548" y="90" class="end small t-hot">B → I: costly</text>
+    <text x="560" y="214" class="mid small">a plane at right angles to the sheet, along each border edge</text>
+    <text x="560" y="230" class="mid small">(seen from above, it is the edge line itself)</text>
+  </svg>
+  <figcaption>Garland and Heckbert's fix: for each border edge, add the quadric of a plane through the edge, at right angles to its triangle, with a large weight. A simpler fix is to <b>lock</b> border vertices: they never move.</figcaption>
+</figure>
+
+<p>Locking matters when one object is split into several meshes that meet along a border, for example a model split into parts by material. If each part is simplified and chosen on its own, an unlocked border can move differently in each part, and a crack opens between them. Locked borders always match, at any mix of levels. The cost: the border keeps all its vertices, so a part with a long border cannot get very coarse.</p>
+
+<h3>UV seams and attributes</h3>
+
+<p>A vertex is more than a position: it has a normal and UVs. Where a texture is cut open (a <b>UV seam</b>), or a hard edge has two normals, the same position is stored as <b>two vertices</b> with different attributes.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Left: two texture islands meet at a seam. Each seam position is two vertices, one per island. Right: a bad collapse moves only one copy of a seam vertex, so the two sides no longer meet and a crack or a texture tear appears.">
+    <text x="190" y="22" class="mid title">A seam: one position, two vertices</text>
+    <rect x="40" y="40" width="150" height="150" class="mem"/>
+    <rect x="190" y="40" width="150" height="150" class="cpu"/>
+    <text x="115" y="120" class="mid small">UV island 1</text>
+    <text x="265" y="120" class="mid small">UV island 2</text>
+    <line x1="190" y1="40" x2="190" y2="190" class="hot dashed"/>
+    <circle cx="186" cy="80" r="4" class="mem"/><circle cx="194" cy="80" r="4" class="cpu"/>
+    <circle cx="186" cy="150" r="4" class="mem"/><circle cx="194" cy="150" r="4" class="cpu"/>
+    <text x="190" y="212" class="mid small">u = 1.0 on the left copy, u = 0.0 on the right copy</text>
+
+    <text x="570" y="22" class="mid title">Only one copy moved: a tear</text>
+    <polygon points="420,40 570,40 570,80 546,166 570,190 420,190" class="mem"/>
+    <rect x="570" y="40" width="150" height="150" class="cpu"/>
+    <polygon points="570,80 546,166 570,190" class="hot"/>
+    <circle cx="546" cy="166" r="4" class="mem"/>
+    <circle cx="574" cy="150" r="4" class="cpu"/>
+    <circle cx="566" cy="80" r="4" class="mem"/><circle cx="574" cy="80" r="4" class="cpu"/>
+    <text x="536" y="170" class="end small">moved</text>
+    <text x="570" y="212" class="mid small t-hot">the two sides differ: a crack, or a jump in the texture</text>
+  </svg>
+  <figcaption>The rule: a seam vertex may only collapse <b>along</b> the seam, and both copies must collapse the same way.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Approach</th><th>How</th><th>Result</th></tr>
+  <tr><td>Position-only quadrics, seam rules</td><td>Find vertices with equal positions. Treat their edges like borders: they only collapse along the seam, together.</td><td>No tears. But a collapse inside one island can still bend its normals or stretch its texture.</td></tr>
+  <tr><td>Attribute quadrics</td><td>Extend the quadric with the attributes (Garland and Heckbert 1998, Hoppe 1999): the cost also counts how far the normal and UV would change.</td><td>Better shading and texture. Bigger quadrics, slower, and the weights between position and attributes need tuning.</td></tr>
+</table>
+</div>
+
+<h2><span class="n">8</span>Targets and when to stop</h2>
+
+<p>A simplifier gets a <b>target</b>: an index count (3 per triangle), an error limit, or both. It stops at whichever comes first. It can also stop <b>early</b>, above the target: when every remaining collapse is refused (locked vertices, seams, the link condition), there is nothing left to do.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Rule</th><th>Typical choice</th><th>Why</th></tr>
+  <tr><td>Each level's target</td><td>half the triangles of the level before</td><td>An object twice as far covers a quarter of the pixels; halving per level gives many levels for little memory.</td></tr>
+  <tr><td>Minimum size</td><td>no levels for small meshes; stop below a few dozen triangles</td><td>A level of a 200-triangle mesh saves almost nothing.</td></tr>
+  <tr><td>Stalling</td><td>stop when a step removes less than, say, 10%</td><td>The simplifier is stuck on constraints; another level would be a near copy.</td></tr>
+  <tr><td>Maximum levels</td><td>a fixed number, e.g. 8</td><td>Fits a fixed-size table on the GPU.</td></tr>
+</table>
+</div>
+
+<p>With halving, the extra indices form a geometric series: ½ + ¼ + ⅛ + … &lt; 1. All the coarser levels together cost <b>less</b> than LOD 0's indices.</p>
+
+<h2 id="sloppy"><span class="n">9</span>Sloppy versus topology-preserving</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Left: two parts with a narrow gap between them, and a grid over both. Middle: sloppy simplification by vertex clustering merges vertices from both parts that fall in one cell, so the gap closes and the parts fuse into one blob. Right: topology-preserving edge collapse keeps the two parts and the gap, with fewer triangles, but can stop before reaching its target.">
+    <text x="130" y="22" class="mid title">Two parts, a narrow gap</text>
+    <rect x="40" y="50" width="80" height="120" rx="4" class="gpu"/>
+    <rect x="132" y="50" width="88" height="120" rx="4" class="gpu"/>
+    <path d="M30,80 H230 M30,120 H230 M30,160 H230 M70,40 V180 M110,40 V180 M150,40 V180 M190,40 V180" class="arrow dashed"/>
+    <text x="130" y="206" class="mid small">dashed: the clustering grid</text>
+
+    <line x1="240" y1="110" x2="290" y2="110" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="390" y="22" class="mid title">Sloppy (clustering)</text>
+    <polygon points="310,60 470,60 470,170 310,170" class="hot"/>
+    <text x="390" y="114" class="mid small">one blob:</text>
+    <text x="390" y="130" class="mid small">the gap is gone</text>
+    <text x="390" y="206" class="mid small">reaches any target, very fast</text>
+    <text x="390" y="222" class="mid small t-hot">changes the topology</text>
+
+    <text x="620" y="22" class="mid title">Topology-preserving</text>
+    <rect x="530" y="56" width="74" height="110" rx="2" class="gpu"/>
+    <rect x="616" y="56" width="84" height="110" rx="2" class="gpu"/>
+    <line x1="530" y1="56" x2="604" y2="166" class="arrow"/>
+    <line x1="616" y1="56" x2="700" y2="166" class="arrow"/>
+    <text x="620" y="206" class="mid small">the gap and holes stay</text>
+    <text x="620" y="222" class="mid small">may stop above the target</text>
+  </svg>
+  <figcaption>"Sloppy" simplifiers (vertex clustering and its variants) ignore which triangles are connected. They are good for the last, coarsest levels, where only the rough outline matters, and as a fallback when topology-preserving simplification gets stuck.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th></th><th>Topology-preserving (edge collapse)</th><th>Sloppy (clustering)</th></tr>
+  <tr><td>Speed</td><td>a priority queue, many updates</td><td>one or a few passes</td></tr>
+  <tr><td>Reaches the target</td><td>not always: stops on constraints</td><td>always</td></tr>
+  <tr><td>Holes, gaps, separate parts</td><td>kept</td><td>may close or fuse</td></tr>
+  <tr><td>Many tiny separate parts (leaves, rivets)</td><td>stuck: each part can only shrink to its smallest shape</td><td>parts merge or vanish: good for far levels</td></tr>
+  <tr><td>Use for</td><td>near and middle levels</td><td>far levels, fallback</td></tr>
+</table>
+</div>
+
+<h2 id="sharing"><span class="n">10</span>Sharing vertices between levels, and the memory cost</h2>
+
+<p>With half-edge collapses, every vertex a level uses is an original vertex. So a level is only a new <b>index list</b> into the same vertex buffer.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="One vertex buffer of 16 vertices in the middle. Above, LOD 0's index list uses all of them. Below, LOD 2's index list uses only 5 of them, spread over the buffer.">
+    <text x="20" y="40" class="title">LOD 0</text>
+    <text x="20" y="56" class="small">indices</text>
+    <rect x="130" y="26" width="608" height="30" rx="3" class="box"/>
+    <text x="434" y="46" class="mid small">uses every vertex</text>
+    <line x1="149" y1="56" x2="149" y2="98" class="arrow" marker-end="url(#ah)"/>
+    <line x1="301" y1="56" x2="301" y2="98" class="arrow" marker-end="url(#ah)"/>
+    <line x1="453" y1="56" x2="453" y2="98" class="arrow" marker-end="url(#ah)"/>
+    <line x1="605" y1="56" x2="605" y2="98" class="arrow" marker-end="url(#ah)"/>
+    <line x1="719" y1="56" x2="719" y2="98" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="20" y="114" class="title t-mem">vertices</text>
+    <text x="20" y="130" class="small">stored once</text>
+    <rect x="130" y="100" width="38" height="36" rx="3" class="mem"/>
+    <rect x="168" y="100" width="38" height="36" rx="3" class="mem"/>
+    <rect x="206" y="100" width="38" height="36" rx="3" class="mem"/>
+    <rect x="244" y="100" width="38" height="36" rx="3" class="mem"/>
+    <rect x="282" y="100" width="38" height="36" rx="3" class="mem"/>
+    <rect x="320" y="100" width="38" height="36" rx="3" class="mem"/>
+    <rect x="358" y="100" width="38" height="36" rx="3" class="mem"/>
+    <rect x="396" y="100" width="38" height="36" rx="3" class="mem"/>
+    <rect x="434" y="100" width="38" height="36" rx="3" class="mem"/>
+    <rect x="472" y="100" width="38" height="36" rx="3" class="mem"/>
+    <rect x="510" y="100" width="38" height="36" rx="3" class="mem"/>
+    <rect x="548" y="100" width="38" height="36" rx="3" class="mem"/>
+    <rect x="586" y="100" width="38" height="36" rx="3" class="mem"/>
+    <rect x="624" y="100" width="38" height="36" rx="3" class="mem"/>
+    <rect x="662" y="100" width="38" height="36" rx="3" class="mem"/>
+    <rect x="700" y="100" width="38" height="36" rx="3" class="mem"/>
+
+    <text x="20" y="194" class="title t-hot">LOD 2</text>
+    <text x="20" y="210" class="small">indices</text>
+    <rect x="130" y="180" width="152" height="30" rx="3" class="hot"/>
+    <text x="206" y="200" class="mid small">5 vertices, spread out</text>
+    <path d="M170,180 C175,165 185,150 187,138" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <path d="M220,180 C260,165 320,150 339,138" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <path d="M250,180 C330,165 460,150 491,138" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <path d="M270,184 C400,175 570,155 605,138" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <path d="M282,195 C450,195 690,165 719,138" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+  </svg>
+  <figcaption>The coarse level reads few vertices, but they are far apart in memory, so the GPU fetches more cache lines per vertex. Some engines reorder the vertices so coarse levels use the front of the buffer (each level is a prefix), which fixes this.</figcaption>
+</figure>
+
+<h3>Worked example: the memory cost</h3>
+
+<p>A mesh with 100,000 triangles and 50,000 vertices of 64 bytes, with 32-bit indices. Seven coarser levels, each half the one before:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>Size</th></tr>
+  <tr><td>Vertices: 50,000 × 64 B</td><td>3.20 MB</td></tr>
+  <tr><td>LOD 0 indices: 100,000 × 3 × 4 B</td><td>1.20 MB</td></tr>
+  <tr><td>LOD 1 to 7 indices: 99,219 triangles × 12 B</td><td>1.19 MB, <b>+27%</b> on the whole mesh</td></tr>
+  <tr><td>If each level had its own vertices too: about 49,600 more × 64 B</td><td>+3.18 MB more, <b>+99%</b> in total</td></tr>
+</table>
+</div>
+
+<p>Sharing the vertex buffer makes the whole chain cost about a quarter of the mesh instead of doubling it. The price is the quality of half-edge collapses, and the scattered fetches of coarse levels.</p>
+
+<h3>After simplifying</h3>
+
+<p>Each level's triangles come out in the order the collapses left them. Reorder them for the GPU's <b>vertex cache</b> (so a vertex shared by neighbouring triangles is shaded once), like any other index buffer.</p>
+
+<h2 id="in-rasm"><span class="n">11</span>In RASM</h2>
+
+<p>RASM builds LODs for every sub-mesh as it loads, with the meshoptimizer library: <code>buildMeshLods</code> calls <code>meshopt_simplify</code>, which is the quadric edge collapse from this page, with half-edge collapses onto existing vertices.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="buildMeshLods first welds identical vertices. Then it simplifies LOD 0 to LOD 1 with half the triangles, LOD 1 to LOD 2, and so on. It makes no levels for meshes under 1024 triangles. The chain stops at 8 levels, when the next target is under 64 triangles, or when a step removes under a tenth. Each level's error adds up the errors of the steps.">
+    <text x="550" y="16" class="mid small t-cpu">each step: meshopt_simplify to half of the one before</text>
+    <path d="M430,24 V28 H670 V24" class="arrow cpu"/>
+
+    <rect x="20" y="34" width="120" height="52" rx="6" class="cpu"/>
+    <text x="80" y="56" class="mid title">ObjRaw</text>
+    <text x="80" y="74" class="mid small">from the importer</text>
+    <line x1="140" y1="60" x2="158" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="160" y="34" width="140" height="52" rx="6" class="cpu"/>
+    <text x="230" y="56" class="mid title">weldVertices</text>
+    <text x="230" y="74" class="mid small">identical ones → one</text>
+    <line x1="300" y1="60" x2="318" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="320" y="34" width="100" height="52" rx="6" class="cpu"/>
+    <text x="370" y="56" class="mid title">LOD 0</text>
+    <text x="370" y="74" class="mid small">N triangles</text>
+    <line x1="420" y1="60" x2="438" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="440" y="34" width="100" height="52" rx="6" class="cpu"/>
+    <text x="490" y="56" class="mid title">LOD 1</text>
+    <text x="490" y="74" class="mid small">≈ N/2 · e1</text>
+    <line x1="540" y1="60" x2="558" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="560" y="34" width="100" height="52" rx="6" class="cpu"/>
+    <text x="610" y="56" class="mid title">LOD 2</text>
+    <text x="610" y="74" class="mid small">≈ N/4 · e1 + e2</text>
+    <line x1="660" y1="60" x2="678" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="680" y="34" width="60" height="52" rx="6" class="cpu"/>
+    <text x="710" y="64" class="mid title">…</text>
+
+    <rect x="20" y="116" width="230" height="84" rx="6" class="zone"/>
+    <text x="32" y="136" class="title">No LODs when</text>
+    <text x="32" y="156" class="small">the sub-mesh has under 1024 triangles</text>
+    <text x="32" y="172" class="small">(MIN_LOD_TRIANGLES), or</text>
+    <text x="32" y="188" class="small">EngineConfig::meshLods is false</text>
+
+    <rect x="265" y="116" width="270" height="84" rx="6" class="zone"/>
+    <text x="277" y="136" class="title">The chain stops at</text>
+    <text x="277" y="154" class="small">8 levels, LOD 0 included (MAX_MESH_LODS),</text>
+    <text x="277" y="170" class="small">a next target under 64 triangles, or a step</text>
+    <text x="277" y="186" class="small">that removes under a tenth of the triangles</text>
+
+    <rect x="550" y="116" width="190" height="84" rx="6" class="zone"/>
+    <text x="562" y="136" class="title">The error</text>
+    <text x="562" y="154" class="small">adds up the steps' errors,</text>
+    <text x="562" y="170" class="small">in the mesh's own units,</text>
+    <text x="562" y="186" class="small">so it never gets smaller</text>
+
+    <text x="20" y="232" class="small">Every level is an index list into the same welded vertices (ObjRaw::lods, from fine to coarse).</text>
+  </svg>
+  <figcaption>The OBJ importer gives every face corner its own vertex, and simplification only collapses edges between triangles that share vertices. So <code>weldVertices</code> merges identical vertices first (same position, normal, UVs and tangent), with <code>meshopt_generateVertexRemap</code>.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Algorithm</td><td>quadric edge collapse</td><td>The same, through <code>meshopt_simplify</code> (meshoptimizer, from vcpkg).</td></tr>
+  <tr><td>Collapse type</td><td>full or half-edge</td><td>Half-edge: every level indexes the original vertices. No new positions.</td></tr>
+  <tr><td>What the cost covers</td><td>position, or also attributes</td><td>Position only. Seams survive through meshoptimizer's seam rules (vertices with equal positions), but normals and UVs inside an island are not in the cost.</td></tr>
+  <tr><td>Borders</td><td>border planes, or a lock</td><td>Locked (<code>meshopt_SimplifyLockBorder</code>). Sub-meshes of one model meet along their borders and pick their levels on their own, so the seam must not crack. <code>tests/meshLodTests.cpp</code> checks that every level keeps every border vertex.</td></tr>
+  <tr><td>Each level from</td><td>the original, or the level before</td><td>The level before. A level's error is the sum of its steps' errors: a safe bound against LOD 0, never smaller than the level before's.</td></tr>
+  <tr><td>Error units</td><td>absolute or relative</td><td>Absolute, in the mesh's own units (<code>meshopt_SimplifyErrorAbsolute</code>). Stored per level in <code>MeshLod</code>, then <code>GeometryLod</code>; LOD 0 has 0.</td></tr>
+  <tr><td>Targets</td><td>half per level; stop rules</td><td>Half per level, with no error limit. No levels under 1024 triangles (<code>MIN_LOD_TRIANGLES</code>). Stops at <code>MAX_MESH_LODS</code> = 8 levels with LOD 0, when the next target is under 64 triangles (<code>MIN_LAST_LOD_TRIANGLES</code>), or when a step keeps over 90% of the triangles.</td></tr>
+  <tr><td>Sloppy</td><td>for far levels and as a fallback</td><td>Not used. A mesh made of many small separate parts stalls early and gets few levels.</td></tr>
+  <tr><td>Sharing vertices</td><td>one vertex buffer, an index list per level</td><td>Yes. <code>GeometryPool::upload</code> writes the vertices once, then LOD 0's indices followed by each coarser level's. All levels share the sub-mesh's <code>vertexOffset</code>. A level costs only its indices (<code>lodIndexCount</code>, counted by <code>getMeshByteSize</code>).</td></tr>
+  <tr><td>Vertex order for coarse levels</td><td>reorder so each level is a prefix</td><td>Not done: coarse levels fetch scattered vertices. Each coarser level's triangles are reordered with <code>meshopt_optimizeVertexCache</code>; LOD 0 keeps the importer's order.</td></tr>
+  <tr><td>Speed</td><td>—</td><td><code>meshopt_SimplifySparse</code>: a coarse level only uses a few of the vertices, so the work follows its indices, not the vertex count.</td></tr>
+  <tr><td>When</td><td>offline or at load</td><td>At load. <code>loadMesh</code> runs it on the worker (see <a href="asset-streaming.html#in-rasm">Streaming assets</a>); <code>createMesh</code> runs it on the main thread. <code>EngineConfig::meshLods</code> (on by default) turns it off.</td></tr>
+</table>
+</div>
+
+<h3>Where the levels are stored</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 275" role="img" aria-label="In the geometry pool, a sub-mesh's indices are LOD 0 followed by LOD 1, 2 and 3, each about half the one before. All of them point into the same vertices, stored once. The sub-mesh's geometry table row has vertexOffset, lodCount and one firstIndex, indexCount and error per level.">
+    <text x="20" y="54" class="title t-mem">indices</text>
+    <text x="20" y="70" class="small">in the pool</text>
+    <rect x="150" y="34" width="300" height="46" rx="4" class="mem"/>
+    <text x="300" y="54" class="mid title">LOD 0</text>
+    <text x="300" y="71" class="mid small">all N triangles · error 0</text>
+    <rect x="450" y="34" width="150" height="46" rx="4" class="mem"/>
+    <text x="525" y="54" class="mid title">LOD 1</text>
+    <text x="525" y="71" class="mid small">≈ N / 2</text>
+    <rect x="600" y="34" width="76" height="46" rx="4" class="mem"/>
+    <text x="638" y="54" class="mid title">LOD 2</text>
+    <text x="638" y="71" class="mid small">≈ N / 4</text>
+    <rect x="676" y="34" width="40" height="46" rx="4" class="mem"/>
+    <text x="696" y="62" class="mid title">3</text>
+    <path d="M150,24 V18 H716 V24" class="arrow"/>
+    <text x="433" y="12" class="mid small">one after another, from firstIndex</text>
+
+    <line x1="300" y1="80" x2="300" y2="142" class="arrow dashed" marker-end="url(#ah)"/>
+    <line x1="525" y1="80" x2="395" y2="142" class="arrow dashed" marker-end="url(#ah)"/>
+    <line x1="638" y1="80" x2="425" y2="142" class="arrow dashed" marker-end="url(#ah)"/>
+    <line x1="696" y1="80" x2="445" y2="142" class="arrow dashed" marker-end="url(#ah)"/>
+
+    <text x="20" y="168" class="title t-mem">vertices</text>
+    <text x="20" y="184" class="small">in the pool</text>
+    <rect x="150" y="146" width="300" height="46" rx="4" class="mem"/>
+    <text x="300" y="166" class="mid title">the sub-mesh's vertices, once</text>
+    <text x="300" y="183" class="mid small">every level points into them</text>
+
+    <rect x="500" y="146" width="240" height="96" rx="6" class="mem"/>
+    <text x="620" y="166" class="mid title">GeometryData row</text>
+    <text x="514" y="186" class="mono small">vertexOffset, bounds</text>
+    <text x="514" y="202" class="mono small">lodCount = 4</text>
+    <text x="514" y="218" class="mono small">lods[i]:</text>
+    <text x="520" y="234" class="mono small">firstIndex, indexCount, error</text>
+
+    <text x="20" y="266" class="small">The row has room for MAX_MESH_LODS levels; lodCount says how many are real.</text>
+  </svg>
+  <figcaption><code>GeometryPool::upload</code> writes this layout and one <code>GeometryData</code> row per sub-mesh. The cull shader reads the row to pick a level and swaps the draw's index range: see <a href="lod-selection.html#in-rasm">LOD selection</a>.</figcaption>
+</figure>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Building the chain</td><td><code>buildMeshLods</code>, <code>weldVertices</code>, <code>MIN_LOD_TRIANGLES</code>, <code>MIN_LAST_LOD_TRIANGLES</code> in <code>src/assets/meshLod.cpp</code></td></tr>
+  <tr><td>Where it is called</td><td><code>Engine::loadMesh</code> (worker) and <code>Engine::createMesh</code> in <code>src/assets/mesh.cpp</code></td></tr>
+  <tr><td>CPU result</td><td><code>MeshLod</code>, <code>ObjRaw</code>, <code>MAX_MESH_LODS</code> in <code>include/rasm/mesh.h</code></td></tr>
+  <tr><td>The switch</td><td><code>EngineConfig::meshLods</code> in <code>include/rasm/types.h</code></td></tr>
+  <tr><td>Pool layout and table row</td><td><code>GeometryPool::upload</code> in <code>src/renderer/geometryPool.cpp</code></td></tr>
+  <tr><td>GPU struct</td><td><code>GeometryLod</code>, <code>GeometryData</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
+  <tr><td>Tests (no GPU)</td><td><code>tests/meshLodTests.cpp</code>: a chain that shares welded vertices with growing errors, locked borders, no levels for a small mesh</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Every level indexes the sub-mesh's own vertices: they share one <code>vertexOffset</code>. Per-level vertices would need a new field in <code>GeometryLod</code>.</li>
+    <li>Errors never get smaller from one level to the next, and LOD 0's is 0. <code>selectLod</code> assumes that a coarser level never has a smaller error.</li>
+    <li>Borders stay locked, or sub-meshes that meet can crack.</li>
+    <li><code>MAX_MESH_LODS</code> is the same in <code>include/rasm/mesh.h</code> and <code>core.slang</code>. A change to <code>GeometryData</code> follows <a href="struct-layout.html">the struct contract</a>.</li>
+    <li><code>buildMeshLods</code> runs on worker threads: it must not touch the engine.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>No attribute-aware cost, no sloppy fallback, no vertex reordering for coarse levels (development plan, phase 2). Levels cannot be streamed in and out of the pool, because nothing is ever freed from it (D4).</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Michael Garland and Paul Heckbert, <i>Surface Simplification Using Quadric Error Metrics</i>, SIGGRAPH 1997.</li>
+  <li>Michael Garland and Paul Heckbert, <i>Simplifying Surfaces with Color and Texture using Quadric Error Metrics</i>, IEEE Visualization 1998.</li>
+  <li>Hugues Hoppe, <i>Progressive Meshes</i>, SIGGRAPH 1996; and <i>New Quadric Metric for Simplifying Meshes with Appearance Attributes</i>, IEEE Visualization 1999.</li>
+  <li>Jarek Rossignac and Paul Borrel, <i>Multi-resolution 3D Approximations for Rendering Complex Scenes</i> (1993): vertex clustering.</li>
+  <li>David Luebke and others, <i>Level of Detail for 3D Graphics</i> (2002).</li>
+  <li>Arseny Kapoulkine, <i>meshoptimizer</i>: the library RASM uses, with notes on its simplifier in its README.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

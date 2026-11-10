@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU Timing · RASM</title>
+<meta name="description" content="How to measure a frame: CPU time and GPU time, timestamp queries, reading results frames later without stalling, per-pass timers, GPU counters written with atomics and read back, 64-bit counts from 32-bit atomics, smoothing, memory numbers, and how RASM does it.">
+<meta name="rasm-sources" content="src/renderer/frameStats.cpp src/renderer/frameStats.h include/rasm/engine.h src/engine.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/renderGraph.cpp shaders/passes/cull.slang src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/platform/window.cpp include/rasm/render/resource.h">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/gpu-timing.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Culling and the frame</p>
+<h1>GPU timing and frame statistics</h1>
+<p class="lead">To make a renderer faster, you first need to know where the time goes and how much work the GPU really did. That is harder than it sounds: the GPU runs later than the CPU, on its own clock, and its results come back frames later. This page explains how engines measure GPU time and count GPU work without slowing the frame down. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>The CPU <b>records</b> commands; the GPU <b>runs</b> them later. A CPU timer around a draw call measures the recording, not the drawing.</li>
+    <li>A <b>timestamp query</b> asks the GPU to write its own clock into a <b>query pool</b> when it reaches a point in the command stream. Two timestamps give the time of the work between them.</li>
+    <li>Ticks become nanoseconds with the <b>timestamp period</b>. Only the low <b>valid bits</b> count, so the difference must be taken modulo 2<sup>bits</sup>.</li>
+    <li>Results are read after the frame's fence, so they arrive <b>N frames late</b> (N = frames in flight), and the CPU never waits for them.</li>
+    <li>Shaders can count their own work (objects culled, triangles kept) with <b>atomics</b> into a small buffer that the CPU reads the same way. A 64-bit count can be built from 32-bit atomics with a <b>carry</b>.</li>
+    <li>Single-frame numbers are noisy: average them, or refresh the text slowly, so that people can read them.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>Two clocks: CPU time and GPU time</h2>
+
+<p>A frame has two kinds of time. <b>CPU time</b> is how long the CPU works on the frame: game logic, culling, recording command buffers. <b>GPU time</b> is how long the GPU works on it: running the shaders, writing pixels. The two run at the same time, on different frames.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A timeline with two rows. The CPU records frame 1, then frame 2, then frame 3. The GPU runs frame 1 while the CPU records frame 2, and frame 2 while the CPU records frame 3. The frame rate is set by the slower of the two.">
+    <line x1="90" y1="30" x2="750" y2="30" class="arrow" marker-end="url(#ah)"/>
+    <text x="20" y="34" class="small">time →</text>
+    <text x="20" y="74" class="title t-cpu">CPU</text>
+    <rect x="90" y="54" width="160" height="34" rx="4" class="cpu"/>
+    <text x="170" y="76" class="mid small">record frame 1</text>
+    <rect x="260" y="54" width="160" height="34" rx="4" class="cpu"/>
+    <text x="340" y="76" class="mid small">record frame 2</text>
+    <rect x="430" y="54" width="160" height="34" rx="4" class="cpu"/>
+    <text x="510" y="76" class="mid small">record frame 3</text>
+    <rect x="600" y="54" width="140" height="34" rx="4" class="ghost"/>
+    <text x="670" y="76" class="mid small t-faint">wait for a slot</text>
+    <text x="20" y="134" class="title t-gpu">GPU</text>
+    <rect x="250" y="114" width="230" height="34" rx="4" class="gpu"/>
+    <text x="365" y="136" class="mid small">run frame 1</text>
+    <rect x="480" y="114" width="230" height="34" rx="4" class="gpu"/>
+    <text x="595" y="136" class="mid small">run frame 2</text>
+    <line x1="250" y1="88" x2="250" y2="112" class="arrow dashed" marker-end="url(#ah)"/>
+    <line x1="420" y1="88" x2="480" y2="112" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="256" y="104" class="small">submit</text>
+    <text x="90" y="186" class="small">Here the GPU needs 230 units per frame and the CPU 160. The GPU is the slower one: the frame</text>
+    <text x="90" y="202" class="small">is <tspan class="t-hot">GPU-bound</tspan>, and the CPU ends up waiting. Making the CPU faster would change nothing.</text>
+    <text x="90" y="226" class="small">If the CPU were slower, the GPU would sit idle between frames: <tspan class="t-hot">CPU-bound</tspan>.</text>
+  </svg>
+  <figcaption>The frame rate follows the slower side. So the first question of any optimization is "which side is slow?", and that needs both numbers.</figcaption>
+</figure>
+
+<p>The time from one frame start to the next is the <b>frame time</b>. It is easy to measure on the CPU, and it is what the player feels. But it is neither the CPU time nor the GPU time: it is the larger of the two, plus any waiting. With vertical sync on, it is also rounded up to the display's refresh interval (16.7 ms at 60 Hz), even if both sides finish in 3 ms.</p>
+
+<h2><span class="n">2</span>Why the CPU cannot time GPU work</h2>
+
+<p>The obvious idea fails: start a CPU timer before a draw call and stop it after. The draw call only <i>writes a command</i> into a command buffer. It returns in microseconds, long before the GPU starts it. Waiting for the GPU does not work either:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>CPU-side attempt</th><th>What it really measures</th></tr>
+  <tr><td>Timer around the draw call</td><td>the cost of recording the command</td></tr>
+  <tr><td>Timer from submit to "the fence is signalled"</td><td>the GPU work plus the queue wait (earlier frames still running), the driver's delay, and the moment the CPU noticed the fence</td></tr>
+  <tr><td>Submit each pass alone and wait for it</td><td>the pass, but the GPU now idles between passes and cannot overlap them. The frame becomes much slower, and the numbers describe that slower frame.</td></tr>
+</table>
+</div>
+
+<p>The only reliable clock for GPU work is the GPU's own clock. The GPU must write it down at the right moments, while it runs the frame as usual.</p>
+
+<h2><span class="n">3</span>Timestamp queries</h2>
+
+<p>A <b>query</b> is a small slot that the GPU fills with an answer. A <b>query pool</b> is an array of them. A <b>timestamp</b> query is filled with the value of the GPU's clock. The command that fills it goes into the command buffer, between other commands, like a bookmark:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A command buffer: write timestamp 0, draw, draw, dispatch, write timestamp 1, draw, write timestamp 2. When the GPU reaches each timestamp command, it writes its clock into that slot of the query pool: 1,250,000, 1,280,000 and 1,292,500 ticks. The differences times the period give the time of each part.">
+    <text x="20" y="24" class="small">command buffer</text>
+    <rect x="20" y="34" width="70" height="40" rx="4" class="hot"/>
+    <text x="55" y="58" class="mid mono small">ts 0</text>
+    <rect x="96" y="34" width="80" height="40" rx="4" class="box"/>
+    <text x="136" y="58" class="mid small">draw</text>
+    <rect x="182" y="34" width="80" height="40" rx="4" class="box"/>
+    <text x="222" y="58" class="mid small">draw</text>
+    <rect x="268" y="34" width="80" height="40" rx="4" class="box"/>
+    <text x="308" y="58" class="mid small">dispatch</text>
+    <rect x="354" y="34" width="70" height="40" rx="4" class="hot"/>
+    <text x="389" y="58" class="mid mono small">ts 1</text>
+    <rect x="430" y="34" width="80" height="40" rx="4" class="box"/>
+    <text x="470" y="58" class="mid small">draw</text>
+    <rect x="516" y="34" width="70" height="40" rx="4" class="hot"/>
+    <text x="551" y="58" class="mid mono small">ts 2</text>
+
+    <line x1="55" y1="74" x2="55" y2="132" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="389" y1="74" x2="200" y2="132" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="551" y1="74" x2="330" y2="132" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="400" y="110" class="small">the GPU writes its clock when it gets there</text>
+
+    <text x="20" y="128" class="small">query pool</text>
+    <rect x="20" y="136" width="130" height="40" rx="4" class="mem"/>
+    <text x="85" y="160" class="mid mono small">1,250,000</text>
+    <rect x="150" y="136" width="130" height="40" rx="4" class="mem"/>
+    <text x="215" y="160" class="mid mono small">1,280,000</text>
+    <rect x="280" y="136" width="130" height="40" rx="4" class="mem"/>
+    <text x="345" y="160" class="mid mono small">1,292,500</text>
+    <rect x="410" y="136" width="130" height="40" rx="4" class="ghost"/>
+    <text x="475" y="160" class="mid small t-faint">unused</text>
+
+    <text x="20" y="206" class="mono small">part A = (1,280,000 − 1,250,000) ticks × 40 ns = 1.20 ms</text>
+    <text x="20" y="226" class="mono small">part B = (1,292,500 − 1,280,000) ticks × 40 ns = 0.50 ms</text>
+    <text x="560" y="206" class="small">(example period: 40 ns</text>
+    <text x="560" y="222" class="small">per tick)</text>
+  </svg>
+  <figcaption>A timestamp is a raw tick count. Only differences between two timestamps of the same queue mean something.</figcaption>
+</figure>
+
+<h3>What the API tells you about the clock</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Value (Vulkan name)</th><th>Meaning</th><th>Use</th></tr>
+  <tr><td><b>Timestamp period</b> (<samp>timestampPeriod</samp>)</td><td>nanoseconds per tick, a float. Often 1, but it can be 10, 41.7, 52.1, … depending on the GPU.</td><td>ns = ticks × period</td></tr>
+  <tr><td><b>Valid bits</b> (<samp>timestampValidBits</samp>, per queue family)</td><td>how many low bits of the 64-bit value are real. 0 means the queue has no timestamps.</td><td>take differences modulo 2<sup>bits</sup> (below)</td></tr>
+  <tr><td>Pipeline stage of the write</td><td>the timestamp is written once all earlier commands have <i>finished</i> that stage</td><td>use "all commands" (or "bottom of pipe") to mean "everything before is done"</td></tr>
+</table>
+</div>
+
+<h3>Wrap-around</h3>
+
+<p>With fewer than 64 valid bits, the counter wraps back to 0 now and then. A pass that straddles the wrap has an end timestamp smaller than its begin. Plain subtraction then gives a huge number. The fix is to subtract and keep only the valid bits; that is subtraction modulo 2<sup>bits</sup>:</p>
+
+<pre><code class="lang-text">mask  = 2^bits − 1                      bits = 32 → mask = 0xFFFFFFFF
+ticks = (end − begin) &amp; mask
+
+begin = 0xFFFFF000   end = 0x00001000   (the counter wrapped in between)
+ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
+      → 8192 × 40 ns = 0.328 ms</code></pre>
+
+<p>This works as long as the measured work is shorter than one full turn of the counter. Even with 32 bits and a 1 ns tick, a turn is 4.3 seconds.</p>
+
+<h3>Rules of query pools</h3>
+
+<ol class="steps">
+  <li><b>Reset before use.</b>A query must be reset before the GPU writes it again, either by a command in a command buffer or, where supported, from the CPU (Vulkan 1.2 "host query reset").</li>
+  <li><b>Read after the GPU is done.</b>Reading earlier either fails ("not ready") or, with a "wait" flag, blocks the CPU until the GPU gets there.</li>
+  <li><b>Do not reuse while in flight.</b>A pool that the GPU is still writing cannot be reset by the CPU. With several frames in flight, each frame needs its own pool (section 4).</li>
+</ol>
+
+<h2><span class="n">4</span>Reading results without stalling</h2>
+
+<p>The timestamps of frame N are written while the GPU runs frame N, which is after the CPU has moved on. If the CPU waited for them right away, it would lose the overlap of section 1. Instead, each <a href="frames-in-flight.html">frame-in-flight</a> slot gets its own query pool. The CPU reads a slot's pool at the moment it must wait for that slot anyway: after the slot's fence, just before it records the slot's next frame.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Two frames in flight. Frame N uses slot A and writes its timestamps into pool A. Frame N+1 uses slot B. Frame N+2 uses slot A again: it waits for frame N's fence, reads pool A, resets it, and records new timestamps into it. The numbers shown during frame N+2 belong to frame N.">
+    <line x1="90" y1="30" x2="750" y2="30" class="arrow" marker-end="url(#ah)"/>
+    <text x="20" y="34" class="small">time →</text>
+    <text x="200" y="20" class="mid small">frame N · slot A</text>
+    <text x="410" y="20" class="mid small">frame N+1 · slot B</text>
+    <text x="620" y="20" class="mid small">frame N+2 · slot A</text>
+
+    <text x="20" y="84" class="title t-cpu">CPU</text>
+    <rect x="90" y="46" width="220" height="74" rx="6" class="cpu"/>
+    <text x="200" y="68" class="mid title">record frame N</text>
+    <text x="200" y="88" class="mid small">timestamp commands → pool A</text>
+    <text x="200" y="106" class="mid small">submit, fence value v</text>
+    <rect x="330" y="46" width="160" height="74" rx="6" class="ghost"/>
+    <text x="410" y="88" class="mid small t-faint">uses pool B</text>
+    <rect x="510" y="46" width="240" height="74" rx="6" class="cpu"/>
+    <text x="522" y="66" class="small">1. wait for fence value v</text>
+    <text x="522" y="84" class="small">2. read pool A: frame N's times</text>
+    <text x="522" y="102" class="small">3. reset pool A, record frame N+2</text>
+
+    <rect x="330" y="140" width="160" height="34" rx="6" class="mem"/>
+    <text x="410" y="162" class="mid small">pool A</text>
+    <line x1="300" y1="200" x2="350" y2="176" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="258" y="196" class="small t-gpu">writes</text>
+    <line x1="490" y1="157" x2="560" y2="122" class="arrow" marker-end="url(#ah)"/>
+    <text x="566" y="150" class="small">reads, after the wait: no stall</text>
+
+    <text x="20" y="236" class="title t-gpu">GPU</text>
+    <rect x="160" y="200" width="300" height="60" rx="6" class="gpu"/>
+    <text x="310" y="226" class="mid title">frame N runs</text>
+    <text x="310" y="246" class="mid small">writes the timestamps into pool A</text>
+    <rect x="470" y="200" width="240" height="60" rx="6" class="ghost"/>
+    <text x="590" y="234" class="mid small t-faint">frame N+1 runs</text>
+    <text x="90" y="290" class="small">With N frames in flight, the numbers you show are N frames old. At 60 fps and N = 2, that is 33 ms: nobody can tell.</text>
+  </svg>
+  <figcaption>The CPU already waits for the fence before it reuses a slot. Reading the queries there costs no extra waiting, and the pool is free to reset.</figcaption>
+</figure>
+
+<p>The same pattern works for anything the GPU writes for the CPU: counters (section 7), readback of pixels, GPU-generated lists. A frame that was recorded but never submitted wrote nothing, so the reader must notice that (for example, by checking that the fence value moved) and skip the slot.</p>
+
+<h2><span class="n">5</span>Per-pass timers</h2>
+
+<p>A timer is a pair of timestamps: one before a piece of work, one after it. Put a pair around the whole frame and one around each pass, and you have a profile of the frame. A pool with 2<var>k</var> queries holds <var>k</var> timers: timer <var>i</var> uses query 2<var>i</var> for its begin and 2<var>i</var> + 1 for its end.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="Timers on a GPU timeline. A compute pass runs from 0 to 0.05 ms in its own command buffer. The frame's command buffer runs from 0.05 to 1.31 ms. Inside it, a scene pass from 0.07 to 1.25 ms, and inside that a nested timer from 0.45 to 0.53 ms. The frame time is the earliest begin to the latest end: 1.31 ms.">
+    <line x1="60" y1="190" x2="745" y2="190" class="arrow" marker-end="url(#ah)"/>
+    <line x1="60" y1="186" x2="60" y2="194" class="arrow"/>
+    <line x1="316" y1="186" x2="316" y2="194" class="arrow"/>
+    <line x1="571" y1="186" x2="571" y2="194" class="arrow"/>
+    <line x1="730" y1="186" x2="730" y2="194" class="arrow"/>
+    <text x="60" y="210" class="mid mono small">0</text>
+    <text x="316" y="210" class="mid mono small">0.5</text>
+    <text x="571" y="210" class="mid mono small">1.0</text>
+    <text x="730" y="210" class="mid mono small">1.31 ms</text>
+    <rect x="60" y="40" width="26" height="34" rx="4" class="gpu"/>
+    <text x="60" y="30" class="small">compute 0 – 0.05</text>
+    <rect x="86" y="40" width="644" height="34" rx="4" class="gpu"/>
+    <text x="408" y="62" class="mid small">frame command buffer 0.05 – 1.31</text>
+    <rect x="96" y="84" width="603" height="34" rx="4" class="gpu"/>
+    <text x="200" y="106" class="mid small">scene pass 0.07 – 1.25</text>
+    <rect x="290" y="128" width="41" height="34" rx="4" class="box"/>
+    <text x="340" y="150" class="small">nested 0.45 – 0.53</text>
+    <text x="60" y="234" class="small">Frame GPU time = latest end − earliest begin = 1.31 ms, even though the frame command buffer timer alone says 1.26.</text>
+  </svg>
+  <figcaption>Timers can nest. The work of two command buffers can also run back to back, or even overlap, so the frame's GPU time is best taken from the earliest begin to the latest end of all timers.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Thing to know</th><th>Why it matters</th></tr>
+  <tr><td>Pass times do not add up to the frame time</td><td>A GPU overlaps work: the next pass may start before the previous one has fully drained. Nested timers are counted twice if added.</td></tr>
+  <tr><td>Timestamps are cheap, not free</td><td>A timestamp waits for earlier work to reach its stage. Many timers inside a pass can reduce overlap a little. A few per pass are fine.</td></tr>
+  <tr><td>Tile-based GPUs (most phones)</td><td>Inside a render pass, the GPU works tile by tile, not draw by draw. Timestamps between draws in one pass are not meaningful there; time whole passes.</td></tr>
+  <tr><td>Clock speed changes</td><td>A GPU with little work lowers its clock. A light frame can then show longer times than expected. Profile with a stable workload, or ask the driver for a stable clock.</td></tr>
+  <tr><td>Fixed pool size</td><td>A pool holds a fixed number of timers. When a frame wants more, the extra ones must be dropped, ideally with one warning, not one per frame.</td></tr>
+</table>
+</div>
+
+<h2><span class="n">6</span>Pipeline statistics, and other counters</h2>
+
+<p>Timestamps say how long. Other questions are "how much": how many vertices, triangles or pixels did the GPU really process? APIs have query types for that too:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Query type</th><th>Counts</th></tr>
+  <tr><td><b>Pipeline statistics</b></td><td>per pipeline stage: input vertices and primitives, vertex shader runs, primitives after clipping, fragment shader runs, compute shader runs. Chosen by flags when the pool is made.</td></tr>
+  <tr><td><b>Occlusion</b></td><td>samples that passed the depth test between begin and end. Used for occlusion tests and lens flares.</td></tr>
+  <tr><td>Vendor counters</td><td>cache hits, memory traffic, occupancy. Seen in tools like Nsight, Radeon GPU Profiler or PIX, not usually inside the engine.</td></tr>
+</table>
+</div>
+
+<p>Pipeline statistics have the same timing as timestamps (begin, end, read frames later). They are optional on some hardware and have a small cost. They cannot answer questions about the engine's own work, such as "how many objects did culling keep?". For that, the shaders count by themselves.</p>
+
+<h2><span class="n">7</span>Counting in shaders, with atomics</h2>
+
+<p>In a <a href="gpu-driven.html">GPU-driven</a> renderer the GPU decides what to draw, so the CPU does not know how many objects survived culling or how many triangles were drawn. The shader that decides can count. Thousands of threads add to the same counter, so the add must be an <b>atomic</b> operation: a read-modify-write that no other thread can interrupt.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Left: every thread adds 1 to a global counter with an atomic: 64 atomics per group, all on one address. Right: the threads of a group first add up their results in shared memory, and one thread adds the group's total with a single atomic.">
+    <text x="190" y="20" class="mid title">Naive: one atomic per thread</text>
+    <rect x="30" y="40" width="320" height="50" rx="6" class="gpu"/>
+    <text x="190" y="62" class="mid small">64 threads of one group</text>
+    <text x="190" y="80" class="mid small">each kept object: atomicAdd(counter, 1)</text>
+    <line x1="80" y1="90" x2="170" y2="168" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="140" y1="90" x2="180" y2="168" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="240" y1="90" x2="200" y2="168" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="300" y1="90" x2="210" y2="168" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <rect x="140" y="170" width="100" height="36" rx="4" class="mem"/>
+    <text x="190" y="193" class="mid small">counter</text>
+    <text x="190" y="232" class="mid small">thousands of atomics on one address: they queue up</text>
+
+    <text x="570" y="20" class="mid title">Better: reduce in the group first</text>
+    <rect x="410" y="40" width="320" height="50" rx="6" class="gpu"/>
+    <text x="570" y="62" class="mid small">64 threads write their result to shared memory</text>
+    <text x="570" y="80" class="mid small">one thread adds them up (or a wave/subgroup op)</text>
+    <line x1="570" y1="90" x2="570" y2="168" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="580" y="134" class="small">one atomicAdd(counter, total)</text>
+    <rect x="520" y="170" width="100" height="36" rx="4" class="mem"/>
+    <text x="570" y="193" class="mid small">counter</text>
+    <text x="570" y="232" class="mid small">64 times fewer atomics</text>
+  </svg>
+  <figcaption>The counter buffer is small and in memory that the CPU can read. It is zeroed before the frame and read after the frame's fence, exactly like the query pool in section 4.</figcaption>
+</figure>
+
+<h3>64-bit counts from 32-bit atomics</h3>
+
+<p>A 32-bit counter overflows at 4,294,967,295. A big scene can draw more triangles than that per frame. 64-bit atomics would fix it, but not every GPU and API has them: WebGPU has none, and Metal has them only on some GPUs and only for some operations. The trick: keep two 32-bit words, <b>low</b> and <b>high</b>, and carry by hand.</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. Add up a group's numbers in 64 bits</h4>
+    <svg viewBox="0 0 720 170" role="img" aria-label="One thread adds the group's 64 values into a low and a high word. When the 32-bit sum wraps, it is smaller than before, which is how the carry is detected.">
+      <text x="20" y="30" class="title">Inside one group, one thread</text>
+      <text x="20" y="58" class="mono">for each value x:</text>
+      <text x="40" y="80" class="mono">sum  = low + x</text>
+      <text x="40" y="102" class="mono">high = high + (sum &lt; low ? 1 : 0)</text>
+      <text x="40" y="124" class="mono">low  = sum</text>
+      <text x="400" y="58" class="small">A 32-bit add wraps past 4,294,967,295.</text>
+      <text x="400" y="76" class="small">After a wrap the sum is smaller than</text>
+      <text x="400" y="94" class="small">what we started with: that is the carry.</text>
+      <text x="20" y="156" class="small">This part has no atomics: one thread owns these two words.</text>
+    </svg>
+    <p>Unsigned 32-bit math wraps around, it does not fail. So "the result went down" means "it passed 2<sup>32</sup>".</p>
+  </div>
+  <div class="step">
+    <h4>2. Add the group's total to the buffer</h4>
+    <svg viewBox="0 0 720 210" role="img" aria-label="The buffer's low word holds 0xFFFFFF00. The group adds 0x200 with an atomic that returns the old value. The new low word is 0x100, smaller than the old value, so the group adds one more to the high word.">
+      <rect x="20" y="20" width="300" height="50" rx="6" class="mem"/>
+      <text x="170" y="42" class="mid small">low word</text>
+      <text x="170" y="60" class="mid mono">0xFFFFFF00 → 0x00000100</text>
+      <rect x="340" y="20" width="300" height="50" rx="6" class="mem"/>
+      <text x="490" y="42" class="mid small">high word</text>
+      <text x="490" y="60" class="mid mono">0 → 1</text>
+      <text x="20" y="104" class="mono">old = atomicAdd(low, 0x200)             // returns 0xFFFFFF00</text>
+      <text x="20" y="128" class="mono">carry = (old + 0x200 &lt; old) ? 1 : 0      // 0x100 &lt; old → 1</text>
+      <text x="20" y="152" class="mono">if (high + carry &gt; 0) atomicAdd(high, high + carry)</text>
+      <text x="20" y="190" class="small">Check: 0xFFFFFF00 + 0x200 = 0x1_00000100 → high 1, low 0x100. Every group detects its own carry, in any order.</text>
+    </svg>
+    <p>The atomic returns the value from just before this group's add. Only this group's add can have caused the wrap it sees, so each carry is counted exactly once.</p>
+  </div>
+  <div class="step">
+    <h4>3. Read it on the CPU</h4>
+    <svg viewBox="0 0 720 150" role="img" aria-label="After the fence the CPU reads both words and combines them: high shifted left by 32, or low.">
+      <rect x="20" y="20" width="200" height="50" rx="6" class="mem"/>
+      <text x="120" y="42" class="mid small">counter buffer</text>
+      <text x="120" y="60" class="mid mono small">low, high</text>
+      <line x1="220" y1="45" x2="298" y2="45" class="arrow" marker-end="url(#ah)"/>
+      <text x="259" y="36" class="mid small">after fence</text>
+      <rect x="300" y="20" width="400" height="50" rx="6" class="cpu"/>
+      <text x="500" y="50" class="mid mono">count = (uint64) high &lt;&lt; 32 | low</text>
+      <text x="20" y="104" class="small">The two words are written by separate atomics, so they only agree once all the GPU's adds are done.</text>
+      <text x="20" y="122" class="small">After the fence they are. Then they are zeroed for the next frame that uses this buffer.</text>
+    </svg>
+    <p>Reading in the middle of the frame could see a low word that has wrapped and a high word that has not been incremented yet. Reading after the fence avoids that.</p>
+  </div>
+</div>
+
+<h2><span class="n">8</span>Turning numbers into something readable</h2>
+
+<p>A frame time changes every frame by a little, and sometimes by a lot (a spike). Printing every frame's value makes an unreadable blur. Common fixes:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Method</th><th>How</th><th>Good for</th></tr>
+  <tr><td>Sample and hold</td><td>show the latest value, but update the text only a few times per second</td><td>the simplest; readable; hides spikes between updates</td></tr>
+  <tr><td>Mean over a window</td><td>keep the last <var>n</var> values in a ring, show their average</td><td>steady numbers; needs memory for <var>n</var> values</td></tr>
+  <tr><td><b>Exponential moving average</b></td><td>avg = avg + <var>α</var> · (value − avg), with <var>α</var> = 0.05 to 0.2</td><td>one number of state; reacts in about 1/<var>α</var> frames</td></tr>
+  <tr><td>Max, or percentiles</td><td>the worst frame of the last second; the 99th percentile ("1% low" fps)</td><td>stutter: the average hides it, the max shows it</td></tr>
+  <tr><td>A graph</td><td>a strip of the last few hundred frame times</td><td>seeing spikes and patterns at a glance</td></tr>
+</table>
+</div>
+
+<p>An example with <var>α</var> = 0.1. Frames take 16.7 ms, then one takes 40 ms, then 16.7 ms again. The average moves from 16.7 to 16.7 + 0.1 · (40 − 16.7) = 19.0, then to 19.0 + 0.1 · (16.7 − 19.0) = 18.8, and slowly back. The spike is visible, but it does not take over the display. The max of the last second would show 40.</p>
+
+<div class="callout">
+  <strong>Average times, not frames per second</strong>
+  <p>Frame rate is 1000 / ms, which is not linear. Two frames of 10 ms and 30 ms average 20 ms, which is 50 fps. Averaging their rates (100 fps and 33 fps) gives 67 fps, which is wrong. Average the times, then convert.</p>
+</div>
+
+<h2><span class="n">9</span>Measure only when someone looks</h2>
+
+<p>Timers, counters and readback are cheap but not free: a few commands per pass, some atomics in the shaders, a buffer read and a text update per frame. A common rule is to measure only while an overlay is shown or a tool asks for the numbers. Two details follow:</p>
+
+<ul>
+  <li>The first values arrive N frames after measuring starts (section 4). Until then, show zeros or nothing.</li>
+  <li>A counter that the shaders always add to (because skipping the atomics would need a shader branch) must be zeroed before the first measured frame, or it shows garbage from earlier frames.</li>
+</ul>
+
+<h2><span class="n">10</span>Memory numbers</h2>
+
+<p>The other number people ask for is "how much video memory do we use?". The API can tell, per <b>memory heap</b>:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Number</th><th>Meaning</th></tr>
+  <tr><td><b>Budget</b></td><td>how much of this heap the process can use now without trouble. It changes with what other programs use. Going over it makes the driver move memory around, which is slow.</td></tr>
+  <tr><td><b>Usage</b></td><td>how much of this heap the process uses now, counting everything: buffers, textures, the swapchain, the driver's own allocations.</td></tr>
+  <tr><td>Heap size</td><td>the total. It never changes, and it is not what you can really use.</td></tr>
+</table>
+</div>
+
+<p>In Vulkan these come from the <samp>VK_EXT_memory_budget</samp> extension. A heap marked <b>device-local</b> is video memory on a discrete GPU. On an integrated GPU, or with resizable BAR, device-local memory can also be visible to the CPU, so "device-local" and "video memory" are not exactly the same thing. See <a href="gpu-memory.html">GPU memory</a>.</p>
+
+<h2 id="in-rasm"><span class="n">11</span>In RASM</h2>
+
+<p>RASM collects one set of numbers per frame into a public <code>FrameStats</code>. The application reads it with <code>Engine::getFrameStats</code>; the <a href="bitmap-text.html#in-rasm">stats overlay</a> draws it on screen. Everything follows sections 3 to 9: timestamp pairs per pass, one query pool and one counter buffer per frame slot, read after the slot's fence.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 -12 760 312" role="img" aria-label="Five sources fill FrameStats: deltaTime gives cpuFrameMs, the timestamp query pool of the slot gives gpuFrameMs and gpuTimers, drawTotals gives draws and triangles, the cull stats buffer gives the visible counts and LOD counts, and queryVRAMStats gives memory. getFrameStats and the overlay read FrameStats.">
+    <rect x="15" y="20"  width="230" height="44" rx="6" class="cpu"/>
+    <text x="130" y="39" class="mid title">deltaTime</text>
+    <text x="130" y="56" class="mid small">time between frame starts</text>
+    <rect x="15" y="74"  width="230" height="44" rx="6" class="mem"/>
+    <text x="130" y="93" class="mid title">GPU Timers s</text>
+    <text x="130" y="110" class="mid small">timestamp query pool, per slot</text>
+    <rect x="15" y="128" width="230" height="44" rx="6" class="cpu"/>
+    <text x="130" y="147" class="mid title">drawTotals[s]</text>
+    <text x="130" y="164" class="mid small">summed on the CPU by drawScene</text>
+    <rect x="15" y="182" width="230" height="44" rx="6" class="mem"/>
+    <text x="130" y="201" class="mid title">Cull Stats Buffer s</text>
+    <text x="130" y="218" class="mid small">atomics from cull.slang</text>
+    <rect x="15" y="236" width="230" height="44" rx="6" class="cpu"/>
+    <text x="130" y="255" class="mid title">queryVRAMStats</text>
+    <text x="130" y="272" class="mid small">VK_EXT_memory_budget</text>
+
+    <line x1="245" y1="42"  x2="328" y2="42"  class="arrow" marker-end="url(#ah)"/>
+    <line x1="245" y1="96"  x2="328" y2="96"  class="arrow" marker-end="url(#ah)"/>
+    <line x1="245" y1="150" x2="328" y2="150" class="arrow" marker-end="url(#ah)"/>
+    <line x1="245" y1="204" x2="328" y2="204" class="arrow" marker-end="url(#ah)"/>
+    <line x1="245" y1="258" x2="328" y2="258" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="330" y="14" width="210" height="272" rx="8" class="box"/>
+    <text x="435" y="4" class="mid title">FrameStats</text>
+    <text x="345" y="46"  class="mono">cpuFrameMs</text>
+    <text x="345" y="84"  class="mono">gpuFrameMs</text>
+    <text x="345" y="100" class="mono">gpuTimers[]</text>
+    <text x="345" y="116" class="mono">gpuTimerCount</text>
+    <text x="345" y="146" class="mono">draws</text>
+    <text x="345" y="164" class="mono">triangles</text>
+    <text x="345" y="192" class="mono">drawsVisible</text>
+    <text x="345" y="208" class="mono">trianglesVisible</text>
+    <text x="345" y="224" class="mono">trianglesVisibleLod0</text>
+    <text x="345" y="240" class="mono">drawsPerLod[8]</text>
+    <text x="345" y="268" class="mono">memory</text>
+
+    <line x1="540" y1="110" x2="588" y2="84"  class="arrow" marker-end="url(#ah)"/>
+    <line x1="540" y1="190" x2="588" y2="214" class="arrow" marker-end="url(#ah)"/>
+    <rect x="590" y="58" width="160" height="54" rx="6" class="cpu"/>
+    <text x="670" y="80" class="mid title">getFrameStats()</text>
+    <text x="670" y="98" class="mid small">for the application</text>
+    <rect x="590" y="188" width="160" height="54" rx="6" class="cpu"/>
+    <text x="670" y="210" class="mid title">stats overlay</text>
+    <text x="670" y="228" class="mid small">text rebuilt every 250 ms</text>
+  </svg>
+  <figcaption><code>updateFrameStats</code> fills <code>FrameStats</code> once per frame, right after the fence wait of the frame's slot <var>s</var>. <code>cpuFrameMs</code> and <code>memory</code> are current; the GPU numbers belong to the slot's previous frame, two frames ago.</figcaption>
+</figure>
+
+<h3>The timers</h3>
+
+<p>Each slot has a pool of 2 × <code>MAX_GPU_TIMERS</code> = 32 timestamps, so 16 timers. Timer <var>i</var> writes queries 2<var>i</var> and 2<var>i</var> + 1, both with <code>vkCmdWriteTimestamp2</code> at the "all commands" stage.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Timer</th><th>Started by</th><th>Name</th></tr>
+  <tr><td>The frame's command buffer</td><td><code>beginFrame</code>, ended in <code>endFrame</code></td><td>"Frame" (always timer 0, not listed)</td></tr>
+  <tr><td>Each graphics pass</td><td><code>beginPass</code> / <code>endPass</code></td><td>the pass name: "Scene" in <code>Engine::render</code>, "Clear" for the empty swapchain pass, or the render graph pass's name</td></tr>
+  <tr><td>Each render graph compute pass</td><td><code>RenderGraph::execute</code></td><td>the pass name</td></tr>
+  <tr><td>Hi-Z build and late culling</td><td><code>recordOcclusionCulling</code>, once per occlusion-culled <code>drawScene</code>, nested in the pass's timer</td><td>"Hi-Z"</td></tr>
+  <tr><td>Early culling</td><td><code>beginCullingTimer</code> in <code>recordCulling</code>; always gets the last timer, which passes cannot take</td><td>"Culling"</td></tr>
+  <tr><td>The application's own work</td><td><code>Engine::beginGpuTimer</code> / <code>Engine::endGpuTimer</code></td><td>its own name</td></tr>
+</table>
+</div>
+
+<p>The culling command buffer is recorded last but submitted first, before the frame's command buffer. So, as in section 5, <code>gpuFrameMs</code> runs from the earliest timestamp to the latest end, and <code>gpuTimers</code> are sorted by start time ("Culling" comes first). <code>VulkanDevice::getTimestamps</code> turns the raw values into nanoseconds: each value becomes its signed distance from the first one, masked to <code>timestampValidBits</code> (the wrap rule of section 3), then the earliest is subtracted and the result multiplied by <code>timestampPeriod</code>. It reads without the wait flag, so a pool that is not ready returns nothing instead of stalling.</p>
+
+<h3>The counters</h3>
+
+<p>The cull shader counts what it keeps. Each slot has a <b>Cull Stats Buffer</b> of <code>CULL_STATS_WORDS</code> = 13 words, host-visible and host-readable. The <code>STATS_*</code> constants in <code>cull.slang</code> and the <code>CULL_STATS_*</code> ones in <code>gpuScene.h</code> name them:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Words</th><th>Holds</th><th>Becomes</th></tr>
+  <tr><td>[0]</td><td>visible draws</td><td><code>drawsVisible</code></td></tr>
+  <tr><td>[1] low, [2] high</td><td>visible triangles at the LOD culling picked</td><td><code>trianglesVisible</code></td></tr>
+  <tr><td>[3] low, [4] high</td><td>the same draws' triangles at LOD 0</td><td><code>trianglesVisibleLod0</code></td></tr>
+  <tr><td>[5] … [12]</td><td>visible draws at LOD 0 … 7</td><td><code>drawsPerLod</code></td></tr>
+</table>
+</div>
+
+<p><code>countMain</code> does what section 7 describes. Each thread writes its result to shared memory; the group's last thread adds the 64 triangle counts in two words with a carry, then calls <code>InterlockedAdd</code> once for the draw count and <code>addCount64</code> for each triangle count. Threads 0 to 7 each count the group's draws at their LOD and add that. The early and the late culling (see <a href="occlusion-culling.html#in-rasm">occlusion culling</a>) both count, and a draw is still counted once, because the late pass only keeps draws the early one did not draw. Draws of a <code>drawScene</code> call without culling are not seen by the shader, so the CPU adds them from <code>DrawTotals</code> (<code>unculledDraws</code>, <code>unculledTriangles</code>), counted at LOD 0.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Frame N in slot s: the CPU records timer commands and adds to drawTotals; the GPU runs culling, which adds to the cull stats buffer, and the passes, which write timestamps. A barrier to HOST makes the writes visible. Frame N+2 in slot s waits for frame N's fence value, reads the timestamps and the cull stats, then, if this frame is measured, resets the queries and zeroes the counters.">
+    <line x1="90" y1="30" x2="750" y2="30" class="arrow" marker-end="url(#ah)"/>
+    <text x="20" y="34" class="small">time →</text>
+    <text x="210" y="20" class="mid small">frame N · slot s</text>
+    <text x="410" y="20" class="mid small">frame N+1 · slot 1−s</text>
+    <text x="620" y="20" class="mid small">frame N+2 · slot s</text>
+
+    <text x="20" y="100" class="title t-cpu">CPU</text>
+    <rect x="90" y="44" width="240" height="104" rx="6" class="cpu"/>
+    <text x="210" y="66" class="mid title">records frame N</text>
+    <text x="102" y="90"  class="small">timer pairs: writeTimestamp</text>
+    <text x="102" y="108" class="small">drawScene adds to drawTotals[s]</text>
+    <text x="102" y="126" class="small">submit signals fence value v</text>
+
+    <rect x="340" y="44" width="140" height="104" rx="6" class="ghost"/>
+    <text x="410" y="100" class="mid small t-faint">other slot</text>
+
+    <rect x="490" y="44" width="260" height="104" rx="6" class="cpu"/>
+    <text x="502" y="64"  class="small">1. wait for fence value v</text>
+    <text x="502" y="82"  class="small">2. updateFrameStats reads slot s</text>
+    <text x="502" y="100" class="small">3. if measured: reset queries, zero counters</text>
+    <text x="502" y="118" class="small">4. updateStatsOverlay</text>
+    <text x="502" y="136" class="small">5. record frame N+2</text>
+
+    <text x="20" y="184" class="small">GPU</text>
+    <text x="20" y="198" class="small">memory</text>
+    <rect x="345" y="158" width="140" height="26" rx="6" class="mem"/>
+    <text x="415" y="175" class="mid small">GPU Timers s</text>
+    <rect x="345" y="192" width="140" height="26" rx="6" class="mem"/>
+    <text x="415" y="209" class="mid small">Cull Stats Buffer s</text>
+
+    <line x1="290" y1="228" x2="343" y2="174" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="320" y1="228" x2="343" y2="208" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="250" y="196" class="small t-gpu">writes</text>
+    <line x1="485" y1="171" x2="540" y2="150" class="arrow" marker-end="url(#ah)"/>
+    <line x1="485" y1="205" x2="590" y2="150" class="arrow" marker-end="url(#ah)"/>
+    <text x="600" y="180" class="small">reads, after the wait</text>
+
+    <text x="20" y="275" class="title t-gpu">GPU</text>
+    <rect x="90" y="228" width="240" height="90" rx="6" class="gpu"/>
+    <text x="210" y="250" class="mid title">frame N runs</text>
+    <text x="102" y="272" class="small">early + late culling: Cull Stats[s]</text>
+    <text x="102" y="290" class="small">passes: timestamps into pool s</text>
+    <text x="102" y="308" class="small">COMPUTE → GRAPHICS | HOST barriers</text>
+
+    <rect x="340" y="228" width="140" height="90" rx="6" class="ghost"/>
+    <text x="410" y="277" class="mid small t-faint">other slot</text>
+
+    <rect x="490" y="228" width="260" height="90" rx="6" class="gpu"/>
+    <text x="620" y="262" class="mid title">frame N+2 runs</text>
+    <text x="620" y="282" class="mid small">the overlay shows frame N's numbers</text>
+  </svg>
+  <figcaption><code>MAX_FRAMES_IN_FLIGHT</code> is 2, so the GPU numbers are two frames old. The barriers after both culling phases include the <code>HOST</code> stage, so the CPU sees the counters once the fence is reached.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>"CPU" time</td><td>the CPU's work on a frame</td><td><code>cpuFrameMs</code> is <code>deltaTime</code> × 1000: the <b>frame time</b>, from one frame start to the next, capped at 100 ms. With the FIFO present mode (<code>B21</code>) it is held at the display's refresh interval. CPU work time per zone is measured with Tracy instead (<code>D16</code>).</td></tr>
+  <tr><td>Timestamps</td><td>pairs, period, valid bits</td><td>The same: one pool per frame slot, 16 timers, wrap-safe conversion.</td></tr>
+  <tr><td>Reading</td><td>after the slot's fence, no wait</td><td>The same, in <code>updateFrameStats</code>. A slot whose fence value did not move (a frame that was not submitted) is skipped.</td></tr>
+  <tr><td>Reset</td><td>by command or from the host</td><td>From the host (<code>vkResetQueryPool</code>, host query reset), right after the read.</td></tr>
+  <tr><td>Frame GPU time</td><td>earliest begin to latest end</td><td>The same, because culling runs in its own command buffer before the frame's.</td></tr>
+  <tr><td>Too many timers</td><td>drop, warn once</td><td>The same: one warning per run. The last timer is kept for culling.</td></tr>
+  <tr><td>Pipeline statistics</td><td>optional queries</td><td>None.</td></tr>
+  <tr><td>Shader counters</td><td>reduce in the group, one atomic</td><td>The same, in <code>countMain</code>: one atomic per group per counter, plus up to 8 for the LOD counts.</td></tr>
+  <tr><td>64-bit counts</td><td>two words and a carry</td><td>The same, in <code>addCount64</code>; the CPU joins them in <code>readCount64</code>.</td></tr>
+  <tr><td>Smoothing</td><td>average, EMA, max, graph</td><td>None. <code>FrameStats</code> holds one frame's values. The overlay uses sample and hold: it rebuilds its text every 250 ms.</td></tr>
+  <tr><td>Measure on demand</td><td>only while someone looks</td><td>A slot is measured while <code>showStats</code> is on (<kbd>F1</kbd>), or for good once <code>getFrameStats</code> has been called. Otherwise no timestamps are written and nothing is read; only <code>cpuFrameMs</code> updates. The cull shader always adds to its counters; they are zeroed before each measured frame.</td></tr>
+  <tr><td>Memory</td><td>budget and usage per heap</td><td><code>queryVRAMStats</code> adds up the device-local heaps into <code>vramBudget</code> and <code>vramUsage</code>, and the other heaps into <code>hostBudget</code> and <code>hostUsage</code> (<code>VRAMStats</code>). Read every measured frame.</td></tr>
+  <tr><td>No timestamp support</td><td>valid bits = 0</td><td>The pool is not created (with a warning). The stats then have no GPU times; the rest still works.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Public types</td><td><code>FrameStats</code>, <code>GpuTimer</code>, <code>MAX_GPU_TIMERS</code> in <code>include/rasm/engine.h</code>; <code>VRAMStats</code> in <code>include/rasm/render/resource.h</code></td></tr>
+  <tr><td>Per-slot state</td><td><code>FrameStatsSlot</code>, <code>FrameStatsCollector</code> in <code>src/renderer/frameStats.h</code></td></tr>
+  <tr><td>Timers, read-back, reset</td><td><code>Engine::updateFrameStats</code>, <code>Engine::beginGpuTimer</code>, <code>Engine::endGpuTimer</code>, <code>Engine::beginCullingTimer</code>, <code>Engine::getFrameStats</code> in <code>src/renderer/frameStats.cpp</code></td></tr>
+  <tr><td>Frame and pass timers</td><td><code>Engine::beginFrame</code>, <code>Engine::endFrame</code>, <code>Engine::beginPass</code>, <code>Engine::endPass</code> in <code>src/engine.cpp</code>; <code>RenderGraph::execute</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>Query pool, timestamps, VRAM</td><td><code>VulkanDevice::createTimestampQueryPool</code>, <code>VulkanDevice::getTimestamps</code>, <code>VulkanDevice::queryVRAMStats</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; <code>VulkanCommandBuffer::writeTimestamp</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
+  <tr><td>Counters and draw totals</td><td><code>DrawTotals</code>, <code>cullStats</code>, <code>CULL_STATS_WORDS</code> in <code>src/renderer/gpuScene.h</code>; <code>countMain</code>, <code>addCount64</code> in <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td><code>deltaTime</code>, <kbd>F1</kbd></td><td><code>Engine::pollEvents</code> in <code>src/platform/window.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>The <code>STATS_*</code> words in <code>cull.slang</code> match the <code>CULL_STATS_*</code> words in <code>gpuScene.h</code>.</li>
+    <li>A slot's pool and counter buffer are read and reset only after that slot's fence wait (the frame order in <code>beginFrame</code>).</li>
+    <li>The barriers at the end of each culling phase include <code>HOST</code>; without it the CPU may read stale counters.</li>
+    <li><code>beginGpuTimer</code> may return <code>UINT32_MAX</code>; <code>endGpuTimer</code> must accept it and do nothing.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>The GPU timers do not reach Tracy, and Tracy cannot be turned off (<code>D16</code>). There are no pipeline statistics and no averaging or frame-time graph.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>The Vulkan specification: the chapter "Queries", in particular "Timestamp Queries" and "Pipeline Statistics Queries", and the <samp>VK_EXT_memory_budget</samp> extension.</li>
+  <li>The Khronos Vulkan Samples: the "timestamp queries" sample.</li>
+  <li>Tomas Akenine-Möller and others, <i>Real-Time Rendering</i>, 4th edition: the chapter on pipeline optimization (finding the bottleneck).</li>
+  <li>Bartosz Taudul, <i>Tracy Profiler</i> manual: CPU zones and GPU zones.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

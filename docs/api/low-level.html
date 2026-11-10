@@ -166,7 +166,7 @@
                  float minDepth = 0.0f, float maxDepth = 1.0f);</pre>
   <div class="body">
     <p>Sets the viewport, in pixels, with <code>x</code>, <code>y</code> at the top-left corner. RASM flips it (negative height) so that clip space is Y-up. <code>beginPass</code> already sets it to the whole target; change it to draw into a part of it, as <code>examples/01_render_graph</code> does to keep the image's shape.</p>
-    <p><code>drawScene</code> with any other viewport, or another depth range, is only frustum culled: its Hi-Z covers the whole target (<a href="../guides/culling.html#occlusion">occlusion culling</a>).</p>
+    <p><code>drawScene</code> with any other viewport, or another depth range, is only frustum culled: its Hi-Z covers the whole target (<a href="../guides/occlusion-culling.html">occlusion culling</a>).</p>
   </div>
 </div>
 
@@ -938,7 +938,7 @@ void cleanup();</pre>
     <li>Each call looks its handles up in a hash map (<code>P4</code>).</li>
     <li>There is one queue: no async compute or transfer queue (D13).</li>
   </ul>
-  <p>How these calls reach Vulkan: the guide <a href="../guides/rhi.html">The RHI and the Vulkan backend</a>, and for uploads <a href="../guides/gpu-memory.html">How data reaches the GPU</a>.</p>
+  <p>How these calls reach Vulkan: the guide <a href="../guides/graphics-apis-rhi.html">The RHI and the Vulkan backend</a>, and for uploads <a href="../guides/gpu-memory.html">How data reaches the GPU</a>.</p>
 </div>
 
 </main>
