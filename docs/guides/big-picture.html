@@ -446,7 +446,7 @@
   <tr><td>Dedup hashes</td><td><code>src/rhi/resource.cpp</code></td></tr>
   <tr><td>Texture layouts</td><td><code>TextureStates</code> in <code>src/rhi/textureStates.cpp</code>, used by <code>RenderContext::transitionImageLayout</code></td></tr>
   <tr><td>Pick the backend</td><td><code>rhi::createDevice</code> in <code>src/rhi/device.cpp</code></td></tr>
-  <tr><td>Source list</td><td><code>target_sources(rasm ...)</code> in <code>src/CMakeLists.txt</code>: <code>.cpp</code> files, and public headers in <code>FILE_SET HEADERS</code></td></tr>
+  <tr><td>Source list</td><td><code>target_sources(rasm ...)</code> in <code>src/CMakeLists.txt</code>: <code>.cpp</code> files; every header in <code>include/</code> is found by a glob and installed</td></tr>
   <tr><td>Examples</td><td>one folder each, such as <code>examples/05_city/main.cpp</code>, listed with <code>rasm_add_example</code> in <code>examples/CMakeLists.txt</code></td></tr>
 </table>
 </div>
@@ -459,7 +459,7 @@
     <li>A public header never includes a private header or a backend or third-party header (except glm). Forward-declare, or use a private <code>Impl</code>.</li>
     <li>A new field in <code>ShaderDesc</code>, <code>PipelineDesc</code> or <code>BindlessDescriptorSetLayoutDesc</code> must also be folded into its hash in <code>src/rhi/resource.cpp</code>.</li>
     <li><code>createBuffer</code> and <code>createTexture</code> always make a new resource. Cache at the asset level if you want sharing, and destroy what you replace.</li>
-    <li>A new part gets its own <code>.h</code>/<code>.cpp</code> pair in its layer's folder, and its <code>.cpp</code> goes into <code>target_sources(rasm ...)</code> in <code>src/CMakeLists.txt</code>. A header in <code>include/rasm/</code> also goes into its <code>FILE_SET HEADERS</code> list, or it is not installed.</li>
+    <li>A new part gets its own <code>.h</code>/<code>.cpp</code> pair in its layer's folder, and its <code>.cpp</code> goes into <code>target_sources(rasm ...)</code> in <code>src/CMakeLists.txt</code>. A header in <code>include/rasm/</code> needs no list entry: it is found and installed by itself.</li>
     <li>A new dependency linked to <code>rasm</code> also needs a <code>find_dependency</code> line in <code>cmake/rasmConfig.cmake.in</code>, because <code>rasm</code> is a static library.</li>
     <li>No templates in RASM code. <code>Handle</code> in <code>rasm/handle.h</code> is the only exception.</li>
   </ul>

@@ -2,23 +2,22 @@ include(RasmRuntimeDlls)
 
 find_package(doctest CONFIG REQUIRED)
 
-add_executable(rasm_tests)
-target_sources(rasm_tests PRIVATE
-    "main.cpp"
-    "cameraTests.cpp"
-    "gltfImportTests.cpp"
-    "gpuTableTests.cpp"
-    "handleTests.cpp"
-    "importMeshText.cpp"
-    "meshLodTests.cpp"
-    "meshTests.cpp"
-    "pathTests.cpp"
-    "renderGraphTests.cpp"
-    "resourceDescTests.cpp"
-    "textureStatesTests.cpp"
-    "transformTests.cpp"
-    "uploadManagerTests.cpp"
-)
+add_executable(rasm_tests
+            "main.cpp"
+            "cameraTests.cpp"
+            "gltfImportTests.cpp"
+            "gpuTableTests.cpp"
+            "handleTests.cpp"
+            "importMeshText.cpp"
+            "meshLodTests.cpp"
+            "meshTests.cpp"
+            "pathTests.cpp"
+            "renderGraphTests.cpp"
+            "resourceDescTests.cpp"
+            "textureStatesTests.cpp"
+            "transformTests.cpp"
+            "uploadManagerTests.cpp"
+    )
 
 target_link_libraries(rasm_tests PRIVATE rasm::rasm doctest::doctest)
 # Private classes such as rhi::UploadManager are tested against a fake rhi::Device.

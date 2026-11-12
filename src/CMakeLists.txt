@@ -7,31 +7,17 @@ find_package(SDL3 CONFIG REQUIRED)
 find_package(Tracy CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
+find_path(TINYGLTF_INCLUDE_DIRS "tiny_gltf.h" REQUIRED)
 find_package(tinyobjloader CONFIG REQUIRED)
 find_package(meshoptimizer CONFIG REQUIRED)
 find_package(slang CONFIG REQUIRED)
-find_path(TINYGLTF_INCLUDE_DIRS "tiny_gltf.h" REQUIRED)
 
 add_library(rasm STATIC)
 add_library(rasm::rasm ALIAS rasm)
 
-target_sources(rasm PUBLIC FILE_SET HEADERS BASE_DIRS "${PROJECT_SOURCE_DIR}/include" FILES
-    "${PROJECT_SOURCE_DIR}/include/rasm/camera.h"
-    "${PROJECT_SOURCE_DIR}/include/rasm/engine.h"
-    "${PROJECT_SOURCE_DIR}/include/rasm/entity.h"
-    "${PROJECT_SOURCE_DIR}/include/rasm/handle.h"
-    "${PROJECT_SOURCE_DIR}/include/rasm/light.h"
-    "${PROJECT_SOURCE_DIR}/include/rasm/material.h"
-    "${PROJECT_SOURCE_DIR}/include/rasm/mesh.h"
-    "${PROJECT_SOURCE_DIR}/include/rasm/rasm.h"
-    "${PROJECT_SOURCE_DIR}/include/rasm/render/renderContext.h"
-    "${PROJECT_SOURCE_DIR}/include/rasm/render/renderGraph.h"
-    "${PROJECT_SOURCE_DIR}/include/rasm/render/resource.h"
-    "${PROJECT_SOURCE_DIR}/include/rasm/scene.h"
-    "${PROJECT_SOURCE_DIR}/include/rasm/transform.h"
-    "${PROJECT_SOURCE_DIR}/include/rasm/types.h"
-    "${PROJECT_SOURCE_DIR}/include/rasm/window.h"
-)
+# Every header in include/ is public and installed, so a new one needs no list entry.
+file(GLOB_RECURSE RASM_PUBLIC_HEADERS CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/include/*.h")
+target_sources(rasm PUBLIC FILE_SET HEADERS BASE_DIRS "${PROJECT_SOURCE_DIR}/include" FILES ${RASM_PUBLIC_HEADERS})
 
 target_sources(rasm PRIVATE
     "engine.cpp"
