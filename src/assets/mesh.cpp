@@ -74,7 +74,7 @@ namespace rasm
         }
 
         // find if the model extension is supported, if not return invalid handle
-        auto extension = path.substr(path.find_last_of(".") + 1);
+        auto extension = path.substr(path.find_last_of('.') + 1);
         if (!supportedMeshExtensions.contains(extension))
         {
             spdlog::error("Unsupported mesh format: {}", extension);

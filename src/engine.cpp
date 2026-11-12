@@ -83,7 +83,7 @@ namespace rasm
             return;
         }
 
-        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             frameResources[i].commandBuffer = ctx.createCommandBuffer("Frame Command Buffer " + std::to_string(i));
             if (!frameResources[i].commandBuffer.isValid())
@@ -471,7 +471,7 @@ namespace rasm
         swapchain.width = extent.x;
         swapchain.height = extent.y;
 
-        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             const TextureDesc depthTextureDesc = {.name = "DepthTexture for Frame " + std::to_string(i),
                                                   .width = swapchain.width,

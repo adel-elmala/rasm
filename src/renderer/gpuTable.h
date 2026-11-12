@@ -24,7 +24,7 @@ namespace rasm
     class GpuTable
     {
     public:
-        bool                    create(RenderContext& ctx, const std::string& name, uint32_t rowSize, uint32_t capacity);
+        bool                    create(RenderContext& ctx, const std::string& name, uint32_t bytesPerRow, uint32_t capacity);
         void                    setRow(uint32_t row, const void* data);
         bool                    upload(RenderContext& ctx, uint32_t frame);
         BufferHandle            buffer(uint32_t frame) const;

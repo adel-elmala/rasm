@@ -37,7 +37,7 @@ namespace
     constexpr int OFFICE = 1;
     constexpr int BRICK = 2;
     // A wall texel in every style. A roof's UVs are all this one, so it has no UV derivatives and reads mip 0.
-    const glm::vec2 ROOF_UV((0.5f) / TEXTURE_SIZE, (1.5f) / TEXTURE_SIZE);
+    constexpr glm::vec2 ROOF_UV((0.5f) / TEXTURE_SIZE, (1.5f) / TEXTURE_SIZE);
 
     constexpr float TRUNK_HEIGHT = 4.0f;
     constexpr int LEAF_COLORS = 3;
@@ -51,12 +51,12 @@ namespace
     constexpr int SKY_TEXTURE_HEIGHT = 256;
 
     // The outward direction of each side of a block.
-    const glm::vec2 BLOCK_SIDES[4] = {{1.0f, 0.0f}, {-1.0f, 0.0f}, {0.0f, 1.0f}, {0.0f, -1.0f}};
+    constexpr glm::vec2 BLOCK_SIDES[4] = {{1.0f, 0.0f}, {-1.0f, 0.0f}, {0.0f, 1.0f}, {0.0f, -1.0f}};
 
     constexpr float PLINTH_HEIGHT = 3.0f;
     constexpr float MONUMENT_SCALE = 14.0f;
     // DamagedHelmet spans y = -0.9 .. 0.9 after its node rotation.
-    const glm::vec3 MONUMENT_POSITION(0.0f, CURB_HEIGHT + PLINTH_HEIGHT + 0.9f * MONUMENT_SCALE, 0.0f);
+    constexpr glm::vec3 MONUMENT_POSITION(0.0f, CURB_HEIGHT + PLINTH_HEIGHT + 0.9f * MONUMENT_SCALE, 0.0f);
 
     // Traffic drives on every 4th street, 4 lanes each, and wraps around at the city's edge.
     constexpr int AVENUE_EVERY = 4;
@@ -78,7 +78,7 @@ namespace
     };
 
     // Building pieces stack: a tower is a podium, tower segments and a roof box.
-    const glm::vec3 SEGMENT_SIZES[static_cast<int>(Segment::COUNT)] = {
+    constexpr glm::vec3 SEGMENT_SIZES[static_cast<int>(Segment::COUNT)] = {
         {6 * BAY_WIDTH, 8 * FLOOR_HEIGHT, 6 * BAY_WIDTH},
         {8 * BAY_WIDTH, 4 * FLOOR_HEIGHT, 8 * BAY_WIDTH},
         {8 * BAY_WIDTH, 3 * FLOOR_HEIGHT, 4 * BAY_WIDTH},
@@ -114,13 +114,13 @@ namespace
         float litChance;
     };
 
-    const FacadeStyle FACADE_STYLES[FACADE_STYLE_COUNT] = {
+    constexpr FacadeStyle FACADE_STYLES[FACADE_STYLE_COUNT] = {
         {{0.05f, 0.06f, 0.075f}, {0.02f, 0.03f, 0.05f}, 0.35f, 1.0f, 2, 30, 4, 30, 0.30f},   // glass curtain wall
         {{0.25f, 0.24f, 0.22f}, {0.02f, 0.025f, 0.035f}, 0.85f, 0.0f, 0, 32, 10, 26, 0.35f}, // office, ribbon windows
         {{0.20f, 0.10f, 0.07f}, {0.02f, 0.02f, 0.03f}, 0.9f, 0.0f, 9, 23, 6, 26, 0.38f},     // brick apartments
     };
 
-    const glm::vec3 WINDOW_LIGHTS[3] = {{1.0f, 0.62f, 0.32f}, {0.65f, 0.78f, 1.0f}, {0.6f, 0.35f, 0.15f}};
+    constexpr glm::vec3 WINDOW_LIGHTS[3] = {{1.0f, 0.62f, 0.32f}, {0.65f, 0.78f, 1.0f}, {0.6f, 0.35f, 0.15f}};
 
     struct Car
     {
@@ -142,7 +142,7 @@ namespace
     // Each key also sets the speed: the path is a Catmull-Rom spline in time. It enters downtown along the street
     // at x = -38, circles the monument, cranes up over the plaza and orbits the city high up. Away from the
     // street and the plaza it stays above the tallest tower (about 300 m).
-    const TourKey TOUR[] = {
+    constexpr TourKey TOUR[] = {
         {0.0f, {-1321.0f, 220.0f, 1070.0f}, {0.0f, 140.0f, 0.0f}},
         {12.0f, {-38.0f, 250.0f, 1500.0f}, {-38.0f, 40.0f, 600.0f}},
         {21.0f, {-38.0f, 60.0f, 920.0f}, {-38.0f, 30.0f, 300.0f}},
@@ -298,7 +298,7 @@ namespace
                             const float shade = 0.75f + 0.25f * static_cast<float>(y - style.windowTop) / static_cast<float>(style.windowBottom - style.windowTop);
                             for (int x = style.windowLeft; x < style.windowRight; ++x)
                             {
-                                uint8_t *pixel = &emissive[(static_cast<size_t>(cy * CELL_PIXELS + y) * TEXTURE_SIZE + cx * CELL_PIXELS + x) * 4];
+                                uint8_t *pixel = &emissive[(static_cast<size_t>(cy * CELL_PIXELS + y) * TEXTURE_SIZE + static_cast<size_t>(cx * CELL_PIXELS + x)) * 4];
                                 pixel[0] = toSrgb8(light.r * shade);
                                 pixel[1] = toSrgb8(light.g * shade);
                                 pixel[2] = toSrgb8(light.b * shade);
@@ -554,7 +554,7 @@ namespace
             {
                 if (rng.chance(skipChance))
                     continue;
-                const glm::vec2 cell = centre + (glm::vec2(x, z) - (count - 1) * 0.5f) * spacing;
+                const glm::vec2 cell = centre + (glm::vec2(x, z) - static_cast<float>(count - 1) * 0.5f) * spacing;
                 const glm::vec2 jitter(rng.range(-0.3f, 0.3f) * spacing, rng.range(-0.3f, 0.3f) * spacing);
                 addTree(city, rng, cell + jitter, CURB_HEIGHT + 0.1f, rng.range(0.9f, 1.4f));
             }
@@ -626,7 +626,7 @@ namespace
             for (int i = 0; i < stories; ++i)
             {
                 const float yaw = (turned ? glm::half_pi<float>() : 0.0f) + (rng.chance(0.5f) ? glm::pi<float>() : 0.0f);
-                const glm::vec3 base(position.x, CURB_HEIGHT + i * SEGMENT_SIZES[slab].y, position.y);
+                const glm::vec3 base(position.x, CURB_HEIGHT + static_cast<float>(i) * SEGMENT_SIZES[slab].y, position.y);
                 place(city, city.assets.segments[slab], city.assets.facades[style][rng.below(WINDOW_PATTERNS)], base, glm::vec3(1.0f), yaw);
             }
         }

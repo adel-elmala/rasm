@@ -217,6 +217,9 @@ def run_example(name, preset, frame, out_dir, keep):
     env = dict(os.environ)
     env.update({"VK_INSTANCE_LAYERS": "VK_LAYER_LUNARG_gfxreconstruct", "GFXRECON_CAPTURE_FRAMES": str(frame),
                 "GFXRECON_CAPTURE_FILE": base, "GFXRECON_CAPTURE_FILE_TIMESTAMP": "false", "GFXRECON_QUIT_AFTER_CAPTURE_FRAMES": "true"})
+    # GFXR's default page-guard tracking of mapped memory relies on access violations, which ASan treats as crashes.
+    if "asan" in preset:
+        env["GFXRECON_MEMORY_TRACKING_MODE"] = "unassisted"
     sdk = os.environ.get("VULKAN_SDK")
     if os.name != "nt" and sdk and os.path.isdir(os.path.join(sdk, "share", "vulkan", "explicit_layer.d")):
         env["VK_ADD_LAYER_PATH"] = os.path.join(sdk, "share", "vulkan", "explicit_layer.d")

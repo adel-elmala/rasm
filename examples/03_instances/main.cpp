@@ -59,7 +59,7 @@ namespace
     glm::vec3 gridPosition(int x, int z)
     {
         const float half = (GRID_SIZE - 1) * GRID_SPACING * 0.5f;
-        return glm::vec3(x * GRID_SPACING - half, 0.0f, z * GRID_SPACING - half);
+        return glm::vec3(static_cast<float>(x) * GRID_SPACING - half, 0.0f, static_cast<float>(z) * GRID_SPACING - half);
     }
 }
 
@@ -103,7 +103,7 @@ int main()
     std::vector<rasm::EntityHandle> spinners;
     for (int i = 0; i < SPINNER_COUNT; ++i)
     {
-        const float angle = glm::radians(360.0f * i / SPINNER_COUNT);
+        const float angle = glm::radians(360.0f * static_cast<float>(i) / SPINNER_COUNT);
         const glm::vec3 position(std::cos(angle) * 12.0f, 4.0f, std::sin(angle) * 12.0f);
         spinners.push_back(engine.createEntity("spinner", cube, pulse, cubeTransform(position, 2.0f)));
         engine.addEntityToScene(scene, spinners.back());
@@ -144,7 +144,7 @@ int main()
     {
         for (int i = 0; i < SPINNER_COUNT; ++i)
         {
-            const glm::vec3 axis = glm::normalize(glm::vec3(1.0f, 1.0f + i, 0.5f));
+            const glm::vec3 axis = glm::normalize(glm::vec3(1.0f, 1.0f + static_cast<float>(i), 0.5f));
             engine.updateTransform(spinners[i], engine.getTransform(spinners[i]).rotate(axis, glm::radians(1.0f)));
         }
 
@@ -155,7 +155,7 @@ int main()
             for (int x = 0; x < GRID_SIZE; ++x)
             {
                 glm::vec3 position = gridPosition(x, z);
-                position.y = 0.5f * std::sin(x * 0.3f);
+                position.y = 0.5f * std::sin(static_cast<float>(x) * 0.3f);
                 engine.addEntityToScene(scene, engine.createEntity("spawned", cube, pulse, cubeTransform(position, 0.8f)));
             }
         }

@@ -73,7 +73,16 @@ target_compile_definitions(rasm PRIVATE RASM_SHADER_DIR="${RASM_SHADER_DIR}")
 target_compile_definitions(rasm PRIVATE STBI_WINDOWS_UTF8)
 
 target_include_directories(rasm PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>" "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
-target_include_directories(rasm PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" ${Stb_INCLUDE_DIR} ${TINYGLTF_INCLUDE_DIRS} ${Vulkan_INCLUDE_DIRS})
+target_include_directories(rasm PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+# SYSTEM, like the imported targets' directories, so RASM_WARNINGS does not report warnings inside these headers.
+target_include_directories(rasm SYSTEM PRIVATE ${Stb_INCLUDE_DIR} ${TINYGLTF_INCLUDE_DIRS} ${Vulkan_INCLUDE_DIRS})
+
+# Holds only the third-party *_IMPLEMENTATION code, so clang-tidy has nothing of RASM's to check there.
+set_source_files_properties("thirdparty_impl.cpp" PROPERTIES SKIP_LINTING ON)
+# stb_image_resize2 indexes from a pointer before its table on purpose. ASan still covers this file.
+if ("undefined" IN_LIST RASM_SANITIZERS)
+    set_source_files_properties("thirdparty_impl.cpp" PROPERTIES COMPILE_OPTIONS "-fno-sanitize=undefined")
+endif()
 
 if (RASM_ENABLE_AVX2)
     if (MSVC)

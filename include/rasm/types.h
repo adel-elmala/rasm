@@ -86,6 +86,8 @@ namespace rasm
         int         windowWidth             = 0;
         int         windowHeight            = 0;
         bool        enableValidation        = false;
+        bool        enableSyncValidation    = false;    // with enableValidation: also report missing barriers and hazards (slow)
+        bool        enableGpuValidation     = false;    // with enableValidation: GPU-AV checks shader reads and writes, indirect args, BDA (slow)
         Backend     preferredBackend        = Backend::VULKAN;
         std::string assetRoot               = {};
         std::string shaderDir               = {};

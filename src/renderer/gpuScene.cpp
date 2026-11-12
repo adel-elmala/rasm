@@ -170,7 +170,7 @@ namespace rasm
             gpuScene->cullCommandBuffers[i] = ctx.createCommandBuffer("Cull Command Buffer " + std::to_string(i));
             gpuScene->drawCounts[i] = ctx.createBuffer({.name = "Draw Count Buffer " + std::to_string(i),
                                                         .usage = BufferUsage::INDIRECT,
-                                                        .size = MAX_SCENE_DRAWS_PER_FRAME * gfx::MAX_DRAW_RUNS * sizeof(uint32_t)});
+                                                        .size = static_cast<uint64_t>(MAX_SCENE_DRAWS_PER_FRAME) * gfx::MAX_DRAW_RUNS * sizeof(uint32_t)});
             // The frame's visible draws and triangles (low, high), which updateFrameStats reads back once the slot's fence passed.
             gpuScene->cullStats[i] = ctx.createBuffer({.name = "Cull Stats Buffer " + std::to_string(i), .usage = BufferUsage::STORAGE, .size = CULL_STATS_WORDS * sizeof(uint32_t), .hostVisible = true, .hostReadable = true});
             if (!gpuScene->cullCommandBuffers[i].isValid() || !gpuScene->drawCounts[i].isValid() || !gpuScene->cullStats[i].isValid())
@@ -540,7 +540,7 @@ namespace rasm
         }
         const uint32_t call = sceneDrawCount++;
         const uint64_t sceneDataOffset = call * sizeof(gfx::SceneData);
-        const uint64_t drawCountsOffset = call * gfx::MAX_DRAW_RUNS * sizeof(uint32_t);
+        const uint64_t drawCountsOffset = static_cast<uint64_t>(call) * gfx::MAX_DRAW_RUNS * sizeof(uint32_t);
         const auto drawCount = static_cast<uint32_t>(drawList.draws.size());
         gpuScene->cullGroupCounts[call] = 0;
 
