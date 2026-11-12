@@ -56,7 +56,7 @@ There are two kinds of handle owner:
 ### Construction (`Engine::Engine`, `src/engine.cpp`)
 1. Create the SDL3 window (`createWindow`).
 2. `RenderContext::initialize` calls `rhi::createDevice` for `EngineConfig::preferredBackend`. For Vulkan, `VulkanDevice::initialize`:
-   - creates the instance (validation optional),
+   - creates the instance. `EngineConfig::enableValidation` turns on the Khronos validation layer; with it, `enableSyncValidation` and `enableGpuValidation` (copied into `DeviceDesc`) add the `validate_sync` and `gpuav_enable` layer settings through `VK_EXT_layer_settings`. Without validation (or without the layers installed) those two are ignored with a warning,
    - creates the surface from the main window (`createWindowSurface` in `src/platform/`, which wraps `SDL_Vulkan_CreateSurface`),
    - selects a physical device with the required features (below),
    - creates the device, graphics queue and VMA allocator.

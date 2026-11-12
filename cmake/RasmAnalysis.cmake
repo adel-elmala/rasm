@@ -22,11 +22,28 @@ if (RASM_SANITIZERS)
     add_link_options(-fsanitize=${rasm_sanitizers})
 
     # The Windows ASan runtime is a DLL in clang's resource directory; rasm_copy_runtime_dlls puts it next to each executable.
+    # LLVM names it clang_rt.asan_dynamic-<arch>.dll, or clang_rt.asan_dynamic.dll in a per-target runtime folder.
     if (WIN32 AND "address" IN_LIST RASM_SANITIZERS)
-        execute_process(COMMAND "${CMAKE_CXX_COMPILER}" -print-file-name=clang_rt.asan_dynamic-x86_64.dll
-                        OUTPUT_VARIABLE RASM_ASAN_RUNTIME_DLL OUTPUT_STRIP_TRAILING_WHITESPACE)
-        if (NOT EXISTS "${RASM_ASAN_RUNTIME_DLL}")
-            message(FATAL_ERROR "Could not find clang_rt.asan_dynamic-x86_64.dll next to ${CMAKE_CXX_COMPILER}")
+        if (CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64")
+            set(rasm_asan_arch "aarch64")
+        else()
+            set(rasm_asan_arch "x86_64")
+        endif()
+        foreach (rasm_asan_name "clang_rt.asan_dynamic-${rasm_asan_arch}.dll" "clang_rt.asan_dynamic.dll")
+            execute_process(COMMAND "${CMAKE_CXX_COMPILER}" -print-file-name=${rasm_asan_name}
+                            OUTPUT_VARIABLE rasm_asan_dll OUTPUT_STRIP_TRAILING_WHITESPACE)
+            if (EXISTS "${rasm_asan_dll}")
+                set(RASM_ASAN_RUNTIME_DLL "${rasm_asan_dll}")
+                break()
+            endif()
+        endforeach()
+        if (NOT RASM_ASAN_RUNTIME_DLL)
+            message(WARNING "Could not find the ASan runtime DLL of ${CMAKE_CXX_COMPILER}; put it on PATH to run the executables")
         endif()
     endif()
+endif()
+
+# SKIP_LINTING, which keeps clang-tidy off src/thirdparty_impl.cpp, needs CMake 3.27.
+if (CMAKE_CXX_CLANG_TIDY AND CMAKE_VERSION VERSION_LESS 3.27)
+    message(FATAL_ERROR "clang-tidy builds need CMake 3.27 or newer (this is ${CMAKE_VERSION})")
 endif()

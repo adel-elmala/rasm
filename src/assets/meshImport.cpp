@@ -302,7 +302,7 @@ namespace rasm
             if (node.rotation.size() == 4)
             {
                 // Note: glm::quat constructor is glm::quat(w, x, y, z)
-                glm::quat q(glm::dquat(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]));
+                glm::quat q(static_cast<float>(node.rotation[3]), static_cast<float>(node.rotation[0]), static_cast<float>(node.rotation[1]), static_cast<float>(node.rotation[2]));
                 transform = transform * glm::mat4_cast(q);
             }
 

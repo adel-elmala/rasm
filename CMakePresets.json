@@ -170,11 +170,6 @@
             "hidden": true,
             "output": {
                 "outputOnFailure": true
-            },
-            "environment": {
-                "ASAN_OPTIONS": "halt_on_error=1",
-                "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1",
-                "TSAN_OPTIONS": "halt_on_error=1"
             }
         },
         {
@@ -190,7 +185,10 @@
         {
             "name": "x64-asan",
             "inherits": "test-base",
-            "configurePreset": "x64-asan"
+            "configurePreset": "x64-asan",
+            "environment": {
+                "UBSAN_OPTIONS": "print_stacktrace=1"
+            }
         },
         {
             "name": "macOS",
@@ -205,12 +203,18 @@
         {
             "name": "macOS-asan",
             "inherits": "test-base",
-            "configurePreset": "macOS-asan"
+            "configurePreset": "macOS-asan",
+            "environment": {
+                "UBSAN_OPTIONS": "print_stacktrace=1"
+            }
         },
         {
             "name": "macOS-tsan",
             "inherits": "test-base",
-            "configurePreset": "macOS-tsan"
+            "configurePreset": "macOS-tsan",
+            "environment": {
+                "TSAN_OPTIONS": "halt_on_error=1"
+            }
         },
         {
             "name": "macOS-Xcode",

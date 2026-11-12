@@ -42,9 +42,18 @@ namespace rasm::rhi
 
             // Read by vkCreateInstance, which build() below calls.
             const VkBool32 settingOn = VK_TRUE;
-            if (desc.enableValidation && systemInfo.validation_layers_available)
+            const bool validationOn = desc.enableValidation && systemInfo.validation_layers_available;
+            if (desc.enableValidation && !systemInfo.validation_layers_available)
+                spdlog::warn("Vulkan validation layers are not installed, validation is off");
+            if (!validationOn && (desc.enableSyncValidation || desc.enableGpuValidation))
+                spdlog::warn("enableSyncValidation and enableGpuValidation need enableValidation and the validation layers; ignored");
+
+            if (validationOn)
             {
                 instanceBuilder.enable_validation_layers();
+                // The validation layer provides this extension; the settings below are chained through it.
+                if ((desc.enableSyncValidation || desc.enableGpuValidation) && systemInfo.is_extension_available(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME))
+                    instanceBuilder.enable_extension(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
                 if (desc.enableSyncValidation)
                     instanceBuilder.add_layer_setting({"VK_LAYER_KHRONOS_validation", "validate_sync", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &settingOn});
                 if (desc.enableGpuValidation)

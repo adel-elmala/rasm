@@ -79,9 +79,16 @@ target_include_directories(rasm SYSTEM PRIVATE ${Stb_INCLUDE_DIR} ${TINYGLTF_INC
 
 # Holds only the third-party *_IMPLEMENTATION code, so clang-tidy has nothing of RASM's to check there.
 set_source_files_properties("thirdparty_impl.cpp" PROPERTIES SKIP_LINTING ON)
-# stb_image_resize2 indexes from a pointer before its table on purpose. ASan still covers this file.
+# stb_image_resize2's deliberate tricks: it indexes before its sRGB table (array-bounds), reads info->user_data after
+# clearing info in STBIR__FREE_AND_CLEAR (null, object-size) and copies with unaligned 8-byte stores in STBIR_MOVE_* (alignment).
+# The other UBSan checks and ASan still cover the file.
 if ("undefined" IN_LIST RASM_SANITIZERS)
-    set_source_files_properties("thirdparty_impl.cpp" PROPERTIES COMPILE_OPTIONS "-fno-sanitize=undefined")
+    set_property(SOURCE "thirdparty_impl.cpp" APPEND PROPERTY COMPILE_OPTIONS "-fno-sanitize=array-bounds,null,object-size,alignment")
+endif()
+
+# The instrumented static library needs the sanitizer runtime in whatever links it, including find_package(rasm) consumers.
+if (RASM_SANITIZERS)
+    target_link_options(rasm INTERFACE -fsanitize=${rasm_sanitizers})
 endif()
 
 if (RASM_ENABLE_AVX2)
