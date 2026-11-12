@@ -2,7 +2,7 @@
 
 ## Common prerequisites
 - Git.
-- CMake 3.21 or newer.
+- CMake 3.23 or newer.
 - Ninja.
 - A C++20 compiler: LLVM Clang on Windows, Apple Clang on macOS.
 - A recent Vulkan SDK (version 1.4).
