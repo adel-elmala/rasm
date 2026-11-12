@@ -133,7 +133,7 @@
 <h2 id="build"><span class="n">2</span>Build RASM and link it</h2>
 
 <ol class="steps">
-  <li><b>Install the tools.</b> CMake 3.21 or newer, Ninja, Clang, the Vulkan SDK (1.4) and vcpkg, with the VCPKG_ROOT environment variable set to it. The step-by-step setup is in <code>docs/build_guide.md</code>.</li>
+  <li><b>Install the tools.</b> CMake 3.23 or newer, Ninja, Clang, the Vulkan SDK (1.4) and vcpkg, with the VCPKG_ROOT environment variable set to it. The step-by-step setup is in <code>docs/build_guide.md</code>.</li>
   <li><b>Build and install RASM.</b> The presets use Ninja and <code>clang++</code>, and vcpkg builds the dependencies. <code>cmake --install</code> copies the library, the public headers and the shaders to <code>install/</code> in the repo. Debug and Release share that folder, so install both if your project builds both.
 <pre><code>cmake --preset x64-debug            # macOS: --preset macOS
 cmake --build --preset x64-debug
