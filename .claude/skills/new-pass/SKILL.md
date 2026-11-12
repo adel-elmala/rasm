@@ -100,7 +100,7 @@ graph.addPass(
 ## 4. Where the code goes
 
 - A new example for a new kind of pass: `examples/NN_name/` (see CLAUDE.md "Adding files"), with validation on.
-- Engine code (only after the user agreed to an engine change): the pass gets its own `.h`/`.cpp` pair under `src/renderer/` (CLAUDE.md "one file pair per part"), and is added to `RASM_SRC`.
+- Engine code (only after the user agreed to an engine change): the pass gets its own `.h`/`.cpp` pair under `src/renderer/` (CLAUDE.md "one file pair per part"), and is added to `target_sources(rasm ...)` in `src/CMakeLists.txt`.
 
 ## 5. Verify
 
