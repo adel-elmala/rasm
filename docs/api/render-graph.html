@@ -125,10 +125,10 @@
 public:
          RenderGraph(Engine* owner);
     void addPass(std::string name,
-             std::function&lt;void(PassBuilder&amp;)&gt; setup,
+             const std::function&lt;void(PassBuilder&amp;)&gt;&amp; setup,
              std::function&lt;void(RenderContext&amp;)&gt; execute);
     void addComputePass(std::string name,
-             std::function&lt;void(PassBuilder&amp;)&gt; setup,
+             const std::function&lt;void(PassBuilder&amp;)&gt;&amp; setup,
              std::function&lt;void(RenderContext&amp;)&gt; execute);
     void compile();
     void execute(CameraHandle camera);
@@ -140,7 +140,7 @@ public:
 
 <div class="api" id="addPass">
   <pre class="sig">void addPass(std::string name,
-         std::function&lt;void(PassBuilder&amp;)&gt; setup,
+         const std::function&lt;void(PassBuilder&amp;)&gt;&amp; setup,
          std::function&lt;void(RenderContext&amp;)&gt; execute);</pre>
   <div class="body">
     <p>Adds a graphics pass. <code>setup</code> is called right away, before <code>addPass</code> returns, so handles it creates are ready on the next line. The graph must be compiled again (<code>execute</code> does it if you don't).</p>
@@ -155,7 +155,7 @@ public:
 
 <div class="api" id="addComputePass">
   <pre class="sig">void addComputePass(std::string name,
-         std::function&lt;void(PassBuilder&amp;)&gt; setup,
+         const std::function&lt;void(PassBuilder&amp;)&gt;&amp; setup,
          std::function&lt;void(RenderContext&amp;)&gt; execute);</pre>
   <div class="body">
     <p>Adds a compute pass. It is sorted like any other pass. <code>execute</code> runs outside any render pass, so <code>dispatch</code> and <code>memoryBarrier</code> are allowed and draws are not. There is no target, no clear and no layout transition.</p>

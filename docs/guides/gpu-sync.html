@@ -617,7 +617,7 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
     <li>A texture's layout changes only through <code>transitionImageLayout</code>, so <code>Texture::state</code> stays true. A frame that is not submitted calls <code>discardRecording</code>.</li>
     <li>A new <code>TextureUsage</code> that textures move into needs a source and a destination scope in <code>getSrcScope</code> and <code>getDstScope</code>.</li>
     <li>A graph pass declares every buffer and texture it uses, or the graph cannot place its barriers.</li>
-    <li>Test with <code>enableValidation</code> on; a change that adds validation messages is not done.</li>
+    <li>Test with <code>enableValidation</code> and <code>enableSyncValidation</code> on (or <code>verify.py --sync</code>); a change that adds validation messages is not done.</li>
   </ul>
 </div>
 

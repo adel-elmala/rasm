@@ -117,7 +117,7 @@ namespace rasm
 
     MaterialHandle Engine::loadMaterial(const tinygltf::Model &model, int materialIndex, GltfImportCache &cache)
     {
-        if (materialIndex < 0 || materialIndex >= model.materials.size())
+        if (materialIndex < 0 || materialIndex >= static_cast<int>(model.materials.size()))
             return {};
 
         // Primitives share materials and materials share images; create each of them once per model.
@@ -162,13 +162,13 @@ namespace rasm
         {
             // glTF defaults: metallicFactor = 1.0, roughnessFactor = 1.0. tinygltf keeps those
             // defaults even when no metallicRoughness texture exists, so always copy them over.
-            mat.params[static_cast<uint32_t>(PbrParam::METALLIC)] = material->pbrMetallicRoughness.metallicFactor;
-            mat.params[static_cast<uint32_t>(PbrParam::ROUGHNESS)] = material->pbrMetallicRoughness.roughnessFactor;
+            mat.params[static_cast<uint32_t>(PbrParam::METALLIC)] = static_cast<float>(material->pbrMetallicRoughness.metallicFactor);
+            mat.params[static_cast<uint32_t>(PbrParam::ROUGHNESS)] = static_cast<float>(material->pbrMetallicRoughness.roughnessFactor);
 
             // Same for the base color factor: a material may tint with it without any texture.
-            mat.params[static_cast<uint32_t>(PbrParam::ALBEDO)] = material->pbrMetallicRoughness.baseColorFactor[0];
-            mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 1] = material->pbrMetallicRoughness.baseColorFactor[1];
-            mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 2] = material->pbrMetallicRoughness.baseColorFactor[2];
+            mat.params[static_cast<uint32_t>(PbrParam::ALBEDO)] = static_cast<float>(material->pbrMetallicRoughness.baseColorFactor[0]);
+            mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 1] = static_cast<float>(material->pbrMetallicRoughness.baseColorFactor[1]);
+            mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 2] = static_cast<float>(material->pbrMetallicRoughness.baseColorFactor[2]);
 
             // Color textures are sRGB; material data is linear (glTF 2.0).
             // Expand to RGBA8 to avoid unsupported RGB Vulkan formats and mismatched upload sizes.
@@ -239,10 +239,10 @@ namespace rasm
                 mat.textures[static_cast<uint32_t>(PbrSlot::OCCLUSION)] = uploadTexture(material->occlusionTexture.index, false);
                 mat.textures[static_cast<uint32_t>(PbrSlot::EMISSIVE)] = uploadTexture(material->emissiveTexture.index, true);
             }
-            mat.params[static_cast<uint32_t>(PbrParam::NORMAL_SCALE)] = material->normalTexture.scale;
-            mat.params[static_cast<uint32_t>(PbrParam::OCCLUSION_STRENGTH)] = material->occlusionTexture.strength;
+            mat.params[static_cast<uint32_t>(PbrParam::NORMAL_SCALE)] = static_cast<float>(material->normalTexture.scale);
+            mat.params[static_cast<uint32_t>(PbrParam::OCCLUSION_STRENGTH)] = static_cast<float>(material->occlusionTexture.strength);
             for (uint32_t i = 0; i < 3; ++i)
-                mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + i] = material->emissiveFactor[i];
+                mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + i] = static_cast<float>(material->emissiveFactor[i]);
         }
 
         registry.materials.resize(handle.index + 1);

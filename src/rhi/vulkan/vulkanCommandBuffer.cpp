@@ -272,7 +272,7 @@ namespace rasm::rhi
             .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
             .loadOp = loadOp,
             .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue{.color{clearColor.r, clearColor.g, clearColor.b, clearColor.a}}};
+            .clearValue{.color{.float32{clearColor.r, clearColor.g, clearColor.b, clearColor.a}}}};
 
         VkRenderingAttachmentInfo depthAttachmentInfo{
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -425,9 +425,9 @@ namespace rasm::rhi
 
     // Written once all earlier commands are done, so the time between two timestamps covers the commands
     // between them, without overlap from earlier work.
-    void VulkanCommandBuffer::writeTimestamp(QueryPool *pool, uint32_t index)
+    void VulkanCommandBuffer::writeTimestamp(QueryPool *queryPool, uint32_t index)
     {
-        vkCmdWriteTimestamp2(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, static_cast<VulkanQueryPool *>(pool)->pool, index);
+        vkCmdWriteTimestamp2(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, static_cast<VulkanQueryPool *>(queryPool)->pool, index);
     }
 
     VkCommandBuffer VulkanCommandBuffer::getVkCommandBuffer() const

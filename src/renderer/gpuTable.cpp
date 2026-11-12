@@ -25,15 +25,15 @@ namespace rasm
         }
     }
 
-    bool GpuTable::create(RenderContext &ctx, const std::string &name, uint32_t rowSize, uint32_t capacity)
+    bool GpuTable::create(RenderContext &ctx, const std::string &name, uint32_t bytesPerRow, uint32_t capacity)
     {
-        if (rowSize == 0 || capacity == 0)
+        if (bytesPerRow == 0 || capacity == 0)
         {
             spdlog::error("GPU table '{}' needs a row size and a capacity.", name);
             return false;
         }
 
-        this->rowSize = rowSize;
+        rowSize = bytesPerRow;
         rowCapacity = capacity;
         shadow.assign(static_cast<size_t>(rowSize) * capacity, 0);
         dirtySlots.assign(capacity, 0);

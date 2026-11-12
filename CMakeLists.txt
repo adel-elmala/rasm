@@ -4,6 +4,9 @@ project(rasm VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# RASM uses no C++20 modules. Scanning for them puts @modmap arguments in compile_commands.json, which break clang-tidy.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(RASM_ENABLE_AVX2 "Build the engine for AVX2-capable x86 CPUs" OFF)
 option(RASM_BUILD_EXAMPLES "Build the example applications" ${PROJECT_IS_TOP_LEVEL})
@@ -27,6 +30,7 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
 include(GNUInstallDirs)
+include(RasmAnalysis)
 
 add_subdirectory(src)
 

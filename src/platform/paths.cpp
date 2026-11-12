@@ -31,7 +31,7 @@ namespace rasm
         {
             return std::filesystem::path(reinterpret_cast<const char8_t *>(text.c_str()));
         }
-        catch (const std::system_error &)
+        catch (const std::system_error &) // NOLINT(bugprone-empty-catch): falls through to the code page below
         {
             // Not UTF-8, which is what path::string() gives for a non-ASCII path in the ANSI code page.
         }

@@ -188,7 +188,7 @@ namespace rasm::rhi
             spdlog::error("Failed to release the swapchain semaphores. Error: {}", toVkResultString(result));
     }
 
-    SwapchainStatus VulkanSwapchain::acquireNextImage(uint32_t &imageIndex)
+    SwapchainStatus VulkanSwapchain::acquireNextImage(uint32_t &outImageIndex)
     {
         if (swapchain.swapchain == VK_NULL_HANDLE)
             return SwapchainStatus::OUT_OF_DATE;
@@ -197,7 +197,7 @@ namespace rasm::rhi
         // semaphore is still signaled, so hand it out again rather than acquiring another.
         if (acquiredSlot != NO_ACQUIRE)
         {
-            imageIndex = this->imageIndex;
+            outImageIndex = imageIndex;
             return SwapchainStatus::OK;
         }
         if (presentPending)
@@ -234,8 +234,8 @@ namespace rasm::rhi
         {
             acquiredSlot = slot;
             nextAcquireSlot = (slot + 1) % MAX_FRAMES_IN_FLIGHT;
-            this->imageIndex = acquiredIndex;
             imageIndex = acquiredIndex;
+            outImageIndex = acquiredIndex;
         }
         return status;
     }

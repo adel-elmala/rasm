@@ -86,6 +86,8 @@ namespace rasm
         int         windowWidth             = 0;
         int         windowHeight            = 0;
         bool        enableValidation        = false;
+        bool        enableSyncValidation    = false;
+        bool        enableGpuValidation     = false;
         Backend     preferredBackend        = Backend::VULKAN;
         std::string assetRoot               = {};
         std::string shaderDir               = {};

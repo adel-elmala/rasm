@@ -149,9 +149,11 @@ int main()
             const auto &window = engine.getMainWindow();
             const float windowWidth = static_cast<float>(window.pixelWidth);
             const float windowHeight = static_cast<float>(window.pixelHeight);
-            const float scale = glm::min(windowWidth / config.windowWidth, windowHeight / config.windowHeight);
-            const float width = config.windowWidth * scale;
-            const float height = config.windowHeight * scale;
+            const float configWidth = static_cast<float>(config.windowWidth);
+            const float configHeight = static_cast<float>(config.windowHeight);
+            const float scale = glm::min(windowWidth / configWidth, windowHeight / configHeight);
+            const float width = configWidth * scale;
+            const float height = configHeight * scale;
 
             ctx.setViewport(commandBuffer, (windowWidth - width) * 0.5f, (windowHeight - height) * 0.5f, width, height);
             ctx.bindPipeline(commandBuffer, overlayPipeline);

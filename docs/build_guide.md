@@ -138,6 +138,65 @@ To see the test output, or to run a subset, run the executable directly, for exa
 
 Pass `-DRASM_BUILD_TESTS=OFF` to leave them out.
 
+## Static and dynamic analysis
+
+All of these run locally; CI does not run them. Each tool only looks at RASM's own code (`rasm`, `rasm_tests`, the examples), never at the vcpkg dependencies.
+
+| Tool | Finds | How to run |
+|---|---|---|
+| Compiler warnings | conversions, shadowing, unused code | on by default (`RASM_WARNINGS`) in every preset |
+| clang-tidy + clang static analyzer | bug patterns, null and leak paths, slow copies, naming | `x64-tidy` / `macOS-tidy` preset |
+| AddressSanitizer + UndefinedBehaviorSanitizer | out-of-bounds, use-after-free, undefined behaviour | `x64-asan` / `macOS-asan` preset |
+| ThreadSanitizer | data races | `macOS-tsan` preset |
+| Vulkan synchronization validation, GPU-AV | missing barriers; bad bindless, indirect and BDA accesses in shaders | `EngineConfig` switches or environment variables |
+
+A new build should have no warnings and no clang-tidy findings. Fix new ones, or turn a check off in `.clang-tidy` with a reason, rather than letting them pile up.
+
+### Compiler warnings
+
+`RASM_WARNINGS` (on when RASM is the top-level project) adds `-Wall -Wextra -Wshadow -Wconversion` with clang and GCC, and `/W4` with MSVC. Two are turned off: sign conversions (nearly all are tinygltf's `int` indices; `-Wsign-compare` still reports the comparisons), and missing field initializers (`{VK_STRUCTURE_TYPE_...}` and designated initializers leave the rest at zero or the default on purpose).
+
+### clang-tidy
+
+```
+cmake --preset x64-tidy
+cmake --build --preset x64-tidy
+```
+
+The tidy preset runs clang-tidy on every file it compiles, so findings show up as build warnings and a rebuild only checks the files that changed. It needs `clang-tidy` 19 or newer on `PATH` (it ships with LLVM; `.clang-tidy` uses `ExcludeHeaderFilterRegex`) and CMake 3.27 or newer (for `SKIP_LINTING`); configure stops with an error on an older CMake. The checks are in `.clang-tidy`: `bugprone-*`, `clang-analyzer-*` (the clang static analyzer), `performance-*` and `readability-identifier-naming`, which checks the [naming table](coding_style.md#2-naming). The file lists each check that is turned off and why. `src/thirdparty_impl.cpp` is skipped.
+
+Every build writes `compile_commands.json`, so clang-tidy also runs on an existing build without the preset, for example on one file: `clang-tidy -p build/x64-debug src/engine.cpp`. To silence one finding that is wrong, add `// NOLINT(<check>): <reason>` on its line.
+
+### Sanitizers
+
+```
+cmake --preset x64-asan
+cmake --build --preset x64-asan
+ctest --preset x64-asan
+python .claude/skills/verify-change/scripts/verify.py run --preset x64-asan
+```
+
+The sanitizer presets set `RASM_SANITIZERS` (`address;undefined`, or `thread`). The first ASan or UBSan error stops the program with a report (`-fno-sanitize-recover=all`). The `x64-asan` / `macOS-asan` test presets add `UBSAN_OPTIONS=print_stacktrace=1` for a stack trace, and `macOS-tsan` sets `TSAN_OPTIONS=halt_on_error=1`, because TSan keeps running after a report by default. Set these yourself when running an example by hand.
+
+- **Windows:** clang's ASan does not support the Debug C runtime, so `x64-asan` builds `RelWithDebInfo` against the release runtime and libraries, but with `-O1` and asserts still on. The ASan runtime DLL is copied next to each executable.
+- **UBSan** skips four checks in `src/thirdparty_impl.cpp`, all for stb_image_resize2's deliberate tricks: `array-bounds` (it indexes before its sRGB table), `null` and `object-size` (`STBIR__FREE_AND_CLEAR` reads `info->user_data` after clearing `info`) and `alignment` (`STBIR_MOVE_*` copies coefficients with unaligned 8-byte stores). Every other UBSan check (shifts, overflow, enums, ...) and ASan still cover the file, so tinygltf, stb_image and tinyobjloader parsing stays checked.
+- **Installing a sanitized build:** `rasm` then carries `-fsanitize=...` in its link interface, so a `find_package(rasm)` consumer links the sanitizer runtime too and must use clang.
+- **GFXReconstruct:** its default page-guard memory tracking works through access violations, which ASan treats as crashes. `verify.py` sets `GFXRECON_MEMORY_TRACKING_MODE=unassisted` for `-asan` presets; do the same when capturing by hand.
+- **Leaks:** LeakSanitizer is part of ASan on Linux. It does not exist on Windows, and Apple clang does not support it on macOS; with Homebrew LLVM, set `ASAN_OPTIONS=detect_leaks=1`. With validation on, the Vulkan layer reports every Vulkan object still alive at `vkDestroyDevice`, and VMA asserts on leaked allocations in builds with asserts on.
+- **MemorySanitizer** is not set up. It only runs on Linux, and only when every library, the C++ standard library included, is built with it.
+- **ThreadSanitizer** (`macOS-tsan`) cannot be combined with ASan, so it has its own preset. Windows has no TSan.
+
+### Vulkan validation
+
+`EngineConfig::enableValidation` turns on the Khronos validation layer with its core checks. Two slower checks can be added on top:
+
+| `EngineConfig` field | Environment variable | Finds |
+|---|---|---|
+| `enableSyncValidation` | `VK_LAYER_VALIDATE_SYNC=1` | missing or wrong barriers, read/write hazards between passes |
+| `enableGpuValidation` | `VK_LAYER_GPUAV_ENABLE=1` | out-of-bounds bindless indices, bad indirect draw arguments, bad buffer device address reads, in shaders as they run |
+
+Both fields need `enableValidation` and installed validation layers; without them the engine logs a warning and ignores the fields. The engine enables `VK_EXT_layer_settings` (from the validation layer) to pass them. The environment variables need no rebuild; `verify.py --sync --gpu-av` sets them. Use the environment variables when the GFXReconstruct capture layer is loaded (as `verify.py` does): it drops the layer settings that the two fields pass to `vkCreateInstance`, so the fields have no effect under it. GPU-AV logs three expected warnings at startup: that it is slow next to core checks, which device features it turned on for itself, and which of its checks it turned off because the GPU lacks the feature (ray tracing, mesh shading).
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every pull request and every push to `main`. It has one job per OS: Windows builds `x64-debug` then `x64-release`, macOS builds `macOS` then `macOS-release`, examples included, and each preset runs `ctest`. The runners have no GPU, so CI does not run the examples. It still installs the Vulkan runtime on Windows, because `rasm_tests.exe` loads `vulkan-1.dll`.

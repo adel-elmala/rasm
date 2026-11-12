@@ -12,7 +12,7 @@ namespace rasm::rhi
     class UploadManager
     {
     public:
-        bool                        initialize(Device& device);
+        bool                        initialize(Device& targetDevice);
         void                        cleanup();
         bool                        upload(Buffer* dst, const void* data, size_t size, size_t offset);
         bool                        flush();

@@ -224,7 +224,11 @@ namespace rasm
         const auto config = engine->getConfig();
         const auto &window = engine->getMainWindow();
 
-        impl->device = rhi::createDevice(backend, {.appName = config.appName, .window = &window, .enableValidation = config.enableValidation});
+        impl->device = rhi::createDevice(backend, {.appName = config.appName,
+                                                   .window = &window,
+                                                   .enableValidation = config.enableValidation,
+                                                   .enableSyncValidation = config.enableSyncValidation,
+                                                   .enableGpuValidation = config.enableGpuValidation});
         if (!impl->device)
             return false;
 

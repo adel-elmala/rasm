@@ -66,9 +66,9 @@ namespace
         return std::find(order.begin(), order.end(), passIdx) - order.begin();
     }
 
-    const rasm::TextureHandle TEXTURE_A{1, 1};
-    const rasm::TextureHandle TEXTURE_B{2, 1};
-    const rasm::TextureHandle TEXTURE_C{3, 1};
+    constexpr rasm::TextureHandle TEXTURE_A{1, 1};
+    constexpr rasm::TextureHandle TEXTURE_B{2, 1};
+    constexpr rasm::TextureHandle TEXTURE_C{3, 1};
 }
 
 TEST_CASE("an empty graph compiles")

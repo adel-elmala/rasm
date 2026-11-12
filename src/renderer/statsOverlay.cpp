@@ -130,7 +130,7 @@ namespace rasm
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             StatsOverlaySlot &slot = statsOverlay->slots[i];
-            slot.text = ctx.createBuffer({.name = "Stats Overlay Text " + std::to_string(i), .usage = BufferUsage::STORAGE, .size = MAX_TEXT_COLUMNS * MAX_TEXT_ROWS, .hostVisible = true});
+            slot.text = ctx.createBuffer({.name = "Stats Overlay Text " + std::to_string(i), .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(MAX_TEXT_COLUMNS) * MAX_TEXT_ROWS, .hostVisible = true});
             if (!slot.text.isValid())
             {
                 spdlog::error("Failed to create the stats overlay's text buffer.");

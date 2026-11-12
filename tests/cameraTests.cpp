@@ -7,9 +7,9 @@
 
 namespace
 {
-    const float NEAR_Z = 0.1f;
-    const float FAR_Z = 100.0f;
-    const float TOLERANCE = 1e-4f;
+    constexpr float NEAR_Z = 0.1f;
+    constexpr float FAR_Z = 100.0f;
+    constexpr float TOLERANCE = 1e-4f;
 
     bool isNear(const glm::vec3 &a, const glm::vec3 &b)
     {

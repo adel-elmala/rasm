@@ -65,10 +65,10 @@ namespace rasm
              RenderGraph(Engine* owner) : engine(owner) {}
              ~RenderGraph() = default;
         void addPass(std::string name,
-                 std::function<void(PassBuilder&)> setup,
+                 const std::function<void(PassBuilder&)>& setup,
                  std::function<void(RenderContext&)> execute);
         void addComputePass(std::string name,
-                 std::function<void(PassBuilder&)> setup,
+                 const std::function<void(PassBuilder&)>& setup,
                  std::function<void(RenderContext&)> execute);
 
         void compile();
