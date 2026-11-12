@@ -46,7 +46,7 @@ cmake --install build\x64-debug                        # into install/, for find
 
 | Adding | Where | Also |
 |---|---|---|
-| A part (`.h` + `.cpp`) | camelCase names, in its layer's folder (`src/scene/`, `src/rhi/vulkan/`, ...). Public header in `include/rasm/` only if applications use it. | Add the `.cpp` to `RASM_SRC` in `src/CMakeLists.txt`, next to its folder's files. |
+| A part (`.h` + `.cpp`) | camelCase names, in its layer's folder (`src/scene/`, `src/rhi/vulkan/`, ...). Public header in `include/rasm/` only if applications use it. | Add the `.cpp` to `target_sources(rasm PRIVATE ...)` in `src/CMakeLists.txt`, next to its folder's files. Public headers need no entry: every `.h` under `include/` is picked up and installed. |
 | Any header | — | Whole file inside `// clang-format off` ... `// clang-format on`, then `#pragma once`, with declarations hand-aligned in columns (`docs/coding_style.md` section 4). |
 | An example | `examples/NN_name/main.cpp` | `rasm_add_example(NN_name)` in `examples/CMakeLists.txt`. Set `enableValidation = true`, `assetRoot = RASM_EXAMPLE_ASSET_ROOT`, `shaderDir = RASM_EXAMPLE_SHADER_DIR` like `02_gltf`. |
 | A test | `tests/<name>Tests.cpp` | Add it to the `rasm_tests` list in `tests/CMakeLists.txt`. |
