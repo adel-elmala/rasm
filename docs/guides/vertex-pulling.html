@@ -463,7 +463,7 @@ float4 vertexMain(uint vertexIndex : SV_VertexID) : SV_Position
 
     <rect x="20" y="110" width="360" height="64" rx="6" class="mem"/>
     <text x="34" y="130" class="title">Geometry Index Pool</text>
-    <text x="34" y="148" class="small">uint32 · INDEX · bound once per drawScene</text>
+    <text x="34" y="148" class="small">uint32 · INDEX · bound once per scene pass</text>
     <text x="34" y="164" class="small">geometryPoolIndices = 2²⁴ indices = 64 MiB</text>
 
     <rect x="20" y="186" width="360" height="64" rx="6" class="mem"/>
@@ -503,7 +503,7 @@ float4 vertexMain(uint vertexIndex : SV_VertexID) : SV_Position
   <tr><td>Vertex input layout</td><td>empty</td><td>Empty for every graphics pipeline (<code>VulkanDevice::createGraphicsPipeline</code>). Core Vulkan, so it also runs where dynamic vertex input is missing, such as MoltenVK.</td></tr>
   <tr><td>How the shader reaches the buffer</td><td>a descriptor or an address</td><td>A raw address: <code>SceneData::vertsPtr</code>, a <code>VertexFull</code> pointer. No descriptor. See <a href="device-addresses.html#in-rasm">buffer device addresses</a>.</td></tr>
   <tr><td>The vertex index</td><td>depends on the API and language</td><td>Slang lowers <code>SV_VertexID</code> to <code>VertexIndex</code> − <code>BaseVertex</code>, as in Direct3D. So <code>vertMain</code> gets the local index and adds <code>draw-&gt;vertexOffset</code> itself. The hardware adds the offset, Slang removes it, the shader adds it back.</td></tr>
-  <tr><td>Index buffer</td><td>kept</td><td>Kept. One index buffer for all meshes, bound once per <code>drawScene</code> call with <code>bindIndexBuffer</code>, format <code>U32_UINT</code>.</td></tr>
+  <tr><td>Index buffer</td><td>kept</td><td>Kept. One index buffer for all meshes, bound once per scene pass (<code>Engine::drawSceneView</code>) with <code>bindIndexBuffer</code>, format <code>U32_UINT</code>.</td></tr>
   <tr><td>Indices</td><td>local + <var>vertexOffset</var></td><td>Local to the sub-mesh. <code>vertexOffset</code> = <code>firstVertex</code>, set in <code>rebuildDrawList</code>. Always 32-bit, even for small meshes.</td></tr>
   <tr><td>Sub-allocation</td><td>bump, free list, buddy…</td><td>Bump only. <code>GeometryPool::upload</code> appends; a full pool logs an error and the mesh is not uploaded (<code>GeometryPool::fits</code>). Nothing is freed (<code>D4</code>).</td></tr>
   <tr><td>Layout</td><td>interleaved or streams</td><td>One interleaved 64-byte struct: <code>pos</code>, <code>normal</code>, <code>uv</code>[3], <code>tangent</code>. The same bytes as the public <code>Vertex</code>, checked by <code>static_assert</code>s. <code>VertexPosOnly</code> is declared but not used: there is no position-only stream.</td></tr>
@@ -525,7 +525,7 @@ float4 vertexMain(uint vertexIndex : SV_VertexID) : SV_Position
   <tr><td>A sub-mesh's ranges</td><td><code>MeshGeometry</code> in <code>include/rasm/mesh.h</code>; <code>GeometryData</code>, <code>GeometryLod</code> in <code>shaders/lib/core.slang</code></td></tr>
   <tr><td>The empty vertex input</td><td><code>VulkanDevice::createGraphicsPipeline</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>The pull</td><td><code>vertMain</code> in <code>shaders/passes/rasm.slang</code></td></tr>
-  <tr><td>Binding the index buffer, setting <code>vertsPtr</code></td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Binding the index buffer, setting <code>vertsPtr</code></td><td><code>Engine::drawSceneView</code>, <code>Engine::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>LOD indices</td><td><code>buildMeshLods</code> in <code>src/assets/meshLod.cpp</code></td></tr>
 </table>
 </div>

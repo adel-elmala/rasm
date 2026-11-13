@@ -238,30 +238,30 @@ int main()
 <h2 id="frames"><span class="n">5</span>Three ways to run a frame</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 300" role="img" aria-label="A: render calls beginFrame, beginPass, drawScene, endPass and endFrame for you. B: you call the same functions yourself and can add your own draws. C: RenderGraph execute calls beginFrame, then beginPass, your lambda and endPass for each pass, then endFrame.">
+  <svg viewBox="0 0 760 300" role="img" aria-label="A: render runs a render graph with the scene's passes for you: beginFrame, Cull 1, Scene 1, Hi-Z, Cull 2, Scene 2, endFrame. B: you call beginFrame, beginPass, your own draws, endPass and endFrame yourself; the scene is not drawn this way. C: RenderGraph execute calls beginFrame, then for each pass, yours or the scene's from addScenePasses, beginPass, the lambda and endPass, then endFrame.">
     <text x="130" y="24" class="mid title">A · render()</text>
-    <text x="130" y="42" class="mid small">one call, one scene pass</text>
+    <text x="130" y="42" class="mid small">one call, the scene's passes</text>
     <text x="380" y="24" class="mid title">B · beginFrame / endFrame</text>
     <text x="380" y="42" class="mid small">your own passes and draws</text>
     <text x="622" y="24" class="mid title">C · RenderGraph::execute</text>
     <text x="622" y="42" class="mid small">passes sorted by what they read</text>
 
     <rect x="15" y="56"  width="230" height="28" rx="5" class="cpu"/><text x="130" y="75"  class="mid mono">beginFrame(camera)</text>
-    <rect x="15" y="92"  width="230" height="28" rx="5" class="cpu"/><text x="130" y="111" class="mid mono">beginPass("Scene")</text>
-    <rect x="15" y="128" width="230" height="28" rx="5" class="cpu"/><text x="130" y="147" class="mid mono">drawScene(scene, camera)</text>
-    <rect x="15" y="164" width="230" height="28" rx="5" class="cpu"/><text x="130" y="183" class="mid mono">endPass()</text>
+    <rect x="15" y="92"  width="230" height="28" rx="5" class="cpu"/><text x="130" y="111" class="mid mono">Cull 1 · Scene 1</text>
+    <rect x="15" y="128" width="230" height="28" rx="5" class="cpu"/><text x="130" y="147" class="mid mono">Hi-Z</text>
+    <rect x="15" y="164" width="230" height="28" rx="5" class="cpu"/><text x="130" y="183" class="mid mono">Cull 2 · Scene 2</text>
     <rect x="15" y="200" width="230" height="28" rx="5" class="cpu"/><text x="130" y="219" class="mid mono">endFrame()</text>
 
     <rect x="265" y="56"  width="230" height="28" rx="5" class="box"/><text x="380" y="75"  class="mid mono">if (beginFrame(camera))</text>
     <rect x="265" y="92"  width="230" height="28" rx="5" class="box"/><text x="380" y="111" class="mid mono">beginPass("Main")</text>
-    <rect x="265" y="128" width="230" height="28" rx="5" class="box"/><text x="380" y="147" class="mid mono">drawScene(scene, camera)</text>
-    <rect x="265" y="164" width="230" height="28" rx="5" class="box"/><text x="380" y="183" class="mid">your draws through RenderContext</text>
-    <rect x="265" y="200" width="230" height="28" rx="5" class="box"/><text x="380" y="219" class="mid mono">endPass()</text>
-    <rect x="265" y="236" width="230" height="28" rx="5" class="box"/><text x="380" y="255" class="mid mono">endFrame()</text>
+    <rect x="265" y="128" width="230" height="28" rx="5" class="box"/><text x="380" y="147" class="mid">your draws through RenderContext</text>
+    <rect x="265" y="164" width="230" height="28" rx="5" class="box"/><text x="380" y="183" class="mid mono">endPass()</text>
+    <rect x="265" y="200" width="230" height="28" rx="5" class="box"/><text x="380" y="219" class="mid mono">endFrame()</text>
+    <text x="380" y="252" class="mid small">no scene: only graph passes draw it</text>
 
     <rect x="515" y="56"  width="215" height="28" rx="5" class="cpu"/><text x="622" y="75"  class="mid mono">beginFrame(camera)</text>
     <rect x="515" y="92"  width="215" height="28" rx="5" class="cpu"/><text x="622" y="111" class="mid mono">beginPass(name)</text>
-    <rect x="515" y="128" width="215" height="28" rx="5" class="box"/><text x="622" y="147" class="mid">your execute lambda</text>
+    <rect x="515" y="128" width="215" height="28" rx="5" class="box"/><text x="622" y="147" class="mid">yours, or a scene pass</text>
     <rect x="515" y="164" width="215" height="28" rx="5" class="cpu"/><text x="622" y="183" class="mid mono">endPass()</text>
     <rect x="515" y="200" width="215" height="28" rx="5" class="ghost"/><text x="622" y="219" class="mid small">next pass in sorted order</text>
     <rect x="515" y="236" width="215" height="28" rx="5" class="cpu"/><text x="622" y="255" class="mid mono">endFrame()</text>
@@ -269,7 +269,7 @@ int main()
 
     <rect x="15" y="272" width="14" height="14" rx="3" class="cpu"/><text x="36" y="283" class="small">the engine calls it</text>
     <rect x="160" y="272" width="14" height="14" rx="3" class="box"/><text x="181" y="283" class="small">you call or write it</text>
-    <text x="330" y="283" class="small">In C, barriers come from each pass's reads and writes.</text>
+    <text x="330" y="283" class="small">In A and C, barriers come from each pass's reads and writes.</text>
   </svg>
   <figcaption>All three run the same frame steps. They differ in who calls them. In B, call nothing when <code>beginFrame</code> returns false: the frame is skipped (window minimized, swapchain out of date).</figcaption>
 </figure>
@@ -278,8 +278,8 @@ int main()
 <table>
   <tr><th>Way</th><th>Use it for</th><th>Example</th><th>Reference</th></tr>
   <tr><td>A · <code>render</code></td><td>One scene, one camera, straight to the window.</td><td><code>00_hello_scene</code>, <code>02_gltf</code>, <code>03_instances</code>, <code>05_city</code></td><td><a href="engine.html#render">engine.html#render</a></td></tr>
-  <tr><td>B · <code>beginFrame</code> / <code>endFrame</code></td><td>A few passes in a fixed order, your own pipelines.</td><td>none</td><td><a href="engine.html#beginFrame">engine.html#beginFrame</a></td></tr>
-  <tr><td>C · <code>RenderGraph</code></td><td>Offscreen render targets, post effects, compute work. The graph orders the passes and records their barriers.</td><td><code>01_render_graph</code>, <code>04_compute</code></td><td><a href="render-graph.html">render-graph.html</a></td></tr>
+  <tr><td>B · <code>beginFrame</code> / <code>endFrame</code></td><td>A few passes in a fixed order, your own pipelines. It cannot draw a scene: the scene is drawn by graph passes.</td><td>none</td><td><a href="engine.html#beginFrame">engine.html#beginFrame</a></td></tr>
+  <tr><td>C · <code>RenderGraph</code></td><td>Offscreen render targets, post effects, compute work, a scene into a render target (<a href="engine.html#addScenePasses"><code>addScenePasses</code></a>). The graph orders the passes and records their barriers.</td><td><code>01_render_graph</code>, <code>04_compute</code></td><td><a href="render-graph.html">render-graph.html</a></td></tr>
 </table>
 </div>
 
@@ -289,8 +289,7 @@ while (engine.running())
     if (!engine.beginFrame(camera))
         continue; // skipped: record nothing, no endFrame
     engine.beginPass("Main");
-    engine.drawScene(scene, camera);
-    // engine.getRenderContext() records more draws into
+    // engine.getRenderContext() records draws into
     // engine.getCurrentFrameResources().commandBuffer here
     engine.endPass();
     engine.endFrame();

@@ -13,10 +13,70 @@ namespace rasm
 {
     namespace
     {
+        enum class ResourceKind : uint32_t
+        {
+            TEXTURE,
+            BUFFER,
+            RENDER_TARGET,
+            SWAPCHAIN,
+        };
+
+        struct ResourceKey
+        {
+            ResourceKind kind = ResourceKind::TEXTURE;
+            uint64_t index = 0;
+            uint64_t generation = 0;
+
+            bool operator==(const ResourceKey &) const = default;
+        };
+
+        struct ResourceKeyHash
+        {
+            size_t operator()(const ResourceKey &key) const
+            {
+                return hashCombine(hashCombine(static_cast<size_t>(key.kind), std::hash<uint64_t>()(key.index)), std::hash<uint64_t>()(key.generation));
+            }
+        };
+    }
+
+    namespace
+    {
+        constexpr uint32_t NO_PASS = UINT32_MAX;
+
         void addEdge(std::vector<Pass> &passes, uint32_t from, uint32_t to)
         {
             passes[from].successors.push_back(to);
             passes[to].inDegree++;
+        }
+
+        ResourceKey keyOf(TextureHandle handle) { return {.kind = ResourceKind::TEXTURE, .index = handle.index, .generation = handle.generation}; }
+
+        ResourceKey keyOf(BufferHandle handle) { return {.kind = ResourceKind::BUFFER, .index = handle.index, .generation = handle.generation}; }
+
+        ResourceKey keyOf(RenderTargetHandle handle) { return {.kind = ResourceKind::RENDER_TARGET, .index = handle.index, .generation = handle.generation}; }
+
+        // A depth read orders like a read of the whole target.
+        void collectAccesses(const Pass &pass, std::vector<ResourceKey> &reads, std::vector<ResourceKey> &writes)
+        {
+            const ResourceKey swapchain = {.kind = ResourceKind::SWAPCHAIN};
+            for (auto handle : pass.inputTextures)
+                reads.push_back(keyOf(handle));
+            for (auto handle : pass.inputBuffers)
+                reads.push_back(keyOf(handle));
+            for (auto handle : pass.inputRenderTargets)
+                reads.push_back(keyOf(handle));
+            for (auto handle : pass.depthRenderTargets)
+                reads.push_back(keyOf(handle));
+            if (pass.readsSwapchainDepth)
+                reads.push_back(swapchain);
+            for (auto handle : pass.outputTextures)
+                writes.push_back(keyOf(handle));
+            for (auto handle : pass.outputBuffers)
+                writes.push_back(keyOf(handle));
+            if (pass.outputRenderTarget.isValid())
+                writes.push_back(keyOf(pass.outputRenderTarget));
+            if (pass.writesSwapchain)
+                writes.push_back(swapchain);
         }
     }
 
@@ -93,8 +153,10 @@ namespace rasm
         bool valid = true;
         for (const auto &pass : passes)
         {
-            // Its color would be sampled while it is an attachment.
-            if (pass.outputRenderTarget.isValid() && std::find(pass.inputRenderTargets.begin(), pass.inputRenderTargets.end(), pass.outputRenderTarget) != pass.inputRenderTargets.end())
+            // Its color or depth would be sampled while it is an attachment.
+            const bool readsColor = std::find(pass.inputRenderTargets.begin(), pass.inputRenderTargets.end(), pass.outputRenderTarget) != pass.inputRenderTargets.end();
+            const bool readsDepth = std::find(pass.depthRenderTargets.begin(), pass.depthRenderTargets.end(), pass.outputRenderTarget) != pass.depthRenderTargets.end();
+            if ((pass.outputRenderTarget.isValid() && (readsColor || readsDepth)) || (pass.writesSwapchain && pass.readsSwapchainDepth))
             {
                 spdlog::error("Pass '{}' reads the render target it draws to.", pass.name);
                 valid = false;
@@ -125,73 +187,56 @@ namespace rasm
             pass.successors.clear();
         }
 
-        // 1. Map resources to their producers. Passes that draw to one target run in the order they were added,
-        // so its readers see the last one.
-        std::unordered_map<TextureHandle, uint32_t, HandleHash> texturesWriters;
-        std::unordered_map<BufferHandle, uint32_t, HandleHash> buffersWriters;
-        std::unordered_map<RenderTargetHandle, uint32_t, HandleHash> renderTargetsWriters;
-        uint32_t swapchainWriter = static_cast<uint32_t>(-1);
+        // 1. The writers of each resource, in the order the passes were added.
+        std::vector<std::vector<ResourceKey>> reads(passes.size());
+        std::unordered_map<ResourceKey, std::vector<uint32_t>, ResourceKeyHash> writers;
         for (uint32_t i = 0; i < passes.size(); ++i)
         {
-            auto &pass = passes[i];
-            for (auto outHandle : pass.outputTextures)
+            std::vector<ResourceKey> writes;
+            collectAccesses(passes[i], reads[i], writes);
+            for (const auto &key : writes)
             {
-                texturesWriters[outHandle] = i;
-            }
-
-            for (auto outHandle : pass.outputBuffers)
-            {
-                buffersWriters[outHandle] = i;
-            }
-            if (pass.outputRenderTarget.isValid())
-            {
-                auto it = renderTargetsWriters.find(pass.outputRenderTarget);
-                if (it != renderTargetsWriters.end())
-                    addEdge(passes, it->second, i);
-                renderTargetsWriters[pass.outputRenderTarget] = i;
-            }
-            if (pass.writesSwapchain)
-            {
-                if (swapchainWriter != static_cast<uint32_t>(-1))
-                    addEdge(passes, swapchainWriter, i);
-                swapchainWriter = i;
+                auto &list = writers[key];
+                if (list.empty() || list.back() != i)
+                    list.push_back(i);
             }
         }
 
-        // 2. Build the Adjacency List (Edges)
+        // 2. The writers of a resource run in the order they were added. A reader runs after the last writer added
+        // before it, and before the writer after that one. A reader added before every writer reads the last one,
+        // unless it writes the resource itself: then it reads what the resource held before this frame's writes.
+        for (const auto &[key, list] : writers)
+        {
+            for (size_t k = 1; k < list.size(); ++k)
+                addEdge(passes, list[k - 1], list[k]);
+        }
         for (uint32_t i = 0; i < passes.size(); ++i)
         {
-            for (auto inHandle : passes[i].inputTextures)
+            for (const auto &key : reads[i])
             {
-                uint32_t producerIdx = texturesWriters.find(inHandle) != texturesWriters.end() ? texturesWriters[inHandle] : static_cast<uint32_t>(-1);
-                if (producerIdx != static_cast<uint32_t>(-1) && producerIdx != i)
-                {
-                    // There is a dependency: Producer -> Current Pass
-                    passes[producerIdx].successors.push_back(i);
-                    passes[i].inDegree++;
-                }
+                auto it = writers.find(key);
+                if (it == writers.end())
+                    continue;
+                const auto &list = it->second;
+                const auto next = std::lower_bound(list.begin(), list.end(), i);
+                const bool writesItToo = next != list.end() && *next == i;
+                uint32_t producer = NO_PASS;
+                if (next != list.begin())
+                    producer = *(next - 1);
+                else if (!writesItToo)
+                    producer = list.back();
+                if (producer != NO_PASS && producer != i)
+                    addEdge(passes, producer, i);
+                if (next != list.begin() && next != list.end() && !writesItToo)
+                    addEdge(passes, i, *next);
             }
 
-            for (auto inHandle : passes[i].inputRenderTargets)
+            // A buffer has one copy, so what the frame before wrote is there only until this frame's first write.
+            for (auto handle : passes[i].previousBuffers)
             {
-                uint32_t producerIdx = renderTargetsWriters.find(inHandle) != renderTargetsWriters.end() ? renderTargetsWriters[inHandle] : static_cast<uint32_t>(-1);
-                if (producerIdx != static_cast<uint32_t>(-1) && producerIdx != i)
-                {
-                    // There is a dependency: Producer -> Current Pass
-                    passes[producerIdx].successors.push_back(i);
-                    passes[i].inDegree++;
-                }
-            }
-
-            for (auto inHandle : passes[i].inputBuffers)
-            {
-                uint32_t producerIdx = buffersWriters.find(inHandle) != buffersWriters.end() ? buffersWriters[inHandle] : static_cast<uint32_t>(-1);
-                if (producerIdx != static_cast<uint32_t>(-1) && producerIdx != i)
-                {
-                    // There is a dependency: Producer -> Current Pass
-                    passes[producerIdx].successors.push_back(i);
-                    passes[i].inDegree++;
-                }
+                auto it = writers.find(keyOf(handle));
+                if (it != writers.end() && it->second.front() != i)
+                    addEdge(passes, i, it->second.front());
             }
         }
 
@@ -272,6 +317,7 @@ namespace rasm
 
             // Barriers are not allowed inside a render pass, so all of them go before the pass begins. beginPass
             // moves the attachments it draws to, and endPass leaves a render target's color SAMPLED for its readers.
+            // A depth read moves the depth here, and the next pass that draws the target moves it back.
             // A transient target's first pass draws over memory that other targets used before, last frame's included.
             if (std::find(transientFirstPasses.begin(), transientFirstPasses.end(), position) != transientFirstPasses.end())
                 ctx.aliasingBarrier(commandBuffer);
@@ -281,6 +327,10 @@ namespace rasm
                 ctx.memoryBarrier(commandBuffer, before, after);
             for (auto texture : pass.inputTextures)
                 ctx.transitionImageLayout(commandBuffer, texture, TextureUsage::SAMPLED);
+            for (auto renderTarget : pass.depthRenderTargets)
+                ctx.transitionImageLayout(commandBuffer, engine->getRenderTargetDepthTexture(renderTarget), TextureUsage::SAMPLED);
+            if (pass.readsSwapchainDepth)
+                ctx.transitionImageLayout(commandBuffer, engine->getCurrentFrameResources().depthTexture, TextureUsage::SAMPLED);
 
             if (pass.compute)
             {
@@ -313,20 +363,27 @@ namespace rasm
     }
 
     // Passes that draw to one target run in the order they were added, so the first clears it, and each later one loads
-    // what the one before drew, depth included, which that one must then store.
+    // what the one before drew, depth included, which that one must then store. So must the pass before a depth read.
     void RenderGraph::assignAttachmentOps(const std::vector<uint32_t> &order)
     {
-        constexpr uint32_t NONE = UINT32_MAX;
         std::unordered_map<RenderTargetHandle, uint32_t, HandleHash> lastWriters;
-        uint32_t lastSwapchainWriter = NONE;
+        uint32_t lastSwapchainWriter = NO_PASS;
         for (uint32_t passIdx : order)
         {
             Pass &pass = passes[passIdx];
             pass.attachmentOps = {};
+            for (auto renderTarget : pass.depthRenderTargets)
+            {
+                auto it = lastWriters.find(renderTarget);
+                if (it != lastWriters.end() && it->second != NO_PASS)
+                    passes[it->second].attachmentOps.storeDepth = true;
+            }
+            if (pass.readsSwapchainDepth && lastSwapchainWriter != NO_PASS)
+                passes[lastSwapchainWriter].attachmentOps.storeDepth = true;
             if (pass.compute)
                 continue;
-            uint32_t &previous = pass.writesSwapchain ? lastSwapchainWriter : lastWriters.try_emplace(pass.outputRenderTarget, NONE).first->second;
-            if (previous != NONE)
+            uint32_t &previous = pass.writesSwapchain ? lastSwapchainWriter : lastWriters.try_emplace(pass.outputRenderTarget, NO_PASS).first->second;
+            if (previous != NO_PASS)
             {
                 pass.attachmentOps.loadColor = true;
                 pass.attachmentOps.loadDepth = true;
@@ -369,6 +426,8 @@ namespace rasm
             };
             for (auto renderTarget : pass.inputRenderTargets)
                 use(renderTarget, false);
+            for (auto renderTarget : pass.depthRenderTargets)
+                use(renderTarget, false);
             if (pass.outputRenderTarget.isValid())
                 use(pass.outputRenderTarget, true);
         }
@@ -393,8 +452,9 @@ namespace rasm
         before = {};
         after = {};
 
-        // A write is made visible to each stage once, so the next read in the same stage needs no barrier.
-        for (auto buffer : pass.inputBuffers)
+        // A write is made visible to each stage once, so the next read in the same stage needs no barrier. A read of
+        // what the frame before wrote waits for that write like any other read.
+        auto read = [&](BufferHandle buffer)
         {
             auto &access = bufferAccess[buffer];
             if (access.writeStages != PipelineStage{} && !hasStage(access.readStages, stage))
@@ -403,7 +463,11 @@ namespace rasm
                 after = after | stage;
             }
             access.readStages = access.readStages | stage;
-        }
+        };
+        for (auto buffer : pass.inputBuffers)
+            read(buffer);
+        for (auto buffer : pass.previousBuffers)
+            read(buffer);
 
         // A write waits for every use since the last write, reads included.
         for (auto buffer : pass.outputBuffers)
@@ -454,6 +518,8 @@ namespace rasm
 
     // Last frame's copy is never written this frame, so the read adds no edge. The copy is always SAMPLED: the frame
     // before drew it, or it was cleared when it was made.
+    void RenderGraph::readPrevious(uint32_t passIdx, BufferHandle h) { passes[passIdx].previousBuffers.push_back(h); }
+
     void RenderGraph::readPrevious(uint32_t passIdx, RenderTargetHandle h)
     {
         if (engine && !engine->getRenderContext().getRenderTarget(h).history)
@@ -462,6 +528,27 @@ namespace rasm
             return;
         }
         passes[passIdx].previousRenderTargets.push_back(h);
+    }
+
+    // Depth textures are sampleable only with occlusion culling (TextureUsage::SAMPLED_DEPTH_ATTACHMENT).
+    void RenderGraph::readDepth(uint32_t passIdx, RenderTargetHandle h)
+    {
+        if (engine && !engine->getConfig().occlusionCulling)
+        {
+            spdlog::error("Pass '{}' reads a depth texture, which needs EngineConfig::occlusionCulling; the read is ignored.", passes[passIdx].name);
+            return;
+        }
+        passes[passIdx].depthRenderTargets.push_back(h);
+    }
+
+    void RenderGraph::readSwapchainDepth(uint32_t passIdx)
+    {
+        if (engine && !engine->getConfig().occlusionCulling)
+        {
+            spdlog::error("Pass '{}' reads a depth texture, which needs EngineConfig::occlusionCulling; the read is ignored.", passes[passIdx].name);
+            return;
+        }
+        passes[passIdx].readsSwapchainDepth = true;
     }
 
     void RenderGraph::write(uint32_t passIdx, TextureHandle h) { passes[passIdx].outputTextures.push_back(h); }
@@ -494,6 +581,12 @@ namespace rasm
     void PassBuilder::read(RenderTargetHandle handle) { graph.read(currentPass, handle); }
 
     void PassBuilder::readPrevious(RenderTargetHandle handle) { graph.readPrevious(currentPass, handle); }
+
+    void PassBuilder::readPrevious(BufferHandle handle) { graph.readPrevious(currentPass, handle); }
+
+    void PassBuilder::readDepth(RenderTargetHandle handle) { graph.readDepth(currentPass, handle); }
+
+    void PassBuilder::readSwapchainDepth() { graph.readSwapchainDepth(currentPass); }
 
     void PassBuilder::write(TextureHandle handle) { graph.write(currentPass, handle); }
 

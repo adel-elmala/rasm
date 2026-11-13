@@ -381,7 +381,7 @@ depth = (f − D) / (f − n)       reversed: again, swap n and f</code></pre>
 <p>RASM uses reversed-Z everywhere, with a 32-bit float depth buffer, a 0..1 clip range, and by default an infinite far plane. The three settings of <a href="#reversed">section 6</a> are fixed for every pass and every pipeline.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="A CameraProjection goes into toProjectionMatrix, which picks one of three matrices: glm ortho with near and far swapped, glm perspective with near and far swapped, or a hand-written infinite reversed matrix when farZ is 0 or infinity. drawScene writes it into SceneData. vertMain uses it. The depth attachment is D32_SFLOAT, cleared to 0, tested with GREATER_OR_EQUAL. Frustum planes, occlusion culling and the stats overlay all follow reversed-Z.">
+  <svg viewBox="0 0 760 330" role="img" aria-label="A CameraProjection goes into toProjectionMatrix, which picks one of three matrices: glm ortho with near and far swapped, glm perspective with near and far swapped, or a hand-written infinite reversed matrix when farZ is 0 or infinity. prepareSceneView writes it into SceneData. vertMain uses it. The depth attachment is D32_SFLOAT, cleared to 0, tested with GREATER_OR_EQUAL. Frustum planes, occlusion culling and the stats overlay all follow reversed-Z.">
     <rect x="15" y="20" width="170" height="56" rx="6" class="box"/>
     <text x="100" y="44" class="mid mono">CameraProjection</text>
     <text x="100" y="62" class="mid small">fovY in degrees</text>
@@ -421,7 +421,7 @@ depth = (f − D) / (f − n)       reversed: again, swap n and f</code></pre>
 
     <text x="15" y="288" class="small">Also reversed-Z: getFrustumPlanes (plane 4 is the far plane), occlusion culling (the Hi-Z keeps the minimum,</text>
     <text x="15" y="304" class="small">the farthest), and the stats overlay, whose panel sits at depth 1 (the near plane).</text>
-    <text x="15" y="320" class="small">drawScene fits the aspect ratio to each pass's size; the stored camera does not change.</text>
+    <text x="15" y="320" class="small">prepareSceneView fits the aspect ratio to each target's size; the stored camera does not change.</text>
   </svg>
   <figcaption>glm builds standard 0..1 matrices because <code>GLM_FORCE_DEPTH_ZERO_TO_ONE</code> is set in CMake (<code>B2</code>). Passing far as glm's near and near as glm's far reverses them, as in <a href="#depth-row">section 3</a>.</figcaption>
 </figure>
@@ -435,11 +435,11 @@ depth = (f − D) / (f − n)       reversed: again, swap n and f</code></pre>
   <tr><td>Far plane</td><td>finite or infinite</td><td>Infinite when <code>farZ</code> is 0 or infinity (<code>hasInfiniteFar</code>). A designated initializer that leaves out <code>farZ</code> gives 0, so the examples get an infinite far plane. Orthographic cameras have no infinite form.</td></tr>
   <tr><td>Infinite matrix</td><td>third row = (0, 0, 0, <var>n</var>)</td><td>The same, written by hand because glm has no reversed infinite matrix: <code class="lang-text">m[2][3] = -1</code>, <code class="lang-text">m[3][2] = nearZ</code> (glm indexes column first).</td></tr>
   <tr><td>Field of view</td><td>an angle</td><td><code>fovY</code> is in <b>degrees</b>; <code>toProjectionMatrix</code> converts it.</td></tr>
-  <tr><td>Depth format</td><td>32-bit float</td><td><code>D32_SFLOAT</code> (<code>DEPTH_FORMAT</code>), no stencil. Render targets used by <code>drawScene</code> must use it too.</td></tr>
+  <tr><td>Depth format</td><td>32-bit float</td><td><code>D32_SFLOAT</code> (<code>DEPTH_FORMAT</code>), no stencil. Render targets that <code>Engine::addScenePasses</code> draws into must use it too.</td></tr>
   <tr><td>Clear value</td><td>0</td><td>0.0 in <code>VulkanCommandBuffer::beginRendering</code>, for every pass that clears.</td></tr>
   <tr><td>Depth test</td><td>GREATER</td><td><code>VK_COMPARE_OP_GREATER_OR_EQUAL</code>, depth test and write on, in <code>createGraphicsPipeline</code>, for every graphics pipeline. Equal depths pass.</td></tr>
   <tr><td>Validation</td><td>—</td><td><code>isValidProjection</code> refuses a perspective <code>nearZ</code> that is not finite and &gt; 0, a finite <code>farZ</code> not &gt; <code>nearZ</code>, and an orthographic camera without finite <code>nearZ</code> &lt; <code>farZ</code>. NaN fails every check. <code>createCamera</code> then returns an invalid handle; <code>setCameraProjection</code> keeps the old projection.</td></tr>
-  <tr><td>Aspect ratio</td><td>update on resize</td><td><code>updateCameraAspectRatio</code> runs after the swapchain is (re)created. <code>drawScene</code> also fits a copy to each pass's size with <code>getProjectionMatrix(camera, aspect)</code>. An orthographic camera keeps its center and width; its height becomes width / aspect.</td></tr>
+  <tr><td>Aspect ratio</td><td>update on resize</td><td><code>updateCameraAspectRatio</code> runs after the swapchain is (re)created. <code>Engine::prepareSceneView</code> also fits a copy to each scene view's target size with <code>getProjectionMatrix(camera, aspect)</code>. An orthographic camera keeps its center and width; its height becomes width / aspect.</td></tr>
   <tr><td>Depth bias, depth clamp</td><td>—</td><td>Neither is used (no shadow maps yet).</td></tr>
 </table>
 </div>
@@ -452,7 +452,7 @@ depth = (f − D) / (f − n)       reversed: again, swap n and f</code></pre>
   <tr><td>Projection settings</td><td><code>CameraProjection</code> in <code>include/rasm/camera.h</code></td></tr>
   <tr><td>The matrices</td><td><code>toProjectionMatrix</code>, <code>hasInfiniteFar</code>, <code>setProjectionAspect</code> in <code>src/scene/camera.cpp</code></td></tr>
   <tr><td>Checks</td><td><code>isValidProjection</code> in <code>src/scene/camera.cpp</code></td></tr>
-  <tr><td>Per-pass aspect</td><td><code>Engine::getProjectionMatrix</code> (with an aspect), called by <code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Per-pass aspect</td><td><code>Engine::getProjectionMatrix</code> (with an aspect), called by <code>Engine::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Depth textures</td><td><code>DEPTH_FORMAT</code> in <code>include/rasm/engine.h</code>; created in <code>src/engine.cpp</code></td></tr>
   <tr><td>Clear to 0</td><td><code>VulkanCommandBuffer::beginRendering</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>Compare op</td><td><code>VulkanDevice::createGraphicsPipeline</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>

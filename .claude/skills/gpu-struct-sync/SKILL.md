@@ -20,7 +20,7 @@ pointer field moves.
 | 5 | Shared constants and enums | `MAX_LIGHTS` (`include/rasm/light.h`), `MAX_VERTEX_UV_SETS` (`include/rasm/mesh.h`), `MaterialId`, `LightType`: same values in `core.slang`. |
 | 6 | `VertexFull` only | `rasm::Vertex` in `include/rasm/mesh.h` and the `static_assert`s in `src/renderer/geometryPool.cpp`. |
 | 7 | `PushConstants` only | Its size must stay `PUSH_CONSTANTS_SIZE` (`include/rasm/types.h`), the range of every pipeline layout and the limit `RenderContext::pushConstants` checks. Growing it means raising that constant, and the `new-pass` skill's limits table. |
-| 8 | CPU writers | `src/renderer/gpuScene.cpp`: `drawScene` (`SceneData`, `Light`), `writeInstanceRows` (`InstanceData`), `rebuildDrawList` (`DrawInfo`). `convertToGfxMaterial` + `writeMaterialRow` (`Material`, `MaterialData`), also in `gpuScene.cpp`. `src/renderer/geometryPool.cpp`: `GeometryPool::upload` (`GeometryData`). Fill the new field. Zero-init (`{}`) hides a forgotten one. |
+| 8 | CPU writers | `src/renderer/gpuScene.cpp`: `prepareSceneView` (`SceneData`, `Light`), `writeInstanceRows` (`InstanceData`), `rebuildDrawList` (`DrawInfo`). `convertToGfxMaterial` + `writeMaterialRow` (`Material`, `MaterialData`), also in `gpuScene.cpp`. `src/renderer/geometryPool.cpp`: `GeometryPool::upload` (`GeometryData`). Fill the new field. Zero-init (`{}`) hides a forgotten one. |
 | 9 | GPU readers | `shaders/passes/rasm.slang`, `shaders/lib/pbr.slang`, `shaders/lib/unlit.slang`; `GeometryData` in `shaders/lib/frustumCulling.slang` and `shaders/lib/lodSelection.slang`. |
 | 10 | Docs that quote numbers | `docs/architecture.md` (sizes in the struct contract section), `.claude/skills/frame-debug/SKILL.md` (`SceneData` offsets). |
 

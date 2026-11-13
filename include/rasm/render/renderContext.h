@@ -73,6 +73,7 @@ namespace rasm
         [[nodiscard]] SwapchainStatus       present();
         void                                destroyTexture(const TextureHandle& texture);
         void                                destroyBuffer(const BufferHandle& buffer);
+        bool                                resizeBuffer(const BufferHandle& buffer, uint64_t size);
         void                                bindPipeline(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline);
         void                                bindIndexBuffer(const CommandBufferHandle& commandBuffer, const BufferHandle& buffer, uint64_t offset, Format indexType);
         void                                bindDescriptorSet(const CommandBufferHandle& commandBuffer, const PipelineHandle& pipeline, const DescriptorSetHandle& descriptorSet, uint32_t setIndex = 0);

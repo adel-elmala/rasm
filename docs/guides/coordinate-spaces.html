@@ -531,7 +531,7 @@ pixels:  x_p = vx + (x_n + 1) / 2 · width
     <text x="130" y="146" class="mid small">conjugate(rotation) · T(−position)</text>
     <rect x="20" y="172" width="220" height="56" rx="6" class="cpu"/>
     <text x="130" y="196" class="mid mono">getProjectionMatrix</text>
-    <text x="130" y="214" class="mid small">fitted to the pass's aspect</text>
+    <text x="130" y="214" class="mid small">fitted to the target's aspect</text>
 
     <line x1="240" y1="64"  x2="288" y2="64"  class="arrow mem" marker-end="url(#ah-mem)"/>
     <line x1="240" y1="132" x2="288" y2="146" class="arrow mem" marker-end="url(#ah-mem)"/>
@@ -585,7 +585,7 @@ pixels:  x_p = vx + (x_n + 1) / 2 · width
   <tr><td>Position, rotation, scale</td><td><code>Transform</code> in <code>include/rasm/transform.h</code>; <code>Transform::toMatrix</code>, <code>Transform::rotate</code> in <code>src/scene/transform.cpp</code></td></tr>
   <tr><td>Instance world matrix</td><td><code>Engine::writeInstanceRows</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>View matrix</td><td><code>Engine::getViewMatrix</code> in <code>src/scene/camera.cpp</code></td></tr>
-  <tr><td>Matrices into the frame</td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code> (<code>SceneData</code>'s <code>view</code> and <code>projection</code>)</td></tr>
+  <tr><td>Matrices into the frame</td><td><code>Engine::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code> (<code>SceneData</code>'s <code>view</code> and <code>projection</code>)</td></tr>
   <tr><td>Object to clip</td><td><code>vertMain</code> in <code>shaders/passes/rasm.slang</code></td></tr>
   <tr><td>The Y flip</td><td><code>VulkanCommandBuffer::setViewport</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>glm's depth range</td><td><code>GLM_FORCE_DEPTH_ZERO_TO_ONE</code> in <code>src/CMakeLists.txt</code> (<code>B2</code>)</td></tr>

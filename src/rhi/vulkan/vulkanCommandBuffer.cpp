@@ -283,7 +283,7 @@ namespace rasm::rhi
             .imageView = depth ? depth->view : VK_NULL_HANDLE,
             .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
             .loadOp = ops.loadDepth ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR,
-            // Stored only when a later pass loads it, or drawScene may pause the pass to build its Hi-Z from it.
+            // Stored only when a later pass loads or samples it (RenderGraph::assignAttachmentOps).
             .storeOp = ops.storeDepth ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE,
             // Reversed-Z: the far plane is depth 0. Pairs with the GREATER_OR_EQUAL compare in createGraphicsPipeline.
             .clearValue = {.depthStencil = {0.0f, 0}}};

@@ -346,7 +346,7 @@
 <p>RASM uses glTF's convention: counter-clockwise is front. The cull mode is chosen per instance on the CPU from the material and the determinant, and the draw list is grouped so that each group of equal modes is one indirect draw. Because the Vulkan backend flips Y with a negative viewport height, clip space and the screen agree on the winding (<code>D8</code>).</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="On the CPU, getCullMode picks NONE for a double-sided material, FRONT for a negative determinant, else BACK, per instance. rebuildDrawList sorts the draws by cull mode into up to three runs. drawScene sets the cull mode and issues one indirect draw per run. The pipeline's front face is counter-clockwise with a negative viewport height. In the fragment shader, backFace is isFrontFace equal to handedness below 0, and pbr flips the normal for back faces.">
+  <svg viewBox="0 0 760 330" role="img" aria-label="On the CPU, getCullMode picks NONE for a double-sided material, FRONT for a negative determinant, else BACK, per instance. rebuildDrawList sorts the draws by cull mode into up to three runs. drawSceneView sets the cull mode and issues one indirect draw per run. The pipeline's front face is counter-clockwise with a negative viewport height. In the fragment shader, backFace is isFrontFace equal to handedness below 0, and pbr flips the normal for back faces.">
     <text x="20" y="22" class="title t-cpu">CPU · when a transform or material changes</text>
     <rect x="20" y="32" width="230" height="78" rx="6" class="cpu"/>
     <text x="135" y="54" class="mid mono">getCullMode</text>
@@ -372,7 +372,7 @@
     <text x="610" y="166" class="small">runs ≤ MAX_DRAW_RUNS (3)</text>
     <text x="610" y="182" class="small">empty runs are left out</text>
 
-    <text x="20" y="222" class="title t-gpu">GPU · each drawScene</text>
+    <text x="20" y="222" class="title t-gpu">GPU · each scene pass</text>
     <rect x="20" y="232" width="230" height="56" rx="6" class="gpu"/>
     <text x="135" y="254" class="mid">per run: setCullMode,</text>
     <text x="135" y="272" class="mid small">one indirect draw, then NONE</text>
@@ -402,7 +402,7 @@
   <tr><td>Mirror + front-facing flag</td><td>combine with the determinant</td><td>Done: <code>vertMain</code> passes <code>handedness</code>, the sign of <code class="lang-text">determinant(modelMat3)</code>, to the fragment shader.</td></tr>
   <tr><td>Granularity</td><td>per object</td><td>Per instance row (one sub-mesh of one entity). <code>updateCullModes</code> recomputes it after <code>updateTransform</code> and after a material change; a changed mode rebuilds the draw lists of the entity's scenes.</td></tr>
   <tr><td>Draw calls</td><td>one state per draw</td><td>Draws are sorted into at most three runs, one indirect draw per run, instead of one draw per object.</td></tr>
-  <tr><td>Other passes</td><td>—</td><td><code>beginPass</code> sets <code>NONE</code>, <code>drawScene</code> restores <code>NONE</code> after its runs, and the stats overlay draws with <code>NONE</code>.</td></tr>
+  <tr><td>Other passes</td><td>—</td><td><code>beginPass</code> sets <code>NONE</code>, <code>drawSceneView</code> restores <code>NONE</code> after its runs, and the stats overlay draws with <code>NONE</code>.</td></tr>
   <tr><td>Cluster cone culling</td><td>section 7</td><td>Not done. Culling on the GPU works per draw (frustum, occlusion), not per cluster of triangles.</td></tr>
 </table>
 </div>
@@ -415,7 +415,7 @@
   <tr><td>The modes</td><td><code>CullMode</code> in <code>include/rasm/types.h</code></td></tr>
   <tr><td>Choosing a mode</td><td><code>getCullMode</code>, <code>Engine::updateCullModes</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Runs in the draw list</td><td><code>Engine::rebuildDrawList</code> in <code>src/renderer/gpuScene.cpp</code>; <code>DrawRun</code> in <code>src/renderer/gpuScene.h</code>; <code>MAX_DRAW_RUNS</code> in <code>src/renderer/uberMaterialTypes.h</code></td></tr>
-  <tr><td>Drawing the runs</td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Drawing the runs</td><td><code>Engine::drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Front face, dynamic cull mode</td><td><code>VulkanDevice::createGraphicsPipeline</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>Setting the mode, the Y flip</td><td><code>VulkanCommandBuffer::setCullMode</code>, <code>VulkanCommandBuffer::setViewport</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>Double-sided flag</td><td><code>Material</code> in <code>include/rasm/material.h</code>; read from glTF in <code>src/assets/material.cpp</code></td></tr>

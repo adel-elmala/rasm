@@ -23,6 +23,13 @@ namespace rasm
         constexpr uint32_t CULL_EARLY = 0;       // the cull phases of cull.slang
         constexpr uint32_t CULL_LATE = 1;
 
+        // The packed draws, then culling's scratch: a slot per draw and a count per group, at most one group per
+        // CULL_GROUP_SIZE draws plus one per run.
+        uint64_t getVisibleDrawBufferSize(uint32_t capacity)
+        {
+            return static_cast<uint64_t>(capacity) * (sizeof(gfx::DrawInfo) + sizeof(uint32_t)) + (capacity / CULL_GROUP_SIZE + gfx::MAX_DRAW_RUNS) * sizeof(uint32_t);
+        }
+
         // Level 0 is half the pass's size, rounded up, and each level halves the one before, down to 1x1 (occlusionCulling.slang).
         uint32_t getHizLevelCount(uint32_t width, uint32_t height, uint32_t &texelCount)
         {
@@ -57,6 +64,11 @@ namespace rasm
                 if (length > 0.0f)
                     planes[i] /= length;
             }
+        }
+
+        uint64_t getSceneDataAddress(RenderContext &ctx, const GpuScene &gpuScene, uint32_t frame, uint32_t view)
+        {
+            return ctx.getBufferDeviceAddress(gpuScene.sceneData[frame]) + view * sizeof(gfx::SceneData);
         }
 
         // glTF: a transform with a negative determinant mirrors the mesh, so its front faces turn clockwise (D8).
@@ -153,10 +165,10 @@ namespace rasm
             return false;
         }
 
-        // The CPU rewrites SceneData in every drawScene call, so it stays host-visible.
+        // The CPU rewrites each view's SceneData every frame, so it stays host-visible.
         for (auto &buffer : gpuScene->sceneData)
         {
-            buffer = ctx.createBuffer({.name = "Scene Data Buffer", .usage = BufferUsage::STORAGE, .size = MAX_SCENE_DRAWS_PER_FRAME * sizeof(gfx::SceneData), .hostVisible = true});
+            buffer = ctx.createBuffer({.name = "Scene Data Buffer", .usage = BufferUsage::STORAGE, .size = MAX_SCENE_VIEWS * sizeof(gfx::SceneData), .hostVisible = true});
             if (!buffer.isValid())
             {
                 spdlog::error("Failed to create the scene data buffer.");
@@ -164,16 +176,15 @@ namespace rasm
             }
         }
 
-        // Culling writes a visible draw count per run of each drawScene call; the draws read them as indirect counts.
+        // Culling writes a visible draw count per run of each view; the draws read them as indirect counts.
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
-            gpuScene->cullCommandBuffers[i] = ctx.createCommandBuffer("Cull Command Buffer " + std::to_string(i));
             gpuScene->drawCounts[i] = ctx.createBuffer({.name = "Draw Count Buffer " + std::to_string(i),
                                                         .usage = BufferUsage::INDIRECT,
-                                                        .size = static_cast<uint64_t>(MAX_SCENE_DRAWS_PER_FRAME) * gfx::MAX_DRAW_RUNS * sizeof(uint32_t)});
+                                                        .size = static_cast<uint64_t>(MAX_SCENE_VIEWS) * gfx::MAX_DRAW_RUNS * sizeof(uint32_t)});
             // The frame's visible draws and triangles (low, high), which updateFrameStats reads back once the slot's fence passed.
             gpuScene->cullStats[i] = ctx.createBuffer({.name = "Cull Stats Buffer " + std::to_string(i), .usage = BufferUsage::STORAGE, .size = CULL_STATS_WORDS * sizeof(uint32_t), .hostVisible = true, .hostReadable = true});
-            if (!gpuScene->cullCommandBuffers[i].isValid() || !gpuScene->drawCounts[i].isValid() || !gpuScene->cullStats[i].isValid())
+            if (!gpuScene->drawCounts[i].isValid() || !gpuScene->cullStats[i].isValid())
             {
                 spdlog::error("Failed to create the culling resources.");
                 return false;
@@ -417,7 +428,7 @@ namespace rasm
             }
         }
 
-        // drawScene issues one indirect draw per run of draws with the same cull mode.
+        // drawSceneView issues one indirect draw per run of draws with the same cull mode.
         const auto &cullModes = gpuScene->instanceCullModes;
         std::stable_sort(drawList.draws.begin(), drawList.draws.end(), [&](const gfx::DrawInfo &a, const gfx::DrawInfo &b)
                          { return cullModes[a.firstInstance] < cullModes[b.firstInstance]; });
@@ -461,23 +472,190 @@ namespace rasm
             drawList.staleSlots &= static_cast<uint8_t>(~bit);
     }
 
-    void Engine::drawScene(SceneHandle scene, CameraHandle camera)
+    // The scene in passes of the graph: culling, the draws, and with occlusion culling the Hi-Z build, the late culling
+    // and the late draws. They draw into renderTarget, or the swapchain when it is invalid, so later passes on that
+    // target load what they drew. Each view (scene, camera, target) culls into buffers of its own, kept from frame to
+    // frame, which its passes declare: per-slot buffers by both slots, so their handles hold for every frame.
+    bool Engine::addScenePasses(RenderGraph &graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget)
     {
-        ZoneScoped;
-
         if (!camera.isValid() || camera.index >= registry.cameras.size())
         {
-            spdlog::error("drawScene needs a valid camera handle.");
-            return;
+            spdlog::error("addScenePasses needs a valid camera handle.");
+            return false;
         }
         if (!scene.isValid() || scene.index >= MAX_SCENES || scene.index >= registry.scenes.size())
         {
-            spdlog::error("drawScene needs a valid scene handle.");
-            return;
+            spdlog::error("addScenePasses needs a valid scene handle.");
+            return false;
+        }
+        // The pipeline's formats must match the attachments' for the draw to be defined.
+        if (renderTarget.isValid())
+        {
+            const auto &renderTargetData = ctx.getRenderTarget(renderTarget);
+            if (renderTargetData.colorCount != 1 || renderTargetData.colorFormats[0] != swapchain.imageFormat || renderTargetData.depthFormat != DEPTH_FORMAT)
+            {
+                spdlog::error("addScenePasses needs a render target with one color attachment in the swapchain's format and D32_SFLOAT depth.");
+                return false;
+            }
         }
 
-        // An empty scene, or one whose entities still load, draws nothing; the pass keeps its cleared attachments.
-        const auto &drawList = gpuScene->drawLists[scene.index];
+        const uint32_t view = createSceneView(scene, camera, renderTarget);
+        if (view == UINT32_MAX)
+            return false;
+        const SceneView &sceneView = gpuScene->views[view];
+        const bool occlusion = config.occlusionCulling;
+
+        auto writeCulling = [this, &sceneView](PassBuilder &builder)
+        {
+            for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+            {
+                builder.write(sceneView.visibleDraws[i]);
+                builder.write(gpuScene->drawCounts[i]);
+                builder.write(gpuScene->cullStats[i]);
+            }
+        };
+        auto drawScenePass = [this, &sceneView, renderTarget](PassBuilder &builder)
+        {
+            for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+            {
+                builder.read(sceneView.visibleDraws[i]);
+                builder.read(gpuScene->drawCounts[i]);
+            }
+            if (renderTarget.isValid())
+                builder.write(renderTarget);
+            else
+                builder.writeSwapchain();
+        };
+
+        graph.addComputePass(
+            occlusion ? "Cull 1" : "Cull",
+            [&](PassBuilder &builder)
+            {
+                writeCulling(builder);
+                if (occlusion)
+                    builder.readPrevious(sceneView.visibility);
+            },
+            [this, view](RenderContext &)
+            {
+                prepareSceneView(view);
+                recordSceneCulling(view, CULL_EARLY);
+            });
+        graph.addPass(
+            occlusion ? "Scene 1" : "Scene",
+            drawScenePass,
+            [this, view](RenderContext &)
+            { drawSceneView(view); });
+        if (!occlusion)
+            return true;
+
+        graph.addComputePass(
+            "Hi-Z",
+            [&](PassBuilder &builder)
+            {
+                if (renderTarget.isValid())
+                    builder.readDepth(renderTarget);
+                else
+                    builder.readSwapchainDepth();
+                for (auto hiz : sceneView.hiz)
+                    builder.write(hiz);
+            },
+            [this, view](RenderContext &)
+            { recordHiz(view); });
+        graph.addComputePass(
+            "Cull 2",
+            [&](PassBuilder &builder)
+            {
+                for (auto hiz : sceneView.hiz)
+                    builder.read(hiz);
+                writeCulling(builder);
+                builder.write(sceneView.visibility);
+            },
+            [this, view](RenderContext &)
+            {
+                if (gpuScene->views[view].hizLevelCount > 0)
+                    recordSceneCulling(view, CULL_LATE);
+            });
+        graph.addPass(
+            "Scene 2",
+            drawScenePass,
+            [this, view](RenderContext &)
+            {
+                if (gpuScene->views[view].hizLevelCount > 0)
+                    drawSceneView(view);
+            });
+        return true;
+    }
+
+    // A view lives as long as the engine, so building a graph again for the same scene, camera and target reuses it.
+    // Its buffers start small and grow in prepareSceneView under the same handles.
+    uint32_t Engine::createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget)
+    {
+        for (uint32_t i = 0; i < gpuScene->views.size(); ++i)
+        {
+            const SceneView &view = gpuScene->views[i];
+            if (view.scene == scene && view.camera == camera && view.renderTarget == renderTarget)
+                return i;
+        }
+        if (gpuScene->views.size() >= MAX_SCENE_VIEWS)
+        {
+            spdlog::error("A scene can be drawn by at most {} views (scene, camera, target).", MAX_SCENE_VIEWS);
+            return UINT32_MAX;
+        }
+
+        SceneView view = {.scene = scene, .camera = camera, .renderTarget = renderTarget};
+        bool created = true;
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        {
+            view.visibleCapacity[i] = CULL_GROUP_SIZE;
+            view.visibleDraws[i] = ctx.createBuffer({.name = "Visible Draw Buffer", .usage = BufferUsage::INDIRECT, .size = getVisibleDrawBufferSize(CULL_GROUP_SIZE)});
+            created = created && view.visibleDraws[i].isValid();
+            if (config.occlusionCulling)
+            {
+                view.hizCapacity[i] = 1;
+                view.hiz[i] = ctx.createBuffer({.name = "Hi-Z Buffer", .usage = BufferUsage::STORAGE, .size = sizeof(float)});
+                created = created && view.hiz[i].isValid();
+            }
+        }
+        // The view's visibility, one flag per instance row, is kept across frames and shared by both frame slots: the
+        // GPU runs the frames in order. Rows start unseen, so a new instance is drawn late first.
+        if (config.occlusionCulling)
+        {
+            const std::vector<uint32_t> unseen(config.maxInstances, 0);
+            view.visibility = ctx.createBuffer({.name = "Visibility Buffer", .usage = BufferUsage::STORAGE, .size = unseen.size() * sizeof(uint32_t)});
+            created = created && view.visibility.isValid() && ctx.fillBuffer(view.visibility, unseen.data(), unseen.size() * sizeof(uint32_t));
+        }
+        if (!created)
+        {
+            spdlog::error("Failed to create the culling buffers of a scene view.");
+            for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+            {
+                if (view.visibleDraws[i].isValid())
+                    ctx.destroyBuffer(view.visibleDraws[i]);
+                if (view.hiz[i].isValid())
+                    ctx.destroyBuffer(view.hiz[i]);
+            }
+            if (view.visibility.isValid())
+                ctx.destroyBuffer(view.visibility);
+            return UINT32_MAX;
+        }
+        gpuScene->views.push_back(view);
+        return static_cast<uint32_t>(gpuScene->views.size() - 1);
+    }
+
+    // The view's first pass runs it, before anything of the view is recorded. It decides what the view's passes do
+    // this frame: nothing for an empty scene or one whose entities still load (the passes keep their cleared
+    // attachments), the draws without culling when the culling pipelines fail, and no late half without a Hi-Z.
+    void Engine::prepareSceneView(uint32_t viewIndex)
+    {
+        ZoneScoped;
+
+        SceneView &view = gpuScene->views[viewIndex];
+        view.ready = false;
+        view.culled = false;
+        view.groupCount = 0;
+        view.hizLevelCount = 0;
+
+        const auto &drawList = gpuScene->drawLists[view.scene.index];
         const auto frame = static_cast<uint32_t>(frameCount);
         if (drawList.draws.empty() || (drawList.staleSlots & (1u << frame)) != 0)
             return;
@@ -513,113 +691,56 @@ namespace rasm
 
         uint32_t width = swapchain.width;
         uint32_t height = swapchain.height;
-        TextureHandle colorTexture = swapchain.imageHandles[imageIdx];
         TextureHandle depthTexture = frameResources[frame].depthTexture;
-
-        if (currentRenderTarget.isValid())
+        if (view.renderTarget.isValid())
         {
-            const auto &renderTargetData = ctx.getRenderTarget(currentRenderTarget);
+            const auto &renderTargetData = ctx.getRenderTarget(view.renderTarget);
             width = renderTargetData.width;
             height = renderTargetData.height;
-            colorTexture = renderTargetData.attachments[frame].color[0];
             depthTexture = renderTargetData.attachments[frame].depth;
-
-            // The pipeline's formats must match the attachments' for the draw to be defined.
-            if (renderTargetData.colorCount != 1 || renderTargetData.colorFormats[0] != swapchain.imageFormat || renderTargetData.depthFormat != DEPTH_FORMAT)
-            {
-                spdlog::error("drawScene needs a render target with one color attachment in the swapchain's format and D32_SFLOAT depth.");
-                return;
-            }
         }
 
-        // The GPU reads SceneData after the whole frame is recorded, so every call needs its own slot.
-        if (sceneDrawCount >= MAX_SCENE_DRAWS_PER_FRAME)
-        {
-            spdlog::error("Exceeded maximum number of drawScene calls per frame.");
-            return;
-        }
-        const uint32_t call = sceneDrawCount++;
-        const uint64_t sceneDataOffset = call * sizeof(gfx::SceneData);
-        const uint64_t drawCountsOffset = static_cast<uint64_t>(call) * gfx::MAX_DRAW_RUNS * sizeof(uint32_t);
-        const auto drawCount = static_cast<uint32_t>(drawList.draws.size());
-        gpuScene->cullGroupCounts[call] = 0;
-
-        // Each call culls into its own list, so passes with different cameras can draw one scene in a frame.
-        // The buffer holds the packed draws, then culling's scratch: a slot per draw and a count per group, at
-        // most one group per CULL_GROUP_SIZE draws plus one per run. Only this slot's last frame used the old
+        // The buffer holds the packed draws, then culling's scratch. Only this slot's last frame used the old
         // buffer, and the fence wait covered it.
-        BufferHandle &visibleDraws = gpuScene->visibleDraws[frame][call];
-        uint32_t &visibleCapacity = gpuScene->visibleCapacity[frame][call];
+        const auto drawCount = static_cast<uint32_t>(drawList.draws.size());
+        uint32_t &visibleCapacity = view.visibleCapacity[frame];
         if (culled && visibleCapacity < drawCount)
         {
-            if (visibleDraws.isValid())
-                ctx.destroyBuffer(visibleDraws);
-            visibleCapacity = std::max(drawCount, visibleCapacity * 2);
-            const uint64_t size = static_cast<uint64_t>(visibleCapacity) * (sizeof(gfx::DrawInfo) + sizeof(uint32_t)) +
-                                  (visibleCapacity / CULL_GROUP_SIZE + gfx::MAX_DRAW_RUNS) * sizeof(uint32_t);
-            visibleDraws = ctx.createBuffer({.name = "Visible Draw Buffer", .usage = BufferUsage::INDIRECT, .size = size});
-            if (!visibleDraws.isValid())
+            const uint32_t capacity = std::max(drawCount, visibleCapacity * 2);
+            if (!ctx.resizeBuffer(view.visibleDraws[frame], getVisibleDrawBufferSize(capacity)))
             {
-                spdlog::error("Failed to create a visible draw buffer of {} draws.", visibleCapacity);
-                visibleCapacity = 0;
+                spdlog::error("Failed to grow a visible draw buffer to {} draws.", capacity);
                 return;
             }
+            visibleCapacity = capacity;
         }
 
         // Occlusion culling samples the pass's depth, which is in the bindless set from its creation
-        // (createSwapchainResources, createRenderTarget). Its Hi-Z covers the whole attachment and its test maps
-        // NDC onto it, so another viewport or depth range only gets frustum culling.
-        uint32_t hizLevelCount = 0;
+        // (createSwapchainResources, RenderContext::createAttachments). Its Hi-Z covers the whole attachment.
         const uint32_t depthSlot = getBindlessTextureIndex(depthTexture);
-        const Viewport &viewport = ctx.getViewport();
-        const bool fullViewport = viewport.x == 0.0f && viewport.y == 0.0f && viewport.width == static_cast<float>(width) &&
-                                  viewport.height == static_cast<float>(height) && viewport.minDepth == 0.0f && viewport.maxDepth == 1.0f;
-        if (culled && config.occlusionCulling && gpuScene->hizPipeline.isValid() && depthSlot != UINT32_MAX && fullViewport)
+        if (culled && config.occlusionCulling && gpuScene->hizPipeline.isValid() && depthSlot != UINT32_MAX && view.visibility.isValid())
         {
-            // The call's visibility, one flag per instance row, is kept across frames and shared by both frame
-            // slots: the GPU runs the frames in order. Rows start unseen, so a new instance is drawn late first.
-            BufferHandle &visibility = gpuScene->visibility[call];
-            if (!visibility.isValid())
-            {
-                const std::vector<uint32_t> unseen(config.maxInstances, 0);
-                visibility = ctx.createBuffer({.name = "Visibility Buffer", .usage = BufferUsage::STORAGE, .size = unseen.size() * sizeof(uint32_t)});
-                if (visibility.isValid() && !ctx.fillBuffer(visibility, unseen.data(), unseen.size() * sizeof(uint32_t)))
-                {
-                    ctx.destroyBuffer(visibility);
-                    visibility = {};
-                }
-                if (!visibility.isValid())
-                    spdlog::error("Failed to create a visibility buffer; the scene is drawn without occlusion culling.");
-            }
-
-            // The call's Hi-Z, grown like its visible draws.
             uint32_t texelCount = 0;
             const uint32_t levelCount = getHizLevelCount(width, height, texelCount);
-            BufferHandle &hiz = gpuScene->hiz[frame][call];
-            uint32_t &hizCapacity = gpuScene->hizCapacity[frame][call];
+            uint32_t &hizCapacity = view.hizCapacity[frame];
             if (hizCapacity < texelCount)
             {
-                if (hiz.isValid())
-                    ctx.destroyBuffer(hiz);
-                hizCapacity = texelCount;
-                hiz = ctx.createBuffer({.name = "Hi-Z Buffer", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(texelCount) * sizeof(float)});
-                if (!hiz.isValid())
-                {
-                    spdlog::error("Failed to create a Hi-Z buffer of {} texels; the scene is drawn without occlusion culling.", texelCount);
-                    hizCapacity = 0;
-                }
+                if (ctx.resizeBuffer(view.hiz[frame], static_cast<uint64_t>(texelCount) * sizeof(float)))
+                    hizCapacity = texelCount;
+                else
+                    spdlog::error("Failed to grow a Hi-Z buffer to {} texels; the scene is drawn without occlusion culling.", texelCount);
             }
-            if (visibility.isValid() && hiz.isValid())
-                hizLevelCount = levelCount;
+            if (hizCapacity >= texelCount)
+                view.hizLevelCount = levelCount;
         }
 
-        auto &sceneRef = registry.scenes[scene.index];
-        auto commandBuffer = frameResources[frameCount].commandBuffer;
-        auto &cameraRef = registry.cameras[camera.index];
+        const auto &sceneRef = registry.scenes[view.scene.index];
+        const auto &cameraRef = registry.cameras[view.camera.index];
+        const uint64_t drawCountsOffset = static_cast<uint64_t>(viewIndex) * gfx::MAX_DRAW_RUNS * sizeof(uint32_t);
 
         gfx::SceneData sceneData{};
-        sceneData.projection = getProjectionMatrix(camera, static_cast<float>(width) / static_cast<float>(height));
-        sceneData.view = getViewMatrix(camera);
+        sceneData.projection = getProjectionMatrix(view.camera, static_cast<float>(width) / static_cast<float>(height));
+        sceneData.view = getViewMatrix(view.camera);
         getFrustumPlanes(sceneData.projection * sceneData.view, sceneData.frustumPlanes);
         sceneData.cameraWorldPosition = cameraRef.transform.position;
         sceneData.numLights = static_cast<uint32_t>(sceneRef.lights.size());
@@ -638,7 +759,7 @@ namespace rasm
             sceneData.lights[i] = light;
         }
         sceneData.vertsPtr = ctx.getBufferDeviceAddress(geometryPool->vertexBuffer());
-        sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(culled ? visibleDraws : drawList.buffers[frame]);
+        sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(culled ? view.visibleDraws[frame] : drawList.buffers[frame]);
         sceneData.instancesPtr = ctx.getBufferDeviceAddress(gpuScene->instances.buffer(frame));
         sceneData.materialsPtr = ctx.getBufferDeviceAddress(gpuScene->materials.buffer(frame));
         sceneData.geometryPtr = ctx.getBufferDeviceAddress(geometryPool->tableBuffer());
@@ -650,31 +771,31 @@ namespace rasm
             sceneData.groupCountsPtr = sceneData.cullSlotsPtr + static_cast<uint64_t>(visibleCapacity) * sizeof(uint32_t);
             sceneData.cullStatsPtr = ctx.getBufferDeviceAddress(gpuScene->cullStats[frame]);
         }
-        if (hizLevelCount > 0)
+        if (view.hizLevelCount > 0)
         {
-            sceneData.visibilityPtr = ctx.getBufferDeviceAddress(gpuScene->visibility[call]);
-            sceneData.hizPtr = ctx.getBufferDeviceAddress(gpuScene->hiz[frame][call]);
+            sceneData.visibilityPtr = ctx.getBufferDeviceAddress(view.visibility);
+            sceneData.hizPtr = ctx.getBufferDeviceAddress(view.hiz[frame]);
         }
         sceneData.drawCount = drawCount;
         sceneData.runCount = static_cast<uint32_t>(drawList.runs.size());
         for (uint32_t i = 0; i < sceneData.runCount; ++i)
             sceneData.runFirst[i] = drawList.runs[i].first;
-        sceneData.hizLevelCount = hizLevelCount;
+        sceneData.hizLevelCount = view.hizLevelCount;
         sceneData.depthTexture = depthSlot;
         sceneData.viewportWidth = width;
         sceneData.viewportHeight = height;
         sceneData.lodErrorPixels = config.lodErrorPixels;
         sceneData.forcedLod = config.forcedLod;
-        ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), sceneDataOffset);
+        ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData));
 
         // cull.slang's groups each lie inside one run.
         if (culled)
         {
             for (const DrawRun &run : drawList.runs)
-                gpuScene->cullGroupCounts[call] += (run.count + CULL_GROUP_SIZE - 1) / CULL_GROUP_SIZE;
+                view.groupCount += (run.count + CULL_GROUP_SIZE - 1) / CULL_GROUP_SIZE;
         }
 
-        // Culling counts its visible draws on the GPU; an unculled call draws all of them.
+        // Culling counts its visible draws on the GPU; an unculled view draws all of them.
         DrawTotals &totals = gpuScene->drawTotals[frame];
         totals.draws += drawCount;
         totals.triangles += drawList.triangleCount;
@@ -684,129 +805,86 @@ namespace rasm
             totals.unculledTriangles += drawList.triangleCount;
         }
 
-        const uint64_t sceneDataAddress = ctx.getBufferDeviceAddress(gpuScene->sceneData[frame]) + sceneDataOffset;
-        auto drawRuns = [&]()
-        {
-            ctx.bindPipeline(commandBuffer, gpuScene->pipeline);
-            ctx.bindDescriptorSet(commandBuffer, gpuScene->pipeline, bindlessDescriptorSet, 0);
-            ctx.bindIndexBuffer(commandBuffer, geometryPool->indexBuffer(), 0, Format::U32_UINT);
-
-            gfx::PushConstants pushConstants{.scene = sceneDataAddress};
-            for (uint32_t i = 0; i < drawList.runs.size(); ++i)
-            {
-                // Culling packs a run's visible draws at the start of its range and counts them (recordCulling).
-                const DrawRun &run = drawList.runs[i];
-                pushConstants.firstDraw = run.first;
-                ctx.setCullMode(commandBuffer, run.cullMode);
-                ctx.pushConstants(commandBuffer, gpuScene->pipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
-                if (culled)
-                    ctx.drawIndexedIndirectCount(commandBuffer, visibleDraws, run.first * sizeof(gfx::DrawInfo), gpuScene->drawCounts[frame],
-                                                 drawCountsOffset + i * sizeof(uint32_t), run.count, sizeof(gfx::DrawInfo));
-                else
-                    ctx.drawIndexedIndirect(commandBuffer, drawList.buffers[frame], run.first * sizeof(gfx::DrawInfo), run.count, sizeof(gfx::DrawInfo));
-            }
-            ctx.setCullMode(commandBuffer, CullMode::NONE);
-        };
-
-        // The early draws, then the late ones into the same lists, which the late culling rewrote.
-        drawRuns();
-        if (hizLevelCount > 0)
-        {
-            recordOcclusionCulling(sceneDataAddress, call, colorTexture, depthTexture, width, height, hizLevelCount);
-            drawRuns();
-        }
+        view.width = width;
+        view.height = height;
+        view.culled = culled;
+        view.ready = true;
     }
 
-    // The second half of occlusion culling, in the middle of the pass: the early draws left their depth, so the
-    // pass is paused for the Hi-Z build and the late culling, then resumed with its attachments loaded.
-    void Engine::recordOcclusionCulling(uint64_t sceneDataAddress, uint32_t call, TextureHandle colorTexture, TextureHandle depthTexture, uint32_t width, uint32_t height, uint32_t levelCount)
+    // countMain, then writeMain, which reads the counts and slots countMain wrote. The early phase draws what was
+    // visible last frame; the late one, after the Hi-Z, what the early one left out.
+    void Engine::recordSceneCulling(uint32_t viewIndex, uint32_t phase)
     {
+        const SceneView &view = gpuScene->views[viewIndex];
+        if (!view.ready || !view.culled)
+            return;
+
         const auto commandBuffer = frameResources[frameCount].commandBuffer;
-        const uint32_t timer = beginGpuTimer(commandBuffer, "Hi-Z");
-        ctx.endRendering(commandBuffer);
-        ctx.transitionImageLayout(commandBuffer, depthTexture, TextureUsage::SAMPLED);
+        const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex), .argument = phase};
+        ctx.bindPipeline(commandBuffer, gpuScene->cullCountPipeline);
+        ctx.pushConstants(commandBuffer, gpuScene->cullCountPipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+        ctx.dispatch(commandBuffer, view.groupCount);
+        ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE);
+        ctx.bindPipeline(commandBuffer, gpuScene->cullWritePipeline);
+        ctx.pushConstants(commandBuffer, gpuScene->cullWritePipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+        ctx.dispatch(commandBuffer, view.groupCount);
+    }
 
-        // The early draws are done with the lists the late culling rewrites, and the early culling's slots are visible.
-        ctx.memoryBarrier(commandBuffer, PipelineStage::GRAPHICS | PipelineStage::COMPUTE, PipelineStage::COMPUTE);
+    // Each level reads the one before, level 0 the depth the early draws left.
+    void Engine::recordHiz(uint32_t viewIndex)
+    {
+        const SceneView &view = gpuScene->views[viewIndex];
+        if (view.hizLevelCount == 0)
+            return;
 
-        gfx::PushConstants pushConstants{.scene = sceneDataAddress};
+        const auto commandBuffer = frameResources[frameCount].commandBuffer;
+        gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex)};
         ctx.bindPipeline(commandBuffer, gpuScene->hizPipeline);
         ctx.bindDescriptorSet(commandBuffer, gpuScene->hizPipeline, bindlessDescriptorSet, 0);
-        uint32_t levelWidth = width;
-        uint32_t levelHeight = height;
-        for (uint32_t level = 0; level < levelCount; ++level)
+        uint32_t levelWidth = view.width;
+        uint32_t levelHeight = view.height;
+        for (uint32_t level = 0; level < view.hizLevelCount; ++level)
         {
+            if (level > 0)
+                ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE);
             levelWidth = (levelWidth + 1) / 2;
             levelHeight = (levelHeight + 1) / 2;
             pushConstants.argument = level;
             ctx.pushConstants(commandBuffer, gpuScene->hizPipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
             ctx.dispatch(commandBuffer, (levelWidth + HIZ_GROUP_SIZE - 1) / HIZ_GROUP_SIZE, (levelHeight + HIZ_GROUP_SIZE - 1) / HIZ_GROUP_SIZE);
-            ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE);
         }
-
-        pushConstants.argument = CULL_LATE;
-        ctx.bindPipeline(commandBuffer, gpuScene->cullCountPipeline);
-        ctx.pushConstants(commandBuffer, gpuScene->cullCountPipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
-        ctx.dispatch(commandBuffer, gpuScene->cullGroupCounts[call]);
-        ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE);
-        ctx.bindPipeline(commandBuffer, gpuScene->cullWritePipeline);
-        ctx.pushConstants(commandBuffer, gpuScene->cullWritePipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
-        ctx.dispatch(commandBuffer, gpuScene->cullGroupCounts[call]);
-
-        // The host side is for the cull stats, as in recordCulling.
-        ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::GRAPHICS | PipelineStage::HOST);
-        ctx.transitionImageLayout(commandBuffer, depthTexture, TextureUsage::DEPTH_STENCIL_ATTACHMENT);
-        // The same layout: only orders the early draws' color writes before the load.
-        ctx.transitionImageLayout(commandBuffer, colorTexture, TextureUsage::COLOR_ATTACHMENT);
-        // Depth is stored again, for a later drawScene call in the same pass.
-        ctx.beginRendering(commandBuffer, &colorTexture, 1, depthTexture, glm::vec4(0.0f), {.loadColor = true, .loadDepth = true, .storeDepth = true});
-        endGpuTimer(commandBuffer, timer);
     }
 
-    // drawScene records inside a render pass, where dispatches are not allowed, so the frame's culling is recorded
-    // here, after the frame's command buffer, and endFrame submits it first. Each call gets countMain, a barrier,
-    // then writeMain; the last barrier makes the visible lists and counts visible to the draws. recorded tells
-    // whether there was culling to submit. Returns false when culling was needed but could not be recorded: the
-    // frame's draws would then read stale counts.
-    bool Engine::recordCulling(bool &recorded)
+    // Culling packs a run's visible draws at the start of its range and counts them, so each run is one indirect
+    // draw with a count; an unculled view draws its whole list.
+    void Engine::drawSceneView(uint32_t viewIndex)
     {
-        ZoneScoped;
+        const SceneView &view = gpuScene->views[viewIndex];
+        if (!view.ready)
+            return;
 
-        recorded = false;
-        uint32_t cullTimer = UINT32_MAX;
         const auto frame = static_cast<uint32_t>(frameCount);
-        const CommandBufferHandle commandBuffer = gpuScene->cullCommandBuffers[frame];
-        const uint64_t sceneDataAddress = ctx.getBufferDeviceAddress(gpuScene->sceneData[frame]);
-        for (uint32_t i = 0; i < sceneDrawCount; ++i)
+        const auto &drawList = gpuScene->drawLists[view.scene.index];
+        const auto commandBuffer = frameResources[frame].commandBuffer;
+        const uint64_t drawCountsOffset = static_cast<uint64_t>(viewIndex) * gfx::MAX_DRAW_RUNS * sizeof(uint32_t);
+        ctx.bindPipeline(commandBuffer, gpuScene->pipeline);
+        ctx.bindDescriptorSet(commandBuffer, gpuScene->pipeline, bindlessDescriptorSet, 0);
+        ctx.bindIndexBuffer(commandBuffer, geometryPool->indexBuffer(), 0, Format::U32_UINT);
+
+        gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex)};
+        for (uint32_t i = 0; i < drawList.runs.size(); ++i)
         {
-            const uint32_t groupCount = gpuScene->cullGroupCounts[i];
-            if (groupCount == 0)
-                continue;
-            if (!recorded)
-            {
-                if (!ctx.beginCommandBuffer(commandBuffer))
-                    return false;
-                recorded = true;
-                cullTimer = beginCullingTimer(commandBuffer);
-                // The previous frame's late culling wrote the visibility the early culling reads.
-                ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE);
-            }
-
-            const gfx::PushConstants pushConstants{.scene = sceneDataAddress + i * sizeof(gfx::SceneData), .argument = CULL_EARLY};
-            ctx.bindPipeline(commandBuffer, gpuScene->cullCountPipeline);
-            ctx.pushConstants(commandBuffer, gpuScene->cullCountPipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
-            ctx.dispatch(commandBuffer, groupCount);
-            ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE);
-            ctx.bindPipeline(commandBuffer, gpuScene->cullWritePipeline);
-            ctx.pushConstants(commandBuffer, gpuScene->cullWritePipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
-            ctx.dispatch(commandBuffer, groupCount);
+            const DrawRun &run = drawList.runs[i];
+            pushConstants.firstDraw = run.first;
+            ctx.setCullMode(commandBuffer, run.cullMode);
+            ctx.pushConstants(commandBuffer, gpuScene->pipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+            if (view.culled)
+                ctx.drawIndexedIndirectCount(commandBuffer, view.visibleDraws[frame], run.first * sizeof(gfx::DrawInfo), gpuScene->drawCounts[frame],
+                                             drawCountsOffset + i * sizeof(uint32_t), run.count, sizeof(gfx::DrawInfo));
+            else
+                ctx.drawIndexedIndirect(commandBuffer, drawList.buffers[frame], run.first * sizeof(gfx::DrawInfo), run.count, sizeof(gfx::DrawInfo));
         }
-        if (!recorded)
-            return true;
-
-        // The host side is for updateFrameStats, which reads the cull stats after the frame fence.
-        ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::GRAPHICS | PipelineStage::HOST);
-        endGpuTimer(commandBuffer, cullTimer);
-        return ctx.endCommandBuffer(commandBuffer);
+        // beginPass sets NONE for every other pipeline.
+        ctx.setCullMode(commandBuffer, CullMode::NONE);
     }
 }

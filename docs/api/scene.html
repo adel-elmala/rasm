@@ -73,7 +73,7 @@
     <text x="380" y="142" class="mid">instance rows</text>
     <text x="380" y="159" class="mid small">shared by both scenes</text>
     <line x1="380" y1="80" x2="380" y2="117" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <text x="215" y="196" class="small">Each scene has its own draw list. drawScene(A, camera) draws only A's entities, with A's lights.</text>
+    <text x="215" y="196" class="small">Each scene has its own draw list. Scene A's passes draw only A's entities and lights.</text>
   </svg>
   <figcaption>A scene holds handles, not copies. Putting an entity in two scenes costs no extra GPU rows.</figcaption>
 </figure>
@@ -100,14 +100,14 @@
 <div class="api" id="addCameraToScene">
   <pre class="sig">void addCameraToScene(SceneHandle scene, CameraHandle camera);</pre>
   <div class="body">
-    <p>Records the camera in the scene's camera list (at most <code>MAX_CAMERAS_PER_SCENE</code>, 8). Drawing does not read this list today: <code>render</code> and <code>drawScene</code> take the camera as an argument, and any camera can draw any scene. Cameras are on <a href="camera.html#createCamera">camera.html</a>.</p>
+    <p>Records the camera in the scene's camera list (at most <code>MAX_CAMERAS_PER_SCENE</code>, 8). Drawing does not read this list today: <code>render</code> and <code>addScenePasses</code> take the camera as an argument, and any camera can draw any scene. Cameras are on <a href="camera.html#createCamera">camera.html</a>.</p>
   </div>
 </div>
 
 <div class="api" id="addLightToScene">
   <pre class="sig">void addLightToScene(SceneHandle scene, LightHandle light);</pre>
   <div class="body">
-    <p>Adds the light to the scene. Every <code>drawScene</code> of this scene reads the scene's lights, so the light shines from the next draw on. At most <code>MAX_LIGHTS_PER_SCENE</code> (8) entries; a warning is logged after that.</p>
+    <p>Adds the light to the scene. The scene's passes (<a href="engine.html#addScenePasses"><code>addScenePasses</code></a>) read its lights every frame, so the light shines from the next frame on. At most <code>MAX_LIGHTS_PER_SCENE</code> (8) entries; a warning is logged after that.</p>
   </div>
 </div>
 
@@ -547,7 +547,7 @@ engine.addLightToScene(scene, lamp);</code></pre>
     glm::vec3   position  = glm::vec3(1.0f);
     glm::vec3   direction = glm::vec3(0.0f, -1.0f, 0.0f);
 };</pre>
-  <div class="body"><p>The record the engine keeps for each light. <code>drawScene</code> copies the scene's lights into the GPU's scene data on every call.</p></div>
+  <div class="body"><p>The record the engine keeps for each light. Each frame, the scene's culling pass copies the scene's lights into the GPU's scene data of each scene view.</p></div>
 </div>
 
 <div class="api" id="LightType">
@@ -564,7 +564,7 @@ engine.addLightToScene(scene, lamp);</code></pre>
   <tr><td><code>updateTransform</code></td><td>the entity's instance rows (one per sub-mesh)</td><td>the next frame</td></tr>
   <tr><td><code>loadMesh</code></td><td>geometry pool, geometry table</td><td>a later frame, when the worker is done (up to 4 ms of uploads per frame)</td></tr>
   <tr><td><code>createMesh</code></td><td>geometry pool, geometry table</td><td>the next frame</td></tr>
-  <tr><td><code>addLightToScene</code></td><td>nothing stored on the GPU; copied into the scene data</td><td>the next <code>drawScene</code></td></tr>
+  <tr><td><code>addLightToScene</code></td><td>nothing stored on the GPU; copied into the scene data</td><td>the next frame</td></tr>
   <tr><td><code>updateMaterial</code></td><td>one material table row</td><td>the next frame (see <a href="materials.html#updateMaterial">materials.html</a>)</td></tr>
 </table>
 </div>
@@ -582,7 +582,7 @@ engine.addLightToScene(scene, lamp);</code></pre>
   <tr><td><code>MAX_LIGHTS</code></td><td>8</td><td>7</td><td>lights in total</td></tr>
   <tr><td><code>MAX_LIGHTS_PER_SCENE</code></td><td>8</td><td>8</td><td>light entries in one scene</td></tr>
   <tr><td><code>MAX_CAMERAS_PER_SCENE</code></td><td>8</td><td>8</td><td>camera entries in one scene</td></tr>
-  <tr><td><code>MAX_SCENE_DRAWS_PER_FRAME</code></td><td>8</td><td>8</td><td><code>drawScene</code> calls per frame</td></tr>
+  <tr><td><code>MAX_SCENE_VIEWS</code></td><td>8</td><td>8</td><td>scene views: (scene, camera, target) sets given to <a href="engine.html#addScenePasses"><code>addScenePasses</code></a>, for the engine's lifetime</td></tr>
   <tr><td><code>MAX_VERTEX_UV_SETS</code></td><td>3</td><td>3</td><td>UV sets per vertex</td></tr>
   <tr><td><code>MAX_MESH_LODS</code></td><td>8</td><td>8</td><td>LODs per sub-mesh, LOD 0 included</td></tr>
   <tr><td><code>EngineConfig::maxInstances</code></td><td>65,536</td><td>all</td><td>sub-meshes of all entities together</td></tr>

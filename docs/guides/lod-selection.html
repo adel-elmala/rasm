@@ -593,16 +593,16 @@ float limit = scene->lodErrorPixels / (pixelsPerUnit * sphere.scale);</code></pr
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Rule</td><td>screen-space error, coarsest level under <var>τ</var></td><td>The same. <var>τ</var> is <code>EngineConfig::lodErrorPixels</code>, copied into <code>SceneData</code> every <code>drawScene</code> call. 0 or less always draws LOD 0.</td></tr>
-  <tr><td>Formula</td><td><var>e</var> × <var>s</var> × <var>P</var><sub>11</sub> × <var>H</var> / 2 / <var>w</var>, turned around once per object</td><td>The same, turned around into <code>limit</code>. <var>H</var> is <code>viewportHeight</code>, the height of the target <code>drawScene</code> draws into. The absolute value of <var>P</var><sub>11</sub> is used.</td></tr>
+  <tr><td>Rule</td><td>screen-space error, coarsest level under <var>τ</var></td><td>The same. <var>τ</var> is <code>EngineConfig::lodErrorPixels</code>, copied into each scene view's <code>SceneData</code> every frame. 0 or less always draws LOD 0.</td></tr>
+  <tr><td>Formula</td><td><var>e</var> × <var>s</var> × <var>P</var><sub>11</sub> × <var>H</var> / 2 / <var>w</var>, turned around once per object</td><td>The same, turned around into <code>limit</code>. <var>H</var> is <code>viewportHeight</code>, the height of the target the scene view draws into. The absolute value of <var>P</var><sub>11</sub> is used.</td></tr>
   <tr><td>Depth</td><td>view depth of the sphere's nearest point</td><td><code>clip.w</code> of the sphere's center minus its radius. Zero or less: LOD 0.</td></tr>
   <tr><td>Scale</td><td>the largest stretch</td><td><code>Sphere::scale</code> from <code>getWorldSphere</code>, the same bound frustum culling uses for the radius.</td></tr>
   <tr><td>Orthographic</td><td>no depth division</td><td>When <code>projection[3][3]</code> is not 0, the matrix is orthographic and <code>pixelsPerUnit</code> is not divided by a depth.</td></tr>
   <tr><td>What gets a level</td><td>an object</td><td>Each draw: one sub-mesh of one entity. Sub-meshes of one model can draw different levels; their borders are locked, so they still meet.</td></tr>
-  <tr><td>When</td><td>every frame</td><td>Every <code>drawScene</code> call, in <code>countMain</code>, only for visible draws. A scene drawn without the culling pipelines draws LOD 0.</td></tr>
+  <tr><td>When</td><td>every frame</td><td>Every frame and scene view, in <code>countMain</code>, only for visible draws. A scene view drawn without the culling pipelines draws LOD 0.</td></tr>
   <tr><td>Hysteresis, cross-fade, geomorph</td><td>section 9</td><td>None. The choice is made from scratch every frame and keeps no state, and a switch happens in one frame. With the 1-pixel default, popping is hard to see.</td></tr>
   <tr><td>Debugging</td><td>—</td><td><code>EngineConfig::forcedLod</code> ≥ 0 forces that level (or the mesh's coarsest). <kbd>F2</kbd> cycles it: by error (−1), LOD 0, 1, … 7, by error. The stats overlay (<kbd>F1</kbd>) shows the mode, the visible draws per level, and the triangles saved against LOD 0.</td></tr>
-  <tr><td>Other views, budgets, clusters</td><td>section 10</td><td>None: one camera per <code>drawScene</code> call, a level per draw, no triangle budget.</td></tr>
+  <tr><td>Other views, budgets, clusters</td><td>section 10</td><td>None: one camera per scene view, a level per draw, no triangle budget.</td></tr>
 </table>
 </div>
 
@@ -615,7 +615,7 @@ float limit = scene->lodErrorPixels / (pixelsPerUnit * sphere.scale);</code></pr
   <tr><td>Swapping the index range</td><td><code>getLodDraw</code>, <code>getDrawGeometry</code> in <code>shaders/lib/lodSelection.slang</code></td></tr>
   <tr><td>Where it is called</td><td><code>countMain</code> (picks, counts, packs with <code>CULL_LOD_SHIFT</code>) and <code>writeMain</code> (unpacks, writes) in <code>shaders/passes/cull.slang</code></td></tr>
   <tr><td>Sphere and scale</td><td><code>getWorldSphere</code> in <code>shaders/lib/frustumCulling.slang</code></td></tr>
-  <tr><td>Settings on the GPU</td><td><code>SceneData::lodErrorPixels</code>, <code>SceneData::forcedLod</code>, <code>viewportHeight</code> in <code>shaders/lib/core.slang</code>; filled in <code>Engine::drawScene</code>, <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Settings on the GPU</td><td><code>SceneData::lodErrorPixels</code>, <code>SceneData::forcedLod</code>, <code>viewportHeight</code> in <code>shaders/lib/core.slang</code>; filled in <code>Engine::prepareSceneView</code>, <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Settings for the app</td><td><code>EngineConfig::lodErrorPixels</code>, <code>EngineConfig::forcedLod</code>, <code>EngineConfig::meshLods</code> in <code>include/rasm/types.h</code></td></tr>
   <tr><td>The F2 key</td><td><code>SDLK_F2</code> in <code>src/platform/window.cpp</code></td></tr>
   <tr><td>Stats per level</td><td><code>STATS_LOD_DRAWS</code> in <code>cull.slang</code>; <code>drawsPerLod</code>, <code>trianglesVisibleLod0</code> in <code>src/renderer/frameStats.cpp</code>; shown by <code>src/renderer/statsOverlay.cpp</code></td></tr>
