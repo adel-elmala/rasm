@@ -333,6 +333,7 @@ namespace rasm
     }
 
     // The previous frame's copy of a history target holds nothing until a frame draws it, so it starts out cleared.
+    // The copy is found by its first color texture, which also stands for it in drawnHistory.
     void RenderGraph::clearUndrawnHistory(const Pass &pass)
     {
         auto &ctx = engine->getRenderContext();
@@ -340,22 +341,24 @@ namespace rasm
         for (auto renderTarget : pass.previousRenderTargets)
         {
             const TextureHandle previous = engine->getPreviousRenderTargetTexture(renderTarget);
-            if (!drawnHistory.contains(previous))
+            const auto &data = ctx.getRenderTarget(renderTarget);
+            for (const auto &attachment : data.attachments)
             {
-                const auto &data = ctx.getRenderTarget(renderTarget);
-                for (const auto &attachment : data.attachments)
+                if (attachment.color[0] != previous)
+                    continue;
+                if (!drawnHistory.contains(previous))
                 {
-                    if (attachment.color != previous)
-                        continue;
-                    ctx.transitionImageLayout(commandBuffer, attachment.color, TextureUsage::COLOR_ATTACHMENT, true);
+                    for (uint32_t i = 0; i < data.colorCount; ++i)
+                        ctx.transitionImageLayout(commandBuffer, attachment.color[i], TextureUsage::COLOR_ATTACHMENT, true);
                     ctx.transitionImageLayout(commandBuffer, attachment.depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT, true);
-                    ctx.beginRendering(commandBuffer, attachment.color, attachment.depth, data.clearColor);
+                    ctx.beginRendering(commandBuffer, attachment.color, data.colorCount, attachment.depth, data.clearColor);
                     ctx.endRendering(commandBuffer);
-                    break;
+                    drawnHistory.insert(previous);
                 }
-                drawnHistory.insert(previous);
+                for (uint32_t i = 0; i < data.colorCount; ++i)
+                    ctx.transitionImageLayout(commandBuffer, attachment.color[i], TextureUsage::SAMPLED);
+                break;
             }
-            ctx.transitionImageLayout(commandBuffer, previous, TextureUsage::SAMPLED);
         }
     }
 

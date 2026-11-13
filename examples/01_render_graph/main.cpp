@@ -74,7 +74,7 @@ int main()
             rtHandle = builder.createRenderTarget({
                 .name = "offscreen_rt",
                 .swapchainScale = 1.0f,
-                .colorFormat = colorFormat,
+                .colorFormats = {colorFormat},
                 .depthFormat = rasm::Format::D32_SFLOAT,
                 .clearColor = glm::vec4(0.0f), // alpha 0 marks the background
             });
@@ -127,27 +127,20 @@ int main()
         }
     )");
 
-    // The bunny writes alpha 1 over the clear color's 0, so only the background turns green.
-    auto backgroundPipeline = engine.createPipeline("background", fullScreenTriangle + R"(
+    // Paints the background green, where Background's mask is 0.
+    auto presentPipeline = engine.createPipeline("present", fullScreenTriangle + R"(
         [shader("fragment")]
         float4 fragMain(VSOutput input) : SV_TARGET
         {
             float4 color = gTextures[pc.indices[0]].Sample(input.UV);
-            if (color.a < 0.5)
+            float mask = gTextures[pc.indices[1]].Sample(input.UV).r;
+            if (mask < 0.5)
                 return float4(0.0, 1.0, 0.0, 1.0);
             return float4(color.rgb, 1.0);
         }
     )");
 
-    auto presentPipeline = engine.createPipeline("present", fullScreenTriangle + R"(
-        [shader("fragment")]
-        float4 fragMain(VSOutput input) : SV_TARGET
-        {
-            return gTextures[pc.indices[0]].Sample(input.UV);
-        }
-    )");
-
-    if (!trailPipeline.isValid() || !backgroundPipeline.isValid() || !presentPipeline.isValid())
+    if (!trailPipeline.isValid() || !presentPipeline.isValid())
     {
         return 1;
     }
@@ -173,7 +166,7 @@ int main()
             trailHandle = builder.createRenderTarget({
                 .name = "trail_rt",
                 .swapchainScale = 1.0f,
-                .colorFormat = colorFormat,
+                .colorFormats = {colorFormat},
                 .depthFormat = rasm::Format::D32_SFLOAT,
                 .clearColor = glm::vec4(0.0f),
                 .history = true,
@@ -189,7 +182,10 @@ int main()
                            engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTexture(trailHandle)));
         });
 
+    // Two color attachments: the trail's color, and a mask that is 1 where the bunny writes alpha 1 over the clear
+    // color's 0. The pipeline takes its formats from the target it draws into.
     rasm::RenderTargetHandle compositeHandle{};
+    rasm::PipelineHandle backgroundPipeline{};
     graph.addPass(
         "Background",
         [&trailHandle, &compositeHandle, colorFormat](rasm::PassBuilder &builder)
@@ -197,7 +193,7 @@ int main()
             compositeHandle = builder.createRenderTarget({
                 .name = "composite_rt",
                 .swapchainScale = 1.0f,
-                .colorFormat = colorFormat,
+                .colorFormats = {colorFormat, rasm::Format::R8G8B8A8_UNORM},
                 .depthFormat = rasm::Format::D32_SFLOAT,
             });
             builder.read(trailHandle);
@@ -209,6 +205,29 @@ int main()
             drawFullScreen(ctx, backgroundPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(trailHandle)), 0);
         });
 
+    backgroundPipeline = engine.createPipeline("background", fullScreenTriangle + R"(
+        struct Targets
+        {
+            float4 color : SV_TARGET0;
+            float4 mask : SV_TARGET1;
+        };
+
+        [shader("fragment")]
+        Targets fragMain(VSOutput input)
+        {
+            Targets targets;
+            targets.color = gTextures[pc.indices[0]].Sample(input.UV);
+            targets.mask = float4(targets.color.a < 0.5 ? 0.0 : 1.0);
+            return targets;
+        }
+    )",
+                                               compositeHandle);
+
+    if (!backgroundPipeline.isValid())
+    {
+        return 1;
+    }
+
     graph.addPass(
         "Present",
         [&compositeHandle](rasm::PassBuilder &builder)
@@ -219,7 +238,8 @@ int main()
 
         [&engine, &drawFullScreen, &presentPipeline, &compositeHandle](rasm::RenderContext &ctx)
         {
-            drawFullScreen(ctx, presentPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(compositeHandle)), 0);
+            drawFullScreen(ctx, presentPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(compositeHandle, 0)),
+                           engine.getBindlessTextureIndex(engine.getRenderTargetTexture(compositeHandle, 1)));
         });
 
     graph.compile();

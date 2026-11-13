@@ -725,14 +725,17 @@ namespace rasm::rhi
             .stencilTestEnable = VK_FALSE};
 
         // Dynamic rendering: these formats must match the attachments passed to beginRendering.
-        VkFormat colorAttachmentFormat = toVkFormat(desc.colorAttachmentFormat);
+        const uint32_t colorCount = colorAttachmentCount(desc.colorAttachmentFormats);
+        VkFormat colorAttachmentFormats[MAX_COLOR_ATTACHMENTS] = {};
+        for (uint32_t i = 0; i < colorCount; ++i)
+            colorAttachmentFormats[i] = toVkFormat(desc.colorAttachmentFormats[i]);
         VkFormat depthAttachmentFormat = toVkFormat(desc.depthStencilAttachmentFormat);
 
         // Combined depth/stencil formats must declare the stencil aspect too (Metal validation asserts otherwise).
         VkPipelineRenderingCreateInfo pipelineRenderingInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-            .colorAttachmentCount = 1,
-            .pColorAttachmentFormats = &colorAttachmentFormat,
+            .colorAttachmentCount = colorCount,
+            .pColorAttachmentFormats = colorAttachmentFormats,
             .depthAttachmentFormat = depthAttachmentFormat,
             .stencilAttachmentFormat = hasStencil(desc.depthStencilAttachmentFormat) ? depthAttachmentFormat : VK_FORMAT_UNDEFINED,
         };
@@ -748,10 +751,13 @@ namespace rasm::rhi
             .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
         };
 
+        VkPipelineColorBlendAttachmentState colorBlendAttachments[MAX_COLOR_ATTACHMENTS];
+        std::fill(std::begin(colorBlendAttachments), std::end(colorBlendAttachments), colorBlendAttachment);
+
         VkPipelineColorBlendStateCreateInfo colorBlendInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-            .attachmentCount = 1,
-            .pAttachments = &colorBlendAttachment};
+            .attachmentCount = colorCount,
+            .pAttachments = colorBlendAttachments};
 
         VkPipelineRasterizationStateCreateInfo rasterizerInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,

@@ -29,8 +29,18 @@ namespace rasm
         hash = hashCombine(hash, HandleHash()(desc.computeShader));
         hash = hashCombine(hash, HandleHash()(desc.descriptorSetLayout));
         hash = hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.topology)));
-        hash = hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.colorAttachmentFormat)));
+        for (const Format format : desc.colorAttachmentFormats)
+            hash = hashCombine(hash, hashEnum(static_cast<uint32_t>(format)));
         return hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.depthStencilAttachmentFormat)));
+    }
+
+    // The list ends at the first UNKNOWN, so formats after a gap are not attachments.
+    uint32_t colorAttachmentCount(const Format *formats)
+    {
+        uint32_t count = 0;
+        while (count < MAX_COLOR_ATTACHMENTS && formats[count] != Format::UNKNOWN)
+            ++count;
+        return count;
     }
 
     std::size_t BindlessDescriptorSetLayoutDescHash::operator()(const BindlessDescriptorSetLayoutDesc &desc) const

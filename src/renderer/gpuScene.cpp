@@ -521,13 +521,13 @@ namespace rasm
             const auto &renderTargetData = ctx.getRenderTarget(currentRenderTarget);
             width = renderTargetData.width;
             height = renderTargetData.height;
-            colorTexture = renderTargetData.attachments[frame].color;
+            colorTexture = renderTargetData.attachments[frame].color[0];
             depthTexture = renderTargetData.attachments[frame].depth;
 
             // The pipeline's formats must match the attachments' for the draw to be defined.
-            if (renderTargetData.colorFormat != swapchain.imageFormat || renderTargetData.depthFormat != DEPTH_FORMAT)
+            if (renderTargetData.colorCount != 1 || renderTargetData.colorFormats[0] != swapchain.imageFormat || renderTargetData.depthFormat != DEPTH_FORMAT)
             {
-                spdlog::error("drawScene needs a render target with the swapchain's color format and D32_SFLOAT depth.");
+                spdlog::error("drawScene needs a render target with one color attachment in the swapchain's format and D32_SFLOAT depth.");
                 return;
             }
         }
@@ -759,7 +759,7 @@ namespace rasm
         // The same layout: only orders the early draws' color writes before the load.
         ctx.transitionImageLayout(commandBuffer, colorTexture, TextureUsage::COLOR_ATTACHMENT);
         // Depth is stored again, for a later drawScene call in the same pass.
-        ctx.beginRendering(commandBuffer, colorTexture, depthTexture, glm::vec4(0.0f), {.loadColor = true, .loadDepth = true, .storeDepth = true});
+        ctx.beginRendering(commandBuffer, &colorTexture, 1, depthTexture, glm::vec4(0.0f), {.loadColor = true, .loadDepth = true, .storeDepth = true});
         endGpuTimer(commandBuffer, timer);
     }
 

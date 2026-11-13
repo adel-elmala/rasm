@@ -60,7 +60,7 @@ namespace rasm
         void                                writeTimestamp(const CommandBufferHandle& commandBuffer, const QueryPoolHandle& pool, uint32_t index);
         bool                                fillTexture(const TextureHandle& texture, const void* data);
         [[nodiscard]] SwapchainStatus       recreateSwapchain();
-        bool                                beginRendering(const CommandBufferHandle& commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment, const glm::vec4& clearColor, const AttachmentOps& ops = {});
+        bool                                beginRendering(const CommandBufferHandle& commandBuffer, const TextureHandle* colorAttachments, uint32_t colorCount, TextureHandle depthAttachment, const glm::vec4& clearColor, const AttachmentOps& ops = {});
         bool                                endRendering(const CommandBufferHandle& commandBuffer);
         bool                                setViewport(const CommandBufferHandle& commandBuffer, float x, float y, float width, float height, float minDepth = 0.0f, float maxDepth = 1.0f);
         const Viewport&                     getViewport() const;

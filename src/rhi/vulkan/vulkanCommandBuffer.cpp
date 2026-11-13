@@ -260,18 +260,23 @@ namespace rasm::rhi
         return true;
     }
 
-    void VulkanCommandBuffer::beginRendering(Texture *colorAttachment, Texture *depthAttachment, const glm::vec4 &clearColor, const AttachmentOps &ops)
+    // Every color attachment shares the load op and the clear color.
+    void VulkanCommandBuffer::beginRendering(Texture *const *colorAttachments, uint32_t colorCount, Texture *depthAttachment, const glm::vec4 &clearColor, const AttachmentOps &ops)
     {
-        auto *color = static_cast<VulkanTexture *>(colorAttachment);
+        auto *color = static_cast<VulkanTexture *>(colorAttachments[0]);
         auto *depth = static_cast<VulkanTexture *>(depthAttachment);
 
-        VkRenderingAttachmentInfo colorAttachmentInfo{
-            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-            .imageView = color->view,
-            .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-            .loadOp = ops.loadColor ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue{.color{.float32{clearColor.r, clearColor.g, clearColor.b, clearColor.a}}}};
+        VkRenderingAttachmentInfo colorAttachmentInfos[MAX_COLOR_ATTACHMENTS] = {};
+        for (uint32_t i = 0; i < colorCount; ++i)
+        {
+            colorAttachmentInfos[i] = {
+                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                .imageView = static_cast<VulkanTexture *>(colorAttachments[i])->view,
+                .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                .loadOp = ops.loadColor ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                .clearValue{.color{.float32{clearColor.r, clearColor.g, clearColor.b, clearColor.a}}}};
+        }
 
         VkRenderingAttachmentInfo depthAttachmentInfo{
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -291,8 +296,8 @@ namespace rasm::rhi
                     .width = color->desc.width,
                     .height = color->desc.height}},
             .layerCount = 1,
-            .colorAttachmentCount = 1,
-            .pColorAttachments = &colorAttachmentInfo,
+            .colorAttachmentCount = colorCount,
+            .pColorAttachments = colorAttachmentInfos,
             .pDepthAttachment = &depthAttachmentInfo,
             .pStencilAttachment = hasStencil(depth->desc.format) ? &depthAttachmentInfo : nullptr};
 

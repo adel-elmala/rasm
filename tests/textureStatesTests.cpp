@@ -25,7 +25,7 @@ namespace
             transitions.push_back({oldUsage, newUsage});
             return true;
         }
-        void beginRendering(Texture *, Texture *, const glm::vec4 &, const AttachmentOps &) override {}
+        void beginRendering(Texture *const *, uint32_t, Texture *, const glm::vec4 &, const AttachmentOps &) override {}
         void endRendering() override {}
         void setViewport(float, float, float, float, float, float) override {}
         void setScissor(int32_t, int32_t, uint32_t, uint32_t) override {}

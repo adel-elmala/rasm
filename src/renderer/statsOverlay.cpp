@@ -186,7 +186,7 @@ namespace rasm
         // triangles wind clockwise on screen.
         ctx.transitionImageLayout(commandBuffer, image, TextureUsage::COLOR_ATTACHMENT);
         ctx.transitionImageLayout(commandBuffer, depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT, true);
-        ctx.beginRendering(commandBuffer, image, depth, glm::vec4(0.0f), {.loadColor = true});
+        ctx.beginRendering(commandBuffer, &image, 1, depth, glm::vec4(0.0f), {.loadColor = true});
         ctx.setViewport(commandBuffer, 0.0f, 0.0f, static_cast<float>(swapchain.width), static_cast<float>(swapchain.height));
         ctx.setScissor(commandBuffer, 0, 0, swapchain.width, swapchain.height);
         ctx.setCullMode(commandBuffer, CullMode::NONE);

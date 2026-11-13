@@ -20,7 +20,7 @@ namespace rasm::rhi
         bool                        begin() override;
         bool                        end() override;
         bool                        transitionTexture(Texture* texture, TextureUsage oldUsage, TextureUsage newUsage) override;
-        void                        beginRendering(Texture* colorAttachment, Texture* depthAttachment, const glm::vec4& clearColor, const AttachmentOps& ops) override;
+        void                        beginRendering(Texture* const* colorAttachments, uint32_t colorCount, Texture* depthAttachment, const glm::vec4& clearColor, const AttachmentOps& ops) override;
         void                        endRendering() override;
         void                        setViewport(float x, float y, float width, float height, float minDepth, float maxDepth) override;
         void                        setScissor(int32_t x, int32_t y, uint32_t width, uint32_t height) override;

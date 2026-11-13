@@ -433,7 +433,7 @@ void write(BufferHandle handle);</pre>
 <div class="table-wrap">
 <table>
   <tr><th>What <code>createRenderTarget</code> makes</th><th>How many</th><th>Notes</th></tr>
-  <tr><td>Color texture</td><td>1, or 1 per frame slot (2) with <code>history</code>; usage <code>SAMPLED_COLOR_ATTACHMENT</code></td><td>Added to the bindless set with <code>LINEAR_CLAMP</code>. <code>endPass</code> leaves it in the sampled layout, so later passes can read it.</td></tr>
+  <tr><td>Color textures</td><td>1 per color format, or that many per frame slot (2) with <code>history</code>; usage <code>SAMPLED_COLOR_ATTACHMENT</code></td><td>Added to the bindless set with <code>LINEAR_CLAMP</code>. <code>endPass</code> leaves it in the sampled layout, so later passes can read it.</td></tr>
   <tr><td>Depth texture</td><td>As many as color; usage <code>SAMPLED_DEPTH_ATTACHMENT</code> for <code>D32_SFLOAT</code>, else <code>DEPTH_STENCIL_ATTACHMENT</code></td><td>Cleared to 0 by every pass, and stored. <code>drawScene</code> adds it to the bindless set (<code>NEAREST_CLAMP</code>) the first time it occlusion-culls into the target, and builds its Hi-Z from it. It stays a depth attachment, so later passes cannot sample it.</td></tr>
   <tr><td>Bindless slots used</td><td colspan="2">1 per color texture of <code>MAX_BINDLESS_TEXTURES</code> (1024), and 1 per depth texture once <code>drawScene</code> occlusion-culls into it. A resize keeps the slots.</td></tr>
   <tr><td>Memory</td><td colspan="2">Its own allocation, or, for a <a href="#transient">transient</a> target, a place in a heap that other transient targets share</td></tr>
@@ -455,7 +455,7 @@ void write(BufferHandle handle);</pre>
     uint32_t    width          = 0;
     uint32_t    height         = 0;
     float       swapchainScale = 0.0f;
-    Format      colorFormat    = Format::UNKNOWN;
+    Format      colorFormats[MAX_COLOR_ATTACHMENTS] = {};
     Format      depthFormat    = Format::UNKNOWN;
     glm::vec4   clearColor     = glm::vec4(0.0f);
     bool        history        = false;
@@ -464,12 +464,12 @@ void write(BufferHandle handle);</pre>
 };</pre>
   <div class="body">
     <dl>
-      <dt>name</dt><dd>A label. The textures are named <code>"&lt;name&gt; Color Texture"</code> and <code>"&lt;name&gt; Depth Texture"</code> in debug tools.</dd>
+      <dt>name</dt><dd>A label. The textures are named <code>"&lt;name&gt; Color Texture"</code> (then <code>"&lt;name&gt; Color Texture 1"</code>, …) and <code>"&lt;name&gt; Depth Texture"</code> in debug tools.</dd>
       <dt>width, height</dt><dd>Pixels. Used when <code>swapchainScale</code> is 0.</dd>
       <dt>swapchainScale</dt><dd>Above 0: the size is the window's (the swapchain's, in pixels) times this, at least 1 × 1, and follows each resize. <code>1.0f</code> for full size, <code>0.5f</code> for half. A rebuilt history target loses last frame's image, and its first read after the resize sees <code>clearColor</code>.</dd>
-      <dt>colorFormat</dt><dd>To draw into it with <code>drawScene</code> or with a pipeline from <code>createPipeline</code>, use the swapchain format: <code>engine.getRenderContext().getSwapchainImageFormat()</code>.</dd>
+      <dt>colorFormats</dt><dd>One format per color attachment, up to <a href="types.html#MAX_COLOR_ATTACHMENTS">MAX_COLOR_ATTACHMENTS</a> (4); the list ends at the first <code>UNKNOWN</code>, so <code>.colorFormats = {format}</code> makes one. At least one is needed. For <code>drawScene</code>, or a pipeline from the two-argument <code>createPipeline</code>, use one attachment in the swapchain format: <code>engine.getRenderContext().getSwapchainImageFormat()</code>. For several, make the pipeline with <a href="#createPipeline-target">createPipeline(name, source, renderTarget)</a>.</dd>
       <dt>depthFormat</dt><dd>Needed: every pass binds a depth attachment. Use <code>Format::D32_SFLOAT</code> for the same reason. Only a <code>D32_SFLOAT</code> depth can be sampled, which occlusion culling needs.</dd>
-      <dt>clearColor</dt><dd>Linear color. Every pass that writes the target starts from it, and an undrawn history copy is cleared to it.</dd>
+      <dt>clearColor</dt><dd>Linear color, the same for every color attachment. The first pass that writes the target clears to it, and an undrawn history copy is cleared to it.</dd>
       <dt>history</dt><dd><code>true</code> keeps one copy per frame slot, so a pass can read last frame's color with <code>readPrevious</code>. It costs twice the memory. Leave it <code>false</code> for a target that is drawn and read in the same frame.</dd>
     </dl>
     <p>The full target, with its per-slot textures, is the <a href="types.html#RenderTarget">RenderTarget</a> that <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns.</p>
@@ -477,16 +477,16 @@ void write(BufferHandle handle);</pre>
 </div>
 
 <div class="api" id="getRenderTargetTexture">
-  <pre class="sig">TextureHandle getRenderTargetTexture(const RenderTargetHandle&amp; renderTarget);</pre>
+  <pre class="sig">TextureHandle getRenderTargetTexture(const RenderTargetHandle&amp; renderTarget, uint32_t attachment = 0);</pre>
   <div class="body">
-    <p>The color texture this frame draws. For a history target it changes every frame, so fetch it every frame, inside the pass that reads it. Pass it to <a href="materials.html#getBindlessTextureIndex">getBindlessTextureIndex</a> to get the index a shader samples with. <code>endPass</code> leaves it in the sampled layout. In a graph, declare <code>read(rt)</code> so the pass sorts after the one that draws it. An unknown handle logs <code>Render target handle not found.</code> and returns an invalid handle.</p>
+    <p>The color texture this frame draws, of color attachment <code>attachment</code> (invalid past the target's last one). For a history target it changes every frame, so fetch it every frame, inside the pass that reads it. Pass it to <a href="materials.html#getBindlessTextureIndex">getBindlessTextureIndex</a> to get the index a shader samples with. <code>endPass</code> leaves it in the sampled layout. In a graph, declare <code>read(rt)</code> so the pass sorts after the one that draws it. An unknown handle logs <code>Render target handle not found.</code> and returns an invalid handle.</p>
   </div>
 </div>
 
 <div class="api" id="getPreviousRenderTargetTexture">
-  <pre class="sig">TextureHandle getPreviousRenderTargetTexture(const RenderTargetHandle&amp; renderTarget);</pre>
+  <pre class="sig">TextureHandle getPreviousRenderTargetTexture(const RenderTargetHandle&amp; renderTarget, uint32_t attachment = 0);</pre>
   <div class="body">
-    <p>The color texture the <b>previous frame</b> drew, for a pass that declared <code>readPrevious(renderTarget)</code>. Fetch it every frame and pass it to <a href="materials.html#getBindlessTextureIndex">getBindlessTextureIndex</a>. Returns an invalid handle for a target created without <code>history</code>.</p>
+    <p>The color texture of attachment <code>attachment</code> that the <b>previous frame</b> drew, for a pass that declared <code>readPrevious(renderTarget)</code>. Fetch it every frame and pass it to <a href="materials.html#getBindlessTextureIndex">getBindlessTextureIndex</a>. Returns an invalid handle for a target created without <code>history</code>.</p>
   </div>
 </div>
 
@@ -611,7 +611,7 @@ if (engine.beginFrame(camera))
   <tr><td>Push constants</td><td colspan="2"><code>PUSH_CONSTANTS_SIZE</code> = 16 bytes, <code>[[vk::push_constant]]</code>, e.g. one 8-byte buffer address + two 4-byte values</td></tr>
   <tr><td>Textures</td><td>Bindless array at <code>[[vk::binding(0, 0)]]</code></td><td>The same bindless array: bind it with <code>bindDescriptorSet</code>. No storage images, so compute writes buffers only.</td></tr>
   <tr><td>Fixed state</td><td>Triangle list, no blending, depth test and write on (<code>GREATER_OR_EQUAL</code>), front face counter-clockwise, cull mode from the pass</td><td>–</td></tr>
-  <tr><td>Attachments</td><td>Swapchain color format + <code>D32_SFLOAT</code> depth</td><td>–</td></tr>
+  <tr><td>Attachments</td><td>Swapchain color format + <code>D32_SFLOAT</code> depth, or the formats of a render target you pass</td><td>–</td></tr>
   <tr><td>Imports</td><td colspan="2">The search path is <code>&lt;shaderDir&gt;/lib</code>, so <code>import core;</code> works. Scalar layout, column-major matrices.</td></tr>
 </table>
 </div>
@@ -626,6 +626,21 @@ if (engine.beginFrame(camera))
       <dt>shaderSource</dt><dd>The full Slang source, as a string (a raw string literal works well, see below). The same name and source give back the same pipeline.</dd>
     </dl>
     <p><span class="tag">errors</span> A compile error is logged with Slang's message and the call returns an invalid handle. Binding the pipeline in a pass whose attachments have other formats logs an error and skips the pass's draws.</p>
+  </div>
+</div>
+
+<div class="api" id="createPipeline-target">
+  <pre class="sig">PipelineHandle createPipeline(const std::string&amp; name,
+                              const std::string&amp; shaderSource,
+                              const RenderTargetHandle&amp; renderTarget);</pre>
+  <div class="body">
+    <p>The same, but the pipeline draws into targets with <code>renderTarget</code>'s formats: its color formats, in order, and its depth format. Use it for a target with several color attachments, or with formats other than the swapchain's. The target's textures need not exist yet: a transient target's handle is enough. In the shader, <code>fragMain</code> returns a struct with one output per attachment, in the target's order:</p>
+    <pre><code class="lang-slang">struct Targets
+{
+    float4 color : SV_TARGET0;
+    float4 mask : SV_TARGET1;
+};</code></pre>
+    <p><span class="tag">errors</span> A target with no color formats (or an unknown handle) logs <code>Pipeline '…' needs a render target with color formats.</code> and returns an invalid handle.</p>
   </div>
 </div>
 
@@ -678,7 +693,7 @@ graph.addPass(
         rtHandle = builder.createRenderTarget({
             .name = "offscreen_rt",
             .swapchainScale = 1.0f,
-            .colorFormat = colorFormat,
+            .colorFormats = {colorFormat},
             .depthFormat = rasm::Format::D32_SFLOAT,
             .clearColor = glm::vec4(0.0f),
         });
@@ -693,7 +708,6 @@ graph.addPass(
 // fullScreenTriangle is Slang source: a vertMain that covers the screen, the bindless
 // array, and push constants with two texture indices. Each pipeline adds its fragMain.
 auto trailPipeline = engine.createPipeline("trail", fullScreenTriangle + trailFragment);
-auto backgroundPipeline = engine.createPipeline("background", fullScreenTriangle + backgroundFragment);
 auto presentPipeline = engine.createPipeline("present", fullScreenTriangle + presentFragment);
 
 auto drawFullScreen = [&amp;engine](rasm::RenderContext &amp;ctx, rasm::PipelineHandle pipeline, uint32_t first, uint32_t second)
@@ -715,7 +729,7 @@ graph.addPass(
         trailHandle = builder.createRenderTarget({
             .name = "trail_rt",
             .swapchainScale = 1.0f,
-            .colorFormat = colorFormat,
+            .colorFormats = {colorFormat},
             .depthFormat = rasm::Format::D32_SFLOAT,
             .clearColor = glm::vec4(0.0f),
             .history = true,
@@ -732,7 +746,9 @@ graph.addPass(
     });
 
 // Transient. It starts after offscreen_rt's last pass, so the two share memory.
+// Two color attachments: the trail's color, and a mask of where the bunny is.
 rasm::RenderTargetHandle compositeHandle{};
+rasm::PipelineHandle backgroundPipeline{};
 graph.addPass(
     "Background",
     [&amp;](rasm::PassBuilder &amp;builder)
@@ -740,7 +756,7 @@ graph.addPass(
         compositeHandle = builder.createRenderTarget({
             .name = "composite_rt",
             .swapchainScale = 1.0f,
-            .colorFormat = colorFormat,
+            .colorFormats = {colorFormat, rasm::Format::R8G8B8A8_UNORM},
             .depthFormat = rasm::Format::D32_SFLOAT,
         });
         builder.read(trailHandle);
@@ -752,6 +768,9 @@ graph.addPass(
         drawFullScreen(ctx, backgroundPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(trailHandle)), 0);
     });
 
+// The pipeline takes both formats from the target. Its fragMain writes SV_TARGET0 and SV_TARGET1.
+backgroundPipeline = engine.createPipeline("background", fullScreenTriangle + backgroundFragment, compositeHandle);
+
 graph.addPass(
     "Present",
     [&amp;](rasm::PassBuilder &amp;builder)
@@ -762,7 +781,9 @@ graph.addPass(
 
     [&amp;](rasm::RenderContext &amp;ctx)
     {
-        drawFullScreen(ctx, presentPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(compositeHandle)), 0);
+        // Green where the mask is 0
+        drawFullScreen(ctx, presentPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(compositeHandle, 0)),
+                       engine.getBindlessTextureIndex(engine.getRenderTargetTexture(compositeHandle, 1)));
     });
 
 graph.compile();
