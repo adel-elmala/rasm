@@ -798,14 +798,14 @@ struct BindlessDescriptorSetLayoutDescHash
 <div class="api" id="RenderContext-createRenderTarget">
   <pre class="sig">RenderTargetHandle createRenderTarget(const RenderTargetDesc&amp; desc);</pre>
   <div class="body">
-    <p>What <a href="render-graph.html#createRenderTarget">Engine::createRenderTarget</a> calls: a color and a depth texture per frame slot, both colors made bindless with <code>LINEAR_CLAMP</code>. See <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>.</p>
+    <p>What <a href="render-graph.html#createRenderTarget">Engine::createRenderTarget</a> calls: a color and a depth texture, or one pair per frame slot with <code>history</code>, the colors made bindless with <code>LINEAR_CLAMP</code>. See <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>.</p>
   </div>
 </div>
 
 <div class="api" id="getRenderTarget">
   <pre class="sig">const RenderTarget&amp; getRenderTarget(const RenderTargetHandle&amp; handle);</pre>
   <div class="body">
-    <p>The target's textures (<code>attachments[slot].color</code> and <code>.depth</code> per frame slot), size, formats and clear color. See <a href="types.html#RenderTarget">RenderTarget</a>. An unknown handle logs <code>Render target handle not found.</code> and returns an empty target with invalid handles.</p>
+    <p>The target's textures (<code>attachments[slot].color</code> and <code>.depth</code> per frame slot; without history every slot holds the same pair), size, formats, clear color and <code>history</code>. See <a href="types.html#RenderTarget">RenderTarget</a>. An unknown handle logs <code>Render target handle not found.</code> and returns an empty target with invalid handles.</p>
   </div>
 </div>
 

@@ -141,6 +141,7 @@ namespace rasm
         uint32_t                    getBindlessTextureIndex(const TextureHandle& texture);
         // The render target's color texture for the current frame slot, so fetch it every frame.
         TextureHandle               getRenderTargetTexture(const RenderTargetHandle& renderTarget);
+        TextureHandle               getPreviousRenderTargetTexture(const RenderTargetHandle& renderTarget);
 
         // window related
         Window                      createWindow(uint32_t width, uint32_t height);

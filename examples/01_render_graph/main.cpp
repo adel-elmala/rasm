@@ -85,6 +85,81 @@ int main()
             engine.drawScene(scene, camera);
         });
 
+    // Blends the forward image over last frame's trail, so a moving bunny leaves a fading ghost.
+    auto trailPipeline = engine.createPipeline("trail", R"(
+        struct PushConstants
+        {
+            uint currentIndex;
+            uint previousIndex;
+        };
+
+        [[vk::push_constant]]
+        ConstantBuffer<PushConstants> pc;
+
+        struct VSOutput
+        {
+            float4 Pos : SV_POSITION;
+            float2 UV : TEXCOORD0;
+        };
+
+        [shader("vertex")]
+        VSOutput vertMain(uint vertexID : SV_VertexID)
+        {
+            VSOutput output;
+            output.UV = float2((vertexID << 1) & 2, vertexID & 2);
+            output.Pos = float4(output.UV.x * 2.0 - 1.0, 1.0 - output.UV.y * 2.0, 0.0, 1.0);
+            return output;
+        }
+
+        [[vk::binding(0, 0)]]
+        Sampler2D gTextures[];
+
+        [shader("fragment")]
+        float4 fragMain(VSOutput input) : SV_TARGET
+        {
+            float4 current = gTextures[pc.currentIndex].Sample(input.UV);
+            float4 previous = gTextures[pc.previousIndex].Sample(input.UV);
+            return max(current, previous * 0.85);
+        }
+    )");
+
+    if (!trailPipeline.isValid())
+    {
+        return 1;
+    }
+
+    // A history target keeps a copy per frame slot, so the pass can read the frame before while it draws this one.
+    rasm::RenderTargetHandle trailHandle{};
+    graph.addPass(
+        "Trail",
+        [&config, &rtHandle, &trailHandle, &engine](rasm::PassBuilder &builder)
+        {
+            trailHandle = builder.createRenderTarget({
+                .name = "trail_rt",
+                .width = static_cast<uint32_t>(config.windowWidth),
+                .height = static_cast<uint32_t>(config.windowHeight),
+                .colorFormat = engine.getRenderContext().getSwapchainImageFormat(),
+                .depthFormat = rasm::Format::D32_SFLOAT,
+                .clearColor = glm::vec4(0.0f),
+                .history = true,
+            });
+            builder.read(rtHandle);
+            builder.readPrevious(trailHandle);
+            builder.write(trailHandle);
+        },
+
+        [&engine, &trailPipeline, &rtHandle, &trailHandle](rasm::RenderContext &ctx)
+        {
+            auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
+            const uint32_t indices[2] = {engine.getBindlessTextureIndex(engine.getRenderTargetTexture(rtHandle)),
+                                         engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTexture(trailHandle))};
+
+            ctx.bindPipeline(commandBuffer, trailPipeline);
+            ctx.bindDescriptorSet(commandBuffer, trailPipeline, engine.getBindlessDescriptorSet(), 0);
+            ctx.pushConstants(commandBuffer, trailPipeline, rasm::ShaderType::VERTEX_FRAGMENT, indices, sizeof(indices), 0);
+            ctx.draw(commandBuffer, 3);
+        });
+
     // One triangle covers the screen, so the overlay needs no vertex data.
     auto overlayPipeline = engine.createPipeline("overlay", R"(
         struct PushConstants
@@ -133,17 +208,18 @@ int main()
 
     graph.addPass(
         "overlay",
-        [&rtHandle](rasm::PassBuilder &builder)
+        [&trailHandle](rasm::PassBuilder &builder)
         {
-            builder.read(rtHandle);
+            builder.read(trailHandle);
+            builder.writeSwapchain();
         },
 
-        [&config, &engine, &overlayPipeline, &rtHandle](rasm::RenderContext &ctx)
+        [&config, &engine, &overlayPipeline, &trailHandle](rasm::RenderContext &ctx)
         {
             auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
 
-            // Each frame slot renders to its own attachment.
-            auto textureIndex = engine.getBindlessTextureIndex(engine.getRenderTargetTexture(rtHandle));
+            // A history target draws to a different texture each frame, so fetch it every frame.
+            auto textureIndex = engine.getBindlessTextureIndex(engine.getRenderTargetTexture(trailHandle));
 
             // The render target keeps its size when the window resizes, so fit it inside without changing its shape.
             const auto &window = engine.getMainWindow();

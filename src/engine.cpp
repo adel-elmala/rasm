@@ -580,4 +580,12 @@ namespace rasm
         return rt.attachments[frameCount % MAX_FRAMES_IN_FLIGHT].color;
     }
 
+    TextureHandle Engine::getPreviousRenderTargetTexture(const RenderTargetHandle &renderTarget)
+    {
+        auto &rt = ctx.getRenderTarget(renderTarget);
+        if (!rt.history)
+            return {};
+        return rt.attachments[(frameCount + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT].color;
+    }
+
 } // namespace rasm

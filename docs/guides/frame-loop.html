@@ -570,10 +570,10 @@
   <tr><td>instance and material table buffers, draw list buffers</td><td><code>GpuTable</code>, <code>SceneDrawList::buffers</code></td></tr>
   <tr><td>GPU timestamp query pool</td><td><code>FrameStatsSlot</code></td></tr>
   <tr><td>stats overlay text buffer</td><td><code>StatsOverlaySlot</code></td></tr>
-  <tr><td>render target color and depth textures</td><td><code>RenderTarget::attachments</code></td></tr>
+  <tr><td>color and depth textures of a render target with <code>history</code></td><td><code>RenderTarget::attachments</code></td></tr>
 </table>
 </div>
-<p>All of them are indexed by <code>frameCount</code>. A render target's texture changes every frame, so fetch it with <code>getRenderTargetTexture</code> each frame. The visibility flags of occlusion culling (<code>GpuScene::visibility</code>) have one buffer per <code>drawScene</code> call, shared by both slots: the GPU runs the frames in order, and each frame reads what the one before wrote.</p>
+<p>All of them are indexed by <code>frameCount</code>. A history render target's texture changes every frame, so fetch it with <code>getRenderTargetTexture</code> each frame. A render target without history has one pair of textures that both slots share: the GPU runs the frames in order, and each frame's first use waits for the frame before. The visibility flags of occlusion culling (<code>GpuScene::visibility</code>) have one buffer per <code>drawScene</code> call, shared by both slots: the GPU runs the frames in order, and each frame reads what the one before wrote.</p>
 
 <h2><span class="n">4</span>Swapchain results and skipped frames</h2>
 

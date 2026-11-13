@@ -15,6 +15,9 @@ namespace
     public:
         TestGraph() : RenderGraph(nullptr) {}
 
+        // A graphics pass must draw to one target, so each gets its own and the textures alone decide the order.
+        rasm::RenderTargetHandle ownTarget() const { return {1000 + passes.size(), 1}; }
+
         void addTexturePass(const std::vector<rasm::TextureHandle> &reads, const std::vector<rasm::TextureHandle> &writes)
         {
             addPass(
@@ -29,6 +32,7 @@ namespace
                     {
                         builder.write(handle);
                     }
+                    builder.write(ownTarget());
                 },
                 [](rasm::RenderContext &) {});
         }
@@ -45,6 +49,8 @@ namespace
                 {
                     builder.write(handle);
                 }
+                if (!compute)
+                    builder.write(ownTarget());
             };
             if (compute)
                 addComputePass("compute", setup, [](rasm::RenderContext &) {});
@@ -130,7 +136,10 @@ TEST_CASE("buffers and render targets create edges too")
     graph.addPass(
         "present",
         [&](rasm::PassBuilder &builder)
-        { builder.read(renderTarget); },
+        {
+            builder.read(renderTarget);
+            builder.writeSwapchain();
+        },
         [](rasm::RenderContext &) {});
     graph.addPass(
         "draw",
@@ -140,7 +149,7 @@ TEST_CASE("buffers and render targets create edges too")
             builder.write(renderTarget);
         },
         [](rasm::RenderContext &) {});
-    graph.addPass(
+    graph.addComputePass(
         "cull",
         [&](rasm::PassBuilder &builder)
         { builder.write(buffer); },
@@ -256,7 +265,10 @@ TEST_CASE("a compute pass sorts by its resources and writes no render target")
     graph.addPass(
         "draw",
         [&](rasm::PassBuilder &builder)
-        { builder.read(buffer); },
+        {
+            builder.read(buffer);
+            builder.writeSwapchain();
+        },
         [](rasm::RenderContext &) {});
     graph.addComputePass(
         "cull",
@@ -264,6 +276,7 @@ TEST_CASE("a compute pass sorts by its resources and writes no render target")
         {
             builder.write(buffer);
             builder.write(renderTarget);
+            builder.writeSwapchain();
         },
         [](rasm::RenderContext &) {});
 
@@ -273,6 +286,125 @@ TEST_CASE("a compute pass sorts by its resources and writes no render target")
     CHECK(graph.pass(1).compute);
     CHECK_FALSE(graph.pass(0).compute);
     CHECK_FALSE(graph.pass(1).outputRenderTarget.isValid());
+    CHECK_FALSE(graph.pass(1).writesSwapchain);
+}
+
+TEST_CASE("a graphics pass must write exactly one target")
+{
+    const rasm::RenderTargetHandle renderTarget{1, 1};
+    TestGraph graph;
+
+    SUBCASE("no target fails to compile")
+    {
+        graph.addPass(
+            "nowhere",
+            [](rasm::PassBuilder &) {},
+            [](rasm::RenderContext &) {});
+    }
+
+    SUBCASE("a render target and the swapchain fail to compile")
+    {
+        graph.addPass(
+            "both",
+            [&](rasm::PassBuilder &builder)
+            {
+                builder.write(renderTarget);
+                builder.writeSwapchain();
+            },
+            [](rasm::RenderContext &) {});
+    }
+
+    graph.compile();
+
+    CHECK_FALSE(graph.isCompiled());
+    CHECK(graph.order().empty());
+}
+
+TEST_CASE("passes that draw to the swapchain run in the order they were added")
+{
+    const rasm::RenderTargetHandle scene{1, 1};
+
+    TestGraph graph;
+    graph.addPass(
+        "post",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.read(scene);
+            builder.writeSwapchain();
+        },
+        [](rasm::RenderContext &) {});
+    graph.addPass(
+        "ui",
+        [](rasm::PassBuilder &builder)
+        { builder.writeSwapchain(); },
+        [](rasm::RenderContext &) {});
+    graph.addPass(
+        "draw",
+        [&](rasm::PassBuilder &builder)
+        { builder.write(scene); },
+        [](rasm::RenderContext &) {});
+
+    graph.compile();
+
+    CHECK(graph.order() == std::vector<uint32_t>{2, 0, 1});
+}
+
+TEST_CASE("passes that draw to one render target run in the order they were added, before its readers")
+{
+    const rasm::RenderTargetHandle scene{1, 1};
+
+    TestGraph graph;
+    graph.addPass(
+        "present",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.read(scene);
+            builder.writeSwapchain();
+        },
+        [](rasm::RenderContext &) {});
+    graph.addPass(
+        "opaque",
+        [&](rasm::PassBuilder &builder)
+        { builder.write(scene); },
+        [](rasm::RenderContext &) {});
+    graph.addPass(
+        "transparent",
+        [&](rasm::PassBuilder &builder)
+        { builder.write(scene); },
+        [](rasm::RenderContext &) {});
+
+    graph.compile();
+
+    CHECK(graph.order() == std::vector<uint32_t>{1, 2, 0});
+}
+
+TEST_CASE("reading the previous frame adds no edge, even from the pass that draws the target")
+{
+    const rasm::RenderTargetHandle history{1, 1};
+
+    TestGraph graph;
+    graph.addPass(
+        "reproject",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.readPrevious(history);
+            builder.writeSwapchain();
+        },
+        [](rasm::RenderContext &) {});
+    graph.addPass(
+        "accumulate",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.readPrevious(history);
+            builder.write(history);
+        },
+        [](rasm::RenderContext &) {});
+
+    graph.compile();
+
+    REQUIRE(graph.isCompiled());
+    CHECK(graph.order() == std::vector<uint32_t>{0, 1});
+    CHECK(graph.pass(1).previousRenderTargets == std::vector<rasm::RenderTargetHandle>{history});
 }
 
 TEST_CASE("a buffer barrier goes only where a pass uses a buffer another pass wrote or read")

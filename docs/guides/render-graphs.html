@@ -599,24 +599,31 @@ if order has fewer passes than the graph: there is a cycle</code></pre>
 <p>RASM's render graph is a small one. It sorts passes with Kahn's algorithm, and records the texture transitions and buffer barriers that their declarations need. It does not cull passes, does not manage memory, and runs on one queue. The graph is <b>retained</b>: you add the passes once, and <code>RenderGraph::execute</code> runs them every frame.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="Example 01: Forward draws the scene into offscreen_rt, overlay samples it and draws to the swapchain. Example 04: Animate is a compute pass that writes Particle Positions, Draw reads them and draws to the swapchain, with a barrier before Animate and one before Draw.">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Example 01: Forward draws the scene into offscreen_rt. Trail reads it and last frame's copy of trail_rt, and draws this frame's copy of trail_rt. overlay samples trail_rt and draws to the swapchain. Example 04: Animate is a compute pass that writes Particle Positions, Draw reads them and draws to the swapchain, with a barrier before Animate and one before Draw.">
     <text x="15" y="22" class="title">examples/01_render_graph</text>
-    <rect x="15" y="36" width="150" height="54" rx="6" class="gpu"/>
-    <text x="90" y="58" class="mid title">Forward</text>
-    <text x="90" y="76" class="mid small">drawScene</text>
-    <line x1="165" y1="63" x2="223" y2="63" class="arrow" marker-end="url(#ah)"/>
-    <text x="194" y="56" class="mid small">writes</text>
-    <rect x="225" y="46" width="130" height="34" rx="17" class="mem"/>
-    <text x="290" y="68" class="mid small">offscreen_rt</text>
-    <line x1="355" y1="63" x2="413" y2="63" class="arrow" marker-end="url(#ah)"/>
-    <text x="384" y="56" class="mid small">reads</text>
-    <rect x="415" y="36" width="150" height="54" rx="6" class="gpu"/>
-    <text x="490" y="58" class="mid title">overlay</text>
-    <text x="490" y="76" class="mid small">full-screen triangle</text>
-    <line x1="565" y1="63" x2="603" y2="63" class="arrow" marker-end="url(#ah)"/>
-    <rect x="605" y="46" width="140" height="34" rx="6" class="box"/>
-    <text x="675" y="68" class="mid small">swapchain</text>
-    <text x="15" y="112" class="small">Forward's endPass moves offscreen_rt's color to SAMPLED; read(rt) sorts overlay after it. The target is 1920 × 1080; the overlay fits it into the window.</text>
+    <rect x="15" y="36" width="100" height="54" rx="6" class="gpu"/>
+    <text x="65" y="58" class="mid title">Forward</text>
+    <text x="65" y="76" class="mid small">drawScene</text>
+    <line x1="115" y1="63" x2="138" y2="63" class="arrow" marker-end="url(#ah)"/>
+    <rect x="140" y="46" width="100" height="34" rx="17" class="mem"/>
+    <text x="190" y="68" class="mid small">offscreen_rt</text>
+    <line x1="240" y1="63" x2="263" y2="63" class="arrow" marker-end="url(#ah)"/>
+    <rect x="265" y="36" width="100" height="54" rx="6" class="gpu"/>
+    <text x="315" y="58" class="mid title">Trail</text>
+    <text x="315" y="76" class="mid small">max(now, old·0.85)</text>
+    <line x1="365" y1="63" x2="388" y2="63" class="arrow" marker-end="url(#ah)"/>
+    <rect x="390" y="46" width="100" height="34" rx="17" class="mem"/>
+    <text x="440" y="68" class="mid small">trail_rt (×2)</text>
+    <path d="M440,80 L440,108 L330,108 L330,92" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="385" y="103" class="mid small">readPrevious</text>
+    <line x1="490" y1="63" x2="513" y2="63" class="arrow" marker-end="url(#ah)"/>
+    <rect x="515" y="36" width="100" height="54" rx="6" class="gpu"/>
+    <text x="565" y="58" class="mid title">overlay</text>
+    <text x="565" y="76" class="mid small">full-screen</text>
+    <line x1="615" y1="63" x2="638" y2="63" class="arrow" marker-end="url(#ah)"/>
+    <rect x="640" y="46" width="105" height="34" rx="6" class="box"/>
+    <text x="692" y="68" class="mid small">swapchain</text>
+    <text x="15" y="125" class="small">trail_rt has history: Trail draws this frame's copy and reads last frame's. overlay declares writeSwapchain().</text>
 
     <line x1="10" y1="130" x2="750" y2="130" class="arrow dashed"/>
 
@@ -640,7 +647,7 @@ if order has fewer passes than the graph: there is a cycle</code></pre>
     <text x="690" y="202" class="mid small">swapchain</text>
     <text x="15" y="244" class="small t-hot">COMPUTE | GRAPHICS → COMPUTE before Animate (the previous frame's passes) · COMPUTE → GRAPHICS before Draw</text>
   </svg>
-  <figcaption>The two examples that use the graph. A pass with no render target draws to the swapchain.</figcaption>
+  <figcaption>The two examples that use the graph. Every graphics pass declares its one target: <code>write(rt)</code> or <code>writeSwapchain()</code>.</figcaption>
 </figure>
 
 <pre><code>graph.addPass(
@@ -712,7 +719,8 @@ if order has fewer passes than the graph: there is a cycle</code></pre>
   <tr><th>The pass declares</th><th>Recorded before it</th><th>When</th></tr>
   <tr><td><code>read(texture)</code></td><td><code>transitionImageLayout(texture, SAMPLED)</code></td><td>unless it is <code>SAMPLED</code> already (read after read)</td></tr>
   <tr><td><code>read(renderTarget)</code></td><td>nothing: the drawing pass's <code>endPass</code> left its color <code>SAMPLED</code></td><td>–</td></tr>
-  <tr><td><code>write(renderTarget)</code>, or no target</td><td><code>beginPass</code> moves color and depth to attachments with <code>discard</code>: from <code>UNKNOWN</code>, contents dropped</td><td>always</td></tr>
+  <tr><td><code>readPrevious(renderTarget)</code></td><td><code>transitionImageLayout(previous copy, SAMPLED)</code>; first a clear if no frame drew that copy</td><td>the clear once per copy</td></tr>
+  <tr><td><code>write(renderTarget)</code> or <code>writeSwapchain()</code></td><td><code>beginPass</code> moves color and depth to attachments with <code>discard</code>: from <code>UNKNOWN</code>, contents dropped</td><td>always</td></tr>
   <tr><td><code>read(buffer)</code></td><td>one <code>memoryBarrier</code>: the last write's stage → this pass's stage</td><td>once per stage after each write</td></tr>
   <tr><td><code>write(buffer)</code></td><td>one <code>memoryBarrier</code>: the last write and the reads since → this pass's stage</td><td>if any pass used it before</td></tr>
   <tr><td><code>write(texture)</code></td><td>nothing</td><td>only orders passes (compute writes buffers only)</td></tr>
@@ -763,14 +771,15 @@ if order has fewer passes than the graph: there is a cycle</code></pre>
   <figcaption>C = <code>COMPUTE</code>, G = <code>GRAPHICS</code>. The state carries over to the next frame, so Animate waits for the previous frame's draw, which read the same buffer. A barrier's first scope includes earlier submissions on the queue, so no fence is needed for that.</figcaption>
 </figure>
 
-<h3>Render targets: one set per frame slot</h3>
+<h3>Render targets and history</h3>
 
-<p>RASM has no transient textures. A render target from <code>PassBuilder::createRenderTarget</code> is a normal, permanent resource, and it holds <b>two</b> sets of attachments, one per <a href="frames-in-flight.html">frame slot</a>, so the CPU can record frame N+1 into one while the GPU still reads the other. Each color texture is in the bindless set; <code>Engine::getRenderTargetTexture</code> returns the current slot's. A reading pass looks it up in <code>execute</code>, every frame:</p>
+<p>RASM has no transient textures. A render target from <code>PassBuilder::createRenderTarget</code> is a normal, permanent resource. By default it has <b>one</b> set of attachments that every frame draws. That is safe with <a href="frames-in-flight.html">frames in flight</a>: there is one queue, so frame N+1's passes run after frame N's, and the first use in frame N+1 is a barrier that waits for frame N's reads.</p>
+
+<p>A target created with <code>history = true</code> is RASM's <b>imported history resource</b>: it holds one set per frame slot. A pass draws this frame's copy and reads the copy the previous frame drew with <code>PassBuilder::readPrevious</code>. That read adds no edge, so a pass may read the old copy of the target it draws to. The graph clears a copy that no frame drew yet, so the first frame does not read garbage. Look the textures up in <code>execute</code>, every frame:</p>
 
 <pre><code>auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
-// Each frame slot renders to its own attachment.
-auto textureIndex = engine.getBindlessTextureIndex(
-    engine.getRenderTargetTexture(rtHandle));</code></pre>
+auto current = engine.getBindlessTextureIndex(engine.getRenderTargetTexture(trailHandle));
+auto previous = engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTexture(trailHandle));</code></pre>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
 
@@ -778,10 +787,10 @@ auto textureIndex = engine.getBindlessTextureIndex(
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Phases</td><td>setup, compile, execute; often every frame</td><td>Retained. <code>setup</code> runs at once inside <code>RenderGraph::addPass</code>; <code>RenderGraph::compile</code> runs once when it succeeds (again only after a new pass), but a failed compile is tried again every frame (B28); <code>RenderGraph::execute</code> runs every frame.</td></tr>
-  <tr><td>Resources</td><td>virtual handles; transient or imported</td><td>Real resources, created at once by <code>PassBuilder::createTexture</code>, <code>createBuffer</code> and <code>createRenderTarget</code>, and kept forever. The swapchain is the implicit target of a pass with no render target.</td></tr>
-  <tr><td>Edges</td><td>every hazard, with versions</td><td>Read after write only, from the <b>last added</b> writer of each resource. No versions: a second writer of a resource is not ordered against the first, and a write after a read adds no edge.</td></tr>
+  <tr><td>Resources</td><td>virtual handles; transient or imported</td><td>Real resources, created at once by <code>PassBuilder::createTexture</code>, <code>createBuffer</code> and <code>createRenderTarget</code>, and kept forever. Two are imported: the swapchain (<code>PassBuilder::writeSwapchain</code>) and a history render target's previous copy (<code>PassBuilder::readPrevious</code>).</td></tr>
+  <tr><td>Edges</td><td>every hazard, with versions</td><td>Read after write, from the <b>last added</b> writer of each resource. Passes that draw into the same render target, or into the swapchain, run in the order they were added. No versions: a second writer of a texture or buffer is not ordered against the first, and a write after a read adds no edge (<code>D19</code>).</td></tr>
   <tr><td>Sort</td><td>Kahn's algorithm</td><td>Kahn's algorithm with a FIFO queue that starts in the order passes were added, so independent passes keep that order. A cycle logs <samp>Frame Graph contains a cycle!</samp> and the frames draw no passes.</td></tr>
-  <tr><td>Checks</td><td>–</td><td><code>compile</code> also fails for a pass that reads the render target it draws to, and for a compute pass that declares no buffer write.</td></tr>
+  <tr><td>Checks</td><td>–</td><td><code>compile</code> also fails for a pass that reads the render target it draws to, for a compute pass that declares no buffer write, and for a graphics pass that does not write exactly one render target or the swapchain.</td></tr>
   <tr><td>Pass culling</td><td>walk back from the outputs</td><td>None: every pass runs.</td></tr>
   <tr><td>Texture barriers</td><td>from each resource's state</td><td>The same idea, with a remembered state per texture. Only reads are declared; attachments are moved by <code>beginPass</code> and <code>endPass</code>.</td></tr>
   <tr><td>Buffer barriers</td><td>per resource</td><td>One global <code>memoryBarrier</code> per pass, from the declared buffers' last write and reads. The state carries across frames.</td></tr>
@@ -802,7 +811,7 @@ auto textureIndex = engine.getBindlessTextureIndex(
   <tr><td>Buffer barriers</td><td><code>RenderGraph::bufferBarrier</code>, <code>BufferAccess</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
   <tr><td>Texture state</td><td><code>rhi::TextureStates</code> in <code>src/rhi/textureStates.cpp</code>; <code>RenderContext::transitionImageLayout</code>, <code>RenderContext::discardRecording</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>Pass begin and end, frame end</td><td><code>Engine::beginPass</code>, <code>Engine::endPass</code>, <code>Engine::endFrame</code> in <code>src/engine.cpp</code></td></tr>
-  <tr><td>Render targets per frame slot</td><td><code>RenderContext::createRenderTarget</code> in <code>src/rhi/renderContext.cpp</code>; <code>Engine::getRenderTargetTexture</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Render targets and history</td><td><code>RenderContext::createRenderTarget</code> in <code>src/rhi/renderContext.cpp</code>; <code>Engine::getRenderTargetTexture</code>, <code>Engine::getPreviousRenderTargetTexture</code> in <code>src/engine.cpp</code>; <code>RenderGraph::clearUndrawnHistory</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
   <tr><td>Tests</td><td><code>tests/renderGraphTests.cpp</code> (sort, checks, buffer barriers), <code>tests/textureStatesTests.cpp</code></td></tr>
   <tr><td>Examples</td><td><code>examples/01_render_graph/main.cpp</code>, <code>examples/04_compute/main.cpp</code></td></tr>
 </table>
@@ -812,7 +821,7 @@ auto textureIndex = engine.getBindlessTextureIndex(
   <strong>Keep these true</strong>
   <ul>
     <li>Declare every resource a pass reads or writes with <code>PassBuilder</code>. An undeclared use is not sorted and gets no barrier.</li>
-    <li>Look up <code>getRenderTargetTexture</code> and its bindless index inside <code>execute</code>, every frame. They differ per frame slot.</li>
+    <li>Look up <code>getRenderTargetTexture</code>, <code>getPreviousRenderTargetTexture</code> and their bindless indices inside <code>execute</code>, every frame. For a history target they change every frame.</li>
     <li>No dispatch or <code>memoryBarrier</code> inside a graphics pass: <code>RenderContext</code> refuses both. Use <code>addComputePass</code>.</li>
     <li>Change a texture's layout only through <code>transitionImageLayout</code>, which keeps the remembered state right. Recorded commands that are not submitted must be followed by <code>discardRecording</code>, as <code>endFrame</code> does.</li>
     <li>Sorting, the compile checks and buffer barriers run on the CPU only. Add a test in <code>tests/renderGraphTests.cpp</code> when you change <code>compile</code> or <code>bufferBarrier</code>.</li>

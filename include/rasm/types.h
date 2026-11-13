@@ -138,6 +138,7 @@ namespace rasm
         Format colorFormat;
         Format depthFormat;
         glm::vec4 clearColor;
+        bool history;
     };
 
 } // namespace rasm

@@ -136,6 +136,7 @@ namespace rasm
         Format                      colorFormat                     = Format::UNKNOWN;
         Format                      depthFormat                     = Format::UNKNOWN;
         glm::vec4                   clearColor                      = glm::vec4(0.0f); // linear; every pass that writes the target starts from this
+        bool                        history                         = false;
 
         bool                        operator==(const RenderTargetDesc&) const = default;
     };

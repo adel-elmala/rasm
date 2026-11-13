@@ -10,6 +10,15 @@
 
 namespace rasm
 {
+    namespace
+    {
+        void addEdge(std::vector<Pass> &passes, uint32_t from, uint32_t to)
+        {
+            passes[from].successors.push_back(to);
+            passes[to].inDegree++;
+        }
+    }
+
     void RenderGraph::addPass(std::string name, const std::function<void(PassBuilder &)> &setup, std::function<void(RenderContext &)> execute)
     {
         uint32_t passIdx = static_cast<uint32_t>(passes.size());
@@ -29,10 +38,11 @@ namespace rasm
         auto &pass = passes.back();
         pass.compute = true;
         // A compute pass runs outside any render pass, so it has no attachments to write.
-        if (pass.outputRenderTarget.isValid())
+        if (pass.outputRenderTarget.isValid() || pass.writesSwapchain)
         {
-            spdlog::error("Compute pass '{}' cannot write a render target; the write is ignored.", pass.name);
+            spdlog::error("Compute pass '{}' cannot write a render target or the swapchain; the write is ignored.", pass.name);
             pass.outputRenderTarget = {};
+            pass.writesSwapchain = false;
         }
     }
 
@@ -50,6 +60,12 @@ namespace rasm
             if (pass.outputRenderTarget.isValid() && std::find(pass.inputRenderTargets.begin(), pass.inputRenderTargets.end(), pass.outputRenderTarget) != pass.inputRenderTargets.end())
             {
                 spdlog::error("Pass '{}' reads the render target it draws to.", pass.name);
+                valid = false;
+            }
+            // execute begins the pass on what it writes, so it must be exactly one target.
+            if (!pass.compute && pass.outputRenderTarget.isValid() == pass.writesSwapchain)
+            {
+                spdlog::error("Pass '{}' must write either one render target or the swapchain.", pass.name);
                 valid = false;
             }
             // Compute writes only buffers, so a compute pass that declares no write is missing its buffers.
@@ -72,10 +88,12 @@ namespace rasm
             pass.successors.clear();
         }
 
-        // 1. Map resources to their producers
+        // 1. Map resources to their producers. Passes that draw to one target run in the order they were added,
+        // so its readers see the last one.
         std::unordered_map<TextureHandle, uint32_t, HandleHash> texturesWriters;
         std::unordered_map<BufferHandle, uint32_t, HandleHash> buffersWriters;
         std::unordered_map<RenderTargetHandle, uint32_t, HandleHash> renderTargetsWriters;
+        uint32_t swapchainWriter = static_cast<uint32_t>(-1);
         for (uint32_t i = 0; i < passes.size(); ++i)
         {
             auto &pass = passes[i];
@@ -90,7 +108,16 @@ namespace rasm
             }
             if (pass.outputRenderTarget.isValid())
             {
+                auto it = renderTargetsWriters.find(pass.outputRenderTarget);
+                if (it != renderTargetsWriters.end())
+                    addEdge(passes, it->second, i);
                 renderTargetsWriters[pass.outputRenderTarget] = i;
+            }
+            if (pass.writesSwapchain)
+            {
+                if (swapchainWriter != static_cast<uint32_t>(-1))
+                    addEdge(passes, swapchainWriter, i);
+                swapchainWriter = i;
             }
         }
 
@@ -199,6 +226,7 @@ namespace rasm
                 ctx.memoryBarrier(commandBuffer, before, after);
             for (auto texture : pass.inputTextures)
                 ctx.transitionImageLayout(commandBuffer, texture, TextureUsage::SAMPLED);
+            clearUndrawnHistory(pass);
 
             if (pass.compute)
             {
@@ -212,8 +240,37 @@ namespace rasm
             pass.execute(ctx);
             engine->endPass();
             engine->resetRenderTarget();
+            if (pass.outputRenderTarget.isValid() && ctx.getRenderTarget(pass.outputRenderTarget).history)
+                drawnHistory.insert(engine->getRenderTargetTexture(pass.outputRenderTarget));
         }
         engine->endFrame();
+    }
+
+    // The previous frame's copy of a history target holds nothing until a frame draws it, so it starts out cleared.
+    void RenderGraph::clearUndrawnHistory(const Pass &pass)
+    {
+        auto &ctx = engine->getRenderContext();
+        auto commandBuffer = engine->getCurrentFrameResources().commandBuffer;
+        for (auto renderTarget : pass.previousRenderTargets)
+        {
+            const TextureHandle previous = engine->getPreviousRenderTargetTexture(renderTarget);
+            if (!drawnHistory.contains(previous))
+            {
+                const auto &data = ctx.getRenderTarget(renderTarget);
+                for (const auto &attachment : data.attachments)
+                {
+                    if (attachment.color != previous)
+                        continue;
+                    ctx.transitionImageLayout(commandBuffer, attachment.color, TextureUsage::COLOR_ATTACHMENT, true);
+                    ctx.transitionImageLayout(commandBuffer, attachment.depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT, true);
+                    ctx.beginRendering(commandBuffer, attachment.color, attachment.depth, data.clearColor);
+                    ctx.endRendering(commandBuffer);
+                    break;
+                }
+                drawnHistory.insert(previous);
+            }
+            ctx.transitionImageLayout(commandBuffer, previous, TextureUsage::SAMPLED);
+        }
     }
 
     // Shaders reach buffers through device addresses, so one global barrier covers all of a pass's buffers.
@@ -276,11 +333,24 @@ namespace rasm
 
     void RenderGraph::read(uint32_t passIdx, RenderTargetHandle h) { passes[passIdx].inputRenderTargets.push_back(h); }
 
+    // Last frame's copy is never written this frame, so the read adds no edge.
+    void RenderGraph::readPrevious(uint32_t passIdx, RenderTargetHandle h)
+    {
+        if (engine && !engine->getRenderContext().getRenderTarget(h).history)
+        {
+            spdlog::error("Pass '{}' reads the previous frame of a render target created without history; the read is ignored.", passes[passIdx].name);
+            return;
+        }
+        passes[passIdx].previousRenderTargets.push_back(h);
+    }
+
     void RenderGraph::write(uint32_t passIdx, TextureHandle h) { passes[passIdx].outputTextures.push_back(h); }
 
     void RenderGraph::write(uint32_t passIdx, BufferHandle h) { passes[passIdx].outputBuffers.push_back(h); }
 
     void RenderGraph::write(uint32_t passIdx, RenderTargetHandle h) { passes[passIdx].outputRenderTarget = h; }
+
+    void RenderGraph::writeSwapchain(uint32_t passIdx) { passes[passIdx].writesSwapchain = true; }
 
     TextureHandle PassBuilder::createTexture(const TextureDesc &desc)
     {
@@ -303,10 +373,14 @@ namespace rasm
 
     void PassBuilder::read(RenderTargetHandle handle) { graph.read(currentPass, handle); }
 
+    void PassBuilder::readPrevious(RenderTargetHandle handle) { graph.readPrevious(currentPass, handle); }
+
     void PassBuilder::write(TextureHandle handle) { graph.write(currentPass, handle); }
 
     void PassBuilder::write(BufferHandle handle) { graph.write(currentPass, handle); }
 
     void PassBuilder::write(RenderTargetHandle handle) { graph.write(currentPass, handle); }
+
+    void PassBuilder::writeSwapchain() { graph.writeSwapchain(currentPass); }
 
 }

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <functional>
 
@@ -21,11 +22,13 @@ namespace rasm
         std::vector<TextureHandle>          inputTextures;
         std::vector<BufferHandle>           inputBuffers;
         std::vector<RenderTargetHandle>     inputRenderTargets;
+        std::vector<RenderTargetHandle>     previousRenderTargets;
         std::vector<TextureHandle>          outputTextures;
         std::vector<BufferHandle>           outputBuffers;
         RenderTargetHandle                  outputRenderTarget;
         std::function<void(RenderContext&)> execute;
-        bool                                compute     = false;
+        bool                                compute         = false;
+        bool                                writesSwapchain = false;
 
         // For Sorting
         uint32_t                inDegree = 0;
@@ -49,9 +52,11 @@ namespace rasm
         void                    read(TextureHandle handle);
         void                    read(BufferHandle handle);
         void                    read(RenderTargetHandle handle);
+        void                    readPrevious(RenderTargetHandle handle);
         void                    write(TextureHandle handle);
         void                    write(BufferHandle handle);
         void                    write(RenderTargetHandle rt);
+        void                    writeSwapchain();
 
     private:
         RenderGraph&    graph;
@@ -83,19 +88,23 @@ namespace rasm
 
         void                analyzeDependencies();
         bool                bufferBarrier(const Pass& pass, PipelineStage& before, PipelineStage& after);
+        void                clearUndrawnHistory(const Pass& pass);
         TextureHandle       createTexture(const TextureDesc& desc);
         BufferHandle        createBuffer(const BufferDesc& desc);
         RenderTargetHandle  createRenderTarget(const RenderTargetDesc& desc);
         void                read(uint32_t passIdx, TextureHandle h);
         void                read(uint32_t passIdx, BufferHandle h);
         void                read(uint32_t passIdx, RenderTargetHandle h);
+        void                readPrevious(uint32_t passIdx, RenderTargetHandle h);
         void                write(uint32_t passIdx, TextureHandle h);
         void                write(uint32_t passIdx, BufferHandle h);
         void                write(uint32_t passIdx, RenderTargetHandle h);
+        void                writeSwapchain(uint32_t passIdx);
 
         std::vector<Pass>                                           passes;
         std::vector<uint32_t>                                       executionOrder; // Sorted pass indices
         std::unordered_map<BufferHandle, BufferAccess, HandleHash>  bufferAccess;
+        std::unordered_set<TextureHandle, HandleHash>               drawnHistory;
         Engine*                                                     engine   = nullptr;
         bool                                                        compiled = false;
     };

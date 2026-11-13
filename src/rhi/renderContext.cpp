@@ -475,12 +475,18 @@ namespace rasm
             .height = desc.height,
             .colorFormat = desc.colorFormat,
             .depthFormat = desc.depthFormat,
-            .clearColor = desc.clearColor};
+            .clearColor = desc.clearColor,
+            .history = desc.history};
+
+        // A frame's passes all run before the next frame's on the one queue, and the texture states give the next
+        // frame's first use a barrier, so one copy serves every slot. Only history needs the previous frame's copy.
+        const uint32_t copies = desc.history ? MAX_FRAMES_IN_FLIGHT : 1;
 
         auto destroyAttachments = [&]()
         {
-            for (const auto &attachment : rt.attachments)
+            for (uint32_t i = 0; i < copies; ++i)
             {
+                const auto &attachment = rt.attachments[i];
                 if (attachment.color.isValid())
                 {
                     engine->registry.bindlessTextureIndexMap.erase(attachment.color);
@@ -494,8 +500,9 @@ namespace rasm
             }
         };
 
-        for (auto &attachment : rt.attachments)
+        for (uint32_t i = 0; i < copies; ++i)
         {
+            auto &attachment = rt.attachments[i];
             attachment.color = createTexture(colorDesc);
             attachment.depth = createTexture(depthDesc);
             if (!attachment.color.isValid() || !attachment.depth.isValid())
@@ -507,8 +514,9 @@ namespace rasm
         }
 
         // Only once every attachment exists, so that a failed creation leaves the bindless set untouched.
-        for (const auto &attachment : rt.attachments)
+        for (uint32_t i = 0; i < copies; ++i)
         {
+            const auto &attachment = rt.attachments[i];
             if (engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.color, SamplerType::LINEAR_CLAMP) == UINT32_MAX ||
                 (sampledDepth && engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.depth, SamplerType::NEAREST_CLAMP) == UINT32_MAX))
             {
@@ -517,6 +525,8 @@ namespace rasm
                 return {};
             }
         }
+        for (uint32_t i = copies; i < MAX_FRAMES_IN_FLIGHT; ++i)
+            rt.attachments[i] = rt.attachments[0];
 
         RenderTargetHandle rtHandle = engine->handleManager.getNextRenderTargetHandle();
         impl->renderTargets[rtHandle] = rt;

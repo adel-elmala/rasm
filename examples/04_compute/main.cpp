@@ -149,6 +149,7 @@ int main()
         [&particles](rasm::PassBuilder &builder)
         {
             builder.read(particles);
+            builder.writeSwapchain();
         },
 
         [&engine, &drawPipeline, particlesAddress](rasm::RenderContext &ctx)
