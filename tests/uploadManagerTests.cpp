@@ -54,6 +54,7 @@ namespace
         void drawIndexedIndirectCount(Buffer *, uint64_t, Buffer *, uint64_t, uint32_t, uint32_t) override {}
         void dispatch(uint32_t, uint32_t, uint32_t) override {}
         void memoryBarrier(PipelineStage, PipelineStage) override {}
+        void aliasingBarrier() override {}
         void copyBuffers(Buffer *source, const BufferCopy *list, uint32_t count) override
         {
             src = source;

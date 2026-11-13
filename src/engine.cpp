@@ -344,6 +344,7 @@ namespace rasm
         // record commands for the current frame
         ctx.beginCommandBuffer(currentFrame.commandBuffer);
         frameStats->frameTimer = beginGpuTimer(currentFrame.commandBuffer, "Frame");
+        ctx.clearNewHistory(currentFrame.commandBuffer);
         return true;
     }
 

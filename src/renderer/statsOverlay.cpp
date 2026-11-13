@@ -138,7 +138,9 @@ namespace rasm
             }
         }
 
-        statsOverlay->pipeline = createPipeline("statsOverlay", readFile(pathFromUtf8(config.shaderDir) / "passes/statsOverlay.slang"));
+        // Its pass has no depth attachment, so neither has the pipeline.
+        const Format colorFormats[MAX_COLOR_ATTACHMENTS] = {ctx.getSwapchainImageFormat()};
+        statsOverlay->pipeline = createGraphicsPipeline("statsOverlay", readFile(pathFromUtf8(config.shaderDir) / "passes/statsOverlay.slang"), colorFormats, Format::UNKNOWN);
         if (!statsOverlay->pipeline.isValid())
             spdlog::error("Failed to create the stats overlay pipeline; the overlay stays off.");
         return true;
@@ -165,8 +167,8 @@ namespace rasm
         }
     }
 
-    // Records into the current swapchain pass, before it ends. Every swapchain pass clears, so drawing it in each
-    // one keeps it on the presented image.
+    // Records a pass of its own after every other, so the panel covers whatever the frame drew. It keeps the color and
+    // has no depth. The shader places the panel in window pixels and its triangles wind clockwise on screen.
     void Engine::drawStatsOverlay()
     {
         const StatsOverlaySlot &slot = statsOverlay->slots[frameCount];
@@ -179,14 +181,9 @@ namespace rasm
                                                  .screen = swapchain.width | swapchain.height << 16};
         const auto commandBuffer = frameResources[frameCount].commandBuffer;
         const TextureHandle image = swapchain.imageHandles[imageIdx];
-        const TextureHandle depth = frameResources[frameCount].depthTexture;
 
-        // A pass of its own after every other, so the panel covers whatever the frame drew. It keeps the color, and its
-        // pipeline needs a depth attachment, which it clears. The shader places the panel in window pixels and its
-        // triangles wind clockwise on screen.
         ctx.transitionImageLayout(commandBuffer, image, TextureUsage::COLOR_ATTACHMENT);
-        ctx.transitionImageLayout(commandBuffer, depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT, true);
-        ctx.beginRendering(commandBuffer, &image, 1, depth, glm::vec4(0.0f), {.loadColor = true});
+        ctx.beginRendering(commandBuffer, &image, 1, {}, glm::vec4(0.0f), {.loadColor = true});
         ctx.setViewport(commandBuffer, 0.0f, 0.0f, static_cast<float>(swapchain.width), static_cast<float>(swapchain.height));
         ctx.setScissor(commandBuffer, 0, 0, swapchain.width, swapchain.height);
         ctx.setCullMode(commandBuffer, CullMode::NONE);

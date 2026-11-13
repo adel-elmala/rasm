@@ -38,6 +38,8 @@ namespace rasm
         RenderTargetHandle                  createRenderTarget(const RenderTargetDesc& desc);
         RenderTargetHandle                  createTransientRenderTarget(const RenderTargetDesc& desc);
         bool                                placeTransientRenderTargets(const RenderTargetHandle* renderTargets, const uint32_t* firstPasses, const uint32_t* lastPasses, uint32_t count);
+        void                                destroyTransientRenderTargets(const RenderTargetHandle* renderTargets, uint32_t count);
+        void                                clearNewHistory(const CommandBufferHandle& commandBuffer);
         void                                resizeRenderTargets();
         const RenderTarget&                 getRenderTarget(const RenderTargetHandle& handle);
         std::vector<TextureHandle>          getSwapchainImages();
@@ -81,6 +83,7 @@ namespace rasm
         void                                drawIndexedIndirectCount(const CommandBufferHandle& commandBuffer, const BufferHandle& drawInfoBuffer, uint64_t offset, const BufferHandle& countBuffer, uint64_t countOffset, uint32_t maxDrawCount, uint32_t stride);
         void                                dispatch(const CommandBufferHandle& commandBuffer, uint32_t groupCountX, uint32_t groupCountY = 1, uint32_t groupCountZ = 1);
         void                                memoryBarrier(const CommandBufferHandle& commandBuffer, PipelineStage before, PipelineStage after);
+        void                                aliasingBarrier(const CommandBufferHandle& commandBuffer);
 
     private:
         struct Impl;

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <queue>
 #include <unordered_map>
+#include <utility>
 
 namespace rasm
 {
@@ -17,6 +18,42 @@ namespace rasm
             passes[from].successors.push_back(to);
             passes[to].inDegree++;
         }
+    }
+
+    RenderGraph::RenderGraph(RenderGraph &&other) noexcept
+    {
+        *this = std::move(other);
+    }
+
+    // The transient targets' memory is the graph's, so it goes with the graph.
+    RenderGraph::~RenderGraph()
+    {
+        destroyTransients();
+    }
+
+    // The moved-from graph keeps no transient targets, so its destructor frees nothing.
+    RenderGraph &RenderGraph::operator=(RenderGraph &&other) noexcept
+    {
+        if (this == &other)
+            return *this;
+        destroyTransients();
+        passes = std::move(other.passes);
+        executionOrder = std::move(other.executionOrder);
+        bufferAccess = std::move(other.bufferAccess);
+        transientTargets = std::exchange(other.transientTargets, {});
+        transientFirstPasses = std::move(other.transientFirstPasses);
+        transientLastPasses = std::move(other.transientLastPasses);
+        transientsPlaced = other.transientsPlaced;
+        engine = other.engine;
+        compiled = other.compiled;
+        return *this;
+    }
+
+    void RenderGraph::destroyTransients()
+    {
+        if (engine && !transientTargets.empty())
+            engine->getRenderContext().destroyTransientRenderTargets(transientTargets.data(), static_cast<uint32_t>(transientTargets.size()));
+        transientTargets.clear();
     }
 
     void RenderGraph::addPass(std::string name, const std::function<void(PassBuilder &)> &setup, std::function<void(RenderContext &)> execute)
@@ -195,18 +232,22 @@ namespace rasm
             return;
         }
 
+        // The transient memory is laid out from the lifetimes, so it is laid out again only when they change.
+        const std::vector<uint32_t> firstPasses = transientFirstPasses;
+        const std::vector<uint32_t> lastPasses = transientLastPasses;
         if (!transientLifetimes(sortedIndices))
         {
             executionOrder.clear();
             return;
         }
+        if (transientFirstPasses != firstPasses || transientLastPasses != lastPasses)
+            transientsPlaced = false;
 
         assignAttachmentOps(sortedIndices);
 
-        // 5. Store the final execution order. The transient memory is laid out from it, so it is laid out again.
+        // 5. Store the final execution order.
         executionOrder = std::move(sortedIndices);
         compiled = true;
-        transientsPlaced = false;
         spdlog::info("Successfully compiled {} passes.", executionOrder.size());
     }
 
@@ -218,29 +259,28 @@ namespace rasm
             compile();
 
         auto &ctx = engine->getRenderContext();
-        if (compiled && !transientsPlaced && !transientTargets.empty())
-        {
-            ctx.placeTransientRenderTargets(transientTargets.data(), transientFirstPasses.data(), transientLastPasses.data(), static_cast<uint32_t>(transientTargets.size()));
-            transientsPlaced = true;
-        }
+        const bool placed = compiled && placeTransients();
 
         if (!engine->beginFrame(camera))
             return;
 
         auto commandBuffer = engine->getCurrentFrameResources().commandBuffer;
-        for (const auto &passIdx : executionOrder)
+        const uint32_t passCount = placed ? static_cast<uint32_t>(executionOrder.size()) : 0;
+        for (uint32_t position = 0; position < passCount; ++position)
         {
-            auto &pass = passes[passIdx];
+            auto &pass = passes[executionOrder[position]];
 
             // Barriers are not allowed inside a render pass, so all of them go before the pass begins. beginPass
             // moves the attachments it draws to, and endPass leaves a render target's color SAMPLED for its readers.
+            // A transient target's first pass draws over memory that other targets used before, last frame's included.
+            if (std::find(transientFirstPasses.begin(), transientFirstPasses.end(), position) != transientFirstPasses.end())
+                ctx.aliasingBarrier(commandBuffer);
             PipelineStage before = {};
             PipelineStage after = {};
             if (bufferBarrier(pass, before, after))
                 ctx.memoryBarrier(commandBuffer, before, after);
             for (auto texture : pass.inputTextures)
                 ctx.transitionImageLayout(commandBuffer, texture, TextureUsage::SAMPLED);
-            clearUndrawnHistory(pass);
 
             if (pass.compute)
             {
@@ -254,10 +294,22 @@ namespace rasm
             pass.execute(ctx);
             engine->endPass();
             engine->resetRenderTarget();
-            if (pass.outputRenderTarget.isValid() && ctx.getRenderTarget(pass.outputRenderTarget).history)
-                drawnHistory.insert(engine->getRenderTargetTexture(pass.outputRenderTarget));
         }
         engine->endFrame();
+    }
+
+    // A failed placement, here or at a resize, leaves targets without textures. It is tried again every frame, and
+    // until it works the frames draw no passes.
+    bool RenderGraph::placeTransients()
+    {
+        if (transientTargets.empty())
+            return true;
+        auto &ctx = engine->getRenderContext();
+        const bool missing = std::any_of(transientTargets.begin(), transientTargets.end(), [&ctx](const RenderTargetHandle &target)
+                                         { return !ctx.getRenderTarget(target).attachments[0].color[0].isValid(); });
+        if (!transientsPlaced || missing)
+            transientsPlaced = ctx.placeTransientRenderTargets(transientTargets.data(), transientFirstPasses.data(), transientLastPasses.data(), static_cast<uint32_t>(transientTargets.size()));
+        return transientsPlaced;
     }
 
     // Passes that draw to one target run in the order they were added, so the first clears it, and each later one loads
@@ -332,36 +384,6 @@ namespace rasm
         return valid;
     }
 
-    // The previous frame's copy of a history target holds nothing until a frame draws it, so it starts out cleared.
-    // The copy is found by its first color texture, which also stands for it in drawnHistory.
-    void RenderGraph::clearUndrawnHistory(const Pass &pass)
-    {
-        auto &ctx = engine->getRenderContext();
-        auto commandBuffer = engine->getCurrentFrameResources().commandBuffer;
-        for (auto renderTarget : pass.previousRenderTargets)
-        {
-            const TextureHandle previous = engine->getPreviousRenderTargetTexture(renderTarget);
-            const auto &data = ctx.getRenderTarget(renderTarget);
-            for (const auto &attachment : data.attachments)
-            {
-                if (attachment.color[0] != previous)
-                    continue;
-                if (!drawnHistory.contains(previous))
-                {
-                    for (uint32_t i = 0; i < data.colorCount; ++i)
-                        ctx.transitionImageLayout(commandBuffer, attachment.color[i], TextureUsage::COLOR_ATTACHMENT, true);
-                    ctx.transitionImageLayout(commandBuffer, attachment.depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT, true);
-                    ctx.beginRendering(commandBuffer, attachment.color, data.colorCount, attachment.depth, data.clearColor);
-                    ctx.endRendering(commandBuffer);
-                    drawnHistory.insert(previous);
-                }
-                for (uint32_t i = 0; i < data.colorCount; ++i)
-                    ctx.transitionImageLayout(commandBuffer, attachment.color[i], TextureUsage::SAMPLED);
-                break;
-            }
-        }
-    }
-
     // Shaders reach buffers through device addresses, so one global barrier covers all of a pass's buffers.
     // The state carries over to the next frame: a write waits for the reads of the frame before, and a read
     // waits for a write at the end of the frame before. Barriers cover earlier submissions on the queue.
@@ -430,7 +452,8 @@ namespace rasm
 
     void RenderGraph::read(uint32_t passIdx, RenderTargetHandle h) { passes[passIdx].inputRenderTargets.push_back(h); }
 
-    // Last frame's copy is never written this frame, so the read adds no edge.
+    // Last frame's copy is never written this frame, so the read adds no edge. The copy is always SAMPLED: the frame
+    // before drew it, or it was cleared when it was made.
     void RenderGraph::readPrevious(uint32_t passIdx, RenderTargetHandle h)
     {
         if (engine && !engine->getRenderContext().getRenderTarget(h).history)

@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 #include <functional>
 
@@ -68,17 +67,21 @@ namespace rasm
     {
         friend class PassBuilder;
     public:
-             RenderGraph(Engine* owner) : engine(owner) {}
-             ~RenderGraph() = default;
-        void addPass(std::string name,
-                 const std::function<void(PassBuilder&)>& setup,
-                 std::function<void(RenderContext&)> execute);
-        void addComputePass(std::string name,
-                 const std::function<void(PassBuilder&)>& setup,
-                 std::function<void(RenderContext&)> execute);
+                     RenderGraph(Engine* owner) : engine(owner) {}
+                     RenderGraph(const RenderGraph&) = delete;
+                     RenderGraph(RenderGraph&& other) noexcept;
+                     ~RenderGraph();
+        RenderGraph& operator=(const RenderGraph&) = delete;
+        RenderGraph& operator=(RenderGraph&& other) noexcept;
+        void         addPass(std::string name,
+                             const std::function<void(PassBuilder&)>& setup,
+                             std::function<void(RenderContext&)> execute);
+        void         addComputePass(std::string name,
+                                    const std::function<void(PassBuilder&)>& setup,
+                                    std::function<void(RenderContext&)> execute);
 
-        void compile();
-        void execute(CameraHandle camera);
+        void         compile();
+        void         execute(CameraHandle camera);
 
     protected:
         struct BufferAccess
@@ -89,7 +92,8 @@ namespace rasm
 
         void                analyzeDependencies();
         bool                bufferBarrier(const Pass& pass, PipelineStage& before, PipelineStage& after);
-        void                clearUndrawnHistory(const Pass& pass);
+        void                destroyTransients();
+        bool                placeTransients();
         bool                transientLifetimes(const std::vector<uint32_t>& order);
         void                assignAttachmentOps(const std::vector<uint32_t>& order);
         TextureHandle       createTexture(const TextureDesc& desc);
@@ -107,7 +111,6 @@ namespace rasm
         std::vector<Pass>                                           passes;
         std::vector<uint32_t>                                       executionOrder; // Sorted pass indices
         std::unordered_map<BufferHandle, BufferAccess, HandleHash>  bufferAccess;
-        std::unordered_set<TextureHandle, HandleHash>               drawnHistory;
         std::vector<RenderTargetHandle>                             transientTargets;
         std::vector<uint32_t>                                       transientFirstPasses;
         std::vector<uint32_t>                                       transientLastPasses;

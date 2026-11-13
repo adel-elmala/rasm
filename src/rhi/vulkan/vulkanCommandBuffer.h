@@ -35,6 +35,7 @@ namespace rasm::rhi
         void                        drawIndexedIndirectCount(Buffer* buffer, uint64_t offset, Buffer* countBuffer, uint64_t countOffset, uint32_t maxDrawCount, uint32_t stride) override;
         void                        dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) override;
         void                        memoryBarrier(PipelineStage before, PipelineStage after) override;
+        void                        aliasingBarrier() override;
         void                        copyBuffers(Buffer* src, const BufferCopy* copies, uint32_t copyCount) override;
         void                        writeTimestamp(QueryPool* queryPool, uint32_t index) override;
         VkCommandBuffer             getVkCommandBuffer() const;

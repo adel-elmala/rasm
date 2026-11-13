@@ -195,7 +195,7 @@ public:
 BufferHandle       createBuffer(const BufferDesc&amp; desc);
 RenderTargetHandle createRenderTarget(const RenderTargetDesc&amp; desc);</pre>
   <div class="body">
-    <p>The same as <a href="low-level.html#createTexture">Engine::createTexture</a>, <a href="low-level.html#createBuffer">Engine::createBuffer</a> and <a href="#createRenderTarget">Engine::createRenderTarget</a>. They do <b>not</b> declare a read or write: call <code>read</code> or <code>write</code> too. A render target without <code>history</code> is <a href="#transient">transient</a>: the graph owns its memory and shares it with other transient targets. Textures, buffers and history targets live until the engine shuts down (<code>D4</code>).</p>
+    <p>The same as <a href="low-level.html#createTexture">Engine::createTexture</a>, <a href="low-level.html#createBuffer">Engine::createBuffer</a> and <a href="#createRenderTarget">Engine::createRenderTarget</a>. They do <b>not</b> declare a read or write: call <code>read</code> or <code>write</code> too. A render target without <code>history</code> is <a href="#transient">transient</a>: the graph owns its memory and shares it with other transient targets. Textures, buffers and history targets live until the engine shuts down (<code>D4</code>); transient targets are freed with the graph.</p>
   </div>
 </div>
 
@@ -211,7 +211,7 @@ void read(RenderTargetHandle handle);</pre>
 <div class="api" id="readPrevious">
   <pre class="sig">void readPrevious(RenderTargetHandle handle);</pre>
   <div class="body">
-    <p>This pass reads the color the <b>previous frame</b> drew into <code>handle</code>. Fetch it with <a href="#getPreviousRenderTargetTexture">getPreviousRenderTargetTexture</a>. The target must be created with <code>history = true</code> (see <a href="#history">History</a>). The read adds no edge, because nothing this frame writes that copy, so a pass may read the previous copy of the target it draws to: that is how accumulation works. Before the pass, the graph moves the copy to <code>SAMPLED</code>, and clears it first if no frame drew it yet.</p>
+    <p>This pass reads the color the <b>previous frame</b> drew into <code>handle</code>. Fetch it with <a href="#getPreviousRenderTargetTexture">getPreviousRenderTargetTexture</a>. The target must be created with <code>history = true</code> (see <a href="#history">History</a>). The read adds no edge, because nothing this frame writes that copy, so a pass may read the previous copy of the target it draws to: that is how accumulation works. The copy is always ready to sample: the frame before drew it, or it is new and was cleared to <code>clearColor</code> at the start of the frame.</p>
     <p><span class="tag">errors</span> A target without history logs <code>Pass '…' reads the previous frame of a render target created without history; the read is ignored.</code> during <code>addPass</code>.</p>
   </div>
 </div>
@@ -339,7 +339,7 @@ void write(BufferHandle handle);</pre>
     <dl>
       <dt>camera</dt><dd>Gets this frame's mouse and keyboard input (through <a href="camera.html#pollEvents">pollEvents</a>). It is not given to the passes: a pass that calls <code>drawScene</code> names its own camera.</dd>
     </dl>
-    <p>When <code>beginFrame</code> returns false (window minimized, swapchain being re-created, failed wait), no pass runs that frame. If no pass draws into the swapchain, <code>endFrame</code> clears it so it can be presented. After a pass that draws a history target, the graph remembers that copy as drawn.</p>
+    <p>When <code>beginFrame</code> returns false (window minimized, swapchain being re-created, failed wait), no pass runs that frame. If no pass draws into the swapchain, <code>endFrame</code> clears it so it can be presented. If the transient targets cannot be placed (out of memory), no pass runs either, and the graph tries again the next frame.</p>
   </div>
 </div>
 
@@ -469,7 +469,7 @@ void write(BufferHandle handle);</pre>
       <dt>swapchainScale</dt><dd>Above 0: the size is the window's (the swapchain's, in pixels) times this, at least 1 × 1, and follows each resize. <code>1.0f</code> for full size, <code>0.5f</code> for half. A rebuilt history target loses last frame's image, and its first read after the resize sees <code>clearColor</code>.</dd>
       <dt>colorFormats</dt><dd>One format per color attachment, up to <a href="types.html#MAX_COLOR_ATTACHMENTS">MAX_COLOR_ATTACHMENTS</a> (4); the list ends at the first <code>UNKNOWN</code>, so <code>.colorFormats = {format}</code> makes one. At least one is needed. For <code>drawScene</code>, or a pipeline from the two-argument <code>createPipeline</code>, use one attachment in the swapchain format: <code>engine.getRenderContext().getSwapchainImageFormat()</code>. For several, make the pipeline with <a href="#createPipeline-target">createPipeline(name, source, renderTarget)</a>.</dd>
       <dt>depthFormat</dt><dd>Needed: every pass binds a depth attachment. Use <code>Format::D32_SFLOAT</code> for the same reason. Only a <code>D32_SFLOAT</code> depth can be sampled, which occlusion culling needs.</dd>
-      <dt>clearColor</dt><dd>Linear color, the same for every color attachment. The first pass that writes the target clears to it, and an undrawn history copy is cleared to it.</dd>
+      <dt>clearColor</dt><dd>Linear color, the same for every color attachment. The first pass that writes the target clears to it, and each new history copy is cleared to it before the next frame's passes.</dd>
       <dt>history</dt><dd><code>true</code> keeps one copy per frame slot, so a pass can read last frame's color with <code>readPrevious</code>. It costs twice the memory. Leave it <code>false</code> for a target that is drawn and read in the same frame.</dd>
     </dl>
     <p>The full target, with its per-slot textures, is the <a href="types.html#RenderTarget">RenderTarget</a> that <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns.</p>
@@ -486,7 +486,7 @@ void write(BufferHandle handle);</pre>
 <div class="api" id="getPreviousRenderTargetTexture">
   <pre class="sig">TextureHandle getPreviousRenderTargetTexture(const RenderTargetHandle&amp; renderTarget, uint32_t attachment = 0);</pre>
   <div class="body">
-    <p>The color texture of attachment <code>attachment</code> that the <b>previous frame</b> drew, for a pass that declared <code>readPrevious(renderTarget)</code>. Fetch it every frame and pass it to <a href="materials.html#getBindlessTextureIndex">getBindlessTextureIndex</a>. Returns an invalid handle for a target created without <code>history</code>.</p>
+    <p>The color texture of attachment <code>attachment</code> that the <b>previous frame</b> drew, for a pass that declared <code>readPrevious(renderTarget)</code>. Fetch it every frame and pass it to <a href="materials.html#getBindlessTextureIndex">getBindlessTextureIndex</a>. Returns an invalid handle for a target created without <code>history</code>. A copy that no frame drew yet holds <code>clearColor</code>, also outside a graph.</p>
   </div>
 </div>
 
@@ -526,7 +526,7 @@ void write(BufferHandle handle);</pre>
     <text x="470" y="170" class="small">every frame draws it; the next frame's</text>
     <text x="470" y="186" class="small">first use waits for this frame's reads</text>
   </svg>
-  <figcaption><code>getRenderTargetTexture</code> gives the copy this frame draws, <code>getPreviousRenderTargetTexture</code> the copy the frame before drew. Before any frame drew a copy, the graph clears it to <code>clearColor</code>, so the first read sees no garbage.</figcaption>
+  <figcaption><code>getRenderTargetTexture</code> gives the copy this frame draws, <code>getPreviousRenderTargetTexture</code> the copy the frame before drew. A new copy is cleared to <code>clearColor</code> at the start of the next frame, so the first read sees no garbage.</figcaption>
 </figure>
 
 <h3 id="transient">Transient render targets</h3>
@@ -569,7 +569,9 @@ void write(BufferHandle handle);</pre>
   <li>The handle is ready at once, but the textures exist only from the first <code>execute</code> after a compile. Fetch them inside a pass that declares the target.</li>
   <li>A transient target's contents are gone after its last pass. Read it in a later frame, or before a pass draws it, and you read another target's data. <code>compile</code> fails when the first pass that uses one reads it: <code>Pass '…' reads a transient render target that no pass before it draws.</code></li>
   <li>For a target that must keep its contents between frames, use <code>history = true</code>, or <code>Engine::createRenderTarget</code>.</li>
-  <li>A new compile lays the memory out again: it waits for the GPU to be idle first, so add passes before the loop.</li>
+  <li>Before the first pass of each transient target, the graph records an <a href="low-level.html#aliasingBarrier">aliasingBarrier</a>, so its writes wait for the target that used the memory before, last frame's included.</li>
+  <li>A compile that changes when the targets are used lays the memory out again: it waits for the GPU to be idle first, so add passes before the loop.</li>
+  <li>The transient targets and their memory are freed when the graph is destroyed, after the GPU is idle. A <code>RenderGraph</code> can be moved, not copied.</li>
 </ul>
 
 <div class="api" id="setRenderTarget">

@@ -260,7 +260,7 @@ namespace rasm::rhi
         return true;
     }
 
-    // Every color attachment shares the load op and the clear color.
+    // Every color attachment shares the load op and the clear color. The depth attachment is optional.
     void VulkanCommandBuffer::beginRendering(Texture *const *colorAttachments, uint32_t colorCount, Texture *depthAttachment, const glm::vec4 &clearColor, const AttachmentOps &ops)
     {
         auto *color = static_cast<VulkanTexture *>(colorAttachments[0]);
@@ -280,7 +280,7 @@ namespace rasm::rhi
 
         VkRenderingAttachmentInfo depthAttachmentInfo{
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-            .imageView = depth->view,
+            .imageView = depth ? depth->view : VK_NULL_HANDLE,
             .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
             .loadOp = ops.loadDepth ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR,
             // Stored only when a later pass loads it, or drawScene may pause the pass to build its Hi-Z from it.
@@ -298,8 +298,8 @@ namespace rasm::rhi
             .layerCount = 1,
             .colorAttachmentCount = colorCount,
             .pColorAttachments = colorAttachmentInfos,
-            .pDepthAttachment = &depthAttachmentInfo,
-            .pStencilAttachment = hasStencil(depth->desc.format) ? &depthAttachmentInfo : nullptr};
+            .pDepthAttachment = depth ? &depthAttachmentInfo : nullptr,
+            .pStencilAttachment = depth && hasStencil(depth->desc.format) ? &depthAttachmentInfo : nullptr};
 
         vkCmdBeginRendering(commandBuffer, &renderingInfo);
     }
@@ -393,6 +393,22 @@ namespace rasm::rhi
                                     .srcAccessMask = toVkWriteMask(before),
                                     .dstStageMask = toVkStageMask(after),
                                     .dstAccessMask = toVkReadMask(after) | toVkWriteMask(after)};
+        VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
+        vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+    }
+
+    // Textures placed in the same memory: the next one's attachment writes wait for every use of the ones there before.
+    // An image barrier covers only its own image, so this one is global. Reads before it only have to finish.
+    void VulkanCommandBuffer::aliasingBarrier()
+    {
+        constexpr VkPipelineStageFlags2 attachmentStages = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR |
+                                                           VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR;
+        VkMemoryBarrier2 barrier = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                                    .srcStageMask = attachmentStages | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                    .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                                    .dstStageMask = attachmentStages,
+                                    .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                                                     VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT};
         VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
         vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
     }
