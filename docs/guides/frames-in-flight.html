@@ -481,7 +481,7 @@
   <tr><td>Draw lists, one per scene</td><td><code>SceneDrawList::buffers</code></td><td><code>syncGpuScene</code>, through <code>uploadDrawList</code></td></tr>
   <tr><td>Scene data per <code>drawScene</code> call</td><td><code>GpuScene::sceneData</code> (host-visible)</td><td><code>drawScene</code></td></tr>
   <tr><td>Culling: command buffer, counts, visible lists, Hi-Z, cull stats</td><td><code>GpuScene::cullCommandBuffers</code>, <code>drawCounts</code>, <code>visibleDraws</code>, <code>hiz</code>, <code>cullStats</code></td><td>the culling shaders; the CPU reads <code>cullStats</code> back</td></tr>
-  <tr><td>Render target attachments</td><td><code>RenderTarget::attachments</code></td><td>passes that draw into the target</td></tr>
+  <tr><td>Attachments of a render target with <code>history</code></td><td><code>RenderTarget::attachments</code></td><td>passes that draw into the target; the next frame reads the copy</td></tr>
   <tr><td>Timestamp queries</td><td><code>FrameStatsSlot::timestamps</code></td><td>the GPU timers; read in <code>updateFrameStats</code></td></tr>
   <tr><td>Stats overlay text</td><td><code>StatsOverlaySlot::text</code></td><td><code>updateStatsOverlay</code></td></tr>
 </table>
@@ -491,7 +491,9 @@
 
 <p>One GPU-only buffer is shared on purpose: <code>GpuScene::visibility</code>, what the last frame's occlusion culling saw. The next frame reads it, so it must survive the frame. The queue runs frames in order, and <code>recordCulling</code> starts with a compute-to-compute barrier, so one copy is safe (see <a href="occlusion-culling.html#in-rasm">occlusion culling</a>).</p>
 
-<p>The geometry pool, textures, pipelines and the one bindless descriptor set have a single copy. They are only added to: new ranges, new textures, new bindless slots, never a change to something a running frame reads. The bindless set's layout uses update-after-bind, which allows writing new slots while earlier frames still run. Nothing is freed while frames are in flight, because nothing can be destroyed yet (<b>D4</b>). Resize is the exception: it waits for the device to go idle, then replaces the depth textures.</p>
+<p>A render target without <code>history</code> also has one copy that both slots share. Each frame draws it before it reads it, and the queue runs the frames in order, so the next frame's draw waits behind the barriers of this one (see <a href="temporal-history.html#in-rasm">temporal history</a>).</p>
+
+<p>The geometry pool, textures, pipelines and the one bindless descriptor set have a single copy. They are only added to: new ranges, new textures, new bindless slots, never a change to something a running frame reads. The bindless set's layout uses update-after-bind, which allows writing new slots while earlier frames still run. Nothing is freed while frames are in flight, because nothing can be destroyed yet (<b>D4</b>). Resize is the exception: it waits for the device to go idle, then replaces the depth textures and rebuilds the render targets sized from the window (<code>RenderContext::resizeRenderTargets</code>).</p>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
 

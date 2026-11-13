@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Getting Started · RASM</title>
 <meta name="description" content="Build RASM, link it into your own CMake project, write a first program, and learn the handles and the three ways to run a frame.">
-<meta name="rasm-sources" content="include/rasm/rasm.h include/rasm/engine.h include/rasm/handle.h include/rasm/types.h src/engine.cpp src/core/handle.cpp src/renderer/renderGraph.cpp src/platform/paths.cpp examples/00_hello_scene/main.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp examples/05_city/main.cpp cmake/rasmConfig.cmake.in cmake/RasmInstall.cmake cmake/RasmRuntimeDlls.cmake CMakeLists.txt CMakePresets.json src/CMakeLists.txt">
+<meta name="rasm-sources" content="include/rasm/rasm.h include/rasm/engine.h include/rasm/handle.h include/rasm/types.h src/engine.cpp src/core/handle.cpp src/renderer/renderGraph.cpp src/platform/paths.cpp examples/00_hello_scene/main.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp examples/05_city/main.cpp cmake/rasmConfig.cmake.in cmake/RasmInstall.cmake cmake/RasmRuntimeDlls.cmake cmake/RasmAnalysis.cmake CMakeLists.txt CMakePresets.json src/CMakeLists.txt">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -156,7 +156,7 @@ add_custom_command(TARGET my_app POST_BUILD
 
 <div class="callout">
   <strong>Other ways to add RASM</strong>
-  <p><code>add_subdirectory(rasm)</code> works too and gives the same <code>rasm::rasm</code> target. Then examples, tests and install rules are off by default. The options are <code>-DRASM_BUILD_EXAMPLES=ON</code>, <code>-DRASM_BUILD_TESTS=ON</code>, <code>-DRASM_INSTALL=ON</code>, <code>-DRASM_ENABLE_AVX2=ON</code> (x86 only) and <code>-DRASM_SHADER_DIR=&lt;path&gt;</code> (the default shader folder, <code>shaders</code> beside the executable).</p>
+  <p><code>add_subdirectory(rasm)</code> works too and gives the same <code>rasm::rasm</code> target. Then examples, tests and install rules are off by default. The options are <code>-DRASM_BUILD_EXAMPLES=ON</code>, <code>-DRASM_BUILD_TESTS=ON</code>, <code>-DRASM_INSTALL=ON</code>, <code>-DRASM_ENABLE_AVX2=ON</code> (x86 only), <code>-DRASM_WARNINGS=ON</code> (extra compiler warnings on RASM's own targets) and <code>-DRASM_SHADER_DIR=&lt;path&gt;</code> (the default shader folder, <code>shaders</code> beside the executable).</p>
   <p>On Windows the executable needs the dependency DLLs next to it. The examples copy them with <code>rasm_copy_runtime_dlls</code> in <code>cmake/RasmRuntimeDlls.cmake</code>, because vcpkg's own copy misses <code>TracyClient.dll</code> in Debug.</p>
 </div>
 
