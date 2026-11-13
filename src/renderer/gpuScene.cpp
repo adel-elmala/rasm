@@ -759,7 +759,7 @@ namespace rasm
         // The same layout: only orders the early draws' color writes before the load.
         ctx.transitionImageLayout(commandBuffer, colorTexture, TextureUsage::COLOR_ATTACHMENT);
         // Depth is stored again, for a later drawScene call in the same pass.
-        ctx.beginRendering(commandBuffer, colorTexture, depthTexture, glm::vec4(0.0f), true, true);
+        ctx.beginRendering(commandBuffer, colorTexture, depthTexture, glm::vec4(0.0f), {.loadColor = true, .loadDepth = true, .storeDepth = true});
         endGpuTimer(commandBuffer, timer);
     }
 

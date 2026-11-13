@@ -142,6 +142,13 @@ namespace rasm
         bool                        operator==(const RenderTargetDesc&) const = default;
     };
 
+    struct AttachmentOps
+    {
+        bool                        loadColor                       = false;
+        bool                        loadDepth                       = false;
+        bool                        storeDepth                      = false;
+    };
+
     struct BindlessDescriptorSetLayoutDesc
     {
         std::string                 name;

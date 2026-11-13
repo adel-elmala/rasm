@@ -178,13 +178,21 @@ namespace rasm
                                                  .grid = slot.columns | slot.rows << 8 | scale << 16,
                                                  .screen = swapchain.width | swapchain.height << 16};
         const auto commandBuffer = frameResources[frameCount].commandBuffer;
-        // The shader places the panel in window pixels, whatever viewport the pass left set, and its triangles
-        // wind clockwise on screen.
+        const TextureHandle image = swapchain.imageHandles[imageIdx];
+        const TextureHandle depth = frameResources[frameCount].depthTexture;
+
+        // A pass of its own after every other, so the panel covers whatever the frame drew. It keeps the color, and its
+        // pipeline needs a depth attachment, which it clears. The shader places the panel in window pixels and its
+        // triangles wind clockwise on screen.
+        ctx.transitionImageLayout(commandBuffer, image, TextureUsage::COLOR_ATTACHMENT);
+        ctx.transitionImageLayout(commandBuffer, depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT, true);
+        ctx.beginRendering(commandBuffer, image, depth, glm::vec4(0.0f), {.loadColor = true});
         ctx.setViewport(commandBuffer, 0.0f, 0.0f, static_cast<float>(swapchain.width), static_cast<float>(swapchain.height));
         ctx.setScissor(commandBuffer, 0, 0, swapchain.width, swapchain.height);
         ctx.setCullMode(commandBuffer, CullMode::NONE);
         ctx.bindPipeline(commandBuffer, statsOverlay->pipeline);
         ctx.pushConstants(commandBuffer, statsOverlay->pipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
         ctx.draw(commandBuffer, 6);
+        ctx.endRendering(commandBuffer);
     }
 }

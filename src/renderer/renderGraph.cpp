@@ -201,6 +201,8 @@ namespace rasm
             return;
         }
 
+        assignAttachmentOps(sortedIndices);
+
         // 5. Store the final execution order. The transient memory is laid out from it, so it is laid out again.
         executionOrder = std::move(sortedIndices);
         compiled = true;
@@ -248,7 +250,7 @@ namespace rasm
                 continue;
             }
             engine->setRenderTarget(pass.outputRenderTarget);
-            engine->beginPass(pass.name);
+            engine->beginPass(pass.name, pass.attachmentOps);
             pass.execute(ctx);
             engine->endPass();
             engine->resetRenderTarget();
@@ -256,6 +258,30 @@ namespace rasm
                 drawnHistory.insert(engine->getRenderTargetTexture(pass.outputRenderTarget));
         }
         engine->endFrame();
+    }
+
+    // Passes that draw to one target run in the order they were added, so the first clears it, and each later one loads
+    // what the one before drew, depth included, which that one must then store.
+    void RenderGraph::assignAttachmentOps(const std::vector<uint32_t> &order)
+    {
+        constexpr uint32_t NONE = UINT32_MAX;
+        std::unordered_map<RenderTargetHandle, uint32_t, HandleHash> lastWriters;
+        uint32_t lastSwapchainWriter = NONE;
+        for (uint32_t passIdx : order)
+        {
+            Pass &pass = passes[passIdx];
+            pass.attachmentOps = {};
+            if (pass.compute)
+                continue;
+            uint32_t &previous = pass.writesSwapchain ? lastSwapchainWriter : lastWriters.try_emplace(pass.outputRenderTarget, NONE).first->second;
+            if (previous != NONE)
+            {
+                pass.attachmentOps.loadColor = true;
+                pass.attachmentOps.loadDepth = true;
+                passes[previous].attachmentOps.storeDepth = true;
+            }
+            previous = passIdx;
+        }
     }
 
     // Each transient render target lives from the first pass in the order that uses it to the last, as positions in the

@@ -260,17 +260,16 @@ namespace rasm::rhi
         return true;
     }
 
-    void VulkanCommandBuffer::beginRendering(Texture *colorAttachment, Texture *depthAttachment, const glm::vec4 &clearColor, bool load, bool storeDepth)
+    void VulkanCommandBuffer::beginRendering(Texture *colorAttachment, Texture *depthAttachment, const glm::vec4 &clearColor, const AttachmentOps &ops)
     {
         auto *color = static_cast<VulkanTexture *>(colorAttachment);
         auto *depth = static_cast<VulkanTexture *>(depthAttachment);
-        const VkAttachmentLoadOp loadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
 
         VkRenderingAttachmentInfo colorAttachmentInfo{
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .imageView = color->view,
             .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-            .loadOp = loadOp,
+            .loadOp = ops.loadColor ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
             .clearValue{.color{.float32{clearColor.r, clearColor.g, clearColor.b, clearColor.a}}}};
 
@@ -278,9 +277,9 @@ namespace rasm::rhi
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .imageView = depth->view,
             .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-            .loadOp = loadOp,
-            // Stored only for a pass that drawScene may pause to build its Hi-Z from it.
-            .storeOp = storeDepth ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .loadOp = ops.loadDepth ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR,
+            // Stored only when a later pass loads it, or drawScene may pause the pass to build its Hi-Z from it.
+            .storeOp = ops.storeDepth ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE,
             // Reversed-Z: the far plane is depth 0. Pairs with the GREATER_OR_EQUAL compare in createGraphicsPipeline.
             .clearValue = {.depthStencil = {0.0f, 0}}};
 

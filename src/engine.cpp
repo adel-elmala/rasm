@@ -343,6 +343,7 @@ namespace rasm
             endPass();
             setRenderTarget(renderTarget);
         }
+        drawStatsOverlay();
         ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::PRESENT_SRC);
 
         endGpuTimer(currentFrame.commandBuffer, frameStats->frameTimer);
@@ -378,32 +379,31 @@ namespace rasm
         FrameMark;
     }
 
-    void Engine::beginPass(const std::string &name)
+    void Engine::beginPass(const std::string &name, const AttachmentOps &ops)
     {
         auto currentFrame = frameResources[frameCount];
         frameStats->passTimer = beginGpuTimer(currentFrame.commandBuffer, name);
         uint32_t width = swapchain.width;
         uint32_t height = swapchain.height;
-        // drawScene's occlusion culling pauses the pass and builds its Hi-Z from the depth drawn so far.
-        const bool storeDepth = config.occlusionCulling;
-
+        TextureHandle color = swapchain.imageHandles[imageIdx];
+        TextureHandle depth = currentFrame.depthTexture;
+        glm::vec4 clearColor = SWAPCHAIN_CLEAR_COLOR;
         if (currentRenderTarget.isValid())
         {
-            auto renderTargetData = ctx.getRenderTarget(currentRenderTarget);
+            const auto &renderTargetData = ctx.getRenderTarget(currentRenderTarget);
             width = renderTargetData.width;
             height = renderTargetData.height;
+            color = renderTargetData.attachments[frameCount].color;
+            depth = renderTargetData.attachments[frameCount].depth;
+            clearColor = renderTargetData.clearColor;
+        }
 
-            // The pass clears both, so their contents are dropped.
-            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::COLOR_ATTACHMENT, true);
-            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT, true);
-            ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, renderTargetData.attachments[frameCount].depth, renderTargetData.clearColor, false, storeDepth);
-        }
-        else
-        {
-            ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::COLOR_ATTACHMENT, true);
-            ctx.transitionImageLayout(currentFrame.commandBuffer, currentFrame.depthTexture, TextureUsage::DEPTH_STENCIL_ATTACHMENT, true);
-            ctx.beginRendering(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], currentFrame.depthTexture, SWAPCHAIN_CLEAR_COLOR, false, storeDepth);
-        }
+        // What the pass clears is dropped. drawScene's occlusion culling pauses the pass and builds its Hi-Z from the
+        // depth drawn so far, so it needs the depth stored.
+        ctx.transitionImageLayout(currentFrame.commandBuffer, color, TextureUsage::COLOR_ATTACHMENT, !ops.loadColor);
+        ctx.transitionImageLayout(currentFrame.commandBuffer, depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT, !ops.loadDepth);
+        ctx.beginRendering(currentFrame.commandBuffer, color, depth, clearColor,
+                           {.loadColor = ops.loadColor, .loadDepth = ops.loadDepth, .storeDepth = ops.storeDepth || config.occlusionCulling});
 
         // begin dynamic rendering
         ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
@@ -415,8 +415,6 @@ namespace rasm
     void Engine::endPass()
     {
         auto currentFrame = frameResources[frameCount];
-        if (!currentRenderTarget.isValid())
-            drawStatsOverlay();
         ctx.endRendering(currentFrame.commandBuffer);
 
         if (currentRenderTarget.isValid())

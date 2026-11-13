@@ -723,7 +723,8 @@ if order has fewer passes than the graph: there is a cycle</code></pre>
   <tr><td><code>read(texture)</code></td><td><code>transitionImageLayout(texture, SAMPLED)</code></td><td>unless it is <code>SAMPLED</code> already (read after read)</td></tr>
   <tr><td><code>read(renderTarget)</code></td><td>nothing: the drawing pass's <code>endPass</code> left its color <code>SAMPLED</code></td><td>–</td></tr>
   <tr><td><code>readPrevious(renderTarget)</code></td><td><code>transitionImageLayout(previous copy, SAMPLED)</code>; first a clear if no frame drew that copy</td><td>the clear once per copy</td></tr>
-  <tr><td><code>write(renderTarget)</code> or <code>writeSwapchain()</code></td><td><code>beginPass</code> moves color and depth to attachments with <code>discard</code>: from <code>UNKNOWN</code>, contents dropped</td><td>always</td></tr>
+  <tr><td><code>write(renderTarget)</code> or <code>writeSwapchain()</code></td><td><code>beginPass</code> moves color and depth to attachments with <code>discard</code>: from <code>UNKNOWN</code>, contents dropped</td><td>the first pass on the target (it clears)</td></tr>
+  <tr><td>the same, on a target an earlier pass drew</td><td><code>beginPass</code> moves them to attachments without <code>discard</code>, keeping the contents</td><td>later passes (they load)</td></tr>
   <tr><td><code>read(buffer)</code></td><td>one <code>memoryBarrier</code>: the last write's stage → this pass's stage</td><td>once per stage after each write</td></tr>
   <tr><td><code>write(buffer)</code></td><td>one <code>memoryBarrier</code>: the last write and the reads since → this pass's stage</td><td>if any pass used it before</td></tr>
   <tr><td><code>write(texture)</code></td><td>nothing</td><td>only orders passes (compute writes buffers only)</td></tr>
@@ -803,7 +804,7 @@ auto previous = engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTex
   <tr><td>Buffer barriers</td><td>per resource</td><td>One global <code>memoryBarrier</code> per pass, from the declared buffers' last write and reads. The state carries across frames.</td></tr>
   <tr><td>Transient memory, aliasing</td><td>one heap, lifetimes</td><td>The same, for render targets only, laid out once per compile instead of every frame. One heap per set of memory types; greedy first fit, biggest first.</td></tr>
   <tr><td>Size</td><td>often relative to the screen</td><td><code>RenderTargetDesc::swapchainScale</code>; a resize rebuilds the target, or places its group again, with the device idle.</td></tr>
-  <tr><td>Load and store</td><td>per pass</td><td>Every graphics pass clears its target, so two passes that draw to the swapchain overwrite each other (<code>D9</code>).</td></tr>
+  <tr><td>Load and store</td><td>per pass</td><td>Per pass, but inferred: passes on one target run in add order, the first clears it, later ones load color and depth, and the one before a load stores its depth (<code>RenderGraph::assignAttachmentOps</code>). There is no way to ask for a load on the first pass, or for <samp>DONT_CARE</samp>.</td></tr>
   <tr><td>Async compute</td><td>a second queue</td><td>One graphics queue (<code>D13</code>).</td></tr>
   <tr><td>Everything in the graph</td><td>the whole frame</td><td>The scene's culling is not a graph pass. Its early half runs before all the frame's work, compute passes included (<code>D18</code>); see <a href="stream-compaction.html#in-rasm">stream compaction</a>. <code>Engine::render</code> does not use the graph.</td></tr>
 </table>
@@ -839,7 +840,7 @@ auto previous = engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTex
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>Transient textures and buffers (only render targets are transient), pass culling, load and store per pass, and moving the scene's culling into the graph (<code>D9</code>, <code>D18</code> in <code>docs/code_review.md</code>; phase 3 of <code>docs/development_plan.md</code>). For writing your own passes, see <a href="../api/render-graph.html">the render graph API</a>.</p>
+  <p>Transient textures and buffers (only render targets are transient), pass culling, multiple color attachments, and moving the scene's culling into the graph (<code>D9</code>, <code>D18</code> in <code>docs/code_review.md</code>; phase 3 of <code>docs/development_plan.md</code>). For writing your own passes, see <a href="../api/render-graph.html">the render graph API</a>.</p>
 </div>
 
 <h3>Further reading</h3>

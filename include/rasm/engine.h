@@ -111,7 +111,7 @@ namespace rasm
         [[nodiscard]] bool          beginFrame(CameraHandle camera);
         // Presents the swapchain image, cleared if no pass rendered to it this frame.
         void                        endFrame();
-        void                        beginPass(const std::string& name = "Pass");
+        void                        beginPass(const std::string& name = "Pass", const AttachmentOps& ops = {});
         void                        endPass();
         void                        render(SceneHandle scene, CameraHandle camera);
         // Records a scene into the current pass, for render graph passes, with the camera fitted to the pass's

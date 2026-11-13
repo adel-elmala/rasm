@@ -27,6 +27,7 @@ namespace rasm
         std::vector<BufferHandle>           outputBuffers;
         RenderTargetHandle                  outputRenderTarget;
         std::function<void(RenderContext&)> execute;
+        AttachmentOps                       attachmentOps;
         bool                                compute         = false;
         bool                                writesSwapchain = false;
 
@@ -90,6 +91,7 @@ namespace rasm
         bool                bufferBarrier(const Pass& pass, PipelineStage& before, PipelineStage& after);
         void                clearUndrawnHistory(const Pass& pass);
         bool                transientLifetimes(const std::vector<uint32_t>& order);
+        void                assignAttachmentOps(const std::vector<uint32_t>& order);
         TextureHandle       createTexture(const TextureDesc& desc);
         BufferHandle        createBuffer(const BufferDesc& desc);
         RenderTargetHandle  createRenderTarget(const RenderTargetDesc& desc);

@@ -419,7 +419,7 @@ lit  = bit g.x of row g.y of the glyph of code</code></pre>
 <p>RASM uses exactly the method of sections 2 to 6 for its <b>stats overlay</b>, the panel that shows the numbers from <a href="gpu-timing.html#in-rasm">GPU timing and frame statistics</a>. The font, the lookup and the panel layout are in one shader, <code>shaders/passes/statsOverlay.slang</code>. The text is built on the CPU in <code>src/renderer/statsOverlay.cpp</code>. <kbd>F1</kbd> turns it on and off (<code>showStats</code>).</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 300" role="img" aria-label="Every 250 ms, buildText formats FrameStats into lines and buildGrid pads them into a grid of at most 40 columns and 26 rows. Every frame, updateStatsOverlay copies the grid into the frame slot's text buffer. In every swapchain pass, endPass calls drawStatsOverlay, which pushes 16 bytes of push constants and draws 6 vertices with the statsOverlay pipeline.">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Every 250 ms, buildText formats FrameStats into lines and buildGrid pads them into a grid of at most 40 columns and 26 rows. Every frame, updateStatsOverlay copies the grid into the frame slot's text buffer. At the end of the frame, endFrame calls drawStatsOverlay, which begins a pass of its own on the window, pushes 16 bytes of push constants and draws 6 vertices with the statsOverlay pipeline.">
     <text x="20" y="22" class="title t-cpu">CPU · every 250 ms</text>
     <rect x="20" y="32" width="180" height="56" rx="6" class="cpu"/>
     <text x="110" y="56" class="mid mono">buildText</text>
@@ -439,9 +439,9 @@ lit  = bit g.x of row g.y of the glyph of code</code></pre>
     <text x="610" y="142" class="mid title">Stats Overlay Text s</text>
     <text x="610" y="160" class="mid small">1040 bytes, host-visible, per slot</text>
 
-    <text x="20" y="140" class="title t-cpu">CPU · end of each swapchain pass</text>
+    <text x="20" y="140" class="title t-cpu">CPU · endFrame, after every other pass</text>
     <rect x="20" y="150" width="420" height="56" rx="6" class="cpu"/>
-    <text x="230" y="172" class="mid small">endPass → drawStatsOverlay: viewport and scissor = window,</text>
+    <text x="230" y="172" class="mid small">drawStatsOverlay: own pass, load color · viewport = window,</text>
     <text x="230" y="190" class="mid small">CullMode::NONE, bind pipeline, push 16 bytes, draw 6</text>
 
     <line x1="230" y1="206" x2="230" y2="234" class="arrow" marker-end="url(#ah)"/>
@@ -495,7 +495,7 @@ lit  = bit g.x of row g.y of the glyph of code</code></pre>
   <tr><td>Scale</td><td>a whole number from the screen size</td><td>max(1, swapchain height / 1080): 1 at 1080p, 2 at 2160p.</td></tr>
   <tr><td>Background</td><td>opaque, translucent, outline …</td><td>Opaque, no blending: <code>BACKGROUND</code> near black, <code>FOREGROUND</code> light grey, both linear colors.</td></tr>
   <tr><td>Depth</td><td>depth test off, or nearest depth</td><td>The pipeline keeps its depth test, and the panel sits at depth 1, the nearest value under reversed-Z (see <a href="projection-depth.html">Projection and reversed-Z depth</a>).</td></tr>
-  <tr><td>When drawn</td><td>last</td><td>At the end of every swapchain pass, inside it: <code>endPass</code> calls <code>drawStatsOverlay</code> before <code>endRendering</code>. Each pass clears, so drawing in each one keeps the panel on the final image.</td></tr>
+  <tr><td>When drawn</td><td>last</td><td>Once per frame, after every other pass: <code>endFrame</code> calls <code>drawStatsOverlay</code>, which begins a pass of its own on the window that loads the color (so the frame's image stays) and clears depth. The pass has no GPU timer.</td></tr>
   <tr><td>Alternatives</td><td>atlas, SDF, UI library</td><td>None yet. A Dear ImGui integration is planned in the development plan (phase 4).</td></tr>
 </table>
 </div>

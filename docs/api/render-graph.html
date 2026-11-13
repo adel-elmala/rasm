@@ -69,7 +69,7 @@
     <text x="344" y="202" class="mid small">output or swapchain</text>
     <rect x="412" y="166" width="84" height="46" rx="6" class="cpu"/>
     <text x="454" y="185" class="mid mono">beginPass</text>
-    <text x="454" y="202" class="mid small">layouts, clear</text>
+    <text x="454" y="202" class="mid small">clear or load</text>
     <rect x="504" y="166" width="76" height="46" rx="23" class="shader"/>
     <text x="542" y="185" class="mid mono">execute</text>
     <text x="542" y="202" class="mid small">your lambda</text>
@@ -102,7 +102,7 @@
   <h3>In short</h3>
   <ul>
     <li>Create targets and buffers in the setup callback, and declare them with <code>read</code> / <code>write</code>. Only these declarations order the passes.</li>
-    <li>A graphics pass draws into exactly one target: the render target it writes, or the swapchain with <code>writeSwapchain()</code>. Every graphics pass <b>clears</b> its target first.</li>
+    <li>A graphics pass draws into exactly one target: the render target it writes, or the swapchain with <code>writeSwapchain()</code>. The first pass that draws a target <b>clears</b> it; later passes on the same target draw on top.</li>
     <li>For last frame's image (accumulation, trails, temporal effects), create the target with <code>history = true</code> and declare <code>readPrevious(rt)</code>.</li>
     <li>Any other target from <code>builder.createRenderTarget</code> is <b>transient</b>: targets that are never used at the same time share memory. Set <code>swapchainScale = 1.0f</code> to make a target follow the window size.</li>
     <li>The graph records the barriers and layout changes from what the passes declare. <b>Declare every buffer and texture a pass uses</b>: an undeclared one gets no barrier.</li>
@@ -151,7 +151,7 @@ public:
       <dt>setup</dt><dd>Gets a <a href="#PassBuilder">PassBuilder</a>. Create resources and declare reads and writes here.</dd>
       <dt>execute</dt><dd>Called every frame between <code>beginPass</code> and <code>endPass</code>, so draws are allowed and dispatches and barriers are not. The viewport and scissor cover the whole target, and the cull mode is <code>NONE</code>.</dd>
     </dl>
-    <p><span class="tag">target</span> The target is the render target the pass writes, or the swapchain image after <code>writeSwapchain()</code>. A graphics pass must declare exactly one of them, or <code>compile</code> fails. It is cleared at the start of the pass: color to the target's <code>clearColor</code> (the swapchain uses a dark gray), depth to 0.</p>
+    <p><span class="tag">target</span> The target is the render target the pass writes, or the swapchain image after <code>writeSwapchain()</code>. A graphics pass must declare exactly one of them, or <code>compile</code> fails. The first pass in the frame that draws a target clears it: color to the target's <code>clearColor</code> (the swapchain uses a dark gray), depth to 0. A later pass on the same target keeps color and depth and draws on top (see <a href="#load-store">Load and store</a>).</p>
   </div>
 </div>
 
@@ -250,6 +250,7 @@ void write(BufferHandle handle);</pre>
     std::vector&lt;BufferHandle&gt;           outputBuffers;
     RenderTargetHandle                  outputRenderTarget;
     std::function&lt;void(RenderContext&amp;)&gt; execute;
+    AttachmentOps                       attachmentOps;
     bool                                compute         = false;
     bool                                writesSwapchain = false;
 
@@ -257,7 +258,7 @@ void write(BufferHandle handle);</pre>
     std::vector&lt;uint32_t&gt;   successors;
 };</pre>
   <div class="body">
-    <p>What the graph stores per pass. <code>read</code> and <code>write</code> fill the input and output lists, <code>readPrevious</code> fills <code>previousRenderTargets</code>, and <code>writeSwapchain</code> sets <code>writesSwapchain</code>. <code>inDegree</code> and <code>successors</code> are filled by <code>compile</code>: the number of passes that must run first, and the passes that wait for this one. You never build a <code>Pass</code> yourself.</p>
+    <p>What the graph stores per pass. <code>read</code> and <code>write</code> fill the input and output lists, <code>readPrevious</code> fills <code>previousRenderTargets</code>, and <code>writeSwapchain</code> sets <code>writesSwapchain</code>. <code>compile</code> fills <code>attachmentOps</code> (see <a href="#load-store">Load and store</a>). <code>inDegree</code> and <code>successors</code> are filled by <code>compile</code>: the number of passes that must run first, and the passes that wait for this one. You never build a <code>Pass</code> yourself.</p>
   </div>
 </div>
 
@@ -352,7 +353,8 @@ void write(BufferHandle handle);</pre>
   <tr><td><code>read(texture)</code></td><td><code>transitionImageLayout(texture, SAMPLED)</code></td><td>unless it is <code>SAMPLED</code> already</td></tr>
   <tr><td><code>read(renderTarget)</code></td><td>nothing</td><td><code>endPass</code> of the pass that drew it left the color sampled</td></tr>
   <tr><td><code>readPrevious(renderTarget)</code></td><td><code>transitionImageLayout(previous copy, SAMPLED)</code>, after a clear if no frame drew it yet</td><td>the clear only once per copy</td></tr>
-  <tr><td><code>write(renderTarget)</code> or <code>writeSwapchain()</code></td><td><code>beginPass</code> moves color and depth to attachments, dropping their contents</td><td>always: the pass clears and writes them</td></tr>
+  <tr><td><code>write(renderTarget)</code> or <code>writeSwapchain()</code></td><td><code>beginPass</code> moves color and depth to attachments, dropping their contents</td><td>the first pass on the target, which clears it</td></tr>
+  <tr><td>the same, after an earlier pass on the target</td><td><code>beginPass</code> moves them to attachments and keeps the contents</td><td>later passes, which load</td></tr>
   <tr><td><code>read(buffer)</code></td><td><code>memoryBarrier</code>: last write's stage → this pass's stage</td><td>once per stage after each write</td></tr>
   <tr><td><code>write(buffer)</code></td><td><code>memoryBarrier</code>: last write and the reads since → this pass's stage</td><td>if any pass used the buffer before, also in the previous frame</td></tr>
   <tr><td><code>write(texture)</code></td><td>nothing</td><td>it only orders passes</td></tr>
@@ -362,10 +364,34 @@ void write(BufferHandle handle);</pre>
 <p>All of a pass's buffers share one global barrier. A buffer or texture the pass uses without declaring it gets nothing, so declare everything it touches. The graph knows only its own passes: a buffer shared with another graph, or with work outside the graph, is not ordered.</p>
 <p><span class="tag">errors</span> <code>compile</code> fails, like on a cycle, for declarations that cannot be right: a pass that reads the render target it draws to (<code>Pass '…' reads the render target it draws to.</code>), a compute pass with no buffer write, a graphics pass that does not write exactly one render target or the swapchain, and a read of a transient target that no earlier pass draws. The frames then draw no passes until the graph changes.</p>
 
+<h3 id="load-store">Load and store</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 150" role="img" aria-label="Three passes draw to the swapchain in add order: Scene, UI, then the engine's stats overlay. Scene clears color and depth and stores depth because UI loads it. UI loads color and depth. The stats overlay, drawn by endFrame, loads color and clears depth.">
+    <text x="20" y="20" class="title">passes on one target, in add order</text>
+    <rect x="20" y="34" width="210" height="70" rx="6" class="gpu"/>
+    <text x="125" y="56" class="mid mono">Scene</text>
+    <text x="125" y="76" class="mid small">clear color + depth</text>
+    <text x="125" y="93" class="mid small">store depth</text>
+    <line x1="230" y1="69" x2="268" y2="69" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="270" y="34" width="210" height="70" rx="6" class="gpu"/>
+    <text x="375" y="56" class="mid mono">UI</text>
+    <text x="375" y="76" class="mid small">load color + depth</text>
+    <text x="375" y="93" class="mid small">draws on top</text>
+    <line x1="480" y1="69" x2="518" y2="69" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="520" y="34" width="220" height="70" rx="6" class="cpu"/>
+    <text x="630" y="56" class="mid mono">stats overlay</text>
+    <text x="630" y="76" class="mid small">endFrame, if shown</text>
+    <text x="630" y="93" class="mid small">load color, clear depth</text>
+    <text x="20" y="132" class="small">The graph sets each pass's AttachmentOps in compile. A pass that loads waits for the one before; nothing is cleared twice.</text>
+  </svg>
+  <figcaption>Each graphics pass gets <a href="engine.html#AttachmentOps">AttachmentOps</a> from <code>compile</code>: the first pass on a target clears it, each later one loads color and depth, and the pass before a loading one stores its depth. Color is always stored. Read the result in <code>Pass::attachmentOps</code>.</figcaption>
+</figure>
+
 <h3>What one frame records: <code>examples/04_compute</code></h3>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 190" role="img" aria-label="The frame command buffer of example 4: a compute and graphics to compute barrier, the Animate compute pass that writes particle positions, a compute to graphics barrier, then the Draw pass with its clear and draw call, then the stats overlay and endPass.">
+  <svg viewBox="0 0 760 190" role="img" aria-label="The frame command buffer of example 4: a compute and graphics to compute barrier, the Animate compute pass that writes particle positions, a compute to graphics barrier, then the Draw pass with its clear and draw call, then endPass.">
     <line x1="20" y1="20" x2="740" y2="20" class="arrow" marker-end="url(#ah)"/>
     <text x="20" y="14" class="small">frame command buffer, in recording order →</text>
 
@@ -800,7 +826,6 @@ graph.addPass(
   <strong>Known limits</strong>
   <ul>
     <li>Only render targets are transient. Textures and buffers from the builder, and history targets, live until shutdown (<code>D4</code>).</li>
-    <li>Every graphics pass clears its target. Two passes that draw into the swapchain (or into the same render target) do not add up: the second one replaces the first (<code>D9</code>).</li>
     <li>Depth is not kept between passes.</li>
     <li>The early scene culling, which <code>drawScene</code> needs, runs on the GPU before every pass of the frame, including your compute passes (D18). The late culling runs inside the pass that calls <code>drawScene</code>.</li>
     <li>Nothing can be destroyed: render targets, buffers and pipelines live until shutdown (<code>D4</code>).</li>

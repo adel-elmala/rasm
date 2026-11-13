@@ -533,3 +533,80 @@ TEST_CASE("reading a transient render target that no pass draws first fails to c
     CHECK_FALSE(graph.isCompiled());
     CHECK(graph.order().empty());
 }
+
+TEST_CASE("the first pass that draws a target clears it, and each later one loads what the one before drew")
+{
+    const rasm::RenderTargetHandle scene{1, 1};
+
+    TestGraph graph;
+    graph.addPass(
+        "opaque",
+        [&](rasm::PassBuilder &builder)
+        { builder.write(scene); },
+        [](rasm::RenderContext &) {});
+    graph.addPass(
+        "ui",
+        [](rasm::PassBuilder &builder)
+        { builder.writeSwapchain(); },
+        [](rasm::RenderContext &) {});
+    graph.addPass(
+        "transparent",
+        [&](rasm::PassBuilder &builder)
+        { builder.write(scene); },
+        [](rasm::RenderContext &) {});
+    graph.addPass(
+        "present",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.read(scene);
+            builder.writeSwapchain();
+        },
+        [](rasm::RenderContext &) {});
+
+    graph.compile();
+    REQUIRE(graph.isCompiled());
+
+    const rasm::AttachmentOps &opaque = graph.pass(0).attachmentOps;
+    const rasm::AttachmentOps &ui = graph.pass(1).attachmentOps;
+    const rasm::AttachmentOps &transparent = graph.pass(2).attachmentOps;
+    const rasm::AttachmentOps &present = graph.pass(3).attachmentOps;
+
+    CHECK_FALSE(opaque.loadColor);
+    CHECK_FALSE(opaque.loadDepth);
+    CHECK(opaque.storeDepth);
+    CHECK(transparent.loadColor);
+    CHECK(transparent.loadDepth);
+    CHECK_FALSE(transparent.storeDepth);
+
+    CHECK_FALSE(ui.loadColor);
+    CHECK(ui.storeDepth);
+    CHECK(present.loadColor);
+    CHECK(present.loadDepth);
+    CHECK_FALSE(present.storeDepth);
+}
+
+TEST_CASE("a compute pass and a lone graphics pass get the default attachment ops")
+{
+    const rasm::BufferHandle buffer{1, 1};
+
+    TestGraph graph;
+    graph.addBufferPass(true, {}, {buffer});
+    graph.addPass(
+        "draw",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.read(buffer);
+            builder.writeSwapchain();
+        },
+        [](rasm::RenderContext &) {});
+
+    graph.compile();
+    REQUIRE(graph.isCompiled());
+
+    for (uint32_t i = 0; i < 2; ++i)
+    {
+        CHECK_FALSE(graph.pass(i).attachmentOps.loadColor);
+        CHECK_FALSE(graph.pass(i).attachmentOps.loadDepth);
+        CHECK_FALSE(graph.pass(i).attachmentOps.storeDepth);
+    }
+}

@@ -972,7 +972,7 @@ namespace rasm
         return impl->textureStates.transition(*rhiCommandBuffer, rhiTexture, newUsage, discard);
     }
 
-    bool RenderContext::beginRendering(const CommandBufferHandle &commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment, const glm::vec4 &clearColor, bool load, bool storeDepth)
+    bool RenderContext::beginRendering(const CommandBufferHandle &commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment, const glm::vec4 &clearColor, const AttachmentOps &ops)
     {
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         auto *color = lookup(impl->textures, colorAttachment, __func__);
@@ -980,7 +980,7 @@ namespace rasm
         if (!rhiCommandBuffer || !color || !depth)
             return false;
 
-        rhiCommandBuffer->beginRendering(color, depth, clearColor, load, storeDepth);
+        rhiCommandBuffer->beginRendering(color, depth, clearColor, ops);
         impl->passColorFormat = color->desc.format;
         impl->passDepthFormat = depth->desc.format;
         impl->skipDraws = false;

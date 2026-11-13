@@ -405,7 +405,7 @@
 
   <div class="step">
     <h4>9. endPass, and the end of the frame's command buffer</h4>
-    <svg viewBox="0 0 730 232" role="img" aria-label="endPass records the overlay and endRendering. endFrame records the barrier to PRESENT_SRC, closes the frame timer and ends the command buffer.">
+    <svg viewBox="0 0 730 232" role="img" aria-label="endPass records endRendering. endFrame records the stats overlay in a pass of its own, the barrier to PRESENT_SRC, closes the frame timer and ends the command buffer.">
       <!--strip 5-->
       <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
       <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
@@ -415,19 +415,19 @@
       <rect x="520" y="8" width="98" height="28" rx="5" class="cpu"/><rect x="518" y="6" width="102" height="32" rx="7" class="hot"/><text x="569" y="26" class="mid small title">record</text>
       <rect x="622" y="8" width="98" height="28" rx="5" class="ghost"/><text x="671" y="26" class="mid small t-faint">submit · present</text>
       <!--/strip-->
-      <path d="M128,64 V58 H370 V64" class="arrow"/>
-      <text x="249" y="52" class="mid small mono">endPass()</text>
-      <path d="M374,64 V58 H650 V64" class="arrow"/>
-      <text x="512" y="52" class="mid small mono">endFrame()</text>
+      <path d="M128,64 V58 H306 V64" class="arrow"/>
+      <text x="217" y="52" class="mid small mono">endPass()</text>
+      <path d="M310,64 V58 H686 V64" class="arrow"/>
+      <text x="498" y="52" class="mid small mono">endFrame()</text>
       <rect x="10" y="70" width="710" height="44" rx="6" class="zone"/>
       <rect x="14"  y="78" width="110" height="28" rx="4" class="ghost"/><text x="69"  y="96" class="mid small t-faint">… drawScene</text>
-      <rect x="128" y="78" width="60"  height="28" rx="4" class="cpu"/><text x="158" y="96" class="mid small">overlay</text>
-      <rect x="192" y="78" width="90"  height="28" rx="4" class="cpu"/><text x="237" y="96" class="mid small">endRendering</text>
-      <rect x="286" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="328" y="96" class="mid small">ts Scene end</text>
-      <rect x="374" y="78" width="140" height="28" rx="4" class="cpu"/><text x="444" y="96" class="mid small">barrier: → PRESENT_SRC</text>
-      <rect x="518" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="560" y="96" class="mid small">ts Frame end</text>
-      <rect x="606" y="78" width="44"  height="28" rx="4" class="cpu"/><text x="628" y="96" class="mid small">end</text>
-      <text x="14" y="146" class="small">overlay — the stats overlay, only in a swapchain pass and only when it is shown (F1).</text>
+      <rect x="128" y="78" width="90"  height="28" rx="4" class="cpu"/><text x="173" y="96" class="mid small">endRendering</text>
+      <rect x="222" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="264" y="96" class="mid small">ts Scene end</text>
+      <rect x="310" y="78" width="90"  height="28" rx="4" class="cpu"/><text x="355" y="96" class="mid small">overlay pass</text>
+      <rect x="404" y="78" width="140" height="28" rx="4" class="cpu"/><text x="474" y="96" class="mid small">barrier: → PRESENT_SRC</text>
+      <rect x="548" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="590" y="96" class="mid small">ts Frame end</text>
+      <rect x="636" y="78" width="50"  height="28" rx="4" class="cpu"/><text x="661" y="96" class="mid small">end</text>
+      <text x="14" y="146" class="small">overlay pass — the stats overlay, only when it is shown (F1): a pass of its own that loads the image's color.</text>
       <text x="14" y="164" class="small">endPass sets swapchainRendered. A render target pass instead moves its color texture to SAMPLED, for later passes.</text>
       <text x="14" y="182" class="small">barrier — in endFrame, once per frame: the image goes COLOR_ATTACHMENT → PRESENT_SRC.</text>
       <text x="14" y="212" class="small t-hot">No pass drew to the swapchain? endFrame first records an empty pass named "Clear", so present still works.</text>

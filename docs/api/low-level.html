@@ -281,14 +281,13 @@ constexpr bool          hasStage(PipelineStage stages, PipelineStage stage);</pr
                     TextureHandle colorAttachment,
                     TextureHandle depthAttachment,
                     const glm::vec4&amp; clearColor,
-                    bool load = false, bool storeDepth = false);</pre>
+                    const AttachmentOps&amp; ops = {});</pre>
   <div class="body">
-    <p>Starts a render pass into one color and one depth texture. Color is cleared to <code>clearColor</code>, and depth to 0. Color is kept (stored) at the end of the pass; depth only with <code>storeDepth</code>. Both attachments are required.</p>
+    <p>Starts a render pass into one color and one depth texture. By default color is cleared to <code>clearColor</code> and depth to 0. Color is kept (stored) at the end of the pass; depth only with <code>ops.storeDepth</code>. Both attachments are required.</p>
     <dl>
-      <dt>load</dt><dd><code>false</code>: clear both attachments. <code>true</code>: keep what is in them, and ignore <code>clearColor</code>. Use it to go on drawing after a pause, as <code>drawScene</code> does after its Hi-Z build. Before a load, transition the attachments to <code>COLOR_ATTACHMENT</code> and <code>DEPTH_STENCIL_ATTACHMENT</code>, even when they are already in that layout: the barrier orders the earlier writes before the load.</dd>
-      <dt>storeDepth</dt><dd><code>true</code>: keep depth at the end of the pass, for a later <code>load</code> or a read. <code>false</code>: depth may be thrown away, which saves memory bandwidth. <code>drawScene</code> with occlusion culling needs it, because it pauses the pass and reads depth.</dd>
+      <dt>ops</dt><dd>See <a href="engine.html#AttachmentOps">AttachmentOps</a>. <code>loadColor</code> / <code>loadDepth</code> keep what an attachment holds instead of clearing it. Use them to go on drawing after a pause, as <code>drawScene</code> does after its Hi-Z build, or on top of an earlier pass. Before a load, transition the attachment to <code>COLOR_ATTACHMENT</code> or <code>DEPTH_STENCIL_ATTACHMENT</code> without <code>discard</code>, even when it is already in that layout: the barrier orders the earlier writes before the load. <code>storeDepth</code> keeps depth for a later load or a read; without it depth may be thrown away, which saves memory bandwidth.</dd>
     </dl>
-    <p><code>Engine::beginPass</code> calls this (without <code>load</code>, and with <code>storeDepth</code> = <code>EngineConfig::occlusionCulling</code>) after the layout transitions and also sets the viewport, scissor and cull mode, so use <code>beginPass</code> unless you build the whole frame yourself.</p>
+    <p><code>Engine::beginPass</code> calls this after the layout transitions, with its <code>ops</code> (and <code>storeDepth</code> forced on with <code>EngineConfig::occlusionCulling</code>), and also sets the viewport, scissor and cull mode, so use <code>beginPass</code> unless you build the whole frame yourself.</p>
   </div>
 </div>
 
