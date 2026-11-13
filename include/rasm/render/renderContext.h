@@ -9,6 +9,11 @@
 #include "rasm/types.h"
 #include "rasm/render/resource.h"
 
+namespace rasm::rhi
+{
+    struct Heap;
+}
+
 namespace rasm
 {
     class Engine;
@@ -31,6 +36,9 @@ namespace rasm
         FenceHandle                         createFence(const std::string& name, uint64_t initialValue = 0);
         QueryPoolHandle                     createTimestampQueryPool(const std::string& name, uint32_t count);
         RenderTargetHandle                  createRenderTarget(const RenderTargetDesc& desc);
+        RenderTargetHandle                  createTransientRenderTarget(const RenderTargetDesc& desc);
+        bool                                placeTransientRenderTargets(const RenderTargetHandle* renderTargets, const uint32_t* firstPasses, const uint32_t* lastPasses, uint32_t count);
+        void                                resizeRenderTargets();
         const RenderTarget&                 getRenderTarget(const RenderTargetHandle& handle);
         std::vector<TextureHandle>          getSwapchainImages();
         Format                              getSwapchainImageFormat();
@@ -76,6 +84,10 @@ namespace rasm
 
     private:
         struct Impl;
+
+        bool                                createAttachments(RenderTarget& renderTarget, const RenderTargetDesc& desc, rhi::Heap* const* heaps, const uint64_t* offsets);
+        void                                destroyAttachments(RenderTarget& renderTarget);
+        bool                                placeGroup(uint32_t group);
 
         Engine*                 engine  = nullptr;
         std::unique_ptr<Impl>   impl;

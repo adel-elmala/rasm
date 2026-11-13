@@ -61,6 +61,11 @@ namespace
         // What execute records before the pass: false for no barrier.
         bool barrierBefore(uint32_t passIdx, rasm::PipelineStage &before, rasm::PipelineStage &after) { return bufferBarrier(passes[passIdx], before, after); }
 
+        // createRenderTarget needs an engine, so a test marks a handle transient directly.
+        void addTransient(rasm::RenderTargetHandle renderTarget) { transientTargets.push_back(renderTarget); }
+        uint32_t firstPass(uint32_t transient) const { return transientFirstPasses[transient]; }
+        uint32_t lastPass(uint32_t transient) const { return transientLastPasses[transient]; }
+
         const std::vector<uint32_t> &order() const { return executionOrder; }
         const rasm::Pass &pass(uint32_t passIdx) const { return passes[passIdx]; }
         bool isCompiled() const { return compiled; }
@@ -463,4 +468,68 @@ TEST_CASE("a buffer barrier goes only where a pass uses a buffer another pass wr
         CHECK(before == (rasm::PipelineStage::COMPUTE | rasm::PipelineStage::GRAPHICS));
         CHECK(after == rasm::PipelineStage::COMPUTE);
     }
+}
+
+TEST_CASE("a transient render target lives from the first pass that uses it to the last")
+{
+    const rasm::RenderTargetHandle scene{1, 1};
+    const rasm::RenderTargetHandle post{2, 1};
+    const rasm::RenderTargetHandle unused{3, 1};
+
+    TestGraph graph;
+    graph.addTransient(scene);
+    graph.addTransient(post);
+    graph.addTransient(unused);
+    graph.addPass(
+        "present",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.read(post);
+            builder.writeSwapchain();
+        },
+        [](rasm::RenderContext &) {});
+    graph.addPass(
+        "post",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.read(scene);
+            builder.write(post);
+        },
+        [](rasm::RenderContext &) {});
+    graph.addPass(
+        "draw",
+        [&](rasm::PassBuilder &builder)
+        { builder.write(scene); },
+        [](rasm::RenderContext &) {});
+
+    graph.compile();
+
+    REQUIRE(graph.order() == std::vector<uint32_t>{2, 1, 0});
+    CHECK(graph.firstPass(0) == 0);
+    CHECK(graph.lastPass(0) == 1);
+    CHECK(graph.firstPass(1) == 1);
+    CHECK(graph.lastPass(1) == 2);
+    CHECK(graph.firstPass(2) == 0);
+    CHECK(graph.lastPass(2) == 2);
+}
+
+TEST_CASE("reading a transient render target that no pass draws first fails to compile")
+{
+    const rasm::RenderTargetHandle scene{1, 1};
+
+    TestGraph graph;
+    graph.addTransient(scene);
+    graph.addPass(
+        "present",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.read(scene);
+            builder.writeSwapchain();
+        },
+        [](rasm::RenderContext &) {});
+
+    graph.compile();
+
+    CHECK_FALSE(graph.isCompiled());
+    CHECK(graph.order().empty());
 }

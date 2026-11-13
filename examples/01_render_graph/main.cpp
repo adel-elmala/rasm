@@ -62,20 +62,21 @@ int main()
     engine.addCameraToScene(scene, camera);
 
     rasm::RenderGraph graph = engine.createRenderGraph();
+    const rasm::Format colorFormat = engine.getRenderContext().getSwapchainImageFormat();
 
+    // Targets made through the builder belong to the graph. Without history they are transient: each lives only from
+    // the first pass that uses it to the last, so the graph lets offscreen_rt and composite_rt share memory.
     rasm::RenderTargetHandle rtHandle{};
-    // Standard forward rendering pass.
     graph.addPass(
         "Forward",
-        [&config, &rtHandle, &engine](rasm::PassBuilder &builder)
+        [&rtHandle, colorFormat](rasm::PassBuilder &builder)
         {
             rtHandle = builder.createRenderTarget({
                 .name = "offscreen_rt",
-                .width = static_cast<uint32_t>(config.windowWidth),
-                .height = static_cast<uint32_t>(config.windowHeight),
-                .colorFormat = engine.getRenderContext().getSwapchainImageFormat(),
+                .swapchainScale = 1.0f,
+                .colorFormat = colorFormat,
                 .depthFormat = rasm::Format::D32_SFLOAT,
-                .clearColor = glm::vec4(0.0f), // alpha 0 marks the background for the overlay
+                .clearColor = glm::vec4(0.0f), // alpha 0 marks the background
             });
             builder.write(rtHandle);
         },
@@ -85,91 +86,8 @@ int main()
             engine.drawScene(scene, camera);
         });
 
-    // Blends the forward image over last frame's trail, so a moving bunny leaves a fading ghost.
-    auto trailPipeline = engine.createPipeline("trail", R"(
-        struct PushConstants
-        {
-            uint currentIndex;
-            uint previousIndex;
-        };
-
-        [[vk::push_constant]]
-        ConstantBuffer<PushConstants> pc;
-
-        struct VSOutput
-        {
-            float4 Pos : SV_POSITION;
-            float2 UV : TEXCOORD0;
-        };
-
-        [shader("vertex")]
-        VSOutput vertMain(uint vertexID : SV_VertexID)
-        {
-            VSOutput output;
-            output.UV = float2((vertexID << 1) & 2, vertexID & 2);
-            output.Pos = float4(output.UV.x * 2.0 - 1.0, 1.0 - output.UV.y * 2.0, 0.0, 1.0);
-            return output;
-        }
-
-        [[vk::binding(0, 0)]]
-        Sampler2D gTextures[];
-
-        [shader("fragment")]
-        float4 fragMain(VSOutput input) : SV_TARGET
-        {
-            float4 current = gTextures[pc.currentIndex].Sample(input.UV);
-            float4 previous = gTextures[pc.previousIndex].Sample(input.UV);
-            return max(current, previous * 0.85);
-        }
-    )");
-
-    if (!trailPipeline.isValid())
-    {
-        return 1;
-    }
-
-    // A history target keeps a copy per frame slot, so the pass can read the frame before while it draws this one.
-    rasm::RenderTargetHandle trailHandle{};
-    graph.addPass(
-        "Trail",
-        [&config, &rtHandle, &trailHandle, &engine](rasm::PassBuilder &builder)
-        {
-            trailHandle = builder.createRenderTarget({
-                .name = "trail_rt",
-                .width = static_cast<uint32_t>(config.windowWidth),
-                .height = static_cast<uint32_t>(config.windowHeight),
-                .colorFormat = engine.getRenderContext().getSwapchainImageFormat(),
-                .depthFormat = rasm::Format::D32_SFLOAT,
-                .clearColor = glm::vec4(0.0f),
-                .history = true,
-            });
-            builder.read(rtHandle);
-            builder.readPrevious(trailHandle);
-            builder.write(trailHandle);
-        },
-
-        [&engine, &trailPipeline, &rtHandle, &trailHandle](rasm::RenderContext &ctx)
-        {
-            auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
-            const uint32_t indices[2] = {engine.getBindlessTextureIndex(engine.getRenderTargetTexture(rtHandle)),
-                                         engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTexture(trailHandle))};
-
-            ctx.bindPipeline(commandBuffer, trailPipeline);
-            ctx.bindDescriptorSet(commandBuffer, trailPipeline, engine.getBindlessDescriptorSet(), 0);
-            ctx.pushConstants(commandBuffer, trailPipeline, rasm::ShaderType::VERTEX_FRAGMENT, indices, sizeof(indices), 0);
-            ctx.draw(commandBuffer, 3);
-        });
-
-    // One triangle covers the screen, so the overlay needs no vertex data.
-    auto overlayPipeline = engine.createPipeline("overlay", R"(
-        struct PushConstants
-        {
-            uint textureIndex;
-        };
-
-        [[vk::push_constant]]
-        ConstantBuffer<PushConstants> pc;
-
+    // One triangle covers the screen, so the full-screen passes need no vertex data.
+    const std::string fullScreenTriangle = R"(
         struct VSOutput
         {
             float4 Pos : SV_POSITION;
@@ -183,59 +101,125 @@ int main()
             output.UV = float2((vertexID << 1) & 2, vertexID & 2);
             // Clip space is Y-up and UV v = 0 is the image's top row.
             output.Pos = float4(output.UV.x * 2.0 - 1.0, 1.0 - output.UV.y * 2.0, 0.0, 1.0);
-
             return output;
         }
 
         [[vk::binding(0, 0)]]
         Sampler2D gTextures[];
 
+        struct PushConstants
+        {
+            uint indices[2];
+        };
+
+        [[vk::push_constant]]
+        ConstantBuffer<PushConstants> pc;
+    )";
+
+    // Blends the forward image over last frame's trail, so a moving bunny leaves a fading ghost.
+    auto trailPipeline = engine.createPipeline("trail", fullScreenTriangle + R"(
         [shader("fragment")]
         float4 fragMain(VSOutput input) : SV_TARGET
         {
-            float4 color = gTextures[pc.textureIndex].Sample(input.UV);
-            // The bunny writes alpha 1 over the clear color's 0, so only the background is transparent.
+            float4 current = gTextures[pc.indices[0]].Sample(input.UV);
+            float4 previous = gTextures[pc.indices[1]].Sample(input.UV);
+            return max(current, previous * 0.85);
+        }
+    )");
+
+    // The bunny writes alpha 1 over the clear color's 0, so only the background turns green.
+    auto backgroundPipeline = engine.createPipeline("background", fullScreenTriangle + R"(
+        [shader("fragment")]
+        float4 fragMain(VSOutput input) : SV_TARGET
+        {
+            float4 color = gTextures[pc.indices[0]].Sample(input.UV);
             if (color.a < 0.5)
                 return float4(0.0, 1.0, 0.0, 1.0);
             return float4(color.rgb, 1.0);
         }
     )");
 
-    if (!overlayPipeline.isValid())
+    auto presentPipeline = engine.createPipeline("present", fullScreenTriangle + R"(
+        [shader("fragment")]
+        float4 fragMain(VSOutput input) : SV_TARGET
+        {
+            return gTextures[pc.indices[0]].Sample(input.UV);
+        }
+    )");
+
+    if (!trailPipeline.isValid() || !backgroundPipeline.isValid() || !presentPipeline.isValid())
     {
         return 1;
     }
 
+    // Records one full-screen triangle that samples the given bindless textures.
+    auto drawFullScreen = [&engine](rasm::RenderContext &ctx, rasm::PipelineHandle pipeline, uint32_t first, uint32_t second)
+    {
+        auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
+        const uint32_t indices[2] = {first, second};
+        ctx.bindPipeline(commandBuffer, pipeline);
+        ctx.bindDescriptorSet(commandBuffer, pipeline, engine.getBindlessDescriptorSet(), 0);
+        ctx.pushConstants(commandBuffer, pipeline, rasm::ShaderType::VERTEX_FRAGMENT, indices, sizeof(indices), 0);
+        ctx.draw(commandBuffer, 3);
+    };
+
+    // A history target lives across frames with a copy per frame slot, so the pass can read the frame before while
+    // it draws this one. Fetch both textures every frame: they swap.
+    rasm::RenderTargetHandle trailHandle{};
     graph.addPass(
-        "overlay",
-        [&trailHandle](rasm::PassBuilder &builder)
+        "Trail",
+        [&rtHandle, &trailHandle, colorFormat](rasm::PassBuilder &builder)
         {
+            trailHandle = builder.createRenderTarget({
+                .name = "trail_rt",
+                .swapchainScale = 1.0f,
+                .colorFormat = colorFormat,
+                .depthFormat = rasm::Format::D32_SFLOAT,
+                .clearColor = glm::vec4(0.0f),
+                .history = true,
+            });
+            builder.read(rtHandle);
+            builder.readPrevious(trailHandle);
+            builder.write(trailHandle);
+        },
+
+        [&engine, &drawFullScreen, &trailPipeline, &rtHandle, &trailHandle](rasm::RenderContext &ctx)
+        {
+            drawFullScreen(ctx, trailPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(rtHandle)),
+                           engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTexture(trailHandle)));
+        });
+
+    rasm::RenderTargetHandle compositeHandle{};
+    graph.addPass(
+        "Background",
+        [&trailHandle, &compositeHandle, colorFormat](rasm::PassBuilder &builder)
+        {
+            compositeHandle = builder.createRenderTarget({
+                .name = "composite_rt",
+                .swapchainScale = 1.0f,
+                .colorFormat = colorFormat,
+                .depthFormat = rasm::Format::D32_SFLOAT,
+            });
             builder.read(trailHandle);
+            builder.write(compositeHandle);
+        },
+
+        [&engine, &drawFullScreen, &backgroundPipeline, &trailHandle](rasm::RenderContext &ctx)
+        {
+            drawFullScreen(ctx, backgroundPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(trailHandle)), 0);
+        });
+
+    graph.addPass(
+        "Present",
+        [&compositeHandle](rasm::PassBuilder &builder)
+        {
+            builder.read(compositeHandle);
             builder.writeSwapchain();
         },
 
-        [&config, &engine, &overlayPipeline, &trailHandle](rasm::RenderContext &ctx)
+        [&engine, &drawFullScreen, &presentPipeline, &compositeHandle](rasm::RenderContext &ctx)
         {
-            auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
-
-            // A history target draws to a different texture each frame, so fetch it every frame.
-            auto textureIndex = engine.getBindlessTextureIndex(engine.getRenderTargetTexture(trailHandle));
-
-            // The render target keeps its size when the window resizes, so fit it inside without changing its shape.
-            const auto &window = engine.getMainWindow();
-            const float windowWidth = static_cast<float>(window.pixelWidth);
-            const float windowHeight = static_cast<float>(window.pixelHeight);
-            const float configWidth = static_cast<float>(config.windowWidth);
-            const float configHeight = static_cast<float>(config.windowHeight);
-            const float scale = glm::min(windowWidth / configWidth, windowHeight / configHeight);
-            const float width = configWidth * scale;
-            const float height = configHeight * scale;
-
-            ctx.setViewport(commandBuffer, (windowWidth - width) * 0.5f, (windowHeight - height) * 0.5f, width, height);
-            ctx.bindPipeline(commandBuffer, overlayPipeline);
-            ctx.bindDescriptorSet(commandBuffer, overlayPipeline, engine.getBindlessDescriptorSet(), 0);
-            ctx.pushConstants(commandBuffer, overlayPipeline, rasm::ShaderType::VERTEX_FRAGMENT, &textureIndex, sizeof(textureIndex), 0);
-            ctx.draw(commandBuffer, 3);
+            drawFullScreen(ctx, presentPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(compositeHandle)), 0);
         });
 
     graph.compile();

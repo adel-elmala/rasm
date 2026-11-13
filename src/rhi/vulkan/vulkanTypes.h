@@ -24,6 +24,11 @@ namespace rasm::rhi
         uint32_t                mipLevels       = 1;
     };
 
+    struct VulkanHeap : Heap
+    {
+        VmaAllocation           allocation      = nullptr;
+    };
+
     struct VulkanSampler : Sampler
     {
         VkSampler               sampler         = VK_NULL_HANDLE;

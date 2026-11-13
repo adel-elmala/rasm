@@ -104,6 +104,7 @@
     <li>Create targets and buffers in the setup callback, and declare them with <code>read</code> / <code>write</code>. Only these declarations order the passes.</li>
     <li>A graphics pass draws into exactly one target: the render target it writes, or the swapchain with <code>writeSwapchain()</code>. Every graphics pass <b>clears</b> its target first.</li>
     <li>For last frame's image (accumulation, trails, temporal effects), create the target with <code>history = true</code> and declare <code>readPrevious(rt)</code>.</li>
+    <li>Any other target from <code>builder.createRenderTarget</code> is <b>transient</b>: targets that are never used at the same time share memory. Set <code>swapchainScale = 1.0f</code> to make a target follow the window size.</li>
     <li>The graph records the barriers and layout changes from what the passes declare. <b>Declare every buffer and texture a pass uses</b>: an undeclared one gets no barrier.</li>
     <li>A compute pass runs outside any render pass, so it can <code>dispatch</code>.</li>
     <li>Inside a callback, record with the <a href="low-level.html">RenderContext</a> and the frame's command buffer: <code>engine.getCurrentFrameResources().commandBuffer</code>.</li>
@@ -194,7 +195,7 @@ public:
 BufferHandle       createBuffer(const BufferDesc&amp; desc);
 RenderTargetHandle createRenderTarget(const RenderTargetDesc&amp; desc);</pre>
   <div class="body">
-    <p>The same as <a href="low-level.html#createTexture">Engine::createTexture</a>, <a href="low-level.html#createBuffer">Engine::createBuffer</a> and <a href="#createRenderTarget">Engine::createRenderTarget</a>. They do <b>not</b> declare a read or write: call <code>read</code> or <code>write</code> too. The resources are not transient; they live until the engine shuts down (<code>D4</code>).</p>
+    <p>The same as <a href="low-level.html#createTexture">Engine::createTexture</a>, <a href="low-level.html#createBuffer">Engine::createBuffer</a> and <a href="#createRenderTarget">Engine::createRenderTarget</a>. They do <b>not</b> declare a read or write: call <code>read</code> or <code>write</code> too. A render target without <code>history</code> is <a href="#transient">transient</a>: the graph owns its memory and shares it with other transient targets. Textures, buffers and history targets live until the engine shuts down (<code>D4</code>).</p>
   </div>
 </div>
 
@@ -359,7 +360,7 @@ void write(BufferHandle handle);</pre>
 </div>
 
 <p>All of a pass's buffers share one global barrier. A buffer or texture the pass uses without declaring it gets nothing, so declare everything it touches. The graph knows only its own passes: a buffer shared with another graph, or with work outside the graph, is not ordered.</p>
-<p><span class="tag">errors</span> <code>compile</code> fails, like on a cycle, for declarations that cannot be right: a pass that reads the render target it draws to (<code>Pass '…' reads the render target it draws to.</code>), a compute pass with no buffer write, and a graphics pass that does not write exactly one render target or the swapchain. The frames then draw no passes until the graph changes.</p>
+<p><span class="tag">errors</span> <code>compile</code> fails, like on a cycle, for declarations that cannot be right: a pass that reads the render target it draws to (<code>Pass '…' reads the render target it draws to.</code>), a compute pass with no buffer write, a graphics pass that does not write exactly one render target or the swapchain, and a read of a transient target that no earlier pass draws. The frames then draw no passes until the graph changes.</p>
 
 <h3>What one frame records: <code>examples/04_compute</code></h3>
 
@@ -408,14 +409,15 @@ void write(BufferHandle handle);</pre>
   <tr><th>What <code>createRenderTarget</code> makes</th><th>How many</th><th>Notes</th></tr>
   <tr><td>Color texture</td><td>1, or 1 per frame slot (2) with <code>history</code>; usage <code>SAMPLED_COLOR_ATTACHMENT</code></td><td>Added to the bindless set with <code>LINEAR_CLAMP</code>. <code>endPass</code> leaves it in the sampled layout, so later passes can read it.</td></tr>
   <tr><td>Depth texture</td><td>As many as color; usage <code>SAMPLED_DEPTH_ATTACHMENT</code> for <code>D32_SFLOAT</code>, else <code>DEPTH_STENCIL_ATTACHMENT</code></td><td>Cleared to 0 by every pass, and stored. <code>drawScene</code> adds it to the bindless set (<code>NEAREST_CLAMP</code>) the first time it occlusion-culls into the target, and builds its Hi-Z from it. It stays a depth attachment, so later passes cannot sample it.</td></tr>
-  <tr><td>Bindless slots used</td><td colspan="2">1 per color texture of <code>MAX_BINDLESS_TEXTURES</code> (1024), and 1 per depth texture once <code>drawScene</code> occlusion-culls into it</td></tr>
+  <tr><td>Bindless slots used</td><td colspan="2">1 per color texture of <code>MAX_BINDLESS_TEXTURES</code> (1024), and 1 per depth texture once <code>drawScene</code> occlusion-culls into it. A resize keeps the slots.</td></tr>
+  <tr><td>Memory</td><td colspan="2">Its own allocation, or, for a <a href="#transient">transient</a> target, a place in a heap that other transient targets share</td></tr>
 </table>
 </div>
 
 <div class="api" id="createRenderTarget">
   <pre class="sig">RenderTargetHandle createRenderTarget(const RenderTargetDesc&amp; desc);</pre>
   <div class="body">
-    <p>Creates an offscreen color + depth target and makes its color bindless: one pair that every frame draws, or one pair per frame slot when <code>desc.history</code> is set. Ready at once. A pass draws into it after <code>builder.write(rt)</code>, or after <code>setRenderTarget(rt)</code> in a hand-written frame.</p>
+    <p>Creates an offscreen color + depth target and makes its color bindless: one pair that every frame draws, or one pair per frame slot when <code>desc.history</code> is set. Ready at once. With <code>swapchainScale</code> it is rebuilt at the new size when the window resizes; the handle stays the same. A pass draws into it after <code>builder.write(rt)</code>, or after <code>setRenderTarget(rt)</code> in a hand-written frame.</p>
     <p><span class="tag">errors</span> If a texture cannot be created or the bindless set is full, it logs an error, destroys what it created, and returns an invalid handle.</p>
   </div>
 </div>
@@ -424,19 +426,21 @@ void write(BufferHandle handle);</pre>
   <pre class="sig">struct RenderTargetDesc
 {
     std::string name;
-    uint32_t    width       = 0;
-    uint32_t    height      = 0;
-    Format      colorFormat = Format::UNKNOWN;
-    Format      depthFormat = Format::UNKNOWN;
-    glm::vec4   clearColor  = glm::vec4(0.0f);
-    bool        history     = false;
+    uint32_t    width          = 0;
+    uint32_t    height         = 0;
+    float       swapchainScale = 0.0f;
+    Format      colorFormat    = Format::UNKNOWN;
+    Format      depthFormat    = Format::UNKNOWN;
+    glm::vec4   clearColor     = glm::vec4(0.0f);
+    bool        history        = false;
 
     bool operator==(const RenderTargetDesc&amp;) const = default;
 };</pre>
   <div class="body">
     <dl>
       <dt>name</dt><dd>A label. The textures are named <code>"&lt;name&gt; Color Texture"</code> and <code>"&lt;name&gt; Depth Texture"</code> in debug tools.</dd>
-      <dt>width, height</dt><dd>Pixels. Fixed: the target does not follow the window size.</dd>
+      <dt>width, height</dt><dd>Pixels. Used when <code>swapchainScale</code> is 0.</dd>
+      <dt>swapchainScale</dt><dd>Above 0: the size is the window's (the swapchain's, in pixels) times this, at least 1 × 1, and follows each resize. <code>1.0f</code> for full size, <code>0.5f</code> for half. A rebuilt history target loses last frame's image, and its first read after the resize sees <code>clearColor</code>.</dd>
       <dt>colorFormat</dt><dd>To draw into it with <code>drawScene</code> or with a pipeline from <code>createPipeline</code>, use the swapchain format: <code>engine.getRenderContext().getSwapchainImageFormat()</code>.</dd>
       <dt>depthFormat</dt><dd>Needed: every pass binds a depth attachment. Use <code>Format::D32_SFLOAT</code> for the same reason. Only a <code>D32_SFLOAT</code> depth can be sampled, which occlusion culling needs.</dd>
       <dt>clearColor</dt><dd>Linear color. Every pass that writes the target starts from it, and an undrawn history copy is cleared to it.</dd>
@@ -498,6 +502,49 @@ void write(BufferHandle handle);</pre>
   </svg>
   <figcaption><code>getRenderTargetTexture</code> gives the copy this frame draws, <code>getPreviousRenderTargetTexture</code> the copy the frame before drew. Before any frame drew a copy, the graph clears it to <code>clearColor</code>, so the first read sees no garbage.</figcaption>
 </figure>
+
+<h3 id="transient">Transient render targets</h3>
+
+<p>A render target made with <code>builder.createRenderTarget</code> and no <code>history</code> is <b>transient</b>. It belongs to the graph and lives only from the first pass that uses it to the last. After each compile, the graph places all transient targets in shared heaps: two targets whose lifetimes do not overlap get the <b>same memory</b>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="The four passes of example 1 in run order: Forward, Trail, Background, Present. offscreen_rt is used by Forward and Trail. composite_rt is used by Background and Present. Their lifetimes do not overlap, so both sit at offset 0 of one heap. trail_rt has history and its own memory, kept across frames.">
+    <text x="20" y="22" class="title">run order →</text>
+    <rect x="180" y="8" width="130" height="30" rx="6" class="gpu"/>
+    <text x="245" y="28" class="mid mono">Forward</text>
+    <rect x="320" y="8" width="130" height="30" rx="6" class="gpu"/>
+    <text x="385" y="28" class="mid mono">Trail</text>
+    <rect x="460" y="8" width="130" height="30" rx="6" class="gpu"/>
+    <text x="525" y="28" class="mid mono">Background</text>
+    <rect x="600" y="8" width="130" height="30" rx="6" class="gpu"/>
+    <text x="665" y="28" class="mid mono">Present</text>
+
+    <text x="20" y="72" class="mono">offscreen_rt</text>
+    <rect x="180" y="54" width="270" height="28" rx="4" class="mem"/>
+    <text x="315" y="73" class="mid small">transient: Forward → Trail</text>
+    <text x="20" y="112" class="mono">composite_rt</text>
+    <rect x="460" y="94" width="270" height="28" rx="4" class="mem"/>
+    <text x="595" y="113" class="mid small">transient: Background → Present</text>
+    <line x1="315" y1="82" x2="315" y2="142" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="595" y1="122" x2="595" y2="142" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="20" y="166" class="title">one heap</text>
+    <rect x="180" y="144" width="550" height="40" rx="6" class="zone"/>
+    <text x="455" y="162" class="mid small">offset 0: offscreen_rt's color + depth, later composite_rt's</text>
+    <text x="455" y="177" class="mid small">16.9 MiB instead of 33.8 MiB at 1920 × 1080</text>
+
+    <text x="20" y="222" class="mono">trail_rt</text>
+    <rect x="180" y="204" width="550" height="28" rx="4" class="box"/>
+    <text x="455" y="223" class="mid small">history: its own memory, kept across frames</text>
+  </svg>
+  <figcaption>The log shows the saving once per layout: <samp>Placed 2 transient render targets in 1 heap(s): 16.9 MiB instead of 33.8 MiB.</samp></figcaption>
+</figure>
+
+<ul>
+  <li>The handle is ready at once, but the textures exist only from the first <code>execute</code> after a compile. Fetch them inside a pass that declares the target.</li>
+  <li>A transient target's contents are gone after its last pass. Read it in a later frame, or before a pass draws it, and you read another target's data. <code>compile</code> fails when the first pass that uses one reads it: <code>Pass '…' reads a transient render target that no pass before it draws.</code></li>
+  <li>For a target that must keep its contents between frames, use <code>history = true</code>, or <code>Engine::createRenderTarget</code>.</li>
+  <li>A new compile lays the memory out again: it waits for the GPU to be idle first, so add passes before the loop.</li>
+</ul>
 
 <div class="api" id="setRenderTarget">
   <pre class="sig">void setRenderTarget(const RenderTargetHandle&amp; renderTarget);</pre>
@@ -590,21 +637,22 @@ if (engine.beginFrame(camera))
 
 <h2><span class="n">7</span>Complete examples</h2>
 
-<h3>Offscreen scene + full-screen pass (<code>examples/01_render_graph</code>)</h3>
+<h3>Offscreen scene, trail and full-screen passes (<code>examples/01_render_graph</code>)</h3>
 
 <pre><code>// Shortened from examples/01_render_graph/main.cpp
 rasm::RenderGraph graph = engine.createRenderGraph();
-rasm::RenderTargetHandle rtHandle{};
+const rasm::Format colorFormat = engine.getRenderContext().getSwapchainImageFormat();
 
+// No history: transient. It lives from "Forward" to "Trail".
+rasm::RenderTargetHandle rtHandle{};
 graph.addPass(
     "Forward",
     [&amp;](rasm::PassBuilder &amp;builder)
     {
         rtHandle = builder.createRenderTarget({
             .name = "offscreen_rt",
-            .width = 1920,
-            .height = 1080,
-            .colorFormat = engine.getRenderContext().getSwapchainImageFormat(),
+            .swapchainScale = 1.0f,
+            .colorFormat = colorFormat,
             .depthFormat = rasm::Format::D32_SFLOAT,
             .clearColor = glm::vec4(0.0f),
         });
@@ -616,44 +664,32 @@ graph.addPass(
         engine.drawScene(scene, camera);
     });
 
-auto overlayPipeline = engine.createPipeline("overlay", R"(
-    struct PushConstants { uint textureIndex; };
-    [[vk::push_constant]] ConstantBuffer&lt;PushConstants&gt; pc;
+// fullScreenTriangle is Slang source: a vertMain that covers the screen, the bindless
+// array, and push constants with two texture indices. Each pipeline adds its fragMain.
+auto trailPipeline = engine.createPipeline("trail", fullScreenTriangle + trailFragment);
+auto backgroundPipeline = engine.createPipeline("background", fullScreenTriangle + backgroundFragment);
+auto presentPipeline = engine.createPipeline("present", fullScreenTriangle + presentFragment);
 
-    struct VSOutput { float4 Pos : SV_POSITION; float2 UV : TEXCOORD0; };
+auto drawFullScreen = [&amp;engine](rasm::RenderContext &amp;ctx, rasm::PipelineHandle pipeline, uint32_t first, uint32_t second)
+{
+    auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
+    const uint32_t indices[2] = {first, second};
+    ctx.bindPipeline(commandBuffer, pipeline);
+    ctx.bindDescriptorSet(commandBuffer, pipeline, engine.getBindlessDescriptorSet(), 0);
+    ctx.pushConstants(commandBuffer, pipeline, rasm::ShaderType::VERTEX_FRAGMENT, indices, sizeof(indices), 0);
+    ctx.draw(commandBuffer, 3);
+};
 
-    [shader("vertex")]
-    VSOutput vertMain(uint vertexID : SV_VertexID)
-    {
-        VSOutput output;   // one triangle that covers the screen
-        output.UV = float2((vertexID &lt;&lt; 1) &amp; 2, vertexID &amp; 2);
-        output.Pos = float4(output.UV.x * 2.0 - 1.0,
-                            1.0 - output.UV.y * 2.0, 0.0, 1.0);
-        return output;
-    }
-
-    [[vk::binding(0, 0)]] Sampler2D gTextures[];
-
-    [shader("fragment")]
-    float4 fragMain(VSOutput input) : SV_TARGET
-    {
-        return gTextures[pc.textureIndex].Sample(input.UV);
-    }
-)");
-
-// Blends this frame over last frame's trail: max(current, previous * 0.85)
-auto trailPipeline = engine.createPipeline("trail", trailSource);
+// History: one copy per frame slot, so the pass reads last frame's trail.
 rasm::RenderTargetHandle trailHandle{};
-
 graph.addPass(
     "Trail",
     [&amp;](rasm::PassBuilder &amp;builder)
     {
         trailHandle = builder.createRenderTarget({
             .name = "trail_rt",
-            .width = 1920,
-            .height = 1080,
-            .colorFormat = engine.getRenderContext().getSwapchainImageFormat(),
+            .swapchainScale = 1.0f,
+            .colorFormat = colorFormat,
             .depthFormat = rasm::Format::D32_SFLOAT,
             .clearColor = glm::vec4(0.0f),
             .history = true,
@@ -665,40 +701,42 @@ graph.addPass(
 
     [&amp;](rasm::RenderContext &amp;ctx)
     {
-        auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
-        const uint32_t indices[2] = {engine.getBindlessTextureIndex(engine.getRenderTargetTexture(rtHandle)),
-                                     engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTexture(trailHandle))};
-        ctx.bindPipeline(commandBuffer, trailPipeline);
-        ctx.bindDescriptorSet(commandBuffer, trailPipeline,
-                              engine.getBindlessDescriptorSet(), 0);
-        ctx.pushConstants(commandBuffer, trailPipeline,
-                          rasm::ShaderType::VERTEX_FRAGMENT,
-                          indices, sizeof(indices), 0);
-        ctx.draw(commandBuffer, 3);
+        drawFullScreen(ctx, trailPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(rtHandle)),
+                       engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTexture(trailHandle)));
+    });
+
+// Transient. It starts after offscreen_rt's last pass, so the two share memory.
+rasm::RenderTargetHandle compositeHandle{};
+graph.addPass(
+    "Background",
+    [&amp;](rasm::PassBuilder &amp;builder)
+    {
+        compositeHandle = builder.createRenderTarget({
+            .name = "composite_rt",
+            .swapchainScale = 1.0f,
+            .colorFormat = colorFormat,
+            .depthFormat = rasm::Format::D32_SFLOAT,
+        });
+        builder.read(trailHandle);
+        builder.write(compositeHandle);
+    },
+
+    [&amp;](rasm::RenderContext &amp;ctx)
+    {
+        drawFullScreen(ctx, backgroundPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(trailHandle)), 0);
     });
 
 graph.addPass(
-    "overlay",
+    "Present",
     [&amp;](rasm::PassBuilder &amp;builder)
     {
-        builder.read(trailHandle); // this pass runs after "Trail"
+        builder.read(compositeHandle);
         builder.writeSwapchain();
     },
 
     [&amp;](rasm::RenderContext &amp;ctx)
     {
-        auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
-        // the copy of the trail this frame drew
-        auto texture = engine.getRenderTargetTexture(trailHandle);
-        uint32_t textureIndex = engine.getBindlessTextureIndex(texture);
-
-        ctx.bindPipeline(commandBuffer, overlayPipeline);
-        ctx.bindDescriptorSet(commandBuffer, overlayPipeline,
-                              engine.getBindlessDescriptorSet(), 0);
-        ctx.pushConstants(commandBuffer, overlayPipeline,
-                          rasm::ShaderType::VERTEX_FRAGMENT,
-                          &amp;textureIndex, sizeof(textureIndex), 0);
-        ctx.draw(commandBuffer, 3);
+        drawFullScreen(ctx, presentPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(compositeHandle)), 0);
     });
 
 graph.compile();
@@ -761,7 +799,7 @@ graph.addPass(
 <div class="callout warn">
   <strong>Known limits</strong>
   <ul>
-    <li>It orders passes and records the barriers and layout changes their declarations need. It does not allocate transient resources or alias memory (<code>D9</code>): a render target is created by you, keeps its size, and lives until shutdown.</li>
+    <li>Only render targets are transient. Textures and buffers from the builder, and history targets, live until shutdown (<code>D4</code>).</li>
     <li>Every graphics pass clears its target. Two passes that draw into the swapchain (or into the same render target) do not add up: the second one replaces the first (<code>D9</code>).</li>
     <li>Depth is not kept between passes.</li>
     <li>The early scene culling, which <code>drawScene</code> needs, runs on the GPU before every pass of the frame, including your compute passes (D18). The late culling runs inside the pass that calls <code>drawScene</code>.</li>

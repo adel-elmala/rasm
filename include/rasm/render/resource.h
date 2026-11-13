@@ -133,6 +133,7 @@ namespace rasm
         std::string                 name;
         uint32_t                    width                           = 0;
         uint32_t                    height                          = 0;
+        float                       swapchainScale                  = 0.0f;
         Format                      colorFormat                     = Format::UNKNOWN;
         Format                      depthFormat                     = Format::UNKNOWN;
         glm::vec4                   clearColor                      = glm::vec4(0.0f); // linear; every pass that writes the target starts from this

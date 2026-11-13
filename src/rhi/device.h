@@ -80,6 +80,19 @@ namespace rasm::rhi
         TextureUsage                        state               = TextureUsage::UNKNOWN;
     };
 
+    struct MemoryRequirements
+    {
+        uint64_t                            size                = 0;
+        uint64_t                            alignment           = 1;
+        uint32_t                            memoryTypeBits      = 0;
+    };
+
+    struct Heap
+    {
+        uint64_t                            size                = 0;
+        uint32_t                            memoryTypeBits      = 0;
+    };
+
     struct Sampler
     {
         SamplerDesc                         desc;
@@ -182,6 +195,9 @@ namespace rasm::rhi
         virtual                         ~Device() = default;
         virtual Buffer*                 createBuffer(const BufferDesc& desc) = 0;
         virtual Texture*                createTexture(const TextureDesc& desc) = 0;
+        virtual MemoryRequirements      getTextureMemoryRequirements(const TextureDesc& desc) = 0;
+        virtual Heap*                   createHeap(uint64_t size, uint64_t alignment, uint32_t memoryTypeBits, const std::string& name) = 0;
+        virtual Texture*                createPlacedTexture(const TextureDesc& desc, Heap* heap, uint64_t offset) = 0;
         virtual Sampler*                createSampler(const SamplerDesc& desc) = 0;
         virtual Shader*                 createShader(const ShaderDesc& desc) = 0;
         virtual Pipeline*               createGraphicsPipeline(const PipelineDesc& desc, Shader* vertexShader, Shader* fragmentShader, DescriptorSetLayout* layout) = 0;
@@ -195,6 +211,7 @@ namespace rasm::rhi
         virtual QueryPool*              createTimestampQueryPool(uint32_t count, const std::string& name) = 0;
         virtual void                    destroyBuffer(Buffer* buffer) = 0;
         virtual void                    destroyTexture(Texture* texture) = 0;
+        virtual void                    destroyHeap(Heap* heap) = 0;
         virtual void                    destroySampler(Sampler* sampler) = 0;
         virtual void                    destroyShader(Shader* shader) = 0;
         virtual void                    destroyPipeline(Pipeline* pipeline) = 0;

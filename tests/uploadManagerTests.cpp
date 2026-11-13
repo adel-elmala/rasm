@@ -125,6 +125,9 @@ namespace
             return buffer;
         }
         Texture *createTexture(const TextureDesc &) override { return nullptr; }
+        MemoryRequirements getTextureMemoryRequirements(const TextureDesc &) override { return {}; }
+        Heap *createHeap(uint64_t, uint64_t, uint32_t, const std::string &) override { return nullptr; }
+        Texture *createPlacedTexture(const TextureDesc &, Heap *, uint64_t) override { return nullptr; }
         Sampler *createSampler(const SamplerDesc &) override { return nullptr; }
         Shader *createShader(const ShaderDesc &) override { return nullptr; }
         Pipeline *createGraphicsPipeline(const PipelineDesc &, Shader *, Shader *, DescriptorSetLayout *) override { return nullptr; }
@@ -171,6 +174,7 @@ namespace
         }
         void destroySwapchain(rhi::Swapchain *) override {}
         void destroyQueryPool(QueryPool *) override {}
+        void destroyHeap(Heap *) override {}
         Queue *getQueue(QueueType) override { return &queue; }
         bool fillBuffer(Buffer *buffer, const void *data, size_t size, size_t offset) override
         {

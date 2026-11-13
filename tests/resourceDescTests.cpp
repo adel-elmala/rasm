@@ -163,4 +163,12 @@ TEST_CASE("every render target field takes part in equality")
     auto clearColor = base;
     clearColor.clearColor = glm::vec4(1.0f);
     CHECK_FALSE(base == clearColor);
+
+    auto history = base;
+    history.history = true;
+    CHECK_FALSE(base == history);
+
+    auto swapchainScale = base;
+    swapchainScale.swapchainScale = 0.5f;
+    CHECK_FALSE(base == swapchainScale);
 }

@@ -1,6 +1,7 @@
 #include "rasm/render/renderContext.h"
 #include "rasm/engine.h"
 #include "rhi/device.h"
+#include "rhi/memoryAliasing.h"
 #include "rhi/textureStates.h"
 #include "rhi/uploadManager.h"
 
@@ -17,6 +18,24 @@ namespace rasm
 {
     namespace
     {
+        struct RenderTargetInfo
+        {
+            RenderTargetDesc desc;
+            bool transient = false;
+        };
+
+        // Transient render targets laid out together in heaps, from the passes that use each one.
+        struct TransientGroup
+        {
+            std::vector<RenderTargetHandle> targets;
+            std::vector<uint32_t> firstPasses;
+            std::vector<uint32_t> lastPasses;
+            std::vector<rhi::Heap *> heaps;
+        };
+    }
+
+    namespace
+    {
         // Invalid use of the public API: stop in the debugger in debug builds, fail the call with an error in release.
         bool checkArgument(bool valid, const char *caller, const char *message)
         {
@@ -25,6 +44,30 @@ namespace rasm
             spdlog::error("{}: {}", caller, message);
             assert(false && "Invalid RenderContext argument, see the log.");
             return false;
+        }
+
+        glm::uvec2 renderTargetSize(const RenderTargetDesc &desc, glm::uvec2 swapchainExtent)
+        {
+            if (desc.swapchainScale <= 0.0f)
+                return {desc.width, desc.height};
+            const glm::vec2 size = glm::round(glm::vec2(swapchainExtent) * desc.swapchainScale);
+            return glm::max(glm::uvec2(size), glm::uvec2(1));
+        }
+
+        TextureDesc colorTextureDesc(const RenderTargetDesc &desc, glm::uvec2 size)
+        {
+            return {.name = desc.name + " Color Texture", .width = size.x, .height = size.y, .format = desc.colorFormat, .usage = TextureUsage::SAMPLED_COLOR_ATTACHMENT};
+        }
+
+        // drawScene's occlusion culling samples D32 depth through the bindless set. A depth/stencil view can't be sampled.
+        TextureDesc depthTextureDesc(const RenderTargetDesc &desc, glm::uvec2 size, bool occlusionCulling)
+        {
+            const bool sampled = occlusionCulling && desc.depthFormat == Format::D32_SFLOAT;
+            return {.name = desc.name + " Depth Texture",
+                    .width = size.x,
+                    .height = size.y,
+                    .format = desc.depthFormat,
+                    .usage = sampled ? TextureUsage::SAMPLED_DEPTH_ATTACHMENT : TextureUsage::DEPTH_STENCIL_ATTACHMENT};
         }
 
         rhi::SamplerDesc samplerDesc(SamplerType type)
@@ -178,6 +221,8 @@ namespace rasm
         std::unordered_map<DescriptorPoolHandle, rhi::DescriptorPool*, HandleHash>                                              descriptorPools;
         std::unordered_map<DescriptorSetHandle, rhi::DescriptorSet*, HandleHash>                                                descriptorSets;
         std::unordered_map<RenderTargetHandle, RenderTarget, HandleHash>                                                        renderTargets;
+        std::unordered_map<RenderTargetHandle, RenderTargetInfo, HandleHash>                                                    renderTargetInfos;
+        std::vector<TransientGroup>                                                                                             transientGroups;
 
         // Dedup caches, only for immutable objects keyed on their full state. Mutable resources
         // (buffers, textures, descriptor pools/sets) are always created fresh (B1).
@@ -280,6 +325,9 @@ namespace rasm
         impl->unregisterSwapchainImages();
         for (const auto &[handle, texture] : impl->textures)
             device.destroyTexture(texture);
+        for (const auto &group : impl->transientGroups)
+            for (auto *heap : group.heaps)
+                device.destroyHeap(heap);
         for (const auto &[handle, pipeline] : impl->pipelines)
             device.destroyPipeline(pipeline);
         for (const auto &[handle, shader] : impl->shaders)
@@ -453,84 +501,250 @@ namespace rasm
 
     RenderTargetHandle RenderContext::createRenderTarget(const RenderTargetDesc &desc)
     {
-        const TextureDesc colorDesc = {
-            .name = desc.name + " Color Texture",
-            .width = desc.width,
-            .height = desc.height,
-            .format = desc.colorFormat,
-            .usage = TextureUsage::SAMPLED_COLOR_ATTACHMENT};
+        RenderTarget rt = {.colorFormat = desc.colorFormat, .depthFormat = desc.depthFormat, .clearColor = desc.clearColor, .history = desc.history};
+        if (!createAttachments(rt, desc, nullptr, nullptr))
+            return {};
 
-        // drawScene's occlusion culling samples D32 depth through the bindless set. A depth/stencil view can't be sampled.
-        const bool sampledDepth = engine->config.occlusionCulling && desc.depthFormat == Format::D32_SFLOAT;
-        const TextureDesc depthDesc = {
-            .name = desc.name + " Depth Texture",
-            .width = desc.width,
-            .height = desc.height,
-            .format = desc.depthFormat,
-            .usage = sampledDepth ? TextureUsage::SAMPLED_DEPTH_ATTACHMENT : TextureUsage::DEPTH_STENCIL_ATTACHMENT};
+        RenderTargetHandle rtHandle = engine->handleManager.getNextRenderTargetHandle();
+        impl->renderTargets[rtHandle] = rt;
+        impl->renderTargetInfos[rtHandle] = {.desc = desc};
+        return rtHandle;
+    }
 
-        RenderTarget rt = {
-            .attachments = {},
-            .width = desc.width,
-            .height = desc.height,
-            .colorFormat = desc.colorFormat,
-            .depthFormat = desc.depthFormat,
-            .clearColor = desc.clearColor,
-            .history = desc.history};
+    // The handle is usable at once, but the textures exist only after placeTransientRenderTargets.
+    RenderTargetHandle RenderContext::createTransientRenderTarget(const RenderTargetDesc &desc)
+    {
+        if (!checkArgument(!desc.history, __func__, "a history render target lives across frames, so it can't be transient."))
+            return {};
 
+        const glm::uvec2 size = renderTargetSize(desc, getSwapchainExtent());
+        RenderTargetHandle rtHandle = engine->handleManager.getNextRenderTargetHandle();
+        impl->renderTargets[rtHandle] = {.width = size.x, .height = size.y, .colorFormat = desc.colorFormat, .depthFormat = desc.depthFormat, .clearColor = desc.clearColor};
+        impl->renderTargetInfos[rtHandle] = {.desc = desc, .transient = true};
+        return rtHandle;
+    }
+
+    // A group that already holds one of the targets is replaced, after the GPU is done with its memory.
+    bool RenderContext::placeTransientRenderTargets(const RenderTargetHandle *renderTargets, const uint32_t *firstPasses, const uint32_t *lastPasses, uint32_t count)
+    {
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            auto it = impl->renderTargetInfos.find(renderTargets[i]);
+            if (!checkArgument(it != impl->renderTargetInfos.end() && it->second.transient, __func__, "only transient render targets can be placed."))
+                return false;
+        }
+
+        const RenderTargetHandle *end = renderTargets + count;
+        std::vector<rhi::Heap *> retired;
+        for (size_t g = impl->transientGroups.size(); g-- > 0;)
+        {
+            auto &group = impl->transientGroups[g];
+            const bool replaced = std::any_of(group.targets.begin(), group.targets.end(), [renderTargets, end](const RenderTargetHandle &target)
+                                              { return std::find(renderTargets, end, target) != end; });
+            if (!replaced)
+                continue;
+            if (retired.empty())
+                impl->device->waitIdle();
+            for (const auto &target : group.targets)
+            {
+                if (std::find(renderTargets, end, target) == end)
+                    destroyAttachments(impl->renderTargets[target]);
+            }
+            retired.insert(retired.end(), group.heaps.begin(), group.heaps.end());
+            impl->transientGroups.erase(impl->transientGroups.begin() + static_cast<std::ptrdiff_t>(g));
+        }
+
+        impl->transientGroups.push_back({.targets = std::vector<RenderTargetHandle>(renderTargets, end),
+                                         .firstPasses = std::vector<uint32_t>(firstPasses, firstPasses + count),
+                                         .lastPasses = std::vector<uint32_t>(lastPasses, lastPasses + count)});
+        const bool placed = placeGroup(static_cast<uint32_t>(impl->transientGroups.size() - 1));
+
+        // placeGroup destroyed the targets' old textures, so nothing lives in these heaps any more.
+        for (auto *heap : retired)
+            impl->device->destroyHeap(heap);
+        return placed;
+    }
+
+    // Called with the device idle, after the swapchain changed size.
+    void RenderContext::resizeRenderTargets()
+    {
+        for (auto &[handle, info] : impl->renderTargetInfos)
+        {
+            if (!info.transient && info.desc.swapchainScale > 0.0f)
+                createAttachments(impl->renderTargets[handle], info.desc, nullptr, nullptr);
+        }
+        for (uint32_t g = 0; g < impl->transientGroups.size(); ++g)
+        {
+            const auto &targets = impl->transientGroups[g].targets;
+            const bool scaled = std::any_of(targets.begin(), targets.end(), [this](const RenderTargetHandle &target)
+                                            { return impl->renderTargetInfos[target].desc.swapchainScale > 0.0f; });
+            if (scaled)
+                placeGroup(g);
+        }
+    }
+
+    // Two requests per target, color then depth. The old textures are destroyed by createAttachments, then the old heaps.
+    bool RenderContext::placeGroup(uint32_t groupIndex)
+    {
+        auto &group = impl->transientGroups[groupIndex];
+        const glm::uvec2 extent = getSwapchainExtent();
+        const auto count = static_cast<uint32_t>(group.targets.size());
+
+        std::vector<rhi::AliasRequest> requests;
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            const auto &desc = impl->renderTargetInfos[group.targets[i]].desc;
+            const glm::uvec2 size = renderTargetSize(desc, extent);
+            const TextureDesc textureDescs[2] = {colorTextureDesc(desc, size), depthTextureDesc(desc, size, engine->config.occlusionCulling)};
+            for (const auto &textureDesc : textureDescs)
+            {
+                const auto requirements = impl->device->getTextureMemoryRequirements(textureDesc);
+                requests.push_back({.size = requirements.size,
+                                    .alignment = requirements.alignment,
+                                    .memoryTypeBits = requirements.memoryTypeBits,
+                                    .firstPass = group.firstPasses[i],
+                                    .lastPass = group.lastPasses[i]});
+            }
+        }
+
+        std::vector<rhi::AliasPlacement> placements(requests.size());
+        std::vector<rhi::AliasHeap> layout;
+        rhi::packAliased(requests.data(), static_cast<uint32_t>(requests.size()), placements.data(), layout);
+
+        const std::vector<rhi::Heap *> oldHeaps = std::move(group.heaps);
+        group.heaps.clear();
+        bool placed = true;
+        for (uint32_t h = 0; h < layout.size() && placed; ++h)
+        {
+            auto *heap = impl->device->createHeap(layout[h].size, layout[h].alignment, layout[h].memoryTypeBits, "Transient Render Targets " + std::to_string(h));
+            placed = heap != nullptr;
+            if (heap)
+                group.heaps.push_back(heap);
+        }
+
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            auto &rt = impl->renderTargets[group.targets[i]];
+            const auto &desc = impl->renderTargetInfos[group.targets[i]].desc;
+            if (!placed)
+            {
+                destroyAttachments(rt);
+                continue;
+            }
+            const rhi::AliasPlacement &color = placements[size_t{2} * i];
+            const rhi::AliasPlacement &depth = placements[size_t{2} * i + 1];
+            rhi::Heap *const heaps[2] = {group.heaps[color.heap], group.heaps[depth.heap]};
+            const uint64_t offsets[2] = {color.offset, depth.offset};
+            placed = createAttachments(rt, desc, heaps, offsets) && placed;
+        }
+
+        for (auto *heap : oldHeaps)
+            impl->device->destroyHeap(heap);
+        if (!placed)
+        {
+            spdlog::error("Failed to place {} transient render targets.", count);
+            return false;
+        }
+
+        uint64_t separate = 0;
+        uint64_t aliased = 0;
+        for (const auto &request : requests)
+            separate += request.size;
+        for (const auto &heap : layout)
+            aliased += heap.size;
+        spdlog::info("Placed {} transient render targets in {} heap(s): {:.1f} MiB instead of {:.1f} MiB.", count, layout.size(),
+                     static_cast<double>(aliased) / (1024.0 * 1024.0), static_cast<double>(separate) / (1024.0 * 1024.0));
+        return true;
+    }
+
+    // Builds the target's textures at its current size, in heaps when given (color, depth), and destroys the old ones.
+    // The new textures take the old ones' bindless slots, so a resize or a new layout does not use up the set.
+    bool RenderContext::createAttachments(RenderTarget &renderTarget, const RenderTargetDesc &desc, rhi::Heap *const *heaps, const uint64_t *offsets)
+    {
         // A frame's passes all run before the next frame's on the one queue, and the texture states give the next
         // frame's first use a barrier, so one copy serves every slot. Only history needs the previous frame's copy.
         const uint32_t copies = desc.history ? MAX_FRAMES_IN_FLIGHT : 1;
+        const glm::uvec2 size = renderTargetSize(desc, getSwapchainExtent());
+        const TextureDesc colorDesc = colorTextureDesc(desc, size);
+        const TextureDesc depthDesc = depthTextureDesc(desc, size, engine->config.occlusionCulling);
+        const bool sampledDepth = depthDesc.usage == TextureUsage::SAMPLED_DEPTH_ATTACHMENT;
 
-        auto destroyAttachments = [&]()
+        uint32_t colorSlots[MAX_FRAMES_IN_FLIGHT];
+        uint32_t depthSlots[MAX_FRAMES_IN_FLIGHT];
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
-            for (uint32_t i = 0; i < copies; ++i)
-            {
-                const auto &attachment = rt.attachments[i];
-                if (attachment.color.isValid())
-                {
-                    engine->registry.bindlessTextureIndexMap.erase(attachment.color);
-                    destroyTexture(attachment.color);
-                }
-                if (attachment.depth.isValid())
-                {
-                    engine->registry.bindlessTextureIndexMap.erase(attachment.depth);
-                    destroyTexture(attachment.depth);
-                }
-            }
+            const uint32_t colorSlot = engine->getBindlessTextureIndex(renderTarget.attachments[i].color);
+            const uint32_t depthSlot = engine->getBindlessTextureIndex(renderTarget.attachments[i].depth);
+            colorSlots[i] = colorSlot == UINT32_MAX ? MAX_BINDLESS_TEXTURES : colorSlot;
+            depthSlots[i] = depthSlot == UINT32_MAX ? MAX_BINDLESS_TEXTURES : depthSlot;
+        }
+        destroyAttachments(renderTarget);
+        renderTarget.width = size.x;
+        renderTarget.height = size.y;
+
+        auto makeTexture = [this, heaps, offsets](const TextureDesc &textureDesc, uint32_t attachment) -> TextureHandle
+        {
+            if (!heaps)
+                return createTexture(textureDesc);
+            auto *texture = impl->device->createPlacedTexture(textureDesc, heaps[attachment], offsets[attachment]);
+            if (!texture)
+                return {};
+            TextureHandle handle = engine->handleManager.getNextTextureHandle();
+            impl->textures[handle] = texture;
+            return handle;
         };
 
         for (uint32_t i = 0; i < copies; ++i)
         {
-            auto &attachment = rt.attachments[i];
-            attachment.color = createTexture(colorDesc);
-            attachment.depth = createTexture(depthDesc);
+            auto &attachment = renderTarget.attachments[i];
+            attachment.color = makeTexture(colorDesc, 0);
+            attachment.depth = makeTexture(depthDesc, 1);
             if (!attachment.color.isValid() || !attachment.depth.isValid())
             {
                 spdlog::error("Failed to create the attachments of render target '{}'.", desc.name);
-                destroyAttachments();
-                return {};
+                destroyAttachments(renderTarget);
+                return false;
             }
         }
 
         // Only once every attachment exists, so that a failed creation leaves the bindless set untouched.
         for (uint32_t i = 0; i < copies; ++i)
         {
-            const auto &attachment = rt.attachments[i];
-            if (engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.color, SamplerType::LINEAR_CLAMP) == UINT32_MAX ||
-                (sampledDepth && engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.depth, SamplerType::NEAREST_CLAMP) == UINT32_MAX))
+            const auto &attachment = renderTarget.attachments[i];
+            if (engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.color, SamplerType::LINEAR_CLAMP, colorSlots[i]) == UINT32_MAX ||
+                (sampledDepth && engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.depth, SamplerType::NEAREST_CLAMP, depthSlots[i]) == UINT32_MAX))
             {
                 spdlog::error("Failed to make render target '{}' bindless.", desc.name);
-                destroyAttachments();
-                return {};
+                destroyAttachments(renderTarget);
+                return false;
             }
         }
         for (uint32_t i = copies; i < MAX_FRAMES_IN_FLIGHT; ++i)
-            rt.attachments[i] = rt.attachments[0];
+            renderTarget.attachments[i] = renderTarget.attachments[0];
+        return true;
+    }
 
-        RenderTargetHandle rtHandle = engine->handleManager.getNextRenderTargetHandle();
-        impl->renderTargets[rtHandle] = rt;
-        return rtHandle;
+    // Slots of a target without history all hold the same pair, so each texture is destroyed once.
+    void RenderContext::destroyAttachments(RenderTarget &renderTarget)
+    {
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        {
+            const RenderTargetAttachments attachment = renderTarget.attachments[i];
+            for (uint32_t j = i; j < MAX_FRAMES_IN_FLIGHT; ++j)
+            {
+                if (renderTarget.attachments[j].color == attachment.color)
+                    renderTarget.attachments[j].color = {};
+                if (renderTarget.attachments[j].depth == attachment.depth)
+                    renderTarget.attachments[j].depth = {};
+            }
+            for (const TextureHandle texture : {attachment.color, attachment.depth})
+            {
+                if (!texture.isValid())
+                    continue;
+                engine->registry.bindlessTextureIndexMap.erase(texture);
+                destroyTexture(texture);
+            }
+        }
     }
 
     const RenderTarget &RenderContext::getRenderTarget(const RenderTargetHandle &handle)

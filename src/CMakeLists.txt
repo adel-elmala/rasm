@@ -44,6 +44,7 @@ target_sources(rasm PRIVATE
     "renderer/shaderCompiler.cpp"
     "renderer/statsOverlay.cpp"
     "rhi/device.cpp"
+    "rhi/memoryAliasing.cpp"
     "rhi/renderContext.cpp"
     "rhi/resource.cpp"
     "rhi/textureStates.cpp"

@@ -802,6 +802,32 @@ struct BindlessDescriptorSetLayoutDescHash
   </div>
 </div>
 
+<div class="api" id="createTransientRenderTarget">
+  <pre class="sig">RenderTargetHandle createTransientRenderTarget(const RenderTargetDesc&amp; desc);</pre>
+  <div class="body">
+    <p>What <a href="render-graph.html#PassBuilder-createTexture">PassBuilder::createRenderTarget</a> calls for a target without <code>history</code>. The handle and the target's size and formats exist at once; the textures only after <code>placeTransientRenderTargets</code>. You rarely call it yourself: the render graph does.</p>
+    <p><span class="tag">errors</span> A desc with <code>history</code> stops in the debugger in a debug build and returns an invalid handle: <code>a history render target lives across frames, so it can't be transient.</code></p>
+  </div>
+</div>
+
+<div class="api" id="placeTransientRenderTargets">
+  <pre class="sig">bool placeTransientRenderTargets(const RenderTargetHandle* renderTargets,
+                                 const uint32_t* firstPasses,
+                                 const uint32_t* lastPasses,
+                                 uint32_t count);</pre>
+  <div class="body">
+    <p>Creates the textures of <code>count</code> transient targets in shared heaps. Target <code>i</code> is in use from pass position <code>firstPasses[i]</code> to <code>lastPasses[i]</code>, both included. Targets whose ranges do not overlap may get the same memory (see <a href="render-graph.html#transient">Transient render targets</a>). The textures keep their bindless slots, and the call logs the heap size against the size without sharing.</p>
+    <p>If one of the targets was placed before, its old group is replaced: the call first waits for the device to be idle, then frees the old heaps. <code>RenderGraph::execute</code> calls this after each compile. Returns <code>false</code> and logs an error if a heap or texture cannot be created; those targets then have no textures.</p>
+  </div>
+</div>
+
+<div class="api" id="resizeRenderTargets">
+  <pre class="sig">void resizeRenderTargets();</pre>
+  <div class="body">
+    <p>Rebuilds every render target with a <code>swapchainScale</code> at the swapchain's current size, and places each transient group that holds one again. The handles and bindless slots stay the same. The engine calls it after the swapchain is created again, with the device idle. Do not call it while the GPU may use the targets.</p>
+  </div>
+</div>
+
 <div class="api" id="getRenderTarget">
   <pre class="sig">const RenderTarget&amp; getRenderTarget(const RenderTargetHandle&amp; handle);</pre>
   <div class="body">

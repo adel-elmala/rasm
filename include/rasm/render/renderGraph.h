@@ -89,6 +89,7 @@ namespace rasm
         void                analyzeDependencies();
         bool                bufferBarrier(const Pass& pass, PipelineStage& before, PipelineStage& after);
         void                clearUndrawnHistory(const Pass& pass);
+        bool                transientLifetimes(const std::vector<uint32_t>& order);
         TextureHandle       createTexture(const TextureDesc& desc);
         BufferHandle        createBuffer(const BufferDesc& desc);
         RenderTargetHandle  createRenderTarget(const RenderTargetDesc& desc);
@@ -105,6 +106,10 @@ namespace rasm
         std::vector<uint32_t>                                       executionOrder; // Sorted pass indices
         std::unordered_map<BufferHandle, BufferAccess, HandleHash>  bufferAccess;
         std::unordered_set<TextureHandle, HandleHash>               drawnHistory;
+        std::vector<RenderTargetHandle>                             transientTargets;
+        std::vector<uint32_t>                                       transientFirstPasses;
+        std::vector<uint32_t>                                       transientLastPasses;
+        bool                                                        transientsPlaced = false;
         Engine*                                                     engine   = nullptr;
         bool                                                        compiled = false;
     };

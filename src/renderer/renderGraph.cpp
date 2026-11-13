@@ -195,9 +195,16 @@ namespace rasm
             return;
         }
 
-        // 5. Store the final execution order
+        if (!transientLifetimes(sortedIndices))
+        {
+            executionOrder.clear();
+            return;
+        }
+
+        // 5. Store the final execution order. The transient memory is laid out from it, so it is laid out again.
         executionOrder = std::move(sortedIndices);
         compiled = true;
+        transientsPlaced = false;
         spdlog::info("Successfully compiled {} passes.", executionOrder.size());
     }
 
@@ -209,6 +216,11 @@ namespace rasm
             compile();
 
         auto &ctx = engine->getRenderContext();
+        if (compiled && !transientsPlaced && !transientTargets.empty())
+        {
+            ctx.placeTransientRenderTargets(transientTargets.data(), transientFirstPasses.data(), transientLastPasses.data(), static_cast<uint32_t>(transientTargets.size()));
+            transientsPlaced = true;
+        }
 
         if (!engine->beginFrame(camera))
             return;
@@ -244,6 +256,54 @@ namespace rasm
                 drawnHistory.insert(engine->getRenderTargetTexture(pass.outputRenderTarget));
         }
         engine->endFrame();
+    }
+
+    // Each transient render target lives from the first pass in the order that uses it to the last, as positions in the
+    // order. Its memory holds another target's data before that, so its first use must draw it.
+    bool RenderGraph::transientLifetimes(const std::vector<uint32_t> &order)
+    {
+        const auto count = transientTargets.size();
+        transientFirstPasses.assign(count, UINT32_MAX);
+        transientLastPasses.assign(count, 0);
+        std::unordered_map<RenderTargetHandle, uint32_t, HandleHash> transientIndex;
+        for (uint32_t i = 0; i < count; ++i)
+            transientIndex[transientTargets[i]] = i;
+
+        bool valid = true;
+        for (uint32_t position = 0; position < order.size(); ++position)
+        {
+            const Pass &pass = passes[order[position]];
+            auto use = [&](RenderTargetHandle renderTarget, bool draws)
+            {
+                auto it = transientIndex.find(renderTarget);
+                if (it == transientIndex.end())
+                    return;
+                if (transientFirstPasses[it->second] == UINT32_MAX)
+                {
+                    transientFirstPasses[it->second] = position;
+                    if (!draws)
+                    {
+                        spdlog::error("Pass '{}' reads a transient render target that no pass before it draws.", pass.name);
+                        valid = false;
+                    }
+                }
+                transientLastPasses[it->second] = position;
+            };
+            for (auto renderTarget : pass.inputRenderTargets)
+                use(renderTarget, false);
+            if (pass.outputRenderTarget.isValid())
+                use(pass.outputRenderTarget, true);
+        }
+
+        // A target no pass declares is still created, and kept for the whole frame.
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            if (transientFirstPasses[i] != UINT32_MAX)
+                continue;
+            transientFirstPasses[i] = 0;
+            transientLastPasses[i] = order.empty() ? 0 : static_cast<uint32_t>(order.size() - 1);
+        }
+        return valid;
     }
 
     // The previous frame's copy of a history target holds nothing until a frame draws it, so it starts out cleared.
@@ -321,9 +381,17 @@ namespace rasm
         return handle;
     }
 
+    // A history target lives across frames. Any other is transient: its memory is the graph's to share.
     RenderTargetHandle RenderGraph::createRenderTarget(const RenderTargetDesc &desc)
     {
-        auto handle = engine->createRenderTarget(desc);
+        if (desc.history)
+            return engine->createRenderTarget(desc);
+        auto handle = engine->getRenderContext().createTransientRenderTarget(desc);
+        if (handle.isValid())
+        {
+            transientTargets.push_back(handle);
+            transientsPlaced = false;
+        }
         return handle;
     }
 

@@ -501,6 +501,7 @@ namespace rasm
                 addBindlessTexture(bindlessDescriptorSet, frameResources[i].depthTexture, SamplerType::NEAREST_CLAMP, depthSlot);
         }
 
+        ctx.resizeRenderTargets();
         updateCameraAspectRatio(static_cast<float>(swapchain.width) / static_cast<float>(swapchain.height));
         return true;
     }

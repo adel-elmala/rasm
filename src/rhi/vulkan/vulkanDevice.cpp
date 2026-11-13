@@ -322,6 +322,60 @@ namespace rasm::rhi
             }
             return pipelineLayout;
         }
+
+        // Drivers may accept an oversized image instead of failing, so this can't be left to image creation.
+        bool fitsDevice(const TextureDesc &desc, uint32_t maxExtent)
+        {
+            if (desc.width <= maxExtent && desc.height <= maxExtent)
+                return true;
+            spdlog::error("Texture '{}' is {}x{}, the device limit is {}.", desc.name, desc.width, desc.height, maxExtent);
+            return false;
+        }
+
+        // Only sampled RGBA8 images use the mip upload/generation path. Render targets and other formats keep one level.
+        uint32_t mipLevelCount(const TextureDesc &desc)
+        {
+            uint32_t mipLevels = 1;
+            if (desc.usage == TextureUsage::SAMPLED &&
+                (desc.format == Format::R8G8B8A8_UNORM || desc.format == Format::R8G8B8A8_SRGB ||
+                 desc.format == Format::B8G8R8A8_SRGB))
+            {
+                for (uint32_t size = std::max(desc.width, desc.height); size > 1; size /= 2)
+                    ++mipLevels;
+            }
+            return mipLevels;
+        }
+
+        // TODO: check if the format is supported by the device, and if not, find a compatible one
+        VkImageCreateInfo imageCreateInfo(const TextureDesc &desc, uint32_t mipLevels)
+        {
+            VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+            imageInfo.imageType = VK_IMAGE_TYPE_2D;
+            imageInfo.extent.width = desc.width;
+            imageInfo.extent.height = desc.height;
+            imageInfo.extent.depth = 1;
+            imageInfo.mipLevels = mipLevels;
+            imageInfo.arrayLayers = 1;
+            imageInfo.format = toVkFormat(desc.format);
+            imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+            imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            imageInfo.usage = toVkImageUsageFlags(desc.usage);
+            imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            return imageInfo;
+        }
+
+        VkResult createImageView(VkDevice device, VulkanTexture &texture)
+        {
+            VkImageViewCreateInfo viewInfo = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            viewInfo.image = texture.image;
+            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            viewInfo.format = toVkFormat(texture.desc.format);
+            viewInfo.subresourceRange.aspectMask = toVkAspectMask(texture.desc.format);
+            viewInfo.subresourceRange.levelCount = texture.mipLevels;
+            viewInfo.subresourceRange.layerCount = 1;
+            return vkCreateImageView(device, &viewInfo, nullptr, &texture.view);
+        }
     }
 
     std::unique_ptr<Device> createVulkanDevice(const DeviceDesc &desc)
@@ -455,39 +509,11 @@ namespace rasm::rhi
 
     Texture *VulkanDevice::createTexture(const TextureDesc &desc)
     {
-        // Drivers may accept an oversized image instead of failing, so this can't be left to vmaCreateImage.
-        const uint32_t maxExtent = physicalDevice.properties.limits.maxImageDimension2D;
-        if (desc.width > maxExtent || desc.height > maxExtent)
-        {
-            spdlog::error("Texture '{}' is {}x{}, the device limit is {}.", desc.name, desc.width, desc.height, maxExtent);
+        if (!fitsDevice(desc, physicalDevice.properties.limits.maxImageDimension2D))
             return nullptr;
-        }
 
-        // Only sampled RGBA8 images use this upload/generation path. Render targets and
-        // other formats retain a single level.
-        uint32_t mipLevels = 1;
-        if (desc.usage == TextureUsage::SAMPLED &&
-            (desc.format == Format::R8G8B8A8_UNORM || desc.format == Format::R8G8B8A8_SRGB ||
-             desc.format == Format::B8G8R8A8_SRGB))
-        {
-            for (uint32_t size = std::max(desc.width, desc.height); size > 1; size /= 2)
-                ++mipLevels;
-        }
-
-        // TODO: check if the format is supported by the device, and if not, find a compatible one
-        VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        imageInfo.imageType = VK_IMAGE_TYPE_2D;
-        imageInfo.extent.width = desc.width;
-        imageInfo.extent.height = desc.height;
-        imageInfo.extent.depth = 1;
-        imageInfo.mipLevels = mipLevels;
-        imageInfo.arrayLayers = 1;
-        imageInfo.format = toVkFormat(desc.format);
-        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        imageInfo.usage = toVkImageUsageFlags(desc.usage);
-        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        const uint32_t mipLevels = mipLevelCount(desc);
+        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevels);
 
         VmaAllocationCreateInfo allocInfo = {};
         allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
@@ -511,19 +537,78 @@ namespace rasm::rhi
             return nullptr;
         }
 
-        VkImageViewCreateInfo viewInfo = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        viewInfo.image = texture->image;
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = imageInfo.format;
-        viewInfo.subresourceRange.aspectMask = toVkAspectMask(desc.format);
-        viewInfo.subresourceRange.levelCount = mipLevels;
-        viewInfo.subresourceRange.layerCount = 1;
-
-        result = vkCreateImageView(device.device, &viewInfo, nullptr, &texture->view);
+        result = createImageView(device.device, *texture);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create image view for '{}'. Error: {}", desc.name, toVkResultString(result));
             vmaDestroyImage(allocator, texture->image, texture->allocation);
+            delete texture;
+            return nullptr;
+        }
+
+        setObjectName(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(texture->image), desc.name);
+        setObjectName(VK_OBJECT_TYPE_IMAGE_VIEW, reinterpret_cast<uint64_t>(texture->view), desc.name);
+        return texture;
+    }
+
+    MemoryRequirements VulkanDevice::getTextureMemoryRequirements(const TextureDesc &desc)
+    {
+        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevelCount(desc));
+        const VkDeviceImageMemoryRequirements info = {.sType = VK_STRUCTURE_TYPE_DEVICE_IMAGE_MEMORY_REQUIREMENTS, .pCreateInfo = &imageInfo};
+        VkMemoryRequirements2 requirements = {.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
+        vkGetDeviceImageMemoryRequirements(device.device, &info, &requirements);
+        return {.size = requirements.memoryRequirements.size,
+                .alignment = requirements.memoryRequirements.alignment,
+                .memoryTypeBits = requirements.memoryRequirements.memoryTypeBits};
+    }
+
+    Heap *VulkanDevice::createHeap(uint64_t size, uint64_t alignment, uint32_t memoryTypeBits, const std::string &name)
+    {
+        const VkMemoryRequirements requirements = {.size = size, .alignment = alignment, .memoryTypeBits = memoryTypeBits};
+        VmaAllocationCreateInfo allocInfo = {};
+        allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        allocInfo.preferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+
+        auto *heap = new VulkanHeap();
+        heap->size = size;
+        heap->memoryTypeBits = memoryTypeBits;
+        auto result = vmaAllocateMemory(allocator, &requirements, &allocInfo, &heap->allocation, nullptr);
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to allocate heap '{}' of {} bytes. Error: {}", name, size, toVkResultString(result));
+            delete heap;
+            return nullptr;
+        }
+        vmaSetAllocationName(allocator, heap->allocation, name.c_str());
+        return heap;
+    }
+
+    // The image does not own its memory: destroyTexture frees only the image, and the heap outlives it.
+    Texture *VulkanDevice::createPlacedTexture(const TextureDesc &desc, Heap *heap, uint64_t offset)
+    {
+        if (!fitsDevice(desc, physicalDevice.properties.limits.maxImageDimension2D))
+            return nullptr;
+
+        const uint32_t mipLevels = mipLevelCount(desc);
+        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevels);
+
+        auto *texture = new VulkanTexture();
+        texture->desc = desc;
+        texture->mipLevels = mipLevels;
+
+        auto result = vmaCreateAliasingImage2(allocator, static_cast<VulkanHeap *>(heap)->allocation, offset, &imageInfo, &texture->image);
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to place image '{}' at offset {}. Error: {}", desc.name, offset, toVkResultString(result));
+            delete texture;
+            return nullptr;
+        }
+
+        result = createImageView(device.device, *texture);
+        if (result != VK_SUCCESS)
+        {
+            spdlog::error("Failed to create image view for '{}'. Error: {}", desc.name, toVkResultString(result));
+            vkDestroyImage(device.device, texture->image, nullptr);
             delete texture;
             return nullptr;
         }
@@ -945,6 +1030,13 @@ namespace rasm::rhi
         vkDestroyImageView(device.device, vkTexture->view, nullptr);
         vmaDestroyImage(allocator, vkTexture->image, vkTexture->allocation);
         delete vkTexture;
+    }
+
+    void VulkanDevice::destroyHeap(Heap *heap)
+    {
+        auto *vkHeap = static_cast<VulkanHeap *>(heap);
+        vmaFreeMemory(allocator, vkHeap->allocation);
+        delete vkHeap;
     }
 
     void VulkanDevice::destroySampler(Sampler *sampler)
