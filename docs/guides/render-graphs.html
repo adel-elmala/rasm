@@ -494,6 +494,8 @@ if order has fewer passes than the graph: there is a cycle</code></pre>
 
 <p>Two refinements are common. <b>Split barriers</b> signal at the end of the writer and wait just before the reader, so the GPU can work in between. And a pass is either all graphics or all compute, so the graph only needs to know the stage of the pass, not of every draw inside it.</p>
 
+<p>The same knowledge picks each pass's <b>load and store ops</b>: whether an attachment's old contents are loaded or cleared at the start, and whether its new contents are kept at the end. The graph knows who drew the target before and who reads it after. See <a href="load-store-ops.html">Load and store ops</a>.</p>
+
 <h2 id="aliasing"><span class="n">8</span>Transient resources and memory aliasing</h2>
 
 <p>After sorting, the graph knows each transient resource's <b>lifetime</b>: from the first pass that uses it to the last. Two resources whose lifetimes do not overlap can share the same memory. This is <b>aliasing</b>. Here is another small frame, a post-processing chain, with made-up but typical sizes:</p>
@@ -564,6 +566,8 @@ if order has fewer passes than the graph: there is a cycle</code></pre>
   </div>
 </div>
 
+<p>How the offsets are chosen, why the barrier must be global, and the variants on other APIs are in <a href="memory-aliasing.html">Transient memory and aliasing</a>.</p>
+
 <h2><span class="n">9</span>Async compute</h2>
 
 <p>Many GPUs can run a compute queue next to the graphics queue. Compute work that does not depend on the graphics work in flight can fill the gaps in it. The graph knows the dependencies, so it can move a compute pass to the other queue and put a semaphore on each edge that crosses between queues.</p>
@@ -588,7 +592,7 @@ if order has fewer passes than the graph: there is a cycle</code></pre>
 
 <ul>
   <li><b>Undeclared use is invisible.</b> A pass that reads a texture without declaring it gets no edge and no barrier. Most graph bugs are missing declarations.</li>
-  <li><b>Persistent resources.</b> Textures that live across frames (last frame's color for TAA, an exposure value) are imported, not transient. With <a href="frames-in-flight.html">frames in flight</a>, they often need one copy per frame.</li>
+  <li><b>Persistent resources.</b> Textures that live across frames (last frame's color for TAA, an exposure value) are imported, not transient. With <a href="frames-in-flight.html">frames in flight</a>, they often need one copy per frame; see <a href="temporal-history.html">History buffers</a>.</li>
   <li><b>Rebuild or retain.</b> Rebuilding the graph every frame makes dynamic frames easy (a pass is declared or not). Compiling once is cheaper, but every change needs a recompile.</li>
   <li><b>Render pass merging.</b> On tile-based mobile GPUs, passes that read the previous pass's output at the same pixel can be merged into one render pass with subpasses, keeping the data on chip.</li>
   <li><b>One queue or many.</b> Async compute adds cross-queue semaphores and makes resource ownership harder: a resource used on two queues needs a queue ownership transfer or concurrent sharing.</li>
@@ -596,7 +600,7 @@ if order has fewer passes than the graph: there is a cycle</code></pre>
 
 <h2 id="in-rasm"><span class="n">11</span>In RASM</h2>
 
-<p>RASM's render graph is a small one. It sorts passes with Kahn's algorithm, and records the texture transitions and buffer barriers that their declarations need. It does not cull passes, does not manage memory, and runs on one queue. The graph is <b>retained</b>: you add the passes once, and <code>RenderGraph::execute</code> runs them every frame.</p>
+<p>RASM's render graph is a small one. It sorts passes with Kahn's algorithm, records the texture transitions and buffer barriers that their declarations need, picks each pass's load ops, and places transient render targets in shared memory. It does not cull passes, and runs on one queue. The graph is <b>retained</b>: you add the passes once, and <code>RenderGraph::execute</code> runs them every frame.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 250" role="img" aria-label="Example 01: Forward draws the scene into offscreen_rt. Trail reads it and last frame's copy of trail_rt, and draws this frame's copy. Background reads trail_rt and draws composite_rt. Present samples composite_rt and draws to the swapchain. offscreen_rt and composite_rt are transient and share memory. Example 04: Animate is a compute pass that writes Particle Positions, Draw reads them and draws to the swapchain, with a barrier before Animate and one before Draw.">
@@ -722,7 +726,8 @@ if order has fewer passes than the graph: there is a cycle</code></pre>
   <tr><th>The pass declares</th><th>Recorded before it</th><th>When</th></tr>
   <tr><td><code>read(texture)</code></td><td><code>transitionImageLayout(texture, SAMPLED)</code></td><td>unless it is <code>SAMPLED</code> already (read after read)</td></tr>
   <tr><td><code>read(renderTarget)</code></td><td>nothing: the drawing pass's <code>endPass</code> left its color <code>SAMPLED</code></td><td>–</td></tr>
-  <tr><td><code>readPrevious(renderTarget)</code></td><td><code>transitionImageLayout(previous copy, SAMPLED)</code>; first a clear if no frame drew that copy</td><td>the clear once per copy</td></tr>
+  <tr><td><code>readPrevious(renderTarget)</code></td><td>nothing: the frame before left that copy <code>SAMPLED</code>, or <code>clearNewHistory</code> cleared a new copy at the start of the frame</td><td>–</td></tr>
+  <tr><td>the first pass of a transient target</td><td><code>aliasingBarrier</code>: a global memory barrier, since the target's memory held another target before</td><td>every frame</td></tr>
   <tr><td><code>write(renderTarget)</code> or <code>writeSwapchain()</code></td><td><code>beginPass</code> moves color and depth to attachments with <code>discard</code>: from <code>UNKNOWN</code>, contents dropped</td><td>the first pass on the target (it clears)</td></tr>
   <tr><td>the same, on a target an earlier pass drew</td><td><code>beginPass</code> moves them to attachments without <code>discard</code>, keeping the contents</td><td>later passes (they load)</td></tr>
   <tr><td><code>read(buffer)</code></td><td>one <code>memoryBarrier</code>: the last write's stage → this pass's stage</td><td>once per stage after each write</td></tr>
@@ -777,15 +782,15 @@ if order has fewer passes than the graph: there is a cycle</code></pre>
 
 <h3>Render targets: transient, history, and the rest</h3>
 
-<p>A render target from <code>PassBuilder::createRenderTarget</code> without history is <b>transient</b>. Its handle exists at once; its textures are created after the compile, when the graph knows the order. <code>RenderGraph::transientLifetimes</code> finds the first and last position in the order of a pass that uses each one, and <code>RenderContext::placeTransientRenderTargets</code> asks the device for each texture's size and alignment and packs them with <code>rhi::packAliased</code>: biggest first, each at the lowest offset that no texture with an overlapping lifetime uses. Then it creates one heap per set of memory types and the textures inside it. In <code>examples/01_render_graph</code> that halves the memory: <samp>16.9 MiB instead of 33.8 MiB</samp>.</p>
+<p>A render target from <code>PassBuilder::createRenderTarget</code> without history is <b>transient</b>. Its handle exists at once; its textures are created after the compile, when the graph knows the order. <code>RenderGraph::transientLifetimes</code> finds the first and last position in the order of a pass that uses each one, and <code>RenderContext::placeTransientRenderTargets</code> asks the device for each texture's size and alignment and packs them with <code>rhi::packAliased</code>: biggest first, each at the lowest offset that no texture with an overlapping lifetime uses. Then it creates one heap per set of memory types and the textures inside it. In <code>examples/01_render_graph</code> that saves 40%: <samp>25.3 MiB instead of 42.2 MiB</samp> at 1920 × 1080. The algorithm step by step: <a href="memory-aliasing.html#in-rasm">Transient memory and aliasing</a>.</p>
 
 <p>A transient's first use each frame is <code>beginPass</code>, which moves its attachments from <code>UNKNOWN</code>. That image barrier only orders writes to the same image, not the writes of the target that used the memory before. So <code>RenderGraph::execute</code> records <code>RenderContext::aliasingBarrier</code>, a global memory barrier, before the first pass of each transient target: the new writes wait for every attachment write and shader read before, last frame's included. And the first use must be a draw: <code>compile</code> fails when it is a read.</p>
 
 <p>The layout is made again only when a compile changes the lifetimes. If a heap cannot be made, the frames draw no passes and the graph tries again each frame. The graph owns its transient targets: its destructor waits for the GPU and frees them with <code>RenderContext::destroyTransientRenderTargets</code>.</p>
 
-<p>A render target has <b>one</b> set of attachments that every frame draws. That is safe with <a href="frames-in-flight.html">frames in flight</a>: there is one queue, so frame N+1's passes run after frame N's, and the first use in frame N+1 is a barrier that waits for frame N's reads.</p>
+<p>A render target has up to <code>MAX_COLOR_ATTACHMENTS</code> color textures, which one pass draws together (<a href="multiple-render-targets.html">Multiple render targets</a>), and one depth texture. It has <b>one</b> set of attachments that every frame draws. That is safe with <a href="frames-in-flight.html">frames in flight</a>: there is one queue, so frame N+1's passes run after frame N's, and the first use in frame N+1 is a barrier that waits for frame N's reads.</p>
 
-<p>A target created with <code>history = true</code> is RASM's <b>imported history resource</b>: it holds one set per frame slot. A pass draws this frame's copy and reads the copy the previous frame drew with <code>PassBuilder::readPrevious</code>. That read adds no edge, so a pass may read the old copy of the target it draws to. <code>RenderContext::createRenderTarget</code> marks each new copy, and <code>Engine::beginFrame</code> clears it to <code>clearColor</code> before any pass, so the first frame does not read garbage, in a graph or not. Look the textures up in <code>execute</code>, every frame:</p>
+<p>A target created with <code>history = true</code> is RASM's <b>imported history resource</b>: it holds one set per frame slot. A pass draws this frame's copy and reads the copy the previous frame drew with <code>PassBuilder::readPrevious</code>. That read adds no edge, so a pass may read the old copy of the target it draws to. <code>RenderContext::createRenderTarget</code> marks each new copy, and <code>Engine::beginFrame</code> clears it to <code>clearColor</code> before any pass, so the first frame does not read garbage, in a graph or not (more in <a href="temporal-history.html#in-rasm">History buffers</a>). Look the textures up in <code>execute</code>, every frame:</p>
 
 <pre><code>auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
 auto current = engine.getBindlessTextureIndex(engine.getRenderTargetTexture(trailHandle));

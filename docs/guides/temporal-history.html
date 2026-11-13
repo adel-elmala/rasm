@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>History Buffers · RASM</title>
+<meta name="description" content="How a pass reads last frame's image: why one image can't be read and written at once, ping-pong between two copies, how history fits frames in flight, the math of decay and moving averages, when history is invalid, the costs and pitfalls, and how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/render/resource.h include/rasm/types.h include/rasm/engine.h include/rasm/render/renderGraph.h src/rhi/renderContext.cpp src/engine.cpp src/renderer/renderGraph.cpp examples/01_render_graph/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/temporal-history.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Culling and the frame</p>
+<h1>History buffers: last frame's image</h1>
+<p class="lead">Some effects need to know what the screen looked like a moment ago: a fading trail, temporal anti-aliasing, a denoiser, auto exposure. They keep a <b>history buffer</b>, an image that survives from one frame to the next. This page explains why it takes two images, how they swap, how to blend the past with the present, and when the past must be thrown away. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A temporal effect reads <b>last frame's result</b> and writes this frame's result.</li>
+    <li>A pass cannot sample an image while it draws into the same image. That is a <b>feedback loop</b>, and the result is undefined.</li>
+    <li>So keep <b>two copies</b> and swap them every frame: draw one, read the other. This is <b>ping-pong</b>.</li>
+    <li>With frames in flight, the slot index already alternates, so it can pick the copy. Barriers on the one queue keep the copies safe; the fence alone does not.</li>
+    <li>Blending is a running average: <code class="lang-text">mix(previous, current, α)</code>, or a decaying trail: <code class="lang-text">max(current, previous × k)</code>. With <var>k</var> = 0.85, a trail falls to 10% in about 14 frames.</li>
+    <li>History is <b>invalid</b> on the first frame, after a resize and after a camera cut. Clear it, rebuild it, or ignore it for one frame.</li>
+    <li>It costs a second full-screen image and one more full-screen read per frame.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>Effects that need the past</h2>
+
+<p>Most passes only need this frame: the scene, the lights, the camera. A <b>temporal</b> effect also needs its own output from the frame before. It takes that output, mixes in what is new, and writes the result. Next frame, the result is the input again. The simplest example is a trail behind a moving object:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="A ball moves to the right. Its position this frame is solid with brightness 1.0. The four positions before it are faint, with brightness 0.85, 0.72, 0.61 and 0.52: each frame the old image is multiplied by 0.85.">
+    <text x="20" y="22" class="title">A trail: each frame keeps 85% of the old image</text>
+    <circle cx="140" cy="90" r="28" class="ghost"/>
+    <circle cx="260" cy="90" r="28" class="ghost"/>
+    <circle cx="380" cy="90" r="28" class="ghost"/>
+    <circle cx="500" cy="90" r="28" class="ghost"/>
+    <circle cx="620" cy="90" r="28" class="gpu"/>
+    <line x1="660" y1="90" x2="720" y2="90" class="arrow" marker-end="url(#ah)"/>
+    <text x="690" y="80" class="mid small">moves</text>
+    <text x="140" y="94" class="mid small t-faint">0.52</text>
+    <text x="260" y="94" class="mid small t-faint">0.61</text>
+    <text x="380" y="94" class="mid small t-faint">0.72</text>
+    <text x="500" y="94" class="mid small t-faint">0.85</text>
+    <text x="620" y="94" class="mid title">1.0</text>
+    <text x="140" y="140" class="mid small">4 frames ago</text>
+    <text x="260" y="140" class="mid small">3 frames ago</text>
+    <text x="380" y="140" class="mid small">2 frames ago</text>
+    <text x="500" y="140" class="mid small">1 frame ago</text>
+    <text x="620" y="140" class="mid small">this frame</text>
+    <text x="20" y="180" class="small">No pass draws the old positions. They are still in the image from last frame, which the pass reads and dims.</text>
+  </svg>
+  <figcaption>The trail is free: the pass draws only the ball. All older positions come from the history buffer.</figcaption>
+</figure>
+
+<p>Many well-known effects work this way. They differ in what they keep and how they mix it:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Effect</th><th>What the history holds</th><th>How it uses it</th></tr>
+  <tr><td>Trails, motion trails</td><td>last frame's trail image</td><td>keeps the brighter of "new" and "old, a bit darker"</td></tr>
+  <tr><td>Accumulation (path tracing, a still camera)</td><td>the average of all frames so far</td><td>adds one more noisy sample to the average</td></tr>
+  <tr><td>Temporal anti-aliasing (TAA)</td><td>last frame's smooth image</td><td>moves the camera by less than a pixel each frame and averages the results</td></tr>
+  <tr><td>Temporal denoising</td><td>last frame's filtered lighting</td><td>averages noisy lighting over time instead of over many rays</td></tr>
+  <tr><td>Motion blur (simple)</td><td>last frame's image</td><td>blends it in where things move</td></tr>
+  <tr><td>Auto exposure</td><td>last frame's brightness (one pixel)</td><td>moves slowly towards this frame's brightness, so the eye "adapts"</td></tr>
+</table>
+</div>
+
+<h2><span class="n">2</span>One image cannot be read and drawn at once</h2>
+
+<p>The obvious idea is one image: read the old value at a pixel, and write the new value back to the same image. In a draw, this does not work. The GPU shades many pixels at once, in an order you do not control. A pixel shader that samples the image may get the old value, the new value, or a value that is half written. Worse, the image is in a layout for drawing, not for sampling, and caches for the two are not kept in step. This is a <b>feedback loop</b>, and graphics APIs call its result undefined. Validation layers report it.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 260" role="img" aria-label="Left: one image. The pass reads it and draws into it at the same time, so what a read sees is undefined. Right: two images. The pass reads image A, which last frame drew, and draws image B. Next frame they swap roles.">
+    <text x="190" y="22" class="mid title">One image: a feedback loop</text>
+    <rect x="110" y="40" width="160" height="44" rx="6" class="mem"/>
+    <text x="190" y="67" class="mid mono">image T</text>
+    <rect x="110" y="150" width="160" height="44" rx="22" class="shader"/>
+    <text x="190" y="177" class="mid">pass</text>
+    <line x1="150" y1="86" x2="150" y2="148" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="142" y="122" class="end small">reads</text>
+    <line x1="230" y1="148" x2="230" y2="86" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="238" y="122" class="small">draws</text>
+    <text x="190" y="222" class="mid small t-hot">old value, new value, or half written?</text>
+    <text x="190" y="240" class="mid small t-hot">undefined</text>
+
+    <line x1="380" y1="30" x2="380" y2="240" class="arrow dashed"/>
+
+    <text x="570" y="22" class="mid title">Two images: no loop</text>
+    <rect x="410" y="40" width="130" height="44" rx="6" class="mem"/>
+    <text x="475" y="59" class="mid mono">image A</text>
+    <text x="475" y="75" class="mid small">last frame drew it</text>
+    <rect x="600" y="40" width="130" height="44" rx="6" class="mem"/>
+    <text x="665" y="59" class="mid mono">image B</text>
+    <text x="665" y="75" class="mid small">this frame draws it</text>
+    <rect x="495" y="150" width="150" height="44" rx="22" class="shader"/>
+    <text x="570" y="177" class="mid">pass</text>
+    <line x1="475" y1="86" x2="530" y2="148" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="490" y="126" class="end small">reads</text>
+    <line x1="610" y1="148" x2="665" y2="86" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="650" y="126" class="small">draws</text>
+    <text x="570" y="222" class="mid small t-gpu">reads only A, draws only B</text>
+    <text x="570" y="240" class="mid small">next frame: A and B swap roles</text>
+  </svg>
+  <figcaption>The fix is to never touch one image in both ways in the same pass. The old result lives in one image, the new result goes to another.</figcaption>
+</figure>
+
+<p>A compute shader is a special case. If every thread reads and writes <b>only its own pixel</b> of a storage image, one image is enough, since no other thread touches that pixel. But as soon as a thread reads a neighbour (a blur, a reprojection, a filtered sample), it needs two images again.</p>
+
+<h2><span class="n">3</span>Ping-pong: two images that swap</h2>
+
+<p>Keep two copies of the image, A and B. Frame 0 draws A. Frame 1 reads A and draws B. Frame 2 reads B and draws A. Each frame, the copy that was "new" becomes "old". The data does not move; only the names swap. This is called <b>ping-pong</b>, or double buffering.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="Four frames, two copies. Frame 0 reads B, which is only cleared, and draws A. Frame 1 reads A and draws B. Frame 2 reads B and draws A. Frame 3 reads A and draws B. The image each frame draws is the one the next frame reads.">
+    <text x="20" y="74" class="title">copy A</text>
+    <text x="20" y="164" class="title">copy B</text>
+    <text x="160" y="28" class="mid title">frame 0</text>
+    <text x="320" y="28" class="mid title">frame 1</text>
+    <text x="480" y="28" class="mid title">frame 2</text>
+    <text x="640" y="28" class="mid title">frame 3</text>
+
+    <rect x="100" y="50" width="120" height="40" rx="6" class="gpu"/>
+    <text x="160" y="75" class="mid">draws</text>
+    <rect x="100" y="140" width="120" height="40" rx="6" class="ghost"/>
+    <text x="160" y="158" class="mid small">reads, but nothing</text>
+    <text x="160" y="172" class="mid small">drew it: cleared</text>
+    <line x1="160" y1="138" x2="160" y2="92" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="260" y="50" width="120" height="40" rx="6" class="mem"/>
+    <text x="320" y="75" class="mid">reads</text>
+    <rect x="260" y="140" width="120" height="40" rx="6" class="gpu"/>
+    <text x="320" y="165" class="mid">draws</text>
+    <line x1="320" y1="92" x2="320" y2="138" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="420" y="50" width="120" height="40" rx="6" class="gpu"/>
+    <text x="480" y="75" class="mid">draws</text>
+    <rect x="420" y="140" width="120" height="40" rx="6" class="mem"/>
+    <text x="480" y="165" class="mid">reads</text>
+    <line x1="480" y1="138" x2="480" y2="92" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="580" y="50" width="120" height="40" rx="6" class="mem"/>
+    <text x="640" y="75" class="mid">reads</text>
+    <rect x="580" y="140" width="120" height="40" rx="6" class="gpu"/>
+    <text x="640" y="165" class="mid">draws</text>
+    <line x1="640" y1="92" x2="640" y2="138" class="arrow" marker-end="url(#ah)"/>
+
+    <line x1="220" y1="70" x2="258" y2="70" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <line x1="380" y1="160" x2="418" y2="160" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <line x1="540" y1="70" x2="578" y2="70" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+
+    <text x="20" y="212" class="small">Grey arrow: the pass, inside one frame. Orange arrow: the same image, kept to the next frame.</text>
+    <text x="20" y="230" class="small">The result zig-zags between the two copies. Each frame reads what the frame before drew.</text>
+  </svg>
+  <figcaption>Frame <var>n</var> draws copy <var>n</var> mod 2 and reads copy (<var>n</var> + 1) mod 2. Frame 0 reads a copy that no frame drew yet; <a href="#invalid">section 7</a> deals with that.</figcaption>
+</figure>
+
+<p>The code that picks the copies is two lines. The important part: both indices change <b>every frame</b>, so anything that refers to "the current copy" or "the previous copy" must be looked up again every frame.</p>
+
+<pre><code>// frame n draws history[n % 2] and reads history[(n + 1) % 2]
+const uint32_t drawIndex = frameIndex % 2;
+const uint32_t readIndex = (frameIndex + 1) % 2;</code></pre>
+
+<h2><span class="n">4</span>Other ways to keep the past</h2>
+
+<p>Ping-pong is the usual choice, but not the only one:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Way</th><th>How</th><th>Cost</th><th>Good for</th></tr>
+  <tr><td><b>Ping-pong</b></td><td>two copies, swap the roles each frame</td><td>2 images, no copy</td><td>most temporal effects</td></tr>
+  <tr><td><b>Copy at the end</b></td><td>one "history" image and one output; after the pass, copy the output into history</td><td>2 images, plus one full-screen copy per frame</td><td>when the output must stay at one fixed image (another system holds it)</td></tr>
+  <tr><td><b>Output + history, kept apart</b></td><td>the pass writes a new output image; a later pass writes the history it wants to keep</td><td>2 images, often a smaller history</td><td>TAA, where the history and the shown image differ (for example, before and after sharpening)</td></tr>
+  <tr><td><b>In place, compute</b></td><td>one storage image; each thread reads and writes only its own pixel</td><td>1 image</td><td>per-pixel accumulation with no neighbour reads</td></tr>
+</table>
+</div>
+
+<h2 id="frames-in-flight"><span class="n">5</span>History and frames in flight</h2>
+
+<p>With <a href="frames-in-flight.html">frames in flight</a>, the CPU records frame <var>n</var> + 1 while the GPU still runs frame <var>n</var>. Each frame has a <b>slot</b>, and with two slots the slot index goes 0, 1, 0, 1. That is exactly the ping-pong pattern, so many engines give each slot its own history copy and let the slot index pick it. With <var>N</var> slots and <var>N</var> copies, slot <var>i</var> draws copy <var>i</var> and reads copy (<var>i</var> − 1) mod <var>N</var>.</p>
+
+<p>Is it safe? The CPU waits on a fence before it reuses a slot, but that fence only says the frame <b>two</b> frames ago is done. The frame in between may still be reading the copy that the new frame will draw. What keeps the copy safe is the <b>queue order</b> and two <a href="gpu-sync.html">barriers</a>:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Timeline. The CPU records F0 and F1, waits for the fence of slot 0, records F2, waits, records F3. The GPU runs F0, which draws A, then F1, which reads A and draws B, then F2, which reads B and draws A. Barrier 1 at the end of F0's pass makes A ready to sample. Barrier 2 at the start of F2's pass makes the draw into A wait until F1 has read it. The fence only covers F0.">
+    <text x="20" y="58" class="title t-cpu">CPU</text>
+    <text x="20" y="140" class="title t-gpu">GPU</text>
+    <rect x="70"  y="40" width="90" height="28" rx="3" class="cpu"/><text x="115" y="58" class="mid small">record F0</text>
+    <rect x="160" y="40" width="90" height="28" rx="3" class="cpu"/><text x="205" y="58" class="mid small">record F1</text>
+    <rect x="250" y="40" width="60" height="28" rx="3" class="ghost"/><text x="280" y="58" class="mid small t-faint">waits</text>
+    <rect x="310" y="40" width="90" height="28" rx="3" class="cpu"/><text x="355" y="58" class="mid small">record F2</text>
+    <rect x="400" y="40" width="80" height="28" rx="3" class="ghost"/><text x="440" y="58" class="mid small t-faint">waits</text>
+    <rect x="480" y="40" width="90" height="28" rx="3" class="cpu"/><text x="525" y="58" class="mid small">record F3</text>
+
+    <rect x="160" y="112" width="150" height="50" rx="4" class="gpu"/>
+    <text x="235" y="133" class="mid">F0 · slot 0</text>
+    <text x="235" y="151" class="mid small">draws A</text>
+    <rect x="310" y="112" width="170" height="50" rx="4" class="gpu"/>
+    <text x="395" y="133" class="mid">F1 · slot 1</text>
+    <text x="395" y="151" class="mid small">reads A · draws B</text>
+    <rect x="480" y="112" width="170" height="50" rx="4" class="gpu"/>
+    <text x="565" y="133" class="mid">F2 · slot 0</text>
+    <text x="565" y="151" class="mid small">reads B · draws A</text>
+
+    <line x1="310" y1="110" x2="310" y2="72" class="arrow cpu dashed" marker-end="url(#ah-cpu)"/>
+    <text x="316" y="96" class="small t-cpu">fence: F0 done</text>
+
+    <line x1="300" y1="166" x2="300" y2="184" class="hot"/>
+    <text x="300" y="198" class="mid small t-hot">①</text>
+    <line x1="492" y1="166" x2="492" y2="184" class="hot"/>
+    <text x="492" y="198" class="mid small t-hot">②</text>
+
+    <text x="20" y="226" class="small"><tspan class="t-hot">①</tspan> after F0 draws A: "A was drawn, now it is sampled". F1's read sees all of F0's pixels.</text>
+    <text x="20" y="244" class="small"><tspan class="t-hot">②</tspan> before F2 draws A: "A was sampled, now it is drawn". F2 waits until F1 has read A.</text>
+    <text x="20" y="262" class="small">The fence only covers F0. When the CPU records F2, F1 may still read A, so ② is what keeps A safe.</text>
+  </svg>
+  <figcaption>On one queue the GPU runs F0, F1, F2 in that order, and a barrier also waits for work submitted earlier. So the two barriers are enough, with no extra fence.</figcaption>
+</figure>
+
+<p>Two consequences follow:</p>
+<ul>
+  <li><b>Two copies are enough</b> for any number of slots, because the GPU runs the frames one after the other. A copy per slot is a convenience: the index is already there. With exactly two slots, the two ideas are the same.</li>
+  <li>The copies are written by the <b>GPU only</b>. Data the CPU writes every frame needs a copy per slot for another reason (the CPU must not overwrite what the GPU still reads). History needs its copies because one pass reads and draws it.</li>
+</ul>
+
+<h2 id="math"><span class="n">6</span>Mixing the past with the present</h2>
+
+<p>The pass has two inputs at every pixel: <var>c</var>, this frame's new value, and <var>h</var>, the history from last frame. It writes the new history <var>h'</var>. Two formulas cover most effects.</p>
+
+<div class="split">
+  <div>
+    <h4>Running average</h4>
+    <p><code class="lang-text">h' = mix(h, c, α)</code><br>= (1 − <var>α</var>) · <var>h</var> + <var>α</var> · <var>c</var></p>
+    <p>Each frame, the new value gets weight <var>α</var>, and everything older shrinks by (1 − <var>α</var>). The frame <var>i</var> frames ago has weight <var>α</var>·(1 − <var>α</var>)<sup><var>i</var></sup>. This is an <b>exponential moving average</b>. It is used by TAA, denoisers and auto exposure. A small <var>α</var> is smooth but slow; with <var>α</var> = 0.1 the average covers about 1/<var>α</var> = 10 frames.</p>
+  </div>
+  <div>
+    <h4>Decaying trail</h4>
+    <p><code class="lang-text">h' = max(c, h · k)</code></p>
+    <p>The old image gets a bit darker every frame (<var>k</var> &lt; 1), and anything new that is brighter wins at once. A pixel that was lit once and then left alone fades as <var>k</var><sup><var>n</var></sup>. It is not an average: a bright object stays at full brightness, and only its trail fades.</p>
+  </div>
+</div>
+
+<p>Both fade the same way once the input goes dark: if <var>c</var> = 0, both give <var>h'</var> = <var>h</var> × (1 − <var>α</var>) or <var>h</var> × <var>k</var>. They differ in how fast they <b>follow</b> a new value. Here is one pixel that an object covers for 10 frames and then leaves, with <var>k</var> = 0.85 and <var>α</var> = 0.15:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="A graph of brightness over 40 frames. The input is 1 for frames 0 to 9 and 0 after. The max trail is 1 while the object is there, then falls as 0.85 to the power n: 0.44 after 5 frames, 0.10 after 14, 0.011 after 28. The running average with alpha 0.15 rises slowly to 0.80 by frame 9, then falls at the same rate.">
+    <line x1="70" y1="220" x2="690" y2="220" class="arrow"/>
+    <line x1="70" y1="220" x2="70" y2="30" class="arrow"/>
+    <text x="62" y="44" class="end small">1.0</text>
+    <text x="62" y="134" class="end small">0.5</text>
+    <text x="62" y="224" class="end small">0</text>
+    <line x1="66" y1="130" x2="74" y2="130" class="arrow"/>
+    <text x="70" y="238" class="mid small">0</text>
+    <text x="220" y="238" class="mid small">10</text>
+    <text x="370" y="238" class="mid small">20</text>
+    <text x="520" y="238" class="mid small">30</text>
+    <text x="670" y="238" class="mid small">40</text>
+    <text x="370" y="256" class="mid small">frame (at 60 fps, 10 frames = 0.17 s)</text>
+
+    <polyline points="70,40 205,40 205,220 670,220" class="ghost"/>
+    <polyline points="70,40 85,40 100,40 115,40 130,40 145,40 160,40 175,40 190,40 205,40 220,67 235,90 250,109.5 265,126 280,140.1 295,152.1 310,162.3 325,171 340,178.3 355,184.6 370,189.9 385,194.4 400,198.2 415,201.5 430,204.3 445,206.6 460,208.6 475,210.3 490,211.8 505,213 520,214.1 535,215 550,215.7 565,216.4 580,216.9 595,217.4 610,217.8 625,218.1 640,218.4 655,218.6 670,218.8" class="hot"/>
+    <polyline points="70,193 85,170.1 100,150.5 115,134 130,119.9 145,107.9 160,97.7 175,89 190,81.7 205,75.4 220,97.1 235,115.6 250,131.2 265,144.5 280,155.9 295,165.5 310,173.7 325,180.6 340,186.5 355,191.5 370,195.8 385,199.4 400,202.5 415,205.1 430,207.4 445,209.3 460,210.9 475,212.2 490,213.4 505,214.4 520,215.2 535,216 550,216.6 565,217.1 580,217.5 595,217.9 610,218.2 625,218.5 640,218.7 655,218.9 670,219.1" class="arrow cpu"/>
+
+    <circle cx="280" cy="140.1" r="4" class="mem"/>
+    <text x="288" y="134" class="small">5 frames later: 0.44</text>
+    <circle cx="415" cy="201.5" r="4" class="mem"/>
+    <text x="420" y="190" class="small">14 later: 0.10</text>
+    <circle cx="625" cy="218.1" r="4" class="mem"/>
+    <text x="625" y="206" class="mid small">28 later: 0.011</text>
+
+    <line x1="500" y1="44" x2="530" y2="44" class="hot"/>
+    <text x="538" y="48" class="small">max(c, h × 0.85): trail</text>
+    <line x1="500" y1="64" x2="530" y2="64" class="arrow cpu"/>
+    <text x="538" y="68" class="small">mix(h, c, 0.15): average</text>
+    <line x1="500" y1="84" x2="530" y2="84" class="ghost"/>
+    <text x="538" y="88" class="small">input c: object there</text>
+    <text x="20" y="282" class="small">The object leaves after frame 9. The trail drops from 1.0, the average from 0.80, both by × 0.85 per frame.</text>
+  </svg>
+  <figcaption>The trail jumps to full brightness at once and lags only on the way down. The average lags both ways: after 10 frames it has reached only 1 − 0.85<sup>10</sup> = 0.80.</figcaption>
+</figure>
+
+<h3>How long does a trail last?</h3>
+
+<p>After <var>n</var> frames, a pixel keeps <var>k</var><sup><var>n</var></sup> of its brightness. The <b>half-life</b>, the number of frames to reach 0.5, is ln 0.5 / ln <var>k</var>. For <var>k</var> = 0.85 that is 4.3 frames.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Frames later</th><th>0.85<sup><var>n</var></sup></th><th>Time at 60 fps</th><th>Time at 144 fps</th></tr>
+  <tr><td>1</td><td>0.85</td><td>17 ms</td><td>7 ms</td></tr>
+  <tr><td>4.3 (half-life)</td><td>0.50</td><td>71 ms</td><td>30 ms</td></tr>
+  <tr><td>5</td><td>0.44</td><td>83 ms</td><td>35 ms</td></tr>
+  <tr><td>14</td><td>0.10</td><td>233 ms</td><td>97 ms</td></tr>
+  <tr><td>28</td><td>0.011</td><td>467 ms</td><td>194 ms</td></tr>
+</table>
+</div>
+
+<p>The same <var>k</var> gives a trail less than half as long at 144 fps as at 60 fps. The effect depends on the <b>frame rate</b>. To fix that, choose <var>k</var> for a reference rate and raise it to the frame time: with the frame time <var>dt</var> in seconds, use <var>k</var><sup><var>dt</var> × 60</sup>. At 144 fps that gives 0.85<sup>60/144</sup> = 0.93 per frame, and the trail lasts the same 0.23 s to reach 10%. For a running average, use 1 − (1 − <var>α</var>)<sup><var>dt</var> × 60</sup> the same way.</p>
+
+<pre><code class="lang-slang">float4 trail(float4 current, float4 previous, float dt)
+{
+    float k = pow(0.85, dt * 60.0);
+    return max(current, previous * k);
+}</code></pre>
+
+<h3>Precision</h3>
+
+<p>History is fed back into itself many times, so small errors add up. In an 8-bit image, a value of 3/255 times 0.85 is 2.55/255, which rounds back to 3/255 on hardware that rounds to the nearest step. Dark trails then never quite reach 0. A running average with a small <var>α</var> has the same problem: a change smaller than one step is lost. A 16-bit float format avoids both; it costs twice the memory.</p>
+
+<h2 id="invalid"><span class="n">7</span>When the history is wrong</h2>
+
+<p>The formulas trust that <var>h</var> really is "this pixel, last frame". Sometimes it is not:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Four cases. First frame: the old copy was never drawn and holds garbage; clear it or use the current value only. Resize: the old copy has the old size; make new copies and start over. Camera cut: last frame shows another place; ignore the history for one frame. Something moves: old pixels stay behind as ghosts; reproject with motion vectors, clamp, or reject.">
+    <text x="100" y="22" class="mid title">First frame</text>
+    <rect x="35" y="38" width="130" height="80" rx="4" class="ghost"/>
+    <text x="100" y="76" class="mid title t-faint">? ? ?</text>
+    <text x="100" y="96" class="mid small">never drawn</text>
+
+    <text x="290" y="22" class="mid title">Resize</text>
+    <rect x="215" y="36" width="150" height="88" rx="4" class="zone"/>
+    <rect x="225" y="46" width="80" height="48" rx="4" class="mem"/>
+    <text x="265" y="74" class="mid small">old size</text>
+    <text x="358" y="116" class="end small">new size</text>
+
+    <text x="480" y="22" class="mid title">Camera cut</text>
+    <rect x="405" y="48" width="64" height="60" rx="4" class="mem"/>
+    <text x="437" y="82" class="mid small">a room</text>
+    <line x1="471" y1="78" x2="489" y2="78" class="arrow" marker-end="url(#ah)"/>
+    <rect x="491" y="48" width="64" height="60" rx="4" class="gpu"/>
+    <text x="523" y="82" class="mid small">a street</text>
+
+    <text x="665" y="22" class="mid title">Something moves</text>
+    <circle cx="610" cy="80" r="16" class="ghost"/>
+    <circle cx="640" cy="80" r="16" class="ghost"/>
+    <circle cx="670" cy="80" r="16" class="ghost"/>
+    <circle cx="710" cy="80" r="16" class="gpu"/>
+
+    <text x="100" y="152" class="mid small">old copy holds garbage</text>
+    <text x="290" y="152" class="mid small">pixels no longer line up</text>
+    <text x="480" y="152" class="mid small">the old place bleeds in</text>
+    <text x="665" y="152" class="mid small">old pixels stay: ghosting</text>
+
+    <line x1="20" y1="170" x2="740" y2="170" class="arrow dashed"/>
+    <text x="100" y="192" class="mid small t-gpu">clear it before the first read,</text>
+    <text x="100" y="208" class="mid small t-gpu">or use only c on frame 0</text>
+    <text x="290" y="192" class="mid small t-gpu">make new copies,</text>
+    <text x="290" y="208" class="mid small t-gpu">clear them, start over</text>
+    <text x="480" y="192" class="mid small t-gpu">ignore h for one frame</text>
+    <text x="480" y="208" class="mid small t-gpu">(a "reset" flag)</text>
+    <text x="665" y="192" class="mid small t-gpu">reproject, then clamp</text>
+    <text x="665" y="208" class="mid small t-gpu">or reject (below)</text>
+    <text x="20" y="240" class="small">The first three are events the CPU knows about. The last one happens at single pixels, so the shader must detect it.</text>
+  </svg>
+  <figcaption>Above the line: what goes wrong. Below it, in green: the fix. A temporal effect is only as good as its history.</figcaption>
+</figure>
+
+<ul>
+  <li><b>First frame.</b> A new image holds whatever was in that memory. Reading it can show noise or an old frame from another program. Clear every new copy to a known value before any frame reads it, or pass a flag that says "no history yet" and use <var>c</var> alone.</li>
+  <li><b>Resize.</b> Images that follow the window size are made again. The new copies are new images, so the first-frame rule applies to them too. Keeping the old copy and sampling it with the new size would blend pixels that are no longer at the same place.</li>
+  <li><b>Camera cut, teleport, a new level.</b> The image has nothing to do with last frame. Without a reset, the old place fades out over the next frames, like a ghost. The CPU knows when this happens, so it tells the shader to ignore <var>h</var> for one frame.</li>
+</ul>
+
+<h3>Reprojection: when the camera or objects move</h3>
+
+<p>A trail <i>wants</i> the old pixels to stay. TAA and denoisers do not: they want the same <b>surface point</b>, not the same pixel. When the camera moves, that point was at another place on the screen last frame. A <b>motion vector</b> per pixel says how far it moved, and the pass samples the history there:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Left: last frame's history image, with an object near the left. Right: this frame, with the same object further right. For a pixel p on the object this frame, the motion vector points back to p prime, where that point was last frame. The pass samples the history at p prime instead of at p.">
+    <text x="180" y="22" class="mid title">history (last frame)</text>
+    <rect x="40" y="36" width="280" height="140" rx="4" class="mem"/>
+    <circle cx="130" cy="106" r="30" class="box"/>
+    <circle cx="130" cy="106" r="5" class="hot"/>
+    <text x="130" y="158" class="mid mono">p'</text>
+    <circle cx="250" cy="106" r="4" class="ghost"/>
+    <text x="250" y="130" class="mid small t-faint">p: wrong place</text>
+
+    <text x="580" y="22" class="mid title">this frame</text>
+    <rect x="440" y="36" width="280" height="140" rx="4" class="gpu"/>
+    <circle cx="640" cy="106" r="30" class="box"/>
+    <circle cx="640" cy="106" r="5" class="hot"/>
+    <text x="640" y="158" class="mid mono">p</text>
+
+    <path d="M634,100 C540,60 240,60 136,100" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="385" y="50" class="mid small t-hot">p' = p − motion(p)</text>
+    <text x="20" y="206" class="small">Motion comes from the camera (this frame's and last frame's view-projection matrices) and from each object's own movement.</text>
+    <text x="20" y="222" class="small">The history is read with a filtered sample, since p' is rarely at a pixel center.</text>
+  </svg>
+  <figcaption>Reprojection follows a surface point back in time. Without it, a moving camera smears the image.</figcaption>
+</figure>
+
+<p>Reprojection is not perfect. A point that was <b>hidden</b> last frame (behind an object that moved away) has no history at all; this is called a <b>disocclusion</b>. Shading changes too. So TAA also checks the history value: it looks at the 3 × 3 pixels around <var>p</var> in this frame and <b>clamps</b> the history colour into their range (minimum to maximum). A history value far outside that range is surely wrong, and is pulled in. Denoisers instead <b>reject</b> the history when depth or normal differ too much, and start that pixel over. These checks remove most ghosting, at the cost of some flicker.</p>
+
+<h2><span class="n">8</span>Costs</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Cost</th><th>Size at 1920 × 1080</th><th>Note</th></tr>
+  <tr><td>Memory: one 8-bit RGBA copy</td><td>7.9 MiB</td><td>4 bytes per pixel</td></tr>
+  <tr><td>Memory: one 16-bit float RGBA copy</td><td>15.8 MiB</td><td>8 bytes per pixel; better for averages</td></tr>
+  <tr><td>Memory: ping-pong</td><td>2 × the above</td><td>plus a depth image per copy, if the pass draws with depth</td></tr>
+  <tr><td>Bandwidth</td><td>one more full-screen read per frame</td><td>about 0.5 GB/s for 8-bit at 60 fps; more with reprojection, which reads several neighbours</td></tr>
+  <tr><td>Memory sharing</td><td>none</td><td>history must survive between frames, so it can't share memory with <a href="memory-aliasing.html">transient</a> images</td></tr>
+</table>
+</div>
+
+<p>A history buffer often does not need the full screen size or format. Auto exposure keeps one pixel. A denoiser may keep half-resolution lighting. Only keep what the next frame really reads.</p>
+
+<h2><span class="n">9</span>Pitfalls</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Mistake</th><th>What you see</th><th>Fix</th></tr>
+  <tr><td>Look up "current" and "previous" image once, at setup</td><td>Every second frame the pass samples the image it draws: a feedback loop, validation errors, flicker</td><td>Look up both every frame. They swap.</td></tr>
+  <tr><td>Read history on the first frame</td><td>Noise or a random old image for one frame, which then fades out</td><td>Clear new copies, or use a "no history" flag</td></tr>
+  <tr><td>Keep history after a resize</td><td>Stretched or shifted ghost image</td><td>Make new copies and treat them as new</td></tr>
+  <tr><td>No reset on a camera cut</td><td>The old scene fades through the new one</td><td>Ignore history for one frame</td></tr>
+  <tr><td>Same pixel instead of reprojection (TAA, denoise)</td><td>Smearing and ghosting when the camera moves</td><td>Motion vectors, clamp or reject</td></tr>
+  <tr><td>A fixed <var>k</var> or <var>α</var> per frame</td><td>The effect is longer at 30 fps than at 144 fps</td><td>Scale by the frame time (<a href="#math">section 6</a>)</td></tr>
+  <tr><td>8-bit history</td><td>Banding; trails that stop at a dark grey</td><td>16-bit float</td></tr>
+  <tr><td>Sample the history while drawing into it</td><td>Undefined values</td><td>Two copies, or one copy per pixel in compute</td></tr>
+</table>
+</div>
+
+<h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
+
+<p>RASM has history for render targets. A render target created with <code>RenderTargetDesc::history</code> set to <code>true</code> has one set of attachments per frame slot (<code>MAX_FRAMES_IN_FLIGHT</code> = 2). That is ping-pong, picked by the slot index <code>frameCount</code>. New copies are cleared before any frame reads them.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="At creation, a RenderTargetDesc with history goes to createAttachments, which makes attachments 0 and 1, one per frame slot, and queues a HistoryClear per copy in pendingClears. Each frame, beginFrame records clearNewHistory before any pass, which clears new copies to clearColor and leaves them SAMPLED. The pass then samples the copy of the previous slot and draws the copy of frameCount; endPass moves its colors to SAMPLED. endFrame flips frameCount, so the next frame reads the copy this frame drew.">
+    <text x="20" y="24" class="title t-cpu">CPU · when the target is created</text>
+    <rect x="20" y="40" width="170" height="50" rx="6" class="cpu"/>
+    <text x="105" y="61" class="mid mono">RenderTargetDesc</text>
+    <text x="105" y="79" class="mid small">history = true</text>
+    <line x1="190" y1="65" x2="218" y2="65" class="arrow" marker-end="url(#ah)"/>
+    <rect x="220" y="40" width="170" height="50" rx="6" class="cpu"/>
+    <text x="305" y="61" class="mid mono">createAttachments</text>
+    <text x="305" y="79" class="mid small">2 copies instead of 1</text>
+    <line x1="390" y1="65" x2="418" y2="50" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="390" y1="65" x2="418" y2="82" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="420" y="34" width="150" height="30" rx="6" class="mem"/>
+    <text x="495" y="54" class="mid mono small">attachments[0]</text>
+    <rect x="420" y="68" width="150" height="30" rx="6" class="mem"/>
+    <text x="495" y="88" class="mid mono small">attachments[1]</text>
+    <text x="585" y="56" class="small">one per frame slot,</text>
+    <text x="585" y="72" class="small">own memory,</text>
+    <text x="585" y="88" class="small">kept until shutdown</text>
+
+    <line x1="305" y1="90" x2="305" y2="116" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="220" y="118" width="170" height="44" rx="6" class="mem"/>
+    <text x="305" y="137" class="mid mono">pendingClears</text>
+    <text x="305" y="154" class="mid small">a HistoryClear per copy</text>
+    <line x1="305" y1="162" x2="305" y2="198" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="20" y="190" class="title t-gpu">Every frame, in order</text>
+    <rect x="20" y="200" width="170" height="50" rx="6" class="cpu"/>
+    <text x="105" y="221" class="mid mono">beginFrame</text>
+    <text x="105" y="239" class="mid small">before any pass</text>
+    <line x1="190" y1="225" x2="218" y2="225" class="arrow" marker-end="url(#ah)"/>
+    <rect x="220" y="200" width="170" height="50" rx="6" class="gpu"/>
+    <text x="305" y="221" class="mid mono">clearNewHistory</text>
+    <text x="305" y="239" class="mid small">to clearColor → SAMPLED</text>
+    <line x1="390" y1="225" x2="418" y2="225" class="arrow" marker-end="url(#ah)"/>
+    <rect x="420" y="200" width="170" height="50" rx="25" class="shader"/>
+    <text x="505" y="221" class="mid">Trail pass</text>
+    <text x="505" y="239" class="mid small">reads prev · draws current</text>
+    <line x1="590" y1="225" x2="608" y2="225" class="arrow" marker-end="url(#ah)"/>
+    <rect x="610" y="200" width="140" height="50" rx="6" class="gpu"/>
+    <text x="680" y="221" class="mid mono">endPass</text>
+    <text x="680" y="239" class="mid small">colors → SAMPLED</text>
+
+    <text x="20" y="276" class="small">current = attachments[frameCount], previous = attachments[(frameCount + 1) % 2].</text>
+    <text x="20" y="292" class="small">endFrame flips frameCount, so the next frame reads the copy this frame drew.</text>
+  </svg>
+  <figcaption>The clear runs only for new copies: once after creation, and again after each resize that rebuilds the target. After that, every copy is either drawn by a frame or left as it was, and always ends the frame <code>SAMPLED</code>.</figcaption>
+</figure>
+
+<p><code>examples/01_render_graph</code> draws a fading trail of the bunny this way. The Trail pass creates <code>trail_rt</code> with history, declares that it reads the previous copy, and draws the current one:</p>
+
+<pre><code>graph.addPass(
+    "Trail",
+    [&amp;rtHandle, &amp;trailHandle, colorFormat](rasm::PassBuilder &amp;builder)
+    {
+        trailHandle = builder.createRenderTarget({
+            .name = "trail_rt",
+            .swapchainScale = 1.0f,
+            .colorFormats = {colorFormat},
+            .depthFormat = rasm::Format::D32_SFLOAT,
+            .clearColor = glm::vec4(0.0f),
+            .history = true,
+        });
+        builder.read(rtHandle);
+        builder.readPrevious(trailHandle);
+        builder.write(trailHandle);
+    },
+
+    [&amp;engine, &amp;drawFullScreen, &amp;trailPipeline, &amp;rtHandle, &amp;trailHandle](rasm::RenderContext &amp;ctx)
+    {
+        drawFullScreen(ctx, trailPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(rtHandle)),
+                       engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTexture(trailHandle)));
+    });</code></pre>
+
+<p>Its fragment shader is the decaying trail from <a href="#math">section 6</a>, with <var>k</var> = 0.85 per frame:</p>
+
+<pre><code class="lang-slang">float4 fragMain(VSOutput input) : SV_TARGET
+{
+    float4 current = gTextures[pc.indices[0]].Sample(input.UV);
+    float4 previous = gTextures[pc.indices[1]].Sample(input.UV);
+    return max(current, previous * 0.85);
+}</code></pre>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Copies</td><td>two, ping-pong</td><td>One per frame slot in <code>RenderTarget::attachments</code>: <code>MAX_FRAMES_IN_FLIGHT</code> = 2. A target without history has one copy that every slot shares (<code>createAttachments</code>).</td></tr>
+  <tr><td>Picking the copy</td><td><var>n</var> mod 2 and (<var>n</var> + 1) mod 2</td><td><code>Engine::getRenderTargetTexture</code> returns copy <code>frameCount</code>; <code>Engine::getPreviousRenderTargetTexture</code> returns copy <code class="lang-text">(frameCount + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT</code>, and an invalid handle for a target without history. Both take a color index for targets with several colors.</td></tr>
+  <tr><td>Feedback loop</td><td>never read and draw one image</td><td><code>RenderGraph::compile</code> fails when a pass reads the target it draws to with <code>read</code>. <code>PassBuilder::readPrevious</code> is the allowed way: the previous copy is never drawn this frame, so it adds no edge. It logs an error and ignores the read for a target without history.</td></tr>
+  <tr><td>Barriers</td><td>drawn → sampled, sampled → drawn</td><td><code>Engine::endPass</code> moves the colors to <code>SAMPLED</code> (<code>B10</code>). <code>beginPass</code> moves the copy back to <code>COLOR_ATTACHMENT</code>; texture states carry over between frames, so that barrier waits for last frame's reads. <code>readPrevious</code> records no barrier: the copy is already <code>SAMPLED</code>.</td></tr>
+  <tr><td>First frame</td><td>clear, or a "no history" flag</td><td>Clear. <code>createAttachments</code> queues a <code>HistoryClear</code> for each new copy in <code>pendingClears</code>. <code>Engine::beginFrame</code> records <code>RenderContext::clearNewHistory</code> before any pass: each copy is cleared to <code>clearColor</code> and left <code>SAMPLED</code>, so the previous copy is safe to sample, in a graph or not. Only the colors are cleared, not the depth.</td></tr>
+  <tr><td>A frame that is not submitted</td><td>—</td><td>Its clears move from <code>recordedClears</code> back to <code>pendingClears</code> (<code>RenderContext::discardRecording</code>) and run with the next frame. Destroying a copy drops its clear (<code>destroyAttachments</code>).</td></tr>
+  <tr><td>Resize</td><td>new copies, start over</td><td>A target with <code>swapchainScale</code> is rebuilt by <code>RenderContext::resizeRenderTargets</code>, and its new copies are cleared again. They keep the old bindless indices. A target with a fixed size keeps its history.</td></tr>
+  <tr><td>Camera cut</td><td>ignore history for one frame</td><td>No reset call. A pass that must forget the past has to ignore the previous copy itself.</td></tr>
+  <tr><td>Reprojection, clamping</td><td>motion vectors, 3 × 3 clamp</td><td>None: RASM has no motion vectors. The trail samples the same pixel, which is what a trail wants.</td></tr>
+  <tr><td>Decay per frame</td><td>scale by the frame time</td><td>The example uses a fixed 0.85 per frame, so its trail is shorter at a higher frame rate.</td></tr>
+  <tr><td>Format</td><td>16-bit float for averages</td><td>Any color format. The example uses the swapchain's (<code>getSwapchainImageFormat</code>, usually <code>B8G8R8A8_SRGB</code>), which is fine for a short trail.</td></tr>
+  <tr><td>Memory</td><td>two copies, no sharing</td><td>Two sets of colors and depth. <code>RenderContext::createTransientRenderTarget</code> rejects a history desc, and <code>RenderGraph::createRenderTarget</code> sends one to <code>Engine::createRenderTarget</code>: own memory, kept until shutdown, never <a href="memory-aliasing.html#in-rasm">aliased</a>.</td></tr>
+</table>
+</div>
+
+<p>Because the copies swap, look up both textures and their bindless indices inside the pass's execute function, every frame, as the example does. See also the <a href="../api/render-graph.html#history">API reference</a> and <a href="render-graphs.html#in-rasm">Render graphs</a>.</p>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The flag and the clear color</td><td><code>RenderTargetDesc::history</code>, <code>RenderTargetDesc::clearColor</code> in <code>include/rasm/render/resource.h</code></td></tr>
+  <tr><td>The copies</td><td><code>RenderTarget::attachments</code> in <code>include/rasm/types.h</code></td></tr>
+  <tr><td>Making and freeing copies</td><td><code>RenderContext::createAttachments</code>, <code>RenderContext::destroyAttachments</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Clearing new copies</td><td><code>RenderContext::clearNewHistory</code>, <code>HistoryClear</code>, <code>RenderContext::discardRecording</code> in <code>src/rhi/renderContext.cpp</code>; called by <code>Engine::beginFrame</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Resize</td><td><code>RenderContext::resizeRenderTargets</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Not transient</td><td><code>RenderContext::createTransientRenderTarget</code>; <code>RenderGraph::createRenderTarget</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>Picking the copy</td><td><code>Engine::getRenderTargetTexture</code>, <code>Engine::getPreviousRenderTargetTexture</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Drawn → sampled</td><td><code>Engine::endPass</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Declaring the read</td><td><code>PassBuilder::readPrevious</code>, <code>RenderGraph::readPrevious</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>The example</td><td>the Trail pass in <code>examples/01_render_graph/main.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Look up <code>getRenderTargetTexture</code>, <code>getPreviousRenderTargetTexture</code> and their bindless indices every frame, inside execute. Fetched once, they point at the wrong copy every second frame.</li>
+    <li>Never <code>read</code> the target a pass draws to. Read last frame's copy with <code>readPrevious</code>.</li>
+    <li>Every new history copy must be cleared before a frame reads it. A new way to make copies goes through <code>createAttachments</code>, which queues the <code>HistoryClear</code>; destroying a copy must drop it.</li>
+    <li><code>clearNewHistory</code> runs in <code>beginFrame</code>, before any pass. A frame that is not submitted gives its clears back (<code>discardRecording</code>).</li>
+    <li><code>endPass</code> leaves every color <code>SAMPLED</code>. <code>readPrevious</code> records no barrier because it relies on that.</li>
+    <li>A history target is never transient: its memory must survive to the next frame.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Brian Karis, <i>High Quality Temporal Supersampling</i>, SIGGRAPH 2014 course "Advances in Real-Time Rendering": TAA with reprojection and neighbourhood clamping.</li>
+  <li>Lei Yang, Shiqiu Liu and Marco Salvi, <i>A Survey of Temporal Antialiasing Techniques</i>, Eurographics 2020: history validation, rejection and ghosting.</li>
+  <li>Christoph Schied and others, <i>Spatiotemporal Variance-Guided Filtering</i>, HPG 2017: temporal accumulation for denoising.</li>
+  <li>Yuriy O'Donnell, <i>FrameGraph: Extensible Rendering Architecture in Frostbite</i>, GDC 2017: history as an imported resource in a render graph.</li>
+  <li><a href="frames-in-flight.html">Frames in flight</a>, <a href="gpu-sync.html">GPU synchronization</a>, <a href="memory-aliasing.html">Transient memory and aliasing</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

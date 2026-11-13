@@ -337,7 +337,7 @@
   <tr><td><code>createBindlessDescriptorSetLayout</code></td><td>yes</td><td><code>descriptorSetLayoutDescCache</code>, <code>BindlessDescriptorSetLayoutDescHash</code></td></tr>
   <tr><td><code>createBuffer</code>, <code>createTexture</code></td><td>no</td><td>cache at the asset level: <code>loadTexture</code> caches by path and format</td></tr>
   <tr><td><code>createDescriptorPool</code>, <code>allocateDescriptorSet</code></td><td>no</td><td>—</td></tr>
-  <tr><td><code>createRenderTarget</code></td><td>no</td><td>makes a color and a depth texture per frame slot</td></tr>
+  <tr><td><code>createRenderTarget</code></td><td>no</td><td>makes up to 4 color textures and a depth texture, one set per frame slot with <code>history</code></td></tr>
 </table>
 </div>
 
@@ -423,7 +423,7 @@
 <table>
   <tr><th>Example</th><th>What it does</th><th>Engine parts it uses</th><th>Read</th></tr>
   <tr><td><code>00_hello_scene</code></td><td>three bunnies from one OBJ mesh and one texture, three lights</td><td><code>loadMesh</code>, <code>loadTexture</code>, <code>createEntity</code>, <code>render</code></td><td><a href="frame-loop.html">stop 2</a>, <a href="gpu-scene.html">stop 3</a>, <a href="gpu-driven.html">GPU-driven rendering</a></td></tr>
-  <tr><td><code>01_render_graph</code></td><td>the scene into a render target, then a pass that samples it onto the swapchain</td><td><code>RenderGraph</code>, <code>drawScene</code>, <code>createPipeline</code></td><td><a href="render-graphs.html">Render graphs</a>, <a href="gpu-sync.html">GPU synchronization</a></td></tr>
+  <tr><td><code>01_render_graph</code></td><td>the scene into a render target, a fading trail from last frame's image, a pass with two color outputs, then the swapchain; two of the targets share memory</td><td><code>RenderGraph</code>, <code>drawScene</code>, <code>createPipeline</code></td><td><a href="render-graphs.html">Render graphs</a>, <a href="memory-aliasing.html">Transient memory</a>, <a href="temporal-history.html">History buffers</a>, <a href="multiple-render-targets.html">Multiple render targets</a></td></tr>
   <tr><td><code>02_gltf</code></td><td>three glTF models with their PBR materials</td><td><code>loadGLTF</code>, sub-meshes, material rows</td><td><a href="asset-streaming.html">Streaming assets</a>, <a href="pbr.html">PBR</a>, <a href="bindless.html">Bindless</a></td></tr>
   <tr><td><code>03_instances</code></td><td>10 000 cubes; a few spin, new ones appear, one material pulses</td><td><code>createMesh</code>, <code>updateTransform</code>, <code>updateMaterial</code></td><td><a href="gpu-scene.html">stop 3</a>, <a href="gpu-memory.html">GPU memory and uploads</a></td></tr>
   <tr><td><code>04_compute</code></td><td>a compute pass moves 4096 particles in a buffer that a draw then reads</td><td><code>addComputePass</code>, <code>createComputePipeline</code></td><td><a href="device-addresses.html">Buffer device addresses</a>, <a href="gpu-sync.html">GPU synchronization</a></td></tr>

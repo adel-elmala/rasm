@@ -1,0 +1,921 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transient Memory and Aliasing · RASM</title>
+<meta name="description" content="How transient memory and memory aliasing work: lifetimes as intervals, memory requirements, heaps and placed resources, the greedy packing, alignment and memory types, the barrier a takeover needs, variants in Vulkan, Direct3D 12 and Metal, and how RASM does it.">
+<meta name="rasm-sources" content="src/rhi/memoryAliasing.h src/rhi/memoryAliasing.cpp src/rhi/renderContext.cpp include/rasm/render/renderContext.h src/renderer/renderGraph.cpp include/rasm/render/renderGraph.h src/rhi/device.h src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp tests/memoryAliasingTests.cpp examples/01_render_graph/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/memory-aliasing.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Culling and the frame</p>
+<h1>Transient memory and aliasing</h1>
+<p class="lead">Most render targets are needed for only a few passes of the frame. If each one gets its own memory, most of that memory sits idle. Memory aliasing lets resources that are never alive at the same time use the same bytes. This page explains lifetimes, heaps, how to pack the resources, and the barrier that every takeover needs. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A <b>transient</b> resource lives only inside one frame, from the first pass that uses it to the last. Its <b>lifetime</b> is an interval of passes.</li>
+    <li>Two resources whose lifetimes do <b>not overlap</b> can use the same bytes. This is <b>aliasing</b>. The memory needed is at least the <b>peak</b>: the most bytes alive in any one pass.</li>
+    <li>The device tells you a resource's <b>size, alignment and memory types</b> before it exists. You allocate one big <b>heap</b> and create each resource at an <b>offset</b> in it.</li>
+    <li>Choosing the offsets is a packing problem (NP-hard in general). The usual <b>greedy</b> method: biggest first, each at the lowest aligned offset that no overlapping resource uses.</li>
+    <li>Memory that changes owner holds <b>garbage</b>. The new resource's first use must overwrite it, after a <b>global barrier</b>, because an image barrier covers only its own image. Last frame's users count too.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>The problem: memory that sits idle</h2>
+
+<p>A modern frame draws into many textures that nobody sees: a G-buffer, an HDR color target, bloom, a tone-mapped image, an anti-aliased image. Each one is read by the next pass or two, and then it is not needed any more. But if each one has its own memory, that memory stays reserved for the whole frame, and for every frame after it.</p>
+
+<p>Full-screen textures are big. One pixel of an <samp>RGBA8</samp> or <samp>D32</samp> texture is 4 bytes, so at 1920 × 1080:</p>
+
+<pre><code class="lang-text">1920 × 1080 × 4 B = 8,294,400 B = 7.9 MiB        (1 MiB = 1,048,576 B)</code></pre>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Format</th><th>Bytes per pixel</th><th>1920 × 1080</th><th>2560 × 1440</th><th>3840 × 2160</th></tr>
+  <tr><td><samp>RGBA8</samp>, <samp>D32</samp></td><td>4</td><td>7.9 MiB</td><td>14.1 MiB</td><td>31.6 MiB</td></tr>
+  <tr><td><samp>RGBA16F</samp> (HDR)</td><td>8</td><td>15.8 MiB</td><td>28.1 MiB</td><td>63.3 MiB</td></tr>
+  <tr><td><samp>RGBA8</samp> with 4× MSAA</td><td>16</td><td>31.6 MiB</td><td>56.3 MiB</td><td>126.6 MiB</td></tr>
+</table>
+</div>
+
+<p>Real sizes are often a little bigger: the GPU stores images in tiles and pads the edges. This page uses one small post-processing frame as its example, with round sizes close to 1920 × 1080:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Six passes: GBuffer, Lighting, Bloom, Tonemap, FXAA, UI. Five textures each hold memory for the whole frame, but each is in use only for two or three passes. In use per pass: 32, 48, 20, 28, 16 and 8 MiB. Held: 68 MiB in every pass.">
+    <rect x="20" y="29" width="14" height="12" rx="2" class="mem"/>
+    <text x="40" y="39" class="small">in use</text>
+    <rect x="90" y="29" width="14" height="12" rx="2" class="ghost"/>
+    <text x="110" y="39" class="small">held, but idle</text>
+    <text x="240" y="39" class="mid small">GBuffer</text>
+    <text x="320" y="39" class="mid small">Lighting</text>
+    <text x="400" y="39" class="mid small">Bloom</text>
+    <text x="480" y="39" class="mid small">Tonemap</text>
+    <text x="560" y="39" class="mid small">FXAA</text>
+    <text x="640" y="39" class="mid small">UI</text>
+
+    <text x="190" y="67" class="end small">G-buffer · 32 MiB</text>
+    <rect x="200" y="52" width="480" height="22" rx="3" class="ghost"/>
+    <rect x="202" y="52" width="156" height="22" rx="3" class="mem"/>
+    <text x="190" y="97" class="end small">HDR · 16 MiB</text>
+    <rect x="200" y="82" width="480" height="22" rx="3" class="ghost"/>
+    <rect x="282" y="82" width="236" height="22" rx="3" class="mem"/>
+    <text x="190" y="127" class="end small">Bloom · 4 MiB</text>
+    <rect x="200" y="112" width="480" height="22" rx="3" class="ghost"/>
+    <rect x="362" y="112" width="156" height="22" rx="3" class="mem"/>
+    <text x="190" y="157" class="end small">LDR · 8 MiB</text>
+    <rect x="200" y="142" width="480" height="22" rx="3" class="ghost"/>
+    <rect x="442" y="142" width="156" height="22" rx="3" class="mem"/>
+    <text x="190" y="187" class="end small">AA · 8 MiB</text>
+    <rect x="200" y="172" width="480" height="22" rx="3" class="ghost"/>
+    <rect x="522" y="172" width="156" height="22" rx="3" class="mem"/>
+
+    <text x="190" y="220" class="end small">in use, MiB</text>
+    <text x="240" y="220" class="mid">32</text>
+    <text x="320" y="220" class="mid">48</text>
+    <text x="400" y="220" class="mid">20</text>
+    <text x="480" y="220" class="mid">28</text>
+    <text x="560" y="220" class="mid">16</text>
+    <text x="640" y="220" class="mid">8</text>
+    <text x="190" y="242" class="end small">held, MiB</text>
+    <text x="440" y="242" class="mid t-hot">68 in every pass</text>
+  </svg>
+  <figcaption>Each texture is in use for 2 or 3 of the 6 passes. On average only 25 of the 68 MiB (37 %) hold data that a later pass still needs.</figcaption>
+</figure>
+
+<p>The fix is to let textures that are never needed at the same time use the same memory. To do that, we must know <i>when</i> each texture is needed.</p>
+
+<h2 id="lifetimes"><span class="n">2</span>Lifetimes are intervals</h2>
+
+<p>Put the passes in the order they run and number them. A transient resource's <b>lifetime</b> is the interval from the first pass that uses it to the last one. Before its first pass nothing is in it yet; after its last pass nobody reads it again. A render graph knows the order and every pass's reads and writes, so it can compute every lifetime (see <a href="render-graphs.html#aliasing">render graphs</a>).</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Left: the five lifetimes as bars over passes 0 to 5. G-buffer 0 to 1, HDR 1 to 3, Bloom 2 to 3, LDR 3 to 4, AA 4 to 5. The sum alive per pass is 32, 48, 20, 28, 16, 8, so the peak is 48 MiB in pass 1. Right: a graph with a line between every two resources whose lifetimes overlap: G-buffer and HDR, HDR and Bloom, HDR and LDR, Bloom and LDR, LDR and AA.">
+    <rect x="130" y="40" width="384" height="156" class="zone"/>
+    <text x="162" y="32" class="mid small">0</text>
+    <text x="226" y="32" class="mid small">1</text>
+    <text x="290" y="32" class="mid small">2</text>
+    <text x="354" y="32" class="mid small">3</text>
+    <text x="418" y="32" class="mid small">4</text>
+    <text x="482" y="32" class="mid small">5</text>
+    <text x="20" y="32" class="small">pass</text>
+
+    <text x="120" y="62" class="end small">G-buffer · G</text>
+    <rect x="132" y="47" width="124" height="22" rx="3" class="mem"/>
+    <text x="194" y="62" class="mid small">32 MiB</text>
+    <text x="120" y="92" class="end small">HDR · H</text>
+    <rect x="196" y="77" width="188" height="22" rx="3" class="mem"/>
+    <text x="290" y="92" class="mid small">16 MiB</text>
+    <text x="120" y="122" class="end small">Bloom · B</text>
+    <rect x="260" y="107" width="124" height="22" rx="3" class="mem"/>
+    <text x="322" y="122" class="mid small">4 MiB</text>
+    <text x="120" y="152" class="end small">LDR · L</text>
+    <rect x="324" y="137" width="124" height="22" rx="3" class="mem"/>
+    <text x="386" y="152" class="mid small">8 MiB</text>
+    <text x="120" y="182" class="end small">AA · A</text>
+    <rect x="388" y="167" width="124" height="22" rx="3" class="mem"/>
+    <text x="450" y="182" class="mid small">8 MiB</text>
+
+    <text x="120" y="218" class="end small">alive, MiB</text>
+    <text x="162" y="218" class="mid">32</text>
+    <rect x="200" y="202" width="52" height="24" rx="4" class="hot"/>
+    <text x="226" y="218" class="mid title t-hot">48</text>
+    <text x="290" y="218" class="mid">20</text>
+    <text x="354" y="218" class="mid">28</text>
+    <text x="418" y="218" class="mid">16</text>
+    <text x="482" y="218" class="mid">8</text>
+    <text x="130" y="250" class="small">Peak: 48 MiB in pass 1. No layout can use less, because those bytes are all alive at once.</text>
+
+    <text x="655" y="32" class="mid title">Who may not share</text>
+    <line x1="590" y1="80" x2="655" y2="80" class="arrow"/>
+    <line x1="655" y1="80" x2="720" y2="80" class="arrow"/>
+    <line x1="655" y1="80" x2="687" y2="145" class="arrow"/>
+    <line x1="720" y1="80" x2="687" y2="145" class="arrow"/>
+    <line x1="720" y1="80" x2="735" y2="200" class="arrow"/>
+    <circle cx="590" cy="80" r="17" class="mem"/>
+    <text x="590" y="85" class="mid title">G</text>
+    <circle cx="655" cy="80" r="17" class="mem"/>
+    <text x="655" y="85" class="mid title">H</text>
+    <circle cx="720" cy="80" r="17" class="mem"/>
+    <text x="720" y="85" class="mid title">L</text>
+    <circle cx="687" cy="145" r="17" class="mem"/>
+    <text x="687" y="150" class="mid title">B</text>
+    <circle cx="735" cy="200" r="17" class="mem"/>
+    <text x="735" y="205" class="mid title">A</text>
+    <text x="560" y="182" class="small">a line: the lifetimes</text>
+    <text x="560" y="198" class="small">overlap, so the two</text>
+    <text x="560" y="214" class="small">need their own bytes</text>
+  </svg>
+  <figcaption>G and L have no line: the G-buffer is dead after pass 1 and LDR is born in pass 3, so they can share. The right side is called an <b>interval graph</b>.</figcaption>
+</figure>
+
+<h3>Both ends count</h3>
+
+<p>A pass that reads one texture and draws another uses <b>both</b> at the same time. In the example, pass 3 (Tonemap) reads HDR and draws LDR. HDR ends in pass 3 and LDR starts in pass 3, so they overlap and must not share. So the two ends of a lifetime are <b>inclusive</b>: lifetimes [<var>a</var>, <var>b</var>] and [<var>c</var>, <var>d</var>] overlap when</p>
+
+<pre><code class="lang-text">a ≤ d  and  c ≤ b</code></pre>
+
+<h3>The lower bound</h3>
+
+<p>Add up the sizes of the resources alive in each pass. The largest sum is the <b>peak</b>. Any layout needs at least that much memory, because all those bytes are in use at the same moment. Without aliasing, the frame needs the sum of all sizes. With good aliasing, it needs close to the peak: here 48 MiB instead of 68 MiB.</p>
+
+<h2 id="heaps"><span class="n">3</span>Memory requirements, heaps and placed resources</h2>
+
+<p>Usually a resource and its memory are made together: create the texture, and the allocator gives it memory of its own. That is a <b>dedicated</b> (or committed) allocation. To share memory, the two steps must be split: first get one big block of memory, a <b>heap</b>, then create each resource at an <b>offset</b> inside it. Such a resource is <b>placed</b>. It does not own its memory: destroying it leaves the heap alone, and the heap must outlive every resource in it. For heaps and memory types in general, see <a href="gpu-memory.html">GPU memory</a>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 256" role="img" aria-label="Left: five dedicated allocations, one per texture, 68 MiB in all. Right: one 48 MiB heap. The G-buffer and LDR are placed at offset 0, AA and Bloom at offset 8, and HDR at offset 32.">
+    <text x="20" y="22" class="title">Dedicated: one allocation each</text>
+    <rect x="60" y="36" width="150" height="64" rx="3" class="mem"/>
+    <text x="135" y="72" class="mid small">G-buffer 32</text>
+    <rect x="60" y="108" width="150" height="32" rx="3" class="mem"/>
+    <text x="135" y="128" class="mid small">HDR 16</text>
+    <rect x="60" y="148" width="150" height="8" rx="2" class="mem"/>
+    <text x="218" y="156" class="small">Bloom 4</text>
+    <rect x="60" y="164" width="150" height="16" rx="3" class="mem"/>
+    <text x="135" y="176" class="mid small">LDR 8</text>
+    <rect x="60" y="188" width="150" height="16" rx="3" class="mem"/>
+    <text x="135" y="200" class="mid small">AA 8</text>
+    <text x="230" y="66" class="small">5 allocations</text>
+    <text x="230" y="82" class="small">68 MiB in all</text>
+
+    <text x="400" y="22" class="title">One heap, placed resources</text>
+    <rect x="460" y="36" width="60" height="120" rx="3" class="mem"/>
+    <text x="452" y="40" class="end small">0</text>
+    <text x="452" y="60" class="end small">8</text>
+    <text x="452" y="120" class="end small">32</text>
+    <text x="452" y="160" class="end small">48 MiB</text>
+    <line x1="460" y1="56" x2="520" y2="56" class="arrow dashed"/>
+    <line x1="460" y1="116" x2="520" y2="116" class="arrow dashed"/>
+    <text x="490" y="176" class="mid small">1 heap, 48 MiB</text>
+
+    <rect x="600" y="40" width="130" height="24" rx="4" class="box"/>
+    <text x="665" y="56" class="mid small">G-buffer</text>
+    <rect x="600" y="70" width="130" height="24" rx="4" class="box"/>
+    <text x="665" y="86" class="mid small">LDR</text>
+    <rect x="600" y="100" width="130" height="24" rx="4" class="box"/>
+    <text x="665" y="116" class="mid small">AA</text>
+    <rect x="600" y="130" width="130" height="24" rx="4" class="box"/>
+    <text x="665" y="146" class="mid small">Bloom</text>
+    <rect x="600" y="160" width="130" height="24" rx="4" class="box"/>
+    <text x="665" y="176" class="mid small">HDR</text>
+    <line x1="600" y1="52"  x2="524" y2="38"  class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="600" y1="82"  x2="524" y2="40"  class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="600" y1="112" x2="524" y2="57"  class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="600" y1="142" x2="524" y2="59"  class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="600" y1="172" x2="524" y2="117" class="arrow mem" marker-end="url(#ah-mem)"/>
+
+    <text x="20" y="232" class="small">Simple: each one is created, sized and freed alone.</text>
+    <text x="20" y="248" class="small">The driver may also prefer it for render targets.</text>
+    <text x="400" y="232" class="small">One allocation. A resource is a heap and an offset.</text>
+    <text x="400" y="248" class="small">Resources that never live together share bytes.</text>
+  </svg>
+  <figcaption>The offsets on the right come from the packing in <a href="#packing">section 4</a>.</figcaption>
+</figure>
+
+<h3>Asking before creating</h3>
+
+<p>To pack resources into a heap, we must know their needs before we place them. Every API can tell the needs of a resource from its description alone (size, format, usage), without creating it:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Need</th><th>Meaning</th></tr>
+  <tr><td><b>size</b></td><td>The bytes the resource uses. It can be more than width × height × bytes per pixel, because of tiling and padding.</td></tr>
+  <tr><td><b>alignment</b></td><td>The offset in the heap must be a multiple of this number, a power of two. Images often need several KiB.</td></tr>
+  <tr><td><b>memory types</b></td><td>A bit mask: bit <var>i</var> set means memory type <var>i</var> can hold the resource. The heap's type must be one of them.</td></tr>
+</table>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>API</th><th>Ask, make the heap, place a resource</th></tr>
+  <tr><td>Vulkan</td><td>Ask with <samp>vkGetDeviceImageMemoryRequirements</samp> (Vulkan 1.3; no image needed). Make the heap with <samp>vkAllocateMemory</samp>. Create the image, then bind it at an offset with <samp>vkBindImageMemory</samp>.</td></tr>
+  <tr><td>Direct3D 12</td><td>Ask with <samp>GetResourceAllocationInfo</samp>. Make the heap with <samp>CreateHeap</samp>. Place with <samp>CreatePlacedResource</samp>.</td></tr>
+  <tr><td>Metal</td><td>Ask with <samp>heapTextureSizeAndAlign</samp>. Make the heap with <samp>makeHeap</samp>. On a placement heap, place with <samp>makeTexture(descriptor:offset:)</samp>.</td></tr>
+</table>
+</div>
+
+<h2 id="packing"><span class="n">4</span>Packing: where each resource goes</h2>
+
+<p>Now each resource is a rectangle. Its width is its lifetime, which is fixed. Its height is its size. We choose only its <b>offset</b>: how high it sits. Rectangles must not overlap, and the goal is the lowest total height, the heap size. In computer science this is <b>dynamic storage allocation</b>. Finding the best answer is NP-hard, so engines use a fast heuristic instead.</p>
+
+<p>The common heuristic is <b>greedy first fit, biggest first</b>:</p>
+
+<ol class="steps">
+  <li><b>Sort by size, biggest first.</b> Big pieces are the hardest to fit. Small pieces placed later can fill the gaps between them.</li>
+  <li><b>For each resource, collect the blockers.</b> These are the resources already placed whose lifetimes overlap its own. Sort them by offset.</li>
+  <li><b>Walk up from offset 0.</b> If the resource fits below the next blocker (after rounding up to its alignment), stop. If not, jump past the end of that blocker and try again.</li>
+  <li><b>Place it.</b> It goes at that offset. The heap size is the highest end of any resource.</li>
+</ol>
+
+<p>Here are the five textures, sorted: G-buffer 32, HDR 16, LDR 8, AA 8, Bloom 4. LDR and AA are the same size, so they keep their order. Step through it:</p>
+
+<div class="stepper">
+  <div class="step">
+    <h4>1. G-buffer: the biggest goes first</h4>
+    <svg viewBox="0 0 760 290" role="img" aria-label="Step 1. The G-buffer, 32 MiB, passes 0 to 1, is placed first at offset 0. The heap is 32 MiB.">
+      <rect x="110" y="34" width="432" height="192" class="zone"/>
+      <rect x="110" y="34" width="144" height="192" class="ghost"/>
+      <text x="102" y="38" class="end small">0</text>
+      <text x="102" y="70" class="end small">8</text>
+      <text x="102" y="102" class="end small">16</text>
+      <text x="102" y="134" class="end small">24</text>
+      <text x="102" y="166" class="end small">32</text>
+      <text x="102" y="198" class="end small">40</text>
+      <text x="102" y="230" class="end small">48</text>
+      <text x="20" y="38" class="small">offset</text>
+      <text x="20" y="52" class="small">in MiB</text>
+      <text x="146" y="244" class="mid small">0</text>
+      <text x="146" y="258" class="mid small">GBuffer</text>
+      <text x="218" y="244" class="mid small">1</text>
+      <text x="218" y="258" class="mid small">Lighting</text>
+      <text x="290" y="244" class="mid small">2</text>
+      <text x="290" y="258" class="mid small">Bloom</text>
+      <text x="362" y="244" class="mid small">3</text>
+      <text x="362" y="258" class="mid small">Tonemap</text>
+      <text x="434" y="244" class="mid small">4</text>
+      <text x="434" y="258" class="mid small">FXAA</text>
+      <text x="506" y="244" class="mid small">5</text>
+      <text x="506" y="258" class="mid small">UI</text>
+      <text x="110" y="278" class="small">x: passes in order · the dashed band is the lifetime of the texture being placed</text>
+      <rect x="113" y="35" width="138" height="126" rx="3" class="mem"/>
+      <rect x="113" y="35" width="138" height="126" rx="3" class="hot"/>
+      <text x="182" y="102" class="mid small">G-buffer 32</text>
+      <line x1="106" y1="162" x2="546" y2="162" class="hot dashed"/>
+      <text x="570" y="50" class="title">Step 1: G-buffer</text>
+      <text x="570" y="72" class="small">32 MiB, passes 0 to 1</text>
+      <text x="570" y="90" class="small">Nothing is placed yet,</text>
+      <text x="570" y="108" class="small">so it goes at offset 0.</text>
+      <text x="552" y="166" class="small t-hot">heap: 32 MiB</text>
+    </svg>
+    <p>The list is sorted by size: G-buffer 32, HDR 16, LDR 8, AA 8, Bloom 4. The first one always goes at offset 0.</p>
+  </div>
+  <div class="step">
+    <h4>2. HDR: blocked by the G-buffer</h4>
+    <svg viewBox="0 0 760 290" role="img" aria-label="Step 2. HDR, 16 MiB, passes 1 to 3, overlaps the G-buffer in pass 1, so it goes at offset 32. The heap grows to 48 MiB.">
+      <rect x="110" y="34" width="432" height="192" class="zone"/>
+      <rect x="182" y="34" width="216" height="192" class="ghost"/>
+      <text x="102" y="38" class="end small">0</text>
+      <text x="102" y="70" class="end small">8</text>
+      <text x="102" y="102" class="end small">16</text>
+      <text x="102" y="134" class="end small">24</text>
+      <text x="102" y="166" class="end small">32</text>
+      <text x="102" y="198" class="end small">40</text>
+      <text x="102" y="230" class="end small">48</text>
+      <text x="20" y="38" class="small">offset</text>
+      <text x="20" y="52" class="small">in MiB</text>
+      <text x="146" y="244" class="mid small">0</text>
+      <text x="146" y="258" class="mid small">GBuffer</text>
+      <text x="218" y="244" class="mid small">1</text>
+      <text x="218" y="258" class="mid small">Lighting</text>
+      <text x="290" y="244" class="mid small">2</text>
+      <text x="290" y="258" class="mid small">Bloom</text>
+      <text x="362" y="244" class="mid small">3</text>
+      <text x="362" y="258" class="mid small">Tonemap</text>
+      <text x="434" y="244" class="mid small">4</text>
+      <text x="434" y="258" class="mid small">FXAA</text>
+      <text x="506" y="244" class="mid small">5</text>
+      <text x="506" y="258" class="mid small">UI</text>
+      <text x="110" y="278" class="small">x: passes in order · the dashed band is the lifetime of the texture being placed</text>
+      <rect x="113" y="35" width="138" height="126" rx="3" class="mem"/>
+      <text x="182" y="102" class="mid small">G-buffer 32</text>
+      <rect x="185" y="163" width="210" height="62" rx="3" class="mem"/>
+      <rect x="185" y="163" width="210" height="62" rx="3" class="hot"/>
+      <text x="290" y="198" class="mid small">HDR 16</text>
+      <line x1="106" y1="226" x2="546" y2="226" class="hot dashed"/>
+      <text x="570" y="50" class="title">Step 2: HDR</text>
+      <text x="570" y="72" class="small">16 MiB, passes 1 to 3</text>
+      <text x="570" y="90" class="small">Lives together with the</text>
+      <text x="570" y="108" class="small">G-buffer in pass 1, which</text>
+      <text x="570" y="126" class="small">uses 0 to 32. Lowest free</text>
+      <text x="570" y="144" class="small">offset: 32.</text>
+      <text x="552" y="230" class="small t-hot">heap: 48 MiB</text>
+    </svg>
+    <p>Pass 1 (Lighting) reads the G-buffer and draws HDR, so both are alive there. HDR must not touch bytes 0 to 32.</p>
+  </div>
+  <div class="step">
+    <h4>3. LDR: takes the G-buffer's bytes</h4>
+    <svg viewBox="0 0 760 290" role="img" aria-label="Step 3. LDR, 8 MiB, passes 3 to 4, overlaps only HDR at 32 to 48. It fits at offset 0, in the G-buffer's bytes. The heap stays 48 MiB.">
+      <rect x="110" y="34" width="432" height="192" class="zone"/>
+      <rect x="326" y="34" width="144" height="192" class="ghost"/>
+      <text x="102" y="38" class="end small">0</text>
+      <text x="102" y="70" class="end small">8</text>
+      <text x="102" y="102" class="end small">16</text>
+      <text x="102" y="134" class="end small">24</text>
+      <text x="102" y="166" class="end small">32</text>
+      <text x="102" y="198" class="end small">40</text>
+      <text x="102" y="230" class="end small">48</text>
+      <text x="20" y="38" class="small">offset</text>
+      <text x="20" y="52" class="small">in MiB</text>
+      <text x="146" y="244" class="mid small">0</text>
+      <text x="146" y="258" class="mid small">GBuffer</text>
+      <text x="218" y="244" class="mid small">1</text>
+      <text x="218" y="258" class="mid small">Lighting</text>
+      <text x="290" y="244" class="mid small">2</text>
+      <text x="290" y="258" class="mid small">Bloom</text>
+      <text x="362" y="244" class="mid small">3</text>
+      <text x="362" y="258" class="mid small">Tonemap</text>
+      <text x="434" y="244" class="mid small">4</text>
+      <text x="434" y="258" class="mid small">FXAA</text>
+      <text x="506" y="244" class="mid small">5</text>
+      <text x="506" y="258" class="mid small">UI</text>
+      <text x="110" y="278" class="small">x: passes in order · the dashed band is the lifetime of the texture being placed</text>
+      <rect x="113" y="35" width="138" height="126" rx="3" class="mem"/>
+      <text x="182" y="102" class="mid small">G-buffer 32</text>
+      <rect x="185" y="163" width="210" height="62" rx="3" class="mem"/>
+      <text x="290" y="198" class="mid small">HDR 16</text>
+      <rect x="329" y="35" width="138" height="30" rx="3" class="mem"/>
+      <rect x="329" y="35" width="138" height="30" rx="3" class="hot"/>
+      <text x="398" y="54" class="mid small">LDR 8</text>
+      <line x1="106" y1="226" x2="546" y2="226" class="hot dashed"/>
+      <text x="570" y="50" class="title">Step 3: LDR</text>
+      <text x="570" y="72" class="small">8 MiB, passes 3 to 4</text>
+      <text x="570" y="90" class="small">Lives together with HDR only</text>
+      <text x="570" y="108" class="small">(32 to 48). Try 0: 0 + 8 ≤ 32,</text>
+      <text x="570" y="126" class="small">it fits. Offset 0.</text>
+      <text x="570" y="144" class="small">The G-buffer is dead by then.</text>
+      <text x="552" y="230" class="small t-hot">heap: 48 MiB</text>
+    </svg>
+    <p>The first aliasing: LDR reuses bytes 0 to 8, which the G-buffer used in passes 0 and 1.</p>
+  </div>
+  <div class="step">
+    <h4>4. AA: blocked by LDR</h4>
+    <svg viewBox="0 0 760 290" role="img" aria-label="Step 4. AA, 8 MiB, passes 4 to 5, overlaps LDR at 0 to 8, so it goes at offset 8, again in the G-buffer's old bytes.">
+      <rect x="110" y="34" width="432" height="192" class="zone"/>
+      <rect x="398" y="34" width="144" height="192" class="ghost"/>
+      <text x="102" y="38" class="end small">0</text>
+      <text x="102" y="70" class="end small">8</text>
+      <text x="102" y="102" class="end small">16</text>
+      <text x="102" y="134" class="end small">24</text>
+      <text x="102" y="166" class="end small">32</text>
+      <text x="102" y="198" class="end small">40</text>
+      <text x="102" y="230" class="end small">48</text>
+      <text x="20" y="38" class="small">offset</text>
+      <text x="20" y="52" class="small">in MiB</text>
+      <text x="146" y="244" class="mid small">0</text>
+      <text x="146" y="258" class="mid small">GBuffer</text>
+      <text x="218" y="244" class="mid small">1</text>
+      <text x="218" y="258" class="mid small">Lighting</text>
+      <text x="290" y="244" class="mid small">2</text>
+      <text x="290" y="258" class="mid small">Bloom</text>
+      <text x="362" y="244" class="mid small">3</text>
+      <text x="362" y="258" class="mid small">Tonemap</text>
+      <text x="434" y="244" class="mid small">4</text>
+      <text x="434" y="258" class="mid small">FXAA</text>
+      <text x="506" y="244" class="mid small">5</text>
+      <text x="506" y="258" class="mid small">UI</text>
+      <text x="110" y="278" class="small">x: passes in order · the dashed band is the lifetime of the texture being placed</text>
+      <rect x="113" y="35" width="138" height="126" rx="3" class="mem"/>
+      <text x="182" y="102" class="mid small">G-buffer 32</text>
+      <rect x="185" y="163" width="210" height="62" rx="3" class="mem"/>
+      <text x="290" y="198" class="mid small">HDR 16</text>
+      <rect x="329" y="35" width="138" height="30" rx="3" class="mem"/>
+      <text x="398" y="54" class="mid small">LDR 8</text>
+      <rect x="401" y="67" width="138" height="30" rx="3" class="mem"/>
+      <rect x="401" y="67" width="138" height="30" rx="3" class="hot"/>
+      <text x="470" y="86" class="mid small">AA 8</text>
+      <line x1="106" y1="226" x2="546" y2="226" class="hot dashed"/>
+      <text x="570" y="50" class="title">Step 4: AA</text>
+      <text x="570" y="72" class="small">8 MiB, passes 4 to 5</text>
+      <text x="570" y="90" class="small">Lives together with LDR</text>
+      <text x="570" y="108" class="small">(0 to 8). Lowest free</text>
+      <text x="570" y="126" class="small">offset: 8.</text>
+      <text x="552" y="230" class="small t-hot">heap: 48 MiB</text>
+    </svg>
+    <p>AA only has to avoid LDR. HDR is dead after pass 3, and the G-buffer after pass 1.</p>
+  </div>
+  <div class="step">
+    <h4>5. Bloom: fills a gap</h4>
+    <svg viewBox="0 0 760 290" role="img" aria-label="Step 5. Bloom, 4 MiB, passes 2 to 3, overlaps LDR and HDR. Offset 0 hits LDR; offset 8 fits below HDR. AA uses the same bytes, but later. The final heap is 48 MiB.">
+      <rect x="110" y="34" width="432" height="192" class="zone"/>
+      <rect x="254" y="34" width="144" height="192" class="ghost"/>
+      <text x="102" y="38" class="end small">0</text>
+      <text x="102" y="70" class="end small">8</text>
+      <text x="102" y="102" class="end small">16</text>
+      <text x="102" y="134" class="end small">24</text>
+      <text x="102" y="166" class="end small">32</text>
+      <text x="102" y="198" class="end small">40</text>
+      <text x="102" y="230" class="end small">48</text>
+      <text x="20" y="38" class="small">offset</text>
+      <text x="20" y="52" class="small">in MiB</text>
+      <text x="146" y="244" class="mid small">0</text>
+      <text x="146" y="258" class="mid small">GBuffer</text>
+      <text x="218" y="244" class="mid small">1</text>
+      <text x="218" y="258" class="mid small">Lighting</text>
+      <text x="290" y="244" class="mid small">2</text>
+      <text x="290" y="258" class="mid small">Bloom</text>
+      <text x="362" y="244" class="mid small">3</text>
+      <text x="362" y="258" class="mid small">Tonemap</text>
+      <text x="434" y="244" class="mid small">4</text>
+      <text x="434" y="258" class="mid small">FXAA</text>
+      <text x="506" y="244" class="mid small">5</text>
+      <text x="506" y="258" class="mid small">UI</text>
+      <text x="110" y="278" class="small">x: passes in order · the dashed band is the lifetime of the texture being placed</text>
+      <rect x="113" y="35" width="138" height="126" rx="3" class="mem"/>
+      <text x="182" y="102" class="mid small">G-buffer 32</text>
+      <rect x="185" y="163" width="210" height="62" rx="3" class="mem"/>
+      <text x="290" y="198" class="mid small">HDR 16</text>
+      <rect x="329" y="35" width="138" height="30" rx="3" class="mem"/>
+      <text x="398" y="54" class="mid small">LDR 8</text>
+      <rect x="401" y="67" width="138" height="30" rx="3" class="mem"/>
+      <text x="470" y="86" class="mid small">AA 8</text>
+      <rect x="257" y="67" width="138" height="14" rx="3" class="mem"/>
+      <rect x="257" y="67" width="138" height="14" rx="3" class="hot"/>
+      <text x="326" y="78" class="mid small">Bloom 4</text>
+      <line x1="106" y1="226" x2="546" y2="226" class="hot dashed"/>
+      <text x="570" y="50" class="title">Step 5: Bloom</text>
+      <text x="570" y="72" class="small">4 MiB, passes 2 to 3</text>
+      <text x="570" y="90" class="small">Blocked by LDR (0 to 8) and</text>
+      <text x="570" y="108" class="small">HDR (32 to 48), by offset.</text>
+      <text x="570" y="126" class="small">Try 0: hits LDR. Try 8:</text>
+      <text x="570" y="144" class="small">8 + 4 ≤ 32, fits. Offset 8.</text>
+      <text x="570" y="162" class="small">AA is there too, but in</text>
+      <text x="570" y="180" class="small">passes 4 to 5: no overlap.</text>
+      <text x="552" y="230" class="small t-hot">heap: 48 MiB</text>
+    </svg>
+    <p>Done: 48 MiB instead of 68 MiB. That equals the peak from section 2, so for this frame the greedy result is the best possible.</p>
+  </div>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Step</th><th>Texture</th><th>Size</th><th>Lifetime</th><th>Blockers, by offset</th><th>Offset</th><th>Heap</th></tr>
+  <tr><td>1</td><td>G-buffer</td><td>32</td><td>0 – 1</td><td>none</td><td>0</td><td>32</td></tr>
+  <tr><td>2</td><td>HDR</td><td>16</td><td>1 – 3</td><td>G-buffer 0 – 32</td><td>32</td><td>48</td></tr>
+  <tr><td>3</td><td>LDR</td><td>8</td><td>3 – 4</td><td>HDR 32 – 48</td><td>0</td><td>48</td></tr>
+  <tr><td>4</td><td>AA</td><td>8</td><td>4 – 5</td><td>LDR 0 – 8</td><td>8</td><td>48</td></tr>
+  <tr><td>5</td><td>Bloom</td><td>4</td><td>2 – 3</td><td>LDR 0 – 8, HDR 32 – 48</td><td>8</td><td>48</td></tr>
+</table>
+</div>
+
+<p>Sizes and offsets in MiB. The result, 48 MiB, equals the peak, so it is the best possible for this frame. That is not always so: when many resources start and end at different times, the greedy result can be above the peak. In practice it is close, and it is fast: <var>n</var> resources need about <var>n</var>² overlap tests, which is nothing for a few dozen render targets.</p>
+
+<pre><code>struct Request
+{
+    uint64_t size = 0;
+    uint64_t alignment = 1;
+    uint32_t first = 0; // first pass that uses it
+    uint32_t last = 0;  // last pass that uses it, included
+};
+
+uint64_t alignUp(uint64_t value, uint64_t alignment)
+{
+    return (value + alignment - 1) / alignment * alignment;
+}
+
+bool overlap(const Request &amp;a, const Request &amp;b)
+{
+    return a.first &lt;= b.last &amp;&amp; b.first &lt;= a.last;
+}
+
+// Writes each request's offset and returns the heap size.
+uint64_t pack(const Request *req, uint32_t count, uint64_t *offsets)
+{
+    std::vector&lt;uint32_t&gt; order(count);
+    std::iota(order.begin(), order.end(), 0u);
+    auto bigFirst = [req](uint32_t a, uint32_t b)
+    { return req[a].size &gt; req[b].size; };
+    std::stable_sort(order.begin(), order.end(), bigFirst);
+
+    uint64_t heapSize = 0;
+    std::vector&lt;uint32_t&gt; placed;
+    for (uint32_t i : order)
+    {
+        // The placed ones alive at the same time, lowest offset first.
+        std::vector&lt;uint32_t&gt; blockers;
+        for (uint32_t j : placed)
+        {
+            if (overlap(req[i], req[j]))
+                blockers.push_back(j);
+        }
+        auto lowFirst = [offsets](uint32_t a, uint32_t b)
+        { return offsets[a] &lt; offsets[b]; };
+        std::sort(blockers.begin(), blockers.end(), lowFirst);
+
+        // Stop at the first gap that is big enough, else jump past.
+        uint64_t offset = 0;
+        for (uint32_t j : blockers)
+        {
+            if (alignUp(offset, req[i].alignment) + req[i].size &lt;= offsets[j])
+                break;
+            offset = std::max(offset, offsets[j] + req[j].size);
+        }
+        offsets[i] = alignUp(offset, req[i].alignment);
+        heapSize = std::max(heapSize, offsets[i] + req[i].size);
+        placed.push_back(i);
+    }
+    return heapSize;
+}</code></pre>
+
+<h3>Alignment</h3>
+
+<p>An offset must be a multiple of the resource's alignment. So the free offset found by the walk is rounded <b>up</b>: <var>alignUp</var>(<var>x</var>, <var>a</var>) = ⌈<var>x</var> / <var>a</var>⌉ · <var>a</var>. The bytes skipped by the rounding are lost. The heap itself must start at an address that suits every resource in it, so its alignment is the largest one.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 166" role="img" aria-label="A heap with A, 1000 bytes, at offset 0. B, 500 bytes, needs 4096-byte alignment. The first free offset, 1000, is rounded up to 4096, and the 3096 bytes between them are not used.">
+    <text x="378" y="18" class="mid mono t-hot">alignUp(1000, 4096) = 4096</text>
+    <path d="M185,62 C260,26 497,26 572,62" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <rect x="60" y="66" width="600" height="40" class="zone"/>
+    <rect x="61" y="67" width="124" height="38" rx="3" class="mem"/>
+    <text x="123" y="90" class="mid small">A · 1000 B</text>
+    <text x="378" y="90" class="mid small t-faint">3096 B unused</text>
+    <rect x="572" y="67" width="62" height="38" rx="3" class="mem"/>
+    <text x="603" y="90" class="mid small">B · 500 B</text>
+    <line x1="185" y1="60" x2="185" y2="112" class="hot dashed"/>
+    <text x="60"  y="126" class="mid small">0</text>
+    <text x="185" y="126" class="mid small">1000</text>
+    <text x="572" y="126" class="mid small">4096</text>
+    <text x="640" y="126" class="mid small">4596</text>
+    <text x="60" y="154" class="small">A and B are alive together. B needs an alignment of 4096 bytes, so the heap's alignment is 4096 and its size is 4596 bytes.</text>
+  </svg>
+  <figcaption>Render targets are large compared with their alignment, so the loss is small in practice. It matters more for many small resources.</figcaption>
+</figure>
+
+<h3>Memory types</h3>
+
+<p>A heap is one allocation, so it has one memory type. A resource may go into a heap only if the resource's memory-type mask has the heap's type in it. Color and depth textures, or buffers and textures, can report different masks. So resources are split into groups, and each group gets its own heap and its own packing.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Grouping</th><th>How</th><th>Result</th></tr>
+  <tr><td>Same mask</td><td>Resources with exactly the same mask share a heap.</td><td>Simple. Can make more heaps than needed.</td></tr>
+  <tr><td>Shared type</td><td>Resources whose masks have a common bit share a heap of that type.</td><td>Fewer heaps, more sharing. A little more code.</td></tr>
+</table>
+</div>
+
+<p>On most desktop GPUs, all render targets accept the same device-local memory, so one heap is the usual result.</p>
+
+<h2 id="takeover"><span class="n">5</span>Taking over memory</h2>
+
+<p>When a resource starts to use bytes that another resource used before, three rules apply.</p>
+
+<h3>1. The contents are garbage</h3>
+
+<p>The bytes still hold the old resource's data, which means nothing to the new one. Even worse, GPUs keep hidden <b>compression data</b> next to many render targets, and that data is wrong too. So the new resource's <b>first use must write all of it</b>: a clear, or a "discard" followed by a pass that writes every pixel. A transient resource must never be <b>read first</b>. In Vulkan, the first use also starts from the <samp>UNDEFINED</samp> layout, which tells the driver to throw the old contents away, compression data included.</p>
+
+<h3>2. A barrier between the old owner and the new one</h3>
+
+<p>The GPU runs passes in parallel unless a barrier tells it to wait (see <a href="gpu-sync.html">GPU synchronization</a>). Without a barrier, the new resource's writes can land while a pass still reads the old resource, or the old resource's writes, still in a cache, can reach memory after the new ones:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 262" role="img" aria-label="Top: with only an image barrier on Y, pass 4 starts writing Y while pass 3 still reads X, in the same bytes 0 to 8. Bottom: a global memory barrier before pass 4 makes it wait for every earlier attachment write and read.">
+    <text x="20" y="22" class="title">Only an image barrier on Y</text>
+    <rect x="120" y="34" width="140" height="40" rx="6" class="gpu"/>
+    <text x="190" y="51" class="mid title">Pass 2</text>
+    <text x="190" y="66" class="mid small">writes X · bytes 0–8</text>
+    <rect x="266" y="34" width="174" height="40" rx="6" class="gpu"/>
+    <text x="353" y="51" class="mid title">Pass 3</text>
+    <text x="353" y="66" class="mid small">reads X · bytes 0–8</text>
+    <rect x="330" y="82" width="190" height="40" rx="6" class="gpu"/>
+    <text x="425" y="99" class="mid title">Pass 4</text>
+    <text x="425" y="114" class="mid small">writes Y · bytes 0–8</text>
+    <line x1="330" y1="129" x2="440" y2="129" class="hot"/>
+    <text x="448" y="133" class="small t-hot">overlap: same bytes, same time</text>
+    <text x="540" y="52" class="small t-hot">Y's writes land in X's bytes</text>
+    <text x="540" y="68" class="small t-hot">while pass 3 still reads X.</text>
+    <text x="540" y="96" class="small">The image barrier waits for</text>
+    <text x="540" y="112" class="small">and flushes only Y, not X.</text>
+    <text x="20" y="58" class="small">GPU, time →</text>
+
+    <line x1="20" y1="142" x2="740" y2="142" class="arrow dashed"/>
+
+    <text x="20" y="168" class="title">A global memory barrier before pass 4</text>
+    <rect x="120" y="180" width="140" height="40" rx="6" class="gpu"/>
+    <text x="190" y="197" class="mid title">Pass 2</text>
+    <text x="190" y="212" class="mid small">writes X · bytes 0–8</text>
+    <rect x="266" y="180" width="174" height="40" rx="6" class="gpu"/>
+    <text x="353" y="197" class="mid title">Pass 3</text>
+    <text x="353" y="212" class="mid small">reads X · bytes 0–8</text>
+    <line x1="452" y1="174" x2="452" y2="226" class="hot"/>
+    <rect x="464" y="180" width="190" height="40" rx="6" class="gpu"/>
+    <text x="559" y="197" class="mid title">Pass 4</text>
+    <text x="559" y="212" class="mid small">clears Y, then writes it</text>
+    <text x="452" y="244" class="mid small t-hot">wait for every earlier attachment write and shader read, flush the writes</text>
+    <text x="20" y="204" class="small">GPU, time →</text>
+  </svg>
+  <figcaption>X's last use is pass 3 and Y's first use is pass 4. The barrier goes right before Y's first use.</figcaption>
+</figure>
+
+<p>The natural barrier is the one that moves Y into its first layout. But an <b>image barrier only covers its own image</b>: its memory part flushes and waits for writes to Y, not to X. So aliasing needs a barrier that covers <b>all</b> memory:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>API</th><th>The barrier for a takeover</th></tr>
+  <tr><td>Vulkan</td><td>A global memory barrier (<samp>VkMemoryBarrier2</samp>): wait for the stages that used the old resources, flush their writes, before the stages of the new one. Then the image barrier from <samp>UNDEFINED</samp> as usual.</td></tr>
+  <tr><td>Direct3D 12</td><td>An <b>aliasing barrier</b>, <samp>D3D12_RESOURCE_BARRIER_TYPE_ALIASING</samp>, naming the resource before and the resource after (or none, meaning "any").</td></tr>
+  <tr><td>Metal</td><td>Resources from a heap are usually not tracked. A <samp>MTLFence</samp>, updated after the old resource's last pass and waited for before the new one's first pass.</td></tr>
+</table>
+</div>
+
+<h3>3. Last frame counts too</h3>
+
+<p>The layout is the same every frame. So the first owner of some bytes in frame N+1 takes them over from their last owner in frame N. A new frame is not a barrier: commands from two submissions on one queue may overlap on the GPU.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Frame N runs passes 0 to 5. Frame N plus 1 starts before frame N's UI pass ends. Frame N's UI reads AA in bytes 8 to 16. Frame N plus 1's GBuffer pass writes the G-buffer in bytes 0 to 32, the same bytes.">
+    <text x="10" y="64" class="title">frame N</text>
+    <rect x="80"  y="42" width="52" height="36" rx="5" class="gpu"/><text x="106" y="64" class="mid small">GBuffer</text>
+    <rect x="136" y="42" width="52" height="36" rx="5" class="gpu"/><text x="162" y="64" class="mid small">Lighting</text>
+    <rect x="192" y="42" width="52" height="36" rx="5" class="gpu"/><text x="218" y="64" class="mid small">Bloom</text>
+    <rect x="248" y="42" width="52" height="36" rx="5" class="gpu"/><text x="274" y="64" class="mid small">Tonemap</text>
+    <rect x="304" y="42" width="52" height="36" rx="5" class="gpu"/><text x="330" y="64" class="mid small">FXAA</text>
+    <rect x="360" y="42" width="52" height="36" rx="5" class="gpu"/><text x="386" y="64" class="mid small">UI</text>
+    <rect x="357" y="39" width="58" height="42" rx="6" class="hot"/>
+    <text x="430" y="56" class="small">UI reads AA:</text>
+    <text x="430" y="72" class="small t-hot">bytes 8 to 16</text>
+
+    <text x="10" y="134" class="title">frame N+1</text>
+    <rect x="380" y="112" width="52" height="36" rx="5" class="gpu"/><text x="406" y="134" class="mid small">GBuffer</text>
+    <rect x="436" y="112" width="52" height="36" rx="5" class="gpu"/><text x="462" y="134" class="mid small">Lighting</text>
+    <rect x="492" y="112" width="52" height="36" rx="5" class="gpu"/><text x="518" y="134" class="mid small">Bloom</text>
+    <rect x="548" y="112" width="52" height="36" rx="5" class="gpu"/><text x="574" y="134" class="mid small">Tonemap</text>
+    <rect x="604" y="112" width="52" height="36" rx="5" class="gpu"/><text x="630" y="134" class="mid small">FXAA</text>
+    <rect x="660" y="112" width="52" height="36" rx="5" class="gpu"/><text x="686" y="134" class="mid small">UI</text>
+    <rect x="377" y="109" width="58" height="42" rx="6" class="hot"/>
+    <line x1="392" y1="82" x2="400" y2="106" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="368" y="98" class="end small">GBuffer writes the G-buffer: bytes 0 to 32,</text>
+    <text x="368" y="112" class="end small t-hot">the same bytes as AA</text>
+    <text x="10" y="180" class="small">Time goes right. The barrier before frame N+1's GBuffer must also wait for frame N's UI pass.</text>
+  </svg>
+  <figcaption>On one queue, a barrier's first half covers every command submitted before it, last frame's included. So the barrier from rule 2, at the start of each resource's lifetime, is enough. Work on other queues needs semaphores.</figcaption>
+</figure>
+
+<h2 id="variants"><span class="n">6</span>Variants</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Choice</th><th>Options</th><th>Trade-off</th></tr>
+  <tr><td>When to pack</td><td>once, when the graph changes · every frame</td><td>Once is cheap and keeps heaps stable. Every frame fits graphs that change each frame (a pass on or off), but needs a pool of heaps to take memory from.</td></tr>
+  <tr><td>What aliases</td><td>render targets only · buffers too</td><td>Buffers pack the same way. In Vulkan, a buffer and an image next to each other in one heap must keep the device's <samp>bufferImageGranularity</samp> apart.</td></tr>
+  <tr><td>Frames in flight</td><td>one layout for all frames · one heap per frame slot</td><td>One layout uses the least memory and needs the cross-frame barrier. One heap per slot avoids that hazard, for twice the memory.</td></tr>
+  <tr><td>Heap per</td><td>graph · whole engine</td><td>One heap per graph is simple. One shared pool lets two graphs, or two views, reuse each other's memory.</td></tr>
+</table>
+</div>
+
+<div class="split">
+  <div>
+    <h4>Direct3D 12</h4>
+    <p><samp>CreateHeap</samp>, then <samp>CreatePlacedResource</samp> at an offset. On <b>resource heap tier 1</b> hardware, a heap holds only one kind of resource: buffers, render-target and depth textures, or other textures. Tier 2 allows a mix. The first use of an aliased render target must be a clear, a <samp>DiscardResource</samp> or a full copy.</p>
+  </div>
+  <div>
+    <h4>Metal</h4>
+    <p>A <samp>MTLHeap</samp> of the <b>automatic</b> type places resources itself: <samp>makeAliasable</samp> on a resource lets later resources from the heap take its memory. A <b>placement</b> heap takes explicit offsets, as on this page. Either way, fences order the takeover.</p>
+  </div>
+</div>
+
+<h3>No memory at all: memoryless attachments</h3>
+
+<p>Tile-based GPUs (most phones, and Apple GPUs) draw a render pass one small tile at a time, in on-chip memory. An attachment that is cleared at the start of the pass and not stored at the end, like a depth buffer used only inside one pass, never needs to reach main memory. It can be <b>memoryless</b>: <samp>MTLStorageMode.memoryless</samp> in Metal, or a lazily allocated memory type (<samp>VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT</samp>) with a transient attachment in Vulkan. That is aliasing taken to the end: zero bytes. It depends on the pass's load and store ops; see <a href="load-store-ops.html">load and store ops</a>. Desktop GPUs usually have no such memory type.</p>
+
+<h2><span class="n">7</span>Pitfalls</h2>
+
+<ul>
+  <li><b>Reading before the first write.</b> The first use reads the previous owner's data. Nothing fails; the image just shows garbage, often only on some GPUs. A graph should reject a transient whose first use is a read.</li>
+  <li><b>Forgetting the last frame.</b> The barrier at a resource's first use must also cover the previous frame's last users of the same bytes. A barrier that only looks at earlier passes of the same frame misses them.</li>
+  <li><b>An undeclared use.</b> A pass that samples a texture without declaring it is outside the lifetime. By then another resource may own the bytes. Every read and write must be declared.</li>
+  <li><b>Keeping a handle after the last pass.</b> A texture handle or descriptor still points at the old bytes, but a different resource writes them now. Reading it shows that resource's data, with no error.</li>
+  <li><b>Resize.</b> New sizes mean a new layout and new heaps. The GPU must be done with the old heaps before they are freed. For a moment, both may exist.</li>
+  <li><b>Debugging.</b> Capture tools show an aliased texture's bytes even outside its lifetime, so it seems to hold another texture's image. That is expected.</li>
+  <li><b>Fragmentation.</b> Alignment gaps and greedy choices can leave a heap above the peak. Compare the heap size with the peak to see how much.</li>
+</ul>
+
+<h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
+
+<p>RASM aliases the render targets of a <a href="render-graphs.html#in-rasm">render graph</a>. A render target that <code>PassBuilder::createRenderTarget</code> makes without <code>history</code> is transient: its handle exists at once, but its textures are made only after the graph is compiled, inside heaps shared with the graph's other transient targets. The packing is the greedy method of <a href="#packing">section 4</a>, in <code>rhi::packAliased</code>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 340" role="img" aria-label="Setup: PassBuilder createRenderTarget without history calls createTransientRenderTarget, which returns a handle without textures, kept in the graph's transientTargets. Compile: transientLifetimes finds the first and last position of each target, and the layout is redone only if they changed. Execute, until placed: placeTransients calls placeTransientRenderTargets, whose placeGroup asks for memory requirements, packs with packAliased, creates heaps and placed textures. Every frame on the GPU: aliasingBarrier before the first pass of each transient target, then beginPass clears it.">
+    <text x="20" y="22" class="title t-cpu">setup · inside addPass</text>
+    <rect x="20" y="32" width="230" height="50" rx="6" class="cpu"/>
+    <text x="135" y="53" class="mid mono">createRenderTarget</text>
+    <text x="135" y="71" class="mid small">PassBuilder, no history</text>
+    <line x1="250" y1="57" x2="278" y2="57" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="280" y="32" width="230" height="50" rx="6" class="cpu"/>
+    <text x="395" y="53" class="mid mono">createTransientRenderTarget</text>
+    <text x="395" y="71" class="mid small">a handle, no textures yet</text>
+    <line x1="510" y1="57" x2="538" y2="57" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="540" y="32" width="200" height="50" rx="6" class="cpu"/>
+    <text x="640" y="53" class="mid mono">transientTargets</text>
+    <text x="640" y="71" class="mid small">the graph owns them</text>
+
+    <text x="20" y="110" class="title t-cpu">compile</text>
+    <rect x="20" y="120" width="380" height="50" rx="6" class="cpu"/>
+    <text x="210" y="141" class="mid mono">transientLifetimes</text>
+    <text x="210" y="159" class="mid small">first and last position per target · a read first → compile fails</text>
+    <line x1="400" y1="145" x2="428" y2="145" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="430" y="120" width="310" height="50" rx="6" class="box"/>
+    <text x="585" y="141" class="mid small">lifetimes changed, or a new target:</text>
+    <text x="585" y="159" class="mid mono">transientsPlaced = false</text>
+
+    <text x="20" y="198" class="title t-cpu">execute · until placed (a failure is retried next frame)</text>
+    <rect x="20" y="208" width="150" height="50" rx="6" class="cpu"/>
+    <text x="95" y="229" class="mid mono">placeTransients</text>
+    <text x="95" y="247" class="mid small">RenderGraph</text>
+    <line x1="170" y1="233" x2="188" y2="233" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="190" y="208" width="230" height="50" rx="6" class="cpu"/>
+    <text x="305" y="229" class="mid mono">placeTransientRenderTargets</text>
+    <text x="305" y="247" class="mid small">wait idle if it replaces a layout</text>
+    <line x1="420" y1="233" x2="438" y2="233" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="440" y="208" width="300" height="50" rx="6" class="mem"/>
+    <text x="590" y="229" class="mid mono">placeGroup</text>
+    <text x="590" y="247" class="mid small">requirements → packAliased → heaps → textures</text>
+
+    <text x="20" y="286" class="title t-gpu">GPU · every frame</text>
+    <rect x="20" y="296" width="340" height="40" rx="6" class="gpu"/>
+    <text x="190" y="313" class="mid mono">aliasingBarrier</text>
+    <text x="190" y="328" class="mid small">before the first pass of each transient target</text>
+    <line x1="360" y1="316" x2="388" y2="316" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="390" y="296" width="350" height="40" rx="6" class="gpu"/>
+    <text x="565" y="313" class="mid mono">beginPass</text>
+    <text x="565" y="328" class="mid small">attachments from UNKNOWN, clear: the full first write</text>
+  </svg>
+  <figcaption>The layout is made once, and again only when a compile changes the lifetimes or a resize changes the sizes. The barrier is recorded every frame.</figcaption>
+</figure>
+
+<p><code>examples/01_render_graph</code> has two transient targets. <samp>offscreen_rt</samp> (one color and depth) lives in passes 0 and 1; <samp>composite_rt</samp> (two colors and depth) in passes 2 and 3. Their lifetimes do not overlap, so they share one heap. <samp>trail_rt</samp> has history, so it has memory of its own.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 262" role="img" aria-label="Example 01 at 1920 by 1080. Passes 0 Forward, 1 Trail, 2 Background, 3 Present. One heap with three slots of about 8.4 MiB. Slot 0: offscreen_rt color in passes 0 to 1, then composite_rt color 0 in passes 2 to 3. Slot 1: offscreen_rt depth, then composite_rt color 1. Slot 2: composite_rt depth only. An aliasing barrier comes before passes 0 and 2. trail_rt has its own memory.">
+    <text x="150" y="24" class="mid mono small t-hot">aliasingBarrier</text>
+    <text x="370" y="24" class="mid mono small t-hot">aliasingBarrier</text>
+    <rect x="150" y="36" width="440" height="126" class="zone"/>
+    <line x1="150" y1="30" x2="150" y2="168" class="hot"/>
+    <line x1="370" y1="30" x2="370" y2="168" class="hot"/>
+    <text x="140" y="40" class="end small">0</text>
+    <text x="140" y="82" class="end small">8.4</text>
+    <text x="140" y="124" class="end small">16.9</text>
+    <text x="140" y="166" class="end small">25.3 MiB</text>
+    <rect x="154" y="38" width="212" height="38" rx="3" class="mem"/>
+    <text x="260" y="61" class="mid small">offscreen_rt color</text>
+    <rect x="374" y="38" width="212" height="38" rx="3" class="mem"/>
+    <text x="480" y="61" class="mid small">composite_rt color 0</text>
+    <rect x="154" y="80" width="212" height="38" rx="3" class="mem"/>
+    <text x="260" y="103" class="mid small">offscreen_rt depth</text>
+    <rect x="374" y="80" width="212" height="38" rx="3" class="mem"/>
+    <text x="480" y="103" class="mid small">composite_rt color 1 (mask)</text>
+    <rect x="374" y="122" width="212" height="38" rx="3" class="mem"/>
+    <text x="480" y="145" class="mid small">composite_rt depth</text>
+    <text x="205" y="184" class="mid small">0 Forward</text>
+    <text x="315" y="184" class="mid small">1 Trail</text>
+    <text x="425" y="184" class="mid small">2 Background</text>
+    <text x="535" y="184" class="mid small">3 Present</text>
+
+    <rect x="606" y="38" width="140" height="80" rx="6" class="box"/>
+    <text x="676" y="58" class="mid small title">trail_rt</text>
+    <text x="676" y="76" class="mid small">history: 2 copies of</text>
+    <text x="676" y="92" class="mid small">color + depth, in</text>
+    <text x="676" y="108" class="mid small">memory of its own</text>
+
+    <text x="20" y="218" class="mono small">Placed 2 transient render targets in 1 heap(s): 25.3 MiB instead of 42.2 MiB.</text>
+    <text x="20" y="242" class="small">At 1920 × 1080 each of the 5 textures asks for about 8.4 MiB (more than 7.9: the driver pads it). At most 3 are alive at once.</text>
+  </svg>
+  <figcaption>The log line is from one desktop GPU; sizes and memory types differ per GPU. With all five sizes equal, the stable sort keeps the order of the requests, which gives this layout.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>What is transient</td><td>any resource made inside the frame</td><td>Render targets without <code>history</code> from <code>PassBuilder::createRenderTarget</code>. Textures and buffers from the builder, history targets, and targets from <code>Engine::createRenderTarget</code> get their own memory.</td></tr>
+  <tr><td>Lifetime</td><td>first to last use, both ends included</td><td>The same, as positions in the sorted order (<code>RenderGraph::transientLifetimes</code>). A target that no pass declares lives the whole frame.</td></tr>
+  <tr><td>One request per</td><td>resource</td><td>Texture: each color and the depth of a target is its own request, with the target's lifetime (<code>attachmentTextureDescs</code>).</td></tr>
+  <tr><td>Asking</td><td>needs from the description</td><td><code>VulkanDevice::getTextureMemoryRequirements</code>, with <code>vkGetDeviceImageMemoryRequirements</code>.</td></tr>
+  <tr><td>Packing</td><td>greedy, biggest first, lowest free aligned offset</td><td>The same (<code>rhi::packAliased</code>). Equal sizes keep their order (a stable sort).</td></tr>
+  <tr><td>Memory types</td><td>same mask, or a shared type</td><td>Same mask: one heap per exact <code>memoryTypeBits</code> value.</td></tr>
+  <tr><td>Heap</td><td>one allocation</td><td><code>VulkanDevice::createHeap</code>: one dedicated VMA allocation (<code>vmaAllocateMemory</code>), device-local preferred, with the largest alignment. Textures are placed with <code>vmaCreateAliasingImage2</code>.</td></tr>
+  <tr><td>When</td><td>once, or every frame</td><td>Once per compile that changes the lifetimes. A resize places a layout again if one of its targets is sized from the window (<code>RenderTargetDesc::swapchainScale</code>).</td></tr>
+  <tr><td>First use</td><td>a full write</td><td>The first pass on a target draws it and clears it (<code>RenderGraph::assignAttachmentOps</code>). <code>compile</code> fails if a pass reads a transient target first: <samp>Pass '...' reads a transient render target that no pass before it draws.</samp></td></tr>
+  <tr><td>Barrier</td><td>global, before the first use</td><td><code>RenderContext::aliasingBarrier</code>: one <code>VkMemoryBarrier2</code> before each pass where a transient target starts, one per pass even if two start there.</td></tr>
+  <tr><td>Last frame</td><td>covered by the same barrier</td><td>Yes: one queue, and a barrier's first half covers earlier submissions. One layout for both frame slots.</td></tr>
+  <tr><td>Graphs</td><td>one heap per graph, or a shared pool</td><td>One per graph: each graph's targets are one <code>TransientGroup</code> with its own heaps.</td></tr>
+  <tr><td>Bindless slots</td><td>–</td><td>A new layout's textures take the old textures' slots (<code>RenderContext::createAttachments</code>), so placing again does not use up the bindless set.</td></tr>
+  <tr><td>Failure</td><td>–</td><td>If a heap or texture can't be made, the frames draw no passes and the graph tries again every frame (<code>RenderGraph::placeTransients</code>).</td></tr>
+  <tr><td>Buffers, memoryless</td><td>variants</td><td>No: only render targets alias, and nothing is memoryless.</td></tr>
+</table>
+</div>
+
+<h3>The barrier</h3>
+
+<p><code>VulkanCommandBuffer::aliasingBarrier</code> records this one memory barrier. It waits for every attachment write, and for fragment and compute shader work (the reads of the old owner), before the new owner's attachment work:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Field</th><th>Value</th></tr>
+  <tr><td><code>srcStageMask</code></td><td><code>VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT</code><br><code>VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR</code><br><code>VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR</code><br><code>VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT</code><br><code>VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT</code></td></tr>
+  <tr><td><code>srcAccessMask</code></td><td><code>VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT</code><br><code>VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT</code></td></tr>
+  <tr><td><code>dstStageMask</code></td><td>the three attachment stages (the first three above)</td></tr>
+  <tr><td><code>dstAccessMask</code></td><td>color and depth attachment reads and writes</td></tr>
+</table>
+</div>
+
+<p>Then <code>beginPass</code> moves the target's attachments from <code>UNKNOWN</code>, which is an image barrier from the <samp>UNDEFINED</samp> layout, and clears them.</p>
+
+<h3>Lifetime of the memory</h3>
+
+<p>The graph owns its transient targets. <code>RenderGraph::~RenderGraph</code> calls <code>RenderContext::destroyTransientRenderTargets</code>, which waits for the GPU, destroys the textures, and frees a group's heaps once none of its targets is left. A <code>RenderGraph</code> is move-only, so two graphs never free the same targets. Placing a layout again first waits for the GPU to be idle, then builds the new heaps and textures, then frees the old heaps.</p>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Packing</td><td><code>rhi::packAliased</code>, <code>rhi::AliasRequest</code>, <code>rhi::AliasPlacement</code>, <code>rhi::AliasHeap</code> in <code>src/rhi/memoryAliasing.h</code> and <code>src/rhi/memoryAliasing.cpp</code></td></tr>
+  <tr><td>Lifetimes, placing, barrier</td><td><code>RenderGraph::transientLifetimes</code>, <code>RenderGraph::compile</code>, <code>RenderGraph::placeTransients</code>, <code>RenderGraph::execute</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>Transient targets</td><td><code>RenderContext::createTransientRenderTarget</code>, <code>RenderContext::placeTransientRenderTargets</code>, <code>RenderContext::placeGroup</code>, <code>RenderContext::createAttachments</code>, <code>RenderContext::destroyTransientRenderTargets</code>, <code>RenderContext::resizeRenderTargets</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Device side</td><td><code>VulkanDevice::getTextureMemoryRequirements</code>, <code>VulkanDevice::createHeap</code>, <code>VulkanDevice::createPlacedTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; the interface in <code>src/rhi/device.h</code></td></tr>
+  <tr><td>The barrier</td><td><code>RenderContext::aliasingBarrier</code>; <code>VulkanCommandBuffer::aliasingBarrier</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/memoryAliasingTests.cpp</code> (sharing, inclusive ends, gaps, alignment, memory types, no shared byte); <code>tests/renderGraphTests.cpp</code> (lifetimes)</td></tr>
+  <tr><td>Example</td><td><code>examples/01_render_graph/main.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>A transient target's first pass draws it. Declare every read with <code>PassBuilder::read</code>, so the lifetime covers it. A texture or bindless index used outside the declared passes reads another target's bytes, with no error.</li>
+    <li>Lifetimes are inclusive at both ends. A pass that reads one target and draws another uses both.</li>
+    <li>If transient targets get a new kind of use (compute writes, copies), add its stages and accesses to <code>VulkanCommandBuffer::aliasingBarrier</code>. Today it covers attachment writes and fragment and compute reads only.</li>
+    <li>Placed textures do not own their memory. Destroy them before their heap (<code>destroyHeap</code>), and wait for the GPU before a heap is freed.</li>
+    <li>A change to <code>rhi::packAliased</code> comes with a test in <code>tests/memoryAliasingTests.cpp</code>, and the test that no two overlapping lifetimes share a byte must still pass.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Not done yet</strong>
+  <p>Transient textures and buffers: only render targets are transient (<code>D9</code> in <code>docs/code_review.md</code>). There is also no heap pool that two graphs share. The API of the functions above is in <a href="../api/low-level.html#placeTransientRenderTargets">the low-level API</a> and <a href="../api/render-graph.html#createRenderTarget">the render graph API</a>.</p>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Yuriy O'Donnell, <i>FrameGraph: Extensible Rendering Architecture in Frostbite</i>, GDC 2017: transient resources and aliasing in a frame graph.</li>
+  <li>Michael R. Garey and David S. Johnson, <i>Computers and Intractability</i> (1979): "dynamic storage allocation" is NP-complete.</li>
+  <li>The Vulkan specification, section <i>Memory Aliasing</i> in the chapter <i>Resource Creation</i>.</li>
+  <li>Microsoft, <i>Direct3D 12: Memory aliasing and data inheritance</i>, and <i>Using resource barriers</i> (aliasing barriers).</li>
+  <li>Apple, the Metal documentation on heaps: <i>MTLHeap</i> and <i>makeAliasable()</i>.</li>
+  <li>Related guides: <a href="render-graphs.html">render graphs</a>, <a href="gpu-memory.html">GPU memory</a>, <a href="gpu-sync.html">GPU synchronization</a>, <a href="load-store-ops.html">load and store ops</a>, <a href="temporal-history.html">history buffers</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>
