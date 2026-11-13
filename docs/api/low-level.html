@@ -256,6 +256,14 @@
   </div>
 </div>
 
+<div class="api" id="aliasingBarrier">
+  <pre class="sig">void aliasingBarrier(const CommandBufferHandle&amp; commandBuffer);</pre>
+  <div class="body">
+    <p>For textures that share memory. The attachment writes after it wait for every earlier use of any texture: attachment writes, and reads in fragment and compute shaders. A layout transition covers only its own texture, so it does not order the writes of another texture placed in the same memory. Outside a render pass only.</p>
+    <p><code>RenderGraph::execute</code> records one before the first pass of each <a href="render-graph.html#transient">transient render target</a>. Record your own only if you place textures in shared memory yourself.</p>
+  </div>
+</div>
+
 <div class="api" id="PipelineStage">
   <pre class="sig">enum class PipelineStage : uint32_t
 {
@@ -278,17 +286,17 @@ constexpr bool          hasStage(PipelineStage stages, PipelineStage stage);</pr
 
 <div class="api" id="beginRendering">
   <pre class="sig">bool beginRendering(const CommandBufferHandle&amp; commandBuffer,
-                    TextureHandle colorAttachment,
+                    const TextureHandle* colorAttachments,
+                    uint32_t colorCount,
                     TextureHandle depthAttachment,
                     const glm::vec4&amp; clearColor,
-                    bool load = false, bool storeDepth = false);</pre>
+                    const AttachmentOps&amp; ops = {});</pre>
   <div class="body">
-    <p>Starts a render pass into one color and one depth texture. Color is cleared to <code>clearColor</code>, and depth to 0. Color is kept (stored) at the end of the pass; depth only with <code>storeDepth</code>. Both attachments are required.</p>
+    <p>Starts a render pass into <code>colorCount</code> color textures (1 to <code>MAX_COLOR_ATTACHMENTS</code>) and one depth texture. By default every color is cleared to <code>clearColor</code> and depth to 0; one load op serves all colors. Color is kept (stored) at the end of the pass; depth only with <code>ops.storeDepth</code>. Pass an invalid <code>depthAttachment</code> for a pass without depth; its pipelines must then have <code>Format::UNKNOWN</code> as their depth format.</p>
     <dl>
-      <dt>load</dt><dd><code>false</code>: clear both attachments. <code>true</code>: keep what is in them, and ignore <code>clearColor</code>. Use it to go on drawing after a pause, as <code>drawScene</code> does after its Hi-Z build. Before a load, transition the attachments to <code>COLOR_ATTACHMENT</code> and <code>DEPTH_STENCIL_ATTACHMENT</code>, even when they are already in that layout: the barrier orders the earlier writes before the load.</dd>
-      <dt>storeDepth</dt><dd><code>true</code>: keep depth at the end of the pass, for a later <code>load</code> or a read. <code>false</code>: depth may be thrown away, which saves memory bandwidth. <code>drawScene</code> with occlusion culling needs it, because it pauses the pass and reads depth.</dd>
+      <dt>ops</dt><dd>See <a href="engine.html#AttachmentOps">AttachmentOps</a>. <code>loadColor</code> / <code>loadDepth</code> keep what an attachment holds instead of clearing it. Use them to go on drawing after a pause, as <code>drawScene</code> does after its Hi-Z build, or on top of an earlier pass. Before a load, transition the attachment to <code>COLOR_ATTACHMENT</code> or <code>DEPTH_STENCIL_ATTACHMENT</code> without <code>discard</code>, even when it is already in that layout: the barrier orders the earlier writes before the load. <code>storeDepth</code> keeps depth for a later load or a read; without it depth may be thrown away, which saves memory bandwidth.</dd>
     </dl>
-    <p><code>Engine::beginPass</code> calls this (without <code>load</code>, and with <code>storeDepth</code> = <code>EngineConfig::occlusionCulling</code>) after the layout transitions and also sets the viewport, scissor and cull mode, so use <code>beginPass</code> unless you build the whole frame yourself.</p>
+    <p><code>Engine::beginPass</code> calls this after the layout transitions, with its <code>ops</code> (and <code>storeDepth</code> forced on with <code>EngineConfig::occlusionCulling</code>), and also sets the viewport, scissor and cull mode, so use <code>beginPass</code> unless you build the whole frame yourself.</p>
   </div>
 </div>
 
@@ -674,7 +682,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
     ShaderHandle              computeShader;
     DescriptorSetLayoutHandle descriptorSetLayout;
     PrimitiveTopology         topology = PrimitiveTopology::TRIANGLE_LIST;
-    Format                    colorAttachmentFormat = Format::UNKNOWN;
+    Format                    colorAttachmentFormats[MAX_COLOR_ATTACHMENTS] = {};
     Format                    depthStencilAttachmentFormat = Format::UNKNOWN;
 
     bool operator==(const PipelineDesc&amp;) const = default;
@@ -684,9 +692,16 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <dt>computeShader</dt><dd>Valid for a compute pipeline; then leave the vertex and fragment shaders invalid.</dd>
       <dt>descriptorSetLayout</dt><dd>Required. Usually the engine's bindless layout (the one <code>Engine::createPipeline</code> uses).</dd>
       <dt>topology</dt><dd>See <a href="types.html#PrimitiveTopology">PrimitiveTopology</a>.</dd>
-      <dt>colorAttachmentFormat</dt><dd>Must equal the color format of the pass the pipeline is used in, or <code>bindPipeline</code> rejects it.</dd>
+      <dt>colorAttachmentFormats</dt><dd>One per color attachment, ending at the first <code>UNKNOWN</code> (count them with <code>colorAttachmentCount</code>). Must equal the color formats of the pass the pipeline is used in, in order, or <code>bindPipeline</code> rejects it. Every attachment gets the same blend state (blending off).</dd>
       <dt>depthStencilAttachmentFormat</dt><dd>The same for the depth format.</dd>
     </dl>
+  </div>
+</div>
+
+<div class="api" id="colorAttachmentCount">
+  <pre class="sig">uint32_t colorAttachmentCount(const Format* formats);</pre>
+  <div class="body">
+    <p>How many of the <code>MAX_COLOR_ATTACHMENTS</code> formats at <code>formats</code> come before the first <code>UNKNOWN</code>: the number of color attachments a <code>PipelineDesc</code> or <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a> describes. A format after a gap does not count.</p>
   </div>
 </div>
 
@@ -798,14 +813,55 @@ struct BindlessDescriptorSetLayoutDescHash
 <div class="api" id="RenderContext-createRenderTarget">
   <pre class="sig">RenderTargetHandle createRenderTarget(const RenderTargetDesc&amp; desc);</pre>
   <div class="body">
-    <p>What <a href="render-graph.html#createRenderTarget">Engine::createRenderTarget</a> calls: a color and a depth texture per frame slot, both colors made bindless with <code>LINEAR_CLAMP</code>. See <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>.</p>
+    <p>What <a href="render-graph.html#createRenderTarget">Engine::createRenderTarget</a> calls: a color and a depth texture, or one pair per frame slot with <code>history</code>, the colors made bindless with <code>LINEAR_CLAMP</code>. See <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>. The copies of a history target are cleared to <code>clearColor</code> by <a href="#clearNewHistory">clearNewHistory</a> at the start of the next frame.</p>
+    <p><span class="tag">errors</span> These stop in the debugger in a debug build and return an invalid handle: no color format (<code>a render target needs at least one color format.</code>), a gap in <code>colorFormats</code> (<code>a render target's color formats can't have a gap.</code>), or no depth format (<code>a render target needs a depth format.</code>). <code>createTransientRenderTarget</code> checks the same.</p>
+  </div>
+</div>
+
+<div class="api" id="createTransientRenderTarget">
+  <pre class="sig">RenderTargetHandle createTransientRenderTarget(const RenderTargetDesc&amp; desc);</pre>
+  <div class="body">
+    <p>What <a href="render-graph.html#PassBuilder-createTexture">PassBuilder::createRenderTarget</a> calls for a target without <code>history</code>. The handle and the target's size and formats exist at once; the textures only after <code>placeTransientRenderTargets</code>. You rarely call it yourself: the render graph does.</p>
+    <p><span class="tag">errors</span> A desc with <code>history</code> stops in the debugger in a debug build and returns an invalid handle: <code>a history render target lives across frames, so it can't be transient.</code></p>
+  </div>
+</div>
+
+<div class="api" id="placeTransientRenderTargets">
+  <pre class="sig">bool placeTransientRenderTargets(const RenderTargetHandle* renderTargets,
+                                 const uint32_t* firstPasses,
+                                 const uint32_t* lastPasses,
+                                 uint32_t count);</pre>
+  <div class="body">
+    <p>Creates the textures of <code>count</code> transient targets in shared heaps. Target <code>i</code> is in use from pass position <code>firstPasses[i]</code> to <code>lastPasses[i]</code>, both included. Targets whose ranges do not overlap may get the same memory (see <a href="render-graph.html#transient">Transient render targets</a>). The textures keep their bindless slots, and the call logs the heap size against the size without sharing.</p>
+    <p>If one of the targets was placed before, its old group is replaced: the call first waits for the device to be idle, then frees the old heaps. <code>RenderGraph::execute</code> calls this after a compile that changed the targets' lifetimes. Returns <code>false</code> and logs an error if a heap or texture cannot be created; those targets then have no textures, and the graph tries again the next frame.</p>
+  </div>
+</div>
+
+<div class="api" id="destroyTransientRenderTargets">
+  <pre class="sig">void destroyTransientRenderTargets(const RenderTargetHandle* renderTargets, uint32_t count);</pre>
+  <div class="body">
+    <p>Destroys transient targets: their textures, their handles, and the heaps of each group that has no target left. It waits for the device to be idle first, so call it outside the frame loop. Handles that are unknown or not transient are skipped. The <code>RenderGraph</code> destructor calls it for the graph's targets.</p>
+  </div>
+</div>
+
+<div class="api" id="clearNewHistory">
+  <pre class="sig">void clearNewHistory(const CommandBufferHandle&amp; commandBuffer);</pre>
+  <div class="body">
+    <p>Records a clear to <code>clearColor</code> of every history copy made since the last call, and leaves the colors in the sampled layout. So the previous frame's copy can be read on the first frame, and after a resize. <code>Engine::beginFrame</code> calls it, before any pass. If the frame is not submitted, <code>discardRecording</code> keeps the clears for the next call.</p>
+  </div>
+</div>
+
+<div class="api" id="resizeRenderTargets">
+  <pre class="sig">void resizeRenderTargets();</pre>
+  <div class="body">
+    <p>Rebuilds every render target with a <code>swapchainScale</code> at the swapchain's current size, and places each transient group that holds one again. The handles and bindless slots stay the same. The engine calls it after the swapchain is created again, with the device idle. Do not call it while the GPU may use the targets.</p>
   </div>
 </div>
 
 <div class="api" id="getRenderTarget">
   <pre class="sig">const RenderTarget&amp; getRenderTarget(const RenderTargetHandle&amp; handle);</pre>
   <div class="body">
-    <p>The target's textures (<code>attachments[slot].color</code> and <code>.depth</code> per frame slot), size, formats and clear color. See <a href="types.html#RenderTarget">RenderTarget</a>. An unknown handle logs <code>Render target handle not found.</code> and returns an empty target with invalid handles.</p>
+    <p>The target's textures (<code>attachments[slot].color[i]</code> for each of its <code>colorCount</code> color attachments, and <code>.depth</code>, per frame slot; without history every slot holds the same textures), size, formats, clear color and <code>history</code>. See <a href="types.html#RenderTarget">RenderTarget</a>. An unknown handle logs <code>Render target handle not found.</code> and returns an empty target with invalid handles.</p>
   </div>
 </div>
 

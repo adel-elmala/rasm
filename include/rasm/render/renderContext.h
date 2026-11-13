@@ -9,6 +9,11 @@
 #include "rasm/types.h"
 #include "rasm/render/resource.h"
 
+namespace rasm::rhi
+{
+    struct Heap;
+}
+
 namespace rasm
 {
     class Engine;
@@ -31,6 +36,11 @@ namespace rasm
         FenceHandle                         createFence(const std::string& name, uint64_t initialValue = 0);
         QueryPoolHandle                     createTimestampQueryPool(const std::string& name, uint32_t count);
         RenderTargetHandle                  createRenderTarget(const RenderTargetDesc& desc);
+        RenderTargetHandle                  createTransientRenderTarget(const RenderTargetDesc& desc);
+        bool                                placeTransientRenderTargets(const RenderTargetHandle* renderTargets, const uint32_t* firstPasses, const uint32_t* lastPasses, uint32_t count);
+        void                                destroyTransientRenderTargets(const RenderTargetHandle* renderTargets, uint32_t count);
+        void                                clearNewHistory(const CommandBufferHandle& commandBuffer);
+        void                                resizeRenderTargets();
         const RenderTarget&                 getRenderTarget(const RenderTargetHandle& handle);
         std::vector<TextureHandle>          getSwapchainImages();
         Format                              getSwapchainImageFormat();
@@ -52,7 +62,7 @@ namespace rasm
         void                                writeTimestamp(const CommandBufferHandle& commandBuffer, const QueryPoolHandle& pool, uint32_t index);
         bool                                fillTexture(const TextureHandle& texture, const void* data);
         [[nodiscard]] SwapchainStatus       recreateSwapchain();
-        bool                                beginRendering(const CommandBufferHandle& commandBuffer, TextureHandle colorAttachment, TextureHandle depthAttachment, const glm::vec4& clearColor, bool load = false, bool storeDepth = false);
+        bool                                beginRendering(const CommandBufferHandle& commandBuffer, const TextureHandle* colorAttachments, uint32_t colorCount, TextureHandle depthAttachment, const glm::vec4& clearColor, const AttachmentOps& ops = {});
         bool                                endRendering(const CommandBufferHandle& commandBuffer);
         bool                                setViewport(const CommandBufferHandle& commandBuffer, float x, float y, float width, float height, float minDepth = 0.0f, float maxDepth = 1.0f);
         const Viewport&                     getViewport() const;
@@ -73,9 +83,14 @@ namespace rasm
         void                                drawIndexedIndirectCount(const CommandBufferHandle& commandBuffer, const BufferHandle& drawInfoBuffer, uint64_t offset, const BufferHandle& countBuffer, uint64_t countOffset, uint32_t maxDrawCount, uint32_t stride);
         void                                dispatch(const CommandBufferHandle& commandBuffer, uint32_t groupCountX, uint32_t groupCountY = 1, uint32_t groupCountZ = 1);
         void                                memoryBarrier(const CommandBufferHandle& commandBuffer, PipelineStage before, PipelineStage after);
+        void                                aliasingBarrier(const CommandBufferHandle& commandBuffer);
 
     private:
         struct Impl;
+
+        bool                                createAttachments(RenderTarget& renderTarget, const RenderTargetDesc& desc, rhi::Heap* const* heaps, const uint64_t* offsets);
+        void                                destroyAttachments(RenderTarget& renderTarget);
+        bool                                placeGroup(uint32_t group);
 
         Engine*                 engine  = nullptr;
         std::unique_ptr<Impl>   impl;

@@ -238,6 +238,24 @@ namespace rasm
 
     PipelineHandle Engine::createPipeline(const std::string &name, const std::string &shaderSource)
     {
+        const Format colorFormats[MAX_COLOR_ATTACHMENTS] = {ctx.getSwapchainImageFormat()};
+        return createGraphicsPipeline(name, shaderSource, colorFormats, DEPTH_FORMAT);
+    }
+
+    // The pipeline draws into targets with the formats of this one: its colors, in order, and its depth.
+    PipelineHandle Engine::createPipeline(const std::string &name, const std::string &shaderSource, const RenderTargetHandle &renderTarget)
+    {
+        const auto &rt = ctx.getRenderTarget(renderTarget);
+        if (rt.colorCount == 0)
+        {
+            spdlog::error("Pipeline '{}' needs a render target with color formats.", name);
+            return {};
+        }
+        return createGraphicsPipeline(name, shaderSource, rt.colorFormats, rt.depthFormat);
+    }
+
+    PipelineHandle Engine::createGraphicsPipeline(const std::string &name, const std::string &shaderSource, const Format *colorFormats, Format depthFormat)
+    {
         ZoneScoped;
 
         const char *vertEntryPoint = "vertMain";
@@ -251,13 +269,14 @@ namespace rasm
             return {};
         }
 
-        return ctx.createPipeline({.name = "Pipeline for " + name,
-                                   .vertexShader = ctx.createShader({.name = name + ".vert", .type = ShaderType::VERTEX, .entryPoint = vertEntryPoint, .code = std::move(vertShader.code)}),
-                                   .fragmentShader = ctx.createShader({.name = name + ".frag", .type = ShaderType::FRAGMENT, .entryPoint = fragEntryPoint, .code = std::move(fragShader.code)}),
-                                   .descriptorSetLayout = bindlessDescriptorSetLayout,
-                                   .topology = PrimitiveTopology::TRIANGLE_LIST,
-                                   .colorAttachmentFormat = ctx.getSwapchainImageFormat(),
-                                   .depthStencilAttachmentFormat = DEPTH_FORMAT});
+        PipelineDesc desc = {.name = "Pipeline for " + name,
+                             .vertexShader = ctx.createShader({.name = name + ".vert", .type = ShaderType::VERTEX, .entryPoint = vertEntryPoint, .code = std::move(vertShader.code)}),
+                             .fragmentShader = ctx.createShader({.name = name + ".frag", .type = ShaderType::FRAGMENT, .entryPoint = fragEntryPoint, .code = std::move(fragShader.code)}),
+                             .descriptorSetLayout = bindlessDescriptorSetLayout,
+                             .topology = PrimitiveTopology::TRIANGLE_LIST,
+                             .depthStencilAttachmentFormat = depthFormat};
+        std::copy(colorFormats, colorFormats + MAX_COLOR_ATTACHMENTS, std::begin(desc.colorAttachmentFormats));
+        return ctx.createPipeline(desc);
     }
 
     PipelineHandle Engine::createComputePipeline(const std::string &name, const std::string &shaderSource, const std::string &entryPoint)
@@ -325,6 +344,7 @@ namespace rasm
         // record commands for the current frame
         ctx.beginCommandBuffer(currentFrame.commandBuffer);
         frameStats->frameTimer = beginGpuTimer(currentFrame.commandBuffer, "Frame");
+        ctx.clearNewHistory(currentFrame.commandBuffer);
         return true;
     }
 
@@ -343,6 +363,7 @@ namespace rasm
             endPass();
             setRenderTarget(renderTarget);
         }
+        drawStatsOverlay();
         ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::PRESENT_SRC);
 
         endGpuTimer(currentFrame.commandBuffer, frameStats->frameTimer);
@@ -378,32 +399,34 @@ namespace rasm
         FrameMark;
     }
 
-    void Engine::beginPass(const std::string &name)
+    void Engine::beginPass(const std::string &name, const AttachmentOps &ops)
     {
         auto currentFrame = frameResources[frameCount];
         frameStats->passTimer = beginGpuTimer(currentFrame.commandBuffer, name);
         uint32_t width = swapchain.width;
         uint32_t height = swapchain.height;
-        // drawScene's occlusion culling pauses the pass and builds its Hi-Z from the depth drawn so far.
-        const bool storeDepth = config.occlusionCulling;
-
+        TextureHandle colors[MAX_COLOR_ATTACHMENTS] = {swapchain.imageHandles[imageIdx]};
+        uint32_t colorCount = 1;
+        TextureHandle depth = currentFrame.depthTexture;
+        glm::vec4 clearColor = SWAPCHAIN_CLEAR_COLOR;
         if (currentRenderTarget.isValid())
         {
-            auto renderTargetData = ctx.getRenderTarget(currentRenderTarget);
+            const auto &renderTargetData = ctx.getRenderTarget(currentRenderTarget);
             width = renderTargetData.width;
             height = renderTargetData.height;
+            colorCount = renderTargetData.colorCount;
+            std::copy(std::begin(renderTargetData.attachments[frameCount].color), std::end(renderTargetData.attachments[frameCount].color), std::begin(colors));
+            depth = renderTargetData.attachments[frameCount].depth;
+            clearColor = renderTargetData.clearColor;
+        }
 
-            // The pass clears both, so their contents are dropped.
-            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::COLOR_ATTACHMENT, true);
-            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT, true);
-            ctx.beginRendering(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, renderTargetData.attachments[frameCount].depth, renderTargetData.clearColor, false, storeDepth);
-        }
-        else
-        {
-            ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::COLOR_ATTACHMENT, true);
-            ctx.transitionImageLayout(currentFrame.commandBuffer, currentFrame.depthTexture, TextureUsage::DEPTH_STENCIL_ATTACHMENT, true);
-            ctx.beginRendering(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], currentFrame.depthTexture, SWAPCHAIN_CLEAR_COLOR, false, storeDepth);
-        }
+        // What the pass clears is dropped. drawScene's occlusion culling pauses the pass and builds its Hi-Z from the
+        // depth drawn so far, so it needs the depth stored.
+        for (uint32_t i = 0; i < colorCount; ++i)
+            ctx.transitionImageLayout(currentFrame.commandBuffer, colors[i], TextureUsage::COLOR_ATTACHMENT, !ops.loadColor);
+        ctx.transitionImageLayout(currentFrame.commandBuffer, depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT, !ops.loadDepth);
+        ctx.beginRendering(currentFrame.commandBuffer, colors, colorCount, depth, clearColor,
+                           {.loadColor = ops.loadColor, .loadDepth = ops.loadDepth, .storeDepth = ops.storeDepth || config.occlusionCulling});
 
         // begin dynamic rendering
         ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
@@ -415,8 +438,6 @@ namespace rasm
     void Engine::endPass()
     {
         auto currentFrame = frameResources[frameCount];
-        if (!currentRenderTarget.isValid())
-            drawStatsOverlay();
         ctx.endRendering(currentFrame.commandBuffer);
 
         if (currentRenderTarget.isValid())
@@ -424,7 +445,8 @@ namespace rasm
             // Later passes sample the color attachment through the bindless set, whose descriptors promise
             // this layout (B10). Depth stays an attachment: only drawScene's Hi-Z reads it, inside the pass.
             const auto &renderTargetData = ctx.getRenderTarget(currentRenderTarget);
-            ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color, TextureUsage::SAMPLED);
+            for (uint32_t i = 0; i < renderTargetData.colorCount; ++i)
+                ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color[i], TextureUsage::SAMPLED);
         }
         else
         {
@@ -501,6 +523,7 @@ namespace rasm
                 addBindlessTexture(bindlessDescriptorSet, frameResources[i].depthTexture, SamplerType::NEAREST_CLAMP, depthSlot);
         }
 
+        ctx.resizeRenderTargets();
         updateCameraAspectRatio(static_cast<float>(swapchain.width) / static_cast<float>(swapchain.height));
         return true;
     }
@@ -574,10 +597,20 @@ namespace rasm
         return UINT32_MAX;
     }
 
-    TextureHandle Engine::getRenderTargetTexture(const RenderTargetHandle &renderTarget)
+    TextureHandle Engine::getRenderTargetTexture(const RenderTargetHandle &renderTarget, uint32_t attachment)
     {
         auto &rt = ctx.getRenderTarget(renderTarget);
-        return rt.attachments[frameCount % MAX_FRAMES_IN_FLIGHT].color;
+        if (attachment >= rt.colorCount)
+            return {};
+        return rt.attachments[frameCount % MAX_FRAMES_IN_FLIGHT].color[attachment];
+    }
+
+    TextureHandle Engine::getPreviousRenderTargetTexture(const RenderTargetHandle &renderTarget, uint32_t attachment)
+    {
+        auto &rt = ctx.getRenderTarget(renderTarget);
+        if (!rt.history || attachment >= rt.colorCount)
+            return {};
+        return rt.attachments[(frameCount + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT].color[attachment];
     }
 
 } // namespace rasm

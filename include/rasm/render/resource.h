@@ -121,9 +121,9 @@ namespace rasm
         ShaderHandle                fragmentShader;
         ShaderHandle                computeShader;
         DescriptorSetLayoutHandle   descriptorSetLayout;
-        PrimitiveTopology           topology                        = PrimitiveTopology::TRIANGLE_LIST;
-        Format                      colorAttachmentFormat           = Format::UNKNOWN;
-        Format                      depthStencilAttachmentFormat    = Format::UNKNOWN;
+        PrimitiveTopology           topology                                      = PrimitiveTopology::TRIANGLE_LIST;
+        Format                      colorAttachmentFormats[MAX_COLOR_ATTACHMENTS] = {};
+        Format                      depthStencilAttachmentFormat                  = Format::UNKNOWN;
 
         bool                        operator==(const PipelineDesc&) const = default;
     };
@@ -131,13 +131,24 @@ namespace rasm
     struct RenderTargetDesc
     {
         std::string                 name;
-        uint32_t                    width                           = 0;
-        uint32_t                    height                          = 0;
-        Format                      colorFormat                     = Format::UNKNOWN;
-        Format                      depthFormat                     = Format::UNKNOWN;
-        glm::vec4                   clearColor                      = glm::vec4(0.0f); // linear; every pass that writes the target starts from this
+        uint32_t                    width                                         = 0;
+        uint32_t                    height                                        = 0;
+        float                       swapchainScale                                = 0.0f;
+        Format                      colorFormats[MAX_COLOR_ATTACHMENTS]           = {};
+        Format                      depthFormat                                   = Format::UNKNOWN;
+        glm::vec4                   clearColor                                    = glm::vec4(0.0f); // linear; every pass that writes the target starts from this
+        bool                        history                                       = false;
 
         bool                        operator==(const RenderTargetDesc&) const = default;
+    };
+
+    uint32_t                        colorAttachmentCount(const Format* formats);
+
+    struct AttachmentOps
+    {
+        bool                        loadColor                       = false;
+        bool                        loadDepth                       = false;
+        bool                        storeDepth                      = false;
     };
 
     struct BindlessDescriptorSetLayoutDesc

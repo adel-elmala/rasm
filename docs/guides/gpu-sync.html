@@ -623,7 +623,7 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>There is one queue: no async compute or transfer queue, and a <code>SubmitDesc</code> cannot wait on a fence (<b>D13</b>). The render graph places barriers but has no transient resources or aliasing (<b>D9</b>).</p>
+  <p>There is one queue: no async compute or transfer queue, and a <code>SubmitDesc</code> cannot wait on a fence (<b>D13</b>). The render graph places barriers and aliases transient render targets, but does not cull passes (<b>D9</b>). Aliasing needs its own global barrier: see <a href="memory-aliasing.html">Transient memory and aliasing</a>.</p>
 </div>
 
 <h3>Further reading</h3>

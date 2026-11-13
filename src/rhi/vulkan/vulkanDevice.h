@@ -20,6 +20,9 @@ namespace rasm::rhi
         bool                        initialize(const DeviceDesc& desc);
         Buffer*                     createBuffer(const BufferDesc& desc) override;
         Texture*                    createTexture(const TextureDesc& desc) override;
+        MemoryRequirements          getTextureMemoryRequirements(const TextureDesc& desc) override;
+        Heap*                       createHeap(uint64_t size, uint64_t alignment, uint32_t memoryTypeBits, const std::string& name) override;
+        Texture*                    createPlacedTexture(const TextureDesc& desc, Heap* heap, uint64_t offset) override;
         Sampler*                    createSampler(const SamplerDesc& desc) override;
         Shader*                     createShader(const ShaderDesc& desc) override;
         Pipeline*                   createGraphicsPipeline(const PipelineDesc& desc, Shader* vertexShader, Shader* fragmentShader, DescriptorSetLayout* layout) override;
@@ -33,6 +36,7 @@ namespace rasm::rhi
         QueryPool*                  createTimestampQueryPool(uint32_t count, const std::string& name) override;
         void                        destroyBuffer(Buffer* buffer) override;
         void                        destroyTexture(Texture* texture) override;
+        void                        destroyHeap(Heap* heap) override;
         void                        destroySampler(Sampler* sampler) override;
         void                        destroyShader(Shader* shader) override;
         void                        destroyPipeline(Pipeline* pipeline) override;

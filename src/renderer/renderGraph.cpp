@@ -7,9 +7,55 @@
 #include <algorithm>
 #include <queue>
 #include <unordered_map>
+#include <utility>
 
 namespace rasm
 {
+    namespace
+    {
+        void addEdge(std::vector<Pass> &passes, uint32_t from, uint32_t to)
+        {
+            passes[from].successors.push_back(to);
+            passes[to].inDegree++;
+        }
+    }
+
+    RenderGraph::RenderGraph(RenderGraph &&other) noexcept
+    {
+        *this = std::move(other);
+    }
+
+    // The transient targets' memory is the graph's, so it goes with the graph.
+    RenderGraph::~RenderGraph()
+    {
+        destroyTransients();
+    }
+
+    // The moved-from graph keeps no transient targets, so its destructor frees nothing.
+    RenderGraph &RenderGraph::operator=(RenderGraph &&other) noexcept
+    {
+        if (this == &other)
+            return *this;
+        destroyTransients();
+        passes = std::move(other.passes);
+        executionOrder = std::move(other.executionOrder);
+        bufferAccess = std::move(other.bufferAccess);
+        transientTargets = std::exchange(other.transientTargets, {});
+        transientFirstPasses = std::move(other.transientFirstPasses);
+        transientLastPasses = std::move(other.transientLastPasses);
+        transientsPlaced = other.transientsPlaced;
+        engine = other.engine;
+        compiled = other.compiled;
+        return *this;
+    }
+
+    void RenderGraph::destroyTransients()
+    {
+        if (engine && !transientTargets.empty())
+            engine->getRenderContext().destroyTransientRenderTargets(transientTargets.data(), static_cast<uint32_t>(transientTargets.size()));
+        transientTargets.clear();
+    }
+
     void RenderGraph::addPass(std::string name, const std::function<void(PassBuilder &)> &setup, std::function<void(RenderContext &)> execute)
     {
         uint32_t passIdx = static_cast<uint32_t>(passes.size());
@@ -29,10 +75,11 @@ namespace rasm
         auto &pass = passes.back();
         pass.compute = true;
         // A compute pass runs outside any render pass, so it has no attachments to write.
-        if (pass.outputRenderTarget.isValid())
+        if (pass.outputRenderTarget.isValid() || pass.writesSwapchain)
         {
-            spdlog::error("Compute pass '{}' cannot write a render target; the write is ignored.", pass.name);
+            spdlog::error("Compute pass '{}' cannot write a render target or the swapchain; the write is ignored.", pass.name);
             pass.outputRenderTarget = {};
+            pass.writesSwapchain = false;
         }
     }
 
@@ -50,6 +97,12 @@ namespace rasm
             if (pass.outputRenderTarget.isValid() && std::find(pass.inputRenderTargets.begin(), pass.inputRenderTargets.end(), pass.outputRenderTarget) != pass.inputRenderTargets.end())
             {
                 spdlog::error("Pass '{}' reads the render target it draws to.", pass.name);
+                valid = false;
+            }
+            // execute begins the pass on what it writes, so it must be exactly one target.
+            if (!pass.compute && pass.outputRenderTarget.isValid() == pass.writesSwapchain)
+            {
+                spdlog::error("Pass '{}' must write either one render target or the swapchain.", pass.name);
                 valid = false;
             }
             // Compute writes only buffers, so a compute pass that declares no write is missing its buffers.
@@ -72,10 +125,12 @@ namespace rasm
             pass.successors.clear();
         }
 
-        // 1. Map resources to their producers
+        // 1. Map resources to their producers. Passes that draw to one target run in the order they were added,
+        // so its readers see the last one.
         std::unordered_map<TextureHandle, uint32_t, HandleHash> texturesWriters;
         std::unordered_map<BufferHandle, uint32_t, HandleHash> buffersWriters;
         std::unordered_map<RenderTargetHandle, uint32_t, HandleHash> renderTargetsWriters;
+        uint32_t swapchainWriter = static_cast<uint32_t>(-1);
         for (uint32_t i = 0; i < passes.size(); ++i)
         {
             auto &pass = passes[i];
@@ -90,7 +145,16 @@ namespace rasm
             }
             if (pass.outputRenderTarget.isValid())
             {
+                auto it = renderTargetsWriters.find(pass.outputRenderTarget);
+                if (it != renderTargetsWriters.end())
+                    addEdge(passes, it->second, i);
                 renderTargetsWriters[pass.outputRenderTarget] = i;
+            }
+            if (pass.writesSwapchain)
+            {
+                if (swapchainWriter != static_cast<uint32_t>(-1))
+                    addEdge(passes, swapchainWriter, i);
+                swapchainWriter = i;
             }
         }
 
@@ -168,7 +232,20 @@ namespace rasm
             return;
         }
 
-        // 5. Store the final execution order
+        // The transient memory is laid out from the lifetimes, so it is laid out again only when they change.
+        const std::vector<uint32_t> firstPasses = transientFirstPasses;
+        const std::vector<uint32_t> lastPasses = transientLastPasses;
+        if (!transientLifetimes(sortedIndices))
+        {
+            executionOrder.clear();
+            return;
+        }
+        if (transientFirstPasses != firstPasses || transientLastPasses != lastPasses)
+            transientsPlaced = false;
+
+        assignAttachmentOps(sortedIndices);
+
+        // 5. Store the final execution order.
         executionOrder = std::move(sortedIndices);
         compiled = true;
         spdlog::info("Successfully compiled {} passes.", executionOrder.size());
@@ -182,17 +259,22 @@ namespace rasm
             compile();
 
         auto &ctx = engine->getRenderContext();
+        const bool placed = compiled && placeTransients();
 
         if (!engine->beginFrame(camera))
             return;
 
         auto commandBuffer = engine->getCurrentFrameResources().commandBuffer;
-        for (const auto &passIdx : executionOrder)
+        const uint32_t passCount = placed ? static_cast<uint32_t>(executionOrder.size()) : 0;
+        for (uint32_t position = 0; position < passCount; ++position)
         {
-            auto &pass = passes[passIdx];
+            auto &pass = passes[executionOrder[position]];
 
             // Barriers are not allowed inside a render pass, so all of them go before the pass begins. beginPass
             // moves the attachments it draws to, and endPass leaves a render target's color SAMPLED for its readers.
+            // A transient target's first pass draws over memory that other targets used before, last frame's included.
+            if (std::find(transientFirstPasses.begin(), transientFirstPasses.end(), position) != transientFirstPasses.end())
+                ctx.aliasingBarrier(commandBuffer);
             PipelineStage before = {};
             PipelineStage after = {};
             if (bufferBarrier(pass, before, after))
@@ -208,12 +290,98 @@ namespace rasm
                 continue;
             }
             engine->setRenderTarget(pass.outputRenderTarget);
-            engine->beginPass(pass.name);
+            engine->beginPass(pass.name, pass.attachmentOps);
             pass.execute(ctx);
             engine->endPass();
             engine->resetRenderTarget();
         }
         engine->endFrame();
+    }
+
+    // A failed placement, here or at a resize, leaves targets without textures. It is tried again every frame, and
+    // until it works the frames draw no passes.
+    bool RenderGraph::placeTransients()
+    {
+        if (transientTargets.empty())
+            return true;
+        auto &ctx = engine->getRenderContext();
+        const bool missing = std::any_of(transientTargets.begin(), transientTargets.end(), [&ctx](const RenderTargetHandle &target)
+                                         { return !ctx.getRenderTarget(target).attachments[0].color[0].isValid(); });
+        if (!transientsPlaced || missing)
+            transientsPlaced = ctx.placeTransientRenderTargets(transientTargets.data(), transientFirstPasses.data(), transientLastPasses.data(), static_cast<uint32_t>(transientTargets.size()));
+        return transientsPlaced;
+    }
+
+    // Passes that draw to one target run in the order they were added, so the first clears it, and each later one loads
+    // what the one before drew, depth included, which that one must then store.
+    void RenderGraph::assignAttachmentOps(const std::vector<uint32_t> &order)
+    {
+        constexpr uint32_t NONE = UINT32_MAX;
+        std::unordered_map<RenderTargetHandle, uint32_t, HandleHash> lastWriters;
+        uint32_t lastSwapchainWriter = NONE;
+        for (uint32_t passIdx : order)
+        {
+            Pass &pass = passes[passIdx];
+            pass.attachmentOps = {};
+            if (pass.compute)
+                continue;
+            uint32_t &previous = pass.writesSwapchain ? lastSwapchainWriter : lastWriters.try_emplace(pass.outputRenderTarget, NONE).first->second;
+            if (previous != NONE)
+            {
+                pass.attachmentOps.loadColor = true;
+                pass.attachmentOps.loadDepth = true;
+                passes[previous].attachmentOps.storeDepth = true;
+            }
+            previous = passIdx;
+        }
+    }
+
+    // Each transient render target lives from the first pass in the order that uses it to the last, as positions in the
+    // order. Its memory holds another target's data before that, so its first use must draw it.
+    bool RenderGraph::transientLifetimes(const std::vector<uint32_t> &order)
+    {
+        const auto count = transientTargets.size();
+        transientFirstPasses.assign(count, UINT32_MAX);
+        transientLastPasses.assign(count, 0);
+        std::unordered_map<RenderTargetHandle, uint32_t, HandleHash> transientIndex;
+        for (uint32_t i = 0; i < count; ++i)
+            transientIndex[transientTargets[i]] = i;
+
+        bool valid = true;
+        for (uint32_t position = 0; position < order.size(); ++position)
+        {
+            const Pass &pass = passes[order[position]];
+            auto use = [&](RenderTargetHandle renderTarget, bool draws)
+            {
+                auto it = transientIndex.find(renderTarget);
+                if (it == transientIndex.end())
+                    return;
+                if (transientFirstPasses[it->second] == UINT32_MAX)
+                {
+                    transientFirstPasses[it->second] = position;
+                    if (!draws)
+                    {
+                        spdlog::error("Pass '{}' reads a transient render target that no pass before it draws.", pass.name);
+                        valid = false;
+                    }
+                }
+                transientLastPasses[it->second] = position;
+            };
+            for (auto renderTarget : pass.inputRenderTargets)
+                use(renderTarget, false);
+            if (pass.outputRenderTarget.isValid())
+                use(pass.outputRenderTarget, true);
+        }
+
+        // A target no pass declares is still created, and kept for the whole frame.
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            if (transientFirstPasses[i] != UINT32_MAX)
+                continue;
+            transientFirstPasses[i] = 0;
+            transientLastPasses[i] = order.empty() ? 0 : static_cast<uint32_t>(order.size() - 1);
+        }
+        return valid;
     }
 
     // Shaders reach buffers through device addresses, so one global barrier covers all of a pass's buffers.
@@ -264,9 +432,17 @@ namespace rasm
         return handle;
     }
 
+    // A history target lives across frames. Any other is transient: its memory is the graph's to share.
     RenderTargetHandle RenderGraph::createRenderTarget(const RenderTargetDesc &desc)
     {
-        auto handle = engine->createRenderTarget(desc);
+        if (desc.history)
+            return engine->createRenderTarget(desc);
+        auto handle = engine->getRenderContext().createTransientRenderTarget(desc);
+        if (handle.isValid())
+        {
+            transientTargets.push_back(handle);
+            transientsPlaced = false;
+        }
         return handle;
     }
 
@@ -276,11 +452,25 @@ namespace rasm
 
     void RenderGraph::read(uint32_t passIdx, RenderTargetHandle h) { passes[passIdx].inputRenderTargets.push_back(h); }
 
+    // Last frame's copy is never written this frame, so the read adds no edge. The copy is always SAMPLED: the frame
+    // before drew it, or it was cleared when it was made.
+    void RenderGraph::readPrevious(uint32_t passIdx, RenderTargetHandle h)
+    {
+        if (engine && !engine->getRenderContext().getRenderTarget(h).history)
+        {
+            spdlog::error("Pass '{}' reads the previous frame of a render target created without history; the read is ignored.", passes[passIdx].name);
+            return;
+        }
+        passes[passIdx].previousRenderTargets.push_back(h);
+    }
+
     void RenderGraph::write(uint32_t passIdx, TextureHandle h) { passes[passIdx].outputTextures.push_back(h); }
 
     void RenderGraph::write(uint32_t passIdx, BufferHandle h) { passes[passIdx].outputBuffers.push_back(h); }
 
     void RenderGraph::write(uint32_t passIdx, RenderTargetHandle h) { passes[passIdx].outputRenderTarget = h; }
+
+    void RenderGraph::writeSwapchain(uint32_t passIdx) { passes[passIdx].writesSwapchain = true; }
 
     TextureHandle PassBuilder::createTexture(const TextureDesc &desc)
     {
@@ -303,10 +493,14 @@ namespace rasm
 
     void PassBuilder::read(RenderTargetHandle handle) { graph.read(currentPass, handle); }
 
+    void PassBuilder::readPrevious(RenderTargetHandle handle) { graph.readPrevious(currentPass, handle); }
+
     void PassBuilder::write(TextureHandle handle) { graph.write(currentPass, handle); }
 
     void PassBuilder::write(BufferHandle handle) { graph.write(currentPass, handle); }
 
     void PassBuilder::write(RenderTargetHandle handle) { graph.write(currentPass, handle); }
+
+    void PassBuilder::writeSwapchain() { graph.writeSwapchain(currentPass); }
 
 }

@@ -25,7 +25,7 @@ namespace
             transitions.push_back({oldUsage, newUsage});
             return true;
         }
-        void beginRendering(Texture *, Texture *, const glm::vec4 &, bool, bool) override {}
+        void beginRendering(Texture *const *, uint32_t, Texture *, const glm::vec4 &, const AttachmentOps &) override {}
         void endRendering() override {}
         void setViewport(float, float, float, float, float, float) override {}
         void setScissor(int32_t, int32_t, uint32_t, uint32_t) override {}
@@ -40,6 +40,7 @@ namespace
         void drawIndexedIndirectCount(Buffer *, uint64_t, Buffer *, uint64_t, uint32_t, uint32_t) override {}
         void dispatch(uint32_t, uint32_t, uint32_t) override {}
         void memoryBarrier(PipelineStage, PipelineStage) override {}
+        void aliasingBarrier() override {}
         void copyBuffers(Buffer *, const BufferCopy *, uint32_t) override {}
         void writeTimestamp(QueryPool *, uint32_t) override {}
 

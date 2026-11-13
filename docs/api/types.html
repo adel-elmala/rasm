@@ -195,10 +195,11 @@ private:
 <div class="api" id="Format">
   <pre class="sig">enum class Format
 {
+    UNKNOWN,
     R8G8B8A8_UNORM, R8G8B8A8_SRGB, B8G8R8A8_SRGB, R8G8B8_UNORM,
     R16G16B16A16_SFLOAT, R32G32B32_SFLOAT, R32G32B32A32_SFLOAT,
     D24_UNORM_S8_UINT, D32_SFLOAT, D32_SFLOAT_S8_UINT,
-    R32G32_SFLOAT, U16_UINT, U32_UINT, UNKNOWN
+    R32G32_SFLOAT, U16_UINT, U32_UINT,
 };</pre>
   <div class="body">
     <p>Texture, attachment and index formats. Each maps to the Vulkan format of the same name (<code>R8G8B8A8_UNORM</code> → <code>VK_FORMAT_R8G8B8A8_UNORM</code>), except the index types.</p>
@@ -316,7 +317,7 @@ private:
 <div class="api" id="RenderTarget">
   <pre class="sig">struct RenderTargetAttachments
 {
-    TextureHandle color;
+    TextureHandle color[rasm::MAX_COLOR_ATTACHMENTS];
     TextureHandle depth;
 };
 
@@ -325,12 +326,14 @@ struct RenderTarget
     RenderTargetAttachments attachments[rasm::MAX_FRAMES_IN_FLIGHT];
     uint32_t                width;
     uint32_t                height;
-    Format                  colorFormat;
+    Format                  colorFormats[rasm::MAX_COLOR_ATTACHMENTS];
+    uint32_t                colorCount;
     Format                  depthFormat;
     glm::vec4               clearColor;
+    bool                    history;
 };</pre>
   <div class="body">
-    <p>A render target as <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns it: the values of its <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>, plus one <code>RenderTargetAttachments</code> pair (color, depth) per frame slot. <code>getRenderTargetTexture</code> picks <code>attachments[slot].color</code> for the current slot.</p>
+    <p>A render target as <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns it: the values of its <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>, plus one <code>RenderTargetAttachments</code> entry (its colors, its depth) per frame slot. Only the first <code>colorCount</code> colors are used. Without <code>history</code> every entry holds the same textures; with it each slot has its own. <code>getRenderTargetTexture(rt, i)</code> picks <code>attachments[slot].color[i]</code> for the current slot, and <code>getPreviousRenderTargetTexture</code> the previous slot's.</p>
   </div>
 </div>
 
@@ -426,6 +429,7 @@ struct RenderTarget
 <table>
   <tr><th>Constant and header</th><th>Value</th><th>What it limits</th></tr>
   <tr id="MAX_FRAMES_IN_FLIGHT"><td><code>MAX_FRAMES_IN_FLIGHT</code><br><code>rasm/types.h</code></td><td>2</td><td>Frame slots. The CPU records one frame while the GPU runs the other.</td></tr>
+  <tr id="MAX_COLOR_ATTACHMENTS"><td><code>MAX_COLOR_ATTACHMENTS</code><br><code>rasm/types.h</code></td><td>4</td><td>Color attachments of one render target or pipeline. Vulkan guarantees at least 4.</td></tr>
   <tr id="MAX_BINDLESS_TEXTURES"><td><code>MAX_BINDLESS_TEXTURES</code><br><code>rasm/types.h</code></td><td>1024</td><td>Bindless texture slots in all. Each loaded texture takes 1, each render target 2. Slots are never freed.</td></tr>
   <tr id="MAX_DESCRIPTOR_TYPES"><td><code>MAX_DESCRIPTOR_TYPES</code><br><code>rasm/types.h</code></td><td>1</td><td>Entries in <code>DescriptorPoolDesc::sizes</code>.</td></tr>
   <tr id="PUSH_CONSTANTS_SIZE"><td><code>PUSH_CONSTANTS_SIZE</code><br><code>rasm/types.h</code></td><td>16</td><td>Push constant bytes of every pipeline.</td></tr>

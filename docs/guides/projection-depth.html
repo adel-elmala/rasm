@@ -420,7 +420,7 @@ depth = (f − D) / (f − n)       reversed: again, swap n and f</code></pre>
     <text x="692" y="254" class="mid small">≥ passes</text>
 
     <text x="15" y="288" class="small">Also reversed-Z: getFrustumPlanes (plane 4 is the far plane), occlusion culling (the Hi-Z keeps the minimum,</text>
-    <text x="15" y="304" class="small">the farthest), and the stats overlay, which writes depth 1 (the near plane) to stay on top.</text>
+    <text x="15" y="304" class="small">the farthest), and the stats overlay, whose panel sits at depth 1 (the near plane).</text>
     <text x="15" y="320" class="small">drawScene fits the aspect ratio to each pass's size; the stored camera does not change.</text>
   </svg>
   <figcaption>glm builds standard 0..1 matrices because <code>GLM_FORCE_DEPTH_ZERO_TO_ONE</code> is set in CMake (<code>B2</code>). Passing far as glm's near and near as glm's far reverses them, as in <a href="#depth-row">section 3</a>.</figcaption>

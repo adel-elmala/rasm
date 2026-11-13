@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multiple Render Targets · RASM</title>
+<meta name="description" content="Multiple render targets: one pass that writes several images per pixel. Fragment shader outputs, the rules on formats, blending and limits, the memory and bandwidth cost, deferred shading, variants and pitfalls, and how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/types.h include/rasm/render/resource.h src/rhi/resource.cpp src/rhi/renderContext.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/rhi/vulkan/vulkanDevice.cpp src/engine.cpp src/renderer/gpuScene.cpp examples/01_render_graph/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/multiple-render-targets.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Culling and the frame</p>
+<h1>Multiple render targets</h1>
+<p class="lead">Often one pass must produce several images for the same pixels: a color, a normal, a material, a mask. Multiple render targets (MRT) let one draw write all of them at once. The fragment shader returns several values, and each one goes to its own texture. This page explains how that works, what it costs, and where it goes wrong. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A pass can have <b>N color attachments</b>. The fragment shader returns N values; output <var>i</var> goes to attachment <var>i</var>.</li>
+    <li>The geometry is drawn <b>once</b>: vertex work, rasterization and the depth test happen one time for all N images.</li>
+    <li>All attachments have the <b>same size</b>. Each one has its <b>own format</b>, and can have its own blend state and write mask. There is one depth attachment for all of them.</li>
+    <li>The pipeline is built for the <b>exact list of formats</b>, in order. A pass with other formats cannot use it.</li>
+    <li>APIs allow 4 to 8 color attachments. The real limit is <b>bytes per pixel</b>: every byte is written and later read, for every pixel, every frame.</li>
+    <li>The classic use is <b>deferred shading</b>: a G-buffer pass writes surface data, a lighting pass reads it.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>The problem: several images per pixel</h2>
+
+<p>Many techniques need more than one value per pixel. Deferred shading needs the surface color, the normal and the material of every pixel. Motion blur and temporal anti-aliasing need a velocity per pixel. Object picking needs an object ID per pixel. Post effects often need a mask that says which pixels belong to what.</p>
+
+<p>A pass with one output can only write one of these images. To get three, you draw the scene three times, with three shaders. Every draw reads the vertices again, runs the vertex shader again, builds the triangles again and runs the depth test again. Only the last step, the fragment shader, does different work.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Top: without MRT, the mesh goes through three passes, each with vertex shader, rasterization and fragment shader, and each pass writes one image: albedo, normal, material. The vertex work runs three times. Bottom: with MRT, the mesh goes through one pass whose fragment shader has three outputs, and the pass writes all three images. The vertex work runs once.">
+    <text x="20" y="20" class="title">One output per pass: the mesh is drawn 3 times</text>
+    <rect x="20" y="62" width="110" height="56" rx="6" class="mem"/>
+    <text x="75" y="86" class="mid">Mesh</text>
+    <text x="75" y="104" class="mid small">read 3 times</text>
+    <line x1="130" y1="90" x2="178" y2="51" class="arrow" marker-end="url(#ah)"/>
+    <line x1="130" y1="90" x2="178" y2="93" class="arrow" marker-end="url(#ah)"/>
+    <line x1="130" y1="90" x2="178" y2="135" class="arrow" marker-end="url(#ah)"/>
+    <rect x="180" y="34" width="270" height="34" rx="6" class="gpu"/>
+    <text x="315" y="55" class="mid small">pass 1 · vertex · raster · depth · fragment</text>
+    <rect x="180" y="76" width="270" height="34" rx="6" class="gpu"/>
+    <text x="315" y="97" class="mid small">pass 2 · vertex · raster · depth · fragment</text>
+    <rect x="180" y="118" width="270" height="34" rx="6" class="gpu"/>
+    <text x="315" y="139" class="mid small">pass 3 · vertex · raster · depth · fragment</text>
+    <line x1="450" y1="51" x2="498" y2="51" class="arrow" marker-end="url(#ah)"/>
+    <line x1="450" y1="93" x2="498" y2="93" class="arrow" marker-end="url(#ah)"/>
+    <line x1="450" y1="135" x2="498" y2="135" class="arrow" marker-end="url(#ah)"/>
+    <rect x="500" y="34" width="110" height="34" rx="4" class="mem"/>
+    <text x="555" y="55" class="mid small">albedo</text>
+    <rect x="500" y="76" width="110" height="34" rx="4" class="mem"/>
+    <text x="555" y="97" class="mid small">normal</text>
+    <rect x="500" y="118" width="110" height="34" rx="4" class="mem"/>
+    <text x="555" y="139" class="mid small">material</text>
+    <text x="630" y="88" class="small t-hot">vertex work × 3</text>
+    <text x="630" y="104" class="small t-hot">depth test × 3</text>
+
+    <text x="20" y="190" class="title">Three outputs in one pass: the mesh is drawn once</text>
+    <rect x="20" y="242" width="110" height="56" rx="6" class="mem"/>
+    <text x="75" y="266" class="mid">Mesh</text>
+    <text x="75" y="284" class="mid small">read once</text>
+    <line x1="130" y1="270" x2="178" y2="270" class="arrow" marker-end="url(#ah)"/>
+    <rect x="180" y="226" width="270" height="88" rx="6" class="gpu"/>
+    <text x="315" y="252" class="mid title">one pass</text>
+    <text x="315" y="274" class="mid small">vertex · raster · depth: once</text>
+    <rect x="215" y="284" width="200" height="22" rx="11" class="shader"/>
+    <text x="315" y="299" class="mid small">fragment shader: 3 outputs</text>
+    <line x1="450" y1="270" x2="498" y2="227" class="arrow" marker-end="url(#ah)"/>
+    <line x1="450" y1="270" x2="498" y2="269" class="arrow" marker-end="url(#ah)"/>
+    <line x1="450" y1="270" x2="498" y2="311" class="arrow" marker-end="url(#ah)"/>
+    <rect x="500" y="210" width="110" height="34" rx="4" class="mem"/>
+    <text x="555" y="231" class="mid small">albedo</text>
+    <rect x="500" y="252" width="110" height="34" rx="4" class="mem"/>
+    <text x="555" y="273" class="mid small">normal</text>
+    <rect x="500" y="294" width="110" height="34" rx="4" class="mem"/>
+    <text x="555" y="315" class="mid small">material</text>
+    <text x="630" y="264" class="small t-gpu">vertex work × 1</text>
+    <text x="630" y="280" class="small t-gpu">depth test × 1</text>
+  </svg>
+  <figcaption>The same three images, two ways. With many triangles, the top way costs about three times the geometry work.</figcaption>
+</figure>
+
+<p>There is a second problem with the top way. The three passes must agree exactly on which surface is in front at each pixel. With the same depth test and the same vertices they usually do, but it is easy to break: a shader that moves vertices a little differently, or a different depth state, and the normal image shows a different surface than the albedo image.</p>
+
+<h2><span class="n">2</span>The idea: one pass, N outputs</h2>
+
+<p>A render pass does not have to draw into one image. It can have a list of <b>color attachments</b>: textures numbered 0, 1, 2 and so on. The fragment shader then returns one value per attachment. The GPU writes output 0 to attachment 0, output 1 to attachment 1, and so on, all for the same pixel.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="One pixel of a triangle goes into the fragment shader. The shader returns three outputs, numbered 0, 1 and 2. Output 0 goes to attachment 0, the albedo texture. Output 1 goes to attachment 1, the normal texture. Output 2 goes to attachment 2, the material texture. All three get a value at the same pixel position. One depth attachment, tested before the shader, is shared by all.">
+    <text x="85" y="22" class="mid title">One pixel</text>
+    <polygon points="30,200 140,50 160,210" class="box"/>
+    <rect x="98" y="132" width="12" height="12" class="hot"/>
+    <text x="85" y="236" class="mid small">fragment at (x, y)</text>
+    <line x1="160" y1="138" x2="208" y2="138" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="210" y="40" width="210" height="196" rx="18" class="shader"/>
+    <text x="315" y="66" class="mid title">Fragment shader</text>
+    <text x="315" y="88" class="mid small">runs once, returns</text>
+    <text x="230" y="120" class="mono small">out 0 = albedo</text>
+    <text x="230" y="162" class="mono small">out 1 = normal</text>
+    <text x="230" y="204" class="mono small">out 2 = material</text>
+
+    <line x1="420" y1="116" x2="478" y2="74" class="arrow" marker-end="url(#ah)"/>
+    <line x1="420" y1="158" x2="478" y2="138" class="arrow" marker-end="url(#ah)"/>
+    <line x1="420" y1="200" x2="478" y2="202" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="480" y="48" width="250" height="52" rx="4" class="mem"/>
+    <rect x="696" y="66" width="12" height="12" class="hot"/>
+    <text x="494" y="70" class="small">attachment 0 · albedo</text>
+    <text x="494" y="88" class="small">4 bytes, sRGB color</text>
+    <rect x="480" y="112" width="250" height="52" rx="4" class="mem"/>
+    <rect x="696" y="130" width="12" height="12" class="hot"/>
+    <text x="494" y="134" class="small">attachment 1 · normal</text>
+    <text x="494" y="152" class="small">4 bytes, 10 + 10 + 10 + 2 bits</text>
+    <rect x="480" y="176" width="250" height="52" rx="4" class="mem"/>
+    <rect x="696" y="194" width="12" height="12" class="hot"/>
+    <text x="494" y="198" class="small">attachment 2 · material</text>
+    <text x="494" y="216" class="small">4 bytes, linear data</text>
+
+    <rect x="210" y="256" width="520" height="30" rx="4" class="box"/>
+    <text x="470" y="276" class="mid small">depth attachment: one, shared · tested once, for all outputs</text>
+  </svg>
+  <figcaption>Output <var>i</var> goes to attachment <var>i</var>. The orange square is the same pixel position in every texture.</figcaption>
+</figure>
+
+<p>In the shader, each output is marked with its attachment number. In Slang and HLSL the fragment shader returns a struct, and each field has a semantic with the number. (In Slang, <samp>fragMain</samp> also gets the <samp>[shader("fragment")]</samp> attribute; it is left out here.)</p>
+
+<pre><code class="lang-slang">struct GBufferOutput
+{
+    float4 albedo : SV_TARGET0;
+    float4 normal : SV_TARGET1;
+    float4 material : SV_TARGET2;
+};
+
+GBufferOutput fragMain(VSOutput input)
+{
+    GBufferOutput output;
+    output.albedo = float4(baseColor, ambientOcclusion);
+    output.normal = float4(normalize(input.normal) * 0.5 + 0.5, 0.0);
+    output.material = float4(metallic, roughness, 0.0, 0.0);
+    return output;
+}</code></pre>
+
+<p>Other shading languages spell the number differently, but the idea is the same:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Language</th><th>Output 1 is written as</th></tr>
+  <tr><td>Slang, HLSL</td><td><samp>float4 normal : SV_Target1;</samp> (the case of the semantic does not matter)</td></tr>
+  <tr><td>GLSL</td><td><samp>layout(location = 1) out vec4 normal;</samp></td></tr>
+  <tr><td>Metal (MSL)</td><td><samp>float4 normal [[color(1)]];</samp></td></tr>
+  <tr><td>WGSL</td><td><samp>@location(1) normal: vec4f</samp></td></tr>
+</table>
+</div>
+
+<p>Everything before the fragment shader is shared. The rasterizer finds the pixels once. The depth test runs once, and if it fails, none of the outputs are written. If it passes, all of them are. So the images can never disagree about which surface is visible.</p>
+
+<h2><span class="n">3</span>The rules</h2>
+
+<p>The attachments of one pass are not fully free. They share some things and keep others apart:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Property</th><th>Per attachment, or shared?</th><th>Why</th></tr>
+  <tr><td>Size (width, height)</td><td><b>shared</b>: all the same</td><td>One pixel position (<var>x</var>, <var>y</var>) must mean the same place in every texture.</td></tr>
+  <tr><td>Sample count (MSAA)</td><td><b>shared</b></td><td>The rasterizer makes one set of samples for all of them.</td></tr>
+  <tr><td>Format</td><td>per attachment</td><td>A color can be 8-bit sRGB, a normal 10-bit, a velocity 16-bit float, an ID a 32-bit integer.</td></tr>
+  <tr><td>Blend state</td><td>per attachment, if the GPU supports <b>independent blend</b></td><td>Without it, all attachments must use the same blend state (Vulkan: the <samp>independentBlend</samp> feature; D3D12: <samp>IndependentBlendEnable</samp>). Desktop GPUs all support it.</td></tr>
+  <tr><td>Write mask</td><td>per attachment (also under independent blend)</td><td>Turns off writes to some channels, or to the whole attachment.</td></tr>
+  <tr><td>Load and store, clear value</td><td>per attachment</td><td>One attachment can be cleared and another kept; see <a href="load-store-ops.html">Load and store ops</a>.</td></tr>
+  <tr><td>Depth (and stencil)</td><td><b>one</b> for the pass</td><td>Visibility is decided once per pixel, for all outputs.</td></tr>
+</table>
+</div>
+
+<h3>The pipeline is built for exact formats</h3>
+
+<p>A graphics pipeline is compiled for a fixed list of attachment formats: how many there are, in which order, and which format each one has. The driver bakes the conversion from the shader's output (a <samp>float4</samp>) to each format into the pipeline. So a pipeline can only draw in a pass whose attachments have exactly those formats.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Left: a pipeline built for formats RGBA8 sRGB, RGB10A2 and RGBA8, plus D32 depth, used in a pass whose attachments have the same formats in the same order. Every slot matches, so the draw is allowed. Right: the same pipeline in a pass with only two attachments, RGBA8 sRGB and RGBA8. Slot 1 does not match and slot 2 is missing, so the draw is invalid.">
+    <text x="190" y="20" class="mid title t-gpu">Same list → draw</text>
+    <text x="95" y="44" class="mid small">pipeline expects</text>
+    <text x="285" y="44" class="mid small">pass has</text>
+    <rect x="30" y="54" width="130" height="30" rx="4" class="cpu"/>
+    <text x="95" y="74" class="mid mono small">0 · RGBA8 sRGB</text>
+    <rect x="30" y="94" width="130" height="30" rx="4" class="cpu"/>
+    <text x="95" y="114" class="mid mono small">1 · RGB10A2</text>
+    <rect x="30" y="134" width="130" height="30" rx="4" class="cpu"/>
+    <text x="95" y="154" class="mid mono small">2 · RGBA8</text>
+    <rect x="30" y="174" width="130" height="30" rx="4" class="box"/>
+    <text x="95" y="194" class="mid mono small">depth · D32</text>
+    <rect x="220" y="54" width="130" height="30" rx="4" class="mem"/>
+    <text x="285" y="74" class="mid mono small">0 · RGBA8 sRGB</text>
+    <rect x="220" y="94" width="130" height="30" rx="4" class="mem"/>
+    <text x="285" y="114" class="mid mono small">1 · RGB10A2</text>
+    <rect x="220" y="134" width="130" height="30" rx="4" class="mem"/>
+    <text x="285" y="154" class="mid mono small">2 · RGBA8</text>
+    <rect x="220" y="174" width="130" height="30" rx="4" class="box"/>
+    <text x="285" y="194" class="mid mono small">depth · D32</text>
+    <text x="190" y="74" class="mid t-gpu">=</text>
+    <text x="190" y="114" class="mid t-gpu">=</text>
+    <text x="190" y="154" class="mid t-gpu">=</text>
+    <text x="190" y="194" class="mid t-gpu">=</text>
+    <text x="190" y="232" class="mid small">count, order and formats all match</text>
+
+    <line x1="380" y1="30" x2="380" y2="236" class="arrow dashed"/>
+
+    <text x="570" y="20" class="mid title t-hot">Other list → invalid</text>
+    <text x="475" y="44" class="mid small">pipeline expects</text>
+    <text x="665" y="44" class="mid small">pass has</text>
+    <rect x="410" y="54" width="130" height="30" rx="4" class="cpu"/>
+    <text x="475" y="74" class="mid mono small">0 · RGBA8 sRGB</text>
+    <rect x="410" y="94" width="130" height="30" rx="4" class="cpu"/>
+    <text x="475" y="114" class="mid mono small">1 · RGB10A2</text>
+    <rect x="410" y="134" width="130" height="30" rx="4" class="cpu"/>
+    <text x="475" y="154" class="mid mono small">2 · RGBA8</text>
+    <rect x="410" y="174" width="130" height="30" rx="4" class="box"/>
+    <text x="475" y="194" class="mid mono small">depth · D32</text>
+    <rect x="600" y="54" width="130" height="30" rx="4" class="mem"/>
+    <text x="665" y="74" class="mid mono small">0 · RGBA8 sRGB</text>
+    <rect x="600" y="94" width="130" height="30" rx="4" class="hot"/>
+    <text x="665" y="114" class="mid mono small">1 · RGBA8</text>
+    <rect x="600" y="134" width="130" height="30" rx="4" class="ghost"/>
+    <text x="665" y="154" class="mid small t-faint">missing</text>
+    <rect x="600" y="174" width="130" height="30" rx="4" class="box"/>
+    <text x="665" y="194" class="mid mono small">depth · D32</text>
+    <text x="570" y="74" class="mid t-gpu">=</text>
+    <text x="570" y="114" class="mid t-hot">≠</text>
+    <text x="570" y="154" class="mid t-hot">≠</text>
+    <text x="570" y="194" class="mid t-gpu">=</text>
+    <text x="570" y="232" class="mid small t-hot">validation error, or wrong output</text>
+  </svg>
+  <figcaption>The check is per slot. Older APIs used a "render pass" object to describe the list; with dynamic rendering (Vulkan 1.3) the pipeline lists the formats directly.</figcaption>
+</figure>
+
+<p>So one shader often needs several pipelines: one per list of formats it draws into. A material shader that draws both into a G-buffer and into a forward HDR target is two pipelines.</p>
+
+<h3>Limits</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>API</th><th>Color attachments per pass</th><th>Notes</th></tr>
+  <tr><td>Vulkan</td><td><samp>maxColorAttachments</samp>: at least 4, 8 on almost every GPU</td><td>Query it on the device. Some mobile GPUs report only 4.</td></tr>
+  <tr><td>Direct3D 12</td><td>8</td><td>Fixed by the API.</td></tr>
+  <tr><td>Metal</td><td>8</td><td>4 on the oldest Apple GPUs.</td></tr>
+  <tr><td>WebGPU</td><td>8 by default</td><td>Also limits the total size: by default at most 32 bytes per sample over all attachments.</td></tr>
+</table>
+</div>
+
+<p>In practice the count is rarely the limit. The bytes are.</p>
+
+<h2 id="cost"><span class="n">4</span>The cost: bytes per pixel</h2>
+
+<p>Every attachment is written for every pixel the pass covers, and some later pass reads it back. So the cost of MRT is simple to estimate: add up the bytes per pixel of all attachments, and multiply by the number of pixels.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="Two bars of bytes per pixel. A fat G-buffer: world position in RGBA32F, 16 bytes; normal in RGBA16F, 8 bytes; albedo, 4; material, 4; depth, 4; 36 bytes in total. A packed G-buffer: albedo, 4; octahedral normal in RG16, 4; material, 4; velocity in RG16F, 4; depth, 4; 20 bytes in total.">
+    <text x="20" y="20" class="title">Bytes per pixel, one box = one attachment (15 px per byte)</text>
+
+    <text x="20" y="62" class="small">fat</text>
+    <rect x="150" y="44" width="240" height="32" class="mem"/>
+    <text x="270" y="64" class="mid small">position · RGBA32F · 16</text>
+    <rect x="390" y="44" width="120" height="32" class="mem"/>
+    <text x="450" y="64" class="mid small">normal · RGBA16F · 8</text>
+    <rect x="510" y="44" width="60" height="32" class="mem"/>
+    <text x="540" y="64" class="mid small">albedo</text>
+    <rect x="570" y="44" width="60" height="32" class="mem"/>
+    <text x="600" y="64" class="mid small">material</text>
+    <rect x="630" y="44" width="60" height="32" class="box"/>
+    <text x="660" y="64" class="mid small">depth</text>
+    <text x="700" y="64" class="title">36 B</text>
+
+    <text x="20" y="122" class="small">packed</text>
+    <rect x="150" y="104" width="60" height="32" class="mem"/>
+    <text x="180" y="124" class="mid small">albedo</text>
+    <rect x="210" y="104" width="60" height="32" class="mem"/>
+    <text x="240" y="124" class="mid small">normal</text>
+    <rect x="270" y="104" width="60" height="32" class="mem"/>
+    <text x="300" y="124" class="mid small">material</text>
+    <rect x="330" y="104" width="60" height="32" class="mem"/>
+    <text x="360" y="124" class="mid small">velocity</text>
+    <rect x="390" y="104" width="60" height="32" class="box"/>
+    <text x="420" y="124" class="mid small">depth</text>
+    <text x="460" y="124" class="title t-gpu">20 B</text>
+
+    <text x="150" y="166" class="small">The packed version drops the position (the lighting pass rebuilds it from depth),</text>
+    <text x="150" y="182" class="small">stores the normal in 2 × 16 bits, and still has room for a velocity.</text>
+    <text x="150" y="198" class="small">Every byte here is paid once to write and once to read, at every pixel.</text>
+  </svg>
+  <figcaption>The same surface data, two layouts. The difference is almost 2× in memory and bandwidth.</figcaption>
+</figure>
+
+<h3>Worked example: a G-buffer at 1080p</h3>
+
+<p>A 1920 × 1080 image has 2,073,600 pixels. Take the packed layout: four 4-byte color attachments and a 4-byte depth, 20 bytes per pixel.</p>
+
+<pre><code class="lang-text">memory      20 B × 2,073,600 px = 41,472,000 B ≈ 39.6 MiB
+write       41.5 MB per frame   × 60 frames/s ≈ 2.5 GB/s
+write+read  83 MB per frame     × 60 frames/s ≈ 5.0 GB/s</code></pre>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Layout</th><th>B/pixel</th><th>Memory at 1080p</th><th>Write + read, 60 fps, 1080p</th><th>Memory at 4K</th><th>Write + read, 60 fps, 4K</th></tr>
+  <tr><td>packed</td><td>20</td><td>39.6 MiB</td><td>5.0 GB/s</td><td>158.2 MiB</td><td>19.9 GB/s</td></tr>
+  <tr><td>fat</td><td>36</td><td>71.2 MiB</td><td>9.0 GB/s</td><td>284.8 MiB</td><td>35.8 GB/s</td></tr>
+</table>
+</div>
+
+<p>These are lower bounds. A pixel covered by several triangles is written several times (<b>overdraw</b>), the depth test also reads depth, and later passes may read the images more than once. A mid-range GPU has a few hundred GB/s in total, so a fat G-buffer at 4K takes a real part of the frame.</p>
+
+<h3>Packing: fewer bytes for the same data</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Data</th><th>Naive</th><th>Packed</th><th>How</th></tr>
+  <tr><td>Position</td><td>RGBA32F, 16 B</td><td>0 B</td><td>Do not store it. Rebuild it from the depth and the pixel position with the inverse view-projection matrix.</td></tr>
+  <tr><td>Normal</td><td>RGBA16F, 8 B</td><td>RG16, 4 B, or RGB10A2, 4 B</td><td><b>Octahedral</b> encoding: fold the unit sphere onto a square, and store 2 numbers instead of 3. Or store 3 numbers in 10 bits each.</td></tr>
+  <tr><td>Metallic, roughness, AO, flags</td><td>one attachment each</td><td>one RGBA8, 4 B</td><td>Put small values that are used together into the channels of one attachment.</td></tr>
+  <tr><td>Velocity</td><td>RGBA16F, 8 B</td><td>RG16F, 4 B</td><td>Screen-space motion has 2 parts; the other channels were empty.</td></tr>
+</table>
+</div>
+
+<div class="callout">
+  <strong>Tile-based GPUs</strong>
+  <p>Most mobile GPUs, Apple's included, draw the screen in small tiles and keep the tile's attachments in fast on-chip memory. Writing many attachments is cheap there, as long as they fit in that memory and the pass does not <b>store</b> the ones nobody reads later. If all attachments together are too big for a tile, the GPU uses smaller tiles, which costs more. See <a href="load-store-ops.html">Load and store ops</a>.</p>
+</div>
+
+<h2><span class="n">5</span>The classic use: deferred shading</h2>
+
+<p>In forward shading, every triangle computes its lighting while it is drawn. A pixel that is covered five times is lit five times, and every object's shader must loop over every light. <b>Deferred shading</b> splits this in two passes. The first pass, the <b>geometry pass</b>, uses MRT to store what is needed for lighting: the <b>G-buffer</b> (geometry buffer). The second pass, the <b>lighting pass</b>, runs once per pixel, reads the G-buffer as textures, and computes the lighting only for the surface that is really visible.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="The mesh goes into the geometry pass, which uses MRT to write the G-buffer: albedo, normal, material, velocity and depth. The lighting pass, a full-screen pass, reads the G-buffer textures and the light list, and writes one HDR color image, which later passes like tone mapping use.">
+    <rect x="20" y="96" width="90" height="50" rx="6" class="mem"/>
+    <text x="65" y="118" class="mid">Mesh</text>
+    <text x="65" y="135" class="mid small">all objects</text>
+    <line x1="110" y1="121" x2="138" y2="121" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="140" y="76" width="150" height="90" rx="6" class="gpu"/>
+    <text x="215" y="102" class="mid title">Geometry pass</text>
+    <text x="215" y="122" class="mid small">draws every object</text>
+    <text x="215" y="138" class="mid small">MRT: 4 outputs</text>
+    <text x="215" y="154" class="mid small">no lighting</text>
+    <line x1="290" y1="121" x2="318" y2="121" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="390" y="24" class="mid title">G-buffer</text>
+    <rect x="320" y="34" width="140" height="30" rx="4" class="mem"/>
+    <text x="390" y="54" class="mid small">0 · albedo</text>
+    <rect x="320" y="70" width="140" height="30" rx="4" class="mem"/>
+    <text x="390" y="90" class="mid small">1 · normal</text>
+    <rect x="320" y="106" width="140" height="30" rx="4" class="mem"/>
+    <text x="390" y="126" class="mid small">2 · material</text>
+    <rect x="320" y="142" width="140" height="30" rx="4" class="mem"/>
+    <text x="390" y="162" class="mid small">3 · velocity</text>
+    <rect x="320" y="178" width="140" height="30" rx="4" class="box"/>
+    <text x="390" y="198" class="mid small">depth</text>
+    <line x1="460" y1="121" x2="498" y2="121" class="arrow" marker-end="url(#ah)"/>
+    <text x="479" y="112" class="mid small">read</text>
+
+    <rect x="500" y="76" width="140" height="90" rx="6" class="gpu"/>
+    <text x="570" y="102" class="mid title">Lighting pass</text>
+    <text x="570" y="122" class="mid small">full screen</text>
+    <text x="570" y="138" class="mid small">once per pixel</text>
+    <text x="570" y="154" class="mid small">loops over lights</text>
+    <rect x="500" y="200" width="140" height="30" rx="4" class="mem"/>
+    <text x="570" y="220" class="mid small">light list</text>
+    <line x1="570" y1="200" x2="570" y2="168" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="640" y1="121" x2="668" y2="121" class="arrow" marker-end="url(#ah)"/>
+    <rect x="670" y="96" width="80" height="50" rx="4" class="mem"/>
+    <text x="710" y="118" class="mid">HDR</text>
+    <text x="710" y="135" class="mid small">color</text>
+  </svg>
+  <figcaption>Pass 1 writes several images with MRT. Pass 2 reads them as ordinary textures. The lighting cost no longer depends on overdraw.</figcaption>
+</figure>
+
+<div class="split">
+  <div>
+    <h4>What it gives</h4>
+    <ul>
+      <li>Lighting runs once per visible pixel, not once per covered triangle.</li>
+      <li>Many lights are cheap: each light only touches the pixels it reaches.</li>
+      <li>Other screen effects (ambient occlusion, reflections, decals) can read the same normals and depth.</li>
+    </ul>
+  </div>
+  <div>
+    <h4>What it costs</h4>
+    <ul>
+      <li>The G-buffer memory and bandwidth from <a href="#cost">section 4</a>, every frame.</li>
+      <li>One surface per pixel: transparent objects need a forward pass after.</li>
+      <li>MSAA is hard: every attachment would need all its samples.</li>
+      <li>All materials must fit the same G-buffer layout.</li>
+    </ul>
+  </div>
+</div>
+
+<p>MRT is not only for deferred shading. A forward pass can also write a velocity image for temporal effects (see <a href="temporal-history.html">History buffers</a>), an object ID for picking, or a mask for a later post effect, next to its color.</p>
+
+<h2><span class="n">6</span>Variants</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Variant</th><th>What it is</th><th>When to use it</th></tr>
+  <tr><td>Unused slots</td><td>Some APIs allow an empty attachment in the middle of the list (a null view in Vulkan dynamic rendering, a null target in D3D12). The shader output for that slot is dropped.</td><td>One shader for several passes that use different subsets of the outputs.</td></tr>
+  <tr><td>Write mask 0</td><td>The attachment is bound, but its write mask turns all channels off.</td><td>A pass that leaves one image untouched while it writes the others.</td></tr>
+  <tr><td>Subpasses, input attachments, local read</td><td>A later step of the same pass reads the value an earlier step wrote at <b>the same pixel</b>, without a round trip to memory (Vulkan subpasses and dynamic rendering local read, Metal tile memory).</td><td>Deferred shading on tile-based GPUs: the G-buffer never leaves the chip.</td></tr>
+  <tr><td>Storage images</td><td>The shader writes images directly, with no attachment: any pixel, any number of images.</td><td>Compute passes, or writes to other pixels than the current one. There is no blending and no depth test, and the shader must handle ordering itself.</td></tr>
+  <tr><td>Visibility buffer</td><td>The geometry pass writes only a triangle ID and an instance ID (one 32- or 64-bit attachment). A later pass fetches the triangle and computes the rest.</td><td>Very dense geometry, where even a packed G-buffer is too big.</td></tr>
+  <tr><td>Dual-source blending</td><td>Two shader outputs feed the blend of <b>one</b> attachment. Not MRT; see below.</td><td>Per-channel alpha, for example subpixel text.</td></tr>
+</table>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 190" role="img" aria-label="Left, MRT: a shader with two outputs writes two different images. Right, dual-source blending: a shader with two outputs, a color and a blend factor, both go into the blend unit of one image, which computes color times factor plus the old value times one minus the factor.">
+    <text x="190" y="20" class="mid title">MRT: 2 outputs → 2 images</text>
+    <rect x="30" y="50" width="130" height="90" rx="18" class="shader"/>
+    <text x="95" y="80" class="mid">shader</text>
+    <text x="95" y="102" class="mid mono small">out 0</text>
+    <text x="95" y="122" class="mid mono small">out 1</text>
+    <line x1="160" y1="98" x2="218" y2="65" class="arrow" marker-end="url(#ah)"/>
+    <line x1="160" y1="118" x2="218" y2="135" class="arrow" marker-end="url(#ah)"/>
+    <rect x="220" y="44" width="130" height="40" rx="4" class="mem"/>
+    <text x="285" y="69" class="mid small">image 0</text>
+    <rect x="220" y="114" width="130" height="40" rx="4" class="mem"/>
+    <text x="285" y="139" class="mid small">image 1</text>
+
+    <line x1="380" y1="30" x2="380" y2="176" class="arrow dashed"/>
+
+    <text x="570" y="20" class="mid title">Dual source: 2 outputs → 1 image</text>
+    <rect x="410" y="50" width="130" height="90" rx="18" class="shader"/>
+    <text x="475" y="80" class="mid">shader</text>
+    <text x="475" y="102" class="mid mono small">color</text>
+    <text x="475" y="122" class="mid mono small">factor</text>
+    <line x1="540" y1="98" x2="578" y2="88" class="arrow" marker-end="url(#ah)"/>
+    <line x1="540" y1="118" x2="578" y2="108" class="arrow" marker-end="url(#ah)"/>
+    <rect x="580" y="70" width="160" height="56" rx="6" class="gpu"/>
+    <text x="660" y="92" class="mid small">blend into image 0</text>
+    <text x="660" y="112" class="mid mono small">c·f + old·(1 − f)</text>
+    <text x="570" y="170" class="mid small">usually allowed with one attachment only</text>
+  </svg>
+  <figcaption>Both have a second shader output, but they do different things. Dual-source blending is a blend feature, not a way to write more images.</figcaption>
+</figure>
+
+<h2><span class="n">7</span>Pitfalls</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Problem</th><th>What you see</th><th>Fix</th></tr>
+  <tr><td>Output number and attachment order differ</td><td>Normals show up in the color image, or masks in the albedo. Nothing crashes: all are <samp>float4</samp>.</td><td>Keep one list of the attachments and build both the pass and the shader struct from it.</td></tr>
+  <tr><td>An output is not written on some path</td><td>Garbage in that image at some pixels. A missing output (or a missing channel) is <b>undefined</b>, not 0.</td><td>Write every output in every branch. Use a write mask if the image should keep its old value.</td></tr>
+  <tr><td>Data in an sRGB format</td><td>Normals and masks come back bent: the GPU applied the sRGB curve on write.</td><td>Use UNORM or float formats for data. Only colors get sRGB. See <a href="color-spaces.html">Color spaces</a>.</td></tr>
+  <tr><td>Blending on a format that cannot blend</td><td>Validation error, or the pipeline fails. Integer formats never blend, and 32-bit float often cannot.</td><td>Turn blending off for that attachment (needs independent blend), or pick another format.</td></tr>
+  <tr><td>Blending on with data in alpha</td><td>A mask or roughness stored in alpha also changes how the color mixes.</td><td>Keep blending off on data attachments, or move the data out of alpha.</td></tr>
+  <tr><td>A mask read with a linear filter</td><td>At edges the mask is 0.3 or 0.7, not 0 or 1, when the reader's size or position differs.</td><td>Compare against 0.5, or sample with a nearest filter.</td></tr>
+  <tr><td>Too many bytes</td><td>The pass is bandwidth-bound; on tile-based GPUs it is slower than expected.</td><td>Pack (section 4), and do not store attachments that no later pass reads.</td></tr>
+</table>
+</div>
+
+<h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
+
+<p>A RASM render target has up to <code>MAX_COLOR_ATTACHMENTS</code> (4) color textures and one depth texture. Its formats are listed in <code>RenderTargetDesc::colorFormats</code>. A pipeline that draws into it takes its formats from the target, and every color is a bindless texture that later passes can sample. <code>examples/01_render_graph</code> uses two colors.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Example 1. The Trail pass draws trail_rt. The Background pass reads trail_rt and draws composite_rt, which has two colors and a depth: color 0 in the swapchain format gets the trail color, color 1 in R8G8B8A8_UNORM gets a mask that is 1 where alpha is at least 0.5. The depth is required but unused. The Present pass reads both colors with getRenderTargetTexture and draws to the swapchain, painting the background green where the mask is 0.">
+    <rect x="20" y="96" width="120" height="60" rx="6" class="mem"/>
+    <text x="80" y="120" class="mid mono">trail_rt</text>
+    <text x="80" y="140" class="mid small">from the Trail pass</text>
+    <line x1="140" y1="126" x2="178" y2="126" class="arrow" marker-end="url(#ah)"/>
+
+    <rect x="180" y="70" width="190" height="112" rx="6" class="gpu"/>
+    <text x="275" y="94" class="mid title">Background pass</text>
+    <rect x="195" y="106" width="160" height="62" rx="16" class="shader"/>
+    <text x="275" y="128" class="mid mono small">color : SV_TARGET0</text>
+    <text x="275" y="148" class="mid mono small">mask : SV_TARGET1</text>
+
+    <line x1="370" y1="110" x2="408" y2="66" class="arrow" marker-end="url(#ah)"/>
+    <line x1="370" y1="140" x2="408" y2="140" class="arrow" marker-end="url(#ah)"/>
+    <text x="490" y="24" class="mid mono">composite_rt</text>
+    <rect x="410" y="36" width="160" height="56" rx="4" class="mem"/>
+    <text x="490" y="58" class="mid small">color 0 · trail color</text>
+    <text x="490" y="76" class="mid small">swapchain format</text>
+    <rect x="410" y="110" width="160" height="56" rx="4" class="mem"/>
+    <text x="490" y="132" class="mid small">color 1 · mask, 0 or 1</text>
+    <text x="490" y="150" class="mid mono small">R8G8B8A8_UNORM</text>
+    <rect x="410" y="184" width="160" height="40" rx="4" class="ghost"/>
+    <text x="490" y="202" class="mid small">depth · D32_SFLOAT</text>
+    <text x="490" y="217" class="mid small t-faint">needed, not used</text>
+
+    <line x1="570" y1="64" x2="608" y2="112" class="arrow" marker-end="url(#ah)"/>
+    <line x1="570" y1="138" x2="608" y2="132" class="arrow" marker-end="url(#ah)"/>
+    <rect x="610" y="90" width="130" height="66" rx="6" class="gpu"/>
+    <text x="675" y="114" class="mid title">Present</text>
+    <text x="675" y="132" class="mid small">mask 0 → green</text>
+    <text x="675" y="148" class="mid small">else the color</text>
+    <text x="675" y="180" class="mid small">reads attachments</text>
+    <text x="675" y="196" class="mid small">0 and 1 with</text>
+    <text x="675" y="212" class="mid mono small">getRenderTargetTexture</text>
+    <text x="20" y="256" class="small">The mask is 1 where the trail's alpha is at least 0.5: the bunny writes alpha 1 over the clear color's alpha 0.</text>
+  </svg>
+  <figcaption>One full-screen draw writes both colors. The next pass reads them as two bindless textures.</figcaption>
+</figure>
+
+<p>The fragment shader of the Background pass, as in the example (where <code>fragMain</code> also has the <code>[shader("fragment")]</code> attribute):</p>
+
+<pre><code class="lang-slang">struct Targets
+{
+    float4 color : SV_TARGET0;
+    float4 mask : SV_TARGET1;
+};
+
+Targets fragMain(VSOutput input)
+{
+    Targets targets;
+    targets.color = gTextures[pc.indices[0]].Sample(input.UV);
+    targets.mask = float4(targets.color.a < 0.5 ? 0.0 : 1.0);
+    return targets;
+}</code></pre>
+
+<p>The target lists the two formats in the same order, and the pipeline is made from the target, so the formats always match:</p>
+
+<pre><code>compositeHandle = builder.createRenderTarget({
+    .name = "composite_rt",
+    .swapchainScale = 1.0f,
+    .colorFormats = {colorFormat, rasm::Format::R8G8B8A8_UNORM},
+    .depthFormat = rasm::Format::D32_SFLOAT,
+});
+
+// later: a pipeline with the target's formats
+auto pipeline = engine.createPipeline("background", source, compositeHandle);</code></pre>
+
+<h3>What happens to the formats</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="At creation, createRenderTarget checks the desc with checkRenderTargetDesc and makes one texture per color format plus a depth texture with createAttachments, each color bindless with LINEAR_CLAMP. Engine::createPipeline with the target copies its color and depth formats into PipelineDesc::colorAttachmentFormats, and the Vulkan pipeline gets the same blend state for every color: blending off, all channels written. Each frame, beginPass moves every color to an attachment and beginRendering starts the pass with one clear color and one load op for all colors. bindPipeline compares all formats with the pass's: if they match it binds, otherwise it logs an error and skips the draws. endPass moves every color to SAMPLED, and getRenderTargetTexture returns color i.">
+    <text x="20" y="20" class="title t-cpu">CPU · create the target</text>
+    <rect x="20" y="30" width="190" height="56" rx="6" class="cpu"/>
+    <text x="115" y="52" class="mid mono">RenderTargetDesc</text>
+    <text x="115" y="72" class="mid mono small">colorFormats = {A, B}</text>
+    <line x1="210" y1="58" x2="238" y2="58" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="240" y="30" width="260" height="56" rx="6" class="cpu"/>
+    <text x="370" y="52" class="mid mono">checkRenderTargetDesc</text>
+    <text x="370" y="72" class="mid small">≥ 1 color · no gap · a depth</text>
+    <line x1="500" y1="58" x2="528" y2="58" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="530" y="30" width="210" height="56" rx="6" class="mem"/>
+    <text x="635" y="52" class="mid mono">createAttachments</text>
+    <text x="635" y="72" class="mid small">A, B, depth · colors bindless</text>
+
+    <text x="20" y="120" class="title t-cpu">CPU · create the pipeline</text>
+    <rect x="20" y="130" width="190" height="56" rx="6" class="cpu"/>
+    <text x="115" y="152" class="mid mono">Engine::createPipeline</text>
+    <text x="115" y="172" class="mid small">(name, source, target)</text>
+    <line x1="210" y1="158" x2="238" y2="158" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="240" y="130" width="260" height="56" rx="6" class="cpu"/>
+    <text x="370" y="152" class="mid mono">PipelineDesc</text>
+    <text x="370" y="172" class="mid mono small">colorAttachmentFormats = {A, B}</text>
+    <line x1="500" y1="158" x2="528" y2="158" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="530" y="130" width="210" height="56" rx="6" class="gpu"/>
+    <text x="635" y="152" class="mid">Vulkan pipeline</text>
+    <text x="635" y="172" class="mid small">every color: blend off, RGBA written</text>
+
+    <text x="20" y="220" class="title t-gpu">Each frame · record the pass</text>
+    <rect x="20" y="230" width="170" height="70" rx="6" class="gpu"/>
+    <text x="105" y="252" class="mid mono">beginPass</text>
+    <text x="105" y="270" class="mid small">A, B → attachments</text>
+    <text x="105" y="286" class="mid small">one clear, one load op</text>
+    <line x1="190" y1="265" x2="218" y2="265" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="220" y="230" width="170" height="70" rx="6" class="gpu"/>
+    <text x="305" y="252" class="mid mono">bindPipeline</text>
+    <text x="305" y="270" class="mid small">pipeline formats</text>
+    <text x="305" y="286" class="mid small">= the pass's?</text>
+    <line x1="390" y1="255" x2="418" y2="245" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="390" y1="275" x2="418" y2="285" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <rect x="420" y="230" width="140" height="28" rx="4" class="gpu"/>
+    <text x="490" y="249" class="mid small">yes: bind, draw</text>
+    <rect x="420" y="272" width="140" height="28" rx="4" class="ghost"/>
+    <text x="490" y="291" class="mid small t-hot">no: error, draws skipped</text>
+    <line x1="560" y1="244" x2="588" y2="258" class="arrow" marker-end="url(#ah)"/>
+    <rect x="590" y="230" width="150" height="70" rx="6" class="gpu"/>
+    <text x="665" y="252" class="mid mono">endPass</text>
+    <text x="665" y="270" class="mid small">A, B → SAMPLED</text>
+    <text x="665" y="286" class="mid small">later passes read</text>
+    <text x="20" y="322" class="small">A and B stand for the two formats of the example: the swapchain format and R8G8B8A8_UNORM.</text>
+  </svg>
+  <figcaption>The target is the one source of the format list. The pipeline copies it, and <code>bindPipeline</code> checks it again for every pass.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Number of colors</td><td>4 to 8, from the device</td><td><code>MAX_COLOR_ATTACHMENTS</code> = 4, the minimum Vulkan guarantees, so no device query is needed.</td></tr>
+  <tr><td>The list of formats</td><td>some APIs allow empty slots</td><td>No gaps. The list ends at the first <code>Format::UNKNOWN</code> (<code>colorAttachmentCount</code>). <code>checkRenderTargetDesc</code> rejects a desc with no color, a gap, or no depth format.</td></tr>
+  <tr><td>Depth</td><td>optional</td><td>Needed by every render target, even when no pass tests depth, as in the example.</td></tr>
+  <tr><td>Blend state, write mask</td><td>per attachment, with independent blend</td><td>The same for every color: blending off, all four channels written (<code>VulkanDevice::createGraphicsPipeline</code>). So no independent blend is needed, and nothing in a pass can blend.</td></tr>
+  <tr><td>Clear value</td><td>per attachment</td><td>One <code>RenderTargetDesc::clearColor</code> for all colors.</td></tr>
+  <tr><td>Load and store</td><td>per attachment</td><td>One load op for all colors (<code>AttachmentOps::loadColor</code>, set per pass by the render graph); colors are always stored. See <a href="load-store-ops.html">Load and store ops</a>.</td></tr>
+  <tr><td>Pipeline formats</td><td>exact list, in order</td><td><code>Engine::createPipeline</code> with a target copies its color and depth formats. <code>RenderContext::bindPipeline</code> compares all of them with the pass's; a mismatch logs an error and skips the pass's draws.</td></tr>
+  <tr><td>Reading the result</td><td>sample as textures</td><td>Every color is bindless with <code>LINEAR_CLAMP</code>. <code>endPass</code> moves each to <code>SAMPLED</code>; <code>getRenderTargetTexture</code> with the attachment index returns it.</td></tr>
+  <tr><td>Formats for packing</td><td>RG16, RGB10A2, RG16F</td><td>Not in <code>Format</code> yet. The 4-byte color formats are <code>R8G8B8A8_UNORM</code>, <code>R8G8B8A8_SRGB</code> and <code>B8G8R8A8_SRGB</code>; the example's 1-bit mask takes 4 bytes.</td></tr>
+  <tr><td>G-buffer from the scene</td><td>section 5</td><td>None yet. <code>drawScene</code> needs a target with one color in the swapchain format (and <code>D32_SFLOAT</code> depth), so MRT is for full-screen and hand-written passes today.</td></tr>
+  <tr><td>Subpasses, local read</td><td>section 6</td><td>None. Each pass is its own dynamic rendering scope; a later pass reads the colors as textures.</td></tr>
+  <tr><td>Memory</td><td>section 4</td><td>All colors and the depth of a transient target share heaps with other transient targets (<code>D9</code>). See <a href="memory-aliasing.html">Transient memory and aliasing</a>. A <code>history</code> target has two copies of every color (<a href="temporal-history.html">History buffers</a>).</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The limit</td><td><code>MAX_COLOR_ATTACHMENTS</code> in <code>include/rasm/types.h</code></td></tr>
+  <tr><td>The format list</td><td><code>RenderTargetDesc::colorFormats</code> in <code>include/rasm/render/resource.h</code>; <code>colorAttachmentCount</code> in <code>src/rhi/resource.cpp</code></td></tr>
+  <tr><td>The target's data</td><td><code>RenderTarget</code>, <code>RenderTargetAttachments</code> in <code>include/rasm/types.h</code></td></tr>
+  <tr><td>Desc checks</td><td><code>checkRenderTargetDesc</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>One texture per color</td><td><code>createAttachments</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Pipeline formats from a target</td><td><code>Engine::createPipeline</code> in <code>src/engine.cpp</code>, into <code>PipelineDesc::colorAttachmentFormats</code></td></tr>
+  <tr><td>Blend state for every color</td><td><code>VulkanDevice::createGraphicsPipeline</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>Starting the pass</td><td><code>Engine::beginPass</code> in <code>src/engine.cpp</code>; <code>RenderContext::beginRendering</code>; <code>VulkanCommandBuffer::beginRendering</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
+  <tr><td>The format check</td><td><code>RenderContext::bindPipeline</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Reading color <var>i</var></td><td><code>Engine::endPass</code>, <code>Engine::getRenderTargetTexture</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>One color for the scene</td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>The example</td><td>the Background and Present passes in <code>examples/01_render_graph/main.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>The shader's <code>SV_TARGET0</code>, <code>SV_TARGET1</code>, … follow the order of the target's <code>colorFormats</code>. Make the pipeline with <code>createPipeline(name, source, renderTarget)</code>, so its formats come from the target.</li>
+    <li>A render target desc has at least one color, no gap in <code>colorFormats</code>, and a depth format. <code>checkRenderTargetDesc</code> rejects anything else.</li>
+    <li>Data attachments (masks, normals, IDs) use a UNORM or float format, never sRGB.</li>
+    <li>Write every output on every path. Blending is off, so an output the shader skips leaves undefined values.</li>
+    <li><code>drawScene</code> draws only into a target with one color in the swapchain format.</li>
+    <li>A new per-attachment field in <code>PipelineDesc</code> (a blend state, a write mask) must also go into its hash in <code>src/rhi/resource.cpp</code>, or two different pipelines are merged.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Shawn Hargreaves and Mark Harris, <i>Deferred Shading</i>, NVIDIA (2004): the G-buffer idea and its costs.</li>
+  <li>Zina H. Cigolle and others, <i>A Survey of Efficient Representations for Independent Unit Vectors</i>, JCGT (2014): octahedral normals.</li>
+  <li>Christopher A. Burns and Warren A. Hunt, <i>The Visibility Buffer: A Cache-Friendly Approach to Deferred Shading</i>, JCGT (2013).</li>
+  <li>The Vulkan specification: the chapters on dynamic rendering, fragment output interface, and color blending (<samp>independentBlend</samp>, dual-source blending).</li>
+  <li><a href="render-graphs.html">Render graphs</a>, <a href="load-store-ops.html">Load and store ops</a>, <a href="memory-aliasing.html">Transient memory and aliasing</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

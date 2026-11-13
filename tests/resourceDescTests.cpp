@@ -16,7 +16,7 @@ namespace
                 .fragmentShader = rasm::ShaderHandle{2, 1},
                 .descriptorSetLayout = rasm::DescriptorSetLayoutHandle{3, 1},
                 .topology = rasm::PrimitiveTopology::TRIANGLE_LIST,
-                .colorAttachmentFormat = rasm::Format::B8G8R8A8_SRGB,
+                .colorAttachmentFormats = {rasm::Format::B8G8R8A8_SRGB},
                 .depthStencilAttachmentFormat = rasm::Format::D32_SFLOAT_S8_UINT};
     }
 
@@ -30,7 +30,7 @@ namespace
         return {.name = "target",
                 .width = 1280,
                 .height = 720,
-                .colorFormat = rasm::Format::B8G8R8A8_SRGB,
+                .colorFormats = {rasm::Format::B8G8R8A8_SRGB},
                 .depthFormat = rasm::Format::D32_SFLOAT_S8_UINT,
                 .clearColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f)};
     }
@@ -111,8 +111,12 @@ TEST_CASE("every pipeline field takes part in equality")
     CHECK_FALSE(base == topology);
 
     auto colorFormat = base;
-    colorFormat.colorAttachmentFormat = rasm::Format::R8G8B8A8_UNORM;
+    colorFormat.colorAttachmentFormats[0] = rasm::Format::R8G8B8A8_UNORM;
     CHECK_FALSE(base == colorFormat);
+
+    auto secondColorFormat = base;
+    secondColorFormat.colorAttachmentFormats[1] = rasm::Format::R8G8B8A8_UNORM;
+    CHECK_FALSE(base == secondColorFormat);
 
     auto depthFormat = base;
     depthFormat.depthStencilAttachmentFormat = rasm::Format::D24_UNORM_S8_UINT;
@@ -153,8 +157,12 @@ TEST_CASE("every render target field takes part in equality")
     CHECK_FALSE(base == height);
 
     auto colorFormat = base;
-    colorFormat.colorFormat = rasm::Format::R8G8B8A8_UNORM;
+    colorFormat.colorFormats[0] = rasm::Format::R8G8B8A8_UNORM;
     CHECK_FALSE(base == colorFormat);
+
+    auto secondColorFormat = base;
+    secondColorFormat.colorFormats[1] = rasm::Format::R8G8B8A8_UNORM;
+    CHECK_FALSE(base == secondColorFormat);
 
     auto depthFormat = base;
     depthFormat.depthFormat = rasm::Format::D24_UNORM_S8_UINT;
@@ -163,4 +171,12 @@ TEST_CASE("every render target field takes part in equality")
     auto clearColor = base;
     clearColor.clearColor = glm::vec4(1.0f);
     CHECK_FALSE(base == clearColor);
+
+    auto history = base;
+    history.history = true;
+    CHECK_FALSE(base == history);
+
+    auto swapchainScale = base;
+    swapchainScale.swapchainScale = 0.5f;
+    CHECK_FALSE(base == swapchainScale);
 }

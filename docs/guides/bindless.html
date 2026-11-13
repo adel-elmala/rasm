@@ -568,7 +568,7 @@ free(slot):
   <tr><td><code>createMaterial</code></td><td>each valid texture it gets that has no slot yet</td><td><code>LINEAR_REPEAT</code></td></tr>
   <tr><td><code>updateMaterial</code></td><td>each valid texture of the new values that has no slot yet</td><td><code>LINEAR_REPEAT</code></td></tr>
   <tr><td><code>loadMaterial</code> (glTF)</td><td>each uploaded image, once per image, sampler and color space</td><td>from the glTF sampler (<code>toSamplerType</code>)</td></tr>
-  <tr><td><code>RenderContext::createRenderTarget</code></td><td>both color attachments; with <code>occlusionCulling</code>, also <code>D32_SFLOAT</code> depth attachments</td><td><code>LINEAR_CLAMP</code>, depth <code>NEAREST_CLAMP</code></td></tr>
+  <tr><td><code>RenderContext::createRenderTarget</code></td><td>each color texture (of each frame slot's copy, with <code>history</code>); with <code>occlusionCulling</code>, also a <code>D32_SFLOAT</code> depth texture. A rebuilt or re-placed target keeps its slots.</td><td><code>LINEAR_CLAMP</code>, depth <code>NEAREST_CLAMP</code></td></tr>
   <tr><td><code>createSwapchainResources</code></td><td>with <code>occlusionCulling</code>: each frame slot's depth texture (keeps the old slot on resize)</td><td><code>NEAREST_CLAMP</code></td></tr>
 </table>
 </div>
