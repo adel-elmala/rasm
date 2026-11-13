@@ -47,7 +47,7 @@ int main()
 
     rasm::BufferHandle particles = engine.createBuffer({.name = "Particle Positions",
                                                         .usage = rasm::BufferUsage::STORAGE,
-                                                        .size = PARTICLE_COUNT * 2 * sizeof(float)});
+                                                        .size = static_cast<uint64_t>(PARTICLE_COUNT) * 2 * sizeof(float)});
     if (!particles.isValid())
         return 1;
     const uint64_t particlesAddress = engine.getRenderContext().getBufferDeviceAddress(particles);

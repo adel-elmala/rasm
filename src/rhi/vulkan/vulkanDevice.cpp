@@ -30,7 +30,7 @@ namespace rasm::rhi
                 return vkb::Result<vkb::Instance>{systemInfoRet.error()};
             }
 
-            auto systemInfo = systemInfoRet.value();
+            const auto &systemInfo = systemInfoRet.value();
 
             // Debug utils is cheap, so enable it whenever it is available: object names show up in
             // RenderDoc / Nsight even without validation (B3).
@@ -40,9 +40,24 @@ namespace rasm::rhi
                 debugUtilsEnabled = true;
             }
 
-            if (desc.enableValidation && systemInfo.validation_layers_available)
+            // Read by vkCreateInstance, which build() below calls.
+            const VkBool32 settingOn = VK_TRUE;
+            const bool validationOn = desc.enableValidation && systemInfo.validation_layers_available;
+            if (desc.enableValidation && !systemInfo.validation_layers_available)
+                spdlog::warn("Vulkan validation layers are not installed, validation is off");
+            if (!validationOn && (desc.enableSyncValidation || desc.enableGpuValidation))
+                spdlog::warn("enableSyncValidation and enableGpuValidation need enableValidation and the validation layers; ignored");
+
+            if (validationOn)
             {
                 instanceBuilder.enable_validation_layers();
+                // The validation layer provides this extension; the settings below are chained through it.
+                if ((desc.enableSyncValidation || desc.enableGpuValidation) && systemInfo.is_extension_available(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME))
+                    instanceBuilder.enable_extension(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
+                if (desc.enableSyncValidation)
+                    instanceBuilder.add_layer_setting({"VK_LAYER_KHRONOS_validation", "validate_sync", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &settingOn});
+                if (desc.enableGpuValidation)
+                    instanceBuilder.add_layer_setting({"VK_LAYER_KHRONOS_validation", "gpuav_enable", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1, &settingOn});
 
                 // Validation needs to send errors via a callback, have vk-bootstrap do it
                 if (debugUtilsEnabled)
@@ -165,7 +180,7 @@ namespace rasm::rhi
                 "\t\t\t\t\tdriver version: {}.{}.{} --  API version: {}.{}.{}",
                 physicalDevice.properties.deviceName,
                 toDeviceTypeString(physicalDevice.properties.deviceType),
-                physicalDevice.memory_properties.memoryHeaps[0].size / (1024 * 1024),
+                physicalDevice.memory_properties.memoryHeaps[0].size / (1024ull * 1024),
                 VK_VERSION_MAJOR(physicalDevice.properties.driverVersion),
                 VK_VERSION_MINOR(physicalDevice.properties.driverVersion),
                 VK_VERSION_PATCH(physicalDevice.properties.driverVersion),
@@ -194,7 +209,6 @@ namespace rasm::rhi
             case BufferUsage::STORAGE:
                 return flags | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
             case BufferUsage::DEVICE_ADDRESS:
-                return flags;
             default:
                 return flags;
             }

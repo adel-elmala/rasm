@@ -44,7 +44,7 @@ namespace rasm
         }
 
         // find if the texture extension is supported, if not return invalid handle
-        auto extension = path.substr(path.find_last_of(".") + 1);
+        auto extension = path.substr(path.find_last_of('.') + 1);
         if (!supportedTextureExtensions.contains(extension))
         {
             spdlog::error("Unsupported texture format: {}", extension);

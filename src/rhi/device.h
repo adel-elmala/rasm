@@ -53,8 +53,10 @@ namespace rasm::rhi
     struct DeviceDesc
     {
         std::string     appName;
-        const Window*   window              = nullptr;
-        bool            enableValidation    = false;
+        const Window*   window                  = nullptr;
+        bool            enableValidation        = false;
+        bool            enableSyncValidation    = false;
+        bool            enableGpuValidation     = false;
     };
 
     struct Buffer

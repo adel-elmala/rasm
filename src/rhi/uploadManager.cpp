@@ -17,11 +17,11 @@ namespace rasm::rhi
         constexpr uint64_t MAX_CHUNK_SIZE = RING_SIZE / 4;
     }
 
-    bool UploadManager::initialize(Device &device)
+    bool UploadManager::initialize(Device &targetDevice)
     {
-        this->device = &device;
-        staging = device.createBuffer({.name = "Upload Staging Ring", .usage = BufferUsage::DEVICE_ADDRESS, .size = RING_SIZE, .hostVisible = true});
-        fence = device.createFence(0, "Upload Fence");
+        device = &targetDevice;
+        staging = device->createBuffer({.name = "Upload Staging Ring", .usage = BufferUsage::DEVICE_ADDRESS, .size = RING_SIZE, .hostVisible = true});
+        fence = device->createFence(0, "Upload Fence");
         if (!staging || !fence)
         {
             spdlog::error("Failed to create the upload staging ring.");
@@ -31,7 +31,7 @@ namespace rasm::rhi
 
         for (uint32_t i = 0; i < 2; ++i)
         {
-            batches[i].commandBuffer = device.createCommandBuffer(QueueType::GRAPHICS, "Upload Command Buffer " + std::to_string(i));
+            batches[i].commandBuffer = device->createCommandBuffer(QueueType::GRAPHICS, "Upload Command Buffer " + std::to_string(i));
             if (!batches[i].commandBuffer)
                 return false;
         }

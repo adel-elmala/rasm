@@ -1,0 +1,47 @@
+# Run through the x64-tidy / macOS-tidy presets, or with run-clang-tidy -p <build dir>. See docs/build_guide.md.
+#
+# Turned off:
+#   bugprone-easily-swappable-parameters    every (x, y) pair of the same type
+#   bugprone-exception-escape               engine code has no exceptions, and main() in the examples may let std throw
+#   bugprone-throwing-static-initialization same: a static std::string or set that fails to allocate ends the program anyway
+#   bugprone-narrowing-conversions          -Wconversion (RASM_WARNINGS) already reports these
+#   bugprone-invalid-enum-default-initialization, clang-analyzer-optin.core.EnumCastOutOfRange
+#                                           flag enums (PipelineStage, Vk*FlagBits): {} and a | b are valid values
+#   performance-enum-size                   GPU-facing enums keep their 32-bit size on purpose
+#   performance-no-int-to-ptr               Window keeps its SDL_Window pointer in a handle
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape,
+  -bugprone-throwing-static-initialization,
+  -bugprone-narrowing-conversions,
+  -bugprone-invalid-enum-default-initialization,
+  clang-analyzer-*,
+  -clang-analyzer-optin.core.EnumCastOutOfRange,
+  performance-*,
+  -performance-enum-size,
+  -performance-no-int-to-ptr,
+  readability-identifier-naming
+
+HeaderFilterRegex: '.*'
+ExcludeHeaderFilterRegex: '.*vcpkg_installed.*'
+
+# The naming table in docs/coding_style.md section 2.
+CheckOptions:
+  readability-identifier-naming.NamespaceCase:          lower_case
+  readability-identifier-naming.ClassCase:              CamelCase
+  readability-identifier-naming.StructCase:             CamelCase
+  readability-identifier-naming.UnionCase:              CamelCase
+  readability-identifier-naming.EnumCase:               CamelCase
+  readability-identifier-naming.TypeAliasCase:          CamelCase
+  readability-identifier-naming.TypedefCase:            CamelCase
+  readability-identifier-naming.TemplateParameterCase:  CamelCase
+  readability-identifier-naming.FunctionCase:           camelBack
+  readability-identifier-naming.MethodCase:             camelBack
+  readability-identifier-naming.VariableCase:           camelBack
+  readability-identifier-naming.ParameterCase:          camelBack
+  readability-identifier-naming.MemberCase:             camelBack
+  readability-identifier-naming.ConstexprVariableCase:  UPPER_CASE
+  readability-identifier-naming.EnumConstantCase:       UPPER_CASE
+  readability-identifier-naming.MacroDefinitionCase:    UPPER_CASE

@@ -46,6 +46,25 @@
             }
         },
         {
+            "name": "x64-asan",
+            "displayName": "Windows x64, AddressSanitizer + UndefinedBehaviorSanitizer",
+            "description": "ASan does not support the Debug CRT on Windows, so this builds against the release CRT and libraries, with asserts on.",
+            "inherits": "windows-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O1 -g -Xclang -gcodeview",
+                "RASM_SANITIZERS": "address;undefined"
+            }
+        },
+        {
+            "name": "x64-tidy",
+            "displayName": "Windows x64 Debug, clang-tidy on every compile",
+            "inherits": "x64-debug",
+            "cacheVariables": {
+                "CMAKE_CXX_CLANG_TIDY": "clang-tidy"
+            }
+        },
+        {
             "name": "macOS-base",
             "hidden": true,
             "inherits": "base",
@@ -72,6 +91,30 @@
             }
         },
         {
+            "name": "macOS-asan",
+            "displayName": "macOS Debug, AddressSanitizer + UndefinedBehaviorSanitizer",
+            "inherits": "macOS",
+            "cacheVariables": {
+                "RASM_SANITIZERS": "address;undefined"
+            }
+        },
+        {
+            "name": "macOS-tsan",
+            "displayName": "macOS Debug, ThreadSanitizer",
+            "inherits": "macOS",
+            "cacheVariables": {
+                "RASM_SANITIZERS": "thread"
+            }
+        },
+        {
+            "name": "macOS-tidy",
+            "displayName": "macOS Debug, clang-tidy on every compile",
+            "inherits": "macOS",
+            "cacheVariables": {
+                "CMAKE_CXX_CLANG_TIDY": "clang-tidy"
+            }
+        },
+        {
             "name": "macOS-Xcode",
             "displayName": "macOS native Xcode",
             "inherits": "macOS-base",
@@ -88,12 +131,32 @@
             "configurePreset": "x64-release"
         },
         {
+            "name": "x64-asan",
+            "configurePreset": "x64-asan"
+        },
+        {
+            "name": "x64-tidy",
+            "configurePreset": "x64-tidy"
+        },
+        {
             "name": "macOS",
             "configurePreset": "macOS"
         },
         {
             "name": "macOS-release",
             "configurePreset": "macOS-release"
+        },
+        {
+            "name": "macOS-asan",
+            "configurePreset": "macOS-asan"
+        },
+        {
+            "name": "macOS-tsan",
+            "configurePreset": "macOS-tsan"
+        },
+        {
+            "name": "macOS-tidy",
+            "configurePreset": "macOS-tidy"
         },
         {
             "name": "macOS-Xcode",
@@ -120,6 +183,14 @@
             "configurePreset": "x64-release"
         },
         {
+            "name": "x64-asan",
+            "inherits": "test-base",
+            "configurePreset": "x64-asan",
+            "environment": {
+                "UBSAN_OPTIONS": "print_stacktrace=1"
+            }
+        },
+        {
             "name": "macOS",
             "inherits": "test-base",
             "configurePreset": "macOS"
@@ -128,6 +199,22 @@
             "name": "macOS-release",
             "inherits": "test-base",
             "configurePreset": "macOS-release"
+        },
+        {
+            "name": "macOS-asan",
+            "inherits": "test-base",
+            "configurePreset": "macOS-asan",
+            "environment": {
+                "UBSAN_OPTIONS": "print_stacktrace=1"
+            }
+        },
+        {
+            "name": "macOS-tsan",
+            "inherits": "test-base",
+            "configurePreset": "macOS-tsan",
+            "environment": {
+                "TSAN_OPTIONS": "halt_on_error=1"
+            }
         },
         {
             "name": "macOS-Xcode",

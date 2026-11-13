@@ -20,7 +20,7 @@ python $V run           # AFTER: same checks + pixel diff against the baseline
 
 | Option | Use |
 |---|---|
-| `--preset x64-debug` | Build preset (also `x64-release`, `macOS`, `macOS-release`). Each preset has its own baseline. |
+| `--preset x64-debug` | Build preset (also `x64-release`, `macOS`, `macOS-release`, and the sanitizer presets `x64-asan`, `macOS-asan`, `macOS-tsan`). Each preset has its own baseline. |
 | `--examples 00_hello_scene,02_gltf` | Only these (default: every `rasm_add_example` in `examples/CMakeLists.txt`). |
 | `--frame 60` | Frame to screenshot. Keep it the same for baseline and run. |
 | `--tolerance 2` | Max per-channel difference (0-255) still counted as "same". |

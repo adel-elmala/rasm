@@ -38,7 +38,8 @@ cmake --install build\x64-debug                        # into install/, for find
 - Requires `VCPKG_ROOT`; presets use Ninja + `clang++`. Options: `-DRASM_ENABLE_AVX2=ON` (x86 only), `-DRASM_BUILD_EXAMPLES=OFF`, `-DRASM_BUILD_TESTS=OFF`, `-DRASM_INSTALL=OFF`, `-DRASM_SHADER_DIR=<path>`.
 - A new dependency linked to `rasm`, PUBLIC or PRIVATE, also needs a `find_dependency` line in `cmake/rasmConfig.cmake.in`: `rasm` is static, so consumers link it too.
 - Run `clang-format -i <file>` on `.cpp` files you change. It keeps line breaks (no column limit) and skips `// clang-format off` regions. Every header is wrapped in those guards and hand-aligned in columns, so new headers need them too (see `docs/coding_style.md` section 4).
-- `rasm_tests` (doctest, no GPU) covers CPU-side code only, and there is no lint config yet. Verify rendering changes by running the examples with `EngineConfig::enableValidation = true` — a change that adds validation messages is not done.
+- `rasm_tests` (doctest, no GPU) covers CPU-side code only. Verify rendering changes by running the examples with `EngineConfig::enableValidation = true` — a change that adds validation messages is not done.
+- Analysis (local only, see [docs/build_guide.md](docs/build_guide.md#static-and-dynamic-analysis)): every build has `RASM_WARNINGS` on and must stay warning-free. `cmake --build --preset x64-tidy` runs clang-tidy (`.clang-tidy`) and `x64-asan` builds with ASan + UBSan (`macOS-asan`, `macOS-tsan` on macOS). Turn a check off only with a reason in `.clang-tidy`, or `// NOLINT(<check>): <reason>` at the site.
 - Shaders are compiled at runtime from `EngineConfig::shaderDir`, by default a `shaders/` folder beside the executable. Examples set `shaderDir` to the repo's `shaders/` and `assetRoot` to its `assets/`, so a shader edit shows up the next time an example starts, with no build. `tools/compile-shaders.bat` is only an offline compile check.
 
 ## Adding files

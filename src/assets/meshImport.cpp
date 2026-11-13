@@ -302,7 +302,7 @@ namespace rasm
             if (node.rotation.size() == 4)
             {
                 // Note: glm::quat constructor is glm::quat(w, x, y, z)
-                glm::quat q(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]);
+                glm::quat q(static_cast<float>(node.rotation[3]), static_cast<float>(node.rotation[0]), static_cast<float>(node.rotation[1]), static_cast<float>(node.rotation[2]));
                 transform = transform * glm::mat4_cast(q);
             }
 
@@ -593,12 +593,19 @@ namespace rasm
                 {
                     Vertex v = {};
 
-                    v.pos = {attrib.vertices[index.vertex_index * 3], attrib.vertices[index.vertex_index * 3 + 1], attrib.vertices[index.vertex_index * 3 + 2]};
+                    const size_t p = 3 * static_cast<size_t>(index.vertex_index);
+                    v.pos = {attrib.vertices[p], attrib.vertices[p + 1], attrib.vertices[p + 2]};
                     if (hasObjAttribute(attrib.normals, index.normal_index, 3))
-                        v.normal = {attrib.normals[index.normal_index * 3], attrib.normals[index.normal_index * 3 + 1], attrib.normals[index.normal_index * 3 + 2]};
+                    {
+                        const size_t n = 3 * static_cast<size_t>(index.normal_index);
+                        v.normal = {attrib.normals[n], attrib.normals[n + 1], attrib.normals[n + 2]};
+                    }
                     // OBJ puts the UV origin at the image's bottom-left; textures start at the top-left.
                     if (hasObjAttribute(attrib.texcoords, index.texcoord_index, 2))
-                        v.uv[0] = {attrib.texcoords[index.texcoord_index * 2], 1.0 - attrib.texcoords[index.texcoord_index * 2 + 1]};
+                    {
+                        const size_t t = 2 * static_cast<size_t>(index.texcoord_index);
+                        v.uv[0] = {attrib.texcoords[t], 1.0f - attrib.texcoords[t + 1]};
+                    }
 
                     objRaw.vertices.push_back(v);
                     objRaw.indices.push_back(static_cast<uint32_t>(objRaw.indices.size()));
@@ -617,7 +624,7 @@ namespace rasm
     {
         ZoneScoped;
 
-        const auto extension = path.substr(path.find_last_of(".") + 1);
+        const auto extension = path.substr(path.find_last_of('.') + 1);
         if (extension == "gltf" || extension == "glb")
             return importGltf(path, extension == "glb");
         return importObj(path);

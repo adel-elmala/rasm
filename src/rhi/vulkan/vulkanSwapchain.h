@@ -18,7 +18,7 @@ namespace rasm::rhi
                                     VulkanSwapchain(VulkanDevice& device);
                                     ~VulkanSwapchain() override;
         bool                        initialize(const SwapchainDesc& desc);
-        SwapchainStatus             acquireNextImage(uint32_t& imageIndex) override;
+        SwapchainStatus             acquireNextImage(uint32_t& outImageIndex) override;
         SwapchainStatus             present() override;
         SwapchainStatus             resize(uint32_t width, uint32_t height) override;
         uint32_t                    getImageCount() const override;

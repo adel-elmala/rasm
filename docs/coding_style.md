@@ -26,6 +26,8 @@ These rules describe how RASM code is written. Most of them are what the code al
 | File names | camelCase, matching the main type | `renderGraph.h` / `renderGraph.cpp` |
 | Macros | `RASM_` prefix, UPPER_SNAKE_CASE | `RASM_ENABLE_AVX2` |
 
+`readability-identifier-naming` in `.clang-tidy` checks this table, so the `x64-tidy` preset reports a name that breaks it. It can't tell a compile-time constant from a runtime one, so it expects UPPER_SNAKE_CASE only on `constexpr` names: declare compile-time constants `constexpr`.
+
 Naming conventions for specific kinds of function:
 - `create*` makes a new object and returns a handle.
 - `load*` reads from disk.

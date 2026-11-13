@@ -29,7 +29,6 @@ namespace rasm::rhi
         case Format::R8G8B8_UNORM:
             return VK_FORMAT_R8G8B8_UNORM;
         case Format::UNKNOWN:
-            return VK_FORMAT_UNDEFINED;
         default:
             return VK_FORMAT_UNDEFINED;
         }

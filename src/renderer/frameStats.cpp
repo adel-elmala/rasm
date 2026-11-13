@@ -76,10 +76,10 @@ namespace rasm
                     order[i - 1] = i;
                 stats.gpuTimerCount = slot.timerCount - 1;
                 std::sort(order, order + stats.gpuTimerCount, [&](uint32_t a, uint32_t b)
-                          { return nanoseconds[2 * a] < nanoseconds[2 * b]; });
+                          { return nanoseconds[2 * size_t{a}] < nanoseconds[2 * size_t{b}]; });
                 for (uint32_t i = 0; i < stats.gpuTimerCount; ++i)
                 {
-                    const uint32_t timer = order[i];
+                    const size_t timer = order[i];
                     stats.gpuTimers[i] = {.name = slot.timerNames[timer],
                                           .milliseconds = static_cast<float>(static_cast<double>(nanoseconds[2 * timer + 1] - nanoseconds[2 * timer]) * 1e-6)};
                 }

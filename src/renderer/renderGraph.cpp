@@ -10,7 +10,7 @@
 
 namespace rasm
 {
-    void RenderGraph::addPass(std::string name, std::function<void(PassBuilder &)> setup, std::function<void(RenderContext &)> execute)
+    void RenderGraph::addPass(std::string name, const std::function<void(PassBuilder &)> &setup, std::function<void(RenderContext &)> execute)
     {
         uint32_t passIdx = static_cast<uint32_t>(passes.size());
         Pass p = {};
@@ -23,9 +23,9 @@ namespace rasm
         compiled = false; // Mark graph as dirty
     }
 
-    void RenderGraph::addComputePass(std::string name, std::function<void(PassBuilder &)> setup, std::function<void(RenderContext &)> execute)
+    void RenderGraph::addComputePass(std::string name, const std::function<void(PassBuilder &)> &setup, std::function<void(RenderContext &)> execute)
     {
-        addPass(std::move(name), std::move(setup), std::move(execute));
+        addPass(std::move(name), setup, std::move(execute));
         auto &pass = passes.back();
         pass.compute = true;
         // A compute pass runs outside any render pass, so it has no attachments to write.
