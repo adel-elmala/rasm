@@ -13,6 +13,7 @@
 namespace rasm
 {
     constexpr uint32_t  MAX_FRAMES_IN_FLIGHT    = 2;
+    constexpr uint32_t  MAX_COLOR_ATTACHMENTS   = 4;
     constexpr uint32_t  MAX_DESCRIPTOR_TYPES    = 1;
     constexpr uint32_t  MAX_BINDLESS_TEXTURES   = 1024;
     constexpr uint32_t  PUSH_CONSTANTS_SIZE     = 16;
@@ -30,6 +31,7 @@ namespace rasm
 
     enum class Format
     {
+        UNKNOWN,
         R8G8B8A8_UNORM,
         R8G8B8A8_SRGB,
         B8G8R8A8_SRGB,
@@ -43,7 +45,6 @@ namespace rasm
         R32G32_SFLOAT,
         U16_UINT,
         U32_UINT,
-        UNKNOWN
     };
 
     enum class ShaderType
@@ -126,7 +127,7 @@ namespace rasm
 
     struct RenderTargetAttachments
     {
-        TextureHandle color;
+        TextureHandle color[rasm::MAX_COLOR_ATTACHMENTS];
         TextureHandle depth;
     };
 
@@ -135,9 +136,11 @@ namespace rasm
         RenderTargetAttachments attachments[rasm::MAX_FRAMES_IN_FLIGHT];
         uint32_t width;
         uint32_t height;
-        Format colorFormat;
+        Format colorFormats[rasm::MAX_COLOR_ATTACHMENTS];
+        uint32_t colorCount;
         Format depthFormat;
         glm::vec4 clearColor;
+        bool history;
     };
 
 } // namespace rasm

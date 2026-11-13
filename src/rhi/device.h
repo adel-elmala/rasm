@@ -80,6 +80,19 @@ namespace rasm::rhi
         TextureUsage                        state               = TextureUsage::UNKNOWN;
     };
 
+    struct MemoryRequirements
+    {
+        uint64_t                            size                = 0;
+        uint64_t                            alignment           = 1;
+        uint32_t                            memoryTypeBits      = 0;
+    };
+
+    struct Heap
+    {
+        uint64_t                            size                = 0;
+        uint32_t                            memoryTypeBits      = 0;
+    };
+
     struct Sampler
     {
         SamplerDesc                         desc;
@@ -126,7 +139,7 @@ namespace rasm::rhi
         virtual bool                begin() = 0;
         virtual bool                end() = 0;
         virtual bool                transitionTexture(Texture* texture, TextureUsage oldUsage, TextureUsage newUsage) = 0;
-        virtual void                beginRendering(Texture* colorAttachment, Texture* depthAttachment, const glm::vec4& clearColor, bool load, bool storeDepth) = 0;
+        virtual void                beginRendering(Texture* const* colorAttachments, uint32_t colorCount, Texture* depthAttachment, const glm::vec4& clearColor, const AttachmentOps& ops) = 0;
         virtual void                endRendering() = 0;
         virtual void                setViewport(float x, float y, float width, float height, float minDepth, float maxDepth) = 0;
         virtual void                setScissor(int32_t x, int32_t y, uint32_t width, uint32_t height) = 0;
@@ -141,6 +154,7 @@ namespace rasm::rhi
         virtual void                drawIndexedIndirectCount(Buffer* buffer, uint64_t offset, Buffer* countBuffer, uint64_t countOffset, uint32_t maxDrawCount, uint32_t stride) = 0;
         virtual void                dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
         virtual void                memoryBarrier(PipelineStage before, PipelineStage after) = 0;
+        virtual void                aliasingBarrier() = 0;
         virtual void                copyBuffers(Buffer* src, const BufferCopy* copies, uint32_t copyCount) = 0;
         virtual void                writeTimestamp(QueryPool* pool, uint32_t index) = 0;
     };
@@ -182,6 +196,9 @@ namespace rasm::rhi
         virtual                         ~Device() = default;
         virtual Buffer*                 createBuffer(const BufferDesc& desc) = 0;
         virtual Texture*                createTexture(const TextureDesc& desc) = 0;
+        virtual MemoryRequirements      getTextureMemoryRequirements(const TextureDesc& desc) = 0;
+        virtual Heap*                   createHeap(uint64_t size, uint64_t alignment, uint32_t memoryTypeBits, const std::string& name) = 0;
+        virtual Texture*                createPlacedTexture(const TextureDesc& desc, Heap* heap, uint64_t offset) = 0;
         virtual Sampler*                createSampler(const SamplerDesc& desc) = 0;
         virtual Shader*                 createShader(const ShaderDesc& desc) = 0;
         virtual Pipeline*               createGraphicsPipeline(const PipelineDesc& desc, Shader* vertexShader, Shader* fragmentShader, DescriptorSetLayout* layout) = 0;
@@ -195,6 +212,7 @@ namespace rasm::rhi
         virtual QueryPool*              createTimestampQueryPool(uint32_t count, const std::string& name) = 0;
         virtual void                    destroyBuffer(Buffer* buffer) = 0;
         virtual void                    destroyTexture(Texture* texture) = 0;
+        virtual void                    destroyHeap(Heap* heap) = 0;
         virtual void                    destroySampler(Sampler* sampler) = 0;
         virtual void                    destroyShader(Shader* shader) = 0;
         virtual void                    destroyPipeline(Pipeline* pipeline) = 0;

@@ -78,6 +78,7 @@
   <tr><td><a href="render-graph.html#createRenderTarget"><code>createRenderTarget</code></a></td><td>offscreen color + depth</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#setRenderTarget"><code>setRenderTarget</code></a> / <a href="render-graph.html#resetRenderTarget"><code>resetRenderTarget</code></a></td><td>where the next pass draws</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a></td><td>read a target in a later pass</td><td>render-graph.html</td></tr>
+  <tr><td><a href="render-graph.html#getPreviousRenderTargetTexture"><code>getPreviousRenderTargetTexture</code></a></td><td>read last frame's copy of a history target</td><td>render-graph.html</td></tr>
   <tr><td><a href="low-level.html#getRenderContext"><code>getRenderContext</code></a></td><td>the low-level API</td><td>low-level.html</td></tr>
   <tr><td><a href="low-level.html#getBindlessDescriptorSet"><code>getBindlessDescriptorSet</code></a></td><td>the texture set to bind</td><td>low-level.html</td></tr>
 </table>
@@ -268,20 +269,44 @@ if (!engine.running())
 </div>
 
 <div class="api" id="beginPass">
-  <pre class="sig">void beginPass(const std::string&amp; name = "Pass");</pre>
+  <pre class="sig">void beginPass(const std::string&amp; name = "Pass", const AttachmentOps&amp; ops = {});</pre>
   <div class="body">
-    <p>Starts rendering into the current target: the window, or the render target set with <a href="render-graph.html#setRenderTarget"><code>setRenderTarget</code></a>. It clears color and depth (their old contents are dropped, so nothing is kept from an earlier pass), sets the viewport and scissor to the whole target, and sets cull mode to none. Only between <code>beginFrame</code> and <code>endFrame</code>.</p>
+    <p>Starts rendering into the current target: the window, or the render target set with <a href="render-graph.html#setRenderTarget"><code>setRenderTarget</code></a>. By default it clears color and depth (their old contents are dropped), sets the viewport and scissor to the whole target, and sets cull mode to none. Only between <code>beginFrame</code> and <code>endFrame</code>.</p>
     <dl>
       <dt>name</dt><dd>Label of the pass. It names the pass's GPU timer in <code>getFrameStats</code> and the stats overlay.</dd>
+      <dt>ops</dt><dd>Which attachments to keep instead of clearing, and whether to keep depth at the end. See <a href="#AttachmentOps">AttachmentOps</a>. A render graph sets them for you.</dd>
     </dl>
     <p>The window is cleared to a dark gray. A render target is cleared to its own <code>clearColor</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="AttachmentOps">
+  <pre class="sig">struct AttachmentOps
+{
+    bool loadColor  = false;
+    bool loadDepth  = false;
+    bool storeDepth = false;
+};</pre>
+  <div class="body">
+    <p>What a pass does with its attachments. The defaults clear both and throw depth away at the end.</p>
+    <dl>
+      <dt>loadColor, loadDepth</dt><dd><code>true</code>: keep what the attachment holds, and draw on top. <code>false</code>: clear it (color to the target's clear color, depth to 0).</dd>
+      <dt>storeDepth</dt><dd><code>true</code>: keep depth at the end of the pass, for a later pass that loads it. Color is always kept. With <code>EngineConfig::occlusionCulling</code> depth is always kept.</dd>
+    </dl>
+    <pre><code>// A hand-written frame: the scene, then a UI pass on top of it
+engine.beginPass("Scene", {.storeDepth = true});
+engine.drawScene(scene, camera);
+engine.endPass();
+engine.beginPass("UI", {.loadColor = true, .loadDepth = true});
+// ... draw the UI
+engine.endPass();</code></pre>
   </div>
 </div>
 
 <div class="api" id="endPass">
   <pre class="sig">void endPass();</pre>
   <div class="body">
-    <p>Ends the pass. On the window, it first draws the stats overlay (when shown). On a render target, it moves the color image to the sampled layout, so later passes can sample it (see <a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a>). The depth image stays a depth attachment, so later passes cannot sample it. <code>endFrame</code> moves the swapchain image to the present layout.</p>
+    <p>Ends the pass. On a render target, it moves the color image to the sampled layout, so later passes can sample it (see <a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a>). The depth image stays a depth attachment, so later passes cannot sample it. <code>endFrame</code> moves the swapchain image to the present layout.</p>
   </div>
 </div>
 

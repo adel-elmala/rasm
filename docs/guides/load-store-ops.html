@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Load and store ops · RASM</title>
+<meta name="description" content="What a render pass does with its attachments at the start and at the end: load ops (LOAD, CLEAR, DONT_CARE) and store ops (STORE, DONT_CARE, NONE), why they matter on tile-based GPUs, how to choose them, how a render graph infers them, and how RASM does it.">
+<meta name="rasm-sources" content="include/rasm/render/resource.h include/rasm/render/renderGraph.h include/rasm/engine.h src/rhi/vulkan/vulkanCommandBuffer.cpp src/renderer/renderGraph.cpp src/engine.cpp src/renderer/gpuScene.cpp src/renderer/statsOverlay.cpp src/rhi/renderContext.cpp src/rhi/textureStates.cpp examples/01_render_graph/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+</head>
+<body data-root="../" data-page="guides/load-store-ops.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Culling and the frame</p>
+<h1>Load and store ops</h1>
+<p class="lead">A render pass draws into images called attachments. At the start of the pass, the GPU must know what to do with the old contents of each attachment. At the end, it must know what to do with the new contents. These two choices are the <b>load op</b> and the <b>store op</b>. They are two small flags, but on many GPUs they decide how many bytes a pass moves. The <a href="#in-rasm">last part</a> shows how RASM picks them.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li><b>Load op</b>, at the start: <b>LOAD</b> keeps the old contents, <b>CLEAR</b> fills the image with one value, <b>DONT_CARE</b> starts with anything.</li>
+    <li><b>Store op</b>, at the end: <b>STORE</b> keeps the new contents, <b>DONT_CARE</b> may throw them away, <b>NONE</b> does not write at all.</li>
+    <li>On a <b>tile-based GPU</b> (phones, Apple) the image lives in small on-chip memory while the pass runs. LOAD is a copy in and STORE is a copy out. CLEAR and DONT_CARE are free.</li>
+    <li>Rule: load only what an earlier pass drew and you still need. Store only what someone reads later.</li>
+    <li>Depth is the classic win: most frames never read depth after the last pass, so it does not need to be stored.</li>
+    <li>A render graph knows who drew an attachment before and who reads it after, so it can pick the ops by itself.</li>
+  </ul>
+</div>
+
+<h2><span class="n">1</span>Two questions per attachment</h2>
+
+<p>A render pass draws into one or more <b>attachments</b>: color images, and often one depth image. Before the first triangle, the GPU asks "what is in this image now?". After the last triangle, it asks "do you need what I drew?". The program answers both questions, once per attachment, when it begins the pass.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 220" role="img" aria-label="An attachment in memory holds old contents. The load op decides what reaches the render pass: LOAD keeps the old contents, CLEAR fills it with one value, DONT_CARE starts with anything. The pass draws. The store op decides what reaches memory: STORE writes it back, DONT_CARE may throw it away, NONE does not write at all.">
+    <text x="234" y="24" class="mid title">start of the pass</text>
+    <text x="524" y="24" class="mid title">end of the pass</text>
+    <rect x="20" y="40" width="150" height="56" rx="6" class="mem"/>
+    <text x="95" y="63" class="mid">Attachment</text>
+    <text x="95" y="82" class="mid small">old contents</text>
+    <line x1="170" y1="68" x2="298" y2="68" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="234" y="60" class="mid small t-hot">load op</text>
+    <rect x="300" y="40" width="160" height="56" rx="6" class="gpu"/>
+    <text x="380" y="63" class="mid">Render pass</text>
+    <text x="380" y="82" class="mid small">draws into it</text>
+    <line x1="460" y1="68" x2="588" y2="68" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="524" y="60" class="mid small t-hot">store op</text>
+    <rect x="590" y="40" width="150" height="56" rx="6" class="mem"/>
+    <text x="665" y="63" class="mid">Attachment</text>
+    <text x="665" y="82" class="mid small">new contents</text>
+
+    <text x="140" y="128" class="mono t-mem">LOAD</text>
+    <text x="230" y="128" class="small">keep the old contents</text>
+    <text x="140" y="152" class="mono t-gpu">CLEAR</text>
+    <text x="230" y="152" class="small">fill with one value</text>
+    <text x="140" y="176" class="mono t-gpu">DONT_CARE</text>
+    <text x="230" y="176" class="small">start with anything</text>
+
+    <text x="450" y="128" class="mono t-mem">STORE</text>
+    <text x="545" y="128" class="small">write it back</text>
+    <text x="450" y="152" class="mono t-gpu">DONT_CARE</text>
+    <text x="545" y="152" class="small">may throw it away</text>
+    <text x="450" y="176" class="mono t-gpu">NONE</text>
+    <text x="545" y="176" class="small">do not write at all</text>
+    <text x="20" y="208" class="small">Amber ops move bytes between the GPU and memory. Green ops move none.</text>
+  </svg>
+  <figcaption>Every attachment has its own pair: each color attachment, and the depth (and stencil) attachment.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Op</th><th>Meaning</th><th>Use it when</th></tr>
+  <tr><td>load <b>LOAD</b></td><td>The pass starts with what the image holds.</td><td>An earlier pass drew into it and this pass draws on top: transparent objects over opaque ones, a UI over the scene.</td></tr>
+  <tr><td>load <b>CLEAR</b></td><td>Every pixel starts as one clear value: a color, or a depth.</td><td>This is the first pass on the image this frame, and some pixels may stay empty.</td></tr>
+  <tr><td>load <b>DONT_CARE</b></td><td>The start contents are undefined. They can be old data, or garbage.</td><td>The pass writes every pixel anyway: a full-screen post effect.</td></tr>
+  <tr><td>store <b>STORE</b></td><td>What the pass drew is written to the image in memory.</td><td>A later pass reads it, it is shown on screen, or the next frame needs it.</td></tr>
+  <tr><td>store <b>DONT_CARE</b></td><td>The new contents may be lost. Afterwards the image is undefined.</td><td>Nobody reads it after this pass. Depth after the last 3D pass is the usual case.</td></tr>
+  <tr><td>store <b>NONE</b></td><td>The pass did not change the image, so nothing is written back, and the old contents stay.</td><td>The pass only reads the attachment, for example a depth test with depth writes off.</td></tr>
+</table>
+</div>
+
+<p>Every modern API has the same two choices, with different names:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>API</th><th>Load</th><th>Store</th></tr>
+  <tr><td>Vulkan</td><td><samp>VK_ATTACHMENT_LOAD_OP_LOAD</samp>, <samp>_CLEAR</samp>, <samp>_DONT_CARE</samp>, <samp>_NONE</samp></td><td><samp>VK_ATTACHMENT_STORE_OP_STORE</samp>, <samp>_DONT_CARE</samp>, <samp>_NONE</samp></td></tr>
+  <tr><td>Metal</td><td><samp>MTLLoadActionLoad</samp>, <samp>Clear</samp>, <samp>DontCare</samp></td><td><samp>MTLStoreActionStore</samp>, <samp>DontCare</samp>, <samp>MultisampleResolve</samp></td></tr>
+  <tr><td>Direct3D 12 render passes</td><td>beginning access <samp>PRESERVE</samp>, <samp>CLEAR</samp>, <samp>DISCARD</samp>, <samp>NO_ACCESS</samp></td><td>ending access <samp>PRESERVE</samp>, <samp>DISCARD</samp>, <samp>RESOLVE</samp>, <samp>NO_ACCESS</samp></td></tr>
+  <tr><td>WebGPU</td><td><samp>"load"</samp>, <samp>"clear"</samp></td><td><samp>"store"</samp>, <samp>"discard"</samp></td></tr>
+</table>
+</div>
+
+<p>In Vulkan they go into the attachment info that begins the pass, next to the clear value:</p>
+
+<pre><code>VkRenderingAttachmentInfo colorAttachment{
+    .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+    .imageView = colorView,
+    .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+    .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+    .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+    .clearValue{.color{.float32{0.0f, 0.0f, 0.0f, 1.0f}}}};</code></pre>
+
+<h2 id="tilers"><span class="n">2</span>Why it matters: tile-based GPUs</h2>
+
+<p>There are two kinds of GPU. An <b>immediate-mode</b> GPU (most desktop GPUs) draws each triangle as it comes. Its pixels can land anywhere on the screen, so the color and depth images stay in video memory (VRAM), and a cache sits in between. A <b>tile-based</b> GPU (phones, Apple GPUs, many others) first sorts all the triangles of the pass into small screen tiles, for example 32×32 pixels. Then it draws one tile at a time, completely, in a small and very fast memory on the chip.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Left: an immediate-mode GPU. Shader cores and the depth test read and write every pixel through a small cache to VRAM. Right: a tile-based GPU. The screen is split into tiles; one tile at a time lives in on-chip tile memory. The load op LOAD copies the tile from VRAM into tile memory, the store op STORE copies it back. CLEAR fills the tile on chip and DONT_CARE skips the copy.">
+    <text x="190" y="22" class="mid title">Immediate-mode GPU</text>
+    <rect x="40" y="40" width="300" height="46" rx="6" class="gpu"/>
+    <text x="190" y="60" class="mid">Shader cores and depth test</text>
+    <text x="190" y="77" class="mid small">triangles in order, anywhere on screen</text>
+    <line x1="190" y1="88" x2="190" y2="118" class="arrow" marker-start="url(#ah)" marker-end="url(#ah)"/>
+    <text x="200" y="107" class="small">every pixel</text>
+    <rect x="40" y="120" width="300" height="40" rx="6" class="box"/>
+    <text x="190" y="145" class="mid">Cache (small)</text>
+    <line x1="190" y1="162" x2="190" y2="208" class="arrow mem" marker-start="url(#ah-mem)" marker-end="url(#ah-mem)"/>
+    <text x="200" y="189" class="small">misses and evictions</text>
+    <rect x="40" y="210" width="300" height="56" rx="6" class="mem"/>
+    <text x="190" y="233" class="mid">VRAM</text>
+    <text x="190" y="252" class="mid small">color and depth images</text>
+    <text x="190" y="288" class="mid small">The image is in memory the whole time.</text>
+
+    <line x1="375" y1="20" x2="375" y2="290" class="arrow dashed"/>
+
+    <text x="575" y="22" class="mid title">Tile-based GPU</text>
+    <rect x="410" y="40" width="30" height="30" class="box"/><rect x="440" y="40" width="30" height="30" class="box"/><rect x="470" y="40" width="30" height="30" class="box"/><rect x="500" y="40" width="30" height="30" class="box"/>
+    <rect x="410" y="70" width="30" height="30" class="box"/><rect x="440" y="70" width="30" height="30" class="box"/><rect x="470" y="70" width="30" height="30" class="box"/><rect x="500" y="70" width="30" height="30" class="box"/>
+    <rect x="410" y="100" width="30" height="30" class="box"/><rect x="440" y="100" width="30" height="30" class="box"/><rect x="470" y="100" width="30" height="30" class="box"/><rect x="500" y="100" width="30" height="30" class="box"/>
+    <rect x="440" y="70" width="30" height="30" class="hot"/>
+    <text x="470" y="148" class="mid small">the screen, in tiles</text>
+    <line x1="470" y1="82" x2="578" y2="78" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <rect x="580" y="50" width="160" height="56" rx="6" class="gpu"/>
+    <text x="660" y="73" class="mid">Tile memory</text>
+    <text x="660" y="92" class="mid small">on chip, one tile at a time</text>
+    <line x1="615" y1="208" x2="615" y2="110" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="705" y1="108" x2="705" y2="206" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="660" y="152" class="mid small t-mem">LOAD ↑</text>
+    <text x="660" y="170" class="mid small t-mem">STORE ↓</text>
+    <rect x="580" y="210" width="160" height="56" rx="6" class="mem"/>
+    <text x="660" y="233" class="mid">VRAM</text>
+    <text x="660" y="252" class="mid small">color and depth images</text>
+    <text x="400" y="190" class="small t-gpu">CLEAR fills the tile on chip:</text>
+    <text x="400" y="206" class="small">no read from memory.</text>
+    <text x="400" y="232" class="small t-gpu">DONT_CARE skips the copy:</text>
+    <text x="400" y="248" class="small">no memory traffic at all.</text>
+    <text x="575" y="288" class="mid small">The image is copied in and out once per tile.</text>
+  </svg>
+  <figcaption>On a tile-based GPU the depth test and blending never touch VRAM. Only the load op and the store op do. They are the pass's whole memory traffic for its attachments.</figcaption>
+</figure>
+
+<p>So on a tile-based GPU, the load and store ops are not details. A LOAD reads the whole image from memory, and a STORE writes the whole image. Memory traffic costs time and, on a phone, battery and heat. CLEAR costs nothing: the tile memory is filled with the clear value on the chip.</p>
+
+<h3>Desktop GPUs care too</h3>
+
+<p>An immediate-mode GPU has no copy in or out, but the ops still help it:</p>
+
+<ul>
+  <li><b>Fast clears.</b> Many desktop GPUs keep images compressed in blocks, with a little metadata per block. A CLEAR can just mark every block as "clear" in the metadata, without writing the pixels.</li>
+  <li><b>No decompression.</b> DONT_CARE at the start lets the driver skip work on the old contents, such as decompressing them.</li>
+  <li><b>Depth.</b> A depth image that is not stored may never need to be written out of the GPU's compressed form.</li>
+</ul>
+
+<p>The gain on desktop is smaller and depends on the GPU and the driver. But the right ops never cost anything, so set them right everywhere.</p>
+
+<h2 id="bandwidth"><span class="n">3</span>Worked example: the bytes</h2>
+
+<p>Take a 1920×1080 screen with an RGBA8 color image (4 bytes per pixel) and a 32-bit depth image (also 4 bytes per pixel). Count the bytes a tile-based GPU moves between tile memory and VRAM. (MB here means 1,000,000 bytes.)</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Attachment</th><th>Size</th></tr>
+  <tr><td>color, RGBA8</td><td>1920 × 1080 × 4 = 8,294,400 bytes ≈ 8.3 MB</td></tr>
+  <tr><td>depth, 32-bit float</td><td>1920 × 1080 × 4 = 8,294,400 bytes ≈ 8.3 MB</td></tr>
+</table>
+</div>
+
+<p>One pass, with three choices of ops:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Color ops</th><th>Depth ops</th><th>Read</th><th>Written</th><th>Per frame</th><th>At 60 fps</th></tr>
+  <tr><td>LOAD, STORE</td><td>LOAD, STORE</td><td>16.6 MB</td><td>16.6 MB</td><td>33.2 MB</td><td>1.99 GB/s</td></tr>
+  <tr><td>CLEAR, STORE</td><td>CLEAR, STORE</td><td>0</td><td>16.6 MB</td><td>16.6 MB</td><td>1.00 GB/s</td></tr>
+  <tr><td>CLEAR, STORE</td><td>CLEAR, DONT_CARE</td><td>0</td><td>8.3 MB</td><td>8.3 MB</td><td>0.50 GB/s</td></tr>
+</table>
+</div>
+
+<p>The same pass, the same image on screen, and 4 times fewer bytes. Now a frame with three passes on the same images: opaque objects, then transparent objects (which test against the opaque depth), then a UI on top (with no depth).</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Pass</th><th>Ops (color · depth)</th><th>Bytes</th></tr>
+  <tr><td>Opaque</td><td>CLEAR, STORE · CLEAR, STORE</td><td>8.3 + 8.3 = 16.6 MB</td></tr>
+  <tr><td>Transparent</td><td>LOAD, STORE · LOAD, DONT_CARE</td><td>16.6 + 8.3 = 24.9 MB</td></tr>
+  <tr><td>UI</td><td>LOAD, STORE · no depth</td><td>16.6 MB</td></tr>
+  <tr><td><b>Total</b></td><td></td><td><b>58,060,800 bytes ≈ 58.1 MB</b> → 3.48 GB/s at 60 fps</td></tr>
+</table>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Bytes moved per frame by the three-pass frame. Every pass loading and storing both images: 99.5 MB, 5.97 GB/s. Ops chosen per pass: 58.1 MB, 3.48 GB/s. All three as one pass: 8.3 MB, 0.50 GB/s.">
+    <text x="20" y="22" class="title">Three passes at 1920×1080, bytes per frame</text>
+    <text x="20" y="54" class="small">Every pass: LOAD + STORE,</text>
+    <text x="20" y="68" class="small">color and depth</text>
+    <rect x="215" y="40" width="133" height="34" class="mem"/><rect x="348" y="40" width="133" height="34" class="mem"/><rect x="481" y="40" width="132" height="34" class="mem"/>
+    <text x="281" y="61" class="mid small">Opaque</text><text x="414" y="61" class="mid small">Transparent</text><text x="547" y="61" class="mid small">UI</text>
+    <text x="621" y="61" class="small">99.5 MB · 5.97 GB/s</text>
+
+    <text x="20" y="109" class="small">Ops chosen per pass</text>
+    <text x="20" y="123" class="small">(the table above)</text>
+    <rect x="215" y="95" width="66" height="34" class="mem"/><rect x="281" y="95" width="100" height="34" class="mem"/><rect x="381" y="95" width="66" height="34" class="mem"/>
+    <text x="248" y="116" class="mid small">Opaque</text><text x="331" y="116" class="mid small">Transp.</text><text x="414" y="116" class="mid small">UI</text>
+    <text x="455" y="116" class="small">58.1 MB · 3.48 GB/s</text>
+
+    <text x="20" y="164" class="small">One merged pass: CLEAR,</text>
+    <text x="20" y="178" class="small">store color only</text>
+    <rect x="215" y="150" width="33" height="34" class="mem"/>
+    <text x="256" y="171" class="small">8.3 MB · 0.50 GB/s</text>
+  </svg>
+  <figcaption>4 pixels of bar per MB. Good ops save about 40% here. Merging the passes (<a href="#variants">section 5</a>) saves much more, because the images stay on the chip between the passes.</figcaption>
+</figure>
+
+<p>A phone has a few tens of GB/s of memory bandwidth in total, shared with the CPU. A few GB/s for one image is a large part of it. These numbers are the tile-based model. An immediate-mode GPU moves bytes in a different way, so the numbers do not apply there directly.</p>
+
+<h2 id="choosing"><span class="n">4</span>Choosing the ops</h2>
+
+<p>Two questions decide everything. For the load op: "do I need what is already there?". For the store op: "will anybody read what I drew?".</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Two decision trees. Load op: if an earlier pass drew the image this frame and the pass needs it, LOAD. Otherwise, if the pass writes every pixel, DONT_CARE, else CLEAR. Store op: if anything reads the image after this pass, a later pass, the screen or the next frame, STORE; otherwise DONT_CARE.">
+    <text x="190" y="22" class="mid title">Load op</text>
+    <rect x="20" y="36" width="340" height="44" rx="6" class="box"/>
+    <text x="190" y="54" class="mid small">Did an earlier pass draw it this frame,</text>
+    <text x="190" y="70" class="mid small">and does this pass need that image?</text>
+    <line x1="100" y1="80" x2="100" y2="118" class="arrow" marker-end="url(#ah)"/>
+    <text x="108" y="103" class="small">yes</text>
+    <rect x="40" y="120" width="120" height="36" rx="6" class="mem"/>
+    <text x="100" y="143" class="mid mono">LOAD</text>
+    <line x1="280" y1="80" x2="280" y2="118" class="arrow" marker-end="url(#ah)"/>
+    <text x="288" y="103" class="small">no</text>
+    <rect x="190" y="120" width="180" height="44" rx="6" class="box"/>
+    <text x="280" y="138" class="mid small">Does the pass write</text>
+    <text x="280" y="154" class="mid small">every pixel?</text>
+    <line x1="230" y1="164" x2="230" y2="198" class="arrow" marker-end="url(#ah)"/>
+    <text x="238" y="186" class="small">yes</text>
+    <rect x="180" y="200" width="100" height="36" rx="6" class="gpu"/>
+    <text x="230" y="223" class="mid mono">DONT_CARE</text>
+    <line x1="330" y1="164" x2="330" y2="198" class="arrow" marker-end="url(#ah)"/>
+    <text x="338" y="186" class="small">no</text>
+    <rect x="290" y="200" width="80" height="36" rx="6" class="gpu"/>
+    <text x="330" y="223" class="mid mono">CLEAR</text>
+    <text x="20" y="260" class="small">LOAD reads the image. CLEAR and DONT_CARE are free.</text>
+
+    <line x1="385" y1="20" x2="385" y2="262" class="arrow dashed"/>
+
+    <text x="575" y="22" class="mid title">Store op</text>
+    <rect x="410" y="36" width="330" height="44" rx="6" class="box"/>
+    <text x="575" y="54" class="mid small">Will anything read it after this pass?</text>
+    <text x="575" y="70" class="mid small">A later pass, the screen, the next frame</text>
+    <line x1="490" y1="80" x2="490" y2="118" class="arrow" marker-end="url(#ah)"/>
+    <text x="498" y="103" class="small">yes</text>
+    <rect x="430" y="120" width="120" height="36" rx="6" class="mem"/>
+    <text x="490" y="143" class="mid mono">STORE</text>
+    <line x1="660" y1="80" x2="660" y2="118" class="arrow" marker-end="url(#ah)"/>
+    <text x="668" y="103" class="small">no</text>
+    <rect x="600" y="120" width="120" height="36" rx="6" class="gpu"/>
+    <text x="660" y="143" class="mid mono">DONT_CARE</text>
+    <text x="410" y="190" class="small">STORE writes the image. DONT_CARE is free.</text>
+    <text x="410" y="214" class="small">A pass that only reads the attachment and</text>
+    <text x="410" y="230" class="small">never writes it: NONE, if the API has it.</text>
+  </svg>
+  <figcaption>"Read later" means any read: a later pass that loads it, a pass that samples it as a texture, the screen, or the next frame.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Situation</th><th>Load</th><th>Store</th></tr>
+  <tr><td>Main 3D pass, first on its images</td><td>CLEAR color and depth</td><td>STORE color; depth only if a later pass needs it</td></tr>
+  <tr><td>A pass that draws on top (transparent objects, decals, UI)</td><td>LOAD</td><td>STORE color; depth as above</td></tr>
+  <tr><td>Full-screen post effect into a new image</td><td>DONT_CARE</td><td>STORE</td></tr>
+  <tr><td>Shadow map</td><td>CLEAR depth</td><td>STORE depth: the lighting pass samples it</td></tr>
+  <tr><td>Depth that only the last 3D pass uses</td><td>CLEAR or LOAD</td><td>DONT_CARE</td></tr>
+  <tr><td>The swapchain image</td><td>CLEAR, or DONT_CARE if every pixel is drawn</td><td>STORE: the screen reads it</td></tr>
+</table>
+</div>
+
+<h2 id="variants"><span class="n">5</span>The same idea in other places</h2>
+
+<div class="split">
+  <div>
+    <h4>Discard in a barrier</h4>
+    <p>An image barrier can change the layout from <b>UNDEFINED</b>. That also says "I do not need the old contents", like DONT_CARE. A pass that clears or does not care can use it: the driver may skip decompressing the old data. A pass that loads must <b>not</b>: the barrier would throw away what it wants to load. See <a href="gpu-sync.html">GPU synchronization</a>.</p>
+  </div>
+  <div>
+    <h4>Merging passes</h4>
+    <p>Two passes in a row on the same images pay a STORE and a LOAD in between. If they are one pass, the images stay on the chip and both copies go away (the last bar in <a href="#bandwidth">section 3</a>). Vulkan <b>subpasses</b> and tile-local reads let a pass even read the previous step's pixel while it is still on the chip, for example for deferred lighting.</p>
+  </div>
+</div>
+
+<p>Multisampling (MSAA) shows the store op at its best. A 4× MSAA image has 4 samples per pixel, but the screen needs only one. At the end of the pass, the GPU <b>resolves</b> the samples to one value, and stores only that.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="On chip, the MSAA color with 4 samples per pixel is resolved to one value per pixel. Only the resolved image is stored to VRAM, 8.3 MB. The MSAA image uses DONT_CARE and is never written, so it needs no memory: it can be memoryless.">
+    <rect x="20" y="34" width="480" height="88" class="zone"/>
+    <text x="490" y="50" class="end small">on chip</text>
+    <rect x="40" y="56" width="160" height="50" rx="6" class="gpu"/>
+    <text x="120" y="77" class="mid">MSAA color</text>
+    <text x="120" y="95" class="mid small">4 samples per pixel</text>
+    <line x1="200" y1="81" x2="258" y2="81" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="229" y="73" class="mid small">resolve</text>
+    <rect x="260" y="56" width="160" height="50" rx="6" class="gpu"/>
+    <text x="340" y="77" class="mid">Resolved color</text>
+    <text x="340" y="95" class="mid small">1 value per pixel</text>
+
+    <line x1="120" y1="106" x2="120" y2="160" class="arrow dashed"/>
+    <text x="128" y="140" class="small t-faint">DONT_CARE</text>
+    <line x1="340" y1="106" x2="340" y2="160" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="348" y="140" class="small t-mem">STORE</text>
+
+    <rect x="20" y="146" width="480" height="78" class="zone"/>
+    <text x="490" y="162" class="end small">VRAM</text>
+    <rect x="40" y="162" width="160" height="48" rx="6" class="ghost"/>
+    <text x="120" y="183" class="mid t-faint">MSAA image</text>
+    <text x="120" y="200" class="mid small">33.2 MB, never written</text>
+    <rect x="260" y="162" width="160" height="48" rx="6" class="mem"/>
+    <text x="340" y="183" class="mid">Resolved image</text>
+    <text x="340" y="200" class="mid small">8.3 MB written</text>
+
+    <text x="525" y="60" class="title">Memoryless</text>
+    <text x="525" y="84" class="small">With load CLEAR and store DONT_CARE,</text>
+    <text x="525" y="100" class="small">the MSAA image is never read or</text>
+    <text x="525" y="116" class="small">written in memory. A tile-based GPU</text>
+    <text x="525" y="132" class="small">then needs no memory for it at all.</text>
+    <text x="525" y="162" class="small">Vulkan: a transient attachment in</text>
+    <text x="525" y="178" class="small">lazily allocated memory.</text>
+    <text x="525" y="194" class="small">Metal: memoryless storage.</text>
+  </svg>
+  <figcaption>1920×1080, RGBA8, 4× MSAA: the MSAA image is 4 × 8.3 = 33.2 MB. A resolve is just another store op: Metal names it a store action, Direct3D 12 an ending access.</figcaption>
+</figure>
+
+<p>The same works for depth that is cleared at the start and not stored at the end: it can be memoryless too, as long as no other pass needs it.</p>
+
+<h2 id="graph"><span class="n">6</span>How a render graph picks the ops</h2>
+
+<p>A <a href="render-graphs.html">render graph</a> knows every pass, in the order they run, and what each pass writes and reads. That is exactly what the two questions need. Here is a frame with four passes, and the ops the graph finds for each image:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A grid with four passes as columns, Opaque, Transparent, Tonemap and UI, and three images as rows. HDR color: Opaque CLEAR then STORE, Transparent LOAD then STORE, Tonemap samples it. Depth: Opaque CLEAR then STORE, Transparent LOAD then DONT_CARE. Swapchain: Tonemap DONT_CARE then STORE, UI LOAD then STORE, then presented.">
+    <text x="245" y="30" class="mid title">1 Opaque</text>
+    <text x="385" y="30" class="mid title">2 Transparent</text>
+    <text x="525" y="30" class="mid title">3 Tonemap</text>
+    <text x="665" y="30" class="mid title">4 UI</text>
+    <line x1="20" y1="40" x2="740" y2="40" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="20" y="77" class="title">HDR color</text>
+    <rect x="180" y="52" width="130" height="40" rx="6" class="box"/>
+    <text x="245" y="77" class="mid small"><tspan class="t-gpu">CLEAR</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <rect x="320" y="52" width="130" height="40" rx="6" class="box"/>
+    <text x="385" y="77" class="mid small"><tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <rect x="470" y="56" width="110" height="32" rx="16" class="shader"/>
+    <text x="525" y="77" class="mid small">samples it</text>
+
+    <text x="20" y="137" class="title">Depth</text>
+    <rect x="180" y="112" width="130" height="40" rx="6" class="box"/>
+    <text x="245" y="137" class="mid small"><tspan class="t-gpu">CLEAR</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <rect x="320" y="112" width="130" height="40" rx="6" class="box"/>
+    <text x="385" y="137" class="mid small"><tspan class="t-mem">LOAD</tspan> → <tspan class="t-gpu">DONT_CARE</tspan></text>
+
+    <text x="20" y="197" class="title">Swapchain</text>
+    <rect x="460" y="172" width="130" height="40" rx="6" class="box"/>
+    <text x="525" y="197" class="mid small"><tspan class="t-gpu">DONT_CARE</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <rect x="600" y="172" width="130" height="40" rx="6" class="box"/>
+    <text x="665" y="197" class="mid small"><tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan></text>
+
+    <text x="20" y="238" class="small">Tonemap draws every pixel, so it does not care. Nobody reads depth after Transparent, so it is not stored. The screen reads the swapchain.</text>
+  </svg>
+  <figcaption>Each box is one pass drawing into one image: its load op, then its store op. The purple pill is a read as a texture, which also counts as "read later".</figcaption>
+</figure>
+
+<p>After sorting the passes, the graph walks them in order:</p>
+
+<ol class="steps">
+  <li><b>Load op.</b> For each attachment of the pass, look at the last earlier pass that drew it. If there is one, and the pass draws on top, LOAD. If there is none, CLEAR, or DONT_CARE when the pass says it covers every pixel.</li>
+  <li><b>Store op.</b> Look forward: is there a later pass that loads the image or samples it? Is it the swapchain, or an image kept for the next frame? Then STORE. Otherwise DONT_CARE.</li>
+  <li><b>Barriers.</b> A pass that does not LOAD can use the UNDEFINED layout in its barrier (<a href="#variants">section 5</a>). A pass that loads keeps the layout.</li>
+  <li><b>Optional: merge.</b> Neighbouring passes on the same images, with nothing in between that samples them, can become one pass, so the LOAD and STORE between them go away.</li>
+</ol>
+
+<p>The store op needs to know the future, so it is set after the whole order is known: either in a second walk backwards, or by fixing the previous writer when a later pass loads.</p>
+
+<h2 id="pitfalls"><span class="n">7</span>Pitfalls</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Mistake</th><th>What you see</th><th>Fix</th></tr>
+  <tr><td>DONT_CARE store, and a later pass reads the image</td><td>Garbage, flicker, or black. Often only on some GPUs: an immediate-mode GPU may keep the data by luck, a tile-based one drops it.</td><td>STORE whenever anything reads after.</td></tr>
+  <tr><td>Depth DONT_CARE, but the next pass LOADs depth</td><td>The depth test runs against garbage: objects flicker, vanish, or draw over each other.</td><td>The pass before a depth LOAD must STORE depth.</td></tr>
+  <tr><td>LOAD on the first use of an image (or on the swapchain)</td><td>Old or random pixels from a previous frame show through. On a tiler it also costs a full read.</td><td>CLEAR, or DONT_CARE when every pixel is drawn.</td></tr>
+  <tr><td>Clearing with a draw call, or with a clear command after a LOAD</td><td>A correct image, but the pass reads the whole image and then writes it again.</td><td>Use the CLEAR load op: it is free.</td></tr>
+  <tr><td>UNDEFINED layout in the barrier before a LOAD</td><td>The loaded contents are lost, even though the op is LOAD.</td><td>Keep the old layout when the pass loads.</td></tr>
+  <tr><td>Splitting one pass into many small ones</td><td>Every split adds a STORE and a LOAD of the same images.</td><td>Keep draws to the same images in one pass when you can.</td></tr>
+</table>
+</div>
+
+<div class="callout warn">
+  <strong>Bugs that hide on desktop</strong>
+  <p>A wrong DONT_CARE often "works" on a desktop GPU, because the image in VRAM happens to keep its old data. The same code shows garbage on a phone or a Mac. The Vulkan validation layers do not catch it, because DONT_CARE is legal. Test on a tile-based GPU, or look at the image in a frame debugger.</p>
+</div>
+
+<h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
+
+<p>RASM uses Vulkan dynamic rendering, so the ops go into <code>VulkanCommandBuffer::beginRendering</code>. A pass describes them with three flags, <code>AttachmentOps</code>: <code>loadColor</code>, <code>loadDepth</code> and <code>storeDepth</code>. The render graph sets them for each pass in <code>RenderGraph::assignAttachmentOps</code>, when it compiles. A frame written by hand passes them to <code>Engine::beginPass</code>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Top: three graph passes on one target, in add order. The first clears color and depth and stores depth, because the second loads it. The second loads both and stores depth, because the third loads it. The third loads both and does not store depth, unless occlusion culling is on. Color is always stored. Middle: a pass with drawScene and occlusion culling ends rendering after the early draws, storing depth, runs the Hi-Z build and late culling as compute, then begins rendering again with color and depth loaded and depth stored. Bottom: endFrame runs a Clear pass if no pass drew the swapchain, then the stats overlay, which loads color and has no depth, then presents.">
+    <text x="20" y="22" class="title">Render graph: passes on one target run in add order</text>
+    <rect x="20" y="34" width="220" height="64" rx="6" class="gpu"/>
+    <text x="130" y="54" class="mid title">1st pass</text>
+    <text x="130" y="72" class="mid small">color <tspan class="t-gpu">CLEAR</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <text x="130" y="88" class="mid small">depth <tspan class="t-gpu">CLEAR</tspan> → <tspan class="t-mem">STORE</tspan> (2nd loads)</text>
+    <line x1="240" y1="66" x2="268" y2="66" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="270" y="34" width="220" height="64" rx="6" class="gpu"/>
+    <text x="380" y="54" class="mid title">2nd pass</text>
+    <text x="380" y="72" class="mid small">color <tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <text x="380" y="88" class="mid small">depth <tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan> (3rd loads)</text>
+    <line x1="490" y1="66" x2="518" y2="66" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="520" y="34" width="220" height="64" rx="6" class="gpu"/>
+    <text x="630" y="54" class="mid title">last pass</text>
+    <text x="630" y="72" class="mid small">color <tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <text x="630" y="88" class="mid small">depth <tspan class="t-mem">LOAD</tspan> → <tspan class="t-gpu">DONT_CARE</tspan> *</text>
+    <text x="20" y="116" class="small">* STORE when occlusion culling is on (the default): drawScene reads depth in the middle of a pass.</text>
+
+    <text x="20" y="150" class="title">Inside one pass: drawScene with occlusion culling</text>
+    <rect x="20" y="180" width="270" height="40" rx="6" class="gpu"/>
+    <text x="155" y="205" class="mid">rendering: early draws</text>
+    <rect x="300" y="180" width="160" height="40" rx="20" class="shader"/>
+    <text x="380" y="198" class="mid small">Hi-Z build, late culling</text>
+    <text x="380" y="212" class="mid small">compute: outside rendering</text>
+    <rect x="470" y="180" width="270" height="40" rx="6" class="gpu"/>
+    <text x="605" y="205" class="mid">rendering: late draws</text>
+    <text x="20" y="172" class="small t-faint">ops of the pass</text>
+    <text x="290" y="172" class="end small t-mem">store depth</text>
+    <text x="470" y="172" class="small t-mem">LOAD color + depth</text>
+    <text x="740" y="172" class="end small t-mem">store depth</text>
+
+    <text x="20" y="256" class="title">endFrame, on the swapchain</text>
+    <rect x="20" y="266" width="230" height="52" rx="6" class="gpu"/>
+    <text x="135" y="287" class="mid">"Clear" pass</text>
+    <text x="135" y="306" class="mid small">only if no pass drew it: <tspan class="t-gpu">CLEAR</tspan></text>
+    <line x1="250" y1="292" x2="278" y2="292" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="280" y="266" width="250" height="52" rx="6" class="gpu"/>
+    <text x="405" y="287" class="mid">stats overlay, if shown</text>
+    <text x="405" y="306" class="mid small">color <tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan>, no depth</text>
+    <line x1="530" y1="292" x2="558" y2="292" class="arrow" marker-end="url(#ah)"/>
+    <rect x="560" y="266" width="180" height="52" rx="6" class="box"/>
+    <text x="650" y="296" class="mid">present</text>
+  </svg>
+  <figcaption>The graph never clears a target twice in a frame, and never loads one that nothing drew. The Hi-Z build splits one pass into two rendering scopes, so the first one must store depth and the second one loads it.</figcaption>
+</figure>
+
+<p>Passes that draw to one target already run in the order they were added: <code>compile</code> adds an edge from each writer of a target to the next one. So <code>assignAttachmentOps</code> only walks the sorted order once and remembers the last writer of each target (the swapchain counts as one target). When a pass finds an earlier writer, it loads color and depth, and it sets <code>storeDepth</code> on that earlier pass. <code>RenderGraph::execute</code> then passes <code>Pass::attachmentOps</code> to <code>beginPass</code>.</p>
+
+<p><code>beginPass</code> also does the barrier from <a href="#variants">section 5</a>. It calls <code>transitionImageLayout</code> with <code>discard</code> for each attachment that it clears, so the old layout is <code>VK_IMAGE_LAYOUT_UNDEFINED</code>. An attachment that it loads keeps its layout, and the barrier orders the earlier pass's writes before the load.</p>
+
+<pre><code>// A hand-written frame: the scene, then a UI pass on top of it
+engine.beginPass("Scene", {.storeDepth = true});
+engine.drawScene(scene, camera);
+engine.endPass();
+engine.beginPass("UI", {.loadColor = true, .loadDepth = true});
+// ... draw the UI
+engine.endPass();</code></pre>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Load ops</td><td>LOAD, CLEAR, DONT_CARE (and NONE)</td><td>LOAD or CLEAR only (<code>loadColor</code>, <code>loadDepth</code>). No DONT_CARE load: a full-screen pass clears first. On a tile-based GPU a clear is as cheap.</td></tr>
+  <tr><td>Store ops</td><td>STORE, DONT_CARE, NONE</td><td>Color is always STORE. Depth is STORE with <code>storeDepth</code>, else DONT_CARE. No NONE.</td></tr>
+  <tr><td>Per attachment</td><td>one pair per attachment</td><td>One <code>loadColor</code> for all color attachments of a pass (<a href="multiple-render-targets.html">multiple render targets</a>). A stencil aspect shares depth's ops.</td></tr>
+  <tr><td>Clear values</td><td>any, per attachment</td><td>Color: the target's <code>clearColor</code>, or <code>SWAPCHAIN_CLEAR_COLOR</code> for the swapchain. Depth: always 0, the far plane in <a href="projection-depth.html#reversed">reversed-Z</a>.</td></tr>
+  <tr><td>Who picks the ops</td><td>the graph, from writers before and readers after</td><td>The graph, from writers before only (<code>RenderGraph::assignAttachmentOps</code>, review item <code>D9</code>). The first pass on a target clears it; you cannot ask it to load or to not care.</td></tr>
+  <tr><td>Store of color</td><td>only if read later</td><td>Always. The graph does not check readers: <code>endPass</code> leaves a render target's color sampled for any later pass (<code>B10</code>).</td></tr>
+  <tr><td>Store of depth</td><td>only if read later</td><td>Only if a later pass on the target loads it, <b>or</b> whenever <code>EngineConfig::occlusionCulling</code> is on (the default): <code>drawScene</code> pauses the pass to build its Hi-Z from depth (<a href="occlusion-culling.html#in-rasm">occlusion culling</a>).</td></tr>
+  <tr><td>Discard in the barrier</td><td>UNDEFINED when not loading</td><td>The same: <code>beginPass</code> transitions with <code>discard</code> when the pass clears.</td></tr>
+  <tr><td>Memoryless attachments</td><td>transient, lazily allocated</td><td>None. <code>TextureUsage::TRANSIENT_ATTACHMENT</code> exists but nothing uses it. Transient render targets share memory instead (<a href="memory-aliasing.html">memory aliasing</a>); their first pass always clears.</td></tr>
+  <tr><td>MSAA resolve</td><td>a store variant</td><td>None: RASM has no multisampling.</td></tr>
+  <tr><td>Merging passes</td><td>one pass, or subpasses</td><td>None. Each pass is its own rendering scope, and the Hi-Z build splits a <code>drawScene</code> pass into two.</td></tr>
+  <tr><td>History images</td><td>STORE, the next frame reads it</td><td>Color is stored anyway. Each frame's copy is cleared by its first pass; last frame's copy is sampled, not loaded (<a href="temporal-history.html">history buffers</a>). A new copy is cleared once at creation by an empty rendering scope (<code>RenderContext::clearNewHistory</code>).</td></tr>
+  <tr><td>Swapchain with no pass</td><td>the screen still reads it</td><td><code>Engine::endFrame</code> runs a "Clear" pass, so the image is in a known state when it is presented.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The three flags</td><td><code>AttachmentOps</code> in <code>include/rasm/render/resource.h</code>; a graph pass keeps them in <code>Pass::attachmentOps</code></td></tr>
+  <tr><td>Flags to Vulkan ops</td><td><code>VulkanCommandBuffer::beginRendering</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
+  <tr><td>The graph picks them</td><td><code>RenderGraph::assignAttachmentOps</code>, called by <code>RenderGraph::compile</code>, in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>Barrier with discard, forced depth store</td><td><code>Engine::beginPass</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Discard means old usage unknown</td><td><code>TextureStates::transition</code> in <code>src/rhi/textureStates.cpp</code></td></tr>
+  <tr><td>The pause for the Hi-Z</td><td><code>Engine::recordOcclusionCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>The "Clear" pass</td><td><code>Engine::endFrame</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Stats overlay pass</td><td><code>Engine::drawStatsOverlay</code> in <code>src/renderer/statsOverlay.cpp</code></td></tr>
+  <tr><td>Clearing new history copies</td><td><code>RenderContext::clearNewHistory</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>A frame that uses the graph</td><td><code>examples/01_render_graph/main.cpp</code>: each pass draws its own target once, so every pass clears</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Passes that draw to one target must keep running in add order. <code>assignAttachmentOps</code> depends on the edges that <code>compile</code> adds between them.</li>
+    <li>A pass that loads depth needs the pass before it to store depth. Anything that ends a rendering scope in the middle of a pass, like the Hi-Z build, must store depth and load it again.</li>
+    <li>Clear only with <code>discard</code>, load only without it. A discard before a load drops the contents.</li>
+    <li>Color stays stored: later passes sample render targets without telling the pass that drew them.</li>
+    <li>The depth clear value 0 pairs with the <code>VK_COMPARE_OP_GREATER_OR_EQUAL</code> depth test (reversed-Z). Change both or neither.</li>
+    <li>The first pass on a transient target must draw it: its memory held another target before.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>The Vulkan specification: <i>Render Pass Load Operations</i> and <i>Render Pass Store Operations</i>, and <i>Lazily Allocated Memory</i>.</li>
+  <li>Arm, <i>Mali GPU Best Practices</i>: the sections on render passes and attachments.</li>
+  <li>Khronos <i>Vulkan Samples</i>: the "render passes" and "MSAA" performance samples, with bandwidth numbers.</li>
+  <li>Apple, <i>Metal Best Practices Guide</i>: "Load and Store Actions" and "Memoryless Render Targets".</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

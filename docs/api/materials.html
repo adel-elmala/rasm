@@ -319,7 +319,7 @@ ctx.pushConstants(commandBuffer, overlayPipeline, rasm::ShaderType::VERTEX_FRAGM
   <tr><th>Who adds textures</th><th>Sampler</th></tr>
   <tr><td><code>createMaterial</code>, <code>updateMaterial</code></td><td><code>LINEAR_REPEAT</code></td></tr>
   <tr><td>glTF import</td><td>from the glTF sampler (see below)</td></tr>
-  <tr><td><code>createRenderTarget</code> (one slot per frame slot)</td><td><code>LINEAR_CLAMP</code></td></tr>
+  <tr><td><code>createRenderTarget</code> (one slot per color texture)</td><td><code>LINEAR_CLAMP</code></td></tr>
   <tr><td>you, with <code>addBindlessTexture</code></td><td>your choice</td></tr>
 </table>
 </div>
@@ -342,7 +342,7 @@ ctx.pushConstants(commandBuffer, overlayPipeline, rasm::ShaderType::VERTEX_FRAGM
 <div class="api" id="getBindlessTextureIndex">
   <pre class="sig">uint32_t getBindlessTextureIndex(const TextureHandle&amp; texture);</pre>
   <div class="body">
-    <p>The texture's slot in the bindless set, or <code>UINT32_MAX</code> if it was never added. For a render target, ask with <code>getRenderTargetTexture</code> every frame, because each frame slot has its own color texture.</p>
+    <p>The texture's slot in the bindless set, or <code>UINT32_MAX</code> if it was never added. For a render target, ask with <code>getRenderTargetTexture</code> every frame, because a history target has a color texture per frame slot.</p>
   </div>
 </div>
 

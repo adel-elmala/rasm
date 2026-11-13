@@ -69,7 +69,7 @@
     <text x="344" y="202" class="mid small">output or swapchain</text>
     <rect x="412" y="166" width="84" height="46" rx="6" class="cpu"/>
     <text x="454" y="185" class="mid mono">beginPass</text>
-    <text x="454" y="202" class="mid small">layouts, clear</text>
+    <text x="454" y="202" class="mid small">clear or load</text>
     <rect x="504" y="166" width="76" height="46" rx="23" class="shader"/>
     <text x="542" y="185" class="mid mono">execute</text>
     <text x="542" y="202" class="mid small">your lambda</text>
@@ -102,7 +102,9 @@
   <h3>In short</h3>
   <ul>
     <li>Create targets and buffers in the setup callback, and declare them with <code>read</code> / <code>write</code>. Only these declarations order the passes.</li>
-    <li>A graphics pass draws into the render target it writes, or into the swapchain if it writes none. Every graphics pass <b>clears</b> its target first.</li>
+    <li>A graphics pass draws into exactly one target: the render target it writes, or the swapchain with <code>writeSwapchain()</code>. The first pass that draws a target <b>clears</b> it; later passes on the same target draw on top.</li>
+    <li>For last frame's image (accumulation, trails, temporal effects), create the target with <code>history = true</code> and declare <code>readPrevious(rt)</code>.</li>
+    <li>Any other target from <code>builder.createRenderTarget</code> is <b>transient</b>: targets that are never used at the same time share memory. Set <code>swapchainScale = 1.0f</code> to make a target follow the window size.</li>
     <li>The graph records the barriers and layout changes from what the passes declare. <b>Declare every buffer and texture a pass uses</b>: an undeclared one gets no barrier.</li>
     <li>A compute pass runs outside any render pass, so it can <code>dispatch</code>.</li>
     <li>Inside a callback, record with the <a href="low-level.html">RenderContext</a> and the frame's command buffer: <code>engine.getCurrentFrameResources().commandBuffer</code>.</li>
@@ -149,7 +151,7 @@ public:
       <dt>setup</dt><dd>Gets a <a href="#PassBuilder">PassBuilder</a>. Create resources and declare reads and writes here.</dd>
       <dt>execute</dt><dd>Called every frame between <code>beginPass</code> and <code>endPass</code>, so draws are allowed and dispatches and barriers are not. The viewport and scissor cover the whole target, and the cull mode is <code>NONE</code>.</dd>
     </dl>
-    <p><span class="tag">target</span> The target is the render target the pass writes, or the swapchain image if it writes none. It is cleared at the start of the pass: color to the target's <code>clearColor</code> (the swapchain uses a dark gray), depth to 0.</p>
+    <p><span class="tag">target</span> The target is the render target the pass writes, or the swapchain image after <code>writeSwapchain()</code>. A graphics pass must declare exactly one of them, or <code>compile</code> fails. The first pass in the frame that draws a target clears it: color to the target's <code>clearColor</code> (the swapchain uses a dark gray), depth to 0. A later pass on the same target keeps color and depth and draws on top (see <a href="#load-store">Load and store</a>).</p>
   </div>
 </div>
 
@@ -159,7 +161,7 @@ public:
          std::function&lt;void(RenderContext&amp;)&gt; execute);</pre>
   <div class="body">
     <p>Adds a compute pass. It is sorted like any other pass. <code>execute</code> runs outside any render pass, so <code>dispatch</code> and <code>memoryBarrier</code> are allowed and draws are not. There is no target, no clear and no layout transition.</p>
-    <p><span class="tag">errors</span> A render target written in <code>setup</code> logs <code>Compute pass '…' cannot write a render target; the write is ignored.</code> and is dropped. A compute pass must <code>write</code> at least one buffer, since compute writes only buffers: without one, <code>compile</code> fails with <code>Compute pass '…' declares no buffer write; declare every buffer it uses.</code></p>
+    <p><span class="tag">errors</span> A render target or swapchain write declared in <code>setup</code> logs <code>Compute pass '…' cannot write a render target or the swapchain; the write is ignored.</code> and is dropped. A compute pass must <code>write</code> at least one buffer, since compute writes only buffers: without one, <code>compile</code> fails with <code>Compute pass '…' declares no buffer write; declare every buffer it uses.</code></p>
     <p>The graph adds a barrier before the pass only for a buffer it declares that another pass (or the previous frame) wrote or read; see <a href="#barriers">Barriers</a>. A pass with several dependent dispatches records <code>ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE)</code> between them itself.</p>
   </div>
 </div>
@@ -177,9 +179,11 @@ public:
     void               read(TextureHandle handle);
     void               read(BufferHandle handle);
     void               read(RenderTargetHandle handle);
+    void               readPrevious(RenderTargetHandle handle);
     void               write(TextureHandle handle);
     void               write(BufferHandle handle);
     void               write(RenderTargetHandle rt);
+    void               writeSwapchain();
 };</pre>
   <div class="body">
     <p>Given to your <code>setup</code> callback. It records what one pass uses. The graph makes it; you do not construct one.</p>
@@ -191,7 +195,7 @@ public:
 BufferHandle       createBuffer(const BufferDesc&amp; desc);
 RenderTargetHandle createRenderTarget(const RenderTargetDesc&amp; desc);</pre>
   <div class="body">
-    <p>The same as <a href="low-level.html#createTexture">Engine::createTexture</a>, <a href="low-level.html#createBuffer">Engine::createBuffer</a> and <a href="#createRenderTarget">Engine::createRenderTarget</a>. They do <b>not</b> declare a read or write: call <code>read</code> or <code>write</code> too. The resources are not transient; they live until the engine shuts down (<code>D4</code>).</p>
+    <p>The same as <a href="low-level.html#createTexture">Engine::createTexture</a>, <a href="low-level.html#createBuffer">Engine::createBuffer</a> and <a href="#createRenderTarget">Engine::createRenderTarget</a>. They do <b>not</b> declare a read or write: call <code>read</code> or <code>write</code> too. A render target without <code>history</code> is <a href="#transient">transient</a>: the graph owns its memory and shares it with other transient targets. Textures, buffers and history targets live until the engine shuts down (<code>D4</code>); transient targets are freed with the graph.</p>
   </div>
 </div>
 
@@ -201,6 +205,14 @@ void read(BufferHandle handle);
 void read(RenderTargetHandle handle);</pre>
   <div class="body">
     <p>This pass reads the resource. If another pass writes it, that pass runs first. A read of something no pass writes adds no order. Declaring a read does not bind anything: the pass still finds the data itself (a bindless index, a device address). It does decide the barriers: a texture or render target read is moved to <code>SAMPLED</code> before the pass, and a buffer read waits for the last write (see <a href="#barriers">Barriers</a>).</p>
+  </div>
+</div>
+
+<div class="api" id="readPrevious">
+  <pre class="sig">void readPrevious(RenderTargetHandle handle);</pre>
+  <div class="body">
+    <p>This pass reads the color the <b>previous frame</b> drew into <code>handle</code>. Fetch it with <a href="#getPreviousRenderTargetTexture">getPreviousRenderTargetTexture</a>. The target must be created with <code>history = true</code> (see <a href="#history">History</a>). The read adds no edge, because nothing this frame writes that copy, so a pass may read the previous copy of the target it draws to: that is how accumulation works. The copy is always ready to sample: the frame before drew it, or it is new and was cleared to <code>clearColor</code> at the start of the frame.</p>
+    <p><span class="tag">errors</span> A target without history logs <code>Pass '…' reads the previous frame of a render target created without history; the read is ignored.</code> during <code>addPass</code>.</p>
   </div>
 </div>
 
@@ -215,7 +227,14 @@ void write(BufferHandle handle);</pre>
 <div class="api" id="write-renderTarget">
   <pre class="sig">void write(RenderTargetHandle rt);</pre>
   <div class="body">
-    <p>This graphics pass draws into <code>rt</code>. A pass has one output target: a second call replaces the first. Without this call the pass draws into the swapchain.</p>
+    <p>This graphics pass draws into <code>rt</code>. A pass has one output target: a second call replaces the first. Passes that draw into the same <code>rt</code> run in the order they were added, and a pass that reads <code>rt</code> runs after the last of them.</p>
+  </div>
+</div>
+
+<div class="api" id="writeSwapchain">
+  <pre class="sig">void writeSwapchain();</pre>
+  <div class="body">
+    <p>This graphics pass draws into this frame's swapchain image: the window. Passes that draw into the swapchain run in the order they were added. A pass that declares neither <code>write(rt)</code> nor <code>writeSwapchain()</code>, or both, makes <code>compile</code> fail with <code>Pass '…' must write either one render target or the swapchain.</code></p>
   </div>
 </div>
 
@@ -226,17 +245,20 @@ void write(BufferHandle handle);</pre>
     std::vector&lt;TextureHandle&gt;          inputTextures;
     std::vector&lt;BufferHandle&gt;           inputBuffers;
     std::vector&lt;RenderTargetHandle&gt;     inputRenderTargets;
+    std::vector&lt;RenderTargetHandle&gt;     previousRenderTargets;
     std::vector&lt;TextureHandle&gt;          outputTextures;
     std::vector&lt;BufferHandle&gt;           outputBuffers;
     RenderTargetHandle                  outputRenderTarget;
     std::function&lt;void(RenderContext&amp;)&gt; execute;
-    bool                                compute     = false;
+    AttachmentOps                       attachmentOps;
+    bool                                compute         = false;
+    bool                                writesSwapchain = false;
 
     uint32_t                inDegree = 0;
     std::vector&lt;uint32_t&gt;   successors;
 };</pre>
   <div class="body">
-    <p>What the graph stores per pass. <code>read</code> and <code>write</code> fill the input and output lists. <code>inDegree</code> and <code>successors</code> are filled by <code>compile</code>: the number of passes that must run first, and the passes that wait for this one. You never build a <code>Pass</code> yourself.</p>
+    <p>What the graph stores per pass. <code>read</code> and <code>write</code> fill the input and output lists, <code>readPrevious</code> fills <code>previousRenderTargets</code>, and <code>writeSwapchain</code> sets <code>writesSwapchain</code>. <code>compile</code> fills <code>attachmentOps</code> (see <a href="#load-store">Load and store</a>). <code>inDegree</code> and <code>successors</code> are filled by <code>compile</code>: the number of passes that must run first, and the passes that wait for this one. You never build a <code>Pass</code> yourself.</p>
   </div>
 </div>
 
@@ -299,13 +321,13 @@ void write(BufferHandle handle);</pre>
     <text x="590" y="212" class="small">order; a freed pass waits</text>
     <text x="590" y="228" class="small">behind them (Kahn, FIFO).</text>
   </svg>
-  <figcaption>Only reads and writes decide the order. Passes with no edge between them may not keep the order you added them in. If the order matters, connect them with a read and a write.</figcaption>
+  <figcaption>Only reads and writes decide the order. Passes with no edge between them may not keep the order you added them in. If the order matters, connect them with a read and a write. Passes that draw into the same render target, or into the swapchain, always keep their add order.</figcaption>
 </figure>
 
 <div class="api" id="compile">
   <pre class="sig">void compile();</pre>
   <div class="body">
-    <p>Builds one edge from the writer of each resource to every pass that reads it, then sorts the passes (Kahn's algorithm). Does nothing if the graph is already compiled. <code>execute</code> calls it when a pass was added since the last compile, so calling it yourself only moves the work (and its log line) to start-up.</p>
+    <p>Builds one edge from the writer of each resource to every pass that reads it, and one from each pass that draws into a target to the next pass added that draws into the same target. Then it sorts the passes (Kahn's algorithm). Does nothing if the graph is already compiled. <code>execute</code> calls it when a pass was added since the last compile, so calling it yourself only moves the work (and its log line) to start-up.</p>
     <p><span class="tag">errors</span> A cycle (A reads what B writes and B reads what A writes) logs <code>Frame Graph contains a cycle!</code> and leaves no pass to run. The graph stays uncompiled, so each <code>execute</code> tries again and logs again. Frames still run and present a cleared image, so the window keeps responding.</p>
   </div>
 </div>
@@ -317,7 +339,7 @@ void write(BufferHandle handle);</pre>
     <dl>
       <dt>camera</dt><dd>Gets this frame's mouse and keyboard input (through <a href="camera.html#pollEvents">pollEvents</a>). It is not given to the passes: a pass that calls <code>drawScene</code> names its own camera.</dd>
     </dl>
-    <p>When <code>beginFrame</code> returns false (window minimized, swapchain being re-created, failed wait), no pass runs that frame. If no pass draws into the swapchain, <code>endFrame</code> clears it so it can be presented.</p>
+    <p>When <code>beginFrame</code> returns false (window minimized, swapchain being re-created, failed wait), no pass runs that frame. If no pass draws into the swapchain, <code>endFrame</code> clears it so it can be presented. If the transient targets cannot be placed (out of memory), no pass runs either, and the graph tries again the next frame.</p>
   </div>
 </div>
 
@@ -330,7 +352,9 @@ void write(BufferHandle handle);</pre>
   <tr><th>The pass declares</th><th>Recorded before it</th><th>When</th></tr>
   <tr><td><code>read(texture)</code></td><td><code>transitionImageLayout(texture, SAMPLED)</code></td><td>unless it is <code>SAMPLED</code> already</td></tr>
   <tr><td><code>read(renderTarget)</code></td><td>nothing</td><td><code>endPass</code> of the pass that drew it left the color sampled</td></tr>
-  <tr><td><code>write(renderTarget)</code>, or no target</td><td><code>beginPass</code> moves color and depth to attachments, dropping their contents</td><td>always: the pass clears and writes them</td></tr>
+  <tr><td><code>readPrevious(renderTarget)</code></td><td><code>transitionImageLayout(previous copy, SAMPLED)</code>, after a clear if no frame drew it yet</td><td>the clear only once per copy</td></tr>
+  <tr><td><code>write(renderTarget)</code> or <code>writeSwapchain()</code></td><td><code>beginPass</code> moves color and depth to attachments, dropping their contents</td><td>the first pass on the target, which clears it</td></tr>
+  <tr><td>the same, after an earlier pass on the target</td><td><code>beginPass</code> moves them to attachments and keeps the contents</td><td>later passes, which load</td></tr>
   <tr><td><code>read(buffer)</code></td><td><code>memoryBarrier</code>: last write's stage → this pass's stage</td><td>once per stage after each write</td></tr>
   <tr><td><code>write(buffer)</code></td><td><code>memoryBarrier</code>: last write and the reads since → this pass's stage</td><td>if any pass used the buffer before, also in the previous frame</td></tr>
   <tr><td><code>write(texture)</code></td><td>nothing</td><td>it only orders passes</td></tr>
@@ -338,12 +362,36 @@ void write(BufferHandle handle);</pre>
 </div>
 
 <p>All of a pass's buffers share one global barrier. A buffer or texture the pass uses without declaring it gets nothing, so declare everything it touches. The graph knows only its own passes: a buffer shared with another graph, or with work outside the graph, is not ordered.</p>
-<p><span class="tag">errors</span> <code>compile</code> fails, like on a cycle, for declarations that cannot be right: a pass that reads the render target it draws to (<code>Pass '…' reads the render target it draws to.</code>), and a compute pass with no buffer write. The frames then draw no passes until the graph changes.</p>
+<p><span class="tag">errors</span> <code>compile</code> fails, like on a cycle, for declarations that cannot be right: a pass that reads the render target it draws to (<code>Pass '…' reads the render target it draws to.</code>), a compute pass with no buffer write, a graphics pass that does not write exactly one render target or the swapchain, and a read of a transient target that no earlier pass draws. The frames then draw no passes until the graph changes.</p>
+
+<h3 id="load-store">Load and store</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 150" role="img" aria-label="Three passes draw to the swapchain in add order: Scene, UI, then the engine's stats overlay. Scene clears color and depth and stores depth because UI loads it. UI loads color and depth. The stats overlay, drawn by endFrame, loads color and has no depth attachment.">
+    <text x="20" y="20" class="title">passes on one target, in add order</text>
+    <rect x="20" y="34" width="210" height="70" rx="6" class="gpu"/>
+    <text x="125" y="56" class="mid mono">Scene</text>
+    <text x="125" y="76" class="mid small">clear color + depth</text>
+    <text x="125" y="93" class="mid small">store depth</text>
+    <line x1="230" y1="69" x2="268" y2="69" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="270" y="34" width="210" height="70" rx="6" class="gpu"/>
+    <text x="375" y="56" class="mid mono">UI</text>
+    <text x="375" y="76" class="mid small">load color + depth</text>
+    <text x="375" y="93" class="mid small">draws on top</text>
+    <line x1="480" y1="69" x2="518" y2="69" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="520" y="34" width="220" height="70" rx="6" class="cpu"/>
+    <text x="630" y="56" class="mid mono">stats overlay</text>
+    <text x="630" y="76" class="mid small">endFrame, if shown</text>
+    <text x="630" y="93" class="mid small">load color, no depth</text>
+    <text x="20" y="132" class="small">The graph sets each pass's AttachmentOps in compile. A pass that loads waits for the one before; nothing is cleared twice.</text>
+  </svg>
+  <figcaption>Each graphics pass gets <a href="engine.html#AttachmentOps">AttachmentOps</a> from <code>compile</code>: the first pass on a target clears it, each later one loads color and depth, and the pass before a loading one stores its depth. Color is always stored. Read the result in <code>Pass::attachmentOps</code>.</figcaption>
+</figure>
 
 <h3>What one frame records: <code>examples/04_compute</code></h3>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 190" role="img" aria-label="The frame command buffer of example 4: a compute and graphics to compute barrier, the Animate compute pass that writes particle positions, a compute to graphics barrier, then the Draw pass with its clear and draw call, then the stats overlay and endPass.">
+  <svg viewBox="0 0 760 190" role="img" aria-label="The frame command buffer of example 4: a compute and graphics to compute barrier, the Animate compute pass that writes particle positions, a compute to graphics barrier, then the Draw pass with its clear and draw call, then endPass.">
     <line x1="20" y1="20" x2="740" y2="20" class="arrow" marker-end="url(#ah)"/>
     <text x="20" y="14" class="small">frame command buffer, in recording order →</text>
 
@@ -384,17 +432,18 @@ void write(BufferHandle handle);</pre>
 
 <div class="table-wrap">
 <table>
-  <tr><th>What <code>createRenderTarget</code> makes</th><th>Per frame slot (2)</th><th>Notes</th></tr>
-  <tr><td>Color texture</td><td>1, usage <code>SAMPLED_COLOR_ATTACHMENT</code></td><td>Added to the bindless set with <code>LINEAR_CLAMP</code>. <code>endPass</code> leaves it in the sampled layout, so later passes can read it.</td></tr>
-  <tr><td>Depth texture</td><td>1, usage <code>SAMPLED_DEPTH_ATTACHMENT</code> for <code>D32_SFLOAT</code>, else <code>DEPTH_STENCIL_ATTACHMENT</code></td><td>Cleared to 0 by every pass, and stored. <code>drawScene</code> adds it to the bindless set (<code>NEAREST_CLAMP</code>) the first time it occlusion-culls into the target, and builds its Hi-Z from it. It stays a depth attachment, so later passes cannot sample it.</td></tr>
-  <tr><td>Bindless slots used</td><td colspan="2">2 of <code>MAX_BINDLESS_TEXTURES</code> (1024), and 2 more once <code>drawScene</code> occlusion-culls into both slots' depth</td></tr>
+  <tr><th>What <code>createRenderTarget</code> makes</th><th>How many</th><th>Notes</th></tr>
+  <tr><td>Color textures</td><td>1 per color format, or that many per frame slot (2) with <code>history</code>; usage <code>SAMPLED_COLOR_ATTACHMENT</code></td><td>Added to the bindless set with <code>LINEAR_CLAMP</code>. <code>endPass</code> leaves it in the sampled layout, so later passes can read it.</td></tr>
+  <tr><td>Depth texture</td><td>As many as color; usage <code>SAMPLED_DEPTH_ATTACHMENT</code> for <code>D32_SFLOAT</code>, else <code>DEPTH_STENCIL_ATTACHMENT</code></td><td>Cleared to 0 by every pass, and stored. <code>drawScene</code> adds it to the bindless set (<code>NEAREST_CLAMP</code>) the first time it occlusion-culls into the target, and builds its Hi-Z from it. It stays a depth attachment, so later passes cannot sample it.</td></tr>
+  <tr><td>Bindless slots used</td><td colspan="2">1 per color texture of <code>MAX_BINDLESS_TEXTURES</code> (1024), and 1 per depth texture once <code>drawScene</code> occlusion-culls into it. A resize keeps the slots.</td></tr>
+  <tr><td>Memory</td><td colspan="2">Its own allocation, or, for a <a href="#transient">transient</a> target, a place in a heap that other transient targets share</td></tr>
 </table>
 </div>
 
 <div class="api" id="createRenderTarget">
   <pre class="sig">RenderTargetHandle createRenderTarget(const RenderTargetDesc&amp; desc);</pre>
   <div class="body">
-    <p>Creates an offscreen color + depth target, one pair per frame slot, and makes both color textures bindless. Ready at once. A pass draws into it after <code>builder.write(rt)</code>, or after <code>setRenderTarget(rt)</code> in a hand-written frame.</p>
+    <p>Creates an offscreen color + depth target and makes its color bindless: one pair that every frame draws, or one pair per frame slot when <code>desc.history</code> is set. Ready at once. With <code>swapchainScale</code> it is rebuilt at the new size when the window resizes; the handle stays the same. A pass draws into it after <code>builder.write(rt)</code>, or after <code>setRenderTarget(rt)</code> in a hand-written frame.</p>
     <p><span class="tag">errors</span> If a texture cannot be created or the bindless set is full, it logs an error, destroys what it created, and returns an invalid handle.</p>
   </div>
 </div>
@@ -403,32 +452,127 @@ void write(BufferHandle handle);</pre>
   <pre class="sig">struct RenderTargetDesc
 {
     std::string name;
-    uint32_t    width       = 0;
-    uint32_t    height      = 0;
-    Format      colorFormat = Format::UNKNOWN;
-    Format      depthFormat = Format::UNKNOWN;
-    glm::vec4   clearColor  = glm::vec4(0.0f);
+    uint32_t    width          = 0;
+    uint32_t    height         = 0;
+    float       swapchainScale = 0.0f;
+    Format      colorFormats[MAX_COLOR_ATTACHMENTS] = {};
+    Format      depthFormat    = Format::UNKNOWN;
+    glm::vec4   clearColor     = glm::vec4(0.0f);
+    bool        history        = false;
 
     bool operator==(const RenderTargetDesc&amp;) const = default;
 };</pre>
   <div class="body">
     <dl>
-      <dt>name</dt><dd>A label. The textures are named <code>"&lt;name&gt; Color Texture"</code> and <code>"&lt;name&gt; Depth Texture"</code> in debug tools.</dd>
-      <dt>width, height</dt><dd>Pixels. Fixed: the target does not follow the window size.</dd>
-      <dt>colorFormat</dt><dd>To draw into it with <code>drawScene</code> or with a pipeline from <code>createPipeline</code>, use the swapchain format: <code>engine.getRenderContext().getSwapchainImageFormat()</code>.</dd>
+      <dt>name</dt><dd>A label. The textures are named <code>"&lt;name&gt; Color Texture"</code> (then <code>"&lt;name&gt; Color Texture 1"</code>, …) and <code>"&lt;name&gt; Depth Texture"</code> in debug tools.</dd>
+      <dt>width, height</dt><dd>Pixels. Used when <code>swapchainScale</code> is 0.</dd>
+      <dt>swapchainScale</dt><dd>Above 0: the size is the window's (the swapchain's, in pixels) times this, at least 1 × 1, and follows each resize. <code>1.0f</code> for full size, <code>0.5f</code> for half. A rebuilt history target loses last frame's image, and its first read after the resize sees <code>clearColor</code>.</dd>
+      <dt>colorFormats</dt><dd>One format per color attachment, up to <a href="types.html#MAX_COLOR_ATTACHMENTS">MAX_COLOR_ATTACHMENTS</a> (4); the list ends at the first <code>UNKNOWN</code>, so <code>.colorFormats = {format}</code> makes one. At least one is needed. For <code>drawScene</code>, or a pipeline from the two-argument <code>createPipeline</code>, use one attachment in the swapchain format: <code>engine.getRenderContext().getSwapchainImageFormat()</code>. For several, make the pipeline with <a href="#createPipeline-target">createPipeline(name, source, renderTarget)</a>.</dd>
       <dt>depthFormat</dt><dd>Needed: every pass binds a depth attachment. Use <code>Format::D32_SFLOAT</code> for the same reason. Only a <code>D32_SFLOAT</code> depth can be sampled, which occlusion culling needs.</dd>
-      <dt>clearColor</dt><dd>Linear color. Every pass that writes the target starts from it.</dd>
+      <dt>clearColor</dt><dd>Linear color, the same for every color attachment. The first pass that writes the target clears to it, and each new history copy is cleared to it before the next frame's passes.</dd>
+      <dt>history</dt><dd><code>true</code> keeps one copy per frame slot, so a pass can read last frame's color with <code>readPrevious</code>. It costs twice the memory. Leave it <code>false</code> for a target that is drawn and read in the same frame.</dd>
     </dl>
     <p>The full target, with its per-slot textures, is the <a href="types.html#RenderTarget">RenderTarget</a> that <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns.</p>
   </div>
 </div>
 
 <div class="api" id="getRenderTargetTexture">
-  <pre class="sig">TextureHandle getRenderTargetTexture(const RenderTargetHandle&amp; renderTarget);</pre>
+  <pre class="sig">TextureHandle getRenderTargetTexture(const RenderTargetHandle&amp; renderTarget, uint32_t attachment = 0);</pre>
   <div class="body">
-    <p>The color texture of the <b>current frame slot</b>. The slot changes every frame, so fetch it every frame, inside the pass that reads it. Pass it to <a href="materials.html#getBindlessTextureIndex">getBindlessTextureIndex</a> to get the index a shader samples with. <code>endPass</code> leaves it in the sampled layout. In a graph, declare <code>read(rt)</code> so the pass sorts after the one that draws it. An unknown handle logs <code>Render target handle not found.</code> and returns an invalid handle.</p>
+    <p>The color texture this frame draws, of color attachment <code>attachment</code> (invalid past the target's last one). For a history target it changes every frame, so fetch it every frame, inside the pass that reads it. Pass it to <a href="materials.html#getBindlessTextureIndex">getBindlessTextureIndex</a> to get the index a shader samples with. <code>endPass</code> leaves it in the sampled layout. In a graph, declare <code>read(rt)</code> so the pass sorts after the one that draws it. An unknown handle logs <code>Render target handle not found.</code> and returns an invalid handle.</p>
   </div>
 </div>
+
+<div class="api" id="getPreviousRenderTargetTexture">
+  <pre class="sig">TextureHandle getPreviousRenderTargetTexture(const RenderTargetHandle&amp; renderTarget, uint32_t attachment = 0);</pre>
+  <div class="body">
+    <p>The color texture of attachment <code>attachment</code> that the <b>previous frame</b> drew, for a pass that declared <code>readPrevious(renderTarget)</code>. Fetch it every frame and pass it to <a href="materials.html#getBindlessTextureIndex">getBindlessTextureIndex</a>. Returns an invalid handle for a target created without <code>history</code>. A copy that no frame drew yet holds <code>clearColor</code>, also outside a graph.</p>
+  </div>
+</div>
+
+<h3 id="history">History</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="A render target with history has two copies, A and B. In frame N the pass draws copy A and reads copy B, which frame N-1 drew. In frame N+1 the roles swap: it draws B and reads A. A render target without history has one copy that every frame draws.">
+    <text x="20" y="20" class="title">history = true: one copy per frame slot</text>
+    <text x="20" y="48" class="small">frame N</text>
+    <rect x="90" y="30" width="150" height="40" rx="6" class="mem"/>
+    <text x="165" y="55" class="mid mono">copy A</text>
+    <rect x="300" y="30" width="150" height="40" rx="23" class="shader"/>
+    <text x="375" y="55" class="mid mono">your pass</text>
+    <rect x="510" y="30" width="150" height="40" rx="6" class="mem"/>
+    <text x="585" y="55" class="mid mono">copy B</text>
+    <line x1="298" y1="50" x2="242" y2="50" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="270" y="44" class="mid small">draws</text>
+    <line x1="508" y1="50" x2="452" y2="50" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="480" y="44" class="mid small">reads</text>
+    <text x="675" y="48" class="small">drawn by N-1</text>
+
+    <text x="20" y="108" class="small">frame N+1</text>
+    <rect x="90" y="90" width="150" height="40" rx="6" class="mem"/>
+    <text x="165" y="115" class="mid mono">copy A</text>
+    <rect x="300" y="90" width="150" height="40" rx="23" class="shader"/>
+    <text x="375" y="115" class="mid mono">your pass</text>
+    <rect x="510" y="90" width="150" height="40" rx="6" class="mem"/>
+    <text x="585" y="115" class="mid mono">copy B</text>
+    <line x1="242" y1="110" x2="298" y2="110" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="270" y="104" class="mid small">reads</text>
+    <line x1="452" y1="110" x2="508" y2="110" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="480" y="104" class="mid small">draws</text>
+
+    <text x="20" y="168" class="title">history = false (default)</text>
+    <rect x="300" y="152" width="150" height="40" rx="6" class="mem"/>
+    <text x="375" y="177" class="mid mono">one copy</text>
+    <text x="470" y="170" class="small">every frame draws it; the next frame's</text>
+    <text x="470" y="186" class="small">first use waits for this frame's reads</text>
+  </svg>
+  <figcaption><code>getRenderTargetTexture</code> gives the copy this frame draws, <code>getPreviousRenderTargetTexture</code> the copy the frame before drew. A new copy is cleared to <code>clearColor</code> at the start of the next frame, so the first read sees no garbage.</figcaption>
+</figure>
+
+<h3 id="transient">Transient render targets</h3>
+
+<p>A render target made with <code>builder.createRenderTarget</code> and no <code>history</code> is <b>transient</b>. It belongs to the graph and lives only from the first pass that uses it to the last. After each compile, the graph places all transient targets in shared heaps: two targets whose lifetimes do not overlap get the <b>same memory</b>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="The four passes of example 1 in run order: Forward, Trail, Background, Present. offscreen_rt is used by Forward and Trail. composite_rt is used by Background and Present. Their lifetimes do not overlap, so both sit at offset 0 of one heap. trail_rt has history and its own memory, kept across frames.">
+    <text x="20" y="22" class="title">run order →</text>
+    <rect x="180" y="8" width="130" height="30" rx="6" class="gpu"/>
+    <text x="245" y="28" class="mid mono">Forward</text>
+    <rect x="320" y="8" width="130" height="30" rx="6" class="gpu"/>
+    <text x="385" y="28" class="mid mono">Trail</text>
+    <rect x="460" y="8" width="130" height="30" rx="6" class="gpu"/>
+    <text x="525" y="28" class="mid mono">Background</text>
+    <rect x="600" y="8" width="130" height="30" rx="6" class="gpu"/>
+    <text x="665" y="28" class="mid mono">Present</text>
+
+    <text x="20" y="72" class="mono">offscreen_rt</text>
+    <rect x="180" y="54" width="270" height="28" rx="4" class="mem"/>
+    <text x="315" y="73" class="mid small">transient: Forward → Trail</text>
+    <text x="20" y="112" class="mono">composite_rt</text>
+    <rect x="460" y="94" width="270" height="28" rx="4" class="mem"/>
+    <text x="595" y="113" class="mid small">transient: Background → Present</text>
+    <line x1="315" y1="82" x2="315" y2="142" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="595" y1="122" x2="595" y2="142" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="20" y="166" class="title">one heap</text>
+    <rect x="180" y="144" width="550" height="40" rx="6" class="zone"/>
+    <text x="455" y="162" class="mid small">offscreen_rt's 2 textures, later composite_rt's 3, in the same bytes</text>
+    <text x="455" y="177" class="mid small">25.3 MiB instead of 42.2 MiB at 1920 × 1080</text>
+
+    <text x="20" y="222" class="mono">trail_rt</text>
+    <rect x="180" y="204" width="550" height="28" rx="4" class="box"/>
+    <text x="455" y="223" class="mid small">history: its own memory, kept across frames</text>
+  </svg>
+  <figcaption>The log shows the saving once per layout: <samp>Placed 2 transient render targets in 1 heap(s): 25.3 MiB instead of 42.2 MiB.</samp></figcaption>
+</figure>
+
+<ul>
+  <li>The handle is ready at once, but the textures exist only from the first <code>execute</code> after a compile. Fetch them inside a pass that declares the target.</li>
+  <li>A transient target's contents are gone after its last pass. Read it in a later frame, or before a pass draws it, and you read another target's data. <code>compile</code> fails when the first pass that uses one reads it: <code>Pass '…' reads a transient render target that no pass before it draws.</code></li>
+  <li>For a target that must keep its contents between frames, use <code>history = true</code>, or <code>Engine::createRenderTarget</code>.</li>
+  <li>Before the first pass of each transient target, the graph records an <a href="low-level.html#aliasingBarrier">aliasingBarrier</a>, so its writes wait for the target that used the memory before, last frame's included.</li>
+  <li>A compile that changes when the targets are used lays the memory out again: it waits for the GPU to be idle first, so add passes before the loop.</li>
+  <li>The transient targets and their memory are freed when the graph is destroyed, after the GPU is idle. A <code>RenderGraph</code> can be moved, not copied.</li>
+</ul>
 
 <div class="api" id="setRenderTarget">
   <pre class="sig">void setRenderTarget(const RenderTargetHandle&amp; renderTarget);</pre>
@@ -469,7 +613,7 @@ if (engine.beginFrame(camera))
   <tr><td>Push constants</td><td colspan="2"><code>PUSH_CONSTANTS_SIZE</code> = 16 bytes, <code>[[vk::push_constant]]</code>, e.g. one 8-byte buffer address + two 4-byte values</td></tr>
   <tr><td>Textures</td><td>Bindless array at <code>[[vk::binding(0, 0)]]</code></td><td>The same bindless array: bind it with <code>bindDescriptorSet</code>. No storage images, so compute writes buffers only.</td></tr>
   <tr><td>Fixed state</td><td>Triangle list, no blending, depth test and write on (<code>GREATER_OR_EQUAL</code>), front face counter-clockwise, cull mode from the pass</td><td>–</td></tr>
-  <tr><td>Attachments</td><td>Swapchain color format + <code>D32_SFLOAT</code> depth</td><td>–</td></tr>
+  <tr><td>Attachments</td><td>Swapchain color format + <code>D32_SFLOAT</code> depth, or the formats of a render target you pass</td><td>–</td></tr>
   <tr><td>Imports</td><td colspan="2">The search path is <code>&lt;shaderDir&gt;/lib</code>, so <code>import core;</code> works. Scalar layout, column-major matrices.</td></tr>
 </table>
 </div>
@@ -484,6 +628,21 @@ if (engine.beginFrame(camera))
       <dt>shaderSource</dt><dd>The full Slang source, as a string (a raw string literal works well, see below). The same name and source give back the same pipeline.</dd>
     </dl>
     <p><span class="tag">errors</span> A compile error is logged with Slang's message and the call returns an invalid handle. Binding the pipeline in a pass whose attachments have other formats logs an error and skips the pass's draws.</p>
+  </div>
+</div>
+
+<div class="api" id="createPipeline-target">
+  <pre class="sig">PipelineHandle createPipeline(const std::string&amp; name,
+                              const std::string&amp; shaderSource,
+                              const RenderTargetHandle&amp; renderTarget);</pre>
+  <div class="body">
+    <p>The same, but the pipeline draws into targets with <code>renderTarget</code>'s formats: its color formats, in order, and its depth format. Use it for a target with several color attachments, or with formats other than the swapchain's. The target's textures need not exist yet: a transient target's handle is enough. In the shader, <code>fragMain</code> returns a struct with one output per attachment, in the target's order:</p>
+    <pre><code class="lang-slang">struct Targets
+{
+    float4 color : SV_TARGET0;
+    float4 mask : SV_TARGET1;
+};</code></pre>
+    <p><span class="tag">errors</span> A target with no color formats (or an unknown handle) logs <code>Pipeline '…' needs a render target with color formats.</code> and returns an invalid handle.</p>
   </div>
 </div>
 
@@ -521,21 +680,22 @@ if (engine.beginFrame(camera))
 
 <h2><span class="n">7</span>Complete examples</h2>
 
-<h3>Offscreen scene + full-screen pass (<code>examples/01_render_graph</code>)</h3>
+<h3>Offscreen scene, trail and full-screen passes (<code>examples/01_render_graph</code>)</h3>
 
 <pre><code>// Shortened from examples/01_render_graph/main.cpp
 rasm::RenderGraph graph = engine.createRenderGraph();
-rasm::RenderTargetHandle rtHandle{};
+const rasm::Format colorFormat = engine.getRenderContext().getSwapchainImageFormat();
 
+// No history: transient. It lives from "Forward" to "Trail".
+rasm::RenderTargetHandle rtHandle{};
 graph.addPass(
     "Forward",
     [&amp;](rasm::PassBuilder &amp;builder)
     {
         rtHandle = builder.createRenderTarget({
             .name = "offscreen_rt",
-            .width = 1920,
-            .height = 1080,
-            .colorFormat = engine.getRenderContext().getSwapchainImageFormat(),
+            .swapchainScale = 1.0f,
+            .colorFormats = {colorFormat},
             .depthFormat = rasm::Format::D32_SFLOAT,
             .clearColor = glm::vec4(0.0f),
         });
@@ -547,52 +707,85 @@ graph.addPass(
         engine.drawScene(scene, camera);
     });
 
-auto overlayPipeline = engine.createPipeline("overlay", R"(
-    struct PushConstants { uint textureIndex; };
-    [[vk::push_constant]] ConstantBuffer&lt;PushConstants&gt; pc;
+// fullScreenTriangle is Slang source: a vertMain that covers the screen, the bindless
+// array, and push constants with two texture indices. Each pipeline adds its fragMain.
+auto trailPipeline = engine.createPipeline("trail", fullScreenTriangle + trailFragment);
+auto presentPipeline = engine.createPipeline("present", fullScreenTriangle + presentFragment);
 
-    struct VSOutput { float4 Pos : SV_POSITION; float2 UV : TEXCOORD0; };
+auto drawFullScreen = [&amp;engine](rasm::RenderContext &amp;ctx, rasm::PipelineHandle pipeline, uint32_t first, uint32_t second)
+{
+    auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
+    const uint32_t indices[2] = {first, second};
+    ctx.bindPipeline(commandBuffer, pipeline);
+    ctx.bindDescriptorSet(commandBuffer, pipeline, engine.getBindlessDescriptorSet(), 0);
+    ctx.pushConstants(commandBuffer, pipeline, rasm::ShaderType::VERTEX_FRAGMENT, indices, sizeof(indices), 0);
+    ctx.draw(commandBuffer, 3);
+};
 
-    [shader("vertex")]
-    VSOutput vertMain(uint vertexID : SV_VertexID)
-    {
-        VSOutput output;   // one triangle that covers the screen
-        output.UV = float2((vertexID &lt;&lt; 1) &amp; 2, vertexID &amp; 2);
-        output.Pos = float4(output.UV.x * 2.0 - 1.0,
-                            1.0 - output.UV.y * 2.0, 0.0, 1.0);
-        return output;
-    }
-
-    [[vk::binding(0, 0)]] Sampler2D gTextures[];
-
-    [shader("fragment")]
-    float4 fragMain(VSOutput input) : SV_TARGET
-    {
-        return gTextures[pc.textureIndex].Sample(input.UV);
-    }
-)");
-
+// History: one copy per frame slot, so the pass reads last frame's trail.
+rasm::RenderTargetHandle trailHandle{};
 graph.addPass(
-    "overlay",
+    "Trail",
     [&amp;](rasm::PassBuilder &amp;builder)
     {
-        builder.read(rtHandle); // this pass runs after "Forward"
+        trailHandle = builder.createRenderTarget({
+            .name = "trail_rt",
+            .swapchainScale = 1.0f,
+            .colorFormats = {colorFormat},
+            .depthFormat = rasm::Format::D32_SFLOAT,
+            .clearColor = glm::vec4(0.0f),
+            .history = true,
+        });
+        builder.read(rtHandle);            // runs after "Forward"
+        builder.readPrevious(trailHandle); // last frame's trail
+        builder.write(trailHandle);        // this frame's trail
     },
 
     [&amp;](rasm::RenderContext &amp;ctx)
     {
-        auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
-        // this frame's slot of the render target
-        auto texture = engine.getRenderTargetTexture(rtHandle);
-        uint32_t textureIndex = engine.getBindlessTextureIndex(texture);
+        drawFullScreen(ctx, trailPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(rtHandle)),
+                       engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTexture(trailHandle)));
+    });
 
-        ctx.bindPipeline(commandBuffer, overlayPipeline);
-        ctx.bindDescriptorSet(commandBuffer, overlayPipeline,
-                              engine.getBindlessDescriptorSet(), 0);
-        ctx.pushConstants(commandBuffer, overlayPipeline,
-                          rasm::ShaderType::VERTEX_FRAGMENT,
-                          &amp;textureIndex, sizeof(textureIndex), 0);
-        ctx.draw(commandBuffer, 3);
+// Transient. It starts after offscreen_rt's last pass, so the two share memory.
+// Two color attachments: the trail's color, and a mask of where the bunny is.
+rasm::RenderTargetHandle compositeHandle{};
+rasm::PipelineHandle backgroundPipeline{};
+graph.addPass(
+    "Background",
+    [&amp;](rasm::PassBuilder &amp;builder)
+    {
+        compositeHandle = builder.createRenderTarget({
+            .name = "composite_rt",
+            .swapchainScale = 1.0f,
+            .colorFormats = {colorFormat, rasm::Format::R8G8B8A8_UNORM},
+            .depthFormat = rasm::Format::D32_SFLOAT,
+        });
+        builder.read(trailHandle);
+        builder.write(compositeHandle);
+    },
+
+    [&amp;](rasm::RenderContext &amp;ctx)
+    {
+        drawFullScreen(ctx, backgroundPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(trailHandle)), 0);
+    });
+
+// The pipeline takes both formats from the target. Its fragMain writes SV_TARGET0 and SV_TARGET1.
+backgroundPipeline = engine.createPipeline("background", fullScreenTriangle + backgroundFragment, compositeHandle);
+
+graph.addPass(
+    "Present",
+    [&amp;](rasm::PassBuilder &amp;builder)
+    {
+        builder.read(compositeHandle);
+        builder.writeSwapchain();
+    },
+
+    [&amp;](rasm::RenderContext &amp;ctx)
+    {
+        // Green where the mask is 0
+        drawFullScreen(ctx, presentPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(compositeHandle, 0)),
+                       engine.getBindlessTextureIndex(engine.getRenderTargetTexture(compositeHandle, 1)));
     });
 
 graph.compile();
@@ -634,6 +827,7 @@ graph.addPass(
     [&amp;](rasm::PassBuilder &amp;builder)
     {
         builder.read(particles); // this pass runs after "Animate"
+        builder.writeSwapchain();
     },
 
     [&amp;](rasm::RenderContext &amp;ctx)
@@ -654,8 +848,7 @@ graph.addPass(
 <div class="callout warn">
   <strong>Known limits</strong>
   <ul>
-    <li>It orders passes and records the barriers and layout changes their declarations need. It does not allocate transient resources or alias memory (<code>D9</code>).</li>
-    <li>Every graphics pass clears its target. Two passes that draw into the swapchain (or into the same render target) do not add up: the second one replaces the first (<code>D9</code>).</li>
+    <li>Only render targets are transient. Textures and buffers from the builder, and history targets, live until shutdown (<code>D4</code>).</li>
     <li>Depth is not kept between passes.</li>
     <li>The early scene culling, which <code>drawScene</code> needs, runs on the GPU before every pass of the frame, including your compute passes (D18). The late culling runs inside the pass that calls <code>drawScene</code>.</li>
     <li>Nothing can be destroyed: render targets, buffers and pipelines live until shutdown (<code>D4</code>).</li>

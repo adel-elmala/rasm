@@ -39,7 +39,7 @@ namespace
         }
         bool end() override { return true; }
         bool transitionTexture(Texture *, TextureUsage, TextureUsage) override { return true; }
-        void beginRendering(Texture *, Texture *, const glm::vec4 &, bool, bool) override {}
+        void beginRendering(Texture *const *, uint32_t, Texture *, const glm::vec4 &, const AttachmentOps &) override {}
         void endRendering() override {}
         void setViewport(float, float, float, float, float, float) override {}
         void setScissor(int32_t, int32_t, uint32_t, uint32_t) override {}
@@ -54,6 +54,7 @@ namespace
         void drawIndexedIndirectCount(Buffer *, uint64_t, Buffer *, uint64_t, uint32_t, uint32_t) override {}
         void dispatch(uint32_t, uint32_t, uint32_t) override {}
         void memoryBarrier(PipelineStage, PipelineStage) override {}
+        void aliasingBarrier() override {}
         void copyBuffers(Buffer *source, const BufferCopy *list, uint32_t count) override
         {
             src = source;
@@ -125,6 +126,9 @@ namespace
             return buffer;
         }
         Texture *createTexture(const TextureDesc &) override { return nullptr; }
+        MemoryRequirements getTextureMemoryRequirements(const TextureDesc &) override { return {}; }
+        Heap *createHeap(uint64_t, uint64_t, uint32_t, const std::string &) override { return nullptr; }
+        Texture *createPlacedTexture(const TextureDesc &, Heap *, uint64_t) override { return nullptr; }
         Sampler *createSampler(const SamplerDesc &) override { return nullptr; }
         Shader *createShader(const ShaderDesc &) override { return nullptr; }
         Pipeline *createGraphicsPipeline(const PipelineDesc &, Shader *, Shader *, DescriptorSetLayout *) override { return nullptr; }
@@ -171,6 +175,7 @@ namespace
         }
         void destroySwapchain(rhi::Swapchain *) override {}
         void destroyQueryPool(QueryPool *) override {}
+        void destroyHeap(Heap *) override {}
         Queue *getQueue(QueueType) override { return &queue; }
         bool fillBuffer(Buffer *buffer, const void *data, size_t size, size_t offset) override
         {

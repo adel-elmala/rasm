@@ -90,6 +90,7 @@ namespace rasm
         // returns invalid on failure.
         // The name is a label, so two pipelines can share one.
         PipelineHandle              createPipeline(const std::string& name, const std::string& shaderSource);
+        PipelineHandle              createPipeline(const std::string& name, const std::string& shaderSource, const RenderTargetHandle& renderTarget);
         PipelineHandle              createComputePipeline(const std::string& name, const std::string& shaderSource, const std::string& entryPoint = "compMain");
         const Material&             getMaterial(const MaterialHandle& handle);
         Transform                   getTransform(EntityHandle entity);
@@ -111,7 +112,7 @@ namespace rasm
         [[nodiscard]] bool          beginFrame(CameraHandle camera);
         // Presents the swapchain image, cleared if no pass rendered to it this frame.
         void                        endFrame();
-        void                        beginPass(const std::string& name = "Pass");
+        void                        beginPass(const std::string& name = "Pass", const AttachmentOps& ops = {});
         void                        endPass();
         void                        render(SceneHandle scene, CameraHandle camera);
         // Records a scene into the current pass, for render graph passes, with the camera fitted to the pass's
@@ -140,7 +141,8 @@ namespace rasm
         uint32_t                    addBindlessTexture(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, SamplerType sampler = SamplerType::LINEAR_REPEAT, uint32_t slot = MAX_BINDLESS_TEXTURES);
         uint32_t                    getBindlessTextureIndex(const TextureHandle& texture);
         // The render target's color texture for the current frame slot, so fetch it every frame.
-        TextureHandle               getRenderTargetTexture(const RenderTargetHandle& renderTarget);
+        TextureHandle               getRenderTargetTexture(const RenderTargetHandle& renderTarget, uint32_t attachment = 0);
+        TextureHandle               getPreviousRenderTargetTexture(const RenderTargetHandle& renderTarget, uint32_t attachment = 0);
 
         // window related
         Window                      createWindow(uint32_t width, uint32_t height);
@@ -194,6 +196,7 @@ namespace rasm
             std::future<TextureRaw>     result;
         };
 
+        PipelineHandle              createGraphicsPipeline(const std::string& name, const std::string& shaderSource, const Format* colorFormats, Format depthFormat);
         MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
         void                        finishMeshLoad(PendingMeshLoad& load);
         void                        finishTextureLoad(PendingTextureLoad& load);
