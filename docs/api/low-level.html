@@ -166,14 +166,14 @@
                  float minDepth = 0.0f, float maxDepth = 1.0f);</pre>
   <div class="body">
     <p>Sets the viewport, in pixels, with <code>x</code>, <code>y</code> at the top-left corner. RASM flips it (negative height) so that clip space is Y-up. <code>beginPass</code> already sets it to the whole target; change it to draw into a part of it, as <code>examples/01_render_graph</code> does to keep the image's shape.</p>
-    <p><code>drawScene</code> with any other viewport, or another depth range, is only frustum culled: its Hi-Z covers the whole target (<a href="../guides/occlusion-culling.html">occlusion culling</a>).</p>
+    <p>The <a href="engine.html#addScenePasses">scene passes</a> set no viewport: they draw with the one <code>beginPass</code> sets, over the whole target, and their Hi-Z covers the whole target too (<a href="../guides/occlusion-culling.html">occlusion culling</a>).</p>
   </div>
 </div>
 
 <div class="api" id="getViewport">
   <pre class="sig">const Viewport&amp; getViewport() const;</pre>
   <div class="body">
-    <p>The last viewport given to <code>setViewport</code>, on any command buffer. See <a href="types.html#Viewport">Viewport</a>. <code>drawScene</code> reads it to decide whether it can use occlusion culling.</p>
+    <p>The last viewport given to <code>setViewport</code>, on any command buffer. See <a href="types.html#Viewport">Viewport</a>. Nothing in the engine reads it.</p>
   </div>
 </div>
 
@@ -188,7 +188,7 @@
 <div class="api" id="setCullMode">
   <pre class="sig">bool setCullMode(const CommandBufferHandle&amp; commandBuffer, CullMode cullMode);</pre>
   <div class="body">
-    <p>Sets which faces the next draws skip. Every pipeline takes its cull mode from here. Front faces are counter-clockwise. <code>beginPass</code> sets <code>CullMode::NONE</code>, and <code>drawScene</code> changes it and sets it back.</p>
+    <p>Sets which faces the next draws skip. Every pipeline takes its cull mode from here. Front faces are counter-clockwise. <code>beginPass</code> sets <code>CullMode::NONE</code>, and the scene's draw passes change it for each run of draws and set it back.</p>
   </div>
 </div>
 
@@ -231,7 +231,7 @@
                               uint64_t countOffset, uint32_t maxDrawCount,
                               uint32_t stride);</pre>
   <div class="body">
-    <p>The same, but the GPU also reads the number of draws, a <code>uint32_t</code> at <code>countOffset</code> in <code>countBuffer</code>, and draws at most <code>maxDrawCount</code>. This is how <code>drawScene</code> draws what culling kept.</p>
+    <p>The same, but the GPU also reads the number of draws, a <code>uint32_t</code> at <code>countOffset</code> in <code>countBuffer</code>, and draws at most <code>maxDrawCount</code>. This is how the scene's draw passes draw what culling kept.</p>
   </div>
 </div>
 
@@ -294,9 +294,9 @@ constexpr bool          hasStage(PipelineStage stages, PipelineStage stage);</pr
   <div class="body">
     <p>Starts a render pass into <code>colorCount</code> color textures (1 to <code>MAX_COLOR_ATTACHMENTS</code>) and one depth texture. By default every color is cleared to <code>clearColor</code> and depth to 0; one load op serves all colors. Color is kept (stored) at the end of the pass; depth only with <code>ops.storeDepth</code>. Pass an invalid <code>depthAttachment</code> for a pass without depth; its pipelines must then have <code>Format::UNKNOWN</code> as their depth format.</p>
     <dl>
-      <dt>ops</dt><dd>See <a href="engine.html#AttachmentOps">AttachmentOps</a>. <code>loadColor</code> / <code>loadDepth</code> keep what an attachment holds instead of clearing it. Use them to go on drawing after a pause, as <code>drawScene</code> does after its Hi-Z build, or on top of an earlier pass. Before a load, transition the attachment to <code>COLOR_ATTACHMENT</code> or <code>DEPTH_STENCIL_ATTACHMENT</code> without <code>discard</code>, even when it is already in that layout: the barrier orders the earlier writes before the load. <code>storeDepth</code> keeps depth for a later load or a read; without it depth may be thrown away, which saves memory bandwidth.</dd>
+      <dt>ops</dt><dd>See <a href="engine.html#AttachmentOps">AttachmentOps</a>. <code>loadColor</code> / <code>loadDepth</code> keep what an attachment holds instead of clearing it. Use them to draw on top of an earlier pass, as the scene's <code>Scene 2</code> pass does after <code>Scene 1</code> and the Hi-Z build. Before a load, transition the attachment to <code>COLOR_ATTACHMENT</code> or <code>DEPTH_STENCIL_ATTACHMENT</code> without <code>discard</code>, even when it is already in that layout: the barrier orders the earlier writes before the load. <code>storeDepth</code> keeps depth for a later load or a read; without it depth may be thrown away, which saves memory bandwidth.</dd>
     </dl>
-    <p><code>Engine::beginPass</code> calls this after the layout transitions, with its <code>ops</code> (and <code>storeDepth</code> forced on with <code>EngineConfig::occlusionCulling</code>), and also sets the viewport, scissor and cull mode, so use <code>beginPass</code> unless you build the whole frame yourself.</p>
+    <p><code>Engine::beginPass</code> calls this after the layout transitions, with its <code>ops</code> (a render graph sets them for each pass), and also sets the viewport, scissor and cull mode, so use <code>beginPass</code> unless you build the whole frame yourself.</p>
   </div>
 </div>
 
@@ -339,7 +339,7 @@ constexpr bool          hasStage(PipelineStage stages, PipelineStage stage);</pr
       <figcaption>Every arrow can go the other way too, except into <code>UNKNOWN</code>. Only <code>SAMPLED</code> to <code>SAMPLED</code> records nothing: reads after reads need no barrier.</figcaption>
     </figure>
     <p>The use changes when the barrier is recorded. A successful <a href="#submit"><code>submit</code></a> keeps it; for commands that will not run, call <a href="#discardRecording"><code>discardRecording</code></a>. Command buffers that touch the same texture must be submitted in the order they were recorded.</p>
-    <p><span class="tag">errors</span> Another usage logs an error, records nothing and returns <code>false</code>. Inside a render pass it records nothing (barriers are not allowed there). <code>beginPass</code> moves its attachments, <code>endPass</code> moves a render target's color to <code>SAMPLED</code>, <code>endFrame</code> moves the swapchain image to <code>PRESENT_SRC</code>, and a render graph pass that reads a texture gets it in <code>SAMPLED</code>. Call it yourself only for your own textures outside those steps.</p>
+    <p><span class="tag">errors</span> Another usage logs an error, records nothing and returns <code>false</code>. Inside a render pass it records nothing (barriers are not allowed there). <code>beginPass</code> moves its attachments, <code>endPass</code> moves a render target's color to <code>SAMPLED</code>, <code>endFrame</code> moves the swapchain image to <code>PRESENT_SRC</code>, and a render graph pass that reads a texture, or a target's depth (<a href="render-graph.html#readDepth">readDepth</a>), gets it in <code>SAMPLED</code>. Call it yourself only for your own textures outside those steps.</p>
   </div>
 </div>
 
@@ -488,7 +488,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
 <div class="api" id="getBufferDeviceAddress">
   <pre class="sig">uint64_t getBufferDeviceAddress(const BufferHandle&amp; buffer);</pre>
   <div class="body">
-    <p>The buffer's GPU address. Put it in a push constant (or in another buffer) and use it as a pointer in Slang, e.g. <code>float2* positions;</code>. The address never changes. Returns 0 with an error for an unknown handle.</p>
+    <p>The buffer's GPU address. Put it in a push constant (or in another buffer) and use it as a pointer in Slang, e.g. <code>float2* positions;</code>. The address stays the same until <a href="#resizeBuffer">resizeBuffer</a>. Returns 0 with an error for an unknown handle.</p>
   </div>
 </div>
 
@@ -496,6 +496,19 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
   <pre class="sig">BufferDesc getBufferDesc(const BufferHandle&amp; buffer);</pre>
   <div class="body">
     <p>The desc the buffer was created with. An unknown handle logs an error and returns <code>BufferDesc{}</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="resizeBuffer">
+  <pre class="sig">bool resizeBuffer(const BufferHandle&amp; buffer, uint64_t size);</pre>
+  <div class="body">
+    <p>Replaces the buffer with a new one of <code>size</code> bytes, made from the same desc, under the <b>same handle</b>. So whatever holds the handle stays valid, for example a render graph's <code>read</code> and <code>write</code> declarations. The scene passes grow their culling buffers this way.</p>
+    <ul>
+      <li>The contents are not copied: the new buffer starts undefined.</li>
+      <li>The device address changes: fetch it again with <a href="#getBufferDeviceAddress">getBufferDeviceAddress</a>.</li>
+      <li>The old buffer is destroyed at once, with its queued uploads, so the GPU must be done with it, as for <code>destroyBuffer</code>.</li>
+    </ul>
+    <p><span class="tag">errors</span> An unknown handle logs <code>resizeBuffer: buffer handle not found.</code> and returns <code>false</code>. When the new buffer cannot be created it returns <code>false</code>, and the old buffer stays.</p>
   </div>
 </div>
 
@@ -568,7 +581,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <tr><td><code>COLOR_ATTACHMENT</code></td><td>drawn into</td><td>yes</td></tr>
       <tr><td><code>DEPTH_STENCIL_ATTACHMENT</code></td><td>depth buffer</td><td>yes</td></tr>
       <tr><td><code>SAMPLED_COLOR_ATTACHMENT</code></td><td>drawn into, then read (render target color)</td><td>–</td></tr>
-      <tr><td><code>SAMPLED_DEPTH_ATTACHMENT</code></td><td>depth buffer that shaders can also read (swapchain depth, and render target depth in <code>D32_SFLOAT</code>)</td><td>–</td></tr>
+      <tr><td><code>SAMPLED_DEPTH_ATTACHMENT</code></td><td>depth buffer that shaders can also read: with <code>EngineConfig::occlusionCulling</code>, the swapchain depth and render target depth in <code>D32_SFLOAT</code> (<a href="render-graph.html#readDepth">readDepth</a>)</td><td>–</td></tr>
       <tr><td><code>TRANSFER_SRC</code>, <code>TRANSFER_DST</code>, <code>STORAGE</code>, <code>TRANSIENT_ATTACHMENT</code>, <code>INPUT_ATTACHMENT</code></td><td>only passed on to the backend; no RASM call uses them</td><td>–</td></tr>
       <tr><td><code>PRESENT_SRC</code></td><td>–</td><td>yes (swapchain image before present)</td></tr>
       <tr><td><code>UNKNOWN</code></td><td>–</td><td>the start; never a target (contents thrown away)</td></tr>

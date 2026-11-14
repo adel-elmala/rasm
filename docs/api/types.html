@@ -209,7 +209,7 @@ private:
       <tr><td><code>R8G8B8A8_SRGB</code></td><td>color textures: albedo, emissive. The default of <code>loadTexture</code>. Gets a mip chain.</td></tr>
       <tr><td><code>R8G8B8A8_UNORM</code></td><td>data textures: normal, metallic-roughness, occlusion. Gets a mip chain.</td></tr>
       <tr><td><code>B8G8R8A8_SRGB</code></td><td>the swapchain format RASM asks for; use <code>getSwapchainImageFormat()</code> for the real one</td></tr>
-      <tr><td><code>D32_SFLOAT</code></td><td>the engine's depth format; needed by <code>drawScene</code> and <code>createPipeline</code></td></tr>
+      <tr><td><code>D32_SFLOAT</code></td><td>the engine's depth format; needed by <code>addScenePasses</code> and <code>createPipeline</code>. The only depth format a pass can sample (<code>readDepth</code>)</td></tr>
       <tr><td><code>D24_UNORM_S8_UINT</code>, <code>D32_SFLOAT_S8_UINT</code></td><td>depth + stencil, for pipelines you build yourself</td></tr>
       <tr><td><code>R8G8B8_UNORM</code>, <code>R16G16B16A16_SFLOAT</code>, <code>R32G32_SFLOAT</code>, <code>R32G32B32_SFLOAT</code>, <code>R32G32B32A32_SFLOAT</code></td><td>other texture formats; no engine path uses them. Only the RGBA8 formats get mips, and <code>fillTexture</code> expects 4 bytes per pixel.</td></tr>
       <tr><td><code>U16_UINT</code>, <code>U32_UINT</code></td><td>index types for <code>bindIndexBuffer</code> only, not texture formats</td></tr>
@@ -251,7 +251,7 @@ private:
 <div class="api" id="CullMode">
   <pre class="sig">enum class CullMode { NONE, FRONT, BACK };</pre>
   <div class="body">
-    <p>Which triangles <code>setCullMode</code> skips. Front faces are counter-clockwise. Each pass starts with <code>NONE</code>. <code>drawScene</code> picks one per sub-mesh: <code>NONE</code> for a <code>doubleSided</code> material, else <code>BACK</code>, or <code>FRONT</code> when the transform mirrors the mesh.</p>
+    <p>Which triangles <code>setCullMode</code> skips. Front faces are counter-clockwise. Each pass starts with <code>NONE</code>. The scene's draw passes pick one per sub-mesh: <code>NONE</code> for a <code>doubleSided</code> material, else <code>BACK</code>, or <code>FRONT</code> when the transform mirrors the mesh.</p>
   </div>
 </div>
 
@@ -430,13 +430,13 @@ struct RenderTarget
   <tr><th>Constant and header</th><th>Value</th><th>What it limits</th></tr>
   <tr id="MAX_FRAMES_IN_FLIGHT"><td><code>MAX_FRAMES_IN_FLIGHT</code><br><code>rasm/types.h</code></td><td>2</td><td>Frame slots. The CPU records one frame while the GPU runs the other.</td></tr>
   <tr id="MAX_COLOR_ATTACHMENTS"><td><code>MAX_COLOR_ATTACHMENTS</code><br><code>rasm/types.h</code></td><td>4</td><td>Color attachments of one render target or pipeline. Vulkan guarantees at least 4.</td></tr>
-  <tr id="MAX_BINDLESS_TEXTURES"><td><code>MAX_BINDLESS_TEXTURES</code><br><code>rasm/types.h</code></td><td>1024</td><td>Bindless texture slots in all. Each loaded texture takes 1, each render target 2. Slots are never freed.</td></tr>
+  <tr id="MAX_BINDLESS_TEXTURES"><td><code>MAX_BINDLESS_TEXTURES</code><br><code>rasm/types.h</code></td><td>1024</td><td>Bindless texture slots in all. Each loaded texture takes 1. A render target takes 1 per color texture, and with <code>EngineConfig::occlusionCulling</code> 1 per depth texture; a history target twice that. Slots are never freed.</td></tr>
   <tr id="MAX_DESCRIPTOR_TYPES"><td><code>MAX_DESCRIPTOR_TYPES</code><br><code>rasm/types.h</code></td><td>1</td><td>Entries in <code>DescriptorPoolDesc::sizes</code>.</td></tr>
   <tr id="PUSH_CONSTANTS_SIZE"><td><code>PUSH_CONSTANTS_SIZE</code><br><code>rasm/types.h</code></td><td>16</td><td>Push constant bytes of every pipeline.</td></tr>
   <tr id="INVALID_TEXTURE_INDEX"><td><code>INVALID_TEXTURE_INDEX</code><br><code>rasm/types.h</code></td><td><code>0xFFFFFFFF</code></td><td>Not a limit: the bindless index written for a material slot with no texture. Shaders must not sample it.</td></tr>
   <tr id="MAX_MATERIALS"><td><code>MAX_MATERIALS</code><br><code>rasm/engine.h</code></td><td>256</td><td>Materials: 255 fit, and the engine's default material takes one.</td></tr>
   <tr id="MAX_CAMERAS"><td><code>MAX_CAMERAS</code><br><code>rasm/engine.h</code></td><td>8</td><td>Cameras: 7 fit.</td></tr>
-  <tr id="MAX_GPU_TIMERS"><td><code>MAX_GPU_TIMERS</code><br><code>rasm/engine.h</code></td><td>16</td><td>GPU timers per frame: the frame, culling, and 14 for passes and <code>beginGpuTimer</code>. <code>FrameStats::gpuTimers</code> has 15 entries.</td></tr>
+  <tr id="MAX_GPU_TIMERS"><td><code>MAX_GPU_TIMERS</code><br><code>rasm/engine.h</code></td><td>16</td><td>GPU timers per frame: the frame, and 15 for passes and <code>beginGpuTimer</code>. <code>FrameStats::gpuTimers</code> has 15 entries.</td></tr>
   <tr id="MAX_ENTITIES"><td><code>MAX_ENTITIES</code><br><code>rasm/entity.h</code></td><td>262144 (2<sup>18</sup>)</td><td>Entities: 262143 fit.</td></tr>
   <tr id="MAX_LIGHTS"><td><code>MAX_LIGHTS</code><br><code>rasm/light.h</code></td><td>8</td><td>Lights: 7 fit. Also the size of the light array the shader gets.</td></tr>
   <tr id="MAX_TEXTURE_SLOTS"><td><code>MAX_TEXTURE_SLOTS</code><br><code>rasm/material.h</code></td><td>6 (<code>PbrSlot::COUNT</code>)</td><td>Textures per material, one per <a href="materials.html#PbrSlot">PbrSlot</a>.</td></tr>
@@ -448,7 +448,7 @@ struct RenderTarget
   <tr id="MAX_CAMERAS_PER_SCENE"><td><code>MAX_CAMERAS_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>8</td><td><code>addCameraToScene</code> per scene (the global camera limit is lower).</td></tr>
   <tr id="MAX_LIGHTS_PER_SCENE"><td><code>MAX_LIGHTS_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>= <code>MAX_LIGHTS</code></td><td><code>addLightToScene</code> per scene (the global light limit is lower).</td></tr>
   <tr id="MAX_SCENES"><td><code>MAX_SCENES</code><br><code>rasm/scene.h</code></td><td>16</td><td>Scenes: 15 fit.</td></tr>
-  <tr id="MAX_SCENE_DRAWS_PER_FRAME"><td><code>MAX_SCENE_DRAWS_PER_FRAME</code><br><code>rasm/scene.h</code></td><td>8</td><td><code>drawScene</code> calls per frame. More log an error and draw nothing.</td></tr>
+  <tr id="MAX_SCENE_VIEWS"><td><code>MAX_SCENE_VIEWS</code><br><code>rasm/scene.h</code></td><td>8</td><td>Scene views: the (scene, camera, target) sets given to <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> and held by render graphs at once. A graph lets go of its views when it is destroyed or replaced. One more logs an error, and <code>addScenePasses</code> adds nothing and returns <code>false</code>.</td></tr>
 </table>
 </div>
 

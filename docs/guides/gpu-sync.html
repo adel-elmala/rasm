@@ -490,7 +490,7 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
 </table>
 </div>
 
-<p><code>PipelineStage</code> is a set of flags, so one barrier can name several with <code>|</code>. Culling ends with <code>COMPUTE</code> → <code>GRAPHICS | HOST</code>: the draws read the lists, and the CPU reads the cull stats after the fence.</p>
+<p><code>PipelineStage</code> is a set of flags, so one barrier can name several with <code>|</code>. Before the late culling the graph records <code>GRAPHICS | COMPUTE</code> → <code>COMPUTE</code>: the early draws read the lists that it rewrites, and the Hi-Z build wrote what it reads. <code>endFrame</code> ends with <code>COMPUTE</code> → <code>HOST</code>, so the CPU reads the cull stats after the fence.</p>
 
 <h3>Texture usages and their scopes</h3>
 
@@ -534,41 +534,42 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
 <h3>The barriers of one frame</h3>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 504" role="img" aria-label="The barriers of one frame of Engine::render with occlusion culling. Cull command buffer: compute to compute for last frame's visibility, then per drawScene call count, compute to compute, write, and at the end compute to graphics or host. Frame command buffer: swapchain image and depth to attachments, discarding; early draws; end rendering; depth to sampled; graphics or compute to compute; Hi-Z levels each followed by compute to compute; late count, compute to compute, late write; compute to graphics or host; depth back to attachment; color attachment to color attachment; begin rendering with load; late draws; swapchain image to present.">
-    <text x="20" y="22" class="title">cull command buffer · runs first</text>
-    <rect x="20"  y="34"  width="330" height="28" rx="4" class="hot"/><text x="30" y="53" class="small mono">COMPUTE → COMPUTE</text><text x="340" y="53" class="end small">last frame's visibility</text>
-    <rect x="20"  y="70"  width="330" height="28" rx="4" class="shader"/><text x="30" y="89" class="small">countMain, early</text><text x="340" y="89" class="end small">per drawScene call</text>
-    <rect x="20"  y="106" width="330" height="28" rx="4" class="hot"/><text x="30" y="125" class="small mono">COMPUTE → COMPUTE</text>
-    <rect x="20"  y="142" width="330" height="28" rx="4" class="shader"/><text x="30" y="161" class="small">writeMain, early</text>
-    <rect x="20"  y="178" width="330" height="28" rx="4" class="hot"/><text x="30" y="197" class="small mono">COMPUTE → GRAPHICS | HOST</text><text x="340" y="197" class="end small">lists for draws</text>
-
-    <text x="20" y="246" class="small">Uploads go out before both, in their own</text>
-    <text x="20" y="262" class="small">submit, with the copyBuffers barriers.</text>
-    <text x="20" y="294" class="small">Legend:</text>
-    <rect x="20" y="304" width="20" height="14" rx="3" class="hot"/><text x="48" y="315" class="small">memory barrier (global)</text>
-    <rect x="20" y="326" width="20" height="14" rx="3" class="mem"/><text x="48" y="337" class="small">image transition (TextureUsage)</text>
-    <rect x="20" y="348" width="20" height="14" rx="3" class="shader"/><text x="48" y="359" class="small">compute work</text>
-    <rect x="20" y="370" width="20" height="14" rx="3" class="gpu"/><text x="48" y="381" class="small">rendering</text>
-
-    <text x="400" y="22" class="title">frame command buffer</text>
-    <rect x="400" y="34"  width="340" height="28" rx="4" class="mem"/><text x="410" y="53" class="small mono">image, depth: UNKNOWN → attachment</text>
-    <rect x="400" y="70"  width="340" height="28" rx="4" class="gpu"/><text x="410" y="89" class="small">beginRendering, early draws, endRendering</text>
-    <rect x="400" y="106" width="340" height="28" rx="4" class="mem"/><text x="410" y="125" class="small mono">depth → SAMPLED</text>
-    <rect x="400" y="142" width="340" height="28" rx="4" class="hot"/><text x="410" y="161" class="small mono">GRAPHICS | COMPUTE → COMPUTE</text>
-    <rect x="400" y="178" width="340" height="28" rx="4" class="shader"/><text x="410" y="197" class="small">Hi-Z: one dispatch per level</text><text x="730" y="197" class="end small mono">+ C → C each</text>
-    <rect x="400" y="214" width="340" height="28" rx="4" class="shader"/><text x="410" y="233" class="small">countMain, late</text>
-    <rect x="400" y="250" width="340" height="28" rx="4" class="hot"/><text x="410" y="269" class="small mono">COMPUTE → COMPUTE</text>
-    <rect x="400" y="286" width="340" height="28" rx="4" class="shader"/><text x="410" y="305" class="small">writeMain, late</text>
-    <rect x="400" y="322" width="340" height="28" rx="4" class="hot"/><text x="410" y="341" class="small mono">COMPUTE → GRAPHICS | HOST</text>
-    <rect x="400" y="358" width="340" height="28" rx="4" class="mem"/><text x="410" y="377" class="small mono">depth → DEPTH_STENCIL_ATTACHMENT</text>
-    <rect x="400" y="394" width="340" height="28" rx="4" class="mem"/><text x="410" y="413" class="small mono">color: COLOR_ATTACHMENT → same</text>
-    <rect x="400" y="430" width="340" height="28" rx="4" class="gpu"/><text x="410" y="449" class="small">beginRendering (load), late draws, endRendering</text>
-    <rect x="400" y="466" width="340" height="28" rx="4" class="mem"/><text x="410" y="485" class="small mono">image → PRESENT_SRC</text>
-    <text x="20" y="420" class="small">Right column, from the first "endRendering"</text>
-    <text x="20" y="436" class="small">to "beginRendering (load)":</text>
-    <text x="20" y="452" class="small mono">recordOcclusionCulling</text>
+  <svg viewBox="0 0 760 520" role="img" aria-label="The barriers of one frame of Engine::render with occlusion culling, all in one command buffer. Cull 1: graphics or compute to compute for last frame's passes, early countMain, compute to compute, early writeMain. Scene 1: compute to graphics, swapchain image and depth from unknown to attachments, early draws. Hi-Z: compute to compute, depth to sampled, one dispatch per level with compute to compute after each. Cull 2: graphics or compute to compute, late countMain, compute to compute, late writeMain. Scene 2: compute to graphics, color and depth back to attachments without discard, late draws with load. endFrame: image to present, compute to host for the cull stats.">
+    <text x="20" y="22" class="title">frame command buffer · left column, then right</text>
+    <text x="20" y="48" class="small title">Cull 1 · compute</text>
+    <rect x="20" y="56" width="340" height="28" rx="4" class="hot"/><text x="30" y="75" class="small mono">GRAPHICS | COMPUTE → COMPUTE</text><text x="350" y="75" class="end small">last frame's passes</text>
+    <rect x="20" y="92" width="340" height="28" rx="4" class="shader"/><text x="30" y="111" class="small">countMain, early</text>
+    <rect x="20" y="128" width="340" height="28" rx="4" class="hot"/><text x="30" y="147" class="small mono">COMPUTE → COMPUTE</text><text x="350" y="147" class="end small">inside the pass</text>
+    <rect x="20" y="164" width="340" height="28" rx="4" class="shader"/><text x="30" y="183" class="small">writeMain, early</text>
+    <text x="20" y="212" class="small title">Scene 1 · graphics</text>
+    <rect x="20" y="220" width="340" height="28" rx="4" class="hot"/><text x="30" y="239" class="small mono">COMPUTE → GRAPHICS</text><text x="350" y="239" class="end small">lists for the draws</text>
+    <rect x="20" y="256" width="340" height="28" rx="4" class="mem"/><text x="30" y="275" class="small mono">image, depth: UNKNOWN → attachment</text>
+    <rect x="20" y="292" width="340" height="28" rx="4" class="gpu"/><text x="30" y="311" class="small">beginRendering (clear), early draws, endRendering</text>
+    <text x="20" y="340" class="small title">Hi-Z · compute</text>
+    <rect x="20" y="348" width="340" height="28" rx="4" class="hot"/><text x="30" y="367" class="small mono">COMPUTE → COMPUTE</text><text x="350" y="367" class="end small">last frame's Cull 2</text>
+    <rect x="20" y="384" width="340" height="28" rx="4" class="mem"/><text x="30" y="403" class="small mono">depth → SAMPLED</text><text x="350" y="403" class="end small">readSwapchainDepth</text>
+    <rect x="20" y="420" width="340" height="28" rx="4" class="shader"/><text x="30" y="439" class="small">Hi-Z: one dispatch per level</text><text x="350" y="439" class="end small mono">+ C → C each</text>
+    <text x="20" y="478" class="small">Uploads go out before it, in their own submit,</text>
+    <text x="20" y="494" class="small">with the copyBuffers barriers.</text>
+    <text x="400" y="48" class="small title">Cull 2 · compute</text>
+    <rect x="400" y="56" width="340" height="28" rx="4" class="hot"/><text x="410" y="75" class="small mono">GRAPHICS | COMPUTE → COMPUTE</text><text x="730" y="75" class="end small">after Scene 1</text>
+    <rect x="400" y="92" width="340" height="28" rx="4" class="shader"/><text x="410" y="111" class="small">countMain, late</text>
+    <rect x="400" y="128" width="340" height="28" rx="4" class="hot"/><text x="410" y="147" class="small mono">COMPUTE → COMPUTE</text><text x="730" y="147" class="end small">inside the pass</text>
+    <rect x="400" y="164" width="340" height="28" rx="4" class="shader"/><text x="410" y="183" class="small">writeMain, late</text>
+    <text x="400" y="212" class="small title">Scene 2 · graphics</text>
+    <rect x="400" y="220" width="340" height="28" rx="4" class="hot"/><text x="410" y="239" class="small mono">COMPUTE → GRAPHICS</text><text x="730" y="239" class="end small">lists for the draws</text>
+    <rect x="400" y="256" width="340" height="28" rx="4" class="mem"/><text x="410" y="275" class="small mono">color, depth → attachment, kept</text>
+    <rect x="400" y="292" width="340" height="28" rx="4" class="gpu"/><text x="410" y="311" class="small">beginRendering (load), late draws, endRendering</text>
+    <text x="400" y="340" class="small title">endFrame</text>
+    <rect x="400" y="348" width="340" height="28" rx="4" class="mem"/><text x="410" y="367" class="small mono">image → PRESENT_SRC</text>
+    <rect x="400" y="384" width="340" height="28" rx="4" class="hot"/><text x="410" y="403" class="small mono">COMPUTE → HOST</text><text x="730" y="403" class="end small">cull stats for the CPU</text>
+    <text x="400" y="440" class="small">Legend:</text>
+    <rect x="400" y="450" width="20" height="14" rx="3" class="hot"/><text x="428" y="461" class="small">memory barrier (global)</text>
+    <rect x="580" y="450" width="20" height="14" rx="3" class="mem"/><text x="608" y="461" class="small">image transition</text>
+    <rect x="400" y="474" width="20" height="14" rx="3" class="shader"/><text x="428" y="485" class="small">compute work</text>
+    <rect x="580" y="474" width="20" height="14" rx="3" class="gpu"/><text x="608" y="485" class="small">rendering</text>
   </svg>
-  <figcaption>One <code>drawScene</code> call in <code>Engine::render</code>, with <code>EngineConfig::occlusionCulling</code> on. Barriers cannot be recorded inside a rendering scope, so <code>recordOcclusionCulling</code> ends the pass, records its compute work, and begins the pass again with <code>load</code>. See <a href="occlusion-culling.html#in-rasm">occlusion culling</a>.</figcaption>
+  <figcaption>One frame of <code>Engine::render</code> with <code>EngineConfig::occlusionCulling</code> on. Every pass is a graph pass in the one frame command buffer, so no barrier sits inside a rendering scope. The graph records the barrier before each pass from what the pass declares; the <code>COMPUTE → COMPUTE</code> barriers between dispatches inside a pass come from the pass itself (<code>recordSceneCulling</code>, <code>recordHiz</code>). See <a href="occlusion-culling.html#in-rasm">occlusion culling</a>.</figcaption>
 </figure>
 
 <h3>The render graph's part</h3>
@@ -585,11 +586,11 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
   <tr><td>Buffer barriers</td><td>global memory barriers are fine</td><td>Only global ones. Shaders reach buffers through device addresses, which a per-buffer barrier could not name anyway.</td></tr>
   <tr><td>Image barriers</td><td>per mip and layer</td><td>Always the whole mip chain, layer 0. No per-mip tracking.</td></tr>
   <tr><td>Batching</td><td>several barriers per call</td><td>One barrier per <code>vkCmdPipelineBarrier2</code> call.</td></tr>
-  <tr><td>State tracking</td><td>per resource, or a render graph</td><td>Both: <code>TextureStates</code> for textures, <code>RenderGraph::bufferAccess</code> for buffers used by graph passes. Engine-internal passes (culling, Hi-Z) place their own.</td></tr>
-  <tr><td>Discard</td><td>UNDEFINED as old layout</td><td>The <code>discard</code> flag, or <code>UNKNOWN</code> as the state. <code>beginPass</code> discards both attachments, since it clears them.</td></tr>
+  <tr><td>State tracking</td><td>per resource, or a render graph</td><td>Both: <code>TextureStates</code> for textures, <code>RenderGraph::bufferAccess</code> for buffers used by graph passes, the scene passes included. Only the barriers between dispatches inside one pass are placed by the pass itself.</td></tr>
+  <tr><td>Discard</td><td>UNDEFINED as old layout</td><td>The <code>discard</code> flag, or <code>UNKNOWN</code> as the state. <code>beginPass</code> discards the attachments a pass clears, and keeps the ones it loads.</td></tr>
   <tr><td>Split barriers, events</td><td>possible</td><td>None.</td></tr>
   <tr><td>Queues</td><td>semaphores, ownership transfers</td><td>One queue, so submission order and barriers do it all. Uploads need no semaphore: <code>copyBuffers</code> brackets them with all-commands barriers (<b>D13</b>).</td></tr>
-  <tr><td>Host reads</td><td>barrier to host, fence, invalidate</td><td>All three: <code>COMPUTE</code> → <code>GRAPHICS | HOST</code>, the frame fence, and <code>readBuffer</code> invalidates the range.</td></tr>
+  <tr><td>Host reads</td><td>barrier to host, fence, invalidate</td><td>All three: <code>COMPUTE</code> → <code>HOST</code> at the end of the frame, the frame fence, and <code>readBuffer</code> invalidates the range.</td></tr>
   <tr><td>Host-side layout change</td><td>—</td><td>Loaded textures use host image copy: <code>fillTexture</code> transitions and fills them on the CPU, with no GPU barrier.</td></tr>
 </table>
 </div>
@@ -604,7 +605,7 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
   <tr><td>Texture state tracking</td><td><code>TextureStates</code> in <code>src/rhi/textureStates.cpp</code></td></tr>
   <tr><td>Checks: no barrier inside a pass</td><td><code>RenderContext::memoryBarrier</code>, <code>transitionImageLayout</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>Graph barriers</td><td><code>RenderGraph::bufferBarrier</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
-  <tr><td>Culling and Hi-Z barriers</td><td><code>recordCulling</code>, <code>recordOcclusionCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Barriers inside the culling and Hi-Z passes</td><td><code>recordSceneCulling</code>, <code>recordHiz</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Pass and frame transitions</td><td><code>Engine::beginPass</code>, <code>endPass</code>, <code>endFrame</code> in <code>src/engine.cpp</code></td></tr>
 </table>
 </div>

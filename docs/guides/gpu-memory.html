@@ -548,7 +548,7 @@
   <tr><td>The staging buffer's memory</td><td>system RAM</td><td>Created <code>hostVisible</code>. Every RASM buffer has the device-address usage bit, which VMA counts as GPU access, so VMA <i>prefers</i> device-local memory for it. On a GPU with a BAR heap the ring may land in VRAM.</td></tr>
   <tr><td>Data the GPU reads every frame</td><td>one copy per frame in flight</td><td><code>GpuTable</code> (instance and material tables): a CPU <code>shadow</code>, one buffer per frame slot, dirty rows per slot merged into ranges by <code>mergeRows</code>, uploaded in <code>syncGpuScene</code> after that slot's fence wait. <code>SceneData</code>: one <code>hostVisible</code> buffer per slot. See <a href="gpu-scene.html">The GPU scene tables</a>.</td></tr>
   <tr><td>Data that only grows</td><td>write only new ranges</td><td><code>GeometryPool</code>: a linear (bump) allocator over three device-local buffers (vertices, indices, the geometry table), sized from <code>EngineConfig</code>. Nothing is ever freed (D4).</td></tr>
-  <tr><td>Buffers that grow</td><td>—</td><td>Draw lists, visible draws and Hi-Z buffers are per frame slot. When one is too small, it is destroyed and a bigger one is made (draw buffers at least double), right after that slot's fence wait.</td></tr>
+  <tr><td>Buffers that grow</td><td>—</td><td>Draw lists, visible draws and Hi-Z buffers are per frame slot. When one is too small, it is destroyed and a bigger one is made (draw buffers at least double), right after that slot's fence wait. Visible draws and Hi-Z grow with <code>RenderContext::resizeBuffer</code>, which keeps the handle, so the render graph passes that declared it stay valid; the contents and the device address change.</td></tr>
   <tr><td>Textures</td><td>classic, or host image copy</td><td>Host image copy only: <code>VulkanDevice::fillTexture</code> changes the layout with <code>vkTransitionImageLayout</code>, builds every mip on the CPU with stb_image_resize, and copies all levels with <code>vkCopyMemoryToImage</code>. No staging fallback (P2).</td></tr>
   <tr><td>Readback</td><td>cached memory, barrier, fence, invalidate</td><td>The same: a <code>hostReadable</code> buffer, <code>readBuffer</code> calls <code>vmaInvalidateAllocation</code>. <code>updateFrameStats</code> reads a slot's cull stats right after <code>beginFrame</code> waited for that slot's fence: the numbers of the slot's last frame, two frames ago.</td></tr>
 </table>
@@ -560,12 +560,12 @@
 <table>
   <tr><th>Buffer</th><th>Kind</th><th>Copies</th><th>Written by</th></tr>
   <tr><td>Upload staging ring</td><td><code>hostVisible</code></td><td>1</td><td><code>UploadManager::upload</code></td></tr>
-  <tr><td>Scene data</td><td><code>hostVisible</code></td><td>1 per frame slot, room for <code>MAX_SCENE_DRAWS_PER_FRAME</code> = 8 calls</td><td><code>drawScene</code></td></tr>
+  <tr><td>Scene data</td><td><code>hostVisible</code></td><td>1 per frame slot, room for <code>MAX_SCENE_VIEWS</code> = 8 scene views</td><td><code>prepareSceneView</code></td></tr>
   <tr><td>Cull stats</td><td><code>hostVisible</code> + <code>hostReadable</code></td><td>1 per frame slot</td><td>the GPU; read by <code>updateFrameStats</code></td></tr>
   <tr><td>Instance and material tables</td><td>default</td><td>1 per frame slot</td><td><code>GpuTable::upload</code></td></tr>
   <tr><td>Vertex pool, index pool, geometry table</td><td>default</td><td>1</td><td><code>GeometryPool::upload</code></td></tr>
   <tr><td>Draw info</td><td>default</td><td>1 per scene and frame slot</td><td><code>uploadDrawList</code></td></tr>
-  <tr><td>Visible draws, draw counts, Hi-Z, visibility</td><td>default</td><td>per call (and slot)</td><td>only the GPU, except visibility's first fill</td></tr>
+  <tr><td>Visible draws, draw counts, Hi-Z, visibility</td><td>default</td><td>per scene view (and slot, except visibility)</td><td>only the GPU, except visibility's first fill</td></tr>
 </table>
 </div>
 

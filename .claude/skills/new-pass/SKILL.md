@@ -13,10 +13,10 @@ is the working reference (forward pass into a render target, then an overlay pas
 | Kind | How today | Notes |
 |---|---|---|
 | **Full-screen / post** (tone map, blur, debug view) | own pipeline, `ctx.draw(cmd, 3)`, samples an earlier render target | the common case. Template below. |
-| **Scene into a render target** | `engine.drawScene(scene, camera)` in the pass | uses the uber shader. The target must have the swapchain color format + `D32_SFLOAT`, else `drawScene` logs and skips. |
+| **Scene into a render target** | `engine.addScenePasses(graph, scene, camera, target)` before the passes that read the target | adds the culling and draw passes (uber shader). The target must have one color in the swapchain format + `D32_SFLOAT`, else it logs and returns `false`. Passes added later that draw the target load what the scene drew. |
 | **Scene with its own shader** (shadow map, normals view, ID buffer) | ✗ not possible from the app | the custom shader can't get the `SceneData` address. Needs an engine change: propose it first. |
 | **Compute** (culling, particles, buffer processing) | `engine.createComputePipeline` (`compMain`, or a named entry point), `graph.addComputePass`, `ctx.dispatch`; the graph adds the barriers around the pass | writes **buffers** through device addresses only (no storage images). It can read bindless textures with `Load`/`Sample` after `ctx.bindDescriptorSet(cmd, pipeline, engine.getBindlessDescriptorSet())`. A texture it reads must be in `SAMPLED` layout. Reference: `examples/04_compute`, and `hizMain` in `shaders/passes/hiz.slang`. |
-| **Pass built into the engine** (every app gets it) | ✗ `Engine::render` records one fixed pass | phase 3 ("graph-driven frame"). Propose first. |
+| **Pass built into the engine** (every app gets it) | `Engine::render` runs `Renderer`'s graph of the scene passes (`src/renderer/renderer.cpp`) | an engine change: propose it first. |
 
 ## 2. Current limits (check before designing)
 
@@ -28,9 +28,9 @@ is the working reference (forward pass into a render target, then an overlay pas
 | Fixed state | depth test + write `GREATER_OR_EQUAL` (reversed-Z, cleared to 0: a pass that writes its own depth puts the far plane at 0, not `z = w`), no blending, triangle list, no vertex input, front face counter-clockwise | `createGraphicsPipeline` |
 | Cull mode | dynamic: `beginPass` sets `NONE`, `ctx.setCullMode(commandBuffer, CullMode::BACK)` changes it for the pass | `VulkanCommandBuffer::setCullMode` |
 | Every pass **clears** its target | two passes can't accumulate into one target | `VulkanCommandBuffer::beginRendering`, review §3 |
-| Readable outputs | only the **color** of an earlier render target, through its bindless index. Depth isn't stored. | `Engine::endPass` |
+| Readable outputs | the **color** of an earlier render target, through its bindless index, and with `occlusionCulling` its **depth** (`builder.readDepth(target)` / `readSwapchainDepth()`, `engine.getRenderTargetDepthTexture`; the graph makes the pass before store it) | `Engine::endPass`, `RenderGraph::compile` |
 | Ordering | from `builder.read`/`write` only, topologically sorted. The graph adds a global `memoryBarrier` before every compute pass and before the first graphics pass after one, plus the render target begin/end transitions. Dependent dispatches inside one compute pass need `ctx.memoryBarrier(COMPUTE, COMPUTE)` between them | `RenderGraph::compile` |
-| Camera | `execute(camera)` passes it to `beginFrame` (input and delta time); each pass picks its own camera for `drawScene` | `RenderGraph::execute` |
+| Camera | `execute(camera)` passes it to `beginFrame` (input and delta time); each `addScenePasses` call names its own camera | `RenderGraph::execute` |
 
 If a design needs to go past a limit (blending, more push constants, depth reads, MRT), that's an
 RHI/engine change: propose it in a sentence and wait (CLAUDE.md).

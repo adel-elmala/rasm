@@ -8,7 +8,7 @@ RASM is an early-stage C++20 GPU-driven rendering engine (static lib target `ras
 
 ## Docs — read the relevant one before changing code
 
-- [docs/architecture.md](docs/architecture.md) — how the engine works today: handles/registries, `RenderContext` dedup caches, frame loop, the GPU-driven path (GPU scene tables, `syncGpuScene`, `drawScene`), CPU↔GPU struct contract, materials/bindless, asset import, render graph, limits.
+- [docs/architecture.md](docs/architecture.md) — how the engine works today: handles/registries, `RenderContext` dedup caches, frame loop, the GPU-driven path (GPU scene tables, `syncGpuScene`, the scene passes of `addScenePasses`), CPU↔GPU struct contract, materials/bindless, asset import, render graph, limits.
 - [docs/coding_style.md](docs/coding_style.md) — naming, headers, formatting (aligned `// clang-format off` headers), error handling, Vulkan and Slang rules.
 - [docs/code_review.md](docs/code_review.md) — known bugs/design issues with IDs (`B1`, `D4`, `P1`, `C3`, ...). Check it before "fixing" odd behaviour; reference IDs in commits.
 - [docs/development_plan.md](docs/development_plan.md) — phased roadmap; phase 0 (stabilization) comes first.

@@ -128,22 +128,21 @@
   <tr><td>Material<br><code>MaterialData</code>, 84 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>MAX_MATERIALS</code> = 256; row = material handle index</td><td><code>writeMaterialRow</code></td></tr>
   <tr><td>Instance<br><code>InstanceData</code>, 108 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>maxInstances</code> (2<sup>16</sup>), bump-allocated</td><td><code>writeInstanceRows</code></td></tr>
   <tr><td>Draw list<br><code>DrawInfo</code>, 20 B</td><td><code>buffers</code> in <code>SceneDrawList</code>, one per frame slot and scene</td><td>grows ×2 when too small</td><td><code>rebuildDrawList</code>, then <code>uploadDrawList</code></td></tr>
-  <tr><td>Visible draws</td><td><code>visibleDraws</code>, per frame slot and <code>drawScene</code> call</td><td>grows ×2 when too small; culling's scratch follows the draws</td><td>the GPU: <code>writeMain</code> packs the kept draws (<a href="stream-compaction.html#in-rasm">stream compaction</a>)</td></tr>
-  <tr><td>Draw counts</td><td><code>drawCounts</code>, one per frame slot</td><td><code>MAX_DRAW_RUNS</code> per <code>drawScene</code> call</td><td>the GPU (<code>writeMain</code>)</td></tr>
-  <tr><td>Visibility</td><td><code>visibility</code>, one per <code>drawScene</code> call, shared by both frame slots</td><td><code>maxInstances</code> <code>uint32_t</code>s, one per instance row, 0 at start</td><td>the GPU (late <code>countMain</code>, <a href="occlusion-culling.html#in-rasm">occlusion culling</a>)</td></tr>
-  <tr><td>Hi-Z</td><td><code>hiz</code>, per frame slot and <code>drawScene</code> call</td><td><code>float</code>s, all levels of the pass's size; grows when the pass is bigger</td><td>the GPU (<code>hizMain</code>)</td></tr>
-  <tr><td>Scene data</td><td><code>sceneData</code>, one per frame slot, <code>hostVisible</code></td><td><code>MAX_SCENE_DRAWS_PER_FRAME</code> = 8 <code>SceneData</code></td><td><code>drawScene</code>, every call</td></tr>
+  <tr><td>Visible draws</td><td><code>visibleDraws</code> in <code>SceneView</code>, per frame slot and scene view</td><td>grows ×2 in place (<code>resizeBuffer</code>, same handle) when too small; culling's scratch and the draw counts (<code>MAX_DRAW_RUNS</code> <code>uint32_t</code>s, written by <code>writeMain</code>) follow the draws</td><td>the GPU: <code>writeMain</code> packs the kept draws (<a href="stream-compaction.html#in-rasm">stream compaction</a>)</td></tr>
+  <tr><td>Visibility</td><td><code>visibility</code> in <code>SceneView</code>, one per scene view, shared by both frame slots</td><td><code>maxInstances</code> <code>uint32_t</code>s, one per instance row, 0 at start</td><td>the GPU (late <code>countMain</code>, <a href="occlusion-culling.html#in-rasm">occlusion culling</a>)</td></tr>
+  <tr><td>Hi-Z</td><td><code>hiz</code> in <code>SceneView</code>, per frame slot and scene view</td><td><code>float</code>s, all levels of the target's size; grows in place when the target is bigger</td><td>the GPU (<code>hizMain</code>)</td></tr>
+  <tr><td>Scene data</td><td><code>sceneData</code>, one per frame slot, <code>hostVisible</code></td><td><code>MAX_SCENE_VIEWS</code> = 8 <code>SceneData</code>, one per scene view</td><td><code>prepareSceneView</code>, every frame, at the start of the view's <code>Cull</code> pass</td></tr>
 </table>
 </div>
 
-<p>All of these are created once, in <code>createGpuScene</code> and <code>GeometryPool::create</code>, except the draw-list, visible-draw and Hi-Z buffers, which grow on demand. How a <code>GpuTable</code> uploads only its dirty rows, per frame slot, is in <a href="gpu-memory.html#in-rasm">GPU memory and uploads</a>.</p>
+<p>All of these are created once, in <code>createGpuScene</code> and <code>GeometryPool::create</code>, except the draw-list buffers, which grow on demand, and the buffers of a scene view. A scene view is one (scene, camera, target) that <code>addScenePasses</code> draws; it is made the first time a graph adds its passes (<code>createSceneView</code>), and its visible-draw and Hi-Z buffers start small and grow in place, so the handles the passes declared stay valid. How a <code>GpuTable</code> uploads only its dirty rows, per frame slot, is in <a href="gpu-memory.html#in-rasm">GPU memory and uploads</a>.</p>
 
 <h3>How a shader finds the tables</h3>
 
-<p>No table is bound. The push constant points to this call's <code>SceneData</code>, and <code>SceneData</code> points to every table of this frame slot. So a shader follows two pointers to reach any row (<a href="device-addresses.html#in-rasm">Buffer device addresses</a>).</p>
+<p>No table is bound. The push constant points to this scene view's <code>SceneData</code>, and <code>SceneData</code> points to every table of this frame slot. So a shader follows two pointers to reach any row (<a href="device-addresses.html#in-rasm">Buffer device addresses</a>).</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="The push constant holds the address of this drawScene call's SceneData. SceneData holds one pointer per table: vertsPtr to the vertex pool, geometryPtr to the geometry table, instancesPtr and materialsPtr to this slot's instance and material tables, allDrawsPtr to the scene's draw list, drawInfoPtr to the call's visible draws, drawCountsPtr to its draw counts, visibilityPtr and hizPtr to its visibility flags and Hi-Z.">
+  <svg viewBox="0 0 760 330" role="img" aria-label="The push constant holds the address of this scene view's SceneData. SceneData holds one pointer per table: vertsPtr to the vertex pool, geometryPtr to the geometry table, instancesPtr and materialsPtr to this slot's instance and material tables, allDrawsPtr to the scene's draw list, drawInfoPtr to the view's visible draws, drawCountsPtr to its draw counts, visibilityPtr and hizPtr to its visibility flags and Hi-Z.">
     <rect x="20" y="130" width="160" height="70" rx="6" class="cpu"/>
     <text x="100" y="152" class="mid title">PushConstants</text>
     <text x="100" y="172" class="mid mono">scene</text>
@@ -152,7 +151,7 @@
 
     <rect x="230" y="20" width="210" height="290" rx="6" class="mem"/>
     <text x="335" y="40" class="mid title">SceneData</text>
-    <text x="335" y="56" class="mid small">one per drawScene call</text>
+    <text x="335" y="56" class="mid small">one per scene view</text>
     <text x="246" y="84"  class="mono">vertsPtr</text>
     <text x="246" y="110" class="mono">geometryPtr</text>
     <text x="246" y="136" class="mono">instancesPtr</text>
@@ -178,10 +177,10 @@
     <rect x="520" y="122" width="220" height="22" rx="4" class="mem"/><text x="530" y="137" class="small">Instance table, this slot</text>
     <rect x="520" y="148" width="220" height="22" rx="4" class="mem"/><text x="530" y="163" class="small">Material table, this slot</text>
     <rect x="520" y="174" width="220" height="22" rx="4" class="mem"/><text x="530" y="189" class="small">the scene's draw list, this slot</text>
-    <rect x="520" y="200" width="220" height="22" rx="4" class="mem"/><text x="530" y="215" class="small">visible draws, this call</text>
-    <rect x="520" y="226" width="220" height="22" rx="4" class="mem"/><text x="530" y="241" class="small">draw counts, this call's part</text>
-    <rect x="520" y="252" width="220" height="22" rx="4" class="mem"/><text x="530" y="267" class="small">visibility flags, this call</text>
-    <rect x="520" y="278" width="220" height="22" rx="4" class="mem"/><text x="530" y="293" class="small">Hi-Z, this call</text>
+    <rect x="520" y="200" width="220" height="22" rx="4" class="mem"/><text x="530" y="215" class="small">visible draws, this view</text>
+    <rect x="520" y="226" width="220" height="22" rx="4" class="mem"/><text x="530" y="241" class="small">draw counts, this view's part</text>
+    <rect x="520" y="252" width="220" height="22" rx="4" class="mem"/><text x="530" y="267" class="small">visibility flags, this view</text>
+    <rect x="520" y="278" width="220" height="22" rx="4" class="mem"/><text x="530" y="293" class="small">Hi-Z, this view</text>
     <text x="520" y="40" class="small">The index pool is bound as the</text>
     <text x="520" y="54" class="small">index buffer, not reached by pointer.</text>
   </svg>
@@ -435,7 +434,7 @@
     <text x="404" y="196" class="mid small">run 1 · FRONT</text><text x="404" y="212" class="mid small">first 2, count 1</text>
     <text x="594" y="196" class="mid small">run 2 · BACK</text><text x="594" y="212" class="mid small">first 3, count 3</text>
   </svg>
-  <figcaption>The sort order is the order of the <code>CullMode</code> values. Within a run, draws keep their scene order. <code>drawScene</code> sets the cull mode and issues one indirect draw per run.</figcaption>
+  <figcaption>The sort order is the order of the <code>CullMode</code> values. Within a run, draws keep their scene order. <code>drawSceneView</code> sets the cull mode and issues one indirect draw per run.</figcaption>
 </figure>
 
 <p>A run is a <code>DrawRun</code> <code>{cullMode, first, count}</code>. There are at most <code>MAX_DRAW_RUNS</code> = 3 runs, one per cull mode (a <code>static_assert</code> ties the two together). A draw is skipped, with a warning when the entity gets its rows, if its sub-mesh has no vertices or no indices.</p>
@@ -453,7 +452,7 @@
 <ol class="steps">
   <li><b>Rebuild sets <code>staleSlots</code> to both bits.</b> The CPU list in <code>draws</code> is now newer than both slot buffers.</li>
   <li><b>Each slot uploads in its own frame.</b> <code>uploadDrawList</code> writes <code>draws</code> into <code>buffers[frame]</code> and clears that slot's bit. If the buffer is too small, it destroys it and creates one with <code>max(drawCount, capacity × 2)</code> rows. Only this slot's last frame used the old buffer, and the fence wait covered it.</li>
-  <li><b><code>drawScene</code> skips a list that is not ready.</b> If the list is empty, or this slot's bit is still set (the upload failed), the scene draws nothing this frame and the pass keeps its clear color.</li>
+  <li><b><code>prepareSceneView</code> skips a list that is not ready.</b> If the list is empty, or this slot's bit is still set (the upload failed), the scene passes record nothing this frame and the target keeps its clear color.</li>
 </ol>
 
 <h2><span class="n">5</span>The cull mode of a row</h2>
@@ -510,7 +509,7 @@
   <tr><td><code>updateMaterial</code></td><td><code>writeMaterialRow</code>; <code>refreshEntitiesAfterMaterialChange</code> if <code>doubleSided</code> changed or a texture still loads</td><td>The material row (same row index, so no instance row changes). Draw lists of entities that change cull mode or start waiting.</td></tr>
   <tr><td>a texture load finishes</td><td><code>finishLoads</code> sets <code>texturesFinished</code></td><td>Draw lists of entities that become drawable.</td></tr>
   <tr><td>a mesh load finishes, or <code>createMesh</code></td><td><code>finishMeshLoad</code> or <code>createMesh</code>: <code>GeometryPool::upload</code>. The LODs were built before, by <code>buildMeshLods</code>.</td><td>The vertices, the indices of every LOD, and one geometry row per sub-mesh, once.</td></tr>
-  <tr><td><code>drawScene</code></td><td>fills one <code>SceneData</code></td><td>At once (the scene data buffer is <code>hostVisible</code>).</td></tr>
+  <tr><td><code>addScenePasses</code></td><td>finds or makes the scene view (<code>createSceneView</code>); its <code>Cull</code> pass calls <code>prepareSceneView</code>, which fills the view's <code>SceneData</code> every frame</td><td>At once (the scene data buffer is <code>hostVisible</code>).</td></tr>
 </table>
 </div>
 
@@ -521,14 +520,14 @@
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>State: tables, lists, draw lists</td><td><code>GpuScene</code>, <code>EntityDrawState</code>, <code>SceneDrawList</code>, <code>DrawRun</code> in <code>src/renderer/gpuScene.h</code></td></tr>
+  <tr><td>State: tables, lists, draw lists, scene views</td><td><code>GpuScene</code>, <code>EntityDrawState</code>, <code>SceneDrawList</code>, <code>DrawRun</code>, <code>SceneView</code> in <code>src/renderer/gpuScene.h</code></td></tr>
   <tr><td>Creating the tables</td><td><code>Engine::createGpuScene</code> in <code>src/renderer/gpuScene.cpp</code>; <code>GeometryPool::create</code> in <code>src/renderer/geometryPool.cpp</code></td></tr>
   <tr><td>The per-frame sync</td><td><code>Engine::syncGpuScene</code>, called from <code>Engine::beginFrame</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Rows</td><td><code>queueInstanceRows</code>, <code>writeInstanceRows</code>, <code>updateCullModes</code>, <code>writeMaterialRow</code>, <code>getCullMode</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Draw lists</td><td><code>addEntityToDrawList</code>, <code>markDrawListsDirty</code>, <code>rebuildDrawList</code>, <code>uploadDrawList</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Callers</td><td><code>src/scene/entity.cpp</code>, <code>src/scene/scene.cpp</code>, <code>src/assets/material.cpp</code></td></tr>
   <tr><td>Row structs</td><td><code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
-  <tr><td>Table pointers</td><td><code>Engine::drawScene</code> fills <code>SceneData</code> in <code>src/renderer/gpuScene.cpp</code>; read by <code>shaders/passes/rasm.slang</code> and <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>Table pointers</td><td><code>Engine::prepareSceneView</code> fills <code>SceneData</code> in <code>src/renderer/gpuScene.cpp</code>; read by <code>shaders/passes/rasm.slang</code> and <code>shaders/passes/cull.slang</code></td></tr>
   <tr><td>LODs of a mesh</td><td><code>buildMeshLods</code> in <code>src/assets/meshLod.cpp</code>; the rows in <code>GeometryPool::upload</code></td></tr>
 </table>
 </div>

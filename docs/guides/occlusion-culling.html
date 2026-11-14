@@ -1786,65 +1786,68 @@
 
 <h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
 
-<p>RASM uses the two-pass Hi-Z scheme from <a href="#two-pass">section 7</a>, inside every <code>drawScene</code> call. It is on by default; <code>EngineConfig::occlusionCulling</code> turns it off. Both culling passes run the same two compute dispatches, <code>countMain</code> and <code>writeMain</code> in <code>cull.slang</code> (see <a href="stream-compaction.html#in-rasm">stream compaction</a>), with a phase in the push constant: <code>CULL_EARLY</code> or <code>CULL_LATE</code>. The frustum test runs first in both (<a href="frustum-culling.html#in-rasm">frustum culling</a>).</p>
+<p>RASM uses the two-pass Hi-Z scheme from <a href="#two-pass">section 7</a>, in the scene passes of every scene view (a scene, a camera and a target). It is on by default; <code>EngineConfig::occlusionCulling</code> turns it off. Both culling passes run the same two compute dispatches, <code>countMain</code> and <code>writeMain</code> in <code>cull.slang</code> (see <a href="stream-compaction.html#in-rasm">stream compaction</a>), with a phase in the push constant: <code>CULL_EARLY</code> or <code>CULL_LATE</code>. The frustum test runs first in both (<a href="frustum-culling.html#in-rasm">frustum culling</a>).</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="Early cull runs before the frame and reads the visibility buffer. The early draws write the depth texture. The pass pauses: hizMain builds the Hi-Z buffer from the depth, and the late cull reads it and writes the visibility buffer. The pass resumes with its attachments loaded and the late draws run.">
-    <rect x="280" y="10" width="340" height="96" rx="8" class="zone"/>
-    <rect x="10"  y="30" width="125" height="58" rx="28" class="shader"/>
-    <text x="72"  y="54" class="mid title">Early cull</text>
-    <text x="72"  y="72" class="mid small">before the frame</text>
-    <line x1="135" y1="59" x2="153" y2="59" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+  <svg viewBox="0 0 760 270" role="img" aria-label="Five render graph passes in order: Cull 1, Scene 1, Hi-Z, Cull 2, Scene 2. Cull 1 reads the visibility buffer. Scene 1 writes the depth texture. Hi-Z reads the depth and writes the Hi-Z buffer. Cull 2 reads the Hi-Z buffer and writes the visibility buffer, which the next frame's Cull 1 reads.">
+    <rect x="4" y="6" width="752" height="104" rx="8" class="zone"/>
+    <text x="380" y="22" class="mid small">five render graph passes, in the frame's one command buffer</text>
 
-    <rect x="155" y="30" width="110" height="58" rx="6" class="gpu"/>
-    <text x="210" y="54" class="mid title">Early draws</text>
-    <text x="210" y="72" class="mid small">inside the pass</text>
-    <line x1="265" y1="59" x2="290" y2="59" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="10"  y="32" width="130" height="64" rx="28" class="shader"/>
+    <text x="75"  y="58" class="mid title">Cull 1</text>
+    <text x="75"  y="78" class="mid small">early cull</text>
+    <line x1="141" y1="64" x2="160" y2="64" class="arrow gpu" marker-end="url(#ah-gpu)"/>
 
-    <text x="450" y="24" class="mid small">pass paused: endRendering, depth → SAMPLED</text>
-    <rect x="292" y="34" width="140" height="58" rx="28" class="shader"/>
-    <text x="362" y="58" class="mid title">hizMain</text>
-    <text x="362" y="76" class="mid small">one dispatch per level</text>
-    <line x1="432" y1="63" x2="455" y2="63" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <rect x="457" y="34" width="150" height="58" rx="28" class="shader"/>
-    <text x="532" y="58" class="mid title">Late cull</text>
-    <text x="532" y="76" class="mid small">countMain + writeMain</text>
-    <line x1="620" y1="59" x2="638" y2="59" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="162" y="32" width="130" height="64" rx="6" class="gpu"/>
+    <text x="227" y="58" class="mid title">Scene 1</text>
+    <text x="227" y="78" class="mid small">early draws</text>
+    <line x1="293" y1="64" x2="312" y2="64" class="arrow gpu" marker-end="url(#ah-gpu)"/>
 
-    <rect x="640" y="30" width="110" height="58" rx="6" class="gpu"/>
-    <text x="695" y="54" class="mid title">Late draws</text>
-    <text x="695" y="72" class="mid small">resumed with LOAD</text>
+    <rect x="314" y="32" width="130" height="64" rx="28" class="shader"/>
+    <text x="379" y="58" class="mid title">Hi-Z</text>
+    <text x="379" y="78" class="mid small">hizMain per level</text>
+    <line x1="445" y1="64" x2="464" y2="64" class="arrow gpu" marker-end="url(#ah-gpu)"/>
 
-    <rect x="10"  y="150" width="125" height="46" rx="6" class="mem"/>
-    <text x="72"  y="170" class="mid">Visibility</text>
-    <text x="72"  y="187" class="mid small">u32 per instance row</text>
-    <line x1="72" y1="150" x2="72" y2="90" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="466" y="32" width="130" height="64" rx="28" class="shader"/>
+    <text x="531" y="58" class="mid title">Cull 2</text>
+    <text x="531" y="78" class="mid small">late cull</text>
+    <line x1="597" y1="64" x2="616" y2="64" class="arrow gpu" marker-end="url(#ah-gpu)"/>
 
-    <rect x="155" y="150" width="110" height="46" rx="6" class="mem"/>
-    <text x="210" y="170" class="mid">Depth texture</text>
-    <text x="210" y="187" class="mid small">the pass's depth</text>
-    <line x1="210" y1="88" x2="210" y2="148" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <line x1="265" y1="160" x2="330" y2="94" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="618" y="32" width="130" height="64" rx="6" class="gpu"/>
+    <text x="683" y="58" class="mid title">Scene 2</text>
+    <text x="683" y="78" class="mid small">late draws</text>
 
-    <rect x="300" y="150" width="125" height="46" rx="6" class="mem"/>
-    <text x="362" y="170" class="mid">Hi-Z</text>
-    <text x="362" y="187" class="mid small">all levels, one buffer</text>
-    <line x1="362" y1="92" x2="362" y2="148" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <line x1="425" y1="160" x2="490" y2="94" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="10"  y="160" width="130" height="46" rx="6" class="mem"/>
+    <text x="75"  y="180" class="mid">Visibility</text>
+    <text x="75"  y="197" class="mid small">u32 per instance row</text>
+    <line x1="75" y1="160" x2="75" y2="99" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="84"  y="134" class="small">readPrevious</text>
 
-    <path d="M560,92 V225 H100 V198" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
-    <text x="330" y="242" class="mid small">late cull writes 1 = seen, 0 = not seen; the next early cull reads it</text>
+    <rect x="162" y="160" width="130" height="46" rx="6" class="mem"/>
+    <text x="227" y="180" class="mid">Depth texture</text>
+    <text x="227" y="197" class="mid small">the target's depth</text>
+    <line x1="227" y1="96" x2="227" y2="158" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="292" y1="170" x2="343" y2="99" class="arrow mem" marker-end="url(#ah-mem)"/>
+
+    <rect x="314" y="160" width="130" height="46" rx="6" class="mem"/>
+    <text x="379" y="180" class="mid">Hi-Z</text>
+    <text x="379" y="197" class="mid small">all levels, one buffer</text>
+    <line x1="400" y1="96" x2="400" y2="158" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="444" y1="170" x2="495" y2="99" class="arrow mem" marker-end="url(#ah-mem)"/>
+
+    <path d="M560,96 V236 H110 V209" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
+    <text x="380" y="256" class="mid small">Cull 2 writes 1 = seen, 0 = not seen; the next frame's Cull 1 reads it</text>
   </svg>
-  <figcaption>One <code>drawScene</code> call. The early cull is in the cull command buffer that <code>Engine::endFrame</code> submits before the frame. Everything in the grey box is recorded by <code>Engine::recordOcclusionCulling</code>, in the middle of the frame's command buffer.</figcaption>
+  <figcaption>One scene view with <code>EngineConfig::occlusionCulling</code>. Each box is a render graph pass that <code>Engine::addScenePasses</code> adds. All five are recorded in the frame's one command buffer, in this order.</figcaption>
 </figure>
 
 <div class="table-wrap">
 <table>
   <tr><th></th><th>Early cull (<code>CULL_EARLY</code>)</th><th>Late cull (<code>CULL_LATE</code>)</th></tr>
-  <tr><td>Recorded by</td><td><code>Engine::recordCulling</code>, in the cull command buffer</td><td><code>Engine::recordOcclusionCulling</code>, between the early and late draws</td></tr>
+  <tr><td>Pass</td><td><code>Cull 1</code>: <code>prepareSceneView</code>, then <code>recordSceneCulling</code></td><td><code>Cull 2</code>: <code>recordSceneCulling</code>, after the <code>Hi-Z</code> pass</td></tr>
   <tr><td>Keeps a draw when</td><td>it is in the frustum and its visibility flag is 1</td><td>it is in the frustum, <code>isOccluded</code> says no, <b>and</b> the early cull did not keep it</td></tr>
   <tr><td>Writes visibility</td><td>no</td><td>yes, for every draw in the frustum: 1 if not occluded, else 0</td></tr>
-  <tr><td>Output</td><td colspan="2">the same visible draw lists and counts; the late draws repeat the early draws' indirect calls, which now read the late lists</td></tr>
+  <tr><td>Output</td><td colspan="2">the view's same visible draw list and counts; <code>Scene 2</code> repeats the indirect calls of <code>Scene 1</code>, which now read the late list</td></tr>
 </table>
 </div>
 
@@ -1951,40 +1954,61 @@
   <li>Read the 4 corner texels of the range, take the min (the farthest), and return <code class="lang-text">nearestDepth &lt; farthest</code>.</li>
 </ol>
 
-<h3>Pausing the pass</h3>
+<h3>The passes in the frame</h3>
 
-<p>The Hi-Z needs the early draws' depth, but those draws are inside a render pass, where Vulkan allows no dispatches. So <code>Engine::recordOcclusionCulling</code> ends the pass, runs the compute work, and begins it again:</p>
+<p>The Hi-Z needs the early draws' depth, but draws run inside a render pass, where Vulkan allows no dispatches. So the scene is five render graph passes, not one. Each pass declares what it reads and writes, and the graph records the barriers between passes from that:</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 200" role="img" aria-label="Frame command buffer for one pass. beginPass with storeDepth. Early draws. Then, inside the Hi-Z timer: endRendering, depth to SAMPLED, a barrier, hizMain per level, the late cull, a barrier, depth back to the depth attachment, color to the color attachment, beginRendering with load. Then the late draws and endPass.">
-    <rect x="10" y="40" width="100" height="56" rx="6" class="cpu"/>
-    <text x="60" y="62" class="mid title">beginPass</text>
-    <text x="60" y="80" class="mid mono small">storeDepth</text>
-    <rect x="114" y="40" width="80" height="56" rx="6" class="gpu"/>
-    <text x="154" y="62" class="mid title">early</text>
-    <text x="154" y="80" class="mid small">draws</text>
-    <rect x="200" y="20" width="440" height="110" rx="8" class="zone"/>
-    <text x="420" y="36" class="mid small t-hot">GPU timer "Hi-Z"</text>
-    <text x="212" y="60" class="mono small">endRendering</text>
-    <text x="212" y="78" class="mono small">depth → SAMPLED</text>
-    <text x="212" y="96" class="mono small">barrier</text>
-    <text x="340" y="60" class="mono small">hizMain × levels</text>
-    <text x="340" y="78" class="mono small">countMain (late)</text>
-    <text x="340" y="96" class="mono small">writeMain (late)</text>
-    <text x="340" y="114" class="small">barriers between</text>
-    <text x="480" y="60" class="mono small">depth → DEPTH</text>
-    <text x="480" y="78" class="mono small">color → COLOR</text>
-    <text x="480" y="96" class="mono small">beginRendering</text>
-    <text x="480" y="114" class="mono small">(load, storeDepth)</text>
-    <rect x="646" y="40" width="50" height="56" rx="6" class="gpu"/>
-    <text x="671" y="62" class="mid title">late</text>
-    <text x="671" y="80" class="mid small">draws</text>
-    <rect x="700" y="40" width="54" height="56" rx="6" class="cpu"/>
-    <text x="727" y="72" class="mid small">endPass</text>
-    <text x="10" y="160" class="small">beginPass clears color and depth. The resumed beginRendering loads them, so the early draws stay.</text>
-    <text x="10" y="178" class="small">Depth is stored at both ends: the Hi-Z needs it mid-pass, and a later drawScene call in the same pass needs it again.</text>
+  <svg viewBox="0 0 760 222" role="img" aria-label="The frame's command buffer: Cull 1 with prepareSceneView, countMain, a barrier and writeMain. A compute to graphics barrier. Scene 1 clears, draws the early draws and stores depth. Depth moves to SAMPLED. Hi-Z runs hizMain once per level with barriers between. A graphics and compute to compute barrier. Cull 2 runs the late countMain, a barrier and writeMain. A compute to graphics barrier and depth back to an attachment. Scene 2 loads color and depth and draws the late draws.">
+    <text x="10" y="18" class="small">the frame's command buffer, in graph order</text>
+
+    <rect x="10" y="30" width="128" height="110" rx="8" class="shader"/>
+    <text x="74" y="52" class="mid title">Cull 1</text>
+    <text x="74" y="74" class="mid mono small">prepareSceneView</text>
+    <text x="74" y="92" class="mid mono small">countMain</text>
+    <text x="74" y="110" class="mid small">barrier</text>
+    <text x="74" y="128" class="mid mono small">writeMain</text>
+
+    <rect x="163" y="30" width="128" height="110" rx="8" class="gpu"/>
+    <text x="227" y="52" class="mid title">Scene 1</text>
+    <text x="227" y="74" class="mid small">clears color, depth</text>
+    <text x="227" y="92" class="mid small">early draws</text>
+    <text x="227" y="110" class="mid small">stores depth</text>
+
+    <rect x="316" y="30" width="128" height="110" rx="8" class="shader"/>
+    <text x="380" y="52" class="mid title">Hi-Z</text>
+    <text x="380" y="74" class="mid small">hizMain, level 0</text>
+    <text x="380" y="92" class="mid small">barrier</text>
+    <text x="380" y="110" class="mid small">hizMain, level 1</text>
+    <text x="380" y="128" class="mid small">…</text>
+
+    <rect x="469" y="30" width="128" height="110" rx="8" class="shader"/>
+    <text x="533" y="52" class="mid title">Cull 2</text>
+    <text x="533" y="74" class="mid mono small">countMain</text>
+    <text x="533" y="92" class="mid small">barrier</text>
+    <text x="533" y="110" class="mid mono small">writeMain</text>
+    <text x="533" y="128" class="mid small">late phase</text>
+
+    <rect x="622" y="30" width="128" height="110" rx="8" class="gpu"/>
+    <text x="686" y="52" class="mid title">Scene 2</text>
+    <text x="686" y="74" class="mid small">loads color, depth</text>
+    <text x="686" y="92" class="mid small">late draws</text>
+
+    <line x1="150.5" y1="30" x2="150.5" y2="156" class="hot"/>
+    <line x1="303.5" y1="30" x2="303.5" y2="154" class="hot"/>
+    <line x1="456.5" y1="30" x2="456.5" y2="154" class="hot"/>
+    <line x1="609.5" y1="30" x2="609.5" y2="154" class="hot"/>
+    <text x="150" y="170" class="mid small t-hot">COMPUTE</text>
+    <text x="150" y="184" class="mid small t-hot">→ GRAPHICS</text>
+    <text x="303" y="170" class="mid small t-hot">depth</text>
+    <text x="303" y="184" class="mid small t-hot">→ SAMPLED</text>
+    <text x="456" y="170" class="mid small t-hot">GRAPHICS | COMPUTE</text>
+    <text x="456" y="184" class="mid small t-hot">→ COMPUTE</text>
+    <text x="609" y="170" class="mid small t-hot">COMPUTE → GRAPHICS</text>
+    <text x="609" y="184" class="mid small t-hot">depth → attachment</text>
+    <text x="10" y="212" class="small">Orange: barriers between passes, from what each pass declares. "barrier" in a box: one between two dispatches.</text>
   </svg>
-  <figcaption>The cost of the pause is a store and a load of the attachments, plus the barriers. The <code>"Hi-Z"</code> timer in the <a href="gpu-timing.html">frame stats</a> measures all of it.</figcaption>
+  <figcaption>Each box has its own GPU timer in the <a href="gpu-timing.html">frame stats</a>. <code>Scene 1</code> stores its depth because <code>Hi-Z</code> reads it (<code>PassBuilder::readDepth</code>, or <code>readSwapchainDepth</code> for the swapchain) and <code>Scene 2</code> loads it, so the early draws stay. In a frame whose <code>hizLevelCount</code> is 0, <code>Hi-Z</code>, <code>Cull 2</code> and <code>Scene 2</code> record nothing.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -1992,17 +2016,17 @@
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Source of depth</td><td>occluder prepass, reprojection or two-pass</td><td>Two-pass, per <code>drawScene</code> call.</td></tr>
-  <tr><td>History</td><td>one flag per object and view</td><td>One <code>uint</code> per instance row (a sub-mesh of an entity), in <code>GpuScene::visibility</code>, one buffer per <code>drawScene</code> call index. Both frame slots share it: the GPU runs the frames in order. Rows start at 0, so a new instance is drawn late first.</td></tr>
+  <tr><td>Source of depth</td><td>occluder prepass, reprojection or two-pass</td><td>Two-pass, per scene view.</td></tr>
+  <tr><td>History</td><td>one flag per object and view</td><td>One <code>uint</code> per instance row (a sub-mesh of an entity), in <code>SceneView::visibility</code>, one buffer per scene view, so a view always reads its own camera's history. Both frame slots share it: the GPU runs the frames in order. Rows start at 0, so a new instance is drawn late first.</td></tr>
   <tr><td>Late test</td><td>every object against the new Hi-Z</td><td>The same: every draw in the frustum, also the early ones, so their flag is fresh. Only the ones not drawn early are drawn late.</td></tr>
   <tr><td>Level 0</td><td>the depth buffer itself</td><td>Already half size. <code>hizMain</code> reads level 0 straight from the depth texture through the bindless set, so there is no full-size copy. A level-<var>L</var> texel covers 2<sup><var>L</var>+1</sup> pixels.</td></tr>
-  <tr><td>Storage</td><td>a mip-mapped texture</td><td>One buffer of <code>float</code>s with the levels back to back (<code>hizPtr</code>), one per frame slot and call. No sampler, no min/max reduction: 4 plain reads.</td></tr>
+  <tr><td>Storage</td><td>a mip-mapped texture</td><td>One buffer of <code>float</code>s with the levels back to back (<code>hizPtr</code>), one per frame slot and scene view (<code>SceneView::hiz</code>). It grows with the target. No sampler, no min/max reduction: 4 plain reads.</td></tr>
   <tr><td>Build</td><td>one dispatch per level, or single-pass</td><td>One dispatch per level, with a barrier after each.</td></tr>
   <tr><td>Odd sizes</td><td>round up and clamp, or read 3</td><td>Round up and clamp: the last texel reads its last row or column twice.</td></tr>
   <tr><td>Bound</td><td>box corners or exact sphere</td><td>The view-space box around the sphere, 8 corners. Works for perspective and orthographic cameras.</td></tr>
   <tr><td>Level choice</td><td>log<sub>2</sub> formula, or check the texel range</td><td>Checks the texel range, one level at a time, from level 0 up.</td></tr>
   <tr><td>Granularity</td><td>objects, clusters or triangles</td><td>Draws (one sub-mesh of one entity). No clusters.</td></tr>
-  <tr><td>When it is skipped</td><td>–</td><td>The call is only frustum culled (<code>hizLevelCount</code> = 0) when <code>EngineConfig::occlusionCulling</code> is false, when <code>hiz.slang</code> fails to compile, when the depth texture has no bindless slot, when the visibility or Hi-Z buffer cannot be created, or when the viewport is not the whole target with depth range 0 to 1.</td></tr>
+  <tr><td>When it is skipped</td><td>–</td><td>Without <code>EngineConfig::occlusionCulling</code> the view has only the passes <code>Cull</code> and <code>Scene</code>. With it, a frame is only frustum culled (<code>hizLevelCount</code> = 0) when <code>hiz.slang</code> fails to compile, when the depth texture has no bindless slot, or when the Hi-Z buffer cannot grow.</td></tr>
 </table>
 </div>
 
@@ -2016,10 +2040,13 @@
   <tr><td>Level sizes (CPU)</td><td><code>getHizLevelCount</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Hi-Z build</td><td><code>hizMain</code> in <code>shaders/passes/hiz.slang</code></td></tr>
   <tr><td>Early and late phases</td><td><code>countMain</code> in <code>shaders/passes/cull.slang</code>; <code>CULL_EARLY</code>, <code>CULL_LATE</code> there and in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>When to occlusion-cull, buffers</td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code>; <code>GpuScene::visibility</code>, <code>GpuScene::hiz</code> in <code>src/renderer/gpuScene.h</code></td></tr>
-  <tr><td>Early dispatches</td><td><code>Engine::recordCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Pause, Hi-Z, late dispatches, resume</td><td><code>Engine::recordOcclusionCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Depth stored and sampleable</td><td><code>Engine::beginPass</code>, <code>Engine::createSwapchainResources</code> in <code>src/engine.cpp</code>; <code>RenderContext::createRenderTarget</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>The five passes</td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Per-view buffers</td><td><code>SceneView::visibility</code>, <code>SceneView::hiz</code> in <code>src/renderer/gpuScene.h</code>; made by <code>Engine::createSceneView</code>, grown by <code>Engine::prepareSceneView</code></td></tr>
+  <tr><td>When to occlusion-cull this frame</td><td><code>Engine::prepareSceneView</code> (sets <code>hizLevelCount</code>)</td></tr>
+  <tr><td>Early and late dispatches</td><td><code>Engine::recordSceneCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Hi-Z dispatches</td><td><code>Engine::recordHiz</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Depth stored, moved to <code>SAMPLED</code></td><td><code>RenderGraph::assignAttachmentOps</code>, <code>PassBuilder::readDepth</code>, <code>PassBuilder::readSwapchainDepth</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>Depth sampleable</td><td><code>Engine::createSwapchainResources</code> in <code>src/engine.cpp</code>; <code>RenderContext::createAttachments</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>Switch</td><td><code>EngineConfig::occlusionCulling</code> in <code>include/rasm/types.h</code></td></tr>
   <tr><td>Shader inputs</td><td><code>hizPtr</code>, <code>visibilityPtr</code>, <code>hizLevelCount</code>, <code>depthTexture</code>, <code>viewportWidth</code>, <code>viewportHeight</code> in <code>SceneData</code> (<code>shaders/lib/core.slang</code>)</td></tr>
 </table>
@@ -2031,14 +2058,15 @@
     <li>The test must stay conservative. Compare the image with <code>EngineConfig::occlusionCulling</code> on and off: it must not change.</li>
     <li>Reversed-Z: the Hi-Z keeps the <b>min</b>, and a draw is occluded when its nearest depth is <b>smaller</b>.</li>
     <li><code>getHizLevelCount</code> and <code>getHizLevel</code> must agree on the level sizes. <code>HIZ_GROUP_SIZE</code>, <code>CULL_EARLY</code> and <code>CULL_LATE</code> are defined in a shader and in <code>gpuScene.cpp</code>: change both.</li>
-    <li>No dispatch or barrier inside a render pass: <code>RenderContext</code> refuses them. That is why the pass is paused.</li>
-    <li>A call should keep its camera from frame to frame. Two cameras that swap call order read each other's flags: still correct, but slower.</li>
+    <li>No dispatch or barrier inside a render pass: <code>RenderContext</code> refuses them. That is why the Hi-Z and the late culling are compute passes of their own.</li>
+    <li>A pass declares every buffer and depth it touches (<code>readPrevious</code> for the visibility flags in <code>Cull 1</code>): the graph records the barriers only from those declarations.</li>
+    <li>A view is one scene, camera and target, with its own flags, at most <code>MAX_SCENE_VIEWS</code> of them. A new camera or target is a new view, whose flags start at 0.</li>
   </ul>
 </div>
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>No cluster or triangle culling, no single-pass Hi-Z build, no min/max sampler. The early culling runs before all other GPU work of the frame (<code>D18</code> in <code>docs/code_review.md</code>). A draw that moves between the early and late pass can change which of two equal-depth surfaces wins (<code>B24</code> showed this, with a camera that moved by float noise).</p>
+  <p>No cluster or triangle culling, no single-pass Hi-Z build, no min/max sampler. A draw that moves between the early and late pass can change which of two equal-depth surfaces wins (<code>B24</code> showed this, with a camera that moved by float noise).</p>
 </div>
 
 <h3>Further reading</h3>

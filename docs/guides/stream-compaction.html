@@ -1005,7 +1005,7 @@ void compactMain(uint3 id : SV_DispatchThreadID)
     <text x="290" y="152" class="mid mono">drawIndexedIndirectCount</text>
     <text x="290" y="170" class="mid small">one per run, maximum = the run's size</text>
   </svg>
-  <figcaption>The pointers live in each <code>drawScene</code> call's <code>SceneData</code>. <code>cullSlotsPtr</code> and <code>groupCountsPtr</code> are scratch space in the same buffer as the visible draws, right after them.</figcaption>
+  <figcaption>The pointers live in each scene view's <code>SceneData</code>. <code>cullSlotsPtr</code> and <code>groupCountsPtr</code> are scratch space in the same buffer as the visible draws, right after them.</figcaption>
 </figure>
 
 <div class="split">
@@ -1065,38 +1065,34 @@ void compactMain(uint3 id : SV_DispatchThreadID)
 
 <h3>When it runs</h3>
 
-<p><code>drawScene</code> records its draws inside a render pass, and Vulkan does not allow dispatches there. So the early culling, both dispatches for every <code>drawScene</code> call of the frame, goes into its own <b>cull command buffer</b>. <code>Engine::recordCulling</code> records it at the end of the frame, and <code>Engine::endFrame</code> submits it first, in the same submit as the frame.</p>
+<p>The culling is a compute pass of the <a href="render-graphs.html">render graph</a>, <code>Cull</code>, before the pass that draws, <code>Scene</code>. <code>Engine::addScenePasses</code> adds both. <code>Cull</code> declares that it writes the visible draws and the draw counts, and <code>Scene</code> that it reads them, so the graph records one barrier between them. Inside <code>Cull</code>, <code>Engine::recordSceneCulling</code> records <code>countMain</code>, a <code>COMPUTE → COMPUTE</code> barrier and <code>writeMain</code>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="The CPU records the frame command buffer first and the cull command buffer second. One submit puts the cull command buffer first, so the GPU runs the culling, then a barrier, then the frame.">
-    <text x="20" y="54" class="title t-cpu">CPU</text>
-    <text x="20" y="70" class="small">records</text>
-    <rect x="120" y="25" width="300" height="56" rx="6" class="cpu"/>
-    <text x="270" y="48" class="mid title">Frame command buffer</text>
-    <text x="270" y="68" class="mid small">beginPass · drawScene · endPass</text>
-    <rect x="440" y="25" width="300" height="56" rx="6" class="cpu"/>
-    <text x="590" y="46" class="mid title">Cull command buffer</text>
-    <text x="590" y="62" class="mid small">per call: countMain · barrier · writeMain</text>
-    <text x="590" y="76" class="mid small">a barrier first and last</text>
-    <line x1="120" y1="12" x2="740" y2="12" class="arrow" marker-end="url(#ah)"/>
-    <text x="20" y="16" class="small">time →</text>
+  <svg viewBox="0 0 760 210" role="img" aria-label="The frame's command buffer: the Cull pass runs countMain, a barrier and writeMain and writes the visible draws and counts. The graph records a compute to graphics barrier. The Scene pass reads them with one drawIndexedIndirectCount per run.">
+    <text x="20" y="18" class="small">the frame's command buffer, in graph order</text>
 
-    <line x1="590" y1="81" x2="270" y2="160" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <line x1="270" y1="81" x2="590" y2="160" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="120" y="126" class="small">one submit: {cull, frame}</text>
+    <rect x="20" y="30" width="260" height="80" rx="8" class="shader"/>
+    <text x="150" y="54" class="mid title">Cull (compute)</text>
+    <text x="150" y="76" class="mid mono small">countMain · barrier · writeMain</text>
+    <text x="150" y="96" class="mid small">for one scene view</text>
 
-    <text x="20" y="194" class="title t-gpu">GPU</text>
-    <text x="20" y="210" class="small">runs</text>
-    <rect x="120" y="165" width="290" height="56" rx="6" class="gpu"/>
-    <text x="265" y="188" class="mid title">Culling</text>
-    <text x="265" y="208" class="mid small">writes visible draws + counts</text>
-    <line x1="425" y1="160" x2="425" y2="226" class="hot"/>
-    <text x="425" y="242" class="mid small t-hot">COMPUTE → GRAPHICS | HOST barrier</text>
-    <rect x="440" y="165" width="300" height="56" rx="6" class="gpu"/>
-    <text x="590" y="188" class="mid title">Frame</text>
-    <text x="590" y="208" class="mid small">draws read those draws + counts</text>
+    <line x1="380" y1="26" x2="380" y2="116" class="hot"/>
+    <text x="380" y="134" class="mid small t-hot">COMPUTE → GRAPHICS</text>
+    <text x="380" y="148" class="mid small t-hot">recorded by the graph</text>
+
+    <rect x="480" y="30" width="260" height="80" rx="8" class="gpu"/>
+    <text x="610" y="54" class="mid title">Scene (graphics)</text>
+    <text x="610" y="76" class="mid mono small">drawIndexedIndirectCount</text>
+    <text x="610" y="96" class="mid small">one per run</text>
+
+    <rect x="250" y="162" width="260" height="40" rx="6" class="mem"/>
+    <text x="380" y="187" class="mid">visible draws + draw counts</text>
+    <line x1="190" y1="110" x2="248" y2="170" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="512" y1="170" x2="570" y2="113" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="196" y="150" class="end small">writes</text>
+    <text x="566" y="150" class="small">reads</text>
   </svg>
-  <figcaption>Recording order and GPU order are opposite. The draws only need the buffers' addresses when they are recorded, not their contents. The late half of <a href="occlusion-culling.html#in-rasm">occlusion culling</a> runs the same two dispatches again, inside the frame.</figcaption>
+  <figcaption>Both passes are in the frame's one command buffer, in the graph's order. With <a href="occlusion-culling.html#in-rasm">occlusion culling</a> they are <code>Cull 1</code> and <code>Scene 1</code>, and <code>Cull 2</code> runs the same two dispatches again after the Hi-Z.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -1111,7 +1107,7 @@ void compactMain(uint3 id : SV_DispatchThreadID)
   <tr><td>Segments</td><td>separate counts per list, or a segmented scan</td><td>Groups never cross a run (<code>getCullGroup</code>), and each run has its own count in <code>drawCountsPtr</code>.</td></tr>
   <tr><td>Count</td><td>written by the last group, or an atomic counter</td><td>Written by thread 0 of the run's last group, every frame. Nothing is cleared.</td></tr>
   <tr><td>Atomics</td><td>for positions, in the unordered methods</td><td>Only for the frame statistics (<code>cullStatsPtr</code>, with <code>InterlockedAdd</code>), never for positions.</td></tr>
-  <tr><td>Capacity</td><td>the worst case</td><td>The visible draw buffer holds at least as many draws as the draw list, then the scratch (<code>visibleCapacity</code> in <code>Engine::drawScene</code>).</td></tr>
+  <tr><td>Capacity</td><td>the worst case</td><td>The visible draw buffer holds at least as many draws as the draw list, then the scratch. It grows in <code>Engine::prepareSceneView</code> (<code>SceneView::visibleCapacity</code>).</td></tr>
   <tr><td>What is copied</td><td>the item</td><td>The <code>DrawInfo</code>, with the index range of the LOD that <code>countMain</code> chose (<a href="lod-selection.html">LOD selection</a>). The LOD rides in the high bits of the slot.</td></tr>
 </table>
 </div>
@@ -1125,9 +1121,9 @@ void compactMain(uint3 id : SV_DispatchThreadID)
   <tr><td>Base from earlier groups, scatter, run count</td><td><code>writeMain</code> in <code>shaders/passes/cull.slang</code></td></tr>
   <tr><td>Which run and range a group covers</td><td><code>getCullGroup</code> in <code>shaders/passes/cull.slang</code></td></tr>
   <tr><td>Group size</td><td><code>CULL_GROUP_SIZE</code> in <code>shaders/passes/cull.slang</code> and <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Scratch pointers, buffer size, group count per call</td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code> (<code>cullGroupCounts</code>)</td></tr>
-  <tr><td>Recording the dispatches and barriers</td><td><code>Engine::recordCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Submit order {cull, frame}</td><td><code>Engine::endFrame</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Scratch pointers, buffer size, group count per view</td><td><code>Engine::prepareSceneView</code>, <code>getVisibleDrawBufferSize</code> in <code>src/renderer/gpuScene.cpp</code> (<code>SceneView::groupCount</code>)</td></tr>
+  <tr><td>Recording the dispatches and the barrier between them</td><td><code>Engine::recordSceneCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>The <code>Cull</code> and <code>Scene</code> passes</td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Runs of one cull mode</td><td><code>Engine::rebuildDrawList</code> in <code>src/renderer/gpuScene.cpp</code>, <code>DrawRun</code> in <code>src/renderer/gpuScene.h</code></td></tr>
   <tr><td>The pointers</td><td><code>SceneData</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
 </table>
@@ -1136,8 +1132,8 @@ void compactMain(uint3 id : SV_DispatchThreadID)
 <div class="callout rule">
   <strong>Keep these true</strong>
   <ul>
-    <li><code>CULL_GROUP_SIZE</code> is defined in <code>cull.slang</code> and in <code>gpuScene.cpp</code>. Change both, and the scratch size in <code>Engine::drawScene</code> (one count per group, at most one group per 64 draws plus one per run).</li>
-    <li>A group must never cross a run. <code>getCullGroup</code> and the CPU's group count in <code>Engine::drawScene</code> must agree.</li>
+    <li><code>CULL_GROUP_SIZE</code> is defined in <code>cull.slang</code> and in <code>gpuScene.cpp</code>. Change both, and the scratch size in <code>getVisibleDrawBufferSize</code> (one count per group, at most one group per 64 draws plus one per run).</li>
+    <li>A group must never cross a run. <code>getCullGroup</code> and the CPU's group count in <code>Engine::prepareSceneView</code> must agree.</li>
     <li>Threads past the end of a run still reach every barrier, with <code>visible</code> = false. Do not return early in <code>countMain</code> or <code>writeMain</code>.</li>
     <li>The count must be written every time the culling runs, by the run's last group. Nothing clears it.</li>
     <li>A new pointer in <code>SceneData</code> is a CPU↔GPU struct change: follow <a href="struct-layout.html">the struct layout rules</a>.</li>
@@ -1146,7 +1142,7 @@ void compactMain(uint3 id : SV_DispatchThreadID)
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>No wave intrinsics and no hierarchical scan: the cost above grows with the square of the group count. The early culling runs before every other GPU work of the frame, compute passes of the <a href="render-graphs.html">render graph</a> included (<code>D18</code> in <code>docs/code_review.md</code>).</p>
+  <p>No wave intrinsics and no hierarchical scan: the cost above grows with the square of the group count.</p>
 </div>
 
 <h3>Further reading</h3>

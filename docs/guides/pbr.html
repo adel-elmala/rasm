@@ -708,7 +708,7 @@ cos θ = v·h  (the same as l·h)</code></pre>
   <tr><td>Material branch, UV sets, back faces</td><td><code>fragMain</code> in <code>shaders/passes/rasm.slang</code></td></tr>
   <tr><td>GPU light and material structs</td><td><code>Light</code>, <code>LightType</code>, <code>Material</code>, <code>MaterialData</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
   <tr><td>Public light type</td><td><code>Light</code>, <code>LightType</code>, <code>MAX_LIGHTS</code> in <code>include/rasm/light.h</code>; <code>Engine::createLight</code> in <code>src/scene/light.cpp</code></td></tr>
-  <tr><td>Lights into the scene data</td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Lights into the scene data</td><td><code>Engine::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Material factors and defaults</td><td><code>Engine::createMaterial</code> and <code>loadMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
 </table>
 </div>

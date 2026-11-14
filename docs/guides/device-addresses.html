@@ -274,7 +274,7 @@ void update(uint index)
 <p>RASM binds no buffer through a descriptor. Every buffer gets a device address at creation, and shaders reach all scene data from one root pointer in a 16-byte push constant: the pattern of section 5. Textures go through the bindless descriptor set.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 400" role="img" aria-label="The push constant holds scene, firstDraw and argument. scene points to one SceneData in the Scene Data Buffer of this frame slot, at slot address plus call times 768. SceneData holds twelve pointers: vertsPtr to the geometry vertex pool, drawInfoPtr to the visible draw buffer, instancesPtr and materialsPtr to this slot's tables, geometryPtr to the geometry table, allDrawsPtr to the draw info buffer, drawCountsPtr into the draw count buffer, cullSlotsPtr and groupCountsPtr into the visible draw buffer after the draws, cullStatsPtr, visibilityPtr and hizPtr.">
+  <svg viewBox="0 0 760 400" role="img" aria-label="The push constant holds scene, firstDraw and argument. scene points to one SceneData in the Scene Data Buffer of this frame slot, at slot address plus view index times 768. SceneData holds twelve pointers: vertsPtr to the geometry vertex pool, drawInfoPtr to the visible draw buffer, instancesPtr and materialsPtr to this slot's tables, geometryPtr to the geometry table, allDrawsPtr to the draw info buffer, drawCountsPtr, cullSlotsPtr and groupCountsPtr into the visible draw buffer after the draws, cullStatsPtr, visibilityPtr and hizPtr.">
     <rect x="20" y="160" width="150" height="76" rx="6" class="box"/>
     <text x="95" y="182" class="mid title">PushConstants</text>
     <text x="95" y="202" class="mid mono small">scene</text>
@@ -283,7 +283,7 @@ void update(uint index)
 
     <rect x="210" y="20" width="200" height="370" rx="6" class="mem"/>
     <text x="310" y="42" class="mid title">SceneData</text>
-    <text x="310" y="58" class="mid small">768 bytes, one per drawScene call</text>
+    <text x="310" y="58" class="mid small">768 bytes, one per scene view</text>
     <text x="226" y="84" class="small">projection, view, camera,</text>
     <text x="226" y="100" class="small">lights, frustum planes, ...</text>
     <text x="226" y="128" class="mono small">vertsPtr</text>
@@ -309,26 +309,26 @@ void update(uint index)
     <rect x="510" y="201" width="230" height="22" rx="3" class="mem"/><text x="625" y="216" class="mid small">Geometry Table</text>
     <line x1="350" y1="234" x2="508" y2="234" class="arrow" marker-end="url(#ah)"/>
     <rect x="510" y="223" width="230" height="22" rx="3" class="mem"/><text x="625" y="238" class="mid small">Draw Info Buffer, this slot</text>
-    <line x1="350" y1="256" x2="508" y2="256" class="arrow" marker-end="url(#ah)"/>
-    <rect x="510" y="245" width="230" height="22" rx="3" class="mem"/><text x="625" y="260" class="mid small">Draw Count Buffer + call offset</text>
 
-    <rect x="510" y="20" width="230" height="84" rx="4" class="mem"/>
-    <text x="625" y="38" class="mid small title">Visible Draw Buffer (one buffer)</text>
-    <rect x="522" y="46" width="206" height="16" rx="2" class="box"/><text x="625" y="58" class="mid small">draws: capacity × 20 B</text>
-    <rect x="522" y="64" width="206" height="16" rx="2" class="box"/><text x="625" y="76" class="mid small">cull slots: capacity × 4 B</text>
-    <rect x="522" y="82" width="206" height="16" rx="2" class="box"/><text x="625" y="94" class="mid small">group counts</text>
-    <path d="M330,146 H470 V54 H520" class="arrow" marker-end="url(#ah)"/>
-    <path d="M350,278 H480 V72 H520" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <path d="M360,300 H490 V90 H520" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <rect x="510" y="20" width="230" height="88" rx="4" class="mem"/>
+    <text x="625" y="35" class="mid small title">Visible Draw Buffer, this slot</text>
+    <rect x="522" y="40" width="206" height="15" rx="2" class="box"/><text x="625" y="51" class="mid small">draws: capacity × 20 B</text>
+    <rect x="522" y="56" width="206" height="15" rx="2" class="box"/><text x="625" y="67" class="mid small">cull slots: capacity × 4 B</text>
+    <rect x="522" y="72" width="206" height="15" rx="2" class="box"/><text x="625" y="83" class="mid small">group counts</text>
+    <rect x="522" y="88" width="206" height="15" rx="2" class="box"/><text x="625" y="99" class="mid small">draw counts: one per run</text>
+    <path d="M330,146 H470 V47 H520" class="arrow" marker-end="url(#ah)"/>
+    <path d="M350,256 H500 V95 H520" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <path d="M350,278 H480 V63 H520" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <path d="M360,300 H490 V79 H520" class="arrow hot" marker-end="url(#ah-hot)"/>
 
     <rect x="510" y="300" width="230" height="22" rx="3" class="mem"/><text x="625" y="315" class="mid small">Cull Stats Buffer, this slot</text>
     <line x1="340" y1="322" x2="508" y2="312" class="arrow" marker-end="url(#ah)"/>
-    <rect x="510" y="330" width="230" height="22" rx="3" class="mem"/><text x="625" y="345" class="mid small">Visibility Buffer, this call</text>
+    <rect x="510" y="330" width="230" height="22" rx="3" class="mem"/><text x="625" y="345" class="mid small">Visibility Buffer, this view</text>
     <line x1="340" y1="344" x2="508" y2="341" class="arrow" marker-end="url(#ah)"/>
-    <rect x="510" y="360" width="230" height="22" rx="3" class="mem"/><text x="625" y="375" class="mid small">Hi-Z Buffer, this slot and call</text>
+    <rect x="510" y="360" width="230" height="22" rx="3" class="mem"/><text x="625" y="375" class="mid small">Hi-Z Buffer, this slot</text>
     <line x1="300" y1="366" x2="508" y2="371" class="arrow" marker-end="url(#ah)"/>
   </svg>
-  <figcaption>Twelve pointers. The two orange ones are computed on the CPU by pointer math into one buffer (section 5, "sub-arrays"). The last five are set only for a culled call (the normal case), and the last two only with occlusion culling. Otherwise they stay 0. <code>drawInfoPtr</code> points at the visible draws of a culled call, and at the whole draw list otherwise.</figcaption>
+  <figcaption>Twelve pointers. The three orange ones are computed on the CPU by pointer math into one buffer (section 5, "sub-arrays"). The last six are set only for a culled view (the normal case), and the last two only with occlusion culling. Otherwise they stay 0. <code>drawInfoPtr</code> points at the visible draws of a culled view, and at the whole draw list otherwise. The visible draws, the visibility flags and the Hi-Z belong to the scene view (<code>SceneView</code>).</figcaption>
 </figure>
 
 <p>The vertex shader in <code>shaders/passes/rasm.slang</code> follows the chain like this (spacing changed):</p>
@@ -337,7 +337,7 @@ void update(uint index)
 InstanceData *instance = pc.scene-&gt;instancesPtr + draw-&gt;firstInstance;
 VertexFull vert = pc.scene-&gt;vertsPtr[input.vertexID + draw-&gt;vertexOffset];</code></pre>
 
-<p>And <code>drawScene</code> in <code>src/renderer/gpuScene.cpp</code> does the CPU-side pointer math for the sub-arrays (line breaks added):</p>
+<p>And <code>Engine::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code> does the CPU-side pointer math for the sub-arrays (line breaks added):</p>
 
 <pre><code>sceneData.cullSlotsPtr =
     sceneData.drawInfoPtr + static_cast&lt;uint64_t&gt;(visibleCapacity) * sizeof(gfx::DrawInfo);
@@ -352,9 +352,9 @@ sceneData.groupCountsPtr =
   <tr><td>Enabling it</td><td>feature + usage bit + memory flag</td><td>The device requires <var>bufferDeviceAddress</var>, <var>shaderInt64</var> and <var>scalarBlockLayout</var>. <code>toVkBufferUsageFlags</code> adds the device-address bit to <b>every</b> buffer. The VMA allocator is created with <code>VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT</code>, which handles the memory flag.</td></tr>
   <tr><td>Asking once</td><td>keep the address</td><td><code>VulkanDevice::createBuffer</code> calls <code>vkGetBufferDeviceAddress</code> once and stores it in <code>Buffer::deviceAddress</code>. <code>RenderContext::getBufferDeviceAddress</code> returns it, or logs an error and returns 0.</td></tr>
   <tr><td>Root pointer</td><td>a push constant with one pointer</td><td><code>PushConstants</code>: <code>scene</code> (8 bytes), plus <code>firstDraw</code> and <code>argument</code>: 16 bytes, <code>PUSH_CONSTANTS_SIZE</code>.</td></tr>
-  <tr><td>Frame struct</td><td>one per frame or view</td><td>One <code>SceneData</code> per <code>drawScene</code> call. Each frame slot has one "Scene Data Buffer" with room for <code>MAX_SCENE_DRAWS_PER_FRAME</code> = 8 of them; call <var>c</var> uses the buffer's address + <var>c</var> × 768.</td></tr>
-  <tr><td>Sub-arrays</td><td>base + size of what comes before</td><td><code>cullSlotsPtr</code> and <code>groupCountsPtr</code> point into the visible draw buffer; <code>drawCountsPtr</code> adds the call's offset into the draw count buffer.</td></tr>
-  <tr><td>Stale addresses</td><td>write them again every frame</td><td>The same: <code>drawScene</code> writes every address in every call, from the current buffers. A buffer that grew (draw lists, visible draws, Hi-Z) is picked up at once.</td></tr>
+  <tr><td>Frame struct</td><td>one per frame or view</td><td>One <code>SceneData</code> per scene view (a scene, a camera and a target). Each frame slot has one "Scene Data Buffer" with room for <code>MAX_SCENE_VIEWS</code> = 8 of them; view <var>v</var> uses the buffer's address + <var>v</var> × 768.</td></tr>
+  <tr><td>Sub-arrays</td><td>base + size of what comes before</td><td><code>cullSlotsPtr</code>, <code>groupCountsPtr</code> and <code>drawCountsPtr</code> point into the visible draw buffer, after the draws.</td></tr>
+  <tr><td>Stale addresses</td><td>write them again every frame</td><td>The same: <code>Engine::prepareSceneView</code> writes every address of a view every frame, from the current buffers. A buffer that grew is picked up at once: the draw lists, and the visible draws and Hi-Z, which <code>RenderContext::resizeBuffer</code> grows under the same handle but at a new address.</td></tr>
   <tr><td>Null pointers</td><td>a flag says whether to read</td><td>Unused pointers stay 0 (<code>SceneData</code> starts as <code>{}</code>). <code>countMain</code> reads <code>visibilityPtr</code> and <code>hizPtr</code> only when <code>hizLevelCount</code> is not 0.</td></tr>
   <tr><td>Bounds</td><td>pass counts and check them</td><td>Counts travel with the data (<code>drawCount</code>, <code>runFirst</code>, <code>numLights</code>, sizes from <code>EngineConfig</code>), but shaders trust them: there is no bounds check on any pointer.</td></tr>
   <tr><td>Images</td><td>descriptors</td><td>Textures use one bindless descriptor set. The Hi-Z pyramid is <i>not</i> an image: it is a float buffer read through <code>hizPtr</code>, with its levels packed one after another.</td></tr>
@@ -371,7 +371,7 @@ sceneData.groupCountsPtr =
   <tr><td>Features, usage bit, VMA flag</td><td><code>src/rhi/vulkan/vulkanDevice.cpp</code>: device selection, <code>toVkBufferUsageFlags</code>, the allocator creation</td></tr>
   <tr><td>Getting the address</td><td><code>VulkanDevice::createBuffer</code>; <code>RenderContext::getBufferDeviceAddress</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>The pointer structs</td><td><code>SceneData</code>, <code>PushConstants</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
-  <tr><td>Writing the addresses</td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Writing the addresses</td><td><code>Engine::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Reading through them</td><td><code>vertMain</code>, <code>fragMain</code> in <code>shaders/passes/rasm.slang</code>; <code>countMain</code>, <code>writeMain</code> in <code>shaders/passes/cull.slang</code>; <code>hizMain</code> in <code>shaders/passes/hiz.slang</code></td></tr>
 </table>
 </div>
@@ -379,7 +379,7 @@ sceneData.groupCountsPtr =
 <div class="callout rule">
   <strong>Keep these true</strong>
   <ul>
-    <li>Write every address in <code>SceneData</code> from the current buffers in each <code>drawScene</code> call; never cache an address across a buffer that can be recreated.</li>
+    <li>Write every address in <code>SceneData</code> from the current buffers every frame; never cache an address across a buffer that can be recreated or resized.</li>
     <li>Destroy a buffer only when no frame in flight can still read its address.</li>
     <li>A pointer that is 0 must not be read. Guard it with a count or a flag, like <code>hizLevelCount</code>.</li>
     <li>Keep 64-bit fields at 8-byte aligned offsets in every shared struct. <code>SceneData</code> and <code>PushConstants</code> are CPU↔GPU structs: follow <a href="struct-layout.html#in-rasm">the struct contract</a>.</li>

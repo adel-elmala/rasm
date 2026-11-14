@@ -573,10 +573,10 @@
 
 <h2 id="in-rasm"><span class="n">12</span>In RASM</h2>
 
-<p>RASM is GPU-driven from the start. <code>Engine::drawScene</code> draws a whole scene with one pipeline, a few binds and one <code>drawIndexedIndirectCount</code> per <b>cull-mode run</b>: at most 3 calls, or 6 with <a href="occlusion-culling.html">occlusion culling</a>. The tables it reads are in <a href="gpu-scene.html">the GPU scene tour</a>.</p>
+<p>RASM is GPU-driven from the start. <code>Engine::addScenePasses</code> adds a scene to the <a href="render-graphs.html">render graph</a> as a compute pass that culls, <code>Cull</code>, and a pass that draws, <code>Scene</code> (<code>Engine::render</code> does this for you). <code>Scene</code> draws the whole scene with one pipeline, a few binds and one <code>drawIndexedIndirectCount</code> per <b>cull-mode run</b>: at most 3 calls, or 6 with <a href="occlusion-culling.html">occlusion culling</a> (3 in <code>Scene 1</code>, 3 in <code>Scene 2</code>). The tables it reads are in <a href="gpu-scene.html">the GPU scene tour</a>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="When the scene changes, rebuildDrawList writes one DrawInfo per sub-mesh, sorted by cull mode into runs, and uploadDrawList copies it to the frame slot's draw list buffer. Each frame, cull.slang's countMain and writeMain test every draw and pack the visible ones per run into the visible draw buffer, with one count per run. drawScene records, per run, setCullMode, the push constant and drawIndexedIndirectCount. vertMain finds its DrawInfo with getDrawIndex and its instance row with firstInstance.">
+  <svg viewBox="0 0 760 330" role="img" aria-label="When the scene changes, rebuildDrawList writes one DrawInfo per sub-mesh, sorted by cull mode into runs, and uploadDrawList copies it to the frame slot's draw list buffer. Each frame, in the Cull pass, cull.slang's countMain and writeMain test every draw and pack the visible ones per run into the visible draw buffer, with one count per run. drawSceneView records, per run, setCullMode, the push constant and drawIndexedIndirectCount. vertMain finds its DrawInfo with getDrawIndex and its instance row with firstInstance.">
     <text x="15" y="22" class="title t-cpu">CPU · when the scene changes</text>
     <rect x="15" y="34" width="165" height="56" rx="6" class="cpu"/>
     <text x="97" y="57" class="mid mono">rebuildDrawList</text>
@@ -586,7 +586,7 @@
     <text x="287" y="57" class="mid title">Draw list buffer</text>
     <text x="287" y="76" class="mid small">sorted by cull mode, per slot</text>
 
-    <text x="400" y="22" class="title t-gpu">GPU · every frame, before the pass</text>
+    <text x="400" y="22" class="title t-gpu">GPU · every frame, the Cull pass</text>
     <line x1="375" y1="62" x2="398" y2="62" class="arrow" marker-end="url(#ah)"/>
     <rect x="400" y="34" width="160" height="56" rx="28" class="shader"/>
     <text x="480" y="57" class="mid mono">cull.slang</text>
@@ -600,7 +600,7 @@
     <text x="662" y="95" class="mid title">Draw counts</text>
     <text x="662" y="110" class="mid small">one uint per run</text>
 
-    <text x="15" y="160" class="title t-cpu">CPU · drawScene, inside the pass</text>
+    <text x="15" y="160" class="title t-cpu">CPU · drawSceneView, in the Scene pass</text>
     <rect x="15" y="172" width="360" height="132" rx="6" class="cpu"/>
     <text x="29" y="194" class="small">once: bindPipeline, bindDescriptorSet (bindless),</text>
     <text x="29" y="210" class="small">bindIndexBuffer (the geometry pool, 32-bit)</text>
@@ -619,7 +619,7 @@
     <text x="572" y="271" class="mid mono">vertMain</text>
     <text x="572" y="290" class="mid small">getDrawIndex() → DrawInfo → firstInstance → instance row</text>
   </svg>
-  <figcaption>The culling dispatches are recorded in their own command buffer, which is submitted before the frame's command buffer (<code>recordCulling</code>). The draws are recorded before them, but run after them.</figcaption>
+  <figcaption>Both passes are in the frame's one command buffer, in the graph's order: the culling first, then the draws. <code>Cull</code> declares that it writes the visible draws and counts, <code>Scene</code> that it reads them, so the graph records the barrier between them.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -633,10 +633,10 @@
   <tr><td>Draw index</td><td>restarts at 0 per call</td><td><code>getDrawIndex</code> reads <code>DrawIndex</code> with <code>spirv_asm</code> and adds <code>firstDraw</code> from the push constant: the run's first slot.</td></tr>
   <tr><td>Grouping into runs</td><td>by pipeline and state</td><td>By cull mode only. Every scene draw uses one pipeline, and the cull mode is dynamic state (<code>VK_DYNAMIC_STATE_CULL_MODE</code>). So there are at most 3 runs (<code>MAX_DRAW_RUNS</code>): <code>NONE</code>, <code>FRONT</code>, <code>BACK</code>, in that order. See <a href="face-culling.html#in-rasm">face culling</a>.</td></tr>
   <tr><td>Building the list</td><td>CPU on change, or GPU</td><td>CPU, on change (<code>rebuildDrawList</code>): one draw per sub-mesh of each entity whose mesh and textures are loaded, with LOD 0's index range. <code>std::stable_sort</code> keeps the entity order inside a run.</td></tr>
-  <tr><td>Count buffer</td><td>one count per call</td><td><code>drawCounts</code>: one <code>uint32_t</code> per run per <code>drawScene</code> call, written by <code>writeMain</code>. Order inside a run is kept: compaction uses prefix sums, not an atomic counter (see <a href="stream-compaction.html#in-rasm">stream compaction</a>).</td></tr>
+  <tr><td>Count buffer</td><td>one count per call</td><td>One <code>uint32_t</code> per run, at the end of the scene view's visible draw buffer (<code>drawCountsPtr</code>), written by <code>writeMain</code>. Order inside a run is kept: compaction uses prefix sums, not an atomic counter (see <a href="stream-compaction.html#in-rasm">stream compaction</a>).</td></tr>
   <tr><td>LOD</td><td>compute changes the index range</td><td>Yes: <code>writeMain</code> writes the chosen LOD's <code>firstIndex</code> and <code>indexCount</code> into the packed copy. The CPU list keeps LOD 0. See <a href="lod-selection.html#in-rasm">LOD selection</a>.</td></tr>
-  <tr><td>Two rounds</td><td>one</td><td>With occlusion culling, the runs are drawn twice in the same pass: the early draws, then the late ones, into the same lists. So up to 6 calls.</td></tr>
-  <tr><td>Fallback</td><td>a CPU path</td><td>If <code>cull.slang</code> fails to compile, <code>drawScene</code> uses <code>drawIndexedIndirect</code> over each whole run of the draw list: everything drawn, at LOD 0, with no count buffer.</td></tr>
+  <tr><td>Two rounds</td><td>one</td><td>With occlusion culling, the runs are drawn twice, in two passes: the early draws in <code>Scene 1</code>, then the late ones in <code>Scene 2</code>, from the same lists. So up to 6 calls.</td></tr>
+  <tr><td>Fallback</td><td>a CPU path</td><td>If <code>cull.slang</code> fails to compile, <code>drawSceneView</code> uses <code>drawIndexedIndirect</code> over each whole run of the draw list: everything drawn, at LOD 0, with no count buffer.</td></tr>
   <tr><td>Statistics</td><td>read back later</td><td>Culling adds up visible draws and triangles into a host-readable buffer, read after the frame slot's fence (see <a href="gpu-timing.html#in-rasm">GPU timing</a>).</td></tr>
 </table>
 </div>
@@ -648,8 +648,9 @@
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>The draw record</td><td><code>gfx::DrawInfo</code> in <code>src/renderer/uberMaterialTypes.h</code>, <code>DrawInfo</code> in <code>shaders/lib/core.slang</code></td></tr>
   <tr><td>Draw list and runs</td><td><code>SceneDrawList</code>, <code>DrawRun</code> in <code>src/renderer/gpuScene.h</code>; <code>Engine::rebuildDrawList</code>, <code>Engine::uploadDrawList</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Recording the draws</td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Recording the culling</td><td><code>Engine::recordCulling</code>, <code>Engine::recordOcclusionCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>The scene passes</td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Recording the draws</td><td><code>Engine::drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Recording the culling</td><td><code>Engine::recordSceneCulling</code>, <code>Engine::recordHiz</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Packing and counting</td><td><code>countMain</code>, <code>writeMain</code> in <code>shaders/passes/cull.slang</code></td></tr>
   <tr><td>The indirect calls</td><td><code>RenderContext::drawIndexedIndirectCount</code>, <code>RenderContext::drawIndexedIndirect</code> in <code>src/rhi/renderContext.cpp</code>; <code>VulkanCommandBuffer::drawIndexedIndirectCount</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>The Vulkan features</td><td><code>multiDrawIndirect</code>, <code>drawIndirectFirstInstance</code>, <code>drawIndirectCount</code>, <code>shaderDrawParameters</code> in <code>initPhysicalDevice</code>, <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
@@ -661,10 +662,10 @@
   <strong>Keep these true</strong>
   <ul>
     <li><code>DrawInfo</code> has the layout of the Vulkan indexed indirect record, on both sides. A field added to it changes the stride of every indirect call and of the culling buffers.</li>
-    <li>The draw list is sorted by cull mode, each run is contiguous, and culling packs a run's visible draws at the start of that run's range. <code>drawScene</code> and <code>cull.slang</code> both rely on <code>runFirst</code>.</li>
+    <li>The draw list is sorted by cull mode, each run is contiguous, and culling packs a run's visible draws at the start of that run's range. <code>drawSceneView</code> and <code>cull.slang</code> both rely on <code>runFirst</code>.</li>
     <li>Every call pushes <code>firstDraw</code> = the run's first slot. Without it, every run would read run 0's draws.</li>
     <li>A new state that differs between draws must be dynamic state and a new run, or it cannot be in this pass. Raising the number of runs means changing <code>MAX_DRAW_RUNS</code> on both sides and the <code>static_assert</code> next to it.</li>
-    <li><code>drawScene</code> sets the cull mode back to <code>NONE</code> after its runs: <code>beginPass</code> sets it for every other pipeline.</li>
+    <li><code>drawSceneView</code> sets the cull mode back to <code>NONE</code> after its runs: <code>beginPass</code> sets it for every other pipeline.</li>
   </ul>
 </div>
 
@@ -673,7 +674,6 @@
   <ul>
     <li><code>P3</code>: no real instancing. Each entity's sub-mesh is its own draw, even when the mesh is shared.</li>
     <li><code>D4</code>: nothing can be removed, so draw lists only grow and instance rows are never freed.</li>
-    <li><code>D18</code>: the culling runs before every other GPU work of the frame, from its own command buffer. GPU work that changes what culling reads would need it to become a graph pass.</li>
     <li><code>D12</code>: <code>getDrawIndex</code> uses <code>spirv_asm</code>, so this path is Vulkan-only today.</li>
     <li>No transparent objects: the scene pipeline has blending off.</li>
   </ul>

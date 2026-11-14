@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Big Picture · RASM</title>
 <meta name="description" content="The first stop of the engine tour: the layers of RASM from the application down to Vulkan, the source folders, public and private headers, who owns which object, creation dedup, how scenes, entities, meshes and materials relate, and which example shows what.">
-<meta name="rasm-sources" content="include/rasm/rasm.h include/rasm/engine.h include/rasm/handle.h include/rasm/types.h include/rasm/entity.h include/rasm/scene.h include/rasm/mesh.h include/rasm/material.h include/rasm/light.h include/rasm/camera.h include/rasm/transform.h include/rasm/window.h include/rasm/render/renderContext.h include/rasm/render/renderGraph.h include/rasm/render/resource.h src/engine.cpp src/core/handle.cpp src/rhi/renderContext.cpp src/rhi/resource.cpp src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/device.h src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanTypes.h src/scene/scene.cpp src/scene/entity.cpp src/scene/camera.cpp src/scene/light.cpp src/assets/mesh.cpp src/assets/meshLod.cpp src/assets/material.cpp src/assets/texture.cpp src/renderer/gpuScene.h src/renderer/renderGraph.cpp src/CMakeLists.txt examples/CMakeLists.txt examples/00_hello_scene/main.cpp examples/01_render_graph/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/04_compute/main.cpp examples/05_city/main.cpp">
+<meta name="rasm-sources" content="include/rasm/rasm.h include/rasm/engine.h include/rasm/handle.h include/rasm/types.h include/rasm/entity.h include/rasm/scene.h include/rasm/mesh.h include/rasm/material.h include/rasm/light.h include/rasm/camera.h include/rasm/transform.h include/rasm/window.h include/rasm/render/renderContext.h include/rasm/render/renderGraph.h include/rasm/render/resource.h src/engine.cpp src/core/handle.cpp src/rhi/renderContext.cpp src/rhi/resource.cpp src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/device.h src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.h src/rhi/vulkan/vulkanTypes.h src/scene/scene.cpp src/scene/entity.cpp src/scene/camera.cpp src/scene/light.cpp src/assets/mesh.cpp src/assets/meshLod.cpp src/assets/material.cpp src/assets/texture.cpp src/renderer/gpuScene.h src/renderer/renderer.h src/renderer/renderer.cpp src/renderer/renderGraph.cpp src/CMakeLists.txt examples/CMakeLists.txt examples/00_hello_scene/main.cpp examples/01_render_graph/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/04_compute/main.cpp examples/05_city/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -58,7 +58,7 @@
 <p>Each layer only talks to the one under it. The arrows show what crosses each boundary: handles at the top, <code>rhi::</code> pointers in the middle, native Vulkan calls at the bottom.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 460" role="img" aria-label="Application calls Engine with handles. Engine and RenderGraph call RenderContext. RenderContext calls rhi::Device through rhi pointers. VulkanDevice implements rhi::Device and calls Vulkan, which runs on the GPU.">
+  <svg viewBox="0 0 760 460" role="img" aria-label="Application calls Engine with handles, or runs its own RenderGraph. Engine and RenderGraph call RenderContext. RenderContext calls rhi::Device through rhi pointers. VulkanDevice implements rhi::Device and calls Vulkan, which runs on the GPU.">
     <rect x="150" y="16" width="250" height="48" rx="6" class="box"/>
     <text x="275" y="36" class="mid title">Application</text>
     <text x="275" y="54" class="mid mono">examples/NN_name/main.cpp</text>
@@ -96,14 +96,14 @@
     <text x="68" y="153" class="mid title">RenderGraph</text>
     <text x="68" y="171" class="mid small">passes, barriers</text>
     <path d="M150,40 H68 V131" class="arrow dashed" marker-end="url(#ah)"/>
-    <text x="74" y="96" class="small">optional</text>
+    <text x="74" y="96" class="small">own graph</text>
     <line x1="126" y1="146" x2="148" y2="128" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <line x1="126" y1="168" x2="148" y2="186" class="arrow cpu" marker-end="url(#ah-cpu)"/>
 
     <text x="430" y="36" class="small">Creates objects and gets handles back.</text>
-    <text x="430" y="52" class="small">Calls render(), or runs a render graph, each frame.</text>
+    <text x="430" y="52" class="small">Calls render(), or runs its own render graph.</text>
     <text x="430" y="114" class="small">CPU objects in its registry, the frame loop,</text>
-    <text x="430" y="130" class="small">asset loads, the GPU scene tables, culling.</text>
+    <text x="430" y="130" class="small">asset loads, the GPU scene tables, scene passes.</text>
     <text x="430" y="192" class="small">Handle → rhi object tables, dedup caches, the</text>
     <text x="430" y="208" class="small">layout of each texture, render targets, bindless.</text>
     <text x="430" y="270" class="small">Backend-neutral interface: resources, command</text>
@@ -112,7 +112,7 @@
     <text x="430" y="364" class="small">Also VulkanCommandBuffer, Queue, Swapchain.</text>
     <text x="430" y="430" class="small">Runs what the queue submitted.</text>
   </svg>
-  <figcaption>The render graph is an optional path. It calls <code>Engine</code> for the frame and the passes, records the barriers between them, and gives each pass the <code>RenderContext</code> to record with. See <a href="render-graphs.html">Render graphs</a>. Why there is an <code>rhi::Device</code> layer at all is in <a href="graphics-apis-rhi.html">Graphics APIs and the RHI</a>.</figcaption>
+  <figcaption>Every frame that draws the scene runs a render graph: <code>render()</code> runs one that <code>Engine</code> keeps (<code>Renderer</code>), or the application builds its own and adds the scene with <code>addScenePasses</code>. The graph calls <code>Engine</code> for the frame and the passes, records the barriers between them, and gives each pass the <code>RenderContext</code> to record with. See <a href="render-graphs.html">Render graphs</a>. Why there is an <code>rhi::Device</code> layer at all is in <a href="graphics-apis-rhi.html">Graphics APIs and the RHI</a>.</figcaption>
 </figure>
 
 <div class="table-wrap">
@@ -138,7 +138,7 @@
   <tr><td><code>src/platform/</code></td><td>SDL3 window and input, paths, the Vulkan surface hook</td><td><code>window.cpp</code>, <code>paths.cpp</code>, <code>windowSurface.h</code></td></tr>
   <tr><td><code>src/assets/</code></td><td>mesh, texture and material loading, glTF and OBJ import, mesh LODs</td><td><code>mesh.cpp</code>, <code>meshImport.cpp</code>, <code>meshLod.cpp</code>, <code>texture.cpp</code>, <code>material.cpp</code></td></tr>
   <tr><td><code>src/scene/</code></td><td>scenes, entities, cameras, lights, transforms</td><td><code>scene.cpp</code>, <code>entity.cpp</code>, <code>camera.cpp</code></td></tr>
-  <tr><td><code>src/renderer/</code></td><td>GPU scene tables, culling, frame stats, overlay, render graph, shader compiler, GPU structs</td><td><code>gpuScene.cpp</code>, <code>gpuTable.cpp</code>, <code>geometryPool.cpp</code>, <code>shaderCompiler.cpp</code></td></tr>
+  <tr><td><code>src/renderer/</code></td><td>GPU scene tables, the scene passes, the graph behind <code>render</code>, frame stats, overlay, render graph, shader compiler, GPU structs</td><td><code>gpuScene.cpp</code>, <code>renderer.cpp</code>, <code>gpuTable.cpp</code>, <code>geometryPool.cpp</code>, <code>shaderCompiler.cpp</code></td></tr>
   <tr><td><code>src/rhi/</code></td><td><code>RenderContext</code>, the <code>rhi::Device</code> interface, uploads, texture layouts</td><td><code>renderContext.cpp</code>, <code>device.h</code>, <code>uploadManager.cpp</code>, <code>textureStates.cpp</code></td></tr>
   <tr><td><code>src/rhi/vulkan/</code></td><td>the Vulkan backend</td><td><code>vulkanDevice.cpp</code>, <code>vulkanCommandBuffer.cpp</code>, <code>vulkanSwapchain.cpp</code>, <code>vulkanQueue.cpp</code></td></tr>
   <tr><td><code>shaders/lib/</code>, <code>shaders/passes/</code></td><td>Slang modules and pass entry points, compiled at run time</td><td><code>core.slang</code>, <code>rasm.slang</code>, <code>cull.slang</code>, <code>hiz.slang</code></td></tr>
@@ -423,7 +423,7 @@
 <table>
   <tr><th>Example</th><th>What it does</th><th>Engine parts it uses</th><th>Read</th></tr>
   <tr><td><code>00_hello_scene</code></td><td>three bunnies from one OBJ mesh and one texture, three lights</td><td><code>loadMesh</code>, <code>loadTexture</code>, <code>createEntity</code>, <code>render</code></td><td><a href="frame-loop.html">stop 2</a>, <a href="gpu-scene.html">stop 3</a>, <a href="gpu-driven.html">GPU-driven rendering</a></td></tr>
-  <tr><td><code>01_render_graph</code></td><td>the scene into a render target, a fading trail from last frame's image, a pass with two color outputs, then the swapchain; two of the targets share memory</td><td><code>RenderGraph</code>, <code>drawScene</code>, <code>createPipeline</code></td><td><a href="render-graphs.html">Render graphs</a>, <a href="memory-aliasing.html">Transient memory</a>, <a href="temporal-history.html">History buffers</a>, <a href="multiple-render-targets.html">Multiple render targets</a></td></tr>
+  <tr><td><code>01_render_graph</code></td><td>the scene into a render target, a fading trail from last frame's image, a pass with two color outputs, then the swapchain; two of the targets share memory</td><td><code>RenderGraph</code>, <code>createRenderTarget</code>, <code>addScenePasses</code>, <code>createPipeline</code></td><td><a href="render-graphs.html">Render graphs</a>, <a href="memory-aliasing.html">Transient memory</a>, <a href="temporal-history.html">History buffers</a>, <a href="multiple-render-targets.html">Multiple render targets</a></td></tr>
   <tr><td><code>02_gltf</code></td><td>three glTF models with their PBR materials</td><td><code>loadGLTF</code>, sub-meshes, material rows</td><td><a href="asset-streaming.html">Streaming assets</a>, <a href="pbr.html">PBR</a>, <a href="bindless.html">Bindless</a></td></tr>
   <tr><td><code>03_instances</code></td><td>10 000 cubes; a few spin, new ones appear, one material pulses</td><td><code>createMesh</code>, <code>updateTransform</code>, <code>updateMaterial</code></td><td><a href="gpu-scene.html">stop 3</a>, <a href="gpu-memory.html">GPU memory and uploads</a></td></tr>
   <tr><td><code>04_compute</code></td><td>a compute pass moves 4096 particles in a buffer that a draw then reads</td><td><code>addComputePass</code>, <code>createComputePipeline</code></td><td><a href="device-addresses.html">Buffer device addresses</a>, <a href="gpu-sync.html">GPU synchronization</a></td></tr>

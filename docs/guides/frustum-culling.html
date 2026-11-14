@@ -573,10 +573,10 @@
 
 <h2 id="in-rasm"><span class="n">12</span>In RASM</h2>
 
-<p>RASM frustum-culls every draw (one sub-mesh of one entity) on the GPU, every frame, inside <code>drawScene</code>. It uses the plain sphere test from <a href="#sphere-test">section 5</a>, with planes taken from the matrix as in <a href="#planes">section 6</a>.</p>
+<p>RASM frustum-culls every draw (one sub-mesh of one entity) on the GPU, every frame, in the <code>Cull</code> pass that <code>Engine::addScenePasses</code> adds for each scene view (a scene, a camera and a target). It uses the plain sphere test from <a href="#sphere-test">section 5</a>, with planes taken from the matrix as in <a href="#planes">section 6</a>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 210" role="img" aria-label="At load, computeBounds builds a sphere per sub-mesh into the geometry table. Each drawScene call, the CPU builds 6 world-space planes from projection times view into SceneData. On the GPU, countMain runs one thread per draw: getWorldSphere moves the sphere with the instance's world matrix, and isInFrustum tests it against the planes.">
+  <svg viewBox="0 0 760 210" role="img" aria-label="At load, computeBounds builds a sphere per sub-mesh into the geometry table. Each frame, for each scene view, the CPU builds 6 world-space planes from projection times view into SceneData. On the GPU, countMain runs one thread per draw: getWorldSphere moves the sphere with the instance's world matrix, and isInFrustum tests it against the planes.">
     <text x="20" y="30" class="title t-cpu">CPU · at load</text>
     <rect x="20" y="40" width="200" height="56" rx="6" class="cpu"/>
     <text x="120" y="63" class="mid mono">computeBounds</text>
@@ -586,7 +586,7 @@
     <text x="365" y="63" class="mid">Geometry table</text>
     <text x="365" y="82" class="mid mono small">boundsCenter · boundsRadius</text>
 
-    <text x="20" y="130" class="title t-cpu">CPU · per drawScene</text>
+    <text x="20" y="130" class="title t-cpu">CPU · each frame, per scene view</text>
     <rect x="20" y="140" width="200" height="56" rx="6" class="cpu"/>
     <text x="120" y="163" class="mid mono">getFrustumPlanes</text>
     <text x="120" y="182" class="mid small">projection × view</text>
@@ -606,7 +606,7 @@
     <text x="640" y="154" class="mid mono">isInFrustum</text>
     <text x="640" y="172" class="mid small">6 planes: keep or cull</text>
   </svg>
-  <figcaption>The sphere is built once, the planes once per <code>drawScene</code> call, and the test runs once per draw.</figcaption>
+  <figcaption>The sphere is built once, the planes once per scene view and frame (<code>Engine::prepareSceneView</code>), and the test runs once per draw.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -622,7 +622,7 @@
   <tr><td>Radius under scale</td><td>three ways in section 8</td><td>The Gershgorin bound (<code>getWorldSphere</code>). Safe for any matrix, exact for rotate + scale.</td></tr>
   <tr><td>Hierarchy, plane masks</td><td>section 11</td><td>None. Every draw is tested against all 6 planes, flat, one GPU thread each.</td></tr>
   <tr><td>Corner false positives</td><td>accept, or add a second test</td><td>Accepted. Many of them are then removed by <a href="occlusion-culling.html">occlusion culling</a>, which runs the frustum test first.</td></tr>
-  <tr><td>Planes per view</td><td>one set per camera</td><td>One set per <code>drawScene</code> call, in that call's <code>SceneData</code>. Two passes with two cameras cull separately.</td></tr>
+  <tr><td>Planes per view</td><td>one set per camera</td><td>One set per scene view, in that view's <code>SceneData</code> slot. Two cameras are two views, and cull separately.</td></tr>
 </table>
 </div>
 
@@ -634,7 +634,7 @@
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Bounding sphere per sub-mesh</td><td><code>computeBounds</code> in <code>src/renderer/geometryPool.cpp</code></td></tr>
-  <tr><td>Planes from the matrix</td><td><code>getFrustumPlanes</code> in <code>src/renderer/gpuScene.cpp</code>, called by <code>Engine::drawScene</code></td></tr>
+  <tr><td>Planes from the matrix</td><td><code>getFrustumPlanes</code> in <code>src/renderer/gpuScene.cpp</code>, called by <code>Engine::prepareSceneView</code></td></tr>
   <tr><td>Where the planes are stored</td><td><code>SceneData::frustumPlanes</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
   <tr><td>Sphere into world space</td><td><code>getWorldSphere</code> in <code>shaders/lib/frustumCulling.slang</code></td></tr>
   <tr><td>The test</td><td><code>isInFrustum</code> in <code>shaders/lib/frustumCulling.slang</code></td></tr>
