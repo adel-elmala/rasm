@@ -78,6 +78,15 @@ namespace rasm
             if (pass.writesSwapchain)
                 writes.push_back(swapchain);
         }
+
+        // Depth textures are sampleable only with occlusion culling (TextureUsage::SAMPLED_DEPTH_ATTACHMENT).
+        bool canReadDepth(const Engine *engine, const Pass &pass)
+        {
+            if (!engine || engine->getConfig().occlusionCulling)
+                return true;
+            spdlog::error("Pass '{}' reads a depth texture, which needs EngineConfig::occlusionCulling; the read is ignored.", pass.name);
+            return false;
+        }
     }
 
     RenderGraph::RenderGraph(RenderGraph &&other) noexcept
@@ -85,18 +94,20 @@ namespace rasm
         *this = std::move(other);
     }
 
-    // The transient targets' memory is the graph's, so it goes with the graph.
+    // The transient targets' memory and the hold on its scene views are the graph's, so they go with the graph.
     RenderGraph::~RenderGraph()
     {
         destroyTransients();
+        releaseSceneViews();
     }
 
-    // The moved-from graph keeps no transient targets, so its destructor frees nothing.
+    // The moved-from graph keeps no transient targets or scene views, so its destructor frees nothing.
     RenderGraph &RenderGraph::operator=(RenderGraph &&other) noexcept
     {
         if (this == &other)
             return *this;
         destroyTransients();
+        releaseSceneViews();
         passes = std::move(other.passes);
         executionOrder = std::move(other.executionOrder);
         bufferAccess = std::move(other.bufferAccess);
@@ -104,6 +115,7 @@ namespace rasm
         transientFirstPasses = std::move(other.transientFirstPasses);
         transientLastPasses = std::move(other.transientLastPasses);
         transientsPlaced = other.transientsPlaced;
+        sceneViews = std::exchange(other.sceneViews, {});
         engine = other.engine;
         compiled = other.compiled;
         return *this;
@@ -114,6 +126,16 @@ namespace rasm
         if (engine && !transientTargets.empty())
             engine->getRenderContext().destroyTransientRenderTargets(transientTargets.data(), static_cast<uint32_t>(transientTargets.size()));
         transientTargets.clear();
+    }
+
+    void RenderGraph::releaseSceneViews()
+    {
+        if (engine)
+        {
+            for (uint32_t view : sceneViews)
+                engine->releaseSceneView(view);
+        }
+        sceneViews.clear();
     }
 
     void RenderGraph::addPass(std::string name, const std::function<void(PassBuilder &)> &setup, std::function<void(RenderContext &)> execute)
@@ -530,25 +552,16 @@ namespace rasm
         passes[passIdx].previousRenderTargets.push_back(h);
     }
 
-    // Depth textures are sampleable only with occlusion culling (TextureUsage::SAMPLED_DEPTH_ATTACHMENT).
     void RenderGraph::readDepth(uint32_t passIdx, RenderTargetHandle h)
     {
-        if (engine && !engine->getConfig().occlusionCulling)
-        {
-            spdlog::error("Pass '{}' reads a depth texture, which needs EngineConfig::occlusionCulling; the read is ignored.", passes[passIdx].name);
-            return;
-        }
-        passes[passIdx].depthRenderTargets.push_back(h);
+        if (canReadDepth(engine, passes[passIdx]))
+            passes[passIdx].depthRenderTargets.push_back(h);
     }
 
     void RenderGraph::readSwapchainDepth(uint32_t passIdx)
     {
-        if (engine && !engine->getConfig().occlusionCulling)
-        {
-            spdlog::error("Pass '{}' reads a depth texture, which needs EngineConfig::occlusionCulling; the read is ignored.", passes[passIdx].name);
-            return;
-        }
-        passes[passIdx].readsSwapchainDepth = true;
+        if (canReadDepth(engine, passes[passIdx]))
+            passes[passIdx].readsSwapchainDepth = true;
     }
 
     void RenderGraph::write(uint32_t passIdx, TextureHandle h) { passes[passIdx].outputTextures.push_back(h); }

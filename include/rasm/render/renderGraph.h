@@ -72,6 +72,7 @@ namespace rasm
     class RenderGraph
     {
         friend class PassBuilder;
+        friend class Engine;
     public:
                            RenderGraph(Engine* owner) : engine(owner) {}
                            RenderGraph(const RenderGraph&) = delete;
@@ -100,6 +101,7 @@ namespace rasm
         void                analyzeDependencies();
         bool                bufferBarrier(const Pass& pass, PipelineStage& before, PipelineStage& after);
         void                destroyTransients();
+        void                releaseSceneViews();
         bool                placeTransients();
         bool                transientLifetimes(const std::vector<uint32_t>& order);
         void                assignAttachmentOps(const std::vector<uint32_t>& order);
@@ -124,6 +126,7 @@ namespace rasm
         std::vector<uint32_t>                                       transientFirstPasses;
         std::vector<uint32_t>                                       transientLastPasses;
         bool                                                        transientsPlaced = false;
+        std::vector<uint32_t>                                       sceneViews;     // Engine::addScenePasses's views
         Engine*                                                     engine   = nullptr;
         bool                                                        compiled = false;
     };

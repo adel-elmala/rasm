@@ -526,7 +526,9 @@ namespace rasm
 
     void Engine::render(SceneHandle scene, CameraHandle camera)
     {
-        renderer->render({.scene = scene, .camera = camera});
+        // The renderer is made last in the constructor, so an engine that failed to start has none.
+        if (renderer)
+            renderer->render({.scene = scene, .camera = camera});
     }
 
     bool Engine::running() const

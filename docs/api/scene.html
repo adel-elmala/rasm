@@ -582,7 +582,7 @@ engine.addLightToScene(scene, lamp);</code></pre>
   <tr><td><code>MAX_LIGHTS</code></td><td>8</td><td>7</td><td>lights in total</td></tr>
   <tr><td><code>MAX_LIGHTS_PER_SCENE</code></td><td>8</td><td>8</td><td>light entries in one scene</td></tr>
   <tr><td><code>MAX_CAMERAS_PER_SCENE</code></td><td>8</td><td>8</td><td>camera entries in one scene</td></tr>
-  <tr><td><code>MAX_SCENE_VIEWS</code></td><td>8</td><td>8</td><td>scene views: (scene, camera, target) sets given to <a href="engine.html#addScenePasses"><code>addScenePasses</code></a>, for the engine's lifetime</td></tr>
+  <tr><td><code>MAX_SCENE_VIEWS</code></td><td>8</td><td>8</td><td>scene views: (scene, camera, target) sets given to <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> and held by render graphs at once</td></tr>
   <tr><td><code>MAX_VERTEX_UV_SETS</code></td><td>3</td><td>3</td><td>UV sets per vertex</td></tr>
   <tr><td><code>MAX_MESH_LODS</code></td><td>8</td><td>8</td><td>LODs per sub-mesh, LOD 0 included</td></tr>
   <tr><td><code>EngineConfig::maxInstances</code></td><td>65,536</td><td>all</td><td>sub-meshes of all entities together</td></tr>

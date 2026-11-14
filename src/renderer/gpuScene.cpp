@@ -23,11 +23,24 @@ namespace rasm
         constexpr uint32_t CULL_EARLY = 0;       // the cull phases of cull.slang
         constexpr uint32_t CULL_LATE = 1;
 
-        // The packed draws, then culling's scratch: a slot per draw and a count per group, at most one group per
-        // CULL_GROUP_SIZE draws plus one per run.
-        uint64_t getVisibleDrawBufferSize(uint32_t capacity)
+        // A view's visible draw buffer holds the packed draws, then culling's scratch (a slot per draw and a count per
+        // group, at most one group per CULL_GROUP_SIZE draws plus one per run), then the visible draws per run, which
+        // the draws read as indirect counts.
+        uint64_t getDrawCountsOffset(uint32_t capacity)
         {
             return static_cast<uint64_t>(capacity) * (sizeof(gfx::DrawInfo) + sizeof(uint32_t)) + (capacity / CULL_GROUP_SIZE + gfx::MAX_DRAW_RUNS) * sizeof(uint32_t);
+        }
+
+        uint64_t getVisibleDrawBufferSize(uint32_t capacity)
+        {
+            return getDrawCountsOffset(capacity) + gfx::MAX_DRAW_RUNS * sizeof(uint32_t);
+        }
+
+        void destroyBuffer(RenderContext &ctx, BufferHandle &buffer)
+        {
+            if (buffer.isValid())
+                ctx.destroyBuffer(buffer);
+            buffer = {};
         }
 
         // Level 0 is half the pass's size, rounded up, and each level halves the one before, down to 1x1 (occlusionCulling.slang).
@@ -176,15 +189,11 @@ namespace rasm
             }
         }
 
-        // Culling writes a visible draw count per run of each view; the draws read them as indirect counts.
+        // The frame's visible draws and triangles (low, high), which updateFrameStats reads back once the slot's fence passed.
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
-            gpuScene->drawCounts[i] = ctx.createBuffer({.name = "Draw Count Buffer " + std::to_string(i),
-                                                        .usage = BufferUsage::INDIRECT,
-                                                        .size = static_cast<uint64_t>(MAX_SCENE_VIEWS) * gfx::MAX_DRAW_RUNS * sizeof(uint32_t)});
-            // The frame's visible draws and triangles (low, high), which updateFrameStats reads back once the slot's fence passed.
             gpuScene->cullStats[i] = ctx.createBuffer({.name = "Cull Stats Buffer " + std::to_string(i), .usage = BufferUsage::STORAGE, .size = CULL_STATS_WORDS * sizeof(uint32_t), .hostVisible = true, .hostReadable = true});
-            if (!gpuScene->drawCounts[i].isValid() || !gpuScene->cullStats[i].isValid())
+            if (!gpuScene->cullStats[i].isValid())
             {
                 spdlog::error("Failed to create the culling resources.");
                 return false;
@@ -475,7 +484,9 @@ namespace rasm
     // The scene in passes of the graph: culling, the draws, and with occlusion culling the Hi-Z build, the late culling
     // and the late draws. They draw into renderTarget, or the swapchain when it is invalid, so later passes on that
     // target load what they drew. Each view (scene, camera, target) culls into buffers of its own, kept from frame to
-    // frame, which its passes declare: per-slot buffers by both slots, so their handles hold for every frame.
+    // frame while a graph holds the view, which its passes declare: per-slot buffers by both slots, so their handles
+    // hold for every frame. The cull stats are not declared: the views only add to them atomically, and only the CPU
+    // reads them, after the slot's fence, so views need no order between them.
     bool Engine::addScenePasses(RenderGraph &graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget)
     {
         if (!camera.isValid() || camera.index >= registry.cameras.size())
@@ -499,28 +510,33 @@ namespace rasm
             }
         }
 
+        // A view's passes run once per frame: a second set would read its own visibility as last frame's.
+        for (uint32_t heldView : graph.sceneViews)
+        {
+            const SceneView &held = gpuScene->views[heldView];
+            if (held.scene == scene && held.camera == camera && held.renderTarget == renderTarget)
+            {
+                spdlog::error("addScenePasses was called twice for the same scene, camera and target in one graph.");
+                return false;
+            }
+        }
+
         const uint32_t view = createSceneView(scene, camera, renderTarget);
         if (view == UINT32_MAX)
             return false;
+        graph.sceneViews.push_back(view);
         const SceneView &sceneView = gpuScene->views[view];
-        const bool occlusion = config.occlusionCulling;
+        const bool occlusion = sceneView.visibility.isValid();
 
-        auto writeCulling = [this, &sceneView](PassBuilder &builder)
+        auto writeCulling = [&sceneView](PassBuilder &builder)
         {
-            for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
-            {
-                builder.write(sceneView.visibleDraws[i]);
-                builder.write(gpuScene->drawCounts[i]);
-                builder.write(gpuScene->cullStats[i]);
-            }
+            for (auto buffer : sceneView.visibleDraws)
+                builder.write(buffer);
         };
-        auto drawScenePass = [this, &sceneView, renderTarget](PassBuilder &builder)
+        auto drawScenePass = [&sceneView, renderTarget](PassBuilder &builder)
         {
-            for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
-            {
-                builder.read(sceneView.visibleDraws[i]);
-                builder.read(gpuScene->drawCounts[i]);
-            }
+            for (auto buffer : sceneView.visibleDraws)
+                builder.read(buffer);
             if (renderTarget.isValid())
                 builder.write(renderTarget);
             else
@@ -586,60 +602,90 @@ namespace rasm
         return true;
     }
 
-    // A view lives as long as the engine, so building a graph again for the same scene, camera and target reuses it.
-    // Its buffers start small and grow in prepareSceneView under the same handles.
+    // A view lives while a graph holds it, so graphs built for the same scene, camera and target share it. Its
+    // buffers start small and grow in prepareSceneView under the same handles.
     uint32_t Engine::createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget)
     {
-        for (uint32_t i = 0; i < gpuScene->views.size(); ++i)
+        uint32_t freeSlot = UINT32_MAX;
+        for (uint32_t i = 0; i < MAX_SCENE_VIEWS; ++i)
         {
-            const SceneView &view = gpuScene->views[i];
+            SceneView &view = gpuScene->views[i];
+            if (view.graphs == 0)
+            {
+                freeSlot = std::min(freeSlot, i);
+                continue;
+            }
             if (view.scene == scene && view.camera == camera && view.renderTarget == renderTarget)
+            {
+                ++view.graphs;
                 return i;
+            }
         }
-        if (gpuScene->views.size() >= MAX_SCENE_VIEWS)
+        if (freeSlot == UINT32_MAX)
         {
-            spdlog::error("A scene can be drawn by at most {} views (scene, camera, target).", MAX_SCENE_VIEWS);
+            spdlog::error("At most {} views (scene, camera, target) can be held by render graphs at once.", MAX_SCENE_VIEWS);
             return UINT32_MAX;
         }
 
-        SceneView view = {.scene = scene, .camera = camera, .renderTarget = renderTarget};
-        bool created = true;
+        SceneView view = {.scene = scene, .camera = camera, .renderTarget = renderTarget, .graphs = 1};
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             view.visibleCapacity[i] = CULL_GROUP_SIZE;
             view.visibleDraws[i] = ctx.createBuffer({.name = "Visible Draw Buffer", .usage = BufferUsage::INDIRECT, .size = getVisibleDrawBufferSize(CULL_GROUP_SIZE)});
-            created = created && view.visibleDraws[i].isValid();
-            if (config.occlusionCulling)
+            if (!view.visibleDraws[i].isValid())
+            {
+                spdlog::error("Failed to create the culling buffers of a scene view.");
+                for (auto &buffer : view.visibleDraws)
+                    destroyBuffer(ctx, buffer);
+                return UINT32_MAX;
+            }
+        }
+
+        // The view's visibility, one flag per instance row, is kept across frames and shared by both frame slots: the
+        // GPU runs the frames in order. Rows start unseen, so a new instance is drawn late first. Without these
+        // buffers the view is only frustum culled.
+        if (config.occlusionCulling)
+        {
+            bool created = true;
+            for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
             {
                 view.hizCapacity[i] = 1;
                 view.hiz[i] = ctx.createBuffer({.name = "Hi-Z Buffer", .usage = BufferUsage::STORAGE, .size = sizeof(float)});
                 created = created && view.hiz[i].isValid();
             }
-        }
-        // The view's visibility, one flag per instance row, is kept across frames and shared by both frame slots: the
-        // GPU runs the frames in order. Rows start unseen, so a new instance is drawn late first.
-        if (config.occlusionCulling)
-        {
             const std::vector<uint32_t> unseen(config.maxInstances, 0);
             view.visibility = ctx.createBuffer({.name = "Visibility Buffer", .usage = BufferUsage::STORAGE, .size = unseen.size() * sizeof(uint32_t)});
             created = created && view.visibility.isValid() && ctx.fillBuffer(view.visibility, unseen.data(), unseen.size() * sizeof(uint32_t));
-        }
-        if (!created)
-        {
-            spdlog::error("Failed to create the culling buffers of a scene view.");
-            for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+            if (!created)
             {
-                if (view.visibleDraws[i].isValid())
-                    ctx.destroyBuffer(view.visibleDraws[i]);
-                if (view.hiz[i].isValid())
-                    ctx.destroyBuffer(view.hiz[i]);
+                spdlog::error("Failed to create the occlusion culling buffers of a scene view; it is drawn with frustum culling only.");
+                for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+                {
+                    destroyBuffer(ctx, view.hiz[i]);
+                    view.hizCapacity[i] = 0;
+                }
+                destroyBuffer(ctx, view.visibility);
             }
-            if (view.visibility.isValid())
-                ctx.destroyBuffer(view.visibility);
-            return UINT32_MAX;
         }
-        gpuScene->views.push_back(view);
-        return static_cast<uint32_t>(gpuScene->views.size() - 1);
+        gpuScene->views[freeSlot] = view;
+        return freeSlot;
+    }
+
+    // A graph lets go of a view when it is destroyed or replaced. The last one frees the view's buffers once the
+    // frames that used them are done.
+    void Engine::releaseSceneView(uint32_t viewIndex)
+    {
+        SceneView &view = gpuScene->views[viewIndex];
+        if (view.graphs == 0 || --view.graphs > 0)
+            return;
+        ctx.waitForFence(frameFence, frameFenceValue);
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+        {
+            destroyBuffer(ctx, view.visibleDraws[i]);
+            destroyBuffer(ctx, view.hiz[i]);
+        }
+        destroyBuffer(ctx, view.visibility);
+        view = {};
     }
 
     // The view's first pass runs it, before anything of the view is recorded. It decides what the view's passes do
@@ -736,7 +782,6 @@ namespace rasm
 
         const auto &sceneRef = registry.scenes[view.scene.index];
         const auto &cameraRef = registry.cameras[view.camera.index];
-        const uint64_t drawCountsOffset = static_cast<uint64_t>(viewIndex) * gfx::MAX_DRAW_RUNS * sizeof(uint32_t);
 
         gfx::SceneData sceneData{};
         sceneData.projection = getProjectionMatrix(view.camera, static_cast<float>(width) / static_cast<float>(height));
@@ -764,11 +809,11 @@ namespace rasm
         sceneData.materialsPtr = ctx.getBufferDeviceAddress(gpuScene->materials.buffer(frame));
         sceneData.geometryPtr = ctx.getBufferDeviceAddress(geometryPool->tableBuffer());
         sceneData.allDrawsPtr = ctx.getBufferDeviceAddress(drawList.buffers[frame]);
-        sceneData.drawCountsPtr = ctx.getBufferDeviceAddress(gpuScene->drawCounts[frame]) + drawCountsOffset;
         if (culled)
         {
             sceneData.cullSlotsPtr = sceneData.drawInfoPtr + static_cast<uint64_t>(visibleCapacity) * sizeof(gfx::DrawInfo);
             sceneData.groupCountsPtr = sceneData.cullSlotsPtr + static_cast<uint64_t>(visibleCapacity) * sizeof(uint32_t);
+            sceneData.drawCountsPtr = sceneData.drawInfoPtr + getDrawCountsOffset(visibleCapacity);
             sceneData.cullStatsPtr = ctx.getBufferDeviceAddress(gpuScene->cullStats[frame]);
         }
         if (view.hizLevelCount > 0)
@@ -866,7 +911,7 @@ namespace rasm
         const auto frame = static_cast<uint32_t>(frameCount);
         const auto &drawList = gpuScene->drawLists[view.scene.index];
         const auto commandBuffer = frameResources[frame].commandBuffer;
-        const uint64_t drawCountsOffset = static_cast<uint64_t>(viewIndex) * gfx::MAX_DRAW_RUNS * sizeof(uint32_t);
+        const uint64_t drawCountsOffset = getDrawCountsOffset(view.visibleCapacity[frame]);
         ctx.bindPipeline(commandBuffer, gpuScene->pipeline);
         ctx.bindDescriptorSet(commandBuffer, gpuScene->pipeline, bindlessDescriptorSet, 0);
         ctx.bindIndexBuffer(commandBuffer, geometryPool->indexBuffer(), 0, Format::U32_UINT);
@@ -879,7 +924,7 @@ namespace rasm
             ctx.setCullMode(commandBuffer, run.cullMode);
             ctx.pushConstants(commandBuffer, gpuScene->pipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
             if (view.culled)
-                ctx.drawIndexedIndirectCount(commandBuffer, view.visibleDraws[frame], run.first * sizeof(gfx::DrawInfo), gpuScene->drawCounts[frame],
+                ctx.drawIndexedIndirectCount(commandBuffer, view.visibleDraws[frame], run.first * sizeof(gfx::DrawInfo), view.visibleDraws[frame],
                                              drawCountsOffset + i * sizeof(uint32_t), run.count, sizeof(gfx::DrawInfo));
             else
                 ctx.drawIndexedIndirect(commandBuffer, drawList.buffers[frame], run.first * sizeof(gfx::DrawInfo), run.count, sizeof(gfx::DrawInfo));

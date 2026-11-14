@@ -377,16 +377,17 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
     return 1;
 }</code></pre>
 
-<p><b>Scene views.</b> Each (scene, camera, target) is a <i>scene view</i>, with its own culling buffers on the GPU. A view is kept for the engine's lifetime, so building a graph again for the same three reuses it. Views let one frame draw several scenes, cameras or targets. The scene's lights are read every frame. Nothing is drawn, with no error, while the scene is empty or all its entities still load: the target keeps its clear color.</p>
+<p><b>Scene views.</b> Each (scene, camera, target) is a <i>scene view</i>, with its own culling buffers on the GPU. A view lives while a graph holds it: graphs built for the same three share it, and when the last of them is destroyed or replaced, the view's buffers are freed. Views let one frame draw several scenes, cameras or targets. The scene's lights are read every frame. Nothing is drawn, with no error, while the scene is empty or all its entities still load: the target keeps its clear color.</p>
 <p>Culling also picks each visible draw's <a href="../guides/lod-selection.html">level of detail</a> from its distance to the camera and <code>EngineConfig::lodErrorPixels</code>. A view drawn without culling draws LOD 0.</p>
 
 <div class="table-wrap">
 <table>
   <tr><th>Rule</th><th>What happens otherwise</th></tr>
-  <tr><td>At most <code>MAX_SCENE_VIEWS</code> (8) scene views</td><td>An error (<i>"A scene can be drawn by at most 8 views (scene, camera, target)."</i>), nothing added, <code>false</code></td></tr>
+  <tr><td>At most <code>MAX_SCENE_VIEWS</code> (8) scene views held by graphs at once</td><td>An error (<i>"At most 8 views (scene, camera, target) can be held by render graphs at once."</i>), nothing added, <code>false</code></td></tr>
+  <tr><td>One graph adds each scene view once</td><td>An error, nothing added, <code>false</code></td></tr>
   <tr><td>A render target has one color in the window's format and <code>D32_SFLOAT</code> depth</td><td>An error, nothing added, <code>false</code></td></tr>
   <tr><td>The scene shader <code>passes/rasm.slang</code> must compile</td><td>An error is logged; the engine tries again next frame, so a fixed shader file is picked up while the program runs</td></tr>
-  <tr><td>The culling shader <code>passes/cull.slang</code> should compile</td><td>The scene is still drawn, only without culling. Without <code>passes/hiz.slang</code> it is frustum culled only.</td></tr>
+  <tr><td>The culling shader <code>passes/cull.slang</code> should compile</td><td>The scene is still drawn, only without culling. Without <code>passes/hiz.slang</code>, or when the view's occlusion buffers cannot be made, it is frustum culled only.</td></tr>
 </table>
 </div>
 

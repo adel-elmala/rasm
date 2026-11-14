@@ -64,6 +64,7 @@ namespace rasm
         BufferHandle                    hiz[MAX_FRAMES_IN_FLIGHT]                                           = {};
         uint32_t                        hizCapacity[MAX_FRAMES_IN_FLIGHT]                                   = {};
         BufferHandle                    visibility                                                          = {};
+        uint32_t                        graphs                                                              = 0;    // graphs that hold it; 0 is a free slot
         bool                            ready                                                               = false;
         bool                            culled                                                              = false;
         uint32_t                        groupCount                                                          = 0;
@@ -81,9 +82,8 @@ namespace rasm
         PipelineHandle                  cullCountPipeline                                                   = {};
         PipelineHandle                  cullWritePipeline                                                   = {};
         PipelineHandle                  hizPipeline                                                         = {};
-        BufferHandle                    drawCounts[MAX_FRAMES_IN_FLIGHT]                                    = {};
         BufferHandle                    cullStats[MAX_FRAMES_IN_FLIGHT]                                     = {};
-        std::vector<SceneView>          views;
+        SceneView                       views[MAX_SCENE_VIEWS];
         DrawTotals                      drawTotals[MAX_FRAMES_IN_FLIGHT]                                    = {};
         std::vector<EntityDrawState>    entities;
         std::vector<CullMode>           instanceCullModes;

@@ -917,7 +917,7 @@ graph.addPass(
   <strong>Known limits</strong>
   <ul>
     <li>Only render targets are transient. Textures and buffers from the builder, and history targets, live until shutdown (<code>D4</code>).</li>
-    <li>The graph orders only its own passes. A buffer that two graphs share is not ordered between them, and two graphs that draw the same scene view (scene, camera, target) share its buffers.</li>
+    <li>The graph orders only its own passes. A buffer that two graphs share is not ordered between them, and two graphs that draw the same scene view (scene, camera, target) share its buffers. A graph holds the scene views it added until it is destroyed or replaced.</li>
     <li>Nothing can be destroyed: render targets, buffers and pipelines live until shutdown (<code>D4</code>).</li>
   </ul>
 </div>

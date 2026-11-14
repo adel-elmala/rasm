@@ -61,8 +61,8 @@ namespace rasm
         const uint64_t fenceValue = frameResources[frame].fenceValue;
         if (slot.measuring && fenceValue != slot.readFenceValue)
         {
-            // Timer 0 is the frame's command buffer. Culling's command buffer runs before it, so the frame's GPU
-            // time goes from the earliest timestamp (0) to the latest, and the timers are listed by start time.
+            // Timer 0 spans the frame's command buffer, culling included, so the frame's GPU time goes from its start
+            // (timestamp 0) to the latest end. The other timers are listed by start time.
             uint64_t nanoseconds[2 * MAX_GPU_TIMERS];
             if (slot.timerCount > 0 && ctx.getTimestamps(slot.timestamps, 2 * slot.timerCount, nanoseconds))
             {

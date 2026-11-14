@@ -61,6 +61,7 @@ namespace rasm
     class Engine
     {
         friend class RenderContext;
+        friend class RenderGraph;
 
     public:
                                     Engine(const EngineConfig& config);
@@ -211,6 +212,7 @@ namespace rasm
         void                        rebuildDrawList(SceneHandle scene);
         void                        uploadDrawList(SceneDrawList& drawList);
         uint32_t                    createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget);
+        void                        releaseSceneView(uint32_t view);
         void                        prepareSceneView(uint32_t view);
         void                        recordSceneCulling(uint32_t view, uint32_t phase);
         void                        recordHiz(uint32_t view);

@@ -467,7 +467,7 @@ engine.setCameraController(camera, rasm::CameraController{
   <tr><th>Constant</th><th>Value</th><th>What it limits</th></tr>
   <tr><td><code>MAX_CAMERAS</code></td><td>8 (7 usable)</td><td>cameras in the whole engine, <code>rasm/engine.h</code></td></tr>
   <tr><td><code>MAX_CAMERAS_PER_SCENE</code></td><td>8</td><td><code>addCameraToScene</code> per scene, <code>rasm/scene.h</code></td></tr>
-  <tr><td><code>MAX_SCENE_VIEWS</code></td><td>8</td><td>scene views (scene, camera, target) given to <a href="engine.html#addScenePasses"><code>addScenePasses</code></a>, so at most 8 camera views in all, <code>rasm/scene.h</code></td></tr>
+  <tr><td><code>MAX_SCENE_VIEWS</code></td><td>8</td><td>scene views (scene, camera, target) held by render graphs at once (<a href="engine.html#addScenePasses"><code>addScenePasses</code></a>), so at most 8 camera views at a time, <code>rasm/scene.h</code></td></tr>
 </table>
 </div>
 

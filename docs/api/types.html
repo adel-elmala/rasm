@@ -448,7 +448,7 @@ struct RenderTarget
   <tr id="MAX_CAMERAS_PER_SCENE"><td><code>MAX_CAMERAS_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>8</td><td><code>addCameraToScene</code> per scene (the global camera limit is lower).</td></tr>
   <tr id="MAX_LIGHTS_PER_SCENE"><td><code>MAX_LIGHTS_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>= <code>MAX_LIGHTS</code></td><td><code>addLightToScene</code> per scene (the global light limit is lower).</td></tr>
   <tr id="MAX_SCENES"><td><code>MAX_SCENES</code><br><code>rasm/scene.h</code></td><td>16</td><td>Scenes: 15 fit.</td></tr>
-  <tr id="MAX_SCENE_VIEWS"><td><code>MAX_SCENE_VIEWS</code><br><code>rasm/scene.h</code></td><td>8</td><td>Scene views: the (scene, camera, target) sets given to <a href="engine.html#addScenePasses"><code>addScenePasses</code></a>, kept for the engine's lifetime. One more logs an error, and <code>addScenePasses</code> adds nothing and returns <code>false</code>.</td></tr>
+  <tr id="MAX_SCENE_VIEWS"><td><code>MAX_SCENE_VIEWS</code><br><code>rasm/scene.h</code></td><td>8</td><td>Scene views: the (scene, camera, target) sets given to <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> and held by render graphs at once. A graph lets go of its views when it is destroyed or replaced. One more logs an error, and <code>addScenePasses</code> adds nothing and returns <code>false</code>.</td></tr>
 </table>
 </div>
 

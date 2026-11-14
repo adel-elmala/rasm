@@ -480,7 +480,7 @@
   <tr><td>GPU scene tables: instances, materials</td><td><code>GpuTable::buffers</code></td><td><code>syncGpuScene</code>, through <code>GpuTable::upload</code></td></tr>
   <tr><td>Draw lists, one per scene</td><td><code>SceneDrawList::buffers</code></td><td><code>syncGpuScene</code>, through <code>uploadDrawList</code></td></tr>
   <tr><td>Scene data, one per scene view</td><td><code>GpuScene::sceneData</code> (host-visible)</td><td><code>prepareSceneView</code>, at the start of the view's <code>Cull</code> pass</td></tr>
-  <tr><td>Culling: counts, visible lists, Hi-Z, cull stats</td><td><code>drawCounts</code>, <code>cullStats</code> in <code>GpuScene</code>; <code>visibleDraws</code>, <code>hiz</code> in each <code>SceneView</code></td><td>the culling and Hi-Z passes; the CPU reads <code>cullStats</code> back</td></tr>
+  <tr><td>Culling: visible lists with their counts, Hi-Z, cull stats</td><td><code>cullStats</code> in <code>GpuScene</code>; <code>visibleDraws</code>, <code>hiz</code> in each <code>SceneView</code></td><td>the culling and Hi-Z passes; the CPU reads <code>cullStats</code> back</td></tr>
   <tr><td>Attachments of a render target with <code>history</code></td><td><code>RenderTarget::attachments</code></td><td>passes that draw into the target; the next frame reads the copy</td></tr>
   <tr><td>Timestamp queries</td><td><code>FrameStatsSlot::timestamps</code></td><td>the GPU timers; read in <code>updateFrameStats</code></td></tr>
   <tr><td>Stats overlay text</td><td><code>StatsOverlaySlot::text</code></td><td><code>updateStatsOverlay</code></td></tr>

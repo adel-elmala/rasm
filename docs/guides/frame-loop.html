@@ -547,8 +547,8 @@
 <table>
   <tr><th>Per slot</th><th>Where</th></tr>
   <tr><td>frame command buffer, depth texture, fence value</td><td><code>FrameResources</code> in <code>Engine::frameResources</code></td></tr>
-  <tr><td><code>SceneData</code> and draw counts (a slot per scene view), cull stats</td><td><code>GpuScene</code></td></tr>
-  <tr><td>visible draws, Hi-Z buffer</td><td><code>SceneView</code>, one per scene view in <code>GpuScene::views</code></td></tr>
+  <tr><td><code>SceneData</code> (a slot per scene view), cull stats</td><td><code>GpuScene</code></td></tr>
+  <tr><td>visible draws with their draw counts, Hi-Z buffer</td><td><code>SceneView</code>, one per scene view in <code>GpuScene::views</code></td></tr>
   <tr><td>instance and material table buffers, draw list buffers</td><td><code>GpuTable</code>, <code>SceneDrawList::buffers</code></td></tr>
   <tr><td>GPU timestamp query pool</td><td><code>FrameStatsSlot</code></td></tr>
   <tr><td>stats overlay text buffer</td><td><code>StatsOverlaySlot</code></td></tr>
