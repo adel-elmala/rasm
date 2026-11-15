@@ -174,7 +174,11 @@ namespace rasm
                                      {"viewportHeight", offsetof(gfx::SceneData, viewportHeight)},
                                      {"lodErrorPixels", offsetof(gfx::SceneData, lodErrorPixels)},
                                      {"forcedLod", offsetof(gfx::SceneData, forcedLod)},
-                                     {"padding", offsetof(gfx::SceneData, padding)}});
+                                     {"shadowTexture", offsetof(gfx::SceneData, shadowTexture)},
+                                     {"shadowMatrix", offsetof(gfx::SceneData, shadowMatrix)},
+                                     {"shadowLight", offsetof(gfx::SceneData, shadowLight)},
+                                     {"lodPixelsPerUnit", offsetof(gfx::SceneData, lodPixelsPerUnit)},
+                                     {"lodDepthPlane", offsetof(gfx::SceneData, lodDepthPlane)}});
 
             valid &= validateStruct(fieldStruct(scene, "lights"), "Light", sizeof(gfx::Light),
                                     {{"position", offsetof(gfx::Light, position)},
@@ -435,9 +439,12 @@ namespace rasm
 
     slang::TargetDesc ShaderCompiler::getTargetDesc(Target target)
     {
-        // The returned desc only points at these, so they must outlive this function.
-        static const slang::CompilerOptionEntry spirvOptions[] = {{slang::CompilerOptionName::EmitSpirvDirectly,
-                                                                   {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}}};
+        // The returned desc only points at these, so they must outlive this function. Slang counts any texture gather
+        // (shadow.slang) as spvImageGatherExtended and warns when the profile lacks it; plain gathers emit no such
+        // SPIR-V capability, so naming it changes no code.
+        static slang::CompilerOptionEntry spirvOptions[] = {{slang::CompilerOptionName::EmitSpirvDirectly, {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}},
+                                                            {slang::CompilerOptionName::Capability, {slang::CompilerOptionValueKind::Int, 0, 0, nullptr, nullptr}}};
+        spirvOptions[1].value.intValue0 = globalSession->findCapability("spvImageGatherExtended");
 
         slang::TargetDesc targetDesc = {};
 
@@ -446,7 +453,7 @@ namespace rasm
         case Target::SPIRV:
             targetDesc.format = SLANG_SPIRV;
             targetDesc.profile = globalSession->findProfile("spirv_1_4");
-            targetDesc.compilerOptionEntryCount = 1;
+            targetDesc.compilerOptionEntryCount = 2;
             targetDesc.compilerOptionEntries = spirvOptions;
             break;
         case Target::MSL:

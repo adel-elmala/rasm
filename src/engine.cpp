@@ -257,13 +257,15 @@ namespace rasm
         return createGraphicsPipeline(name, shaderSource, colorFormats, DEPTH_FORMAT);
     }
 
-    // The pipeline draws into targets with the formats of this one: its colors, in order, and its depth.
+    // The pipeline draws into targets with the formats of this one: its colors, in order, and its depth. A depth-only
+    // target gives a pipeline without colors.
     PipelineHandle Engine::createPipeline(const std::string &name, const std::string &shaderSource, const RenderTargetHandle &renderTarget)
     {
         const auto &rt = ctx.getRenderTarget(renderTarget);
-        if (rt.colorCount == 0)
+        // Every render target has a depth format, so an invalid or stale handle is the one without.
+        if (rt.depthFormat == Format::UNKNOWN)
         {
-            spdlog::error("Pipeline '{}' needs a render target with color formats.", name);
+            spdlog::error("Pipeline '{}' needs a valid render target.", name);
             return {};
         }
         return createGraphicsPipeline(name, shaderSource, rt.colorFormats, rt.depthFormat);

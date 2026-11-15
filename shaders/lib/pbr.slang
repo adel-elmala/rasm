@@ -99,6 +99,8 @@ struct PBRInfo
     float2      emissiveUV;          // UV coordinates for the emissive texture
     uint        numLights;           // number of lights
     Light       lights[MAX_LIGHTS];  // array of lights
+    float       shadow;              // how much of lights[shadowLight] reaches the fragment (shadow.slang)
+    int         shadowLight;         // the light the shadow map darkens (SceneData::shadowLight), -1 without one
     Material    material;            // material properties
 };
 
@@ -178,6 +180,8 @@ float4 shadePBR(Sampler2D gTextures[], PBRInfo pbrInfo)
             // Directional Light: direction points from the light towards the surface,
             // L points from the surface towards the light.
             l = normalize(-light.direction);
+            if (i == pbrInfo.shadowLight)
+                attenuation = pbrInfo.shadow;
         }
         else {
             // Point Light

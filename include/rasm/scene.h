@@ -26,5 +26,14 @@ namespace rasm
         std::vector<LightHandle>    lights;
     };
 
+    struct SceneShadow
+    {
+        CameraHandle                camera;
+        RenderTargetHandle          renderTarget;
+        LightHandle                 light;
+
+        bool                        operator==(const SceneShadow&) const = default;
+    };
+
 }
 // clang-format on
