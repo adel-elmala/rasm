@@ -66,6 +66,7 @@ const SECTIONS = [
             { path: "guides/occlusion-culling.html",     title: "Occlusion culling with Hi-Z" },
             { path: "guides/lod-selection.html",         title: "LOD selection" },
             { path: "guides/render-graphs.html",         title: "Render graphs" },
+            { path: "guides/async-compute.html",         title: "Async compute and multiple queues" },
             { path: "guides/memory-aliasing.html",       title: "Transient memory and aliasing" },
             { path: "guides/load-store-ops.html",        title: "Load and store ops" },
             { path: "guides/multiple-render-targets.html", title: "Multiple render targets" },

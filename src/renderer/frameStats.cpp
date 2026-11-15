@@ -12,7 +12,7 @@ namespace rasm
     namespace
     {
         // Returns UINT32_MAX when the slot isn't measured, the GPU has no timestamps or the frame has used limit timers.
-        uint32_t beginTimer(RenderContext &ctx, FrameStatsCollector &collector, uint32_t frame, const CommandBufferHandle &commandBuffer, const std::string &name, uint32_t limit)
+        uint32_t beginTimer(RenderContext &ctx, FrameStatsCollector &collector, uint32_t frame, const CommandBufferHandle &commandBuffer, const std::string &name, bool onCompute, uint32_t limit)
         {
             FrameStatsSlot &slot = collector.slots[frame];
             if (!slot.measuring || !slot.timestamps.isValid())
@@ -27,6 +27,7 @@ namespace rasm
 
             const uint32_t timer = slot.timerCount++;
             slot.timerNames[timer] = name;
+            slot.timerOnCompute[timer] = onCompute;
             ctx.writeTimestamp(commandBuffer, slot.timestamps, 2 * timer);
             return timer;
         }
@@ -61,25 +62,25 @@ namespace rasm
         const uint64_t fenceValue = frameResources[frame].fenceValue;
         if (slot.measuring && fenceValue != slot.readFenceValue)
         {
-            // Timer 0 spans the frame's command buffer, culling included, so the frame's GPU time goes from its start
-            // (timestamp 0) to the latest end. The other timers are listed by start time.
+            // Timer 0 spans the frame on the graphics queue, so the frame's GPU time goes from its start to the latest
+            // end there. Async compute timers are left out: a timestamp of another queue may count from another
+            // origin. Each timer begins and ends on one queue, so its own time holds. They are listed in the order
+            // they were recorded, which is the order each queue runs them.
             uint64_t nanoseconds[2 * MAX_GPU_TIMERS];
             if (slot.timerCount > 0 && ctx.getTimestamps(slot.timestamps, 2 * slot.timerCount, nanoseconds))
             {
-                uint64_t end = 0;
+                uint64_t end = nanoseconds[1];
                 for (uint32_t i = 0; i < slot.timerCount; ++i)
-                    end = std::max(end, nanoseconds[2 * i + 1]);
-                stats.gpuFrameMs = static_cast<float>(static_cast<double>(end) * 1e-6);
+                {
+                    if (!slot.timerOnCompute[i])
+                        end = std::max(end, nanoseconds[2 * i + 1]);
+                }
+                stats.gpuFrameMs = static_cast<float>(static_cast<double>(end - nanoseconds[0]) * 1e-6);
 
-                uint32_t order[MAX_GPU_TIMERS];
-                for (uint32_t i = 1; i < slot.timerCount; ++i)
-                    order[i - 1] = i;
                 stats.gpuTimerCount = slot.timerCount - 1;
-                std::sort(order, order + stats.gpuTimerCount, [&](uint32_t a, uint32_t b)
-                          { return nanoseconds[2 * size_t{a}] < nanoseconds[2 * size_t{b}]; });
                 for (uint32_t i = 0; i < stats.gpuTimerCount; ++i)
                 {
-                    const size_t timer = order[i];
+                    const size_t timer = i + 1;
                     stats.gpuTimers[i] = {.name = slot.timerNames[timer],
                                           .milliseconds = static_cast<float>(static_cast<double>(nanoseconds[2 * timer + 1] - nanoseconds[2 * timer]) * 1e-6)};
                 }
@@ -118,7 +119,8 @@ namespace rasm
 
     uint32_t Engine::beginGpuTimer(const CommandBufferHandle &commandBuffer, const std::string &name)
     {
-        return beginTimer(ctx, *frameStats, static_cast<uint32_t>(frameCount), commandBuffer, name, MAX_GPU_TIMERS);
+        const bool onCompute = asyncCompute && commandBuffer == frameResources[frameCount].commandBuffer && recordingQueue == QueueType::COMPUTE;
+        return beginTimer(ctx, *frameStats, static_cast<uint32_t>(frameCount), commandBuffer, name, onCompute, MAX_GPU_TIMERS);
     }
 
     void Engine::endGpuTimer(const CommandBufferHandle &commandBuffer, uint32_t timer)

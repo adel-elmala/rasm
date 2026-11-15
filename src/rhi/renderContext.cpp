@@ -267,6 +267,7 @@ namespace rasm
         std::vector<TransientGroup>                                                                                             transientGroups;
         std::vector<HistoryClear>                                                                                               pendingClears;  // made since the last frame began
         std::vector<HistoryClear>                                                                                               recordedClears; // in a frame not yet submitted
+        rhi::FenceWait                                                                                                          lastComputeSubmit;  // what the last compute submit signals
 
         // Dedup caches, only for immutable objects keyed on their full state. Mutable resources
         // (buffers, textures, descriptor pools/sets) are always created fresh (B1).
@@ -317,7 +318,8 @@ namespace rasm
                                                    .window = &window,
                                                    .enableValidation = config.enableValidation,
                                                    .enableSyncValidation = config.enableSyncValidation,
-                                                   .enableGpuValidation = config.enableGpuValidation});
+                                                   .enableGpuValidation = config.enableGpuValidation,
+                                                   .asyncCompute = config.asyncCompute});
         if (!impl->device)
             return false;
 
@@ -510,9 +512,9 @@ namespace rasm
         return handle;
     }
 
-    CommandBufferHandle RenderContext::createCommandBuffer(const std::string &name)
+    CommandBufferHandle RenderContext::createCommandBuffer(const std::string &name, QueueType queue)
     {
-        auto *rhiCommandBuffer = impl->device->createCommandBuffer(rhi::QueueType::GRAPHICS, name);
+        auto *rhiCommandBuffer = impl->device->createCommandBuffer(queue, name);
         if (!rhiCommandBuffer)
             return {};
 
@@ -1199,45 +1201,74 @@ namespace rasm
         return true;
     }
 
-    bool RenderContext::submit(const CommandBufferHandle *commandBuffers, uint32_t commandBufferCount, FenceHandle signalFence, uint64_t signalValue, bool presentsSwapchainImage)
+    bool RenderContext::submit(const SubmitInfo &info)
     {
         ZoneScoped;
 
         // They run in this order on the queue, as one submission.
-        if (!checkArgument(commandBufferCount <= rhi::MAX_SUBMIT_COMMAND_BUFFERS, __func__, "too many command buffers."))
+        if (!checkArgument(info.commandBufferCount <= rhi::MAX_SUBMIT_COMMAND_BUFFERS, __func__, "too many command buffers."))
+            return false;
+        // One wait is kept for the uploads.
+        if (!checkArgument(info.waitCount < rhi::MAX_SUBMIT_WAITS, __func__, "too many fence waits."))
             return false;
         rhi::CommandBuffer *rhiCommandBuffers[rhi::MAX_SUBMIT_COMMAND_BUFFERS] = {};
-        for (uint32_t i = 0; i < commandBufferCount; ++i)
+        for (uint32_t i = 0; i < info.commandBufferCount; ++i)
         {
-            rhiCommandBuffers[i] = lookup(impl->commandBuffers, commandBuffers[i], __func__);
+            rhiCommandBuffers[i] = lookup(impl->commandBuffers, info.commandBuffers[i], __func__);
             if (!rhiCommandBuffers[i])
                 return false;
         }
 
-        rhi::Fence *fence = nullptr;
-        if (signalFence.isValid())
+        rhi::FenceWait waits[rhi::MAX_SUBMIT_WAITS] = {};
+        uint32_t waitCount = 0;
+        for (uint32_t i = 0; i < info.waitCount; ++i)
         {
-            fence = lookup(impl->fences, signalFence, __func__);
+            auto *fence = lookup(impl->fences, info.waits[i].fence, __func__);
             if (!fence)
+                return false;
+            waits[waitCount++] = {.fence = fence, .value = info.waits[i].value};
+        }
+
+        rhi::Fence *signalFence = nullptr;
+        if (info.signal.fence.isValid())
+        {
+            signalFence = lookup(impl->fences, info.signal.fence, __func__);
+            if (!signalFence)
                 return false;
         }
 
-        // Uploads go first on the same queue, so this submit sees their data. A failed batch is logged and
-        // retried with the next submit; the frame still goes out so the swapchain keeps moving.
-        impl->uploads.flush();
+        // Uploads go first, on the graphics queue, so this submit sees their data: the same queue through the
+        // barriers in the copies, the compute queue by waiting for them. The copies also wait for the compute
+        // queue, which may still read what they overwrite. A failed batch is logged and retried with the next
+        // submit; the frame still goes out so the swapchain keeps moving.
+        const bool computeQueue = info.queue == QueueType::COMPUTE && impl->device->hasAsyncCompute();
+        impl->uploads.flush(&impl->lastComputeSubmit, impl->lastComputeSubmit.fence != nullptr ? 1 : 0);
+        const rhi::FenceWait uploads = impl->uploads.lastSubmit();
+        if (computeQueue && uploads.value > 0)
+            waits[waitCount++] = uploads;
 
         rhi::SubmitDesc submitDesc = {
             .commandBuffers = rhiCommandBuffers,
-            .commandBufferCount = commandBufferCount,
-            .swapchain = presentsSwapchainImage ? impl->swapchain : nullptr,
-            .signalFence = fence,
-            .signalValue = signalValue,
+            .commandBufferCount = info.commandBufferCount,
+            .waits = waits,
+            .waitCount = waitCount,
+            .acquireSwapchain = info.waitsForSwapchainImage ? impl->swapchain : nullptr,
+            .presentSwapchain = info.presentsSwapchainImage ? impl->swapchain : nullptr,
+            .signalFence = signalFence,
+            .signalValue = info.signal.value,
         };
-        if (!impl->device->getQueue(rhi::QueueType::GRAPHICS)->submit(submitDesc))
+        if (!impl->device->getQueue(info.queue)->submit(submitDesc))
             return false;
+        if (computeQueue && signalFence != nullptr)
+            impl->lastComputeSubmit = {.fence = signalFence, .value = info.signal.value};
         impl->textureStates.submitted();
         impl->recordedClears.clear();
         return true;
+    }
+
+    bool RenderContext::hasAsyncCompute() const
+    {
+        return impl->device->hasAsyncCompute();
     }
 
     // For commands that were recorded but will not run, a failed submit included: the textures go back to

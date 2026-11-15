@@ -108,8 +108,8 @@
     <li>For last frame's image (accumulation, trails, temporal effects), create the target with <code>history = true</code> and declare <code>readPrevious(rt)</code>.</li>
     <li>Any other target from <code>createRenderTarget</code> on the graph or the builder is <b>transient</b>: targets that are never used at the same time share memory. Set <code>swapchainScale = 1.0f</code> to make a target follow the window size.</li>
     <li>The graph records the barriers and layout changes from what the passes declare. <b>Declare every buffer and texture a pass uses</b>: an undeclared one gets no barrier.</li>
-    <li>A compute pass runs outside any render pass, so it can <code>dispatch</code>.</li>
-    <li>Inside a callback, record with the <a href="low-level.html">RenderContext</a> and the frame's command buffer: <code>engine.getCurrentFrameResources().commandBuffer</code>.</li>
+    <li>A compute pass runs outside any render pass, so it can <code>dispatch</code>. One added with <code>addAsyncComputePass</code> runs on the compute queue when <code>EngineConfig::asyncCompute</code> is on; the graph adds the waits between the queues.</li>
+    <li>Inside a callback, record with the <a href="low-level.html">RenderContext</a> and the command buffer being recorded: <code>engine.getCurrentFrameResources().commandBuffer</code>. Fetch it inside the callback, since it changes when the pass runs on the other queue.</li>
     <li>Pipelines for your own shaders come from <code>createPipeline</code> and <code>createComputePipeline</code>, compiled from Slang source at run time.</li>
   </ul>
 </div>
@@ -134,6 +134,9 @@ public:
     void               addComputePass(std::string name,
                                       const std::function&lt;void(PassBuilder&amp;)&gt;&amp; setup,
                                       std::function&lt;void(RenderContext&amp;)&gt; execute);
+    void               addAsyncComputePass(std::string name,
+                                           const std::function&lt;void(PassBuilder&amp;)&gt;&amp; setup,
+                                           std::function&lt;void(RenderContext&amp;)&gt; execute);
     RenderTargetHandle createRenderTarget(const RenderTargetDesc&amp; desc);
     void               compile();
     void               execute(CameraHandle camera);
@@ -169,6 +172,21 @@ public:
   </div>
 </div>
 
+<div class="api" id="addAsyncComputePass">
+  <pre class="sig">void addAsyncComputePass(std::string name,
+                         const std::function&lt;void(PassBuilder&amp;)&gt;&amp; setup,
+                         std::function&lt;void(RenderContext&amp;)&gt; execute);</pre>
+  <div class="body">
+    <p>Adds a compute pass that may run on the compute queue, next to the graphics work. With <code>EngineConfig::asyncCompute</code> and a compute queue (<a href="low-level.html#hasAsyncCompute"><code>hasAsyncCompute</code></a>), it records into the compute queue's command buffer. Without one, it is the same as <code>addComputePass</code>. The pass sorts the same way either way, and the rules of <a href="#addComputePass"><code>addComputePass</code></a> apply.</p>
+    <ul>
+      <li>Fetch <code>engine.getCurrentFrameResources().commandBuffer</code> inside <code>execute</code>: during this pass it is the compute queue's command buffer.</li>
+      <li>When this pass and a pass on the graphics queue use the same declared resource, the graph makes one queue wait for the other instead of recording a barrier (see <a href="#queues">Across queues</a>).</li>
+      <li>The compute queue has no graphics stages: a <code>memoryBarrier</code> with <code>GRAPHICS</code> is fitted to it (see <a href="low-level.html#memoryBarrier">memoryBarrier</a>).</li>
+    </ul>
+    <p>The scene's culling passes and <code>Hi-Z</code> are added this way (<a href="engine.html#addScenePasses"><code>addScenePasses</code></a>). A pass gains from the compute queue only when graphics work that does not need it can run at the same time; each change of queue costs a little (<code>P11</code>). See the guide <a href="../guides/async-compute.html">Async compute and multiple queues</a>.</p>
+  </div>
+</div>
+
 <div class="api" id="RenderGraph-createRenderTarget">
   <pre class="sig">RenderTargetHandle createRenderTarget(const RenderTargetDesc&amp; desc);</pre>
   <div class="body">
@@ -196,6 +214,7 @@ public:
     void               read(TextureHandle handle);
     void               read(BufferHandle handle);
     void               read(RenderTargetHandle handle);
+    void               read(const BufferHandle (&amp;perFrame)[MAX_FRAMES_IN_FLIGHT]);
     void               readPrevious(RenderTargetHandle handle);
     void               readPrevious(BufferHandle handle);
     void               readDepth(RenderTargetHandle handle);
@@ -203,6 +222,7 @@ public:
     void               write(TextureHandle handle);
     void               write(BufferHandle handle);
     void               write(RenderTargetHandle rt);
+    void               write(const BufferHandle (&amp;perFrame)[MAX_FRAMES_IN_FLIGHT]);
     void               writeSwapchain();
 };</pre>
   <div class="body">
@@ -224,7 +244,7 @@ RenderTargetHandle createRenderTarget(const RenderTargetDesc&amp; desc);</pre>
 void read(BufferHandle handle);
 void read(RenderTargetHandle handle);</pre>
   <div class="body">
-    <p>This pass reads the resource. It runs after the last pass added before it that writes the resource, and before the next pass added that writes it. A read added before every writer reads the last writer of the frame, unless this pass writes the resource too: then it reads what the resource held before this frame's writes. A read of something no pass writes adds no order. Declaring a read does not bind anything: the pass still finds the data itself (a bindless index, a device address). It does decide the barriers: a texture or render target read is moved to <code>SAMPLED</code> before the pass, and a buffer read waits for the last write (see <a href="#barriers">Barriers</a>).</p>
+    <p>This pass reads the resource. It runs after the last pass added before it that writes the resource, and before the next pass added that writes it. A read added before every writer reads the last writer of the frame, unless this pass writes the resource too: then it reads what the resource held before this frame's writes. A read of something no pass writes adds no order. Declaring a read does not bind anything: the pass still finds the data itself (a bindless index, a device address). It does decide the barriers: a texture or render target read is moved to <code>SAMPLED</code> before the pass, and a buffer read waits for the last write (see <a href="#barriers">Barriers</a>, and <a href="#queues">Across queues</a> for a write on the other queue).</p>
   </div>
 </div>
 
@@ -266,6 +286,19 @@ void write(BufferHandle handle);</pre>
   </div>
 </div>
 
+<div class="api" id="read-perFrame">
+  <pre class="sig">void read(const BufferHandle (&amp;perFrame)[MAX_FRAMES_IN_FLIGHT]);
+void write(const BufferHandle (&amp;perFrame)[MAX_FRAMES_IN_FLIGHT]);</pre>
+  <div class="body">
+    <p>This pass reads or writes a buffer that has one copy per frame slot: <code>perFrame[i]</code> is the copy that frames in slot <code>i</code> use. You create and fill the copies yourself.</p>
+    <ul>
+      <li><b>Order:</b> every copy counts, so the pass sorts as if it read or wrote each of them.</li>
+      <li><b>Barriers and waits:</b> only the copy of the frame being recorded counts. The frame before uses the other copy, so this frame does not wait for it.</li>
+    </ul>
+    <p>The scene passes declare their visible draws and their Hi-Z this way. So <code>Cull 1</code> on the compute queue does not wait for the last frame's draws on the graphics queue, and can run next to them.</p>
+  </div>
+</div>
+
 <div class="api" id="write-renderTarget">
   <pre class="sig">void write(RenderTargetHandle rt);</pre>
   <div class="body">
@@ -292,10 +325,13 @@ void write(BufferHandle handle);</pre>
     std::vector&lt;RenderTargetHandle&gt;     depthRenderTargets;
     std::vector&lt;TextureHandle&gt;          outputTextures;
     std::vector&lt;BufferHandle&gt;           outputBuffers;
+    std::vector&lt;FrameBuffers&gt;           frameInputBuffers;
+    std::vector&lt;FrameBuffers&gt;           frameOutputBuffers;
     RenderTargetHandle                  outputRenderTarget;
     std::function&lt;void(RenderContext&amp;)&gt; execute;
     AttachmentOps                       attachmentOps;
     bool                                compute             = false;
+    bool                                async               = false;
     bool                                writesSwapchain     = false;
     bool                                readsSwapchainDepth = false;
 
@@ -303,7 +339,7 @@ void write(BufferHandle handle);</pre>
     std::vector&lt;uint32_t&gt;   successors;
 };</pre>
   <div class="body">
-    <p>What the graph stores per pass. <code>read</code> and <code>write</code> fill the input and output lists, <code>readPrevious</code> fills <code>previousRenderTargets</code> or <code>previousBuffers</code>, <code>readDepth</code> fills <code>depthRenderTargets</code>, <code>readSwapchainDepth</code> sets <code>readsSwapchainDepth</code>, and <code>writeSwapchain</code> sets <code>writesSwapchain</code>. <code>compile</code> fills <code>attachmentOps</code> (see <a href="#load-store">Load and store</a>). <code>inDegree</code> and <code>successors</code> are filled by <code>compile</code>: the number of passes that must run first, and the passes that wait for this one. You never build a <code>Pass</code> yourself.</p>
+    <p>What the graph stores per pass. <code>read</code> and <code>write</code> fill the input and output lists (the per-frame ones fill <code>frameInputBuffers</code> and <code>frameOutputBuffers</code>), <code>addComputePass</code> sets <code>compute</code>, <code>addAsyncComputePass</code> sets <code>compute</code> and <code>async</code>, <code>readPrevious</code> fills <code>previousRenderTargets</code> or <code>previousBuffers</code>, <code>readDepth</code> fills <code>depthRenderTargets</code>, <code>readSwapchainDepth</code> sets <code>readsSwapchainDepth</code>, and <code>writeSwapchain</code> sets <code>writesSwapchain</code>. <code>compile</code> fills <code>attachmentOps</code> (see <a href="#load-store">Load and store</a>). <code>inDegree</code> and <code>successors</code> are filled by <code>compile</code>: the number of passes that must run first, and the passes that wait for this one. You never build a <code>Pass</code> yourself.</p>
   </div>
 </div>
 
@@ -317,14 +353,36 @@ void write(BufferHandle handle);</pre>
   </div>
 </div>
 
-<div class="api" id="BufferAccess">
-  <pre class="sig">struct BufferAccess
+<div class="api" id="FrameBuffers">
+  <pre class="sig">struct FrameBuffers
+{
+    BufferHandle slots[MAX_FRAMES_IN_FLIGHT];
+};</pre>
+  <div class="body">
+    <p>One per-frame buffer declaration (<a href="#read-perFrame">read(perFrame)</a>, <a href="#read-perFrame">write(perFrame)</a>): the copy of each frame slot. Stored in <code>Pass::frameInputBuffers</code> and <code>Pass::frameOutputBuffers</code>. You never build one yourself.</p>
+  </div>
+</div>
+
+<div class="api" id="Access">
+  <pre class="sig">struct QueueUse
 {
     PipelineStage   writeStages = {};
     PipelineStage   readStages  = {};
+    uint64_t        value       = 0;
+};
+
+struct Access
+{
+    QueueUse        queues[QUEUE_COUNT];
 };</pre>
   <div class="body">
-    <p>A protected type inside <code>RenderGraph</code>: what the graph remembers about each buffer a pass declares. <code>writeStages</code> is the stage of the last write (none before the first), and <code>readStages</code> the stages that have read it since, behind a barrier. It is kept across frames, and only <code>execute</code> changes it. You never build one yourself.</p>
+    <p>Protected types inside <code>RenderGraph</code>: what the graph remembers about each buffer a pass declares (<code>bufferAccess</code>) and, with async compute, each texture (<code>textureAccess</code>). <code>queues</code> has one entry per <a href="low-level.html#QueueType">QueueType</a>:</p>
+    <dl>
+      <dt>writeStages</dt><dd>The stage of the last write on that queue (none before the first).</dd>
+      <dt>readStages</dt><dd>The stages that have read it on that queue since, behind a barrier.</dd>
+      <dt>value</dt><dd>The fence value of the batch that used it last on that queue. A pass on the other queue waits for it.</dd>
+    </dl>
+    <p>A write empties the other queue's entry. Textures count every use as a write. The state is kept across frames, and only <code>execute</code> changes it. You never build one yourself.</p>
   </div>
 </div>
 
@@ -398,7 +456,7 @@ void write(BufferHandle handle);</pre>
 <div class="api" id="execute">
   <pre class="sig">void execute(CameraHandle camera);</pre>
   <div class="body">
-    <p>Runs one whole frame: <code>beginFrame(camera)</code>, every pass in order, <code>endFrame</code>. Call it once per loop instead of <code>render</code>. The results show on screen when the frame is presented.</p>
+    <p>Runs one whole frame: <code>beginFrame(camera)</code>, every pass in order, <code>endFrame</code>. Call it once per loop instead of <code>render</code>. The results show on screen when the frame is presented. With async compute, each pass records into the open batch of its queue (<a href="#queues">Across queues</a>).</p>
     <dl>
       <dt>camera</dt><dd>Gets this frame's mouse and keyboard input (through <a href="camera.html#pollEvents">pollEvents</a>). It is not given to the passes: <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> takes its own camera.</dd>
     </dl>
@@ -408,7 +466,7 @@ void write(BufferHandle handle);</pre>
 
 <h3 id="barriers">Barriers</h3>
 
-<p>Before each pass begins, <code>execute</code> records what its reads and writes need. A pass is <code>COMPUTE</code> or <code>GRAPHICS</code> as a whole.</p>
+<p>Before each pass begins, <code>execute</code> records what its reads and writes need. A pass is <code>COMPUTE</code> or <code>GRAPHICS</code> as a whole. These barriers cover uses on the same queue; a use on the other queue gets a wait instead (<a href="#queues">Across queues</a>).</p>
 
 <div class="table-wrap">
 <table>
@@ -428,6 +486,44 @@ void write(BufferHandle handle);</pre>
 
 <p>All of a pass's buffers share one global barrier. A buffer or texture the pass uses without declaring it gets nothing, so declare everything it touches. The graph knows only its own passes: a buffer shared with another graph, or with work outside the graph, is not ordered.</p>
 <p><span class="tag">errors</span> <code>compile</code> fails, like on a cycle, for declarations that cannot be right: a pass that reads the render target it draws to, its color or its depth (<code>Pass '…' reads the render target it draws to.</code>), a compute pass with no buffer write, a graphics pass that does not write exactly one render target or the swapchain, and a read of a transient target that no earlier pass draws. The frames then draw no passes until the graph changes.</p>
+
+<h3 id="queues">Across queues</h3>
+
+<p>With <code>EngineConfig::asyncCompute</code>, a pass from <a href="#addAsyncComputePass"><code>addAsyncComputePass</code></a> records into the compute queue, every other pass into the graphics queue. The graph keeps, per resource and per queue, which stages used it and the value of the batch that used it last (<a href="#Access"><code>Access</code></a>). A <i>batch</i> is one command buffer and one submit on one queue.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Scene 1 on the graphics queue draws rt; its batch signals value 6. Hi-Z on the compute queue reads the depth of rt and writes the Hi-Z buffer, so its batch waits for value 6 on the graphics fence, with no barrier. Cull 2 on the compute queue reads the Hi-Z buffer that Hi-Z wrote on the same queue, so it gets a COMPUTE to COMPUTE barrier.">
+    <text x="10" y="64" class="small">graphics queue</text>
+    <text x="10" y="164" class="small">compute queue</text>
+    <rect x="130" y="36" width="190" height="50" rx="6" class="gpu"/>
+    <text x="225" y="56" class="mid mono">Scene 1</text>
+    <text x="225" y="74" class="mid small">write(rt) · batch signals 6</text>
+    <rect x="360" y="136" width="176" height="50" rx="6" class="gpu"/>
+    <text x="448" y="156" class="mid mono">Hi-Z</text>
+    <text x="448" y="174" class="mid small">readDepth(rt) · write(hiz)</text>
+    <rect x="570" y="136" width="170" height="50" rx="6" class="gpu"/>
+    <text x="655" y="156" class="mid mono">Cull 2</text>
+    <text x="655" y="174" class="mid small">read(hiz)</text>
+    <path d="M320,61 C345,61 345,161 358,161" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="350" y="106" class="small t-hot">other queue: wait for 6, no barrier</text>
+    <line x1="553" y1="128" x2="553" y2="194" class="hot"/>
+    <text x="553" y="212" class="mid small t-hot">same queue: barrier COMPUTE → COMPUTE</text>
+  </svg>
+  <figcaption>The wait is a semaphore wait at the start of the compute batch. It blocks all commands and makes the graphics queue's writes visible, so no barrier is needed for them.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Before a pass, for each declared resource</th><th>The graph</th></tr>
+  <tr><td>A buffer it reads, which the other queue wrote</td><td>waits for the other queue's batch that wrote it</td></tr>
+  <tr><td>A buffer it writes, which the other queue wrote or read</td><td>waits for the other queue's batch that used it last</td></tr>
+  <tr><td>A texture, render target or swapchain image the other queue used</td><td>waits as for a buffer write: every texture use counts as a write, since the first use on a queue is often a layout transition. On the same queue, the layout transitions order textures.</td></tr>
+  <tr><td>The first pass of a <a href="#transient">transient</a> target</td><td>waits for all of the other queue's work so far, which may have used the memory</td></tr>
+  <tr><td>A resource it does not declare</td><td>no wait, like no barrier</td></tr>
+</table>
+</div>
+
+<p>A wait closes the other queue's open batch when it needs that batch's work. The waiting queue's open batch then starts only once the other queue's fence reaches the value. <code>endFrame</code> submits all batches, in the order they were closed. Without a compute queue every pass records into the graphics batch and the graph adds no wait. The scene passes and their four batches: <a href="engine.html#addScenePasses"><code>addScenePasses</code></a>.</p>
 
 <h3 id="load-store">Load and store</h3>
 
@@ -490,7 +586,7 @@ void write(BufferHandle handle);</pre>
     <text x="498" y="178" class="mid small">same buffer (reads)</text>
     <line x1="498" y1="158" x2="498" y2="114" class="arrow mem" marker-end="url(#ah-mem)"/>
   </svg>
-  <figcaption>Both barriers come from the buffer's <code>BufferAccess</code>. The first: the previous frame's Animate wrote the buffer and its Draw read it (both frame slots share it), so this write waits for both. The second makes the new positions visible to this frame's draw. The example records no barrier itself.</figcaption>
+  <figcaption>Both barriers come from what the graph remembers about the buffer on the graphics queue (its <a href="#Access"><code>Access</code></a>). The first: the previous frame's Animate wrote the buffer and its Draw read it (both frame slots share it), so this write waits for both. The second makes the new positions visible to this frame's draw. The example records no barrier itself.</figcaption>
 </figure>
 
 <h2><span class="n">4</span>Render targets</h2>
@@ -919,10 +1015,11 @@ graph.addPass(
     <li>Only render targets are transient. Textures and buffers from the builder, and history targets, live until shutdown (<code>D4</code>).</li>
     <li>The graph orders only its own passes. A buffer that two graphs share is not ordered between them, and two graphs that draw the same scene view (scene, camera, target) share its buffers. A graph holds the scene views it added until it is destroyed or replaced.</li>
     <li>Nothing can be destroyed: render targets, buffers and pipelines live until shutdown (<code>D4</code>).</li>
+    <li>Async compute passes overlap little with the scene passes today: each change of queue costs a little, and a frame with uploads overlaps less (<code>P11</code>).</li>
   </ul>
 </div>
 
-<p>How the graph works inside, with the barriers and layouts step by step: the guide <a href="../guides/render-graphs.html">Render graphs</a>. To add a pass to the engine itself, see the <code>new-pass</code> skill in <code>.claude/skills/</code>.</p>
+<p>How the graph works inside, with the barriers and layouts step by step: the guide <a href="../guides/render-graphs.html">Render graphs</a>. How the two queues share a frame: <a href="../guides/async-compute.html">Async compute and multiple queues</a>. To add a pass to the engine itself, see the <code>new-pass</code> skill in <code>.claude/skills/</code>.</p>
 
 </main>
 </div>

@@ -107,10 +107,10 @@
     <text x="430" y="192" class="small">Handle → rhi object tables, dedup caches, the</text>
     <text x="430" y="208" class="small">layout of each texture, render targets, bindless.</text>
     <text x="430" y="270" class="small">Backend-neutral interface: resources, command</text>
-    <text x="430" y="286" class="small">buffers, the queue, the swapchain, fences.</text>
+    <text x="430" y="286" class="small">buffers, the queues, the swapchain, fences.</text>
     <text x="430" y="348" class="small">Vulkan objects through vk-bootstrap and VMA.</text>
     <text x="430" y="364" class="small">Also VulkanCommandBuffer, Queue, Swapchain.</text>
-    <text x="430" y="430" class="small">Runs what the queue submitted.</text>
+    <text x="430" y="430" class="small">Runs what the queues submitted.</text>
   </svg>
   <figcaption>Every frame that draws the scene runs a render graph: <code>render()</code> runs one that <code>Engine</code> keeps (<code>Renderer</code>), or the application builds its own and adds the scene with <code>addScenePasses</code>. The graph calls <code>Engine</code> for the frame and the passes, records the barriers between them, and gives each pass the <code>RenderContext</code> to record with. See <a href="render-graphs.html">Render graphs</a>. Why there is an <code>rhi::Device</code> layer at all is in <a href="graphics-apis-rhi.html">Graphics APIs and the RHI</a>.</figcaption>
 </figure>
@@ -120,7 +120,7 @@
   <tr><th>Layer</th><th>Knows</th><th>Does not know</th></tr>
   <tr><td><code>Engine</code></td><td>scenes, entities, meshes, materials, cameras, lights; the frame loop</td><td>any Vulkan type</td></tr>
   <tr><td><code>RenderContext</code></td><td>handles and the <code>rhi::</code> object behind each one; the layout each texture is in (<code>TextureStates</code>)</td><td>scenes, entities, the frame loop</td></tr>
-  <tr><td><code>rhi::Device</code></td><td>neutral resources, command buffers, the queue, the swapchain</td><td>handles, which backend is under it</td></tr>
+  <tr><td><code>rhi::Device</code></td><td>neutral resources, command buffers, the graphics queue and an optional <a href="async-compute.html">compute queue</a>, the swapchain</td><td>handles, which backend is under it</td></tr>
   <tr><td><code>VulkanDevice</code></td><td><code>VkDevice</code>, VMA, vk-bootstrap</td><td>handles, the engine</td></tr>
 </table>
 </div>
@@ -425,7 +425,7 @@
   <tr><td><code>00_hello_scene</code></td><td>three bunnies from one OBJ mesh and one texture, three lights</td><td><code>loadMesh</code>, <code>loadTexture</code>, <code>createEntity</code>, <code>render</code></td><td><a href="frame-loop.html">stop 2</a>, <a href="gpu-scene.html">stop 3</a>, <a href="gpu-driven.html">GPU-driven rendering</a></td></tr>
   <tr><td><code>01_render_graph</code></td><td>the scene into a render target, a fading trail from last frame's image, a pass with two color outputs, then the swapchain; two of the targets share memory</td><td><code>RenderGraph</code>, <code>createRenderTarget</code>, <code>addScenePasses</code>, <code>createPipeline</code></td><td><a href="render-graphs.html">Render graphs</a>, <a href="memory-aliasing.html">Transient memory</a>, <a href="temporal-history.html">History buffers</a>, <a href="multiple-render-targets.html">Multiple render targets</a></td></tr>
   <tr><td><code>02_gltf</code></td><td>three glTF models with their PBR materials</td><td><code>loadGLTF</code>, sub-meshes, material rows</td><td><a href="asset-streaming.html">Streaming assets</a>, <a href="pbr.html">PBR</a>, <a href="bindless.html">Bindless</a></td></tr>
-  <tr><td><code>03_instances</code></td><td>10 000 cubes; a few spin, new ones appear, one material pulses</td><td><code>createMesh</code>, <code>updateTransform</code>, <code>updateMaterial</code></td><td><a href="gpu-scene.html">stop 3</a>, <a href="gpu-memory.html">GPU memory and uploads</a></td></tr>
+  <tr><td><code>03_instances</code></td><td>10 000 cubes; a few spin, new ones appear, one material pulses; culling runs on the compute queue</td><td><code>createMesh</code>, <code>updateTransform</code>, <code>updateMaterial</code>, <code>EngineConfig::asyncCompute</code></td><td><a href="gpu-scene.html">stop 3</a>, <a href="gpu-memory.html">GPU memory and uploads</a>, <a href="async-compute.html">Async compute</a></td></tr>
   <tr><td><code>04_compute</code></td><td>a compute pass moves 4096 particles in a buffer that a draw then reads</td><td><code>addComputePass</code>, <code>createComputePipeline</code></td><td><a href="device-addresses.html">Buffer device addresses</a>, <a href="gpu-sync.html">GPU synchronization</a></td></tr>
   <tr><td><code>05_city</code></td><td>a night city of about 146 000 instances; 5000 cars move every frame</td><td>culling, Hi-Z, LODs, <code>fillTexture</code></td><td><a href="frustum-culling.html">Frustum</a> and <a href="occlusion-culling.html">occlusion culling</a>, <a href="lod-selection.html">LOD selection</a></td></tr>
 </table>

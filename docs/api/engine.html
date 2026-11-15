@@ -178,6 +178,7 @@ if (!engine.running())
   <tr><td><code>meshLods</code></td><td><code>true</code></td><td>Builds coarser levels of detail (<a href="scene.html#MeshLod">LODs</a>) of every sub-mesh with 1024 triangles or more as meshes load, on the worker thread for <code>loadMesh</code>. <code>false</code>: meshes have LOD 0 only.</td></tr>
   <tr><td><code>lodErrorPixels</code></td><td><code>1.0f</code></td><td>Culling draws the coarsest LOD whose error stays under this many pixels on screen. Larger is faster and coarser; 0 always draws LOD 0. See <a href="../guides/lod-selection.html">level of detail</a>.</td></tr>
   <tr><td><code>forcedLod</code></td><td><code>-1</code></td><td>For debugging. From 0 up, every draw uses this LOD (or its mesh's coarsest one), whatever the distance. -1 picks by distance. <kbd>F2</kbd> cycles it at runtime.</td></tr>
+  <tr><td><code>asyncCompute</code></td><td><code>false</code></td><td>Runs the scene's culling and Hi-Z passes, and every pass added with <a href="render-graph.html#addAsyncComputePass"><code>addAsyncComputePass</code></a>, on a second GPU queue next to the graphics work. Needs a GPU with a compute queue family without graphics; without one, everything stays on the graphics queue, as with <code>false</code>. Off by default: today it does not make the scene passes faster (<code>P11</code>). <code>examples/03_instances</code> turns it on. See <a href="../guides/async-compute.html">async compute</a>.</td></tr>
 </table>
 </div>
 
@@ -196,11 +197,11 @@ if (!engine.running())
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 306" role="img" aria-label="beginFrame polls events, finishes loads for up to 4 milliseconds, waits for the frame slot, uploads scene changes and acquires a swapchain image. It returns false when the window is minimized, the swapchain cannot be rebuilt, or acquire fails. Then your passes run. endFrame clears the swapchain if no pass drew to it, draws the stats overlay if it is shown, submits the frame's one command buffer and presents.">
+  <svg viewBox="0 0 760 306" role="img" aria-label="beginFrame polls events, finishes loads for up to 4 milliseconds, waits for the frame slot, uploads scene changes and acquires a swapchain image. It returns false when the window is minimized, the swapchain cannot be rebuilt, or acquire fails. Then your passes run. endFrame clears the swapchain if no pass drew to it, draws the stats overlay if it is shown, submits the frame's batches and presents.">
     <text x="10" y="22" class="title mono">beginFrame(camera)</text>
     <rect x="10"  y="34" width="132" height="50" rx="6" class="cpu"/><text x="76"  y="55" class="mid">pollEvents</text><text x="76"  y="72" class="mid small">input, camera, quit</text>
     <rect x="157" y="34" width="132" height="50" rx="6" class="cpu"/><text x="223" y="55" class="mid">finishLoads</text><text x="223" y="72" class="mid small">up to 4 ms of loads</text>
-    <rect x="304" y="34" width="132" height="50" rx="6" class="cpu"/><text x="370" y="55" class="mid">wait for slot</text><text x="370" y="72" class="mid small">frame fence</text>
+    <rect x="304" y="34" width="132" height="50" rx="6" class="cpu"/><text x="370" y="55" class="mid">wait for slot</text><text x="370" y="72" class="mid small">its fences</text>
     <rect x="451" y="34" width="132" height="50" rx="6" class="mem"/><text x="517" y="55" class="mid">syncGpuScene</text><text x="517" y="72" class="mid small">upload what changed</text>
     <rect x="598" y="34" width="132" height="50" rx="6" class="cpu"/><text x="664" y="55" class="mid">acquire image</text><text x="664" y="72" class="mid small">from the swapchain</text>
     <line x1="142" y1="59" x2="155" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
@@ -223,7 +224,7 @@ if (!engine.running())
     <rect x="10"  y="188" width="150" height="50" rx="6" class="box"/><text x="85"  y="209" class="mid">your passes</text><text x="85"  y="226" class="mid small">graph or beginPass</text>
     <rect x="175" y="188" width="132" height="50" rx="6" class="cpu"/><text x="241" y="209" class="mid">clear if unused</text><text x="241" y="226" class="mid small">no pass drew the window</text>
     <rect x="322" y="188" width="132" height="50" rx="6" class="cpu"/><text x="388" y="209" class="mid">stats overlay</text><text x="388" y="226" class="mid small">if shown (F1)</text>
-    <rect x="469" y="188" width="132" height="50" rx="6" class="cpu"/><text x="535" y="209" class="mid">submit</text><text x="535" y="226" class="mid small">one command buffer</text>
+    <rect x="469" y="188" width="132" height="50" rx="6" class="cpu"/><text x="535" y="209" class="mid">submit</text><text x="535" y="226" class="mid small">each batch</text>
     <rect x="616" y="188" width="132" height="50" rx="6" class="cpu"/><text x="682" y="209" class="mid">present</text><text x="682" y="226" class="mid small">image to the window</text>
     <line x1="160" y1="213" x2="173" y2="213" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <line x1="307" y1="213" x2="320" y2="213" class="arrow cpu" marker-end="url(#ah-cpu)"/>
@@ -264,7 +265,7 @@ if (!engine.running())
 <div class="api" id="endFrame">
   <pre class="sig">void endFrame();</pre>
   <div class="body">
-    <p>Ends the frame's command buffer and sends the frame to the GPU, then shows it in the window. If no pass drew to the window this frame (for example, all passes drew to render targets), it adds a pass that clears the window first. With the stats overlay shown, it draws the overlay in a pass of its own on top. The frame is one command buffer: culling is recorded in it as ordinary <a href="#addScenePasses">scene passes</a>.</p>
+    <p>Ends the frame's command buffers and sends the frame to the GPU, then shows it in the window. If no pass drew to the window this frame (for example, all passes drew to render targets), it adds a pass that clears the window first. With the stats overlay shown, it draws the overlay in a pass of its own on top. Without async compute the frame is one command buffer: culling is recorded in it as ordinary <a href="#addScenePasses">scene passes</a>. With <code>EngineConfig::asyncCompute</code> it is a few <i>batches</i>, each one command buffer and one submit on one queue. They are all submitted here, in the order they were closed. The last graphics batch waits for all of the frame's compute work, and presents.</p>
     <p>Call it only after a <code>beginFrame</code> that returned true, and after the last <code>endPass</code>.</p>
   </div>
 </div>
@@ -314,7 +315,7 @@ engine.endPass();</code></pre>
 <div class="api" id="addScenePasses">
   <pre class="sig">bool addScenePasses(RenderGraph&amp; graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle&amp; renderTarget = {});</pre>
   <div class="body">
-    <p>Adds the passes that draw <code>scene</code> from <code>camera</code> to <code>graph</code>. They are ordinary graph passes: the graph sorts them with your passes, records their barriers from what they declare, and times each one under its name. <code>render</code> calls it for you; call it yourself when you build your own graph.</p>
+    <p>Adds the passes that draw <code>scene</code> from <code>camera</code> to <code>graph</code>. They are ordinary graph passes: the graph sorts them with your passes, records their barriers from what they declare, and times each one under its name. <code>render</code> calls it for you; call it yourself when you build your own graph. The culling passes and <code>Hi-Z</code> are <a href="render-graph.html#addAsyncComputePass">async compute passes</a>: with <code>EngineConfig::asyncCompute</code> they run on the compute queue.</p>
     <dl>
       <dt>graph</dt><dd>The graph to add to, before its <code>compile</code>. Add your own passes before or after.</dd>
       <dt>scene</dt><dd>Invalid: logs <code>addScenePasses needs a valid scene handle.</code>, adds nothing and returns <code>false</code>.</dd>
@@ -331,12 +332,12 @@ engine.endPass();</code></pre>
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 300" role="img" aria-label="With occlusion culling, addScenePasses adds five passes in this order: Cull 1 (compute), Scene 1 (graphics, clears the target and draws), Hi-Z (compute, reads the target's depth), Cull 2 (compute), Scene 2 (graphics, loads the target and draws). Without occlusion culling it adds Cull and Scene. Passes added later that draw the same target load it.">
+  <svg viewBox="0 0 760 300" role="img" aria-label="With occlusion culling, addScenePasses adds five passes in this order: Cull 1 (async compute), Scene 1 (graphics, clears the target and draws), Hi-Z (async compute, reads the target's depth), Cull 2 (async compute), Scene 2 (graphics, loads the target and draws). Without occlusion culling it adds Cull and Scene. Passes added later that draw the same target load it.">
     <text x="10" y="20" class="title">with EngineConfig::occlusionCulling (the default)</text>
-    <rect x="10"  y="32" width="136" height="62" rx="6" class="gpu"/><text x="78"  y="52" class="mid mono">Cull 1</text><text x="78"  y="68" class="mid small">compute</text><text x="78"  y="84" class="mid small">seen last frame?</text>
+    <rect x="10"  y="32" width="136" height="62" rx="6" class="gpu"/><text x="78"  y="52" class="mid mono">Cull 1</text><text x="78"  y="68" class="mid small">async compute</text><text x="78"  y="84" class="mid small">seen last frame?</text>
     <rect x="160" y="32" width="136" height="62" rx="6" class="gpu"/><text x="228" y="52" class="mid mono">Scene 1</text><text x="228" y="68" class="mid small">graphics</text><text x="228" y="84" class="mid small">early draws</text>
-    <rect x="310" y="32" width="136" height="62" rx="6" class="gpu"/><text x="378" y="52" class="mid mono">Hi-Z</text><text x="378" y="68" class="mid small">compute</text><text x="378" y="84" class="mid small">depth pyramid</text>
-    <rect x="460" y="32" width="136" height="62" rx="6" class="gpu"/><text x="528" y="52" class="mid mono">Cull 2</text><text x="528" y="68" class="mid small">compute</text><text x="528" y="84" class="mid small">test the rest</text>
+    <rect x="310" y="32" width="136" height="62" rx="6" class="gpu"/><text x="378" y="52" class="mid mono">Hi-Z</text><text x="378" y="68" class="mid small">async compute</text><text x="378" y="84" class="mid small">depth pyramid</text>
+    <rect x="460" y="32" width="136" height="62" rx="6" class="gpu"/><text x="528" y="52" class="mid mono">Cull 2</text><text x="528" y="68" class="mid small">async compute</text><text x="528" y="84" class="mid small">test the rest</text>
     <rect x="610" y="32" width="136" height="62" rx="6" class="gpu"/><text x="678" y="52" class="mid mono">Scene 2</text><text x="678" y="68" class="mid small">graphics</text><text x="678" y="84" class="mid small">late draws</text>
     <line x1="146" y1="63" x2="158" y2="63" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <line x1="296" y1="63" x2="308" y2="63" class="arrow gpu" marker-end="url(#ah-gpu)"/>
@@ -360,6 +361,24 @@ engine.endPass();</code></pre>
     <text x="10" y="290" class="small">Passes you add later that draw the same target load what the scene drew. Passes that read it run after.</text>
   </svg>
   <figcaption>The GPU culls first: draws outside the camera's view are skipped. With occlusion culling, <code>Cull 1</code> keeps the draws that were visible last frame, <code>Scene 1</code> draws them, <code>Hi-Z</code> builds a depth pyramid from their depth, <code>Cull 2</code> tests the other draws against it, and <code>Scene 2</code> draws the ones it found visible. See <a href="../guides/occlusion-culling.html">occlusion culling</a>.</figcaption>
+</figure>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 222" role="img" aria-label="With EngineConfig::asyncCompute the scene passes make four batches on two queues: compute Cull 1, graphics Scene 1, compute Hi-Z and Cull 2, graphics Scene 2 and the overlay, which presents. Each batch waits for the one before it on the other queue. Cull 1 of the next frame can run next to this frame's Scene 2.">
+    <text x="10" y="20" class="title">with EngineConfig::asyncCompute</text>
+    <text x="10" y="64" class="small">compute queue</text>
+    <text x="10" y="154" class="small">graphics queue</text>
+    <rect x="120" y="40" width="120" height="40" rx="6" class="gpu"/><text x="180" y="65" class="mid mono">Cull 1</text>
+    <rect x="270" y="130" width="140" height="40" rx="6" class="gpu"/><text x="340" y="155" class="mid mono">Scene 1</text>
+    <rect x="440" y="40" width="140" height="40" rx="6" class="gpu"/><text x="510" y="65" class="mid mono">Hi-Z, Cull 2</text>
+    <rect x="600" y="130" width="150" height="40" rx="6" class="gpu"/><text x="675" y="149" class="mid mono">Scene 2, overlay</text><text x="675" y="164" class="mid small">present</text>
+    <path d="M240,60 C258,60 258,150 268,150" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <path d="M410,150 C428,150 428,60 438,60" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <path d="M580,60 C592,60 592,150 598,150" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="10" y="196" class="small t-hot">Orange arrow: the batch waits for the one before it on the other queue.</text>
+    <text x="10" y="214" class="small">Each box is a batch: one command buffer and one submit. They go out together at the end of endFrame.</text>
+  </svg>
+  <figcaption>The visible draws and the Hi-Z have one buffer per frame slot, so <code>Cull 1</code> waits only for its own slot's last frame. It can run on the compute queue while the frame before still draws. That is the only overlap today, so the option is off by default (<code>P11</code>). See <a href="../guides/async-compute.html">async compute</a>.</figcaption>
 </figure>
 
 <pre><code>// From examples/01_render_graph/main.cpp: the scene into an offscreen target
@@ -394,7 +413,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
 <div class="api" id="getCurrentFrameResources">
   <pre class="sig">const FrameResources&amp; getCurrentFrameResources();</pre>
   <div class="body">
-    <p>The current frame slot's <a href="types.html#FrameResources"><code>FrameResources</code></a>: <code>commandBuffer</code> (record your own draws and dispatches into it), <code>depthTexture</code> (the window pass's depth) and <code>fenceValue</code>. Fetch it every frame, because the slot changes every frame. The depth textures are replaced on resize.</p>
+    <p>The current frame slot's <a href="types.html#FrameResources"><code>FrameResources</code></a>: <code>commandBuffer</code> (the one being recorded: record your own draws and dispatches into it), <code>depthTexture</code> (the window pass's depth), <code>fenceValue</code> and <code>computeFenceValue</code>. Fetch it every frame, because the slot changes every frame. With <code>EngineConfig::asyncCompute</code> fetch it inside each pass, because the command buffer changes when a pass runs on the other queue. The depth textures are replaced on resize.</p>
     <pre><code>auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
 ctx.bindPipeline(commandBuffer, pipeline);
 ctx.draw(commandBuffer, 3);</code></pre>
@@ -486,8 +505,8 @@ for (uint32_t i = 0; i &lt; stats.gpuTimerCount; ++i)
   <div class="body">
     <dl>
       <dt>cpuFrameMs</dt><dd>Time between the last two frames on the CPU, in ms. Capped at 100 ms. Updated every frame, even when not measuring.</dd>
-      <dt>gpuFrameMs</dt><dd>GPU time of the whole frame (all passes), in ms. 0 on a GPU without timestamps.</dd>
-      <dt>gpuTimers</dt><dd>One <code>GpuTimer</code> per pass (graphics or compute, the <a href="#addScenePasses">scene passes</a> included) and per timer of your own, in GPU start order. Room for <code>MAX_GPU_TIMERS - 1</code> (15).</dd>
+      <dt>gpuFrameMs</dt><dd>GPU time of the frame on the graphics queue, in ms: from the frame's start to the latest end of a timer there. Timers on the compute queue are left out, because the timestamps of two queues may not share a clock. 0 on a GPU without timestamps.</dd>
+      <dt>gpuTimers</dt><dd>One <code>GpuTimer</code> per pass (graphics or compute, the <a href="#addScenePasses">scene passes</a> included) and per timer of your own, in the order they were recorded. Room for <code>MAX_GPU_TIMERS - 1</code> (15).</dd>
       <dt>gpuTimerCount</dt><dd>How many entries of <code>gpuTimers</code> are filled.</dd>
       <dt>draws</dt><dd>Draws of all scene views the frame drew, before culling (one per sub-mesh of each entity).</dd>
       <dt>drawsVisible</dt><dd>Draws that passed culling: inside the view, and with occlusion culling also not hidden. Draws of a view drawn without culling all count.</dd>
@@ -519,7 +538,7 @@ for (uint32_t i = 0; i &lt; stats.gpuTimerCount; ++i)
       <dt>name</dt><dd>Label in the stats.</dd>
       <dt>returns</dt><dd>The timer id, or <code>UINT32_MAX</code> when nothing is measured: measuring is off, the GPU has no timestamps, or the frame used all its timers (a warning is logged once).</dd>
     </dl>
-    <p>A frame has <code>MAX_GPU_TIMERS</code> (16) timers: one for the whole frame, and 15 for passes and your timers together.</p>
+    <p>A frame has <code>MAX_GPU_TIMERS</code> (16) timers: one for the whole frame, and 15 for passes and your timers together. Begin and end a timer in the same pass, so both timestamps are on one queue.</p>
   </div>
 </div>
 

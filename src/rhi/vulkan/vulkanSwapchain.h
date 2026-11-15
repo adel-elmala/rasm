@@ -25,7 +25,9 @@ namespace rasm::rhi
         Texture*                    getImage(uint32_t index) override;
         Format                      getFormat() const override;
         glm::uvec2                  getExtent() const override;
-        bool                        getSubmitSemaphores(VkSemaphoreSubmitInfo& acquireWait, VkSemaphoreSubmitInfo& presentSignal, VkSemaphoreSubmitInfo& releaseSignal) const;
+        bool                        getAcquireWait(VkSemaphoreSubmitInfo& acquireWait, uint32_t& waitCount) const;
+        void                        onAcquireWaited();
+        bool                        getPresentSignals(VkSemaphoreSubmitInfo& presentSignal, VkSemaphoreSubmitInfo& releaseSignal) const;
         void                        onSubmitted();
 
     private:
@@ -46,6 +48,7 @@ namespace rasm::rhi
         uint64_t                    releaseValue                                = 0;
         uint32_t                    nextAcquireSlot                             = 0;
         uint32_t                    acquiredSlot                                = NO_ACQUIRE;
+        bool                        acquireWaited                               = false;
         bool                        presentPending                              = false;
         uint32_t                    imageIndex                                  = 0;
     };

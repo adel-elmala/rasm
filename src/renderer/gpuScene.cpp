@@ -528,22 +528,20 @@ namespace rasm
         const SceneView &sceneView = gpuScene->views[view];
         const bool occlusion = sceneView.visibility.isValid();
 
+        // Each frame uses only its slot's draw list and Hi-Z, so culling the next frame does not wait for
+        // this frame's draws on the other queue.
         auto writeCulling = [&sceneView](PassBuilder &builder)
-        {
-            for (auto buffer : sceneView.visibleDraws)
-                builder.write(buffer);
-        };
+        { builder.write(sceneView.visibleDraws); };
         auto drawScenePass = [&sceneView, renderTarget](PassBuilder &builder)
         {
-            for (auto buffer : sceneView.visibleDraws)
-                builder.read(buffer);
+            builder.read(sceneView.visibleDraws);
             if (renderTarget.isValid())
                 builder.write(renderTarget);
             else
                 builder.writeSwapchain();
         };
 
-        graph.addComputePass(
+        graph.addAsyncComputePass(
             occlusion ? "Cull 1" : "Cull",
             [&](PassBuilder &builder)
             {
@@ -564,7 +562,7 @@ namespace rasm
         if (!occlusion)
             return true;
 
-        graph.addComputePass(
+        graph.addAsyncComputePass(
             "Hi-Z",
             [&](PassBuilder &builder)
             {
@@ -572,17 +570,15 @@ namespace rasm
                     builder.readDepth(renderTarget);
                 else
                     builder.readSwapchainDepth();
-                for (auto hiz : sceneView.hiz)
-                    builder.write(hiz);
+                builder.write(sceneView.hiz);
             },
             [this, view](RenderContext &)
             { recordHiz(view); });
-        graph.addComputePass(
+        graph.addAsyncComputePass(
             "Cull 2",
             [&](PassBuilder &builder)
             {
-                for (auto hiz : sceneView.hiz)
-                    builder.read(hiz);
+                builder.read(sceneView.hiz);
                 writeCulling(builder);
                 builder.write(sceneView.visibility);
             },
@@ -679,6 +675,8 @@ namespace rasm
         if (view.graphs == 0 || --view.graphs > 0)
             return;
         ctx.waitForFence(frameFence, frameFenceValue);
+        if (asyncCompute)
+            ctx.waitForFence(computeFence, computeFenceValue);
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             destroyBuffer(ctx, view.visibleDraws[i]);

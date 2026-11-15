@@ -150,11 +150,35 @@ namespace rasm
 
     protected:
         bool                                                        createSwapchainResources();
+        void                                                        useQueue(QueueType queue);
+        uint64_t                                                    openBatchValue(QueueType queue) const;
+        void                                                        waitForQueue(QueueType waiter, QueueType queue, uint64_t value);
+        void                                                        waitForQueueWork(QueueType waiter, QueueType queue);
+        void                                                        closeBatch(QueueType queue);
+        bool                                                        submitBatches();
 
         EngineConfig                                                config                                  = {};
         FrameResources                                              frameResources[MAX_FRAMES_IN_FLIGHT]    = {}; // Double buffering
         FenceHandle                                                 frameFence                              = {};
-        uint64_t                                                    frameFenceValue                         = 0;  // last value a frame submit signaled
+        uint64_t                                                    frameFenceValue                         = 0;  // last value a graphics submit signaled
+        FenceHandle                                                 computeFence                            = {};
+        uint64_t                                                    computeFenceValue                       = 0;
+        struct ClosedBatch
+        {
+            QueueType                                               queue                                   = QueueType::GRAPHICS;
+            CommandBufferHandle                                     commandBuffer;
+            uint64_t                                                waits[QUEUE_COUNT]                      = {};
+            uint64_t                                                value                                   = 0;
+        };
+
+        std::vector<CommandBufferHandle>                            batchCommandBuffers[MAX_FRAMES_IN_FLIGHT][QUEUE_COUNT] = {};
+        uint32_t                                                    batchesUsed[QUEUE_COUNT]                = {};
+        bool                                                        batchOpen[QUEUE_COUNT]                  = {};
+        uint64_t                                                    batchWaits[QUEUE_COUNT][QUEUE_COUNT]    = {};
+        uint64_t                                                    batchValues[QUEUE_COUNT]                = {};
+        std::vector<ClosedBatch>                                    closedBatches;
+        QueueType                                                   recordingQueue                          = QueueType::GRAPHICS;
+        bool                                                        asyncCompute                            = false;
         Swapchain                                                   swapchain                               = {};
         std::unique_ptr<GeometryPool>                               geometryPool                            = {};
         std::unique_ptr<GpuScene>                                   gpuScene                                = {};

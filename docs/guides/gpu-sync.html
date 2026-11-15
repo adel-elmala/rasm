@@ -387,6 +387,8 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
   <figcaption>With exclusive sharing, each resource belongs to one queue family at a time. The ownership change is a pair of barriers with the same family indices. Concurrent sharing skips the pair, and may be slower. One queue needs none of this.</figcaption>
 </figure>
 
+<p>When to use a second queue, and what it costs: <a href="async-compute.html">Async compute and multiple queues</a>.</p>
+
 <h2><span class="n">10</span>Other APIs</h2>
 
 <div class="table-wrap">
@@ -428,10 +430,10 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
 
 <h2 id="in-rasm"><span class="n">12</span>In RASM</h2>
 
-<p>RASM uses synchronization2 and one queue. The RHI offers two barrier calls, deliberately coarse: a global <code>memoryBarrier</code> between sets of <code>PipelineStage</code>, and an image transition between two <code>TextureUsage</code> values. <code>RenderContext</code> remembers each texture's usage, and the <code>RenderGraph</code> derives barriers from what passes declare.</p>
+<p>RASM uses synchronization2, a graphics queue and, with <a href="async-compute.html">async compute</a> on, a compute queue. The RHI offers two barrier calls, deliberately coarse: a global <code>memoryBarrier</code> between sets of <code>PipelineStage</code>, and an image transition between two <code>TextureUsage</code> values. <code>RenderContext</code> remembers each texture's usage, and the <code>RenderGraph</code> derives barriers from what passes declare.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 300" role="img" aria-label="Four paths to a Vulkan barrier. memoryBarrier(before, after) records one global VkMemoryBarrier2. transitionImageLayout(texture, usage) goes through TextureStates, which knows the old usage, to CommandBuffer::transitionTexture, which records one VkImageMemoryBarrier2. copyBuffers records two global barriers around the upload copies. A submit that names the swapchain waits on the acquire semaphore at color attachment output.">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Four paths to a Vulkan barrier. memoryBarrier(before, after) records one global VkMemoryBarrier2. transitionImageLayout(texture, usage) goes through TextureStates, which knows the old usage, to CommandBuffer::transitionTexture, which records one VkImageMemoryBarrier2. copyBuffers records two global barriers around the upload copies. A submit waits for its fence values at all commands, and the first one that names the swapchain image waits on the acquire semaphore at color attachment output.">
     <text x="20" y="20" class="small">caller (engine, render graph)</text>
     <text x="300" y="20" class="small">RenderContext, rhi</text>
     <text x="560" y="20" class="small">Vulkan</text>
@@ -467,13 +469,13 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
     <text x="645" y="196" class="mid small">COPY → ALL_COMMANDS</text>
 
     <rect x="20" y="224" width="240" height="44" rx="6" class="cpu"/>
-    <text x="140" y="244" class="mid mono small">submit(...,</text>
-    <text x="140" y="260" class="mid mono small">presentsSwapchainImage)</text>
+    <text x="140" y="244" class="mid mono small">submit(SubmitInfo)</text>
+    <text x="140" y="260" class="mid small">waits, swapchain image</text>
     <line x1="260" y1="246" x2="548" y2="246" class="arrow" marker-end="url(#ah)"/>
-    <text x="400" y="238" class="mid small">VulkanSwapchain adds the semaphores</text>
+    <text x="400" y="238" class="mid small">fence waits; VulkanSwapchain adds its semaphores</text>
     <rect x="550" y="224" width="190" height="44" rx="6" class="gpu"/>
-    <text x="645" y="244" class="mid small">wait acquire semaphore</text>
-    <text x="645" y="260" class="mid small">at COLOR_ATTACHMENT_OUTPUT</text>
+    <text x="645" y="244" class="mid small">fence waits at ALL_COMMANDS</text>
+    <text x="645" y="260" class="mid small">acquire wait at color output</text>
     <text x="20" y="292" class="small">RenderContext refuses memoryBarrier and transitionImageLayout between beginRendering and endRendering.</text>
   </svg>
   <figcaption>Every <code>vkCmdPipelineBarrier2</code> in RASM comes from <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code>. Textures filled from the CPU skip the GPU entirely: <code>fillTexture</code> changes their layout on the host (<code>vkTransitionImageLayout</code>, host image copy) and leaves them <code>SAMPLED</code>.</figcaption>
@@ -569,12 +571,52 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
     <rect x="400" y="474" width="20" height="14" rx="3" class="shader"/><text x="428" y="485" class="small">compute work</text>
     <rect x="580" y="474" width="20" height="14" rx="3" class="gpu"/><text x="608" y="485" class="small">rendering</text>
   </svg>
-  <figcaption>One frame of <code>Engine::render</code> with <code>EngineConfig::occlusionCulling</code> on. Every pass is a graph pass in the one frame command buffer, so no barrier sits inside a rendering scope. The graph records the barrier before each pass from what the pass declares; the <code>COMPUTE → COMPUTE</code> barriers between dispatches inside a pass come from the pass itself (<code>recordSceneCulling</code>, <code>recordHiz</code>). See <a href="occlusion-culling.html#in-rasm">occlusion culling</a>.</figcaption>
+  <figcaption>One frame of <code>Engine::render</code> with <code>EngineConfig::occlusionCulling</code> on and async compute off. Every pass is a graph pass in the one frame command buffer, so no barrier sits inside a rendering scope. With async compute on, the barriers between the two queues become waits (next section). The graph records the barrier before each pass from what the pass declares; the <code>COMPUTE → COMPUTE</code> barriers between dispatches inside a pass come from the pass itself (<code>recordSceneCulling</code>, <code>recordHiz</code>). See <a href="occlusion-culling.html#in-rasm">occlusion culling</a>.</figcaption>
 </figure>
+
+<h3>Across queues</h3>
+
+<p>With <code>EngineConfig::asyncCompute</code>, the culling and Hi-Z passes run on a compute queue from a family without graphics. Work on the other queue is outside a barrier's scopes, so a barrier between the queues becomes a wait: the waiting submit waits for the other queue's timeline fence (<code>FenceValue</code> in <code>SubmitInfo::waits</code>).</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 190" role="img" aria-label="On one queue, Cull 1, a COMPUTE to GRAPHICS barrier, then Scene 1. On two queues, Cull 1 on the compute queue ends its batch, which signals compute fence value c+1. The graphics batch waits for c+1 at all commands, then runs Scene 1, with no barrier.">
+    <text x="20" y="24" class="title">one queue (default)</text>
+    <rect x="20" y="50" width="100" height="36" rx="6" class="shader"/><text x="70" y="73" class="mid small">Cull 1</text>
+    <rect x="130" y="50" width="100" height="36" rx="6" class="hot"/><text x="180" y="73" class="mid small mono">C → G</text>
+    <rect x="240" y="50" width="100" height="36" rx="6" class="gpu"/><text x="290" y="73" class="mid small">Scene 1</text>
+    <text x="20" y="112" class="small">A barrier: its first scope covers</text>
+    <text x="20" y="128" class="small">earlier work on the same queue.</text>
+
+    <line x1="370" y1="12" x2="370" y2="160" class="arrow dashed"/>
+
+    <text x="390" y="24" class="title">two queues (async compute)</text>
+    <text x="390" y="72" class="small">compute</text>
+    <rect x="450" y="50" width="100" height="36" rx="6" class="shader"/><text x="500" y="73" class="mid small">Cull 1</text>
+    <rect x="560" y="50" width="90" height="36" rx="6" class="mem"/><text x="605" y="73" class="mid small">signal c+1</text>
+    <text x="390" y="142" class="small">graphics</text>
+    <rect x="560" y="120" width="90" height="36" rx="6" class="mem"/><text x="605" y="143" class="mid small">wait c+1</text>
+    <rect x="660" y="120" width="90" height="36" rx="6" class="gpu"/><text x="705" y="143" class="mid small">Scene 1</text>
+    <line x1="605" y1="86" x2="605" y2="118" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="613" y="106" class="small">computeFence</text>
+    <text x="20" y="182" class="small">The wait blocks all commands (ALL_COMMANDS) and makes the other queue's writes visible, so no barrier follows it.</text>
+  </svg>
+  <figcaption>The graph adds the wait before a pass that uses what the other queue wrote, or writes what it used (<a href="render-graphs.html#rasm-queues">render graphs</a>). The frame's batches and their values: <a href="frame-loop.html#batches">the frame loop</a>.</figcaption>
+</figure>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Between</th><th>RASM uses</th></tr>
+  <tr><td>passes on one queue</td><td>a barrier, as without async compute</td></tr>
+  <tr><td>a compute batch and a graphics batch</td><td>a timeline fence wait at all commands (<code>VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT</code>), since a batch often starts with a layout transition that must come after it</td></tr>
+  <tr><td>uploads and the compute queue</td><td>the upload submit waits for the last compute submit, and a compute submit waits for the last upload (<code>UploadManager::lastSubmit</code>)</td></tr>
+  <tr><td>barriers in a compute-queue command buffer</td><td><code>fitToComputeQueue</code>: graphics source stages become all commands, which chains to the submit's wait; graphics destination stages and graphics-only accesses are dropped</td></tr>
+  <tr><td>resource ownership</td><td>none: every buffer and image is created <code>VK_SHARING_MODE_CONCURRENT</code> for both families</td></tr>
+</table>
+</div>
 
 <h3>The render graph's part</h3>
 
-<p>Before each pass, <code>RenderGraph::execute</code> records at most one <code>memoryBarrier</code> and moves the textures the pass reads to <code>SAMPLED</code>. <code>bufferBarrier</code> keeps, per buffer, the stages of the last write and of the reads since. Its rules are the hazards of section 2: a read after a write waits for the write (once per reading stage), and a write waits for every use since the last write. The state carries over to the next frame. See <a href="render-graphs.html#in-rasm">render graphs</a>.</p>
+<p>Before each pass, <code>RenderGraph::execute</code> records at most one <code>memoryBarrier</code> and moves the textures the pass reads to <code>SAMPLED</code>. <code>bufferBarrier</code> keeps, per buffer and per queue, the stages of the last write and of the reads since. Its rules are the hazards of section 2: a read after a write waits for the write (once per reading stage), and a write waits for every use since the last write. A use on the other queue gets a wait instead (<code>RenderGraph::waitForOtherQueue</code>). The state carries over to the next frame. See <a href="render-graphs.html#in-rasm">render graphs</a>.</p>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
 
@@ -586,11 +628,11 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
   <tr><td>Buffer barriers</td><td>global memory barriers are fine</td><td>Only global ones. Shaders reach buffers through device addresses, which a per-buffer barrier could not name anyway.</td></tr>
   <tr><td>Image barriers</td><td>per mip and layer</td><td>Always the whole mip chain, layer 0. No per-mip tracking.</td></tr>
   <tr><td>Batching</td><td>several barriers per call</td><td>One barrier per <code>vkCmdPipelineBarrier2</code> call.</td></tr>
-  <tr><td>State tracking</td><td>per resource, or a render graph</td><td>Both: <code>TextureStates</code> for textures, <code>RenderGraph::bufferAccess</code> for buffers used by graph passes, the scene passes included. Only the barriers between dispatches inside one pass are placed by the pass itself.</td></tr>
+  <tr><td>State tracking</td><td>per resource, or a render graph</td><td>Both: <code>TextureStates</code> for textures, <code>RenderGraph::bufferAccess</code> for buffers used by graph passes, the scene passes included, per queue. <code>RenderGraph::textureAccess</code> tracks textures across queues only. Only the barriers between dispatches inside one pass are placed by the pass itself.</td></tr>
   <tr><td>Discard</td><td>UNDEFINED as old layout</td><td>The <code>discard</code> flag, or <code>UNKNOWN</code> as the state. <code>beginPass</code> discards the attachments a pass clears, and keeps the ones it loads.</td></tr>
   <tr><td>Split barriers, events</td><td>possible</td><td>None.</td></tr>
-  <tr><td>Queues</td><td>semaphores, ownership transfers</td><td>One queue, so submission order and barriers do it all. Uploads need no semaphore: <code>copyBuffers</code> brackets them with all-commands barriers (<b>D13</b>).</td></tr>
-  <tr><td>Host reads</td><td>barrier to host, fence, invalidate</td><td>All three: <code>COMPUTE</code> → <code>HOST</code> at the end of the frame, the frame fence, and <code>readBuffer</code> invalidates the range.</td></tr>
+  <tr><td>Queues</td><td>semaphores, ownership transfers</td><td>A graphics queue, and a compute queue when <code>EngineConfig::asyncCompute</code> is on and the GPU has one. Timeline fence waits between them, and concurrent sharing instead of ownership transfers (<b>P11</b>). Uploads go on the graphics queue and need no semaphore there: <code>copyBuffers</code> brackets them with all-commands barriers. No transfer queue (<b>D13</b>).</td></tr>
+  <tr><td>Host reads</td><td>barrier to host, fence, invalidate</td><td>All three: <code>COMPUTE</code> → <code>HOST</code> at the end of the frame and of each compute batch, the slot's fences, and <code>readBuffer</code> invalidates the range.</td></tr>
   <tr><td>Host-side layout change</td><td>—</td><td>Loaded textures use host image copy: <code>fillTexture</code> transitions and fills them on the CPU, with no GPU barrier.</td></tr>
 </table>
 </div>
@@ -601,10 +643,11 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td><code>PipelineStage</code>, <code>TextureUsage</code></td><td><code>include/rasm/render/resource.h</code></td></tr>
-  <tr><td>Stage and access masks, image scopes, upload barriers</td><td><code>toVkStageMask</code>, <code>getSrcScope</code>, <code>getDstScope</code>, <code>copyBuffers</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
+  <tr><td>Stage and access masks, image scopes, upload barriers, compute-queue barriers</td><td><code>toVkStageMask</code>, <code>getSrcScope</code>, <code>getDstScope</code>, <code>copyBuffers</code>, <code>fitToComputeQueue</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
+  <tr><td>Fence waits of a submit</td><td><code>VulkanQueue::submit</code> in <code>src/rhi/vulkan/vulkanQueue.cpp</code>; <code>RenderContext::submit</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>Texture state tracking</td><td><code>TextureStates</code> in <code>src/rhi/textureStates.cpp</code></td></tr>
   <tr><td>Checks: no barrier inside a pass</td><td><code>RenderContext::memoryBarrier</code>, <code>transitionImageLayout</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
-  <tr><td>Graph barriers</td><td><code>RenderGraph::bufferBarrier</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>Graph barriers and queue waits</td><td><code>RenderGraph::bufferBarrier</code>, <code>RenderGraph::waitForOtherQueue</code>, <code>RenderGraph::textureWaits</code> in <code>src/renderer/renderGraph.cpp</code>; <code>Engine::waitForQueue</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Barriers inside the culling and Hi-Z passes</td><td><code>recordSceneCulling</code>, <code>recordHiz</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Pass and frame transitions</td><td><code>Engine::beginPass</code>, <code>endPass</code>, <code>endFrame</code> in <code>src/engine.cpp</code></td></tr>
 </table>
@@ -617,14 +660,15 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
     <li>No barrier, dispatch or layout change between <code>beginRendering</code> and <code>endRendering</code>; <code>RenderContext</code> checks it.</li>
     <li>A texture's layout changes only through <code>transitionImageLayout</code>, so <code>Texture::state</code> stays true. A frame that is not submitted calls <code>discardRecording</code>.</li>
     <li>A new <code>TextureUsage</code> that textures move into needs a source and a destination scope in <code>getSrcScope</code> and <code>getDstScope</code>.</li>
-    <li>A graph pass declares every buffer and texture it uses, or the graph cannot place its barriers.</li>
+    <li>A graph pass declares every buffer and texture it uses, or the graph cannot place its barriers or its waits across queues.</li>
+    <li>Waits between queues stay at all commands, because the first commands of a batch are often layout transitions.</li>
     <li>Test with <code>enableValidation</code> and <code>enableSyncValidation</code> on (or <code>verify.py --sync</code>); a change that adds validation messages is not done.</li>
   </ul>
 </div>
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>There is one queue: no async compute or transfer queue, and a <code>SubmitDesc</code> cannot wait on a fence (<b>D13</b>). The render graph places barriers and aliases transient render targets, but does not cull passes (<b>D9</b>). Aliasing needs its own global barrier: see <a href="memory-aliasing.html">Transient memory and aliasing</a>.</p>
+  <p>There is no transfer queue (<b>D13</b>), and with async compute every resource is shared by both queue families instead of moving ownership (<b>P11</b>). The render graph places barriers and aliases transient render targets, but does not cull passes (<b>D9</b>). Aliasing needs its own global barrier: see <a href="memory-aliasing.html">Transient memory and aliasing</a>.</p>
 </div>
 
 <h3>Further reading</h3>

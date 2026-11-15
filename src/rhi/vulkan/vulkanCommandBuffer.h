@@ -16,7 +16,7 @@ namespace rasm::rhi
     public:
                                     VulkanCommandBuffer(VulkanDevice& device);
                                     ~VulkanCommandBuffer() override;
-        bool                        initialize(uint32_t queueFamilyIndex, const std::string& name);
+        bool                        initialize(uint32_t queueFamilyIndex, bool onComputeQueue, const std::string& name);
         bool                        begin() override;
         bool                        end() override;
         bool                        transitionTexture(Texture* texture, TextureUsage oldUsage, TextureUsage newUsage) override;
@@ -44,6 +44,7 @@ namespace rasm::rhi
         VulkanDevice&               device;
         VkCommandPool               pool                    = VK_NULL_HANDLE;
         VkCommandBuffer             commandBuffer           = VK_NULL_HANDLE;
+        bool                        computeQueue            = false;
     };
 }
 // clang-format on

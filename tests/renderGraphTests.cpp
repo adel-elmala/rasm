@@ -58,8 +58,27 @@ namespace
                 addPass("graphics", setup, [](rasm::RenderContext &) {});
         }
 
+        // A compute pass writes the buffers, and a graphics pass reads them.
+        void addFrameBufferPass(bool async, const rasm::BufferHandle (&perFrame)[rasm::MAX_FRAMES_IN_FLIGHT])
+        {
+            if (async)
+                addAsyncComputePass("cull", [&](rasm::PassBuilder &builder)
+                                    { builder.write(perFrame); }, [](rasm::RenderContext &) {});
+            else
+            {
+                addPass(
+                    "draw",
+                    [&](rasm::PassBuilder &builder)
+                    {
+                        builder.read(perFrame);
+                        builder.write(ownTarget());
+                    },
+                    [](rasm::RenderContext &) {});
+            }
+        }
+
         // What execute records before the pass: false for no barrier.
-        bool barrierBefore(uint32_t passIdx, rasm::PipelineStage &before, rasm::PipelineStage &after) { return bufferBarrier(passes[passIdx], before, after); }
+        bool barrierBefore(uint32_t passIdx, rasm::PipelineStage &before, rasm::PipelineStage &after) { return bufferBarrier(passes[passIdx], rasm::QueueType::GRAPHICS, before, after); }
 
         // createRenderTarget needs an engine, so a test marks a handle transient directly.
         void addTransient(rasm::RenderTargetHandle renderTarget) { transientTargets.push_back(renderTarget); }
@@ -759,4 +778,42 @@ TEST_CASE("a pass that reads the depth of the target it draws to fails to compil
     graph.compile();
 
     CHECK_FALSE(graph.isCompiled());
+}
+
+TEST_CASE("a per-frame buffer orders its passes through every slot, and an async compute pass sorts like a compute pass")
+{
+    const rasm::BufferHandle draws[rasm::MAX_FRAMES_IN_FLIGHT] = {{1, 1}, {2, 1}};
+    constexpr bool ASYNC = true;
+
+    TestGraph graph;
+    graph.addFrameBufferPass(!ASYNC, draws); // 0: draw
+    graph.addFrameBufferPass(ASYNC, draws);  // 1: cull
+
+    graph.compile();
+
+    REQUIRE(graph.isCompiled());
+    CHECK(graph.order() == std::vector<uint32_t>{1, 0});
+    CHECK(graph.pass(1).async);
+    CHECK(graph.pass(1).compute);
+    CHECK_FALSE(graph.pass(0).async);
+}
+
+TEST_CASE("a per-frame buffer's barrier covers only the frame's slot")
+{
+    const rasm::BufferHandle draws[rasm::MAX_FRAMES_IN_FLIGHT] = {{1, 1}, {2, 1}};
+    constexpr bool ASYNC = true;
+    constexpr bool GRAPHICS = false;
+
+    TestGraph graph;
+    graph.addFrameBufferPass(ASYNC, draws);        // 0: cull into slot 0, the slot of a graph without an engine
+    graph.addFrameBufferPass(!ASYNC, draws);       // 1: draw from slot 0
+    graph.addBufferPass(GRAPHICS, {draws[1]}, {}); // 2: read slot 1, which nothing wrote
+
+    rasm::PipelineStage before = {};
+    rasm::PipelineStage after = {};
+    CHECK_FALSE(graph.barrierBefore(0, before, after));
+    REQUIRE(graph.barrierBefore(1, before, after));
+    CHECK(before == rasm::PipelineStage::COMPUTE);
+    CHECK(after == rasm::PipelineStage::GRAPHICS);
+    CHECK_FALSE(graph.barrierBefore(2, before, after));
 }

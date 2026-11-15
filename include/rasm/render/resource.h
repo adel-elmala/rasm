@@ -64,6 +64,14 @@ namespace rasm
     constexpr PipelineStage         operator|(PipelineStage a, PipelineStage b)     { return static_cast<PipelineStage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b)); }
     constexpr bool                  hasStage(PipelineStage stages, PipelineStage stage) { return (static_cast<uint32_t>(stages) & static_cast<uint32_t>(stage)) != 0; }
 
+    enum class QueueType : uint32_t
+    {
+        GRAPHICS,
+        COMPUTE,
+    };
+
+    constexpr uint32_t              QUEUE_COUNT                 = 2;
+
     enum class DescriptorType
     {
         UNIFORM_BUFFER,

@@ -39,7 +39,7 @@
 <div class="tldr">
   <h3>In short</h3>
   <ul>
-    <li>Record into <code>engine.getCurrentFrameResources().commandBuffer</code>, between <code>beginFrame</code> and <code>endFrame</code>. The engine begins, ends and submits it.</li>
+    <li>Record into <code>engine.getCurrentFrameResources().commandBuffer</code>, between <code>beginFrame</code> and <code>endFrame</code>. The engine begins, ends and submits it. Fetch it inside each pass: with async compute the graph moves it between the queues.</li>
     <li>Draws go inside a render pass, dispatches and barriers outside. Calls in the wrong place are refused.</li>
     <li>Shaders read buffers through device addresses (<code>getBufferDeviceAddress</code>), passed in the 16-byte push constant. There are no vertex buffers.</li>
     <li><code>fillBuffer</code> writes mapped buffers at once and queues the others for the next submit.</li>
@@ -70,7 +70,7 @@
 <div class="api" id="getCurrentFrameResources">
   <pre class="sig">const FrameResources&amp; getCurrentFrameResources();</pre>
   <div class="body">
-    <p>The resources of the current frame slot (0 or 1): the frame's <code>commandBuffer</code>, the swapchain-sized <code>depthTexture</code> and the slot's fence value. See <a href="types.html#FrameResources">FrameResources</a>. Between <code>beginFrame</code> and <code>endFrame</code> the command buffer is recording; record your commands into it. The slot changes in <code>endFrame</code>, so fetch it every frame.</p>
+    <p>The resources of the current frame slot (0 or 1): the <code>commandBuffer</code> being recorded, the swapchain-sized <code>depthTexture</code> and the slot's fence values. See <a href="types.html#FrameResources">FrameResources</a>. Between <code>beginFrame</code> and <code>endFrame</code> the command buffer is recording; record your commands into it. The slot changes in <code>endFrame</code>, so fetch it every frame. With <code>EngineConfig::asyncCompute</code> the command buffer also changes from pass to pass (an async compute pass records into one of the compute queue), so fetch it inside the pass that records.</p>
   </div>
 </div>
 
@@ -253,6 +253,7 @@
       <dt>before, after</dt><dd>One or more <a href="#PipelineStage">PipelineStage</a> flags, combined with <code>|</code>.</dd>
     </dl>
     <p>The render graph already puts one around compute passes. Record your own between two dependent dispatches (<code>COMPUTE</code> → <code>COMPUTE</code>), and before reading a buffer on the CPU (… → <code>HOST</code>).</p>
+    <p>A command buffer of the compute queue has no graphics stages. There, <code>GRAPHICS</code> in <code>before</code> waits for all earlier commands instead, and <code>GRAPHICS</code> in <code>after</code> is dropped. Work of the graphics queue is ordered by the submit's waits (<a href="#SubmitInfo">SubmitInfo</a>), not by a barrier. <code>transitionImageLayout</code> and <code>aliasingBarrier</code> fit their stages to the compute queue the same way.</p>
   </div>
 </div>
 
@@ -281,6 +282,24 @@ constexpr bool          hasStage(PipelineStage stages, PipelineStage stage);</pr
       <dt>GRAPHICS</dt><dd>Indirect argument reads, index fetch, vertex and fragment shaders.</dd>
       <dt>HOST</dt><dd>The CPU: <code>readBuffer</code> after the barrier, or CPU writes before it.</dd>
     </dl>
+  </div>
+</div>
+
+<div class="api" id="QueueType">
+  <pre class="sig">enum class QueueType : uint32_t
+{
+    GRAPHICS,
+    COMPUTE,
+};
+
+constexpr uint32_t QUEUE_COUNT = 2;</pre>
+  <div class="body">
+    <p>The GPU queue a command buffer is made for and a submit goes to. <code>QUEUE_COUNT</code> is the number of values.</p>
+    <dl>
+      <dt>GRAPHICS</dt><dd>The queue every GPU has. It draws, dispatches, copies the uploads and presents.</dd>
+      <dt>COMPUTE</dt><dd>A second queue that runs compute work next to the graphics queue. It exists only with <code>EngineConfig::asyncCompute</code> on a GPU with a compute queue family without graphics (<a href="#hasAsyncCompute">hasAsyncCompute</a>). Without it, <code>COMPUTE</code> command buffers and submits use the graphics queue.</dd>
+    </dl>
+    <p>What a second queue is for, and what it costs: the guide <a href="../guides/async-compute.html">Async compute and multiple queues</a>.</p>
   </div>
 </div>
 
@@ -882,13 +901,13 @@ struct BindlessDescriptorSetLayoutDescHash
 
 <div class="callout">
   <strong>The engine runs these for you</strong>
-  <p><code>beginFrame</code> and <code>endFrame</code> wait for the frame slot, acquire, begin and end the command buffer, submit and present. Call the functions below yourself only for extra work outside the frame, and never <code>acquireNextImage</code>, <code>present</code> or <code>recreateSwapchain</code> while the engine runs frames.</p>
+  <p><code>beginFrame</code> and <code>endFrame</code> wait for the frame slot, acquire, begin and end the command buffers, submit and present. Call the functions below yourself only for extra work outside the frame, and never <code>acquireNextImage</code>, <code>present</code> or <code>recreateSwapchain</code> while the engine runs frames.</p>
 </div>
 
 <div class="api" id="createCommandBuffer">
-  <pre class="sig">CommandBufferHandle createCommandBuffer(const std::string&amp; name);</pre>
+  <pre class="sig">CommandBufferHandle createCommandBuffer(const std::string&amp; name, QueueType queue = QueueType::GRAPHICS);</pre>
   <div class="body">
-    <p>Creates a command buffer for the one graphics queue.</p>
+    <p>Creates a command buffer for <code>queue</code>. Submit it only to that queue. Record only compute work into a <code>COMPUTE</code> one: dispatches and barriers, no render pass. Its barriers have no graphics stages (see <a href="#memoryBarrier">memoryBarrier</a>). Without a compute queue (<a href="#hasAsyncCompute">hasAsyncCompute</a> is <code>false</code>), a <code>COMPUTE</code> command buffer is made for the graphics queue.</p>
   </div>
 </div>
 
@@ -907,24 +926,75 @@ struct BindlessDescriptorSetLayoutDescHash
   </div>
 </div>
 
-<div class="api" id="submit">
-  <pre class="sig">bool submit(const CommandBufferHandle* commandBuffers,
-            uint32_t commandBufferCount, FenceHandle signalFence,
-            uint64_t signalValue, bool presentsSwapchainImage);</pre>
+<div class="api" id="FenceValue">
+  <pre class="sig">struct FenceValue
+{
+    FenceHandle fence;
+    uint64_t    value = 0;
+};</pre>
   <div class="body">
-    <p>Submits up to 8 command buffers as one submission; they run in array order. Pending <code>fillBuffer</code> uploads are submitted first, so these command buffers see their data.</p>
+    <p>One value of one timeline fence. A submit waits until <code>fence</code> reaches <code>value</code>, or sets <code>fence</code> to <code>value</code> when its work is done.</p>
+  </div>
+</div>
+
+<div class="api" id="SubmitInfo">
+  <pre class="sig">struct SubmitInfo
+{
+    QueueType                  queue                  = QueueType::GRAPHICS;
+    const CommandBufferHandle* commandBuffers         = nullptr;
+    uint32_t                   commandBufferCount     = 0;
+    const FenceValue*          waits                  = nullptr;
+    uint32_t                   waitCount              = 0;
+    FenceValue                 signal                 = {};
+    bool                       waitsForSwapchainImage = false;
+    bool                       presentsSwapchainImage = false;
+};</pre>
+  <div class="body">
+    <p>What one <a href="#submit"><code>submit</code></a> sends.</p>
     <dl>
-      <dt>signalFence, signalValue</dt><dd>The fence is set to <code>signalValue</code> when the work is done. An invalid handle signals nothing.</dd>
-      <dt>presentsSwapchainImage</dt><dd><code>true</code> only for the frame that draws the acquired swapchain image: it waits for the acquire and signals the present.</dd>
+      <dt>queue</dt><dd>The queue that runs the command buffers. <code>COMPUTE</code> without a compute queue goes to the graphics queue.</dd>
+      <dt>commandBuffers</dt><dd><code>commandBufferCount</code> command buffers, at most 8, made for <code>queue</code>. They run in array order, as one submission.</dd>
+      <dt>waits</dt><dd><code>waitCount</code> fence values, at most 3. The command buffers start only when each fence has reached its value. The wait blocks all commands, barriers included. Use it to wait for work on the other queue.</dd>
+      <dt>signal</dt><dd>The fence is set to <code>signal.value</code> when the work is done. An invalid fence signals nothing.</dd>
+      <dt>waitsForSwapchainImage</dt><dd><code>true</code> for a submit that may use the acquired swapchain image. Only the first such submit after the acquire really waits for the image.</dd>
+      <dt>presentsSwapchainImage</dt><dd><code>true</code> only for the frame's last submit that uses the swapchain image: it signals the present. Then call <code>present</code>.</dd>
     </dl>
-    <p>On success the texture states the commands recorded are kept (see <a href="#transitionImageLayout"><code>transitionImageLayout</code></a>). On failure it returns <code>false</code>: call <code>discardRecording</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="submit">
+  <pre class="sig">bool submit(const SubmitInfo&amp; info);</pre>
+  <div class="body">
+    <p>Sends <code>info.commandBuffers</code> to <code>info.queue</code> as one submission. Pending <code>fillBuffer</code> uploads are submitted first, on the graphics queue, so these command buffers see their data. A graphics submit sees them through the copies' barriers, a compute submit by waiting for the copies. The copies also wait for the last compute submit, which may still read what they overwrite.</p>
+    <figure class="diagram">
+      <svg viewBox="0 0 700 170" role="img" aria-label="Three submits. Submit A on the graphics queue signals the frame fence to 5. Submit B on the compute queue waits for the frame fence to reach 5, runs, and signals the compute fence to 3. Submit C on the graphics queue waits for the compute fence to reach 3.">
+        <text x="10" y="46" class="small">graphics queue</text>
+        <text x="10" y="136" class="small">compute queue</text>
+        <rect x="110" y="22" width="170" height="40" rx="6" class="gpu"/><text x="195" y="47" class="mid mono">submit A</text>
+        <rect x="490" y="22" width="190" height="40" rx="6" class="gpu"/><text x="585" y="47" class="mid mono">submit C</text>
+        <rect x="300" y="112" width="170" height="40" rx="6" class="gpu"/><text x="385" y="137" class="mid mono">submit B</text>
+        <path d="M280,42 C292,42 292,132 298,132" class="arrow hot" marker-end="url(#ah-hot)"/>
+        <text x="222" y="92" class="mid small t-hot">signal 5 → wait 5</text>
+        <path d="M470,132 C480,132 480,42 488,42" class="arrow hot" marker-end="url(#ah-hot)"/>
+        <text x="550" y="92" class="mid small t-hot">signal 3 → wait 3</text>
+      </svg>
+      <figcaption>Each queue has its own timeline fence. A submit signals its fence; a submit on the other queue lists that value in <code>waits</code>. The engine's frame does this for its async compute passes.</figcaption>
+    </figure>
+    <p>On success the texture states the commands recorded are kept (see <a href="#transitionImageLayout"><code>transitionImageLayout</code></a>). On failure it returns <code>false</code>: call <code>discardRecording</code>. More than 8 command buffers or more than 3 waits log an error and submit nothing.</p>
+  </div>
+</div>
+
+<div class="api" id="hasAsyncCompute">
+  <pre class="sig">bool hasAsyncCompute() const;</pre>
+  <div class="body">
+    <p><code>true</code> when the device has a compute queue of its own, next to the graphics queue. That needs <code>EngineConfig::asyncCompute</code> and a GPU with a compute queue family without graphics, whose timestamps have as many valid bits as the graphics queue's. Then every buffer and texture is shared by both queues, so either queue can use it with no ownership transfer.</p>
   </div>
 </div>
 
 <div class="api" id="discardRecording">
   <pre class="sig">void discardRecording();</pre>
   <div class="body">
-    <p>Says that the commands recorded since the last successful <code>submit</code> will not run, a failed submit included. Every texture they moved goes back to the usage it had before them, which is still the GPU's layout. <code>endFrame</code> calls it for a frame it does not submit. Without it, the next barrier on such a texture would start from a layout the texture never reached.</p>
+    <p>Says that the commands recorded since the last successful <code>submit</code> will not run, a failed submit included. Every texture they moved goes back to the usage it had before them, which is still the GPU's layout. <code>endFrame</code> calls it when a submit of the frame fails. In a frame of several submits, only the states since the last successful one go back (<code>B30</code>). Without it, the next barrier on such a texture would start from a layout the texture never reached.</p>
   </div>
 </div>
 
@@ -1005,9 +1075,10 @@ void cleanup();</pre>
   <ul>
     <li>Only buffers and textures can be destroyed, and only by hand; nothing waits for the GPU for you (<code>D4</code>).</li>
     <li>Each call looks its handles up in a hash map (<code>P4</code>).</li>
-    <li>There is one queue: no async compute or transfer queue (D13).</li>
+    <li>There is a graphics queue and, with <code>EngineConfig::asyncCompute</code>, a compute queue. There is no transfer queue (<code>D13</code>).</li>
+    <li>Async compute does not make the scene passes faster yet, so it is off by default (<code>P11</code>).</li>
   </ul>
-  <p>How these calls reach Vulkan: the guide <a href="../guides/graphics-apis-rhi.html">Graphics APIs and the RHI</a>, and for uploads <a href="../guides/gpu-memory.html">GPU memory and uploads</a>.</p>
+  <p>How these calls reach Vulkan: the guide <a href="../guides/graphics-apis-rhi.html">Graphics APIs and the RHI</a>, for uploads <a href="../guides/gpu-memory.html">GPU memory and uploads</a>, and for the compute queue <a href="../guides/async-compute.html">Async compute and multiple queues</a>.</p>
 </div>
 
 </main>

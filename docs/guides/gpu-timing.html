@@ -457,14 +457,34 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
 <div class="table-wrap">
 <table>
   <tr><th>Timer</th><th>Started by</th><th>Name</th></tr>
-  <tr><td>The frame's command buffer</td><td><code>beginFrame</code>, ended in <code>endFrame</code></td><td>"Frame" (always timer 0, not listed)</td></tr>
+  <tr><td>The frame on the graphics queue</td><td><code>beginFrame</code>, ended in <code>endFrame</code></td><td>"Frame" (always timer 0, not listed)</td></tr>
   <tr><td>Each graphics pass</td><td><code>beginPass</code> / <code>endPass</code></td><td>the pass name: "Scene 1" and "Scene 2" of the scene passes ("Scene" without occlusion culling), "Clear" for the empty swapchain pass, or your graph pass's name</td></tr>
-  <tr><td>Each render graph compute pass</td><td><code>RenderGraph::execute</code></td><td>the pass name: "Cull 1", "Hi-Z" and "Cull 2" of the scene passes ("Cull" without occlusion culling), or your graph pass's name</td></tr>
+  <tr><td>Each render graph compute pass, on its queue</td><td><code>RenderGraph::execute</code></td><td>the pass name: "Cull 1", "Hi-Z" and "Cull 2" of the scene passes ("Cull" without occlusion culling), or your graph pass's name</td></tr>
   <tr><td>The application's own work</td><td><code>Engine::beginGpuTimer</code> / <code>Engine::endGpuTimer</code></td><td>its own name</td></tr>
 </table>
 </div>
 
-<p>Every timer is in the frame's one command buffer, around one pass. As in section 5, <code>gpuFrameMs</code> runs from the earliest timestamp to the latest end, and <code>gpuTimers</code> are sorted by start time, so they list the passes in the order they ran: "Cull 1", "Scene 1", "Hi-Z", "Cull 2", "Scene 2". <code>VulkanDevice::getTimestamps</code> turns the raw values into nanoseconds: each value becomes its signed distance from the first one, masked to <code>timestampValidBits</code> (the wrap rule of section 3), then the earliest is subtracted and the result multiplied by <code>timestampPeriod</code>. It reads without the wait flag, so a pool that is not ready returns nothing instead of stalling.</p>
+<p>Without async compute every timer is in the frame's one command buffer, around one pass. With <code>EngineConfig::asyncCompute</code>, a timer is in the batch of its pass's queue. It begins and ends on that queue, so its own time holds. <code>gpuFrameMs</code> runs from the "Frame" timer's start to the latest end of a graphics-queue timer. Compute-queue timers are left out of it: timestamps of two queues may not count from the same origin (section 3). <code>gpuTimers</code> are listed in the order they were recorded, which is the order each queue runs them: "Cull 1", "Scene 1", "Hi-Z", "Cull 2", "Scene 2".</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 180" role="img" aria-label="With async compute, the graphics queue runs Scene 1 and Scene 2 and the compute queue runs Cull 1, Hi-Z and Cull 2. gpuFrameMs spans the Frame timer on the graphics queue, from its start to the latest graphics end. The compute timers keep their own times but are not part of gpuFrameMs.">
+    <line x1="220" y1="36" x2="680" y2="36" class="arrow hot" marker-start="url(#ah-hot)" marker-end="url(#ah-hot)"/>
+    <text x="450" y="28" class="mid small t-hot">gpuFrameMs: "Frame" start → latest graphics end</text>
+    <text x="10" y="70" class="title">graphics</text>
+    <rect x="220" y="52" width="460" height="32" rx="6" class="zone"/>
+    <rect x="230" y="56" width="110" height="24" rx="4" class="gpu"/><text x="285" y="73" class="mid small">Scene 1</text>
+    <rect x="520" y="56" width="110" height="24" rx="4" class="gpu"/><text x="575" y="73" class="mid small">Scene 2</text>
+    <text x="10" y="124" class="title">compute</text>
+    <rect x="100" y="106" width="110" height="24" rx="4" class="shader"/><text x="155" y="123" class="mid small">Cull 1</text>
+    <rect x="350" y="106" width="76" height="24" rx="4" class="shader"/><text x="388" y="123" class="mid small">Hi-Z</text>
+    <rect x="430" y="106" width="80" height="24" rx="4" class="shader"/><text x="470" y="123" class="mid small">Cull 2</text>
+    <text x="10" y="156" class="small">Each bar is a timer pair on one queue, so its own time holds. The compute bars are not part of gpuFrameMs:</text>
+    <text x="10" y="172" class="small">their timestamps come from another queue. Time goes right.</text>
+  </svg>
+  <figcaption>The scene passes with async compute on. Without async compute all bars are on one queue, inside the "Frame" timer. The device takes a compute queue only if its timestamps have as many valid bits as the graphics queue's, since both share one pool and mask.</figcaption>
+</figure>
+
+<p><code>VulkanDevice::getTimestamps</code> turns the raw values into nanoseconds: each value becomes its signed distance from the first one, masked to <code>timestampValidBits</code> (the wrap rule of section 3), then the earliest is subtracted and the result multiplied by <code>timestampPeriod</code>. It reads without the wait flag, so a pool that is not ready returns nothing instead of stalling.</p>
 
 <h3>The counters</h3>
 
@@ -535,7 +555,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
     <text x="620" y="262" class="mid title">frame N+2 runs</text>
     <text x="620" y="282" class="mid small">the overlay shows frame N's numbers</text>
   </svg>
-  <figcaption><code>MAX_FRAMES_IN_FLIGHT</code> is 2, so the GPU numbers are two frames old. <code>endFrame</code> records one <code>COMPUTE → HOST</code> barrier after the last pass, so the CPU sees the counters once the fence is reached.</figcaption>
+  <figcaption><code>MAX_FRAMES_IN_FLIGHT</code> is 2, so the GPU numbers are two frames old. <code>endFrame</code> records one <code>COMPUTE → HOST</code> barrier after the last pass, and with async compute each compute batch ends with one too, so the CPU sees the counters once the fences are reached.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -547,7 +567,8 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
   <tr><td>Timestamps</td><td>pairs, period, valid bits</td><td>The same: one pool per frame slot, 16 timers, wrap-safe conversion.</td></tr>
   <tr><td>Reading</td><td>after the slot's fence, no wait</td><td>The same, in <code>updateFrameStats</code>. A slot whose fence value did not move (a frame that was not submitted) is skipped.</td></tr>
   <tr><td>Reset</td><td>by command or from the host</td><td>From the host (<code>vkResetQueryPool</code>, host query reset), right after the read.</td></tr>
-  <tr><td>Frame GPU time</td><td>earliest begin to latest end</td><td>The same. All timers are in the frame's one command buffer.</td></tr>
+  <tr><td>Frame GPU time</td><td>earliest begin to latest end</td><td>From the "Frame" timer's start to the latest end on the graphics queue. With one queue that is the same. With async compute, the compute-queue timers are left out, since timestamps of two queues may not share a clock.</td></tr>
+  <tr><td>Timer order</td><td>by start time</td><td>The order they were recorded, which is the order each queue runs them.</td></tr>
   <tr><td>Too many timers</td><td>drop, warn once</td><td>The same: one warning per run.</td></tr>
   <tr><td>Pipeline statistics</td><td>optional queries</td><td>None.</td></tr>
   <tr><td>Shader counters</td><td>reduce in the group, one atomic</td><td>The same, in <code>countMain</code>: one atomic per group per counter, plus up to 8 for the LOD counts.</td></tr>
@@ -579,7 +600,8 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
   <ul>
     <li>The <code>STATS_*</code> words in <code>cull.slang</code> match the <code>CULL_STATS_*</code> words in <code>gpuScene.h</code>.</li>
     <li>A slot's pool and counter buffer are read and reset only after that slot's fence wait (the frame order in <code>beginFrame</code>).</li>
-    <li><code>endFrame</code> records a <code>COMPUTE → HOST</code> barrier after the last pass; without it the CPU may read stale counters.</li>
+    <li><code>endFrame</code> records a <code>COMPUTE → HOST</code> barrier after the last pass, and <code>Engine::closeBatch</code> one at the end of each compute batch; without them the CPU may read stale counters.</li>
+    <li>Only timers on the graphics queue count toward <code>gpuFrameMs</code>. A timer begins and ends on one queue.</li>
     <li><code>beginGpuTimer</code> may return <code>UINT32_MAX</code>; <code>endGpuTimer</code> must accept it and do nothing.</li>
   </ul>
 </div>

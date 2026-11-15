@@ -15,7 +15,8 @@ namespace rasm::rhi
         bool                        initialize(Device& targetDevice);
         void                        cleanup();
         bool                        upload(Buffer* dst, const void* data, size_t size, size_t offset);
-        bool                        flush();
+        bool                        flush(const FenceWait* waits = nullptr, uint32_t waitCount = 0);
+        FenceWait                   lastSubmit() const;
         void                        cancelUploads(const Buffer* buffer);
 
     private:

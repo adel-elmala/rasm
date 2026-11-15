@@ -505,9 +505,9 @@
   <tr><td>Naming</td><td>pointers or handles</td><td>Both: handles (<code>BufferHandle</code>) above <code>RenderContext</code>, pointers below it. Handles never become invalid yet (<b>D4</b>).</td></tr>
   <tr><td>Recording</td><td>direct or deferred</td><td>Direct. Each <code>VulkanCommandBuffer</code> owns its own command pool, reset in <code>begin</code>.</td></tr>
   <tr><td>Barriers</td><td>caller, state tracking, or graph</td><td>All three, in layers. The RHI has explicit <code>memoryBarrier</code> and <code>transitionTexture</code>. <code>RenderContext</code> tracks each texture's state (<code>TextureStates</code>). <code>RenderGraph</code> derives barriers from declared reads and writes. See <a href="gpu-sync.html#in-rasm">GPU synchronization</a>.</td></tr>
-  <tr><td>CPU–GPU sync</td><td>fences or counters</td><td>Only counters: an <code>rhi::Fence</code> is a timeline, a Vulkan timeline semaphore. See <a href="frames-in-flight.html#in-rasm">frames in flight</a>.</td></tr>
-  <tr><td>Swapchain sync</td><td>semaphores in the interface</td><td>None cross it. <code>VulkanSwapchain</code> owns its semaphores, and a <code>SubmitDesc</code> just names the swapchain. See <a href="swapchain.html#in-rasm">the swapchain</a>.</td></tr>
-  <tr><td>Queues</td><td>graphics, compute, transfer</td><td>One: <code>QueueType</code> has only <code>GRAPHICS</code> (<b>D13</b>).</td></tr>
+  <tr><td>CPU–GPU sync</td><td>fences or counters</td><td>Only counters: an <code>rhi::Fence</code> is a timeline, a Vulkan timeline semaphore. A submit signals one and can wait for up to three others (<code>SubmitInfo::waits</code>, <code>FenceValue</code>), which is how the two queues wait for each other. See <a href="frames-in-flight.html#in-rasm">frames in flight</a>.</td></tr>
+  <tr><td>Swapchain sync</td><td>semaphores in the interface</td><td>None cross it. <code>VulkanSwapchain</code> owns its semaphores, and a <code>SubmitDesc</code> just names the swapchain: <code>acquireSwapchain</code> to wait for the image, <code>presentSwapchain</code> to present it. See <a href="swapchain.html#in-rasm">the swapchain</a>.</td></tr>
+  <tr><td>Queues</td><td>graphics, compute, transfer</td><td>Graphics, and compute when asked. <code>QueueType</code> has <code>GRAPHICS</code> and <code>COMPUTE</code>. With <code>EngineConfig::asyncCompute</code>, <code>VulkanDevice</code> takes a compute queue from a family without graphics, and <code>hasAsyncCompute</code> says whether it found one. Without one, compute command buffers and submits use the graphics queue. With one, every buffer and image is shared by both families, so no ownership moves. No transfer queue (<b>D13</b>). See <a href="async-compute.html">async compute</a>.</td></tr>
   <tr><td>Shaders</td><td>one language, cross-compiled</td><td>Slang, compiled at runtime. <code>getShaderCompilerTarget</code> in <code>src/engine.cpp</code> maps each backend to SPIR-V, HLSL, MSL or WGSL. But the shaders use device addresses and <code>spirv_asm</code>, so only SPIR-V works today (<b>D12</b>).</td></tr>
   <tr><td>Window</td><td>one hook per API</td><td><code>createWindowSurface</code> takes a <code>VkInstance</code>, so the window hook is Vulkan-only (<b>D7</b>).</td></tr>
   <tr><td>Checks</td><td>one place for the rules</td><td><code>RenderContext</code> checks public API misuse with <code>checkArgument</code>: an error log, an assert in debug builds, and the call does nothing. For example, no draw outside a rendering scope and no barrier or dispatch inside one.</td></tr>
@@ -527,7 +527,8 @@
   <tr><td>Native structs</td><td><code>src/rhi/vulkan/vulkanTypes.h</code></td></tr>
   <tr><td>Device and resources</td><td><code>VulkanDevice</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>Recording</td><td><code>VulkanCommandBuffer</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
-  <tr><td>Submit</td><td><code>VulkanQueue::submit</code> in <code>src/rhi/vulkan/vulkanQueue.cpp</code></td></tr>
+  <tr><td>Queue types</td><td><code>QueueType</code>, <code>QUEUE_COUNT</code> in <code>include/rasm/render/resource.h</code>; the compute queue in <code>VulkanDevice::initialize</code></td></tr>
+  <tr><td>Submit</td><td><code>SubmitInfo</code>, <code>RenderContext::submit</code> in <code>include/rasm/render/renderContext.h</code>; <code>SubmitDesc</code> in <code>src/rhi/device.h</code>; <code>VulkanQueue::submit</code> in <code>src/rhi/vulkan/vulkanQueue.cpp</code></td></tr>
   <tr><td>Shader target per backend</td><td><code>getShaderCompilerTarget</code> in <code>src/engine.cpp</code></td></tr>
 </table>
 </div>
@@ -545,7 +546,7 @@
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>A second backend needs, in this order: shaders without raw pointers and <code>spirv_asm</code> (<b>D12</b>), a window hook that takes native handles (<b>D7</b>), and more queue types (<b>D13</b>). Objects are destroyed at once, so only when the GPU is idle or a fence covered their last use; there is no deferred destruction (<b>D4</b>). There is no pipeline cache (<b>P8</b>).</p>
+  <p>A second backend needs, in this order: shaders without raw pointers and <code>spirv_asm</code> (<b>D12</b>), a window hook that takes native handles (<b>D7</b>), and a transfer queue (<b>D13</b>). Objects are destroyed at once, so only when the GPU is idle or a fence covered their last use; there is no deferred destruction (<b>D4</b>). There is no pipeline cache (<b>P8</b>).</p>
 </div>
 
 <h3>Further reading</h3>
