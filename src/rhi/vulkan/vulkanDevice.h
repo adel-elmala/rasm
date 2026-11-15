@@ -48,10 +48,11 @@ namespace rasm::rhi
         void                        destroySwapchain(Swapchain* swapchain) override;
         void                        destroyQueryPool(QueryPool* pool) override;
         Queue*                      getQueue(QueueType queueType) override;
+        bool                        hasAsyncCompute() const override;
         bool                        fillBuffer(Buffer* buffer, const void* data, size_t size, size_t offset) override;
         bool                        readBuffer(Buffer* buffer, void* data, size_t size, size_t offset) override;
         void                        resetQueries(QueryPool* pool) override;
-        bool                        getTimestamps(QueryPool* pool, uint32_t count, uint64_t* nanoseconds) override;
+        bool                        getTimestamps(QueryPool* pool, uint32_t firstQuery, uint32_t count, uint64_t* nanoseconds) override;
         bool                        fillTexture(Texture* texture, const void* data) override;
         void                        updateBindlessTexture(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, Sampler* sampler) override;
         bool                        waitForFence(Fence* fence, uint64_t value, uint64_t timeout) override;
@@ -72,6 +73,9 @@ namespace rasm::rhi
         vkb::Device                     device              = {};
         vkb::DispatchTable              dispatchTable       = {};
         std::unique_ptr<VulkanQueue>    graphicsQueue       = {};
+        std::unique_ptr<VulkanQueue>    computeQueue        = {};
+        uint32_t                        sharedFamilies[2]   = {};
+        uint32_t                        sharedFamilyCount   = 0;
         VkSurfaceKHR                    surface             = VK_NULL_HANDLE;
         bool                            debugUtilsEnabled   = false;
         uint64_t                        timestampMask       = 0;

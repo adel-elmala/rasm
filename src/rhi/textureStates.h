@@ -3,7 +3,6 @@
 
 #include "rhi/device.h"
 
-#include <utility>
 #include <vector>
 
 namespace rasm::rhi
@@ -12,12 +11,19 @@ namespace rasm::rhi
     {
     public:
         bool                                            transition(CommandBuffer& commandBuffer, Texture* texture, TextureUsage newUsage, bool discard);
-        void                                            submitted();
+        void                                            submitted(CommandBuffer* const* commandBuffers, uint32_t commandBufferCount);
         void                                            discardUnsubmitted();
         void                                            forget(Texture* texture);
 
     private:
-        std::vector<std::pair<Texture*, TextureUsage>>  unsubmitted;
+        struct Change
+        {
+            Texture*                                    texture             = nullptr;
+            const CommandBuffer*                        commandBuffer       = nullptr;
+            TextureUsage                                before              = TextureUsage::UNKNOWN;
+        };
+
+        std::vector<Change>                             unsubmitted;        // in the order they were recorded
     };
 }
 // clang-format on

@@ -347,7 +347,9 @@ namespace rasm::rhi
         }
 
         // TODO: check if the format is supported by the device, and if not, find a compatible one
-        VkImageCreateInfo imageCreateInfo(const TextureDesc &desc, uint32_t mipLevels)
+        // With a compute queue, images are shared by both families. Concurrent sharing needs no ownership
+        // transfers between the queues; some GPUs compress such images less.
+        VkImageCreateInfo imageCreateInfo(const TextureDesc &desc, uint32_t mipLevels, const uint32_t *sharedFamilies, uint32_t sharedFamilyCount)
         {
             VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
             imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -361,7 +363,9 @@ namespace rasm::rhi
             imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             imageInfo.usage = toVkImageUsageFlags(desc.usage);
             imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-            imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            imageInfo.sharingMode = sharedFamilyCount > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE;
+            imageInfo.queueFamilyIndexCount = sharedFamilyCount > 1 ? sharedFamilyCount : 0;
+            imageInfo.pQueueFamilyIndices = sharedFamilyCount > 1 ? sharedFamilies : nullptr;
             return imageInfo;
         }
 
@@ -393,6 +397,7 @@ namespace rasm::rhi
         if (allocator != nullptr)
             vmaDestroyAllocator(allocator);
         graphicsQueue.reset();
+        computeQueue.reset();
         if (device.device != VK_NULL_HANDLE)
             vkb::destroy_device(device);
         if (surface != VK_NULL_HANDLE)
@@ -444,6 +449,28 @@ namespace rasm::rhi
         timestampMask = timestampBits >= 64 ? ~0ull : (1ull << timestampBits) - 1;
         timestampPeriod = physicalDevice.properties.limits.timestampPeriod;
 
+        // A queue family with compute and no graphics runs beside the graphics queue. Its timestamps must match the
+        // graphics queue's, since the GPU timers of both share one mask.
+        if (desc.asyncCompute)
+        {
+            // vk-bootstrap's compute queue comes from a family without graphics, preferring one without transfer.
+            auto computeRet = device.get_queue(vkb::QueueType::compute);
+            auto computeIndexRet = device.get_queue_index(vkb::QueueType::compute);
+            const bool separate = computeRet && computeIndexRet && (device.queue_families[computeIndexRet.value()].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0;
+            if (separate && device.queue_families[computeIndexRet.value()].timestampValidBits == timestampBits)
+            {
+                computeQueue = std::make_unique<VulkanQueue>(computeRet.value(), computeIndexRet.value());
+                sharedFamilies[0] = queueIndexRet.value();
+                sharedFamilies[1] = computeIndexRet.value();
+                sharedFamilyCount = 2;
+                spdlog::info("Async compute on queue family {}.", computeIndexRet.value());
+            }
+            else
+            {
+                spdlog::info("No separate compute queue with matching timestamps; compute passes run on the graphics queue.");
+            }
+        }
+
         VmaVulkanFunctions vkFunctions{
             .vkGetInstanceProcAddr = vkGetInstanceProcAddr,
             .vkGetDeviceProcAddr = vkGetDeviceProcAddr,
@@ -472,6 +499,12 @@ namespace rasm::rhi
         VkBufferCreateInfo bufferInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bufferInfo.size = desc.size;
         bufferInfo.usage = toVkBufferUsageFlags(desc.usage);
+        if (sharedFamilyCount > 1)
+        {
+            bufferInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+            bufferInfo.queueFamilyIndexCount = sharedFamilyCount;
+            bufferInfo.pQueueFamilyIndices = sharedFamilies;
+        }
 
         // P1: buffers that aren't hostVisible prefer device-local memory, and are mapped only when that memory is
         // also host-visible (ReBAR, integrated GPUs). Otherwise pMappedData stays null and they are filled by staging.
@@ -513,7 +546,7 @@ namespace rasm::rhi
             return nullptr;
 
         const uint32_t mipLevels = mipLevelCount(desc);
-        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevels);
+        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevels, sharedFamilies, sharedFamilyCount);
 
         VmaAllocationCreateInfo allocInfo = {};
         allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
@@ -553,7 +586,7 @@ namespace rasm::rhi
 
     MemoryRequirements VulkanDevice::getTextureMemoryRequirements(const TextureDesc &desc)
     {
-        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevelCount(desc));
+        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevelCount(desc), sharedFamilies, sharedFamilyCount);
         const VkDeviceImageMemoryRequirements info = {.sType = VK_STRUCTURE_TYPE_DEVICE_IMAGE_MEMORY_REQUIREMENTS, .pCreateInfo = &imageInfo};
         VkMemoryRequirements2 requirements = {.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
         vkGetDeviceImageMemoryRequirements(device.device, &info, &requirements);
@@ -590,7 +623,7 @@ namespace rasm::rhi
             return nullptr;
 
         const uint32_t mipLevels = mipLevelCount(desc);
-        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevels);
+        const VkImageCreateInfo imageInfo = imageCreateInfo(desc, mipLevels, sharedFamilies, sharedFamilyCount);
 
         auto *texture = new VulkanTexture();
         texture->desc = desc;
@@ -951,10 +984,11 @@ namespace rasm::rhi
 
     CommandBuffer *VulkanDevice::createCommandBuffer(QueueType queueType, const std::string &name)
     {
-        assert(queueType == QueueType::GRAPHICS);
+        const bool onComputeQueue = queueType == QueueType::COMPUTE && computeQueue != nullptr;
+        auto *queue = onComputeQueue ? computeQueue.get() : graphicsQueue.get();
 
         auto *commandBuffer = new VulkanCommandBuffer(*this);
-        if (!commandBuffer->initialize(graphicsQueue->getFamilyIndex(), name))
+        if (!commandBuffer->initialize(queue->getFamilyIndex(), onComputeQueue, name))
         {
             delete commandBuffer;
             return nullptr;
@@ -1113,8 +1147,14 @@ namespace rasm::rhi
 
     Queue *VulkanDevice::getQueue(QueueType queueType)
     {
-        assert(queueType == QueueType::GRAPHICS);
+        if (queueType == QueueType::COMPUTE && computeQueue != nullptr)
+            return computeQueue.get();
         return graphicsQueue.get();
+    }
+
+    bool VulkanDevice::hasAsyncCompute() const
+    {
+        return computeQueue != nullptr;
     }
 
     bool VulkanDevice::fillBuffer(Buffer *buffer, const void *data, size_t size, size_t offset)
@@ -1284,14 +1324,15 @@ namespace rasm::rhi
         vkResetQueryPool(device.device, static_cast<VulkanQueryPool *>(pool)->pool, 0, pool->count);
     }
 
-    // Nanoseconds since the earliest of the queries. False when any of them has not been written since the last reset.
-    bool VulkanDevice::getTimestamps(QueryPool *pool, uint32_t count, uint64_t *nanoseconds)
+    // Nanoseconds since the first of the queries; one before it reads 0. False when any of them has not been
+    // written since the last reset.
+    bool VulkanDevice::getTimestamps(QueryPool *pool, uint32_t firstQuery, uint32_t count, uint64_t *nanoseconds)
     {
-        assert(count <= pool->count);
+        assert(firstQuery + count <= pool->count);
         if (count == 0)
             return true;
 
-        auto result = vkGetQueryPoolResults(device.device, static_cast<VulkanQueryPool *>(pool)->pool, 0, count, count * sizeof(uint64_t),
+        auto result = vkGetQueryPoolResults(device.device, static_cast<VulkanQueryPool *>(pool)->pool, firstQuery, count, count * sizeof(uint64_t),
                                             nanoseconds, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
         if (result != VK_SUCCESS)
         {
@@ -1300,20 +1341,18 @@ namespace rasm::rhi
             return false;
         }
 
-        // The counter wraps after timestampValidBits, so each value is turned into its signed distance from the
-        // first one, modulo the valid bits. That holds while the queries span less than half the counter's range.
+        // The counter wraps after timestampValidBits, so each value is turned into its distance from the first one,
+        // modulo the valid bits, and one in the upper half of that range counts as before the first. That holds while
+        // the queries span less than half the counter's range. Queries written on another queue may count from
+        // another origin, so their values can be far off; they are clamped, never wrapped.
+        constexpr double MAX_NANOSECONDS = 9.0e18;
         const uint64_t first = nanoseconds[0];
-        int64_t earliest = 0;
         for (uint32_t i = 0; i < count; ++i)
         {
-            uint64_t ticks = (nanoseconds[i] - first) & timestampMask;
-            if (ticks > timestampMask >> 1)
-                ticks |= ~timestampMask;
-            nanoseconds[i] = ticks;
-            earliest = std::min(earliest, static_cast<int64_t>(ticks));
+            const uint64_t ticks = (nanoseconds[i] - first) & timestampMask;
+            const bool before = ticks > timestampMask >> 1;
+            nanoseconds[i] = before ? 0 : static_cast<uint64_t>(std::min(static_cast<double>(ticks) * timestampPeriod, MAX_NANOSECONDS));
         }
-        for (uint32_t i = 0; i < count; ++i)
-            nanoseconds[i] = static_cast<uint64_t>(static_cast<double>(static_cast<int64_t>(nanoseconds[i]) - earliest) * timestampPeriod);
         return true;
     }
 

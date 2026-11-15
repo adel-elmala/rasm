@@ -18,6 +18,24 @@ namespace rasm
 {
     class Engine;
 
+    struct FenceValue
+    {
+        FenceHandle                         fence;
+        uint64_t                            value                   = 0;
+    };
+
+    struct SubmitInfo
+    {
+        QueueType                           queue                   = QueueType::GRAPHICS;
+        const CommandBufferHandle*          commandBuffers          = nullptr;
+        uint32_t                            commandBufferCount      = 0;
+        const FenceValue*                   waits                   = nullptr;
+        uint32_t                            waitCount               = 0;
+        FenceValue                          signal                  = {};
+        bool                                waitsForSwapchainImage  = false;
+        bool                                presentsSwapchainImage  = false;
+    };
+
     class RenderContext
     {
     public:
@@ -32,7 +50,7 @@ namespace rasm
         DescriptorSetLayoutHandle           createBindlessDescriptorSetLayout(const BindlessDescriptorSetLayoutDesc& desc);
         DescriptorPoolHandle                createDescriptorPool(const DescriptorPoolDesc& desc);
         DescriptorSetHandle                 allocateDescriptorSet(const std::string& name, const DescriptorPoolHandle& pool, const DescriptorSetLayoutHandle& layout);
-        CommandBufferHandle                 createCommandBuffer(const std::string& name);
+        CommandBufferHandle                 createCommandBuffer(const std::string& name, QueueType queue = QueueType::GRAPHICS);
         FenceHandle                         createFence(const std::string& name, uint64_t initialValue = 0);
         QueryPoolHandle                     createTimestampQueryPool(const std::string& name, uint32_t count);
         RenderTargetHandle                  createRenderTarget(const RenderTargetDesc& desc);
@@ -58,7 +76,7 @@ namespace rasm
         bool                                fillBuffer(const BufferHandle& buffer, const void* data, size_t size, size_t offset = 0);
         bool                                readBuffer(const BufferHandle& buffer, void* data, size_t size, size_t offset = 0);
         void                                resetQueries(const QueryPoolHandle& pool);
-        bool                                getTimestamps(const QueryPoolHandle& pool, uint32_t count, uint64_t* nanoseconds);
+        bool                                getTimestamps(const QueryPoolHandle& pool, uint32_t firstQuery, uint32_t count, uint64_t* nanoseconds);
         void                                writeTimestamp(const CommandBufferHandle& commandBuffer, const QueryPoolHandle& pool, uint32_t index);
         bool                                fillTexture(const TextureHandle& texture, const void* data);
         [[nodiscard]] SwapchainStatus       recreateSwapchain();
@@ -68,7 +86,8 @@ namespace rasm
         const Viewport&                     getViewport() const;
         bool                                setScissor(const CommandBufferHandle& commandBuffer, int32_t x, int32_t y, uint32_t width, uint32_t height);
         bool                                setCullMode(const CommandBufferHandle& commandBuffer, CullMode cullMode);
-        bool                                submit(const CommandBufferHandle* commandBuffers, uint32_t commandBufferCount, FenceHandle signalFence, uint64_t signalValue, bool presentsSwapchainImage);
+        bool                                submit(const SubmitInfo& info);
+        bool                                hasAsyncCompute() const;
         void                                discardRecording();
         [[nodiscard]] SwapchainStatus       present();
         void                                destroyTexture(const TextureHandle& texture);

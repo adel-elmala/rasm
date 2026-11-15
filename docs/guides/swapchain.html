@@ -330,10 +330,10 @@
 
 <h2 id="in-rasm"><span class="n">7</span>In RASM</h2>
 
-<p><code>VulkanSwapchain</code> builds the swapchain with vk-bootstrap and owns all of its sync objects. No semaphore crosses the RHI: a submit only names the swapchain (<code>SubmitDesc::swapchain</code>), and the swapchain fills in the waits and signals. The engine's frame loop handles skipped frames and resize.</p>
+<p><code>VulkanSwapchain</code> builds the swapchain with vk-bootstrap and owns all of its sync objects. No semaphore crosses the RHI: a submit only names the swapchain, to wait for its image (<code>SubmitDesc::acquireSwapchain</code>) or to present it (<code>SubmitDesc::presentSwapchain</code>), and the swapchain fills in the waits and signals. A frame is one submit, or with <a href="async-compute.html">async compute</a> a few (<a href="frame-loop.html">the frame loop</a>): the first graphics submit waits for the image, and the last one presents it. The engine's frame loop handles skipped frames and resize.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 390" role="img" aria-label="acquireNextImage first waits on the CPU until releaseTimeline reaches the value stored for its acquire slot, then acquires with acquireSemaphores of that slot. The presenting submit waits on that semaphore at color attachment output and signals presentSemaphores of the image, releaseTimeline with the next value, and the frame fence. present waits on the image's present semaphore.">
+  <svg viewBox="0 0 760 390" role="img" aria-label="acquireNextImage first waits on the CPU until releaseTimeline reaches the value stored for its acquire slot, then acquires with acquireSemaphores of that slot. The frame's first graphics submit waits on that semaphore at color attachment output. The last one, which presents, signals presentSemaphores of the image and releaseTimeline with the next value. Each graphics submit signals the frame fence. present waits on the image's present semaphore.">
     <text x="20" y="60"  class="title t-cpu">CPU</text>
     <text x="20" y="206" class="title t-gpu">graphics queue</text>
     <text x="20" y="336" class="title">presentation</text>
@@ -344,14 +344,14 @@
     <text x="220" y="74" class="mid small">vkAcquireNextImageKHR</text>
     <rect x="360" y="34" width="160" height="50" rx="6" class="cpu"/>
     <text x="440" y="56" class="mid mono">submit</text>
-    <text x="440" y="74" class="mid small">one vkQueueSubmit2</text>
+    <text x="440" y="74" class="mid small">vkQueueSubmit2 per batch</text>
     <rect x="580" y="34" width="160" height="50" rx="6" class="cpu"/>
     <text x="660" y="56" class="mid mono">present</text>
     <text x="660" y="74" class="mid small">vkQueuePresentKHR</text>
 
     <rect x="360" y="180" width="160" height="50" rx="6" class="gpu"/>
     <text x="440" y="202" class="mid">frame work</text>
-    <text x="440" y="220" class="mid small">cull + frame command buffers</text>
+    <text x="440" y="220" class="mid small">one submit per batch</text>
 
     <rect x="130" y="314" width="180" height="50" rx="6" class="box"/>
     <text x="220" y="336" class="mid">image is free</text>
@@ -372,20 +372,21 @@
     <line x1="220" y1="314" x2="220" y2="286" class="arrow mem" marker-end="url(#ah-mem)"/>
     <text x="228" y="304" class="small">signal</text>
     <line x1="310" y1="267" x2="400" y2="234" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <text x="300" y="300" class="small">wait at color output</text>
+    <text x="318" y="300" class="small">first graphics submit</text>
+    <text x="318" y="314" class="small">waits at color output</text>
     <line x1="480" y1="230" x2="560" y2="262" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <text x="528" y="240" class="small">signal</text>
+    <text x="528" y="240" class="small">last one signals</text>
     <line x1="650" y1="284" x2="650" y2="312" class="arrow mem" marker-end="url(#ah-mem)"/>
     <text x="658" y="302" class="small">wait</text>
     <line x1="400" y1="180" x2="312" y2="136" class="arrow mem" marker-end="url(#ah-mem)"/>
     <text x="350" y="178" class="end small">signal next value</text>
     <line x1="440" y1="84" x2="440" y2="178" class="arrow" marker-end="url(#ah)"/>
     <line x1="480" y1="180" x2="600" y2="146" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <text x="548" y="176" class="small">signal frame value</text>
+    <text x="548" y="176" class="small">each signals a value</text>
     <line x1="220" y1="110" x2="220" y2="86" class="arrow hot" marker-end="url(#ah-hot)"/>
     <text x="228" y="102" class="small t-hot">a later acquire waits here (CPU)</text>
   </svg>
-  <figcaption>One presenting submit waits on one semaphore and signals three. The release timeline tells <code>acquireNextImage</code> when an acquire semaphore is free again, without depending on how the engine paces its frames.</figcaption>
+  <figcaption>The frame's submits wait on one semaphore and signal three: the first graphics submit waits, the last one presents. With one submit, it does both. Every graphics submit names the image for the wait, but only the first one waits: the semaphore is binary, so a second wait would never end. The release timeline tells <code>acquireNextImage</code> when an acquire semaphore is free again, without depending on how the engine paces its frames.</figcaption>
 </figure>
 
 <div class="table-wrap">
@@ -400,7 +401,7 @@
 <h3>The order is enforced</h3>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 190" role="img" aria-label="Idle: acquire moves to Acquired. Acquired: a successful submit that names the swapchain moves to Submitted; acquiring again returns the same image. Submitted: present moves back to Idle, whatever its result.">
+  <svg viewBox="0 0 760 190" role="img" aria-label="Idle: acquire moves to Acquired. Acquired: a successful submit that presents moves to Submitted; acquiring again returns the same image. Submitted: present moves back to Idle, whatever its result.">
     <rect x="20" y="56" width="200" height="64" rx="6" class="box"/>
     <text x="120" y="80" class="mid title">Idle</text>
     <text x="120" y="98" class="mid small mono">acquiredSlot = NO_ACQUIRE</text>
@@ -421,7 +422,7 @@
     <path d="M350,56 C350,20 410,20 410,54" class="arrow" marker-end="url(#ah)"/>
     <text x="380" y="16" class="mid small">acquire again → the same image</text>
   </svg>
-  <figcaption>A call in the wrong state logs an error and fails: a submit that names the swapchain while <i>Idle</i>, an acquire while <i>Submitted</i> (<code>FAILURE</code>), a present that does not follow a successful submit. "Acquire again" happens after a failed submit: the image is still acquired and its semaphore still signaled, so it is handed out again.</figcaption>
+  <figcaption>The first submit that waits for the image sets <code>acquireWaited</code> (<code>onAcquireWaited</code>), so later submits of the frame skip the wait; present clears it. A call in the wrong state logs an error and fails: a submit that waits for or presents the image while <i>Idle</i>, an acquire while <i>Submitted</i> (<code>FAILURE</code>), a present that does not follow a successful submit. "Acquire again" happens after a failed submit: the image is still acquired and its semaphore still signaled, so it is handed out again.</figcaption>
 </figure>
 
 <h3>The frame loop around it</h3>
@@ -470,12 +471,12 @@
     <text x="330" y="270" class="mid mono small">PRESENT_SRC</text>
     <line x1="410" y1="260" x2="438" y2="260" class="arrow" marker-end="url(#ah)"/>
     <rect x="440" y="232" width="130" height="56" rx="6" class="gpu"/>
-    <text x="505" y="254" class="mid mono small">submit</text>
-    <text x="505" y="270" class="mid small">names the swapchain</text>
+    <text x="505" y="254" class="mid mono small">submitBatches</text>
+    <text x="505" y="270" class="mid small">the last one presents</text>
     <line x1="570" y1="260" x2="598" y2="260" class="arrow" marker-end="url(#ah)"/>
     <rect x="600" y="232" width="140" height="56" rx="6" class="cpu"/>
     <text x="670" y="254" class="mid mono small">present</text>
-    <text x="670" y="270" class="mid small">if the submit worked</text>
+    <text x="670" y="270" class="mid small">if that submit worked</text>
     <text x="740" y="312" class="end small"><tspan class="mono">SUBOPTIMAL</tspan> or <tspan class="mono">OUT_OF_DATE</tspan>: set the flag, rebuild next frame</text>
   </svg>
   <figcaption><code>swapchainOutOfDate</code> carries the news to the next <code>beginFrame</code>. The window sets <code>resized</code> on SDL's pixel-size event, so the swapchain follows the size in pixels (<b>B17</b>).</figcaption>
@@ -506,7 +507,8 @@
   <tr><td>Suboptimal</td><td>finish the frame, rebuild</td><td>The same, through <code>swapchainOutOfDate</code>.</td></tr>
   <tr><td>Minimized window</td><td>skip frames, sleep</td><td>The same: <code>beginFrame</code> skips, and <code>pollEvents</code> waits up to 100 ms for an event while minimized.</td></tr>
   <tr><td>Rebuild</td><td>wait idle, old swapchain, release signals</td><td>All three.</td></tr>
-  <tr><td>Present queue</td><td>any queue that can present</td><td>The one graphics queue.</td></tr>
+  <tr><td>Present queue</td><td>any queue that can present</td><td>The graphics queue. Compute queue submits never wait for the image or present it.</td></tr>
+  <tr><td>Submits per frame</td><td>one</td><td>One, or a few with <code>EngineConfig::asyncCompute</code>: the first graphics submit waits for the image, the last one presents.</td></tr>
 </table>
 </div>
 
@@ -516,10 +518,10 @@
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Building, acquire, present, resize</td><td><code>VulkanSwapchain</code> in <code>src/rhi/vulkan/vulkanSwapchain.cpp</code></td></tr>
-  <tr><td>Waits and signals of the presenting submit</td><td><code>getSubmitSemaphores</code>, <code>onSubmitted</code>; used by <code>VulkanQueue::submit</code> in <code>src/rhi/vulkan/vulkanQueue.cpp</code></td></tr>
+  <tr><td>The image wait, the present signals</td><td><code>getAcquireWait</code>, <code>onAcquireWaited</code>, <code>getPresentSignals</code>, <code>onSubmitted</code>; used by <code>VulkanQueue::submit</code> in <code>src/rhi/vulkan/vulkanQueue.cpp</code></td></tr>
   <tr><td>Result codes</td><td><code>SwapchainStatus</code> in <code>include/rasm/types.h</code></td></tr>
   <tr><td>Image handles, layout at acquire</td><td><code>RenderContext::acquireNextImage</code>, <code>recreateSwapchain</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
-  <tr><td>Skips, resize, present</td><td><code>Engine::beginFrame</code>, <code>endFrame</code>, <code>recreateSwapchain</code>, <code>createSwapchainResources</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Skips, resize, present</td><td><code>Engine::beginFrame</code>, <code>endFrame</code>, <code>submitBatches</code>, <code>recreateSwapchain</code>, <code>createSwapchainResources</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Resize and minimize events</td><td><code>pollEvents</code> in <code>src/platform/window.cpp</code></td></tr>
 </table>
 </div>

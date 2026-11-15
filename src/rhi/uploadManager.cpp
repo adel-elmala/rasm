@@ -106,12 +106,15 @@ namespace rasm::rhi
         }
 
         // Same queue as the frames, submitted before the frame that uses the data: the barriers in
-        // copyBuffers order it, and the fence only tells the CPU when the ring space is free again.
+        // copyBuffers order it, and the fence only tells the CPU when the ring space is free again. Work on
+        // another queue is not in those barriers: the copies wait for its last submit (waitFor), and that
+        // queue's submits wait for the fence (lastSubmit). This holds for the flushes made while recording too.
         bool submitted = false;
         if (recorded)
         {
             CommandBuffer *commandBuffers[] = {batch.commandBuffer};
-            submitted = device->getQueue(QueueType::GRAPHICS)->submit({.commandBuffers = commandBuffers, .commandBufferCount = 1, .signalFence = fence, .signalValue = submittedValue + 1});
+            const uint32_t waitCount = queueWait.fence != nullptr ? 1 : 0;
+            submitted = device->getQueue(QueueType::GRAPHICS)->submit({.commandBuffers = commandBuffers, .commandBufferCount = 1, .waits = &queueWait, .waitCount = waitCount, .signalFence = fence, .signalValue = submittedValue + 1});
         }
 
         // A failed batch stays pending and goes out with the next flush: the caller was already told its
@@ -131,6 +134,17 @@ namespace rasm::rhi
         pendingRanges.clear();
         currentBatch = (currentBatch + 1) % 2;
         return true;
+    }
+
+    FenceWait UploadManager::lastSubmit() const
+    {
+        return {.fence = fence, .value = submittedValue};
+    }
+
+    // The wait must be on a submit that already went out, or the copies wait for a value nothing signals.
+    void UploadManager::waitFor(const FenceWait &wait)
+    {
+        queueWait = wait;
     }
 
     // The buffer is about to be destroyed: its pending copies must not run, and submitted ones must finish.

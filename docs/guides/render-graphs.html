@@ -588,6 +588,8 @@ if order has fewer passes than the graph: there is a cycle</code></pre>
   <figcaption>It only pays when the two kinds of work use different parts of the GPU. Shadow maps (raster heavy) next to a compute pass (math heavy) is the classic pair.</figcaption>
 </figure>
 
+<p>Queues, semaphores between them and resource sharing have their own page: <a href="async-compute.html">Async compute and multiple queues</a>.</p>
+
 <h2><span class="n">10</span>Variants and pitfalls</h2>
 
 <ul>
@@ -600,7 +602,7 @@ if order has fewer passes than the graph: there is a cycle</code></pre>
 
 <h2 id="in-rasm"><span class="n">11</span>In RASM</h2>
 
-<p>RASM's render graph is a small one. It sorts passes with Kahn's algorithm, records the texture transitions and buffer barriers that their declarations need, picks each pass's load ops, and places transient render targets in shared memory. It does not cull passes, and runs on one queue. The graph is <b>retained</b>: you add the passes once, and <code>RenderGraph::execute</code> runs them every frame. The scene is graph passes too: <code>Engine::addScenePasses</code> adds them to any graph, and <code>Engine::render</code> runs a graph that holds only them (<code>Renderer::render</code>).</p>
+<p>RASM's render graph is a small one. It sorts passes with Kahn's algorithm, records the texture transitions and buffer barriers that their declarations need, picks each pass's load ops, and places transient render targets in shared memory. It does not cull passes. A pass added with <code>RenderGraph::addAsyncComputePass</code> runs on a compute queue when the engine has one (<a href="#rasm-queues">across queues</a>, below). The graph is <b>retained</b>: you add the passes once, and <code>RenderGraph::execute</code> runs them every frame. The scene is graph passes too: <code>Engine::addScenePasses</code> adds them to any graph, and <code>Engine::render</code> runs a graph that holds only them (<code>Renderer::render</code>).</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 250" role="img" aria-label="Example 01: the scene passes draw the scene into offscreen_rt. Trail reads it and last frame's copy of trail_rt, and draws this frame's copy. Background reads trail_rt and draws composite_rt. Present samples composite_rt and draws to the swapchain. offscreen_rt and composite_rt are transient and share memory. Example 04: Animate is a compute pass that writes Particle Positions, Draw reads them and draws to the swapchain, with a barrier before Animate and one before Draw.">
@@ -678,7 +680,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
 <h3>One frame</h3>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 300" role="img" aria-label="execute compiles if needed, calls beginFrame, then for each pass in order: the barriers its reads and writes need, then either the graphics path (setRenderTarget, beginPass with the pass's load ops, execute, endPass, resetRenderTarget) or the compute path (beginGpuTimer, execute, endGpuTimer). After the last pass, endFrame draws the stats overlay, moves the swapchain image to PRESENT_SRC, submits and presents.">
+  <svg viewBox="0 0 760 300" role="img" aria-label="execute compiles if needed, calls beginFrame, then for each pass in order: the batch of its queue, the waits for the other queue and the barriers its reads and writes need, then either the graphics path (setRenderTarget, beginPass with the pass's load ops, execute, endPass, resetRenderTarget) or the compute path (beginGpuTimer, execute, endGpuTimer). After the last pass, endFrame draws the stats overlay, moves the swapchain image to PRESENT_SRC, submits the batches and presents.">
     <rect x="15" y="20" width="150" height="44" rx="6" class="cpu"/>
     <text x="90" y="40" class="mid title">compile()</text>
     <text x="90" y="56" class="mid small">only if not compiled</text>
@@ -689,7 +691,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
     <line x1="365" y1="42" x2="393" y2="42" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <rect x="395" y="20" width="350" height="44" rx="6" class="zone"/>
     <text x="570" y="40" class="mid title">for each pass in executionOrder</text>
-    <text x="570" y="56" class="mid small">barriers first, from its reads and writes</text>
+    <text x="570" y="56" class="mid small">its queue's batch, then waits and barriers</text>
 
     <line x1="480" y1="64" x2="200" y2="100" class="arrow" marker-end="url(#ah)"/>
     <line x1="660" y1="64" x2="580" y2="100" class="arrow" marker-end="url(#ah)"/>
@@ -720,9 +722,9 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
     <line x1="435" y1="266" x2="453" y2="266" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <rect x="455" y="244" width="290" height="44" rx="6" class="cpu"/>
     <text x="600" y="264" class="mid title">endFrame()</text>
-    <text x="600" y="280" class="mid small">overlay, → PRESENT_SRC, submit</text>
+    <text x="600" y="280" class="mid small">overlay, → PRESENT_SRC, submit batches</text>
   </svg>
-  <figcaption>Everything is recorded into the frame's one command buffer (see <a href="frame-loop.html">the frame loop</a>). Each pass gets a <a href="gpu-timing.html">GPU timer</a> named after it.</figcaption>
+  <figcaption>Each pass records into the open batch of its queue (<code>Engine::useQueue</code>): an async compute pass into the compute batch when there is a compute queue, every other pass into the graphics batch. Without a compute queue the frame is one command buffer (see <a href="frame-loop.html">the frame loop</a>). Each pass gets a <a href="gpu-timing.html">GPU timer</a> named after it.</figcaption>
 </figure>
 
 <h3>Barriers in RASM</h3>
@@ -741,10 +743,12 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
   <tr><td><code>readPrevious(buffer)</code></td><td>like <code>read(buffer)</code>; the last write is the previous frame's</td><td>once per stage after each write</td></tr>
   <tr><td><code>write(buffer)</code></td><td>one <code>memoryBarrier</code>: the last write and the reads since → this pass's stage</td><td>if any pass used it before</td></tr>
   <tr><td><code>write(texture)</code></td><td>nothing</td><td>only orders passes (compute writes buffers only)</td></tr>
+  <tr><td><code>read</code> or <code>write</code> of a per-frame buffer array</td><td>like <code>read(buffer)</code> or <code>write(buffer)</code>, for the buffer of this frame's slot only</td><td>every slot's buffer still orders the passes</td></tr>
+  <tr><td>a resource the other queue used</td><td>no barrier: a semaphore wait at the start of this queue's batch (<code>Engine::waitForQueue</code>)</td><td>with async compute only (<a href="#rasm-queues">below</a>)</td></tr>
 </table>
 </div>
 
-<p>Texture state lives in <code>RenderContext</code>: <code>rhi::TextureStates</code> remembers each texture's last usage, so <code>transitionImageLayout</code> takes only the new one. If a recorded frame is never submitted, <code>RenderContext::discardRecording</code> puts the old states back. Buffers are reached through <a href="device-addresses.html">device addresses</a>, so the graph cannot see them; it trusts the declarations. For each declared buffer it keeps a <code>BufferAccess</code>: the stage of the last write and the stages that read since. All of a pass's buffers fold into one global <code>memoryBarrier</code>. This is <code>examples/04_compute</code> over two frames:</p>
+<p>Texture state lives in <code>RenderContext</code>: <code>rhi::TextureStates</code> remembers each texture's last usage, so <code>transitionImageLayout</code> takes only the new one. If recorded commands are never submitted, <code>RenderContext::discardRecording</code> puts the old states back; the command buffers that did go out keep theirs. Buffers are reached through <a href="device-addresses.html">device addresses</a>, so the graph cannot see them; it trusts the declarations. For each declared buffer it keeps an <code>Access</code> (<code>bufferAccess</code>): per queue, the stage of the last write, the stages that read since, and the batch that used it last. All of a pass's buffers fold into one global <code>memoryBarrier</code>. This is <code>examples/04_compute</code> over two frames:</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 200" role="img" aria-label="Frame N: before Animate, a barrier from compute and graphics to compute; Animate writes, so the buffer's state is write COMPUTE, no reads. Before Draw, a barrier from compute to graphics; after Draw the state is write COMPUTE, reads GRAPHICS. Frame N plus 1 repeats the same two barriers, because the state carried over.">
@@ -775,7 +779,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
     <text x="382" y="114" class="small t-hot">C | G → C</text>
     <text x="565" y="114" class="mid small t-hot">C → G</text>
 
-    <text x="12" y="140" class="small">BufferAccess after the pass:</text>
+    <text x="12" y="140" class="small">Access after the pass (graphics queue):</text>
     <rect x="30" y="148" width="150" height="36" rx="4" class="mem"/>
     <text x="105" y="171" class="mid small">write C · reads none</text>
     <rect x="205" y="148" width="150" height="36" rx="4" class="mem"/>
@@ -785,7 +789,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
     <rect x="575" y="148" width="150" height="36" rx="4" class="mem"/>
     <text x="650" y="171" class="mid small">write C · reads G</text>
   </svg>
-  <figcaption>C = <code>COMPUTE</code>, G = <code>GRAPHICS</code>. The state carries over to the next frame, so Animate waits for the previous frame's draw, which read the same buffer. A barrier's first scope includes earlier submissions on the queue, so no fence is needed for that.</figcaption>
+  <figcaption>C = <code>COMPUTE</code>, G = <code>GRAPHICS</code>. The state carries over to the next frame, so Animate waits for the previous frame's draw, which read the same buffer. A barrier's first scope includes earlier submissions on the same queue, so no fence is needed for that. The example has no async pass, so the compute queue's half of the state stays empty.</figcaption>
 </figure>
 
 <h3>The scene passes: one resource, written twice</h3>
@@ -852,7 +856,60 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
   <figcaption>Each arrow is an edge of the sort. A read between two writes runs after the first and before the second, so <code>Scene 1</code> draws before <code>Cull 2</code> rewrites the list. <code>Hi-Z</code> samples the depth (<code>readSwapchainDepth</code> for the swapchain), so the graph makes <code>Scene 1</code> store it, moves it to <code>SAMPLED</code>, and <code>Scene 2</code> loads it. C = <code>COMPUTE</code>, G = <code>GRAPHICS</code>. Without occlusion culling there are only <code>Cull</code> and <code>Scene</code>.</figcaption>
 </figure>
 
-<p>A scene view's buffers grow while the application runs. They grow in place (<code>RenderContext::resizeBuffer</code> keeps the handle), so what the passes declared stays valid. The passes declare the buffers of both frame slots, since a graph's declarations are fixed when the passes are added. How the passes cull is in <a href="occlusion-culling.html#in-rasm">occlusion culling</a>.</p>
+<p>A scene view's buffers grow while the application runs. They grow in place (<code>RenderContext::resizeBuffer</code> keeps the handle), so what the passes declared stays valid. The visible draws and the Hi-Z have one buffer per frame slot, and the passes declare them with the array forms of <code>PassBuilder::read</code> and <code>PassBuilder::write</code> (<code>FrameBuffers</code>). A graph's declarations are fixed when the passes are added, so every slot's buffer orders the passes. But barriers and waits cover only the buffer of the slot being recorded: <code>Cull 1</code> does not wait for the previous frame's draws, which use the other slot. How the passes cull is in <a href="occlusion-culling.html#in-rasm">occlusion culling</a>.</p>
+
+<h3 id="rasm-queues">Across queues</h3>
+
+<p>With <code>EngineConfig::asyncCompute</code>, on a GPU that has a compute queue (<code>RenderContext::hasAsyncCompute</code>), a pass from <code>addAsyncComputePass</code> records on the compute queue. Without one it is a plain compute pass. The order of the passes is the same either way; only the queue changes. The graph keeps the state of each resource per queue, and before a pass it looks at the other queue's half:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>This pass</th><th>The other queue</th><th>The graph</th></tr>
+  <tr><td>reads a buffer</td><td>wrote it</td><td><code>Engine::waitForQueue</code> with the value of that queue's batch</td></tr>
+  <tr><td>writes a buffer</td><td>wrote it or read it</td><td>the same</td></tr>
+  <tr><td>uses a texture or a render target</td><td>used it</td><td>the same: every texture use counts as a write, since the first use on a queue is often a layout transition</td></tr>
+  <tr><td>is a transient target's first pass</td><td>used a transient target this frame</td><td><code>Engine::waitForQueue</code> with the value of its last such pass (<code>transientUses</code>): the memory may have held what it used</td></tr>
+  <tr><td>uses an undeclared resource</td><td>–</td><td>nothing, like no barrier</td></tr>
+</table>
+</div>
+
+<p>A wait is a semaphore wait at the start of the waiting queue's batch, not a barrier. It blocks all commands and makes the other queue's writes visible. If the value belongs to the other queue's open batch, that batch is closed first. Every buffer and image is shared by both queues (concurrent sharing), so nothing moves ownership. Textures are tracked across queues only: on one queue, their layout transitions order them.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="The scene passes with async compute make four batches. Compute: Cull 1. Graphics: Scene 1, which waits for Cull 1's draws. Compute: Hi-Z and Cull 2, which wait for Scene 1's depth, with a barrier between them. Graphics: Scene 2 and the overlay, which wait for Cull 2's draws, then present. The next frame's Cull 1 runs on the compute queue next to Scene 2.">
+    <text x="15" y="54" class="title">compute</text>
+    <text x="15" y="134" class="title">graphics</text>
+
+    <rect x="84" y="24" width="112" height="52" rx="8" class="zone"/>
+    <rect x="90" y="30" width="100" height="40" rx="6" class="gpu"/><text x="140" y="55" class="mid">Cull 1</text>
+
+    <rect x="204" y="104" width="122" height="52" rx="8" class="zone"/>
+    <rect x="210" y="110" width="110" height="40" rx="6" class="gpu"/><text x="265" y="135" class="mid">Scene 1</text>
+
+    <rect x="334" y="24" width="192" height="52" rx="8" class="zone"/>
+    <rect x="340" y="30" width="84" height="40" rx="6" class="gpu"/><text x="382" y="55" class="mid">Hi-Z</text>
+    <line x1="430" y1="28" x2="430" y2="72" class="hot"/>
+    <rect x="436" y="30" width="84" height="40" rx="6" class="gpu"/><text x="478" y="55" class="mid">Cull 2</text>
+
+    <rect x="534" y="104" width="152" height="52" rx="8" class="zone"/>
+    <rect x="540" y="110" width="140" height="40" rx="6" class="gpu"/><text x="610" y="135" class="mid">Scene 2 · overlay</text>
+    <line x1="686" y1="130" x2="704" y2="130" class="arrow" marker-end="url(#ah)"/>
+    <text x="708" y="134" class="small">present</text>
+
+    <rect x="560" y="30" width="120" height="40" rx="6" class="box"/><text x="620" y="55" class="mid small">Cull 1, next frame</text>
+
+    <line x1="192" y1="72" x2="214" y2="104" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="196" y="96" class="small t-hot end">draws</text>
+    <line x1="322" y1="104" x2="344" y2="74" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="322" y="96" class="small t-hot end">depth</text>
+    <line x1="522" y1="72" x2="544" y2="104" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="526" y="96" class="small t-hot end">draws</text>
+
+    <text x="15" y="182" class="small">Time goes right. A box is a batch: one command buffer, one submit. Hot arrows are the waits the graph adds;</text>
+    <text x="15" y="198" class="small">inside a batch, Hi-Z and Cull 2 get a plain barrier. The next frame's Cull 1 needs nothing Scene 2 uses.</text>
+  </svg>
+  <figcaption>The scene passes with async compute: four batches, submitted in this order at the end of the frame (<a href="frame-loop.html">the frame loop</a>). <code>Cull 1</code> of the next frame can run next to <code>Scene 2</code>; that is the only overlap today, so async compute costs a little more than it saves on the scene passes (<code>P11</code>) and is off by default. The idea in general: <a href="async-compute.html">Async compute and multiple queues</a>.</figcaption>
+</figure>
 
 <h3>Render targets: transient, history, and the rest</h3>
 
@@ -862,7 +919,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
 
 <p>The layout is made again only when a compile changes the lifetimes. If a heap cannot be made, the frames draw no passes and the graph tries again each frame. The graph owns its transient targets: its destructor waits for the GPU and frees them with <code>RenderContext::destroyTransientRenderTargets</code>.</p>
 
-<p>A render target has up to <code>MAX_COLOR_ATTACHMENTS</code> color textures, which one pass draws together (<a href="multiple-render-targets.html">Multiple render targets</a>), and one depth texture. It has <b>one</b> set of attachments that every frame draws. That is safe with <a href="frames-in-flight.html">frames in flight</a>: there is one queue, so frame N+1's passes run after frame N's, and the first use in frame N+1 is a barrier that waits for frame N's reads.</p>
+<p>A render target has up to <code>MAX_COLOR_ATTACHMENTS</code> color textures, which one pass draws together (<a href="multiple-render-targets.html">Multiple render targets</a>), and one depth texture. It has <b>one</b> set of attachments that every frame draws. That is safe with <a href="frames-in-flight.html">frames in flight</a>: on one queue, frame N+1's passes run after frame N's, and the first use in frame N+1 is a barrier that waits for frame N's reads. A use on the other queue waits for frame N's use instead, since the state carries over between frames.</p>
 
 <p>A target created with <code>history = true</code> is RASM's <b>imported history resource</b>: it holds one set per frame slot. A pass draws this frame's copy and reads the copy the previous frame drew with <code>PassBuilder::readPrevious</code>. That read adds no edge, so a pass may read the old copy of the target it draws to. <code>RenderContext::createRenderTarget</code> marks each new copy, and <code>Engine::beginFrame</code> clears it to <code>clearColor</code> before any pass, so the first frame does not read garbage, in a graph or not (more in <a href="temporal-history.html#in-rasm">History buffers</a>). Look the textures up in <code>execute</code>, every frame:</p>
 
@@ -882,11 +939,11 @@ auto previous = engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTex
   <tr><td>Checks</td><td>–</td><td><code>compile</code> also fails for a pass that reads the render target it draws to (its color or its depth), for a compute pass that declares no buffer write, and for a graphics pass that does not write exactly one render target or the swapchain.</td></tr>
   <tr><td>Pass culling</td><td>walk back from the outputs</td><td>None: every pass runs.</td></tr>
   <tr><td>Texture barriers</td><td>from each resource's state</td><td>The same idea, with a remembered state per texture. Only reads are declared; attachments are moved by <code>beginPass</code> and <code>endPass</code>.</td></tr>
-  <tr><td>Buffer barriers</td><td>per resource</td><td>One global <code>memoryBarrier</code> per pass, from the declared buffers' last write and reads. The state carries across frames.</td></tr>
+  <tr><td>Buffer barriers</td><td>per resource</td><td>One global <code>memoryBarrier</code> per pass, from the declared buffers' last write and reads on the same queue. The state carries across frames.</td></tr>
   <tr><td>Transient memory, aliasing</td><td>one heap, lifetimes</td><td>The same, for render targets only, laid out again only when a compile changes the lifetimes, not every frame. A global barrier starts each target's first pass. One heap per set of memory types; greedy first fit, biggest first.</td></tr>
   <tr><td>Size</td><td>often relative to the screen</td><td><code>RenderTargetDesc::swapchainScale</code>; a resize rebuilds the target, or places its group again, with the device idle.</td></tr>
   <tr><td>Load and store</td><td>per pass</td><td>Per pass, but inferred: passes on one target run in add order, the first clears it, later ones load color and depth, and the one before a load or a depth read stores its depth (<code>RenderGraph::assignAttachmentOps</code>). There is no way to ask for a load on the first pass, or for <samp>DONT_CARE</samp>.</td></tr>
-  <tr><td>Async compute</td><td>a second queue</td><td>One graphics queue (<code>D13</code>).</td></tr>
+  <tr><td>Async compute</td><td>a second queue, a semaphore on each edge between queues</td><td>Opt-in (<code>EngineConfig::asyncCompute</code>), and only for passes added with <code>addAsyncComputePass</code>. An edge between queues is a wait at the start of a batch. Resources are shared by both queues, with no ownership transfers. No transfer queue yet (<code>D13</code>).</td></tr>
   <tr><td>Everything in the graph</td><td>the whole frame</td><td>Almost: the scene's culling and draws are graph passes (<code>addScenePasses</code>), and <code>Engine::render</code> runs a graph. Only <code>endFrame</code> records outside it: the empty <samp>Clear</samp> pass, the stats overlay and the barrier to <code>PRESENT_SRC</code>.</td></tr>
 </table>
 </div>
@@ -897,14 +954,15 @@ auto previous = engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTex
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Graph, pass, builder types</td><td><code>RenderGraph</code>, <code>Pass</code>, <code>PassBuilder</code> in <code>include/rasm/render/renderGraph.h</code></td></tr>
-  <tr><td>Add, sort, run</td><td><code>RenderGraph::addPass</code>, <code>RenderGraph::addComputePass</code>, <code>RenderGraph::compile</code>, <code>RenderGraph::execute</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
-  <tr><td>Buffer barriers</td><td><code>RenderGraph::bufferBarrier</code>, <code>BufferAccess</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>Add, sort, run</td><td><code>RenderGraph::addPass</code>, <code>RenderGraph::addComputePass</code>, <code>RenderGraph::addAsyncComputePass</code>, <code>RenderGraph::compile</code>, <code>RenderGraph::execute</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>Buffer barriers, waits across queues</td><td><code>RenderGraph::bufferBarrier</code>, <code>RenderGraph::waitForOtherQueue</code>, <code>RenderGraph::textureWaits</code> in <code>src/renderer/renderGraph.cpp</code>; <code>Access</code>, <code>QueueUse</code> in <code>include/rasm/render/renderGraph.h</code></td></tr>
+  <tr><td>Batches</td><td><code>Engine::useQueue</code>, <code>Engine::waitForQueue</code>, <code>Engine::closeBatch</code>, <code>Engine::submitBatches</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Texture state</td><td><code>rhi::TextureStates</code> in <code>src/rhi/textureStates.cpp</code>; <code>RenderContext::transitionImageLayout</code>, <code>RenderContext::discardRecording</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>The scene passes, and the graph of <code>Engine::render</code></td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code>; <code>Renderer::render</code> in <code>src/renderer/renderer.cpp</code></td></tr>
   <tr><td>Pass begin and end, frame end</td><td><code>Engine::beginPass</code>, <code>Engine::endPass</code>, <code>Engine::endFrame</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Transient layout</td><td><code>RenderGraph::transientLifetimes</code> in <code>src/renderer/renderGraph.cpp</code>; <code>RenderContext::placeTransientRenderTargets</code>, <code>RenderContext::destroyTransientRenderTargets</code>, <code>RenderContext::aliasingBarrier</code> in <code>src/rhi/renderContext.cpp</code>; <code>rhi::packAliased</code> in <code>src/rhi/memoryAliasing.cpp</code>; <code>VulkanDevice::createPlacedTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>Render targets and history</td><td><code>RenderContext::createRenderTarget</code> in <code>src/rhi/renderContext.cpp</code>; <code>Engine::getRenderTargetTexture</code>, <code>Engine::getPreviousRenderTargetTexture</code>, <code>Engine::getRenderTargetDepthTexture</code> in <code>src/engine.cpp</code>; <code>RenderContext::clearNewHistory</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
-  <tr><td>Tests</td><td><code>tests/renderGraphTests.cpp</code> (sort, checks, buffer barriers, lifetimes), <code>tests/memoryAliasingTests.cpp</code>, <code>tests/textureStatesTests.cpp</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/renderGraphTests.cpp</code> (sort, checks, buffer barriers, per-frame buffers, lifetimes), <code>tests/memoryAliasingTests.cpp</code>, <code>tests/textureStatesTests.cpp</code></td></tr>
   <tr><td>Examples</td><td><code>examples/01_render_graph/main.cpp</code>, <code>examples/04_compute/main.cpp</code></td></tr>
 </table>
 </div>
@@ -912,7 +970,8 @@ auto previous = engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTex
 <div class="callout rule">
   <strong>Keep these true</strong>
   <ul>
-    <li>Declare every resource a pass reads or writes with <code>PassBuilder</code>. An undeclared use is not sorted and gets no barrier.</li>
+    <li>Declare every resource a pass reads or writes with <code>PassBuilder</code>. An undeclared use is not sorted and gets no barrier, and on the other queue no wait.</li>
+    <li>Get the command buffer from <code>getCurrentFrameResources</code> inside <code>execute</code>. With async compute it changes from pass to pass, as recording moves between the queues' batches.</li>
     <li>Look up <code>getRenderTargetTexture</code>, <code>getPreviousRenderTargetTexture</code> and their bindless indices inside <code>execute</code>, every frame. For a history target they change every frame.</li>
     <li>No dispatch or <code>memoryBarrier</code> inside a graphics pass: <code>RenderContext</code> refuses both. Use <code>addComputePass</code>.</li>
     <li>Add the passes that write one resource in the order they must run: the add order is the write order.</li>
@@ -924,7 +983,7 @@ auto previous = engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTex
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>Transient textures and buffers (only render targets are transient), pass culling, and a second queue for async compute (<code>D13</code>). For writing your own passes, see <a href="../api/render-graph.html">the render graph API</a>.</p>
+  <p>Transient textures and buffers (only render targets are transient), pass culling, and ownership transfers instead of sharing every resource between the queues (<code>P11</code>). For writing your own passes, see <a href="../api/render-graph.html">the render graph API</a>.</p>
 </div>
 
 <h3>Further reading</h3>

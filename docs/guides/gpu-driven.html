@@ -619,7 +619,7 @@
     <text x="572" y="271" class="mid mono">vertMain</text>
     <text x="572" y="290" class="mid small">getDrawIndex() → DrawInfo → firstInstance → instance row</text>
   </svg>
-  <figcaption>Both passes are in the frame's one command buffer, in the graph's order: the culling first, then the draws. <code>Cull</code> declares that it writes the visible draws and counts, <code>Scene</code> that it reads them, so the graph records the barrier between them.</figcaption>
+  <figcaption>Both passes run in the graph's order: the culling first, then the draws. <code>Cull</code> declares that it writes the visible draws and counts, <code>Scene</code> that it reads them, so the graph records the barrier between them. By default both are in the frame's one command buffer; with <code>EngineConfig::asyncCompute</code>, <code>Cull</code> runs on the compute queue and <code>Scene</code> waits for it instead (<a href="async-compute.html">async compute</a>).</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>

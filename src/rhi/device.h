@@ -16,11 +16,6 @@ namespace rasm
 
 namespace rasm::rhi
 {
-    enum class QueueType
-    {
-        GRAPHICS,
-    };
-
     enum class Filter
     {
         NEAREST,
@@ -57,6 +52,7 @@ namespace rasm::rhi
         bool            enableValidation        = false;
         bool            enableSyncValidation    = false;
         bool            enableGpuValidation     = false;
+        bool            asyncCompute            = false;
     };
 
     struct Buffer
@@ -172,13 +168,23 @@ namespace rasm::rhi
         virtual glm::uvec2          getExtent() const = 0;
     };
 
-    constexpr uint32_t                  MAX_SUBMIT_COMMAND_BUFFERS = 8;
+    constexpr uint32_t                  MAX_SUBMIT_COMMAND_BUFFERS  = 8;
+    constexpr uint32_t                  MAX_SUBMIT_WAITS            = 4;
+
+    struct FenceWait
+    {
+        Fence*                          fence               = nullptr;
+        uint64_t                        value               = 0;
+    };
 
     struct SubmitDesc
     {
         CommandBuffer* const*           commandBuffers      = nullptr;
         uint32_t                        commandBufferCount  = 0;
-        Swapchain*                      swapchain           = nullptr;
+        const FenceWait*                waits               = nullptr;
+        uint32_t                        waitCount           = 0;
+        Swapchain*                      acquireSwapchain    = nullptr;
+        Swapchain*                      presentSwapchain    = nullptr;
         Fence*                          signalFence         = nullptr;
         uint64_t                        signalValue         = 0;
     };
@@ -224,10 +230,11 @@ namespace rasm::rhi
         virtual void                    destroySwapchain(Swapchain* swapchain) = 0;
         virtual void                    destroyQueryPool(QueryPool* pool) = 0;
         virtual Queue*                  getQueue(QueueType queueType) = 0;
+        virtual bool                    hasAsyncCompute() const = 0;
         virtual bool                    fillBuffer(Buffer* buffer, const void* data, size_t size, size_t offset) = 0;
         virtual bool                    readBuffer(Buffer* buffer, void* data, size_t size, size_t offset) = 0;
         virtual void                    resetQueries(QueryPool* pool) = 0;
-        virtual bool                    getTimestamps(QueryPool* pool, uint32_t count, uint64_t* nanoseconds) = 0;
+        virtual bool                    getTimestamps(QueryPool* pool, uint32_t firstQuery, uint32_t count, uint64_t* nanoseconds) = 0;
         virtual bool                    fillTexture(Texture* texture, const void* data) = 0;
         virtual void                    updateBindlessTexture(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, Sampler* sampler) = 0;
         virtual bool                    waitForFence(Fence* fence, uint64_t value, uint64_t timeout) = 0;

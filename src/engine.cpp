@@ -92,6 +92,16 @@ namespace rasm
                 spdlog::error("Failed to create command buffer for frame {}", i);
                 return;
             }
+            batchCommandBuffers[i][static_cast<uint32_t>(QueueType::GRAPHICS)].push_back(frameResources[i].commandBuffer);
+        }
+
+        // Each compute submit signals the next value, like the frame fence for graphics.
+        if (config.asyncCompute && ctx.hasAsyncCompute())
+        {
+            computeFence = ctx.createFence("Compute Fence");
+            asyncCompute = computeFence.isValid();
+            if (!asyncCompute)
+                spdlog::warn("Failed to create the compute fence; compute passes run on the graphics queue.");
         }
 
         auto shaderTarget = getShaderCompilerTarget(config.preferredBackend);
@@ -320,9 +330,11 @@ namespace rasm
                 return false;
         }
 
-        // Wait for the GPU to finish the previous frame in this slot before its command buffer is reused.
+        // Wait for the GPU to finish the previous frame in this slot before its command buffers are reused.
         auto &currentFrame = frameResources[frameCount];
         if (!ctx.waitForFence(frameFence, currentFrame.fenceValue))
+            return false;
+        if (asyncCompute && !ctx.waitForFence(computeFence, currentFrame.computeFenceValue))
             return false;
 
         // After the wait: they read what the slot's last frame measured and rewrite the tables it read.
@@ -345,7 +357,17 @@ namespace rasm
         swapchainRendered = false;
 
         // record commands for the current frame
-        ctx.beginCommandBuffer(currentFrame.commandBuffer);
+        for (uint32_t q = 0; q < QUEUE_COUNT; ++q)
+        {
+            batchesUsed[q] = 0;
+            batchOpen[q] = false;
+        }
+        batchValues[static_cast<uint32_t>(QueueType::GRAPHICS)] = frameFenceValue;
+        batchValues[static_cast<uint32_t>(QueueType::COMPUTE)] = computeFenceValue;
+        closedBatches.clear();
+        recordingFailed = false;
+        if (!useQueue(QueueType::GRAPHICS))
+            return false;
         frameStats->frameTimer = beginGpuTimer(currentFrame.commandBuffer, "Frame");
         ctx.clearNewHistory(currentFrame.commandBuffer);
         return true;
@@ -355,46 +377,199 @@ namespace rasm
     {
         ZoneScoped;
 
-        auto &currentFrame = frameResources[frameCount];
-
-        // Present needs the image in PRESENT_SRC, so a frame that only drew to render targets clears it.
-        if (!swapchainRendered)
+        // The rest of the frame is graphics work, and the frame's last graphics submit presents.
+        if (useQueue(QueueType::GRAPHICS))
         {
-            auto renderTarget = currentRenderTarget;
-            resetRenderTarget();
-            beginPass("Clear");
-            endPass();
-            setRenderTarget(renderTarget);
+            auto &currentFrame = frameResources[frameCount];
+
+            // Present needs the image in PRESENT_SRC, so a frame that only drew to render targets clears it.
+            if (!swapchainRendered)
+            {
+                auto renderTarget = currentRenderTarget;
+                resetRenderTarget();
+                beginPass("Clear");
+                endPass();
+                setRenderTarget(renderTarget);
+            }
+            drawStatsOverlay();
+            ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::PRESENT_SRC);
+            // updateFrameStats reads the cull stats on the host, after the slot's fence. With a compute queue the
+            // culling runs there, and submitBatches puts the barrier in its last batch.
+            if (!asyncCompute)
+                ctx.memoryBarrier(currentFrame.commandBuffer, PipelineStage::COMPUTE, PipelineStage::HOST);
+            endGpuTimer(currentFrame.commandBuffer, frameStats->frameTimer);
+
+            // The frame ends when both queues are done with it: compute work that nothing drew with still finishes
+            // before this slot's graphics fence says so, and before the next frame's graphics work starts.
+            if (asyncCompute)
+                waitForQueueWork(QueueType::GRAPHICS, QueueType::COMPUTE);
         }
-        drawStatsOverlay();
-        ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::PRESENT_SRC);
-        // updateFrameStats reads the cull stats on the host, after the slot's fence.
-        ctx.memoryBarrier(currentFrame.commandBuffer, PipelineStage::COMPUTE, PipelineStage::HOST);
-
-        endGpuTimer(currentFrame.commandBuffer, frameStats->frameTimer);
-        ctx.endCommandBuffer(currentFrame.commandBuffer);
-
-        // The slot only takes the new value once a submit will signal it; a value nothing signals would block
-        // the next wait on this slot forever. After a failed submit the swapchain keeps the image acquired,
-        // and the next acquire hands it out again.
-        const uint64_t signalValue = frameFenceValue + 1;
-        if (ctx.submit(&currentFrame.commandBuffer, 1, frameFence, signalValue, true))
+        closeBatch(QueueType::COMPUTE);
+        closeBatch(QueueType::GRAPHICS);
+        if (submitBatches())
         {
-            frameFenceValue = signalValue;
-            currentFrame.fenceValue = signalValue;
-
             auto status = ctx.present();
             if (status == SwapchainStatus::SUBOPTIMAL || status == SwapchainStatus::OUT_OF_DATE)
                 swapchainOutOfDate = true;
-        }
-        else
-        {
-            ctx.discardRecording();
         }
 
         frameCount = (frameCount + 1) % MAX_FRAMES_IN_FLIGHT; // Toggle between 0 and 1 for double buffering
 
         FrameMark;
+    }
+
+    // A batch is the commands one queue runs between two waits for the other queue: one command buffer and one
+    // submit. Each queue records into one open batch at a time, and a batch is closed when the other queue needs
+    // what it did (waitForQueue) or at the end of the frame. Recording moves between the open batches as passes
+    // change queue, and FrameResources::commandBuffer names the one in use. Without a compute queue every pass
+    // records into the graphics batch. A batch that can't be opened drops the frame: nothing more is recorded into
+    // it, and endFrame submits none of it.
+    bool Engine::useQueue(QueueType queue)
+    {
+        if (recordingFailed)
+            return false;
+        if (!asyncCompute)
+            queue = QueueType::GRAPHICS;
+        const auto q = static_cast<uint32_t>(queue);
+        auto &commandBuffers = batchCommandBuffers[frameCount][q];
+        if (!batchOpen[q])
+        {
+            if (batchesUsed[q] == commandBuffers.size())
+            {
+                const std::string name = std::string(queue == QueueType::COMPUTE ? "Compute" : "Frame") + " Command Buffer " +
+                                         std::to_string(frameCount) + "." + std::to_string(batchesUsed[q]);
+                const CommandBufferHandle created = ctx.createCommandBuffer(name, queue);
+                if (!created.isValid())
+                {
+                    spdlog::error("Failed to create '{}'; the frame is dropped.", name);
+                    recordingFailed = true;
+                    return false;
+                }
+                commandBuffers.push_back(created);
+            }
+            if (!ctx.beginCommandBuffer(commandBuffers[batchesUsed[q]]))
+            {
+                spdlog::error("Failed to begin a command buffer; the frame is dropped.");
+                recordingFailed = true;
+                return false;
+            }
+            ++batchesUsed[q];
+            batchOpen[q] = true;
+            for (uint32_t x = 0; x < QUEUE_COUNT; ++x)
+                batchWaits[q][x] = 0;
+        }
+        recordingQueue = queue;
+        frameResources[frameCount].commandBuffer = commandBuffers[batchesUsed[q] - 1];
+        return true;
+    }
+
+    // The value the queue's open batch will signal.
+    uint64_t Engine::openBatchValue(QueueType queue) const
+    {
+        return batchValues[static_cast<uint32_t>(queue)] + 1;
+    }
+
+    // The waiter's open batch starts only once the queue reaches the value. A value of the queue's open batch
+    // closes that batch first, so every wait is on a batch closed, and later submitted, before the waiter's.
+    void Engine::waitForQueue(QueueType waiter, QueueType queue, uint64_t value)
+    {
+        if (!asyncCompute || waiter == queue)
+            return;
+        const auto q = static_cast<uint32_t>(queue);
+        if (value > batchValues[q] && batchOpen[q])
+            closeBatch(queue);
+        auto &wait = batchWaits[static_cast<uint32_t>(waiter)][q];
+        wait = std::max(wait, std::min(value, batchValues[q]));
+    }
+
+    // Waits for everything recorded on the queue so far.
+    void Engine::waitForQueueWork(QueueType waiter, QueueType queue)
+    {
+        waitForQueue(waiter, queue, openBatchValue(queue));
+    }
+
+    void Engine::closeBatch(QueueType queue)
+    {
+        const auto q = static_cast<uint32_t>(queue);
+        if (!batchOpen[q])
+            return;
+        batchOpen[q] = false;
+        const CommandBufferHandle commandBuffer = batchCommandBuffers[frameCount][q][batchesUsed[q] - 1];
+        ClosedBatch batch = {.queue = queue, .commandBuffer = commandBuffer, .value = ++batchValues[q]};
+        std::copy(std::begin(batchWaits[q]), std::end(batchWaits[q]), std::begin(batch.waits));
+        closedBatches.push_back(batch);
+    }
+
+    // The batches go out together at the end of the frame, in the order they were closed, so the GPU starts the
+    // frame once it is recorded, as with a single submit, and every wait is on a batch already submitted. The
+    // last graphics batch presents. A failed submit ends the frame there: what follows may wait for it, and a wait
+    // for a value nothing signals never ends. A dropped frame submits nothing. Returns whether the present submit
+    // went out.
+    bool Engine::submitBatches()
+    {
+        ZoneScoped;
+
+        size_t presentBatch = closedBatches.size();
+        size_t lastCompute = closedBatches.size();
+        for (size_t i = 0; i < closedBatches.size(); ++i)
+        {
+            if (closedBatches[i].queue == QueueType::GRAPHICS)
+                presentBatch = i;
+            else
+                lastCompute = i;
+        }
+
+        // Command buffers end only here, so the frame's last compute batch, often closed long before the end,
+        // still takes the barrier: updateFrameStats reads the cull stats on the host, after the slot's fences.
+        // Every one is ended, so none is still recording at its next begin.
+        bool recorded = !recordingFailed;
+        for (size_t i = 0; i < closedBatches.size(); ++i)
+        {
+            if (i == lastCompute)
+                ctx.memoryBarrier(closedBatches[i].commandBuffer, PipelineStage::COMPUTE, PipelineStage::HOST);
+            recorded = ctx.endCommandBuffer(closedBatches[i].commandBuffer) && recorded;
+        }
+        if (!recorded)
+        {
+            ctx.discardRecording();
+            return false;
+        }
+
+        for (size_t i = 0; i < closedBatches.size(); ++i)
+        {
+            const ClosedBatch &batch = closedBatches[i];
+            const bool compute = batch.queue == QueueType::COMPUTE;
+            FenceValue waits[QUEUE_COUNT] = {};
+            uint32_t waitCount = 0;
+            for (uint32_t x = 0; x < QUEUE_COUNT; ++x)
+            {
+                if (batch.waits[x] > 0)
+                    waits[waitCount++] = {.fence = x == static_cast<uint32_t>(QueueType::COMPUTE) ? computeFence : frameFence, .value = batch.waits[x]};
+            }
+
+            // The slot only takes the new value once a submit will signal it; a value nothing signals would block
+            // the next wait on this slot forever. Every graphics submit may wait for the swapchain image, and only
+            // the frame's first one does. After a failed present submit the swapchain keeps the image acquired,
+            // and the next acquire hands it out again.
+            const bool submitted = ctx.submit({.queue = batch.queue,
+                                               .commandBuffers = &batch.commandBuffer,
+                                               .commandBufferCount = 1,
+                                               .waits = waits,
+                                               .waitCount = waitCount,
+                                               .signal = {.fence = compute ? computeFence : frameFence, .value = batch.value},
+                                               .waitsForSwapchainImage = !compute,
+                                               .presentsSwapchainImage = i == presentBatch});
+            if (!submitted)
+            {
+                ctx.discardRecording();
+                return false;
+            }
+            if (compute)
+                computeFenceValue = frameResources[frameCount].computeFenceValue = batch.value;
+            else
+                frameFenceValue = frameResources[frameCount].fenceValue = batch.value;
+        }
+        return presentBatch < closedBatches.size();
     }
 
     void Engine::beginPass(const std::string &name, const AttachmentOps &ops)

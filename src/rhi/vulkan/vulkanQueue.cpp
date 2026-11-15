@@ -25,17 +25,40 @@ namespace rasm::rhi
                               .commandBuffer = static_cast<VulkanCommandBuffer *>(desc.commandBuffers[i])->getVkCommandBuffer()};
         }
 
-        VkSemaphoreSubmitInfo waits[1] = {};
+        if (desc.waitCount > MAX_SUBMIT_WAITS)
+        {
+            spdlog::error("A submit waits for at most {} fences, got {}.", MAX_SUBMIT_WAITS, desc.waitCount);
+            return false;
+        }
+
+        // The fence waits block every stage: the first commands of the submit are often barriers whose layout
+        // transitions must come after them.
+        VkSemaphoreSubmitInfo waits[MAX_SUBMIT_WAITS + 1] = {};
         VkSemaphoreSubmitInfo signals[3] = {};
         uint32_t waitCount = 0;
         uint32_t signalCount = 0;
-
-        auto *swapchain = static_cast<VulkanSwapchain *>(desc.swapchain);
-        if (swapchain != nullptr)
+        for (uint32_t i = 0; i < desc.waitCount; ++i)
         {
-            if (!swapchain->getSubmitSemaphores(waits[waitCount], signals[signalCount], signals[signalCount + 1]))
+            waits[waitCount++] = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                  .semaphore = static_cast<VulkanFence *>(desc.waits[i].fence)->semaphore,
+                                  .value = desc.waits[i].value,
+                                  .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+        }
+
+        auto *acquireSwapchain = static_cast<VulkanSwapchain *>(desc.acquireSwapchain);
+        uint32_t acquireWaitCount = 0;
+        if (acquireSwapchain != nullptr)
+        {
+            if (!acquireSwapchain->getAcquireWait(waits[waitCount], acquireWaitCount))
                 return false;
-            waitCount += 1;
+            waitCount += acquireWaitCount;
+        }
+
+        auto *presentSwapchain = static_cast<VulkanSwapchain *>(desc.presentSwapchain);
+        if (presentSwapchain != nullptr)
+        {
+            if (!presentSwapchain->getPresentSignals(signals[signalCount], signals[signalCount + 1]))
+                return false;
             signalCount += 2;
         }
 
@@ -63,8 +86,10 @@ namespace rasm::rhi
             spdlog::error("Failed to submit command buffer. Error: {}", toVkResultString(result));
             return false;
         }
-        if (swapchain != nullptr)
-            swapchain->onSubmitted();
+        if (acquireWaitCount > 0)
+            acquireSwapchain->onAcquireWaited();
+        if (presentSwapchain != nullptr)
+            presentSwapchain->onSubmitted();
         return true;
     }
 

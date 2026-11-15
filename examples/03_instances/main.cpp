@@ -73,7 +73,9 @@ int main()
         .preferredBackend = rasm::Backend::VULKAN,
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
         .shaderDir = RASM_EXAMPLE_SHADER_DIR,
-        .showStats = true};
+        .showStats = true,
+        // Culling and Hi-Z on the compute queue, so the examples run that path under validation too.
+        .asyncCompute = true};
 
     rasm::Engine engine(config);
     if (!engine.running())

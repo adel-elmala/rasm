@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Occlusion Culling · RASM</title>
 <meta name="description" content="How occlusion culling with a hierarchical depth buffer (Hi-Z) works: the depth pyramid, projecting a bounding volume to a screen rectangle, picking the level, the conservative test, last frame's depth and the two-pass scheme, and how RASM does it.">
-<meta name="rasm-sources" content="shaders/lib/occlusionCulling.slang shaders/passes/hiz.slang shaders/passes/cull.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/engine.cpp src/rhi/renderContext.cpp include/rasm/types.h shaders/lib/core.slang">
+<meta name="rasm-sources" content="shaders/lib/occlusionCulling.slang shaders/passes/hiz.slang shaders/passes/cull.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/engine.cpp src/rhi/renderContext.cpp include/rasm/types.h shaders/lib/core.slang src/renderer/renderGraph.cpp include/rasm/render/renderGraph.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -1791,7 +1791,7 @@
 <figure class="diagram">
   <svg viewBox="0 0 760 270" role="img" aria-label="Five render graph passes in order: Cull 1, Scene 1, Hi-Z, Cull 2, Scene 2. Cull 1 reads the visibility buffer. Scene 1 writes the depth texture. Hi-Z reads the depth and writes the Hi-Z buffer. Cull 2 reads the Hi-Z buffer and writes the visibility buffer, which the next frame's Cull 1 reads.">
     <rect x="4" y="6" width="752" height="104" rx="8" class="zone"/>
-    <text x="380" y="22" class="mid small">five render graph passes, in the frame's one command buffer</text>
+    <text x="380" y="22" class="mid small">five render graph passes · the round ones are async compute passes</text>
 
     <rect x="10"  y="32" width="130" height="64" rx="28" class="shader"/>
     <text x="75"  y="58" class="mid title">Cull 1</text>
@@ -1838,7 +1838,7 @@
     <path d="M560,96 V236 H110 V209" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
     <text x="380" y="256" class="mid small">Cull 2 writes 1 = seen, 0 = not seen; the next frame's Cull 1 reads it</text>
   </svg>
-  <figcaption>One scene view with <code>EngineConfig::occlusionCulling</code>. Each box is a render graph pass that <code>Engine::addScenePasses</code> adds. All five are recorded in the frame's one command buffer, in this order.</figcaption>
+  <figcaption>One scene view with <code>EngineConfig::occlusionCulling</code>. Each box is a render graph pass that <code>Engine::addScenePasses</code> adds, and they run in this order. <code>Cull 1</code>, <code>Hi-Z</code> and <code>Cull 2</code> are added with <code>RenderGraph::addAsyncComputePass</code>: with <code>EngineConfig::asyncCompute</code> they run on the compute queue, else in the frame's one command buffer with the rest (<a href="async-compute.html">async compute</a>).</figcaption>
 </figure>
 
 <div class="table-wrap">
@@ -1960,7 +1960,7 @@
 
 <figure class="diagram">
   <svg viewBox="0 0 760 222" role="img" aria-label="The frame's command buffer: Cull 1 with prepareSceneView, countMain, a barrier and writeMain. A compute to graphics barrier. Scene 1 clears, draws the early draws and stores depth. Depth moves to SAMPLED. Hi-Z runs hizMain once per level with barriers between. A graphics and compute to compute barrier. Cull 2 runs the late countMain, a barrier and writeMain. A compute to graphics barrier and depth back to an attachment. Scene 2 loads color and depth and draws the late draws.">
-    <text x="10" y="18" class="small">the frame's command buffer, in graph order</text>
+    <text x="10" y="18" class="small">the frame's command buffer, in graph order (async compute off)</text>
 
     <rect x="10" y="30" width="128" height="110" rx="8" class="shader"/>
     <text x="74" y="52" class="mid title">Cull 1</text>
@@ -2008,7 +2008,7 @@
     <text x="609" y="184" class="mid small t-hot">depth → attachment</text>
     <text x="10" y="212" class="small">Orange: barriers between passes, from what each pass declares. "barrier" in a box: one between two dispatches.</text>
   </svg>
-  <figcaption>Each box has its own GPU timer in the <a href="gpu-timing.html">frame stats</a>. <code>Scene 1</code> stores its depth because <code>Hi-Z</code> reads it (<code>PassBuilder::readDepth</code>, or <code>readSwapchainDepth</code> for the swapchain) and <code>Scene 2</code> loads it, so the early draws stay. In a frame whose <code>hizLevelCount</code> is 0, <code>Hi-Z</code>, <code>Cull 2</code> and <code>Scene 2</code> record nothing.</figcaption>
+  <figcaption>Each box has its own GPU timer in the <a href="gpu-timing.html">frame stats</a>. <code>Scene 1</code> stores its depth because <code>Hi-Z</code> reads it (<code>PassBuilder::readDepth</code>, or <code>readSwapchainDepth</code> for the swapchain) and <code>Scene 2</code> loads it, so the early draws stay. In a frame whose <code>hizLevelCount</code> is 0, <code>Hi-Z</code>, <code>Cull 2</code> and <code>Scene 2</code> record nothing. With async compute on, the frame is four batches: compute <code>Cull 1</code>, graphics <code>Scene 1</code>, compute <code>Hi-Z</code> and <code>Cull 2</code>, graphics <code>Scene 2</code>. A barrier between two passes on different queues becomes a semaphore wait at the start of a batch; the layout transitions are still recorded, on the queue of the pass that needs them (<a href="render-graphs.html#rasm-queues">render graphs</a>).</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -2017,10 +2017,11 @@
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Source of depth</td><td>occluder prepass, reprojection or two-pass</td><td>Two-pass, per scene view.</td></tr>
-  <tr><td>History</td><td>one flag per object and view</td><td>One <code>uint</code> per instance row (a sub-mesh of an entity), in <code>SceneView::visibility</code>, one buffer per scene view, so a view always reads its own camera's history. Both frame slots share it: the GPU runs the frames in order. Rows start at 0, so a new instance is drawn late first.</td></tr>
+  <tr><td>History</td><td>one flag per object and view</td><td>One <code>uint</code> per instance row (a sub-mesh of an entity), in <code>SceneView::visibility</code>, one buffer per scene view, so a view always reads its own camera's history. Both frame slots share it: only the compute passes use it, and they run on one queue in frame order. Rows start at 0, so a new instance is drawn late first.</td></tr>
   <tr><td>Late test</td><td>every object against the new Hi-Z</td><td>The same: every draw in the frustum, also the early ones, so their flag is fresh. Only the ones not drawn early are drawn late.</td></tr>
   <tr><td>Level 0</td><td>the depth buffer itself</td><td>Already half size. <code>hizMain</code> reads level 0 straight from the depth texture through the bindless set, so there is no full-size copy. A level-<var>L</var> texel covers 2<sup><var>L</var>+1</sup> pixels.</td></tr>
-  <tr><td>Storage</td><td>a mip-mapped texture</td><td>One buffer of <code>float</code>s with the levels back to back (<code>hizPtr</code>), one per frame slot and scene view (<code>SceneView::hiz</code>). It grows with the target. No sampler, no min/max reduction: 4 plain reads.</td></tr>
+  <tr><td>Storage</td><td>a mip-mapped texture</td><td>One buffer of <code>float</code>s with the levels back to back (<code>hizPtr</code>), one per frame slot and scene view (<code>SceneView::hiz</code>). It grows with the target. No sampler, no min/max reduction: 4 plain reads. The passes declare it, and the visible draws, per frame slot (the array form of <code>PassBuilder::write</code>), so a frame's barriers and waits cover only its own slot.</td></tr>
+  <tr><td>Queue</td><td>graphics, or async compute</td><td>The culling and Hi-Z passes run on the compute queue with <code>EngineConfig::asyncCompute</code>. Only <code>Cull 1</code> can then run next to the previous frame's <code>Scene 2</code>; the rest is a chain, so it costs a little more than it saves today, and it is off by default (<b>P11</b>).</td></tr>
   <tr><td>Build</td><td>one dispatch per level, or single-pass</td><td>One dispatch per level, with a barrier after each.</td></tr>
   <tr><td>Odd sizes</td><td>round up and clamp, or read 3</td><td>Round up and clamp: the last texel reads its last row or column twice.</td></tr>
   <tr><td>Bound</td><td>box corners or exact sphere</td><td>The view-space box around the sphere, 8 corners. Works for perspective and orthographic cameras.</td></tr>
@@ -2040,7 +2041,7 @@
   <tr><td>Level sizes (CPU)</td><td><code>getHizLevelCount</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Hi-Z build</td><td><code>hizMain</code> in <code>shaders/passes/hiz.slang</code></td></tr>
   <tr><td>Early and late phases</td><td><code>countMain</code> in <code>shaders/passes/cull.slang</code>; <code>CULL_EARLY</code>, <code>CULL_LATE</code> there and in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>The five passes</td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>The five passes</td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code>; <code>RenderGraph::addAsyncComputePass</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
   <tr><td>Per-view buffers</td><td><code>SceneView::visibility</code>, <code>SceneView::hiz</code> in <code>src/renderer/gpuScene.h</code>; made by <code>Engine::createSceneView</code>, grown by <code>Engine::prepareSceneView</code></td></tr>
   <tr><td>When to occlusion-cull this frame</td><td><code>Engine::prepareSceneView</code> (sets <code>hizLevelCount</code>)</td></tr>
   <tr><td>Early and late dispatches</td><td><code>Engine::recordSceneCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
@@ -2059,7 +2060,7 @@
     <li>Reversed-Z: the Hi-Z keeps the <b>min</b>, and a draw is occluded when its nearest depth is <b>smaller</b>.</li>
     <li><code>getHizLevelCount</code> and <code>getHizLevel</code> must agree on the level sizes. <code>HIZ_GROUP_SIZE</code>, <code>CULL_EARLY</code> and <code>CULL_LATE</code> are defined in a shader and in <code>gpuScene.cpp</code>: change both.</li>
     <li>No dispatch or barrier inside a render pass: <code>RenderContext</code> refuses them. That is why the Hi-Z and the late culling are compute passes of their own.</li>
-    <li>A pass declares every buffer and depth it touches (<code>readPrevious</code> for the visibility flags in <code>Cull 1</code>): the graph records the barriers only from those declarations.</li>
+    <li>A pass declares every buffer and depth it touches (<code>readPrevious</code> for the visibility flags in <code>Cull 1</code>): the graph records the barriers, and the waits between queues, only from those declarations.</li>
     <li>A view is one scene, camera and target, with its own flags, at most <code>MAX_SCENE_VIEWS</code> of them. A new camera or target is a new view, whose flags start at 0.</li>
   </ul>
 </div>
