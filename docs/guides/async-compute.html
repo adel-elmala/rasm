@@ -21,6 +21,7 @@
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
     <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
     <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
   </defs>
 </svg>
 
@@ -439,7 +440,7 @@
 
     <line x1="254" y1="128" x2="656" y2="128" class="arrow bad dashed" marker-start="url(#ah-bad)" marker-end="url(#ah-bad)"/>
     <text x="455" y="122" class="mid small t-bad">compute end − graphics start: can be wrong by milliseconds</text>
-    <line x1="190" y1="186" x2="730" y2="186" class="arrow shader" marker-end="url(#ah)"/>
+    <line x1="190" y1="186" x2="730" y2="186" class="arrow shader" marker-end="url(#ah-shader)"/>
     <path d="M190,178V194" class="arrow shader thick"/>
     <text x="190" y="210" class="mid small t-shader">clock 0</text>
     <rect x="530" y="146" width="130" height="30" rx="5" class="shader"/><text x="595" y="166" class="mid small">a compute pass</text>

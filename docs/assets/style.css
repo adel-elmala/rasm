@@ -301,7 +301,8 @@ main {
 
 .menu-button { display: none; }
 
-@media (max-width: 1240px) {
+/* sidebar + content + toc = 1370px: below that the toc would squeeze the reading column */
+@media (max-width: 1369px) {
     .layout { grid-template-columns: var(--sidebar) minmax(0, 1fr); }
     #toc { display: none; }
 }
@@ -419,7 +420,6 @@ pre code { background: none; padding: 0; font-size: 1em; }
     transition: opacity 0.15s;
 }
 .code-wrap:hover .copy, .copy:focus { opacity: 1; }
-
 .tok-kw    { color: var(--tok-kw); }
 .tok-type  { color: var(--tok-type); }
 .tok-fn    { color: var(--tok-fn); }
@@ -718,8 +718,8 @@ figure.diagram {
     background: var(--bg-raised);
     box-shadow: var(--shadow);
     overflow-x: auto;
-    counter-increment: fig;
 }
+figure.diagram > figcaption { counter-increment: fig; }
 figure svg { display: block; width: 100%; height: auto; margin: 0 auto; }
 figcaption { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); color: var(--fg-soft); font-size: 14px; }
 figure.diagram > figcaption::before { content: "Fig. " counter(fig) "  "; color: var(--accent); font-weight: 700; white-space: pre; }
@@ -741,6 +741,8 @@ figure.diagram > figcaption::before { content: "Fig. " counter(fig) "  "; color:
     transition: opacity 0.15s;
 }
 figure.diagram:hover .zoom, .zoom:focus { opacity: 1; }
+/* touch screens have no hover: keep both buttons visible */
+@media (hover: none) { .zoom, .copy { opacity: 1; } }
 
 #lightbox {
     position: fixed;

@@ -19,8 +19,9 @@ its patterns.
 | a rule the reader must not miss | `.callout`, `.callout.warn`, `.callout.rule` with a `<strong>` title | bold text in a paragraph |
 | reference data with 3+ columns, code maps, "This page / RASM" | a table inside `.table-wrap` | — |
 
-The page column fits three `.vcard`s in a row. Use `.vgrid.two` for four cards (2 × 2) and `.vgrid.three` to
-force three columns, so no card is left alone on a row.
+A plain `.vgrid` fits as many `.vcard`s in a row as the window allows: four in the full page column, three
+in a narrower one. So use it only for two, three or six cards. Use `.vgrid.two` for four cards (2 × 2) and
+`.vgrid.three` for five (3 + 2), so no card is left alone on a row.
 
 Keep tables for lookup data. A table whose cells hold sentences that describe shapes or behaviour should
 become pictures.
@@ -58,7 +59,8 @@ become pictures.
 
 ## Check the picture
 
-Screenshot every page you change, in both themes, and read the image (see step 3 of `SKILL.md`). For the
-light theme, copy the page to a temporary file with `<html lang="en" data-theme="light">`, screenshot it, and
-delete the copy. Fix text that overflows a box, labels on top of lines, and shapes that are hard to see in
+Screenshot every page you change, in both themes, and read the image (see step 3 of `SKILL.md`). A plain
+screenshot follows the OS theme, so force each one: copy the page to a temporary file with
+`<html lang="en" data-theme="dark">`, screenshot it, do the same with `data-theme="light"`, and delete the
+copies. Fix text that overflows a box, labels on top of lines, and shapes that are hard to see in
 one theme.

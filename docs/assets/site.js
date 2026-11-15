@@ -147,7 +147,10 @@ const SECTIONS = [
         nav.innerHTML = html;
 
         const current = nav.querySelector("a.current");
-        if (current) nav.scrollTop = Math.max(0, current.offsetTop - nav.clientHeight / 2);
+        function scrollToCurrent() {
+            if (current) nav.scrollTop = Math.max(0, current.offsetTop - nav.clientHeight / 2);
+        }
+        scrollToCurrent();
 
         const toggle = document.getElementById("theme-toggle");
         toggle.addEventListener("click", function () {
@@ -176,6 +179,7 @@ const SECTIONS = [
             });
             nav.classList.toggle("filtering", words.length > 0);
             noMatch.classList.toggle("show", shown === 0);
+            if (words.length === 0) scrollToCurrent();
         });
         filter.addEventListener("keydown", function (e) {
             if (e.key === "Enter") {
@@ -186,11 +190,12 @@ const SECTIONS = [
                 filter.value = "";
                 filter.dispatchEvent(new Event("input"));
                 filter.blur();
+                document.body.classList.remove("nav-open");
             }
         });
         document.addEventListener("keydown", function (e) {
             const tag = (e.target.tagName || "").toLowerCase();
-            if (e.key === "/" && tag !== "input" && tag !== "textarea") {
+            if (e.key === "/" && !e.ctrlKey && !e.metaKey && !e.altKey && tag !== "input" && tag !== "textarea") {
                 e.preventDefault();
                 document.body.classList.add("nav-open");
                 filter.focus();
@@ -234,8 +239,15 @@ const SECTIONS = [
 
         const lead = main.querySelector(".lead");
         if (lead) {
-            const words = main.textContent.split(/\s+/).length;
-            const figures = main.querySelectorAll("figure, .stepper, .vgrid").length;
+            // prose only: labels inside drawings and code are not read as text
+            let words = 0;
+            const walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+                const node = walker.currentNode;
+                if (node.parentElement.closest("svg, pre")) continue;
+                words += node.textContent.split(/\s+/).filter(Boolean).length;
+            }
+            const figures = main.querySelectorAll("svg[role=img]").length;
             const info = document.createElement("p");
             info.className = "read-time";
             info.textContent = `About ${Math.max(1, Math.round(words / 220))} min to read · ${figures} pictures`;
@@ -267,7 +279,7 @@ const SECTIONS = [
         heads.forEach(function (h) {
             if (h.closest(".tldr, .api, .stepper, .vcard, .split")) return;
             if (!h.id) {
-                const label = Array.from(h.childNodes).filter(function (c) { return !(c.classList && c.classList.contains("n")); })
+                const label = Array.from(h.childNodes).filter(function (c) { return c.nodeName !== "SMALL" && !(c.classList && c.classList.contains("n")); })
                     .map(function (c) { return c.textContent; }).join("");
                 const base = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "section";
                 let id = base;
