@@ -19,6 +19,9 @@
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
   </defs>
 </svg>
 
@@ -42,9 +45,65 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>The problem: several images per pixel</h2>
+<h2 id="problem"><span class="n">1</span>The problem: several images per pixel</h2>
 
-<p>Many techniques need more than one value per pixel. Deferred shading needs the surface color, the normal and the material of every pixel. Motion blur and temporal anti-aliasing need a velocity per pixel. Object picking needs an object ID per pixel. Post effects often need a mask that says which pixels belong to what.</p>
+<p>Many techniques need more than one value per pixel:</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 320 120" role="img" aria-label="Three small images of the same scene, a ball on the ground: its color, its normals and its material.">
+      <rect x="14"  y="14" width="88" height="66" class="paper"/>
+      <rect x="116" y="14" width="88" height="66" class="paper"/>
+      <rect x="218" y="14" width="88" height="66" class="paper"/>
+      <rect x="14"  y="62" width="88" height="18" class="mem"/><circle cx="58"  cy="46" r="18" class="accent"/>
+      <rect x="116" y="62" width="88" height="18" class="gpu"/><circle cx="160" cy="46" r="18" class="shader"/>
+      <rect x="218" y="62" width="88" height="18" class="box"/><circle cx="262" cy="46" r="18" class="solid"/>
+      <text x="58"  y="100" class="mid small">color</text>
+      <text x="160" y="100" class="mid small">normal</text>
+      <text x="262" y="100" class="mid small">material</text>
+    </svg>
+    <h4>Deferred shading</h4>
+    <p>Needs the surface color, the normal and the material of every pixel.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 120" role="img" aria-label="An image of a moving ball. Small arrows on its pixels show how far each one moved.">
+      <rect x="70" y="14" width="180" height="66" class="paper"/>
+      <circle cx="130" cy="47" r="22" class="ghost"/>
+      <circle cx="170" cy="47" r="22" class="solid"/>
+      <path d="M158,36h22M158,47h22M158,58h22" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="160" y="100" class="mid small">one velocity per pixel</text>
+    </svg>
+    <h4>Motion blur, temporal anti-aliasing</h4>
+    <p>Need a velocity per pixel.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 120" role="img" aria-label="An image where each object is filled with its own number: 7, 12 and 31. A cursor points at object 12.">
+      <rect x="70" y="14" width="180" height="66" class="paper"/>
+      <rect x="84" y="30" width="40" height="40" class="cpu"/><text x="104" y="55" class="mid mono">7</text>
+      <circle cx="160" cy="48" r="22" class="gpu"/><text x="160" y="53" class="mid mono">12</text>
+      <polygon points="200,70 222,26 244,70" class="shader"/><text x="222" y="64" class="mid mono">31</text>
+      <path d="M176,62l16,6l-7,2l-2,7z" class="solid"/>
+      <text x="160" y="100" class="mid small">one object ID per pixel</text>
+    </svg>
+    <h4>Object picking</h4>
+    <p>Needs an object ID per pixel.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 120" role="img" aria-label="Left, a color image with a ball. Right, its mask: 1 where the ball is, 0 everywhere else.">
+      <rect x="30" y="14" width="110" height="66" class="paper"/>
+      <circle cx="85" cy="47" r="22" class="accent"/>
+      <line x1="146" y1="47" x2="172" y2="47" class="arrow" marker-end="url(#ah)"/>
+      <rect x="180" y="14" width="110" height="66" class="solid"/>
+      <circle cx="235" cy="47" r="22" class="paper"/>
+      <text x="235" y="52" class="mid mono">1</text>
+      <text x="196" y="32" class="mid mono">0</text>
+      <text x="85"  y="100" class="mid small">color</text>
+      <text x="235" y="100" class="mid small">mask</text>
+    </svg>
+    <h4>Post effects</h4>
+    <p>Often need a mask that says which pixels belong to what.</p>
+  </div>
+</div>
 
 <p>A pass with one output can only write one of these images. To get three, you draw the scene three times, with three shaders. Every draw reads the vertices again, runs the vertex shader again, builds the triangles again and runs the depth test again. Only the last step, the fragment shader, does different work.</p>
 
@@ -72,8 +131,8 @@
     <text x="555" y="97" class="mid small">normal</text>
     <rect x="500" y="118" width="110" height="34" rx="4" class="mem"/>
     <text x="555" y="139" class="mid small">material</text>
-    <text x="630" y="88" class="small t-hot">vertex work × 3</text>
-    <text x="630" y="104" class="small t-hot">depth test × 3</text>
+    <text x="630" y="88" class="small t-bad">vertex work × 3</text>
+    <text x="630" y="104" class="small t-bad">depth test × 3</text>
 
     <text x="20" y="190" class="title">Three outputs in one pass: the mesh is drawn once</text>
     <rect x="20" y="242" width="110" height="56" rx="6" class="mem"/>
@@ -94,15 +153,45 @@
     <text x="555" y="273" class="mid small">normal</text>
     <rect x="500" y="294" width="110" height="34" rx="4" class="mem"/>
     <text x="555" y="315" class="mid small">material</text>
-    <text x="630" y="264" class="small t-gpu">vertex work × 1</text>
-    <text x="630" y="280" class="small t-gpu">depth test × 1</text>
+    <text x="630" y="264" class="small t-ok">vertex work × 1</text>
+    <text x="630" y="280" class="small t-ok">depth test × 1</text>
   </svg>
   <figcaption>The same three images, two ways. With many triangles, the top way costs about three times the geometry work.</figcaption>
 </figure>
 
-<p>There is a second problem with the top way. The three passes must agree exactly on which surface is in front at each pixel. With the same depth test and the same vertices they usually do, but it is easy to break: a shader that moves vertices a little differently, or a different depth state, and the normal image shows a different surface than the albedo image.</p>
+<p>There is a second problem with the top way. The three passes must agree exactly on which surface is in front at each pixel. With the same depth test and the same vertices they usually do, but it is easy to break:</p>
 
-<h2><span class="n">2</span>The idea: one pass, N outputs</h2>
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 130" role="img" aria-label="Two images from two passes. The box in the normal image is a little to the side of where it is in the albedo image.">
+      <rect x="20"  y="12" width="120" height="76" class="paper"/>
+      <rect x="180" y="12" width="120" height="76" class="paper"/>
+      <rect x="54"  y="34" width="48" height="40" class="accent"/>
+      <rect x="214" y="34" width="48" height="40" class="ghost"/>
+      <rect x="226" y="28" width="48" height="40" class="shader"/>
+      <text x="80"  y="106" class="mid small">albedo, pass 1</text>
+      <text x="240" y="106" class="mid small">normal, pass 2</text>
+      <text x="160" y="124" class="mid small t-bad">the two images show different surfaces at the edges</text>
+    </svg>
+    <h4>Three passes can disagree</h4>
+    <p>A shader that moves vertices a little differently, or a different depth state, and the normal image shows a different surface than the albedo image.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 130" role="img" aria-label="Two images from one pass. The box is at exactly the same place in both.">
+      <rect x="20"  y="12" width="120" height="76" class="paper"/>
+      <rect x="180" y="12" width="120" height="76" class="paper"/>
+      <rect x="54"  y="34" width="48" height="40" class="accent"/>
+      <rect x="214" y="34" width="48" height="40" class="shader"/>
+      <text x="80"  y="106" class="mid small">albedo, output 0</text>
+      <text x="240" y="106" class="mid small">normal, output 1</text>
+      <text x="160" y="124" class="mid small t-ok">the same surface at every pixel</text>
+    </svg>
+    <h4>One pass cannot</h4>
+    <p>The surface is found once per pixel, and every image gets its value from it (section 2).</p>
+  </div>
+</div>
+
+<h2 id="idea"><span class="n">2</span>The idea: one pass, N outputs</h2>
 
 <p>A render pass does not have to draw into one image. It can have a list of <b>color attachments</b>: textures numbered 0, 1, 2 and so on. The fragment shader then returns one value per attachment. The GPU writes output 0 to attachment 0, output 1 to attachment 1, and so on, all for the same pixel.</p>
 
@@ -176,9 +265,49 @@ GBufferOutput fragMain(VSOutput input)
 
 <p>Everything before the fragment shader is shared. The rasterizer finds the pixels once. The depth test runs once, and if it fails, none of the outputs are written. If it passes, all of them are. So the images can never disagree about which surface is visible.</p>
 
-<h2><span class="n">3</span>The rules</h2>
+<h2 id="rules"><span class="n">3</span>The rules</h2>
 
 <p>The attachments of one pass are not fully free. They share some things and keep others apart:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Three color attachments and one depth attachment, drawn as four sheets of the same size. A bracket over all of them says: shared, one size and one sample count. Under each color attachment are its own settings: a format, a blend state, a write mask, and load, store and clear. The three columns differ. The depth is one for the whole pass.">
+    <path d="M110,40v-8h630v8" class="hot"/>
+    <text x="425" y="22" class="mid t-hot">shared by all: one size, one sample count</text>
+    <rect x="110" y="50" width="140" height="70" class="mem"/>
+    <rect x="270" y="50" width="140" height="70" class="mem"/>
+    <rect x="430" y="50" width="140" height="70" class="mem"/>
+    <rect x="600" y="50" width="140" height="70" class="box"/>
+    <text x="180" y="82" class="mid title">attachment 0</text>
+    <text x="340" y="82" class="mid title">attachment 1</text>
+    <text x="500" y="82" class="mid title">attachment 2</text>
+    <text x="670" y="82" class="mid title">depth</text>
+    <text x="180" y="100" class="mid small">a color</text>
+    <text x="340" y="100" class="mid small">a normal</text>
+    <text x="500" y="100" class="mid small">an ID</text>
+    <text x="670" y="100" class="mid small">(and stencil)</text>
+
+    <text x="98" y="153" class="end small">format</text>
+    <text x="98" y="185" class="end small">blend state</text>
+    <text x="98" y="217" class="end small">write mask</text>
+    <text x="98" y="249" class="end small">load, store, clear</text>
+    <rect x="110" y="136" width="140" height="26" rx="4" class="zone"/><text x="180" y="153" class="mid small">8-bit sRGB</text>
+    <rect x="270" y="136" width="140" height="26" rx="4" class="zone"/><text x="340" y="153" class="mid small">10-bit</text>
+    <rect x="430" y="136" width="140" height="26" rx="4" class="zone"/><text x="500" y="153" class="mid small">32-bit integer</text>
+    <rect x="110" y="168" width="140" height="26" rx="4" class="zone"/><text x="180" y="185" class="mid small">blend on</text>
+    <rect x="270" y="168" width="140" height="26" rx="4" class="zone"/><text x="340" y="185" class="mid small">blend off</text>
+    <rect x="430" y="168" width="140" height="26" rx="4" class="zone"/><text x="500" y="185" class="mid small">blend off</text>
+    <rect x="110" y="200" width="140" height="26" rx="4" class="zone"/><text x="180" y="217" class="mid small">R G B A</text>
+    <rect x="270" y="200" width="140" height="26" rx="4" class="zone"/><text x="340" y="217" class="mid small">R G B</text>
+    <rect x="430" y="200" width="140" height="26" rx="4" class="zone"/><text x="500" y="217" class="mid small">R</text>
+    <rect x="110" y="232" width="140" height="26" rx="4" class="zone"/><text x="180" y="249" class="mid small">clear, store</text>
+    <rect x="270" y="232" width="140" height="26" rx="4" class="zone"/><text x="340" y="249" class="mid small">clear, store</text>
+    <rect x="430" y="232" width="140" height="26" rx="4" class="zone"/><text x="500" y="249" class="mid small">keep, store</text>
+    <text x="670" y="185" class="mid small">one for the pass:</text>
+    <text x="670" y="201" class="mid small">visibility is decided</text>
+    <text x="670" y="217" class="mid small">once per pixel</text>
+  </svg>
+  <figcaption>Above the sheets: what every attachment of a pass has in common. Under each sheet: what it can choose for itself. The values are examples.</figcaption>
+</figure>
 
 <div class="table-wrap">
 <table>
@@ -199,7 +328,7 @@ GBufferOutput fragMain(VSOutput input)
 
 <figure class="diagram">
   <svg viewBox="0 0 760 250" role="img" aria-label="Left: a pipeline built for formats RGBA8 sRGB, RGB10A2 and RGBA8, plus D32 depth, used in a pass whose attachments have the same formats in the same order. Every slot matches, so the draw is allowed. Right: the same pipeline in a pass with only two attachments, RGBA8 sRGB and RGBA8. Slot 1 does not match and slot 2 is missing, so the draw is invalid.">
-    <text x="190" y="20" class="mid title t-gpu">Same list → draw</text>
+    <text x="190" y="20" class="mid title t-ok">Same list → draw</text>
     <text x="95" y="44" class="mid small">pipeline expects</text>
     <text x="285" y="44" class="mid small">pass has</text>
     <rect x="30" y="54" width="130" height="30" rx="4" class="cpu"/>
@@ -218,15 +347,15 @@ GBufferOutput fragMain(VSOutput input)
     <text x="285" y="154" class="mid mono small">2 · RGBA8</text>
     <rect x="220" y="174" width="130" height="30" rx="4" class="box"/>
     <text x="285" y="194" class="mid mono small">depth · D32</text>
-    <text x="190" y="74" class="mid t-gpu">=</text>
-    <text x="190" y="114" class="mid t-gpu">=</text>
-    <text x="190" y="154" class="mid t-gpu">=</text>
-    <text x="190" y="194" class="mid t-gpu">=</text>
+    <text x="190" y="74" class="mid t-ok">=</text>
+    <text x="190" y="114" class="mid t-ok">=</text>
+    <text x="190" y="154" class="mid t-ok">=</text>
+    <text x="190" y="194" class="mid t-ok">=</text>
     <text x="190" y="232" class="mid small">count, order and formats all match</text>
 
     <line x1="380" y1="30" x2="380" y2="236" class="arrow dashed"/>
 
-    <text x="570" y="20" class="mid title t-hot">Other list → invalid</text>
+    <text x="570" y="20" class="mid title t-bad">Other list → invalid</text>
     <text x="475" y="44" class="mid small">pipeline expects</text>
     <text x="665" y="44" class="mid small">pass has</text>
     <rect x="410" y="54" width="130" height="30" rx="4" class="cpu"/>
@@ -239,17 +368,17 @@ GBufferOutput fragMain(VSOutput input)
     <text x="475" y="194" class="mid mono small">depth · D32</text>
     <rect x="600" y="54" width="130" height="30" rx="4" class="mem"/>
     <text x="665" y="74" class="mid mono small">0 · RGBA8 sRGB</text>
-    <rect x="600" y="94" width="130" height="30" rx="4" class="hot"/>
+    <rect x="600" y="94" width="130" height="30" rx="4" class="bad"/>
     <text x="665" y="114" class="mid mono small">1 · RGBA8</text>
     <rect x="600" y="134" width="130" height="30" rx="4" class="ghost"/>
     <text x="665" y="154" class="mid small t-faint">missing</text>
     <rect x="600" y="174" width="130" height="30" rx="4" class="box"/>
     <text x="665" y="194" class="mid mono small">depth · D32</text>
-    <text x="570" y="74" class="mid t-gpu">=</text>
-    <text x="570" y="114" class="mid t-hot">≠</text>
-    <text x="570" y="154" class="mid t-hot">≠</text>
-    <text x="570" y="194" class="mid t-gpu">=</text>
-    <text x="570" y="232" class="mid small t-hot">validation error, or wrong output</text>
+    <text x="570" y="74" class="mid t-ok">=</text>
+    <text x="570" y="114" class="mid t-bad">≠</text>
+    <text x="570" y="154" class="mid t-bad">≠</text>
+    <text x="570" y="194" class="mid t-ok">=</text>
+    <text x="570" y="232" class="mid small t-bad">validation error, or wrong output</text>
   </svg>
   <figcaption>The check is per slot. Older APIs used a "render pass" object to describe the list; with dynamic rendering (Vulkan 1.3) the pipeline lists the formats directly.</figcaption>
 </figure>
@@ -275,7 +404,7 @@ GBufferOutput fragMain(VSOutput input)
 <p>Every attachment is written for every pixel the pass covers, and some later pass reads it back. So the cost of MRT is simple to estimate: add up the bytes per pixel of all attachments, and multiply by the number of pixels.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 210" role="img" aria-label="Two bars of bytes per pixel. A fat G-buffer: world position in RGBA32F, 16 bytes; normal in RGBA16F, 8 bytes; albedo, 4; material, 4; depth, 4; 36 bytes in total. A packed G-buffer: albedo, 4; octahedral normal in RG16, 4; material, 4; velocity in RG16F, 4; depth, 4; 20 bytes in total.">
+  <svg viewBox="0 0 760 150" role="img" aria-label="Two bars of bytes per pixel. A fat G-buffer: world position in RGBA32F, 16 bytes; normal in RGBA16F, 8 bytes; albedo, 4; material, 4; depth, 4; 36 bytes in total. A packed G-buffer: albedo, 4; octahedral normal in RG16, 4; material, 4; velocity in RG16F, 4; depth, 4; 20 bytes in total.">
     <text x="20" y="20" class="title">Bytes per pixel, one box = one attachment (15 px per byte)</text>
 
     <text x="20" y="62" class="small">fat</text>
@@ -302,13 +431,9 @@ GBufferOutput fragMain(VSOutput input)
     <text x="360" y="124" class="mid small">velocity</text>
     <rect x="390" y="104" width="60" height="32" class="box"/>
     <text x="420" y="124" class="mid small">depth</text>
-    <text x="460" y="124" class="title t-gpu">20 B</text>
-
-    <text x="150" y="166" class="small">The packed version drops the position (the lighting pass rebuilds it from depth),</text>
-    <text x="150" y="182" class="small">stores the normal in 2 × 16 bits, and still has room for a velocity.</text>
-    <text x="150" y="198" class="small">Every byte here is paid once to write and once to read, at every pixel.</text>
+    <text x="460" y="124" class="title t-ok">20 B</text>
   </svg>
-  <figcaption>The same surface data, two layouts. The difference is almost 2× in memory and bandwidth.</figcaption>
+  <figcaption>The same surface data, two layouts. The difference is almost 2× in memory and bandwidth. The packed version drops the position (the lighting pass rebuilds it from depth), stores the normal in 2 × 16 bits, and still has room for a velocity. Every byte here is paid once to write and once to read, at every pixel.</figcaption>
 </figure>
 
 <h3>Worked example: a G-buffer at 1080p</h3>
@@ -331,14 +456,76 @@ write+read  83 MB per frame     × 60 frames/s ≈ 5.0 GB/s</code></pre>
 
 <h3>Packing: fewer bytes for the same data</h3>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Data</th><th>Naive</th><th>Packed</th><th>How</th></tr>
-  <tr><td>Position</td><td>RGBA32F, 16 B</td><td>0 B</td><td>Do not store it. Rebuild it from the depth and the pixel position with the inverse view-projection matrix.</td></tr>
-  <tr><td>Normal</td><td>RGBA16F, 8 B</td><td>RG16, 4 B, or RGB10A2, 4 B</td><td><b>Octahedral</b> encoding: fold the unit sphere onto a square, and store 2 numbers instead of 3. Or store 3 numbers in 10 bits each.</td></tr>
-  <tr><td>Metallic, roughness, AO, flags</td><td>one attachment each</td><td>one RGBA8, 4 B</td><td>Put small values that are used together into the channels of one attachment.</td></tr>
-  <tr><td>Velocity</td><td>RGBA16F, 8 B</td><td>RG16F, 4 B</td><td>Screen-space motion has 2 parts; the other channels were empty.</td></tr>
-</table>
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 320 120" role="img" aria-label="A side view. A ray goes from the camera through one pixel of the screen to a point on a surface. The depth along the ray and the pixel position give the point back.">
+      <circle cx="30" cy="62" r="7" class="box"/>
+      <line x1="90" y1="22" x2="90" y2="98" class="arrow thick"/>
+      <rect x="85" y="51" width="10" height="10" class="accent"/>
+      <line x1="37" y1="61" x2="250" y2="40" class="arrow hot dashed"/>
+      <line x1="238" y1="12" x2="272" y2="96" class="surface"/>
+      <circle cx="250" cy="40" r="6" class="ok"/>
+      <text x="30" y="88" class="mid small">camera</text>
+      <text x="90" y="112" class="mid small">pixel (x, y)</text>
+      <text x="170" y="38" class="mid small t-hot halo">depth</text>
+      <text x="262" y="112" class="mid small t-ok">position</text>
+    </svg>
+    <h4>Position</h4>
+    <p><b>Naive:</b> RGBA32F, 16 B. <b>Packed:</b> 0 B.</p>
+    <p>Do not store it. Rebuild it from the depth and the pixel position with the inverse view-projection matrix.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 120" role="img" aria-label="A normal on a sphere has three numbers. Folded onto a square, the same direction is one point with two numbers.">
+      <circle cx="80" cy="52" r="38" class="box"/>
+      <line x1="80" y1="52" x2="104" y2="24" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+      <line x1="130" y1="52" x2="176" y2="52" class="arrow" marker-end="url(#ah)"/>
+      <text x="153" y="44" class="mid small">fold</text>
+      <rect x="190" y="14" width="76" height="76" class="mem"/>
+      <polygon points="228,14 266,52 228,90 190,52" class="dashed"/>
+      <circle cx="246" cy="36" r="5" class="accent"/>
+      <text x="80"  y="110" class="mid small">sphere: 3 numbers</text>
+      <text x="228" y="110" class="mid small">square: 2 numbers</text>
+    </svg>
+    <h4>Normal</h4>
+    <p><b>Naive:</b> RGBA16F, 8 B. <b>Packed:</b> RG16, 4 B, or RGB10A2, 4 B.</p>
+    <p><b>Octahedral</b> encoding: fold the unit sphere onto a square, and store 2 numbers instead of 3. Or store 3 numbers in 10 bits each.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 120" role="img" aria-label="One texel with four channels. R holds metallic, G roughness, B ambient occlusion, A flags.">
+      <rect x="24"  y="36" width="68" height="40" class="mem"/>
+      <rect x="92"  y="36" width="68" height="40" class="mem"/>
+      <rect x="160" y="36" width="68" height="40" class="mem"/>
+      <rect x="228" y="36" width="68" height="40" class="mem"/>
+      <text x="58"  y="26" class="mid title">R</text>
+      <text x="126" y="26" class="mid title">G</text>
+      <text x="194" y="26" class="mid title">B</text>
+      <text x="262" y="26" class="mid title">A</text>
+      <text x="58"  y="60" class="mid small">metallic</text>
+      <text x="126" y="60" class="mid small">roughness</text>
+      <text x="194" y="60" class="mid small">AO</text>
+      <text x="262" y="60" class="mid small">flags</text>
+      <text x="160" y="102" class="mid small">one RGBA8 texel: 4 bytes</text>
+    </svg>
+    <h4>Metallic, roughness, AO, flags</h4>
+    <p><b>Naive:</b> one attachment each. <b>Packed:</b> one RGBA8, 4 B.</p>
+    <p>Put small values that are used together into the channels of one attachment.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 120" role="img" aria-label="Top: four 16-bit channels, two of them empty, 8 bytes. Bottom: two 16-bit channels, both used, 4 bytes.">
+      <rect x="20"  y="12" width="58" height="34" class="mem"/><text x="49"  y="34" class="mid small">x</text>
+      <rect x="78"  y="12" width="58" height="34" class="mem"/><text x="107" y="34" class="mid small">y</text>
+      <rect x="136" y="12" width="58" height="34" class="ghost"/><text x="165" y="34" class="mid small t-faint">empty</text>
+      <rect x="194" y="12" width="58" height="34" class="ghost"/><text x="223" y="34" class="mid small t-faint">empty</text>
+      <text x="262" y="34" class="title t-bad">8 B</text>
+      <rect x="20"  y="62" width="58" height="34" class="mem"/><text x="49"  y="84" class="mid small">x</text>
+      <rect x="78"  y="62" width="58" height="34" class="mem"/><text x="107" y="84" class="mid small">y</text>
+      <text x="146" y="84" class="title t-ok">4 B</text>
+      <text x="20" y="114" class="small">screen-space motion has 2 parts</text>
+    </svg>
+    <h4>Velocity</h4>
+    <p><b>Naive:</b> RGBA16F, 8 B. <b>Packed:</b> RG16F, 4 B.</p>
+    <p>Screen-space motion has 2 parts; the other channels were empty.</p>
+  </div>
 </div>
 
 <div class="callout">
@@ -346,9 +533,44 @@ write+read  83 MB per frame     × 60 frames/s ≈ 5.0 GB/s</code></pre>
   <p>Most mobile GPUs, Apple's included, draw the screen in small tiles and keep the tile's attachments in fast on-chip memory. Writing many attachments is cheap there, as long as they fit in that memory and the pass does not <b>store</b> the ones nobody reads later. If all attachments together are too big for a tile, the GPU uses smaller tiles, which costs more. See <a href="load-store-ops.html">Load and store ops</a>.</p>
 </div>
 
-<h2><span class="n">5</span>The classic use: deferred shading</h2>
+<h2 id="deferred"><span class="n">5</span>The classic use: deferred shading</h2>
 
-<p>In forward shading, every triangle computes its lighting while it is drawn. A pixel that is covered five times is lit five times, and every object's shader must loop over every light. <b>Deferred shading</b> splits this in two passes. The first pass, the <b>geometry pass</b>, uses MRT to store what is needed for lighting: the <b>G-buffer</b> (geometry buffer). The second pass, the <b>lighting pass</b>, runs once per pixel, reads the G-buffer as textures, and computes the lighting only for the surface that is really visible.</p>
+<p>Where the lighting runs is the difference between forward and deferred shading:</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 320 130" role="img" aria-label="A side view of one pixel. Five surfaces lie behind each other. Each one is lit when it is drawn, so the pixel is lit five times, and four of them are hidden.">
+      <circle cx="28" cy="72" r="7" class="box"/>
+      <line x1="36" y1="72" x2="104" y2="72" class="arrow dashed" marker-end="url(#ah)"/>
+      <path d="M150,40V104M190,40V104M230,40V104M270,40V104" class="surface o-50"/>
+      <line x1="110" y1="40" x2="110" y2="104" class="surface"/>
+      <circle cx="110" cy="22" r="8" class="light"/>
+      <circle cx="150" cy="22" r="8" class="bad"/>
+      <circle cx="190" cy="22" r="8" class="bad"/>
+      <circle cx="230" cy="22" r="8" class="bad"/>
+      <circle cx="270" cy="22" r="8" class="bad"/>
+      <text x="28" y="98" class="mid small">pixel</text>
+      <text x="190" y="124" class="mid small t-bad">lit 5 times, 4 of them hidden</text>
+    </svg>
+    <h4>Forward shading</h4>
+    <p>Every triangle computes its lighting while it is drawn. A pixel that is covered five times is lit five times, and every object's shader must loop over every light.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 320 130" role="img" aria-label="The same five surfaces. Only the nearest one, the visible one, is lit, once.">
+      <circle cx="28" cy="72" r="7" class="box"/>
+      <line x1="36" y1="72" x2="104" y2="72" class="arrow dashed" marker-end="url(#ah)"/>
+      <path d="M150,40V104M190,40V104M230,40V104M270,40V104" class="surface o-50"/>
+      <line x1="110" y1="40" x2="110" y2="104" class="surface"/>
+      <circle cx="110" cy="22" r="8" class="light"/>
+      <text x="28" y="98" class="mid small">pixel</text>
+      <text x="190" y="124" class="mid small t-ok">lit once: the visible surface</text>
+    </svg>
+    <h4>Deferred shading</h4>
+    <p>Splits the work in two passes. Lighting is computed only for the surface that is really visible.</p>
+  </div>
+</div>
+
+<p>The first pass, the <b>geometry pass</b>, uses MRT to store what is needed for lighting: the <b>G-buffer</b> (geometry buffer). The second pass, the <b>lighting pass</b>, runs once per pixel and reads the G-buffer as textures.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 250" role="img" aria-label="The mesh goes into the geometry pass, which uses MRT to write the G-buffer: albedo, normal, material, velocity and depth. The lighting pass, a full-screen pass, reads the G-buffer textures and the light list, and writes one HDR color image, which later passes like tone mapping use.">
@@ -416,18 +638,110 @@ write+read  83 MB per frame     × 60 frames/s ≈ 5.0 GB/s</code></pre>
 
 <p>MRT is not only for deferred shading. A forward pass can also write a velocity image for temporal effects (see <a href="temporal-history.html">History buffers</a>), an object ID for picking, or a mask for a later post effect, next to its color.</p>
 
-<h2><span class="n">6</span>Variants</h2>
+<h2 id="variants"><span class="n">6</span>Variants</h2>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Variant</th><th>What it is</th><th>When to use it</th></tr>
-  <tr><td>Unused slots</td><td>Some APIs allow an empty attachment in the middle of the list (a null view in Vulkan dynamic rendering, a null target in D3D12). The shader output for that slot is dropped.</td><td>One shader for several passes that use different subsets of the outputs.</td></tr>
-  <tr><td>Write mask 0</td><td>The attachment is bound, but its write mask turns all channels off.</td><td>A pass that leaves one image untouched while it writes the others.</td></tr>
-  <tr><td>Subpasses, input attachments, local read</td><td>A later step of the same pass reads the value an earlier step wrote at <b>the same pixel</b>, without a round trip to memory (Vulkan subpasses and dynamic rendering local read, Metal tile memory).</td><td>Deferred shading on tile-based GPUs: the G-buffer never leaves the chip.</td></tr>
-  <tr><td>Storage images</td><td>The shader writes images directly, with no attachment: any pixel, any number of images.</td><td>Compute passes, or writes to other pixels than the current one. There is no blending and no depth test, and the shader must handle ordering itself.</td></tr>
-  <tr><td>Visibility buffer</td><td>The geometry pass writes only a triangle ID and an instance ID (one 32- or 64-bit attachment). A later pass fetches the triangle and computes the rest.</td><td>Very dense geometry, where even a packed G-buffer is too big.</td></tr>
-  <tr><td>Dual-source blending</td><td>Two shader outputs feed the blend of <b>one</b> attachment. Not MRT; see below.</td><td>Per-channel alpha, for example subpixel text.</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A shader with three outputs. Slots 0 and 2 have an image. Slot 1 is empty, and its output is dropped.">
+      <rect x="10" y="30" width="62" height="70" rx="16" class="shader"/>
+      <text x="41" y="70" class="mid small">shader</text>
+      <line x1="72" y1="52" x2="136" y2="28" class="arrow" marker-end="url(#ah)"/>
+      <line x1="72" y1="65" x2="136" y2="65" class="arrow dashed" marker-end="url(#ah)"/>
+      <line x1="72" y1="78" x2="136" y2="102" class="arrow" marker-end="url(#ah)"/>
+      <rect x="138" y="14" width="90" height="28" rx="4" class="mem"/><text x="183" y="32" class="mid small">slot 0</text>
+      <rect x="138" y="51" width="90" height="28" rx="4" class="ghost"/><text x="183" y="69" class="mid small t-faint">empty: dropped</text>
+      <rect x="138" y="88" width="90" height="28" rx="4" class="mem"/><text x="183" y="106" class="mid small">slot 2</text>
+    </svg>
+    <h4>Unused slots</h4>
+    <p>Some APIs allow an empty attachment in the middle of the list (a null view in Vulkan dynamic rendering, a null target in D3D12). The shader output for that slot is dropped.</p>
+    <p class="cost">Use: one shader for several passes that use different subsets of the outputs.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An arrow from the shader stops at a mask in front of an attachment. The four channels behind it keep their old values.">
+      <line x1="14" y1="60" x2="92" y2="60" class="arrow" marker-end="url(#ah)"/>
+      <text x="52" y="50" class="mid small">output</text>
+      <line x1="100" y1="30" x2="100" y2="90" class="arrow hot thick"/>
+      <text x="100" y="22" class="mid small t-hot">mask 0</text>
+      <rect x="112" y="42" width="28" height="36" class="box"/><text x="126" y="65" class="mid small t-faint">R</text>
+      <rect x="140" y="42" width="28" height="36" class="box"/><text x="154" y="65" class="mid small t-faint">G</text>
+      <rect x="168" y="42" width="28" height="36" class="box"/><text x="182" y="65" class="mid small t-faint">B</text>
+      <rect x="196" y="42" width="28" height="36" class="box"/><text x="210" y="65" class="mid small t-faint">A</text>
+      <text x="168" y="100" class="mid small">old values stay</text>
+    </svg>
+    <h4>Write mask 0</h4>
+    <p>The attachment is bound, but its write mask turns all channels off.</p>
+    <p class="cost">Use: a pass that leaves one image untouched while it writes the others.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A grid of pixels in one tile. Step 1 writes one pixel. Step 2 reads the same pixel back, without leaving the tile.">
+      <rect x="72" y="10" width="96" height="96" class="paper"/>
+      <path d="M96,10V106M120,10V106M144,10V106M72,34H168M72,58H168M72,82H168" class="grid"/>
+      <rect x="120" y="34" width="24" height="24" class="accent"/>
+      <line x1="16" y1="46" x2="116" y2="46" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="146" y1="46" x2="226" y2="46" class="arrow shader" marker-end="url(#ah-shader)"/>
+      <text x="40" y="38" class="mid small t-gpu">1 write</text>
+      <text x="202" y="38" class="mid small t-shader">2 read</text>
+      <text x="120" y="124" class="mid small">the same pixel, in tile memory</text>
+    </svg>
+    <h4>Subpasses, input attachments, local read</h4>
+    <p>A later step of the same pass reads the value an earlier step wrote at <b>the same pixel</b>, without a round trip to memory (Vulkan subpasses and dynamic rendering local read, Metal tile memory).</p>
+    <p class="cost">Use: deferred shading on tile-based GPUs: the G-buffer never leaves the chip.</p>
+  </div>
+</div>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A shader writes straight into two images, at pixels it chooses itself.">
+      <rect x="10" y="30" width="62" height="70" rx="16" class="shader"/>
+      <text x="41" y="70" class="mid small">shader</text>
+      <rect x="150" y="8" width="72" height="54" class="paper"/>
+      <path d="M168,8V62M186,8V62M204,8V62M150,26H222M150,44H222" class="grid"/>
+      <rect x="150" y="68" width="72" height="54" class="paper"/>
+      <path d="M168,68V122M186,68V122M204,68V122M150,86H222M150,104H222" class="grid"/>
+      <rect x="186" y="8" width="18" height="18" class="accent"/>
+      <rect x="150" y="44" width="18" height="18" class="accent"/>
+      <rect x="204" y="86" width="18" height="18" class="accent"/>
+      <line x1="72" y1="54" x2="184" y2="18" class="arrow shader" marker-end="url(#ah-shader)"/>
+      <line x1="72" y1="62" x2="148" y2="53" class="arrow shader" marker-end="url(#ah-shader)"/>
+      <line x1="72" y1="76" x2="202" y2="94" class="arrow shader" marker-end="url(#ah-shader)"/>
+    </svg>
+    <h4>Storage images</h4>
+    <p>The shader writes images directly, with no attachment: any pixel, any number of images.</p>
+    <p class="cost">Use: compute passes, or writes to other pixels than the current one. There is no blending and no depth test, and the shader must handle ordering itself.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An image where every triangle is filled with its own ID. A later pass reads the ID and shades the pixel.">
+      <rect x="12" y="14" width="104" height="80" class="paper"/>
+      <polygon points="18,88 50,22 70,88" class="cpu"/>
+      <polygon points="50,22 104,30 70,88" class="gpu"/>
+      <polygon points="70,88 104,30 110,88" class="shader"/>
+      <text x="46" y="72" class="mid mono">17</text>
+      <text x="74" y="50" class="mid mono">18</text>
+      <text x="94" y="80" class="mid mono">19</text>
+      <text x="64" y="112" class="mid small">triangle ID per pixel</text>
+      <line x1="120" y1="54" x2="150" y2="54" class="arrow" marker-end="url(#ah)"/>
+      <rect x="152" y="34" width="78" height="40" rx="16" class="shader"/>
+      <text x="191" y="58" class="mid small">later pass</text>
+    </svg>
+    <h4>Visibility buffer</h4>
+    <p>The geometry pass writes only a triangle ID and an instance ID (one 32- or 64-bit attachment). A later pass fetches the triangle and computes the rest.</p>
+    <p class="cost">Use: very dense geometry, where even a packed G-buffer is too big.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A shader with two outputs. Both go into the blend of one image.">
+      <rect x="10" y="30" width="62" height="70" rx="16" class="shader"/>
+      <text x="41" y="70" class="mid small">shader</text>
+      <line x1="72" y1="56" x2="126" y2="62" class="arrow" marker-end="url(#ah)"/>
+      <line x1="72" y1="76" x2="126" y2="70" class="arrow" marker-end="url(#ah)"/>
+      <rect x="128" y="44" width="100" height="44" rx="4" class="mem"/>
+      <text x="178" y="63" class="mid small">blend into</text>
+      <text x="178" y="79" class="mid small">1 image</text>
+      <text x="120" y="118" class="mid small">2 outputs, 1 image</text>
+    </svg>
+    <h4>Dual-source blending</h4>
+    <p>Two shader outputs feed the blend of <b>one</b> attachment. Not MRT; see below.</p>
+    <p class="cost">Use: per-channel alpha, for example subpixel text.</p>
+  </div>
 </div>
 
 <figure class="diagram">
@@ -461,20 +775,17 @@ write+read  83 MB per frame     × 60 frames/s ≈ 5.0 GB/s</code></pre>
   <figcaption>Both have a second shader output, but they do different things. Dual-source blending is a blend feature, not a way to write more images.</figcaption>
 </figure>
 
-<h2><span class="n">7</span>Pitfalls</h2>
+<h2 id="pitfalls"><span class="n">7</span>Pitfalls</h2>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Problem</th><th>What you see</th><th>Fix</th></tr>
-  <tr><td>Output number and attachment order differ</td><td>Normals show up in the color image, or masks in the albedo. Nothing crashes: all are <samp>float4</samp>.</td><td>Keep one list of the attachments and build both the pass and the shader struct from it.</td></tr>
-  <tr><td>An output is not written on some path</td><td>Garbage in that image at some pixels. A missing output (or a missing channel) is <b>undefined</b>, not 0.</td><td>Write every output in every branch. Use a write mask if the image should keep its old value.</td></tr>
-  <tr><td>Data in an sRGB format</td><td>Normals and masks come back bent: the GPU applied the sRGB curve on write.</td><td>Use UNORM or float formats for data. Only colors get sRGB. See <a href="color-spaces.html">Color spaces</a>.</td></tr>
-  <tr><td>Blending on a format that cannot blend</td><td>Validation error, or the pipeline fails. Integer formats never blend, and 32-bit float often cannot.</td><td>Turn blending off for that attachment (needs independent blend), or pick another format.</td></tr>
-  <tr><td>Blending on with data in alpha</td><td>A mask or roughness stored in alpha also changes how the color mixes.</td><td>Keep blending off on data attachments, or move the data out of alpha.</td></tr>
-  <tr><td>A mask read with a linear filter</td><td>At edges the mask is 0.3 or 0.7, not 0 or 1, when the reader's size or position differs.</td><td>Compare against 0.5, or sample with a nearest filter.</td></tr>
-  <tr><td>Too many bytes</td><td>The pass is bandwidth-bound; on tile-based GPUs it is slower than expected.</td><td>Pack (section 4), and do not store attachments that no later pass reads.</td></tr>
-</table>
-</div>
+<dl class="pitfalls">
+  <div><dt>Normals show up in the color image, or masks in the albedo</dt><dd>The output number and the attachment order differ. Nothing crashes: all are <samp>float4</samp>. Keep one list of the attachments and build both the pass and the shader struct from it.</dd></div>
+  <div><dt>Garbage in one image at some pixels</dt><dd>An output is not written on some path. A missing output (or a missing channel) is <b>undefined</b>, not 0. Write every output in every branch. Use a write mask if the image should keep its old value.</dd></div>
+  <div><dt>Normals and masks come back bent</dt><dd>Data in an sRGB format: the GPU applied the sRGB curve on write. Use UNORM or float formats for data. Only colors get sRGB. See <a href="color-spaces.html">Color spaces</a>.</dd></div>
+  <div><dt>Validation error, or the pipeline fails</dt><dd>Blending on a format that cannot blend. Integer formats never blend, and 32-bit float often cannot. Turn blending off for that attachment (needs independent blend), or pick another format.</dd></div>
+  <div><dt>A mask or roughness stored in alpha also changes how the color mixes</dt><dd>Blending is on with data in alpha. Keep blending off on data attachments, or move the data out of alpha.</dd></div>
+  <div><dt>At edges a mask is 0.3 or 0.7, not 0 or 1</dt><dd>The mask is read with a linear filter, and the reader's size or position differs. Compare against 0.5, or sample with a nearest filter.</dd></div>
+  <div><dt>The pass is bandwidth-bound; on tile-based GPUs it is slower than expected</dt><dd>Too many bytes. Pack (section 4), and do not store attachments that no later pass reads.</dd></div>
+</dl>
 
 <h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
 

@@ -19,6 +19,10 @@
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+    <marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+    <marker id="ah-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head light"/></marker>
   </defs>
 </svg>
 
@@ -42,14 +46,21 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>Why normal mapping</h2>
+<h2 id="why"><span class="n">1</span>Why normal mapping</h2>
 
 <p>The brightness of a lit surface depends on the angle between its <b>normal</b> and the light (<var>n</var>·<var>l</var>, see <a href="pbr.html">PBR shading</a>). Small details like bricks, scratches or pores change that angle many times inside one pixel-sized area. Modelling them as real triangles would need millions of triangles. Normal mapping keeps the triangles few and stores only the normals of the detail, in a texture.</p>
 
+<div class="legend">
+  <span><i class="hot"></i>the normal used for lighting</span>
+  <span><i class="light"></i>light</span>
+  <span><i class="shade"></i>the strip below: what the eye sees, dark where the normal turns away</span>
+</div>
+
 <figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="Three side views. Left: a bumpy surface made of many triangles, with normals that follow the bumps. Middle: a flat surface of two triangles; all normals point up, so it is lit flat. Right: the same flat surface with a normal map; the normals read from the map tilt like the bumps, so it is lit like the bumps, but its outline is still flat.">
-    <text x="125" y="20" class="mid title">Real bumps</text>
-    <polyline points="20,150 45,120 70,150 95,120 120,150 145,120 170,150 195,120 220,150" class="arrow"/>
+  <svg viewBox="0 0 760 222" role="img" aria-label="Three side views, each with a strip below that shows the brightness the eye sees. Left: a bumpy surface made of many triangles, with normals that follow the bumps; the strip has light and dark bands. Middle: a flat surface of two triangles; all normals point up, so the strip is one even tone. Right: the same flat surface with a normal map; the normals read from the map tilt like the bumps, so the strip has the same bands as the real bumps, but the outline is still flat.">
+    <text x="120" y="20" class="mid title">Real bumps</text>
+    <line x1="22" y1="44" x2="50" y2="90" class="arrow light" marker-end="url(#ah-light)"/>
+    <polyline points="20,150 45,120 70,150 95,120 120,150 145,120 170,150 195,120 220,150" class="surface"/>
     <line x1="32" y1="135" x2="18" y2="121" class="arrow hot" marker-end="url(#ah-hot)"/>
     <line x1="58" y1="135" x2="72" y2="121" class="arrow hot" marker-end="url(#ah-hot)"/>
     <line x1="82" y1="135" x2="68" y2="121" class="arrow hot" marker-end="url(#ah-hot)"/>
@@ -58,21 +69,26 @@
     <line x1="158" y1="135" x2="172" y2="121" class="arrow hot" marker-end="url(#ah-hot)"/>
     <line x1="182" y1="135" x2="168" y2="121" class="arrow hot" marker-end="url(#ah-hot)"/>
     <line x1="208" y1="135" x2="222" y2="121" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="125" y="190" class="mid small">many triangles</text>
-    <text x="125" y="206" class="mid small">lit like bumps, bumpy outline</text>
+    <rect x="20" y="164" width="200" height="16" class="lit"/>
+    <rect x="45" y="164" width="25" height="16" class="shade"/><rect x="95" y="164" width="25" height="16" class="shade"/><rect x="145" y="164" width="25" height="16" class="shade"/><rect x="195" y="164" width="25" height="16" class="shade"/>
+    <text x="120" y="200" class="mid small">many triangles</text>
+    <text x="120" y="216" class="mid small">lit like bumps, bumpy outline</text>
 
     <text x="380" y="20" class="mid title">Flat</text>
-    <line x1="270" y1="140" x2="490" y2="140" class="arrow"/>
-    <line x1="290" y1="140" x2="290" y2="112" class="arrow" marker-end="url(#ah)"/>
-    <line x1="335" y1="140" x2="335" y2="112" class="arrow" marker-end="url(#ah)"/>
-    <line x1="380" y1="140" x2="380" y2="112" class="arrow" marker-end="url(#ah)"/>
-    <line x1="425" y1="140" x2="425" y2="112" class="arrow" marker-end="url(#ah)"/>
-    <line x1="470" y1="140" x2="470" y2="112" class="arrow" marker-end="url(#ah)"/>
-    <text x="380" y="190" class="mid small">2 triangles</text>
-    <text x="380" y="206" class="mid small">every pixel lit the same</text>
+    <line x1="272" y1="44" x2="300" y2="90" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="270" y1="140" x2="490" y2="140" class="surface"/>
+    <line x1="290" y1="140" x2="290" y2="112" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="335" y1="140" x2="335" y2="112" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="380" y1="140" x2="380" y2="112" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="425" y1="140" x2="425" y2="112" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="470" y1="140" x2="470" y2="112" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <rect x="270" y="164" width="220" height="16" class="lit"/>
+    <text x="380" y="200" class="mid small">2 triangles</text>
+    <text x="380" y="216" class="mid small">every pixel lit the same</text>
 
-    <text x="635" y="20" class="mid title">Flat + normal map</text>
-    <line x1="525" y1="140" x2="745" y2="140" class="arrow"/>
+    <text x="625" y="20" class="mid title">Flat + normal map</text>
+    <line x1="527" y1="44" x2="555" y2="90" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="525" y1="140" x2="725" y2="140" class="surface"/>
     <line x1="537" y1="140" x2="523" y2="114" class="arrow hot" marker-end="url(#ah-hot)"/>
     <line x1="563" y1="140" x2="577" y2="114" class="arrow hot" marker-end="url(#ah-hot)"/>
     <line x1="587" y1="140" x2="573" y2="114" class="arrow hot" marker-end="url(#ah-hot)"/>
@@ -81,91 +97,163 @@
     <line x1="663" y1="140" x2="677" y2="114" class="arrow hot" marker-end="url(#ah-hot)"/>
     <line x1="687" y1="140" x2="673" y2="114" class="arrow hot" marker-end="url(#ah-hot)"/>
     <line x1="713" y1="140" x2="727" y2="114" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="635" y="190" class="mid small">2 triangles + 1 texture</text>
-    <text x="635" y="206" class="mid small">lit like bumps, flat outline</text>
-    <text x="380" y="240" class="mid small">The normals come from the texture, so they can change from pixel to pixel, inside one triangle.</text>
+    <rect x="525" y="164" width="200" height="16" class="lit"/>
+    <rect x="550" y="164" width="25" height="16" class="shade"/><rect x="600" y="164" width="25" height="16" class="shade"/><rect x="650" y="164" width="25" height="16" class="shade"/><rect x="700" y="164" width="25" height="16" class="shade"/>
+    <text x="625" y="200" class="mid small">2 triangles + 1 texture</text>
+    <text x="625" y="216" class="mid small">lit like bumps, flat outline</text>
   </svg>
-  <figcaption>Normal mapping fakes the lighting, not the shape. The outline stays flat, the bumps do not hide each other, and they cast no shadows. For large shapes, real geometry is still needed.</figcaption>
+  <figcaption>The normals come from the texture, so they can change from pixel to pixel, inside one triangle. Normal mapping fakes the lighting, not the shape. The outline stays flat, the bumps do not hide each other, and they cast no shadows. For large shapes, real geometry is still needed.</figcaption>
 </figure>
 
-<p>A normal map is usually <b>baked</b>: an artist builds a detailed mesh with millions of triangles, and a tool records its normals into a texture laid over a simple mesh. It can also be painted, or made from a height map.</p>
+<p>A normal map is usually <b>baked</b>:</p>
 
-<h2><span class="n">2</span>Storing a normal in a texture</h2>
+<ol class="flow">
+  <li><b>Detailed mesh</b><span>an artist builds it, with millions of triangles</span></li>
+  <li class="cpu"><b>Bake</b><span>a tool records the normals of the detailed mesh</span></li>
+  <li class="mem"><b>Normal map</b><span>a texture laid over a simple mesh</span></li>
+</ol>
+
+<p>It can also be painted, or made from a height map.</p>
+
+<h2 id="storing"><span class="n">2</span>Storing a normal in a texture</h2>
 
 <p>A unit normal has 3 components, each between −1 and 1. A texture channel stores 0 to 1 (as 0 to 255 in 8 bits). So each component is moved and scaled into that range, and back when it is read:</p>
 
 <pre><code class="lang-text">stored = (n + 1) / 2          n = stored · 2 − 1</code></pre>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="Top: the number lines. −1, 0, 1 map to 0, 0.5, 1 and to the bytes 0, 128 (rounded) and 255. Bottom: three normals on a bump and their colors: the left slope (−0.5, 0, 0.87) is (64, 128, 238), the flat top (0, 0, 1) is (128, 128, 255), the right slope (0.5, 0, 0.87) is (191, 128, 238).">
-    <line x1="80" y1="40" x2="380" y2="40" class="arrow"/>
-    <text x="40" y="44" class="small">n</text>
-    <text x="80" y="30" class="mid mono small">−1</text>
-    <text x="230" y="30" class="mid mono small">0</text>
-    <text x="380" y="30" class="mid mono small">1</text>
-    <line x1="80" y1="44" x2="80" y2="76" class="arrow dashed" marker-end="url(#ah)"/>
-    <line x1="230" y1="44" x2="230" y2="76" class="arrow dashed" marker-end="url(#ah)"/>
-    <line x1="380" y1="44" x2="380" y2="76" class="arrow dashed" marker-end="url(#ah)"/>
-    <line x1="80" y1="80" x2="380" y2="80" class="arrow mem"/>
-    <text x="40" y="84" class="small">stored</text>
-    <text x="80" y="98" class="mid mono small">0</text>
-    <text x="230" y="98" class="mid mono small">0.5</text>
-    <text x="380" y="98" class="mid mono small">1</text>
-    <text x="80" y="114" class="mid mono small t-mem">0</text>
-    <text x="230" y="114" class="mid mono small t-mem">128</text>
-    <text x="380" y="114" class="mid mono small t-mem">255</text>
-    <text x="420" y="44" class="small">The byte 128 reads back as</text>
-    <text x="420" y="60" class="small">128 / 255 · 2 − 1 = 0.0039, not 0.</text>
-    <text x="420" y="76" class="small">8 bits have no exact middle (127.5),</text>
-    <text x="420" y="92" class="small">so a "flat" texel is very slightly tilted.</text>
+  <svg viewBox="0 0 760 230" role="img" aria-label="Left: the number lines. −1, 0, 1 map to 0, 0.5, 1 and to the bytes 0, 128 (rounded) and 255. Right: three normals on a bump and the texel each one becomes: the left slope (−0.5, 0, 0.87) is (64, 128, 238), the flat top (0, 0, 1) is (128, 128, 255), the right slope (0.5, 0, 0.87) is (191, 128, 238).">
+    <text x="30" y="24" class="title">One component</text>
+    <line x1="90" y1="70" x2="370" y2="70" class="arrow"/>
+    <text x="30" y="74" class="small">n</text>
+    <text x="90" y="58" class="mid mono small">−1</text>
+    <text x="230" y="58" class="mid mono small">0</text>
+    <text x="370" y="58" class="mid mono small">1</text>
+    <line x1="90" y1="76" x2="90" y2="124" class="arrow dashed" marker-end="url(#ah)"/>
+    <line x1="230" y1="76" x2="230" y2="124" class="arrow dashed" marker-end="url(#ah)"/>
+    <line x1="370" y1="76" x2="370" y2="124" class="arrow dashed" marker-end="url(#ah)"/>
+    <line x1="90" y1="130" x2="370" y2="130" class="arrow mem thick"/>
+    <text x="30" y="134" class="small">stored</text>
+    <text x="90" y="152" class="mid mono small">0</text>
+    <text x="230" y="152" class="mid mono small">0.5</text>
+    <text x="370" y="152" class="mid mono small">1</text>
+    <text x="30" y="172" class="small t-mem">byte</text>
+    <text x="90" y="172" class="mid mono small t-mem">0</text>
+    <text x="230" y="172" class="mid mono small t-mem">128</text>
+    <text x="370" y="172" class="mid mono small t-mem">255</text>
 
-    <polyline points="80,220 110,220 196,170 264,170 350,220 380,220" class="arrow"/>
-    <line x1="153" y1="195" x2="131" y2="157" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <line x1="230" y1="170" x2="230" y2="132" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <line x1="307" y1="195" x2="329" y2="157" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <rect x="420" y="130" width="100" height="44" rx="4" class="mem"/>
-    <text x="470" y="148" class="mid mono small">64,128,238</text>
-    <text x="470" y="166" class="mid small">left slope</text>
-    <rect x="530" y="130" width="100" height="44" rx="4" class="mem"/>
-    <text x="580" y="148" class="mid mono small">128,128,255</text>
-    <text x="580" y="166" class="mid small">flat</text>
-    <rect x="640" y="130" width="100" height="44" rx="4" class="mem"/>
-    <text x="690" y="148" class="mid mono small">191,128,238</text>
-    <text x="690" y="166" class="mid small">right slope</text>
-    <text x="420" y="198" class="small">(−0.5, 0, 0.87) · (0, 0, 1) · (0.5, 0, 0.87)</text>
-    <text x="420" y="222" class="small">Mostly z: that is why normal maps look light blue.</text>
+    <text x="430" y="24" class="title">Three normals, three texels</text>
+    <polyline points="430,130 470,130 530,95 630,95 690,130 730,130" class="surface"/>
+    <line x1="500" y1="112" x2="480" y2="77" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="580" y1="95" x2="580" y2="55" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="660" y1="112" x2="680" y2="77" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="490" y1="134" x2="482" y2="158" class="dashed"/>
+    <line x1="580" y1="100" x2="580" y2="158" class="dashed"/>
+    <line x1="670" y1="134" x2="678" y2="158" class="dashed"/>
+    <rect x="432" y="160" width="96" height="50" rx="4" class="mem"/>
+    <text x="480" y="180" class="mid mono small">64,128,238</text>
+    <text x="480" y="200" class="mid small">(−0.5, 0, 0.87)</text>
+    <rect x="532" y="160" width="96" height="50" rx="4" class="mem"/>
+    <text x="580" y="180" class="mid mono small">128,128,255</text>
+    <text x="580" y="200" class="mid small">(0, 0, 1)</text>
+    <rect x="632" y="160" width="96" height="50" rx="4" class="mem"/>
+    <text x="680" y="180" class="mid mono small">191,128,238</text>
+    <text x="680" y="200" class="mid small">(0.5, 0, 0.87)</text>
   </svg>
-  <figcaption>A flat area is (128, 128, 255), the typical lavender blue. Red shows tilt along <var>x</var>, green tilt along <var>y</var>.</figcaption>
+  <figcaption>A flat area is (128, 128, 255), the typical lavender blue. Red shows tilt along <var>x</var>, green tilt along <var>y</var>. The values are mostly <var>z</var>: that is why normal maps look light blue.</figcaption>
 </figure>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Rule</th><th>Why</th></tr>
-  <tr><td>Read it as <b>UNORM</b> (linear), never sRGB</td><td>The values are numbers, not colors. An sRGB format would apply the sRGB curve on read, and 128 would come back as about 0.22 instead of 0.5: every normal bends. See <a href="color-spaces.html">Color spaces</a>.</td></tr>
-  <tr><td>Normalize after reading</td><td>8-bit rounding, filtering between texels, and mipmaps all shorten the vector a little.</td></tr>
-  <tr><td>Know the green convention</td><td>"OpenGL style" maps (glTF, Blender) store +<var>y</var> as up in the image. "DirectX style" maps store +<var>y</var> as down. Using one as the other flips every bump in <var>y</var>: lit from below instead of above. The fix is <var>y</var> = −<var>y</var>.</td></tr>
-</table>
+<div class="callout">
+  <strong>8 bits have no exact middle</strong>
+  <p>The byte 128 reads back as 128 / 255 · 2 − 1 = 0.0039, not 0. The exact middle would be 127.5, so a "flat" texel is very slightly tilted.</p>
 </div>
 
-<h2><span class="n">3</span>Tangent space</h2>
+<p>Three rules for reading the map:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A flat surface. Read as UNORM, byte 128 becomes 0.5 and the normal points straight up. Read as sRGB, byte 128 becomes 0.22 and the normal leans far to one side.">
+      <line x1="16" y1="112" x2="224" y2="112" class="surface"/>
+      <line x1="76" y1="112" x2="76" y2="46" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <line x1="176" y1="112" x2="141" y2="52" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <text x="76" y="20" class="mid small t-ok">UNORM</text>
+      <text x="76" y="36" class="mid mono small t-ok">128 → 0.5</text>
+      <text x="170" y="20" class="mid small t-bad">sRGB</text>
+      <text x="170" y="36" class="mid mono small t-bad">128 → 0.22</text>
+    </svg>
+    <h4>Read it as UNORM (linear), never sRGB</h4>
+    <p>The values are numbers, not colors. An sRGB format would apply the sRGB curve on read, and 128 would come back as about 0.22 instead of 0.5: every normal bends. See <a href="color-spaces.html">Color spaces</a>.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An arc marks length 1. The vector as read from the texture stops a little short of the arc. After normalizing it reaches the arc.">
+      <path d="M30,118 A90,90 0 0 1 210,118" class="dashed"/>
+      <line x1="120" y1="118" x2="96" y2="54" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <line x1="120" y1="118" x2="151" y2="34" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <text x="84" y="76" class="end small t-bad">as read:</text>
+      <text x="84" y="90" class="end small t-bad">too short</text>
+      <text x="160" y="76" class="small t-ok">normalized:</text>
+      <text x="160" y="90" class="small t-ok">length 1</text>
+    </svg>
+    <h4>Normalize after reading</h4>
+    <p>8-bit rounding, filtering between texels, and mipmaps all shorten the vector a little.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The same map read with the two green conventions. With the right one the surface looks like a bump. With the wrong one it looks like a dent.">
+      <polyline points="14,86 36,86 52,58 84,58 100,86 114,86" class="surface"/>
+      <polyline points="126,58 140,58 156,86 188,86 204,58 226,58" class="surface"/>
+      <text x="68" y="110" class="mid small t-ok">bump</text>
+      <text x="172" y="110" class="mid small t-bad">dent</text>
+      <text x="68" y="34" class="mid small">right convention</text>
+      <text x="172" y="34" class="mid small">wrong one</text>
+    </svg>
+    <h4>Know the green convention</h4>
+    <p>"OpenGL style" maps (glTF, Blender) store +<var>y</var> as up in the image. "DirectX style" maps store +<var>y</var> as down. Using one as the other flips every bump in <var>y</var>: lit from below instead of above.</p>
+    <p class="cost"><b>The fix:</b> <var>y</var> = −<var>y</var></p>
+  </div>
+</div>
+
+<h2 id="tangent-space"><span class="n">3</span>Tangent space</h2>
 
 <p>In which coordinate system are the stored normals? There are two choices.</p>
 
 <div class="split">
   <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A curved surface with three normals. All three are measured against one fixed set of axes, the axes of the mesh.">
+      <path d="M40,120 Q160,20 280,120" class="surface nofill"/>
+      <line x1="88" y1="88" x2="74" y2="59" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="160" y1="70" x2="160" y2="38" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="232" y1="88" x2="246" y2="59" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="146" y1="128" x2="180" y2="128" class="arrow" marker-end="url(#ah)"/>
+      <line x1="146" y1="128" x2="146" y2="98" class="arrow" marker-end="url(#ah)"/>
+      <text x="186" y="132" class="small">the mesh's axes</text>
+    </svg>
     <h4>Object space</h4>
-    <p>The normal is stored in the mesh's own coordinates. Simple to use: rotate with the object and done. But the map works only for that one mesh, it cannot tile or be reused, and it breaks when the mesh bends (skinning). It uses all colors, so it compresses badly.</p>
+    <p>The normal is stored in the mesh's own coordinates. Simple to use: rotate with the object and done.</p>
+    <p>But the map works only for that one mesh, it cannot tile or be reused, and it breaks when the mesh bends (skinning). It uses all colors, so it compresses badly.</p>
   </div>
   <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same curved surface. Each point has its own small frame: one axis along the surface and one straight out of it. Normals are measured against the frame of their own point.">
+      <path d="M40,120 Q160,20 280,120" class="surface nofill"/>
+      <line x1="88" y1="88" x2="109" y2="77" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="88" y1="88" x2="76" y2="65" class="arrow" marker-end="url(#ah)"/>
+      <line x1="160" y1="70" x2="184" y2="70" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="160" y1="70" x2="160" y2="44" class="arrow" marker-end="url(#ah)"/>
+      <line x1="232" y1="88" x2="253" y2="99" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="232" y1="88" x2="244" y2="65" class="arrow" marker-end="url(#ah)"/>
+      <text x="160" y="32" class="mid small">z: out of the surface</text>
+      <text x="160" y="132" class="mid small">a small frame at every point</text>
+    </svg>
     <h4>Tangent space (the usual choice)</h4>
-    <p>The normal is stored relative to the surface itself: <var>z</var> is "straight out of the surface". The same brick map then works on a wall, a floor or a curved column, it tiles, and it bends with the mesh. Since <var>z</var> is always positive, two channels are enough (<a href="#two-channel">section 9</a>).</p>
+    <p>The normal is stored relative to the surface itself: <var>z</var> is "straight out of the surface". The same brick map then works on a wall, a floor or a curved column, it tiles, and it bends with the mesh.</p>
+    <p>Since <var>z</var> is always positive, two channels are enough (<a href="#two-channel">section 9</a>).</p>
   </div>
 </div>
 
 <p><b>Tangent space</b> is a small coordinate frame at each point of the surface, made of three unit vectors:</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 290" role="img" aria-label="A surface patch with a texture's grid drawn on it. At one point, three vectors: T along the direction where u grows, B along the direction of the texture's up, and N straight out of the surface. On the right, the texture with u to the right and the image's up direction.">
+  <svg viewBox="0 0 760 280" role="img" aria-label="Left: a surface patch with a texture's grid drawn on it. At one point, three vectors: T along the direction where u grows, B along the direction of the texture's up, and N straight out of the surface. Right: the texture itself, with T pointing right, where u grows, and B pointing to the top of the image.">
+    <text x="60" y="26" class="title">On the surface</text>
     <polygon points="60,220 330,250 420,150 150,120" class="zone"/>
     <line x1="114" y1="132" x2="384" y2="162" class="ghost"/>
     <line x1="96" y1="170" x2="366" y2="200" class="ghost"/>
@@ -174,35 +262,50 @@
     <line x1="168" y1="232" x2="258" y2="132" class="ghost"/>
     <line x1="222" y1="238" x2="312" y2="138" class="ghost"/>
     <line x1="276" y1="244" x2="366" y2="144" class="ghost"/>
+    <line x1="240" y1="185" x2="330" y2="195" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <text x="338" y="202" class="title t-hot halo">T</text>
+    <line x1="240" y1="185" x2="282" y2="139" class="arrow gpu thick" marker-end="url(#ah-gpu)"/>
+    <text x="290" y="136" class="title t-gpu halo">B</text>
+    <line x1="240" y1="185" x2="226" y2="80" class="arrow thick" marker-end="url(#ah)"/>
+    <text x="212" y="78" class="title">N</text>
     <circle cx="240" cy="185" r="5" class="cpu"/>
-    <line x1="240" y1="185" x2="330" y2="195" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="336" y="200" class="title t-hot">T</text>
-    <line x1="240" y1="185" x2="282" y2="139" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="288" y="134" class="title t-gpu">B</text>
-    <line x1="240" y1="185" x2="226" y2="80" class="arrow" marker-end="url(#ah)"/>
-    <text x="214" y="78" class="title">N</text>
 
-    <text x="470" y="40" class="title">The three axes</text>
-    <text x="470" y="66" class="small"><tspan class="t-hot">T</tspan>, the tangent: the direction on the surface</text>
-    <text x="470" y="82" class="small">in which the texture coordinate u grows.</text>
-    <text x="470" y="106" class="small"><tspan class="t-gpu">B</tspan>, the bitangent: the direction on the surface</text>
-    <text x="470" y="122" class="small">of the texture's "up" (the stored +y).</text>
-    <text x="470" y="146" class="small">N, the normal: out of the surface.</text>
-    <text x="470" y="180" class="small">A texel's (x, y, z) means: x steps along T,</text>
-    <text x="470" y="196" class="small">y steps along B, z steps along N.</text>
-    <text x="470" y="230" class="small">B is also called the "binormal". That name is</text>
-    <text x="470" y="246" class="small">wrong for surfaces (it comes from curves), but</text>
-    <text x="470" y="262" class="small">it is very common.</text>
+    <text x="500" y="26" class="title">In the texture</text>
+    <rect x="500" y="50" width="180" height="180" class="paper"/>
+    <path d="M545,50V230M590,50V230M635,50V230M500,95H680M500,140H680M500,185H680" class="grid"/>
+    <line x1="590" y1="140" x2="666" y2="140" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <text x="656" y="130" class="title t-hot">T</text>
+    <line x1="590" y1="140" x2="590" y2="64" class="arrow gpu thick" marker-end="url(#ah-gpu)"/>
+    <text x="598" y="72" class="title t-gpu">B</text>
+    <circle cx="590" cy="140" r="5" class="cpu"/>
+    <line x1="500" y1="250" x2="680" y2="250" class="arrow" marker-end="url(#ah)"/>
+    <text x="590" y="268" class="mid small">u grows</text>
+    <line x1="700" y1="230" x2="700" y2="50" class="arrow" marker-end="url(#ah)"/>
+    <text x="708" y="144" class="small">up</text>
   </svg>
   <figcaption>T and B lie in the surface and follow the texture's layout on it. So "tilted to the right in the image" always means "tilted along <var>T</var>", whatever way the surface faces.</figcaption>
 </figure>
 
-<h2><span class="n">4</span>The TBN matrix</h2>
+<div class="formula">
+  <p class="eq">texel (x, y, z) = x steps along T, y steps along B, z steps along N</p>
+  <dl>
+    <dt>T</dt><dd>the tangent: the direction on the surface in which the texture coordinate <var>u</var> grows</dd>
+    <dt>B</dt><dd>the bitangent: the direction on the surface of the texture's "up" (the stored +<var>y</var>)</dd>
+    <dt>N</dt><dd>the normal: out of the surface</dd>
+  </dl>
+</div>
+
+<div class="callout">
+  <strong>"Binormal"</strong>
+  <p><var>B</var> is also called the "binormal". That name is wrong for surfaces (it comes from curves), but it is very common.</p>
+</div>
+
+<h2 id="tbn"><span class="n">4</span>The TBN matrix</h2>
 
 <p>Put <var>T</var>, <var>B</var> and <var>N</var> (in world space) as the columns of a 3×3 matrix. Multiplying a tangent-space vector by it gives the same vector in world space:</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 170" role="img" aria-label="The TBN matrix with columns T, B, N times the tangent-space normal x, y, z equals T times x plus B times y plus N times z, the world-space normal.">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Left: the TBN matrix with columns T, B, N times the tangent-space normal x, y, z equals T times x plus B times y plus N times z, the world-space normal. Right: a side view of the sum: a step of x along T, then a step of z along N, ends at the tip of the world-space normal n.">
     <text x="30" y="40" class="small">TBN matrix</text>
     <rect x="30" y="50" width="150" height="90" rx="4" class="box"/>
     <text x="65" y="100" class="mid title t-hot">T</text>
@@ -218,16 +321,66 @@
     <text x="310" y="100" class="mid title">=</text>
     <text x="330" y="100" class="mono"><tspan class="t-hot">T</tspan>·x + <tspan class="t-gpu">B</tspan>·y + N·z</text>
     <text x="330" y="40" class="small">the world-space normal</text>
-    <text x="560" y="62" class="small">With (0, 0, 1), the flat texel,</text>
-    <text x="560" y="78" class="small">the result is N: no change.</text>
-    <text x="560" y="110" class="small">When T, B, N are unit length and at</text>
-    <text x="560" y="126" class="small">right angles, the inverse of the</text>
-    <text x="560" y="142" class="small">matrix is its transpose.</text>
+
+    <line x1="520" y1="20" x2="520" y2="190" class="dashed"/>
+
+    <line x1="580" y1="170" x2="730" y2="170" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="736" y="174" class="title t-hot">T</text>
+    <line x1="580" y1="170" x2="580" y2="30" class="arrow" marker-end="url(#ah)"/>
+    <text x="566" y="36" class="title">N</text>
+    <line x1="580" y1="170" x2="640" y2="170" class="arrow hot thick"/>
+    <line x1="640" y1="170" x2="640" y2="68" class="arrow dashed"/>
+    <line x1="580" y1="170" x2="639" y2="68" class="arrow mem thick" marker-end="url(#ah-mem)"/>
+    <text x="610" y="188" class="mid small t-hot">T·x</text>
+    <text x="648" y="124" class="small">N·z</text>
+    <text x="648" y="62" class="title t-mem">n</text>
   </svg>
-  <figcaption>The inverse (the transpose) goes the other way: from world to tangent space. Some engines move the light and view vectors into tangent space in the vertex shader instead, and light in tangent space. Today most engines move the normal to world space, as here.</figcaption>
+  <figcaption>On the right, the sum seen from the side (here <var>y</var> = 0). The inverse (the transpose) goes the other way: from world to tangent space. Some engines move the light and view vectors into tangent space in the vertex shader instead, and light in tangent space. Today most engines move the normal to world space, as here.</figcaption>
 </figure>
 
-<h2><span class="n">5</span>Where tangents come from, and the sign <var>w</var></h2>
+<p>With (0, 0, 1), the flat texel, the result is <var>N</var>: no change. When <var>T</var>, <var>B</var>, <var>N</var> are unit length and at right angles, the inverse of the matrix is its transpose.</p>
+
+<h2 id="tangent-sign"><span class="n">5</span>Where tangents come from, and the sign <var>w</var></h2>
+
+<p>A triangle exists twice: in the texture, with its UVs, and on the surface, with its positions. The tangent and bitangent follow from both.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Left: a triangle in the texture. Its two edges from p0 are the UV differences (delta u1, delta v1) and (delta u2, delta v2). Right: the same triangle on the surface. Its two edges from p0 are e1 and e2. T is the direction on the surface where u grows, B the direction where v grows.">
+    <text x="70" y="24" class="title">In the texture</text>
+    <rect x="70" y="40" width="200" height="200" class="paper"/>
+    <path d="M120,40V240M170,40V240M220,40V240M70,90H270M70,140H270M70,190H270" class="grid"/>
+    <polygon points="100,210 230,190 140,80" class="mem"/>
+    <text x="96" y="226" class="end small">p0</text>
+    <text x="236" y="186" class="small">p1</text>
+    <text x="140" y="72" class="mid small">p2</text>
+    <text x="178" y="222" class="mid small halo">(Δu1, Δv1)</text>
+    <text x="112" y="140" class="end small halo">(Δu2, Δv2)</text>
+    <line x1="70" y1="254" x2="270" y2="254" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="278" y="258" class="small t-hot">u</text>
+    <line x1="40" y1="240" x2="40" y2="40" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="40" y="30" class="mid small t-gpu">v</text>
+
+    <line x1="300" y1="150" x2="400" y2="150" class="arrow dashed" marker-start="url(#ah)" marker-end="url(#ah)"/>
+    <text x="350" y="138" class="mid small">the same triangle</text>
+
+    <text x="430" y="24" class="title">On the surface</text>
+    <polygon points="430,210 640,190 500,70" class="box"/>
+    <line x1="430" y1="210" x2="638" y2="190" class="arrow cpu thick" marker-end="url(#ah-cpu)"/>
+    <line x1="430" y1="210" x2="499" y2="72" class="arrow cpu thick" marker-end="url(#ah-cpu)"/>
+    <text x="540" y="220" class="mid small t-cpu">e1</text>
+    <text x="454" y="136" class="end small t-cpu">e2</text>
+    <text x="424" y="226" class="end small">p0</text>
+    <text x="648" y="194" class="small">p1</text>
+    <text x="500" y="60" class="mid small">p2</text>
+    <line x1="520" y1="160" x2="586" y2="156" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="606" y="152" class="title t-hot">T</text>
+    <line x1="520" y1="160" x2="510" y2="100" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="518" y="98" class="title t-gpu">B</text>
+    <text x="680" y="120" class="mid small t-hot">T: where u grows</text>
+    <text x="680" y="136" class="mid small t-gpu">B: where v grows</text>
+  </svg>
+  <figcaption>Each edge on the surface is some steps along <var>T</var> plus some steps along <var>B</var>. The UV differences say how many.</figcaption>
+</figure>
 
 <p>For one triangle, the tangent and bitangent follow from its positions and UVs. Take the two edges <var>e</var><sub>1</sub> = <var>p</var><sub>1</sub> − <var>p</var><sub>0</sub>, <var>e</var><sub>2</sub> = <var>p</var><sub>2</sub> − <var>p</var><sub>0</sub>, and the UV differences (<var>Δu</var><sub>1</sub>, <var>Δv</var><sub>1</sub>), (<var>Δu</var><sub>2</sub>, <var>Δv</var><sub>2</sub>). We look for the directions <var>T</var> (where <var>u</var> grows) and <var>B</var> (where <var>v</var> grows) with</p>
 
@@ -238,76 +391,147 @@ r = 1 / (Δu1 · Δv2 − Δu2 · Δv1)
 T = r · (Δv2 · e1 − Δv1 · e2)
 B = r · (Δu1 · e2 − Δu2 · e1)</code></pre>
 
-<p>Here <var>B</var> is where <var>v</var> grows. That is the texture's "up" when <var>v</var> grows toward the top of the image (the OpenGL habit). When <var>v</var> grows downward, as in glTF, where (0, 0) is the top-left corner, the texture's up is −<var>B</var>. Each vertex then averages the tangents of the triangles around it (Lengyel's method). Storing all three of <var>T</var>, <var>B</var>, <var>N</var> per vertex costs 9 floats. Most formats store <var>N</var>, <var>T</var> and one more number instead: the <b>tangent sign</b> <var>w</var>, either +1 or −1. The shader rebuilds the bitangent:</p>
+<div class="callout">
+  <strong>Which way is "up"?</strong>
+  <p>Here <var>B</var> is where <var>v</var> grows. That is the texture's "up" when <var>v</var> grows toward the top of the image (the OpenGL habit). When <var>v</var> grows downward, as in glTF, where (0, 0) is the top-left corner, the texture's up is −<var>B</var>.</p>
+</div>
+
+<p>Each vertex then averages the tangents of the triangles around it (Lengyel's method). What does a vertex store?</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 110" role="img" aria-label="Nine float cells in one vertex: three for N, three for T, three for B.">
+      <text x="48" y="30" class="mid title">N</text>
+      <text x="120" y="30" class="mid title t-hot">T</text>
+      <text x="192" y="30" class="mid title t-gpu">B</text>
+      <rect x="12" y="40" width="24" height="30" class="box"/><rect x="36" y="40" width="24" height="30" class="box"/><rect x="60" y="40" width="24" height="30" class="box"/>
+      <rect x="84" y="40" width="24" height="30" class="accent"/><rect x="108" y="40" width="24" height="30" class="accent"/><rect x="132" y="40" width="24" height="30" class="accent"/>
+      <rect x="156" y="40" width="24" height="30" class="gpu"/><rect x="180" y="40" width="24" height="30" class="gpu"/><rect x="204" y="40" width="24" height="30" class="gpu"/>
+      <text x="120" y="96" class="mid small">9 floats</text>
+    </svg>
+    <h4>All three vectors</h4>
+    <p>Storing all three of <var>T</var>, <var>B</var>, <var>N</var> per vertex costs 9 floats.</p>
+  </div>
+  <div class="vcard pick">
+    <svg viewBox="0 0 240 110" role="img" aria-label="Seven float cells in one vertex: three for N, three for T, one for the sign w.">
+      <text x="72" y="30" class="mid title">N</text>
+      <text x="144" y="30" class="mid title t-hot">T</text>
+      <text x="192" y="30" class="mid title t-mem">w</text>
+      <rect x="36" y="40" width="24" height="30" class="box"/><rect x="60" y="40" width="24" height="30" class="box"/><rect x="84" y="40" width="24" height="30" class="box"/>
+      <rect x="108" y="40" width="24" height="30" class="accent"/><rect x="132" y="40" width="24" height="30" class="accent"/><rect x="156" y="40" width="24" height="30" class="accent"/>
+      <rect x="180" y="40" width="24" height="30" class="mem"/>
+      <text x="192" y="60" class="mid mono small">±1</text>
+      <text x="120" y="96" class="mid small">7 floats</text>
+    </svg>
+    <h4>N, T and a sign</h4>
+    <p>Most formats store <var>N</var>, <var>T</var> and one more number instead: the <b>tangent sign</b> <var>w</var>, either +1 or −1. The shader rebuilds the bitangent.</p>
+  </div>
+</div>
 
 <pre><code class="lang-text">B = w · cross(N, T)</code></pre>
 
 <p>cross(<var>N</var>, <var>T</var>) is at right angles to both, so it already points along <var>B</var> or exactly against it. <var>w</var> says which one. Why can it be −1? Because of <b>mirrored UVs</b>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 270" role="img" aria-label="A face whose left and right halves use the same half of the texture, mirrored. On the right half, u grows to the right, T points right, and cross(N, T) points up, the same as B: w = +1. On the left half, u grows to the left, T points left, cross(N, T) points down, but B still points up: w = −1.">
-    <rect x="20" y="40" width="340" height="190" rx="8" class="zone"/>
-    <line x1="190" y1="40" x2="190" y2="230" class="ghost"/>
-    <text x="190" y="30" class="mid small">mirror line</text>
-    <text x="115" y="60" class="mid small">left half</text>
-    <text x="265" y="60" class="mid small">right half</text>
-    <circle cx="115" cy="140" r="4" class="cpu"/>
-    <line x1="115" y1="140" x2="55" y2="140" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="30" y="160" class="small t-hot">T (u grows)</text>
-    <line x1="115" y1="140" x2="115" y2="85" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="122" y="92" class="small t-gpu">B</text>
-    <line x1="115" y1="140" x2="115" y2="195" class="arrow dashed" marker-end="url(#ah)"/>
-    <text x="122" y="190" class="small">cross(N, T)</text>
-    <text x="115" y="220" class="mid title">w = −1</text>
-    <circle cx="265" cy="140" r="4" class="cpu"/>
-    <line x1="265" y1="140" x2="325" y2="140" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="276" y="160" class="small t-hot">T (u grows)</text>
-    <line x1="265" y1="140" x2="265" y2="85" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="272" y="92" class="small t-gpu">B = cross(N, T)</text>
-    <text x="265" y="220" class="mid title">w = +1</text>
+  <svg viewBox="0 0 760 250" role="img" aria-label="Left: the texture, which holds one half of a symmetric object. Right: the object. Its right half uses the texture as it is: u grows to the right, T points right, and cross(N, T) points up, the same as B: w = +1. Its left half uses the same texture mirrored: u grows to the left, T points left, cross(N, T) points down, but B still points up: w = −1.">
+    <text x="90" y="24" class="mid title">The texture</text>
+    <rect x="30" y="50" width="120" height="160" class="paper"/>
+    <polygon points="42,120 42,62 86,78 42,94" class="mem"/>
+    <line x1="30" y1="226" x2="150" y2="226" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="90" y="244" class="mid small t-hot">u grows</text>
+    <line x1="166" y1="210" x2="166" y2="50" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="174" y="134" class="small t-gpu">up</text>
 
-    <text x="390" y="60" class="title">The same texture, used twice</text>
-    <text x="390" y="84" class="small">Artists often map only one half of a symmetric</text>
-    <text x="390" y="100" class="small">object and mirror it, to save texture space.</text>
-    <text x="390" y="128" class="small">On the mirrored half, u runs the other way, so</text>
-    <text x="390" y="144" class="small">T flips. B (the texture's up) does not. T, B, N</text>
-    <text x="390" y="160" class="small">now form a left-handed frame, and cross(N, T)</text>
-    <text x="390" y="176" class="small">points against B.</text>
-    <text x="390" y="204" class="small">With w = −1, B = w · cross(N, T) points the right</text>
-    <text x="390" y="220" class="small">way again, and the bumps are lit from the correct</text>
-    <text x="390" y="236" class="small">side on both halves. N points out of the page.</text>
+    <text x="490" y="24" class="mid small">mirror line</text>
+    <rect x="270" y="50" width="440" height="160" rx="8" class="zone"/>
+    <line x1="490" y1="32" x2="490" y2="222" class="dashed"/>
+    <text x="380" y="44" class="mid small">left half: the texture, mirrored</text>
+    <text x="600" y="44" class="mid small">right half: the texture</text>
+    <polygon points="478,120 478,62 434,78 478,94" class="mem"/>
+    <polygon points="502,120 502,62 546,78 502,94" class="mem"/>
+
+    <line x1="380" y1="150" x2="318" y2="150" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <text x="300" y="170" class="small t-hot">T (u grows)</text>
+    <line x1="380" y1="150" x2="380" y2="92" class="arrow gpu thick" marker-end="url(#ah-gpu)"/>
+    <text x="388" y="100" class="small t-gpu">B</text>
+    <line x1="380" y1="150" x2="380" y2="200" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="388" y="196" class="small">cross(N, T)</text>
+    <circle cx="380" cy="150" r="4" class="cpu"/>
+    <text x="380" y="238" class="mid title">w = −1</text>
+
+    <line x1="600" y1="150" x2="662" y2="150" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <text x="620" y="170" class="small t-hot">T (u grows)</text>
+    <line x1="600" y1="150" x2="600" y2="92" class="arrow gpu thick" marker-end="url(#ah-gpu)"/>
+    <text x="608" y="100" class="small t-gpu">B = cross(N, T)</text>
+    <circle cx="600" cy="150" r="4" class="cpu"/>
+    <text x="600" y="238" class="mid title">w = +1</text>
   </svg>
-  <figcaption>Vertices on the mirror line belong to both halves. They must be split into two vertices, one per sign, or the tangents average to nothing there.</figcaption>
+  <figcaption><var>N</var> points out of the page. Vertices on the mirror line belong to both halves. They must be split into two vertices, one per sign, or the tangents average to nothing there.</figcaption>
 </figure>
+
+<p>Artists often map only one half of a symmetric object and mirror it, to save texture space. On the mirrored half, <var>u</var> runs the other way, so <var>T</var> flips. <var>B</var> (the texture's up) does not. <var>T</var>, <var>B</var>, <var>N</var> now form a left-handed frame, and cross(<var>N</var>, <var>T</var>) points against <var>B</var>.</p>
+
+<p>With <var>w</var> = −1, <var>B</var> = <var>w</var> · cross(<var>N</var>, <var>T</var>) points the right way again, and the bumps are lit from the correct side on both halves.</p>
 
 <h3>MikkTSpace: one answer for everyone</h3>
 
-<p>A normal map is only correct with the exact tangents that the baking tool used. Different averaging rules (by area, by angle, split or not at UV seams) give slightly different tangents, and the result shows as seams and wrong shading on curved areas. <b>MikkTSpace</b> (Morten Mikkelsen, 2008) fixes this by being one precisely defined algorithm that bakers and engines all implement the same way. Blender, Unity, Unreal and Substance use it, and the glTF format says that a mesh without tangents should get MikkTSpace tangents.</p>
+<p>A normal map is only correct with the exact tangents that the baking tool used.</p>
 
-<h2><span class="n">6</span>Interpolation, and Gram–Schmidt</h2>
+<div class="vgrid two">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A curved surface with two frames at each of three points: the baker's and the engine's. They point in slightly different directions.">
+      <path d="M20,105 Q120,35 220,105" class="surface nofill"/>
+      <line x1="60" y1="83" x2="45" y2="46" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <line x1="60" y1="83" x2="57" y2="43" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <line x1="120" y1="70" x2="120" y2="30" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <line x1="120" y1="70" x2="132" y2="32" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <line x1="180" y1="83" x2="195" y2="46" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <line x1="180" y1="83" x2="204" y2="52" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <text x="20" y="124" class="small t-mem">the baker's frame</text>
+      <text x="220" y="124" class="end small t-cpu">the engine's frame</text>
+    </svg>
+    <h4>Two different rules</h4>
+    <p>Different averaging rules (by area, by angle, split or not at UV seams) give slightly different tangents, and the result shows as seams and wrong shading on curved areas.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The same curved surface. The baker's frame and the engine's frame are the same at every point.">
+      <path d="M20,105 Q120,35 220,105" class="surface nofill"/>
+      <line x1="60" y1="83" x2="45" y2="46" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <line x1="120" y1="70" x2="120" y2="30" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <line x1="180" y1="83" x2="195" y2="46" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <text x="120" y="124" class="mid small t-ok">baker and engine: the same frame</text>
+    </svg>
+    <h4>MikkTSpace in both</h4>
+    <p><b>MikkTSpace</b> (Morten Mikkelsen, 2008) fixes this by being one precisely defined algorithm that bakers and engines all implement the same way. Blender, Unity, Unreal and Substance use it, and the glTF format says that a mesh without tangents should get MikkTSpace tangents.</p>
+  </div>
+</div>
+
+<h2 id="gram-schmidt"><span class="n">6</span>Interpolation, and Gram–Schmidt</h2>
 
 <p>The vertex shader passes <var>N</var> and <var>T</var> to the fragment shader, and the rasterizer interpolates them across the triangle. Interpolated unit vectors are a little too short, and <var>T</var> is no longer exactly at right angles to <var>N</var>. The fix is the <b>Gram–Schmidt</b> step: remove the part of <var>T</var> that points along <var>N</var>, then normalize.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 220" role="img" aria-label="N points up. The interpolated T leans a little up. Its part along N, N times the dot of N and T, is removed, which leaves a T that is flat, at right angles to N; then it is normalized.">
-    <line x1="100" y1="170" x2="420" y2="170" class="arrow"/>
-    <circle cx="160" cy="170" r="4" class="cpu"/>
-    <line x1="160" y1="170" x2="160" y2="50" class="arrow" marker-end="url(#ah)"/>
+  <svg viewBox="0 0 760 220" role="img" aria-label="N points up. The interpolated T leans a little up. Its part along N, N times the dot of N and T, is removed, which leaves a T that is flat, at right angles to N; then it is normalized. Example: N = (0, 1, 0), T = (0.9, 0.3, 0.1), N dot T = 0.3, T minus 0.3 N = (0.9, 0, 0.1), normalized (0.994, 0, 0.110).">
+    <line x1="60" y1="170" x2="420" y2="170" class="surface"/>
+    <line x1="160" y1="170" x2="160" y2="50" class="arrow thick" marker-end="url(#ah)"/>
     <text x="168" y="54" class="title">N</text>
-    <line x1="160" y1="170" x2="370" y2="110" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
-    <text x="376" y="108" class="small t-hot">T, interpolated</text>
-    <line x1="370" y1="110" x2="370" y2="166" class="arrow dashed" marker-end="url(#ah)"/>
+    <line x1="160" y1="170" x2="370" y2="110" class="arrow bad dashed" marker-end="url(#ah-bad)"/>
+    <text x="376" y="108" class="small t-bad">T, interpolated</text>
+    <line x1="370" y1="114" x2="370" y2="164" class="arrow dashed" marker-end="url(#ah)"/>
     <text x="378" y="142" class="small">− N (N·T)</text>
-    <line x1="160" y1="170" x2="370" y2="170" class="hot" marker-end="url(#ah-hot)"/>
-    <text x="270" y="192" class="mid small t-hot">T′ = normalize(T − N (N·T))</text>
+    <line x1="160" y1="170" x2="368" y2="170" class="arrow ok thick" marker-end="url(#ah-ok)"/>
+    <text x="270" y="194" class="mid small t-ok">T′ = normalize(T − N (N·T))</text>
+    <path d="M160,154H176V170" class="arrow ok"/>
+    <circle cx="160" cy="170" r="4" class="cpu"/>
 
-    <text x="470" y="50" class="title">Example</text>
-    <text x="470" y="74" class="mono small">N  = (0, 1, 0)</text>
-    <text x="470" y="94" class="mono small">T  = (0.9, 0.3, 0.1)</text>
-    <text x="470" y="114" class="mono small">N·T = 0.3</text>
-    <text x="470" y="134" class="mono small">T − 0.3·N = (0.9, 0, 0.1)</text>
-    <text x="470" y="154" class="mono small">T′ = (0.994, 0, 0.110)</text>
-    <text x="470" y="186" class="small">Then B = w · cross(N, T′) is also exact.</text>
+    <rect x="456" y="26" width="284" height="174" rx="8" class="zone"/>
+    <text x="472" y="52" class="title">Example</text>
+    <text x="472" y="76" class="mono small">N  = (0, 1, 0)</text>
+    <text x="472" y="96" class="mono small">T  = (0.9, 0.3, 0.1)</text>
+    <text x="472" y="116" class="mono small">N·T = 0.3</text>
+    <text x="472" y="136" class="mono small">T − 0.3·N = (0.9, 0, 0.1)</text>
+    <text x="472" y="156" class="mono small">T′ = (0.994, 0, 0.110)</text>
+    <text x="472" y="184" class="small">Then B = w · cross(N, T′) is also exact.</text>
   </svg>
   <figcaption>Normalize <var>N</var> first. Gram–Schmidt needs a unit <var>N</var> to remove the right amount.</figcaption>
 </figure>
@@ -316,75 +540,150 @@ B = r · (Δu1 · e2 − Δu2 · e1)</code></pre>
 
 <p>Vertices move to world space with the model matrix <var>M</var>. Tangents lie <i>in</i> the surface, like a small edge, so they move the same way: <var>T</var><sub>world</sub> = <var>M</var> · <var>T</var> (the 3×3 part, no translation). Normals do not. If <var>M</var> scales one axis more than the others, <var>M</var> · <var>N</var> is no longer at right angles to the surface:</p>
 
+<div class="legend">
+  <span><i class="hot"></i>the tangent</span>
+  <span><i class="bad"></i>the normal moved with M: wrong</span>
+  <span><i class="ok"></i>the normal moved with the inverse-transpose: right</span>
+</div>
+
 <figure class="diagram">
   <svg viewBox="0 0 760 270" role="img" aria-label="Left: a 45 degree slope with its normal at 45 degrees. Right: the same slope after scaling x by 2. The tangent becomes (0.894, −0.447). Multiplying the normal by M gives (0.894, 0.447), which is not at right angles to the surface. The inverse-transpose gives (0.447, 0.894), which is.">
     <text x="140" y="20" class="mid title">Before: slope at 45°</text>
-    <line x1="60" y1="80" x2="200" y2="220" class="arrow"/>
-    <circle cx="130" cy="150" r="4" class="cpu"/>
-    <line x1="130" y1="150" x2="187" y2="93" class="arrow" marker-end="url(#ah)"/>
+    <line x1="60" y1="80" x2="200" y2="220" class="surface"/>
+    <line x1="130" y1="150" x2="187" y2="93" class="arrow thick" marker-end="url(#ah)"/>
     <text x="192" y="92" class="small">N (0.707, 0.707)</text>
-    <line x1="130" y1="150" x2="187" y2="207" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="192" y="214" class="small t-hot">T (0.707, −0.707)</text>
+    <line x1="130" y1="150" x2="187" y2="207" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <text x="196" y="204" class="small t-hot">T (0.707, −0.707)</text>
+    <circle cx="130" cy="150" r="4" class="cpu"/>
 
     <line x1="300" y1="140" x2="350" y2="140" class="arrow" marker-end="url(#ah)"/>
     <text x="325" y="130" class="mid small">scale x by 2</text>
 
     <text x="560" y="20" class="mid title">After: M = scale(2, 1)</text>
-    <line x1="400" y1="110" x2="680" y2="250" class="arrow"/>
+    <line x1="400" y1="110" x2="680" y2="250" class="surface"/>
+    <line x1="540" y1="180" x2="620" y2="220" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <text x="616" y="206" class="small t-hot">M·T → (0.894, −0.447)</text>
+    <line x1="540" y1="180" x2="612" y2="144" class="arrow bad dashed" marker-end="url(#ah-bad)"/>
+    <text x="618" y="144" class="small t-bad">M·N → (0.894, 0.447) ✗</text>
+    <line x1="540" y1="180" x2="576" y2="108" class="arrow ok thick" marker-end="url(#ah-ok)"/>
+    <text x="582" y="102" class="small t-ok">(M⁻¹)ᵀ·N → (0.447, 0.894) ✓</text>
     <circle cx="540" cy="180" r="4" class="cpu"/>
-    <line x1="540" y1="180" x2="620" y2="220" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="626" y="214" class="small t-hot">M·T → (0.894, −0.447)</text>
-    <line x1="540" y1="180" x2="612" y2="144" class="arrow dashed" marker-end="url(#ah)"/>
-    <text x="618" y="144" class="small">M·N → (0.894, 0.447) ✗</text>
-    <line x1="540" y1="180" x2="576" y2="108" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="582" y="102" class="small t-gpu">(M⁻¹)ᵀ·N → (0.447, 0.894) ✓</text>
-    <text x="400" y="62" class="small">dot with the new tangent:</text>
-    <text x="400" y="78" class="mono small">M·N: 0.60 (not at right angles)</text>
-    <text x="400" y="94" class="mono small t-gpu">inverse-transpose: 0.00</text>
+    <text x="400" y="52" class="small">dot with the new tangent:</text>
+    <text x="400" y="68" class="mono small t-bad">M·N: 0.60 (not at right angles)</text>
+    <text x="400" y="84" class="mono small t-ok">inverse-transpose: 0.00</text>
   </svg>
   <figcaption>The normal must stay at right angles to every tangent. The matrix that keeps it there is the <b>inverse-transpose</b> (<var>M</var><sup>−1</sup>)<sup>T</sup>. For a pure rotation it equals <var>M</var>; with uniform scale it equals <var>M</var> up to a length, which normalizing removes.</figcaption>
 </figure>
 
-<p>Why it works, in one line: <var>N</var> ⊥ <var>T</var> means <var>N</var><sup>T</sup><var>T</var> = 0. After the transform we need <var>N′</var><sup>T</sup> (<var>M</var><var>T</var>) = 0. With <var>N′</var> = (<var>M</var><sup>−1</sup>)<sup>T</sup> <var>N</var>, the product is <var>N</var><sup>T</sup> <var>M</var><sup>−1</sup> <var>M</var> <var>T</var> = <var>N</var><sup>T</sup><var>T</var> = 0.</p>
+<div class="callout">
+  <strong>Why it works, in one line</strong>
+  <p><var>N</var> ⊥ <var>T</var> means <var>N</var><sup>T</sup><var>T</var> = 0. After the transform we need <var>N′</var><sup>T</sup> (<var>M</var><var>T</var>) = 0. With <var>N′</var> = (<var>M</var><sup>−1</sup>)<sup>T</sup> <var>N</var>, the product is <var>N</var><sup>T</sup> <var>M</var><sup>−1</sup> <var>M</var> <var>T</var> = <var>N</var><sup>T</sup><var>T</var> = 0.</p>
+</div>
 
 <h3>Mirroring transforms</h3>
 
 <p>A model matrix with a negative determinant mirrors the object (for example a scale of −1 on one axis, used to place a left door from a right door). The mirror keeps <var>T</var> and <var>N</var> correct, but it turns cross(<var>N</var>, <var>T</var>) around: the frame changes handedness, just as with mirrored UVs. So the sign must change too: <var>w</var><sub>world</sub> = <var>w</var> · sign(det <var>M</var>).</p>
 
-<h2><span class="n">8</span>A frame without stored tangents</h2>
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A right door with its handle on the right. T points right, B points up, and cross(N, T) points up too.">
+      <rect x="80" y="12" width="80" height="108" class="box"/>
+      <circle cx="148" cy="46" r="5" class="solid"/>
+      <line x1="120" y1="84" x2="152" y2="84" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+      <text x="168" y="88" class="small t-hot">T</text>
+      <line x1="120" y1="84" x2="120" y2="48" class="arrow gpu thick" marker-end="url(#ah-gpu)"/>
+      <text x="168" y="52" class="small t-gpu">B = cross(N, T)</text>
+      <circle cx="120" cy="84" r="4" class="cpu"/>
+    </svg>
+    <h4>The right door: det <var>M</var> &gt; 0</h4>
+    <p>The frame keeps its handedness. <var>w</var> stays as it is.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The mirrored copy, a left door with its handle on the left. T now points left, B still points up, but cross(N, T) points down.">
+      <rect x="80" y="12" width="80" height="108" class="box"/>
+      <circle cx="92" cy="46" r="5" class="solid"/>
+      <line x1="120" y1="84" x2="88" y2="84" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+      <text x="72" y="88" class="end small t-hot">T</text>
+      <line x1="120" y1="84" x2="120" y2="48" class="arrow gpu thick" marker-end="url(#ah-gpu)"/>
+      <text x="168" y="52" class="small t-gpu">B</text>
+      <line x1="120" y1="84" x2="120" y2="114" class="arrow dashed" marker-end="url(#ah)"/>
+      <text x="168" y="112" class="small">cross(N, T)</text>
+      <circle cx="120" cy="84" r="4" class="cpu"/>
+    </svg>
+    <h4>The left door: det <var>M</var> &lt; 0</h4>
+    <p>cross(<var>N</var>, <var>T</var>) now points against <var>B</var>. <var>w</var> changes its sign.</p>
+  </div>
+</div>
+
+<h2 id="derivative-frame"><span class="n">8</span>A frame without stored tangents</h2>
 
 <p>Some meshes have no tangents. Instead of computing them on load, the fragment shader can build a frame on the fly from <b>screen-space derivatives</b>. The GPU shades pixels in 2×2 blocks, so any value has a difference to its right neighbour (<var>ddx</var>) and to the one below (<var>ddy</var>). For the position <var>p</var> and the texture coordinate (<var>u</var>, <var>v</var>):</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 230" role="img" aria-label="A 2 by 2 block of pixels. Moving one pixel right changes the position by dp/dx and the UV by duv/dx; moving one down changes them by dp/dy and duv/dy. Solving the two equations gives the direction in which u grows on the surface: the tangent.">
-    <rect x="40" y="40" width="70" height="70" class="box"/>
-    <rect x="110" y="40" width="70" height="70" class="box"/>
-    <rect x="40" y="110" width="70" height="70" class="box"/>
-    <rect x="110" y="110" width="70" height="70" class="box"/>
-    <circle cx="75" cy="75" r="4" class="cpu"/>
-    <line x1="79" y1="75" x2="140" y2="75" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="145" y="30" class="mid small t-hot">ddx: one pixel right</text>
-    <line x1="75" y1="79" x2="75" y2="140" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="40" y="200" class="small t-gpu">ddy: one pixel down</text>
+  <svg viewBox="0 0 760 250" role="img" aria-label="Left: a 2 by 2 block of pixels on screen. One step right is ddx, one step down is ddy. Right: the same two steps on the surface. They are two small edges, dp/dx and dp/dy, lying across the texture's grid. From them and from the change of the UV along them, the shader finds T, the direction in which u grows.">
+    <text x="40" y="24" class="title">On screen</text>
+    <rect x="40" y="50" width="70" height="70" class="box"/>
+    <rect x="110" y="50" width="70" height="70" class="box"/>
+    <rect x="40" y="120" width="70" height="70" class="box"/>
+    <rect x="110" y="120" width="70" height="70" class="box"/>
+    <line x1="75" y1="85" x2="142" y2="85" class="arrow cpu thick" marker-end="url(#ah-cpu)"/>
+    <line x1="75" y1="85" x2="75" y2="152" class="arrow shader thick" marker-end="url(#ah-shader)"/>
+    <circle cx="75" cy="85" r="4" class="solid"/>
+    <text x="110" y="42" class="mid small t-cpu">ddx: one pixel right</text>
+    <text x="110" y="208" class="mid small t-shader">ddy: one pixel down</text>
 
-    <text x="230" y="50" class="mono small">dp/dx = ddx(p)     duv/dx = ddx(uv)</text>
-    <text x="230" y="70" class="mono small">dp/dy = ddy(p)     duv/dy = ddy(uv)</text>
-    <text x="230" y="100" class="small">The same two equations as for a triangle (section 5), with</text>
-    <text x="230" y="116" class="small">the pixel steps as the two edges:</text>
-    <text x="230" y="140" class="mono small">det = du/dx · dv/dy − dv/dx · du/dy</text>
-    <text x="230" y="160" class="mono small">T  ∝ (dp/dx · dv/dy − dp/dy · dv/dx) · sign(det)</text>
-    <text x="230" y="180" class="mono small">B  ∝ (dp/dy · du/dx − dp/dx · du/dy) · sign(det)</text>
-    <text x="230" y="208" class="small">A negative det means mirrored UVs: the sign keeps the frame right.</text>
+    <line x1="210" y1="120" x2="300" y2="120" class="arrow" marker-end="url(#ah)"/>
+    <text x="255" y="108" class="mid small">the same steps</text>
+
+    <text x="330" y="24" class="title">On the surface</text>
+    <polygon points="330,200 600,220 700,90 430,70" class="zone"/>
+    <line x1="363" y1="157" x2="633" y2="177" class="ghost"/>
+    <line x1="397" y1="113" x2="667" y2="133" class="ghost"/>
+    <line x1="420" y1="207" x2="520" y2="77" class="ghost"/>
+    <line x1="510" y1="213" x2="610" y2="83" class="ghost"/>
+    <line x1="500" y1="150" x2="548" y2="112" class="arrow cpu thick" marker-end="url(#ah-cpu)"/>
+    <text x="554" y="108" class="small t-cpu halo">dp/dx</text>
+    <line x1="500" y1="150" x2="470" y2="192" class="arrow shader thick" marker-end="url(#ah-shader)"/>
+    <text x="462" y="194" class="end small t-shader halo">dp/dy</text>
+    <line x1="500" y1="150" x2="578" y2="156" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <text x="586" y="162" class="title t-hot halo">T</text>
+    <circle cx="500" cy="150" r="4" class="solid"/>
+    <text x="470" y="240" class="mid small">u grows →</text>
   </svg>
-  <figcaption>This is the method of Mikkelsen (2010) and Schüler (2013). It costs a few instructions per pixel and no vertex data.</figcaption>
+  <figcaption>The grid on the surface is the texture's. This is the method of Mikkelsen (2010) and Schüler (2013). It costs a few instructions per pixel and no vertex data.</figcaption>
 </figure>
 
+<pre><code class="lang-text">dp/dx = ddx(p)     duv/dx = ddx(uv)
+dp/dy = ddy(p)     duv/dy = ddy(uv)
+
+det = du/dx · dv/dy − dv/dx · du/dy
+T  ∝ (dp/dx · dv/dy − dp/dy · dv/dx) · sign(det)
+B  ∝ (dp/dy · du/dx − dp/dx · du/dy) · sign(det)</code></pre>
+
+<p>These are the same two equations as for a triangle (section 5), with the pixel steps as the two edges. A negative det means mirrored UVs: the sign keeps the frame right.</p>
+
 <div class="split">
-  <div>
+  <div class="good">
+    <svg viewBox="0 0 320 110" role="img" aria-label="One vertex with position, normal and UV. The tangent slot is empty: it is not needed.">
+      <text x="20" y="30" class="small">one vertex</text>
+      <rect x="20" y="42" width="74" height="40" class="box"/><text x="57" y="66" class="mid small">position</text>
+      <rect x="94" y="42" width="74" height="40" class="box"/><text x="131" y="66" class="mid small">normal</text>
+      <rect x="168" y="42" width="50" height="40" class="box"/><text x="193" y="66" class="mid small">uv</text>
+      <rect x="226" y="42" width="74" height="40" class="ghost"/><text x="263" y="66" class="mid small t-faint">tangent</text>
+      <text x="263" y="100" class="mid small t-ok">not needed</text>
+    </svg>
     <h4>Upside</h4>
     <p>No tangents to compute, store or transform. Mirrored UVs and mirroring transforms work by themselves, because the frame comes from what is on screen.</p>
   </div>
-  <div>
+  <div class="bad">
+    <svg viewBox="0 0 320 110" role="img" aria-label="A smooth curved surface drawn as three flat triangles. Each triangle has one frame, so the frames jump at the edges instead of turning smoothly.">
+      <path d="M30,100 Q160,-4 290,100" class="dashed"/>
+      <polyline points="30,100 110,52 210,52 290,100" class="surface"/>
+      <line x1="70" y1="76" x2="55" y2="50" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <line x1="160" y1="52" x2="160" y2="22" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <line x1="250" y1="76" x2="265" y2="50" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <text x="160" y="84" class="mid small">one flat frame per triangle</text>
+    </svg>
     <h4>Downside</h4>
     <p>The frame is flat per triangle, so it does not match a baked map on curved, smooth surfaces as well as MikkTSpace does. The derivatives are coarse at triangle edges and noisy at grazing angles. If the UVs do not change (det = 0), there is no frame at all.</p>
   </div>
@@ -397,105 +696,184 @@ B = r · (Δu1 · e2 − Δu2 · e1)</code></pre>
 <pre><code class="lang-text">z = sqrt(max(0, 1 − x² − y²))</code></pre>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 210" role="img" aria-label="A quarter circle of radius 1. The stored x = 0.6 and y = 0 fix a point on the circle at height z = 0.8.">
+  <svg viewBox="0 0 760 210" role="img" aria-label="Left: a quarter circle of radius 1. The stored x = 0.6 and y = 0 fix a point on the circle at height z = 0.8. Right: a texel with two stored channels, R for x and G for y. The blue channel is not stored; the shader computes z from x and y.">
     <line x1="60" y1="180" x2="300" y2="180" class="arrow" marker-end="url(#ah)"/>
     <line x1="60" y1="180" x2="60" y2="20" class="arrow" marker-end="url(#ah)"/>
     <path d="M 260 180 A 200 200 0 0 0 60 -20" class="ghost"/>
     <text x="306" y="184" class="small">x</text>
     <text x="66" y="24" class="small">z</text>
-    <line x1="60" y1="180" x2="180" y2="20" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="60" y1="180" x2="180" y2="20" class="arrow hot thick" marker-end="url(#ah-hot)"/>
     <line x1="180" y1="180" x2="180" y2="24" class="arrow dashed"/>
     <text x="180" y="198" class="mid mono small">x = 0.6</text>
-    <text x="186" y="100" class="small">z = √(1 − 0.36) = 0.8</text>
+    <text x="188" y="100" class="small">z = √(1 − 0.36) = 0.8</text>
 
-    <text x="380" y="40" class="title">Why do it</text>
-    <text x="380" y="64" class="small">Block-compressed two-channel formats (BC5, also</text>
-    <text x="380" y="80" class="small">called ATI2 or 3Dc; EAC RG on mobile) store x and y</text>
-    <text x="380" y="96" class="small">with much better quality than a three-channel format</text>
-    <text x="380" y="112" class="small">at the same size. One more square root in the shader.</text>
-    <text x="380" y="144" class="small">With (0.8, 0.7) the sum is above 1: max(0, …)</text>
-    <text x="380" y="160" class="small">keeps the square root safe, and z = 0.</text>
+    <text x="400" y="34" class="title">The texel</text>
+    <rect x="400" y="48" width="96" height="44" rx="4" class="mem"/>
+    <text x="448" y="75" class="mid mono">R: x</text>
+    <rect x="504" y="48" width="96" height="44" rx="4" class="mem"/>
+    <text x="552" y="75" class="mid mono">G: y</text>
+    <rect x="608" y="48" width="132" height="44" rx="4" class="ghost"/>
+    <text x="674" y="75" class="mid small t-faint">B: not stored</text>
+    <line x1="448" y1="92" x2="500" y2="132" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="552" y1="92" x2="552" y2="132" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="400" y="134" width="340" height="44" rx="22" class="shader"/>
+    <text x="570" y="161" class="mid mono">z = sqrt(max(0, 1 − x² − y²))</text>
+    <text x="570" y="198" class="mid small">the shader rebuilds z</text>
   </svg>
+  <figcaption>The length is 1, so <var>x</var> and <var>y</var> fix a point on the circle, and <var>z</var> is its height.</figcaption>
 </figure>
 
-<p>Many formats also have a <b>strength</b> (glTF calls it <samp>scale</samp>): a number that multiplies <var>x</var> and <var>y</var> before the vector is normalized. Values above 1 make the bumps stronger; 0 makes the surface flat.</p>
+<p>Why do it? Block-compressed two-channel formats (BC5, also called ATI2 or 3Dc; EAC RG on mobile) store <var>x</var> and <var>y</var> with much better quality than a three-channel format at the same size. The price is one more square root in the shader.</p>
 
-<h2><span class="n">10</span>Worked example</h2>
+<p>With (0.8, 0.7) the sum is above 1: max(0, …) keeps the square root safe, and <var>z</var> = 0.</p>
+
+<p>Many formats also have a <b>strength</b> (glTF calls it <samp>scale</samp>): a number that multiplies <var>x</var> and <var>y</var> before the vector is normalized.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 110" role="img" aria-label="Three normals on a surface, all pointing straight up.">
+      <line x1="16" y1="96" x2="224" y2="96" class="surface"/>
+      <line x1="60" y1="96" x2="60" y2="34" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="120" y1="96" x2="120" y2="34" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="180" y1="96" x2="180" y2="34" class="arrow hot" marker-end="url(#ah-hot)"/>
+    </svg>
+    <h4>Strength 0</h4>
+    <p>The surface is flat.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 110" role="img" aria-label="Three normals on a surface. The outer two tilt a little to the sides.">
+      <line x1="16" y1="96" x2="224" y2="96" class="surface"/>
+      <line x1="60" y1="96" x2="40" y2="38" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="120" y1="96" x2="120" y2="34" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="180" y1="96" x2="200" y2="38" class="arrow hot" marker-end="url(#ah-hot)"/>
+    </svg>
+    <h4>Strength 1</h4>
+    <p>The map as it is stored.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 110" role="img" aria-label="Three normals on a surface. The outer two tilt strongly to the sides.">
+      <line x1="16" y1="96" x2="224" y2="96" class="surface"/>
+      <line x1="60" y1="96" x2="25" y2="45" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="120" y1="96" x2="120" y2="34" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="180" y1="96" x2="215" y2="45" class="arrow hot" marker-end="url(#ah-hot)"/>
+    </svg>
+    <h4>Strength above 1</h4>
+    <p>The bumps are stronger.</p>
+  </div>
+</div>
+
+<h2 id="example"><span class="n">10</span>Worked example</h2>
 
 <p>A floor. Its normal points up, <var>N</var> = (0, 1, 0), and its <var>u</var> direction runs along +<var>X</var>, so <var>T</var> = (1, 0, 0). One texel holds the bytes (128, 191, 231). The light comes from above and from +<var>Z</var>: <var>l</var> = (0, 0.707, 0.707).</p>
 
 <div class="stepper">
   <div class="step">
     <h4>1. Decode the texel</h4>
-    <svg viewBox="0 0 720 170" role="img" aria-label="The bytes 128, 191, 231 become 0.004, 0.498, 0.812 after dividing by 255, doubling and subtracting 1. The length is 0.952, so normalizing gives 0.004, 0.523, 0.852.">
-      <rect x="20" y="30" width="170" height="50" rx="6" class="mem"/>
-      <text x="105" y="52" class="mid mono">(128, 191, 231)</text>
-      <text x="105" y="70" class="mid small">the bytes in the texture</text>
-      <line x1="190" y1="55" x2="268" y2="55" class="arrow" marker-end="url(#ah)"/>
-      <text x="229" y="46" class="mid small">/ 255 · 2 − 1</text>
-      <rect x="270" y="30" width="180" height="50" rx="6" class="shader"/>
-      <text x="360" y="52" class="mid mono">(0.004, 0.498, 0.812)</text>
-      <text x="360" y="70" class="mid small">length 0.952</text>
-      <line x1="450" y1="55" x2="518" y2="55" class="arrow" marker-end="url(#ah)"/>
-      <text x="484" y="46" class="mid small">normalize</text>
-      <rect x="520" y="30" width="180" height="50" rx="6" class="shader"/>
-      <text x="610" y="52" class="mid mono">(0.004, 0.523, 0.852)</text>
-      <text x="610" y="70" class="mid small">tangent space</text>
-      <text x="20" y="120" class="small">x ≈ 0: no tilt along T. y = 0.52: the normal leans toward B, the texture's "up".</text>
-      <text x="20" y="140" class="small">This texel is on the upper slope of a bump.</text>
+    <svg viewBox="0 0 720 220" role="img" aria-label="The bytes 128, 191, 231 become 0.004, 0.498, 0.812 after dividing by 255, doubling and subtracting 1. The length is 0.952, so normalizing gives 0.004, 0.523, 0.852. Drawn in tangent space, with B to the right and N up, the normal leans about 32 degrees from N toward B.">
+      <rect x="20" y="20" width="170" height="50" rx="6" class="mem"/>
+      <text x="105" y="42" class="mid mono">(128, 191, 231)</text>
+      <text x="105" y="60" class="mid small">the bytes in the texture</text>
+      <line x1="190" y1="45" x2="268" y2="45" class="arrow" marker-end="url(#ah)"/>
+      <text x="229" y="36" class="mid small">/ 255 · 2 − 1</text>
+      <rect x="270" y="20" width="180" height="50" rx="6" class="shader"/>
+      <text x="360" y="42" class="mid mono">(0.004, 0.498, 0.812)</text>
+      <text x="360" y="60" class="mid small">length 0.952</text>
+      <line x1="450" y1="45" x2="518" y2="45" class="arrow" marker-end="url(#ah)"/>
+      <text x="484" y="36" class="mid small">normalize</text>
+      <rect x="520" y="20" width="180" height="50" rx="6" class="shader"/>
+      <text x="610" y="42" class="mid mono">(0.004, 0.523, 0.852)</text>
+      <text x="610" y="60" class="mid small">tangent space</text>
+
+      <line x1="80" y1="200" x2="230" y2="200" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <text x="238" y="204" class="small t-gpu">B, the texture's "up"</text>
+      <line x1="80" y1="200" x2="80" y2="96" class="arrow" marker-end="url(#ah)"/>
+      <text x="70" y="104" class="end title">N</text>
+      <line x1="80" y1="200" x2="131" y2="117" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+      <text x="140" y="118" class="title t-hot">n</text>
+      <text x="92" y="140" class="small">32°</text>
+      <text x="300" y="130" class="small">x ≈ 0: no tilt along T.</text>
+      <text x="300" y="150" class="small">y = 0.52: the normal leans toward B.</text>
     </svg>
-    <p>The normal leans toward the texture's up direction by about 32° (cos⁻¹ 0.852).</p>
+    <p>The normal leans toward the texture's up direction by about 32° (cos⁻¹ 0.852). This texel is on the upper slope of a bump.</p>
   </div>
   <div class="step">
     <h4>2. Build the frame</h4>
-    <svg viewBox="0 0 720 200" role="img" aria-label="With w = +1, B = cross(N, T) = (0, 0, −1). With w = −1, B = (0, 0, 1).">
-      <text x="20" y="34" class="mono">cross(N, T) = cross((0,1,0), (1,0,0)) = (0, 0, −1)</text>
-      <rect x="20" y="60" width="320" height="60" rx="6" class="gpu"/>
-      <text x="180" y="84" class="mid title">w = +1</text>
-      <text x="180" y="104" class="mid mono">B = (0, 0, −1)</text>
-      <rect x="380" y="60" width="320" height="60" rx="6" class="ghost"/>
-      <text x="540" y="84" class="mid title">w = −1 (mirrored UVs)</text>
-      <text x="540" y="104" class="mid mono">B = (0, 0, +1)</text>
-      <text x="20" y="152" class="small">The texture's "up" is −Z on the normal floor and +Z on its mirrored copy.</text>
-      <text x="20" y="172" class="small">Same T, same N, different B: only w tells them apart.</text>
+    <svg viewBox="0 0 720 236" role="img" aria-label="The floor seen from above, twice. With w = +1, B = cross(N, T) = (0, 0, −1): it points up the page, toward −Z. With w = −1, B = (0, 0, 1): it points down the page, toward +Z. T points right, toward +X, in both.">
+      <text x="20" y="26" class="mono">cross(N, T) = cross((0,1,0), (1,0,0)) = (0, 0, −1)</text>
+      <rect x="20" y="44" width="320" height="160" rx="6" class="zone"/>
+      <rect x="36" y="58" width="132" height="132" class="paper"/>
+      <line x1="90" y1="140" x2="150" y2="140" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+      <text x="150" y="158" class="end small t-hot">T</text>
+      <line x1="90" y1="140" x2="90" y2="80" class="arrow gpu thick" marker-end="url(#ah-gpu)"/>
+      <text x="98" y="86" class="small t-gpu">B</text>
+      <circle cx="90" cy="140" r="4" class="cpu"/>
+      <text x="190" y="100" class="title">w = +1</text>
+      <text x="190" y="124" class="mono">B = (0, 0, −1)</text>
+      <text x="190" y="146" class="small">the texture's up is −Z</text>
+
+      <rect x="380" y="44" width="320" height="160" rx="6" class="zone"/>
+      <rect x="396" y="58" width="132" height="132" class="paper"/>
+      <line x1="450" y1="108" x2="510" y2="108" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+      <text x="510" y="100" class="end small t-hot">T</text>
+      <line x1="450" y1="108" x2="450" y2="168" class="arrow gpu thick" marker-end="url(#ah-gpu)"/>
+      <text x="458" y="170" class="small t-gpu">B</text>
+      <circle cx="450" cy="108" r="4" class="cpu"/>
+      <text x="550" y="88" class="title">w = −1</text>
+      <text x="550" y="106" class="small">(mirrored UVs)</text>
+      <text x="550" y="128" class="mono">B = (0, 0, +1)</text>
+      <text x="550" y="150" class="small">the texture's up is +Z</text>
+
+      <text x="20" y="226" class="small">The floor from above: +X is to the right, +Z is down the page, N points at you.</text>
     </svg>
-    <p>The sign comes with the vertex. A shader that ignores it lights one of the two copies wrong.</p>
+    <p>The texture's "up" is −Z on the normal floor and +Z on its mirrored copy. Same <var>T</var>, same <var>N</var>, different <var>B</var>: only <var>w</var> tells them apart. The sign comes with the vertex. A shader that ignores it lights one of the two copies wrong.</p>
   </div>
   <div class="step">
     <h4>3. To world space, and light it</h4>
-    <svg viewBox="0 0 720 210" role="img" aria-label="With w = +1 the world normal is (0.004, 0.852, −0.523) and n dot l is 0.23. With w = −1 it is (0.004, 0.852, 0.523) and n dot l is 0.97.">
-      <text x="20" y="30" class="mono small">n = T·0.004 + B·0.523 + N·0.852</text>
-      <rect x="20" y="50" width="320" height="100" rx="6" class="gpu"/>
-      <text x="180" y="74" class="mid title">w = +1</text>
-      <text x="180" y="96" class="mid mono small">n = (0.004, 0.852, −0.523)</text>
-      <text x="180" y="118" class="mid mono small">n·l = 0.852·0.707 − 0.523·0.707</text>
-      <text x="180" y="138" class="mid mono small">= 0.23</text>
-      <rect x="380" y="50" width="320" height="100" rx="6" class="ghost"/>
-      <text x="540" y="74" class="mid title">w = −1</text>
-      <text x="540" y="96" class="mid mono small">n = (0.004, 0.852, +0.523)</text>
-      <text x="540" y="118" class="mid mono small">n·l = 0.852·0.707 + 0.523·0.707</text>
-      <text x="540" y="138" class="mid mono small">= 0.97</text>
-      <text x="20" y="180" class="small">The flat floor would give n·l = 0.707. The bump turns away from the light on one copy</text>
-      <text x="20" y="196" class="small">(darker, 0.23) and toward it on the other (brighter, 0.97).</text>
+    <svg viewBox="0 0 720 250" role="img" aria-label="The floor seen from the side, twice, with the light up and to the right. With w = +1 the world normal is (0.004, 0.852, −0.523): it leans away from the light, and n dot l is 0.23. With w = −1 it is (0.004, 0.852, 0.523): it leans toward the light, and n dot l is 0.97.">
+      <text x="20" y="24" class="mono small">n = T·0.004 + B·0.523 + N·0.852</text>
+
+      <rect x="20" y="38" width="320" height="204" rx="6" class="zone"/>
+      <text x="34" y="60" class="title">w = +1</text>
+      <text x="328" y="60" class="end mono small">n = (0.004, 0.852, −0.523)</text>
+      <circle cx="268" cy="86" r="9" class="light"/>
+      <line x1="40" y1="178" x2="320" y2="178" class="surface"/>
+      <line x1="180" y1="178" x2="180" y2="98" class="dashed"/>
+      <line x1="180" y1="178" x2="240" y2="118" class="arrow light" marker-end="url(#ah-light)"/>
+      <text x="246" y="132" class="small t-light">l</text>
+      <line x1="180" y1="178" x2="138" y2="110" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+      <text x="128" y="108" class="end title t-hot">n</text>
+      <text x="180" y="206" class="mid title">n·l = 0.23</text>
+      <text x="180" y="226" class="mid mono small">0.852·0.707 − 0.523·0.707</text>
+
+      <rect x="380" y="38" width="320" height="204" rx="6" class="zone"/>
+      <text x="394" y="60" class="title">w = −1</text>
+      <text x="688" y="60" class="end mono small">n = (0.004, 0.852, +0.523)</text>
+      <circle cx="628" cy="86" r="9" class="light"/>
+      <line x1="400" y1="178" x2="680" y2="178" class="surface"/>
+      <line x1="540" y1="178" x2="540" y2="98" class="dashed"/>
+      <line x1="540" y1="178" x2="600" y2="118" class="arrow light" marker-end="url(#ah-light)"/>
+      <text x="606" y="132" class="small t-light">l</text>
+      <line x1="540" y1="178" x2="582" y2="110" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+      <text x="572" y="100" class="end title t-hot">n</text>
+      <text x="540" y="206" class="mid title">n·l = 0.97</text>
+      <text x="540" y="226" class="mid mono small">0.852·0.707 + 0.523·0.707</text>
     </svg>
+    <p>The floor from the side: +Z is to the right, the dashed line is the flat floor's normal. The flat floor would give <var>n</var>·<var>l</var> = 0.707. The bump turns away from the light on one copy (darker, 0.23) and toward it on the other (brighter, 0.97).</p>
     <p>A wrong sign does not make anything black. It makes bumps lit from the wrong side, which is easy to miss: the surface looks like dents instead of bumps.</p>
   </div>
 </div>
 
-<h2><span class="n">11</span>Pitfalls</h2>
+<h2 id="pitfalls"><span class="n">11</span>Pitfalls</h2>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Mistake</th><th>What you see</th><th>Fix</th></tr>
-  <tr><td>Normal map loaded as sRGB</td><td>everything leans the same way; the surface looks tilted</td><td>use a UNORM format</td></tr>
-  <tr><td>Green channel convention mixed up</td><td>bumps look like dents, lit from below</td><td>flip <var>y</var>, or convert the texture once</td></tr>
-  <tr><td>Tangent sign ignored</td><td>one half of a mirrored model is lit inside out</td><td><var>B</var> = <var>w</var> · cross(<var>N</var>, <var>T</var>)</td></tr>
-  <tr><td>Normal moved with <var>M</var>, not its inverse-transpose</td><td>wrong shading on stretched objects only</td><td>use (<var>M</var><sup>−1</sup>)<sup>T</sup>, or keep scales uniform</td></tr>
-  <tr><td>Mirroring transform not folded into <var>w</var></td><td>a mirrored copy of an object has inverted bumps</td><td><var>w</var> · sign(det <var>M</var>)</td></tr>
-  <tr><td>Tangents differ from the baker's</td><td>faint seams, wrong shading on curves</td><td>use MikkTSpace in both</td></tr>
-  <tr><td>Mipmaps of a normal map averaged as colors</td><td>bumps fade and shine too much at a distance</td><td>renormalize; better: turn the lost length into roughness (Toksvig, LEAN)</td></tr>
-</table>
-</div>
+<dl class="pitfalls">
+  <div><dt>Everything leans the same way; the surface looks tilted</dt><dd><b>Normal map loaded as sRGB.</b> Use a UNORM format.</dd></div>
+  <div><dt>Bumps look like dents, lit from below</dt><dd><b>Green channel convention mixed up.</b> Flip <var>y</var>, or convert the texture once.</dd></div>
+  <div><dt>One half of a mirrored model is lit inside out</dt><dd><b>Tangent sign ignored.</b> Use <var>B</var> = <var>w</var> · cross(<var>N</var>, <var>T</var>).</dd></div>
+  <div><dt>Wrong shading on stretched objects only</dt><dd><b>Normal moved with <var>M</var>, not its inverse-transpose.</b> Use (<var>M</var><sup>−1</sup>)<sup>T</sup>, or keep scales uniform.</dd></div>
+  <div><dt>A mirrored copy of an object has inverted bumps</dt><dd><b>Mirroring transform not folded into <var>w</var>.</b> Use <var>w</var> · sign(det <var>M</var>).</dd></div>
+  <div><dt>Faint seams, wrong shading on curves</dt><dd><b>Tangents differ from the baker's.</b> Use MikkTSpace in both.</dd></div>
+  <div><dt>Bumps fade and shine too much at a distance</dt><dd><b>Mipmaps of a normal map averaged as colors.</b> Renormalize; better: turn the lost length into roughness (Toksvig, LEAN).</dd></div>
+</dl>
 
 <h2 id="in-rasm"><span class="n">12</span>In RASM</h2>
 

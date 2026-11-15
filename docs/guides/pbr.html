@@ -19,6 +19,10 @@
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+    <marker id="ah-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head light"/></marker>
+    <marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
   </defs>
 </svg>
 
@@ -42,45 +46,79 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>The question a shader answers</h2>
+<h2 id="question"><span class="n">1</span>The question a shader answers</h2>
 
 <p>When a pixel is shaded, the shader knows one point <var>p</var> on a surface. It must answer one question: <b>how much light leaves <var>p</var> toward the eye, and in which color?</b> Four directions describe the situation. All of them are unit vectors that start at <var>p</var>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 290" role="img" aria-label="A surface point p with its normal n pointing up. The vector l points to a light, v points to the eye, and h lies halfway between them. Light from the light bounces off the surface: a sharp part in the mirror direction and a soft part in all directions.">
-    <rect x="40" y="200" width="420" height="40" class="box"/>
-    <text x="50" y="226" class="small">surface</text>
-    <circle cx="250" cy="200" r="5" class="cpu"/>
-    <text x="258" y="218" class="small">p</text>
-    <line x1="250" y1="200" x2="250" y2="70" class="arrow" marker-end="url(#ah)"/>
-    <text x="256" y="72" class="title">n</text>
-    <line x1="250" y1="200" x2="176" y2="80" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="186" y="80" class="title t-hot">l</text>
-    <circle cx="164" cy="58" r="14" class="mem"/>
-    <text x="140" y="40" class="mid small">light</text>
-    <line x1="250" y1="200" x2="410" y2="143" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <text x="398" y="164" class="title t-cpu">v</text>
-    <rect x="414" y="124" width="36" height="22" rx="4" class="cpu"/>
-    <text x="432" y="116" class="mid small">eye</text>
-    <line x1="250" y1="200" x2="290" y2="87" class="arrow dashed" marker-end="url(#ah)"/>
-    <text x="296" y="96" class="title">h</text>
-
-    <text x="500" y="40" class="title">The four vectors</text>
-    <text x="500" y="66" class="small"><tspan class="t-faint">n</tspan>  normal: the way the surface faces</text>
-    <text x="500" y="88" class="small"><tspan class="t-hot">l</tspan>  toward the light</text>
-    <text x="500" y="110" class="small"><tspan class="t-cpu">v</tspan>  toward the eye (the view direction)</text>
-    <text x="500" y="132" class="small">h  halfway: normalize(l + v)</text>
-    <text x="500" y="166" class="small">Most formulas use only their dot</text>
-    <text x="500" y="182" class="small">products: n·l, n·v, n·h and l·h.</text>
-    <text x="500" y="198" class="small">For unit vectors a dot product is the</text>
-    <text x="500" y="214" class="small">cosine of the angle between them.</text>
+  <svg viewBox="0 0 760 250" role="img" aria-label="A surface point p with its normal n pointing up. The vector l points to a light, v points to the eye, and h lies halfway between them.">
+    <line x1="140" y1="200" x2="620" y2="200" class="surface"/>
+    <text x="150" y="222" class="small">surface</text>
+    <line x1="380" y1="200" x2="380" y2="70" class="arrow" marker-end="url(#ah)"/>
+    <text x="370" y="78" class="end title">n</text>
+    <line x1="380" y1="200" x2="266" y2="76" class="arrow light" marker-end="url(#ah-light)"/>
+    <text x="300" y="100" class="title t-light">l</text>
+    <circle cx="252" cy="60" r="14" class="light"/>
+    <text x="252" y="34" class="mid small">light</text>
+    <line x1="380" y1="200" x2="552" y2="130" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="520" y="162" class="title t-cpu">v</text>
+    <path d="M558,122 Q576,108 594,122 Q576,136 558,122 Z" class="cpu"/>
+    <circle cx="576" cy="122" r="4" class="solid"/>
+    <text x="576" y="100" class="mid small">eye</text>
+    <line x1="380" y1="200" x2="407" y2="83" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <text x="414" y="88" class="title t-hot">h</text>
+    <circle cx="380" cy="200" r="5" class="cpu"/>
+    <text x="388" y="222" class="small">p</text>
   </svg>
   <figcaption>All vectors point away from the surface. <var>n</var>·<var>l</var> = 1 means the light is straight above; 0 means it grazes the surface.</figcaption>
 </figure>
 
-<p>Older shading models (Phong, Blinn–Phong) answer the question with formulas that look good but are made up. They have numbers like a "shininess exponent" that do not exist in the real world, and a material that looks right under one light often looks wrong under another. PBR uses formulas that follow how light behaves. The benefit is practical: a material made once looks right in every lighting, and artists set values they can measure, like "this is gold" or "this is 60% rough".</p>
+<div class="formula">
+  <p class="eq">h = normalize(l + v)</p>
+  <dl>
+    <dt>n</dt><dd>normal: the way the surface faces</dd>
+    <dt>l</dt><dd>toward the light</dd>
+    <dt>v</dt><dd>toward the eye (the view direction)</dd>
+    <dt>h</dt><dd>halfway between <var>l</var> and <var>v</var></dd>
+  </dl>
+</div>
 
-<h2><span class="n">2</span>The rendering equation, in plain words</h2>
+<p>Most formulas use only their dot products: <var>n</var>·<var>l</var>, <var>n</var>·<var>v</var>, <var>n</var>·<var>h</var> and <var>l</var>·<var>h</var>. For unit vectors a dot product is the cosine of the angle between them.</p>
+
+<p>Why "physically based"? Compare with the older shading models:</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same ball under two lights. Under light A it looks right. Under light B it looks wrong.">
+      <circle cx="60" cy="24" r="8" class="light"/>
+      <circle cx="90" cy="76" r="34" class="box"/>
+      <circle cx="78" cy="62" r="8" class="light"/>
+      <text x="90" y="130" class="mid small">light A: looks right</text>
+      <circle cx="260" cy="24" r="8" class="light"/>
+      <circle cx="230" cy="76" r="34" class="bad"/>
+      <circle cx="244" cy="60" r="14" class="light"/>
+      <text x="230" y="130" class="mid small t-bad">light B: looks wrong</text>
+    </svg>
+    <h4>Older models: made-up formulas</h4>
+    <p>Phong and Blinn–Phong use formulas that look good but are made up. They have numbers like a "shininess exponent" that do not exist in the real world. A material that looks right under one light often looks wrong under another.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same ball under two lights. It looks right under both.">
+      <circle cx="60" cy="24" r="8" class="light"/>
+      <circle cx="90" cy="76" r="34" class="ok"/>
+      <circle cx="78" cy="62" r="8" class="light"/>
+      <text x="90" y="130" class="mid small">light A: looks right</text>
+      <circle cx="260" cy="24" r="8" class="light"/>
+      <circle cx="230" cy="76" r="34" class="ok"/>
+      <circle cx="242" cy="62" r="8" class="light"/>
+      <text x="230" y="130" class="mid small t-ok">light B: looks right</text>
+    </svg>
+    <h4>PBR: formulas that follow light</h4>
+    <p>The benefit is practical. A material made once looks right in every lighting. Artists set values they can measure, like "this is gold" or "this is 60% rough".</p>
+  </div>
+</div>
+
+<h2 id="rendering-equation"><span class="n">2</span>The rendering equation, in plain words</h2>
 
 <p>James Kajiya wrote down the full answer in 1986. It is called the <b>rendering equation</b>:</p>
 
@@ -100,28 +138,69 @@
 </table>
 </div>
 
+<p>The cosine term, drawn. The same beam of light, straight and at a slant:</p>
+
 <figure class="diagram">
   <svg viewBox="0 0 760 230" role="img" aria-label="Left: light falls on a surface straight down and covers a narrow strip. Right: the same beam at a slant covers a wider strip, so each point gets less: the cosine term.">
     <text x="190" y="20" class="mid title">Straight down: n·l = 1</text>
-    <rect x="60" y="170" width="260" height="20" class="box"/>
-    <line x1="160" y1="40" x2="160" y2="166" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <line x1="220" y1="40" x2="220" y2="166" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <line x1="160" y1="176" x2="220" y2="176" class="hot"/>
-    <text x="190" y="212" class="mid small">the beam lights a strip of width 1</text>
+    <polygon points="160,40 220,40 220,170 160,170" class="lit"/>
+    <line x1="160" y1="40" x2="160" y2="164" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="220" y1="40" x2="220" y2="164" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="60" y1="170" x2="320" y2="170" class="surface"/>
+    <line x1="160" y1="182" x2="220" y2="182" class="arrow hot thick"/>
+    <text x="190" y="204" class="mid title t-hot">1</text>
+    <text x="190" y="224" class="mid small">the beam lights a strip of width 1</text>
 
-    <text x="560" y="20" class="mid title">At 60°: n·l = 0.5</text>
-    <rect x="420" y="170" width="300" height="20" class="box"/>
-    <line x1="390" y1="91" x2="516" y2="164" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <line x1="510" y1="91" x2="636" y2="164" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <line x1="520" y1="176" x2="640" y2="176" class="hot"/>
-    <text x="570" y="212" class="mid small">the same beam lights a strip of width 2: half the light per point</text>
+    <line x1="380" y1="10" x2="380" y2="224" class="dashed"/>
+
+    <text x="570" y="20" class="mid title">At 60°: n·l = 0.5</text>
+    <polygon points="390,91 510,91 646,170 526,170" class="lit"/>
+    <line x1="390" y1="91" x2="516" y2="164" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="510" y1="91" x2="636" y2="164" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="420" y1="170" x2="720" y2="170" class="surface"/>
+    <line x1="526" y1="182" x2="646" y2="182" class="arrow hot thick"/>
+    <text x="586" y="204" class="mid title t-hot">2</text>
+    <text x="570" y="224" class="mid small">the same beam, a strip of width 2: half the light per point</text>
   </svg>
   <figcaption>The cosine term is pure geometry. It is why a surface gets darker as it turns away from the light, before any material is involved.</figcaption>
 </figure>
 
 <h3 id="rendering-sum">Making it small enough for a shader</h3>
 
-<p>The integral has no closed form in general. Real-time shaders make it simple with one assumption: light comes from a few <b>punctual lights</b>, ideal points or directions with no size. Light from such a light arrives from exactly one direction, so the integral turns into a sum, one term per light:</p>
+<p>The integral has no closed form in general. Real-time shaders make it simple with one assumption about where light comes from:</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Light arrives at the point from every direction of the hemisphere above it.">
+      <path d="M40,110 A80,80 0 0 1 200,110" class="dashed"/>
+      <line x1="193.3" y1="83.3" x2="148.2" y2="99.7" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="175.2" y1="54.8" x2="141.2" y2="88.8" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="146.7" y1="36.7" x2="130.3" y2="81.8" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="120" y1="32" x2="120" y2="80" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="93.3" y1="36.7" x2="109.7" y2="81.8" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="64.8" y1="54.8" x2="98.8" y2="88.8" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="46.7" y1="83.3" x2="91.8" y2="99.7" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="20" y1="110" x2="220" y2="110" class="surface"/>
+      <circle cx="120" cy="110" r="4" class="cpu"/>
+    </svg>
+    <h4>The integral</h4>
+    <p>Light arrives from every direction of the hemisphere. Too much to add up for each pixel.</p>
+  </div>
+  <div class="vcard pick">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Light arrives at the point from two lights only: two directions.">
+      <circle cx="52" cy="26" r="9" class="light"/>
+      <circle cx="196" cy="42" r="9" class="light"/>
+      <line x1="60" y1="36" x2="112" y2="100" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="188" y1="50" x2="130" y2="102" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="20" y1="110" x2="220" y2="110" class="surface"/>
+      <circle cx="120" cy="110" r="4" class="cpu"/>
+      <text x="70" y="22" class="small">light 1</text>
+      <text x="180" y="24" class="end small">light 2</text>
+    </svg>
+    <h4>Punctual lights: a sum</h4>
+    <p><b>Punctual lights</b> are ideal points or directions with no size. Light from such a light arrives from exactly one direction, so the integral turns into a sum, one term per light.</p>
+  </div>
+</div>
 
 <pre><code class="lang-text">Lo = Le + Σ f(li, v) · Ei · (n·li)      (Σ over the lights i)
 
@@ -129,60 +208,100 @@ Ei = the light's color × intensity × attenuation</code></pre>
 
 <p>The light from everything else (the sky, light bounced off walls) is added as a separate <b>ambient</b> term, see <a href="#ambient">section 11</a>. The rest of this page is about <var>f</var>, the BRDF.</p>
 
-<h2><span class="n">3</span>The BRDF and energy conservation</h2>
+<h2 id="brdf"><span class="n">3</span>The BRDF and energy conservation</h2>
 
 <p>BRDF means <b>bidirectional reflectance distribution function</b>. It takes two directions, in (<var>l</var>) and out (<var>v</var>), and returns how much of the light from <var>l</var> leaves toward <var>v</var>. When light hits a surface, two things can happen:</p>
+
+<div class="legend">
+  <span><i class="light"></i>light coming in</span>
+  <span><i></i>specular: bounces off the top</span>
+  <span><i class="gpu"></i>diffuse: goes in and comes out</span>
+</div>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 290" role="img" aria-label="Left, a non-metal: part of the light reflects off the top as specular, the rest enters, scatters among particles and leaves in random directions, colored, as diffuse. Right, a metal: part reflects as colored specular, the rest that enters is absorbed.">
     <text x="190" y="20" class="mid title">Non-metal (plastic, wood, stone)</text>
     <rect x="30" y="150" width="320" height="110" class="zone"/>
-    <line x1="30" y1="150" x2="350" y2="150" class="arrow"/>
-    <line x1="70" y1="50" x2="176" y2="148" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="60" y="44" class="small t-hot">light</text>
-    <line x1="180" y1="150" x2="284" y2="54" class="arrow" marker-end="url(#ah)"/>
-    <text x="290" y="52" class="small">specular: bounces off</text>
-    <text x="290" y="66" class="small">the top, not colored</text>
-    <polyline points="180,152 200,190 170,215 215,235 240,200" class="arrow gpu dashed"/>
+    <line x1="70" y1="50" x2="176" y2="148" class="arrow light" marker-end="url(#ah-light)"/>
+    <text x="60" y="44" class="small t-light">light</text>
+    <line x1="180" y1="150" x2="284" y2="54" class="arrow thick" marker-end="url(#ah)"/>
+    <text x="294" y="52" class="small">specular:</text>
+    <text x="294" y="66" class="small">not colored</text>
+    <polyline points="180,152 200,190 170,215 215,235 240,200 240,152" class="arrow gpu dashed"/>
     <circle cx="200" cy="190" r="3" class="gpu"/>
     <circle cx="170" cy="215" r="3" class="gpu"/>
     <circle cx="215" cy="235" r="3" class="gpu"/>
+    <circle cx="240" cy="200" r="3" class="gpu"/>
     <line x1="240" y1="150" x2="230" y2="100" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <line x1="240" y1="150" x2="270" y2="110" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <line x1="240" y1="150" x2="200" y2="112" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="40" y="276" class="small t-gpu">diffuse: goes in, scatters, comes out anywhere, colored</text>
+    <line x1="30" y1="150" x2="350" y2="150" class="surface"/>
+    <text x="190" y="280" class="mid small t-gpu">diffuse: scatters inside, comes out anywhere, colored</text>
+
+    <line x1="380" y1="10" x2="380" y2="284" class="dashed"/>
 
     <text x="570" y="20" class="mid title">Metal</text>
     <rect x="410" y="150" width="320" height="110" class="zone"/>
-    <line x1="410" y1="150" x2="730" y2="150" class="arrow"/>
-    <line x1="450" y1="50" x2="556" y2="148" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="440" y="44" class="small t-hot">light</text>
-    <line x1="560" y1="150" x2="664" y2="54" class="arrow" marker-end="url(#ah)"/>
-    <text x="640" y="104" class="small">specular only,</text>
-    <text x="640" y="118" class="small">colored (gold</text>
-    <text x="640" y="132" class="small">is yellow)</text>
-    <line x1="560" y1="152" x2="570" y2="190" class="arrow dashed"/>
-    <text x="580" y="200" class="small t-faint">the rest is absorbed:</text>
-    <text x="580" y="214" class="small t-faint">no diffuse</text>
+    <line x1="450" y1="50" x2="556" y2="148" class="arrow light" marker-end="url(#ah-light)"/>
+    <text x="440" y="44" class="small t-light">light</text>
+    <line x1="560" y1="150" x2="664" y2="54" class="arrow mem thick" marker-end="url(#ah-mem)"/>
+    <text x="674" y="52" class="small t-mem">specular only,</text>
+    <text x="674" y="66" class="small t-mem">colored</text>
+    <line x1="560" y1="152" x2="576" y2="196" class="arrow bad dashed"/>
+    <path d="M568,190 L584,202 M584,190 L568,202" class="arrow bad"/>
+    <text x="596" y="200" class="small t-bad">the rest is absorbed:</text>
+    <text x="596" y="214" class="small t-bad">no diffuse</text>
+    <line x1="410" y1="150" x2="730" y2="150" class="surface"/>
   </svg>
-  <figcaption>Every material has specular. Only non-metals have diffuse, because in a metal the free electrons absorb the light that goes in.</figcaption>
+  <figcaption>Every material has specular. Only non-metals have diffuse, because in a metal the free electrons absorb the light that goes in. A metal's specular is colored: gold is yellow.</figcaption>
 </figure>
 
 <p>So the BRDF is a sum of two parts:</p>
 
 <pre><code class="lang-text">f(l, v) = kd · f_diffuse  +  f_specular</code></pre>
 
-<p>The weight <var>k<sub>d</sub></var> keeps the sum honest. Light that the top layer reflected as specular is not there any more to go in and come out as diffuse. This rule is called <b>energy conservation</b>: a surface that is not a light source can never send out more light than it receives. Old models broke it often: a shiny Phong highlight could add light on top of a full diffuse. In PBR the specular part takes its share first, and diffuse gets what is left.</p>
-
-<div class="table-wrap">
-<table>
-  <tr><th>Common choice for <var>k<sub>d</sub></var></th><th>Meaning</th></tr>
-  <tr><td>1 − metallic</td><td>metals have no diffuse; the specular part is not taken out</td></tr>
-  <tr><td>(1 − <var>F</var>) · (1 − metallic)</td><td>also remove the light that Fresnel reflected (<a href="#fresnel">section 8</a>). Closer to energy conservation; a little darker at grazing angles</td></tr>
-</table>
+<div class="callout">
+  <strong>Energy conservation</strong>
+  <p>A surface that is not a light source can never send out more light than it receives. The weight <var>k<sub>d</sub></var> keeps the sum honest: light that the top layer reflected as specular is not there any more to go in and come out as diffuse.</p>
+  <p>Old models broke this rule often: a shiny Phong highlight could add light on top of a full diffuse. In PBR the specular part takes its share first, and diffuse gets what is left.</p>
 </div>
 
-<h2><span class="n">4</span>Diffuse: Lambert</h2>
+<p>Two common choices for <var>k<sub>d</sub></var>:</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A bar of incoming light. Below it, the outgoing light of a non-metal: a small specular part and a diffuse part as long as the whole incoming bar, so the two together are longer than the light that came in.">
+      <text x="62" y="32" class="end small">in</text>
+      <rect x="70" y="18" width="140" height="20" class="light"/>
+      <text x="62" y="72" class="end small">out</text>
+      <rect x="70" y="58" width="24" height="20" class="box"/>
+      <rect x="94" y="58" width="140" height="20" class="gpu"/>
+      <line x1="210" y1="10" x2="210" y2="92" class="dashed"/>
+      <text x="82" y="96" class="mid small">spec</text>
+      <text x="152" y="96" class="mid small t-gpu">diffuse</text>
+      <text x="234" y="118" class="end small t-bad">the specular part is not taken out</text>
+    </svg>
+    <h4>k<sub>d</sub> = 1 − metallic</h4>
+    <p>Metals have no diffuse. The specular part is not taken out.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A bar of incoming light. Below it, the outgoing light of a non-metal: a small specular part and a diffuse part that fills only the rest, so the two together are as long as the light that came in.">
+      <text x="62" y="32" class="end small">in</text>
+      <rect x="70" y="18" width="140" height="20" class="light"/>
+      <text x="62" y="72" class="end small">out</text>
+      <rect x="70" y="58" width="24" height="20" class="box"/>
+      <rect x="94" y="58" width="116" height="20" class="gpu"/>
+      <line x1="210" y1="10" x2="210" y2="92" class="dashed"/>
+      <text x="82" y="96" class="mid small">F</text>
+      <text x="152" y="96" class="mid small t-gpu">1 − F</text>
+      <text x="210" y="118" class="end small t-ok">diffuse gets what is left</text>
+    </svg>
+    <h4>k<sub>d</sub> = (1 − <var>F</var>) · (1 − metallic)</h4>
+    <p>Also remove the light that Fresnel reflected (<a href="#fresnel">section 8</a>). Closer to energy conservation; a little darker at grazing angles.</p>
+  </div>
+</div>
+
+<h2 id="lambert"><span class="n">4</span>Diffuse: Lambert</h2>
 
 <p>Light that goes into a non-metal bounces around many times before it comes out. By then it has "forgotten" where it came from, so it leaves equally in all directions. A surface that does this is called <b>Lambertian</b>, and its BRDF is a constant:</p>
 
@@ -190,58 +309,104 @@ Ei = the light's color × intensity × attenuation</code></pre>
 
 c = the diffuse color (albedo), from 0 to 1 per channel</code></pre>
 
-<p>Why divide by π? Imagine light that arrives with the same strength from every direction of the hemisphere. A white surface (<var>c</var> = 1) should send all of it back out, no more and no less. Adding up the cosine term over the whole hemisphere gives ∫ cos θ d<var>ω</var> = π. So the BRDF must be 1/π to send out exactly 1. Without the π, a white surface would send out π ≈ 3.14 times what it received.</p>
-
 <figure class="diagram">
-  <svg viewBox="0 0 760 220" role="img" aria-label="A Lambertian surface sends light equally in all directions. The brightness the eye sees does not depend on where the eye is. Only the angle to the light matters, through n dot l.">
-    <rect x="40" y="160" width="300" height="20" class="box"/>
-    <line x1="80" y1="40" x2="186" y2="156" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="70" y="34" class="small t-hot">light</text>
-    <line x1="190" y1="160" x2="190" y2="70" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <line x1="190" y1="160" x2="126" y2="96" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <line x1="190" y1="160" x2="254" y2="96" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <line x1="190" y1="160" x2="104" y2="130" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <line x1="190" y1="160" x2="276" y2="130" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="190" y="204" class="mid small">the same radiance in every direction</text>
-
-    <text x="400" y="50" class="title">Lambert in one line</text>
-    <text x="400" y="80" class="mono">color = c / π · E · (n·l)</text>
-    <text x="400" y="110" class="small">It depends on the light (through n·l) but not on</text>
-    <text x="400" y="126" class="small">the eye (no v at all). That is why a matte wall</text>
-    <text x="400" y="142" class="small">looks the same from every side.</text>
-    <text x="400" y="172" class="small">Better models exist (Oren–Nayar, Disney/Burley</text>
-    <text x="400" y="188" class="small">diffuse) that add a little roughness and grazing</text>
-    <text x="400" y="204" class="small">effects. Most real-time engines keep Lambert.</text>
+  <svg viewBox="0 0 760 210" role="img" aria-label="A Lambertian surface sends light equally in all directions. Two eyes at different places see the same brightness. Only the angle to the light matters, through n dot l.">
+    <path d="M284,170 A96,96 0 0 1 476,170" class="dashed"/>
+    <line x1="250" y1="40" x2="375" y2="165" class="arrow light" marker-end="url(#ah-light)"/>
+    <text x="240" y="34" class="mid small t-light">light</text>
+    <line x1="380" y1="170" x2="464.6" y2="139.2" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="380" y1="170" x2="431.6" y2="96.3" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="380" y1="170" x2="380" y2="80" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="380" y1="170" x2="328.4" y2="96.3" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="380" y1="170" x2="295.4" y2="139.2" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="180" y1="170" x2="580" y2="170" class="surface"/>
+    <path d="M436,72 Q452,60 468,72 Q452,84 436,72 Z" class="cpu"/>
+    <circle cx="452" cy="72" r="3.5" class="solid"/>
+    <text x="476" y="68" class="small t-cpu">eye A</text>
+    <path d="M484,128 Q500,116 516,128 Q500,140 484,128 Z" class="cpu"/>
+    <circle cx="500" cy="128" r="3.5" class="solid"/>
+    <text x="524" y="124" class="small t-cpu">eye B: sees the</text>
+    <text x="524" y="138" class="small t-cpu">same brightness</text>
+    <text x="380" y="198" class="mid small">the same radiance in every direction</text>
   </svg>
-  <figcaption>The diffuse color <var>c</var> must be in <b>linear</b> values, not sRGB values. See <a href="color-spaces.html">Color spaces</a>.</figcaption>
+  <figcaption>That is why a matte wall looks the same from every side. The diffuse color <var>c</var> must be in <b>linear</b> values, not sRGB values. See <a href="color-spaces.html">Color spaces</a>.</figcaption>
 </figure>
 
-<h2><span class="n">5</span>Specular: microfacets</h2>
+<div class="formula">
+  <p class="eq">color = c / π · E · (n·l)</p>
+  <dl>
+    <dt>n·l</dt><dd>the result depends on the light, through this term</dd>
+    <dt>v</dt><dd>not in the formula at all: the result does not depend on the eye</dd>
+  </dl>
+</div>
+
+<div class="callout">
+  <strong>Why divide by π?</strong>
+  <p>Imagine light that arrives with the same strength from every direction of the hemisphere. A white surface (<var>c</var> = 1) should send all of it back out, no more and no less. Adding up the cosine term over the whole hemisphere gives ∫ cos θ d<var>ω</var> = π. So the BRDF must be 1/π to send out exactly 1. Without the π, a white surface would send out π ≈ 3.14 times what it received.</p>
+</div>
+
+<p>Better models exist (Oren–Nayar, Disney/Burley diffuse) that add a little roughness and grazing effects. Most real-time engines keep Lambert.</p>
+
+<h2 id="microfacets"><span class="n">5</span>Specular: microfacets</h2>
 
 <p>A mirror reflects light in exactly one direction. Most real surfaces are not mirrors: their highlight is a soft blob, not a sharp point. <b>Microfacet theory</b> explains why. Under a microscope, the surface is made of many tiny flat mirrors, the <b>microfacets</b>, each facing a slightly different way. Each one is a perfect mirror. Together they spread the light.</p>
 
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A flat surface. One ray comes in and one ray leaves, in the mirror direction.">
+      <line x1="50" y1="20" x2="116" y2="96" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="120" y1="100" x2="186" y2="24" class="arrow thick" marker-end="url(#ah)"/>
+      <line x1="20" y1="100" x2="220" y2="100" class="surface"/>
+    </svg>
+    <h4>A mirror</h4>
+    <p>All facets face the same way. The light leaves in one direction: a sharp point.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A slightly uneven surface. One ray comes in and three rays leave, close to the mirror direction.">
+      <line x1="50" y1="20" x2="116" y2="94" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="120" y1="98" x2="194.6" y2="49.7" class="arrow" marker-end="url(#ah)"/>
+      <line x1="120" y1="98" x2="179" y2="32" class="arrow" marker-end="url(#ah)"/>
+      <line x1="120" y1="98" x2="159.4" y2="19.1" class="arrow" marker-end="url(#ah)"/>
+      <polyline points="20,100 45,97 70,102 95,97 120,100 145,96 170,102 195,98 220,100" class="surface nofill"/>
+    </svg>
+    <h4>A little rough</h4>
+    <p>The facets tilt a little. The light spreads into a small, bright highlight.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A very uneven surface. One ray comes in and four shorter rays leave in very different directions.">
+      <line x1="50" y1="20" x2="114" y2="90" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="120" y1="96" x2="174.4" y2="70.6" class="arrow" marker-end="url(#ah)"/>
+      <line x1="120" y1="96" x2="159.4" y2="50.7" class="arrow" marker-end="url(#ah)"/>
+      <line x1="120" y1="96" x2="135.5" y2="38" class="arrow" marker-end="url(#ah)"/>
+      <line x1="120" y1="96" x2="104.5" y2="38" class="arrow" marker-end="url(#ah)"/>
+      <polyline points="20,100 40,90 60,106 80,88 100,104 120,94 140,106 160,90 180,104 200,92 220,100" class="surface nofill"/>
+    </svg>
+    <h4>Rough</h4>
+    <p>More facets point away from the average normal <var>n</var>. The highlight is wider and dimmer.</p>
+  </div>
+</div>
+
+<p>Which facets send light from <var>l</var> into <var>v</var>? A mirror turns <var>l</var> into <var>v</var> only if it faces halfway between them:</p>
+
 <figure class="diagram">
-  <svg viewBox="0 0 760 270" role="img" aria-label="A zoomed-in rough surface made of small tilted facets. Light comes from l, the eye is at v. Only the facets whose normal equals the half vector h reflect light from l into v; they are highlighted.">
-    <polyline points="40,200 80,180 120,205 160,175 200,195 240,170 280,200 320,182 360,206 400,178 440,198 480,172 520,200 560,182 600,204 640,176 680,196 720,186" class="arrow"/>
-    <line x1="160" y1="175" x2="200" y2="195" class="hot"/>
-    <line x1="400" y1="178" x2="440" y2="198" class="hot"/>
-    <line x1="640" y1="176" x2="680" y2="196" class="hot"/>
+  <svg viewBox="0 0 760 230" role="img" aria-label="A zoomed-in rough surface made of small tilted facets. Light comes from l, the eye is at v. Only the facets whose normal equals the half vector h reflect light from l into v; they are highlighted.">
+    <polyline points="40,200 80,180 120,205 160,175 200,195 240,170 280,200 320,182 360,206 400,178 440,198 480,172 520,200 560,182 600,204 640,176 680,196 720,186" class="surface nofill"/>
+    <line x1="160" y1="175" x2="200" y2="195" class="arrow hot thick"/>
+    <line x1="400" y1="178" x2="440" y2="198" class="arrow hot thick"/>
+    <line x1="640" y1="176" x2="680" y2="196" class="arrow hot thick"/>
     <line x1="180" y1="185" x2="196" y2="153" class="arrow hot" marker-end="url(#ah-hot)"/>
     <line x1="420" y1="188" x2="436" y2="156" class="arrow hot" marker-end="url(#ah-hot)"/>
     <line x1="660" y1="186" x2="676" y2="154" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="440" y="150" class="small t-hot">facet normal = h</text>
+    <text x="446" y="150" class="small t-hot">facet normal = h</text>
 
-    <line x1="130" y1="30" x2="140" y2="85" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="122" y="40" class="end small t-hot">light, nearly</text>
-    <text x="122" y="54" class="end small t-hot">from above</text>
+    <line x1="130" y1="30" x2="140" y2="85" class="arrow light" marker-end="url(#ah-light)"/>
+    <text x="122" y="40" class="end small t-light">light, nearly</text>
+    <text x="122" y="54" class="end small t-light">from above</text>
     <line x1="560" y1="90" x2="658" y2="40" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <text x="664" y="40" class="small t-cpu">to the eye</text>
-    <text x="380" y="60" class="mid small">only these facets send light from l into v:</text>
-    <text x="380" y="76" class="mid small">a mirror turns l into v only if it faces halfway between them</text>
-    <text x="380" y="250" class="mid small">The other facets reflect the light somewhere else. A rougher surface has more facets</text>
-    <text x="380" y="266" class="mid small">pointing away from the average normal n, so its highlight is wider and dimmer.</text>
+    <text x="380" y="66" class="mid small">only the orange facets send light from l into v</text>
   </svg>
-  <figcaption>The facets are far smaller than a pixel, so a shader never sees them. It uses statistics: what share of them face <var>h</var>, and what share are hidden.</figcaption>
+  <figcaption>The other facets reflect the light somewhere else. The facets are far smaller than a pixel, so a shader never sees them. It uses statistics: what share of them face <var>h</var>, and what share are hidden.</figcaption>
 </figure>
 
 <p>The facets that matter are the ones whose normal is the <b>half vector</b> <var>h</var> = normalize(<var>l</var> + <var>v</var>). Robert Cook and Kenneth Torrance (1982) turned this idea into the specular BRDF that almost every engine uses today:</p>
@@ -250,17 +415,58 @@ c = the diffuse color (albedo), from 0 to 1 per channel</code></pre>
 f_specular  =  ───────────────────────────
                    4 · (n·l) · (n·v)</code></pre>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Term</th><th>Question it answers</th><th>Usual formula</th></tr>
-  <tr><td><var>D</var></td><td>What share of the facets face <var>h</var>?</td><td>GGX (Trowbridge–Reitz), <a href="#ggx">section 6</a></td></tr>
-  <tr><td><var>G</var></td><td>What share of those are not hidden by other facets?</td><td>Smith with GGX, <a href="#smith">section 7</a></td></tr>
-  <tr><td><var>F</var></td><td>How much does one facet reflect at this angle?</td><td>Schlick's Fresnel, <a href="#fresnel">section 8</a></td></tr>
-  <tr><td>4 (<var>n</var>·<var>l</var>)(<var>n</var>·<var>v</var>)</td><td>A correction from the change between facet space and surface space.</td><td>—</td></tr>
-</table>
+<p>Each letter answers one question:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A rough surface of seven facets. Three of them have the same tilt and are highlighted, each with its normal.">
+      <polyline points="20,92 50,72 80,92 100,66 130,86 160,80 190,100 220,84" class="surface nofill"/>
+      <line x1="50" y1="72" x2="80" y2="92" class="arrow hot thick"/>
+      <line x1="100" y1="66" x2="130" y2="86" class="arrow hot thick"/>
+      <line x1="160" y1="80" x2="190" y2="100" class="arrow hot thick"/>
+      <line x1="65" y1="82" x2="78" y2="62" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="115" y1="76" x2="128" y2="56" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="175" y1="90" x2="188" y2="70" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="120" y="122" class="mid small t-hot">these face h</text>
+    </svg>
+    <h4><var>D</var>: distribution</h4>
+    <p>What share of the facets face <var>h</var>?</p>
+    <p class="cost">GGX (Trowbridge–Reitz), <a href="#ggx">section 6</a></p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two tall facets side by side. Low light from the left is stopped by the first one, so the lower part of the second one is in shadow.">
+      <polygon points="70,50 120,100 150,70" class="shade"/>
+      <line x1="10" y1="35" x2="64" y2="48.5" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="70" y1="50" x2="150" y2="70" class="arrow light dashed"/>
+      <polyline points="20,100 70,50 120,100 170,50 220,100" class="surface nofill"/>
+      <line x1="120" y1="100" x2="150" y2="70" class="arrow bad thick"/>
+      <text x="120" y="122" class="mid small t-bad">hidden: does not count</text>
+    </svg>
+    <h4><var>G</var>: geometry</h4>
+    <p>What share of those are not hidden by other facets?</p>
+    <p class="cost">Smith with GGX, <a href="#smith">section 7</a></p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="One flat facet. A ray comes in. One part is reflected, the other part goes into the surface.">
+      <line x1="50" y1="14" x2="116" y2="86" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="120" y1="90" x2="186" y2="18" class="arrow thick" marker-end="url(#ah)"/>
+      <line x1="122" y1="92" x2="148" y2="122" class="arrow gpu dashed" marker-end="url(#ah-gpu)"/>
+      <line x1="30" y1="90" x2="210" y2="90" class="surface"/>
+      <text x="196" y="34" class="small">F</text>
+      <text x="158" y="118" class="small t-gpu">1 − F</text>
+    </svg>
+    <h4><var>F</var>: Fresnel</h4>
+    <p>How much does one facet reflect at this angle?</p>
+    <p class="cost">Schlick's Fresnel, <a href="#fresnel">section 8</a></p>
+  </div>
 </div>
 
-<p>Many engines merge <var>G</var> and the denominator into one <b>visibility term</b> <var>V</var> = <var>G</var> / (4 (<var>n</var>·<var>l</var>)(<var>n</var>·<var>v</var>)). Then the specular BRDF is just <var>D</var> · <var>V</var> · <var>F</var>, and the division by small numbers at grazing angles disappears into a formula that is safe to compute.</p>
+<p>The divisor 4 (<var>n</var>·<var>l</var>)(<var>n</var>·<var>v</var>) is a correction from the change between facet space and surface space.</p>
+
+<div class="callout">
+  <strong>The visibility term</strong>
+  <p>Many engines merge <var>G</var> and the denominator into one <b>visibility term</b> <var>V</var> = <var>G</var> / (4 (<var>n</var>·<var>l</var>)(<var>n</var>·<var>v</var>)). Then the specular BRDF is just <var>D</var> · <var>V</var> · <var>F</var>, and the division by small numbers at grazing angles disappears into a formula that is safe to compute.</p>
+</div>
 
 <h2 id="ggx"><span class="n">6</span><var>D</var>: the normal distribution (GGX)</h2>
 
@@ -273,7 +479,8 @@ D(h)  =  ───────────────────────�
 <p><var>α</var> is the roughness of the facets. A small <var>α</var> means almost all facets face <var>n</var>: <var>D</var> is a tall, thin spike, and the highlight is small and bright. A large <var>α</var> spreads them: <var>D</var> is low and wide, and the highlight is big and dim. At <var>n</var>·<var>h</var> = 1, the formula gives its peak, 1 / (π <var>α</var>²).</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 270" role="img" aria-label="Three GGX curves, each scaled so its peak is 1, for roughness 0.4, 0.6 and 0.8, against the angle between n and h from 0 to 60 degrees. Low roughness falls off within 10 degrees; high roughness stays above half at 30 degrees. The real peak heights are 12.4, 2.46 and 0.78.">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Left: three GGX curves, each scaled so its peak is 1, for roughness 0.4, 0.6 and 0.8, against the angle between n and h from 0 to 60 degrees. Low roughness falls off within 10 degrees; high roughness stays above half at 30 degrees. Right: the real peak heights as bars: 12.4, 2.46 and 0.78.">
+    <text x="70" y="20" class="title">Width: each curve scaled to peak 1</text>
     <line x1="60" y1="220" x2="370" y2="220" class="arrow" marker-end="url(#ah)"/>
     <line x1="60" y1="220" x2="60" y2="36" class="arrow" marker-end="url(#ah)"/>
     <text x="210" y="260" class="mid small">angle between n and h</text>
@@ -295,19 +502,22 @@ D(h)  =  ───────────────────────�
     <line x1="250" y1="98" x2="276" y2="98" class="arrow cpu"/>
     <text x="282" y="102" class="small t-cpu">r = 0.8</text>
 
-    <text x="420" y="40" class="title">Each curve is scaled to peak 1</text>
-    <text x="420" y="58" class="small">so that their widths can be compared.</text>
-    <text x="420" y="86" class="small">Real peak 1 / (π α²), with α = r²:</text>
-    <text x="420" y="110" class="mono small t-hot">r = 0.4   α = 0.16   peak 12.4</text>
-    <text x="420" y="130" class="mono small t-gpu">r = 0.6   α = 0.36   peak 2.46</text>
-    <text x="420" y="150" class="mono small t-cpu">r = 0.8   α = 0.64   peak 0.78</text>
-    <text x="420" y="182" class="small">A smooth surface puts its light into a</text>
-    <text x="420" y="198" class="small">tiny, very bright spot. A rough one</text>
-    <text x="420" y="214" class="small">spreads the same light out wide.</text>
-    <text x="420" y="240" class="small">GGX has a long tail: a soft glow around</text>
-    <text x="420" y="256" class="small">the highlight, as real materials have.</text>
+    <text x="440" y="20" class="title">Height: the real peak, 1 / (π α²), α = r²</text>
+    <line x1="430" y1="220" x2="730" y2="220" class="arrow"/>
+    <rect x="450" y="60" width="60" height="160" class="accent"/>
+    <text x="480" y="52" class="mid title t-hot">12.4</text>
+    <rect x="550" y="188" width="60" height="32" class="gpu"/>
+    <text x="580" y="180" class="mid title t-gpu">2.46</text>
+    <rect x="650" y="210" width="60" height="10" class="cpu"/>
+    <text x="680" y="202" class="mid title t-cpu">0.78</text>
+    <text x="480" y="238" class="mid mono small">r = 0.4</text>
+    <text x="580" y="238" class="mid mono small">r = 0.6</text>
+    <text x="680" y="238" class="mid mono small">r = 0.8</text>
+    <text x="480" y="256" class="mid mono small">α = 0.16</text>
+    <text x="580" y="256" class="mid mono small">α = 0.36</text>
+    <text x="680" y="256" class="mid mono small">α = 0.64</text>
   </svg>
-  <figcaption>Over the hemisphere, <var>D</var>(<var>h</var>) · (<var>n</var>·<var>h</var>) always adds up to 1. A taller peak must be thinner. That is energy conservation built into <var>D</var>.</figcaption>
+  <figcaption>A smooth surface puts its light into a tiny, very bright spot. A rough one spreads the same light out wide. Over the hemisphere, <var>D</var>(<var>h</var>) · (<var>n</var>·<var>h</var>) always adds up to 1, so a taller peak must be thinner: that is energy conservation built into <var>D</var>. GGX also has a long tail: a soft glow around the highlight, as real materials have.</figcaption>
 </figure>
 
 <h3>Roughness: what artists set, and what the formula uses</h3>
@@ -322,7 +532,10 @@ D(h)  =  ───────────────────────�
 </table>
 </div>
 
-<p>At <var>r</var> = 0 the peak is infinite. A real shader must avoid that: it clamps <var>r</var> to a small minimum, for example 0.045, so that the numbers stay inside a 32-bit float and the highlight of a tiny point light does not flicker from pixel to pixel.</p>
+<div class="callout warn">
+  <strong>Never use a roughness of 0</strong>
+  <p>At <var>r</var> = 0 the peak is infinite. A real shader must avoid that: it clamps <var>r</var> to a small minimum, for example 0.045, so that the numbers stay inside a 32-bit float and the highlight of a tiny point light does not flicker from pixel to pixel.</p>
+</div>
 
 <h2 id="smith"><span class="n">7</span><var>G</var>: masking and shadowing (Smith)</h2>
 
@@ -331,39 +544,89 @@ D(h)  =  ───────────────────────�
 <figure class="diagram">
   <svg viewBox="0 0 760 240" role="img" aria-label="Left, shadowing: light at a low angle cannot reach a facet because a taller facet is in front of it. Right, masking: the facet is lit but the eye at a low angle cannot see it because another facet is in front.">
     <text x="190" y="20" class="mid title">Shadowing: the light cannot reach it</text>
-    <polyline points="30,180 90,120 150,180 210,120 270,180 330,120 350,140" class="arrow"/>
-    <line x1="150" y1="180" x2="210" y2="120" class="hot"/>
-    <line x1="20" y1="96" x2="88" y2="118" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <line x1="88" y1="122" x2="160" y2="150" class="arrow hot dashed"/>
-    <polygon points="90,120 150,180 150,145" class="ghost"/>
-    <text x="170" y="214" class="mid small">a low light hits the first slope;</text>
-    <text x="170" y="230" class="mid small">the facet behind it stays in shadow</text>
+    <polygon points="90,120 150,180 190,140" class="shade"/>
+    <line x1="20" y1="103" x2="84" y2="119" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="90" y1="120" x2="190" y2="140" class="arrow light dashed"/>
+    <polyline points="30,180 90,120 150,180 210,120 270,180 330,120 350,140" class="surface nofill"/>
+    <line x1="150" y1="180" x2="190" y2="140" class="arrow bad thick"/>
+    <text x="190" y="214" class="mid small">a low light hits the first slope;</text>
+    <text x="190" y="230" class="mid small">the facet behind it stays in shadow</text>
+
+    <line x1="380" y1="10" x2="380" y2="234" class="dashed"/>
 
     <text x="570" y="20" class="mid title">Masking: the eye cannot see it</text>
-    <polyline points="410,180 470,120 530,180 590,120 650,180 710,120 730,140" class="arrow"/>
-    <line x1="530" y1="180" x2="470" y2="120" class="hot"/>
-    <line x1="500" y1="150" x2="560" y2="128" class="arrow dashed"/>
+    <polyline points="410,180 470,120 530,180 590,120 650,180 710,120 730,140" class="surface nofill"/>
+    <line x1="530" y1="180" x2="490" y2="140" class="arrow bad thick"/>
+    <line x1="508" y1="158" x2="586" y2="122" class="arrow bad dashed"/>
     <line x1="592" y1="118" x2="740" y2="66" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <text x="700" y="56" class="small t-cpu">eye, low</text>
+    <text x="736" y="56" class="end small t-cpu">eye, low</text>
     <text x="570" y="214" class="mid small">the facet is lit, but the next</text>
     <text x="570" y="230" class="mid small">slope is between it and the eye</text>
   </svg>
   <figcaption>Both effects grow at grazing angles and on rough surfaces. They are why a rough surface does not get brighter and brighter at its edges.</figcaption>
 </figure>
 
-<p>The <b>geometry term</b> <var>G</var> is the share of facets that are neither shadowed nor masked: 1 means none are blocked. The usual model is <b>Smith's</b>. It looks at one direction at a time with a function <var>G</var><sub>1</sub>, and combines the two directions:</p>
+<p>The <b>geometry term</b> <var>G</var> is the share of facets that are neither shadowed nor masked: 1 means none are blocked. The usual model is <b>Smith's</b>. It looks at one direction at a time with a function <var>G</var><sub>1</sub>, and combines the two directions. Two variants are common.</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Variant</th><th>Formula</th><th>Notes</th></tr>
-  <tr><td>Separable Smith, with Schlick's form of <var>G</var><sub>1</sub></td><td><var>G</var> = <var>G</var><sub>1</sub>(<var>n</var>·<var>l</var>) · <var>G</var><sub>1</sub>(<var>n</var>·<var>v</var>)<br><var>G</var><sub>1</sub>(<var>x</var>) = <var>x</var> / (<var>x</var> (1 − <var>k</var>) + <var>k</var>), <var>k</var> = <var>α</var> / 2</td><td>Cheap and common. Brian Karis (2013) uses <var>k</var> = (<var>r</var> + 1)² / 8 for punctual lights, so rough surfaces do not get too bright.</td></tr>
-  <tr><td><b>Height-correlated</b> Smith-GGX (Heitz, 2014)</td><td><var>V</var> = 0.5 / (<var>n</var>·<var>l</var> · √((<var>n</var>·<var>v</var>)² (1 − <var>α</var>²) + <var>α</var>²) + <var>n</var>·<var>v</var> · √((<var>n</var>·<var>l</var>)² (1 − <var>α</var>²) + <var>α</var>²))</td><td>More exact: a facet high on the surface is less likely to be blocked in <i>both</i> directions. Already divided by 4 (<var>n</var>·<var>l</var>)(<var>n</var>·<var>v</var>), so it gives <var>V</var> directly.</td></tr>
-</table>
+<h3>Separable Smith, with Schlick's form of <var>G</var><sub>1</sub></h3>
+
+<div class="formula">
+  <p class="eq">G = G1(n·l) · G1(n·v)</p>
+  <p class="eq">G1(x) = x / (x (1 − k) + k),  k = α / 2</p>
+  <dl>
+    <dt>use</dt><dd>Cheap and common.</dd>
+    <dt>k</dt><dd>Brian Karis (2013) uses <var>k</var> = (<var>r</var> + 1)² / 8 for punctual lights, so rough surfaces do not get too bright.</dd>
+  </dl>
+</div>
+
+<h3><b>Height-correlated</b> Smith-GGX (Heitz, 2014)</h3>
+
+<div class="formula">
+  <p class="eq">V = 0.5 / (n·l · √((n·v)² (1 − α²) + α²)</p>
+  <p class="eq">          + n·v · √((n·l)² (1 − α²) + α²))</p>
+  <dl>
+    <dt>use</dt><dd>More exact: a facet high on the surface is less likely to be blocked in <i>both</i> directions.</dd>
+    <dt>V</dt><dd>Already divided by 4 (<var>n</var>·<var>l</var>)(<var>n</var>·<var>v</var>), so it gives <var>V</var> directly.</dd>
+  </dl>
 </div>
 
 <h2 id="fresnel"><span class="n">8</span><var>F</var>: Fresnel</h2>
 
-<p>Look at a lake. Straight down, you see the bottom: water reflects only about 2% of the light. Look across it at a low angle, and it is a mirror. Every material does this. The share of light that a surface reflects grows toward 100% as the angle becomes grazing. This is the <b>Fresnel effect</b>, after Augustin-Jean Fresnel.</p>
+<p>Look at a lake. The share of light that it reflects depends on the angle you look at it:</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An eye looks straight down at water. The view goes through the water to the bottom. Only a small part is reflected.">
+      <path d="M104,16 Q120,4 136,16 Q120,28 104,16 Z" class="cpu"/>
+      <circle cx="120" cy="16" r="3.5" class="solid"/>
+      <rect x="20" y="66" width="200" height="50" class="cpu o-50"/>
+      <line x1="120" y1="30" x2="120" y2="110" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <line x1="20" y1="66" x2="220" y2="66" class="arrow cpu thick"/>
+      <line x1="20" y1="116" x2="220" y2="116" class="surface"/>
+      <text x="130" y="52" class="small">about 2% reflected</text>
+      <text x="132" y="98" class="small halo">to the bottom</text>
+    </svg>
+    <h4>Straight down</h4>
+    <p>You see the bottom: water reflects only about 2% of the light.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An eye looks across the water at a low angle. The view bounces off the surface toward the sky.">
+      <path d="M12,44 Q28,32 44,44 Q28,56 12,44 Z" class="cpu"/>
+      <circle cx="28" cy="44" r="3.5" class="solid"/>
+      <rect x="20" y="66" width="200" height="50" class="cpu o-50"/>
+      <line x1="48" y1="47" x2="134" y2="64" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <line x1="140" y1="65" x2="222" y2="48" class="arrow cpu thick" marker-end="url(#ah-cpu)"/>
+      <line x1="20" y1="66" x2="220" y2="66" class="arrow cpu thick"/>
+      <line x1="20" y1="116" x2="220" y2="116" class="surface"/>
+      <text x="226" y="34" class="end small">the sky, reflected</text>
+      <text x="120" y="96" class="mid small halo">a mirror</text>
+    </svg>
+    <h4>At a low angle</h4>
+    <p>Look across it, and it is a mirror.</p>
+  </div>
+</div>
+
+<p>Every material does this. The share of light that a surface reflects grows toward 100% as the angle becomes grazing. This is the <b>Fresnel effect</b>, after Augustin-Jean Fresnel.</p>
 
 <p>The exact Fresnel equations need the material's index of refraction and work with polarized light. Christophe Schlick (1994) found a cheap approximation that is close enough:</p>
 
@@ -374,7 +637,8 @@ cos θ = v·h  (the same as l·h)</code></pre>
 <p><var>F</var><sub>0</sub> is the reflectance when you look straight at the facet (θ = 0). It is the one number that describes the material's specular color. The angle is measured to the facet normal <var>h</var>, not to <var>n</var>: that is the facet that does the reflecting.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 270" role="img" aria-label="Schlick Fresnel against the angle from 0 to 90 degrees, for F0 = 0.04 and F0 = 0.9. Both stay nearly flat until about 45 degrees and then rise to 1 at 90 degrees.">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Left: Schlick Fresnel against the angle from 0 to 90 degrees, for F0 = 0.04 and F0 = 0.9. Both stay nearly flat until about 45 degrees and then rise to 1 at 90 degrees. Right: bars of the reflected share for F0 = 0.04 at 0, 45, 60, 75, 85 and 90 degrees: 0.040, 0.042, 0.070, 0.255, 0.649 and 1.">
+    <g transform="translate(-390,0)">
     <line x1="450" y1="220" x2="742" y2="220" class="arrow" marker-end="url(#ah)"/>
     <line x1="450" y1="220" x2="450" y2="36" class="arrow" marker-end="url(#ah)"/>
     <text x="450" y="240" class="mid mono small">0°</text>
@@ -389,24 +653,82 @@ cos θ = v·h  (the same as l·h)</code></pre>
     <text x="520" y="200" class="small t-hot">F0 = 0.04 (plastic)</text>
     <text x="480" y="86" class="small t-cpu">F0 = 0.9 (a bright metal)</text>
     <text x="600" y="262" class="mid small">angle θ between v and h</text>
+    </g>
 
-    <text x="20" y="40" class="title">Schlick, F0 = 0.04</text>
-    <text x="20" y="66" class="mono small">θ</text><text x="70" y="66" class="mono small">cos θ</text><text x="130" y="66" class="mono small">F</text>
-    <text x="20" y="86" class="mono small">0°</text><text x="70" y="86" class="mono small">1.000</text><text x="130" y="86" class="mono small">0.040</text>
-    <text x="20" y="104" class="mono small">45°</text><text x="70" y="104" class="mono small">0.707</text><text x="130" y="104" class="mono small">0.042</text>
-    <text x="20" y="122" class="mono small">60°</text><text x="70" y="122" class="mono small">0.500</text><text x="130" y="122" class="mono small">0.070</text>
-    <text x="20" y="140" class="mono small">75°</text><text x="70" y="140" class="mono small">0.259</text><text x="130" y="140" class="mono small">0.255</text>
-    <text x="20" y="158" class="mono small">85°</text><text x="70" y="158" class="mono small">0.087</text><text x="130" y="158" class="mono small">0.649</text>
-    <text x="20" y="176" class="mono small">90°</text><text x="70" y="176" class="mono small">0.000</text><text x="130" y="176" class="mono small">1.000</text>
-    <text x="20" y="206" class="small">At 60°: 0.04 + 0.96 · 0.5⁵</text>
-    <text x="20" y="222" class="small">= 0.04 + 0.96 · 0.03125 = 0.070</text>
+    <text x="420" y="40" class="title">Schlick, F0 = 0.04: the share reflected</text>
+    <text x="452" y="74" class="end mono small">0°</text>
+    <rect x="462" y="62" width="8.8" height="16" class="accent"/>
+    <text x="479" y="74" class="mono small">0.040</text>
+    <text x="452" y="102" class="end mono small">45°</text>
+    <rect x="462" y="90" width="9.2" height="16" class="accent"/>
+    <text x="479" y="102" class="mono small">0.042</text>
+    <text x="452" y="130" class="end mono small">60°</text>
+    <rect x="462" y="118" width="15.4" height="16" class="accent"/>
+    <text x="485" y="130" class="mono small">0.070</text>
+    <text x="452" y="158" class="end mono small">75°</text>
+    <rect x="462" y="146" width="56.1" height="16" class="accent"/>
+    <text x="526" y="158" class="mono small">0.255</text>
+    <text x="452" y="186" class="end mono small">85°</text>
+    <rect x="462" y="174" width="142.8" height="16" class="accent"/>
+    <text x="613" y="186" class="mono small">0.649</text>
+    <text x="452" y="214" class="end mono small">90°</text>
+    <rect x="462" y="202" width="220" height="16" class="accent"/>
+    <text x="690" y="214" class="mono small">1.000</text>
   </svg>
   <figcaption>The curve is flat for most angles and rises fast near 90°. That is why the edges of objects, which face away from the eye, catch a bright rim of reflected light.</figcaption>
 </figure>
 
-<p><var>F</var> is a color, not a single number: <var>F</var><sub>0</sub> has three channels. For a non-metal they are equal (the highlight is white). For a metal they differ, and the highlight takes the metal's color. At 90° every material reflects everything, so the color fades to white at the edges.</p>
+<div class="table-wrap">
+<table>
+  <tr><th>θ</th><th>0°</th><th>45°</th><th>60°</th><th>75°</th><th>85°</th><th>90°</th></tr>
+  <tr><td>cos θ</td><td>1.000</td><td>0.707</td><td>0.500</td><td>0.259</td><td>0.087</td><td>0.000</td></tr>
+  <tr><td><var>F</var>, with <var>F</var><sub>0</sub> = 0.04</td><td>0.040</td><td>0.042</td><td>0.070</td><td>0.255</td><td>0.649</td><td>1.000</td></tr>
+</table>
+</div>
 
-<h2><span class="n">9</span>The metallic-roughness workflow</h2>
+<p>At 60°: 0.04 + 0.96 · 0.5⁵ = 0.04 + 0.96 · 0.03125 = 0.070.</p>
+
+<p><var>F</var> is a color, not a single number: <var>F</var><sub>0</sub> has three channels.</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three bars for the red, green and blue channel of F0. All three are equally short: 0.04.">
+      <line x1="40" y1="100" x2="200" y2="100" class="arrow"/>
+      <rect x="60" y="96.8" width="30" height="3.2" class="bad"/>
+      <rect x="105" y="96.8" width="30" height="3.2" class="gpu"/>
+      <rect x="150" y="96.8" width="30" height="3.2" class="cpu"/>
+      <text x="75" y="88" class="mid mono small">0.04</text>
+      <text x="120" y="88" class="mid mono small">0.04</text>
+      <text x="165" y="88" class="mid mono small">0.04</text>
+      <text x="75" y="118" class="mid small">R</text>
+      <text x="120" y="118" class="mid small">G</text>
+      <text x="165" y="118" class="mid small">B</text>
+    </svg>
+    <h4>Non-metal</h4>
+    <p>The three channels are equal: the highlight is white.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three bars for the red, green and blue channel of the F0 of gold: 1.00, 0.71 and 0.29.">
+      <line x1="40" y1="100" x2="200" y2="100" class="arrow"/>
+      <rect x="60" y="24" width="30" height="76" class="bad"/>
+      <rect x="105" y="46" width="30" height="54" class="gpu"/>
+      <rect x="150" y="78" width="30" height="22" class="cpu"/>
+      <text x="75" y="16" class="mid mono small">1.00</text>
+      <text x="120" y="38" class="mid mono small">0.71</text>
+      <text x="165" y="70" class="mid mono small">0.29</text>
+      <text x="75" y="118" class="mid small">R</text>
+      <text x="120" y="118" class="mid small">G</text>
+      <text x="165" y="118" class="mid small">B</text>
+      <text x="232" y="118" class="end small">gold</text>
+    </svg>
+    <h4>Metal</h4>
+    <p>The channels differ, and the highlight takes the metal's color.</p>
+  </div>
+</div>
+
+<p>At 90° every material reflects everything, so the color fades to white at the edges.</p>
+
+<h2 id="workflow"><span class="n">9</span>The metallic-roughness workflow</h2>
 
 <p>A material needs a diffuse color, an <var>F</var><sub>0</sub> and a roughness. Real materials fall into two groups that use these very differently:</p>
 
@@ -425,8 +747,13 @@ cos θ = v·h  (the same as l·h)</code></pre>
 
 <p>Non-metals almost all sit near 0.04, and metals have no diffuse at all. So one color and one switch are enough. The <b>metallic-roughness workflow</b> (used by glTF, Unreal and many others) stores three values per pixel:</p>
 
+<div class="legend">
+  <span><i class="mem"></i>stored per pixel</span>
+  <span><i class="shader"></i>computed in the shader</span>
+</div>
+
 <figure class="diagram">
-  <svg viewBox="0 0 760 260" role="img" aria-label="Three inputs, base color, metallic and roughness, become the shading values: diffuse color is base color times one minus metallic; F0 is a mix from 0.04 to the base color by metallic; alpha is roughness squared.">
+  <svg viewBox="0 0 760 240" role="img" aria-label="Three inputs, base color, metallic and roughness, become the shading values: diffuse color is base color times one minus metallic; F0 is a mix from 0.04 to the base color by metallic; alpha is roughness squared.">
     <rect x="20" y="30" width="170" height="50" rx="6" class="mem"/>
     <text x="105" y="52" class="mid title">base color</text>
     <text x="105" y="70" class="mid small">RGB, in linear values</text>
@@ -437,11 +764,11 @@ cos θ = v·h  (the same as l·h)</code></pre>
     <text x="105" y="192" class="mid title">roughness r</text>
     <text x="105" y="210" class="mid small">0 = mirror, 1 = matte</text>
 
-    <line x1="190" y1="55"  x2="368" y2="55"  class="arrow" marker-end="url(#ah)"/>
-    <line x1="190" y1="60"  x2="368" y2="120" class="arrow" marker-end="url(#ah)"/>
-    <line x1="190" y1="125" x2="368" y2="62"  class="arrow" marker-end="url(#ah)"/>
-    <line x1="190" y1="125" x2="368" y2="125" class="arrow" marker-end="url(#ah)"/>
-    <line x1="190" y1="195" x2="368" y2="195" class="arrow" marker-end="url(#ah)"/>
+    <line x1="190" y1="55"  x2="368" y2="55"  class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="190" y1="60"  x2="368" y2="120" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="190" y1="125" x2="368" y2="62"  class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="190" y1="125" x2="368" y2="125" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="190" y1="195" x2="368" y2="195" class="arrow mem" marker-end="url(#ah-mem)"/>
 
     <rect x="370" y="30" width="370" height="50" rx="6" class="shader"/>
     <text x="385" y="52" class="mono">diffuse = base · (1 − metallic)</text>
@@ -452,38 +779,105 @@ cos θ = v·h  (the same as l·h)</code></pre>
     <rect x="370" y="170" width="370" height="50" rx="6" class="shader"/>
     <text x="385" y="192" class="mono">α = r · r</text>
     <text x="385" y="210" class="small">into D and G</text>
-    <text x="380" y="248" class="mid small">The same base color means "the diffuse color" for a non-metal and "the specular color" for a metal.</text>
   </svg>
-  <figcaption>Metallic is meant to be 0 or 1. Values in between are for the borders of a texture (rust on steel, dust on gold), where a pixel is part one, part the other.</figcaption>
+  <figcaption>The same base color means "the diffuse color" for a non-metal and "the specular color" for a metal. Metallic is meant to be 0 or 1. Values in between are for the borders of a texture (rust on steel, dust on gold), where a pixel is part one, part the other.</figcaption>
 </figure>
 
 <div class="split">
-  <div>
+  <div class="good">
     <h4>Upside</h4>
     <p>Few inputs, hard to get wrong. A non-metal cannot get an <var>F</var><sub>0</sub> that does not exist in nature. Textures pack well: glTF puts roughness in the green channel and metallic in the blue channel of one texture.</p>
   </div>
-  <div>
+  <div class="bad">
     <h4>Downside</h4>
     <p>All non-metals share <var>F</var><sub>0</sub> = 0.04. Water, gems or car paint need a different value. The <b>specular-glossiness</b> workflow stores <var>F</var><sub>0</sub> as its own color instead; glTF extensions such as <samp>KHR_materials_specular</samp> and <samp>KHR_materials_ior</samp> add it back.</p>
   </div>
 </div>
 
-<h2><span class="n">10</span>Lights</h2>
+<h2 id="lights"><span class="n">10</span>Lights</h2>
 
 <p>A punctual light gives two things to the sum in <a href="#rendering-sum">section 2</a>: the direction <var>l</var>, and the light <var>E</var> that arrives at the surface.</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Type</th><th>Direction <var>l</var></th><th>Arriving light <var>E</var></th><th>Models</th></tr>
-  <tr><td><b>Directional</b></td><td>the same everywhere: minus the light's direction</td><td>color × intensity, no falloff</td><td>the sun: so far away that its rays are parallel</td></tr>
-  <tr><td><b>Point</b></td><td>normalize(light position − <var>p</var>)</td><td>color × intensity × attenuation(distance)</td><td>a bulb: light goes out in every direction</td></tr>
-  <tr><td><b>Spot</b></td><td>as point</td><td>as point, × a cone factor</td><td>a flashlight: a point light limited to a cone</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Parallel rays fall on a surface. At a point on it, the vector l points back along the rays.">
+      <line x1="20" y1="10" x2="48" y2="82" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="70" y1="10" x2="98" y2="82" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="120" y1="10" x2="148" y2="82" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="170" y1="10" x2="198" y2="82" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="20" y1="96" x2="220" y2="96" class="surface"/>
+      <line x1="125" y1="96" x2="108" y2="52" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <circle cx="125" cy="96" r="4" class="cpu"/>
+      <text x="118" y="48" class="small t-hot">l</text>
+      <text x="120" y="120" class="mid small">the same l everywhere</text>
+    </svg>
+    <h4>Directional</h4>
+    <p><b><var>l</var>:</b> the same everywhere: minus the light's direction.</p>
+    <p><b><var>E</var>:</b> color × intensity, no falloff.</p>
+    <p class="cost">Models the sun: so far away that its rays are parallel</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A light sends rays in every direction. At a point on the surface, the vector l points to the light.">
+      <line x1="132" y1="30" x2="160" y2="30" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="108" y1="30" x2="80" y2="30" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="128.5" y1="21.5" x2="146" y2="4" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="111.5" y1="21.5" x2="94" y2="4" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="128.5" y1="38.5" x2="150" y2="60" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="120" y1="42" x2="120" y2="72" class="arrow light" marker-end="url(#ah-light)"/>
+      <circle cx="120" cy="30" r="9" class="light"/>
+      <line x1="20" y1="110" x2="220" y2="110" class="surface"/>
+      <line x1="60" y1="110" x2="104" y2="51" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <circle cx="60" cy="110" r="4" class="cpu"/>
+      <text x="68" y="76" class="small t-hot">l</text>
+      <text x="54" y="126" class="small">p</text>
+    </svg>
+    <h4>Point</h4>
+    <p><b><var>l</var>:</b> normalize(light position − <var>p</var>).</p>
+    <p><b><var>E</var>:</b> color × intensity × attenuation(distance).</p>
+    <p class="cost">Models a bulb: light goes out in every direction</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A light sends rays only inside a cone. A point outside the cone gets no light.">
+      <polygon points="120,16 68,110 172,110" class="lit o-50"/>
+      <line x1="116" y1="26" x2="88" y2="98" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="120" y1="26" x2="120" y2="100" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="124" y1="26" x2="152" y2="98" class="arrow light" marker-end="url(#ah-light)"/>
+      <circle cx="120" cy="16" r="9" class="light"/>
+      <line x1="20" y1="110" x2="220" y2="110" class="surface"/>
+      <circle cx="200" cy="110" r="4" class="solid"/>
+      <text x="200" y="98" class="mid small">outside</text>
+    </svg>
+    <h4>Spot</h4>
+    <p><b><var>l</var>:</b> as point.</p>
+    <p><b><var>E</var>:</b> as point, × a cone factor.</p>
+    <p class="cost">Models a flashlight: a point light limited to a cone</p>
+  </div>
 </div>
 
 <h3>Attenuation: the inverse-square law</h3>
 
-<p>A point light sends its light out over a sphere. At distance <var>d</var> the sphere has area 4π<var>d</var>², so the light per area falls as <b>1 / <var>d</var>²</b>. Twice as far means a quarter of the light. That is physics, and PBR uses it as it is.</p>
+<p>A point light sends its light out over a sphere. At distance <var>d</var> the sphere has area 4π<var>d</var>², so the light per area falls as <b>1 / <var>d</var>²</b>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 600 200" role="img" aria-label="A light on the left. The light that passes through one square at distance d spreads over four squares of the same size at distance 2d, so each gets a quarter.">
+    <line x1="60" y1="100" x2="440" y2="60" class="arrow light dashed"/>
+    <line x1="60" y1="100" x2="440" y2="140" class="arrow light dashed"/>
+    <circle cx="60" cy="100" r="12" class="light"/>
+    <rect x="250" y="80" width="40" height="40" class="light"/>
+    <rect x="440" y="60" width="80" height="80" class="light o-50"/>
+    <path d="M480,60V140M440,100H520" class="arrow light"/>
+    <line x1="60" y1="168" x2="540" y2="168" class="arrow" marker-end="url(#ah)"/>
+    <path d="M60,163V173M270,163V173M480,163V173" class="arrow"/>
+    <text x="60" y="190" class="mid small">0</text>
+    <text x="270" y="190" class="mid small">d</text>
+    <text x="480" y="190" class="mid small">2d</text>
+    <text x="270" y="64" class="mid small">area 1</text>
+    <text x="270" y="140" class="mid title">1</text>
+    <text x="480" y="44" class="mid small">area 4</text>
+    <text x="548" y="104" class="title">1/4 each</text>
+  </svg>
+  <figcaption>Twice as far means a quarter of the light. That is physics, and PBR uses it as it is.</figcaption>
+</figure>
 
 <p>The problem: 1 / <var>d</var>² never reaches 0. Every light then touches every pixel in the scene, and a renderer that sorts lights into tiles or clusters cannot skip any of them. Engines add a <b>range</b>: a distance where the light ends. To end it smoothly, they multiply by a window that is 1 near the light and falls to 0 at the range (Karis, 2013):</p>
 
@@ -529,28 +923,99 @@ cos θ = v·h  (the same as l·h)</code></pre>
 </table>
 </div>
 
-<p>Physical light units are a separate choice. A physical engine gives a point light in lumens or candela and the sun in lux, and divides by 4π where needed. Many engines just use a unitless "intensity" that the artist tunes by eye.</p>
+<div class="callout">
+  <strong>Light units</strong>
+  <p>Physical light units are a separate choice. A physical engine gives a point light in lumens or candela and the sun in lux, and divides by 4π where needed. Many engines just use a unitless "intensity" that the artist tunes by eye.</p>
+</div>
 
 <h2 id="ambient"><span class="n">11</span>Ambient light, image-based lighting, emission</h2>
 
 <p>Punctual lights are only part of the light in a scene. The sky and every wall that bounces light also light the surface, from all directions at once. Several ways to add that light exist, from cheap to expensive:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Method</th><th>What it adds</th><th>Cost</th></tr>
-  <tr><td>Constant ambient</td><td>a small fixed light × diffuse color. Keeps shadows from being pure black.</td><td>nothing</td></tr>
-  <tr><td>Hemisphere ambient</td><td>a sky color from above, a ground color from below, mixed by the normal</td><td>almost nothing</td></tr>
-  <tr><td><b>Image-based lighting</b> (IBL)</td><td>light from an environment image. Diffuse: a blurred "irradiance" map or spherical harmonics. Specular: a map pre-blurred per roughness, plus a small lookup texture for the BRDF (the <b>split-sum</b> method, Karis 2013).</td><td>a few texture reads</td></tr>
-  <tr><td>Global illumination</td><td>real bounced light: light maps, probes, or ray tracing</td><td>large</td></tr>
-</table>
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The same small amount of light arrives at every part of a surface with a bump.">
+      <line x1="40" y1="68" x2="40" y2="90" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="64" y1="68" x2="64" y2="90" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="108" y1="38" x2="108" y2="60" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="132" y1="38" x2="132" y2="60" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="176" y1="68" x2="176" y2="90" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="200" y1="68" x2="200" y2="90" class="arrow light" marker-end="url(#ah-light)"/>
+      <polyline points="20,100 80,100 100,70 140,70 160,100 220,100" class="surface nofill"/>
+      <text x="120" y="122" class="mid small">the same everywhere</text>
+    </svg>
+    <h4>Constant ambient</h4>
+    <p>A small fixed light × diffuse color. Keeps shadows from being pure black.</p>
+    <p class="cost"><b>Cost:</b> nothing</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A sphere of directions: the upper half is the sky color, the lower half the ground color. The normal picks a mix of the two.">
+      <path d="M70,65 A50,50 0 0 1 170,65 Z" class="cpu"/>
+      <path d="M70,65 A50,50 0 0 0 170,65 Z" class="box"/>
+      <text x="100" y="48" class="mid small">sky</text>
+      <text x="104" y="94" class="mid small">ground</text>
+      <line x1="120" y1="65" x2="152" y2="34" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="158" y="32" class="small t-hot">n</text>
+    </svg>
+    <h4>Hemisphere ambient</h4>
+    <p>A sky color from above, a ground color from below, mixed by the normal.</p>
+    <p class="cost"><b>Cost:</b> almost nothing</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An image of the surroundings, with a sun and hills, lights a ball in front of it.">
+      <rect x="20" y="12" width="200" height="106" class="paper"/>
+      <polygon points="20,84 62,58 100,84" class="box"/>
+      <line x1="20" y1="84" x2="220" y2="84" class="grid"/>
+      <circle cx="184" cy="34" r="9" class="light"/>
+      <line x1="176" y1="42" x2="140" y2="68" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="56" y1="34" x2="104" y2="68" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <circle cx="122" cy="84" r="20" class="solid"/>
+      <text x="30" y="28" class="small">environment image</text>
+    </svg>
+    <h4><b>Image-based lighting</b> (IBL)</h4>
+    <p>Light from an environment image. Diffuse: a blurred "irradiance" map or spherical harmonics. Specular: a map pre-blurred per roughness, plus a small lookup texture for the BRDF (the <b>split-sum</b> method, Karis 2013).</p>
+    <p class="cost"><b>Cost:</b> a few texture reads</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Light from a lamp hits a wall and bounces from the wall onto the floor.">
+      <circle cx="40" cy="22" r="9" class="light"/>
+      <line x1="50" y1="26" x2="184" y2="60" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="186" y1="64" x2="112" y2="104" class="arrow light dashed" marker-end="url(#ah-light)"/>
+      <line x1="190" y1="16" x2="190" y2="110" class="surface"/>
+      <line x1="20" y1="110" x2="190" y2="110" class="surface"/>
+      <text x="124" y="82" class="end small">bounced</text>
+      <text x="198" y="66" class="small">wall</text>
+    </svg>
+    <h4>Global illumination</h4>
+    <p>Real bounced light: light maps, probes, or ray tracing.</p>
+    <p class="cost"><b>Cost:</b> large</p>
+  </div>
 </div>
 
 <div class="split">
   <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A point on flat ground sees a wide part of the sky. A point at the bottom of a crack sees only a narrow part.">
+      <polygon points="70,80 22,62 34,34 70,22 106,34 118,62" class="lit"/>
+      <polygon points="210,128 190,22 230,22" class="lit"/>
+      <polyline points="14,80 180,80 210,130 240,80 306,80" class="surface nofill"/>
+      <circle cx="70" cy="80" r="4" class="cpu"/>
+      <circle cx="210" cy="126" r="4" class="cpu"/>
+      <text x="70" y="104" class="mid small">sees a lot of sky</text>
+      <text x="262" y="110" class="mid small">sees little:</text>
+      <text x="262" y="124" class="mid small">darker ambient</text>
+    </svg>
     <h4>Ambient occlusion (AO)</h4>
     <p>A texture or pass that says how much of the sky each point can see. Cracks and corners see less. AO darkens the <b>ambient</b> light only. Direct light from a punctual light is not affected: that is the job of shadows.</p>
   </div>
   <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A screen that glows by itself. A box next to it is not lit by it.">
+      <path d="M96,26L84,14M130,20V4M164,26L176,14M70,60H52M190,60H208M96,94L84,106M164,94L176,106" class="arrow light"/>
+      <rect x="80" y="30" width="100" height="60" rx="4" class="light"/>
+      <path d="M130,90V112M104,112H156" class="arrow thick"/>
+      <text x="130" y="65" class="mid title">Le</text>
+      <rect x="244" y="70" width="42" height="42" class="solid"/>
+      <text x="265" y="130" class="mid small">not lit by it</text>
+    </svg>
     <h4>Emission</h4>
     <p>The <var>L<sub>e</sub></var> term. The emitted color is added to the result as it is, with no BRDF and no lights. A screen or a lamp shade glows even in a dark room. Emission does not light other objects unless something else (a light, GI, bloom) makes it.</p>
   </div>
@@ -558,32 +1023,50 @@ cos θ = v·h  (the same as l·h)</code></pre>
 
 <h3>The result is HDR</h3>
 
-<p>The sum can be far above 1: a highlight can be 50 times brighter than a wall. A screen shows 0 to 1. So the result goes through <b>tone mapping</b>, a curve that squeezes bright values into the range a screen can show. The simplest is Reinhard: <var>c</var> / (<var>c</var> + 1), which maps 1 to 0.5 and 3 to 0.75. Others (ACES, AgX) keep colors and contrast better. Then the linear value is encoded for the display, see <a href="color-spaces.html">Color spaces</a>.</p>
+<p>The sum can be far above 1: a highlight can be 50 times brighter than a wall. A screen shows 0 to 1.</p>
 
-<h2><span class="n">12</span>Worked example</h2>
+<ol class="flow">
+  <li class="shader"><b>The lighting sum</b><span>linear, can be far above 1</span></li>
+  <li class="shader"><b>Tone mapping</b><span>a curve that squeezes bright values into the range a screen can show</span></li>
+  <li class="gpu"><b>Encode</b><span>the linear value is encoded for the display</span></li>
+</ol>
+
+<p>The simplest tone map is Reinhard: <var>c</var> / (<var>c</var> + 1), which maps 1 to 0.5 and 3 to 0.75. Others (ACES, AgX) keep colors and contrast better. For the encode, see <a href="color-spaces.html">Color spaces</a>.</p>
+
+<h2 id="example"><span class="n">12</span>Worked example</h2>
 
 <p>One pixel, by hand. A grey plastic surface: base color 0.8, metallic 0, roughness <var>r</var> = 0.5. One directional light with <var>E</var> = 1. The light and the eye are both 30° from the normal, on opposite sides. So <var>h</var> = <var>n</var>: the eye sees the center of the highlight.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 200" role="img" aria-label="The surface with normal n. The light direction l is 30 degrees to the left of n and the view direction v is 30 degrees to the right, so the half vector h equals n.">
-    <rect x="80" y="150" width="300" height="24" class="box"/>
-    <circle cx="230" cy="150" r="4" class="cpu"/>
-    <line x1="230" y1="150" x2="230" y2="40" class="arrow" marker-end="url(#ah)"/>
-    <text x="236" y="40" class="small">n = h</text>
-    <line x1="230" y1="150" x2="175" y2="55" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="162" y="52" class="small t-hot">l</text>
-    <line x1="230" y1="150" x2="285" y2="55" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <text x="292" y="52" class="small t-cpu">v</text>
-    <text x="196" y="110" class="end small">30°</text>
-    <text x="264" y="110" class="small">30°</text>
-    <text x="440" y="50" class="mono small">n·l = n·v = cos 30° = 0.866</text>
-    <text x="440" y="72" class="mono small">n·h = 1</text>
-    <text x="440" y="94" class="mono small">l·h = cos 30° = 0.866</text>
-    <text x="440" y="116" class="mono small">α = 0.5² = 0.25,  α² = 0.0625</text>
-    <text x="440" y="138" class="mono small">F0 = mix(0.04, 0.8, 0) = 0.04</text>
-    <text x="440" y="160" class="mono small">diffuse color = 0.8 · (1 − 0) = 0.8</text>
+    <line x1="230" y1="160" x2="530" y2="160" class="surface"/>
+    <line x1="380" y1="160" x2="380" y2="40" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="380" y="28" class="mid title t-hot">n = h</text>
+    <line x1="380" y1="160" x2="322" y2="60" class="arrow light" marker-end="url(#ah-light)"/>
+    <text x="304" y="58" class="title t-light">l</text>
+    <circle cx="300" cy="24" r="11" class="light"/>
+    <line x1="380" y1="160" x2="438" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="448" y="58" class="title t-cpu">v</text>
+    <path d="M444,26 Q460,14 476,26 Q460,38 444,26 Z" class="cpu"/>
+    <circle cx="460" cy="26" r="3.5" class="solid"/>
+    <path d="M380,110 A50,50 0 0 0 355,116.7" class="arrow"/>
+    <path d="M380,110 A50,50 0 0 1 405,116.7" class="arrow"/>
+    <text x="363" y="98" class="mid small">30°</text>
+    <text x="397" y="98" class="mid small">30°</text>
+    <circle cx="380" cy="160" r="4" class="cpu"/>
   </svg>
 </figure>
+
+<p>The inputs that the formulas need:</p>
+
+<div class="stats">
+  <div><b>0.866</b><span><var>n</var>·<var>l</var> = <var>n</var>·<var>v</var></span><small>cos 30°</small></div>
+  <div><b>1</b><span><var>n</var>·<var>h</var></span><small>h = n</small></div>
+  <div><b>0.866</b><span><var>l</var>·<var>h</var></span><small>cos 30°</small></div>
+  <div><b>0.25</b><span><var>α</var>, and <var>α</var>² = 0.0625</span><small>0.5²</small></div>
+  <div><b>0.04</b><span><var>F</var><sub>0</sub></span><small>mix(0.04, 0.8, 0)</small></div>
+  <div><b>0.8</b><span>diffuse color</span><small>0.8 · (1 − 0)</small></div>
+</div>
 
 <div class="table-wrap">
 <table>
@@ -598,25 +1081,38 @@ cos θ = v·h  (the same as l·h)</code></pre>
 </table>
 </div>
 
-<p>Now move the light to 50° while the eye stays at 30° on the other side. Then <var>h</var> is 10° away from <var>n</var>: <var>D</var> falls from 5.09 to 2.41 and the specular from 0.067 to 0.043. The diffuse hardly changes, but <var>n</var>·<var>l</var> drops to 0.643, and the pixel becomes 0.185. Make the same surface gold (<var>F</var><sub>0</sub> = 0.9, metallic 1) in the first setup: the diffuse is 0, the specular is 5.093 · 0.330 · 0.900 = 1.51, and the pixel is 1.31. That is above 1, which is normal for a highlight on metal; tone mapping takes care of it.</p>
+<p>Now change one thing at a time and compare the pixel:</p>
 
-<h2><span class="n">13</span>Pitfalls</h2>
-
-<div class="table-wrap">
-<table>
-  <tr><th>Mistake</th><th>What you see</th><th>Fix</th></tr>
-  <tr><td>Textures not in linear values</td><td>washed-out or too dark colors, wrong highlights</td><td>decode color textures from sRGB; read data textures (roughness, normals) as plain numbers</td></tr>
-  <tr><td>Interpolated vectors not normalized</td><td>highlights that wobble across triangles</td><td>normalize <var>n</var>, <var>v</var> and <var>l</var> in the fragment shader</td></tr>
-  <tr><td>Roughness 0</td><td>no highlight, or one that sparkles and flickers</td><td>clamp <var>r</var> to a small minimum</td></tr>
-  <tr><td><var>n</var>·<var>v</var> or <var>n</var>·<var>l</var> of 0 in a divisor</td><td>black or white pixels at edges (NaN or ∞)</td><td>clamp to a small positive number, or use the <var>V</var> form</td></tr>
-  <tr><td>Light direction sign</td><td>the lit side is the dark one</td><td>decide once: does the stored direction point from the light, or toward it? <var>l</var> must point toward the light</td></tr>
-  <tr><td>Forgetting the π in Lambert</td><td>diffuse 3 times too bright, lights must be dimmed to match</td><td>use <var>c</var> / π, or scale the light intensities by π once, on purpose</td></tr>
-</table>
+<div class="stats">
+  <div><b>0.270</b><span>the setup above: grey plastic, light at 30°</span><small>specular 0.067</small></div>
+  <div><b>0.185</b><span>the light moved to 50°</span><small>specular 0.043, n·l 0.643</small></div>
+  <div><b>1.31</b><span>the first setup, but gold</span><small>specular 1.51, diffuse 0</small></div>
 </div>
+
+<p><b>Light at 50°</b>, while the eye stays at 30° on the other side. Then <var>h</var> is 10° away from <var>n</var>: <var>D</var> falls from 5.09 to 2.41 and the specular from 0.067 to 0.043. The diffuse hardly changes, but <var>n</var>·<var>l</var> drops to 0.643, and the pixel becomes 0.185.</p>
+
+<p><b>Gold</b> (<var>F</var><sub>0</sub> = 0.9, metallic 1) in the first setup: the diffuse is 0, the specular is 5.093 · 0.330 · 0.900 = 1.51, and the pixel is 1.31. That is above 1, which is normal for a highlight on metal; tone mapping takes care of it.</p>
+
+<h2 id="pitfalls"><span class="n">13</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Washed-out or too dark colors, wrong highlights</dt><dd><b>Textures not in linear values.</b> Decode color textures from sRGB; read data textures (roughness, normals) as plain numbers.</dd></div>
+  <div><dt>Highlights that wobble across triangles</dt><dd><b>Interpolated vectors not normalized.</b> Normalize <var>n</var>, <var>v</var> and <var>l</var> in the fragment shader.</dd></div>
+  <div><dt>No highlight, or one that sparkles and flickers</dt><dd><b>Roughness 0.</b> Clamp <var>r</var> to a small minimum.</dd></div>
+  <div><dt>Black or white pixels at edges (NaN or ∞)</dt><dd><b><var>n</var>·<var>v</var> or <var>n</var>·<var>l</var> of 0 in a divisor.</b> Clamp to a small positive number, or use the <var>V</var> form.</dd></div>
+  <div><dt>The lit side is the dark one</dt><dd><b>Light direction sign.</b> Decide once: does the stored direction point from the light, or toward it? <var>l</var> must point toward the light.</dd></div>
+  <div><dt>Diffuse 3 times too bright, lights must be dimmed to match</dt><dd><b>Forgetting the π in Lambert.</b> Use <var>c</var> / π, or scale the light intensities by π once, on purpose.</dd></div>
+</dl>
 
 <h2 id="in-rasm"><span class="n">14</span>In RASM</h2>
 
 <p>RASM shades every non-unlit material with one function, <code>shadePBR</code> in <code>shaders/lib/pbr.slang</code>. The uber shader's <code>fragMain</code> (in <code>shaders/passes/rasm.slang</code>) fills a <code>PBRInfo</code> with the fragment's position, normal, tangent, UVs, the scene's lights and the material row, and calls it. The BRDF is the textbook one from sections 4 to 8, in the form Filament uses.</p>
+
+<div class="legend">
+  <span><i class="mem"></i>GPU tables</span>
+  <span><i class="gpu"></i>from the vertex shader</span>
+  <span><i class="shader"></i>steps of shadePBR</span>
+</div>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 330" role="img" aria-label="shadePBR in six steps: sample the textures and combine them with the material factors; find the normal; compute F0, the diffuse color and alpha; loop over up to 8 lights with D_GGX, F_Schlick and V_SmithGGXCorrelated plus Lambert; add a constant ambient and the emissive color; tone map with Reinhard and return.">
@@ -677,7 +1173,7 @@ cos θ = v·h  (the same as l·h)</code></pre>
   <tr><td>AO</td><td>ambient only</td><td>Ambient only, mixed by the occlusion <code>strength</code>.</td></tr>
   <tr><td>Emission</td><td>added as it is</td><td><code>emissiveFactor</code> × the emissive texture, added after the lights. No emissive-strength extension.</td></tr>
   <tr><td>Tone mapping</td><td>a separate step on the HDR image</td><td>Reinhard per channel, at the end of <code>shadePBR</code>. There is no HDR target, so each pixel is mapped as it is drawn.</td></tr>
-  <tr><td>Shadows</td><td>needed for real direct light</td><td>None: every light reaches every surface that faces it.</td></tr>
+  <tr><td>Shadows</td><td>needed for real direct light</td><td>One shadow map for one directional light, the one <code>SceneShadow::light</code> names (<a href="shadow-mapping.html#in-rasm">Shadow mapping</a>). Every other light reaches every surface that faces it.</td></tr>
 </table>
 </div>
 
@@ -725,7 +1221,7 @@ cos θ = v·h  (the same as l·h)</code></pre>
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>From the development plan, phase 4: an HDR color target with a separate tone-map pass (and Reinhard removed from the material shader), shadows, spot lights (<code>B15</code>), image-based lighting, alpha modes (the pipeline has no blending, so base color alpha does nothing today), and clustered lighting to remove the fixed limit of 8 lights.</p>
+  <p>From the development plan, phase 4: an HDR color target with a separate tone-map pass (and Reinhard removed from the material shader), cascaded shadow maps and spot and point light shadows, spot lights (<code>B15</code>), image-based lighting, alpha modes (the pipeline has no blending, so base color alpha does nothing today), and clustered lighting to remove the fixed limit of 8 lights.</p>
 </div>
 
 <h3>Further reading</h3>

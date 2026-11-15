@@ -19,6 +19,9 @@
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
   </defs>
 </svg>
 
@@ -51,7 +54,7 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>Three ways to run a frame</h2>
+<h2 id="ways"><span class="n">1</span>Three ways to run a frame</h2>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 196" role="img" aria-label="Engine::render builds a render graph with the scene passes once and runs it with RenderGraph::execute. RenderGraph::execute and a manual frame both call beginFrame first and endFrame last, with passes in between.">
@@ -84,7 +87,7 @@
   <figcaption>All three use the same frame functions. <code>render</code> keeps one graph and builds it again only when the scene or the camera changes. The stepper below walks that frame. Only graph passes draw the scene: an app with its own graph calls <code>addScenePasses</code> itself (<a href="render-graphs.html#in-rasm">render graphs</a>).</figcaption>
 </figure>
 
-<h2><span class="n">2</span>One frame, step by step</h2>
+<h2 id="steps"><span class="n">2</span>One frame, step by step</h2>
 
 <p>This is frame 7 of an app that calls <code>render(scene, camera)</code> with occlusion culling on and async compute off (the defaults). Frame 7 uses slot 0. Click through the steps (or use the arrow keys). The strip at the top of each picture shows where we are.</p>
 
@@ -297,7 +300,7 @@
 
   <div class="step">
     <h4>6. Start recording, then Cull 1</h4>
-    <svg viewBox="0 0 730 300" role="img" aria-label="beginFrame begins the frame command buffer, starts the frame timer and clears new history targets. Then the Cull 1 compute pass: a barrier from the graph, a timestamp, countMain, a compute barrier, writeMain and a timestamp. Before it records, prepareSceneView writes the view's SceneData on the CPU.">
+    <svg viewBox="0 0 730 230" role="img" aria-label="beginFrame begins the frame command buffer, starts the frame timer and clears new history targets. Then the Cull 1 compute pass: a barrier from the graph, a timestamp, countMain, a compute barrier, writeMain and a timestamp. Before it records, prepareSceneView writes the view's SceneData on the CPU.">
       <!--strip 5-->
       <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
       <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
@@ -326,17 +329,15 @@
       <text x="244" y="176" class="mono">prepareSceneView(view), on the CPU first</text>
       <text x="244" y="196" class="small">writes the view's SceneData: camera, frustum planes, lights, buffer addresses</text>
       <text x="244" y="213" class="small">grows the slot's visible-draw and Hi-Z buffers; makes the pipelines once</text>
-      <text x="14" y="246" class="small">clear history — clearNewHistory clears new copies of history render targets (none in this app).</text>
-      <text x="14" y="264" class="small">barrier G|C→C — from the graph (G = GRAPHICS, C = COMPUTE): last frame's Scene 2 read what Cull 1 writes.</text>
-      <text x="14" y="282" class="small">ts — a GPU timestamp, only while frame stats are measured. Every pass gets a pair, named after the pass.</text>
     </svg>
+    <p><b>clear history</b>: <code>clearNewHistory</code> clears new copies of history render targets (none in this app).<br><b>barrier G|C→C</b>: from the graph (G = graphics, C = compute). Last frame's <code>Scene 2</code> read what <code>Cull 1</code> writes.<br><b>ts</b>: a GPU timestamp, only while frame stats are measured. Every pass gets a pair, named after the pass.</p>
     <p><code>beginFrame</code> sets <code>swapchainRendered</code> to false and opens the graphics batch (<code>Engine::useQueue</code>), which begins the slot's command buffer. Each command buffer has its own pool, and <code>begin</code> resets it. That is safe because of the wait in step 3. Then <code>RenderGraph::execute</code> runs the passes in its order. Before each pass it records the barriers that the pass's declared reads and writes need, outside any render pass. With async compute, <code>Cull 1</code> records into a compute batch instead, and the graph adds waits between the queues (<a href="#batches">below</a>).</p>
     <p><code>Cull 1</code> is a compute pass, so its dispatches sit between render passes, in the same command buffer. <code>countMain</code> tests each draw against the frustum and last frame's visibility flags, and <code>writeMain</code> packs the visible ones into the view's visible-draw list. The <code>COMPUTE → COMPUTE</code> barrier between them is inside the pass. What they do is in <a href="frustum-culling.html#in-rasm">Frustum culling</a>, <a href="lod-selection.html#in-rasm">LOD selection</a> and <a href="stream-compaction.html#in-rasm">Stream compaction</a>.</p>
   </div>
 
   <div class="step">
     <h4>7. Scene 1: the early draws</h4>
-    <svg viewBox="0 0 730 312" role="img" aria-label="The Scene 1 graphics pass: a compute-to-graphics barrier, a timestamp, the swapchain image and depth barriers, beginRendering with clear, viewport, scissor and cull mode NONE. drawSceneView binds the pipeline, the bindless set and the index buffer, then per run sets the cull mode, pushes the SceneData address and records one indirect count draw. endPass ends rendering.">
+    <svg viewBox="0 0 730 266" role="img" aria-label="The Scene 1 graphics pass: a compute-to-graphics barrier, a timestamp, the swapchain image and depth barriers, beginRendering with clear, viewport, scissor and cull mode NONE. drawSceneView binds the pipeline, the bindless set and the index buffer, then per run sets the cull mode, pushes the SceneData address and records one indirect count draw. endPass ends rendering.">
       <!--strip 5-->
       <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
       <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
@@ -376,16 +377,15 @@
       <text x="24" y="249" class="small">the view's SceneData (prepareSceneView)</text>
       <path d="M300,235 H328 V176" class="arrow mem" marker-end="url(#ah-mem)"/>
       <text x="340" y="235" class="small">its address goes in the push constant</text>
-      <text x="14" y="282" class="small">barrier C→G — from the graph: Cull 1 wrote the visible draws and counts these draws read.</text>
-      <text x="14" y="300" class="small">image and depth start from UNKNOWN (discard): Scene 1 is the target's first pass, so it clears both.</text>
     </svg>
+    <p><b>barrier C→G</b>: from the graph. <code>Cull 1</code> wrote the visible draws and counts these draws read.<br><b>image and depth</b> start from <code>UNKNOWN</code> (discard): <code>Scene 1</code> is the target's first pass, so it clears both.</p>
     <p>A barrier call names only the new usage: <code>RenderContext</code> remembers the layout each texture is in (<code>TextureStates</code>). With <code>discard</code> set, as here, the old contents are dropped and the barrier starts from <code>UNKNOWN</code>. <code>acquireNextImage</code> marks the acquired image <code>UNKNOWN</code> too, and the image barrier waits at color output, after the acquire. Barriers must be recorded outside a render pass. See <a href="gpu-sync.html#in-rasm">GPU synchronization</a>.</p>
     <p>The draw lists and runs <code>drawSceneView</code> uses are in <a href="gpu-scene.html#runs">stop 3</a>. The ideas: <a href="gpu-driven.html">indirect draws</a>, <a href="device-addresses.html">device addresses</a> for the push constant, <a href="vertex-pulling.html">vertex pulling</a> and <a href="uber-shaders.html">the uber shader</a> for what each draw runs.</p>
   </div>
 
   <div class="step">
     <h4>8. Hi-Z, Cull 2, Scene 2: occlusion culling</h4>
-    <svg viewBox="0 0 730 336" role="img" aria-label="Three more passes. Hi-Z: a barrier, depth to SAMPLED, a timestamp, one hizMain dispatch per level with barriers between them. Cull 2: a barrier, the late countMain, a barrier and the late writeMain. Scene 2: a barrier, depth and color back to attachments without discard, beginRendering with load, the late draws and endRendering.">
+    <svg viewBox="0 0 730 254" role="img" aria-label="Three more passes. Hi-Z: a barrier, depth to SAMPLED, a timestamp, one hizMain dispatch per level with barriers between them. Cull 2: a barrier, the late countMain, a barrier and the late writeMain. Scene 2: a barrier, depth and color back to attachments without discard, beginRendering with load, the late draws and endRendering.">
       <!--strip 5-->
       <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
       <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
@@ -420,17 +420,14 @@
       <rect x="494" y="210" width="80"  height="28" rx="4" class="gpu"/><text x="534" y="228" class="mid small">late draws</text>
       <rect x="578" y="210" width="80"  height="28" rx="4" class="cpu"/><text x="618" y="228" class="mid small">endRendering</text>
       <rect x="662" y="210" width="40"  height="28" rx="4" class="cpu"/><text x="682" y="228" class="mid small">ts end</text>
-      <text x="14" y="270" class="small">depth → SAMPLED — Hi-Z declares readSwapchainDepth(), so the graph makes Scene 1 store its depth.</text>
-      <text x="14" y="288" class="small">hizMain builds one level per dispatch: level 0 from the depth of the early draws, each next one from the one before.</text>
-      <text x="14" y="306" class="small">late countMain: seen = in the frustum and not occluded. It writes the visibility flags and keeps what Scene 1 missed.</text>
-      <text x="14" y="324" class="small">Scene 2 loads color and depth (no discard). Hi-Z, Cull 2 and Scene 2 dispatch and draw nothing when the view has no Hi-Z.</text>
     </svg>
+    <p><b>depth → SAMPLED</b>: <code>Hi-Z</code> declares <code>readSwapchainDepth</code>, so the graph makes <code>Scene 1</code> store its depth.<br><b>hizMain</b> builds one level per dispatch: level 0 from the depth of the early draws, each next one from the one before.<br><b>late countMain</b>: seen = in the frustum and not occluded. It writes the visibility flags and keeps what <code>Scene 1</code> missed.<br><b>Scene 2</b> loads color and depth (no discard). <code>Hi-Z</code>, <code>Cull 2</code> and <code>Scene 2</code> dispatch and draw nothing when the view has no Hi-Z.</p>
     <p>Each step is a pass of its own, so no dispatch ever sits inside a render pass. The late culling rewrites the same visible-draw list and counts that <code>Scene 1</code> read, so the graph's barrier before <code>Cull 2</code> waits for the early draws. <code>Cull 1</code> reads the visibility flags that this pass wrote last frame (<code>readPrevious</code>). Without <code>occlusionCulling</code>, <code>addScenePasses</code> adds only <code>Cull</code> and <code>Scene</code>, and this step is not there. Why two passes, and how a Hi-Z works, is in <a href="occlusion-culling.html#in-rasm">Occlusion culling with Hi-Z</a>.</p>
   </div>
 
   <div class="step">
     <h4>9. endFrame closes the command buffer</h4>
-    <svg viewBox="0 0 730 232" role="img" aria-label="endFrame records the stats overlay in a pass of its own, the barrier to PRESENT_SRC, a compute-to-host barrier for the cull stats, closes the frame timer and closes the batch. submitBatches ends its command buffer.">
+    <svg viewBox="0 0 730 124" role="img" aria-label="endFrame records the stats overlay in a pass of its own, the barrier to PRESENT_SRC, a compute-to-host barrier for the cull stats, closes the frame timer and closes the batch. submitBatches ends its command buffer.">
       <!--strip 5-->
       <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
       <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
@@ -449,12 +446,8 @@
       <rect x="362" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="404" y="96" class="mid small">barrier C→H</text>
       <rect x="450" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="492" y="96" class="mid small">ts Frame end</text>
       <rect x="538" y="78" width="44"  height="28" rx="4" class="cpu"/><text x="560" y="96" class="mid small">close</text>
-      <text x="14" y="146" class="small">overlay pass — the stats overlay, only when it is shown (F1): a pass of its own that loads the image's color.</text>
-      <text x="14" y="164" class="small">barrier → PRESENT_SRC — once per frame: the swapchain image goes COLOR_ATTACHMENT → PRESENT_SRC.</text>
-      <text x="14" y="182" class="small">barrier C→H — COMPUTE → HOST: the CPU reads the cull stats after this slot's next fence wait.</text>
-      <text x="14" y="198" class="small">With a compute queue the culling runs there, and the barrier goes in its last batch instead.</text>
-      <text x="14" y="220" class="small t-hot">No pass drew to the swapchain? endFrame first records an empty pass named "Clear", so present still works.</text>
     </svg>
+    <p><b>overlay pass</b>: the stats overlay, only when it is shown (F1). It is a pass of its own that loads the image's color.<br><b>barrier → PRESENT_SRC</b>: once per frame, the swapchain image goes <code>COLOR_ATTACHMENT</code> → <code>PRESENT_SRC</code>.<br><b>barrier C→H</b>: <code>COMPUTE → HOST</code>. The CPU reads the cull stats after this slot's next fence wait. With a compute queue the culling runs there, and the barrier goes in its last batch instead.<br><b>No pass drew to the swapchain?</b> <code>endFrame</code> first records an empty pass named <code>"Clear"</code>, so present still works.</p>
     <p>Present needs the image in <code>PRESENT_SRC</code>. A frame that only draws into render targets gets the empty <code>"Clear"</code> pass, so it presents the clear color (there is no offscreen-only frame yet, <b>D7</b>). A render target pass instead leaves its color textures <code>SAMPLED</code> in <code>endPass</code>, for later passes.</p>
   </div>
 
@@ -529,7 +522,47 @@
 
 <h3 id="batches">With async compute: a frame of batches</h3>
 
-<p>With <code>EngineConfig::asyncCompute</code>, on a GPU with a compute queue, the steps are the same, but recording moves between two queues. A <b>batch</b> is one command buffer and one submit on one queue. Each queue has one open batch (<code>Engine::useQueue</code>), and <code>FrameResources::commandBuffer</code> names the one being recorded. A batch is closed when the other queue needs what it did (<code>Engine::waitForQueue</code>, called by the graph) or at the end of the frame. <code>endFrame</code> submits all batches together, in the order they were closed (<code>Engine::submitBatches</code>), so every wait is on a submit that already went out. Their command buffers end only there, so the frame's last compute batch, closed long before the end, still takes the cull stats barrier. If a batch's command buffer can't be made or begun, <code>useQueue</code> returns false and the frame is dropped: the graph stops, and <code>submitBatches</code> ends every batch and submits none.</p>
+<p>With <code>EngineConfig::asyncCompute</code>, on a GPU with a compute queue, the steps are the same, but recording moves between two queues. A <b>batch</b> is one command buffer and one submit on one queue.</p>
+
+<div class="split">
+  <div>
+    <svg viewBox="0 0 320 96" role="img" aria-label="Async compute off: one batch on the graphics queue holds every pass of the frame.">
+      <text x="10" y="30" class="small">compute</text>
+      <text x="10" y="66" class="small">graphics</text>
+      <path d="M70,26H310" class="grid"/>
+      <rect x="70" y="48" width="240" height="28" rx="5" class="gpu"/>
+      <text x="190" y="66" class="mid small">Cull 1 · Scene 1 · Hi-Z · Cull 2 · Scene 2</text>
+      <text x="190" y="92" class="mid small">1 command buffer, 1 submit</text>
+    </svg>
+    <h4>Async compute off (the default)</h4>
+    <p>One batch. Every pass is recorded into it.</p>
+  </div>
+  <div>
+    <svg viewBox="0 0 320 96" role="img" aria-label="Async compute on: four batches. Cull 1 on the compute queue, Scene 1 on the graphics queue, Hi-Z and Cull 2 on the compute queue, Scene 2 on the graphics queue.">
+      <text x="10" y="30" class="small">compute</text>
+      <text x="10" y="66" class="small">graphics</text>
+      <rect x="70"  y="12" width="50" height="28" rx="5" class="gpu"/><text x="95"  y="30" class="mid small">Cull 1</text>
+      <rect x="124" y="48" width="56" height="28" rx="5" class="gpu"/><text x="152" y="66" class="mid small">Scene 1</text>
+      <rect x="184" y="12" width="68" height="28" rx="5" class="gpu"/><text x="218" y="30" class="mid small">Hi-Z, Cull 2</text>
+      <rect x="256" y="48" width="56" height="28" rx="5" class="gpu"/><text x="284" y="66" class="mid small">Scene 2</text>
+      <text x="190" y="92" class="mid small">4 command buffers, 4 submits</text>
+    </svg>
+    <h4>Async compute on</h4>
+    <p>Recording moves between the queues. Each move closes a batch.</p>
+  </div>
+</div>
+
+<ul>
+  <li>Each queue has one open batch (<code>Engine::useQueue</code>), and <code>FrameResources::commandBuffer</code> names the one being recorded.</li>
+  <li>A batch is closed when the other queue needs what it did (<code>Engine::waitForQueue</code>, called by the graph) or at the end of the frame.</li>
+  <li><code>endFrame</code> submits all batches together, in the order they were closed (<code>Engine::submitBatches</code>), so every wait is on a submit that already went out.</li>
+  <li>Their command buffers end only there, so the frame's last compute batch, closed long before the end, still takes the cull stats barrier.</li>
+</ul>
+
+<div class="callout warn">
+  <strong>A batch that cannot start drops the frame</strong>
+  <p>If a batch's command buffer can't be made or begun, <code>useQueue</code> returns false and the frame is dropped: the graph stops, and <code>submitBatches</code> ends every batch and submits none.</p>
+</div>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 300" role="img" aria-label="The scene passes make four batches. Batch 1, compute: Cull 1, closed when Scene 1 reads its draws. Batch 2, graphics: Scene 1, closed when Hi-Z reads its depth. Batch 3, compute: Hi-Z and Cull 2, closed when Scene 2 reads the draws. Batch 4, graphics: Scene 2 and the overlay, closed by endFrame. Then four submits in that order: submit 1 signals compute value c+1; submit 2 waits for c+1 and the image and signals graphics value g+1; submit 3 waits for g+1 and signals c+2; submit 4 waits for c+2, signals g+2 and presents.">
@@ -581,24 +614,90 @@
 
 <p>Pending uploads still go out first, on the graphics queue. Their copies wait for the last compute submit, the copies flushed while recording too, and a compute submit waits for them, so a frame with uploads loses the overlap. With async compute off, or on a GPU without a compute family that has no graphics, there is one batch, as in the steps above. Async compute costs a little more than it saves on the scene passes today, so it is off by default (<b>P11</b>).</p>
 
-<h2><span class="n">3</span>Two slots over time</h2>
+<h2 id="slots"><span class="n">3</span>Two slots over time</h2>
 
-<p>With two slots, the CPU can record frame N+1 while the GPU runs frame N. It cannot get further ahead: frame N+2 uses the same slot as frame N, so step 3 waits for frame N's fence value. <a href="frames-in-flight.html">Frames in flight</a> draws this on a timeline and explains why one timeline fence per queue is enough. The table is for one graphics submit per frame; with async compute, a frame signals two graphics values and two compute values.</p>
+<p>With two slots, the CPU can record frame N+1 while the GPU runs frame N. It cannot get further ahead: frame N+2 uses the same slot as frame N, so step 3 waits for frame N's fence value. <a href="frames-in-flight.html">Frames in flight</a> draws this on a timeline and explains why one timeline fence per queue is enough. The picture is for one graphics submit per frame; with async compute, a frame signals two graphics values and two compute values.</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Frame</th><th><code>frameCount</code> (slot)</th><th>Waits for</th><th>Signals</th></tr>
-  <tr><td>F1</td><td>0</td><td>0 (passes at once)</td><td>1</td></tr>
-  <tr><td>F2</td><td>1</td><td>0 (passes at once)</td><td>2</td></tr>
-  <tr><td>F3</td><td>0</td><td>1</td><td>3</td></tr>
-  <tr><td>F4</td><td>1</td><td>2</td><td>4</td></tr>
-  <tr><td>F5</td><td>0</td><td>3</td><td>5</td></tr>
-</table>
+<div class="legend">
+  <span><i class="cpu"></i>slot 0</span>
+  <span><i class="shader"></i>slot 1</span>
+  <span><i class="gpu"></i>the value the frame's submit signals</span>
 </div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 218" role="img" aria-label="Five frames in a row. F1 uses slot 0, waits for 0 and signals 1. F2 uses slot 1, waits for 0 and signals 2. F3 uses slot 0, waits for 1 and signals 3. F4 uses slot 1, waits for 2 and signals 4. F5 uses slot 0, waits for 3 and signals 5. Arrows show that each frame waits for the value its slot signaled two frames before.">
+    <text x="20" y="56" class="small">frameCount (slot)</text>
+    <text x="20" y="104" class="small">waits for</text>
+    <text x="20" y="170" class="small">signals</text>
+
+    <text x="180" y="22" class="mid title">F1</text><text x="300" y="22" class="mid title">F2</text><text x="420" y="22" class="mid title">F3</text><text x="540" y="22" class="mid title">F4</text><text x="660" y="22" class="mid title">F5</text>
+
+    <rect x="130" y="36" width="100" height="30" rx="5" class="cpu"/><text x="180" y="56" class="mid mono">0</text>
+    <rect x="250" y="36" width="100" height="30" rx="5" class="shader"/><text x="300" y="56" class="mid mono">1</text>
+    <rect x="370" y="36" width="100" height="30" rx="5" class="cpu"/><text x="420" y="56" class="mid mono">0</text>
+    <rect x="490" y="36" width="100" height="30" rx="5" class="shader"/><text x="540" y="56" class="mid mono">1</text>
+    <rect x="610" y="36" width="100" height="30" rx="5" class="cpu"/><text x="660" y="56" class="mid mono">0</text>
+
+    <rect x="130" y="84" width="100" height="30" rx="5" class="ghost"/><text x="180" y="98" class="mid mono">0</text><text x="180" y="110" class="mid small t-faint">passes at once</text>
+    <rect x="250" y="84" width="100" height="30" rx="5" class="ghost"/><text x="300" y="98" class="mid mono">0</text><text x="300" y="110" class="mid small t-faint">passes at once</text>
+    <rect x="370" y="84" width="100" height="30" rx="5" class="box"/><text x="420" y="104" class="mid mono">1</text>
+    <rect x="490" y="84" width="100" height="30" rx="5" class="box"/><text x="540" y="104" class="mid mono">2</text>
+    <rect x="610" y="84" width="100" height="30" rx="5" class="box"/><text x="660" y="104" class="mid mono">3</text>
+
+    <rect x="130" y="150" width="100" height="30" rx="5" class="gpu"/><text x="180" y="170" class="mid mono">1</text>
+    <rect x="250" y="150" width="100" height="30" rx="5" class="gpu"/><text x="300" y="170" class="mid mono">2</text>
+    <rect x="370" y="150" width="100" height="30" rx="5" class="gpu"/><text x="420" y="170" class="mid mono">3</text>
+    <rect x="490" y="150" width="100" height="30" rx="5" class="gpu"/><text x="540" y="170" class="mid mono">4</text>
+    <rect x="610" y="150" width="100" height="30" rx="5" class="gpu"/><text x="660" y="170" class="mid mono">5</text>
+
+    <path d="M180,150 V128 H360 V99 H368" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <path d="M300,150 V136 H480 V99 H488" class="arrow shader" marker-end="url(#ah-shader)"/>
+    <path d="M420,150 V128 H600 V99 H608" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="420" y="206" class="mid small">A frame waits for the value its own slot signaled, two frames before.</text>
+  </svg>
+  <figcaption>Each frame's values, for one graphics submit per frame.</figcaption>
+</figure>
 
 <p>Nothing is reset: the fence values only grow. A skipped frame needs no cleanup, because it signaled nothing and changed no slot value.</p>
 
 <h3>What has one copy per slot</h3>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 276" role="img" aria-label="Two frame slots with the same set of resources each: depth texture, fence values, command buffers per batch, SceneData and cull stats, visible draws with their counts, Hi-Z buffer, instance and material tables, draw list buffers, timestamp query pool, overlay text buffer, and the textures of history render targets. Under them, shared by both slots: the textures of a render target without history, and the visibility flags.">
+    <rect x="20" y="14" width="340" height="196" rx="8" class="zone"/>
+    <text x="36" y="36" class="title">slot 0 · frameCount = 0</text>
+    <rect x="34" y="46" width="152" height="21" rx="4" class="mem"/><text x="110" y="61" class="mid small">depth texture</text>
+    <rect x="192" y="46" width="152" height="21" rx="4" class="mem"/><text x="268" y="61" class="mid small">fence values</text>
+    <rect x="34" y="72" width="152" height="21" rx="4" class="mem"/><text x="110" y="87" class="mid small">command buffers, per batch</text>
+    <rect x="192" y="72" width="152" height="21" rx="4" class="mem"/><text x="268" y="87" class="mid small">SceneData, cull stats</text>
+    <rect x="34" y="98" width="152" height="21" rx="4" class="mem"/><text x="110" y="113" class="mid small">visible draws + counts</text>
+    <rect x="192" y="98" width="152" height="21" rx="4" class="mem"/><text x="268" y="113" class="mid small">Hi-Z buffer</text>
+    <rect x="34" y="124" width="152" height="21" rx="4" class="mem"/><text x="110" y="139" class="mid small">instance, material tables</text>
+    <rect x="192" y="124" width="152" height="21" rx="4" class="mem"/><text x="268" y="139" class="mid small">draw list buffers</text>
+    <rect x="34" y="150" width="152" height="21" rx="4" class="mem"/><text x="110" y="165" class="mid small">timestamp query pool</text>
+    <rect x="192" y="150" width="152" height="21" rx="4" class="mem"/><text x="268" y="165" class="mid small">overlay text buffer</text>
+    <rect x="34" y="176" width="152" height="21" rx="4" class="mem"/><text x="110" y="191" class="mid small">history target textures</text>
+    <rect x="400" y="14" width="340" height="196" rx="8" class="zone"/>
+    <text x="416" y="36" class="title">slot 1 · frameCount = 1</text>
+    <rect x="414" y="46" width="152" height="21" rx="4" class="mem"/><text x="490" y="61" class="mid small">depth texture</text>
+    <rect x="572" y="46" width="152" height="21" rx="4" class="mem"/><text x="648" y="61" class="mid small">fence values</text>
+    <rect x="414" y="72" width="152" height="21" rx="4" class="mem"/><text x="490" y="87" class="mid small">command buffers, per batch</text>
+    <rect x="572" y="72" width="152" height="21" rx="4" class="mem"/><text x="648" y="87" class="mid small">SceneData, cull stats</text>
+    <rect x="414" y="98" width="152" height="21" rx="4" class="mem"/><text x="490" y="113" class="mid small">visible draws + counts</text>
+    <rect x="572" y="98" width="152" height="21" rx="4" class="mem"/><text x="648" y="113" class="mid small">Hi-Z buffer</text>
+    <rect x="414" y="124" width="152" height="21" rx="4" class="mem"/><text x="490" y="139" class="mid small">instance, material tables</text>
+    <rect x="572" y="124" width="152" height="21" rx="4" class="mem"/><text x="648" y="139" class="mid small">draw list buffers</text>
+    <rect x="414" y="150" width="152" height="21" rx="4" class="mem"/><text x="490" y="165" class="mid small">timestamp query pool</text>
+    <rect x="572" y="150" width="152" height="21" rx="4" class="mem"/><text x="648" y="165" class="mid small">overlay text buffer</text>
+    <rect x="414" y="176" width="152" height="21" rx="4" class="mem"/><text x="490" y="191" class="mid small">history target textures</text>
+    <rect x="20" y="222" width="720" height="44" rx="8" class="zone"/>
+    <text x="36" y="249" class="title">shared by both slots</text>
+    <rect x="200" y="233" width="260" height="22" rx="4" class="mem"/><text x="330" y="248" class="mid small">textures of a render target without history</text>
+    <rect x="470" y="233" width="256" height="22" rx="4" class="mem"/><text x="598" y="248" class="mid small">visibility flags, one buffer per scene view</text>
+  </svg>
+  <figcaption>The frame uses the set of its slot. The table says where each one is stored.</figcaption>
+</figure>
+
 <div class="table-wrap">
 <table>
   <tr><th>Per slot</th><th>Where</th></tr>
@@ -614,7 +713,7 @@
 </div>
 <p>All of them are indexed by <code>frameCount</code>. A history render target's texture changes every frame, so fetch it with <code>getRenderTargetTexture</code> each frame. A render target without history has one pair of textures that both slots share: the GPU runs the frames in order, and each frame's first use waits for the frame before. The visibility flags of occlusion culling (<code>SceneView::visibility</code>) have one buffer per scene view, shared by both slots: only the compute passes use them, those run on one queue in frame order, and each frame reads what the one before wrote.</p>
 
-<h2><span class="n">4</span>Swapchain results and skipped frames</h2>
+<h2 id="results"><span class="n">4</span>Swapchain results and skipped frames</h2>
 
 <div class="table-wrap">
 <table>
@@ -628,16 +727,72 @@
 
 <div class="split">
   <div>
+    <svg viewBox="0 0 320 92" role="img" aria-label="A frame skipped at acquire: input, skip checks, the fence wait and the scene sync ran. Acquire failed, so nothing is recorded or submitted, and frameCount stays.">
+      <rect x="6" y="10" width="43" height="26" rx="4" class="cpu"/><text x="28"  y="27" class="mid small">input</text>
+      <rect x="50" y="10" width="43" height="26" rx="4" class="cpu"/><text x="72"  y="27" class="mid small">checks</text>
+      <rect x="94" y="10" width="43" height="26" rx="4" class="cpu"/><text x="116" y="27" class="mid small">wait</text>
+      <rect x="138" y="10" width="43" height="26" rx="4" class="cpu"/><text x="160" y="27" class="mid small">sync</text>
+      <rect x="182" y="10" width="43" height="26" rx="4" class="bad"/><text x="204" y="27" class="mid small">acquire</text>
+      <rect x="226" y="10" width="43" height="26" rx="4" class="ghost"/><text x="248" y="27" class="mid small t-faint">record</text>
+      <rect x="270" y="10" width="43" height="26" rx="4" class="ghost"/><text x="292" y="27" class="mid small t-faint">submit</text>
+      <text x="204" y="52" class="mid small t-bad">returns false</text>
+      <text x="8" y="72" class="small">frameCount stays · no Tracy frame mark</text>
+      <text x="8" y="88" class="small">the sync's uploads go out with the next submit</text>
+    </svg>
     <h4>A skipped frame (<code>beginFrame</code> returns false)</h4>
     <p>Nothing is recorded or submitted. <code>frameCount</code> does not move, and there is no Tracy frame mark. What ran before the skip still counts: input, finished loads, and (when acquire skips) the scene sync, whose uploads go out with the next submit.</p>
   </div>
   <div>
+    <svg viewBox="0 0 320 92" role="img" aria-label="A frame whose submit fails: everything up to recording ran. The submit failed, so the slot keeps its old fence value, but frameCount still moves.">
+      <rect x="6" y="10" width="43" height="26" rx="4" class="cpu"/><text x="28"  y="27" class="mid small">input</text>
+      <rect x="50" y="10" width="43" height="26" rx="4" class="cpu"/><text x="72"  y="27" class="mid small">checks</text>
+      <rect x="94" y="10" width="43" height="26" rx="4" class="cpu"/><text x="116" y="27" class="mid small">wait</text>
+      <rect x="138" y="10" width="43" height="26" rx="4" class="cpu"/><text x="160" y="27" class="mid small">sync</text>
+      <rect x="182" y="10" width="43" height="26" rx="4" class="cpu"/><text x="204" y="27" class="mid small">acquire</text>
+      <rect x="226" y="10" width="43" height="26" rx="4" class="cpu"/><text x="248" y="27" class="mid small">record</text>
+      <rect x="270" y="10" width="43" height="26" rx="4" class="bad"/><text x="292" y="27" class="mid small">submit</text>
+      <text x="312" y="52" class="end small t-bad">fails: no present</text>
+      <text x="8" y="72" class="small">frameCount moves · the slot keeps its old fence value</text>
+      <text x="8" y="88" class="small">the image stays acquired</text>
+    </svg>
     <h4>A frame that fails to submit</h4>
-    <p>It was recorded, but the slot keeps its old fence value, so the next wait on it passes at once. <code>frameCount</code> still moves. The image stays acquired, and the next acquire returns it again. Its timestamps are not read, because the slot's value did not change. <code>submitBatches</code> calls <code>discardRecording</code>, so the textures it moved go back to the layouts they still have on the GPU. With several batches, a failed submit ends the frame there, since later ones may wait for it; the textures go back only to the layouts the batches that went out left them in.</p>
+    <p>It was recorded, but the slot keeps its old fence value, so the next wait on it passes at once. <code>frameCount</code> still moves. The image stays acquired, and the next acquire returns it again. Its timestamps are not read, because the slot's value did not change.</p>
+    <p><code>submitBatches</code> calls <code>discardRecording</code>, so the textures it moved go back to the layouts they still have on the GPU. With several batches, a failed submit ends the frame there, since later ones may wait for it; the textures go back only to the layouts the batches that went out left them in.</p>
   </div>
 </div>
 
-<h2><span class="n">5</span>Resize</h2>
+<h2 id="resize"><span class="n">5</span>Resize</h2>
+
+<div class="legend">
+  <span><i></i>old, dropped or destroyed</span>
+  <span><i class="mem"></i>new, at the new size</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Before the resize: a small window, its swapchain images and two depth textures. recreateSwapchain waits until the device is idle. After: a larger window, new swapchain images with new handles, two new depth textures at the new size, and the camera's aspect ratio updated.">
+    <text x="20" y="22" class="title">before</text>
+    <rect x="20" y="34" width="120" height="80" rx="4" class="ghost"/><text x="80" y="78" class="mid small t-faint">window</text>
+    <rect x="160" y="34" width="60" height="40" class="ghost"/><rect x="168" y="42" width="60" height="40" class="ghost"/><rect x="176" y="50" width="60" height="40" class="ghost"/>
+    <text x="206" y="108" class="mid small t-faint">swapchain images</text>
+    <rect x="160" y="124" width="60" height="40" class="ghost"/><rect x="172" y="132" width="60" height="40" class="ghost"/>
+    <text x="206" y="188" class="mid small t-faint">2 depth textures</text>
+
+    <line x1="262" y1="100" x2="398" y2="100" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <text x="330" y="84" class="mid mono">recreateSwapchain</text>
+    <text x="330" y="120" class="mid small">waits until the</text>
+    <text x="330" y="134" class="mid small">device is idle</text>
+
+    <text x="420" y="22" class="title">after</text>
+    <rect x="420" y="34" width="160" height="106" rx="4" class="paper"/><text x="500" y="92" class="mid small">window, new pixel size</text>
+    <rect x="600" y="34" width="84" height="56" class="mem"/><rect x="608" y="42" width="84" height="56" class="mem"/><rect x="616" y="50" width="84" height="56" class="mem"/>
+    <text x="658" y="83" class="mid small">new handles</text>
+    <rect x="600" y="118" width="84" height="56" class="mem"/><rect x="612" y="126" width="84" height="56" class="mem"/>
+    <text x="654" y="159" class="mid small">new depth</text>
+    <text x="500" y="160" class="mid small">camera aspect ratio</text>
+    <text x="500" y="174" class="mid small">updated</text>
+  </svg>
+  <figcaption>The five steps below, as one picture.</figcaption>
+</figure>
 
 <ol class="steps">
   <li><b>SDL reports a new pixel size.</b> <code>SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED</code> sets <code>resized</code> and the new <code>pixelWidth</code> and <code>pixelHeight</code> in <code>pollEvents</code>.</li>
@@ -649,7 +804,42 @@
 
 <p>Everything swapchain-sized uses the swapchain extent in pixels. <code>Window::width</code> and <code>height</code> are the logical size, used only for the mouse. They differ on HiDPI screens.</p>
 
-<h2><span class="n">6</span>Where each job runs in the frame</h2>
+<h2 id="jobs"><span class="n">6</span>Where each job runs in the frame</h2>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 244" role="img" aria-label="The jobs of a frame in order. In beginFrame: finishLoads, the fence wait, updateFrameStats, updateStatsOverlay, syncGpuScene, acquire. In RenderGraph::execute, for each pass: graph barriers and queue waits, then the pass: prepareSceneView and recordSceneCulling in a Cull pass, drawSceneView in a Scene pass, recordHiz in the Hi-Z pass. In endFrame: the cull stats barrier, submitBatches, the upload flush inside RenderContext::submit, present.">
+    <rect x="20" y="14" width="220" height="220" rx="8" class="zone"/>
+    <text x="36" y="36" class="title mono">beginFrame</text>
+    <rect x="36" y="46"  width="188" height="24" rx="4" class="cpu"/><text x="130" y="63"  class="mid mono">finishLoads</text>
+    <rect x="36" y="76"  width="188" height="24" rx="4" class="box"/><text x="130" y="93"  class="mid">fence wait for the slot</text>
+    <rect x="36" y="106" width="188" height="24" rx="4" class="cpu"/><text x="130" y="123" class="mid mono">updateFrameStats</text>
+    <rect x="36" y="136" width="188" height="24" rx="4" class="cpu"/><text x="130" y="153" class="mid mono">updateStatsOverlay</text>
+    <rect x="36" y="166" width="188" height="24" rx="4" class="cpu"/><text x="130" y="183" class="mid mono">syncGpuScene</text>
+    <rect x="36" y="196" width="188" height="24" rx="4" class="cpu"/><text x="130" y="213" class="mid">acquire the image</text>
+
+    <line x1="240" y1="124" x2="268" y2="124" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="270" y="14" width="220" height="220" rx="8" class="zone"/>
+    <text x="286" y="36" class="title mono">RenderGraph::execute</text>
+    <text x="286" y="56" class="small">for each pass, in sorted order:</text>
+    <rect x="286" y="66"  width="188" height="24" rx="4" class="cpu"/><text x="380" y="83"  class="mid">barriers, queue waits</text>
+    <rect x="286" y="100" width="188" height="42" rx="4" class="shader"/><text x="380" y="117" class="mid mono">prepareSceneView</text><text x="380" y="134" class="mid mono">recordSceneCulling</text>
+    <rect x="286" y="148" width="188" height="24" rx="4" class="gpu"/><text x="380" y="165" class="mid mono">drawSceneView</text>
+    <rect x="286" y="178" width="188" height="24" rx="4" class="shader"/><text x="380" y="195" class="mid mono">recordHiz</text>
+    <text x="286" y="222" class="small">purple: compute passes · green: Scene</text>
+
+    <line x1="490" y1="124" x2="518" y2="124" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <rect x="520" y="14" width="220" height="220" rx="8" class="zone"/>
+    <text x="536" y="36" class="title mono">endFrame</text>
+    <rect x="536" y="46"  width="188" height="24" rx="4" class="cpu"/><text x="630" y="63"  class="mid">cull stats barrier</text>
+    <rect x="536" y="76"  width="188" height="24" rx="4" class="cpu"/><text x="630" y="93"  class="mid mono">submitBatches</text>
+    <rect x="552" y="106" width="172" height="24" rx="4" class="mem"/><text x="638" y="123" class="mid small">upload flush, in submit</text>
+    <rect x="552" y="136" width="172" height="24" rx="4" class="gpu"/><text x="638" y="153" class="mid small">the frame's submits</text>
+    <rect x="536" y="166" width="188" height="24" rx="4" class="cpu"/><text x="630" y="183" class="mid">present</text>
+  </svg>
+  <figcaption>The order of the jobs. The table gives the reason for each place.</figcaption>
+</figure>
 
 <div class="table-wrap">
 <table>
@@ -675,7 +865,7 @@
   <p><b>P11</b>: async compute does not pay off for the scene passes yet, so it is off by default.</p>
 </div>
 
-<h2><span class="n">7</span>Where it lives in code</h2>
+<h2 id="code"><span class="n">7</span>Where it lives in code</h2>
 
 <div class="table-wrap">
 <table class="code-map">
@@ -695,7 +885,7 @@
 </table>
 </div>
 
-<h2><span class="n">8</span>Rules when you change it</h2>
+<h2 id="rules"><span class="n">8</span>Rules when you change it</h2>
 
 <div class="callout rule">
   <strong>Keep these true</strong>

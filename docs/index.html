@@ -24,16 +24,19 @@
 <nav id="sidebar"></nav>
 <main>
 
+<div class="hero">
 <p class="eyebrow" data-fixed="1">Documentation</p>
-<h1>RASM docs</h1>
+<h1>RASM <span>docs</span></h1>
 <p class="lead">RASM (رسم) is a GPU-driven rendering engine in C++20 with a Vulkan 1.4 backend and Slang shaders. These pages explain how it works inside, with pictures first, and how to build an application with it.</p>
 
 <div class="cards">
-  <a class="card" href="guides/big-picture.html"><b>Guides →</b><span>For engine developers. An engine tour, then one idea per page (culling, bindless, render graphs, …), each explained on its own and then tied back to RASM's code.</span></a>
+  <a class="card" href="guides/big-picture.html"><b>Engine tour →</b><span>Three pages that show how RASM fits together. Start here to work on the engine.</span></a>
+  <a class="card" href="#all-guides"><b>Concept guides →</b><span>One idea per page (culling, bindless, render graphs, …), explained on its own, then tied to RASM's code.</span></a>
   <a class="card" href="api/index.html"><b>API reference →</b><span>For application developers. Every public type and function, with examples.</span></a>
 </div>
+</div>
 
-<h2>The engine on one page</h2>
+<h2 id="map">The engine on one page</h2>
 <p>Each box is a guide. Click one to open it. The top row runs on the CPU, the middle row on the GPU. Boxes with an orange border are tour pages that show how RASM fits together; the others explain one idea each.</p>
 
 <div class="legend">
@@ -42,7 +45,7 @@
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 340" role="img" aria-label="Map of the guides. CPU: your app, streaming assets, bindless materials, the GPU scene tables, uploads. GPU: frustum culling, occlusion culling, indirect draws, PBR shading, render graph passes, present. Under everything: big picture, one frame, frames in flight, the RHI, GPU sync, struct layout.">
+  <svg viewBox="0 0 760 320" role="img" aria-label="Map of the guides. CPU: your app, streaming assets, bindless materials, the GPU scene tables, uploads. GPU: frustum culling, occlusion culling, indirect draws, PBR shading, render graph passes, present. Under everything: big picture, one frame, frames in flight, the RHI, GPU sync, struct layout.">
     <text x="10" y="20" class="small t-cpu">CPU · every frame and on change</text>
     <a href="api/index.html"><rect x="10" y="30" width="130" height="58" rx="6" class="cpu"/><text x="75" y="54" class="mid title">Your app</text><text x="75" y="72" class="mid small">API reference</text></a>
     <line x1="140" y1="59" x2="158" y2="59" class="arrow cpu" marker-end="url(#ah-cpu)"/>
@@ -77,12 +80,37 @@
     <a href="guides/graphics-apis-rhi.html"><rect x="385" y="258" width="115" height="50" rx="6" class="box"/><text x="442" y="288" class="mid title">The RHI</text></a>
     <a href="guides/gpu-sync.html"><rect x="510" y="258" width="115" height="50" rx="6" class="box"/><text x="567" y="288" class="mid title">GPU sync</text></a>
     <a href="guides/struct-layout.html"><rect x="635" y="258" width="115" height="50" rx="6" class="box"/><text x="692" y="288" class="mid title">Struct layout</text></a>
-    <text x="10" y="332" class="small">The sidebar lists every guide, grouped: Engine tour, Foundations, GPU data, Drawing, Culling and the frame.</text>
-  </svg>
+      </svg>
   <figcaption>The path of a frame: assets become rows in GPU tables, the CPU uploads what changed, the GPU culls, draws, shades, runs the passes and presents.</figcaption>
 </figure>
 
-<h2>Where to start</h2>
+<h2 id="how-to-read">How a guide is built</h2>
+<p>Every concept guide has the same shape, so you always know where to look.</p>
+
+<ol class="flow">
+  <li><b>In short</b><span>the whole idea in five lines</span></li>
+  <li><b>The problem</b><span>what goes wrong without it</span></li>
+  <li><b>How it works</b><span>pictures, then the math</span></li>
+  <li><b>Variants and pitfalls</b><span>the choices, and the usual bugs</span></li>
+  <li class="gpu"><b>In RASM</b><span>what the engine does, and where in the code</span></li>
+</ol>
+
+<div class="table-wrap">
+<table>
+  <tr><th>On every page</th><th>What it does</th></tr>
+  <tr><td><b>On this page</b> (right side)</td><td>The sections of the page. The one you are reading is marked.</td></tr>
+  <tr><td><b>Find a page</b> (top left, or press <kbd>/</kbd>)</td><td>Type a few letters to filter the list of pages. <kbd>Enter</kbd> opens the first match.</td></tr>
+  <tr><td><b>⤢</b> on a picture</td><td>Shows the picture large. <kbd>Esc</kbd> closes it.</td></tr>
+  <tr><td><b>◀ Back / Next ▶</b> on a picture</td><td>Steps through the states of one diagram. The arrow keys work too.</td></tr>
+  <tr><td>Colors</td><td><span class="c-cpu">Blue</span> is CPU work, <span class="c-gpu">green</span> is GPU work, <span class="c-mem">amber</span> is memory (buffers, textures), <span class="c-shader">purple</span> is shader code.</td></tr>
+</table>
+</div>
+
+<h2 id="all-guides">All guides</h2>
+<p>The numbers give a reading order, but each guide stands on its own.</p>
+<div id="catalog"></div>
+
+<h2 id="start">Where to start</h2>
 <div class="table-wrap">
 <table>
   <tr><th>You want to…</th><th>Read</th></tr>
@@ -98,7 +126,7 @@
 </table>
 </div>
 
-<h2>Other project docs</h2>
+<h2 id="project-docs">Other project docs</h2>
 <p>These Markdown files hold the full technical record. The guides are the friendly way in; these are the reference.</p>
 <ul>
   <li><a href="architecture.md">architecture.md</a> — every detail of how the engine works today.</li>

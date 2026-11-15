@@ -19,6 +19,7 @@
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
   </defs>
 </svg>
 
@@ -42,7 +43,7 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>Why fewer triangles</h2>
+<h2 id="why"><span class="n">1</span>Why fewer triangles</h2>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 250" role="img" aria-label="Four versions of a round shape, each with half the triangles of the one before: 24, 12, 6 and 3. Each is drawn smaller, as it would look further away. At its size on screen, each looks about as round as the first.">
@@ -74,31 +75,94 @@
 
 <p>Drawing a far object with all its triangles wastes work in three places:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Cost</th><th>Why tiny triangles hurt</th></tr>
-  <tr><td>Vertex work</td><td>Every vertex is fetched and shaded, even when 50 vertices land in one pixel.</td></tr>
-  <tr><td>Pixel work</td><td>GPUs shade pixels in 2 × 2 blocks (quads). A triangle that covers one pixel still runs the pixel shader up to 4 times. Many tiny triangles can cost several times the pixels they cover.</td></tr>
-  <tr><td>Aliasing</td><td>Detail smaller than a pixel flickers as the camera moves. A coarser mesh can even look <i>better</i>.</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="One pixel, drawn as a big square, with many vertices inside it.">
+      <rect x="70" y="12" width="100" height="100" class="paper"/>
+      <circle cx="84" cy="28" r="3" class="bad"/><circle cx="102" cy="22" r="3" class="bad"/><circle cx="122" cy="30" r="3" class="bad"/><circle cx="142" cy="24" r="3" class="bad"/><circle cx="158" cy="34" r="3" class="bad"/>
+      <circle cx="80" cy="50" r="3" class="bad"/><circle cx="98" cy="44" r="3" class="bad"/><circle cx="116" cy="52" r="3" class="bad"/><circle cx="136" cy="46" r="3" class="bad"/><circle cx="156" cy="54" r="3" class="bad"/>
+      <circle cx="86" cy="70" r="3" class="bad"/><circle cx="104" cy="66" r="3" class="bad"/><circle cx="124" cy="74" r="3" class="bad"/><circle cx="144" cy="68" r="3" class="bad"/><circle cx="160" cy="76" r="3" class="bad"/>
+      <circle cx="82" cy="94" r="3" class="bad"/><circle cx="100" cy="88" r="3" class="bad"/><circle cx="120" cy="96" r="3" class="bad"/><circle cx="140" cy="90" r="3" class="bad"/><circle cx="158" cy="98" r="3" class="bad"/>
+      <text x="120" y="126" class="mid small">one pixel, many vertices</text>
+    </svg>
+    <h4>Vertex work</h4>
+    <p>Every vertex is fetched and shaded, even when 50 vertices land in one pixel.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A block of 2 by 2 pixels. A tiny triangle covers one pixel, but all four pixels of the block are shaded.">
+      <rect x="70" y="10" width="50" height="50" class="accent"/><rect x="120" y="10" width="50" height="50" class="accent"/>
+      <rect x="70" y="60" width="50" height="50" class="accent"/><rect x="120" y="60" width="50" height="50" class="accent"/>
+      <polygon points="82,24 108,30 90,48" class="solid"/>
+      <text x="120" y="126" class="mid small">1 pixel covered, 4 shaded</text>
+    </svg>
+    <h4>Pixel work</h4>
+    <p>GPUs shade pixels in 2 × 2 blocks (quads). A triangle that covers one pixel still runs the pixel shader up to 4 times. Many tiny triangles can cost several times the pixels they cover.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The same row of pixels in two frames. A detail smaller than a pixel lights a different pixel in each frame, so it flickers.">
+      <text x="20" y="34" class="small">frame 1</text>
+      <rect x="76" y="16" width="30" height="30" class="paper"/><rect x="106" y="16" width="30" height="30" class="light"/><rect x="136" y="16" width="30" height="30" class="paper"/><rect x="166" y="16" width="30" height="30" class="paper"/>
+      <text x="20" y="84" class="small">frame 2</text>
+      <rect x="76" y="66" width="30" height="30" class="paper"/><rect x="106" y="66" width="30" height="30" class="paper"/><rect x="136" y="66" width="30" height="30" class="light"/><rect x="166" y="66" width="30" height="30" class="paper"/>
+      <text x="120" y="122" class="mid small">the detail jumps: flicker</text>
+    </svg>
+    <h4>Aliasing</h4>
+    <p>Detail smaller than a pixel flickers as the camera moves. A coarser mesh can even look <i>better</i>.</p>
+  </div>
 </div>
 
 <p>The LODs are built once, offline or when the mesh loads. Each frame, the renderer only picks one per object (see <a href="lod-selection.html">LOD selection</a>).</p>
 
-<h2><span class="n">2</span>Ways to simplify</h2>
+<h2 id="ways"><span class="n">2</span>Ways to simplify</h2>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Family</th><th>Idea</th><th>Good</th><th>Bad</th></tr>
-  <tr><td><b>Vertex clustering</b></td><td>Lay a grid over the mesh. All vertices in one cell become one vertex. Triangles that end up with two corners in one cell vanish.</td><td>Very fast, one pass. Reaches any target.</td><td>Ignores the shape: merges things that are only close, closes holes, makes ugly results. See <a href="#sloppy">section 9</a>.</td></tr>
-  <tr><td><b>Vertex removal</b></td><td>Remove one vertex and its triangles, then fill the hole with new triangles.</td><td>Keeps the original vertices.</td><td>Filling a hole in 3D well is hard.</td></tr>
-  <tr><td><b>Edge collapse</b></td><td>Merge the two ends of one edge. Repeat, cheapest first.</td><td>Local, simple, high quality. Keeps the topology when checked.</td><td>Slower than clustering. Needs a good cost: that is the quadric.</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A grid over some vertices. All vertices in one cell become one vertex.">
+      <path d="M30,14V114M90,14V114M150,14V114M210,14V114M30,14H210M30,64H210M30,114H210" class="grid"/>
+      <circle cx="44" cy="28" r="3" class="solid"/><circle cx="70" cy="46" r="3" class="solid"/><circle cx="58" cy="34" r="3" class="solid"/>
+      <circle cx="104" cy="50" r="3" class="solid"/><circle cx="136" cy="24" r="3" class="solid"/>
+      <circle cx="166" cy="30" r="3" class="solid"/><circle cx="192" cy="52" r="3" class="solid"/><circle cx="180" cy="22" r="3" class="solid"/>
+      <circle cx="48" cy="98" r="3" class="solid"/><circle cx="76" cy="76" r="3" class="solid"/>
+      <circle cx="112" cy="100" r="3" class="solid"/><circle cx="130" cy="80" r="3" class="solid"/><circle cx="100" cy="78" r="3" class="solid"/>
+      <circle cx="170" cy="92" r="3" class="solid"/>
+      <circle cx="57" cy="36" r="7" class="accent"/><circle cx="120" cy="37" r="7" class="accent"/><circle cx="179" cy="35" r="7" class="accent"/>
+      <circle cx="62" cy="87" r="7" class="accent"/><circle cx="114" cy="86" r="7" class="accent"/><circle cx="170" cy="92" r="7" class="accent"/>
+    </svg>
+    <h4>Vertex clustering</h4>
+    <p>Lay a grid over the mesh. All vertices in one cell become one vertex. Triangles that end up with two corners in one cell vanish.</p>
+    <p><b class="c-ok">Good:</b> very fast, one pass. Reaches any target.</p>
+    <p class="cost"><b>Bad:</b> ignores the shape: merges things that are only close, closes holes, makes ugly results. See <a href="#sloppy">section 9</a>.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A ring of triangles around one vertex. The vertex and its triangles are removed, and the hole is filled with new triangles.">
+      <polygon points="120,12 176,36 190,90 130,118 66,96 56,40" class="zone"/>
+      <polygon points="120,12 176,36 190,90 130,118 66,96 56,40" class="arrow"/>
+      <path d="M120,64L120,12M120,64L176,36M120,64L190,90M120,64L130,118M120,64L66,96M120,64L56,40" class="dashed"/>
+      <circle cx="120" cy="64" r="5" class="ghost"/>
+      <path d="M56,40L176,36M56,40L190,90M56,40L130,118" class="arrow hot"/>
+    </svg>
+    <h4>Vertex removal</h4>
+    <p>Remove one vertex and its triangles, then fill the hole with new triangles.</p>
+    <p><b class="c-ok">Good:</b> keeps the original vertices.</p>
+    <p class="cost"><b>Bad:</b> filling a hole in 3D well is hard.</p>
+  </div>
+  <div class="vcard pick">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two neighbouring vertices joined by an edge. One end moves onto the other.">
+      <polygon points="50,24 120,14 190,24 214,66 190,108 120,118 50,108 26,66" class="zone"/>
+      <path d="M86,66L50,24M86,66L120,14M86,66L120,118M86,66L50,108M86,66L26,66M154,66L120,14M154,66L190,24M154,66L214,66M154,66L190,108M154,66L120,118" class="arrow"/>
+      <line x1="146" y1="66" x2="96" y2="66" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+      <circle cx="86" cy="66" r="5" class="cpu"/><circle cx="154" cy="66" r="5" class="cpu"/>
+    </svg>
+    <h4>Edge collapse</h4>
+    <p>Merge the two ends of one edge. Repeat, cheapest first.</p>
+    <p><b class="c-ok">Good:</b> local, simple, high quality. Keeps the topology when checked.</p>
+    <p class="cost"><b>Bad:</b> slower than clustering. Needs a good cost: that is the quadric.</p>
+  </div>
 </div>
 
 <p>Edge collapse with quadric error metrics, published by Michael Garland and Paul Heckbert in 1997, is the standard. The rest of this page explains it.</p>
 
-<h2><span class="n">3</span>Edge collapse</h2>
+<h2 id="collapse"><span class="n">3</span>Edge collapse</h2>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 270" role="img" aria-label="Left: a vertex u and its neighbour v, with 10 triangles around them. The edge u–v and its two triangles are highlighted. Right: after the collapse, v is gone. The triangles that used v now use u, and the two triangles on the edge have disappeared, leaving 8.">
@@ -134,10 +198,27 @@
 
 <div class="split">
   <div>
+    <svg viewBox="0 0 320 110" role="img" aria-label="Both ends of the edge, u and v, move to a new point between them.">
+      <line x1="70" y1="60" x2="250" y2="60" class="dashed"/>
+      <line x1="78" y1="60" x2="140" y2="48" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="242" y1="60" x2="162" y2="47" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <circle cx="70" cy="60" r="6" class="ghost"/><circle cx="250" cy="60" r="6" class="ghost"/>
+      <circle cx="150" cy="44" r="7" class="accent"/>
+      <text x="70" y="84" class="mid title">u</text><text x="250" y="84" class="mid title">v</text>
+      <text x="150" y="28" class="mid small t-hot">a new vertex</text>
+    </svg>
     <h4>Full collapse</h4>
     <p>Both ends move to a <b>new</b> point, chosen to fit the old surface best (section 5 shows how to compute it). Best quality. But the result has new vertices, so each level needs its own vertex data.</p>
   </div>
   <div>
+    <svg viewBox="0 0 320 110" role="img" aria-label="The end v moves onto the end u. u stays where it is.">
+      <line x1="70" y1="60" x2="250" y2="60" class="dashed"/>
+      <line x1="242" y1="60" x2="82" y2="60" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <circle cx="250" cy="60" r="6" class="ghost"/>
+      <circle cx="70" cy="60" r="7" class="cpu"/>
+      <text x="70" y="84" class="mid title">u</text><text x="250" y="84" class="mid title">v</text>
+      <text x="70" y="38" class="mid small t-cpu">stays: an original vertex</text>
+    </svg>
     <h4>Half-edge collapse</h4>
     <p>One end moves onto the <b>other</b> end, which stays where it is. A little lower quality. But every vertex of every level is one of the original vertices, so all levels can <b>share one vertex buffer</b> (<a href="#sharing">section 10</a>).</p>
   </div>
@@ -147,16 +228,45 @@
 
 <p>Some collapses break the mesh. Before each one, the algorithm checks:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Check</th><th>What goes wrong without it</th></tr>
-  <tr><td><b>Flip</b>: does any triangle around the moved vertex turn over (its normal points the other way)?</td><td>A fold in the surface: a dark crease or a hole in the silhouette.</td></tr>
-  <tr><td><b>Link condition</b>: do u and v share neighbours other than the two triangles on their edge?</td><td>Two surfaces get glued at one point; the mesh is no longer a clean surface (non-manifold).</td></tr>
-  <tr><td><b>Border and seam rules</b> (<a href="#borders">section 7</a>)</td><td>Holes grow, cracks open, textures tear.</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A triangle whose top vertex moves across its own base. The triangle now faces the other way.">
+      <polygon points="50,66 190,66 120,14" class="ghost"/>
+      <polygon points="50,66 190,66 150,116" class="bad"/>
+      <line x1="122" y1="22" x2="147" y2="106" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <circle cx="120" cy="14" r="4" class="ghost"/>
+      <circle cx="150" cy="116" r="5" class="cpu"/>
+      <text x="234" y="104" class="end small t-bad">turned over</text>
+    </svg>
+    <h4>Flip</h4>
+    <p>Does any triangle around the moved vertex turn over (its normal points the other way)?</p>
+    <p class="cost"><b>Without it:</b> a fold in the surface: a dark crease or a hole in the silhouette.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two pieces of surface that touch at one single point.">
+      <polygon points="120,65 40,20 30,100" class="gpu"/>
+      <polygon points="120,65 200,20 210,100" class="gpu"/>
+      <circle cx="120" cy="65" r="6" class="bad"/>
+      <text x="120" y="112" class="mid small t-bad">glued at one point</text>
+    </svg>
+    <h4>Link condition</h4>
+    <p>Do u and v share neighbours other than the two triangles on their edge?</p>
+    <p class="cost"><b>Without it:</b> two surfaces get glued at one point; the mesh is no longer a clean surface (non-manifold).</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A sheet whose border has a notch cut into it.">
+      <polygon points="24,24 96,24 120,62 144,24 216,24 216,110 24,110" class="zone"/>
+      <polyline points="24,24 96,24 120,62 144,24 216,24" class="arrow bad thick"/>
+      <line x1="96" y1="24" x2="144" y2="24" class="dashed"/>
+      <text x="120" y="92" class="mid small t-bad">the border moved</text>
+    </svg>
+    <h4>Border and seam rules</h4>
+    <p>Borders and UV seams have their own rules (<a href="#borders">section 7</a>).</p>
+    <p class="cost"><b>Without them:</b> holes grow, cracks open, textures tear.</p>
+  </div>
 </div>
 
-<h2><span class="n">4</span>The cost: how far would the surface move?</h2>
+<h2 id="cost"><span class="n">4</span>The cost: how far would the surface move?</h2>
 
 <p>We need a number for each possible collapse: how much it changes the shape. Measuring the true distance between the old and the new surface is slow. The quadric trick estimates it with a few multiplications.</p>
 
@@ -232,7 +342,7 @@ target = u for a half-edge collapse, the best new point for a full one</code></p
 </table>
 </div>
 
-<h2><span class="n">5</span>The algorithm</h2>
+<h2 id="algorithm"><span class="n">5</span>The algorithm</h2>
 
 <ol class="steps">
   <li><b>Quadrics.</b> For every triangle, compute its plane and <var>K</var>. Add <var>K</var> to the quadric of each of its 3 vertices. Many implementations weight <var>K</var> by the triangle's area, so big triangles count more.</li>
@@ -316,7 +426,7 @@ target = u for a half-edge collapse, the best new point for a full one</code></p
 
 <p>For a full collapse, the best target is where <var>v</var><sup>T</sup> <var>Q</var> <var>v</var> is smallest. Split <var>Q</var> into its top-left 3×3 part <var>A</var>, the first three numbers of its last column <var>b</var>, and its bottom-right number <var>c</var>. The cost is <var>x</var><sup>T</sup><var>A</var><var>x</var> + 2 <var>b</var><sup>T</sup><var>x</var> + <var>c</var>, and its minimum is where <var>A</var> <var>x</var> = −<var>b</var>. That is one 3×3 linear system. When <var>A</var> cannot be inverted, for example on a flat area where every point of the plane costs 0, fall back to the cheapest of the two ends or the midpoint.</p>
 
-<h2><span class="n">6</span>The error, in object units</h2>
+<h2 id="error"><span class="n">6</span>The error, in object units</h2>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 230" role="img" aria-label="Left: an original curved outline and a simplified one made of straight segments. The largest gap between them is the error e. Right: a chain of levels. LOD 1 is simplified from LOD 0 with error e1, LOD 2 from LOD 1 with error e2. LOD 2 is at most e1 plus e2 from LOD 0.">
@@ -340,11 +450,8 @@ target = u for a half-edge collapse, the best new point for a full one</code></p
     <text x="700" y="67" class="mid title">LOD 2</text>
     <path d="M465,84 V110 H700 V86" class="arrow hot" marker-end="url(#ah-hot)"/>
     <text x="582" y="128" class="mid small t-hot">LOD 2 is at most e1 + e2 from LOD 0</text>
-    <text x="420" y="168" class="small">When each level is made from the one before,</text>
-    <text x="420" y="184" class="small">its error against LOD 0 is not measured. The sum</text>
-    <text x="420" y="200" class="small">is a safe upper bound (the triangle inequality).</text>
   </svg>
-  <figcaption>The error tells how far a level's surface may be from the original. Seen from far enough, a distance of <var>e</var> is under one pixel. That is how <a href="lod-selection.html">LOD selection</a> picks a level.</figcaption>
+  <figcaption>The error tells how far a level's surface may be from the original. Seen from far enough, a distance of <var>e</var> is under one pixel. That is how <a href="lod-selection.html">LOD selection</a> picks a level. When each level is made from the one before, its error against LOD 0 is not measured. The sum is a safe upper bound (the triangle inequality).</figcaption>
 </figure>
 
 <div class="table-wrap">
@@ -436,7 +543,7 @@ target = u for a half-edge collapse, the best new point for a full one</code></p
 </table>
 </div>
 
-<h2><span class="n">8</span>Targets and when to stop</h2>
+<h2 id="targets"><span class="n">8</span>Targets and when to stop</h2>
 
 <p>A simplifier gets a <b>target</b>: an index count (3 per triangle), an error limit, or both. It stops at whichever comes first. It can also stop <b>early</b>, above the target: when every remaining collapse is refused (locked vertices, seams, the link condition), there is nothing left to do.</p>
 
@@ -451,6 +558,25 @@ target = u for a half-edge collapse, the best new point for a full one</code></p
 </div>
 
 <p>With halving, the extra indices form a geometric series: ½ + ¼ + ⅛ + … &lt; 1. All the coarser levels together cost <b>less</b> than LOD 0's indices.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 150" role="img" aria-label="A long bar: the indices of LOD 0. Below it, the bars of LOD 1, 2, 3 and so on, each half as long as the one before, placed end to end. Together they stay shorter than the LOD 0 bar.">
+    <text x="20" y="44" class="title">LOD 0</text>
+    <rect x="100" y="24" width="600" height="32" rx="3" class="mem"/>
+    <text x="400" y="45" class="mid">all the indices of the full mesh: 1</text>
+    <text x="20" y="106" class="title">coarser</text>
+    <rect x="100" y="86" width="300" height="32" rx="3" class="accent"/><text x="250" y="107" class="mid">LOD 1 · ½</text>
+    <rect x="400" y="86" width="150" height="32" rx="3" class="accent"/><text x="475" y="107" class="mid">LOD 2 · ¼</text>
+    <rect x="550" y="86" width="75" height="32" rx="3" class="accent"/><text x="587" y="107" class="mid">⅛</text>
+    <rect x="625" y="86" width="37" height="32" rx="3" class="accent"/>
+    <rect x="662" y="86" width="19" height="32" rx="3" class="accent"/>
+    <rect x="681" y="86" width="9" height="32" rx="2" class="accent"/>
+    <rect x="690" y="86" width="5" height="32" rx="1" class="accent"/>
+    <line x1="700" y1="14" x2="700" y2="130" class="dashed"/>
+    <text x="700" y="144" class="mid small">never reached</text>
+  </svg>
+  <figcaption>Every level adds half of what is left. The row of coarser levels never gets as long as LOD 0.</figcaption>
+</figure>
 
 <h2 id="sloppy"><span class="n">9</span>Sloppy versus topology-preserving</h2>
 
@@ -545,14 +671,11 @@ target = u for a half-edge collapse, the best new point for a full one</code></p
 
 <p>A mesh with 100,000 triangles and 50,000 vertices of 64 bytes, with 32-bit indices. Seven coarser levels, each half the one before:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Part</th><th>Size</th></tr>
-  <tr><td>Vertices: 50,000 × 64 B</td><td>3.20 MB</td></tr>
-  <tr><td>LOD 0 indices: 100,000 × 3 × 4 B</td><td>1.20 MB</td></tr>
-  <tr><td>LOD 1 to 7 indices: 99,219 triangles × 12 B</td><td>1.19 MB, <b>+27%</b> on the whole mesh</td></tr>
-  <tr><td>If each level had its own vertices too: about 49,600 more × 64 B</td><td>+3.18 MB more, <b>+99%</b> in total</td></tr>
-</table>
+<div class="stats">
+  <div><b>3.20 MB</b><span>vertices</span><small>50,000 × 64 B</small></div>
+  <div><b>1.20 MB</b><span>LOD 0 indices</span><small>100,000 × 3 × 4 B</small></div>
+  <div><b>1.19 MB</b><span>LOD 1 to 7 indices: <strong class="c-ok">+27%</strong> on the whole mesh</span><small>99,219 triangles × 12 B</small></div>
+  <div><b>+3.18 MB</b><span>more, if each level had its own vertices too: <strong class="c-bad">+99%</strong> in total</span><small>about 49,600 more × 64 B</small></div>
 </div>
 
 <p>Sharing the vertex buffer makes the whole chain cost about a quarter of the mesh instead of doubling it. The price is the quality of half-edge collapses, and the scattered fetches of coarse levels.</p>

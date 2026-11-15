@@ -60,9 +60,14 @@ Read the diff of each changed source (`git diff <stamp> <target> -- <file>`) and
   RASM itself and link to the concept guides instead of explaining concepts again.
 - One idea per guide. A new technique gets its own concept guide, not a new section in a neighbour's page.
 - Visual first; short, plain sentences (the main reader's English is a second language). Present tense, today's
-  code only, no history. Known issues by ID from `docs/code_review.md`.
+  code only, no history. Known issues by ID from `docs/code_review.md`. Read `visuals.md` (next to this file)
+  before writing or changing a guide: it says which block fits which content (picture cards, wrong/right pairs,
+  flows, steppers, stat tiles, pitfalls) and how to draw the SVGs. `docs/guides/shadow-mapping.html` is the model.
 - Only classes from `docs/assets/style.css`; no inline styles, no `<style>`/`<script>` inside SVGs, no libraries.
   Colors keep their meaning: `cpu` blue, `gpu` green, `mem` amber (buffers), `shader` purple.
+- `site.js` builds the sidebar, the "On this page" list (from the page's `<h2>`s), the figure numbers, the
+  zoom and copy buttons and the home page catalog. A page writes none of that by hand. Give each `<h2>` an
+  `id` and a `<span class="n">` number. A new page's entry in `SECTIONS` has a one-line `blurb`.
 - Code blocks are `<pre><code>` (signatures `<pre class="sig">`), plain escaped text with no markup inside;
   `site.js` highlights them. Format code like RASM code: snippets like the examples' `.cpp` code, i.e. unchanged
   by `clang-format` with the repo's `.clang-format` (`check` runs it: Allman braces, `&`/`*` on the name, and

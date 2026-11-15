@@ -19,6 +19,8 @@
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
   </defs>
 </svg>
 
@@ -42,7 +44,7 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>Two workers, one frame at a time</h2>
+<h2 id="overlap"><span class="n">1</span>Two workers, one frame at a time</h2>
 
 <p>The CPU builds a frame: it reads input, moves objects, and records commands. Then it <b>submits</b> them, and the GPU runs them. If the CPU then waits for the GPU before it starts the next frame, the two never work at the same time:</p>
 
@@ -103,54 +105,62 @@
   <figcaption>The CPU needs 6 ms per frame and the GPU 10 ms. With two slots, the CPU may run one frame ahead. Frame 2 must wait until the GPU finishes frame 0, because they share slot 0 (dashed boxes: the CPU waits).</figcaption>
 </figure>
 
-<p>With overlap, the frame time is set by the slower side alone: <var>max</var>(CPU, GPU) instead of CPU + GPU. Here the speed goes from 62.5 to 100 frames per second, with no change to the work.</p>
+<p>With overlap, the slower side alone sets the frame time: <var>max</var>(CPU, GPU) instead of CPU + GPU. The work itself does not change.</p>
 
-<h2><span class="n">2</span>The problem: shared data</h2>
+<div class="stats">
+  <div><b>16 ms</b><span>per frame with one slot: 62.5 frames per second</span><small>CPU + GPU = 6 + 10</small></div>
+  <div><b>10 ms</b><span>per frame with two slots: 100 frames per second</span><small>max(CPU, GPU) = max(6, 10)</small></div>
+</div>
 
-<p>Overlap has a price. A frame's commands do not run when they are recorded; they read their data later, while the GPU runs them. Take the camera matrix. The CPU writes it into a buffer, and the GPU reads it during the frame. If there is one buffer, the CPU writes frame 1's camera while the GPU still draws frame 0 with it:</p>
+<h2 id="shared-data"><span class="n">2</span>The problem: shared data</h2>
 
-<figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="Left: one camera buffer. The CPU writes frame 1's camera into it while the GPU still reads it for frame 0, so frame 0 is drawn with half the new camera. Right: two buffers, one per slot. The CPU writes slot 1 while the GPU reads slot 0.">
-    <text x="190" y="20" class="mid title">One buffer: a race</text>
-    <rect x="20" y="40" width="110" height="44" rx="6" class="cpu"/>
-    <text x="75" y="60" class="mid small">CPU writes</text>
-    <text x="75" y="76" class="mid small">camera of F1</text>
-    <rect x="250" y="40" width="110" height="44" rx="6" class="gpu"/>
-    <text x="305" y="60" class="mid small">GPU reads</text>
-    <text x="305" y="76" class="mid small">camera of F0</text>
-    <rect x="135" y="120" width="110" height="44" rx="6" class="mem"/>
-    <text x="190" y="146" class="mid">camera</text>
-    <line x1="75" y1="84" x2="150" y2="118" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <line x1="230" y1="118" x2="300" y2="86" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <rect x="135" y="120" width="110" height="44" rx="6" class="hot"/>
-    <text x="190" y="190" class="mid small t-hot">at the same time:</text>
-    <text x="190" y="206" class="mid small t-hot">F0 may see half of F1's camera</text>
+<p>Overlap has a price. A frame's commands do not run when they are recorded; they read their data later, while the GPU runs them. Take the camera matrix. The CPU writes it into a buffer, and the GPU reads it during the frame.</p>
 
-    <text x="570" y="20" class="mid title">One buffer per slot</text>
-    <rect x="400" y="40" width="110" height="44" rx="6" class="cpu"/>
-    <text x="455" y="60" class="mid small">CPU writes</text>
-    <text x="455" y="76" class="mid small">camera of F1</text>
-    <rect x="630" y="40" width="110" height="44" rx="6" class="gpu"/>
-    <text x="685" y="60" class="mid small">GPU reads</text>
-    <text x="685" y="76" class="mid small">camera of F0</text>
-    <rect x="400" y="120" width="110" height="44" rx="6" class="mem"/>
-    <text x="455" y="140" class="mid">camera</text>
-    <text x="455" y="156" class="mid small">slot 1</text>
-    <rect x="630" y="120" width="110" height="44" rx="6" class="mem"/>
-    <text x="685" y="140" class="mid">camera</text>
-    <text x="685" y="156" class="mid small">slot 0</text>
-    <line x1="455" y1="84" x2="455" y2="118" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <line x1="685" y1="118" x2="685" y2="86" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="570" y="190" class="mid small t-gpu">no shared bytes, no race</text>
-    <text x="570" y="206" class="mid small">F2 writes slot 0 again,</text>
-    <text x="570" y="222" class="mid small">after the GPU is done with F0</text>
-  </svg>
-  <figcaption>The GPU does not notice a CPU write to mapped memory. Nothing in the API stops the race; the program has to avoid it.</figcaption>
-</figure>
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 150" role="img" aria-label="One camera buffer of four cells. The CPU has written frame 1's camera into the first two cells while the GPU still reads the buffer for frame 0. The GPU sees two cells of frame 1 and two of frame 0.">
+      <rect x="10" y="10" width="126" height="30" rx="4" class="cpu"/><text x="73" y="30" class="mid small">CPU writes camera of F1</text>
+      <rect x="184" y="10" width="126" height="30" rx="4" class="gpu"/><text x="247" y="30" class="mid small">GPU reads camera of F0</text>
+      <text x="160" y="68" class="mid small">the camera buffer</text>
+      <rect x="40" y="80" width="60" height="34" class="cpu"/><text x="70" y="102" class="mid mono">F1</text>
+      <rect x="100" y="80" width="60" height="34" class="cpu"/><text x="130" y="102" class="mid mono">F1</text>
+      <rect x="160" y="80" width="60" height="34" class="mem"/><text x="190" y="102" class="mid mono">F0</text>
+      <rect x="220" y="80" width="60" height="34" class="mem"/><text x="250" y="102" class="mid mono">F0</text>
+      <rect x="40" y="80" width="240" height="34" class="arrow bad"/>
+      <line x1="73" y1="40" x2="73" y2="78" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <line x1="247" y1="78" x2="247" y2="42" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <text x="160" y="138" class="mid small t-bad">at the same time: F0 may see half of F1's camera</text>
+    </svg>
+    <h4>One buffer: a race</h4>
+    <p>The CPU writes frame 1's camera while the GPU still draws frame 0 with it.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 150" role="img" aria-label="Two camera buffers, one per slot. The CPU writes frame 1's camera into slot 1 while the GPU reads frame 0's camera from slot 0.">
+      <rect x="10" y="10" width="126" height="30" rx="4" class="cpu"/><text x="73" y="30" class="mid small">CPU writes camera of F1</text>
+      <rect x="184" y="10" width="126" height="30" rx="4" class="gpu"/><text x="247" y="30" class="mid small">GPU reads camera of F0</text>
+      <text x="73" y="130" class="mid small">camera, slot 1</text>
+      <rect x="13" y="80" width="60" height="34" class="cpu"/><text x="43" y="102" class="mid mono">F1</text>
+      <rect x="73" y="80" width="60" height="34" class="cpu"/><text x="103" y="102" class="mid mono">F1</text>
+      <text x="247" y="130" class="mid small">camera, slot 0</text>
+      <rect x="187" y="80" width="60" height="34" class="mem"/><text x="217" y="102" class="mid mono">F0</text>
+      <rect x="247" y="80" width="60" height="34" class="mem"/><text x="277" y="102" class="mid mono">F0</text>
+      <line x1="73" y1="40" x2="73" y2="78" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <line x1="247" y1="78" x2="247" y2="42" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <text x="160" y="146" class="mid small t-ok">no shared bytes, no race</text>
+    </svg>
+    <h4>One buffer per slot</h4>
+    <p>The CPU writes slot 1 while the GPU reads slot 0. F2 writes slot 0 again, after the GPU is done with F0.</p>
+  </div>
+</div>
+
+<div class="callout warn">
+  <strong>Nothing stops the race</strong>
+  <p>The GPU does not notice a CPU write to mapped memory. Nothing in the API stops the race; the program has to avoid it.</p>
+</div>
 
 <p>There are only two ways out: wait until the GPU is done before writing (the "one slot" picture, slow), or write somewhere else. Frames in flight do the second, and wait only when the other place is still in use.</p>
 
-<h2><span class="n">3</span>Frame slots</h2>
+<h2 id="slots"><span class="n">3</span>Frame slots</h2>
 
 <p>Pick a number <var>N</var>, usually 2 or 3. Give every per-frame resource <var>N</var> copies, and call copy <var>i</var> <b>slot</b> <var>i</var>. Frame <var>n</var> uses slot <var>n</var> mod <var>N</var>. So with <var>N</var> = 2, frames 0, 2, 4 use slot 0 and frames 1, 3, 5 use slot 1.</p>
 
@@ -190,49 +200,49 @@
 
 <p>With <var>N</var> slots, the CPU can be at most <var>N</var> − 1 frames ahead of the GPU: frame <var>n</var> must wait for frame <var>n</var> − <var>N</var>, which used the same slot. That wait is the only one the CPU needs.</p>
 
-<h2><span class="n">4</span>Fences: how the CPU knows</h2>
+<h2 id="fences"><span class="n">4</span>Fences: how the CPU knows</h2>
 
 <p>A <b>fence</b> is a sync object the GPU signals and the CPU can wait on. The submit names it; when the GPU has finished everything in that submit, it signals the fence. There are two kinds.</p>
 
-<figure class="diagram">
-  <svg viewBox="0 0 760 290" role="img" aria-label="Left: binary fences, one per slot. Each is either signaled or not; the CPU waits, then must reset it before the next submit. Right: one timeline fence, a counter. The GPU has reached 5. Slot 0 remembers 6 and slot 1 remembers 7. Waiting for 6 blocks until the counter reaches 6.">
-    <text x="190" y="20" class="mid title">Binary: one per slot</text>
-    <rect x="30" y="40" width="150" height="50" rx="6" class="mem"/>
-    <text x="105" y="62" class="mid">fence 0</text>
-    <text x="105" y="78" class="mid small">signaled / not</text>
-    <rect x="200" y="40" width="150" height="50" rx="6" class="mem"/>
-    <text x="275" y="62" class="mid">fence 1</text>
-    <text x="275" y="78" class="mid small">signaled / not</text>
-    <text x="30" y="120" class="small">1. submit with fence 0</text>
-    <text x="30" y="138" class="small">2. GPU finishes → fence 0 signaled</text>
-    <text x="30" y="156" class="small">3. CPU waits for fence 0</text>
-    <text x="30" y="174" class="small">4. CPU <tspan class="t-hot">resets</tspan> it before the next submit</text>
-    <text x="30" y="206" class="small">One object per slot. Each answers one question:</text>
-    <text x="30" y="222" class="small">"is that one submit done?"</text>
+<div class="split">
+  <div>
+    <svg viewBox="0 0 320 150" role="img" aria-label="Two binary fences, one per slot. Fence 0 is signaled, fence 1 is not. Below, the life of one fence: submit, signaled, wait, reset, and back to submit.">
+      <rect x="20" y="10" width="130" height="42" rx="6" class="ok"/><text x="85" y="28" class="mid small">fence 0</text><text x="85" y="44" class="mid small t-ok">signaled</text>
+      <rect x="170" y="10" width="130" height="42" rx="6" class="mem"/><text x="235" y="28" class="mid small">fence 1</text><text x="235" y="44" class="mid small">not signaled</text>
+      <rect x="6" y="80" width="64" height="26" rx="13" class="box"/><text x="38" y="97" class="mid small">submit</text>
+      <rect x="86" y="80" width="64" height="26" rx="13" class="box"/><text x="118" y="97" class="mid small">signaled</text>
+      <rect x="166" y="80" width="64" height="26" rx="13" class="box"/><text x="198" y="97" class="mid small">CPU waits</text>
+      <rect x="246" y="80" width="64" height="26" rx="13" class="accent"/><text x="278" y="97" class="mid small">reset</text>
+      <line x1="70" y1="93" x2="84" y2="93" class="arrow" marker-end="url(#ah)"/>
+      <line x1="150" y1="93" x2="164" y2="93" class="arrow" marker-end="url(#ah)"/>
+      <line x1="230" y1="93" x2="244" y2="93" class="arrow" marker-end="url(#ah)"/>
+      <path d="M278,106 V132 H38 V108" class="arrow hot" marker-end="url(#ah-hot)"/>
+    </svg>
+    <h4>Binary: one per slot</h4>
+    <p>Submit with the slot's fence. The GPU finishes and signals it. The CPU waits for it, then <b>resets</b> it before the next submit. Each fence answers one question: "is that one submit done?"</p>
+  </div>
+  <div>
+    <svg viewBox="0 0 320 150" role="img" aria-label="One timeline fence, a counter on a number line from 3 to 8. The GPU has reached 5. Waiting for 6 blocks until the counter reaches 6. Slot 0 remembers 6 and slot 1 remembers 7.">
+      <text x="190" y="14" class="mid small t-hot">wait(6) blocks until here</text>
+      <line x1="190" y1="20" x2="190" y2="48" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="76" y="40" class="mid small t-gpu">the GPU has reached 5</text>
+      <line x1="14" y1="56" x2="306" y2="56" class="arrow" marker-end="url(#ah)"/>
+      <line x1="14" y1="56" x2="140" y2="56" class="arrow gpu thick"/>
+      <circle cx="40" cy="56" r="4" class="gpu"/><text x="40" y="80" class="mid mono">3</text>
+      <circle cx="90" cy="56" r="4" class="gpu"/><text x="90" y="80" class="mid mono">4</text>
+      <circle cx="140" cy="56" r="4" class="gpu"/><text x="140" y="80" class="mid mono">5</text>
+      <circle cx="190" cy="56" r="4" class="ghost"/><text x="190" y="80" class="mid mono">6</text>
+      <circle cx="240" cy="56" r="4" class="ghost"/><text x="240" y="80" class="mid mono">7</text>
+      <circle cx="286" cy="56" r="4" class="ghost"/><text x="286" y="80" class="mid mono">8</text>
+      <rect x="14" y="104" width="138" height="34" rx="6" class="zone"/><text x="83" y="125" class="mid small">slot 0: last signal 6</text>
+      <rect x="168" y="104" width="138" height="34" rx="6" class="zone"/><text x="237" y="125" class="mid small">slot 1: last signal 7</text>
+    </svg>
+    <h4>Timeline: one counter</h4>
+    <p>Every submit signals the next value. Values only grow, and nothing is reset. One object answers "how far has the GPU come?" for every submit. Reading the counter never blocks.</p>
+  </div>
+</div>
 
-    <text x="570" y="20" class="mid title">Timeline: one counter</text>
-    <line x1="400" y1="80" x2="740" y2="80" class="arrow"/>
-    <circle cx="420" cy="80" r="4" class="gpu"/><text x="420" y="104" class="mid small mono">3</text>
-    <circle cx="475" cy="80" r="4" class="gpu"/><text x="475" y="104" class="mid small mono">4</text>
-    <circle cx="530" cy="80" r="4" class="gpu"/><text x="530" y="104" class="mid small mono">5</text>
-    <circle cx="585" cy="80" r="4" class="ghost"/><text x="585" y="104" class="mid small mono">6</text>
-    <circle cx="640" cy="80" r="4" class="ghost"/><text x="640" y="104" class="mid small mono">7</text>
-    <circle cx="695" cy="80" r="4" class="ghost"/><text x="695" y="104" class="mid small mono">8</text>
-    <line x1="400" y1="80" x2="530" y2="80" class="hot"/>
-    <text x="465" y="62" class="mid small t-gpu">the GPU has reached 5</text>
-    <line x1="585" y1="44" x2="585" y2="72" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="585" y="38" class="mid small t-hot">wait(6) blocks until here</text>
-    <rect x="400" y="130" width="160" height="40" rx="6" class="zone"/>
-    <text x="480" y="155" class="mid small">slot 0: last signal 6</text>
-    <rect x="580" y="130" width="160" height="40" rx="6" class="zone"/>
-    <text x="660" y="155" class="mid small">slot 1: last signal 7</text>
-    <text x="400" y="200" class="small">Every submit signals the next value. Values only grow,</text>
-    <text x="400" y="216" class="small">and nothing is reset. One object answers</text>
-    <text x="400" y="232" class="small">"how far has the GPU come?" for every submit.</text>
-    <text x="400" y="264" class="small">Reading the counter never blocks.</text>
-  </svg>
-  <figcaption>A timeline needs one object for all slots, and also serves uploads, readbacks and deferred deletes: each just stores the value it waits for.</figcaption>
-</figure>
+<p>A timeline needs one object for all slots. It also serves uploads, readbacks and deferred deletes: each just stores the value it waits for.</p>
 
 <div class="table-wrap">
 <table>
@@ -246,7 +256,7 @@
 
 <p>Do not confuse a fence with a <b>semaphore</b> in the binary sense. A binary semaphore orders work <i>between GPU submissions</i> (for example, "draw only after the swapchain image is free"); the CPU cannot wait on it. See <a href="swapchain.html">the swapchain</a> and <a href="gpu-sync.html">GPU synchronization</a>.</p>
 
-<h2><span class="n">5</span>Worked example: the fence, frame by frame</h2>
+<h2 id="example"><span class="n">5</span>Worked example: the fence, frame by frame</h2>
 
 <p>Two slots and one timeline fence that starts at 0. Each slot starts with the value 0, so the first wait on each slot returns at once. Click through the steps (or use the arrow keys).</p>
 
@@ -358,28 +368,187 @@
   </div>
 </div>
 
-<h2><span class="n">6</span>What gets a copy per slot, and what does not</h2>
+<h2 id="copies"><span class="n">6</span>What gets a copy per slot, and what does not</h2>
 
 <p>The rule is simple: a resource needs one copy per slot when the <b>CPU changes it</b> every frame (or the CPU reads it back), and the GPU may still be using the old contents.</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Resource</th><th>Per slot?</th><th>Why</th></tr>
-  <tr><td>Command buffers and their memory (pools, allocators)</td><td>yes</td><td>Re-recording resets their memory, which the GPU reads while it runs them.</td></tr>
-  <tr><td>Per-frame constants: camera, time, lights</td><td>yes</td><td>The CPU rewrites them every frame.</td></tr>
-  <tr><td>Per-object data the CPU updates (transforms)</td><td>yes</td><td>Same. A change must reach every copy, each in its own frame.</td></tr>
-  <tr><td>Readback buffers, timer queries</td><td>yes</td><td>The GPU writes them, the CPU reads them after the fence. A second frame must not overwrite them first.</td></tr>
-  <tr><td>Meshes, textures, pipelines, samplers</td><td>no</td><td>Written once, then only read. If they change, write new data elsewhere, or wait.</td></tr>
-  <tr><td>GPU-only scratch: a depth buffer, a culling list made and used in one frame</td><td>usually no</td><td>The queue runs frames in order, and a barrier covers earlier submissions. One copy is enough, unless frames may overlap on the GPU or the data must survive to the next frame.</td></tr>
-  <tr><td>Swapchain images</td><td>no, the swapchain owns them</td><td>Their count is not <var>N</var>. See <a href="swapchain.html">the swapchain</a>.</td></tr>
-</table>
+<h3>One copy per slot</h3>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two command buffers, one for slot 0 and one for slot 1, each a list of commands.">
+      <rect x="16" y="14" width="160" height="44" rx="4" class="cpu"/>
+      <path d="M28,27H120M28,36H146M28,45H100" class="arrow"/>
+      <text x="184" y="40" class="small">slot 0</text>
+      <rect x="16" y="72" width="160" height="44" rx="4" class="cpu"/>
+      <path d="M28,85H146M28,94H110M28,103H132" class="arrow"/>
+      <text x="184" y="98" class="small">slot 1</text>
+    </svg>
+    <h4>Command buffers and their memory (pools, allocators)</h4>
+    <p>Re-recording resets their memory, which the GPU reads while it runs them.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two small constant buffers, one per slot, each with the camera, the time and the lights.">
+      <rect x="16" y="14" width="160" height="44" rx="4" class="mem"/>
+      <text x="28" y="40" class="small">camera, time, lights</text>
+      <text x="184" y="40" class="small">slot 0</text>
+      <rect x="16" y="72" width="160" height="44" rx="4" class="mem"/>
+      <text x="28" y="98" class="small">camera, time, lights</text>
+      <text x="184" y="98" class="small">slot 1</text>
+    </svg>
+    <h4>Per-frame constants: camera, time, lights</h4>
+    <p>The CPU rewrites them every frame.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two tables of rows, one per slot. The row the CPU changed is marked in both.">
+      <rect x="16" y="14" width="160" height="44" class="mem"/>
+      <rect x="16" y="25" width="160" height="11" class="cpu"/>
+      <path d="M16,25H176M16,36H176M16,47H176" class="grid"/>
+      <text x="184" y="40" class="small">slot 0</text>
+      <rect x="16" y="72" width="160" height="44" class="mem"/>
+      <rect x="16" y="83" width="160" height="11" class="cpu"/>
+      <path d="M16,83H176M16,94H176M16,105H176" class="grid"/>
+      <text x="184" y="98" class="small">slot 1</text>
+    </svg>
+    <h4>Per-object data the CPU updates (transforms)</h4>
+    <p>The same reason. A change must reach every copy, each in its own frame.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two result buffers. The GPU writes slot 1 now. The CPU reads slot 0, after its fence.">
+      <rect x="16" y="14" width="160" height="44" rx="4" class="mem"/>
+      <text x="28" y="40" class="small t-cpu">CPU reads, after its fence</text>
+      <text x="184" y="40" class="small">slot 0</text>
+      <rect x="16" y="72" width="160" height="44" rx="4" class="mem"/>
+      <text x="28" y="98" class="small t-gpu">GPU writes now</text>
+      <text x="184" y="98" class="small">slot 1</text>
+    </svg>
+    <h4>Readback buffers, timer queries</h4>
+    <p>The GPU writes them, the CPU reads them after the fence. A second frame must not overwrite them first.</p>
+  </div>
 </div>
 
-<p>Changing a resource that has only one copy is still possible. Either write only to parts no running frame reads (a new row, a new descriptor slot), or <b>defer</b> the change: remember the fence value of the current frame, and apply the change once the counter has passed it. Deleting works the same way: a destroyed object is put in a queue with the current value, and really freed later.</p>
+<h3>One copy is enough</h3>
 
-<h2><span class="n">7</span>How many slots: throughput against latency</h2>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="One store with a mesh and a texture. Frame 0 and frame 1 both read it.">
+      <rect x="20" y="12" width="90" height="28" rx="4" class="gpu"/><text x="65" y="30" class="mid small">frame 0</text>
+      <rect x="130" y="12" width="90" height="28" rx="4" class="gpu"/><text x="175" y="30" class="mid small">frame 1</text>
+      <rect x="50" y="72" width="140" height="46" rx="4" class="mem"/>
+      <polygon points="70,108 92,82 114,108" class="box"/>
+      <rect x="134" y="82" width="26" height="26" class="box"/>
+      <path d="M147,82V108M134,95H160" class="arrow"/>
+      <line x1="92" y1="72" x2="70" y2="42" class="arrow" marker-end="url(#ah)"/>
+      <line x1="148" y1="72" x2="170" y2="42" class="arrow" marker-end="url(#ah)"/>
+    </svg>
+    <h4>Meshes, textures, pipelines, samplers</h4>
+    <p>Written once, then only read. If they change, write new data elsewhere, or wait.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Frame 0, then frame 1, in queue order. Each makes and uses the same scratch buffer.">
+      <rect x="20" y="12" width="90" height="28" rx="4" class="gpu"/><text x="65" y="30" class="mid small">frame 0</text>
+      <rect x="130" y="12" width="90" height="28" rx="4" class="gpu"/><text x="175" y="30" class="mid small">frame 1</text>
+      <line x1="110" y1="26" x2="128" y2="26" class="arrow" marker-end="url(#ah)"/>
+      <rect x="50" y="80" width="140" height="34" rx="4" class="mem"/><text x="120" y="101" class="mid small">depth, culling list</text>
+      <line x1="70" y1="42" x2="92" y2="78" class="arrow" marker-start="url(#ah)" marker-end="url(#ah)"/>
+      <line x1="170" y1="42" x2="148" y2="78" class="arrow" marker-start="url(#ah)" marker-end="url(#ah)"/>
+      <text x="120" y="60" class="mid small t-faint">in order</text>
+    </svg>
+    <h4>GPU-only scratch: a depth buffer, a culling list made and used in one frame</h4>
+    <p>Usually one copy. The queue runs frames in order, and a barrier covers earlier submissions.</p>
+    <p class="cost"><b>Unless</b> frames may overlap on the GPU, or the data must survive to the next frame.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A swapchain that holds three images of its own.">
+      <rect x="20" y="16" width="200" height="98" rx="8" class="zone"/>
+      <text x="32" y="38" class="small">the swapchain owns them</text>
+      <rect x="36" y="54" width="48" height="40" class="mem"/><text x="60" y="79" class="mid mono">0</text>
+      <rect x="96" y="54" width="48" height="40" class="mem"/><text x="120" y="79" class="mid mono">1</text>
+      <rect x="156" y="54" width="48" height="40" class="mem"/><text x="180" y="79" class="mid mono">2</text>
+    </svg>
+    <h4>Swapchain images</h4>
+    <p>The swapchain owns them. Their count is not <var>N</var>. See <a href="swapchain.html">the swapchain</a>.</p>
+  </div>
+</div>
+
+<h3>Changing a resource that has one copy</h3>
+
+<p>It is still possible. Either write only to parts no running frame reads (a new row, a new descriptor slot), or <b>defer</b> the change: remember the fence value of the current frame, and apply the change once the counter has passed it. Deleting works the same way: a destroyed object is put in a queue with the current value, and really freed later.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 150" role="img" aria-label="A counter on a number line from 4 to 8. The GPU has reached 5. An object is destroyed while the frame that signals 6 is recorded, so it goes into a queue with the value 6. When the counter reaches 6, no running frame uses it and it is freed.">
+    <text x="160" y="46" class="mid small t-gpu">the GPU has reached 5</text>
+    <text x="340" y="18" class="mid small t-hot">destroy is called: remember value 6</text>
+    <line x1="340" y1="24" x2="340" y2="52" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="60" y1="60" x2="700" y2="60" class="arrow" marker-end="url(#ah)"/>
+    <line x1="60" y1="60" x2="220" y2="60" class="arrow gpu thick"/>
+    <circle cx="100" cy="60" r="5" class="gpu"/><text x="100" y="84" class="mid mono">4</text>
+    <circle cx="220" cy="60" r="5" class="gpu"/><text x="220" y="84" class="mid mono">5</text>
+    <circle cx="340" cy="60" r="5" class="accent"/><text x="340" y="84" class="mid mono">6</text>
+    <circle cx="460" cy="60" r="5" class="ghost"/><text x="460" y="84" class="mid mono">7</text>
+    <circle cx="580" cy="60" r="5" class="ghost"/><text x="580" y="84" class="mid mono">8</text>
+    <rect x="240" y="100" width="200" height="36" rx="6" class="mem"/><text x="340" y="122" class="mid small">delete queue: the object, value 6</text>
+    <line x1="440" y1="118" x2="498" y2="118" class="arrow ok" marker-end="url(#ah-ok)"/>
+    <rect x="500" y="100" width="230" height="36" rx="6" class="ok"/><text x="615" y="122" class="mid small">counter reaches 6: really freed</text>
+  </svg>
+  <figcaption>A deferred delete is a wait that nobody blocks on: the object stays alive until the counter has passed its value.</figcaption>
+</figure>
+
+<h2 id="how-many"><span class="n">7</span>How many slots: throughput against latency</h2>
 
 <p><b>Latency</b> here means the time from the start of a frame on the CPU (when input is read) to the end of its GPU work. A simple model, with fixed costs per frame, shows the trade-off. The numbers come from stepping the rule "frame <var>n</var> may start when the CPU is free and frame <var>n</var> − <var>N</var> is done on the GPU":</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="Two timelines with a CPU that needs 6 milliseconds and a GPU that needs 10. With two slots, frame 4 starts on the CPU at 36 milliseconds and ends on the GPU at 56: a latency of 20 milliseconds. With three slots, frame 4 starts at 26 and ends at 56: a latency of 30 milliseconds. The GPU finishes each frame at the same time in both.">
+    <text x="20" y="20" class="title">Two slots</text>
+    <text x="70" y="50" class="end small t-cpu">CPU</text>
+    <text x="70" y="80" class="end small t-gpu">GPU</text>
+    <rect x="80"  y="36" width="60" height="20" rx="3" class="cpu"/><text x="110" y="50" class="mid small">F0</text>
+    <rect x="140" y="36" width="60" height="20" rx="3" class="cpu"/><text x="170" y="50" class="mid small">F1</text>
+    <rect x="240" y="36" width="60" height="20" rx="3" class="cpu"/><text x="270" y="50" class="mid small">F2</text>
+    <rect x="340" y="36" width="60" height="20" rx="3" class="cpu"/><text x="370" y="50" class="mid small">F3</text>
+    <rect x="440" y="36" width="60" height="20" rx="3" class="accent"/><text x="470" y="50" class="mid small">F4</text>
+    <rect x="540" y="36" width="60" height="20" rx="3" class="cpu"/><text x="570" y="50" class="mid small">F5</text>
+    <rect x="140" y="66" width="100" height="20" rx="3" class="gpu"/><text x="190" y="80" class="mid small">F0</text>
+    <rect x="240" y="66" width="100" height="20" rx="3" class="gpu"/><text x="290" y="80" class="mid small">F1</text>
+    <rect x="340" y="66" width="100" height="20" rx="3" class="gpu"/><text x="390" y="80" class="mid small">F2</text>
+    <rect x="440" y="66" width="100" height="20" rx="3" class="gpu"/><text x="490" y="80" class="mid small">F3</text>
+    <rect x="540" y="66" width="100" height="20" rx="3" class="accent"/><text x="590" y="80" class="mid small">F4</text>
+    <rect x="640" y="66" width="100" height="20" rx="3" class="gpu"/><text x="690" y="80" class="mid small">F5</text>
+    <line x1="442" y1="100" x2="638" y2="100" class="arrow hot" marker-start="url(#ah-hot)" marker-end="url(#ah-hot)"/>
+    <text x="540" y="116" class="mid small t-hot">latency of F4: 20 ms</text>
+
+    <text x="20" y="146" class="title">Three slots</text>
+    <text x="70" y="176" class="end small t-cpu">CPU</text>
+    <text x="70" y="206" class="end small t-gpu">GPU</text>
+    <rect x="80"  y="162" width="60" height="20" rx="3" class="cpu"/><text x="110" y="176" class="mid small">F0</text>
+    <rect x="140" y="162" width="60" height="20" rx="3" class="cpu"/><text x="170" y="176" class="mid small">F1</text>
+    <rect x="200" y="162" width="60" height="20" rx="3" class="cpu"/><text x="230" y="176" class="mid small">F2</text>
+    <rect x="260" y="162" width="60" height="20" rx="3" class="cpu"/><text x="290" y="176" class="mid small">F3</text>
+    <rect x="340" y="162" width="60" height="20" rx="3" class="accent"/><text x="370" y="176" class="mid small">F4</text>
+    <rect x="440" y="162" width="60" height="20" rx="3" class="cpu"/><text x="470" y="176" class="mid small">F5</text>
+    <rect x="540" y="162" width="60" height="20" rx="3" class="cpu"/><text x="570" y="176" class="mid small">F6</text>
+    <rect x="140" y="192" width="100" height="20" rx="3" class="gpu"/><text x="190" y="206" class="mid small">F0</text>
+    <rect x="240" y="192" width="100" height="20" rx="3" class="gpu"/><text x="290" y="206" class="mid small">F1</text>
+    <rect x="340" y="192" width="100" height="20" rx="3" class="gpu"/><text x="390" y="206" class="mid small">F2</text>
+    <rect x="440" y="192" width="100" height="20" rx="3" class="gpu"/><text x="490" y="206" class="mid small">F3</text>
+    <rect x="540" y="192" width="100" height="20" rx="3" class="accent"/><text x="590" y="206" class="mid small">F4</text>
+    <rect x="640" y="192" width="100" height="20" rx="3" class="gpu"/><text x="690" y="206" class="mid small">F5</text>
+    <line x1="342" y1="226" x2="638" y2="226" class="arrow hot" marker-start="url(#ah-hot)" marker-end="url(#ah-hot)"/>
+    <text x="490" y="242" class="mid small t-hot">latency of F4: 30 ms</text>
+
+    <line x1="80" y1="262" x2="740" y2="262" class="arrow"/>
+    <path d="M80,258V266M180,258V266M280,258V266M380,258V266M480,258V266M580,258V266M680,258V266" class="arrow"/>
+    <text x="80"  y="282" class="mid small">0</text>
+    <text x="180" y="282" class="mid small">10</text>
+    <text x="280" y="282" class="mid small">20</text>
+    <text x="380" y="282" class="mid small">30</text>
+    <text x="480" y="282" class="mid small">40</text>
+    <text x="580" y="282" class="mid small">50</text>
+    <text x="680" y="282" class="mid small">60 ms</text>
+  </svg>
+  <figcaption>The CPU needs 6 ms per frame and the GPU 10 ms. With three slots the CPU starts frame 4 earlier, but the GPU finishes it at the same moment. The frame only waits longer in the queue.</figcaption>
+</figure>
 
 <div class="table-wrap">
 <table>
@@ -395,10 +564,29 @@
 
 <div class="split">
   <div>
+    <svg viewBox="0 0 320 110" role="img" aria-label="The CPU waits at the fence. A finished frame waits in the queue. The GPU runs an older frame.">
+      <text x="56" y="20" class="mid small t-cpu">CPU</text>
+      <text x="160" y="20" class="mid small">queue</text>
+      <text x="264" y="20" class="mid small t-gpu">GPU</text>
+      <rect x="8" y="30" width="96" height="40" rx="6" class="ghost"/><text x="56" y="54" class="mid small t-faint">waits at the fence</text>
+      <rect x="112" y="30" width="96" height="40" rx="6" class="accent"/><text x="160" y="54" class="mid small">F5 waits</text>
+      <rect x="216" y="30" width="96" height="40" rx="6" class="gpu"/><text x="264" y="54" class="mid small">runs F4</text>
+      <line x1="208" y1="50" x2="214" y2="50" class="arrow"/>
+      <text x="160" y="96" class="mid small t-hot">each extra slot: one more frame waits here</text>
+    </svg>
     <h4>GPU-bound</h4>
     <p>The CPU runs ahead until it hits the fence. Each extra slot is one more finished frame waiting in the queue, so latency grows by one GPU frame, and speed does not change.</p>
   </div>
   <div>
+    <svg viewBox="0 0 320 110" role="img" aria-label="The CPU records a frame. The queue is empty. The GPU is idle and waits for the CPU.">
+      <text x="56" y="20" class="mid small t-cpu">CPU</text>
+      <text x="160" y="20" class="mid small">queue</text>
+      <text x="264" y="20" class="mid small t-gpu">GPU</text>
+      <rect x="8" y="30" width="96" height="40" rx="6" class="cpu"/><text x="56" y="54" class="mid small">records F5</text>
+      <rect x="112" y="30" width="96" height="40" rx="6" class="ghost"/><text x="160" y="54" class="mid small t-faint">empty</text>
+      <rect x="216" y="30" width="96" height="40" rx="6" class="ghost"/><text x="264" y="54" class="mid small t-faint">idle, waits</text>
+      <text x="160" y="96" class="mid small">more slots change nothing</text>
+    </svg>
     <h4>CPU-bound</h4>
     <p>The GPU waits for the CPU, never the other way. The queue stays empty, so more slots change nothing. They do help when costs <b>vary</b>: a slow CPU frame can then hide behind a fast one.</p>
   </div>
@@ -406,20 +594,17 @@
 
 <p>That is why 2 is the common default, and 3 is used when frame costs jump around. Games that care about input lag go further: they limit how far the CPU may run ahead, or delay the start of the CPU frame so it finishes just in time.</p>
 
-<h2><span class="n">8</span>Where to wait, and other pitfalls</h2>
+<h2 id="pitfalls"><span class="n">8</span>Where to wait, and other pitfalls</h2>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Pitfall</th><th>What happens</th><th>Instead</th></tr>
-  <tr><td>Waiting right after submit</td><td>Back to "one slot": no overlap.</td><td>Wait at the start of the frame that reuses the slot.</td></tr>
-  <tr><td>Writing the slot before the wait</td><td>The race from section 2 comes back, but only sometimes.</td><td>Everything that writes a slot's resources runs after its wait.</td></tr>
-  <tr><td>Remembering a value nothing signals</td><td>A submit failed, but the slot stored its value anyway. The next wait on that slot never returns.</td><td>Store the value only after the submit succeeded.</td></tr>
-  <tr><td>Mixing up frame number and slot</td><td>Two frames in flight share one slot.</td><td>Keep both, and index per-frame resources by the slot.</td></tr>
-  <tr><td>Readback "now"</td><td>The CPU reads a result the GPU has not written yet.</td><td>Read a slot's results after its wait: they are <var>N</var> frames old, and that is fine for statistics.</td></tr>
-  <tr><td>Waiting forever</td><td>A GPU hang (device lost) freezes the program.</td><td>A timeout, or at least an error on a failed wait.</td></tr>
-  <tr><td>Resize or shutdown with frames in flight</td><td>Resources are freed while the GPU still uses them.</td><td>Wait for the device to go idle first; it is rare, so the cost does not matter.</td></tr>
-</table>
-</div>
+<dl class="pitfalls">
+  <div><dt>Waiting right after submit</dt><dd>Back to "one slot": no overlap. <b>Instead:</b> wait at the start of the frame that reuses the slot.</dd></div>
+  <div><dt>Writing the slot before the wait</dt><dd>The race from section 2 comes back, but only sometimes. <b>Instead:</b> everything that writes a slot's resources runs after its wait.</dd></div>
+  <div><dt>Remembering a value nothing signals</dt><dd>A submit failed, but the slot stored its value anyway. The next wait on that slot never returns. <b>Instead:</b> store the value only after the submit succeeded.</dd></div>
+  <div><dt>Mixing up frame number and slot</dt><dd>Two frames in flight share one slot. <b>Instead:</b> keep both, and index per-frame resources by the slot.</dd></div>
+  <div><dt>Readback "now"</dt><dd>The CPU reads a result the GPU has not written yet. <b>Instead:</b> read a slot's results after its wait: they are <var>N</var> frames old, and that is fine for statistics.</dd></div>
+  <div><dt>Waiting forever</dt><dd>A GPU hang (device lost) freezes the program. <b>Instead:</b> a timeout, or at least an error on a failed wait.</dd></div>
+  <div><dt>Resize or shutdown with frames in flight</dt><dd>Resources are freed while the GPU still uses them. <b>Instead:</b> wait for the device to go idle first; it is rare, so the cost does not matter.</dd></div>
+</dl>
 
 <h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
@@ -490,15 +675,60 @@
 </table>
 </div>
 
-<p>A changed table row is marked dirty in <b>every</b> slot (<code>GpuTable::setRow</code>). Each slot then uploads it once, in its own frame, after its own wait. That is why <code>EngineConfig::maxInstances</code> costs its memory twice.</p>
+<div class="callout">
+  <strong>A change reaches both slots</strong>
+  <p>A changed table row is marked dirty in <b>every</b> slot (<code>GpuTable::setRow</code>). Each slot then uploads it once, in its own frame, after its own wait. That is why <code>EngineConfig::maxInstances</code> costs its memory twice.</p>
+</div>
 
-<p>One GPU-only buffer per scene view is shared on purpose: <code>SceneView::visibility</code>, what the last frame's occlusion culling saw. The next frame reads it, so it must survive the frame. Only compute passes use it, and they run on one queue in frame order, and the <code>Cull 1</code> pass declares it with <code>readPrevious</code>, so the graph puts a compute-to-compute barrier before it: one copy is safe (see <a href="occlusion-culling.html#in-rasm">occlusion culling</a>).</p>
+<h3>What has one copy</h3>
 
-<p>A render target without <code>history</code> also has one copy that both slots share. Each frame draws it before it reads it, and the queue runs the frames in order, so the next frame's draw waits behind the barriers of this one (see <a href="temporal-history.html#in-rasm">temporal history</a>). A use on the other queue waits for it instead (<a href="render-graphs.html#rasm-queues">render graphs</a>).</p>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Last frame's culling wrote the visibility buffer. This frame's Cull 1 reads it, after a barrier.">
+      <rect x="8" y="12" width="100" height="40" rx="4" class="shader"/><text x="58" y="29" class="mid small">last frame:</text><text x="58" y="44" class="mid small">culling writes</text>
+      <rect x="114" y="8" width="8" height="48" rx="2" class="accent"/>
+      <rect x="130" y="12" width="102" height="40" rx="4" class="shader"/><text x="181" y="29" class="mid small">this frame:</text><text x="181" y="44" class="mid small">Cull 1 reads</text>
+      <rect x="70" y="90" width="100" height="28" rx="4" class="mem"/><text x="120" y="108" class="mid small">visibility</text>
+      <line x1="58" y1="52" x2="92" y2="88" class="hot" marker-end="url(#ah-hot)"/>
+      <line x1="148" y1="90" x2="181" y2="54" class="arrow" marker-end="url(#ah)"/>
+    </svg>
+    <h4>The visibility buffer</h4>
+    <p>One GPU-only buffer per scene view is shared on purpose: <code>SceneView::visibility</code>, what the last frame's occlusion culling saw. The next frame reads it, so it must survive the frame.</p>
+    <p>Only compute passes use it, and they run on one queue in frame order, and the <code>Cull 1</code> pass declares it with <code>readPrevious</code>, so the graph puts a compute-to-compute barrier before it: one copy is safe (see <a href="occlusion-culling.html#in-rasm">occlusion culling</a>).</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two frames in queue order. Each draws the same render target and then reads it.">
+      <rect x="8" y="12" width="100" height="40" rx="4" class="gpu"/><text x="58" y="29" class="mid small">this frame:</text><text x="58" y="44" class="mid small">draw, then read</text>
+      <line x1="108" y1="32" x2="128" y2="32" class="arrow" marker-end="url(#ah)"/>
+      <rect x="130" y="12" width="102" height="40" rx="4" class="gpu"/><text x="181" y="29" class="mid small">next frame:</text><text x="181" y="44" class="mid small">draw, then read</text>
+      <rect x="70" y="90" width="100" height="28" rx="4" class="mem"/><text x="120" y="108" class="mid small">render target</text>
+      <line x1="58" y1="54" x2="92" y2="88" class="arrow" marker-start="url(#ah)" marker-end="url(#ah)"/>
+      <line x1="181" y1="54" x2="148" y2="88" class="arrow" marker-start="url(#ah)" marker-end="url(#ah)"/>
+    </svg>
+    <h4>A render target without <code>history</code></h4>
+    <p>It has one copy that both slots share. Each frame draws it before it reads it, and the queue runs the frames in order, so the next frame's draw waits behind the barriers of this one (see <a href="temporal-history.html#in-rasm">temporal history</a>).</p>
+    <p>A use on the other queue waits for it instead (<a href="render-graphs.html#rasm-queues">render graphs</a>).</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A row of filled cells. New cells are added at the end. The filled cells do not change.">
+      <text x="20" y="34" class="small">in use: never changed</text>
+      <rect x="20" y="46" width="34" height="34" class="mem"/>
+      <rect x="54" y="46" width="34" height="34" class="mem"/>
+      <rect x="88" y="46" width="34" height="34" class="mem"/>
+      <rect x="122" y="46" width="34" height="34" class="mem"/>
+      <rect x="156" y="46" width="34" height="34" class="accent"/><text x="173" y="68" class="mid">+</text>
+      <rect x="190" y="46" width="34" height="34" class="accent"/><text x="207" y="68" class="mid">+</text>
+      <text x="224" y="104" class="end small t-hot">new: only added</text>
+    </svg>
+    <h4>Geometry, textures, pipelines, the bindless set</h4>
+    <p>The geometry pool, textures, pipelines and the one bindless descriptor set have a single copy. They are only added to: new ranges, new textures, new bindless slots, never a change to something a running frame reads.</p>
+    <p>The bindless set's layout uses update-after-bind, which allows writing new slots while earlier frames still run.</p>
+  </div>
+</div>
 
 <p>The visible-draw lists and the Hi-Z have one copy per slot for a second reason: with async compute, <code>Cull 1</code> of the next frame then does not wait for this frame's draws, and can run next to them.</p>
 
-<p>The geometry pool, textures, pipelines and the one bindless descriptor set have a single copy. They are only added to: new ranges, new textures, new bindless slots, never a change to something a running frame reads. The bindless set's layout uses update-after-bind, which allows writing new slots while earlier frames still run. Nothing is freed while frames are in flight, because nothing can be destroyed yet (<b>D4</b>). Resize is the exception: it waits for the device to go idle, then replaces the depth textures and rebuilds the render targets sized from the window (<code>RenderContext::resizeRenderTargets</code>).</p>
+<p>Nothing is freed while frames are in flight, because nothing can be destroyed yet (<b>D4</b>). Resize is the exception: it waits for the device to go idle, then replaces the depth textures and rebuilds the render targets sized from the window (<code>RenderContext::resizeRenderTargets</code>).</p>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
 

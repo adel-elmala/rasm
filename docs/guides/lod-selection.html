@@ -42,7 +42,7 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>The problem</h2>
+<h2 id="problem"><span class="n">1</span>The problem</h2>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 210" role="img" aria-label="A camera on the left and four copies of the same object at growing distances. The nearest is drawn with LOD 0, the next with LOD 1, then LOD 2, then LOD 4. The question is where each switch should happen.">
@@ -68,50 +68,121 @@
   <figcaption>The rule runs for every object, every frame, so it must be cheap. It should never pick a level whose difference you can see, and it should not flicker between two levels.</figcaption>
 </figure>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Goal</th><th>Means</th></tr>
-  <tr><td>Cheap</td><td>A few multiplications per object. It often runs on the GPU, one thread per object.</td></tr>
-  <tr><td>Correct</td><td>The difference to the full mesh stays under what the eye can see: about a pixel.</td></tr>
-  <tr><td>Stable</td><td>An object that barely moves does not switch back and forth.</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A grid of many objects. Each one gets its own small GPU thread.">
+      <circle cx="40" cy="30" r="9" class="shader"/><circle cx="80" cy="30" r="9" class="shader"/><circle cx="120" cy="30" r="9" class="shader"/><circle cx="160" cy="30" r="9" class="shader"/><circle cx="200" cy="30" r="9" class="shader"/>
+      <circle cx="40" cy="62" r="9" class="shader"/><circle cx="80" cy="62" r="9" class="shader"/><circle cx="120" cy="62" r="9" class="shader"/><circle cx="160" cy="62" r="9" class="shader"/><circle cx="200" cy="62" r="9" class="shader"/>
+      <circle cx="40" cy="94" r="9" class="shader"/><circle cx="80" cy="94" r="9" class="shader"/><circle cx="120" cy="94" r="9" class="shader"/><circle cx="160" cy="94" r="9" class="shader"/><circle cx="200" cy="94" r="9" class="shader"/>
+      <text x="120" y="122" class="mid small">one thread per object</text>
+    </svg>
+    <h4>Cheap</h4>
+    <p>A few multiplications per object. It often runs on the GPU, one thread per object.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The outline of the full mesh and the outline of a coarse level, almost on top of each other. The gap between them is under one pixel.">
+      <path d="M30,96 C60,20 180,20 210,96" class="arrow gpu thick"/>
+      <polyline points="30,96 70,48 120,36 170,48 210,96" class="arrow hot"/>
+      <line x1="120" y1="12" x2="120" y2="36" class="arrow" marker-end="url(#ah)"/>
+      <text x="128" y="20" class="small">under 1 px</text>
+      <text x="120" y="120" class="mid small"><tspan class="t-gpu">full mesh</tspan> · <tspan class="t-hot">coarse level</tspan></text>
+    </svg>
+    <h4>Correct</h4>
+    <p>The difference to the full mesh stays under what the eye can see: about a pixel.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two graphs of the chosen level over time. One jumps back and forth between two levels: wrong. The other stays on one level: right.">
+      <polyline points="20,50 40,50 40,24 60,24 60,50 80,50 80,24 100,24 100,50 120,50 120,24 140,24 140,50 160,50 160,24 180,24 180,50 220,50" class="arrow bad"/>
+      <text x="20" y="16" class="small t-bad">flickers between two levels</text>
+      <polyline points="20,100 220,100" class="arrow ok thick"/>
+      <text x="20" y="90" class="small t-ok">stays on one level</text>
+      <text x="220" y="122" class="end small t-faint">time →</text>
+    </svg>
+    <h4>Stable</h4>
+    <p>An object that barely moves does not switch back and forth.</p>
+  </div>
 </div>
 
-<h2><span class="n">2</span>Distance thresholds</h2>
+<h2 id="distance"><span class="n">2</span>Distance thresholds</h2>
 
 <p>The simplest rule: an artist sets a distance per level. Closer than 10 m: LOD 0. 10 to 25 m: LOD 1. And so on.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 230" role="img" aria-label="Half rings around a camera at 10, 25 and 60 metres. Inside the first ring LOD 0 is used, between the first and second LOD 1, between the second and third LOD 2, and outside LOD 3.">
-    <path d="M140,200 A60,60 0 0 1 260,200" class="arrow dashed"/>
-    <path d="M80,200 A120,120 0 0 1 320,200" class="arrow dashed"/>
-    <path d="M20,200 A180,180 0 0 1 380,200" class="arrow dashed"/>
-    <line x1="20" y1="200" x2="380" y2="200" class="arrow"/>
-    <circle cx="200" cy="196" r="7" class="cpu"/>
-    <text x="200" y="170" class="mid small">LOD 0</text>
-    <text x="200" y="118" class="mid small">LOD 1</text>
-    <text x="200" y="58" class="mid small">LOD 2</text>
-    <text x="370" y="34" class="mid small">LOD 3</text>
-    <text x="260" y="216" class="mid small">10 m</text>
-    <text x="320" y="216" class="mid small">25 m</text>
-    <text x="380" y="216" class="mid small">60 m</text>
-
-    <rect x="430" y="30" width="310" height="170" rx="6" class="zone"/>
-    <text x="446" y="54" class="title">The distances ignore</text>
-    <text x="446" y="80" class="small">· the screen's resolution: 4K shows more detail</text>
-    <text x="446" y="100" class="small">· the field of view: zooming in makes things big</text>
-    <text x="446" y="120" class="small">· the object's scale: a tree scaled ×3</text>
-    <text x="460" y="136" class="small">is three times bigger at the same distance</text>
-    <text x="446" y="156" class="small">· the mesh: each mesh needs its own numbers,</text>
-    <text x="460" y="172" class="small">set by hand, and checked again after</text>
-    <text x="460" y="188" class="small">every change to the mesh</text>
+  <svg viewBox="0 0 760 232" role="img" aria-label="Half rings around a camera at 10, 25 and 60 metres. Inside the first ring LOD 0 is used, between the first and second LOD 1, between the second and third LOD 2, and outside LOD 3.">
+    <path d="M195,200 A185,185 0 0 1 565,200 Z" class="zone"/>
+    <path d="M310,200 A70,70 0 0 1 450,200" class="arrow dashed"/>
+    <path d="M255,200 A125,125 0 0 1 505,200" class="arrow dashed"/>
+    <path d="M195,200 A185,185 0 0 1 565,200" class="arrow dashed"/>
+    <line x1="120" y1="200" x2="700" y2="200" class="arrow"/>
+    <circle cx="380" cy="196" r="7" class="cpu"/>
+    <text x="380" y="222" class="mid small">camera</text>
+    <text x="380" y="166" class="mid title">LOD 0</text>
+    <text x="380" y="106" class="mid title">LOD 1</text>
+    <text x="380" y="48" class="mid title">LOD 2</text>
+    <text x="640" y="110" class="mid title">LOD 3</text>
+    <circle cx="414" cy="176" r="6" class="gpu"/><circle cx="300" cy="142" r="6" class="gpu"/><circle cx="476" cy="96" r="6" class="gpu"/><circle cx="262" cy="74" r="6" class="gpu"/><circle cx="640" cy="150" r="6" class="gpu"/><circle cx="150" cy="130" r="6" class="gpu"/>
+    <text x="450" y="216" class="mid small">10 m</text>
+    <text x="505" y="216" class="mid small">25 m</text>
+    <text x="565" y="216" class="mid small">60 m</text>
   </svg>
-  <figcaption>Distance rules are easy to understand and still common in tools, but they need tuning per mesh and per camera.</figcaption>
+  <figcaption>Seen from above. Distance rules are easy to understand and still common in tools, but they need tuning per mesh and per camera.</figcaption>
 </figure>
+
+<p>The distances ignore four things:</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The same object on a small screen and on a 4K screen. On the 4K screen it covers many more pixels.">
+      <rect x="16" y="44" width="72" height="44" rx="3" class="paper"/>
+      <circle cx="52" cy="66" r="11" class="gpu"/>
+      <text x="52" y="106" class="mid small">1080 pixels high</text>
+      <rect x="108" y="12" width="120" height="76" rx="3" class="paper"/>
+      <circle cx="168" cy="50" r="22" class="gpu"/>
+      <text x="168" y="106" class="mid small">2160 pixels high</text>
+    </svg>
+    <h4>The screen's resolution</h4>
+    <p>4K shows more detail.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two cameras look at the same object from the same distance. In the wide view the object is small. In the narrow, zoomed-in view it fills the picture.">
+      <path d="M12,60L100,14M12,60L100,106" class="arrow"/>
+      <circle cx="12" cy="60" r="4" class="cpu"/>
+      <circle cx="88" cy="60" r="11" class="gpu"/>
+      <text x="56" y="124" class="mid small">wide view</text>
+      <path d="M134,60L228,42M134,60L228,78" class="arrow"/>
+      <circle cx="134" cy="60" r="4" class="cpu"/>
+      <circle cx="210" cy="60" r="11" class="gpu"/>
+      <text x="182" y="124" class="mid small">zoomed in</text>
+    </svg>
+    <h4>The field of view</h4>
+    <p>Zooming in makes things big.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A small tree and the same tree scaled three times, at the same distance.">
+      <polygon points="48,104 62,74 76,104" class="gpu"/>
+      <polygon points="126,104 168,14 210,104" class="gpu"/>
+      <line x1="16" y1="104" x2="224" y2="104" class="surface"/>
+      <text x="62" y="124" class="mid small">× 1</text>
+      <text x="168" y="124" class="mid small">× 3</text>
+    </svg>
+    <h4>The object's scale</h4>
+    <p>A tree scaled ×3 is three times bigger at the same distance.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two different meshes, a smooth one and a spiky one. Each needs its own distances.">
+      <circle cx="62" cy="54" r="34" class="gpu"/>
+      <polygon points="176,14 186,42 214,44 192,62 200,92 176,74 152,92 160,62 138,44 166,42" class="gpu"/>
+      <text x="62" y="112" class="mid small">10 m? 25 m?</text>
+      <text x="176" y="112" class="mid small">4 m? 12 m?</text>
+    </svg>
+    <h4>The mesh</h4>
+    <p>Each mesh needs its own numbers, set by hand, and checked again after every change to the mesh.</p>
+  </div>
+</div>
 
 <p>A better variant uses the object's <b>size on screen</b> instead of its distance: the projected height of its bounding sphere, as a fraction of the screen. Unity's LOD Group and Unreal's static mesh LODs both work this way. It fixes the resolution, field-of-view and scale problems, because they all change the size on screen. It still needs a threshold per mesh, because one mesh's LOD 1 may be much worse than another's.</p>
 
-<h2><span class="n">3</span>The screen-space error</h2>
+<h2 id="screen-error"><span class="n">3</span>The screen-space error</h2>
 
 <p>The simplifier already knows how bad each level is: it reports a <b>geometric error</b> <var>e</var>, the largest distance between the level's surface and the full mesh, in the mesh's own units (see <a href="mesh-simplification.html">Mesh simplification</a>). If we turn that distance into <b>pixels</b>, one rule works for every mesh:</p>
 
@@ -121,7 +192,7 @@
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 200" role="img" aria-label="A chain of levels with growing errors, 0, 0.005, 0.012, 0.03 and 0.08 metres. Seen from 20 metres they become 0, 0.25, 0.59, 1.48 and 3.94 pixels. The limit is 1 pixel, so LOD 2 is picked.">
+  <svg viewBox="0 0 760 174" role="img" aria-label="A chain of levels with growing errors, 0, 0.005, 0.012, 0.03 and 0.08 metres. Seen from 20 metres they become 0, 0.25, 0.59, 1.48 and 3.94 pixels. The limit is 1 pixel, so LOD 2 is picked.">
     <text x="20" y="40" class="small">error in metres</text>
     <text x="20" y="104" class="small">on screen at 20 m</text>
     <rect x="160" y="20" width="100" height="44" rx="6" class="gpu"/>
@@ -142,12 +213,11 @@
     <line x1="500" y1="76" x2="500" y2="120" class="hot dashed"/>
     <text x="500" y="138" class="mid small t-hot">limit: 1 px</text>
     <text x="442" y="164" class="mid small t-hot">↑ the coarsest level under the limit</text>
-    <text x="20" y="190" class="small">The numbers are for a 60° field of view and a 1080-pixel-high screen, worked out in section 7.</text>
   </svg>
-  <figcaption>The errors grow from level to level, so the levels under the limit are always the first few. The rule picks the last of them.</figcaption>
+  <figcaption>The errors grow from level to level, so the levels under the limit are always the first few. The rule picks the last of them. The numbers are for a 60° field of view and a 1080-pixel-high screen, worked out in section 7.</figcaption>
 </figure>
 
-<h2><span class="n">4</span>From an error in metres to pixels</h2>
+<h2 id="pixels"><span class="n">4</span>From an error in metres to pixels</h2>
 
 <p>How big is a length <var>L</var> on screen, when it stands at right angles to the view direction, at view depth <var>w</var>? Look at the camera from the side:</p>
 
@@ -196,35 +266,45 @@ level         = the last level with e ≤ eMax</code></pre>
 
 <p>The horizontal direction gives the same answer: <var>P</var><sub>00</sub> is <var>P</var><sub>11</sub> divided by the aspect ratio, and the screen is wider by the same ratio.</p>
 
-<h2><span class="n">5</span>Depth, not distance</h2>
+<h2 id="depth"><span class="n">5</span>Depth, not distance</h2>
+
+<p>The projection divides by the depth along the view direction, not by the straight distance to the object.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 225" role="img" aria-label="An object 40 degrees off the view direction. Its straight distance from the camera, 30 metres, is longer than its depth along the view direction, 23 metres. The projection divides by the depth, so dividing by the distance would make the error look smaller than it is and pick too coarse a level.">
-    <line x1="70" y1="185" x2="700" y2="185" class="arrow dashed" marker-end="url(#ah)"/>
-    <text x="700" y="205" class="end small">view direction</text>
-    <circle cx="60" cy="185" r="7" class="cpu"/>
-    <text x="60" y="210" class="mid small">camera</text>
-    <circle cx="244" cy="31" r="14" class="gpu"/>
-    <line x1="66" y1="179" x2="232" y2="41" class="arrow" marker-end="url(#ah)"/>
-    <text x="140" y="96" class="end small">distance: 30 m</text>
-    <line x1="244" y1="45" x2="244" y2="185" class="arrow dashed"/>
-    <line x1="70" y1="160" x2="242" y2="160" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="165" y="152" class="mid small t-gpu">depth w: 23 m</text>
-    <path d="M118,185 A58,58 0 0 0 104,148" class="arrow hot"/>
-    <text x="124" y="178" class="small t-hot">40°</text>
+  <svg viewBox="0 0 760 250" role="img" aria-label="Left: an object 40 degrees off the view direction. Its straight distance from the camera, 30 metres, is longer than its depth along the view direction, 23 metres. Right: two bars. Dividing by the depth gives the true size of the error on screen. Dividing by the distance gives a bar that is 23 percent shorter: the error looks smaller than it is.">
+    <line x1="90" y1="225" x2="400" y2="225" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="400" y="244" class="end small">view direction</text>
+    <circle cx="80" cy="225" r="7" class="cpu"/>
+    <text x="80" y="246" class="mid small">camera</text>
+    <circle cx="310" cy="32" r="14" class="gpu"/>
+    <line x1="86" y1="219" x2="298" y2="42" class="arrow thick" marker-end="url(#ah)"/>
+    <text x="176" y="112" class="end">distance: 30 m</text>
+    <line x1="310" y1="46" x2="310" y2="225" class="arrow dashed"/>
+    <line x1="92" y1="205" x2="306" y2="205" class="arrow gpu thick" marker-end="url(#ah-gpu)"/>
+    <text x="216" y="196" class="mid t-gpu">depth w: 23 m</text>
+    <path d="M140,225 A60,60 0 0 0 126,186" class="arrow hot"/>
+    <text x="150" y="219" class="small t-hot">40°</text>
 
-    <rect x="320" y="30" width="420" height="120" rx="6" class="zone"/>
-    <text x="336" y="54" class="mono small">distance = 30 m</text>
-    <text x="336" y="76" class="mono small">depth w  = 30 × cos 40° = 23 m</text>
-    <text x="336" y="104" class="small">The projection divides by w = 23. Dividing by 30 instead</text>
-    <text x="336" y="122" class="small">makes the error look 23% smaller: too coarse a level.</text>
+    <text x="450" y="60" class="title">The same error, on screen</text>
+    <text x="450" y="92" class="small t-ok">divided by the depth, 23: its true size</text>
+    <rect x="450" y="100" width="260" height="22" rx="3" class="ok"/>
+    <text x="450" y="152" class="small t-bad">divided by the distance, 30: 23% smaller</text>
+    <rect x="450" y="160" width="200" height="22" rx="3" class="bad"/>
+    <line x1="650" y1="171" x2="710" y2="171" class="arrow bad dashed"/>
+    <text x="450" y="206" class="small">The level looks better than it is: too coarse a level is picked.</text>
   </svg>
   <figcaption>A planar projection divides by the depth <var>w</var>, the distance along the view direction. Off the centre of the screen, the straight distance is longer.</figcaption>
 </figure>
 
-<p>In the picture, the object is 30 m away, 40° off the centre, so its depth is 30 × cos 40° = 23 m. Dividing by 30 instead of 23 makes its error look 23% smaller than it really is. Near the edges of a wide view, a distance-based rule picks levels that are too coarse. The depth is also cheaper: it is the <var>w</var> of the point in clip space, one row of the matrix.</p>
+<div class="stats">
+  <div><b>30 m</b><span>the straight distance to the object, 40° off the centre</span></div>
+  <div><b>23 m</b><span>its depth <var>w</var></span><small>30 × cos 40°</small></div>
+  <div><b>23%</b><span>how much smaller the error looks when you divide by 30 instead of 23</span><small>1 − 23 / 30</small></div>
+</div>
 
-<h2><span class="n">6</span>Staying conservative</h2>
+<p>Near the edges of a wide view, a distance-based rule picks levels that are too coarse. The depth is also cheaper: it is the <var>w</var> of the point in clip space, one row of the matrix.</p>
+
+<h2 id="conservative"><span class="n">6</span>Staying conservative</h2>
 
 <p>Like culling, LOD selection should only err on the safe side: it may pick a level finer than needed (that costs a little time), never a coarser one (that shows). Each input has a safe choice:</p>
 
@@ -262,7 +342,7 @@ level         = the last level with e ≤ eMax</code></pre>
 </table>
 </div>
 
-<h2><span class="n">7</span>Worked example</h2>
+<h2 id="example"><span class="n">7</span>Worked example</h2>
 
 <p>A 60° vertical field of view (<var>P</var><sub>11</sub> = 1.732), a screen 1080 pixels high, a limit <var>τ</var> = 1 pixel. So at depth <var>w</var>, one metre is 1.732 × 1080 / 2 / <var>w</var> = 935.3 / <var>w</var> pixels. A mesh in metres, scale 1, with a bounding sphere of radius 1 m, and these levels:</p>
 
@@ -396,7 +476,7 @@ level         = the last level with e ≤ eMax</code></pre>
   </div>
 </div>
 
-<h2><span class="n">8</span>The orthographic case</h2>
+<h2 id="orthographic"><span class="n">8</span>The orthographic case</h2>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 210" role="img" aria-label="Side view of an orthographic camera. The view rays are parallel. The same object at a near and a far depth has the same size in the image.">
@@ -420,7 +500,7 @@ pixels = e × s × P11 × H / 2 = e × s × H / (top − bottom)</code></pre>
 
 <p>The depth drops out. A view that shows 40 m from top to bottom on a 1080-pixel screen has 27 pixels per metre, near or far. The level changes only when the view zooms (changes <var>top</var> − <var>bottom</var>). This is the common case for map engines and CAD views. A matrix tells which case it is: a perspective matrix has 0 in its bottom-right corner, an orthographic one has 1.</p>
 
-<h2><span class="n">9</span>Popping, and how to hide it</h2>
+<h2 id="popping"><span class="n">9</span>Popping, and how to hide it</h2>
 
 <p>When an object switches levels, its shape changes in one frame. If the change is big enough to see, it <b>pops</b>. With <var>τ</var> = 1 pixel the change is at most a pixel, which is hard to see on a moving image. A larger <var>τ</var> (to save more triangles) makes popping visible, and then one of these helps:</p>
 
@@ -449,8 +529,13 @@ pixels = e × s × P11 × H / 2 = e × s × H / (top − bottom)</code></pre>
 
 <p>For a short time after a switch, draw <b>both</b> levels and blend from the old to the new. Real alpha blending needs sorting and has problems with depth. So engines use <b>dithering</b> (screen-door transparency): each level draws only some pixels, chosen by a fixed pattern, and the two patterns fill the screen together. Over a few frames, more pixels go to the new level.</p>
 
+<div class="legend">
+  <span><i class="cpu"></i>a pixel from the old level</span>
+  <span><i class="gpu"></i>a pixel from the new level</span>
+</div>
+
 <figure class="diagram">
-  <svg viewBox="0 0 760 170" role="img" aria-label="Three 4 by 4 pixel blocks during a cross-fade. At 25 percent, 4 of the 16 pixels come from the new level. At 50 percent, 8. At 75 percent, 12. The pixels follow a fixed ordered pattern, so the two levels never draw the same pixel.">
+  <svg viewBox="0 0 760 124" role="img" aria-label="Three 4 by 4 pixel blocks during a cross-fade. At 25 percent, 4 of the 16 pixels come from the new level. At 50 percent, 8. At 75 percent, 12. The pixels follow a fixed ordered pattern, so the two levels never draw the same pixel.">
     <text x="100" y="22" class="mid title">25% new</text>
     <rect x="60" y="36" width="18" height="18" class="gpu"/>
     <rect x="80" y="36" width="18" height="18" class="cpu"/>
@@ -502,32 +587,114 @@ pixels = e × s × P11 × H / 2 = e × s × H / (top − bottom)</code></pre>
     <rect x="540" y="96" width="18" height="18" class="gpu"/>
     <rect x="560" y="96" width="18" height="18" class="cpu"/>
     <rect x="580" y="96" width="18" height="18" class="gpu"/>
-    <text x="20" y="140" class="small">blue: a pixel from the old level · green: from the new one. Each level discards the other's pixels in its pixel shader.</text>
-    <text x="20" y="158" class="small">A 4 × 4 ordered (Bayer) pattern; temporal anti-aliasing or a blur hides the pattern.</text>
   </svg>
-  <figcaption>The cost: both levels are drawn while the fade runs, and the pixel shader discards pixels, which can turn off some early depth tests.</figcaption>
+  <figcaption>Blue: a pixel from the old level. Green: a pixel from the new one. Each level discards the other's pixels in its pixel shader. This is a 4 × 4 ordered (Bayer) pattern; temporal anti-aliasing or a blur hides the pattern. The cost: both levels are drawn while the fade runs, and the pixel shader discards pixels, which can turn off some early depth tests.</figcaption>
 </figure>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Technique</th><th>Hides</th><th>Cost</th></tr>
-  <tr><td>A small limit (<var>τ</var> ≈ 1 px)</td><td>almost everything</td><td>fewer triangles saved</td></tr>
-  <tr><td>Hysteresis</td><td>flicker at a threshold</td><td>one remembered level per object</td></tr>
-  <tr><td>Dithered cross-fade</td><td>the pop itself</td><td>two draws during the fade, a timer per object, a dither pattern</td></tr>
-  <tr><td>Geomorphing</td><td>the pop itself, smoothly</td><td>vertices move from their fine to their coarse position over time; needs to know where each vertex goes (progressive meshes, terrain)</td></tr>
-</table>
+<h3>The techniques side by side</h3>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two outlines almost on top of each other: with a limit of one pixel, the switch moves the surface by at most one pixel.">
+      <path d="M24,92 C60,26 180,26 216,92" class="arrow gpu thick"/>
+      <path d="M24,92 C60,30 180,30 216,92" class="arrow hot"/>
+      <text x="120" y="118" class="mid small">before and after the switch: 1 px apart</text>
+    </svg>
+    <h4>A small limit (<var>τ</var> ≈ 1 px)</h4>
+    <p>Hides almost everything.</p>
+    <p class="cost"><b>Cost:</b> fewer triangles saved</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two step lines, one for moving away and one for coming back, that switch at different depths. Between them the level does not change.">
+      <rect x="96" y="14" width="48" height="96" class="zone"/>
+      <polyline points="20,86 144,86 144,34 220,34" class="arrow hot"/>
+      <polyline points="220,42 96,42 96,94 20,94" class="arrow gpu dashed"/>
+      <text x="120" y="124" class="mid small">between the two: no change</text>
+    </svg>
+    <h4>Hysteresis</h4>
+    <p>Hides flicker at a threshold.</p>
+    <p class="cost"><b>Cost:</b> one remembered level per object</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A 4 by 4 block of pixels. Half come from the old level and half from the new one, in a checker pattern.">
+      <rect x="72" y="14" width="24" height="24" class="gpu"/><rect x="96" y="14" width="24" height="24" class="cpu"/><rect x="120" y="14" width="24" height="24" class="gpu"/><rect x="144" y="14" width="24" height="24" class="cpu"/>
+      <rect x="72" y="38" width="24" height="24" class="cpu"/><rect x="96" y="38" width="24" height="24" class="gpu"/><rect x="120" y="38" width="24" height="24" class="cpu"/><rect x="144" y="38" width="24" height="24" class="gpu"/>
+      <rect x="72" y="62" width="24" height="24" class="gpu"/><rect x="96" y="62" width="24" height="24" class="cpu"/><rect x="120" y="62" width="24" height="24" class="gpu"/><rect x="144" y="62" width="24" height="24" class="cpu"/>
+      <rect x="72" y="86" width="24" height="24" class="cpu"/><rect x="96" y="86" width="24" height="24" class="gpu"/><rect x="120" y="86" width="24" height="24" class="cpu"/><rect x="144" y="86" width="24" height="24" class="gpu"/>
+      <text x="120" y="124" class="mid small">both levels, mixed pixel by pixel</text>
+    </svg>
+    <h4>Dithered cross-fade</h4>
+    <p>Hides the pop itself.</p>
+    <p class="cost"><b>Cost:</b> two draws during the fade, a timer per object, a dither pattern</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A fine outline with a vertex in the middle, and a coarse outline without it. The vertex slides from its fine position down to the coarse line.">
+      <polyline points="24,90 120,24 216,90" class="arrow gpu thick"/>
+      <line x1="24" y1="90" x2="216" y2="90" class="arrow hot"/>
+      <line x1="120" y1="30" x2="120" y2="84" class="arrow" marker-end="url(#ah)"/>
+      <circle cx="120" cy="24" r="5" class="cpu"/>
+      <circle cx="120" cy="90" r="5" class="ghost"/>
+      <text x="134" y="20" class="small">slides over time</text>
+      <text x="120" y="118" class="mid small"><tspan class="t-gpu">fine</tspan> → <tspan class="t-hot">coarse</tspan></text>
+    </svg>
+    <h4>Geomorphing</h4>
+    <p>Hides the pop itself, smoothly. Vertices move from their fine to their coarse position over time.</p>
+    <p class="cost"><b>Cost:</b> needs to know where each vertex goes (progressive meshes, terrain)</p>
+  </div>
 </div>
 
-<h2><span class="n">10</span>Variants</h2>
+<h2 id="variants"><span class="n">10</span>Variants</h2>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Variant</th><th>Idea</th></tr>
-  <tr><td>Quality setting</td><td>Scale <var>τ</var>: 2 pixels on a low setting, 0.5 on a high one.</td></tr>
-  <tr><td>Triangle budget</td><td>Raise <var>τ</var> until the scene fits a fixed number of triangles. Keeps the frame time steady, at a varying quality.</td></tr>
-  <tr><td>Per-cluster levels</td><td>Split a mesh into small clusters and pick a level per cluster, not per object, from a hierarchy of clusters. One big object (a terrain, a building) then has fine detail near the camera and coarse detail far away. Brian Karis's Nanite talk (2021) describes one such system.</td></tr>
-  <tr><td>Other views</td><td>Shadow maps and reflections have their own cameras. Using the main camera's level for them avoids a shadow whose shape differs from the object.</td></tr>
-</table>
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A slider for the pixel limit, from 0.5 pixels on a high setting to 2 pixels on a low one.">
+      <line x1="30" y1="60" x2="210" y2="60" class="surface"/>
+      <path d="M30,50V70M90,50V70M210,50V70" class="arrow"/>
+      <circle cx="90" cy="60" r="9" class="accent"/>
+      <text x="30" y="92" class="mid small">0.5 px</text>
+      <text x="90" y="92" class="mid small">1 px</text>
+      <text x="210" y="92" class="mid small">2 px</text>
+      <text x="30" y="36" class="mid small t-faint">high</text>
+      <text x="210" y="36" class="mid small t-faint">low</text>
+      <text x="120" y="118" class="mid small">the limit τ</text>
+    </svg>
+    <h4>Quality setting</h4>
+    <p>Scale <var>τ</var>: 2 pixels on a low setting, 0.5 on a high one.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A bar of triangles drawn, cut back to stay under a fixed budget line.">
+      <rect x="24" y="44" width="150" height="26" rx="3" class="gpu"/>
+      <rect x="174" y="44" width="46" height="26" rx="3" class="ghost"/>
+      <line x1="174" y1="26" x2="174" y2="88" class="arrow hot thick"/>
+      <text x="174" y="18" class="mid small t-hot">budget</text>
+      <text x="99" y="62" class="mid small">triangles drawn</text>
+      <text x="120" y="112" class="mid small">raise τ until the scene fits</text>
+    </svg>
+    <h4>Triangle budget</h4>
+    <p>Raise <var>τ</var> until the scene fits a fixed number of triangles. Keeps the frame time steady, at a varying quality.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="One long object seen from a camera on the left. Its triangles are small near the camera and large far away.">
+      <circle cx="14" cy="96" r="5" class="cpu"/>
+      <path d="M30,96 L40,76 L50,96 L60,76 L70,96 L80,76 L90,96 L110,62 L130,96 L150,62 L170,96 L198,40 L226,96 Z" class="gpu"/>
+      <text x="60" y="116" class="mid small">fine, near</text>
+      <text x="190" y="116" class="mid small">coarse, far</text>
+      <text x="120" y="22" class="mid small">one object, many clusters</text>
+    </svg>
+    <h4>Per-cluster levels</h4>
+    <p>Split a mesh into small clusters and pick a level per cluster, not per object, from a hierarchy of clusters. One big object (a terrain, a building) then has fine detail near the camera and coarse detail far away. Brian Karis's Nanite talk (2021) describes one such system.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An object and its shadow on the ground. Both come from the same level, so the shadow has the object's shape.">
+      <circle cx="30" cy="20" r="9" class="light"/>
+      <polygon points="96,82 96,46 120,30 144,46 144,82" class="gpu"/>
+      <polygon points="144,90 220,90 234,108 168,108" class="shade"/>
+      <line x1="16" y1="90" x2="228" y2="90" class="surface"/>
+      <text x="120" y="125" class="mid small">the shadow uses the same level</text>
+    </svg>
+    <h4>Other views</h4>
+    <p>Shadow maps and reflections have their own cameras. Using the main camera's level for them avoids a shadow whose shape differs from the object.</p>
+  </div>
 </div>
 
 <h2 id="in-rasm"><span class="n">11</span>In RASM</h2>

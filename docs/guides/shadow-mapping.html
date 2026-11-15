@@ -19,6 +19,8 @@
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head light"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
   </defs>
 </svg>
 
@@ -41,182 +43,490 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>The question: can the light see this point?</h2>
+<h2 id="question"><span class="n">1</span>The question: can the light see this point?</h2>
 
-<p>Lighting a surface point needs the direction to the light and the surface normal. That alone lights every point that faces the light, even one behind a wall. A shadow is a visibility question: is the path from the point to the light free?</p>
-
-<p>Ray tracing answers it directly, one ray per pixel and light. Rasterization has no rays, but it has a fast way to answer "what is the nearest surface along each line of sight": the depth buffer. Shadow mapping uses that from the light's point of view.</p>
-
-<h2 id="idea"><span class="n">2</span>The idea: depth from the light</h2>
+<p>Lighting math uses the direction to the light and the surface normal. That lights every point that <i>faces</i> the light, even one behind a wall. A shadow is a different question: is the path from the point to the light free?</p>
 
 <div class="legend">
-  <span><i class="mem"></i>the shadow map</span>
-  <span><i class="gpu"></i>lit</span>
-  <span><i class="hot"></i>in shadow</span>
+  <span><i class="light"></i>light</span>
+  <span><i class="shade"></i>in shadow</span>
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 320" role="img" aria-label="A side view. A light shines straight down. A box floats above the ground. Along the ray through point A on the ground, the nearest surface is the ground itself, so the shadow map stores A's depth and A is lit. Along the ray through point B, the nearest surface is the top of the box; B is farther than that, so B is in shadow.">
-    <rect x="60" y="24" width="440" height="22" rx="3" class="mem"/>
-    <text x="280" y="40" class="mid small">shadow map: one depth per texel, seen from the light</text>
-    <text x="520" y="40" class="small">depth grows downward</text>
+  <svg viewBox="0 0 760 240" role="img" aria-label="Two side views of the same scene: a light on the upper left, a wall, and a point P on the ground behind the wall. Left, lighting without shadows: P faces the light, so it is lit, although the wall blocks the ray. Right, with a visibility test: the ray to P stops at the wall, and the ground behind the wall is in shadow.">
+    <text x="20" y="22" class="title t-bad">Lighting only: P is lit (wrong)</text>
+    <circle cx="30" cy="48" r="13" class="light"/>
+    <line x1="40" y1="110" x2="136" y2="196" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="50" y1="42" x2="166" y2="146" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="164" y1="42" x2="336" y2="196" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="104" y1="42" x2="277" y2="197" class="arrow light dashed" marker-end="url(#ah-light)"/>
+    <rect x="170" y="80" width="22" height="120" class="solid"/>
+    <line x1="20" y1="200" x2="350" y2="200" class="surface"/>
+    <circle cx="280" cy="200" r="6" class="bad"/>
+    <text x="280" y="224" class="mid">P</text>
+    <text x="164" y="172" class="end small">wall</text>
+    <text x="240" y="58" class="small t-bad">the ray goes</text>
+    <text x="240" y="72" class="small t-bad">through the wall</text>
 
-    <line x1="150" y1="46" x2="150" y2="258" class="arrow dashed"/>
-    <line x1="330" y1="46" x2="330" y2="128" class="arrow dashed"/>
-    <line x1="330" y1="130" x2="330" y2="258" class="arrow hot dashed"/>
-    <line x1="450" y1="46" x2="450" y2="258" class="arrow dashed"/>
+    <line x1="380" y1="10" x2="380" y2="230" class="dashed"/>
 
-    <rect x="270" y="130" width="120" height="40" rx="2" class="box"/>
-    <text x="330" y="155" class="mid small">box</text>
-
-    <line x1="30" y1="260" x2="520" y2="260" class="arrow"/>
-    <rect x="270" y="256" width="120" height="8" class="hot"/>
-    <text x="40" y="282" class="small">ground</text>
-
-    <circle cx="150" cy="260" r="6" class="gpu"/><text x="150" y="284" class="mid">A</text>
-    <circle cx="330" cy="260" r="6" class="hot"/><text x="330" y="284" class="mid">B</text>
-    <circle cx="450" cy="260" r="6" class="gpu"/><text x="450" y="284" class="mid">C</text>
-    <circle cx="330" cy="130" r="4" class="mem"/>
-
-    <text x="550" y="120" class="title">For each point</text>
-    <text x="550" y="146" class="small">A: its depth 214, map 214</text>
-    <text x="550" y="164" class="small t-gpu">equal → lit</text>
-    <text x="550" y="194" class="small">B: its depth 214, map 84</text>
-    <text x="550" y="212" class="small t-hot">farther → in shadow</text>
-    <text x="550" y="242" class="small">C: its depth 214, map 214</text>
-    <text x="550" y="260" class="small t-gpu">equal → lit</text>
-    <text x="10" y="310" class="small">The map stores, per texel, the depth of the first surface the light hits. A point behind that surface is in shadow.</text>
+    <text x="410" y="22" class="title t-ok">With a visibility test: P is in shadow</text>
+    <circle cx="420" cy="48" r="13" class="light"/>
+    <polygon points="582,80 715,200 582,200" class="shade"/>
+    <line x1="430" y1="110" x2="526" y2="196" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="440" y1="42" x2="556" y2="146" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="554" y1="42" x2="726" y2="196" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="494" y1="42" x2="558" y2="99" class="arrow light" marker-end="url(#ah-light)"/>
+    <rect x="560" y="80" width="22" height="120" class="solid"/>
+    <line x1="410" y1="200" x2="740" y2="200" class="surface"/>
+    <circle cx="670" cy="200" r="6" class="box"/>
+    <text x="670" y="224" class="mid">P</text>
+    <text x="554" y="172" class="end small">wall</text>
+    <text x="612" y="180" class="small halo">shadow</text>
   </svg>
-  <figcaption>The shadow map is a depth buffer drawn from the light. Points are compared, not rays traced: one texture read per pixel answers "is anything nearer the light than me?".</figcaption>
+  <figcaption>Ray tracing answers this with one ray per pixel and light. Rasterization has no rays, but it has a fast answer to "what is the nearest surface along each line of sight": the depth buffer. Shadow mapping uses a depth buffer drawn from the light.</figcaption>
 </figure>
 
-<p>So shadow mapping is two passes:</p>
+<h2 id="idea"><span class="n">2</span>The idea: depth from the light</h2>
+
+<p>Draw the scene from the light and keep only depth. Each texel of that image, the <b>shadow map</b>, now holds the distance to the first surface the light hits in that direction. A point farther away than that number has something in front of it.</p>
+
+<div class="legend">
+  <span><i class="mem"></i>the shadow map</span>
+  <span><i class="light"></i>light rays</span>
+  <span><i class="ok"></i>lit</span>
+  <span><i class="bad"></i>in shadow</span>
+</div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 170" role="img" aria-label="Pass 1, the shadow pass, draws the scene from the light camera into a depth-only texture. Pass 2, the main pass, draws the scene from the camera; each fragment moves its world position into the light's clip space, reads the shadow map there and compares depths.">
-    <rect x="10"  y="30" width="200" height="70" rx="6" class="gpu"/>
-    <text x="110" y="54" class="mid title">Pass 1: shadow pass</text>
-    <text x="110" y="72" class="mid small">scene from the light camera</text>
-    <text x="110" y="88" class="mid small">depth only, no shading</text>
-    <line x1="210" y1="65" x2="268" y2="65" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <rect x="270" y="40" width="160" height="50" rx="6" class="mem"/>
-    <text x="350" y="62" class="mid mono">shadow map</text>
-    <text x="350" y="79" class="mid small">depth texture</text>
-    <line x1="430" y1="65" x2="488" y2="65" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <text x="459" y="56" class="mid small">sampled</text>
-    <rect x="490" y="30" width="260" height="70" rx="6" class="gpu"/>
-    <text x="620" y="54" class="mid title">Pass 2: main pass</text>
-    <text x="620" y="72" class="mid small">scene from the camera, shaded</text>
-    <text x="620" y="88" class="mid small">each fragment: in shadow or not?</text>
-    <text x="10" y="134" class="small">Between the two the texture changes role: a depth attachment in pass 1, a sampled texture in pass 2.</text>
-    <text x="10" y="154" class="small">On Vulkan and D3D12 that is a barrier and a layout change (see GPU synchronization).</text>
+  <svg viewBox="0 0 760 310" role="img" aria-label="A side view. A light shines straight down on a box that floats above the ground. The shadow map is a row of eight texels above the scene; each stores the depth of the first surface below it: 214 where the light reaches the ground, 84 above the box. Point A on the ground has depth 214 and its texel stores 214: lit. Point B under the box has depth 214 but its texel stores 84: in shadow. Point C is lit like A.">
+    <text x="60" y="18" class="small t-mem">shadow map: one depth per texel</text>
+    <rect x="60"  y="24" width="55" height="24" class="mem"/><text x="87"  y="41" class="mid mono">214</text>
+    <rect x="115" y="24" width="55" height="24" class="mem"/><text x="142" y="41" class="mid mono">214</text>
+    <rect x="170" y="24" width="55" height="24" class="mem"/><text x="197" y="41" class="mid mono">214</text>
+    <rect x="225" y="24" width="55" height="24" class="mem"/><text x="252" y="41" class="mid mono">214</text>
+    <rect x="280" y="24" width="55" height="24" class="accent"/><text x="307" y="41" class="mid mono">84</text>
+    <rect x="335" y="24" width="55" height="24" class="accent"/><text x="362" y="41" class="mid mono">84</text>
+    <rect x="390" y="24" width="55" height="24" class="mem"/><text x="417" y="41" class="mid mono">214</text>
+    <rect x="445" y="24" width="55" height="24" class="mem"/><text x="472" y="41" class="mid mono">214</text>
+
+    <rect x="280" y="170" width="110" height="90" class="shade"/>
+    <line x1="142" y1="50" x2="142" y2="252" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="362" y1="50" x2="362" y2="126" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="362" y1="170" x2="362" y2="252" class="arrow bad dashed"/>
+    <line x1="472" y1="50" x2="472" y2="252" class="arrow light" marker-end="url(#ah-light)"/>
+
+    <rect x="280" y="130" width="110" height="40" rx="2" class="solid"/>
+    <text x="335" y="155" class="mid">box</text>
+    <line x1="30" y1="260" x2="520" y2="260" class="surface"/>
+    <text x="36" y="282" class="small">ground</text>
+
+    <circle cx="142" cy="260" r="7" class="ok"/><text x="142" y="288" class="mid title">A</text>
+    <circle cx="362" cy="260" r="7" class="bad"/><text x="362" y="288" class="mid title">B</text>
+    <circle cx="472" cy="260" r="7" class="ok"/><text x="472" y="288" class="mid title">C</text>
+
+    <line x1="530" y1="48" x2="530" y2="260" class="arrow" marker-end="url(#ah)"/>
+    <text x="538" y="60" class="small">0</text>
+    <text x="538" y="134" class="small">84</text>
+    <text x="538" y="258" class="small">214</text>
+    <text x="538" y="196" class="small t-faint">depth</text>
+
+    <rect x="580" y="60" width="172" height="56" rx="6" class="ok"/>
+    <text x="592" y="82" class="title">A: depth 214</text>
+    <text x="592" y="102" class="small">map: 214 → equal → lit</text>
+    <rect x="580" y="128" width="172" height="56" rx="6" class="bad"/>
+    <text x="592" y="150" class="title">B: depth 214</text>
+    <text x="592" y="170" class="small">map: 84 → farther → shadow</text>
+    <rect x="580" y="196" width="172" height="56" rx="6" class="ok"/>
+    <text x="592" y="218" class="title">C: depth 214</text>
+    <text x="592" y="238" class="small">map: 214 → equal → lit</text>
   </svg>
-  <figcaption>The shadow pass is cheap per pixel: no material, no lighting, often no fragment shader at all. Its cost is the geometry it draws a second time.</figcaption>
+  <figcaption>Points are compared, not rays traced. One texture read per pixel answers "is anything nearer the light than me?".</figcaption>
+</figure>
+
+<p>So shadow mapping is two passes over the same scene:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Pass 1, the shadow pass, draws the scene from the light camera and keeps only depth: a small image where the box is near and the ground is far. That image is the shadow map. Pass 2, the main pass, draws the scene from the camera and samples the shadow map for each fragment, which gives the box its shadow on the ground.">
+    <rect x="10" y="14" width="240" height="150" rx="8" class="gpu"/>
+    <circle cx="30" cy="34" r="10" class="badge"/><text x="30" y="38" class="badge-n">1</text>
+    <text x="48" y="39" class="title">Shadow pass</text>
+    <rect x="26" y="56" width="96" height="92" class="mem"/>
+    <rect x="56" y="82" width="38" height="36" class="light"/>
+    <text x="75" y="104" class="mid small">near</text>
+    <text x="32" y="70" class="small">far</text>
+    <text x="134" y="76" class="small">scene from the</text>
+    <text x="134" y="92" class="small">light camera</text>
+    <text x="134" y="116" class="small">depth only:</text>
+    <text x="134" y="132" class="small">no material,</text>
+    <text x="134" y="148" class="small">no lighting</text>
+
+    <line x1="250" y1="89" x2="298" y2="89" class="arrow gpu flowing" marker-end="url(#ah-gpu)"/>
+    <text x="274" y="80" class="mid small">writes</text>
+    <rect x="300" y="60" width="160" height="58" rx="8" class="mem"/>
+    <text x="380" y="85" class="mid title">shadow map</text>
+    <text x="380" y="103" class="mid small">a depth texture</text>
+    <line x1="460" y1="89" x2="508" y2="89" class="arrow mem flowing" marker-end="url(#ah-mem)"/>
+    <text x="484" y="80" class="mid small">sampled</text>
+
+    <rect x="510" y="14" width="240" height="150" rx="8" class="gpu"/>
+    <circle cx="530" cy="34" r="10" class="badge"/><text x="530" y="38" class="badge-n">2</text>
+    <text x="548" y="39" class="title">Main pass</text>
+    <rect x="526" y="56" width="96" height="92" class="paper"/>
+    <polygon points="530,144 618,144 606,104 542,104" class="box"/>
+    <polygon points="574,134 606,134 600,118 580,118" class="shade"/>
+    <rect x="556" y="96" width="24" height="30" class="solid"/>
+    <text x="634" y="76" class="small">scene from the</text>
+    <text x="634" y="92" class="small">camera, shaded</text>
+    <text x="634" y="116" class="small">each fragment:</text>
+    <text x="634" y="132" class="small">in shadow</text>
+    <text x="634" y="148" class="small">or not?</text>
+
+    <text x="380" y="188" class="mid small">Between the passes the texture changes role: depth attachment → sampled texture.</text>
+  </svg>
+  <figcaption>The shadow pass is cheap per pixel, often with no fragment shader at all. Its cost is the geometry, drawn a second time. On Vulkan and D3D12 the change of role is a barrier and a layout change (<a href="gpu-sync.html">GPU synchronization</a>).</figcaption>
 </figure>
 
 <h2 id="light-camera"><span class="n">3</span>The light's camera</h2>
 
-<p>The shadow pass needs a view and a projection, like any camera. They follow from the kind of light.</p>
+<p>The shadow pass needs a view and a projection, like any camera. The kind of light decides them.</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Light</th><th>Its rays</th><th>Light camera</th><th>Maps</th></tr>
-  <tr><td>Directional (sun)</td><td>parallel, from far away</td><td><b>Orthographic</b>, looking along the light direction. Its box must hold every object that can cast a shadow into the view.</td><td>1 (or several cascades, section 7)</td></tr>
-  <tr><td>Spot</td><td>from a point, inside a cone</td><td><b>Perspective</b> at the light, field of view = the cone's angle</td><td>1</td></tr>
-  <tr><td>Point</td><td>from a point, all directions</td><td>Six perspective cameras, 90° each, one per cube face</td><td>6 (a cube map)</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Parallel light rays come down into a box-shaped volume around the scene.">
+      <line x1="50"  y1="6" x2="50"  y2="38" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="85"  y1="6" x2="85"  y2="38" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="120" y1="6" x2="120" y2="38" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="155" y1="6" x2="155" y2="38" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="190" y1="6" x2="190" y2="38" class="arrow light" marker-end="url(#ah-light)"/>
+      <rect x="38" y="44" width="164" height="78" class="hot"/>
+      <rect x="70" y="86" width="30" height="26" class="solid"/>
+      <circle cx="150" cy="99" r="13" class="solid"/>
+      <line x1="46" y1="113" x2="194" y2="113" class="surface"/>
+      <text x="120" y="62" class="mid small t-hot">orthographic box</text>
+    </svg>
+    <h4>Directional (sun)</h4>
+    <p>Parallel rays from far away. An <b>orthographic</b> camera looking along the light. Its box must hold every object that can cast a shadow into the view.</p>
+    <p class="cost">1 map, or several cascades (section 7)</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Rays leave one point inside a cone. The light camera is a perspective frustum with the same angle.">
+      <polygon points="106,34 134,34 196,114 44,114" class="hot"/>
+      <line x1="120" y1="16" x2="60"  y2="94" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="120" y1="16" x2="120" y2="80" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="120" y1="16" x2="180" y2="94" class="arrow light" marker-end="url(#ah-light)"/>
+      <circle cx="120" cy="14" r="7" class="light"/>
+      <rect x="106" y="86" width="28" height="26" class="solid"/>
+      <text x="140" y="32" class="small t-hot">near</text>
+      <text x="202" y="126" class="end small t-hot">far</text>
+    </svg>
+    <h4>Spot</h4>
+    <p>Rays from one point, inside a cone. A <b>perspective</b> camera at the light, with a field of view equal to the cone's angle.</p>
+    <p class="cost">1 map</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Rays leave one point in all directions. A cube around the light gives six square faces, each a 90 degree perspective camera.">
+      <rect x="65" y="10" width="110" height="110" class="hot"/>
+      <line x1="65" y1="10" x2="175" y2="120" class="dashed"/>
+      <line x1="175" y1="10" x2="65" y2="120" class="dashed"/>
+      <line x1="120" y1="58" x2="120" y2="18" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="120" y1="72" x2="120" y2="112" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="113" y1="65" x2="73"  y2="65" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="127" y1="65" x2="167" y2="65" class="arrow light" marker-end="url(#ah-light)"/>
+      <circle cx="120" cy="65" r="7" class="light"/>
+      <text x="184" y="34" class="small">90°</text>
+      <text x="184" y="50" class="small">each</text>
+    </svg>
+    <h4>Point</h4>
+    <p>Rays from one point, in all directions. <b>Six perspective cameras</b> of 90° each, one per face of a cube around the light.</p>
+    <p class="cost">6 maps (a cube map)</p>
+  </div>
 </div>
 
-<p>For the orthographic light camera, the box is a design choice. Too large, and each texel covers a lot of ground: blurry, blocky shadows. Too small, and objects outside it cast no shadow. The near plane must sit behind every caster, or casters between the light and the near plane are clipped away and their shadows vanish.</p>
+<p>For the orthographic camera, the size of the box is a design choice. The map has a fixed number of texels, and the box stretches them over the ground:</p>
+
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Seen from above: a large box whose texels are bigger than the objects under it.">
+      <rect x="10" y="10" width="220" height="110" class="hot"/>
+      <path d="M65,10V120M120,10V120M175,10V120M10,65H230" class="grid"/>
+      <rect x="98"  y="50" width="12" height="12" class="solid"/>
+      <rect x="126" y="56" width="14" height="10" class="solid"/>
+      <circle cx="116" cy="78" r="6" class="solid"/>
+      <text x="37" y="112" class="mid small">1 texel</text>
+    </svg>
+    <h4>Too large</h4>
+    <p>Each texel covers a lot of ground. Shadows are blocky and blurry.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Seen from above: a small box with fine texels. An object outside the box casts no shadow.">
+      <rect x="70" y="30" width="80" height="70" class="hot"/>
+      <path d="M90,30V100M110,30V100M130,30V100M70,47H150M70,65H150M70,82H150" class="grid"/>
+      <rect x="98" y="52" width="16" height="16" class="solid"/>
+      <rect x="182" y="54" width="18" height="18" class="bad"/>
+      <text x="191" y="92" class="mid small t-bad">outside:</text>
+      <text x="191" y="106" class="mid small t-bad">no shadow</text>
+    </svg>
+    <h4>Too small</h4>
+    <p>Sharp shadows, but an object outside the box is not in the map, so it casts none.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Seen from above: a box that just holds all the objects, with medium texels.">
+      <rect x="40" y="20" width="160" height="90" class="hot"/>
+      <path d="M72,20V110M104,20V110M136,20V110M168,20V110M40,50H200M40,80H200" class="grid"/>
+      <rect x="70"  y="44" width="16" height="16" class="solid"/>
+      <rect x="126" y="62" width="18" height="14" class="solid"/>
+      <circle cx="166" cy="48" r="8" class="solid"/>
+    </svg>
+    <h4>Fitted</h4>
+    <p>Just large enough for every caster and every receiver that the view can see.</p>
+  </div>
+</div>
+
+<div class="callout warn">
+  <strong>The near plane counts too</strong>
+  <p>The light camera's near plane must sit behind every caster. A caster between the light and the near plane is clipped away, and its shadow vanishes.</p>
+</div>
 
 <h2 id="test"><span class="n">4</span>The test, step by step</h2>
 
-<p>The light camera's projection times its view is one matrix, <var>S</var>. In pass 2, for a fragment at world position <var>p</var>:</p>
+<p>The light camera's projection times its view is one matrix, <var>S</var>. In pass 2, a fragment at world position <var>p</var> takes this path:</p>
 
-<pre><code class="lang-text">c     = S · (p, 1)                    light clip space
-ndc   = c.xyz / c.w                   divide (w = 1 for orthographic)
-uv    = (ndc.x · 0.5 + 0.5,  0.5 − ndc.y · 0.5)     texture coordinates, v = 0 at the top
-d     = ndc.z                         the fragment's depth as the light sees it
-stored = shadowMap(uv)                the nearest depth along that texel's ray
+<ol class="flow">
+  <li><b>p</b><span>world position of the fragment</span></li>
+  <li class="shader"><b>S · p</b><span>into the light's clip space</span></li>
+  <li class="shader"><b>÷ w</b><span>to NDC (w = 1 for orthographic)</span></li>
+  <li class="shader"><b>uv, d</b><span>where to read the map; depth as the light sees it</span></li>
+  <li class="mem"><b>stored</b><span>read the map at uv</span></li>
+  <li class="gpu"><b>compare</b><span>d against stored</span></li>
+</ol>
 
-lit   = d is not behind stored        (standard depth: d ≤ stored; reversed-Z: d ≥ stored)
+<pre><code class="lang-text">c      = S · (p, 1)            light clip space
+ndc    = c.xyz / c.w           divide (w = 1 for orthographic)
+uv     = (ndc.x · 0.5 + 0.5,   texture coordinates,
+          0.5 − ndc.y · 0.5)   v = 0 at the top
+d      = ndc.z                 the fragment's depth as the light sees it
+stored = shadowMap(uv)         the nearest depth along that texel's ray
+
+lit    = d is not behind stored
+         standard depth: d ≤ stored      reversed-Z: d ≥ stored
 </code></pre>
 
-<ul>
-  <li>The uv line assumes a Y-up clip space and textures with row 0 at the top. An API or engine with other conventions flips <var>v</var> differently; the shadow pass and the lookup just have to agree.</li>
-  <li>With <b>reversed-Z</b> (near = 1, far = 0, see <a href="projection-depth.html">Projection and reversed-Z depth</a>), a nearer surface has the <i>larger</i> depth, so the comparison flips.</li>
-  <li>A point outside the map (<var>uv</var> outside 0..1, or <var>d</var> outside the depth range) has no information. It is usually treated as lit.</li>
-</ul>
-
-<h2 id="acne"><span class="n">5</span>Shadow acne, and the fixes</h2>
-
-<p>The map stores <b>one depth per texel</b>: the depth at the texel's center. A surface tilted toward the light changes depth inside one texel. Half of the surface under each texel is then "behind" the stored value, and shadows itself in stripes. That is <b>shadow acne</b>.</p>
-
 <figure class="diagram">
-  <svg viewBox="0 0 760 290" role="img" aria-label="Left: a tilted surface under five shadow map texels. Each texel stores one depth, drawn as a flat step at the depth of the texel's center. On the left half of each texel the surface lies below its step, so it is wrongly in shadow: stripes. Right: with a bias the comparison is moved by a little more than half a step, and the whole surface is lit.">
-    <text x="20" y="22" class="title">without bias: acne</text>
-    <text x="400" y="22" class="title">with bias: clean</text>
-    <text x="20" y="42" class="small">light from above, depth grows downward</text>
+  <svg viewBox="0 0 760 190" role="img" aria-label="Two number lines of depth along one ray from the light. On the first, the fragment's depth d is at the same place as the stored depth: the fragment is the first surface, so it is lit. On the second, d is farther along the ray than the stored depth: another surface is in front, so the fragment is in shadow.">
+    <circle cx="36" cy="56" r="11" class="light"/>
+    <line x1="52" y1="56" x2="720" y2="56" class="arrow" marker-end="url(#ah)"/>
+    <text x="724" y="44" class="end small">depth along the light's ray</text>
+    <line x1="320" y1="42" x2="320" y2="70" class="arrow mem thick"/>
+    <text x="320" y="32" class="mid small t-mem">stored</text>
+    <circle cx="320" cy="56" r="7" class="ok"/>
+    <text x="336" y="82" class="small t-ok">d = stored: the fragment is the first surface → lit</text>
 
-    <line x1="40"  y1="60" x2="40"  y2="240" class="dashed"/>
-    <line x1="100" y1="60" x2="100" y2="240" class="dashed"/>
-    <line x1="160" y1="60" x2="160" y2="240" class="dashed"/>
-    <line x1="220" y1="60" x2="220" y2="240" class="dashed"/>
-    <line x1="280" y1="60" x2="280" y2="240" class="dashed"/>
-    <line x1="340" y1="60" x2="340" y2="240" class="dashed"/>
-    <line x1="40"  y1="210" x2="100" y2="210" class="arrow"/>
-    <line x1="100" y1="190" x2="160" y2="190" class="arrow"/>
-    <line x1="160" y1="170" x2="220" y2="170" class="arrow"/>
-    <line x1="220" y1="150" x2="280" y2="150" class="arrow"/>
-    <line x1="280" y1="130" x2="340" y2="130" class="arrow"/>
-    <line x1="40" y1="220" x2="340" y2="120" class="arrow gpu"/>
-    <line x1="40"  y1="220" x2="70"  y2="210" class="arrow hot"/>
-    <line x1="100" y1="200" x2="130" y2="190" class="arrow hot"/>
-    <line x1="160" y1="180" x2="190" y2="170" class="arrow hot"/>
-    <line x1="220" y1="160" x2="250" y2="150" class="arrow hot"/>
-    <line x1="280" y1="140" x2="310" y2="130" class="arrow hot"/>
-    <text x="190" y="262" class="mid small">5 texels: each stores the depth at its center</text>
-
-    <line x1="420" y1="60" x2="420" y2="240" class="dashed"/>
-    <line x1="480" y1="60" x2="480" y2="240" class="dashed"/>
-    <line x1="540" y1="60" x2="540" y2="240" class="dashed"/>
-    <line x1="600" y1="60" x2="600" y2="240" class="dashed"/>
-    <line x1="660" y1="60" x2="660" y2="240" class="dashed"/>
-    <line x1="720" y1="60" x2="720" y2="240" class="dashed"/>
-    <line x1="420" y1="222" x2="480" y2="222" class="arrow dashed"/>
-    <line x1="480" y1="202" x2="540" y2="202" class="arrow dashed"/>
-    <line x1="540" y1="182" x2="600" y2="182" class="arrow dashed"/>
-    <line x1="600" y1="162" x2="660" y2="162" class="arrow dashed"/>
-    <line x1="660" y1="142" x2="720" y2="142" class="arrow dashed"/>
-    <line x1="420" y1="220" x2="720" y2="120" class="arrow gpu"/>
-    <line x1="690" y1="130" x2="690" y2="142" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="700" y="112" class="small">bias</text>
-    <text x="570" y="262" class="mid small">the comparison moved past half a step: all lit</text>
-    <text x="20" y="284" class="small">Gray steps are the stored depths. Orange parts of the surface are wrongly in shadow.</text>
+    <circle cx="36" cy="136" r="11" class="light"/>
+    <line x1="52" y1="136" x2="720" y2="136" class="arrow" marker-end="url(#ah)"/>
+    <line x1="320" y1="122" x2="320" y2="150" class="arrow mem thick"/>
+    <text x="320" y="112" class="mid small t-mem">stored</text>
+    <rect x="320" y="130" width="230" height="12" class="shade"/>
+    <circle cx="550" cy="136" r="7" class="bad"/>
+    <text x="550" y="112" class="mid small t-bad">d</text>
+    <text x="336" y="166" class="small t-bad">d is behind stored: another surface is in front → in shadow</text>
   </svg>
-  <figcaption>The steeper the surface is seen from the light, the larger the depth change inside one texel, so the more bias it needs. Acne disappears once the bias is larger than half a texel's depth change.</figcaption>
+  <figcaption>The whole test is one comparison of two numbers on the same ray.</figcaption>
 </figure>
-
-<p>The usual fixes, often combined:</p>
 
 <div class="table-wrap">
 <table>
-  <tr><th>Fix</th><th>How</th><th>Cost of too much</th></tr>
-  <tr><td><b>Constant depth bias</b></td><td>Compare against the stored depth moved by a small amount toward the fragment.</td><td><b>Peter-panning</b>: the shadow detaches from the object's foot, which seems to float.</td></tr>
-  <tr><td><b>Slope-scaled bias</b></td><td>A bias that grows with the surface's slope as the light sees it. GPUs can add it while drawing the shadow map (the rasterizer's depth bias).</td><td>Same, on steep surfaces only.</td></tr>
-  <tr><td><b>Normal offset</b></td><td>Look up the map from <var>p</var> + <var>n</var> · <var>k</var>, a point pushed off the surface along its normal, with <var>k</var> about one texel in world units, more where the light grazes the surface.</td><td>Shadows shift slightly sideways; thin objects can leak light.</td></tr>
-  <tr><td>Draw back faces only</td><td>The shadow pass culls front faces, so the stored depth is the far side of closed objects.</td><td>Fails for open meshes and thin walls.</td></tr>
+  <tr><th>Detail</th><th>What to know</th></tr>
+  <tr><td>The <var>uv</var> line</td><td>It assumes a Y-up clip space and textures with row 0 at the top. Other conventions flip <var>v</var> differently; the shadow pass and the lookup just have to agree.</td></tr>
+  <tr><td><b>Reversed-Z</b></td><td>With near = 1 and far = 0 (<a href="projection-depth.html">Projection and reversed-Z depth</a>), a nearer surface has the <i>larger</i> depth, so the comparison flips.</td></tr>
+  <tr><td>Outside the map</td><td>A point with <var>uv</var> outside 0..1, or <var>d</var> outside the depth range, has no information. It is usually treated as lit.</td></tr>
 </table>
 </div>
 
-<p>Both offsets are best measured in <b>texels</b>, not in fixed world units: then they stay right when the map's size or the light camera's box changes.</p>
+<h2 id="acne"><span class="n">5</span>Shadow acne, and the fixes</h2>
+
+<p>The map stores <b>one depth per texel</b>: the depth at the texel's center. A surface tilted toward the light changes depth inside one texel. Half of the surface under each texel is then "behind" the stored value and shadows itself, in stripes. That is <b>shadow acne</b>.</p>
+
+<div class="legend">
+  <span><i class="gpu"></i>the real surface</span>
+  <span><i class="box"></i>stored depth, one step per texel</span>
+  <span><i class="bad"></i>wrongly in shadow</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 280" role="img" aria-label="Left: a tilted surface under five shadow map texels. Each texel stores one depth, drawn as a flat step at the depth of the texel's center. On the left half of each texel the surface lies below its step, so it is wrongly in shadow: stripes. Right: with a bias the comparison is moved by a little more than half a step, and the whole surface is lit.">
+    <text x="20" y="22" class="title t-bad">Without bias: acne</text>
+    <text x="400" y="22" class="title t-ok">With bias: clean</text>
+    <text x="20" y="42" class="small">light from above, depth grows downward</text>
+
+    <path d="M40,60V240M100,60V240M160,60V240M220,60V240M280,60V240M340,60V240" class="dashed"/>
+    <path d="M40,210H100M100,190H160M160,170H220M220,150H280M280,130H340" class="arrow thick"/>
+    <line x1="40" y1="220" x2="340" y2="120" class="arrow gpu thick"/>
+    <path d="M40,220L70,210M100,200L130,190M160,180L190,170M220,160L250,150M280,140L310,130" class="arrow bad thick"/>
+    <polygon points="40,220 70,210 40,210" class="bad"/>
+    <polygon points="100,200 130,190 100,190" class="bad"/>
+    <polygon points="160,180 190,170 160,170" class="bad"/>
+    <polygon points="220,160 250,150 220,150" class="bad"/>
+    <polygon points="280,140 310,130 280,130" class="bad"/>
+    <text x="190" y="262" class="mid small">5 texels: each stores the depth at its center</text>
+
+    <line x1="380" y1="34" x2="380" y2="268" class="dashed"/>
+
+    <path d="M420,60V240M480,60V240M540,60V240M600,60V240M660,60V240M720,60V240" class="dashed"/>
+    <path d="M420,210H480M480,190H540M540,170H600M600,150H660M660,130H720" class="arrow"/>
+    <path d="M420,224H480M480,204H540M540,184H600M600,164H660M660,144H720" class="arrow hot dashed"/>
+    <line x1="420" y1="220" x2="720" y2="120" class="arrow gpu thick"/>
+    <line x1="700" y1="130" x2="700" y2="142" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="708" y="116" class="small t-hot">bias</text>
+    <text x="570" y="262" class="mid small">the comparison moved past half a step: all lit</text>
+  </svg>
+  <figcaption>The steeper the surface as the light sees it, the larger the depth change inside one texel, so the more bias it needs. Acne disappears once the bias is larger than half a texel's depth change.</figcaption>
+</figure>
+
+<p>Four fixes, often combined:</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The stored steps are moved down by a fixed amount, below the surface.">
+      <path d="M30,94H90M90,74H150M150,54H210" class="arrow"/>
+      <path d="M30,110H90M90,90H150M150,70H210" class="arrow hot dashed"/>
+      <line x1="30" y1="104" x2="210" y2="44" class="arrow gpu thick"/>
+      <line x1="196" y1="56" x2="196" y2="68" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="204" y="34" class="end small t-hot">same everywhere</text>
+    </svg>
+    <h4>Constant depth bias</h4>
+    <p>Compare against the stored depth moved by a small fixed amount toward the fragment.</p>
+    <p class="cost"><b>Too much:</b> peter-panning (below)</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A nearly flat surface gets a small bias; a steep surface gets a large one.">
+      <line x1="16" y1="70" x2="104" y2="58" class="arrow gpu thick"/>
+      <line x1="60" y1="66" x2="60" y2="76" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="60" y="100" class="mid small">flat: small</text>
+      <line x1="140" y1="110" x2="212" y2="22" class="arrow gpu thick"/>
+      <line x1="176" y1="68" x2="176" y2="106" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="200" y="100" class="mid small">steep:</text>
+      <text x="200" y="114" class="mid small">large</text>
+    </svg>
+    <h4>Slope-scaled bias</h4>
+    <p>A bias that grows with the surface's slope as the light sees it. The rasterizer can add it while drawing the map.</p>
+    <p class="cost"><b>Too much:</b> the same, on steep surfaces only</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The lookup point is pushed off the surface along the normal before the map is read.">
+      <line x1="30" y1="100" x2="210" y2="70" class="surface"/>
+      <line x1="120" y1="85" x2="115" y2="52" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <circle cx="120" cy="85" r="5" class="bad"/>
+      <circle cx="114" cy="46" r="5" class="ok"/>
+      <text x="130" y="104" class="small">p</text>
+      <text x="124" y="44" class="small t-ok">p + n · k</text>
+    </svg>
+    <h4>Normal offset</h4>
+    <p>Look up the map from a point pushed off the surface along its normal: about one texel, more where the light grazes.</p>
+    <p class="cost"><b>Too much:</b> shadows shift sideways; thin objects leak light</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A closed box seen from the side. The shadow pass skips the face toward the light and stores the depth of the far face.">
+      <line x1="90"  y1="4" x2="90"  y2="26" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="150" y1="4" x2="150" y2="26" class="arrow light" marker-end="url(#ah-light)"/>
+      <rect x="70" y="34" width="100" height="56" class="box"/>
+      <line x1="70" y1="34" x2="170" y2="34" class="dashed"/>
+      <line x1="70" y1="90" x2="170" y2="90" class="arrow hot thick"/>
+      <text x="178" y="38" class="small t-faint">skipped</text>
+      <text x="178" y="94" class="small t-hot">stored</text>
+      <line x1="30" y1="116" x2="210" y2="116" class="surface"/>
+    </svg>
+    <h4>Draw back faces only</h4>
+    <p>The shadow pass culls front faces, so the map holds the far side of closed objects, away from the lit surface.</p>
+    <p class="cost"><b>Fails for:</b> open meshes and thin walls</p>
+  </div>
+</div>
+
+<p>Bias is a balance. Too little leaves acne; too much moves the shadow away from the object that casts it:</p>
+
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 110" role="img" aria-label="A box on the ground. The lit ground around it is covered in dark stripes.">
+      <rect x="60" y="30" width="44" height="56" class="solid"/>
+      <rect x="104" y="86" width="70" height="9" class="shade"/>
+      <line x1="16" y1="86" x2="224" y2="86" class="surface"/>
+      <path d="M22,92h8M38,92h8M182,92h8M198,92h8M214,92h8" class="arrow bad thick"/>
+    </svg>
+    <h4>Too little: acne</h4>
+    <p>Stripes on surfaces that should be lit.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 110" role="img" aria-label="A box on the ground. Its shadow starts exactly at its foot.">
+      <rect x="60" y="30" width="44" height="56" class="solid"/>
+      <rect x="104" y="86" width="70" height="9" class="shade"/>
+      <line x1="16" y1="86" x2="224" y2="86" class="surface"/>
+    </svg>
+    <h4>Right</h4>
+    <p>No stripes, and the shadow starts at the object's foot.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 110" role="img" aria-label="A box on the ground. Its shadow starts some distance away from its foot, so the box seems to float.">
+      <rect x="60" y="30" width="44" height="56" class="solid"/>
+      <rect x="134" y="86" width="70" height="9" class="shade"/>
+      <line x1="16" y1="86" x2="224" y2="86" class="surface"/>
+      <path d="M106,102H132" class="arrow bad" marker-start="url(#ah-bad)" marker-end="url(#ah-bad)"/>
+      <text x="119" y="76" class="mid small t-bad">gap</text>
+    </svg>
+    <h4>Too much: peter-panning</h4>
+    <p>The shadow detaches, and the object seems to float.</p>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>Measure offsets in texels</strong>
+  <p>Both offsets are best set in <b>texels</b>, not in fixed world units. Then they stay right when the map's size or the light camera's box changes.</p>
+</div>
 
 <h2 id="pcf"><span class="n">6</span>Soft edges: percentage-closer filtering</h2>
 
 <p>One comparison gives 0 or 1, so each shadow-map texel becomes a hard square on screen, and the shadow's edge is a staircase. Blurring the <i>depths</i> does not help: the average of two depths is a depth no surface has. <b>Percentage-closer filtering</b> (PCF) blurs the <i>results</i> instead: compare against several texels around the point, and average the 0s and 1s.</p>
 
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A grid of pixels. The shadow's edge is a staircase: each pixel is fully dark or fully lit.">
+      <rect x="10" y="10" width="300" height="120" class="lit"/>
+      <rect x="10" y="10"  width="180" height="30" class="shade"/>
+      <rect x="10" y="40"  width="150" height="30" class="shade"/>
+      <rect x="10" y="70"  width="120" height="30" class="shade"/>
+      <rect x="10" y="100" width="120" height="30" class="shade"/>
+      <path d="M10,10H310M10,40H310M10,70H310M10,100H310M10,130H310M10,10V130M40,10V130M70,10V130M100,10V130M130,10V130M160,10V130M190,10V130M220,10V130M250,10V130M280,10V130M310,10V130" class="grid"/>
+    </svg>
+    <h4>One comparison</h4>
+    <p>Each pixel is 0 or 1. The edge is a staircase of map texels.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same grid. Near the edge the pixels fade from dark to lit in steps.">
+      <rect x="10" y="10" width="300" height="120" class="lit"/>
+      <rect x="10" y="10"  width="150" height="30" class="shade"/>
+      <rect x="10" y="40"  width="120" height="30" class="shade"/>
+      <rect x="10" y="70"  width="90"  height="30" class="shade"/>
+      <rect x="10" y="100" width="90"  height="30" class="shade"/>
+      <rect x="160" y="10"  width="30" height="30" class="shade o-75"/><rect x="190" y="10"  width="30" height="30" class="shade o-50"/><rect x="220" y="10"  width="30" height="30" class="shade o-25"/>
+      <rect x="130" y="40"  width="30" height="30" class="shade o-75"/><rect x="160" y="40"  width="30" height="30" class="shade o-50"/><rect x="190" y="40"  width="30" height="30" class="shade o-25"/>
+      <rect x="100" y="70"  width="30" height="30" class="shade o-75"/><rect x="130" y="70"  width="30" height="30" class="shade o-50"/><rect x="160" y="70"  width="30" height="30" class="shade o-25"/>
+      <rect x="100" y="100" width="30" height="30" class="shade o-75"/><rect x="130" y="100" width="30" height="30" class="shade o-50"/><rect x="160" y="100" width="30" height="30" class="shade o-25"/>
+      <path d="M10,10H310M10,40H310M10,70H310M10,100H310M10,130H310M10,10V130M40,10V130M70,10V130M100,10V130M130,10V130M160,10V130M190,10V130M220,10V130M250,10V130M280,10V130M310,10V130" class="grid"/>
+    </svg>
+    <h4>PCF: average of several</h4>
+    <p>A pixel near the edge gets a value between 0 and 1: the share of its neighbours that are lit.</p>
+  </div>
+</div>
+
+<p>How the average is built decides how smooth the edge is. A common kernel reads a 4x4 block and weights it so that it acts as a 3x3 filter that slides with the point:</p>
+
+<div class="legend">
+  <span><i class="ok"></i>comparison says lit (1)</span>
+  <span><i class="bad"></i>comparison says shadow (0)</span>
+  <span><i class="mem"></i>the lookup point</span>
+</div>
+
 <figure class="diagram">
-  <svg viewBox="0 0 760 300" role="img" aria-label="A 4 by 4 block of shadow map texels around the lookup point, which falls at a fraction f inside its texel. Each texel's comparison result is weighted: the outer columns by 1 minus f.x and f.x, the inner ones by 1, and the same for rows. The weights add up to 9, so the sum divided by 9 is a 3 by 3 filter that slides smoothly with the point. Here the left half is in shadow and the result is about 0.6.">
+  <svg viewBox="0 0 760 300" role="img" aria-label="A 4 by 4 block of shadow map texels around the lookup point, which falls at a fraction f inside its texel. Each texel's comparison result is weighted: the outer columns by 1 minus f.x and f.x, the inner ones by 1, and the same for rows. The weights add up to 9, so the sum divided by 9 is a 3 by 3 filter that slides smoothly with the point. Here the left part is in shadow and the result is about 0.6.">
     <text x="20" y="22" class="title">3x3 PCF with bilinear weights: 4x4 texels</text>
     <text x="100" y="58" class="mid small">1 − f.x</text>
     <text x="160" y="58" class="mid small">1</text>
@@ -226,26 +536,26 @@ lit   = d is not behind stored        (standard depth: d ≤ stored; reversed-Z:
     <text x="60" y="154" class="end small">1</text>
     <text x="60" y="214" class="end small">1</text>
     <text x="60" y="274" class="end small">f.y</text>
-    <rect x="70"  y="70"  width="60" height="60" class="hot"/><rect x="130" y="70"  width="60" height="60" class="hot"/><rect x="190" y="70"  width="60" height="60" class="gpu"/><rect x="250" y="70"  width="60" height="60" class="gpu"/>
-    <rect x="70"  y="130" width="60" height="60" class="hot"/><rect x="130" y="130" width="60" height="60" class="hot"/><rect x="190" y="130" width="60" height="60" class="gpu"/><rect x="250" y="130" width="60" height="60" class="gpu"/>
-    <rect x="70"  y="190" width="60" height="60" class="hot"/><rect x="130" y="190" width="60" height="60" class="gpu"/><rect x="190" y="190" width="60" height="60" class="gpu"/><rect x="250" y="190" width="60" height="60" class="gpu"/>
-    <rect x="70"  y="250" width="60" height="30" class="hot"/><rect x="130" y="250" width="60" height="30" class="gpu"/><rect x="190" y="250" width="60" height="30" class="gpu"/><rect x="250" y="250" width="60" height="30" class="gpu"/>
-    <text x="100" y="105" class="mid mono small">0</text><text x="160" y="105" class="mid mono small">0</text><text x="220" y="105" class="mid mono small">1</text><text x="280" y="105" class="mid mono small">1</text>
-    <text x="100" y="165" class="mid mono small">0</text><text x="160" y="165" class="mid mono small">0</text><text x="220" y="165" class="mid mono small">1</text><text x="280" y="165" class="mid mono small">1</text>
-    <text x="100" y="225" class="mid mono small">0</text><text x="160" y="225" class="mid mono small">1</text><text x="220" y="225" class="mid mono small">1</text><text x="280" y="225" class="mid mono small">1</text>
-    <text x="100" y="270" class="mid mono small">0</text><text x="160" y="270" class="mid mono small">1</text><text x="220" y="270" class="mid mono small">1</text><text x="280" y="270" class="mid mono small">1</text>
-    <circle cx="175" cy="175" r="5" class="mem"/>
-    <text x="182" y="186" class="small">p</text>
+    <rect x="70"  y="70"  width="60" height="60" class="bad"/><rect x="130" y="70"  width="60" height="60" class="bad"/><rect x="190" y="70"  width="60" height="60" class="ok"/><rect x="250" y="70"  width="60" height="60" class="ok"/>
+    <rect x="70"  y="130" width="60" height="60" class="bad"/><rect x="130" y="130" width="60" height="60" class="bad"/><rect x="190" y="130" width="60" height="60" class="ok"/><rect x="250" y="130" width="60" height="60" class="ok"/>
+    <rect x="70"  y="190" width="60" height="60" class="bad"/><rect x="130" y="190" width="60" height="60" class="ok"/><rect x="190" y="190" width="60" height="60" class="ok"/><rect x="250" y="190" width="60" height="60" class="ok"/>
+    <rect x="70"  y="250" width="60" height="30" class="bad"/><rect x="130" y="250" width="60" height="30" class="ok"/><rect x="190" y="250" width="60" height="30" class="ok"/><rect x="250" y="250" width="60" height="30" class="ok"/>
+    <text x="100" y="105" class="mid mono">0</text><text x="160" y="105" class="mid mono">0</text><text x="220" y="105" class="mid mono">1</text><text x="280" y="105" class="mid mono">1</text>
+    <text x="100" y="165" class="mid mono">0</text><text x="160" y="155" class="mid mono">0</text><text x="220" y="165" class="mid mono">1</text><text x="280" y="165" class="mid mono">1</text>
+    <text x="100" y="225" class="mid mono">0</text><text x="160" y="225" class="mid mono">1</text><text x="220" y="225" class="mid mono">1</text><text x="280" y="225" class="mid mono">1</text>
+    <text x="100" y="270" class="mid mono">0</text><text x="160" y="270" class="mid mono">1</text><text x="220" y="270" class="mid mono">1</text><text x="280" y="270" class="mid mono">1</text>
+    <circle cx="175" cy="175" r="6" class="mem"/>
+    <text x="186" y="182" class="small halo">p</text>
 
-    <text x="350" y="80" class="title">How it adds up</text>
-    <text x="350" y="104" class="small">texel = uv · size − 0.5,  base = floor(texel),  f = texel − base</text>
-    <text x="350" y="124" class="small">texels base − 1 … base + 2 in x and y: 16 reads</text>
-    <text x="350" y="144" class="small">weight = wx · wy, from the labels on the left and top</text>
-    <text x="350" y="164" class="small">lit = Σ weight · (1 if lit else 0) / 9</text>
-    <text x="350" y="194" class="small">The weights add up to 3 · 3 = 9: a 3x3 box filter</text>
-    <text x="350" y="212" class="small">that slides smoothly as p moves, instead of jumping</text>
-    <text x="350" y="230" class="small">a whole texel at a time.</text>
-    <text x="350" y="262" class="small t-faint">1 = lit (green), 0 = in shadow (orange).</text>
+    <rect x="340" y="62" width="410" height="186" rx="8" class="zone"/>
+    <text x="356" y="88" class="title">How it adds up</text>
+    <text x="356" y="112" class="small">texel = uv · size − 0.5,  base = floor(texel),  f = texel − base</text>
+    <text x="356" y="132" class="small">texels base − 1 … base + 2 in x and y: 16 reads</text>
+    <text x="356" y="152" class="small">weight = wx · wy, from the labels on the left and top</text>
+    <text x="356" y="172" class="small">lit = Σ weight · (1 if lit else 0) / 9</text>
+    <text x="356" y="200" class="small">The weights add up to 3 · 3 = 9: a 3x3 box filter that slides</text>
+    <text x="356" y="218" class="small">smoothly as p moves, instead of jumping a whole texel</text>
+    <text x="356" y="236" class="small">at a time.</text>
   </svg>
   <figcaption>A plain 3x3 average of 9 texels gives soft edges, but they still step texel by texel. Weighting the outer row and column by the point's position inside its texel makes the edge move smoothly. GPUs can do the 2x2 bilinear part in hardware with a comparison sampler.</figcaption>
 </figure>
@@ -254,49 +564,78 @@ lit   = d is not behind stored        (standard depth: d ≤ stored; reversed-Z:
 
 <h2 id="resolution"><span class="n">7</span>Resolution, coverage and cascades</h2>
 
-<p>A shadow-map texel covers <var>box width</var> / <var>map size</var> world units. Near the camera, one texel can cover many screen pixels: blocky shadows (<b>perspective aliasing</b>). Far away, many texels fall into one pixel and are wasted.</p>
+<p>A shadow-map texel covers <var>box width</var> / <var>map size</var> world units. Near the camera, one texel can cover many screen pixels: blocky shadows (<b>perspective aliasing</b>). Far away, many texels fall into one pixel and are wasted. Cascades fix this with several maps of the same size over boxes of different sizes.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>what the camera sees (from above)</span>
+  <span><i class="hot"></i>a shadow map's box, with its texel grid</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Two views from above. Left: one shadow map covers the whole view of the camera, so its texels are the same large size next to the camera and far away. Right: three cascades. A small box near the camera, a medium one behind it and a large one far away, each with the same number of texels, so texels are small where the camera is close.">
+    <text x="30" y="18" class="title">One map</text>
+    <polygon points="40,125 300,45 300,205" class="cpu"/>
+    <rect x="30" y="25" width="300" height="200" class="hot"/>
+    <path d="M105,25V225M180,25V225M255,25V225M30,75H330M30,125H330M30,175H330" class="grid"/>
+    <circle cx="40" cy="125" r="5" class="solid"/>
+    <text x="40" y="44" class="small">near the camera:</text>
+    <text x="40" y="58" class="small">texels too big</text>
+    <text x="180" y="244" class="mid small">the same texel size everywhere</text>
+
+    <line x1="380" y1="10" x2="380" y2="240" class="dashed"/>
+
+    <text x="430" y="18" class="title">Cascades: 3 maps</text>
+    <polygon points="440,125 700,45 700,205" class="cpu"/>
+    <rect x="576" y="45" width="160" height="160" class="hot"/>
+    <path d="M616,45V205M656,45V205M696,45V205M576,85H736M576,125H736M576,165H736" class="grid"/>
+    <rect x="498" y="81" width="88" height="88" class="hot"/>
+    <path d="M520,81V169M542,81V169M564,81V169M498,103H586M498,125H586M498,147H586" class="grid"/>
+    <rect x="438" y="95" width="60" height="60" class="hot"/>
+    <path d="M453,95V155M468,95V155M483,95V155M438,110H498M438,125H498M438,140H498" class="grid"/>
+    <circle cx="440" cy="125" r="5" class="solid"/>
+    <text x="468" y="86" class="mid small t-hot">1</text>
+    <text x="542" y="72" class="mid small t-hot">2</text>
+    <text x="656" y="36" class="mid small t-hot">3</text>
+    <text x="580" y="244" class="mid small">small texels near the camera, large ones far away</text>
+  </svg>
+  <figcaption>Each cascade has the same number of texels. The shader picks the cascade by the fragment's distance from the camera.</figcaption>
+</figure>
 
 <div class="table-wrap">
 <table>
   <tr><th>Variant</th><th>Idea</th><th>When</th></tr>
   <tr><td>One map, fixed box</td><td>The box covers a known area (a level, a room, a small scene).</td><td>Small, bounded scenes; the simplest.</td></tr>
   <tr><td>Box fitted to the view</td><td>Every frame, fit the box around the part of the camera's frustum that can receive shadows. Snap it to whole texels so edges do not crawl as the camera moves.</td><td>Medium scenes.</td></tr>
-  <tr><td><b>Cascaded shadow maps</b> (CSM)</td><td>Split the camera's frustum by distance into 3 or 4 slices, each with its own map: small, sharp boxes near the camera, large ones far away. The shader picks the cascade by the fragment's depth.</td><td>Large outdoor scenes; the standard for a sun.</td></tr>
-  <tr><td>Virtual shadow maps</td><td>One huge sparse map, only the pages that pixels need are drawn.</td><td>High-end engines.</td></tr>
+  <tr><td><b>Cascaded shadow maps</b> (CSM)</td><td>Split the camera's frustum by distance into 3 or 4 slices, each with its own map. The shader picks the cascade by the fragment's depth.</td><td>Large outdoor scenes; the standard for a sun.</td></tr>
+  <tr><td>Virtual shadow maps</td><td>One huge sparse map; only the pages that pixels need are drawn.</td><td>High-end engines.</td></tr>
 </table>
 </div>
 
-<h2><span class="n">8</span>Worked example</h2>
+<h2 id="example"><span class="n">8</span>Worked example</h2>
 
 <p>A sun shadow over a 28 × 28 unit area: an orthographic box from −14 to 14, near 0.1, far 60, and a 2048 × 2048 map.</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Quantity</th><th>Value</th></tr>
-  <tr><td>One texel in world units</td><td>28 / 2048 ≈ 0.0137 units (1.4 cm if a unit is a meter)</td></tr>
-  <tr><td>Depth per world unit (orthographic: linear)</td><td>1 / (60 − 0.1) ≈ 0.0167</td></tr>
-  <tr><td>One texel of depth</td><td>0.0137 · 0.0167 ≈ 0.00023: a good size for the constant bias</td></tr>
-  <tr><td>Normal offset, surface facing the light</td><td>1 texel ≈ 0.0137 units</td></tr>
-  <tr><td>Normal offset, light at a grazing angle (n · l = 0.2)</td><td>(1 + 2 · 0.8) texels ≈ 0.036 units</td></tr>
-  <tr><td>Map memory (32-bit depth)</td><td>2048 · 2048 · 4 bytes = 16 MiB</td></tr>
-  <tr><td>Reads per pixel (3x3 bilinear PCF)</td><td>16</td></tr>
-</table>
+<div class="stats">
+  <div><b>0.0137</b><span>world units per texel (1.4 cm if a unit is a meter)</span><small>28 / 2048</small></div>
+  <div><b>0.0167</b><span>depth per world unit (orthographic: linear)</span><small>1 / (60 − 0.1)</small></div>
+  <div><b>0.00023</b><span>one texel of depth: a good constant bias</span><small>0.0137 · 0.0167</small></div>
+  <div><b>1 texel</b><span>normal offset, surface facing the light</span><small>≈ 0.0137 units</small></div>
+  <div><b>2.6 texels</b><span>normal offset at a grazing angle (n · l = 0.2)</span><small>(1 + 2 · 0.8) ≈ 0.036 units</small></div>
+  <div><b>16 MiB</b><span>map memory, 32-bit depth</span><small>2048 · 2048 · 4 bytes</small></div>
+  <div><b>16</b><span>texture reads per pixel, 3x3 bilinear PCF</span><small>4 · 4 texels</small></div>
 </div>
 
-<h2><span class="n">9</span>Pitfalls</h2>
+<h2 id="pitfalls"><span class="n">9</span>Pitfalls</h2>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Symptom</th><th>Usual cause</th></tr>
-  <tr><td>Stripes or moiré on lit surfaces</td><td>Shadow acne: no bias, or a bias smaller than half a texel's depth change.</td></tr>
-  <tr><td>Objects float; shadows start away from their feet</td><td>Too much bias (peter-panning).</td></tr>
-  <tr><td>A shadow is missing near the light</td><td>The caster is in front of the light camera's near plane, or outside its box.</td></tr>
-  <tr><td>Everything is in shadow, or nothing is</td><td>The comparison has the wrong direction (reversed-Z flips it), or <var>v</var> is flipped between the passes.</td></tr>
-  <tr><td>Shadow edges crawl when the camera moves</td><td>A box fitted to the view but not snapped to whole texels.</td></tr>
-  <tr><td>Blocky shadows close to the camera</td><td>One map stretched over too large an area: shrink the box, raise the resolution, or use cascades.</td></tr>
-  <tr><td>Reading the map gives garbage or validation errors</td><td>The depth texture was not moved from attachment to sampled between the passes, or was not created sampleable.</td></tr>
-</table>
-</div>
+<dl class="pitfalls">
+  <div><dt>Stripes or moiré on lit surfaces</dt><dd>Shadow acne: no bias, or a bias smaller than half a texel's depth change.</dd></div>
+  <div><dt>Objects float; shadows start away from their feet</dt><dd>Too much bias (peter-panning).</dd></div>
+  <div><dt>A shadow is missing near the light</dt><dd>The caster is in front of the light camera's near plane, or outside its box.</dd></div>
+  <div><dt>Everything is in shadow, or nothing is</dt><dd>The comparison has the wrong direction (reversed-Z flips it), or <var>v</var> is flipped between the passes.</dd></div>
+  <div><dt>Shadow edges crawl when the camera moves</dt><dd>A box fitted to the view but not snapped to whole texels.</dd></div>
+  <div><dt>Blocky shadows close to the camera</dt><dd>One map stretched over too large an area: shrink the box, raise the resolution, or use cascades.</dd></div>
+  <div><dt>Reading the map gives garbage or validation errors</dt><dd>The depth texture was not moved from attachment to sampled between the passes, or was not created sampleable.</dd></div>
+</dl>
 
 <h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
 
