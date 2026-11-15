@@ -56,13 +56,13 @@ namespace rasm
         }
 
         // Every pass draws with a depth attachment, and colors are attachments 0 to n-1, so a gap would be dropped.
+        // A target without colors is depth-only, like a shadow map.
         bool checkRenderTargetDesc(const RenderTargetDesc &desc, const char *caller)
         {
             const uint32_t colorCount = colorAttachmentCount(desc.colorFormats);
             const bool contiguous = std::all_of(desc.colorFormats + colorCount, std::end(desc.colorFormats), [](Format format)
                                                 { return format == Format::UNKNOWN; });
-            return checkArgument(colorCount > 0, caller, "a render target needs at least one color format.") &&
-                   checkArgument(contiguous, caller, "a render target's color formats can't have a gap.") &&
+            return checkArgument(contiguous, caller, "a render target's color formats can't have a gap.") &&
                    checkArgument(desc.depthFormat != Format::UNKNOWN, caller, "a render target needs a depth format.");
         }
 
@@ -91,10 +91,11 @@ namespace rasm
             return rt;
         }
 
-        // The Hi-Z pass of occlusion culling samples D32 depth through the bindless set. A depth/stencil view can't be sampled.
+        // The Hi-Z pass of occlusion culling samples D32 depth through the bindless set, and so do the readers of a
+        // depth-only target's depth (a shadow map). A depth/stencil view can't be sampled.
         TextureDesc depthTextureDesc(const RenderTargetDesc &desc, glm::uvec2 size, bool occlusionCulling)
         {
-            const bool sampled = occlusionCulling && desc.depthFormat == Format::D32_SFLOAT;
+            const bool sampled = (occlusionCulling || colorAttachmentCount(desc.colorFormats) == 0) && desc.depthFormat == Format::D32_SFLOAT;
             return {.name = desc.name + " Depth Texture",
                     .width = size.x,
                     .height = size.y,
@@ -1142,7 +1143,9 @@ namespace rasm
 
     bool RenderContext::beginRendering(const CommandBufferHandle &commandBuffer, const TextureHandle *colorAttachments, uint32_t colorCount, TextureHandle depthAttachment, const glm::vec4 &clearColor, const AttachmentOps &ops)
     {
-        if (!checkArgument(colorCount > 0 && colorCount <= MAX_COLOR_ATTACHMENTS, __func__, "a pass needs 1 to MAX_COLOR_ATTACHMENTS color attachments."))
+        // A depth-only pass (a shadow map) has no colors.
+        if (!checkArgument(colorCount <= MAX_COLOR_ATTACHMENTS, __func__, "a pass has at most MAX_COLOR_ATTACHMENTS color attachments.") ||
+            !checkArgument(colorCount > 0 || depthAttachment.isValid(), __func__, "a pass needs a color or a depth attachment."))
             return false;
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         // An invalid depth handle means the pass has no depth attachment.

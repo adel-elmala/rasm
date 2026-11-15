@@ -203,12 +203,13 @@ namespace rasm
                 current = mark;
         }
 
-        // Depth textures are sampleable only with occlusion culling (TextureUsage::SAMPLED_DEPTH_ATTACHMENT).
-        bool canReadDepth(const Engine *engine, const Pass &pass)
+        // Depth textures are sampleable with occlusion culling, and a depth-only target's always
+        // (TextureUsage::SAMPLED_DEPTH_ATTACHMENT). colorCount is the target's, 1 for the swapchain.
+        bool canReadDepth(const Engine *engine, const Pass &pass, uint32_t colorCount)
         {
-            if (!engine || engine->getConfig().occlusionCulling)
+            if (!engine || engine->getConfig().occlusionCulling || colorCount == 0)
                 return true;
-            spdlog::error("Pass '{}' reads a depth texture, which needs EngineConfig::occlusionCulling; the read is ignored.", pass.name);
+            spdlog::error("Pass '{}' reads the depth of a target with colors, which needs EngineConfig::occlusionCulling; the read is ignored.", pass.name);
             return false;
         }
     }
@@ -888,13 +889,14 @@ namespace rasm
 
     void RenderGraph::readDepth(uint32_t passIdx, RenderTargetHandle h)
     {
-        if (canReadDepth(engine, passes[passIdx]))
+        const uint32_t colorCount = engine ? engine->getRenderContext().getRenderTarget(h).colorCount : 1;
+        if (canReadDepth(engine, passes[passIdx], colorCount))
             passes[passIdx].depthRenderTargets.push_back(h);
     }
 
     void RenderGraph::readSwapchainDepth(uint32_t passIdx)
     {
-        if (canReadDepth(engine, passes[passIdx]))
+        if (canReadDepth(engine, passes[passIdx], 1))
             passes[passIdx].readsSwapchainDepth = true;
     }
 

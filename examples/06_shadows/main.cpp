@@ -1,0 +1,243 @@
+#include "glm/glm.hpp"
+#include "glm/gtc/quaternion.hpp"
+
+#include "rasm/rasm.h"
+
+#include <cmath>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+// Shadow, forward and post passes in one render graph, with no hand-written barrier: every pass declares what it
+// reads and writes, and the graph orders the passes and moves the shadow map between depth attachment and sampled.
+
+namespace
+{
+    constexpr uint32_t SHADOW_MAP_SIZE = 2048;
+    constexpr float SHADOW_EXTENT = 14.0f; // half the side of the square the light camera sees
+
+    rasm::MeshHandle createCube(rasm::Engine &engine)
+    {
+        // One quad per face, so each face has its own normal.
+        const glm::vec3 normals[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+        const glm::vec2 uvs[4] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+
+        std::vector<rasm::Vertex> vertices;
+        std::vector<uint32_t> indices;
+        for (const auto &n : normals)
+        {
+            // Two axes in the face's plane, ordered so the quad is counter-clockwise seen from outside.
+            const glm::vec3 u = std::abs(n.y) > 0.5f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+            const glm::vec3 v = glm::cross(n, u);
+            const glm::vec3 corners[4] = {n - u - v, n + u - v, n + u + v, n - u + v};
+
+            const auto first = static_cast<uint32_t>(vertices.size());
+            for (int i = 0; i < 4; ++i)
+                vertices.push_back({.pos = corners[i] * 0.5f, .normal = n, .uv = {uvs[i], uvs[i], uvs[i]}, .tangent = glm::vec4(0.0f)});
+            for (uint32_t index : {0u, 1u, 2u, 0u, 2u, 3u})
+                indices.push_back(first + index);
+        }
+        return engine.createMesh(std::move(vertices), std::move(indices));
+    }
+
+    rasm::MaterialHandle createColorMaterial(rasm::Engine &engine, const glm::vec3 &color, float roughness)
+    {
+        auto material = engine.createMaterial(rasm::MaterialType::PBR);
+        auto values = engine.getMaterial(material);
+        for (uint32_t i = 0; i < 3; ++i)
+            values.params[static_cast<uint32_t>(rasm::PbrParam::ALBEDO) + i] = color[i];
+        values.params[static_cast<uint32_t>(rasm::PbrParam::ROUGHNESS)] = roughness;
+        engine.updateMaterial(material, values);
+        return material;
+    }
+
+    rasm::Transform makeTransform(const glm::vec3 &position, const glm::vec3 &scale)
+    {
+        return rasm::Transform{position, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), scale};
+    }
+}
+
+int main()
+{
+    rasm::EngineConfig config = {
+        .appName = "example_6",
+        .windowWidth = 1280,
+        .windowHeight = 720,
+        .enableValidation = true,
+        .preferredBackend = rasm::Backend::VULKAN,
+        .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
+        .shaderDir = RASM_EXAMPLE_SHADER_DIR};
+
+    rasm::Engine engine(config);
+    if (!engine.running())
+        return 1;
+
+    rasm::SceneHandle scene = engine.createScene();
+
+    rasm::MeshHandle cube = createCube(engine);
+    rasm::MeshHandle bunnyMesh = engine.loadMesh("models/obj/bunny/bunny.obj");
+    if (!cube.isValid() || !bunnyMesh.isValid())
+        return 1;
+
+    const rasm::MaterialHandle ground = createColorMaterial(engine, glm::vec3(0.75f), 0.9f);
+    const rasm::MaterialHandle warm = createColorMaterial(engine, glm::vec3(0.9f, 0.5f, 0.25f), 0.5f);
+    const rasm::MaterialHandle cool = createColorMaterial(engine, glm::vec3(0.25f, 0.5f, 0.9f), 0.4f);
+
+    engine.addEntityToScene(scene, engine.createEntity("ground", cube, ground, makeTransform(glm::vec3(0.0f, -0.25f, 0.0f), glm::vec3(24.0f, 0.5f, 24.0f))));
+    // The bunny's vertices are centered on its origin and reach 247.6 below it, so it is lifted to stand on the ground.
+    engine.addEntityToScene(scene, engine.createEntity("bunny", bunnyMesh, warm, makeTransform(glm::vec3(0.0f, 247.6f * 0.01f, 0.0f), glm::vec3(0.01f))));
+    for (int i = 0; i < 4; ++i)
+    {
+        const float angle = glm::radians(45.0f + 90.0f * static_cast<float>(i));
+        const float height = 1.5f + static_cast<float>(i);
+        const glm::vec3 position(std::cos(angle) * 6.0f, height * 0.5f, std::sin(angle) * 6.0f);
+        engine.addEntityToScene(scene, engine.createEntity("pillar", cube, cool, makeTransform(position, glm::vec3(1.0f, height, 1.0f))));
+    }
+    rasm::EntityHandle spinner = engine.createEntity("spinner", cube, warm, makeTransform(glm::vec3(3.0f, 4.0f, 3.0f), glm::vec3(1.5f)));
+    engine.addEntityToScene(scene, spinner);
+
+    rasm::CameraHandle camera = engine.createCamera(rasm::CameraProjection{.type = rasm::CameraProjection::Type::PERSPECTIVE,
+                                                                           .perspective{.fovY = 45.0f,
+                                                                                        .aspect = static_cast<float>(config.windowWidth) / static_cast<float>(config.windowHeight),
+                                                                                        .nearZ = 0.1f}},
+                                                    rasm::Transform{glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(1.0f)});
+    engine.setCameraTransform(camera, rasm::Transform{glm::vec3(0.0f, 12.0f, 22.0f),
+                                                      glm::quatLookAt(glm::normalize(glm::vec3(0.0f, -12.0f, -22.0f)), glm::vec3(0.0f, 1.0f, 0.0f)),
+                                                      glm::vec3(1.0f)});
+    engine.setCameraController(camera, rasm::CameraController{
+                                           .type = rasm::CameraController::Type::TRACK_BALL,
+                                           .trackBall = {.radius = glm::length(glm::vec3(0.0f, 12.0f, 22.0f)),
+                                                         .center = glm::vec3(0.0f),
+                                                         .orbitSensitivity = 1.0f},
+                                           .easingSpeed = 6.0f});
+    engine.addCameraToScene(scene, camera);
+
+    const glm::vec3 lightDirection = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.35f));
+    engine.addLightToScene(scene, engine.createLight(rasm::LightType::DIRECTIONAL, glm::vec3(1.0f, 0.95f, 0.85f), glm::vec3(0.0f), lightDirection, 4.0f, 0.0f));
+
+    // The shadow map is the light's view of the scene: an orthographic camera looking along the light, far enough
+    // back that the whole scene is in front of its near plane.
+    rasm::CameraHandle lightCamera = engine.createCamera(rasm::CameraProjection{.type = rasm::CameraProjection::Type::ORTHOGRAPHIC,
+                                                                                .orthographic{.left = -SHADOW_EXTENT,
+                                                                                              .right = SHADOW_EXTENT,
+                                                                                              .bottom = -SHADOW_EXTENT,
+                                                                                              .top = SHADOW_EXTENT,
+                                                                                              .nearZ = 0.1f,
+                                                                                              .farZ = 60.0f}},
+                                                         rasm::Transform{-lightDirection * 30.0f,
+                                                                         glm::quatLookAt(lightDirection, glm::vec3(0.0f, 1.0f, 0.0f)),
+                                                                         glm::vec3(1.0f)});
+    if (!camera.isValid() || !lightCamera.isValid())
+        return 1;
+
+    rasm::RenderGraph graph = engine.createRenderGraph();
+    const rasm::Format colorFormat = engine.getRenderContext().getSwapchainImageFormat();
+
+    // Depth only: the shadow passes draw just depth, and later passes sample it.
+    const rasm::RenderTargetHandle shadowMap = graph.createRenderTarget({
+        .name = "shadow_map",
+        .width = SHADOW_MAP_SIZE,
+        .height = SHADOW_MAP_SIZE,
+        .depthFormat = rasm::Format::D32_SFLOAT,
+    });
+    const rasm::RenderTargetHandle sceneTarget = graph.createRenderTarget({
+        .name = "scene_rt",
+        .swapchainScale = 1.0f,
+        .colorFormats = {colorFormat},
+        .depthFormat = rasm::Format::D32_SFLOAT,
+        .clearColor = glm::vec4(0.35f, 0.45f, 0.6f, 1.0f),
+    });
+
+    // 1. Shadow: the scene from the light camera, into the depth-only target.
+    // 2. Forward: the scene from the camera, shaded with that shadow map. Its passes read the map, so they run after.
+    if (!engine.addScenePasses(graph, scene, lightCamera, shadowMap) ||
+        !engine.addScenePasses(graph, scene, camera, sceneTarget, rasm::SceneShadow{.camera = lightCamera, .renderTarget = shadowMap}))
+    {
+        return 1;
+    }
+
+    // 3. Post: a vignette over the forward image, with the shadow map in the bottom-left corner.
+    auto postPipeline = engine.createPipeline("post", R"(
+        struct VSOutput
+        {
+            float4 Pos : SV_POSITION;
+            float2 UV : TEXCOORD0;
+        };
+
+        [shader("vertex")]
+        VSOutput vertMain(uint vertexID : SV_VertexID)
+        {
+            VSOutput output;
+            output.UV = float2((vertexID << 1) & 2, vertexID & 2);
+            // Clip space is Y-up and UV v = 0 is the image's top row.
+            output.Pos = float4(output.UV.x * 2.0 - 1.0, 1.0 - output.UV.y * 2.0, 0.0, 1.0);
+            return output;
+        }
+
+        [[vk::binding(0, 0)]]
+        Sampler2D gTextures[];
+
+        struct PushConstants
+        {
+            uint sceneColor;
+            uint shadowDepth;
+        };
+
+        [[vk::push_constant]]
+        ConstantBuffer<PushConstants> pc;
+
+        [shader("fragment")]
+        float4 fragMain(VSOutput input) : SV_TARGET
+        {
+            uint width, height;
+            gTextures[pc.sceneColor].GetDimensions(width, height);
+            float2 pixel = input.UV * float2(width, height);
+
+            float insetSize = float(height) * 0.3;
+            float2 inset = (pixel - float2(16.0, float(height) - 16.0 - insetSize)) / insetSize;
+            if (all(inset >= 0.0) && all(inset <= 1.0))
+            {
+                // Reversed-Z: near the light is white.
+                float depth = gTextures[pc.shadowDepth].Sample(inset).r;
+                return float4(depth.xxx, 1.0);
+            }
+
+            float3 color = gTextures[pc.sceneColor].Sample(input.UV).rgb;
+            float2 centered = input.UV - 0.5;
+            float vignette = saturate(1.0 - dot(centered, centered) * 1.2);
+            return float4(color * vignette, 1.0);
+        }
+    )");
+    if (!postPipeline.isValid())
+        return 1;
+
+    graph.addPass(
+        "Post",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.read(sceneTarget);
+            builder.readDepth(shadowMap);
+            builder.writeSwapchain();
+        },
+        [&](rasm::RenderContext &ctx)
+        {
+            auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
+            const uint32_t indices[2] = {engine.getBindlessTextureIndex(engine.getRenderTargetTexture(sceneTarget)),
+                                         engine.getBindlessTextureIndex(engine.getRenderTargetDepthTexture(shadowMap))};
+            ctx.bindPipeline(commandBuffer, postPipeline);
+            ctx.bindDescriptorSet(commandBuffer, postPipeline, engine.getBindlessDescriptorSet(), 0);
+            ctx.pushConstants(commandBuffer, postPipeline, rasm::ShaderType::VERTEX_FRAGMENT, indices, sizeof(indices), 0);
+            ctx.draw(commandBuffer, 3);
+        });
+
+    graph.compile();
+
+    // Animation advances per frame, not per second, so a given frame renders the same on every run.
+    while (engine.running())
+    {
+        engine.updateTransform(spinner, engine.getTransform(spinner).rotate(glm::normalize(glm::vec3(1.0f, 2.0f, 0.5f)), glm::radians(1.0f)));
+        graph.execute(camera);
+    }
+
+    return 0;
+}

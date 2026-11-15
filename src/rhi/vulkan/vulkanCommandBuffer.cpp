@@ -287,8 +287,9 @@ namespace rasm::rhi
     // Every color attachment shares the load op and the clear color. The depth attachment is optional.
     void VulkanCommandBuffer::beginRendering(Texture *const *colorAttachments, uint32_t colorCount, Texture *depthAttachment, const glm::vec4 &clearColor, const AttachmentOps &ops)
     {
-        auto *color = static_cast<VulkanTexture *>(colorAttachments[0]);
         auto *depth = static_cast<VulkanTexture *>(depthAttachment);
+        // A depth-only pass takes its size from the depth.
+        const auto *area = colorCount > 0 ? static_cast<VulkanTexture *>(colorAttachments[0]) : depth;
 
         VkRenderingAttachmentInfo colorAttachmentInfos[MAX_COLOR_ATTACHMENTS] = {};
         for (uint32_t i = 0; i < colorCount; ++i)
@@ -317,8 +318,8 @@ namespace rasm::rhi
             .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
             .renderArea{
                 .extent{
-                    .width = color->desc.width,
-                    .height = color->desc.height}},
+                    .width = area->desc.width,
+                    .height = area->desc.height}},
             .layerCount = 1,
             .colorAttachmentCount = colorCount,
             .pColorAttachments = colorAttachmentInfos,

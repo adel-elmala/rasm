@@ -117,7 +117,7 @@ namespace rasm
         void                        beginPass(const std::string& name = "Pass", const AttachmentOps& ops = {});
         void                        endPass();
         void                        render(SceneHandle scene, CameraHandle camera);
-        bool                        addScenePasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget = {});
+        bool                        addScenePasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget = {}, const SceneShadow& shadow = {});
         bool                        running() const;
         bool                        recreateSwapchain();
         void                        setRenderTarget(const RenderTargetHandle& renderTarget);
@@ -237,7 +237,7 @@ namespace rasm
         void                        markDrawListsDirty(EntityHandle entity);
         void                        rebuildDrawList(SceneHandle scene);
         void                        uploadDrawList(SceneDrawList& drawList);
-        uint32_t                    createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget);
+        uint32_t                    createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, const SceneShadow& shadow);
         void                        releaseSceneView(uint32_t view);
         void                        prepareSceneView(uint32_t view);
         void                        recordSceneCulling(uint32_t view, uint32_t phase);

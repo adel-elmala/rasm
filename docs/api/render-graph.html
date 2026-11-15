@@ -274,8 +274,8 @@ void readSwapchainDepth();</pre>
       <li>The graph moves the depth to <code>SAMPLED</code> before this pass.</li>
       <li>The next pass that draws the target moves the depth back to an attachment and loads it.</li>
     </ul>
-    <p>The scene's <code>Hi-Z</code> pass uses it to build its depth pyramid between <code>Scene 1</code> and <code>Scene 2</code>.</p>
-    <p><span class="tag">errors</span> It needs <code>EngineConfig::occlusionCulling</code>: only then are <code>D32_SFLOAT</code> depth textures sampleable and in the bindless set. Without it, it logs <code>Pass '…' reads a depth texture, which needs EngineConfig::occlusionCulling; the read is ignored.</code> A pass that reads the depth of the target it draws to makes <code>compile</code> fail with <code>Pass '…' reads the render target it draws to.</code></p>
+    <p>The scene's <code>Hi-Z</code> pass uses it to build its depth pyramid between <code>Scene 1</code> and <code>Scene 2</code>, and a shadowed scene view reads its shadow map with it (<a href="engine.html#addScenePasses"><code>addScenePasses</code></a>).</p>
+    <p><span class="tag">errors</span> The depth of a depth-only target (no color formats) can always be read. The depth of any other target, or of the swapchain, needs <code>EngineConfig::occlusionCulling</code>: only then are those <code>D32_SFLOAT</code> depth textures sampleable and in the bindless set. Without it, it logs <code>Pass '…' reads the depth of a target with colors, which needs EngineConfig::occlusionCulling; the read is ignored.</code> A pass that reads the depth of the target it draws to makes <code>compile</code> fail with <code>Pass '…' reads the render target it draws to.</code></p>
   </div>
 </div>
 
@@ -629,7 +629,7 @@ Lifetimes (W write, R read, P read of the frame before, - alive between uses, . 
 <table>
   <tr><th>What <code>createRenderTarget</code> makes</th><th>How many</th><th>Notes</th></tr>
   <tr><td>Color textures</td><td>1 per color format, or that many per frame slot (2) with <code>history</code>; usage <code>SAMPLED_COLOR_ATTACHMENT</code></td><td>Added to the bindless set with <code>LINEAR_CLAMP</code>. <code>endPass</code> leaves it in the sampled layout, so later passes can read it.</td></tr>
-  <tr><td>Depth texture</td><td>One per color set; usage <code>SAMPLED_DEPTH_ATTACHMENT</code> for <code>D32_SFLOAT</code> with <code>EngineConfig::occlusionCulling</code>, else <code>DEPTH_STENCIL_ATTACHMENT</code></td><td>Cleared to 0 by the first pass that draws the target, and stored only when a later pass loads it or reads it. A sampleable one is added to the bindless set (<code>NEAREST_CLAMP</code>) when it is created; a pass reads it with <a href="#readDepth">readDepth</a>, as the scene's <code>Hi-Z</code> pass does.</td></tr>
+  <tr><td>Depth texture</td><td>One per color set; usage <code>SAMPLED_DEPTH_ATTACHMENT</code> for <code>D32_SFLOAT</code> with <code>EngineConfig::occlusionCulling</code> or on a depth-only target, else <code>DEPTH_STENCIL_ATTACHMENT</code></td><td>Cleared to 0 by the first pass that draws the target, and stored only when a later pass loads it or reads it. A sampleable one is added to the bindless set (<code>NEAREST_CLAMP</code>) when it is created; a pass reads it with <a href="#readDepth">readDepth</a>, as the scene's <code>Hi-Z</code> pass and a shadowed scene view do.</td></tr>
   <tr><td>Bindless slots used</td><td colspan="2">1 per color texture of <code>MAX_BINDLESS_TEXTURES</code> (1024), and 1 per sampleable depth texture. A resize keeps the slots.</td></tr>
   <tr><td>Memory</td><td colspan="2">Its own allocation, or, for a <a href="#transient">transient</a> target, a place in a heap that other transient targets share</td></tr>
 </table>
@@ -662,8 +662,8 @@ Lifetimes (W write, R read, P read of the frame before, - alive between uses, . 
       <dt>name</dt><dd>A label. The textures are named <code>"&lt;name&gt; Color Texture"</code> (then <code>"&lt;name&gt; Color Texture 1"</code>, …) and <code>"&lt;name&gt; Depth Texture"</code> in debug tools.</dd>
       <dt>width, height</dt><dd>Pixels. Used when <code>swapchainScale</code> is 0.</dd>
       <dt>swapchainScale</dt><dd>Above 0: the size is the window's (the swapchain's, in pixels) times this, at least 1 × 1, and follows each resize. <code>1.0f</code> for full size, <code>0.5f</code> for half. A rebuilt history target loses last frame's image, and its first read after the resize sees <code>clearColor</code>.</dd>
-      <dt>colorFormats</dt><dd>One format per color attachment, up to <a href="types.html#MAX_COLOR_ATTACHMENTS">MAX_COLOR_ATTACHMENTS</a> (4); the list ends at the first <code>UNKNOWN</code>, so <code>.colorFormats = {format}</code> makes one. At least one is needed. For <a href="engine.html#addScenePasses"><code>addScenePasses</code></a>, or a pipeline from the two-argument <code>createPipeline</code>, use one attachment in the swapchain format: <code>engine.getRenderContext().getSwapchainImageFormat()</code>. For several, make the pipeline with <a href="#createPipeline-target">createPipeline(name, source, renderTarget)</a>.</dd>
-      <dt>depthFormat</dt><dd>Needed: every pass binds a depth attachment. Use <code>Format::D32_SFLOAT</code> for the same reason. Only a <code>D32_SFLOAT</code> depth can be sampled (<a href="#readDepth">readDepth</a>, with <code>EngineConfig::occlusionCulling</code>), and occlusion culling needs that.</dd>
+      <dt>colorFormats</dt><dd>One format per color attachment, up to <a href="types.html#MAX_COLOR_ATTACHMENTS">MAX_COLOR_ATTACHMENTS</a> (4); the list ends at the first <code>UNKNOWN</code>, so <code>.colorFormats = {format}</code> makes one. None makes a depth-only target, such as a shadow map: its passes draw only depth. For <a href="engine.html#addScenePasses"><code>addScenePasses</code></a>, or a pipeline from the two-argument <code>createPipeline</code>, use one attachment in the swapchain format: <code>engine.getRenderContext().getSwapchainImageFormat()</code>. For several, make the pipeline with <a href="#createPipeline-target">createPipeline(name, source, renderTarget)</a>.</dd>
+      <dt>depthFormat</dt><dd>Needed: every pass binds a depth attachment. Use <code>Format::D32_SFLOAT</code> for the same reason. Only a <code>D32_SFLOAT</code> depth can be sampled (<a href="#readDepth">readDepth</a>, with <code>EngineConfig::occlusionCulling</code> or on a depth-only target), and occlusion culling needs that.</dd>
       <dt>clearColor</dt><dd>Linear color, the same for every color attachment. The first pass that writes the target clears to it, and each new history copy is cleared to it before the next frame's passes.</dd>
       <dt>history</dt><dd><code>true</code> keeps one copy per frame slot, so a pass can read last frame's color with <code>readPrevious</code>. It costs twice the memory. Leave it <code>false</code> for a target that is drawn and read in the same frame.</dd>
     </dl>
@@ -846,7 +846,7 @@ if (engine.beginFrame(camera))
     float4 color : SV_TARGET0;
     float4 mask : SV_TARGET1;
 };</code></pre>
-    <p><span class="tag">errors</span> A target with no color formats (or an unknown handle) logs <code>Pipeline '…' needs a render target with color formats.</code> and returns an invalid handle.</p>
+    <p>A depth-only target (no color formats) gives a pipeline without colors: its fragment shader writes no color.</p>
   </div>
 </div>
 

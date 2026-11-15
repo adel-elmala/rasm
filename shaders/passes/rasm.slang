@@ -2,6 +2,7 @@
 #include "core.slang"
 #include "pbr.slang"
 #include "unlit.slang"
+#include "shadow.slang"
 
 struct VSInput
 {
@@ -95,6 +96,7 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     info.emissiveUV             = selectUV(material.emissive.emissiveTextureCoordinate, input.uv0, input.uv1, input.uv2);
     info.numLights              = pc.scene->numLights;
     info.lights                 = pc.scene->lights;
+    info.shadow                 = sampleShadow(gTextures, pc.scene, input.worldPosition, info.backFace ? -input.worldNormal : input.worldNormal);
     info.material               = material;
 
     return shadePBR(gTextures, info);

@@ -99,6 +99,7 @@ struct PBRInfo
     float2      emissiveUV;          // UV coordinates for the emissive texture
     uint        numLights;           // number of lights
     Light       lights[MAX_LIGHTS];  // array of lights
+    float       shadow;              // how much of the first directional light reaches the fragment (shadow.slang)
     Material    material;            // material properties
 };
 
@@ -163,6 +164,7 @@ float4 shadePBR(Sampler2D gTextures[], PBRInfo pbrInfo)
     float alpha = roughness * roughness;
 
     float3 totalDirectLighting = float3(0.0);
+    bool shadowLight = true;     // the shadow map belongs to the first directional light
 
     // 4. Accumulate light contributions (Multiple Lights Loop)
     for (int i = 0; i < MAX_LIGHTS; ++i) {
@@ -178,6 +180,9 @@ float4 shadePBR(Sampler2D gTextures[], PBRInfo pbrInfo)
             // Directional Light: direction points from the light towards the surface,
             // L points from the surface towards the light.
             l = normalize(-light.direction);
+            if (shadowLight)
+                attenuation = pbrInfo.shadow;
+            shadowLight = false;
         }
         else {
             // Point Light

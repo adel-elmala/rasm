@@ -524,7 +524,7 @@ static_assert(offsetof(Light, intensity) == 12);</code></pre>
     <text x="132" y="42" class="mid title">uberMaterialTypes.h</text>
     <text x="132" y="58" class="mid small">C++, glm default packing</text>
     <text x="28" y="84" class="small">struct SceneData { … }</text>
-    <text x="28" y="104" class="small">static_assert(sizeof(SceneData) == 768)</text>
+    <text x="28" y="104" class="small">static_assert(sizeof(SceneData) == 832)</text>
     <text x="28" y="124" class="small">static_assert(offsetof(…) == …)</text>
     <text x="28" y="146" class="small">compile time: pins the C++ side</text>
 
@@ -563,7 +563,7 @@ static_assert(offsetof(Light, intensity) == 12);</code></pre>
 <table>
   <tr><th>Struct</th><th>Bytes</th><th>Read through</th></tr>
   <tr><td><code>PushConstants</code></td><td>16</td><td>the push constant <code>pc</code></td></tr>
-  <tr><td><code>SceneData</code></td><td>768</td><td><code>pc.scene</code></td></tr>
+  <tr><td><code>SceneData</code></td><td>832</td><td><code>pc.scene</code></td></tr>
   <tr><td><code>Light</code></td><td>48</td><td><code>SceneData::lights</code>, 8 of them</td></tr>
   <tr><td><code>VertexFull</code></td><td>64</td><td><code>vertsPtr</code>; also tied to <code>rasm::Vertex</code></td></tr>
   <tr><td><code>DrawInfo</code></td><td>20</td><td><code>drawInfoPtr</code>, <code>allDrawsPtr</code>; also the indirect draw command</td></tr>
@@ -587,27 +587,28 @@ static_assert(offsetof(Light, intensity) == 12);</code></pre>
 <h3>SceneData, byte by byte</h3>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 170" role="img" aria-label="SceneData is 768 bytes: two matrices from 0 to 128, the camera position and numLights to 144, eight lights to 528, twelve 8-byte pointers to 624, six frustum planes to 720, then twelve 4-byte values, the last one an explicit padding field at 764.">
-    <rect x="20"  y="30" width="117" height="40" rx="2" class="mem"/><text x="78"  y="54" class="mid small">2 matrices</text>
-    <rect x="137" y="30" width="14"  height="40" rx="2" class="mem"/>
-    <rect x="151" y="30" width="350" height="40" rx="2" class="mem"/><text x="326" y="54" class="mid small">lights[8] · 8 × 48</text>
-    <rect x="501" y="30" width="88"  height="40" rx="2" class="hot"/><text x="545" y="54" class="mid small">12 pointers</text>
-    <rect x="589" y="30" width="87"  height="40" rx="2" class="mem"/><text x="632" y="54" class="mid small">planes[6]</text>
-    <rect x="676" y="30" width="40"  height="40" rx="2" class="mem"/>
-    <rect x="716" y="30" width="4"   height="40" rx="1" class="ghost"/>
+  <svg viewBox="0 0 760 170" role="img" aria-label="SceneData is 832 bytes: two matrices from 0 to 128, the camera position and numLights to 144, eight lights to 528, twelve 8-byte pointers to 624, six frustum planes to 720, twelve 4-byte values to 768, the last one shadowTexture at 764, then the shadow matrix to 832.">
+    <rect x="20"  y="30" width="108" height="40" rx="2" class="mem"/><text x="74"  y="54" class="mid small">2 matrices</text>
+    <rect x="128" y="30" width="13"  height="40" rx="2" class="mem"/>
+    <rect x="141" y="30" width="323" height="40" rx="2" class="mem"/><text x="302" y="54" class="mid small">lights[8] · 8 × 48</text>
+    <rect x="464" y="30" width="81"  height="40" rx="2" class="hot"/><text x="504" y="54" class="mid small">12 pointers</text>
+    <rect x="545" y="30" width="81"  height="40" rx="2" class="mem"/><text x="585" y="54" class="mid small">planes[6]</text>
+    <rect x="626" y="30" width="40"  height="40" rx="2" class="mem"/>
+    <rect x="666" y="30" width="54"  height="40" rx="2" class="mem"/><text x="693" y="54" class="mid small">shadow</text>
     <text x="20"  y="88" class="mid mono small">0</text>
-    <text x="137" y="88" class="mid mono small">128</text>
-    <text x="501" y="88" class="mid mono small">528</text>
-    <text x="589" y="88" class="mid mono small">624</text>
-    <text x="676" y="88" class="mid mono small">720</text>
-    <text x="728" y="88" class="mid mono small">768</text>
-    <text x="144" y="22" class="mid small">camera, numLights</text>
-    <text x="720" y="22" class="end small">counts, sizes, LOD</text>
+    <text x="128" y="88" class="mid mono small">128</text>
+    <text x="464" y="88" class="mid mono small">528</text>
+    <text x="545" y="88" class="mid mono small">624</text>
+    <text x="626" y="88" class="mid mono small">720</text>
+    <text x="666" y="88" class="mid mono small">768</text>
+    <text x="720" y="88" class="mid mono small">832</text>
+    <text x="134" y="22" class="mid small">camera, numLights</text>
+    <text x="664" y="22" class="end small">counts, sizes, LOD, shadowTexture</text>
     <text x="20" y="120" class="small">The pointers start at 528 = 144 + 8 × 48, a multiple of 8, so no hidden padding is needed before them.</text>
-    <text x="20" y="138" class="small">The last field, padding at 764, makes the size 768, a multiple of 8, on both sides.</text>
-    <text x="20" y="158" class="small">Scale: 700 px for 768 bytes.</text>
+    <text x="20" y="138" class="small">shadowTexture at 764 ends the 4-byte values; shadowMatrix (a float4x4) fills 768 to 832, a multiple of 8.</text>
+    <text x="20" y="158" class="small">Scale: 700 px for 832 bytes.</text>
   </svg>
-  <figcaption>The <code>static_assert</code>s in <code>uberMaterialTypes.h</code> check the size and the offsets 144, 528, 624 and 720. They do not check the camera fields at 128 or the <code>drawInfoPtr</code> and <code>materialsPtr</code> pointers; only the debug-build reflection check covers those.</figcaption>
+  <figcaption>The <code>static_assert</code>s in <code>uberMaterialTypes.h</code> check the size and the offsets 144, 528, 624, 720, 764 and 768. They do not check the camera fields at 128 or the <code>drawInfoPtr</code> and <code>materialsPtr</code> pointers; only the debug-build reflection check covers those.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -622,7 +623,7 @@ static_assert(offsetof(Light, intensity) == 12);</code></pre>
   <tr><td>Compile-time check</td><td><var>static_assert</var></td><td>The <code>static_assert</code>s at the end of <code>uberMaterialTypes.h</code>, more in <code>geometryPool.cpp</code> (tying <code>rasm::Vertex</code> to <code>VertexFull</code>), and one per push-constant struct.</td></tr>
   <tr><td>Reflection check</td><td>at startup, refuse on mismatch</td><td><code>validateRasmStructs</code>, after each link in <code>ShaderCompiler::compileFromString</code>. It logs each mismatch, and the shader is not compiled, so its pipeline is not created and nothing reads the wrong layout. It runs in every build.</td></tr>
   <tr><td>Type check</td><td>also compare types</td><td>Not done (C11): a <code>uint32_t</code> against a <var>float</var> passes.</td></tr>
-  <tr><td>Explicit padding</td><td>keep the end a multiple of 8</td><td><code>SceneData::padding</code>.</td></tr>
+  <tr><td>Explicit padding</td><td>keep the end a multiple of 8</td><td>None needed today: <code>SceneData</code> ends at 832, a multiple of 8. A field added after <code>shadowMatrix</code> needs one, or a second 4-byte field.</td></tr>
   <tr><td>Push constants</td><td>≤ 128 or 256 bytes</td><td>16 bytes, <code>PUSH_CONSTANTS_SIZE</code>, the one range of every pipeline layout. <code>RenderContext::pushConstants</code> refuses a push past it. The stats overlay's <code>OverlayPushConstants</code> is 16 bytes too.</td></tr>
   <tr><td>Shared constants</td><td>—</td><td><code>MAX_LIGHTS</code>, <code>MAX_VERTEX_UV_SETS</code>, <code>MAX_MESH_LODS</code>, <code>MAX_DRAW_RUNS</code>, <code>MaterialId</code>, <code>LightType</code> are written on both sides with the same values. Nothing checks them.</td></tr>
 </table>
