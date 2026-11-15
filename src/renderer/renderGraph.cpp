@@ -19,6 +19,7 @@ namespace rasm
             BUFFER,
             RENDER_TARGET,
             SWAPCHAIN,
+            SWAPCHAIN_DEPTH, // only the dump keeps it apart: for ordering, a depth read reads the swapchain
         };
 
         struct ResourceKey
@@ -28,6 +29,24 @@ namespace rasm
             uint64_t generation = 0;
 
             bool operator==(const ResourceKey &) const = default;
+        };
+
+        // One resource a pass uses. mark is W for a write, R for a read, P for a read of what the frame before left.
+        // A per-frame buffer is one access per slot.
+        struct PassAccess
+        {
+            ResourceKey key;
+            char mark = 'R';
+            uint32_t slot = 0;
+            bool perFrame = false;
+            bool depth = false;
+        };
+
+        // One row of the lifetime table in RenderGraph::dump: a mark per position in the order.
+        struct LifetimeRow
+        {
+            std::string label;
+            std::string marks;
         };
 
         struct ResourceKeyHash
@@ -55,38 +74,56 @@ namespace rasm
 
         ResourceKey keyOf(RenderTargetHandle handle) { return {.kind = ResourceKind::RENDER_TARGET, .index = handle.index, .generation = handle.generation}; }
 
-        // A depth read orders like a read of the whole target.
-        void collectAccesses(const Pass &pass, std::vector<ResourceKey> &reads, std::vector<ResourceKey> &writes)
+        // Every resource the pass uses, reads before writes. Both the ordering and the dump walk this one list.
+        std::vector<PassAccess> accessesOf(const Pass &pass)
         {
             const ResourceKey swapchain = {.kind = ResourceKind::SWAPCHAIN};
+            std::vector<PassAccess> accesses;
             for (auto handle : pass.inputTextures)
-                reads.push_back(keyOf(handle));
+                accesses.push_back({.key = keyOf(handle)});
             for (auto handle : pass.inputBuffers)
-                reads.push_back(keyOf(handle));
+                accesses.push_back({.key = keyOf(handle)});
             for (const auto &buffers : pass.frameInputBuffers)
             {
-                for (auto handle : buffers.slots)
-                    reads.push_back(keyOf(handle));
+                for (uint32_t slot = 0; slot < MAX_FRAMES_IN_FLIGHT; ++slot)
+                    accesses.push_back({.key = keyOf(buffers.slots[slot]), .slot = slot, .perFrame = true});
             }
+            for (auto handle : pass.previousBuffers)
+                accesses.push_back({.key = keyOf(handle), .mark = 'P'});
             for (auto handle : pass.inputRenderTargets)
-                reads.push_back(keyOf(handle));
+                accesses.push_back({.key = keyOf(handle)});
+            for (auto handle : pass.previousRenderTargets)
+                accesses.push_back({.key = keyOf(handle), .mark = 'P'});
             for (auto handle : pass.depthRenderTargets)
-                reads.push_back(keyOf(handle));
+                accesses.push_back({.key = keyOf(handle), .depth = true});
             if (pass.readsSwapchainDepth)
-                reads.push_back(swapchain);
+                accesses.push_back({.key = swapchain, .depth = true});
             for (auto handle : pass.outputTextures)
-                writes.push_back(keyOf(handle));
+                accesses.push_back({.key = keyOf(handle), .mark = 'W'});
             for (auto handle : pass.outputBuffers)
-                writes.push_back(keyOf(handle));
+                accesses.push_back({.key = keyOf(handle), .mark = 'W'});
             for (const auto &buffers : pass.frameOutputBuffers)
             {
-                for (auto handle : buffers.slots)
-                    writes.push_back(keyOf(handle));
+                for (uint32_t slot = 0; slot < MAX_FRAMES_IN_FLIGHT; ++slot)
+                    accesses.push_back({.key = keyOf(buffers.slots[slot]), .mark = 'W', .slot = slot, .perFrame = true});
             }
             if (pass.outputRenderTarget.isValid())
-                writes.push_back(keyOf(pass.outputRenderTarget));
+                accesses.push_back({.key = keyOf(pass.outputRenderTarget), .mark = 'W'});
             if (pass.writesSwapchain)
-                writes.push_back(swapchain);
+                accesses.push_back({.key = swapchain, .mark = 'W'});
+            return accesses;
+        }
+
+        // A depth read orders like a read of the whole target. A read of the frame before does not order.
+        void collectAccesses(const Pass &pass, std::vector<ResourceKey> &reads, std::vector<ResourceKey> &writes)
+        {
+            for (const PassAccess &access : accessesOf(pass))
+            {
+                if (access.mark == 'W')
+                    writes.push_back(access.key);
+                else if (access.mark == 'R')
+                    reads.push_back(access.key);
+            }
         }
 
         QueueType otherQueue(QueueType queue)
@@ -101,6 +138,69 @@ namespace rasm
             return std::any_of(pass.inputRenderTargets.begin(), pass.inputRenderTargets.end(), transient) ||
                    std::any_of(pass.depthRenderTargets.begin(), pass.depthRenderTargets.end(), transient) ||
                    (pass.outputRenderTarget.isValid() && transient(pass.outputRenderTarget));
+        }
+
+        // An unnamed resource shows its handle as #index:generation. A graph without an engine (the tests) has no names.
+        std::string labelOf(Engine *engine, const ResourceKey &key)
+        {
+            std::string kind;
+            std::string name;
+            RenderContext *ctx = engine ? &engine->getRenderContext() : nullptr;
+            switch (key.kind)
+            {
+            case ResourceKind::TEXTURE:
+                kind = "texture";
+                name = ctx ? ctx->getTextureDesc(TextureHandle{key.index, key.generation}).name : "";
+                break;
+            case ResourceKind::BUFFER:
+                kind = "buffer";
+                name = ctx ? ctx->getBufferDesc(BufferHandle{key.index, key.generation}).name : "";
+                break;
+            case ResourceKind::RENDER_TARGET:
+                kind = "target";
+                name = ctx ? ctx->getRenderTargetDesc(RenderTargetHandle{key.index, key.generation}).name : "";
+                break;
+            case ResourceKind::SWAPCHAIN:
+                return "swapchain";
+            case ResourceKind::SWAPCHAIN_DEPTH:
+                return "swapchain depth";
+            }
+            return kind + (name.empty() ? " #" + std::to_string(key.index) + ":" + std::to_string(key.generation) : " '" + name + "'");
+        }
+
+        std::string joined(const std::vector<std::string> &items)
+        {
+            std::string text;
+            for (const auto &item : items)
+                text += (text.empty() ? "" : ", ") + item;
+            return text.empty() ? "-" : text;
+        }
+
+        uint32_t rankOf(char mark)
+        {
+            switch (mark)
+            {
+            case 'W':
+                return 3;
+            case 'R':
+                return 2;
+            case 'P':
+                return 1;
+            default:
+                return 0;
+            }
+        }
+
+        // W beats R, and R beats P (a read of the frame before), so a mark shows the strongest use at that position.
+        void markUse(std::vector<LifetimeRow> &rows, std::unordered_map<ResourceKey, uint32_t, ResourceKeyHash> &rowOf, const ResourceKey &key,
+                     const std::string &label, uint32_t position, uint32_t positions, char mark)
+        {
+            auto [it, added] = rowOf.try_emplace(key, static_cast<uint32_t>(rows.size()));
+            if (added)
+                rows.push_back({.label = label, .marks = std::string(positions, ' ')});
+            char &current = rows[it->second].marks[position];
+            if (rankOf(mark) > rankOf(current))
+                current = mark;
         }
 
         // Depth textures are sampleable only with occlusion culling (TextureUsage::SAMPLED_DEPTH_ATTACHMENT).
@@ -419,6 +519,109 @@ namespace rasm
             engine->resetRenderTarget();
         }
         engine->endFrame();
+    }
+
+    // The passes in the order they run, then each resource's lifetime: one column per pass in that order, W where a
+    // pass writes it, R where one reads it, P where one reads what the frame before left, - between its first and
+    // last use, . outside them. A per-frame buffer is one row, named by its first slot. The swapchain's depth has its
+    // own row: a pass that draws to the swapchain writes both. A graph that did not compile lists its passes in the
+    // order they were added.
+    std::string RenderGraph::dump() const
+    {
+        std::vector<uint32_t> order = executionOrder;
+        if (!compiled)
+        {
+            order.clear();
+            for (uint32_t i = 0; i < passes.size(); ++i)
+                order.push_back(i);
+        }
+        std::vector<uint32_t> positionOf(passes.size(), NO_PASS);
+        for (uint32_t position = 0; position < order.size(); ++position)
+            positionOf[order[position]] = position;
+
+        const auto positions = static_cast<uint32_t>(order.size());
+        std::string text = "Render graph: " + std::to_string(passes.size()) + " passes, " +
+                           (compiled ? "in the order they run" : "not compiled, in the order they were added") +
+                           (engine ? (engine->asyncCompute ? ", async compute on" : ", async compute off") : "") + "\n";
+        std::vector<LifetimeRow> rows;
+        std::unordered_map<ResourceKey, uint32_t, ResourceKeyHash> rowOf;
+        const ResourceKey swapchainDepth = {.kind = ResourceKind::SWAPCHAIN_DEPTH};
+        for (uint32_t position = 0; position < positions; ++position)
+        {
+            const Pass &pass = passes[order[position]];
+            std::vector<std::string> reads;
+            std::vector<std::string> writes;
+            auto use = [&](const ResourceKey &key, char mark, const char *note)
+            {
+                const std::string label = labelOf(engine, key);
+                (mark == 'W' ? writes : reads).push_back(label + note);
+                markUse(rows, rowOf, key, label, position, positions, mark);
+            };
+            for (const PassAccess &access : accessesOf(pass))
+            {
+                if (access.slot > 0)
+                    continue;
+                const bool swapchain = access.key.kind == ResourceKind::SWAPCHAIN;
+                if (swapchain && access.depth)
+                {
+                    use(swapchainDepth, access.mark, "");
+                    continue;
+                }
+                const char *note = access.mark == 'P' ? " (frame before)" : (access.perFrame ? " (per frame)" : (access.depth ? " (depth)" : ""));
+                use(access.key, access.mark, note);
+                if (swapchain && access.mark == 'W')
+                    use(swapchainDepth, 'W', "");
+            }
+
+            // Without async compute an async pass runs on the graphics queue, like any compute pass.
+            const bool onComputeQueue = pass.async && engine && engine->asyncCompute;
+            const char *queue = onComputeQueue ? "async compute" : (pass.compute ? "compute" : "graphics");
+            text += "\n[" + std::to_string(position) + "] " + pass.name + " (" + queue + ")\n";
+            text += "    reads:  " + joined(reads) + "\n";
+            text += "    writes: " + joined(writes) + "\n";
+            if (!pass.compute)
+            {
+                const AttachmentOps &ops = pass.attachmentOps;
+                text += std::string("    attachments: ") + (ops.loadColor ? "load color" : "clear color") + ", " + (ops.loadDepth ? "load depth" : "clear depth") + ", " +
+                        (ops.storeDepth ? "store depth" : "discard depth") + "\n";
+            }
+            if (compiled)
+            {
+                // A per-frame buffer adds an edge per slot, so a successor can be listed more than once.
+                std::vector<uint32_t> after;
+                for (uint32_t successor : pass.successors)
+                    after.push_back(positionOf[successor]);
+                std::sort(after.begin(), after.end());
+                after.erase(std::unique(after.begin(), after.end()), after.end());
+                std::vector<std::string> next;
+                for (uint32_t later : after)
+                    next.push_back("[" + std::to_string(later) + "] " + passes[order[later]].name);
+                text += "    before: " + joined(next) + "\n";
+            }
+        }
+
+        for (auto target : transientTargets)
+        {
+            auto it = rowOf.find(keyOf(target));
+            if (it != rowOf.end())
+                rows[it->second].label += " (transient)";
+        }
+        text += "\nLifetimes (W write, R read, P read of the frame before, - alive between uses, . not used):\n    ";
+        for (uint32_t position = 0; position < positions; ++position)
+            text += static_cast<char>('0' + position % 10);
+        text += "\n";
+        for (auto &row : rows)
+        {
+            const size_t first = row.marks.find_first_not_of(' ');
+            const size_t last = row.marks.find_last_not_of(' ');
+            for (size_t i = 0; i < row.marks.size(); ++i)
+            {
+                if (row.marks[i] == ' ')
+                    row.marks[i] = (i > first && i < last) ? '-' : '.';
+            }
+            text += "    " + row.marks + "  " + row.label + "\n";
+        }
+        return text;
     }
 
     // A failed placement, here or at a resize, leaves targets without textures. It is tried again every frame, and

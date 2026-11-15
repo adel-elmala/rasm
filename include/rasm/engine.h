@@ -202,6 +202,7 @@ namespace rasm
         bool                                                        isRunning                               = false;
         bool                                                        swapchainOutOfDate                      = false;
         bool                                                        swapchainRendered                       = false; // a pass rendered to the swapchain this frame
+        bool                                                        graphDumpRequested                      = false;
 
     private:
         static constexpr Format     DEPTH_FORMAT    = Format::D32_SFLOAT;

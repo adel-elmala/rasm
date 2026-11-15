@@ -103,6 +103,7 @@ namespace rasm
 
         void               compile();
         void               execute(CameraHandle camera);
+        std::string        dump() const;
 
     protected:
         struct QueueUse

@@ -60,6 +60,7 @@ namespace rasm
         void                                clearNewHistory(const CommandBufferHandle& commandBuffer);
         void                                resizeRenderTargets();
         const RenderTarget&                 getRenderTarget(const RenderTargetHandle& handle);
+        RenderTargetDesc                    getRenderTargetDesc(const RenderTargetHandle& handle);
         std::vector<TextureHandle>          getSwapchainImages();
         Format                              getSwapchainImageFormat();
         glm::uvec2                          getSwapchainExtent();

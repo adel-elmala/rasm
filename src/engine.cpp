@@ -16,6 +16,7 @@
 
 #include <chrono>
 #include <future>
+#include <utility>
 #include <vector>
 
 namespace rasm
@@ -703,7 +704,7 @@ namespace rasm
     {
         // The renderer is made last in the constructor, so an engine that failed to start has none.
         if (renderer)
-            renderer->render({.scene = scene, .camera = camera});
+            renderer->render({.scene = scene, .camera = camera}, std::exchange(graphDumpRequested, false));
     }
 
     bool Engine::running() const
