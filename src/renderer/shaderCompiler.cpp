@@ -10,7 +10,6 @@
 #include "spdlog/spdlog.h"
 
 #include <array>
-#include <cassert>
 #include <cstddef>
 #include <cstring>
 #include <fstream>
@@ -395,7 +394,13 @@ namespace rasm
             }
         }
 
-        assert(validateRasmStructs(linkedProgram->getLayout()) && "C++ structs must match shaders/lib/core.slang");
+        // Every build checks, since a Release build with a mismatch would read shifted data on the GPU (B23).
+        // validateRasmStructs logged each mismatch.
+        if (!validateRasmStructs(linkedProgram->getLayout()))
+        {
+            spdlog::error("The C++ structs do not match shaders/lib/core.slang; '{}' is not compiled.", outputPath);
+            return {};
+        }
 
         constexpr SlangInt TARGET_INDEX = 0;
 

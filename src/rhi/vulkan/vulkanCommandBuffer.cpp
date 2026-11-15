@@ -427,12 +427,12 @@ namespace rasm::rhi
     // An image barrier covers only its own image, so this one is global. Reads before it only have to finish.
     void VulkanCommandBuffer::aliasingBarrier()
     {
-        constexpr VkPipelineStageFlags2 attachmentStages = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR |
-                                                           VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR;
+        constexpr VkPipelineStageFlags2 ATTACHMENT_STAGES = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR |
+                                                            VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR;
         VkMemoryBarrier2 barrier = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
-                                    .srcStageMask = attachmentStages | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                    .srcStageMask = ATTACHMENT_STAGES | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                     .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                                    .dstStageMask = attachmentStages,
+                                    .dstStageMask = ATTACHMENT_STAGES,
                                     .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
                                                      VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT};
         if (computeQueue)

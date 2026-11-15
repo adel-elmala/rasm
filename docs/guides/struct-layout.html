@@ -519,7 +519,7 @@ static_assert(offsetof(Light, intensity) == 12);</code></pre>
 <p>RASM uses <b>scalar layout</b> for everything, so its C++ structs (with glm's default packing) and its Slang structs follow the same rules. The structs live twice: in <code>src/renderer/uberMaterialTypes.h</code> (namespace <code>rasm::gfx</code>) and in <code>shaders/lib/core.slang</code>. Two checks hold them together.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 290" role="img" aria-label="The Slang session uses GLSLForceScalarLayout and column-major matrices. uberMaterialTypes.h holds the C++ structs and static_asserts. core.slang holds the Slang structs. After each link, validateRasmStructs walks from the push constant pc to scene and its pointers, and compares each struct's size and field offsets with the C++ offsetof values. It runs inside assert, so only in debug builds.">
+  <svg viewBox="0 0 760 290" role="img" aria-label="The Slang session uses GLSLForceScalarLayout and column-major matrices. uberMaterialTypes.h holds the C++ structs and static_asserts. core.slang holds the Slang structs. After each link, validateRasmStructs walks from the push constant pc to scene and its pointers, and compares each struct's size and field offsets with the C++ offsetof values. It runs in every build, and a mismatch fails the shader.">
     <rect x="15" y="20" width="235" height="140" rx="6" class="cpu"/>
     <text x="132" y="42" class="mid title">uberMaterialTypes.h</text>
     <text x="132" y="58" class="mid small">C++, glm default packing</text>
@@ -541,7 +541,7 @@ static_assert(offsetof(Light, intensity) == 12);</code></pre>
     <text x="380" y="72" class="mid small">after each link:</text>
     <text x="380" y="90" class="mid small">reflection size + offsets</text>
     <text x="380" y="108" class="mid small">vs C++ sizeof / offsetof</text>
-    <text x="380" y="130" class="mid small">inside assert(): debug only</text>
+    <text x="380" y="130" class="mid small">every build: fails the shader</text>
     <line x1="250" y1="90" x2="279" y2="90" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <line x1="510" y1="90" x2="481" y2="90" class="arrow" marker-end="url(#ah)"/>
 
@@ -554,7 +554,7 @@ static_assert(offsetof(Light, intensity) == 12);</code></pre>
     <text x="15" y="266" class="small">Slang reports scalar offsets only along this path. Asked directly, a type behind a pointer gets std140/std430 padding,</text>
     <text x="15" y="282" class="small">so the check starts at the push constant and follows the fields (fieldStruct). A shader whose pc.scene is not SceneData is skipped.</text>
   </svg>
-  <figcaption>The two checks together catch a wrong size or a moved field, in a debug build. Field types are not compared.</figcaption>
+  <figcaption>The two checks together catch a wrong size or a moved field, in every build. Field types are not compared.</figcaption>
 </figure>
 
 <h3>The shared structs</h3>
@@ -620,7 +620,7 @@ static_assert(offsetof(Light, intensity) == 12);</code></pre>
   <tr><td>C++ side</td><td>a math library's default packing</td><td>glm with no alignment options: <var>vec3</var> is 12 bytes, <var>mat3</var> 36.</td></tr>
   <tr><td>One definition or two</td><td>generate, or share, or check</td><td>Two hand-written copies, checked. Field names may differ: C++ <code>Material::pbr</code> is Slang <code>metallicRoughness</code>.</td></tr>
   <tr><td>Compile-time check</td><td><var>static_assert</var></td><td>The <code>static_assert</code>s at the end of <code>uberMaterialTypes.h</code>, more in <code>geometryPool.cpp</code> (tying <code>rasm::Vertex</code> to <code>VertexFull</code>), and one per push-constant struct.</td></tr>
-  <tr><td>Reflection check</td><td>at startup, refuse on mismatch</td><td><code>validateRasmStructs</code>, after each link in <code>ShaderCompiler::compileFromString</code>. It logs each mismatch, then the <code>assert</code> stops the program. In a Release build the whole call is compiled out (B23).</td></tr>
+  <tr><td>Reflection check</td><td>at startup, refuse on mismatch</td><td><code>validateRasmStructs</code>, after each link in <code>ShaderCompiler::compileFromString</code>. It logs each mismatch, and the shader is not compiled, so its pipeline is not created and nothing reads the wrong layout. It runs in every build.</td></tr>
   <tr><td>Type check</td><td>also compare types</td><td>Not done (C11): a <code>uint32_t</code> against a <var>float</var> passes.</td></tr>
   <tr><td>Explicit padding</td><td>keep the end a multiple of 8</td><td><code>SceneData::padding</code>.</td></tr>
   <tr><td>Push constants</td><td>≤ 128 or 256 bytes</td><td>16 bytes, <code>PUSH_CONSTANTS_SIZE</code>, the one range of every pipeline layout. <code>RenderContext::pushConstants</code> refuses a push past it. The stats overlay's <code>OverlayPushConstants</code> is 16 bytes too.</td></tr>
@@ -628,14 +628,14 @@ static_assert(offsetof(Light, intensity) == 12);</code></pre>
 </table>
 </div>
 
-<p>A mismatch shows up at startup, in a debug build, with messages in this form (from <code>validateStruct</code>):</p>
+<p>A mismatch shows up at startup, in any build, with messages in this form (from <code>validateStruct</code>), and the shader is not compiled:</p>
 
 <pre><code class="lang-text">Size mismatch for &lt;struct&gt;: C++ &lt;bytes&gt;, shader &lt;bytes&gt;
 Offset mismatch for &lt;struct&gt;.&lt;field&gt;: C++ &lt;offset&gt;, shader &lt;offset&gt;</code></pre>
 
 <h3>Shaders are compiled at startup</h3>
 
-<p>RASM compiles its Slang shaders when the engine starts, from <code>EngineConfig::shaderDir</code>. So the check runs on every start of a debug build, and a shader edit needs no build step. <code>tools/compile-shaders.bat</code> compiles every pass offline with the same flags (<samp>-force-glsl-scalar-layout</samp>, <samp>-matrix-layout-column-major</samp>), only as a syntax check; the engine does not use its output.</p>
+<p>RASM compiles its Slang shaders when the engine starts, from <code>EngineConfig::shaderDir</code>. So the check runs on every start, and a shader edit needs no build step. <code>tools/compile-shaders.bat</code> compiles every pass offline with the same flags (<samp>-force-glsl-scalar-layout</samp>, <samp>-matrix-layout-column-major</samp>), only as a syntax check; the engine does not use its output.</p>
 
 <h3>Where it lives in code</h3>
 
@@ -656,7 +656,7 @@ Offset mismatch for &lt;struct&gt;.&lt;field&gt;: C++ &lt;offset&gt;, shader &lt
   <strong>Keep these true</strong>
   <ul>
     <li>Change a shared struct on both sides in the same change: the C++ struct, the Slang struct, the <code>static_assert</code>s, and the table in <code>validateRasmStructs</code>. The <code>gpu-struct-sync</code> skill lists every place.</li>
-    <li>Run a debug build after the change: only it runs the reflection check.</li>
+    <li>Run an example after the change: the reflection check runs at startup and logs any mismatch.</li>
     <li>Never use <var>bool</var>, <var>size_t</var>, <var>int</var> or glm's aligned types in a shared struct.</li>
     <li>Keep 64-bit fields at offsets that are multiples of 8, and the struct size a multiple of 8.</li>
     <li>Compare the two definitions field by field by eye: types are not checked.</li>
@@ -665,7 +665,7 @@ Offset mismatch for &lt;struct&gt;.&lt;field&gt;: C++ &lt;offset&gt;, shader &lt
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p><b>B23</b>: the reflection check runs only in debug builds. <b>C11</b>: it compares sizes and offsets, not types. The shared constants and enums are not checked at all.</p>
+  <p><b>C11</b>: the reflection check compares sizes and offsets, not types. The shared constants and enums are not checked at all.</p>
 </div>
 
 <h3>Further reading</h3>

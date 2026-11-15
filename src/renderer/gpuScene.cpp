@@ -672,7 +672,10 @@ namespace rasm
     void Engine::releaseSceneView(uint32_t viewIndex)
     {
         SceneView &view = gpuScene->views[viewIndex];
-        if (view.graphs == 0 || --view.graphs > 0)
+        if (view.graphs == 0)
+            return;
+        --view.graphs;
+        if (view.graphs > 0)
             return;
         ctx.waitForFence(frameFence, frameFenceValue);
         if (asyncCompute)
