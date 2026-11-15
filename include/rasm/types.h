@@ -97,7 +97,7 @@ namespace rasm
         uint32_t    geometryPoolSubMeshes   = 1u << 14; // 120 B each
         uint32_t    maxInstances            = 1u << 16; // 108 B each, twice (one copy per frame slot)
         bool        showStats               = false;
-        bool        occlusionCulling        = true;     // two-pass Hi-Z culling in drawScene; false keeps frustum culling only
+        bool        occlusionCulling        = true;     // two-pass Hi-Z culling in the scene passes; false keeps frustum culling only
         bool        meshLods                = true;
         float       lodErrorPixels          = 1.0f;
         int32_t     forcedLod               = -1;

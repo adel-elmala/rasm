@@ -410,7 +410,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
     <text x="130" y="110" class="mid small">timestamp query pool, per slot</text>
     <rect x="15" y="128" width="230" height="44" rx="6" class="cpu"/>
     <text x="130" y="147" class="mid title">drawTotals[s]</text>
-    <text x="130" y="164" class="mid small">summed on the CPU by drawScene</text>
+    <text x="130" y="164" class="mid small">summed on the CPU by prepareSceneView</text>
     <rect x="15" y="182" width="230" height="44" rx="6" class="mem"/>
     <text x="130" y="201" class="mid title">Cull Stats Buffer s</text>
     <text x="130" y="218" class="mid small">atomics from cull.slang</text>
@@ -458,15 +458,13 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
 <table>
   <tr><th>Timer</th><th>Started by</th><th>Name</th></tr>
   <tr><td>The frame's command buffer</td><td><code>beginFrame</code>, ended in <code>endFrame</code></td><td>"Frame" (always timer 0, not listed)</td></tr>
-  <tr><td>Each graphics pass</td><td><code>beginPass</code> / <code>endPass</code></td><td>the pass name: "Scene" in <code>Engine::render</code>, "Clear" for the empty swapchain pass, or the render graph pass's name</td></tr>
-  <tr><td>Each render graph compute pass</td><td><code>RenderGraph::execute</code></td><td>the pass name</td></tr>
-  <tr><td>Hi-Z build and late culling</td><td><code>recordOcclusionCulling</code>, once per occlusion-culled <code>drawScene</code>, nested in the pass's timer</td><td>"Hi-Z"</td></tr>
-  <tr><td>Early culling</td><td><code>beginCullingTimer</code> in <code>recordCulling</code>; always gets the last timer, which passes cannot take</td><td>"Culling"</td></tr>
+  <tr><td>Each graphics pass</td><td><code>beginPass</code> / <code>endPass</code></td><td>the pass name: "Scene 1" and "Scene 2" of the scene passes ("Scene" without occlusion culling), "Clear" for the empty swapchain pass, or your graph pass's name</td></tr>
+  <tr><td>Each render graph compute pass</td><td><code>RenderGraph::execute</code></td><td>the pass name: "Cull 1", "Hi-Z" and "Cull 2" of the scene passes ("Cull" without occlusion culling), or your graph pass's name</td></tr>
   <tr><td>The application's own work</td><td><code>Engine::beginGpuTimer</code> / <code>Engine::endGpuTimer</code></td><td>its own name</td></tr>
 </table>
 </div>
 
-<p>The culling command buffer is recorded last but submitted first, before the frame's command buffer. So, as in section 5, <code>gpuFrameMs</code> runs from the earliest timestamp to the latest end, and <code>gpuTimers</code> are sorted by start time ("Culling" comes first). <code>VulkanDevice::getTimestamps</code> turns the raw values into nanoseconds: each value becomes its signed distance from the first one, masked to <code>timestampValidBits</code> (the wrap rule of section 3), then the earliest is subtracted and the result multiplied by <code>timestampPeriod</code>. It reads without the wait flag, so a pool that is not ready returns nothing instead of stalling.</p>
+<p>Every timer is in the frame's one command buffer, around one pass. As in section 5, <code>gpuFrameMs</code> runs from the earliest timestamp to the latest end, and <code>gpuTimers</code> are sorted by start time, so they list the passes in the order they ran: "Cull 1", "Scene 1", "Hi-Z", "Cull 2", "Scene 2". <code>VulkanDevice::getTimestamps</code> turns the raw values into nanoseconds: each value becomes its signed distance from the first one, masked to <code>timestampValidBits</code> (the wrap rule of section 3), then the earliest is subtracted and the result multiplied by <code>timestampPeriod</code>. It reads without the wait flag, so a pool that is not ready returns nothing instead of stalling.</p>
 
 <h3>The counters</h3>
 
@@ -482,7 +480,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
 </table>
 </div>
 
-<p><code>countMain</code> does what section 7 describes. Each thread writes its result to shared memory; the group's last thread adds the 64 triangle counts in two words with a carry, then calls <code>InterlockedAdd</code> once for the draw count and <code>addCount64</code> for each triangle count. Threads 0 to 7 each count the group's draws at their LOD and add that. The early and the late culling (see <a href="occlusion-culling.html#in-rasm">occlusion culling</a>) both count, and a draw is still counted once, because the late pass only keeps draws the early one did not draw. Draws of a <code>drawScene</code> call without culling are not seen by the shader, so the CPU adds them from <code>DrawTotals</code> (<code>unculledDraws</code>, <code>unculledTriangles</code>), counted at LOD 0.</p>
+<p><code>countMain</code> does what section 7 describes. Each thread writes its result to shared memory; the group's last thread adds the 64 triangle counts in two words with a carry, then calls <code>InterlockedAdd</code> once for the draw count and <code>addCount64</code> for each triangle count. Threads 0 to 7 each count the group's draws at their LOD and add that. The early and the late culling (see <a href="occlusion-culling.html#in-rasm">occlusion culling</a>) both count, and a draw is still counted once, because the late pass only keeps draws the early one did not draw. Draws of a scene view drawn without culling are not seen by the shader, so the CPU adds them from <code>DrawTotals</code> (<code>unculledDraws</code>, <code>unculledTriangles</code>), counted at LOD 0.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 330" role="img" aria-label="Frame N in slot s: the CPU records timer commands and adds to drawTotals; the GPU runs culling, which adds to the cull stats buffer, and the passes, which write timestamps. A barrier to HOST makes the writes visible. Frame N+2 in slot s waits for frame N's fence value, reads the timestamps and the cull stats, then, if this frame is measured, resets the queries and zeroes the counters.">
@@ -496,7 +494,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
     <rect x="90" y="44" width="240" height="104" rx="6" class="cpu"/>
     <text x="210" y="66" class="mid title">records frame N</text>
     <text x="102" y="90"  class="small">timer pairs: writeTimestamp</text>
-    <text x="102" y="108" class="small">drawScene adds to drawTotals[s]</text>
+    <text x="102" y="108" class="small">prepareSceneView adds to drawTotals[s]</text>
     <text x="102" y="126" class="small">submit signals fence value v</text>
 
     <rect x="340" y="44" width="140" height="104" rx="6" class="ghost"/>
@@ -528,7 +526,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
     <text x="210" y="250" class="mid title">frame N runs</text>
     <text x="102" y="272" class="small">early + late culling: Cull Stats[s]</text>
     <text x="102" y="290" class="small">passes: timestamps into pool s</text>
-    <text x="102" y="308" class="small">COMPUTE → GRAPHICS | HOST barriers</text>
+    <text x="102" y="308" class="small">endFrame: one COMPUTE → HOST barrier</text>
 
     <rect x="340" y="228" width="140" height="90" rx="6" class="ghost"/>
     <text x="410" y="277" class="mid small t-faint">other slot</text>
@@ -537,7 +535,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
     <text x="620" y="262" class="mid title">frame N+2 runs</text>
     <text x="620" y="282" class="mid small">the overlay shows frame N's numbers</text>
   </svg>
-  <figcaption><code>MAX_FRAMES_IN_FLIGHT</code> is 2, so the GPU numbers are two frames old. The barriers after both culling phases include the <code>HOST</code> stage, so the CPU sees the counters once the fence is reached.</figcaption>
+  <figcaption><code>MAX_FRAMES_IN_FLIGHT</code> is 2, so the GPU numbers are two frames old. <code>endFrame</code> records one <code>COMPUTE → HOST</code> barrier after the last pass, so the CPU sees the counters once the fence is reached.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -549,8 +547,8 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
   <tr><td>Timestamps</td><td>pairs, period, valid bits</td><td>The same: one pool per frame slot, 16 timers, wrap-safe conversion.</td></tr>
   <tr><td>Reading</td><td>after the slot's fence, no wait</td><td>The same, in <code>updateFrameStats</code>. A slot whose fence value did not move (a frame that was not submitted) is skipped.</td></tr>
   <tr><td>Reset</td><td>by command or from the host</td><td>From the host (<code>vkResetQueryPool</code>, host query reset), right after the read.</td></tr>
-  <tr><td>Frame GPU time</td><td>earliest begin to latest end</td><td>The same, because culling runs in its own command buffer before the frame's.</td></tr>
-  <tr><td>Too many timers</td><td>drop, warn once</td><td>The same: one warning per run. The last timer is kept for culling.</td></tr>
+  <tr><td>Frame GPU time</td><td>earliest begin to latest end</td><td>The same. All timers are in the frame's one command buffer.</td></tr>
+  <tr><td>Too many timers</td><td>drop, warn once</td><td>The same: one warning per run.</td></tr>
   <tr><td>Pipeline statistics</td><td>optional queries</td><td>None.</td></tr>
   <tr><td>Shader counters</td><td>reduce in the group, one atomic</td><td>The same, in <code>countMain</code>: one atomic per group per counter, plus up to 8 for the LOD counts.</td></tr>
   <tr><td>64-bit counts</td><td>two words and a carry</td><td>The same, in <code>addCount64</code>; the CPU joins them in <code>readCount64</code>.</td></tr>
@@ -568,7 +566,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Public types</td><td><code>FrameStats</code>, <code>GpuTimer</code>, <code>MAX_GPU_TIMERS</code> in <code>include/rasm/engine.h</code>; <code>VRAMStats</code> in <code>include/rasm/render/resource.h</code></td></tr>
   <tr><td>Per-slot state</td><td><code>FrameStatsSlot</code>, <code>FrameStatsCollector</code> in <code>src/renderer/frameStats.h</code></td></tr>
-  <tr><td>Timers, read-back, reset</td><td><code>Engine::updateFrameStats</code>, <code>Engine::beginGpuTimer</code>, <code>Engine::endGpuTimer</code>, <code>Engine::beginCullingTimer</code>, <code>Engine::getFrameStats</code> in <code>src/renderer/frameStats.cpp</code></td></tr>
+  <tr><td>Timers, read-back, reset</td><td><code>Engine::updateFrameStats</code>, <code>Engine::beginGpuTimer</code>, <code>Engine::endGpuTimer</code>, <code>Engine::getFrameStats</code> in <code>src/renderer/frameStats.cpp</code></td></tr>
   <tr><td>Frame and pass timers</td><td><code>Engine::beginFrame</code>, <code>Engine::endFrame</code>, <code>Engine::beginPass</code>, <code>Engine::endPass</code> in <code>src/engine.cpp</code>; <code>RenderGraph::execute</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
   <tr><td>Query pool, timestamps, VRAM</td><td><code>VulkanDevice::createTimestampQueryPool</code>, <code>VulkanDevice::getTimestamps</code>, <code>VulkanDevice::queryVRAMStats</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; <code>VulkanCommandBuffer::writeTimestamp</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>Counters and draw totals</td><td><code>DrawTotals</code>, <code>cullStats</code>, <code>CULL_STATS_WORDS</code> in <code>src/renderer/gpuScene.h</code>; <code>countMain</code>, <code>addCount64</code> in <code>shaders/passes/cull.slang</code></td></tr>
@@ -581,7 +579,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
   <ul>
     <li>The <code>STATS_*</code> words in <code>cull.slang</code> match the <code>CULL_STATS_*</code> words in <code>gpuScene.h</code>.</li>
     <li>A slot's pool and counter buffer are read and reset only after that slot's fence wait (the frame order in <code>beginFrame</code>).</li>
-    <li>The barriers at the end of each culling phase include <code>HOST</code>; without it the CPU may read stale counters.</li>
+    <li><code>endFrame</code> records a <code>COMPUTE → HOST</code> barrier after the last pass; without it the CPU may read stale counters.</li>
     <li><code>beginGpuTimer</code> may return <code>UINT32_MAX</code>; <code>endGpuTimer</code> must accept it and do nothing.</li>
   </ul>
 </div>

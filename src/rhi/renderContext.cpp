@@ -90,7 +90,7 @@ namespace rasm
             return rt;
         }
 
-        // drawScene's occlusion culling samples D32 depth through the bindless set. A depth/stencil view can't be sampled.
+        // The Hi-Z pass of occlusion culling samples D32 depth through the bindless set. A depth/stencil view can't be sampled.
         TextureDesc depthTextureDesc(const RenderTargetDesc &desc, glm::uvec2 size, bool occlusionCulling)
         {
             const bool sampled = occlusionCulling && desc.depthFormat == Format::D32_SFLOAT;
@@ -914,6 +914,26 @@ namespace rasm
         impl->uploads.cancelUploads(rhiBuffer);
         impl->device->destroyBuffer(rhiBuffer);
         impl->buffers.erase(buffer);
+    }
+
+    // A new buffer with the old desc and the new size, under the same handle, so whatever holds the handle (a render
+    // graph's declarations) stays valid. The contents and the device address change, and the GPU must be done with
+    // the old buffer. On failure the old buffer stays.
+    bool RenderContext::resizeBuffer(const BufferHandle &buffer, uint64_t size)
+    {
+        auto *oldBuffer = lookup(impl->buffers, buffer, __func__);
+        if (!oldBuffer)
+            return false;
+
+        BufferDesc desc = oldBuffer->desc;
+        desc.size = size;
+        auto *newBuffer = impl->device->createBuffer(desc);
+        if (!newBuffer)
+            return false;
+        impl->uploads.cancelUploads(oldBuffer);
+        impl->device->destroyBuffer(oldBuffer);
+        impl->buffers[buffer] = newBuffer;
+        return true;
     }
 
     std::vector<TextureHandle> RenderContext::getSwapchainImages()

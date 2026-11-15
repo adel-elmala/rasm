@@ -429,7 +429,7 @@
 <p>RASM uses Vulkan dynamic rendering, so the ops go into <code>VulkanCommandBuffer::beginRendering</code>. A pass describes them with three flags, <code>AttachmentOps</code>: <code>loadColor</code>, <code>loadDepth</code> and <code>storeDepth</code>. The render graph sets them for each pass in <code>RenderGraph::assignAttachmentOps</code>, when it compiles. A frame written by hand passes them to <code>Engine::beginPass</code>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="Top: three graph passes on one target, in add order. The first clears color and depth and stores depth, because the second loads it. The second loads both and stores depth, because the third loads it. The third loads both and does not store depth, unless occlusion culling is on. Color is always stored. Middle: a pass with drawScene and occlusion culling ends rendering after the early draws, storing depth, runs the Hi-Z build and late culling as compute, then begins rendering again with color and depth loaded and depth stored. Bottom: endFrame runs a Clear pass if no pass drew the swapchain, then the stats overlay, which loads color and has no depth, then presents.">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Top: three graph passes on one target, in add order. The first clears color and depth and stores depth, because the second loads it. The second loads both and stores depth, because the third loads it. The third loads both and does not store depth. Color is always stored. Middle: with occlusion culling, Scene 1 clears and stores color and depth, the Hi-Z compute pass reads the depth with readDepth, Cull 2 culls, and Scene 2 loads color and depth. Bottom: endFrame runs a Clear pass if no pass drew the swapchain, then the stats overlay, which loads color and has no depth, then presents.">
     <text x="20" y="22" class="title">Render graph: passes on one target run in add order</text>
     <rect x="20" y="34" width="220" height="64" rx="6" class="gpu"/>
     <text x="130" y="54" class="mid title">1st pass</text>
@@ -444,21 +444,27 @@
     <rect x="520" y="34" width="220" height="64" rx="6" class="gpu"/>
     <text x="630" y="54" class="mid title">last pass</text>
     <text x="630" y="72" class="mid small">color <tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan></text>
-    <text x="630" y="88" class="mid small">depth <tspan class="t-mem">LOAD</tspan> → <tspan class="t-gpu">DONT_CARE</tspan> *</text>
-    <text x="20" y="116" class="small">* STORE when occlusion culling is on (the default): drawScene reads depth in the middle of a pass.</text>
+    <text x="630" y="88" class="mid small">depth <tspan class="t-mem">LOAD</tspan> → <tspan class="t-gpu">DONT_CARE</tspan></text>
+    <text x="20" y="116" class="small">Depth is stored only when a later pass on the target loads it, or a pass reads it (readDepth, readSwapchainDepth).</text>
 
-    <text x="20" y="150" class="title">Inside one pass: drawScene with occlusion culling</text>
-    <rect x="20" y="180" width="270" height="40" rx="6" class="gpu"/>
-    <text x="155" y="205" class="mid">rendering: early draws</text>
-    <rect x="300" y="180" width="160" height="40" rx="20" class="shader"/>
-    <text x="380" y="198" class="mid small">Hi-Z build, late culling</text>
-    <text x="380" y="212" class="mid small">compute: outside rendering</text>
-    <rect x="470" y="180" width="270" height="40" rx="6" class="gpu"/>
-    <text x="605" y="205" class="mid">rendering: late draws</text>
-    <text x="20" y="172" class="small t-faint">ops of the pass</text>
-    <text x="290" y="172" class="end small t-mem">store depth</text>
-    <text x="470" y="172" class="small t-mem">LOAD color + depth</text>
-    <text x="740" y="172" class="end small t-mem">store depth</text>
+    <text x="20" y="150" class="title">The scene passes with occlusion culling: a depth read between two passes</text>
+    <rect x="20" y="166" width="200" height="56" rx="6" class="gpu"/>
+    <text x="120" y="184" class="mid title">Scene 1</text>
+    <text x="120" y="200" class="mid small">color <tspan class="t-gpu">CLEAR</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <text x="120" y="214" class="mid small">depth <tspan class="t-gpu">CLEAR</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <line x1="220" y1="194" x2="238" y2="194" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="240" y="166" width="150" height="56" rx="20" class="shader"/>
+    <text x="315" y="190" class="mid">Hi-Z, compute</text>
+    <text x="315" y="208" class="mid small">readDepth: depth SAMPLED</text>
+    <line x1="390" y1="194" x2="408" y2="194" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="410" y="166" width="100" height="56" rx="20" class="shader"/>
+    <text x="460" y="190" class="mid">Cull 2</text>
+    <text x="460" y="208" class="mid small">compute</text>
+    <line x1="510" y1="194" x2="528" y2="194" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="530" y="166" width="210" height="56" rx="6" class="gpu"/>
+    <text x="635" y="184" class="mid title">Scene 2</text>
+    <text x="635" y="200" class="mid small">color <tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <text x="635" y="214" class="mid small">depth <tspan class="t-mem">LOAD</tspan> → <tspan class="t-gpu">DONT_CARE</tspan></text>
 
     <text x="20" y="256" class="title">endFrame, on the swapchain</text>
     <rect x="20" y="266" width="230" height="52" rx="6" class="gpu"/>
@@ -472,16 +478,16 @@
     <rect x="560" y="266" width="180" height="52" rx="6" class="box"/>
     <text x="650" y="296" class="mid">present</text>
   </svg>
-  <figcaption>The graph never clears a target twice in a frame, and never loads one that nothing drew. The Hi-Z build splits one pass into two rendering scopes, so the first one must store depth and the second one loads it.</figcaption>
+  <figcaption>The graph never clears a target twice in a frame, and never loads one that nothing drew. A depth read between two passes on one target makes the pass before it store depth, and the pass after it loads depth.</figcaption>
 </figure>
 
-<p>Passes that draw to one target already run in the order they were added: <code>compile</code> adds an edge from each writer of a target to the next one. So <code>assignAttachmentOps</code> only walks the sorted order once and remembers the last writer of each target (the swapchain counts as one target). When a pass finds an earlier writer, it loads color and depth, and it sets <code>storeDepth</code> on that earlier pass. <code>RenderGraph::execute</code> then passes <code>Pass::attachmentOps</code> to <code>beginPass</code>.</p>
+<p>Passes that draw to one target already run in the order they were added: <code>compile</code> adds an edge from each writer of a target to the next one. So <code>assignAttachmentOps</code> only walks the sorted order once and remembers the last writer of each target (the swapchain counts as one target). When a pass finds an earlier writer, it loads color and depth, and it sets <code>storeDepth</code> on that earlier pass. A pass that reads a target's depth (<code>readDepth</code>, <code>readSwapchainDepth</code>) sets <code>storeDepth</code> on the target's last writer before it, too. <code>RenderGraph::execute</code> then passes <code>Pass::attachmentOps</code> to <code>beginPass</code> unchanged.</p>
 
 <p><code>beginPass</code> also does the barrier from <a href="#variants">section 5</a>. It calls <code>transitionImageLayout</code> with <code>discard</code> for each attachment that it clears, so the old layout is <code>VK_IMAGE_LAYOUT_UNDEFINED</code>. An attachment that it loads keeps its layout, and the barrier orders the earlier pass's writes before the load.</p>
 
-<pre><code>// A hand-written frame: the scene, then a UI pass on top of it
-engine.beginPass("Scene", {.storeDepth = true});
-engine.drawScene(scene, camera);
+<pre><code>// A hand-written frame: a world pass, then a UI pass on top of it
+engine.beginPass("World", {.storeDepth = true});
+// ... draw the world
 engine.endPass();
 engine.beginPass("UI", {.loadColor = true, .loadDepth = true});
 // ... draw the UI
@@ -496,13 +502,13 @@ engine.endPass();</code></pre>
   <tr><td>Store ops</td><td>STORE, DONT_CARE, NONE</td><td>Color is always STORE. Depth is STORE with <code>storeDepth</code>, else DONT_CARE. No NONE.</td></tr>
   <tr><td>Per attachment</td><td>one pair per attachment</td><td>One <code>loadColor</code> for all color attachments of a pass (<a href="multiple-render-targets.html">multiple render targets</a>). A stencil aspect shares depth's ops.</td></tr>
   <tr><td>Clear values</td><td>any, per attachment</td><td>Color: the target's <code>clearColor</code>, or <code>SWAPCHAIN_CLEAR_COLOR</code> for the swapchain. Depth: always 0, the far plane in <a href="projection-depth.html#reversed">reversed-Z</a>.</td></tr>
-  <tr><td>Who picks the ops</td><td>the graph, from writers before and readers after</td><td>The graph, from writers before only (<code>RenderGraph::assignAttachmentOps</code>, review item <code>D9</code>). The first pass on a target clears it; you cannot ask it to load or to not care.</td></tr>
+  <tr><td>Who picks the ops</td><td>the graph, from writers before and readers after</td><td>The graph, from the writers before and the depth reads after (<code>RenderGraph::assignAttachmentOps</code>, review item <code>D9</code>). The first pass on a target clears it; you cannot ask it to load or to not care.</td></tr>
   <tr><td>Store of color</td><td>only if read later</td><td>Always. The graph does not check readers: <code>endPass</code> leaves a render target's color sampled for any later pass (<code>B10</code>).</td></tr>
-  <tr><td>Store of depth</td><td>only if read later</td><td>Only if a later pass on the target loads it, <b>or</b> whenever <code>EngineConfig::occlusionCulling</code> is on (the default): <code>drawScene</code> pauses the pass to build its Hi-Z from depth (<a href="occlusion-culling.html#in-rasm">occlusion culling</a>).</td></tr>
+  <tr><td>Store of depth</td><td>only if read later</td><td>Only if a later pass on the target loads it or reads it. With <code>EngineConfig::occlusionCulling</code> (the default) the scene's <code>Hi-Z</code> pass reads it, so <code>Scene 1</code> stores it (<a href="occlusion-culling.html#in-rasm">occlusion culling</a>).</td></tr>
   <tr><td>Discard in the barrier</td><td>UNDEFINED when not loading</td><td>The same: <code>beginPass</code> transitions with <code>discard</code> when the pass clears.</td></tr>
   <tr><td>Memoryless attachments</td><td>transient, lazily allocated</td><td>None. <code>TextureUsage::TRANSIENT_ATTACHMENT</code> exists but nothing uses it. Transient render targets share memory instead (<a href="memory-aliasing.html">memory aliasing</a>); their first pass always clears.</td></tr>
   <tr><td>MSAA resolve</td><td>a store variant</td><td>None: RASM has no multisampling.</td></tr>
-  <tr><td>Merging passes</td><td>one pass, or subpasses</td><td>None. Each pass is its own rendering scope, and the Hi-Z build splits a <code>drawScene</code> pass into two.</td></tr>
+  <tr><td>Merging passes</td><td>one pass, or subpasses</td><td>None. Each pass is its own rendering scope; the scene's early and late draws are two passes, <code>Scene 1</code> and <code>Scene 2</code>.</td></tr>
   <tr><td>History images</td><td>STORE, the next frame reads it</td><td>Color is stored anyway. Each frame's copy is cleared by its first pass; last frame's copy is sampled, not loaded (<a href="temporal-history.html">history buffers</a>). A new copy is cleared once at creation by an empty rendering scope (<code>RenderContext::clearNewHistory</code>).</td></tr>
   <tr><td>Swapchain with no pass</td><td>the screen still reads it</td><td><code>Engine::endFrame</code> runs a "Clear" pass, so the image is in a known state when it is presented.</td></tr>
 </table>
@@ -516,9 +522,9 @@ engine.endPass();</code></pre>
   <tr><td>The three flags</td><td><code>AttachmentOps</code> in <code>include/rasm/render/resource.h</code>; a graph pass keeps them in <code>Pass::attachmentOps</code></td></tr>
   <tr><td>Flags to Vulkan ops</td><td><code>VulkanCommandBuffer::beginRendering</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>The graph picks them</td><td><code>RenderGraph::assignAttachmentOps</code>, called by <code>RenderGraph::compile</code>, in <code>src/renderer/renderGraph.cpp</code></td></tr>
-  <tr><td>Barrier with discard, forced depth store</td><td><code>Engine::beginPass</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Barrier with discard</td><td><code>Engine::beginPass</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Discard means old usage unknown</td><td><code>TextureStates::transition</code> in <code>src/rhi/textureStates.cpp</code></td></tr>
-  <tr><td>The pause for the Hi-Z</td><td><code>Engine::recordOcclusionCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>The depth read between the scene passes</td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code>; <code>PassBuilder::readDepth</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
   <tr><td>The "Clear" pass</td><td><code>Engine::endFrame</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Stats overlay pass</td><td><code>Engine::drawStatsOverlay</code> in <code>src/renderer/statsOverlay.cpp</code></td></tr>
   <tr><td>Clearing new history copies</td><td><code>RenderContext::clearNewHistory</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
@@ -530,7 +536,7 @@ engine.endPass();</code></pre>
   <strong>Keep these true</strong>
   <ul>
     <li>Passes that draw to one target must keep running in add order. <code>assignAttachmentOps</code> depends on the edges that <code>compile</code> adds between them.</li>
-    <li>A pass that loads depth needs the pass before it to store depth. Anything that ends a rendering scope in the middle of a pass, like the Hi-Z build, must store depth and load it again.</li>
+    <li>A pass that loads depth needs the pass before it to store depth. A pass that samples a depth declares <code>readDepth</code> or <code>readSwapchainDepth</code>, so the pass that drew it stores it.</li>
     <li>Clear only with <code>discard</code>, load only without it. A discard before a load drops the contents.</li>
     <li>Color stays stored: later passes sample render targets without telling the pass that drew them.</li>
     <li>The depth clear value 0 pairs with the <code>VK_COMPARE_OP_GREATER_OR_EQUAL</code> depth test (reversed-Z). Change both or neither.</li>

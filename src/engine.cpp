@@ -3,6 +3,7 @@
 #include "renderer/geometryPool.h"
 #include "renderer/frameStats.h"
 #include "renderer/gpuScene.h"
+#include "renderer/renderer.h"
 #include "renderer/shaderCompiler.h"
 #include "renderer/statsOverlay.h"
 
@@ -151,6 +152,7 @@ namespace rasm
         defaultValues.params[static_cast<uint32_t>(PbrParam::METALLIC)] = 1.0f;
         updateMaterial(defaultMaterial, defaultValues);
 
+        renderer = std::make_unique<Renderer>(*this);
         isRunning = true;
     }
 
@@ -160,6 +162,8 @@ namespace rasm
         for (auto &[handle, load] : pendingTextures)
             stbi_image_free(load.result.get().data);
 
+        // Its graph frees what it made through the context.
+        renderer.reset();
         ctx.cleanup();
 
         destroyWindow(this->mainWindow);
@@ -339,7 +343,6 @@ namespace rasm
             swapchainOutOfDate = true; // The image is acquired and still usable; recreate after this frame.
 
         swapchainRendered = false;
-        sceneDrawCount = 0;
 
         // record commands for the current frame
         ctx.beginCommandBuffer(currentFrame.commandBuffer);
@@ -365,22 +368,17 @@ namespace rasm
         }
         drawStatsOverlay();
         ctx.transitionImageLayout(currentFrame.commandBuffer, swapchain.imageHandles[imageIdx], TextureUsage::PRESENT_SRC);
+        // updateFrameStats reads the cull stats on the host, after the slot's fence.
+        ctx.memoryBarrier(currentFrame.commandBuffer, PipelineStage::COMPUTE, PipelineStage::HOST);
 
         endGpuTimer(currentFrame.commandBuffer, frameStats->frameTimer);
         ctx.endCommandBuffer(currentFrame.commandBuffer);
-
-        // The frame's scene draws read what culling writes, so its command buffer goes first. A frame whose culling
-        // failed to record is not submitted, since its draws would read stale counts.
-        bool culling = false;
-        const bool cullingRecorded = recordCulling(culling);
-        const CommandBufferHandle commandBuffers[] = {gpuScene->cullCommandBuffers[frameCount], currentFrame.commandBuffer};
-        const uint32_t firstCommandBuffer = culling ? 0 : 1;
 
         // The slot only takes the new value once a submit will signal it; a value nothing signals would block
         // the next wait on this slot forever. After a failed submit the swapchain keeps the image acquired,
         // and the next acquire hands it out again.
         const uint64_t signalValue = frameFenceValue + 1;
-        if (cullingRecorded && ctx.submit(commandBuffers + firstCommandBuffer, 2 - firstCommandBuffer, frameFence, signalValue, true))
+        if (ctx.submit(&currentFrame.commandBuffer, 1, frameFence, signalValue, true))
         {
             frameFenceValue = signalValue;
             currentFrame.fenceValue = signalValue;
@@ -420,18 +418,16 @@ namespace rasm
             clearColor = renderTargetData.clearColor;
         }
 
-        // What the pass clears is dropped. drawScene's occlusion culling pauses the pass and builds its Hi-Z from the
-        // depth drawn so far, so it needs the depth stored.
+        // What the pass clears is dropped.
         for (uint32_t i = 0; i < colorCount; ++i)
             ctx.transitionImageLayout(currentFrame.commandBuffer, colors[i], TextureUsage::COLOR_ATTACHMENT, !ops.loadColor);
         ctx.transitionImageLayout(currentFrame.commandBuffer, depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT, !ops.loadDepth);
-        ctx.beginRendering(currentFrame.commandBuffer, colors, colorCount, depth, clearColor,
-                           {.loadColor = ops.loadColor, .loadDepth = ops.loadDepth, .storeDepth = ops.storeDepth || config.occlusionCulling});
+        ctx.beginRendering(currentFrame.commandBuffer, colors, colorCount, depth, clearColor, ops);
 
         // begin dynamic rendering
         ctx.setViewport(currentFrame.commandBuffer, 0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
         ctx.setScissor(currentFrame.commandBuffer, 0, 0, width, height);
-        // Every pipeline takes its cull mode from the command buffer; drawScene changes it and restores this.
+        // Every pipeline takes its cull mode from the command buffer; drawSceneView changes it and restores this.
         ctx.setCullMode(currentFrame.commandBuffer, CullMode::NONE);
     }
 
@@ -443,7 +439,7 @@ namespace rasm
         if (currentRenderTarget.isValid())
         {
             // Later passes sample the color attachment through the bindless set, whose descriptors promise
-            // this layout (B10). Depth stays an attachment: only drawScene's Hi-Z reads it, inside the pass.
+            // this layout (B10). Depth stays an attachment; a graph pass that reads it moves it (PassBuilder::readDepth).
             const auto &renderTargetData = ctx.getRenderTarget(currentRenderTarget);
             for (uint32_t i = 0; i < renderTargetData.colorCount; ++i)
                 ctx.transitionImageLayout(currentFrame.commandBuffer, renderTargetData.attachments[frameCount].color[i], TextureUsage::SAMPLED);
@@ -518,7 +514,7 @@ namespace rasm
                 return false;
             }
 
-            // drawScene's occlusion culling samples it. Without a slot that call is only frustum culled.
+            // The Hi-Z pass of addScenePasses samples it. Without a slot the scene is only frustum culled.
             if (config.occlusionCulling)
                 addBindlessTexture(bindlessDescriptorSet, frameResources[i].depthTexture, SamplerType::NEAREST_CLAMP, depthSlot);
         }
@@ -530,14 +526,9 @@ namespace rasm
 
     void Engine::render(SceneHandle scene, CameraHandle camera)
     {
-        ZoneScoped;
-
-        if (!beginFrame(camera))
-            return;
-        beginPass("Scene");
-        drawScene(scene, camera);
-        endPass();
-        endFrame();
+        // The renderer is made last in the constructor, so an engine that failed to start has none.
+        if (renderer)
+            renderer->render({.scene = scene, .camera = camera});
     }
 
     bool Engine::running() const
@@ -603,6 +594,11 @@ namespace rasm
         if (attachment >= rt.colorCount)
             return {};
         return rt.attachments[frameCount % MAX_FRAMES_IN_FLIGHT].color[attachment];
+    }
+
+    TextureHandle Engine::getRenderTargetDepthTexture(const RenderTargetHandle &renderTarget)
+    {
+        return ctx.getRenderTarget(renderTarget).attachments[frameCount % MAX_FRAMES_IN_FLIGHT].depth;
     }
 
     TextureHandle Engine::getPreviousRenderTargetTexture(const RenderTargetHandle &renderTarget, uint32_t attachment)

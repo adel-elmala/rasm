@@ -3,7 +3,7 @@
 #include "occlusionCulling.slang"
 
 // Builds the Hi-Z that occlusion culling tests against (lib/occlusionCulling.slang), from the depth the early
-// draws left. drawScene dispatches it once per level, level 0 first, with a barrier between levels.
+// draws left. The Hi-Z pass dispatches it once per level, level 0 first, with a barrier between levels.
 
 static const uint   HIZ_GROUP_SIZE      = 8;            // Must match HIZ_GROUP_SIZE in gpuScene.cpp.
 

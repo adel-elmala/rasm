@@ -439,7 +439,7 @@ default:         return shadeStandard(material, input);
   <tr><td>Pipelines</td><td>as few as possible</td><td>One graphics pipeline for every scene draw. The others are the stats overlay, three compute pipelines (cull count, cull write, Hi-Z), and any pipeline an application makes with <code>Engine::createPipeline</code>.</td></tr>
   <tr><td>Alpha modes</td><td>a pipeline per blend mode</td><td>None: blending is off in the one pipeline, and there is no alpha test. Transparent materials draw as opaque.</td></tr>
   <tr><td>Registers</td><td>read data when needed</td><td>The unlit path reads its part of the row through a pointer. The PBR path copies the whole material and all <code>MAX_LIGHTS</code> lights into <code>PBRInfo</code> first (<code>P9</code>).</td></tr>
-  <tr><td>Compile cost</td><td>cache pipelines</td><td>Compiled from source the first time <code>drawScene</code> runs after each launch, with no pipeline cache (<code>P8</code>). A failed compile is retried every frame, so a shader fixed on disk is picked up while the application runs.</td></tr>
+  <tr><td>Compile cost</td><td>cache pipelines</td><td>Compiled from source the first time a scene is drawn after each launch (<code>Engine::prepareSceneView</code>), with no pipeline cache (<code>P8</code>). A failed compile is retried every frame, so a shader fixed on disk is picked up while the application runs.</td></tr>
 </table>
 </div>
 
@@ -463,7 +463,7 @@ default:         return shadeStandard(material, input);
   <tr><td>Shading paths</td><td><code>shadePBR</code>, <code>PBRInfo</code> in <code>shaders/lib/pbr.slang</code>; <code>shadeUnlit</code> in <code>shaders/lib/unlit.slang</code></td></tr>
   <tr><td>Shared helpers</td><td><code>hasTexture</code>, <code>selectUV</code>, <code>sampleBaseColor</code>, <code>MaterialId</code> in <code>shaders/lib/core.slang</code></td></tr>
   <tr><td>The material row</td><td><code>gfx::MaterialData</code>, <code>gfx::MaterialId</code> in <code>src/renderer/uberMaterialTypes.h</code>; <code>convertToGfxMaterial</code>, <code>getGfxMaterialId</code>, <code>Engine::writeMaterialRow</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Making the pipeline</td><td><code>Engine::createPipeline</code> in <code>src/engine.cpp</code>; called from <code>Engine::drawScene</code></td></tr>
+  <tr><td>Making the pipeline</td><td><code>Engine::createPipeline</code> in <code>src/engine.cpp</code>; called from <code>Engine::prepareSceneView</code></td></tr>
   <tr><td>Fixed and dynamic state</td><td><code>VulkanDevice::createGraphicsPipeline</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>The public material types</td><td><code>MaterialType</code> in <code>include/rasm/material.h</code></td></tr>
 </table>

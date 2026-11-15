@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Engine · RASM</title>
 <meta name="description" content="The Engine class: EngineConfig, construction and shutdown, the frame functions, loading, frame stats, paths and the window, plus an index of every Engine method.">
-<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/window.cpp src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt">
+<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/window.cpp src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/renderer.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -42,7 +42,7 @@
   <tr><td><a href="#render"><code>render</code></a></td><td>a whole frame, one scene</td><td>this page</td></tr>
   <tr><td><a href="#beginFrame"><code>beginFrame</code></a> / <a href="#endFrame"><code>endFrame</code></a></td><td>start and finish a frame</td><td>this page</td></tr>
   <tr><td><a href="#beginPass"><code>beginPass</code></a> / <a href="#endPass"><code>endPass</code></a></td><td>start and finish a render pass</td><td>this page</td></tr>
-  <tr><td><a href="#drawScene"><code>drawScene</code></a></td><td>record a scene into the pass</td><td>this page</td></tr>
+  <tr><td><a href="#addScenePasses"><code>addScenePasses</code></a></td><td>add a scene's culling and draw passes to a graph</td><td>this page</td></tr>
   <tr><td><a href="#getCurrentFrameResources"><code>getCurrentFrameResources</code></a></td><td>this frame's command buffer and depth</td><td>this page</td></tr>
   <tr><td><a href="#recreateSwapchain"><code>recreateSwapchain</code></a></td><td>rebuild after a resize</td><td>this page</td></tr>
   <tr><td><a href="#waitForLoads"><code>waitForLoads</code></a></td><td>finish every background load now</td><td>this page</td></tr>
@@ -79,6 +79,7 @@
   <tr><td><a href="render-graph.html#setRenderTarget"><code>setRenderTarget</code></a> / <a href="render-graph.html#resetRenderTarget"><code>resetRenderTarget</code></a></td><td>where the next pass draws</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a></td><td>read a target in a later pass</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#getPreviousRenderTargetTexture"><code>getPreviousRenderTargetTexture</code></a></td><td>read last frame's copy of a history target</td><td>render-graph.html</td></tr>
+  <tr><td><a href="render-graph.html#getRenderTargetDepthTexture"><code>getRenderTargetDepthTexture</code></a></td><td>read a target's depth in a later pass</td><td>render-graph.html</td></tr>
   <tr><td><a href="low-level.html#getRenderContext"><code>getRenderContext</code></a></td><td>the low-level API</td><td>low-level.html</td></tr>
   <tr><td><a href="low-level.html#getBindlessDescriptorSet"><code>getBindlessDescriptorSet</code></a></td><td>the texture set to bind</td><td>low-level.html</td></tr>
 </table>
@@ -173,7 +174,7 @@ if (!engine.running())
   <tr><td><code>geometryPoolSubMeshes</code></td><td>2<sup>14</sup> = 16,384</td><td>Sub-meshes of all meshes together (120 bytes each: 1.9 MiB).</td></tr>
   <tr><td><code>maxInstances</code></td><td>2<sup>16</sup> = 65,536</td><td>Instance rows: one per sub-mesh of every entity. 108 bytes each, two copies (one per frame slot).</td></tr>
   <tr><td><code>showStats</code></td><td><code>false</code></td><td>Shows the stats overlay from the first frame. <kbd>F1</kbd> toggles it at runtime.</td></tr>
-  <tr><td><code>occlusionCulling</code></td><td><code>true</code></td><td>Two-pass Hi-Z occlusion culling in <code>drawScene</code>: draws hidden behind others are not drawn. <code>false</code> keeps frustum culling only. See <a href="../guides/occlusion-culling.html">occlusion culling</a>.</td></tr>
+  <tr><td><code>occlusionCulling</code></td><td><code>true</code></td><td>Two-pass Hi-Z occlusion culling in the <a href="#addScenePasses">scene passes</a>: draws hidden behind others are not drawn. It also makes <code>D32_SFLOAT</code> depth textures sampleable, which <a href="render-graph.html#readDepth"><code>readDepth</code></a> needs. <code>false</code> keeps frustum culling only. See <a href="../guides/occlusion-culling.html">occlusion culling</a>.</td></tr>
   <tr><td><code>meshLods</code></td><td><code>true</code></td><td>Builds coarser levels of detail (<a href="scene.html#MeshLod">LODs</a>) of every sub-mesh with 1024 triangles or more as meshes load, on the worker thread for <code>loadMesh</code>. <code>false</code>: meshes have LOD 0 only.</td></tr>
   <tr><td><code>lodErrorPixels</code></td><td><code>1.0f</code></td><td>Culling draws the coarsest LOD whose error stays under this many pixels on screen. Larger is faster and coarser; 0 always draws LOD 0. See <a href="../guides/lod-selection.html">level of detail</a>.</td></tr>
   <tr><td><code>forcedLod</code></td><td><code>-1</code></td><td>For debugging. From 0 up, every draw uses this LOD (or its mesh's coarsest one), whatever the distance. -1 picks by distance. <kbd>F2</kbd> cycles it at runtime.</td></tr>
@@ -187,7 +188,7 @@ if (!engine.running())
 
 <h2 id="frame"><span class="n">3</span>Run a frame</h2>
 
-<p>A frame is <code>beginFrame</code>, then one or more passes, then <code>endFrame</code>. <code>render</code> does all of it for one scene. Here is what each part does inside:</p>
+<p>A frame is <code>beginFrame</code>, then one or more passes, then <code>endFrame</code>. <code>render</code> does all of it for one scene, through a render graph with the scene's passes. Here is what each part does inside:</p>
 
 <div class="legend">
   <span><i class="cpu"></i>engine work on the CPU</span>
@@ -195,7 +196,7 @@ if (!engine.running())
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 306" role="img" aria-label="beginFrame polls events, finishes loads for up to 4 milliseconds, waits for the frame slot, uploads scene changes and acquires a swapchain image. It returns false when the window is minimized, the swapchain cannot be rebuilt, or acquire fails. Then your passes run. endFrame clears the swapchain if no pass drew to it, records the early culling, submits and presents.">
+  <svg viewBox="0 0 760 306" role="img" aria-label="beginFrame polls events, finishes loads for up to 4 milliseconds, waits for the frame slot, uploads scene changes and acquires a swapchain image. It returns false when the window is minimized, the swapchain cannot be rebuilt, or acquire fails. Then your passes run. endFrame clears the swapchain if no pass drew to it, draws the stats overlay if it is shown, submits the frame's one command buffer and presents.">
     <text x="10" y="22" class="title mono">beginFrame(camera)</text>
     <rect x="10"  y="34" width="132" height="50" rx="6" class="cpu"/><text x="76"  y="55" class="mid">pollEvents</text><text x="76"  y="72" class="mid small">input, camera, quit</text>
     <rect x="157" y="34" width="132" height="50" rx="6" class="cpu"/><text x="223" y="55" class="mid">finishLoads</text><text x="223" y="72" class="mid small">up to 4 ms of loads</text>
@@ -219,10 +220,10 @@ if (!engine.running())
     <text x="95" y="166" class="small">returns true</text>
 
     <text x="175" y="180" class="title mono">endFrame()</text>
-    <rect x="10"  y="188" width="150" height="50" rx="6" class="box"/><text x="85"  y="209" class="mid">your passes</text><text x="85"  y="226" class="mid small">beginPass … endPass</text>
+    <rect x="10"  y="188" width="150" height="50" rx="6" class="box"/><text x="85"  y="209" class="mid">your passes</text><text x="85"  y="226" class="mid small">graph or beginPass</text>
     <rect x="175" y="188" width="132" height="50" rx="6" class="cpu"/><text x="241" y="209" class="mid">clear if unused</text><text x="241" y="226" class="mid small">no pass drew the window</text>
-    <rect x="322" y="188" width="132" height="50" rx="6" class="cpu"/><text x="388" y="209" class="mid">early culling</text><text x="388" y="226" class="mid small">recorded per drawScene</text>
-    <rect x="469" y="188" width="132" height="50" rx="6" class="cpu"/><text x="535" y="209" class="mid">submit</text><text x="535" y="226" class="mid small">culling, then frame</text>
+    <rect x="322" y="188" width="132" height="50" rx="6" class="cpu"/><text x="388" y="209" class="mid">stats overlay</text><text x="388" y="226" class="mid small">if shown (F1)</text>
+    <rect x="469" y="188" width="132" height="50" rx="6" class="cpu"/><text x="535" y="209" class="mid">submit</text><text x="535" y="226" class="mid small">one command buffer</text>
     <rect x="616" y="188" width="132" height="50" rx="6" class="cpu"/><text x="682" y="209" class="mid">present</text><text x="682" y="226" class="mid small">image to the window</text>
     <line x1="160" y1="213" x2="173" y2="213" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <line x1="307" y1="213" x2="320" y2="213" class="arrow cpu" marker-end="url(#ah-cpu)"/>
@@ -238,9 +239,9 @@ if (!engine.running())
 <div class="api" id="render">
   <pre class="sig">void render(SceneHandle scene, CameraHandle camera);</pre>
   <div class="body">
-    <p>One whole frame: <code>beginFrame(camera)</code>, a pass named "Scene" on the window, <code>drawScene(scene, camera)</code>, <code>endPass</code>, <code>endFrame</code>. When <code>beginFrame</code> returns false, it returns at once.</p>
+    <p>One whole frame of the scene, drawn into the window. The engine keeps a <a href="render-graph.html">render graph</a> with the scene's passes (<a href="#addScenePasses"><code>addScenePasses</code></a> into the swapchain) and runs it with <code>RenderGraph::execute</code>: <code>beginFrame(camera)</code>, the passes, <code>endFrame</code>. It builds the graph again only when <code>scene</code> or <code>camera</code> is not the same as in the last call. When <code>beginFrame</code> returns false, no pass runs.</p>
     <dl>
-      <dt>scene</dt><dd>The scene to draw. Invalid: an error is logged and the window is only cleared.</dd>
+      <dt>scene</dt><dd>The scene to draw. Invalid: an error is logged once, and the window is only cleared.</dd>
       <dt>camera</dt><dd>Gets this frame's input (mouse, keys) and is the view. It does not need to be in the scene.</dd>
     </dl>
     <pre><code>while (engine.running())
@@ -263,7 +264,7 @@ if (!engine.running())
 <div class="api" id="endFrame">
   <pre class="sig">void endFrame();</pre>
   <div class="body">
-    <p>Ends the frame's command buffer and sends the frame to the GPU, then shows it in the window. If no pass drew to the window this frame (for example, all passes drew to render targets), it adds a pass that clears the window first. It also records the early culling of every <code>drawScene</code> call of the frame, which runs on the GPU before the frame's draws (see <a href="../guides/stream-compaction.html#in-rasm">how culling runs</a>).</p>
+    <p>Ends the frame's command buffer and sends the frame to the GPU, then shows it in the window. If no pass drew to the window this frame (for example, all passes drew to render targets), it adds a pass that clears the window first. With the stats overlay shown, it draws the overlay in a pass of its own on top. The frame is one command buffer: culling is recorded in it as ordinary <a href="#addScenePasses">scene passes</a>.</p>
     <p>Call it only after a <code>beginFrame</code> that returned true, and after the last <code>endPass</code>.</p>
   </div>
 </div>
@@ -291,11 +292,11 @@ if (!engine.running())
     <p>What a pass does with its attachments. The defaults clear both and throw depth away at the end.</p>
     <dl>
       <dt>loadColor, loadDepth</dt><dd><code>true</code>: keep what the attachment holds, and draw on top. <code>false</code>: clear it (color to the target's clear color, depth to 0).</dd>
-      <dt>storeDepth</dt><dd><code>true</code>: keep depth at the end of the pass, for a later pass that loads it. Color is always kept. With <code>EngineConfig::occlusionCulling</code> depth is always kept.</dd>
+      <dt>storeDepth</dt><dd><code>true</code>: keep depth at the end of the pass, for a later pass that loads it or samples it. Color is always kept. A render graph sets it on the pass before one that loads the target or reads its depth (<a href="render-graph.html#readDepth"><code>readDepth</code></a>).</dd>
     </dl>
-    <pre><code>// A hand-written frame: the scene, then a UI pass on top of it
-engine.beginPass("Scene", {.storeDepth = true});
-engine.drawScene(scene, camera);
+    <pre><code>// A hand-written frame: two passes on the window, the second on top of the first
+engine.beginPass("Background", {.storeDepth = true});
+// ... draw the background
 engine.endPass();
 engine.beginPass("UI", {.loadColor = true, .loadDepth = true});
 // ... draw the UI
@@ -306,31 +307,88 @@ engine.endPass();</code></pre>
 <div class="api" id="endPass">
   <pre class="sig">void endPass();</pre>
   <div class="body">
-    <p>Ends the pass. On a render target, it moves the color image to the sampled layout, so later passes can sample it (see <a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a>). The depth image stays a depth attachment, so later passes cannot sample it. <code>endFrame</code> moves the swapchain image to the present layout.</p>
+    <p>Ends the pass. On a render target, it moves the color image to the sampled layout, so later passes can sample it (see <a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a>). The depth image stays a depth attachment; in a graph, a later pass that declares <a href="render-graph.html#readDepth"><code>readDepth</code></a> gets it moved to the sampled layout. <code>endFrame</code> moves the swapchain image to the present layout.</p>
   </div>
 </div>
 
-<div class="api" id="drawScene">
-  <pre class="sig">void drawScene(SceneHandle scene, CameraHandle camera);</pre>
+<div class="api" id="addScenePasses">
+  <pre class="sig">bool addScenePasses(RenderGraph&amp; graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle&amp; renderTarget = {});</pre>
   <div class="body">
-    <p>Records the scene into the current pass, with the camera's projection fitted to the pass's aspect ratio (the camera itself does not change). Use it inside <code>beginPass</code> / <code>endPass</code>, or inside a render graph pass. The scene's lights are read at this call, up to the scene's light count.</p>
+    <p>Adds the passes that draw <code>scene</code> from <code>camera</code> to <code>graph</code>. They are ordinary graph passes: the graph sorts them with your passes, records their barriers from what they declare, and times each one under its name. <code>render</code> calls it for you; call it yourself when you build your own graph.</p>
     <dl>
-      <dt>scene</dt><dd>Invalid: logs "drawScene needs a valid scene handle." and draws nothing.</dd>
-      <dt>camera</dt><dd>The view. Invalid: logs an error and draws nothing.</dd>
+      <dt>graph</dt><dd>The graph to add to, before its <code>compile</code>. Add your own passes before or after.</dd>
+      <dt>scene</dt><dd>Invalid: logs <code>addScenePasses needs a valid scene handle.</code>, adds nothing and returns <code>false</code>.</dd>
+      <dt>camera</dt><dd>The view. Its projection is fitted to the target's aspect ratio every frame; the camera itself does not change. Invalid: logs an error, adds nothing and returns <code>false</code>.</dd>
+      <dt>renderTarget</dt><dd>Where the scene is drawn. Invalid (the default): the window, through the swapchain. A target needs one color in the swapchain's format and <code>D32_SFLOAT</code> depth, the formats of the scene's pipeline. Make it with <a href="render-graph.html#RenderGraph-createRenderTarget"><code>RenderGraph::createRenderTarget</code></a> before this call.</dd>
+      <dt>returns</dt><dd><code>true</code> when the passes were added. On <code>false</code> nothing was added.</dd>
     </dl>
-    <p>Draws nothing, with no error, while the scene is empty or all its entities still load: the pass keeps its clear color.</p>
-    <p>The GPU culls the draws first: those outside the camera's view are skipped. With <code>EngineConfig::occlusionCulling</code> it draws in two parts. First come the draws that were visible last time. Then it ends the pass, builds a Hi-Z from their depth, tests the other draws against it, starts the pass again with its color and depth kept, and draws the ones it found visible. What you drew before <code>drawScene</code> in the same pass is kept. A viewport smaller than the pass (<code>RenderContext::setViewport</code>) turns occlusion culling off for that call. See <a href="../guides/occlusion-culling.html">occlusion culling</a>.</p>
-    <p>Culling also picks each visible draw's <a href="../guides/lod-selection.html">level of detail</a> from its distance to the camera and <code>EngineConfig::lodErrorPixels</code>. A call drawn without culling draws LOD 0.</p>
-    <div class="table-wrap">
-    <table>
-      <tr><th>Rule</th><th>What happens otherwise</th></tr>
-      <tr><td>At most <code>MAX_SCENE_DRAWS_PER_FRAME</code> (8) calls per frame</td><td>"Exceeded maximum number of drawScene calls per frame." and nothing drawn</td></tr>
-      <tr><td>A render target must have the window's color format and <code>D32_SFLOAT</code> depth</td><td>An error is logged and the pass stays cleared</td></tr>
-      <tr><td>The scene shader <code>passes/rasm.slang</code> must compile</td><td>An error is logged; the engine tries again next frame, so a fixed shader file is picked up while the program runs</td></tr>
-      <tr><td>The culling shader <code>passes/cull.slang</code> should compile</td><td>The scene is still drawn, only without culling. Without <code>passes/hiz.slang</code> it is frustum culled only.</td></tr>
-    </table>
-    </div>
   </div>
+</div>
+
+<div class="legend">
+  <span><i class="gpu"></i>scene passes, run on the GPU</span>
+  <span><i class="mem"></i>the target</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="With occlusion culling, addScenePasses adds five passes in this order: Cull 1 (compute), Scene 1 (graphics, clears the target and draws), Hi-Z (compute, reads the target's depth), Cull 2 (compute), Scene 2 (graphics, loads the target and draws). Without occlusion culling it adds Cull and Scene. Passes added later that draw the same target load it.">
+    <text x="10" y="20" class="title">with EngineConfig::occlusionCulling (the default)</text>
+    <rect x="10"  y="32" width="136" height="62" rx="6" class="gpu"/><text x="78"  y="52" class="mid mono">Cull 1</text><text x="78"  y="68" class="mid small">compute</text><text x="78"  y="84" class="mid small">seen last frame?</text>
+    <rect x="160" y="32" width="136" height="62" rx="6" class="gpu"/><text x="228" y="52" class="mid mono">Scene 1</text><text x="228" y="68" class="mid small">graphics</text><text x="228" y="84" class="mid small">early draws</text>
+    <rect x="310" y="32" width="136" height="62" rx="6" class="gpu"/><text x="378" y="52" class="mid mono">Hi-Z</text><text x="378" y="68" class="mid small">compute</text><text x="378" y="84" class="mid small">depth pyramid</text>
+    <rect x="460" y="32" width="136" height="62" rx="6" class="gpu"/><text x="528" y="52" class="mid mono">Cull 2</text><text x="528" y="68" class="mid small">compute</text><text x="528" y="84" class="mid small">test the rest</text>
+    <rect x="610" y="32" width="136" height="62" rx="6" class="gpu"/><text x="678" y="52" class="mid mono">Scene 2</text><text x="678" y="68" class="mid small">graphics</text><text x="678" y="84" class="mid small">late draws</text>
+    <line x1="146" y1="63" x2="158" y2="63" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="296" y1="63" x2="308" y2="63" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="446" y1="63" x2="458" y2="63" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="596" y1="63" x2="608" y2="63" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+
+    <line x1="228" y1="94" x2="228" y2="148" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="236" y="126" class="small">clears, draws</text>
+    <line x1="378" y1="150" x2="378" y2="96" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="386" y="126" class="small">reads depth</text>
+    <line x1="678" y1="94" x2="678" y2="148" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="686" y="126" class="small">loads, draws</text>
+    <rect x="160" y="150" width="586" height="36" rx="6" class="mem"/>
+    <text x="453" y="173" class="mid small">renderTarget, or the swapchain: one color + D32_SFLOAT depth</text>
+
+    <text x="10" y="218" class="title">without it</text>
+    <rect x="10"  y="228" width="136" height="36" rx="6" class="gpu"/><text x="78"  y="251" class="mid mono">Cull</text>
+    <rect x="160" y="228" width="136" height="36" rx="6" class="gpu"/><text x="228" y="251" class="mid mono">Scene</text>
+    <line x1="146" y1="246" x2="158" y2="246" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="310" y="251" class="small">frustum culling only</text>
+    <text x="10" y="290" class="small">Passes you add later that draw the same target load what the scene drew. Passes that read it run after.</text>
+  </svg>
+  <figcaption>The GPU culls first: draws outside the camera's view are skipped. With occlusion culling, <code>Cull 1</code> keeps the draws that were visible last frame, <code>Scene 1</code> draws them, <code>Hi-Z</code> builds a depth pyramid from their depth, <code>Cull 2</code> tests the other draws against it, and <code>Scene 2</code> draws the ones it found visible. See <a href="../guides/occlusion-culling.html">occlusion culling</a>.</figcaption>
+</figure>
+
+<pre><code>// From examples/01_render_graph/main.cpp: the scene into an offscreen target
+const rasm::RenderTargetHandle rtHandle = graph.createRenderTarget({
+    .name = "offscreen_rt",
+    .swapchainScale = 1.0f,
+    .colorFormats = {colorFormat},
+    .depthFormat = rasm::Format::D32_SFLOAT,
+    .clearColor = glm::vec4(0.0f), // alpha 0 marks the background
+});
+
+// The scene's culling and draw passes, into offscreen_rt. The passes below read what they drew.
+if (!engine.addScenePasses(graph, scene, camera, rtHandle))
+{
+    return 1;
+}</code></pre>
+
+<p><b>Scene views.</b> Each (scene, camera, target) is a <i>scene view</i>, with its own culling buffers on the GPU. A view lives while a graph holds it: graphs built for the same three share it, and when the last of them is destroyed or replaced, the view's buffers are freed. Views let one frame draw several scenes, cameras or targets. The scene's lights are read every frame. Nothing is drawn, with no error, while the scene is empty or all its entities still load: the target keeps its clear color.</p>
+<p>Culling also picks each visible draw's <a href="../guides/lod-selection.html">level of detail</a> from its distance to the camera and <code>EngineConfig::lodErrorPixels</code>. A view drawn without culling draws LOD 0.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Rule</th><th>What happens otherwise</th></tr>
+  <tr><td>At most <code>MAX_SCENE_VIEWS</code> (8) scene views held by graphs at once</td><td>An error (<i>"At most 8 views (scene, camera, target) can be held by render graphs at once."</i>), nothing added, <code>false</code></td></tr>
+  <tr><td>One graph adds each scene view once</td><td>An error, nothing added, <code>false</code></td></tr>
+  <tr><td>A render target has one color in the window's format and <code>D32_SFLOAT</code> depth</td><td>An error, nothing added, <code>false</code></td></tr>
+  <tr><td>The scene shader <code>passes/rasm.slang</code> must compile</td><td>An error is logged; the engine tries again next frame, so a fixed shader file is picked up while the program runs</td></tr>
+  <tr><td>The culling shader <code>passes/cull.slang</code> should compile</td><td>The scene is still drawn, only without culling. Without <code>passes/hiz.slang</code>, or when the view's occlusion buffers cannot be made, it is frustum culled only.</td></tr>
+</table>
 </div>
 
 <div class="api" id="getCurrentFrameResources">
@@ -428,11 +486,11 @@ for (uint32_t i = 0; i &lt; stats.gpuTimerCount; ++i)
   <div class="body">
     <dl>
       <dt>cpuFrameMs</dt><dd>Time between the last two frames on the CPU, in ms. Capped at 100 ms. Updated every frame, even when not measuring.</dd>
-      <dt>gpuFrameMs</dt><dd>GPU time of the whole frame (culling and all passes), in ms. 0 on a GPU without timestamps.</dd>
-      <dt>gpuTimers</dt><dd>One <code>GpuTimer</code> per pass, compute pass, culling, Hi-Z build ("Hi-Z", one per occlusion-culled <code>drawScene</code> call) and your own timers, in GPU start order. Room for <code>MAX_GPU_TIMERS - 1</code> (15).</dd>
+      <dt>gpuFrameMs</dt><dd>GPU time of the whole frame (all passes), in ms. 0 on a GPU without timestamps.</dd>
+      <dt>gpuTimers</dt><dd>One <code>GpuTimer</code> per pass (graphics or compute, the <a href="#addScenePasses">scene passes</a> included) and per timer of your own, in GPU start order. Room for <code>MAX_GPU_TIMERS - 1</code> (15).</dd>
       <dt>gpuTimerCount</dt><dd>How many entries of <code>gpuTimers</code> are filled.</dd>
-      <dt>draws</dt><dd>Draws of all <code>drawScene</code> calls of the frame, before culling (one per sub-mesh of each entity).</dd>
-      <dt>drawsVisible</dt><dd>Draws that passed culling: inside the view, and with occlusion culling also not hidden. Draws of a call drawn without culling all count.</dd>
+      <dt>draws</dt><dd>Draws of all scene views the frame drew, before culling (one per sub-mesh of each entity).</dd>
+      <dt>drawsVisible</dt><dd>Draws that passed culling: inside the view, and with occlusion culling also not hidden. Draws of a view drawn without culling all count.</dd>
       <dt>triangles</dt><dd>Triangles before culling, at LOD 0.</dd>
       <dt>trianglesVisible</dt><dd>Triangles of the visible draws, at the LOD culling picked for each.</dd>
       <dt>trianglesVisibleLod0</dt><dd>Triangles of the same visible draws at LOD 0. <code>trianglesVisibleLod0 - trianglesVisible</code> is what LODs saved this frame.</dd>
@@ -446,7 +504,7 @@ for (uint32_t i = 0; i &lt; stats.gpuTimerCount; ++i)
   <pre class="sig">struct GpuTimer</pre>
   <div class="body">
     <dl>
-      <dt>name</dt><dd>The pass name, "Culling", or the name you gave <code>beginGpuTimer</code>.</dd>
+      <dt>name</dt><dd>The pass name (for the scene passes: "Cull 1", "Scene 1", "Hi-Z", "Cull 2", "Scene 2", or "Cull" and "Scene"), or the name you gave <code>beginGpuTimer</code>.</dd>
       <dt>milliseconds</dt><dd>GPU time between the timer's start and end, in ms.</dd>
     </dl>
   </div>
@@ -461,7 +519,7 @@ for (uint32_t i = 0; i &lt; stats.gpuTimerCount; ++i)
       <dt>name</dt><dd>Label in the stats.</dd>
       <dt>returns</dt><dd>The timer id, or <code>UINT32_MAX</code> when nothing is measured: measuring is off, the GPU has no timestamps, or the frame used all its timers (a warning is logged once).</dd>
     </dl>
-    <p>A frame has <code>MAX_GPU_TIMERS</code> (16) timers: one for the whole frame, one kept for culling, and 14 for passes, Hi-Z builds and your timers together.</p>
+    <p>A frame has <code>MAX_GPU_TIMERS</code> (16) timers: one for the whole frame, and 15 for passes and your timers together.</p>
   </div>
 </div>
 

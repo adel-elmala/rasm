@@ -618,7 +618,7 @@ auto pipeline = engine.createPipeline("background", source, compositeHandle);</c
   <tr><td>Pipeline formats</td><td>exact list, in order</td><td><code>Engine::createPipeline</code> with a target copies its color and depth formats. <code>RenderContext::bindPipeline</code> compares all of them with the pass's; a mismatch logs an error and skips the pass's draws.</td></tr>
   <tr><td>Reading the result</td><td>sample as textures</td><td>Every color is bindless with <code>LINEAR_CLAMP</code>. <code>endPass</code> moves each to <code>SAMPLED</code>; <code>getRenderTargetTexture</code> with the attachment index returns it.</td></tr>
   <tr><td>Formats for packing</td><td>RG16, RGB10A2, RG16F</td><td>Not in <code>Format</code> yet. The 4-byte color formats are <code>R8G8B8A8_UNORM</code>, <code>R8G8B8A8_SRGB</code> and <code>B8G8R8A8_SRGB</code>; the example's 1-bit mask takes 4 bytes.</td></tr>
-  <tr><td>G-buffer from the scene</td><td>section 5</td><td>None yet. <code>drawScene</code> needs a target with one color in the swapchain format (and <code>D32_SFLOAT</code> depth), so MRT is for full-screen and hand-written passes today.</td></tr>
+  <tr><td>G-buffer from the scene</td><td>section 5</td><td>None yet. <code>addScenePasses</code> needs a target with one color in the swapchain format (and <code>D32_SFLOAT</code> depth); it logs an error and adds no passes otherwise. So MRT is for full-screen and hand-written passes today.</td></tr>
   <tr><td>Subpasses, local read</td><td>section 6</td><td>None. Each pass is its own dynamic rendering scope; a later pass reads the colors as textures.</td></tr>
   <tr><td>Memory</td><td>section 4</td><td>All colors and the depth of a transient target share heaps with other transient targets (<code>D9</code>). See <a href="memory-aliasing.html">Transient memory and aliasing</a>. A <code>history</code> target has two copies of every color (<a href="temporal-history.html">History buffers</a>).</td></tr>
 </table>
@@ -639,7 +639,7 @@ auto pipeline = engine.createPipeline("background", source, compositeHandle);</c
   <tr><td>Starting the pass</td><td><code>Engine::beginPass</code> in <code>src/engine.cpp</code>; <code>RenderContext::beginRendering</code>; <code>VulkanCommandBuffer::beginRendering</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>The format check</td><td><code>RenderContext::bindPipeline</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>Reading color <var>i</var></td><td><code>Engine::endPass</code>, <code>Engine::getRenderTargetTexture</code> in <code>src/engine.cpp</code></td></tr>
-  <tr><td>One color for the scene</td><td><code>Engine::drawScene</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>One color for the scene</td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>The example</td><td>the Background and Present passes in <code>examples/01_render_graph/main.cpp</code></td></tr>
 </table>
 </div>
@@ -651,7 +651,7 @@ auto pipeline = engine.createPipeline("background", source, compositeHandle);</c
     <li>A render target desc has at least one color, no gap in <code>colorFormats</code>, and a depth format. <code>checkRenderTargetDesc</code> rejects anything else.</li>
     <li>Data attachments (masks, normals, IDs) use a UNORM or float format, never sRGB.</li>
     <li>Write every output on every path. Blending is off, so an output the shader skips leaves undefined values.</li>
-    <li><code>drawScene</code> draws only into a target with one color in the swapchain format.</li>
+    <li><code>addScenePasses</code> draws only into a target with one color in the swapchain format and <code>D32_SFLOAT</code> depth.</li>
     <li>A new per-attachment field in <code>PipelineDesc</code> (a blend state, a write mask) must also go into its hash in <code>src/rhi/resource.cpp</code>, or two different pipelines are merged.</li>
   </ul>
 </div>

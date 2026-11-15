@@ -300,7 +300,7 @@ engine.updateMaterial(pulse, values);</code></pre>
 
 <h2 id="bindless"><span class="n">5</span>Bindless textures</h2>
 
-<p>All textures that shaders can sample sit in one descriptor set: an array of <code>MAX_BINDLESS_TEXTURES</code> (1024) slots, binding 0 of set 0, seen by every shader stage, compute included. Materials fill it for you. You need these functions only for your own shaders, like the overlay of <code>examples/01_render_graph/main.cpp</code>:</p>
+<p>All textures that shaders can sample sit in one descriptor set: an array of <code>MAX_BINDLESS_TEXTURES</code> (1024) slots, binding 0 of set 0, seen by every shader stage, compute included. Materials fill it for you. You need these functions only for your own shaders, like the full-screen passes of <code>examples/01_render_graph/main.cpp</code>:</p>
 
 <pre><code>// Slang: the array the engine binds
 [[vk::binding(0, 0)]]
@@ -320,6 +320,7 @@ ctx.pushConstants(commandBuffer, overlayPipeline, rasm::ShaderType::VERTEX_FRAGM
   <tr><td><code>createMaterial</code>, <code>updateMaterial</code></td><td><code>LINEAR_REPEAT</code></td></tr>
   <tr><td>glTF import</td><td>from the glTF sampler (see below)</td></tr>
   <tr><td><code>createRenderTarget</code> (one slot per color texture)</td><td><code>LINEAR_CLAMP</code></td></tr>
+  <tr><td>the engine, for each <code>D32_SFLOAT</code> depth texture of a render target or the window, with <code>EngineConfig::occlusionCulling</code></td><td><code>NEAREST_CLAMP</code></td></tr>
   <tr><td>you, with <code>addBindlessTexture</code></td><td>your choice</td></tr>
 </table>
 </div>
@@ -342,7 +343,7 @@ ctx.pushConstants(commandBuffer, overlayPipeline, rasm::ShaderType::VERTEX_FRAGM
 <div class="api" id="getBindlessTextureIndex">
   <pre class="sig">uint32_t getBindlessTextureIndex(const TextureHandle&amp; texture);</pre>
   <div class="body">
-    <p>The texture's slot in the bindless set, or <code>UINT32_MAX</code> if it was never added. For a render target, ask with <code>getRenderTargetTexture</code> every frame, because a history target has a color texture per frame slot.</p>
+    <p>The texture's slot in the bindless set, or <code>UINT32_MAX</code> if it was never added. For a render target, ask with <code>getRenderTargetTexture</code> (or <a href="render-graph.html#getRenderTargetDepthTexture"><code>getRenderTargetDepthTexture</code></a> for its depth) every frame, because a history target has a texture per frame slot.</p>
   </div>
 </div>
 

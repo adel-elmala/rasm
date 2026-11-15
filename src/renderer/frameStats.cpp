@@ -61,8 +61,8 @@ namespace rasm
         const uint64_t fenceValue = frameResources[frame].fenceValue;
         if (slot.measuring && fenceValue != slot.readFenceValue)
         {
-            // Timer 0 is the frame's command buffer. Culling's command buffer runs before it, so the frame's GPU
-            // time goes from the earliest timestamp (0) to the latest, and the timers are listed by start time.
+            // Timer 0 spans the frame's command buffer, culling included, so the frame's GPU time goes from its start
+            // (timestamp 0) to the latest end. The other timers are listed by start time.
             uint64_t nanoseconds[2 * MAX_GPU_TIMERS];
             if (slot.timerCount > 0 && ctx.getTimestamps(slot.timestamps, 2 * slot.timerCount, nanoseconds))
             {
@@ -85,9 +85,9 @@ namespace rasm
                 }
             }
 
-            // Culling counted the visible draws and triangles of the culled calls; unculled calls drew all of theirs.
+            // Culling counted the visible draws and triangles of the culled views; unculled views drew all of theirs.
             const DrawTotals &totals = gpuScene->drawTotals[frame];
-            // Unculled calls draw LOD 0.
+            // Unculled views draw LOD 0.
             uint32_t culled[CULL_STATS_WORDS] = {};
             ctx.readBuffer(gpuScene->cullStats[frame], culled, sizeof(culled));
             stats.draws = totals.draws;
@@ -116,15 +116,9 @@ namespace rasm
         ctx.fillBuffer(gpuScene->cullStats[frame], zeros, sizeof(zeros));
     }
 
-    // The last timer is kept for culling, which endFrame records after every pass.
     uint32_t Engine::beginGpuTimer(const CommandBufferHandle &commandBuffer, const std::string &name)
     {
-        return beginTimer(ctx, *frameStats, static_cast<uint32_t>(frameCount), commandBuffer, name, MAX_GPU_TIMERS - 1);
-    }
-
-    uint32_t Engine::beginCullingTimer(const CommandBufferHandle &commandBuffer)
-    {
-        return beginTimer(ctx, *frameStats, static_cast<uint32_t>(frameCount), commandBuffer, "Culling", MAX_GPU_TIMERS);
+        return beginTimer(ctx, *frameStats, static_cast<uint32_t>(frameCount), commandBuffer, name, MAX_GPU_TIMERS);
     }
 
     void Engine::endGpuTimer(const CommandBufferHandle &commandBuffer, uint32_t timer)

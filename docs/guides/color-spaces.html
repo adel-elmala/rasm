@@ -450,7 +450,7 @@ encode (linear light L → sRGB code s):
   <tr><td>Lighting</td><td>linear</td><td>Yes: <code>shadePBR</code> in <code>shaders/lib/pbr.slang</code>.</td></tr>
   <tr><td>HDR target</td><td>16-bit float, tone map in a final pass</td><td>None. The scene draws straight into the 8-bit swapchain (or a render target of the same format), so each material shader tone maps its own result.</td></tr>
   <tr><td>Tone mapping</td><td>exposure + a curve, before the encode</td><td>Reinhard, <code class="lang-text">c / (c + 1)</code> per channel, at the end of <code>shadePBR</code>; no exposure. <code>shadeUnlit</code> does not tone map: an unlit texture shows its own colors.</td></tr>
-  <tr><td>Output and encode</td><td>an _SRGB target encodes</td><td>The swapchain asks for <code>VK_FORMAT_B8G8R8A8_SRGB</code> with <code>VK_COLOR_SPACE_SRGB_NONLINEAR_KHR</code>. Render targets that <code>drawScene</code> draws into must have the swapchain's color format, so they are sRGB too, and are decoded again when a later pass samples them.</td></tr>
+  <tr><td>Output and encode</td><td>an _SRGB target encodes</td><td>The swapchain asks for <code>VK_FORMAT_B8G8R8A8_SRGB</code> with <code>VK_COLOR_SPACE_SRGB_NONLINEAR_KHR</code>. Render targets that <code>Engine::addScenePasses</code> draws into must have the swapchain's color format, so they are sRGB too, and are decoded again when a later pass samples them.</td></tr>
   <tr><td>Blending</td><td>in linear, by the _SRGB target</td><td>Not used: every pipeline has blending off.</td></tr>
   <tr><td>Linear constants</td><td>clear colors are linear</td><td><code>SWAPCHAIN_CLEAR_COLOR</code> is 0.018 linear, which the encode turns into byte 36. The stats overlay's colors in <code>statsOverlay.slang</code> are linear too.</td></tr>
 </table>
@@ -476,7 +476,7 @@ encode (linear light L → sRGB code s):
   <ul>
     <li>Normal, metallic-roughness and occlusion textures are <code>R8G8B8A8_UNORM</code>; color and emissive textures are <code>R8G8B8A8_SRGB</code>.</li>
     <li>Shaders output linear color. Never apply the sRGB curve in a shader: the swapchain format encodes.</li>
-    <li>The swapchain and any render target that <code>drawScene</code> draws into must be an sRGB format; with a UNORM one, the image comes out too dark.</li>
+    <li>The swapchain and any render target that <code>Engine::addScenePasses</code> draws into must be an sRGB format; with a UNORM one, the image comes out too dark.</li>
     <li>Material factors are linear. Convert a color from an sRGB color picker before storing it.</li>
   </ul>
 </div>

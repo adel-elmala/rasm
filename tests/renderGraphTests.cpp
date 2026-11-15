@@ -610,3 +610,153 @@ TEST_CASE("a compute pass and a lone graphics pass get the default attachment op
         CHECK_FALSE(graph.pass(i).attachmentOps.storeDepth);
     }
 }
+
+TEST_CASE("a buffer written twice in a frame orders each reader between the write before it and the one after")
+{
+    const rasm::BufferHandle draws{1, 1};
+
+    TestGraph graph;
+    graph.addBufferPass(true, {}, {draws});
+    graph.addBufferPass(false, {draws}, {});
+    graph.addBufferPass(true, {}, {draws});
+    graph.addBufferPass(false, {draws}, {});
+
+    graph.compile();
+
+    CHECK(graph.order() == std::vector<uint32_t>{0, 1, 2, 3});
+}
+
+TEST_CASE("reading a buffer's previous frame runs before this frame's first write of it")
+{
+    const rasm::BufferHandle visibility{1, 1};
+    const rasm::BufferHandle draws{2, 1};
+
+    TestGraph graph;
+    graph.addComputePass(
+        "late",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.read(draws);
+            builder.write(visibility);
+        },
+        [](rasm::RenderContext &) {});
+    graph.addComputePass(
+        "early",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.readPrevious(visibility);
+            builder.write(draws);
+        },
+        [](rasm::RenderContext &) {});
+
+    graph.compile();
+
+    REQUIRE(graph.isCompiled());
+    CHECK(graph.order() == std::vector<uint32_t>{1, 0});
+
+    rasm::PipelineStage before = {};
+    rasm::PipelineStage after = {};
+    CHECK_FALSE(graph.barrierBefore(1, before, after));
+    graph.barrierBefore(0, before, after);
+    CHECK(graph.barrierBefore(1, before, after));
+    CHECK(before == (rasm::PipelineStage::COMPUTE));
+}
+
+TEST_CASE("a pass that reads and writes a buffer before a later writer is not a cycle")
+{
+    const rasm::BufferHandle visibility{1, 1};
+
+    TestGraph graph;
+    graph.addBufferPass(true, {visibility}, {visibility});
+    graph.addBufferPass(true, {}, {visibility});
+
+    graph.compile();
+
+    CHECK(graph.isCompiled());
+    CHECK(graph.order() == std::vector<uint32_t>{0, 1});
+}
+
+TEST_CASE("a depth read runs between the passes that draw the target, and the pass before it stores the depth")
+{
+    const rasm::RenderTargetHandle scene{1, 1};
+    const rasm::BufferHandle hiz{1, 1};
+
+    TestGraph graph;
+    graph.addTransient(scene);
+    graph.addPass(
+        "early",
+        [&](rasm::PassBuilder &builder)
+        { builder.write(scene); },
+        [](rasm::RenderContext &) {});
+    graph.addComputePass(
+        "hiz",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.readDepth(scene);
+            builder.write(hiz);
+        },
+        [](rasm::RenderContext &) {});
+    graph.addPass(
+        "late",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.read(hiz);
+            builder.write(scene);
+        },
+        [](rasm::RenderContext &) {});
+
+    graph.compile();
+
+    REQUIRE(graph.isCompiled());
+    CHECK(graph.order() == std::vector<uint32_t>{0, 1, 2});
+    CHECK(graph.pass(0).attachmentOps.storeDepth);
+    CHECK(graph.pass(2).attachmentOps.loadColor);
+    CHECK(graph.pass(2).attachmentOps.loadDepth);
+    CHECK(graph.firstPass(0) == 0);
+    CHECK(graph.lastPass(0) == 2);
+}
+
+TEST_CASE("a swapchain depth read makes the swapchain pass before it store its depth")
+{
+    const rasm::BufferHandle hiz{1, 1};
+
+    TestGraph graph;
+    graph.addPass(
+        "early",
+        [](rasm::PassBuilder &builder)
+        { builder.writeSwapchain(); },
+        [](rasm::RenderContext &) {});
+    graph.addComputePass(
+        "hiz",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.readSwapchainDepth();
+            builder.write(hiz);
+        },
+        [](rasm::RenderContext &) {});
+
+    graph.compile();
+
+    REQUIRE(graph.isCompiled());
+    CHECK(graph.order() == std::vector<uint32_t>{0, 1});
+    CHECK(graph.pass(0).attachmentOps.storeDepth);
+}
+
+TEST_CASE("a pass that reads the depth of the target it draws to fails to compile")
+{
+    const rasm::RenderTargetHandle scene{1, 1};
+
+    TestGraph graph;
+    graph.addPass(
+        "draw",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.readDepth(scene);
+            builder.write(scene);
+        },
+        [](rasm::RenderContext &) {});
+
+    graph.compile();
+
+    CHECK_FALSE(graph.isCompiled());
+}

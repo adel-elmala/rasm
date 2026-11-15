@@ -36,7 +36,7 @@
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 290" role="img" aria-label="SDL events become a CameraInput in pollEvents, which beginFrame calls. updateCamera moves the target transform with the controller, then eases the rendered transform toward it. drawScene builds the view matrix from the rendered transform and the projection fitted to the pass, and writes both into SceneData.">
+  <svg viewBox="0 0 760 290" role="img" aria-label="SDL events become a CameraInput in pollEvents, which beginFrame calls. updateCamera moves the target transform with the controller, then eases the rendered transform toward it. Every frame, the scene's cull pass builds the view matrix from the rendered transform and the projection fitted to the target, and writes both into the scene view's SceneData.">
     <rect x="10"  y="20" width="130" height="56" rx="6" class="box"/>
     <text x="75"  y="43" class="mid title">SDL events</text>
     <text x="75"  y="62" class="mid small">mouse, wheel, keys</text>
@@ -75,13 +75,13 @@
     <text x="509" y="171" class="mid small">inverse of the pose</text>
     <rect x="420" y="210" width="178" height="50" rx="6" class="cpu"/>
     <text x="509" y="231" class="mid mono">getProjectionMatrix</text>
-    <text x="509" y="249" class="mid small">fitted to the pass aspect</text>
+    <text x="509" y="249" class="mid small">fitted to the target aspect</text>
     <line x1="618" y1="157" x2="600" y2="157" class="arrow" marker-end="url(#ah)"/>
     <line x1="618" y1="235" x2="600" y2="235" class="arrow" marker-end="url(#ah)"/>
 
     <rect x="222" y="170" width="170" height="54" rx="6" class="cpu"/>
-    <text x="307" y="192" class="mid mono">drawScene</text>
-    <text x="307" y="211" class="mid small">once per pass</text>
+    <text x="307" y="192" class="mid title">scene cull pass</text>
+    <text x="307" y="211" class="mid small">every frame, per view</text>
     <line x1="420" y1="157" x2="394" y2="184" class="arrow" marker-end="url(#ah)"/>
     <line x1="420" y1="235" x2="394" y2="210" class="arrow" marker-end="url(#ah)"/>
 
@@ -90,7 +90,7 @@
     <text x="103" y="211" class="mid small">view, projection, planes</text>
     <line x1="222" y1="197" x2="198" y2="197" class="arrow mem" marker-end="url(#ah-mem)"/>
 
-    <text x="10" y="282" class="small">The camera itself never changes when a pass has another shape: drawScene only fits a copy of the projection.</text>
+    <text x="10" y="282" class="small">The camera itself never changes when a target has another shape: the scene passes fit a copy of the projection.</text>
   </svg>
   <figcaption>One frame of camera work. Input moves the <i>target</i>; the matrices use the eased <i>rendered</i> pose.</figcaption>
 </figure>
@@ -174,7 +174,7 @@ engine.addCameraToScene(scene, camera);</code></pre>
     <p>The projection. <code>type</code> says which member of the union is used.</p>
     <dl>
       <dt>fovY</dt><dd>Vertical field of view in degrees.</dd>
-      <dt>aspect</dt><dd>Width / height. The engine sets it for every camera when the swapchain is created; <code>drawScene</code> uses a copy fitted to the current pass.</dd>
+      <dt>aspect</dt><dd>Width / height. The engine sets it for every camera when the swapchain is created; the <a href="engine.html#addScenePasses">scene passes</a> use a copy fitted to their target.</dd>
       <dt>nearZ, farZ</dt><dd>Distances in front of the camera, in world units. Perspective: <code>farZ</code> 0 or infinity gives an infinite far plane.</dd>
       <dt>left … top</dt><dd>Orthographic view box in world units, in camera space. A new aspect keeps the width and the center, and changes the height.</dd>
     </dl>
@@ -371,7 +371,7 @@ engine.setCameraController(camera, rasm::CameraController{
 <div class="api" id="getProjectionMatrix-aspect">
   <pre class="sig">glm::mat4 getProjectionMatrix(CameraHandle camera, float aspect);</pre>
   <div class="body">
-    <p>The same, fitted to another aspect ratio. The camera itself does not change. A perspective camera keeps its vertical field of view; an orthographic one keeps its width and center. <code>drawScene</code> calls this with the size of the current pass, so a render target of any shape renders without stretching.</p>
+    <p>The same, fitted to another aspect ratio. The camera itself does not change. A perspective camera keeps its vertical field of view; an orthographic one keeps its width and center. The <a href="engine.html#addScenePasses">scene passes</a> call this every frame with the size of their target, so a render target of any shape renders without stretching.</p>
     <dl>
       <dt>aspect</dt><dd>Width / height of the image you render into.</dd>
     </dl>
@@ -381,7 +381,7 @@ engine.setCameraController(camera, rasm::CameraController{
 <div class="api" id="updateCameraAspectRatio">
   <pre class="sig">void updateCameraAspectRatio(float aspect);</pre>
   <div class="body">
-    <p>Sets the aspect of <b>every</b> camera. The engine calls it with the swapchain's width / height at start-up and after each swapchain re-creation (window resize). You rarely need it: <code>drawScene</code> fits the aspect per pass anyway.</p>
+    <p>Sets the aspect of <b>every</b> camera. The engine calls it with the swapchain's width / height at start-up and after each swapchain re-creation (window resize). You rarely need it: the scene passes fit the aspect to their target anyway.</p>
   </div>
 </div>
 
@@ -467,7 +467,7 @@ engine.setCameraController(camera, rasm::CameraController{
   <tr><th>Constant</th><th>Value</th><th>What it limits</th></tr>
   <tr><td><code>MAX_CAMERAS</code></td><td>8 (7 usable)</td><td>cameras in the whole engine, <code>rasm/engine.h</code></td></tr>
   <tr><td><code>MAX_CAMERAS_PER_SCENE</code></td><td>8</td><td><code>addCameraToScene</code> per scene, <code>rasm/scene.h</code></td></tr>
-  <tr><td><code>MAX_SCENE_DRAWS_PER_FRAME</code></td><td>8</td><td><code>drawScene</code> calls per frame, so at most 8 camera views per frame</td></tr>
+  <tr><td><code>MAX_SCENE_VIEWS</code></td><td>8</td><td>scene views (scene, camera, target) held by render graphs at once (<a href="engine.html#addScenePasses"><code>addScenePasses</code></a>), so at most 8 camera views at a time, <code>rasm/scene.h</code></td></tr>
 </table>
 </div>
 

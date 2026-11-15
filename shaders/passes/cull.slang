@@ -8,16 +8,16 @@
 // order is the same every frame. It takes two dispatches over groups of 64 draws that each lie inside one run.
 // countMain tests the draws and counts each group's visible ones. writeMain adds up the counts of the run's
 // earlier groups to find where its group's draws go, and the run's last group writes drawCountsPtr[run], which
-// drawScene draws with drawIndexedIndirectCount. The tests live in lib/: frustumCulling.slang and
+// the scene's draw passes draw with drawIndexedIndirectCount. The tests live in lib/: frustumCulling.slang and
 // occlusionCulling.slang. countMain also picks each visible draw's LOD (lodSelection.slang) and keeps it beside
 // the draw's slot, and writeMain writes that LOD's index range.
 //
-// Occlusion culling runs both dispatches twice per drawScene call (pc.argument is the phase):
-//   CULL_EARLY, before the frame: the draws that are in the frustum and were visible last time.
+// Occlusion culling runs both dispatches twice per scene view and frame (pc.argument is the phase), each in a pass:
+//   CULL_EARLY, before the early draws: the draws that are in the frustum and were visible last time.
 //   passes/hiz.slang, after those are drawn: builds the Hi-Z from the depth they left.
 //   CULL_LATE: tests every draw in the frustum against the Hi-Z, stores the result for the next early
 //   pass, and keeps the visible draws the early pass did not draw.
-// A call with hizLevelCount == 0 only runs CULL_EARLY, as frustum culling.
+// A view with hizLevelCount == 0 only runs CULL_EARLY, as frustum culling.
 
 static const uint   CULL_GROUP_SIZE     = 64;           // Must match CULL_GROUP_SIZE in gpuScene.cpp.
 static const uint   CULLED              = 0xFFFFFFFF;   // cullSlotsPtr of a culled draw

@@ -64,27 +64,21 @@ int main()
     rasm::RenderGraph graph = engine.createRenderGraph();
     const rasm::Format colorFormat = engine.getRenderContext().getSwapchainImageFormat();
 
-    // Targets made through the builder belong to the graph. Without history they are transient: each lives only from
-    // the first pass that uses it to the last, so the graph lets offscreen_rt and composite_rt share memory.
-    rasm::RenderTargetHandle rtHandle{};
-    graph.addPass(
-        "Forward",
-        [&rtHandle, colorFormat](rasm::PassBuilder &builder)
-        {
-            rtHandle = builder.createRenderTarget({
-                .name = "offscreen_rt",
-                .swapchainScale = 1.0f,
-                .colorFormats = {colorFormat},
-                .depthFormat = rasm::Format::D32_SFLOAT,
-                .clearColor = glm::vec4(0.0f), // alpha 0 marks the background
-            });
-            builder.write(rtHandle);
-        },
+    // Targets made through the graph belong to it. Without history they are transient: each lives only from the
+    // first pass that uses it to the last, so the graph lets offscreen_rt and composite_rt share memory.
+    const rasm::RenderTargetHandle rtHandle = graph.createRenderTarget({
+        .name = "offscreen_rt",
+        .swapchainScale = 1.0f,
+        .colorFormats = {colorFormat},
+        .depthFormat = rasm::Format::D32_SFLOAT,
+        .clearColor = glm::vec4(0.0f), // alpha 0 marks the background
+    });
 
-        [&engine, &scene, &camera](rasm::RenderContext &)
-        {
-            engine.drawScene(scene, camera);
-        });
+    // The scene's culling and draw passes, into offscreen_rt. The passes below read what they drew.
+    if (!engine.addScenePasses(graph, scene, camera, rtHandle))
+    {
+        return 1;
+    }
 
     // One triangle covers the screen, so the full-screen passes need no vertex data.
     const std::string fullScreenTriangle = R"(

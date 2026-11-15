@@ -41,6 +41,7 @@ target_sources(rasm PRIVATE
     "renderer/gpuScene.cpp"
     "renderer/gpuTable.cpp"
     "renderer/renderGraph.cpp"
+    "renderer/renderer.cpp"
     "renderer/shaderCompiler.cpp"
     "renderer/statsOverlay.cpp"
     "rhi/device.cpp"

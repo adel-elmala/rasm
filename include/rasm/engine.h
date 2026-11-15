@@ -26,6 +26,7 @@ namespace rasm
 {
 
     class GeometryPool;
+    class Renderer;
     class ShaderCompiler;
     struct GpuScene;
     struct SceneDrawList;
@@ -60,6 +61,7 @@ namespace rasm
     class Engine
     {
         friend class RenderContext;
+        friend class RenderGraph;
 
     public:
                                     Engine(const EngineConfig& config);
@@ -115,11 +117,7 @@ namespace rasm
         void                        beginPass(const std::string& name = "Pass", const AttachmentOps& ops = {});
         void                        endPass();
         void                        render(SceneHandle scene, CameraHandle camera);
-        // Records a scene into the current pass, for render graph passes, with the camera fitted to the pass's
-        // aspect ratio. A frame can make MAX_SCENE_DRAWS_PER_FRAME calls. A render target must use the swapchain's
-        // color format and D32_SFLOAT depth, which are the formats of the scene's pipeline; drawing into
-        // any other logs an error and leaves the pass cleared.
-        void                        drawScene(SceneHandle scene, CameraHandle camera);
+        bool                        addScenePasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget = {});
         bool                        running() const;
         bool                        recreateSwapchain();
         void                        setRenderTarget(const RenderTargetHandle& renderTarget);
@@ -143,6 +141,7 @@ namespace rasm
         // The render target's color texture for the current frame slot, so fetch it every frame.
         TextureHandle               getRenderTargetTexture(const RenderTargetHandle& renderTarget, uint32_t attachment = 0);
         TextureHandle               getPreviousRenderTargetTexture(const RenderTargetHandle& renderTarget, uint32_t attachment = 0);
+        TextureHandle               getRenderTargetDepthTexture(const RenderTargetHandle& renderTarget);
 
         // window related
         Window                      createWindow(uint32_t width, uint32_t height);
@@ -161,6 +160,7 @@ namespace rasm
         std::unique_ptr<GpuScene>                                   gpuScene                                = {};
         std::unique_ptr<FrameStatsCollector>                        frameStats                              = {};
         std::unique_ptr<StatsOverlay>                               statsOverlay                            = {};
+        std::unique_ptr<Renderer>                                   renderer                                = {};
         RenderContext                                               ctx;
         std::unique_ptr<ShaderCompiler>                             shaderCompiler                          = {};
         HandleManager                                               handleManager                           = {};
@@ -172,7 +172,6 @@ namespace rasm
         RenderTargetHandle                                          currentRenderTarget                     = {};
         uint64_t                                                    frameCount                              = 0;
         uint32_t                                                    imageIdx                                = 0;
-        uint32_t                                                    sceneDrawCount                          = 0; // drawScene calls this frame
         float                                                       deltaTime                               = 0.0f; // seconds since the previous frame
         std::chrono::steady_clock::time_point                       lastFrameTime                           = {};
         bool                                                        isRunning                               = false;
@@ -212,11 +211,14 @@ namespace rasm
         void                        markDrawListsDirty(EntityHandle entity);
         void                        rebuildDrawList(SceneHandle scene);
         void                        uploadDrawList(SceneDrawList& drawList);
-        bool                        recordCulling(bool& recorded);
-        void                        recordOcclusionCulling(uint64_t sceneDataAddress, uint32_t call, TextureHandle colorTexture, TextureHandle depthTexture, uint32_t width, uint32_t height, uint32_t levelCount);
+        uint32_t                    createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget);
+        void                        releaseSceneView(uint32_t view);
+        void                        prepareSceneView(uint32_t view);
+        void                        recordSceneCulling(uint32_t view, uint32_t phase);
+        void                        recordHiz(uint32_t view);
+        void                        drawSceneView(uint32_t view);
         void                        createFrameStats();
         void                        updateFrameStats();
-        uint32_t                    beginCullingTimer(const CommandBufferHandle& commandBuffer);
         bool                        createStatsOverlay();
         void                        updateStatsOverlay();
         void                        drawStatsOverlay();

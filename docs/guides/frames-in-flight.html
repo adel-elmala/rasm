@@ -426,7 +426,7 @@
 <p>RASM uses two slots (<code>MAX_FRAMES_IN_FLIGHT</code> = 2) and one timeline fence, <code>Engine::frameFence</code>. <code>frameCount</code> is the slot, 0 or 1, not a frame counter. Everything that writes a slot's resources runs right after the wait in <code>beginFrame</code>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 360" role="img" aria-label="beginFrame waits on frameFence for the slot's fenceValue, then runs updateFrameStats, updateStatsOverlay and syncGpuScene, which write only this slot's buffers, then acquires an image and begins the slot's command buffer. endFrame submits the cull and frame command buffers with signal frameFenceValue plus 1. Only when the submit succeeds do frameFenceValue and the slot's fenceValue take the new value. Then frameCount flips.">
+  <svg viewBox="0 0 760 360" role="img" aria-label="beginFrame waits on frameFence for the slot's fenceValue, then runs updateFrameStats, updateStatsOverlay and syncGpuScene, which write only this slot's buffers, then acquires an image and begins the slot's command buffer. endFrame submits the slot's one command buffer with signal frameFenceValue plus 1. Only when the submit succeeds do frameFenceValue and the slot's fenceValue take the new value. Then frameCount flips.">
     <text x="20" y="22" class="title t-cpu">beginFrame</text>
     <rect x="20" y="34" width="170" height="66" rx="6" class="cpu"/>
     <rect x="20" y="34" width="170" height="66" rx="6" class="hot"/>
@@ -447,7 +447,7 @@
 
     <text x="20" y="170" class="title t-cpu">endFrame</text>
     <rect x="460" y="150" width="280" height="56" rx="6" class="cpu"/>
-    <text x="600" y="172" class="mid mono">submit({cull, frame}, frameFence, v)</text>
+    <text x="600" y="172" class="mid mono">submit(frame, frameFence, v)</text>
     <text x="600" y="192" class="mid small">v = frameFenceValue + 1</text>
     <line x1="600" y1="206" x2="600" y2="232" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <text x="608" y="224" class="small t-gpu">ok</text>
@@ -479,9 +479,9 @@
   <tr><td>Frame command buffer, depth texture, fence value</td><td><code>FrameResources</code> in <code>Engine::frameResources</code></td><td><code>beginFrame</code>, the passes</td></tr>
   <tr><td>GPU scene tables: instances, materials</td><td><code>GpuTable::buffers</code></td><td><code>syncGpuScene</code>, through <code>GpuTable::upload</code></td></tr>
   <tr><td>Draw lists, one per scene</td><td><code>SceneDrawList::buffers</code></td><td><code>syncGpuScene</code>, through <code>uploadDrawList</code></td></tr>
-  <tr><td>Scene data per <code>drawScene</code> call</td><td><code>GpuScene::sceneData</code> (host-visible)</td><td><code>drawScene</code></td></tr>
-  <tr><td>Culling: command buffer, counts, visible lists, Hi-Z, cull stats</td><td><code>GpuScene::cullCommandBuffers</code>, <code>drawCounts</code>, <code>visibleDraws</code>, <code>hiz</code>, <code>cullStats</code></td><td>the culling shaders; the CPU reads <code>cullStats</code> back</td></tr>
-  <tr><td>Render target attachments</td><td><code>RenderTarget::attachments</code></td><td>passes that draw into the target</td></tr>
+  <tr><td>Scene data, one per scene view</td><td><code>GpuScene::sceneData</code> (host-visible)</td><td><code>prepareSceneView</code>, at the start of the view's <code>Cull</code> pass</td></tr>
+  <tr><td>Culling: visible lists with their counts, Hi-Z, cull stats</td><td><code>cullStats</code> in <code>GpuScene</code>; <code>visibleDraws</code>, <code>hiz</code> in each <code>SceneView</code></td><td>the culling and Hi-Z passes; the CPU reads <code>cullStats</code> back</td></tr>
+  <tr><td>Attachments of a render target with <code>history</code></td><td><code>RenderTarget::attachments</code></td><td>passes that draw into the target; the next frame reads the copy</td></tr>
   <tr><td>Timestamp queries</td><td><code>FrameStatsSlot::timestamps</code></td><td>the GPU timers; read in <code>updateFrameStats</code></td></tr>
   <tr><td>Stats overlay text</td><td><code>StatsOverlaySlot::text</code></td><td><code>updateStatsOverlay</code></td></tr>
 </table>
@@ -489,9 +489,11 @@
 
 <p>A changed table row is marked dirty in <b>every</b> slot (<code>GpuTable::setRow</code>). Each slot then uploads it once, in its own frame, after its own wait. That is why <code>EngineConfig::maxInstances</code> costs its memory twice.</p>
 
-<p>One GPU-only buffer is shared on purpose: <code>GpuScene::visibility</code>, what the last frame's occlusion culling saw. The next frame reads it, so it must survive the frame. The queue runs frames in order, and <code>recordCulling</code> starts with a compute-to-compute barrier, so one copy is safe (see <a href="occlusion-culling.html#in-rasm">occlusion culling</a>).</p>
+<p>One GPU-only buffer per scene view is shared on purpose: <code>SceneView::visibility</code>, what the last frame's occlusion culling saw. The next frame reads it, so it must survive the frame. The queue runs frames in order, and the <code>Cull 1</code> pass declares it with <code>readPrevious</code>, so the graph puts a compute-to-compute barrier before it: one copy is safe (see <a href="occlusion-culling.html#in-rasm">occlusion culling</a>).</p>
 
-<p>The geometry pool, textures, pipelines and the one bindless descriptor set have a single copy. They are only added to: new ranges, new textures, new bindless slots, never a change to something a running frame reads. The bindless set's layout uses update-after-bind, which allows writing new slots while earlier frames still run. Nothing is freed while frames are in flight, because nothing can be destroyed yet (<b>D4</b>). Resize is the exception: it waits for the device to go idle, then replaces the depth textures.</p>
+<p>A render target without <code>history</code> also has one copy that both slots share. Each frame draws it before it reads it, and the queue runs the frames in order, so the next frame's draw waits behind the barriers of this one (see <a href="temporal-history.html#in-rasm">temporal history</a>).</p>
+
+<p>The geometry pool, textures, pipelines and the one bindless descriptor set have a single copy. They are only added to: new ranges, new textures, new bindless slots, never a change to something a running frame reads. The bindless set's layout uses update-after-bind, which allows writing new slots while earlier frames still run. Nothing is freed while frames are in flight, because nothing can be destroyed yet (<b>D4</b>). Resize is the exception: it waits for the device to go idle, then replaces the depth textures and rebuilds the render targets sized from the window (<code>RenderContext::resizeRenderTargets</code>).</p>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
 
