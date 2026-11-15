@@ -20,6 +20,7 @@ RASM is an early-stage C++20 GPU-driven rendering engine (static lib target `ras
 The guides and the API reference must always describe the code on `main`. Use the `sync-docs` skill:
 
 - Every change to `include/`, `src/`, `shaders/`, `examples/` or `cmake/` updates the pages that describe it, in the same change (`finish-task` runs `sync-docs`). A new public function or type gets its API entry; changed behaviour gets its diagram fixed, not only its text.
+- A change that brings a new concept, algorithm or technique into RASM (a shadow map, a new culling scheme, a new memory strategy, ...) also gets a new concept guide in `docs/guides/`, in the same change, without being asked. Write it when a contributor would need the idea explained to follow the code; skip it only for a small variation of a topic a guide already covers, and then extend that guide instead. Say in the report which guide you added, or why none was needed.
 - At the start of a session, run `python .claude/skills/sync-docs/scripts/docsync.py status --target main`. If it lists changed code, tell the user the docs are behind main and offer to sync them.
 - `docsync.py check` must pass before the docs are called done. `docs/assets/sync.js` (the stamp) is written only by `docsync.py stamp`.
 - New pages are added to `SECTIONS` in `docs/assets/site.js`, the one list of pages, and follow the house style in the skill (visual first, plain short English, classes from `docs/assets/style.css` only).

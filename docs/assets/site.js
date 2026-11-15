@@ -50,6 +50,7 @@ const SECTIONS = [
             { path: "guides/vertex-pulling.html",        title: "Vertex pulling and mega-buffers" },
             { path: "guides/uber-shaders.html",          title: "Uber shaders and shader permutations" },
             { path: "guides/pbr.html",                   title: "PBR shading" },
+            { path: "guides/shadow-mapping.html",        title: "Shadow mapping" },
             { path: "guides/normal-mapping.html",        title: "Normal mapping and tangent space" },
             { path: "guides/coordinate-spaces.html",     title: "Coordinate spaces and the view matrix" },
             { path: "guides/camera-controllers.html",    title: "Camera controllers and easing" },

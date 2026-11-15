@@ -133,7 +133,7 @@
     bool operator==(const SceneShadow&amp;) const = default;
 };</pre>
   <div class="body">
-    <p>A shadow map for <a href="engine.html#addScenePasses"><code>addScenePasses</code></a>: the light camera, and the depth-only target (<code>D32_SFLOAT</code> depth, no color) that the scene passes of that camera draw. The scene's first directional light is shadowed with it. Both empty (the default) means no shadow.</p>
+    <p>A shadow map for <a href="engine.html#addScenePasses"><code>addScenePasses</code></a>: the light camera, and the depth-only target (<code>D32_SFLOAT</code> depth, no color) that the scene passes of that camera draw. The scene's first directional light is shadowed with it. Both empty (the default) means no shadow. See <a href="../guides/shadow-mapping.html">Shadow mapping</a>.</p>
     <dl>
       <dt>camera</dt><dd>The light's view. Make it orthographic and point it along the light; what is outside its box is lit.</dd>
       <dt>renderTarget</dt><dd>The shadow map. Its size is the shadow's resolution: 2048 × 2048 in <code>examples/06_shadows</code>.</dd>

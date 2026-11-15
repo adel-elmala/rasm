@@ -440,7 +440,7 @@ if (!engine.addScenePasses(graph, scene, lightCamera, shadowMap) ||
     return 1;
 }</code></pre>
 
-<p>The light camera is yours: make it orthographic, place it behind the scene and point it along the light (<code>glm::quatLookAt</code>). Its box decides what can cast a shadow; a point outside it is lit. The shadow uses 3x3 PCF and offsets that assume an orthographic camera. Only the first directional light is shadowed; other lights and the ambient term are not.</p>
+<p>The light camera is yours: make it orthographic, place it behind the scene and point it along the light (<code>glm::quatLookAt</code>). Its box decides what can cast a shadow; a point outside it is lit. The shadow uses 3x3 PCF and offsets that assume an orthographic camera. Only the first directional light is shadowed; other lights and the ambient term are not. How it works: <a href="../guides/shadow-mapping.html">Shadow mapping</a>.</p>
 
 <p><b>Scene views.</b> Each (scene, camera, target, shadow) is a <i>scene view</i>, with its own culling buffers on the GPU. A view lives while a graph holds it: graphs built for the same four share it, and when the last of them is destroyed or replaced, the view's buffers are freed. Views let one frame draw several scenes, cameras or targets. The scene's lights are read every frame. Nothing is drawn, with no error, while the scene is empty or all its entities still load: the target keeps its clear color.</p>
 <p>Culling also picks each visible draw's <a href="../guides/lod-selection.html">level of detail</a> from its distance to the camera and <code>EngineConfig::lodErrorPixels</code>. A view drawn without culling draws LOD 0.</p>
