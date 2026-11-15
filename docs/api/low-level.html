@@ -897,6 +897,13 @@ struct BindlessDescriptorSetLayoutDescHash
   </div>
 </div>
 
+<div class="api" id="getRenderTargetDesc">
+  <pre class="sig">RenderTargetDesc getRenderTargetDesc(const RenderTargetHandle&amp; handle);</pre>
+  <div class="body">
+    <p>The <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a> the target was made with, including its <code>name</code> and <code>swapchainScale</code>. An unknown handle logs <code>Render target handle not found.</code> and returns an empty desc.</p>
+  </div>
+</div>
+
 <h2><span class="n">8</span>Frames, fences and the swapchain</h2>
 
 <div class="callout">

@@ -100,6 +100,8 @@ namespace rasm
                 // Cycles by distance (-1), LOD 0, 1, ..., MAX_MESH_LODS - 1, by distance.
                 if (event.key.key == SDLK_F2 && !event.key.repeat)
                     config.forcedLod = config.forcedLod + 1 >= static_cast<int32_t>(MAX_MESH_LODS) ? -1 : config.forcedLod + 1;
+                if (event.key.key == SDLK_F3 && !event.key.repeat)
+                    graphDumpRequested = true;
                 break;
             }
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
