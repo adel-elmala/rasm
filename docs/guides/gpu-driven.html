@@ -42,7 +42,7 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>The CPU draw loop</h2>
+<h2 id="cpu-loop"><span class="n">1</span>The CPU draw loop</h2>
 
 <p>The simplest renderer draws one object at a time. For each object, the CPU sets up the GPU state the object needs, then asks for a draw:</p>
 
@@ -57,33 +57,47 @@
 <p>Each line is a command that the graphics driver must check and turn into GPU commands. This happens on the CPU, every frame, for every object.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="For every object, the CPU records four commands: bind buffers, bind textures, set constants and draw. This repeats N times. The driver checks every command on the CPU. The GPU then runs many small draws one after another.">
-    <text x="20" y="22" class="title t-cpu">CPU, for every object, every frame</text>
-    <rect x="20"  y="36" width="150" height="50" rx="6" class="cpu"/>
-    <text x="95"  y="57" class="mid title">bind buffers</text>
-    <text x="95"  y="75" class="mid small">the object's mesh</text>
-    <rect x="182" y="36" width="150" height="50" rx="6" class="cpu"/>
-    <text x="257" y="57" class="mid title">bind textures</text>
-    <text x="257" y="75" class="mid small">the object's material</text>
-    <rect x="344" y="36" width="150" height="50" rx="6" class="cpu"/>
-    <text x="419" y="57" class="mid title">set constants</text>
-    <text x="419" y="75" class="mid small">the object's matrix</text>
-    <rect x="506" y="36" width="150" height="50" rx="6" class="cpu"/>
-    <text x="581" y="57" class="mid title">draw</text>
-    <text x="581" y="75" class="mid small">one mesh</text>
-    <text x="708" y="67" class="mid title t-hot">× N</text>
+  <svg viewBox="0 0 760 246" role="img" aria-label="A timeline. The CPU records a group of four commands for object 0: bind buffers, bind textures, set constants, draw. Then the same group for object 1, object 2, and so on, N times. The driver, also on the CPU, checks every command. Below, the GPU runs one small draw per group and waits between them.">
+    <text x="20" y="20" class="title t-cpu">CPU: one group of commands per object, every frame</text>
+    <rect x="20"  y="30" width="100" height="46" rx="4" class="cpu"/>
+    <text x="70"  y="50" class="mid title">bind buffers</text>
+    <text x="70"  y="67" class="mid small">its mesh</text>
+    <rect x="124" y="30" width="100" height="46" rx="4" class="cpu"/>
+    <text x="174" y="50" class="mid title">bind textures</text>
+    <text x="174" y="67" class="mid small">its material</text>
+    <rect x="228" y="30" width="100" height="46" rx="4" class="cpu"/>
+    <text x="278" y="50" class="mid title">set constants</text>
+    <text x="278" y="67" class="mid small">its matrix</text>
+    <rect x="332" y="30" width="100" height="46" rx="4" class="cpu"/>
+    <text x="382" y="50" class="mid title">draw</text>
+    <text x="382" y="67" class="mid small">one mesh</text>
+    <text x="226" y="94" class="mid small">object 0</text>
 
-    <line x1="380" y1="86" x2="380" y2="112" class="arrow" marker-end="url(#ah)"/>
-    <rect x="20" y="114" width="720" height="46" rx="6" class="cpu"/>
-    <text x="380" y="134" class="mid title">Driver, also on the CPU</text>
-    <text x="380" y="151" class="mid small">checks every command, tracks the bound state, writes the GPU's own commands</text>
+    <rect x="446" y="30" width="22" height="46" rx="3" class="cpu"/><rect x="471" y="30" width="22" height="46" rx="3" class="cpu"/><rect x="496" y="30" width="22" height="46" rx="3" class="cpu"/><rect x="521" y="30" width="22" height="46" rx="3" class="cpu"/>
+    <text x="494" y="94" class="mid small">object 1</text>
+    <rect x="555" y="30" width="22" height="46" rx="3" class="cpu"/><rect x="580" y="30" width="22" height="46" rx="3" class="cpu"/><rect x="605" y="30" width="22" height="46" rx="3" class="cpu"/><rect x="630" y="30" width="22" height="46" rx="3" class="cpu"/>
+    <text x="603" y="94" class="mid small">object 2</text>
+    <text x="702" y="60" class="mid big t-hot">… × N</text>
 
-    <line x1="380" y1="160" x2="380" y2="186" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <rect x="20" y="188" width="720" height="46" rx="6" class="gpu"/>
-    <text x="380" y="208" class="mid title">GPU runs the draws one by one</text>
-    <text x="380" y="225" class="mid small">a small draw can finish before the CPU has sent the next one: then the GPU waits</text>
+    <line x1="380" y1="82" x2="380" y2="108" class="arrow" marker-end="url(#ah)"/>
+    <rect x="20" y="110" width="720" height="46" rx="6" class="cpu"/>
+    <text x="380" y="130" class="mid title">Driver, also on the CPU</text>
+    <text x="380" y="147" class="mid small">checks every command, tracks the bound state, writes the GPU's own commands</text>
+
+    <line x1="380" y1="156" x2="380" y2="178" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="20" y="184" class="title t-gpu">GPU: runs the draws one by one</text>
+    <rect x="20" y="194" width="720" height="38" rx="6" class="zone"/>
+    <rect x="28"  y="200" width="44" height="26" rx="3" class="gpu"/>
+    <rect x="186" y="200" width="44" height="26" rx="3" class="gpu"/>
+    <rect x="344" y="200" width="44" height="26" rx="3" class="gpu"/>
+    <rect x="502" y="200" width="44" height="26" rx="3" class="gpu"/>
+    <rect x="660" y="200" width="44" height="26" rx="3" class="gpu"/>
+    <text x="129" y="217" class="mid small t-faint">waits</text>
+    <text x="287" y="217" class="mid small t-faint">waits</text>
+    <text x="445" y="217" class="mid small t-faint">waits</text>
+    <text x="603" y="217" class="mid small t-faint">waits</text>
   </svg>
-  <figcaption>The CPU cost grows with the <b>number of objects</b>, not with the amount of work the GPU does. A scene of 10,000 small objects costs much more CPU time than one big mesh with the same triangles.</figcaption>
+  <figcaption>The CPU cost grows with the <b>number of objects</b>, not with the amount of work the GPU does. A scene of 10,000 small objects costs much more CPU time than one big mesh with the same triangles. A small draw can finish before the CPU has sent the next one: then the GPU waits.</figcaption>
 </figure>
 
 <p>This is called a <b>CPU-driven</b> renderer. The CPU decides everything: which objects are visible, in which order they are drawn, and with which arguments. It works well for hundreds of objects. With tens of thousands, recording the commands can take longer than the GPU needs to draw them.</p>
@@ -116,7 +130,7 @@
 <p>So the first fix for a CPU-driven renderer is to <b>sort</b> the draws. Each draw gets a number, a <b>sort key</b>, built from its state, with the most expensive state in the highest bits. After sorting, draws with the same expensive state are neighbours, and that state changes once per group instead of once per draw.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 150" role="img" aria-label="A 64-bit sort key: 4 bits of pass, 12 bits of pipeline, 16 bits of material, 16 bits of mesh, 16 bits of depth. The high bits hold the most expensive state.">
+  <svg viewBox="0 0 760 92" role="img" aria-label="A 64-bit sort key: 4 bits of pass, 12 bits of pipeline, 16 bits of material, 16 bits of mesh, 16 bits of depth. The high bits hold the most expensive state.">
     <rect x="20"  y="30" width="90"  height="48" rx="4" class="cpu"/>
     <text x="65"  y="51" class="mid title">pass</text>
     <text x="65"  y="68" class="mid small">4 bits</text>
@@ -134,15 +148,52 @@
     <text x="660" y="68" class="mid small">16 bits</text>
     <text x="20" y="20" class="small">high bits: costly state</text>
     <text x="720" y="20" class="end small">low bits: cheap order</text>
-    <text x="20" y="108" class="small">Sort all draws by this 64-bit number. Draws of the same pass and pipeline become neighbours,</text>
-    <text x="20" y="126" class="small">so the pipeline changes once per group. Depth in the low bits orders the draws inside a group, front to back.</text>
   </svg>
-  <figcaption>One example layout. Each engine picks its own fields and sizes.</figcaption>
+  <figcaption>Sort all draws by this 64-bit number. Draws of the same pass and pipeline become neighbours, so the pipeline changes once per group. Depth in the low bits orders the draws inside a group, front to back. This is one example layout. Each engine picks its own fields and sizes.</figcaption>
 </figure>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 120" role="img" aria-label="Nine draws in scene order. Their pipelines are A, B, A, C, B, A, C, B, A. The pipeline changes between every two neighbours: 8 changes.">
+      <rect x="9"   y="34" width="30" height="36" rx="3" class="box"/><text x="24"  y="57" class="mid title">A</text>
+      <rect x="43"  y="34" width="30" height="36" rx="3" class="accent"/><text x="58"  y="57" class="mid title">B</text>
+      <rect x="77"  y="34" width="30" height="36" rx="3" class="box"/><text x="92"  y="57" class="mid title">A</text>
+      <rect x="111" y="34" width="30" height="36" rx="3" class="shader"/><text x="126" y="57" class="mid title">C</text>
+      <rect x="145" y="34" width="30" height="36" rx="3" class="accent"/><text x="160" y="57" class="mid title">B</text>
+      <rect x="179" y="34" width="30" height="36" rx="3" class="box"/><text x="194" y="57" class="mid title">A</text>
+      <rect x="213" y="34" width="30" height="36" rx="3" class="shader"/><text x="228" y="57" class="mid title">C</text>
+      <rect x="247" y="34" width="30" height="36" rx="3" class="accent"/><text x="262" y="57" class="mid title">B</text>
+      <rect x="281" y="34" width="30" height="36" rx="3" class="box"/><text x="296" y="57" class="mid title">A</text>
+      <path d="M41,24V80M75,24V80M109,24V80M143,24V80M177,24V80M211,24V80M245,24V80M279,24V80" class="arrow bad thick"/>
+      <text x="160" y="16" class="mid small">draws in scene order · the letter is the pipeline</text>
+      <text x="160" y="106" class="mid t-bad">8 pipeline changes</text>
+    </svg>
+    <h4>Unsorted</h4>
+    <p>The expensive state changes at almost every draw.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 120" role="img" aria-label="The same nine draws sorted by key: A, A, A, A, B, B, B, C, C. The pipeline changes twice.">
+      <rect x="9"   y="34" width="30" height="36" rx="3" class="box"/><text x="24"  y="57" class="mid title">A</text>
+      <rect x="43"  y="34" width="30" height="36" rx="3" class="box"/><text x="58"  y="57" class="mid title">A</text>
+      <rect x="77"  y="34" width="30" height="36" rx="3" class="box"/><text x="92"  y="57" class="mid title">A</text>
+      <rect x="111" y="34" width="30" height="36" rx="3" class="box"/><text x="126" y="57" class="mid title">A</text>
+      <rect x="145" y="34" width="30" height="36" rx="3" class="accent"/><text x="160" y="57" class="mid title">B</text>
+      <rect x="179" y="34" width="30" height="36" rx="3" class="accent"/><text x="194" y="57" class="mid title">B</text>
+      <rect x="213" y="34" width="30" height="36" rx="3" class="accent"/><text x="228" y="57" class="mid title">B</text>
+      <rect x="247" y="34" width="30" height="36" rx="3" class="shader"/><text x="262" y="57" class="mid title">C</text>
+      <rect x="281" y="34" width="30" height="36" rx="3" class="shader"/><text x="296" y="57" class="mid title">C</text>
+      <path d="M143,24V80M245,24V80" class="arrow ok thick"/>
+      <text x="160" y="16" class="mid small">the same draws, sorted by key</text>
+      <text x="160" y="106" class="mid t-ok">2 pipeline changes</text>
+    </svg>
+    <h4>Sorted by key</h4>
+    <p>Draws with the same state are neighbours. The state changes once per group.</p>
+  </div>
+</div>
 
 <p>Sorting reduces the state changes, but the CPU still records one draw per object and still decides what is visible. GPU-driven rendering removes the loop itself.</p>
 
-<h2><span class="n">3</span>The idea: give the scene to the GPU</h2>
+<h2 id="idea"><span class="n">3</span>The idea: give the scene to the GPU</h2>
 
 <p>The GPU is very good at doing the same small job for many items in parallel. Culling and building draw arguments are such jobs. So a GPU-driven renderer moves the scene into GPU buffers and lets a compute shader do the work of the CPU loop.</p>
 
@@ -207,14 +258,53 @@
 </table>
 </div>
 
-<p>This needs two things from the API. First, a draw call that takes its arguments from GPU memory. Second, a way for the shader to find its object's data without per-draw bindings. The next sections cover both. The second also needs <a href="bindless.html">bindless textures</a> and <a href="vertex-pulling.html">vertex pulling</a>, because there is no chance to bind a mesh's buffers or a material's textures between draws.</p>
+<div class="callout">
+  <strong>What this needs from the API</strong>
+  <ul>
+    <li>A draw call that takes its arguments from GPU memory (sections 4, 6 and 7).</li>
+    <li>A way for the shader to find its object's data without per-draw bindings (section 5). This also needs <a href="bindless.html">bindless textures</a> and <a href="vertex-pulling.html">vertex pulling</a>, because there is no chance to bind a mesh's buffers or a material's textures between draws.</li>
+  </ul>
+</div>
 
 <h2 id="indirect-args"><span class="n">4</span>Indirect draw arguments</h2>
 
-<p>An indexed draw needs 5 numbers. A direct draw call passes them as function arguments, from the CPU. An <b>indirect</b> draw call passes only a buffer and an offset. The GPU reads the 5 numbers from that buffer when it runs the call. We call these 5 numbers a <b>draw record</b>.</p>
+<p>An indexed draw needs 5 numbers. We call these 5 numbers a <b>draw record</b>. The two kinds of draw call differ in where the record comes from:</p>
+
+<div class="split">
+  <div>
+    <svg viewBox="0 0 320 136" role="img" aria-label="A direct draw: the CPU records a call that holds the five numbers. They travel to the GPU inside the call.">
+      <rect x="10" y="8" width="300" height="48" rx="6" class="cpu"/>
+      <text x="160" y="27" class="mid small">the CPU records</text>
+      <text x="160" y="45" class="mid mono">drawIndexed(36, 1, 4800, 0, 57)</text>
+      <line x1="160" y1="56" x2="160" y2="92" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <text x="170" y="78" class="small">the 5 numbers, in the call</text>
+      <rect x="90" y="94" width="140" height="36" rx="6" class="gpu"/>
+      <text x="160" y="117" class="mid title">GPU draws</text>
+    </svg>
+    <h4>Direct draw</h4>
+    <p>The 5 numbers are function arguments. The CPU must know them when it records the call.</p>
+  </div>
+  <div>
+    <svg viewBox="0 0 320 136" role="img" aria-label="An indirect draw: the CPU records a call that holds only a buffer and an offset. When the GPU runs the call, it reads the five numbers from that buffer.">
+      <rect x="10" y="8" width="300" height="48" rx="6" class="cpu"/>
+      <text x="160" y="27" class="mid small">the CPU records</text>
+      <text x="160" y="45" class="mid mono">drawIndexedIndirect(buf, offset)</text>
+      <line x1="80" y1="56" x2="80" y2="92" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <text x="90" y="78" class="small">only where to look</text>
+      <rect x="10" y="94" width="140" height="36" rx="6" class="gpu"/>
+      <text x="80" y="117" class="mid title">GPU draws</text>
+      <rect x="186" y="94" width="124" height="36" rx="4" class="mem"/>
+      <text x="248" y="117" class="mid mono">36 1 4800 0 57</text>
+      <text x="248" y="86" class="mid small t-mem">buf, in GPU memory</text>
+      <line x1="186" y1="112" x2="153" y2="112" class="arrow mem flowing" marker-end="url(#ah-mem)"/>
+    </svg>
+    <h4>Indirect draw</h4>
+    <p>An <b>indirect</b> call passes only a buffer and an offset. The GPU reads the 5 numbers from that buffer when it runs the call.</p>
+  </div>
+</div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 200" role="img" aria-label="An indexed draw record is 5 four-byte numbers, 20 bytes: indexCount at byte 0, instanceCount at 4, firstIndex at 8, vertexOffset at 12 (signed), firstInstance at 16.">
+  <svg viewBox="0 0 760 166" role="img" aria-label="An indexed draw record is 5 four-byte numbers, 20 bytes: indexCount at byte 0, instanceCount at 4, firstIndex at 8, vertexOffset at 12 (signed), firstInstance at 16.">
     <text x="20" y="22" class="title">One indexed draw record: 5 × 4 bytes = 20 bytes</text>
     <rect x="20"  y="36" width="140" height="56" rx="4" class="mem"/>
     <text x="90"  y="59" class="mid">indexCount</text>
@@ -246,9 +336,8 @@
     <text x="522" y="152" class="mid small">index value</text>
     <text x="666" y="136" class="mid small">instance index</text>
     <text x="666" y="152" class="mid small">of copy 0</text>
-    <text x="20" y="186" class="small">The same five numbers a direct indexed draw takes, in the same order, but stored in a GPU buffer.</text>
   </svg>
-  <figcaption>Grey numbers are byte offsets. A non-indexed draw record has 4 numbers: vertex count, instance count, first vertex, first instance.</figcaption>
+  <figcaption>The same five numbers a direct indexed draw takes, in the same order, but stored in a GPU buffer. Grey numbers are byte offsets. A non-indexed draw record has 4 numbers: vertex count, instance count, first vertex, first instance.</figcaption>
 </figure>
 
 <p>Every modern API has this record, with the same fields in the same order. Only the names differ:</p>
@@ -273,26 +362,38 @@
 <p>The usual trick uses <code>firstInstance</code>. Instancing draws the same mesh <var>instanceCount</var> times, and each copy gets an <b>instance index</b>. Copy <var>i</var> gets <code>firstInstance</code> + <var>i</var>. When the draw has one copy, its instance index is just <code>firstInstance</code>. So the renderer writes the object's row number into <code>firstInstance</code>, and the vertex shader uses the instance index to read that row.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 210" role="img" aria-label="A draw record with firstInstance 57. The vertex shader sees instance index 57 and reads row 57 of the object table, which has the world matrix, the mesh id and the material id.">
-    <rect x="20" y="40" width="240" height="76" rx="6" class="mem"/>
-    <text x="140" y="62" class="mid title">Draw record 3</text>
-    <text x="34" y="84" class="small">indexCount 36 · firstIndex 4800</text>
-    <text x="34" y="102" class="small">instanceCount 1 · firstInstance <tspan class="t-hot">57</tspan></text>
-    <line x1="260" y1="78" x2="298" y2="78" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <rect x="300" y="40" width="180" height="76" rx="38" class="shader"/>
-    <text x="390" y="66" class="mid title">Vertex shader</text>
-    <text x="390" y="86" class="mid small">instance index = 57</text>
-    <text x="390" y="102" class="mid small">(firstInstance + copy 0)</text>
-    <line x1="480" y1="78" x2="518" y2="78" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <rect x="520" y="24" width="220" height="108" rx="6" class="mem"/>
-    <text x="630" y="46" class="mid title">Object table, row 57</text>
-    <text x="534" y="70" class="small">world matrix</text>
-    <text x="534" y="90" class="small">mesh id → mesh table</text>
-    <text x="534" y="110" class="small">material id → material table</text>
-    <text x="20" y="166" class="small">The draw record carries only a row number. Everything else about the object is in tables,</text>
-    <text x="20" y="184" class="small">and the shader follows the row number to them.</text>
+  <svg viewBox="0 0 760 214" role="img" aria-label="A draw record drawn as five fields. Its last field, firstInstance, holds 57. The vertex shader sees instance index 57 and reads row 57 of the object table. That row holds the world matrix, a mesh id that points into the mesh table and a material id that points into the material table.">
+    <text x="20" y="28" class="title t-mem">Draw record 3</text>
+    <rect x="20" y="38"  width="200" height="26" class="mem"/><text x="30" y="56">indexCount</text><text x="210" y="56" class="end mono">36</text>
+    <rect x="20" y="64"  width="200" height="26" class="mem"/><text x="30" y="82">instanceCount</text><text x="210" y="82" class="end mono">1</text>
+    <rect x="20" y="90"  width="200" height="26" class="mem"/><text x="30" y="108">firstIndex</text><text x="210" y="108" class="end mono">4800</text>
+    <rect x="20" y="116" width="200" height="26" class="mem"/><text x="30" y="134">vertexOffset</text><text x="210" y="134" class="end mono">0</text>
+    <rect x="20" y="142" width="200" height="26" class="accent"/><text x="30" y="160" class="title">firstInstance</text><text x="210" y="160" class="end mono title">57</text>
+
+    <line x1="220" y1="155" x2="258" y2="155" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <rect x="260" y="124" width="170" height="62" rx="31" class="shader"/>
+    <text x="345" y="149" class="mid title">Vertex shader</text>
+    <text x="345" y="168" class="mid small">instance index = 57</text>
+    <text x="345" y="204" class="mid small">firstInstance + copy 0</text>
+    <path d="M345,124 V113 H468" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="356" y="105" class="small t-hot">reads row 57</text>
+
+    <text x="470" y="28" class="title t-mem">Object table</text>
+    <text x="492" y="42" class="mid small">row</text>
+    <text x="564" y="42" class="mid small">world matrix</text>
+    <text x="648" y="42" class="mid small">mesh id</text>
+    <text x="712" y="42" class="mid small">material id</text>
+    <rect x="470" y="48"  width="274" height="26" class="mem"/><text x="492" y="66" class="mid mono t-faint">55</text>
+    <rect x="470" y="74"  width="274" height="26" class="mem"/><text x="492" y="92" class="mid mono t-faint">56</text>
+    <rect x="470" y="100" width="274" height="26" class="accent"/><text x="492" y="118" class="mid mono title">57</text>
+    <text x="564" y="118" class="mid mono">4 × 4</text><text x="648" y="118" class="mid mono">12</text><text x="712" y="118" class="mid mono">3</text>
+    <path d="M514,48V126M614,48V126M680,48V126" class="grid"/>
+    <line x1="648" y1="126" x2="648" y2="154" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="712" y1="126" x2="712" y2="154" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="560" y="156" width="110" height="30" rx="4" class="mem"/><text x="615" y="176" class="mid small">mesh table</text>
+    <rect x="678" y="156" width="74" height="30" rx="4" class="mem"/><text x="715" y="170" class="mid small">material</text><text x="715" y="182" class="mid small">table</text>
   </svg>
-  <figcaption>The draw call itself knows nothing about the object. It is only a pointer to a row.</figcaption>
+  <figcaption>The draw record carries only a row number. Everything else about the object is in tables, and the shader follows the row number to them. The draw call itself knows nothing about the object. It is only a pointer to a row.</figcaption>
 </figure>
 
 <p>There is a second way. Some APIs give the shader a <b>draw-index</b> built-in: the number of the record inside the current multi-draw call (next section). The shader can read the record itself with it, and any extra per-draw data stored next to it. Both ways are common. Watch out for the API differences:</p>
@@ -310,7 +411,7 @@
 <p>One indirect draw that reads one record saves little: the CPU still makes one call per object. <b>Multi-draw indirect</b> fixes that. One call reads <var>N</var> records, one after another, and runs <var>N</var> draws. The records are <var>stride</var> bytes apart, usually exactly the record size.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 240" role="img" aria-label="A buffer of six draw records, 20 bytes apart. One CPU call, drawIndexedIndirect with offset 0, drawCount 6 and stride 20, makes the GPU's command processor read record i and run draw i, for i from 0 to 5.">
+  <svg viewBox="0 0 760 190" role="img" aria-label="A buffer of six draw records, 20 bytes apart. One CPU call, drawIndexedIndirect with offset 0, drawCount 6 and stride 20, makes the GPU's command processor read record i and run draw i, for i from 0 to 5.">
     <text x="20" y="22" class="small">draw record buffer</text>
     <rect x="20"  y="30" width="100" height="48" rx="4" class="mem"/><text x="70"  y="51" class="mid">record 0</text><text x="70"  y="68" class="mid small">20 B</text>
     <rect x="124" y="30" width="100" height="48" rx="4" class="mem"/><text x="174" y="51" class="mid">record 1</text><text x="174" y="68" class="mid small">20 B</text>
@@ -328,10 +429,8 @@
     <rect x="500" y="130" width="240" height="46" rx="6" class="gpu"/>
     <text x="620" y="150" class="mid title">GPU command processor</text>
     <text x="620" y="167" class="mid small">reads record i, runs draw i</text>
-    <text x="20" y="208" class="small">The arguments are: buffer, offset of the first record, number of records, stride.</text>
-    <text x="20" y="226" class="small">In the shader, the draw-index built-in counts 0, 1, … 5 through the call.</text>
   </svg>
-  <figcaption>The CPU cost is one call, whatever <var>N</var> is. Vulkan needs the <code>multiDrawIndirect</code> feature for <var>N</var> &gt; 1.</figcaption>
+  <figcaption>The arguments are: buffer, offset of the first record, number of records, stride. In the shader, the draw-index built-in counts 0, 1, … 5 through the call. The CPU cost is one call, whatever <var>N</var> is. Vulkan needs the <code>multiDrawIndirect</code> feature for <var>N</var> &gt; 1.</figcaption>
 </figure>
 
 <p>The GPU still runs <var>N</var> separate draws. Its <b>command processor</b>, the front part of the GPU that reads commands, walks the records itself. That is cheap, but not free: a draw of a few triangles still has a fixed cost on the GPU. GPU-driven rendering removes the CPU cost of a draw, not the GPU cost.</p>
@@ -341,6 +440,44 @@
 <p>Multi-draw indirect still has one number from the CPU: <var>N</var>, the record count. But after GPU culling, only the GPU knows how many draws are left. One answer is to keep <var>N</var> fixed and make culled records draw nothing (set their <code>indexCount</code> or <code>instanceCount</code> to 0). That works, but the command processor still reads every empty record.</p>
 
 <p>The better answer is a <b>draw count buffer</b>. The call takes a second buffer, and the GPU reads the record count from it at run time. The CPU passes only an upper limit, <var>maxDrawCount</var>. The GPU draws min(count, <var>maxDrawCount</var>) records.</p>
+
+<div class="split">
+  <div>
+    <svg viewBox="0 0 320 136" role="img" aria-label="Six records, a count fixed at 6. Three records were culled and hold zeros. The GPU still reads all six.">
+      <text x="12" y="18" class="small">N = 6, fixed by the CPU · culled records draw nothing</text>
+      <rect x="12"  y="28" width="46" height="40" rx="4" class="mem"/><text x="35"  y="53" class="mid">d0</text>
+      <rect x="62"  y="28" width="46" height="40" rx="4" class="ghost"/><text x="85"  y="53" class="mid mono t-faint">0</text>
+      <rect x="112" y="28" width="46" height="40" rx="4" class="ghost"/><text x="135" y="53" class="mid mono t-faint">0</text>
+      <rect x="162" y="28" width="46" height="40" rx="4" class="mem"/><text x="185" y="53" class="mid">d3</text>
+      <rect x="212" y="28" width="46" height="40" rx="4" class="mem"/><text x="235" y="53" class="mid">d4</text>
+      <rect x="262" y="28" width="46" height="40" rx="4" class="ghost"/><text x="285" y="53" class="mid mono t-faint">0</text>
+      <path d="M35,68V92M85,68V92M135,68V92M185,68V92M235,68V92M285,68V92" class="arrow gpu"/>
+      <rect x="12" y="94" width="296" height="34" rx="6" class="gpu"/>
+      <text x="160" y="116" class="mid title">GPU reads all 6 records</text>
+    </svg>
+    <h4>Fixed count, empty records</h4>
+    <p>It works, but the command processor still reads every empty record.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 136" role="img" aria-label="The three visible records are packed at the start of the buffer. A count buffer holds 3. The GPU reads only three records.">
+      <text x="12" y="18" class="small">visible records packed at the start · count from the GPU</text>
+      <rect x="12"  y="28" width="46" height="40" rx="4" class="mem"/><text x="35"  y="53" class="mid">d0</text>
+      <rect x="62"  y="28" width="46" height="40" rx="4" class="mem"/><text x="85"  y="53" class="mid">d3</text>
+      <rect x="112" y="28" width="46" height="40" rx="4" class="mem"/><text x="135" y="53" class="mid">d4</text>
+      <rect x="162" y="28" width="46" height="40" rx="4" class="ghost"/>
+      <rect x="212" y="28" width="46" height="40" rx="4" class="ghost"/>
+      <rect x="262" y="28" width="46" height="40" rx="4" class="ghost"/>
+      <path d="M35,68V92M85,68V92M135,68V92" class="arrow gpu"/>
+      <rect x="12" y="94" width="176" height="34" rx="6" class="gpu"/>
+      <text x="100" y="116" class="mid title">GPU reads 3 records</text>
+      <rect x="214" y="94" width="94" height="34" rx="4" class="accent"/>
+      <text x="261" y="116" class="mid title">count = 3</text>
+      <line x1="214" y1="111" x2="191" y2="111" class="arrow hot" marker-end="url(#ah-hot)"/>
+    </svg>
+    <h4>Draw count buffer</h4>
+    <p>The GPU reads how many records to draw, and stops there.</p>
+  </div>
+</div>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 250" role="img" aria-label="A compute shader culls six objects and keeps three. It packs their records at the start of the record buffer and writes count 3 into a count buffer. The CPU recorded drawIndexedIndirectCount with max 6. The GPU reads count 3 and draws three records.">
@@ -383,7 +520,7 @@
 <p>The fix is the sort from <a href="#state-costs">section 2</a>, done once: sort the draw records by their state, so each state's records are one contiguous range, a <b>run</b>. Then record one indirect call per run, each with its own offset, its own <var>maxDrawCount</var> and its own count.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 260" role="img" aria-label="Nine draw records sorted by state: records 0 to 3 have state A, 4 and 5 state B, 6 to 8 state C. Each run gets one call: set state A then draw from record 0 with max 4; set state B then draw from 4 with max 2; set state C then draw from 6 with max 3.">
+  <svg viewBox="0 0 760 206" role="img" aria-label="Nine draw records sorted by state: records 0 to 3 have state A, 4 and 5 state B, 6 to 8 state C. Each run gets one call: set state A then draw from record 0 with max 4; set state B then draw from 4 with max 2; set state C then draw from 6 with max 3.">
     <rect x="16"  y="30" width="292" height="76" rx="6" class="zone"/>
     <text x="162" y="46" class="mid small">run 0 · state A</text>
     <rect x="24"  y="56" width="66" height="40" rx="4" class="mem"/><text x="57"  y="81" class="mid">0</text>
@@ -412,50 +549,145 @@
     <rect x="492" y="130" width="222" height="60" rx="6" class="cpu"/>
     <text x="603" y="153" class="mid title">set state C</text>
     <text x="603" y="174" class="mid small">first 6, max 3, count[2]</text>
-
-    <text x="16" y="222" class="small">3 states, 3 calls, whatever the number of draws. Culling packs each run inside its own range,</text>
-    <text x="16" y="240" class="small">so a run's visible records start at the run's first record, and a run with nothing visible draws nothing.</text>
   </svg>
-  <figcaption>The CPU cost is now one call per <b>state</b>, not per object. The fewer states the scene needs, the fewer calls.</figcaption>
+  <figcaption>3 states, 3 calls, whatever the number of draws. The CPU cost is now one call per <b>state</b>, not per object. The fewer states the scene needs, the fewer calls. Culling packs each run inside its own range, so a run's visible records start at the run's first record, and a run with nothing visible draws nothing.</figcaption>
 </figure>
 
-<p>This is why GPU-driven renderers work hard to reduce the number of states:</p>
+<p>This is why GPU-driven renderers work hard to reduce the number of states. Each card is one thing that would split the runs, and how engines avoid it:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>What would split the runs</th><th>How engines avoid it</th></tr>
-  <tr><td>A pipeline per material</td><td>One shader for all materials, with the material as data: <a href="uber-shaders.html">uber shaders</a>.</td></tr>
-  <tr><td>Textures bound per material</td><td>All textures in one big array, picked by index: <a href="bindless.html">bindless resources</a>.</td></tr>
-  <tr><td>Vertex and index buffers per mesh</td><td>All meshes in one big buffer: <a href="vertex-pulling.html">vertex pulling and mega-buffers</a>.</td></tr>
-  <tr><td>Fixed-function state, such as face culling</td><td><b>Dynamic state</b>: the value is set in the command buffer, not baked into the pipeline. It still splits runs, but not pipelines.</td></tr>
-  <tr><td>Blending (transparent objects)</td><td>Cannot be avoided. Transparent objects need their own pipeline, and usually a sorted order, so they get their own pass.</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three small shaders, one per material, become one shader that reads the material as data.">
+      <rect x="14" y="14" width="70" height="26" rx="13" class="shader"/><text x="49" y="32" class="mid small">shader A</text>
+      <rect x="14" y="52" width="70" height="26" rx="13" class="shader"/><text x="49" y="70" class="mid small">shader B</text>
+      <rect x="14" y="90" width="70" height="26" rx="13" class="shader"/><text x="49" y="108" class="mid small">shader C</text>
+      <line x1="92" y1="65" x2="122" y2="65" class="arrow" marker-end="url(#ah)"/>
+      <rect x="130" y="24" width="96" height="40" rx="20" class="shader"/><text x="178" y="49" class="mid title">one shader</text>
+      <rect x="130" y="80" width="96" height="26" rx="4" class="mem"/><text x="178" y="98" class="mid small">material data</text>
+      <line x1="178" y1="80" x2="178" y2="67" class="arrow mem" marker-end="url(#ah-mem)"/>
+    </svg>
+    <h4>A pipeline per material</h4>
+    <p>One shader for all materials, with the material as data: <a href="uber-shaders.html">uber shaders</a>.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three textures, each bound for its own material, become one array of textures. A draw picks one by its index.">
+      <rect x="34" y="12" width="28" height="28" class="mem"/>
+      <rect x="34" y="51" width="28" height="28" class="mem"/>
+      <rect x="34" y="90" width="28" height="28" class="mem"/>
+      <line x1="72" y1="65" x2="102" y2="65" class="arrow" marker-end="url(#ah)"/>
+      <rect x="112" y="52" width="19" height="26" class="mem"/><rect x="131" y="52" width="19" height="26" class="mem"/><rect x="150" y="52" width="19" height="26" class="mem"/><rect x="169" y="52" width="19" height="26" class="accent"/><rect x="188" y="52" width="19" height="26" class="mem"/><rect x="207" y="52" width="19" height="26" class="mem"/>
+      <text x="121" y="94" class="mid small t-faint">0</text><text x="140" y="94" class="mid small t-faint">1</text><text x="159" y="94" class="mid small t-faint">2</text><text x="178" y="94" class="mid small t-hot">3</text><text x="197" y="94" class="mid small t-faint">4</text><text x="216" y="94" class="mid small t-faint">5</text>
+      <text x="169" y="40" class="mid small">one array, picked by index</text>
+    </svg>
+    <h4>Textures bound per material</h4>
+    <p>All textures in one big array, picked by index: <a href="bindless.html">bindless resources</a>.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three separate mesh buffers become one long buffer that holds the three meshes one after another.">
+      <rect x="14" y="20" width="64" height="18" rx="3" class="mem"/>
+      <rect x="14" y="56" width="44" height="18" rx="3" class="mem"/>
+      <rect x="14" y="92" width="56" height="18" rx="3" class="mem"/>
+      <line x1="86" y1="65" x2="110" y2="65" class="arrow" marker-end="url(#ah)"/>
+      <rect x="118" y="54" width="46" height="22" class="mem"/><rect x="164" y="54" width="28" height="22" class="mem"/><rect x="192" y="54" width="36" height="22" class="mem"/>
+      <text x="173" y="42" class="mid small">one big buffer</text>
+      <text x="141" y="92" class="mid small t-faint">mesh 0</text><text x="178" y="92" class="mid small t-faint">1</text><text x="210" y="92" class="mid small t-faint">2</text>
+    </svg>
+    <h4>Vertex and index buffers per mesh</h4>
+    <p>All meshes in one big buffer: <a href="vertex-pulling.html">vertex pulling and mega-buffers</a>.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="One pipeline. The cull mode is not inside it: commands in the command buffer set it between two runs of draws.">
+      <rect x="14" y="34" width="86" height="62" rx="6" class="gpu"/>
+      <text x="57" y="62" class="mid title">pipeline</text>
+      <text x="57" y="80" class="mid small">stays the same</text>
+      <rect x="126" y="10" width="100" height="24" rx="3" class="accent"/><text x="176" y="27" class="mid small">cull: back</text>
+      <rect x="126" y="38" width="100" height="24" rx="3" class="cpu"/><text x="176" y="55" class="mid small">draw run 0</text>
+      <rect x="126" y="66" width="100" height="24" rx="3" class="accent"/><text x="176" y="83" class="mid small">cull: none</text>
+      <rect x="126" y="94" width="100" height="24" rx="3" class="cpu"/><text x="176" y="111" class="mid small">draw run 1</text>
+    </svg>
+    <h4>Fixed-function state, such as face culling</h4>
+    <p><b>Dynamic state</b>: the value is set in the command buffer, not baked into the pipeline. It still splits runs, but not pipelines.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two passes, one after the other: an opaque pass, then a transparent pass whose draws are sorted and blended.">
+      <rect x="12" y="38" width="96" height="46" rx="6" class="gpu"/>
+      <text x="60" y="66" class="mid small">opaque pass</text>
+      <line x1="108" y1="61" x2="126" y2="61" class="arrow" marker-end="url(#ah)"/>
+      <rect x="128" y="38" width="100" height="46" rx="6" class="accent"/>
+      <text x="178" y="58" class="mid small">transparent pass</text>
+      <text x="178" y="74" class="mid small">sorted, blended</text>
+      <text x="120" y="108" class="mid small t-faint">its own pipeline, its own pass</text>
+    </svg>
+    <h4>Blending (transparent objects)</h4>
+    <p>Cannot be avoided. Transparent objects need their own pipeline, and usually a sorted order, so they get their own pass.</p>
+  </div>
 </div>
 
-<h2><span class="n">9</span>What the CPU still does</h2>
+<h2 id="cpu-work"><span class="n">9</span>What the CPU still does</h2>
 
 <p>GPU-driven does not mean the CPU does nothing. It means the CPU's work no longer grows with the number of objects drawn each frame.</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>When</th><th>CPU work</th></tr>
-  <tr><td>Once, at load</td><td>Upload meshes, textures and materials. Create the pipelines.</td></tr>
-  <tr><td>When something changes</td><td>Write the changed rows of the scene tables: a moved object, a new material. Rebuild the draw list when objects are added or change state.</td></tr>
-  <tr><td>Every frame</td><td>Write the camera and the per-frame constants. Record the culling dispatches, a few binds and one indirect call per run. Submit.</td></tr>
-  <tr><td>Never</td><td>Loop over all objects to test, sort or draw them.</td></tr>
-</table>
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The CPU sends meshes, textures and materials to GPU memory, once.">
+      <rect x="14" y="48" width="62" height="34" rx="6" class="cpu"/><text x="45" y="70" class="mid title">CPU</text>
+      <line x1="76" y1="56" x2="126" y2="28" class="arrow mem flowing" marker-end="url(#ah-mem)"/>
+      <line x1="76" y1="65" x2="126" y2="65" class="arrow mem flowing" marker-end="url(#ah-mem)"/>
+      <line x1="76" y1="74" x2="126" y2="102" class="arrow mem flowing" marker-end="url(#ah-mem)"/>
+      <rect x="130" y="12" width="96" height="28" rx="4" class="mem"/><text x="178" y="31" class="mid small">meshes</text>
+      <rect x="130" y="51" width="96" height="28" rx="4" class="mem"/><text x="178" y="70" class="mid small">textures</text>
+      <rect x="130" y="90" width="96" height="28" rx="4" class="mem"/><text x="178" y="109" class="mid small">materials</text>
+    </svg>
+    <h4>Once, at load</h4>
+    <p>Upload meshes, textures and materials. Create the pipelines.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A scene table of five rows. The CPU writes one row, the one that changed.">
+      <rect x="14" y="48" width="62" height="34" rx="6" class="cpu"/><text x="45" y="70" class="mid title">CPU</text>
+      <line x1="76" y1="65" x2="118" y2="65" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <rect x="122" y="12" width="104" height="20" class="mem"/>
+      <rect x="122" y="34" width="104" height="20" class="mem"/>
+      <rect x="122" y="56" width="104" height="20" class="accent"/><text x="174" y="70" class="mid small">changed row</text>
+      <rect x="122" y="78" width="104" height="20" class="mem"/>
+      <rect x="122" y="100" width="104" height="20" class="mem"/>
+    </svg>
+    <h4>When something changes</h4>
+    <p>Write the changed rows of the scene tables: a moved object, a new material. Rebuild the draw list when objects are added or change state.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A short row of commands: camera, cull, run A, run B, submit. It is the same few commands for any scene size.">
+      <rect x="6"   y="40" width="44" height="36" rx="3" class="cpu"/><text x="28"  y="62" class="mid small">camera</text>
+      <rect x="52"  y="40" width="44" height="36" rx="3" class="cpu"/><text x="74"  y="62" class="mid small">cull</text>
+      <rect x="98"  y="40" width="44" height="36" rx="3" class="cpu"/><text x="120" y="62" class="mid small">run A</text>
+      <rect x="144" y="40" width="44" height="36" rx="3" class="cpu"/><text x="166" y="62" class="mid small">run B</text>
+      <rect x="190" y="40" width="44" height="36" rx="3" class="cpu"/><text x="212" y="62" class="mid small">submit</text>
+      <text x="120" y="100" class="mid small t-faint">the same few commands, any scene size</text>
+    </svg>
+    <h4>Every frame</h4>
+    <p>Write the camera and the per-frame constants. Record the culling dispatches, a few binds and one indirect call per run. Submit.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Many objects, with a loop over all of them crossed out.">
+      <circle cx="42" cy="38" r="6" class="solid"/><circle cx="73" cy="38" r="6" class="solid"/><circle cx="104" cy="38" r="6" class="solid"/><circle cx="135" cy="38" r="6" class="solid"/><circle cx="166" cy="38" r="6" class="solid"/><circle cx="197" cy="38" r="6" class="solid"/>
+      <circle cx="42" cy="65" r="6" class="solid"/><circle cx="73" cy="65" r="6" class="solid"/><circle cx="104" cy="65" r="6" class="solid"/><circle cx="135" cy="65" r="6" class="solid"/><circle cx="166" cy="65" r="6" class="solid"/><circle cx="197" cy="65" r="6" class="solid"/>
+      <circle cx="42" cy="92" r="6" class="solid"/><circle cx="73" cy="92" r="6" class="solid"/><circle cx="104" cy="92" r="6" class="solid"/><circle cx="135" cy="92" r="6" class="solid"/><circle cx="166" cy="92" r="6" class="solid"/><circle cx="197" cy="92" r="6" class="solid"/>
+      <path d="M28,20L212,110M212,20L28,110" class="arrow bad thick"/>
+    </svg>
+    <h4>Never</h4>
+    <p>Loop over all objects to test, sort or draw them.</p>
+  </div>
 </div>
 
 <p>The CPU also loses something: it no longer knows what was drawn. How many objects were visible, or how many triangles, is only in GPU memory. To show it, the CPU must read it back a frame or two later, after the GPU has finished (see <a href="gpu-timing.html">GPU timing and frame statistics</a>).</p>
 
-<h2><span class="n">10</span>Worked example</h2>
+<h2 id="example"><span class="n">10</span>Worked example</h2>
 
 <p>A scene with 8 draws in two states. Click through what happens in one frame.</p>
 
 <div class="stepper">
   <div class="step">
     <h4>1. The draw list, sorted by state</h4>
-    <svg viewBox="0 0 720 170" role="img" aria-label="Eight draw records. Records 0 to 4 have state A, records 5 to 7 state B.">
+    <svg viewBox="0 0 720 112" role="img" aria-label="Eight draw records. Records 0 to 4 have state A, records 5 to 7 state B.">
       <rect x="10"  y="20" width="430" height="80" rx="6" class="zone"/>
       <text x="225" y="38" class="mid small">run A: records 0 to 4</text>
       <rect x="452" y="20" width="258" height="80" rx="6" class="zone"/>
@@ -468,15 +700,13 @@
       <rect x="460" y="48" width="76" height="42" rx="4" class="mem"/><text x="498" y="74" class="mid">d5</text>
       <rect x="544" y="48" width="76" height="42" rx="4" class="mem"/><text x="582" y="74" class="mid">d6</text>
       <rect x="628" y="48" width="76" height="42" rx="4" class="mem"/><text x="666" y="74" class="mid">d7</text>
-      <text x="10" y="130" class="small">The CPU built this list when the scene changed, and uploaded it. It is the same every frame until the scene changes.</text>
-      <text x="10" y="148" class="small">Each record has the full mesh range and the object's row in firstInstance.</text>
     </svg>
-    <p>All 8 records are in a GPU buffer. Nothing in this step happens per frame.</p>
+    <p>All 8 records are in a GPU buffer. The CPU built this list when the scene changed, and uploaded it. It is the same every frame until the scene changes, so nothing in this step happens per frame. Each record has the full mesh range and the object's row in <code>firstInstance</code>.</p>
   </div>
 
   <div class="step">
     <h4>2. Culling tests every record</h4>
-    <svg viewBox="0 0 720 170" role="img" aria-label="A compute shader tests every record. d0, d2, d3, d6 and d7 are visible. d1, d4 and d5 are culled.">
+    <svg viewBox="0 0 720 112" role="img" aria-label="A compute shader tests every record. d0, d2, d3, d6 and d7 are visible. d1, d4 and d5 are culled.">
       <rect x="10"  y="20" width="430" height="80" rx="6" class="zone"/>
       <text x="225" y="38" class="mid small">run A</text>
       <rect x="452" y="20" width="258" height="80" rx="6" class="zone"/>
@@ -489,15 +719,13 @@
       <rect x="460" y="48" width="76" height="42" rx="4" class="ghost"/><text x="498" y="74" class="mid t-faint">d5 ✗</text>
       <rect x="544" y="48" width="76" height="42" rx="4" class="gpu"/><text x="582" y="74" class="mid">d6 ✓</text>
       <rect x="628" y="48" width="76" height="42" rx="4" class="gpu"/><text x="666" y="74" class="mid">d7 ✓</text>
-      <text x="10" y="130" class="small">One compute thread per record. Each thread reads its object's row and bounds, and tests them against the camera.</text>
-      <text x="10" y="148" class="small">It may also pick a coarser level of detail and change the record's index range.</text>
     </svg>
-    <p>5 of the 8 records are visible: 3 in run A, 2 in run B.</p>
+    <p>One compute thread per record. Each thread reads its object's row and bounds, and tests them against the camera. It may also pick a coarser level of detail and change the record's index range. 5 of the 8 records are visible: 3 in run A, 2 in run B.</p>
   </div>
 
   <div class="step">
     <h4>3. Pack each run, write its count</h4>
-    <svg viewBox="0 0 720 190" role="img" aria-label="The output buffer has the same ranges. Run A's slots 0 to 2 hold d0, d2, d3; slots 3 and 4 are unused. Run B's slots 5 and 6 hold d6 and d7; slot 7 is unused. The count buffer holds 3 and 2.">
+    <svg viewBox="0 0 720 158" role="img" aria-label="The output buffer has the same ranges. Run A's slots 0 to 2 hold d0, d2, d3; slots 3 and 4 are unused. Run B's slots 5 and 6 hold d6 and d7; slot 7 is unused. The count buffer holds 3 and 2.">
       <text x="10" y="16" class="small">output record buffer: each run keeps its range, its visible records packed at the start</text>
       <rect x="18"  y="28" width="76" height="42" rx="4" class="mem"/><text x="56"  y="54" class="mid">d0</text>
       <rect x="102" y="28" width="76" height="42" rx="4" class="mem"/><text x="140" y="54" class="mid">d2</text>
@@ -520,14 +748,13 @@
       <rect x="186" y="108" width="160" height="40" rx="4" class="mem"/>
       <text x="266" y="133" class="mid">count[B] = 2</text>
       <text x="360" y="133" class="small">count buffer</text>
-      <text x="10" y="176" class="small">The order inside a run stays the list order: d0, d2, d3. The unused slots keep old data, which no draw reads.</text>
     </svg>
-    <p>Each run's records start where the run starts, so the CPU already knew the offsets when it recorded the calls.</p>
+    <p>Each run's records start where the run starts, so the CPU already knew the offsets when it recorded the calls. The order inside a run stays the list order: d0, d2, d3. The unused slots keep old data, which no draw reads.</p>
   </div>
 
   <div class="step">
     <h4>4. Two indirect calls draw them</h4>
-    <svg viewBox="0 0 720 200" role="img" aria-label="Call A reads records from byte 0, count[A] = 3, max 5: draw index 0, 1, 2 read slots 0, 1, 2. Call B reads from byte 100, count[B] = 2, max 3: draw index 0 and 1, plus the run's first slot 5, read slots 5 and 6.">
+    <svg viewBox="0 0 720 140" role="img" aria-label="Call A reads records from byte 0, count[A] = 3, max 5: draw index 0, 1, 2 read slots 0, 1, 2. Call B reads from byte 100, count[B] = 2, max 3: draw index 0 and 1, plus the run's first slot 5, read slots 5 and 6.">
       <rect x="10" y="20" width="340" height="110" rx="6" class="cpu"/>
       <text x="180" y="42" class="mid title">Call A (state A)</text>
       <text x="24" y="66" class="small">records from byte 0 × 20 = 0</text>
@@ -538,10 +765,8 @@
       <text x="384" y="66" class="small">records from byte 5 × 20 = 100</text>
       <text x="384" y="86" class="small">count from count[B] = 2, max 3</text>
       <text x="384" y="106" class="small">draw index 0, 1 → slots <tspan class="t-hot">5 + 0, 5 + 1</tspan></text>
-      <text x="10" y="160" class="small">The draw-index built-in restarts at 0 in every call. A shader that reads the record by draw index</text>
-      <text x="10" y="178" class="small">must add the run's first slot, which the CPU passes in, for example as a push constant.</text>
     </svg>
-    <p>The CPU recorded 2 state changes and 2 calls. It did not know that 5 draws would be visible, nor which ones.</p>
+    <p>The CPU recorded 2 state changes and 2 calls. It did not know that 5 draws would be visible, nor which ones. The draw-index built-in restarts at 0 in every call. A shader that reads the record by draw index must add the run's first slot, which the CPU passes in, for example as a push constant.</p>
   </div>
 </div>
 
@@ -557,7 +782,7 @@
 </table>
 </div>
 
-<h2><span class="n">11</span>Limits and trade-offs</h2>
+<h2 id="limits"><span class="n">11</span>Limits and trade-offs</h2>
 
 <div class="table-wrap">
 <table>

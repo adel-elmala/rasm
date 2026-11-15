@@ -19,6 +19,8 @@
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
   </defs>
 </svg>
 
@@ -49,7 +51,7 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>Why not load on the main thread</h2>
+<h2 id="main-thread"><span class="n">1</span>Why not load on the main thread</h2>
 
 <p>The main thread runs the frame loop: input, game logic, and recording the GPU's work. If it stops to load a file, no new frame is made until the load is done. The picture freezes.</p>
 
@@ -59,14 +61,14 @@
     <text x="20" y="58" class="small">main thread</text>
     <rect x="120" y="36" width="36" height="36" rx="3" class="cpu"/>
     <rect x="160" y="36" width="36" height="36" rx="3" class="cpu"/>
-    <rect x="200" y="36" width="320" height="36" rx="3" class="hot"/>
+    <rect x="200" y="36" width="320" height="36" rx="3" class="bad"/>
     <text x="360" y="58" class="mid">read + decode + upload: 300 ms</text>
     <rect x="524" y="36" width="36" height="36" rx="3" class="cpu"/>
     <rect x="564" y="36" width="36" height="36" rx="3" class="cpu"/>
     <rect x="604" y="36" width="36" height="36" rx="3" class="cpu"/>
     <rect x="644" y="36" width="36" height="36" rx="3" class="cpu"/>
     <rect x="684" y="36" width="36" height="36" rx="3" class="cpu"/>
-    <text x="360" y="90" class="mid small t-hot">no new frame for 300 ms: the picture freezes</text>
+    <text x="360" y="90" class="mid small t-bad">no new frame for 300 ms: the picture freezes</text>
 
     <text x="20" y="126" class="title">With a worker thread</text>
     <text x="20" y="164" class="small">main thread</text>
@@ -97,52 +99,109 @@
 
 <p>Not every part of a load can move to another thread, though. To see which parts can, split the load into its steps.</p>
 
-<h2><span class="n">2</span>What a load is made of</h2>
+<h2 id="steps"><span class="n">2</span>What a load is made of</h2>
 
-<figure class="diagram">
-  <svg viewBox="0 0 760 190" role="img" aria-label="Five steps in a row: read the file, parse and decode, process, upload to GPU memory, and publish. The first three can run on a worker thread. The last two touch the graphics API and the engine's state, so they usually run on the main thread.">
-    <rect x="20"  y="40" width="128" height="56" rx="6" class="cpu"/>
-    <text x="84"  y="63" class="mid title">Read</text>
-    <text x="84"  y="81" class="mid small">file bytes from disk</text>
-    <line x1="148" y1="68" x2="166" y2="68" class="arrow" marker-end="url(#ah)"/>
-    <rect x="168" y="40" width="128" height="56" rx="6" class="cpu"/>
-    <text x="232" y="63" class="mid title">Parse, decode</text>
-    <text x="232" y="81" class="mid small">JSON, PNG, JPEG…</text>
-    <line x1="296" y1="68" x2="314" y2="68" class="arrow" marker-end="url(#ah)"/>
-    <rect x="316" y="40" width="128" height="56" rx="6" class="cpu"/>
-    <text x="380" y="63" class="mid title">Process</text>
-    <text x="380" y="81" class="mid small">LODs, mips, tangents</text>
-    <line x1="444" y1="68" x2="462" y2="68" class="arrow" marker-end="url(#ah)"/>
-    <rect x="464" y="40" width="128" height="56" rx="6" class="mem"/>
-    <text x="528" y="63" class="mid title">Upload</text>
-    <text x="528" y="81" class="mid small">copy to GPU memory</text>
-    <line x1="592" y1="68" x2="610" y2="68" class="arrow" marker-end="url(#ah)"/>
-    <rect x="612" y="40" width="128" height="56" rx="6" class="cpu"/>
-    <text x="676" y="63" class="mid title">Publish</text>
-    <text x="676" y="81" class="mid small">mark it ready</text>
+<p>A load is five steps in a row. The first three are most of the time, and they only need the file and some memory.</p>
 
-    <rect x="20" y="116" width="424" height="40" rx="6" class="zone"/>
-    <text x="232" y="141" class="mid">can run on a worker: plain data in, plain data out</text>
-    <rect x="464" y="116" width="276" height="40" rx="6" class="hot"/>
-    <text x="602" y="134" class="mid">usually the main thread:</text>
-    <text x="602" y="149" class="mid small">graphics API and engine state</text>
-    <text x="20" y="180" class="small">The first three steps are most of the time. They only need the file and some memory.</text>
-  </svg>
-  <figcaption>"Process" is any work that turns the file's data into what the renderer wants: building coarser versions of a mesh, making the smaller mip levels of a texture, computing missing normals.</figcaption>
-</figure>
+<ol class="flow">
+  <li class="cpu"><b>Read</b><span>file bytes from disk</span></li>
+  <li class="cpu"><b>Parse, decode</b><span>JSON, PNG, JPEG…</span></li>
+  <li class="cpu"><b>Process</b><span>LODs, mips, tangents</span></li>
+  <li class="mem"><b>Upload</b><span>copy to GPU memory</span></li>
+  <li class="cpu"><b>Publish</b><span>mark it ready</span></li>
+</ol>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Step</th><th>Bottleneck</th><th>Why it can or cannot move</th></tr>
-  <tr><td>Read</td><td>the disk</td><td>Only a file name and a byte array. Any thread can do it.</td></tr>
-  <tr><td>Parse, decode</td><td>the CPU</td><td>A pure function of the bytes. Any thread can do it, if the library has no global state.</td></tr>
-  <tr><td>Process</td><td>the CPU</td><td>Same as decode: plain data in, plain data out.</td></tr>
-  <tr><td>Upload</td><td>the bus to the GPU</td><td>It creates GPU objects and records copies. Graphics APIs let several threads do this, but each command buffer and pool belongs to one thread at a time. Many engines keep it on the main thread, which is simpler.</td></tr>
-  <tr><td>Publish</td><td>nothing</td><td>It changes the engine's tables, which the main thread reads all the time. Doing it at one fixed point avoids locks.</td></tr>
-</table>
+<h3>Can run on a worker: plain data in, plain data out</h3>
+
+<div class="vgrid">
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A file on a disk becomes a row of raw bytes in memory.">
+      <rect x="24" y="30" width="56" height="64" rx="4" class="box"/>
+      <path d="M34,46H70M34,58H70M34,70H58" class="arrow"/>
+      <text x="52" y="114" class="mid small">file on disk</text>
+      <line x1="86" y1="62" x2="110" y2="62" class="arrow" marker-end="url(#ah)"/>
+      <rect x="114" y="50" width="20" height="24" class="cpu"/><text x="124" y="67" class="mid mono">89</text>
+      <rect x="134" y="50" width="20" height="24" class="cpu"/><text x="144" y="67" class="mid mono">50</text>
+      <rect x="154" y="50" width="20" height="24" class="cpu"/><text x="164" y="67" class="mid mono">4E</text>
+      <rect x="174" y="50" width="20" height="24" class="cpu"/><text x="184" y="67" class="mid mono">47</text>
+      <rect x="194" y="50" width="20" height="24" class="cpu"/><text x="204" y="67" class="mid mono">…</text>
+      <text x="164" y="114" class="mid small">bytes in memory</text>
+    </svg>
+    <h4>Read</h4>
+    <p>Only a file name and a byte array. Any thread can do it.</p>
+    <p class="cost">Bottleneck: the disk</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A row of bytes becomes a grid of pixels.">
+      <rect x="14" y="50" width="20" height="24" class="cpu"/><text x="24" y="67" class="mid mono">89</text>
+      <rect x="34" y="50" width="20" height="24" class="cpu"/><text x="44" y="67" class="mid mono">50</text>
+      <rect x="54" y="50" width="20" height="24" class="cpu"/><text x="64" y="67" class="mid mono">4E</text>
+      <rect x="74" y="50" width="20" height="24" class="cpu"/><text x="84" y="67" class="mid mono">…</text>
+      <text x="54" y="96" class="mid small">bytes</text>
+      <line x1="100" y1="62" x2="136" y2="62" class="arrow" marker-end="url(#ah)"/>
+      <rect x="142" y="20" width="72" height="72" class="mem"/>
+      <rect x="142" y="20" width="36" height="18" class="light"/>
+      <rect x="160" y="38" width="36" height="18" class="accent"/>
+      <rect x="178" y="56" width="36" height="36" class="solid"/>
+      <path d="M160,20V92M178,20V92M196,20V92M142,38H214M142,56H214M142,74H214" class="grid"/>
+      <text x="178" y="112" class="mid small">pixels</text>
+    </svg>
+    <h4>Parse, decode</h4>
+    <p>A pure function of the bytes. Any thread can do it, if the library has no global state.</p>
+    <p class="cost">Bottleneck: the CPU</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="One large image and three smaller copies of it, each half the size: a mip chain.">
+      <rect x="26" y="22" width="72" height="72" class="mem"/>
+      <path d="M44,22V94M62,22V94M80,22V94M26,40H98M26,58H98M26,76H98" class="grid"/>
+      <rect x="112" y="58" width="36" height="36" class="mem"/>
+      <path d="M130,58V94M112,76H148" class="grid"/>
+      <rect x="162" y="76" width="18" height="18" class="mem"/>
+      <rect x="194" y="85" width="9" height="9" class="mem"/>
+      <text x="120" y="116" class="mid small">mip 0, 1, 2, 3: built from the image</text>
+    </svg>
+    <h4>Process</h4>
+    <p>Same as decode: plain data in, plain data out. It builds what the renderer wants: coarser versions of a mesh, the smaller mip levels of a texture, missing normals.</p>
+    <p class="cost">Bottleneck: the CPU</p>
+  </div>
 </div>
 
-<h2><span class="n">3</span>Worker threads and job queues</h2>
+<h3>Usually the main thread: graphics API and engine state</h3>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 320 110" role="img" aria-label="Data moves from CPU memory over the bus into GPU memory.">
+      <rect x="20" y="28" width="104" height="54" rx="6" class="cpu"/>
+      <text x="72" y="52" class="mid title">CPU</text>
+      <text x="72" y="70" class="mid small">decoded data</text>
+      <line x1="160" y1="22" x2="160" y2="100" class="dashed"/>
+      <text x="160" y="14" class="mid small">the bus</text>
+      <line x1="124" y1="55" x2="194" y2="55" class="arrow mem thick flowing" marker-end="url(#ah-mem)"/>
+      <rect x="196" y="28" width="104" height="54" rx="6" class="mem"/>
+      <text x="248" y="52" class="mid title">GPU</text>
+      <text x="248" y="70" class="mid small">buffer, texture</text>
+    </svg>
+    <h4>Upload</h4>
+    <p>It creates GPU objects and records copies. Graphics APIs let several threads do this, but each command buffer and pool belongs to one thread at a time. Many engines keep it on the main thread, which is simpler.</p>
+    <p class="cost">Bottleneck: the bus to the GPU</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 110" role="img" aria-label="A table of meshes. Two rows say ready. The third row changes from loading to ready.">
+      <rect x="60" y="10" width="200" height="24" class="box"/>
+      <text x="72" y="27" class="small">mesh 5</text><text x="248" y="27" class="end small">ready</text>
+      <rect x="60" y="34" width="200" height="24" class="box"/>
+      <text x="72" y="51" class="small">mesh 6</text><text x="248" y="51" class="end small">ready</text>
+      <rect x="60" y="58" width="200" height="24" class="ok"/>
+      <text x="72" y="75" class="small">mesh 7</text><text x="248" y="75" class="end small t-ok">loading → ready</text>
+      <text x="160" y="102" class="mid small">the engine's table</text>
+    </svg>
+    <h4>Publish</h4>
+    <p>It changes the engine's tables, which the main thread reads all the time. Doing it at one fixed point avoids locks.</p>
+    <p class="cost">Bottleneck: nothing</p>
+  </div>
+</div>
+
+<h2 id="workers"><span class="n">3</span>Worker threads and job queues</h2>
 
 <p>A <b>worker</b> is a thread that runs jobs given to it by another thread. A <b>job</b> here is "load this file": it gets a path and returns the decoded data. There are three common ways to run them.</p>
 
@@ -181,16 +240,61 @@
   <figcaption>A thread pool with two queues. The queues are the only things both sides touch, so only they need a lock.</figcaption>
 </figure>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Way</th><th>How</th><th>Good</th><th>Bad</th></tr>
-  <tr><td>One task per load</td><td>Start a new task (a thread, or a library task like a <b>future</b>) for each load. The task's result is the hand-off.</td><td>Very little code. No queue to write.</td><td>100 loads at once start up to 100 threads, which fight for the CPU and the disk. No order, no priorities, hard to cancel.</td></tr>
-  <tr><td>Fixed thread pool with a job queue</td><td>A few threads (often the core count minus one or two) take jobs from a shared queue.</td><td>The CPU is never oversubscribed. The queue can be sorted by priority (near objects first), and a job can be removed before it starts.</td><td>More code: the queue, its lock, and shutting the threads down.</td></tr>
-  <tr><td>Asynchronous I/O plus a pool</td><td>The OS reads the file in the background (overlapped I/O, io_uring); only decoding uses a worker.</td><td>No thread waits on the disk.</td><td>Platform-specific code.</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Twenty small threads crowd above only four CPU cores.">
+      <path d="M22,12h14v14h-14zM42,12h14v14h-14zM62,12h14v14h-14zM82,12h14v14h-14zM102,12h14v14h-14zM122,12h14v14h-14zM142,12h14v14h-14zM162,12h14v14h-14zM182,12h14v14h-14zM202,12h14v14h-14zM22,32h14v14h-14zM42,32h14v14h-14zM62,32h14v14h-14zM82,32h14v14h-14zM102,32h14v14h-14zM122,32h14v14h-14zM142,32h14v14h-14zM162,32h14v14h-14zM182,32h14v14h-14zM202,32h14v14h-14z" class="cpu"/>
+      <text x="120" y="66" class="mid small t-bad">100 loads: up to 100 threads</text>
+      <rect x="30"  y="78" width="36" height="26" rx="3" class="box"/>
+      <rect x="78"  y="78" width="36" height="26" rx="3" class="box"/>
+      <rect x="126" y="78" width="36" height="26" rx="3" class="box"/>
+      <rect x="174" y="78" width="36" height="26" rx="3" class="box"/>
+      <text x="120" y="122" class="mid small">4 CPU cores</text>
+    </svg>
+    <h4>One task per load</h4>
+    <p>Start a new task (a thread, or a library task like a <b>future</b>) for each load. The task's result is the hand-off.</p>
+    <p><b class="c-ok">Good:</b> very little code. No queue to write.</p>
+    <p><b class="c-bad">Bad:</b> 100 loads at once start up to 100 threads, which fight for the CPU and the disk. No order, no priorities, hard to cancel.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A queue of four jobs feeds three worker threads.">
+      <rect x="14" y="53" width="22" height="24" class="mem"/>
+      <rect x="36" y="53" width="22" height="24" class="mem"/>
+      <rect x="58" y="53" width="22" height="24" class="mem"/>
+      <rect x="80" y="53" width="22" height="24" class="mem"/>
+      <text x="58" y="98" class="mid small">job queue</text>
+      <line x1="106" y1="60" x2="146" y2="28" class="arrow" marker-end="url(#ah)"/>
+      <line x1="106" y1="65" x2="146" y2="65" class="arrow" marker-end="url(#ah)"/>
+      <line x1="106" y1="70" x2="146" y2="102" class="arrow" marker-end="url(#ah)"/>
+      <rect x="148" y="14" width="78" height="26" rx="4" class="cpu"/><text x="187" y="31" class="mid small">worker</text>
+      <rect x="148" y="52" width="78" height="26" rx="4" class="cpu"/><text x="187" y="69" class="mid small">worker</text>
+      <rect x="148" y="90" width="78" height="26" rx="4" class="cpu"/><text x="187" y="107" class="mid small">worker</text>
+    </svg>
+    <h4>Fixed thread pool with a job queue</h4>
+    <p>A few threads (often the core count minus one or two) take jobs from a shared queue.</p>
+    <p><b class="c-ok">Good:</b> the CPU is never oversubscribed. The queue can be sorted by priority (near objects first), and a job can be removed before it starts.</p>
+    <p><b class="c-bad">Bad:</b> more code: the queue, its lock, and shutting the threads down.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The operating system reads the file in the background and hands the bytes to a worker, which only decodes.">
+      <rect x="14" y="36" width="86" height="48" rx="6" class="box"/>
+      <text x="57" y="57" class="mid title">OS</text>
+      <text x="57" y="74" class="mid small">reads the file</text>
+      <line x1="100" y1="60" x2="138" y2="60" class="arrow flowing" marker-end="url(#ah)"/>
+      <text x="119" y="50" class="mid small">bytes</text>
+      <rect x="140" y="36" width="86" height="48" rx="6" class="cpu"/>
+      <text x="183" y="57" class="mid title">worker</text>
+      <text x="183" y="74" class="mid small">decodes only</text>
+      <text x="120" y="110" class="mid small t-ok">no thread waits on the disk</text>
+    </svg>
+    <h4>Asynchronous I/O plus a pool</h4>
+    <p>The OS reads the file in the background (overlapped I/O, io_uring); only decoding uses a worker.</p>
+    <p><b class="c-ok">Good:</b> no thread waits on the disk.</p>
+    <p><b class="c-bad">Bad:</b> platform-specific code.</p>
+  </div>
 </div>
 
-<h2><span class="n">4</span>The hand-off between threads</h2>
+<h2 id="handoff"><span class="n">4</span>The hand-off between threads</h2>
 
 <p>The worker and the main thread run at the same time. If both touch the same data, the result depends on timing: a <b>data race</b>. The safe pattern is that data <b>moves</b> between threads and is never shared. The worker gets a copy of what it needs (a path, some options), builds its result in its own memory, and hands the whole result over in one step. Click through one load (or use the arrow keys).</p>
 
@@ -333,22 +437,53 @@
 </div>
 
 <div class="split">
-  <div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Inside the worker's own memory: a copy of the path, a copy of the options, the result it builds, and thread-safe libraries.">
+      <rect x="8" y="8" width="304" height="124" rx="8" class="zone"/>
+      <text x="160" y="30" class="mid small">the worker's own memory</text>
+      <rect x="22"  y="42" width="84" height="34" rx="4" class="ok"/><text x="64"  y="63" class="mid small">path (copy)</text>
+      <rect x="114" y="42" width="96" height="34" rx="4" class="ok"/><text x="162" y="63" class="mid small">options (copy)</text>
+      <rect x="218" y="42" width="80" height="34" rx="4" class="ok"/><text x="258" y="63" class="mid small">its result</text>
+      <rect x="22" y="86" width="276" height="32" rx="4" class="ok"/><text x="160" y="106" class="mid small">thread-safe libraries</text>
+    </svg>
     <h4>What the worker may touch</h4>
-    <p>Its inputs (copied in), its own memory, and thread-safe libraries. Not the engine's tables, not the graphics device, not anything the main thread may change. Careful with libraries that keep <b>global settings</b>: an image loader with a global "flip vertically" switch gives different results depending on which thread set it last.</p>
+    <p>Its inputs (copied in), its own memory, and thread-safe libraries.</p>
   </div>
-  <div>
-    <h4>Shutting down</h4>
-    <p>When the program exits while a load runs, the worker still writes into memory that the program is about to free. So shutdown must first wait for (or cancel) every running job, and then free what the finished ones returned.</p>
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Arrows from the worker to the engine's tables, the graphics device and data the main thread may change are all crossed out.">
+      <rect x="8" y="48" width="84" height="44" rx="6" class="cpu"/>
+      <text x="50" y="75" class="mid">worker</text>
+      <line x1="92" y1="62" x2="180" y2="28" class="arrow bad dashed" marker-end="url(#ah-bad)"/>
+      <line x1="92" y1="70" x2="180" y2="70" class="arrow bad dashed" marker-end="url(#ah-bad)"/>
+      <line x1="92" y1="78" x2="180" y2="112" class="arrow bad dashed" marker-end="url(#ah-bad)"/>
+      <text x="136" y="50" class="mid title t-bad halo">✗</text>
+      <text x="136" y="75" class="mid title t-bad halo">✗</text>
+      <text x="136" y="100" class="mid title t-bad halo">✗</text>
+      <rect x="182" y="10" width="130" height="34" rx="4" class="box"/><text x="247" y="31" class="mid small">the engine's tables</text>
+      <rect x="182" y="53" width="130" height="34" rx="4" class="box"/><text x="247" y="74" class="mid small">the graphics device</text>
+      <rect x="182" y="96" width="130" height="34" rx="4" class="box"/><text x="247" y="117" class="mid small">main-thread data</text>
+    </svg>
+    <h4>What it must not touch</h4>
+    <p>The engine's tables, the graphics device, or anything the main thread may change.</p>
   </div>
 </div>
 
-<h2><span class="n">5</span>A budget per frame</h2>
+<div class="callout warn">
+  <strong>Libraries with global settings</strong>
+  <p>Careful with libraries that keep <b>global settings</b>: an image loader with a global "flip vertically" switch gives different results depending on which thread set it last.</p>
+</div>
+
+<div class="callout">
+  <strong>Shutting down</strong>
+  <p>When the program exits while a load runs, the worker still writes into memory that the program is about to free. So shutdown must first wait for (or cancel) every running job, and then free what the finished ones returned.</p>
+</div>
+
+<h2 id="budget"><span class="n">5</span>A budget per frame</h2>
 
 <p>Workers finish at random times. Often many finish together, for example when a level starts. If the main thread picked them all up in one frame, that frame would be long again: the freeze from section 1, only shorter. So the main thread works under a <b>budget</b>: it picks up results until the budget is used, and leaves the rest for the next frame.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 220" role="img" aria-label="Four results are ready. In frame A, the main thread finishes result 1, then starts result 2 before the 4 millisecond line, so result 2 finishes past the line. Results 3 and 4 wait for frame B.">
+  <svg viewBox="0 0 760 180" role="img" aria-label="Four results are ready. In frame A, the main thread finishes result 1, then starts result 2 before the 4 millisecond line, so result 2 finishes past the line. Results 3 and 4 wait for frame B.">
     <text x="320" y="20" class="mid small t-hot">budget: 4 ms</text>
     <line x1="320" y1="28" x2="320" y2="178" class="hot dashed"/>
     <text x="140" y="20" class="small">0 ms</text>
@@ -373,78 +508,188 @@
     <rect x="390" y="120" width="350" height="40" rx="4" class="ghost"/>
     <text x="565" y="144" class="mid small t-faint">nothing left · the rest of the frame</text>
 
-    <text x="140" y="204" class="small">Before each result: is the budget used up? Then stop. A result that has started always finishes, so a frame can go a little over.</text>
   </svg>
-  <figcaption>A <b>time budget</b> of a few milliseconds per frame. Each result here takes 3 ms to finish on the main thread.</figcaption>
+  <figcaption>A <b>time budget</b> of a few milliseconds per frame. Each result here takes 3 ms to finish on the main thread. Before each result the main thread asks: is the budget used up? Then it stops. A result that has started always finishes, so a frame can go a little over.</figcaption>
 </figure>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Budget in</th><th>How</th><th>Trade-off</th></tr>
-  <tr><td>Time</td><td>Stop when the clock passes the limit.</td><td>Follows the real cost. One big item can still go over, because work is not split.</td></tr>
-  <tr><td>Bytes</td><td>Stop after <var>N</var> MiB of uploads.</td><td>Predictable for the bus and the staging memory. Ignores CPU work such as building mips.</td></tr>
-  <tr><td>Count</td><td>Stop after <var>N</var> items.</td><td>Simplest. A large and a small texture count the same.</td></tr>
-  <tr><td>No budget</td><td>Take everything that is ready, and wait for the rest.</td><td>For a loading screen: the first frame shows the full scene.</td></tr>
-</table>
+<p>The budget can count different things:</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A frame as a bar of time. Two results are picked up, then a line at 4 milliseconds stops the work.">
+      <rect x="14" y="46" width="212" height="34" rx="3" class="ghost"/>
+      <rect x="14" y="46" width="44" height="34" rx="3" class="cpu"/>
+      <rect x="58" y="46" width="44" height="34" rx="3" class="cpu"/>
+      <line x1="80" y1="30" x2="80" y2="96" class="hot dashed"/>
+      <text x="80" y="22" class="mid small t-hot">4 ms</text>
+      <text x="164" y="67" class="mid small t-faint">the rest waits</text>
+      <text x="120" y="118" class="mid small">time in the frame →</text>
+    </svg>
+    <h4>Time</h4>
+    <p>Stop when the clock passes the limit.</p>
+    <p>Follows the real cost. One big item can still go over, because work is not split.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A bar of bytes. Three uploads of different sizes fill it up to a limit line.">
+      <rect x="14" y="46" width="212" height="34" rx="3" class="ghost"/>
+      <rect x="14"  y="46" width="70" height="34" rx="3" class="mem"/>
+      <rect x="84"  y="46" width="50" height="34" rx="3" class="mem"/>
+      <rect x="134" y="46" width="24" height="34" rx="3" class="mem"/>
+      <line x1="170" y1="30" x2="170" y2="96" class="hot dashed"/>
+      <text x="170" y="22" class="mid small t-hot">N MiB</text>
+      <text x="120" y="118" class="mid small">bytes uploaded →</text>
+    </svg>
+    <h4>Bytes</h4>
+    <p>Stop after <var>N</var> MiB of uploads.</p>
+    <p>Predictable for the bus and the staging memory. Ignores CPU work such as building mips.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three items of very different sizes. Each one counts as one.">
+      <rect x="18" y="36" width="74" height="62" rx="3" class="cpu"/>
+      <rect x="106" y="74" width="24" height="24" rx="3" class="cpu"/>
+      <rect x="144" y="56" width="46" height="42" rx="3" class="cpu"/>
+      <circle cx="55" cy="20" r="10" class="badge"/><text x="55" y="24" class="badge-n">1</text>
+      <circle cx="118" cy="58" r="10" class="badge"/><text x="118" y="62" class="badge-n">2</text>
+      <circle cx="167" cy="40" r="10" class="badge"/><text x="167" y="44" class="badge-n">3</text>
+      <line x1="208" y1="14" x2="208" y2="102" class="hot dashed"/>
+      <text x="120" y="120" class="mid small t-hot">N = 3: large and small count the same</text>
+    </svg>
+    <h4>Count</h4>
+    <p>Stop after <var>N</var> items.</p>
+    <p>Simplest. A large and a small texture count the same.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Six results are all taken in one go, and only then the first frame is drawn.">
+      <path d="M14,46h28v34h-28zM44,46h28v34h-28zM74,46h28v34h-28zM104,46h28v34h-28zM134,46h28v34h-28zM164,46h28v34h-28z" class="cpu"/>
+      <rect x="196" y="46" width="30" height="34" rx="3" class="gpu"/>
+      <text x="103" y="34" class="mid small">take everything, wait for the rest</text>
+      <text x="211" y="98" class="mid small t-gpu">draw</text>
+      <text x="103" y="118" class="mid small">a loading screen</text>
+    </svg>
+    <h4>No budget</h4>
+    <p>Take everything that is ready, and wait for the rest.</p>
+    <p>For a loading screen: the first frame shows the full scene.</p>
+  </div>
 </div>
 
 <h3>Worked example</h3>
 
 <p>30 textures finish at the same moment. Finishing one on the main thread (creating it, copying it, building its mips) takes 3 ms. The frame rate is 60 Hz, so a frame is 16.7 ms.</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Policy</th><th>Main-thread work per frame</th><th>Result</th></tr>
-  <tr><td>No budget</td><td>30 × 3 = 90 ms, in one frame</td><td>One frame takes over 100 ms: a visible hitch of about 5 frames.</td></tr>
-  <tr><td>4 ms, checked before each texture</td><td>starts at 0 ms and 3 ms, so 2 textures = 6 ms</td><td>Every frame stays smooth. All 30 are in after 15 frames, 0.25 s.</td></tr>
-</table>
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 120" role="img" aria-label="A row of frames. Two short frames, then one frame more than six times as long, then short frames again.">
+      <path d="M10,44h16v36h-16zM28,44h16v36h-16zM163,44h16v36h-16zM181,44h16v36h-16zM199,44h16v36h-16zM217,44h16v36h-16zM235,44h16v36h-16zM253,44h16v36h-16zM271,44h16v36h-16zM289,44h16v36h-16z" class="cpu"/>
+      <rect x="46" y="44" width="115" height="36" class="bad"/>
+      <text x="103" y="67" class="mid small">90 ms of loading</text>
+      <text x="103" y="34" class="mid small t-bad">one frame: over 100 ms</text>
+      <text x="160" y="106" class="mid small">each box is one frame; its width is its time</text>
+    </svg>
+    <h4>No budget</h4>
+    <p>30 × 3 = 90 ms of main-thread work, in one frame. One frame takes over 100 ms: a visible hitch of about 5 frames.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 120" role="img" aria-label="Fifteen frames of equal length. Each one has a small slice of loading work at its start.">
+      <path d="M10,44h18v36h-18zM30,44h18v36h-18zM50,44h18v36h-18zM70,44h18v36h-18zM90,44h18v36h-18zM110,44h18v36h-18zM130,44h18v36h-18zM150,44h18v36h-18zM170,44h18v36h-18zM190,44h18v36h-18zM210,44h18v36h-18zM230,44h18v36h-18zM250,44h18v36h-18zM270,44h18v36h-18zM290,44h18v36h-18z" class="cpu"/>
+      <path d="M10,44h6v36h-6zM30,44h6v36h-6zM50,44h6v36h-6zM70,44h6v36h-6zM90,44h6v36h-6zM110,44h6v36h-6zM130,44h6v36h-6zM150,44h6v36h-6zM170,44h6v36h-6zM190,44h6v36h-6zM210,44h6v36h-6zM230,44h6v36h-6zM250,44h6v36h-6zM270,44h6v36h-6zM290,44h6v36h-6z" class="accent"/>
+      <text x="160" y="34" class="mid small t-ok">15 frames, 6 ms of loading in each</text>
+      <text x="160" y="106" class="mid small">all 30 are in after 0.25 s</text>
+    </svg>
+    <h4>4 ms, checked before each texture</h4>
+    <p>A texture starts at 0 ms and at 3 ms, so 2 textures = 6 ms per frame. Every frame stays smooth. All 30 are in after 15 frames, 0.25 s.</p>
+  </div>
 </div>
 
 <p>A smaller budget gives smoother frames, but the scene fills in more slowly. A big item that cannot be split, such as one huge texture, needs to be split into pieces (one mip level or one tile at a time) to stay under the budget.</p>
 
-<h2><span class="n">6</span>What to show until the data arrives</h2>
+<h2 id="placeholders"><span class="n">6</span>What to show until the data arrives</h2>
 
-<figure class="diagram">
-  <svg viewBox="0 0 760 230" role="img" aria-label="Four ways to show an object that is still loading. Hide it: nothing is drawn. Placeholder: drawn with a plain white texture. Low detail first: drawn with a small blurry texture or a coarse mesh. Full: the real data.">
-    <text x="102" y="22" class="mid title">Hide it</text>
-    <rect x="42" y="40" width="120" height="100" rx="6" class="ghost"/>
-    <text x="102" y="94" class="mid small t-faint">not drawn</text>
-    <text x="102" y="166" class="mid small">simple, no wrong look</text>
-    <text x="102" y="182" class="mid small">things pop in late</text>
+<p>Four ways to show an object that is still loading. The grid lines stand for texture detail: a placeholder has none, a small mip a little, the full texture all of it.</p>
 
-    <text x="288" y="22" class="mid title">Placeholder</text>
-    <rect x="228" y="40" width="120" height="100" rx="6" class="box"/>
-    <text x="288" y="94" class="mid small">white texture</text>
-    <text x="288" y="166" class="mid small">the shape is there at once</text>
-    <text x="288" y="182" class="mid small">its surface changes later</text>
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A dashed outline where the object will be. Nothing is drawn.">
+      <rect x="75" y="20" width="90" height="90" rx="6" class="ghost"/>
+      <text x="120" y="69" class="mid small t-faint">not drawn</text>
+    </svg>
+    <h4>Hide it</h4>
+    <p>Simple, and it never looks wrong. Things pop in late.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The object's shape, drawn with a plain white surface.">
+      <rect x="75" y="20" width="90" height="90" rx="6" class="paper"/>
+      <rect x="75" y="20" width="90" height="90" rx="6" class="arrow"/>
+      <text x="120" y="69" class="mid small">white texture</text>
+    </svg>
+    <h4>Placeholder</h4>
+    <p>The shape is there at once. Its surface changes later.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The object with a coarse texture of two by two blocks.">
+      <rect x="75" y="20" width="90" height="90" rx="6" class="mem"/>
+      <path d="M120,20V110M75,65H165" class="arrow"/>
+    </svg>
+    <h4>Low detail first</h4>
+    <p>Small mips or a coarse mesh first, sharper later.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The object with a fine texture of six by six blocks.">
+      <rect x="75" y="20" width="90" height="90" rx="6" class="mem"/>
+      <path d="M90,20V110M105,20V110M120,20V110M135,20V110M150,20V110M75,35H165M75,50H165M75,65H165M75,80H165M75,95H165" class="arrow"/>
+    </svg>
+    <h4>Full</h4>
+    <p>All data in.</p>
+  </div>
+</div>
 
-    <text x="474" y="22" class="mid title">Low detail first</text>
-    <rect x="414" y="40" width="120" height="100" rx="6" class="mem"/>
-    <line x1="474" y1="40" x2="474" y2="140" class="arrow"/>
-    <line x1="414" y1="90" x2="534" y2="90" class="arrow"/>
-    <text x="474" y="166" class="mid small">small mips or a coarse mesh</text>
-    <text x="474" y="182" class="mid small">first, sharper later</text>
+<p>Which one is right depends on the program. A game behind a loading screen hides things. An open world or a map viewer shows something early and refines it.</p>
 
-    <text x="660" y="22" class="mid title">Full</text>
-    <rect x="600" y="40" width="120" height="100" rx="6" class="mem"/>
-    <line x1="630" y1="40" x2="630" y2="140" class="arrow"/>
-    <line x1="660" y1="40" x2="660" y2="140" class="arrow"/>
-    <line x1="690" y1="40" x2="690" y2="140" class="arrow"/>
-    <line x1="600" y1="65" x2="720" y2="65" class="arrow"/>
-    <line x1="600" y1="90" x2="720" y2="90" class="arrow"/>
-    <line x1="600" y1="115" x2="720" y2="115" class="arrow"/>
-    <text x="660" y="166" class="mid small">all data in</text>
+<h3>What is one unit?</h3>
 
-    <text x="20" y="218" class="small">The grid lines stand for texture detail: a placeholder has none, a small mip a little, the full texture all of it.</text>
-  </svg>
-  <figcaption>Which one is right depends on the program. A game behind a loading screen hides things. An open world or a map viewer shows something early and refines it.</figcaption>
-</figure>
+<p>An object often needs a mesh and several textures. Each part can appear on its own, or the object can wait until <b>all parts</b> are in:</p>
 
-<p>One more choice matters: <b>what is one unit</b>. An object often needs a mesh and several textures. If each part appears on its own, the object can show up with a wrong surface for a few frames, for example without its normal map. Waiting until <b>all parts</b> of an object are in avoids that half-loaded look, at the cost of a little more delay.</p>
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 120" role="img" aria-label="Three frames of one object. In frame 1 it is a plain white shape, in frame 2 it has a flat color, in frame 3 it also has its normal map.">
+      <rect x="18"  y="24" width="76" height="66" rx="6" class="paper"/>
+      <rect x="18"  y="24" width="76" height="66" rx="6" class="arrow"/>
+      <rect x="122" y="24" width="76" height="66" rx="6" class="mem"/>
+      <rect x="226" y="24" width="76" height="66" rx="6" class="mem"/>
+      <path d="M245,24V90M264,24V90M283,24V90M226,46H302M226,68H302" class="arrow"/>
+      <text x="56"  y="108" class="mid small">mesh only</text>
+      <text x="160" y="108" class="mid small">+ color</text>
+      <text x="264" y="108" class="mid small">+ normal map</text>
+      <text x="56"  y="16" class="mid small">frame 1</text>
+      <text x="160" y="16" class="mid small">frame 2</text>
+      <text x="264" y="16" class="mid small">frame 3</text>
+    </svg>
+    <h4>Each part on its own</h4>
+    <p>The object can show up with a wrong surface for a few frames, for example without its normal map.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 120" role="img" aria-label="Three frames of one object. In frames 1 and 2 nothing is drawn. In frame 3 the complete object appears.">
+      <rect x="18"  y="24" width="76" height="66" rx="6" class="ghost"/>
+      <rect x="122" y="24" width="76" height="66" rx="6" class="ghost"/>
+      <rect x="226" y="24" width="76" height="66" rx="6" class="mem"/>
+      <path d="M245,24V90M264,24V90M283,24V90M226,46H302M226,68H302" class="arrow"/>
+      <text x="56"  y="108" class="mid small t-faint">waits</text>
+      <text x="160" y="108" class="mid small t-faint">waits</text>
+      <text x="264" y="108" class="mid small">all parts</text>
+      <text x="56"  y="16" class="mid small">frame 1</text>
+      <text x="160" y="16" class="mid small">frame 2</text>
+      <text x="264" y="16" class="mid small">frame 3</text>
+    </svg>
+    <h4>All parts together</h4>
+    <p>No half-loaded look, at the cost of a little more delay.</p>
+  </div>
+</div>
 
-<p>A placeholder must also be ready <b>before</b> anything can use the asset. When a material points at a texture whose pixels are not there yet, and the renderer may sample it, the texture must hold something defined: a plain color, not uninitialized memory.</p>
+<div class="callout warn">
+  <strong>A placeholder must be ready before anything can use the asset</strong>
+  <p>When a material points at a texture whose pixels are not there yet, and the renderer may sample it, the texture must hold something defined: a plain color, not uninitialized memory.</p>
+</div>
 
-<h2><span class="n">7</span>Caching by path, and failures</h2>
+<h2 id="cache"><span class="n">7</span>Caching by path, and failures</h2>
 
 <p>The same file is often requested many times: a tree model used by a thousand trees, a texture shared by many materials. The loader keeps a <b>cache</b>: a map from the file's path to its handle. A second request returns the first handle, also while the first load still runs.</p>
 
@@ -471,13 +716,13 @@
     <text x="184" y="184" class="mid small">load</text>
     <rect x="220" y="170" width="130" height="46" rx="23" class="cpu"/>
     <text x="285" y="198" class="mid">loading</text>
-    <line x1="350" y1="186" x2="448" y2="152" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="392" y="158" class="end small t-gpu">success</text>
-    <line x1="350" y1="200" x2="448" y2="236" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="392" y="236" class="end small t-hot">error</text>
-    <rect x="450" y="126" width="130" height="46" rx="23" class="gpu"/>
+    <line x1="350" y1="186" x2="448" y2="152" class="arrow ok" marker-end="url(#ah-ok)"/>
+    <text x="392" y="158" class="end small t-ok">success</text>
+    <line x1="350" y1="200" x2="448" y2="236" class="arrow bad" marker-end="url(#ah-bad)"/>
+    <text x="392" y="236" class="end small t-bad">error</text>
+    <rect x="450" y="126" width="130" height="46" rx="23" class="ok"/>
     <text x="515" y="154" class="mid">ready</text>
-    <rect x="450" y="214" width="130" height="46" rx="23" class="hot"/>
+    <rect x="450" y="214" width="130" height="46" rx="23" class="bad"/>
     <text x="515" y="242" class="mid">failed</text>
     <path d="M515,260 V284 H285 V218" class="arrow dashed" marker-end="url(#ah)"/>
     <text x="400" y="278" class="mid small">load again: retry</text>
@@ -489,19 +734,68 @@
 
 <p>Errors come in two kinds, and they reach the caller in different ways:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Kind</th><th>Examples</th><th>Found</th><th>How the caller learns it</th></tr>
-  <tr><td>Early</td><td>the file does not exist, the file type is not supported, bad arguments</td><td>in the load call, before any job starts</td><td>an invalid handle, at once</td></tr>
-  <tr><td>Late</td><td>the file is corrupt, the decoder fails, there is no GPU memory left for it</td><td>on the worker, or when the main thread picks it up</td><td>the handle's state becomes <b>failed</b>; the caller can ask for it</td></tr>
-</table>
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 320 120" role="img" aria-label="The load call fails at once and returns an invalid handle. No job starts.">
+      <rect x="14" y="36" width="110" height="40" rx="6" class="cpu"/>
+      <text x="69" y="61" class="mid mono">load(path)</text>
+      <line x1="124" y1="56" x2="188" y2="56" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <text x="156" y="46" class="mid small t-bad">at once</text>
+      <rect x="190" y="36" width="116" height="40" rx="6" class="bad"/>
+      <text x="248" y="61" class="mid">invalid handle</text>
+      <text x="160" y="104" class="mid small">no job starts</text>
+    </svg>
+    <h4>Early</h4>
+    <p>The file does not exist, the file type is not supported, bad arguments.</p>
+    <p><b>Found</b> in the load call, before any job starts. <b>The caller learns it</b> from an invalid handle, at once.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 120" role="img" aria-label="The load call returns a handle in the loading state. Later the worker or the pick-up fails, and the handle's state becomes failed.">
+      <rect x="10" y="10" width="110" height="36" rx="6" class="cpu"/>
+      <text x="65" y="33" class="mid mono">load(path)</text>
+      <line x1="120" y1="28" x2="158" y2="28" class="arrow" marker-end="url(#ah)"/>
+      <rect x="160" y="10" width="150" height="36" rx="18" class="cpu"/>
+      <text x="235" y="33" class="mid">handle: loading</text>
+      <line x1="260" y1="46" x2="260" y2="72" class="arrow bad dashed" marker-end="url(#ah-bad)"/>
+      <text x="268" y="64" class="small t-bad">later</text>
+      <rect x="10" y="74" width="170" height="36" rx="6" class="bad"/>
+      <text x="95" y="97" class="mid small">decode or pick-up fails</text>
+      <line x1="180" y1="92" x2="208" y2="92" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <rect x="210" y="74" width="100" height="36" rx="18" class="bad"/>
+      <text x="260" y="97" class="mid">failed</text>
+    </svg>
+    <h4>Late</h4>
+    <p>The file is corrupt, the decoder fails, there is no GPU memory left for it.</p>
+    <p><b>Found</b> on the worker, or when the main thread picks it up. <b>The caller learns it</b> when the handle's state becomes <b>failed</b>; the caller can ask for it.</p>
+  </div>
 </div>
 
-<p>Should a failed path stay in the cache? If it stays as "failed", every later request fails fast, which is cheap. If a request may <b>retry</b>, a file that was fixed on disk loads on the next try. Either way, a failure must never leave a half-made asset behind: check that everything fits (memory, table slots) <b>before</b> creating the first part, or undo the parts on failure.</p>
+<p>Should a failed path stay in the cache?</p>
 
-<h2><span class="n">8</span>Freeing the CPU copy</h2>
+<div class="split">
+  <div>
+    <h4>Keep it as "failed"</h4>
+    <p>Every later request fails fast, which is cheap.</p>
+  </div>
+  <div>
+    <h4>Let a request retry</h4>
+    <p>A file that was fixed on disk loads on the next try.</p>
+  </div>
+</div>
+
+<div class="callout warn">
+  <strong>No half-made assets</strong>
+  <p>Either way, a failure must never leave a half-made asset behind: check that everything fits (memory, table slots) <b>before</b> creating the first part, or undo the parts on failure.</p>
+</div>
+
+<h2 id="freeing"><span class="n">8</span>Freeing the CPU copy</h2>
 
 <p>During a load the same data exists several times. Most copies are only needed for a short time.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU memory</span>
+  <span><i class="mem"></i>GPU-visible memory</span>
+</div>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 230" role="img" aria-label="A timeline of one load. The file bytes live from the read until parsing is done. The decoded data lives until the upload has copied it. The staging copy lives until the GPU has finished its copy. The GPU copy stays.">
@@ -526,12 +820,19 @@
     <rect x="460" y="110" width="120" height="22" rx="3" class="mem"/>
     <text x="20" y="158" class="small">GPU copy</text>
     <rect x="460" y="144" width="280" height="22" rx="3" class="mem"/>
-    <text x="20" y="214" class="small">CPU memory in blue, GPU-visible memory in amber.</text>
   </svg>
   <figcaption>Each copy can go as soon as the next one exists. The one exception is the staging copy: it can be reused only after the GPU has <b>finished</b> reading it, which a fence tells the CPU (see <a href="gpu-sync.html">GPU synchronization</a>).</figcaption>
 </figure>
 
-<p>The decoded data is the big one. A 2048 × 2048 RGBA texture is 16 MiB, and 21.3 MiB with all its mips. A program that keeps every decoded texture after the upload uses twice the memory for nothing. Keep a CPU copy only when the CPU really reads it later:</p>
+<p>The decoded data is the big one:</p>
+
+<div class="stats">
+  <div><b>16 MiB</b><span>one decoded 2048 × 2048 RGBA texture</span><small>2048 · 2048 · 4 bytes</small></div>
+  <div><b>21.3 MiB</b><span>the same texture with all its mips</span></div>
+  <div><b>2×</b><span>the memory of a program that keeps every decoded texture after the upload, for nothing</span></div>
+</div>
+
+<p>Keep a CPU copy only when the CPU really reads it later:</p>
 
 <div class="table-wrap">
 <table>
@@ -542,24 +843,34 @@
 </table>
 </div>
 
-<h2><span class="n">9</span>File formats, just enough</h2>
+<h2 id="formats"><span class="n">9</span>File formats, just enough</h2>
 
 <p>Two common mesh formats need different work before the data is GPU-ready:</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 250" role="img" aria-label="Left: glTF. A binary buffer holds bytes. A buffer view is a byte range of it with a stride. An accessor says how to read the view: type, count and component type. A mesh primitive uses accessors for its positions, normals and indices. Right: OBJ. A face corner has three separate indices, into positions, UVs and normals. The GPU has one index per vertex, so every distinct triple becomes one vertex.">
-    <text x="180" y="20" class="mid title">glTF: bytes, then views, then accessors</text>
-    <rect x="20" y="36" width="320" height="34" rx="4" class="mem"/>
-    <text x="180" y="57" class="mid">buffer: raw bytes (.bin or inside .glb)</text>
-    <rect x="60" y="88" width="200" height="34" rx="4" class="mem"/>
-    <text x="160" y="109" class="mid">buffer view: offset, length, stride</text>
-    <line x1="160" y1="70" x2="160" y2="86" class="arrow" marker-end="url(#ah)"/>
-    <rect x="80" y="140" width="220" height="34" rx="4" class="box"/>
-    <text x="190" y="161" class="mid">accessor: VEC3 float × 2400</text>
-    <line x1="170" y1="122" x2="170" y2="138" class="arrow" marker-end="url(#ah)"/>
-    <rect x="100" y="192" width="220" height="34" rx="4" class="cpu"/>
-    <text x="210" y="213" class="mid">primitive: POSITION = accessor 3</text>
-    <line x1="190" y1="174" x2="190" y2="190" class="arrow" marker-end="url(#ah)"/>
+    <text x="190" y="20" class="mid title">glTF: bytes, then views, then accessors</text>
+    <text x="20" y="42" class="small">buffer: raw bytes (.bin or inside .glb)</text>
+    <rect x="20" y="48" width="330" height="22" class="mem"/>
+    <rect x="110" y="48" width="150" height="22" class="accent"/>
+    <text x="185" y="64" class="mid small">buffer view</text>
+    <line x1="110" y1="70" x2="20" y2="104" class="dashed"/>
+    <line x1="260" y1="70" x2="350" y2="104" class="dashed"/>
+    <text x="185" y="92" class="mid small">offset, length, stride</text>
+    <path d="M20,104h36v26h-36zM75,104h36v26h-36zM130,104h36v26h-36zM185,104h36v26h-36zM240,104h36v26h-36zM295,104h36v26h-36z" class="cpu"/>
+    <path d="M56,104h19v26h-19zM111,104h19v26h-19zM166,104h19v26h-19zM221,104h19v26h-19zM276,104h19v26h-19zM331,104h19v26h-19z" class="box"/>
+    <text x="38"  y="121" class="mid small">xyz</text>
+    <text x="93"  y="121" class="mid small">xyz</text>
+    <text x="148" y="121" class="mid small">xyz</text>
+    <text x="203" y="121" class="mid small">xyz</text>
+    <text x="258" y="121" class="mid small">xyz</text>
+    <text x="313" y="121" class="mid small">xyz</text>
+    <path d="M20,136v6h55v-6" class="arrow"/>
+    <text x="47" y="158" class="mid small">stride</text>
+    <text x="96" y="158" class="small">accessor: VEC3 float × 2400</text>
+    <line x1="185" y1="166" x2="185" y2="194" class="arrow" marker-end="url(#ah)"/>
+    <rect x="60" y="196" width="250" height="34" rx="4" class="cpu"/>
+    <text x="185" y="217" class="mid">primitive: POSITION = accessor 3</text>
 
     <text x="570" y="20" class="mid title">OBJ: three indices per corner</text>
     <text x="400" y="50" class="mono">f 1/1/1 2/2/1 3/3/1</text>
@@ -578,18 +889,15 @@
     <text x="400" y="210" class="small">The GPU has one index per vertex, so each distinct</text>
     <text x="400" y="226" class="small">(position, UV, normal) triple must become one vertex.</text>
   </svg>
-  <figcaption>glTF is close to what the GPU wants already: typed arrays in binary buffers, plus a node tree with transforms, materials and images (PNG or JPEG, decoded by the loader). OBJ is text and must be rebuilt into vertices. A simple OBJ loader makes one vertex per face corner and merges equal ones afterwards.</figcaption>
+  <figcaption>glTF is close to what the GPU wants already: typed arrays in binary buffers, plus a node tree with transforms, materials and images (PNG or JPEG, decoded by the loader). In the enlarged view, blue is the accessor's data and grey is another attribute stored between its elements, so the stride is larger than one element. OBJ is text and must be rebuilt into vertices. A simple OBJ loader makes one vertex per face corner and merges equal ones afterwards.</figcaption>
 </figure>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Pitfall</th><th>What happens</th></tr>
-  <tr><td>glTF data is not aligned</td><td>A float may start at any byte. Read it with a byte copy, not a pointer cast.</td></tr>
-  <tr><td>A glTF buffer view has a stride</td><td>Attributes can be interleaved. Element <var>i</var> starts at offset + <var>i</var> × stride, not <var>i</var> × element size.</td></tr>
-  <tr><td>OBJ and glTF put the UV origin in different corners</td><td>OBJ's v runs up from the bottom; images and glTF start at the top. Flip one of them (v' = 1 − v).</td></tr>
-  <tr><td>Paths with non-ASCII characters</td><td>Some C libraries open files in the system's code page. Open the file yourself (as UTF-8 or wide characters) and pass the bytes or a stream.</td></tr>
-</table>
-</div>
+<dl class="pitfalls">
+  <div><dt>glTF data is not aligned</dt><dd>A float may start at any byte. Read it with a byte copy, not a pointer cast.</dd></div>
+  <div><dt>A glTF buffer view has a stride</dt><dd>Attributes can be interleaved. Element <var>i</var> starts at offset + <var>i</var> × stride, not <var>i</var> × element size.</dd></div>
+  <div><dt>OBJ and glTF put the UV origin in different corners</dt><dd>OBJ's v runs up from the bottom; images and glTF start at the top. Flip one of them (v' = 1 − v).</dd></div>
+  <div><dt>Paths with non-ASCII characters</dt><dd>Some C libraries open files in the system's code page. Open the file yourself (as UTF-8 or wide characters) and pass the bytes or a stream.</dd></div>
+</dl>
 
 <h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
 

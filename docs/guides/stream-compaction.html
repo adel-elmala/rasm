@@ -42,7 +42,7 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>The problem</h2>
+<h2 id="problem"><span class="n">1</span>The problem</h2>
 
 <p>A GPU culling pass tests every object and keeps the visible ones. A particle system removes dead particles. A ray tracer keeps the rays that still bounce. Each time, the input is an array, the test gives a yes or no per item, and the next step wants only the yes items, side by side, so it can work on them without checking again.</p>
 
@@ -81,18 +81,70 @@
   <figcaption>Stream compaction: test, then pack. The output is shorter than the input, and nobody knows how much shorter until all tests are done.</figcaption>
 </figure>
 
-<p>On one thread, compaction is a loop with a write index that grows by one for each kept item. On a GPU each item has its own thread, and all of them run at once. Thread 6 (item <var>g</var>) cannot know that it goes to place 3 without knowing how many of threads 0 to 5 kept their item. That is the whole problem.</p>
-
-<div class="table-wrap">
-<table>
-  <tr><th>Property</th><th>Meaning</th><th>Why it can matter</th></tr>
-  <tr><td><b>Packed</b></td><td>no gaps between kept items</td><td>The next step runs one thread per kept item, or one draw per kept item, with no wasted work.</td></tr>
-  <tr><td><b>Stable</b> (in order)</td><td>kept items keep their input order</td><td>The same input gives the same output every time. For draws, order decides which of two surfaces at equal depth wins, and how blending adds up.</td></tr>
-  <tr><td><b>Counted</b></td><td>the number of kept items is written somewhere</td><td>The next step must know where the list ends.</td></tr>
-</table>
+<div class="split">
+  <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="One thread walks the input from left to right. It is at item d. The output already holds a and c, and a write index points at the next free place.">
+      <rect x="22" y="18" width="30" height="24" rx="3" class="box"/><text x="37" y="34" class="mid mono">a</text><rect x="57" y="18" width="30" height="24" rx="3" class="box"/><text x="72" y="34" class="mid mono">b</text><rect x="92" y="18" width="30" height="24" rx="3" class="box"/><text x="107" y="34" class="mid mono">c</text><rect x="127" y="18" width="30" height="24" rx="3" class="box"/><text x="142" y="34" class="mid mono">d</text><rect x="162" y="18" width="30" height="24" rx="3" class="box"/><text x="177" y="34" class="mid mono">e</text><rect x="197" y="18" width="30" height="24" rx="3" class="box"/><text x="212" y="34" class="mid mono">f</text><rect x="232" y="18" width="30" height="24" rx="3" class="box"/><text x="247" y="34" class="mid mono">g</text><rect x="267" y="18" width="30" height="24" rx="3" class="box"/><text x="282" y="34" class="mid mono">h</text>
+      <rect x="127" y="18" width="30" height="24" rx="3" class="hot"/>
+      <line x1="142" y1="46" x2="112" y2="76" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <rect x="22" y="80" width="30" height="24" rx="3" class="mem"/><text x="37" y="96" class="mid mono">a</text><rect x="57" y="80" width="30" height="24" rx="3" class="mem"/><text x="72" y="96" class="mid mono">c</text><rect x="92" y="80" width="30" height="24" rx="3" class="ghost"/><rect x="127" y="80" width="30" height="24" rx="3" class="ghost"/>
+      <line x1="107" y1="130" x2="107" y2="110" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="116" y="128" class="small t-hot">write index = 2</text>
+    </svg>
+    <h4>One CPU thread</h4>
+    <p>A loop with a write index that grows by one for each kept item.</p>
+  </div>
+  <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="Eight threads test the eight items at the same time. The four that keep their item do not know which output place to take.">
+      <rect x="22" y="18" width="30" height="24" rx="3" class="gpu"/><text x="37" y="34" class="mid mono">a</text><rect x="57" y="18" width="30" height="24" rx="3" class="ghost"/><text x="72" y="34" class="mid mono t-faint">b</text><rect x="92" y="18" width="30" height="24" rx="3" class="gpu"/><text x="107" y="34" class="mid mono">c</text><rect x="127" y="18" width="30" height="24" rx="3" class="gpu"/><text x="142" y="34" class="mid mono">d</text><rect x="162" y="18" width="30" height="24" rx="3" class="ghost"/><text x="177" y="34" class="mid mono t-faint">e</text><rect x="197" y="18" width="30" height="24" rx="3" class="ghost"/><text x="212" y="34" class="mid mono t-faint">f</text><rect x="232" y="18" width="30" height="24" rx="3" class="gpu"/><text x="247" y="34" class="mid mono">g</text><rect x="267" y="18" width="30" height="24" rx="3" class="ghost"/><text x="282" y="34" class="mid mono t-faint">h</text>
+      <path d="M37,44V74M107,44V74M142,44V74M247,44V74" class="arrow gpu"/>
+      <rect x="22" y="80" width="30" height="24" rx="3" class="ghost"/><text x="37" y="96" class="mid mono t-faint">?</text><rect x="57" y="80" width="30" height="24" rx="3" class="ghost"/><text x="72" y="96" class="mid mono t-faint">?</text><rect x="92" y="80" width="30" height="24" rx="3" class="ghost"/><text x="107" y="96" class="mid mono t-faint">?</text><rect x="127" y="80" width="30" height="24" rx="3" class="ghost"/><text x="142" y="96" class="mid mono t-faint">?</text>
+      <text x="160" y="128" class="mid small t-bad">all at once: which place is mine?</text>
+    </svg>
+    <h4>One GPU thread per item</h4>
+    <p>All of them run at once. Thread 6 (item <var>g</var>) cannot know that it goes to place 3 without knowing how many of threads 0 to 5 kept their item. That is the whole problem.</p>
+  </div>
 </div>
 
-<h2><span class="n">2</span>The simple way: an atomic counter</h2>
+<p>The output can have three properties:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Top: kept items with gaps between them. Bottom: the same items side by side with no gaps.">
+      <rect x="20" y="22" width="28" height="26" rx="3" class="mem"/><text x="34" y="39" class="mid mono">a</text><rect x="53" y="22" width="28" height="26" rx="3" class="ghost"/><rect x="86" y="22" width="28" height="26" rx="3" class="mem"/><text x="100" y="39" class="mid mono">c</text><rect x="119" y="22" width="28" height="26" rx="3" class="mem"/><text x="133" y="39" class="mid mono">d</text><rect x="152" y="22" width="28" height="26" rx="3" class="ghost"/><rect x="185" y="22" width="28" height="26" rx="3" class="mem"/><text x="199" y="39" class="mid mono">g</text>
+      <line x1="120" y1="52" x2="120" y2="72" class="arrow" marker-end="url(#ah)"/>
+      <rect x="20" y="78" width="28" height="26" rx="3" class="mem"/><text x="34" y="95" class="mid mono">a</text><rect x="53" y="78" width="28" height="26" rx="3" class="mem"/><text x="67" y="95" class="mid mono">c</text><rect x="86" y="78" width="28" height="26" rx="3" class="mem"/><text x="100" y="95" class="mid mono">d</text><rect x="119" y="78" width="28" height="26" rx="3" class="mem"/><text x="133" y="95" class="mid mono">g</text>
+    </svg>
+    <h4>Packed</h4>
+    <p>No gaps between kept items.</p>
+    <p>The next step runs one thread per kept item, or one draw per kept item, with no wasted work.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Top: the output a c d g, in input order. Bottom: the output c a g d, in another order.">
+      <rect x="20" y="22" width="28" height="26" rx="3" class="mem"/><text x="34" y="39" class="mid mono">a</text><rect x="53" y="22" width="28" height="26" rx="3" class="mem"/><text x="67" y="39" class="mid mono">c</text><rect x="86" y="22" width="28" height="26" rx="3" class="mem"/><text x="100" y="39" class="mid mono">d</text><rect x="119" y="22" width="28" height="26" rx="3" class="mem"/><text x="133" y="39" class="mid mono">g</text>
+      <text x="158" y="40" class="small t-ok">input order</text>
+      <rect x="20" y="80" width="28" height="26" rx="3" class="ghost"/><text x="34" y="97" class="mid mono t-faint">c</text><rect x="53" y="80" width="28" height="26" rx="3" class="ghost"/><text x="67" y="97" class="mid mono t-faint">a</text><rect x="86" y="80" width="28" height="26" rx="3" class="ghost"/><text x="100" y="97" class="mid mono t-faint">g</text><rect x="119" y="80" width="28" height="26" rx="3" class="ghost"/><text x="133" y="97" class="mid mono t-faint">d</text>
+      <text x="158" y="98" class="small t-bad">not stable</text>
+    </svg>
+    <h4>Stable (in order)</h4>
+    <p>Kept items keep their input order.</p>
+    <p>The same input gives the same output every time. For draws, order decides which of two surfaces at equal depth wins, and how blending adds up.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An output buffer of seven places. The first four hold items. A count of 4 says where the list ends.">
+      <rect x="20" y="22" width="28" height="26" rx="3" class="mem"/><text x="34" y="39" class="mid mono">a</text><rect x="51" y="22" width="28" height="26" rx="3" class="mem"/><text x="65" y="39" class="mid mono">c</text><rect x="82" y="22" width="28" height="26" rx="3" class="mem"/><text x="96" y="39" class="mid mono">d</text><rect x="113" y="22" width="28" height="26" rx="3" class="mem"/><text x="127" y="39" class="mid mono">g</text><rect x="144" y="22" width="28" height="26" rx="3" class="ghost"/><rect x="175" y="22" width="28" height="26" rx="3" class="ghost"/><rect x="206" y="22" width="28" height="26" rx="3" class="ghost"/>
+      <path d="M20,56V62H144V56" class="arrow gpu"/>
+      <line x1="147" y1="14" x2="147" y2="66" class="arrow hot"/>
+      <text x="82" y="82" class="mid mono">count = 4</text>
+      <text x="152" y="82" class="small t-hot">list ends here</text>
+    </svg>
+    <h4>Counted</h4>
+    <p>The number of kept items is written somewhere.</p>
+    <p>The next step must know where the list ends.</p>
+  </div>
+</div>
+
+<h2 id="atomic"><span class="n">2</span>The simple way: an atomic counter</h2>
 
 <p>Put one counter in memory, set to 0. Every thread whose item passes does an <b>atomic add</b> of 1 on it. The atomic returns the old value, which is a slot nobody else got. The thread writes its item there.</p>
 
@@ -140,11 +192,11 @@
 </figure>
 
 <div class="split">
-  <div>
+  <div class="good">
     <h4>Good</h4>
     <p>One pass, a few lines, and fast when few items pass. The counter is the count, ready for the next step.</p>
   </div>
-  <div>
+  <div class="bad">
     <h4>Not so good</h4>
     <p>The output order is <b>not stable</b>. When many threads hit one counter, the atomics are serialized, which costs time. The counter must be cleared before each use, which is one more command and one more barrier.</p>
   </div>
@@ -152,7 +204,7 @@
 
 <p>A common fix for the contention is to do one atomic per <b>wave</b> instead of one per thread (see <a href="#waves">section 5</a>). The order is then stable inside each wave, but the waves still race. When order does not matter, for example for particles that are drawn with additive blending, atomic append is the right choice. When it does, use a prefix sum.</p>
 
-<h2><span class="n">3</span>Prefix sums</h2>
+<h2 id="prefix-sums"><span class="n">3</span>Prefix sums</h2>
 
 <p>A <b>prefix sum</b>, also called a <b>scan</b>, replaces each item of an array with the sum of the items before it. There are two kinds. The <b>exclusive</b> scan does not count the item itself; the <b>inclusive</b> scan does.</p>
 
@@ -253,13 +305,65 @@
 
 <p>Steps 1 and 3 are trivially parallel: each thread works alone. All the difficulty is in step 2, computing a scan with many threads. The next two sections do that, first inside one workgroup, then across many.</p>
 
-<h2><span class="n">4</span>A scan inside one workgroup</h2>
+<h2 id="workgroup"><span class="n">4</span>A scan inside one workgroup</h2>
 
 <p>The threads of one workgroup share a small, fast <b>shared memory</b> (<i>groupshared</i> in HLSL and Slang) and can wait for each other with a <b>barrier</b>. Each thread puts its value into an array in shared memory, and the group then computes the scan in place, in a few steps with a barrier after each one.</p>
 
 <h3>The naive way</h3>
 
 <p>Each thread loops over the items before it and adds them up. Thread <var>i</var> does <var>i</var> additions, so the last thread of a 64-thread group does 63, and the whole group waits for it. The total work is <var>n</var>(<var>n</var> − 1) / 2. This is fine for small groups and very simple, but it does not scale.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 204" role="img" aria-label="Eight threads. Thread 0 reads nothing, thread 1 reads one item, thread 2 two, up to thread 7, which reads seven. The work forms a triangle: 28 additions in total.">
+    <text x="20" y="18" class="small">each green cell is one item a thread reads and adds</text>
+    <text x="190" y="41" class="end mono">t0</text>
+    <text x="208" y="41" class="small">0 additions</text>
+    <text x="190" y="59" class="end mono">t1</text>
+    <rect x="200" y="48" width="34" height="14" rx="2" class="gpu"/>
+    <text x="248" y="59" class="small">1 addition</text>
+    <text x="190" y="77" class="end mono">t2</text>
+    <rect x="200" y="66" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="240" y="66" width="34" height="14" rx="2" class="gpu"/>
+    <text x="288" y="77" class="small">2 additions</text>
+    <text x="190" y="95" class="end mono">t3</text>
+    <rect x="200" y="84" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="240" y="84" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="280" y="84" width="34" height="14" rx="2" class="gpu"/>
+    <text x="328" y="95" class="small">3 additions</text>
+    <text x="190" y="113" class="end mono">t4</text>
+    <rect x="200" y="102" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="240" y="102" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="280" y="102" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="320" y="102" width="34" height="14" rx="2" class="gpu"/>
+    <text x="368" y="113" class="small">4 additions</text>
+    <text x="190" y="131" class="end mono">t5</text>
+    <rect x="200" y="120" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="240" y="120" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="280" y="120" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="320" y="120" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="360" y="120" width="34" height="14" rx="2" class="gpu"/>
+    <text x="408" y="131" class="small">5 additions</text>
+    <text x="190" y="149" class="end mono">t6</text>
+    <rect x="200" y="138" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="240" y="138" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="280" y="138" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="320" y="138" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="360" y="138" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="400" y="138" width="34" height="14" rx="2" class="gpu"/>
+    <text x="448" y="149" class="small">6 additions</text>
+    <text x="190" y="167" class="end mono">t7</text>
+    <rect x="200" y="156" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="240" y="156" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="280" y="156" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="320" y="156" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="360" y="156" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="400" y="156" width="34" height="14" rx="2" class="gpu"/>
+    <rect x="440" y="156" width="34" height="14" rx="2" class="gpu"/>
+    <text x="488" y="167" class="small">7 additions</text>
+    <text x="20" y="196" class="small">8 threads: 0 + 1 + … + 7 = 28 additions = n(n − 1) / 2. The whole group waits for the last thread.</text>
+  </svg>
+  <figcaption>The naive loop for a group of 8. The work grows with the square of the group size.</figcaption>
+</figure>
 
 <h3>Hillis–Steele: few steps, more work</h3>
 
@@ -459,7 +563,15 @@
 </table>
 </div>
 
-<p>For 64 items: the naive loop does 2016 additions, Hillis–Steele 321 in 6 steps, Blelloch 126 in 12 steps. On a GPU, the number of barriers often matters more than the number of additions, which is why the next idea wins.</p>
+<p>For 64 items:</p>
+
+<div class="stats">
+  <div><b>2016</b><span>additions, naive loop</span><small>1 step</small></div>
+  <div><b>321</b><span>additions, Hillis–Steele</span><small>6 steps</small></div>
+  <div><b>126</b><span>additions, Blelloch</span><small>12 steps</small></div>
+</div>
+
+<p>On a GPU, the number of barriers often matters more than the number of additions, which is why the next idea wins.</p>
 
 <h2 id="waves"><span class="n">5</span>Wave intrinsics</h2>
 
@@ -581,7 +693,7 @@ void compactMain(uint3 id : SV_DispatchThreadID)
 
 <p>A thread past the end of the array gets <var>keep</var> = false instead of returning early. Here an early return would be harmless, because wave instructions skip inactive lanes, but a kernel with a group barrier must keep every thread running until the barrier.</p>
 
-<h2><span class="n">6</span>More than one workgroup</h2>
+<h2 id="multi-group"><span class="n">6</span>More than one workgroup</h2>
 
 <p>A workgroup can only see its own shared memory. To scan a million items, the groups must also learn how many items all earlier groups kept. The classic way is three passes, or two when the last pass also scans the block totals itself:</p>
 
@@ -669,7 +781,7 @@ void compactMain(uint3 id : SV_DispatchThreadID)
   <figcaption>Decoupled look-back. Each item is read once and written once, which is the least memory traffic a scan can have. It needs the blocks to start in order, so it takes a block index from an atomic counter instead of the built-in group ID.</figcaption>
 </figure>
 
-<h2><span class="n">7</span>Worked example</h2>
+<h2 id="example"><span class="n">7</span>Worked example</h2>
 
 <p>Here is the whole ordered compaction for 16 items in 4 groups of 4. Click through the steps (or use the arrow keys).</p>
 
@@ -944,16 +1056,50 @@ void compactMain(uint3 id : SV_DispatchThreadID)
   <figcaption>The maximum is the buffer's capacity, which the CPU knows. The GPU never reads past the count, so the old records after it do not matter.</figcaption>
 </figure>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Who writes the count</th><th>Needs a clear first?</th><th>Notes</th></tr>
-  <tr><td>Atomic append: the counter itself</td><td>yes, every frame</td><td>The clear must finish before the culling starts.</td></tr>
-  <tr><td>Ordered scan: the last group writes base + its count</td><td>no</td><td>Written fresh every time, so a stale value never survives.</td></tr>
-  <tr><td>No compaction: keep every draw, set its instance count to 0</td><td>no count at all</td><td>Simplest, but the GPU still reads and skips every culled command.</td></tr>
-</table>
+<p>Who writes the count:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three threads add to one counter. The counter must be cleared to 0 first.">
+      <text x="120" y="20" class="mid small t-hot">clear to 0 first</text>
+      <rect x="70" y="30" width="100" height="34" rx="4" class="mem"/>
+      <text x="120" y="52" class="mid mono">counter</text>
+      <rect x="50" y="96" width="22" height="22" rx="3" class="gpu"/>
+      <rect x="109" y="96" width="22" height="22" rx="3" class="gpu"/>
+      <rect x="168" y="96" width="22" height="22" rx="3" class="gpu"/>
+      <line x1="61" y1="94" x2="96" y2="67" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="120" y1="94" x2="120" y2="67" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="179" y1="94" x2="144" y2="67" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    </svg>
+    <h4>Atomic append: the counter itself</h4>
+    <p><b>Clear first?</b> Yes, every frame. The clear must finish before the culling starts.</p>
+  </div>
+  <div class="vcard pick">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Four groups in a row. The last one writes the count: its base plus its own count.">
+      <rect x="16" y="26" width="46" height="26" rx="3" class="gpu"/>
+      <rect x="70" y="26" width="46" height="26" rx="3" class="gpu"/>
+      <rect x="124" y="26" width="46" height="26" rx="3" class="gpu"/>
+      <rect x="178" y="26" width="46" height="26" rx="3" class="accent"/>
+      <text x="201" y="18" class="mid small t-hot">last group</text>
+      <line x1="201" y1="54" x2="201" y2="80" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <rect x="84" y="82" width="140" height="30" rx="4" class="mem"/>
+      <text x="154" y="102" class="mid mono">base + count</text>
+    </svg>
+    <h4>Ordered scan: the last group writes base + its count</h4>
+    <p><b>Clear first?</b> No. Written fresh every time, so a stale value never survives.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Six draw commands stay in place. Three of them have an instance count of 0 and are skipped.">
+      <rect x="20" y="26" width="30" height="28" rx="3" class="mem"/><text x="35" y="44" class="mid mono">1</text><rect x="54" y="26" width="30" height="28" rx="3" class="ghost"/><text x="69" y="44" class="mid mono t-faint">0</text><rect x="88" y="26" width="30" height="28" rx="3" class="mem"/><text x="103" y="44" class="mid mono">1</text><rect x="122" y="26" width="30" height="28" rx="3" class="mem"/><text x="137" y="44" class="mid mono">1</text><rect x="156" y="26" width="30" height="28" rx="3" class="ghost"/><text x="171" y="44" class="mid mono t-faint">0</text><rect x="190" y="26" width="30" height="28" rx="3" class="ghost"/><text x="205" y="44" class="mid mono t-faint">0</text>
+      <text x="120" y="84" class="mid small">instance count 0: read, then skipped</text>
+      <text x="120" y="104" class="mid small t-faint">no packing, no count</text>
+    </svg>
+    <h4>No compaction: keep every draw, set its instance count to 0</h4>
+    <p><b>Clear first?</b> No count at all. Simplest, but the GPU still reads and skips every culled command.</p>
+  </div>
 </div>
 
-<h2><span class="n">9</span>Choosing a method, and pitfalls</h2>
+<h2 id="choosing"><span class="n">9</span>Choosing a method, and pitfalls</h2>
 
 <div class="table-wrap">
 <table>
@@ -966,12 +1112,56 @@ void compactMain(uint3 id : SV_DispatchThreadID)
 </table>
 </div>
 
-<ul>
-  <li><b>Threads past the end</b> must still run the group's barriers and wave instructions, with a flag of 0. An early <code class="lang-text">return</code> before a barrier is undefined behaviour.</li>
-  <li><b>Barriers between dispatches.</b> The pass that reads the group counts must wait for the pass that wrote them. The draw that reads the count must wait for the pass that wrote it.</li>
-  <li><b>Capacity.</b> The output buffer must hold the worst case: every item kept.</li>
-  <li><b>Segments.</b> When the input is several lists back to back (one per material, say), each list needs its own count. Either make groups that never cross a list boundary, or use a <b>segmented scan</b>, which restarts the sum at each boundary.</li>
-</ul>
+<p>Four things to get right, whatever the method:</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A group of eight threads. The array ends after the fifth. The last three threads carry a flag of 0, and all eight reach the barrier.">
+      <rect x="20" y="30" width="22" height="26" rx="3" class="gpu"/><rect x="47" y="30" width="22" height="26" rx="3" class="gpu"/><rect x="74" y="30" width="22" height="26" rx="3" class="gpu"/><rect x="101" y="30" width="22" height="26" rx="3" class="gpu"/><rect x="128" y="30" width="22" height="26" rx="3" class="gpu"/><rect x="155" y="30" width="22" height="26" rx="3" class="ghost"/><text x="166" y="47" class="mid mono t-faint">0</text><rect x="182" y="30" width="22" height="26" rx="3" class="ghost"/><text x="193" y="47" class="mid mono t-faint">0</text><rect x="209" y="30" width="22" height="26" rx="3" class="ghost"/><text x="220" y="47" class="mid mono t-faint">0</text>
+      <line x1="153" y1="20" x2="153" y2="66" class="arrow hot"/>
+      <text x="150" y="20" class="end small t-hot">end of the array</text>
+      <rect x="20" y="82" width="211" height="20" rx="10" class="shader"/>
+      <text x="125" y="96" class="mid small">barrier: all 8 threads reach it</text>
+    </svg>
+    <h4>Threads past the end</h4>
+    <p>They must still run the group's barriers and wave instructions, with a flag of 0. An early <code class="lang-text">return</code> before a barrier is undefined behaviour.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A pass that writes, then a barrier, then a pass that reads.">
+      <rect x="14" y="44" width="86" height="42" rx="20" class="shader"/>
+      <text x="57" y="70" class="mid small">writes</text>
+      <line x1="100" y1="65" x2="138" y2="65" class="arrow" marker-end="url(#ah)"/>
+      <line x1="120" y1="32" x2="120" y2="98" class="arrow hot thick"/>
+      <text x="120" y="24" class="mid small t-hot">barrier</text>
+      <rect x="140" y="44" width="86" height="42" rx="20" class="shader"/>
+      <text x="183" y="70" class="mid small">reads</text>
+    </svg>
+    <h4>Barriers between dispatches</h4>
+    <p>The pass that reads the group counts must wait for the pass that wrote them. The draw that reads the count must wait for the pass that wrote it.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An input of six items and an output buffer with six places, three of them used.">
+      <text x="20" y="20" class="small">input</text>
+      <rect x="20" y="26" width="30" height="24" rx="3" class="box"/><rect x="54" y="26" width="30" height="24" rx="3" class="box"/><rect x="88" y="26" width="30" height="24" rx="3" class="box"/><rect x="122" y="26" width="30" height="24" rx="3" class="box"/><rect x="156" y="26" width="30" height="24" rx="3" class="box"/><rect x="190" y="26" width="30" height="24" rx="3" class="box"/>
+      <text x="20" y="78" class="small">output: room for every item</text>
+      <rect x="20" y="84" width="30" height="24" rx="3" class="mem"/><rect x="54" y="84" width="30" height="24" rx="3" class="mem"/><rect x="88" y="84" width="30" height="24" rx="3" class="mem"/><rect x="122" y="84" width="30" height="24" rx="3" class="ghost"/><rect x="156" y="84" width="30" height="24" rx="3" class="ghost"/><rect x="190" y="84" width="30" height="24" rx="3" class="ghost"/>
+    </svg>
+    <h4>Capacity</h4>
+    <p>The output buffer must hold the worst case: every item kept.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two lists back to back in one input. Each list has its own count.">
+      <rect x="20" y="26" width="22" height="26" rx="3" class="gpu"/><rect x="46" y="26" width="22" height="26" rx="3" class="ghost"/><rect x="72" y="26" width="22" height="26" rx="3" class="gpu"/><rect x="98" y="26" width="22" height="26" rx="3" class="ghost"/><rect x="126" y="26" width="22" height="26" rx="3" class="gpu"/><rect x="152" y="26" width="22" height="26" rx="3" class="gpu"/><rect x="178" y="26" width="22" height="26" rx="3" class="ghost"/><rect x="204" y="26" width="22" height="26" rx="3" class="gpu"/>
+      <line x1="121" y1="16" x2="121" y2="62" class="arrow hot thick"/>
+      <text x="68" y="18" class="mid small">list 1</text>
+      <text x="174" y="18" class="mid small">list 2</text>
+      <rect x="34" y="82" width="68" height="26" rx="3" class="mem"/><text x="68" y="100" class="mid mono">count 2</text>
+      <rect x="140" y="82" width="68" height="26" rx="3" class="mem"/><text x="174" y="100" class="mid mono">count 3</text>
+    </svg>
+    <h4>Segments</h4>
+    <p>When the input is several lists back to back (one per material, say), each list needs its own count. Either make groups that never cross a list boundary, or use a <b>segmented scan</b>, which restarts the sum at each boundary.</p>
+  </div>
+</div>
 
 <h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
 

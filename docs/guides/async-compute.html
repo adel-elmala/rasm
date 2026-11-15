@@ -19,6 +19,8 @@
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
   </defs>
 </svg>
 
@@ -42,59 +44,179 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>Idle parts of a busy GPU</h2>
+<h2 id="idle"><span class="n">1</span>Idle parts of a busy GPU</h2>
 
-<p>A GPU has many parts: shader cores, the rasterizer, the depth test, blending, the memory bus. A pass rarely uses all of them fully. A shadow map pass writes only depth, so it is limited by the rasterizer and the depth test, and most shader cores have little to do. A small compute dispatch may fill only a few cores. And at a barrier, the GPU lets the work before it finish before it starts the work after it, so for a moment almost everything is idle.</p>
+<p>A GPU has many parts: shader cores, the rasterizer, the depth test, blending, the memory bus. A pass rarely uses all of them fully. The bars show how busy each part is in three moments of a frame.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Bars for five GPU parts during a shadow map pass. The rasterizer and the depth test are full. The shader cores are almost idle and blending is idle.">
+      <text x="84" y="23" class="end small">shader cores</text>
+      <rect x="92" y="12" width="138" height="14" rx="3" class="box"/>
+      <rect x="92" y="12" width="21" height="14" rx="3" class="gpu"/>
+      <text x="84" y="46" class="end small">rasterizer</text>
+      <rect x="92" y="35" width="138" height="14" rx="3" class="box"/>
+      <rect x="92" y="35" width="138" height="14" rx="3" class="gpu"/>
+      <text x="84" y="69" class="end small">depth test</text>
+      <rect x="92" y="58" width="138" height="14" rx="3" class="box"/>
+      <rect x="92" y="58" width="138" height="14" rx="3" class="gpu"/>
+      <text x="84" y="92" class="end small">blending</text>
+      <rect x="92" y="81" width="138" height="14" rx="3" class="box"/>
+      <text x="84" y="115" class="end small">memory bus</text>
+      <rect x="92" y="104" width="138" height="14" rx="3" class="box"/>
+      <rect x="92" y="104" width="62" height="14" rx="3" class="gpu"/>
+    </svg>
+    <h4>A shadow map pass</h4>
+    <p>It writes only depth, so it is limited by the rasterizer and the depth test. Most shader cores have little to do.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Bars for five GPU parts during a small compute dispatch. Only a small part of the shader cores is busy.">
+      <text x="84" y="23" class="end small">shader cores</text>
+      <rect x="92" y="12" width="138" height="14" rx="3" class="box"/>
+      <rect x="92" y="12" width="34" height="14" rx="3" class="shader"/>
+      <text x="84" y="46" class="end small">rasterizer</text>
+      <rect x="92" y="35" width="138" height="14" rx="3" class="box"/>
+      <text x="84" y="69" class="end small">depth test</text>
+      <rect x="92" y="58" width="138" height="14" rx="3" class="box"/>
+      <text x="84" y="92" class="end small">blending</text>
+      <rect x="92" y="81" width="138" height="14" rx="3" class="box"/>
+      <text x="84" y="115" class="end small">memory bus</text>
+      <rect x="92" y="104" width="138" height="14" rx="3" class="box"/>
+      <rect x="92" y="104" width="17" height="14" rx="3" class="shader"/>
+    </svg>
+    <h4>A small compute dispatch</h4>
+    <p>It may fill only a few cores.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Bars for five GPU parts at a barrier. All of them are almost empty.">
+      <text x="84" y="23" class="end small">shader cores</text>
+      <rect x="92" y="12" width="138" height="14" rx="3" class="box"/>
+      <rect x="92" y="12" width="6" height="14" rx="3" class="accent"/>
+      <text x="84" y="46" class="end small">rasterizer</text>
+      <rect x="92" y="35" width="138" height="14" rx="3" class="box"/>
+      <rect x="92" y="35" width="6" height="14" rx="3" class="accent"/>
+      <text x="84" y="69" class="end small">depth test</text>
+      <rect x="92" y="58" width="138" height="14" rx="3" class="box"/>
+      <rect x="92" y="58" width="6" height="14" rx="3" class="accent"/>
+      <text x="84" y="92" class="end small">blending</text>
+      <rect x="92" y="81" width="138" height="14" rx="3" class="box"/>
+      <text x="84" y="115" class="end small">memory bus</text>
+      <rect x="92" y="104" width="138" height="14" rx="3" class="box"/>
+      <rect x="92" y="104" width="6" height="14" rx="3" class="accent"/>
+    </svg>
+    <h4>At a barrier</h4>
+    <p>The GPU lets the work before it finish before it starts the work after it. For a moment almost everything is idle.</p>
+  </div>
+</div>
 
 <p>With one queue, the GPU runs the passes in order, so these idle moments add up. With a second queue, the GPU can take compute work from it and run it in the idle parts.</p>
 
-<figure class="diagram">
-  <svg viewBox="0 0 760 230" role="img" aria-label="With one queue, a shadow pass, a gap at a barrier, a compute pass and a lighting pass run one after another. With two queues, the compute pass runs on the compute queue at the same time as the shadow pass, and the frame ends earlier.">
-    <text x="20" y="30" class="title">One queue</text>
-    <text x="20" y="66" class="small">graphics</text>
-    <rect x="110" y="46" width="200" height="34" rx="5" class="gpu"/>
-    <text x="210" y="68" class="mid small">Shadow map</text>
-    <rect x="312" y="46" width="22" height="34" rx="3" class="ghost"/>
-    <rect x="336" y="46" width="130" height="34" rx="5" class="shader"/>
-    <text x="401" y="68" class="mid small">Compute</text>
-    <rect x="468" y="46" width="22" height="34" rx="3" class="ghost"/>
-    <rect x="492" y="46" width="180" height="34" rx="5" class="gpu"/>
-    <text x="582" y="68" class="mid small">Lighting</text>
-    <text x="323" y="98" class="mid small t-faint">gap</text>
-    <text x="479" y="98" class="mid small t-faint">gap</text>
-    <line x1="672" y1="40" x2="672" y2="104" class="arrow dashed"/>
-    <text x="680" y="70" class="small">end</text>
+<div class="legend">
+  <span><i class="gpu"></i>graphics pass</span>
+  <span><i class="shader"></i>compute pass</span>
+  <span><i class="hot"></i>a wait for a result</span>
+</div>
 
-    <text x="20" y="140" class="title">Two queues</text>
-    <text x="20" y="176" class="small">graphics</text>
-    <rect x="110" y="156" width="200" height="34" rx="5" class="gpu"/>
-    <text x="210" y="178" class="mid small">Shadow map</text>
-    <rect x="312" y="156" width="22" height="34" rx="3" class="ghost"/>
-    <rect x="336" y="156" width="180" height="34" rx="5" class="gpu"/>
-    <text x="426" y="178" class="mid small">Lighting</text>
-    <text x="20" y="218" class="small">compute</text>
-    <rect x="110" y="198" width="130" height="26" rx="5" class="shader"/>
-    <text x="175" y="215" class="mid small">Compute</text>
-    <line x1="240" y1="211" x2="330" y2="192" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <line x1="516" y1="150" x2="516" y2="196" class="arrow dashed"/>
-    <text x="524" y="180" class="small">end</text>
-    <line x1="516" y1="120" x2="672" y2="120" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="594" y="114" class="mid small t-hot">time saved</text>
+<figure class="diagram">
+  <svg viewBox="0 0 760 222" role="img" aria-label="With one queue, a shadow pass, a gap at a barrier, a compute pass and a lighting pass run one after another. With two queues, the compute pass runs on the compute queue at the same time as the shadow pass, and the frame ends earlier.">
+    <text x="20" y="22" class="title">One queue</text>
+    <rect x="100" y="34" width="650" height="46" rx="6" class="zone"/>
+    <text x="20" y="62" class="small">graphics</text>
+    <rect x="110" y="40" width="200" height="34" rx="5" class="gpu"/>
+    <text x="210" y="62" class="mid small">Shadow map</text>
+    <rect x="312" y="40" width="22" height="34" rx="3" class="ghost"/>
+    <rect x="336" y="40" width="130" height="34" rx="5" class="shader"/>
+    <text x="401" y="62" class="mid small">Compute</text>
+    <rect x="468" y="40" width="22" height="34" rx="3" class="ghost"/>
+    <rect x="492" y="40" width="180" height="34" rx="5" class="gpu"/>
+    <text x="582" y="62" class="mid small">Lighting</text>
+    <text x="323" y="94" class="mid small t-faint">gap</text>
+    <text x="479" y="94" class="mid small t-faint">gap</text>
+    <line x1="672" y1="28" x2="672" y2="112" class="dashed"/>
+    <text x="680" y="62" class="small">end</text>
+
+    <line x1="520" y1="104" x2="668" y2="104" class="arrow ok thick" marker-start="url(#ah-ok)" marker-end="url(#ah-ok)"/>
+    <text x="594" y="98" class="mid small t-ok">time saved</text>
+
+    <text x="20" y="128" class="title">Two queues</text>
+    <rect x="100" y="138" width="650" height="42" rx="6" class="zone"/>
+    <rect x="100" y="182" width="650" height="34" rx="6" class="zone"/>
+    <text x="20" y="164" class="small">graphics</text>
+    <rect x="110" y="142" width="200" height="34" rx="5" class="gpu"/>
+    <text x="210" y="164" class="mid small">Shadow map</text>
+    <rect x="312" y="142" width="22" height="34" rx="3" class="ghost"/>
+    <rect x="336" y="142" width="180" height="34" rx="5" class="gpu"/>
+    <text x="426" y="164" class="mid small">Lighting</text>
+    <text x="20" y="204" class="small">compute</text>
+    <rect x="110" y="186" width="130" height="26" rx="5" class="shader"/>
+    <text x="175" y="203" class="mid small">Compute</text>
+    <line x1="240" y1="198" x2="332" y2="178" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="516" y1="100" x2="516" y2="216" class="dashed"/>
+    <text x="524" y="164" class="small">end</text>
   </svg>
-  <figcaption>The compute pass does not get faster. It runs while the shadow pass leaves shader cores free, so the frame ends earlier. The red arrow is the wait: lighting needs the compute result.</figcaption>
+  <figcaption>The compute pass does not get faster. It runs while the shadow pass leaves shader cores free, so the frame ends earlier. The orange arrow is the wait: lighting needs the compute result.</figcaption>
 </figure>
 
-<h2><span class="n">2</span>Queues and queue families</h2>
+<h2 id="queues"><span class="n">2</span>Queues and queue families</h2>
 
 <p>A GPU offers its queues in <b>queue families</b>. All queues of one family can run the same kinds of work. A typical desktop GPU has three kinds:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Family</th><th>Can run</th><th>Used for</th></tr>
-  <tr><td>Graphics</td><td>draws, compute, copies, present</td><td>the main frame. Every GPU that can draw has one.</td></tr>
-  <tr><td>Compute only</td><td>compute, copies</td><td>async compute. No draws, no render passes, no graphics pipeline stages.</td></tr>
-  <tr><td>Transfer only</td><td>copies</td><td>uploads and downloads next to rendering, often on a separate copy engine.</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 110" role="img" aria-label="A graphics queue takes all four kinds of work: draws, compute, copies and present.">
+      <rect x="8" y="14" width="50" height="28" rx="5" class="gpu"/>
+      <text x="33" y="32" class="mid small">draws</text>
+      <line x1="33" y1="42" x2="33" y2="66" class="arrow" marker-end="url(#ah)"/>
+      <rect x="66" y="14" width="50" height="28" rx="5" class="gpu"/>
+      <text x="91" y="32" class="mid small">compute</text>
+      <line x1="91" y1="42" x2="91" y2="66" class="arrow" marker-end="url(#ah)"/>
+      <rect x="124" y="14" width="50" height="28" rx="5" class="gpu"/>
+      <text x="149" y="32" class="mid small">copies</text>
+      <line x1="149" y1="42" x2="149" y2="66" class="arrow" marker-end="url(#ah)"/>
+      <rect x="182" y="14" width="50" height="28" rx="5" class="gpu"/>
+      <text x="207" y="32" class="mid small">present</text>
+      <line x1="207" y1="42" x2="207" y2="66" class="arrow" marker-end="url(#ah)"/>
+      <rect x="8" y="68" width="224" height="30" rx="15" class="gpu"/>
+      <text x="120" y="87" class="mid small title">graphics queue</text>
+    </svg>
+    <h4>Graphics</h4>
+    <p>Can run draws, compute, copies and present. Used for the main frame. Every GPU that can draw has one.</p>
+  </div>
+  <div class="vcard pick">
+    <svg viewBox="0 0 240 110" role="img" aria-label="A compute-only queue takes compute and copies. Draws and present are not allowed.">
+      <rect x="8" y="14" width="50" height="28" rx="5" class="ghost"/>
+      <text x="33" y="32" class="mid small t-faint">draws</text>
+      <rect x="66" y="14" width="50" height="28" rx="5" class="shader"/>
+      <text x="91" y="32" class="mid small">compute</text>
+      <line x1="91" y1="42" x2="91" y2="66" class="arrow" marker-end="url(#ah)"/>
+      <rect x="124" y="14" width="50" height="28" rx="5" class="shader"/>
+      <text x="149" y="32" class="mid small">copies</text>
+      <line x1="149" y1="42" x2="149" y2="66" class="arrow" marker-end="url(#ah)"/>
+      <rect x="182" y="14" width="50" height="28" rx="5" class="ghost"/>
+      <text x="207" y="32" class="mid small t-faint">present</text>
+      <rect x="8" y="68" width="224" height="30" rx="15" class="shader"/>
+      <text x="120" y="87" class="mid small title">compute queue</text>
+    </svg>
+    <h4>Compute only</h4>
+    <p>Can run compute and copies. No draws, no render passes, no graphics pipeline stages. Used for async compute.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 110" role="img" aria-label="A transfer-only queue takes copies only.">
+      <rect x="8" y="14" width="50" height="28" rx="5" class="ghost"/>
+      <text x="33" y="32" class="mid small t-faint">draws</text>
+      <rect x="66" y="14" width="50" height="28" rx="5" class="ghost"/>
+      <text x="91" y="32" class="mid small t-faint">compute</text>
+      <rect x="124" y="14" width="50" height="28" rx="5" class="mem"/>
+      <text x="149" y="32" class="mid small">copies</text>
+      <line x1="149" y1="42" x2="149" y2="66" class="arrow" marker-end="url(#ah)"/>
+      <rect x="182" y="14" width="50" height="28" rx="5" class="ghost"/>
+      <text x="207" y="32" class="mid small t-faint">present</text>
+      <rect x="8" y="68" width="224" height="30" rx="15" class="mem"/>
+      <text x="120" y="87" class="mid small title">transfer queue</text>
+    </svg>
+    <h4>Transfer only</h4>
+    <p>Can run copies. Used for uploads and downloads next to rendering, often on a separate copy engine.</p>
+  </div>
 </div>
 
 <p>Async compute means a queue from the <b>compute-only family</b>. That family is what usually maps to separate hardware that takes work in parallel. Two queues of the graphics family may or may not run side by side: the API does not promise it. A GPU without a compute-only family has no async compute, and the compute work stays on the graphics queue.</p>
@@ -104,117 +226,242 @@
   <p>Having a compute family only means the API lets you submit to it. How much the hardware really overlaps differs between vendors and generations, and between kinds of work. Integrated and mobile GPUs often gain little.</p>
 </div>
 
-<h2><span class="n">3</span>Overlap needs independent work</h2>
+<h2 id="independent"><span class="n">3</span>Overlap needs independent work</h2>
 
 <p>Two passes can run at the same time only when neither needs the other's result. If pass B reads what pass A wrote, B must wait for A, whatever queue each one is on. So the first question is not "is this compute work?" but "what can run next to it?".</p>
 
-<figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="A chain: cull, draw, build depth pyramid, cull again, draw again, where each step waits for the one before. On two queues the work goes back and forth between the queues and nothing overlaps; each handoff adds a small gap. Independent work: culling on the compute queue next to a shadow pass on the graphics queue, which overlaps.">
-    <text x="20" y="28" class="title">A chain: nothing to overlap</text>
-    <text x="20" y="62" class="small">compute</text>
-    <text x="20" y="104" class="small">graphics</text>
-    <rect x="100" y="44" width="70" height="28" rx="5" class="shader"/>
-    <text x="135" y="62" class="mid small">Cull</text>
-    <line x1="170" y1="72" x2="186" y2="88" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <rect x="188" y="88" width="150" height="28" rx="5" class="gpu"/>
-    <text x="263" y="106" class="mid small">Draw</text>
-    <line x1="338" y1="88" x2="354" y2="72" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <rect x="356" y="44" width="110" height="28" rx="5" class="shader"/>
-    <text x="411" y="62" class="mid small">Pyramid, cull</text>
-    <line x1="466" y1="72" x2="482" y2="88" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <rect x="484" y="88" width="90" height="28" rx="5" class="gpu"/>
-    <text x="529" y="106" class="mid small">Draw</text>
-    <text x="592" y="70" class="small">each red arrow is a</text>
-    <text x="592" y="86" class="small">handoff: a short gap</text>
-    <text x="592" y="102" class="small">on the other queue</text>
-
-    <text x="20" y="160" class="title">Independent work: real overlap</text>
-    <text x="20" y="194" class="small">compute</text>
-    <text x="20" y="236" class="small">graphics</text>
-    <rect x="100" y="176" width="150" height="28" rx="5" class="shader"/>
-    <text x="175" y="194" class="mid small">Cull the scene</text>
-    <rect x="100" y="218" width="190" height="28" rx="5" class="gpu"/>
-    <text x="195" y="236" class="mid small">Shadow maps</text>
-    <line x1="250" y1="204" x2="290" y2="218" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <rect x="292" y="218" width="170" height="28" rx="5" class="gpu"/>
-    <text x="377" y="236" class="mid small">Draw the scene</text>
-    <text x="490" y="214" class="small">the shadow maps do not need</text>
-    <text x="490" y="230" class="small">the culling, so the two overlap</text>
-  </svg>
-  <figcaption>In a chain the work only moves between the queues. With independent work, one queue fills the other's idle time.</figcaption>
-</figure>
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 124" role="img" aria-label="A chain: cull, draw, build depth pyramid and cull again, draw again. Each step waits for the one before. The work goes back and forth between the compute queue and the graphics queue and nothing overlaps.">
+      <rect x="62" y="16" width="254" height="40" rx="5" class="zone"/>
+      <rect x="62" y="66" width="254" height="40" rx="5" class="zone"/>
+      <text x="4" y="40" class="small">compute</text>
+      <text x="4" y="90" class="small">graphics</text>
+      <rect x="66" y="24" width="40" height="24" rx="4" class="shader"/><text x="86" y="40" class="mid small">Cull</text>
+      <rect x="114" y="74" width="62" height="24" rx="4" class="gpu"/><text x="145" y="90" class="mid small">Draw</text>
+      <rect x="184" y="24" width="78" height="24" rx="4" class="shader"/><text x="223" y="40" class="mid small">Pyramid, cull</text>
+      <rect x="270" y="74" width="42" height="24" rx="4" class="gpu"/><text x="291" y="90" class="mid small">Draw</text>
+      <line x1="104" y1="48" x2="116" y2="72" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="174" y1="74" x2="186" y2="50" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="260" y1="48" x2="272" y2="72" class="arrow hot" marker-end="url(#ah-hot)"/>
+    </svg>
+    <h4>A chain: nothing to overlap</h4>
+    <p>Cull, draw, build the depth pyramid, cull again, draw again. Each step waits for the one before, so the work only moves between the queues. Each orange arrow is a handoff: a short gap on the other queue.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 124" role="img" aria-label="Independent work: culling runs on the compute queue while the shadow maps are drawn on the graphics queue. Then the scene is drawn.">
+      <rect x="62" y="16" width="254" height="40" rx="5" class="zone"/>
+      <rect x="62" y="66" width="254" height="40" rx="5" class="zone"/>
+      <text x="4" y="40" class="small">compute</text>
+      <text x="4" y="90" class="small">graphics</text>
+      <rect x="66" y="24" width="96" height="24" rx="4" class="shader"/><text x="114" y="40" class="mid small">Cull the scene</text>
+      <rect x="66" y="74" width="118" height="24" rx="4" class="gpu"/><text x="125" y="90" class="mid small">Shadow maps</text>
+      <rect x="192" y="74" width="120" height="24" rx="4" class="gpu"/><text x="252" y="90" class="mid small">Draw the scene</text>
+      <line x1="162" y1="46" x2="190" y2="72" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <path d="M66,112V118H162V112" class="arrow ok"/>
+      <text x="240" y="40" class="mid small t-ok">both run at once</text>
+    </svg>
+    <h4>Independent work: real overlap</h4>
+    <p>The shadow maps do not need the culling, so the two overlap. One queue fills the other's idle time.</p>
+  </div>
+</div>
 
 <p>A chain can still gain at its edges. The first step of the next frame may not need anything from the end of this frame. Then it can run next to the last steps of this frame, as long as the two frames use different copies of the buffers they write.</p>
 
-<h2><span class="n">4</span>Crossing queues: semaphores and batches</h2>
+<h2 id="semaphores"><span class="n">4</span>Crossing queues: semaphores and batches</h2>
 
-<p>A pipeline barrier orders commands on <b>one</b> queue, across all submissions to it (see <a href="gpu-sync.html">GPU synchronization</a>). It cannot see another queue. Between queues the tool is a <b>semaphore</b>: one submit <b>signals</b> it when all its work is done, and another submit <b>waits</b> for it before it starts. The signal also makes the first submit's writes available, and the wait makes them visible, so no extra barrier is needed for memory.</p>
+<p>A pipeline barrier orders commands on <b>one</b> queue, across all submissions to it (see <a href="gpu-sync.html">GPU synchronization</a>). It cannot see another queue. Between queues the tool is a <b>semaphore</b>.</p>
 
-<p>A <b>timeline semaphore</b> holds a number that only grows. Each submit to a queue signals the next value, and a wait names the value it needs. One timeline per queue is enough: "wait until the compute queue reaches 41" means "wait for the compute queue's 41st submit".</p>
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 124" role="img" aria-label="A barrier sits between two passes on the graphics queue. A pass on the compute queue writes X at the same time as the graphics queue reads X: the barrier does not order them.">
+      <rect x="62" y="12" width="254" height="40" rx="5" class="zone"/>
+      <rect x="62" y="62" width="254" height="40" rx="5" class="zone"/>
+      <text x="4" y="36" class="small">compute</text>
+      <text x="4" y="86" class="small">graphics</text>
+      <rect x="150" y="20" width="90" height="24" rx="4" class="shader"/><text x="195" y="36" class="mid small">writes X</text>
+      <rect x="66" y="70" width="70" height="24" rx="4" class="gpu"/><text x="101" y="86" class="mid small">pass</text>
+      <line x1="143" y1="64" x2="143" y2="100" class="arrow hot thick"/>
+      <rect x="150" y="70" width="90" height="24" rx="4" class="bad"/><text x="195" y="86" class="mid small">reads X</text>
+      <text x="143" y="118" class="mid small t-hot">barrier</text>
+      <text x="278" y="62" class="mid small t-bad halo">a race</text>
+    </svg>
+    <h4>A barrier stays on its queue</h4>
+    <p>It orders the two graphics passes. The compute queue's write is not ordered against the read.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 124" role="img" aria-label="The compute submit that writes X signals a semaphore when it is done. The graphics submit that reads X waits for it and starts after.">
+      <rect x="62" y="12" width="254" height="40" rx="5" class="zone"/>
+      <rect x="62" y="62" width="254" height="40" rx="5" class="zone"/>
+      <text x="4" y="36" class="small">compute</text>
+      <text x="4" y="86" class="small">graphics</text>
+      <rect x="66" y="20" width="100" height="24" rx="4" class="shader"/><text x="116" y="36" class="mid small">writes X</text>
+      <rect x="190" y="70" width="100" height="24" rx="4" class="gpu"/><text x="240" y="86" class="mid small">reads X</text>
+      <line x1="166" y1="44" x2="188" y2="68" class="arrow ok thick" marker-end="url(#ah-ok)"/>
+      <text x="174" y="36" class="small t-ok">signal at the end</text>
+      <text x="184" y="118" class="end small t-ok">wait at the start</text>
+    </svg>
+    <h4>A semaphore crosses queues</h4>
+    <p>One submit <b>signals</b> it when all its work is done, and another submit <b>waits</b> for it before it starts. The signal also makes the first submit's writes available, and the wait makes them visible, so no extra barrier is needed for memory.</p>
+  </div>
+</div>
 
-<p>The catch: a submit waits only at its <b>start</b>. There is no "wait here" inside a command buffer for another queue. So each place where a queue needs the other queue's result starts a new submit. Call the commands between two such places a <b>batch</b>: one command buffer and one submit on one queue.</p>
+<p>A <b>timeline semaphore</b> holds a number that only grows. Each submit to a queue signals the next value, and a wait names the value it needs.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 220" role="img" aria-label="Four batches. Compute batch 1 signals compute value 1. Graphics batch 1 waits for compute 1 and signals graphics 1. Compute batch 2 waits for graphics 1 and signals compute 2. Graphics batch 2 waits for compute 2, signals graphics 2 and presents.">
-    <text x="20" y="60" class="small">compute</text>
-    <text x="20" y="156" class="small">graphics</text>
-    <rect x="90" y="30" width="130" height="58" rx="5" class="shader"/>
-    <text x="155" y="50" class="mid small">batch C1</text>
-    <text x="155" y="78" class="mid small mono">signal C = 1</text>
-    <rect x="250" y="126" width="130" height="58" rx="5" class="gpu"/>
-    <text x="315" y="146" class="mid small">batch G1</text>
-    <text x="315" y="163" class="mid small mono">wait C ≥ 1</text>
-    <text x="315" y="177" class="mid small mono">signal G = 1</text>
-    <rect x="410" y="30" width="130" height="58" rx="5" class="shader"/>
-    <text x="475" y="50" class="mid small">batch C2</text>
-    <text x="475" y="67" class="mid small mono">wait G ≥ 1</text>
-    <text x="475" y="81" class="mid small mono">signal C = 2</text>
-    <rect x="560" y="126" width="130" height="58" rx="5" class="gpu"/>
-    <text x="625" y="146" class="mid small">batch G2</text>
-    <text x="625" y="163" class="mid small mono">wait C ≥ 2</text>
-    <text x="625" y="177" class="mid small mono">signal G = 2</text>
-    <line x1="690" y1="155" x2="708" y2="155" class="arrow" marker-end="url(#ah)"/>
-    <text x="712" y="159" class="small">present</text>
-    <line x1="220" y1="88" x2="260" y2="124" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <line x1="380" y1="126" x2="420" y2="90" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <line x1="540" y1="88" x2="572" y2="124" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="90" y="212" class="small">Each red arrow is one semaphore wait, at the start of a batch.</text>
+  <svg viewBox="0 0 760 170" role="img" aria-label="The compute queue runs submits 39, 40 and 41. When each one ends, the compute timeline reaches 39, 40, 41. A graphics submit that waits for the compute timeline to reach 41 starts when submit 41 ends.">
+    <rect x="100" y="14" width="650" height="46" rx="6" class="zone"/>
+    <rect x="100" y="112" width="650" height="46" rx="6" class="zone"/>
+    <text x="20" y="42" class="small">compute</text>
+    <text x="20" y="140" class="small">graphics</text>
+    <rect x="110" y="22" width="120" height="30" rx="5" class="shader"/><text x="170" y="42" class="mid small">submit 39</text>
+    <rect x="236" y="22" width="150" height="30" rx="5" class="shader"/><text x="311" y="42" class="mid small">submit 40</text>
+    <rect x="392" y="22" width="110" height="30" rx="5" class="shader"/><text x="447" y="42" class="mid small">submit 41</text>
+    <line x1="110" y1="84" x2="640" y2="84" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <path d="M230,56V90M386,56V90M502,56V90" class="arrow mem"/>
+    <text x="224" y="102" class="end mono t-mem">C = 39</text>
+    <text x="380" y="102" class="end mono t-mem">C = 40</text>
+    <text x="496" y="102" class="end mono t-mem">C = 41</text>
+    <text x="648" y="88" class="small t-mem">only grows</text>
+    <rect x="392" y="120" width="108" height="30" rx="5" class="ghost"/><text x="446" y="140" class="mid small t-faint">waiting</text>
+    <rect x="504" y="120" width="170" height="30" rx="5" class="gpu"/><text x="589" y="140" class="mid mono small">wait C ≥ 41</text>
+    <line x1="508" y1="92" x2="508" y2="118" class="arrow ok thick" marker-end="url(#ah-ok)"/>
   </svg>
-  <figcaption>The cull, draw, cull, draw chain from section 3 as batches. Every change of queue that carries a result is a new batch on the waiting side.</figcaption>
+  <figcaption>One timeline per queue is enough: "wait until the compute queue reaches 41" means "wait for the compute queue's 41st submit".</figcaption>
 </figure>
 
-<p>Two rules keep the batches safe:</p>
-<ul>
-  <li><b>Submit the signal before the wait.</b> Timeline semaphores allow a wait to be submitted first, but then nothing may stop the signal from coming. Submitting batches in the order they were cut is simplest: every wait names a submit that already went out.</li>
-  <li><b>A failed submit signals nothing.</b> A later wait for its value would block forever. Stop the frame there, or lower the wait to a value that was really signaled.</li>
-</ul>
+<div class="callout warn">
+  <strong>The catch: a submit waits only at its start</strong>
+  <p>There is no "wait here" inside a command buffer for another queue. So each place where a queue needs the other queue's result starts a new submit. Call the commands between two such places a <b>batch</b>: one command buffer and one submit on one queue.</p>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Four batches. Compute batch 1 signals compute value 1. Graphics batch 1 waits for compute 1 and signals graphics 1. Compute batch 2 waits for graphics 1 and signals compute 2. Graphics batch 2 waits for compute 2, signals graphics 2 and presents.">
+    <rect x="80" y="14" width="670" height="74" rx="6" class="zone"/>
+    <rect x="80" y="110" width="670" height="74" rx="6" class="zone"/>
+    <text x="20" y="56" class="small">compute</text>
+    <text x="20" y="152" class="small">graphics</text>
+    <rect x="90" y="22" width="130" height="58" rx="5" class="shader"/>
+    <text x="155" y="42" class="mid title">batch C1</text>
+    <text x="155" y="70" class="mid mono small">signal C = 1</text>
+    <rect x="250" y="118" width="130" height="58" rx="5" class="gpu"/>
+    <text x="315" y="138" class="mid title">batch G1</text>
+    <text x="315" y="155" class="mid mono small">wait C ≥ 1</text>
+    <text x="315" y="169" class="mid mono small">signal G = 1</text>
+    <rect x="410" y="22" width="130" height="58" rx="5" class="shader"/>
+    <text x="475" y="42" class="mid title">batch C2</text>
+    <text x="475" y="59" class="mid mono small">wait G ≥ 1</text>
+    <text x="475" y="73" class="mid mono small">signal C = 2</text>
+    <rect x="560" y="118" width="130" height="58" rx="5" class="gpu"/>
+    <text x="625" y="138" class="mid title">batch G2</text>
+    <text x="625" y="155" class="mid mono small">wait C ≥ 2</text>
+    <text x="625" y="169" class="mid mono small">signal G = 2</text>
+    <line x1="690" y1="147" x2="704" y2="147" class="arrow" marker-end="url(#ah)"/>
+    <text x="708" y="151" class="small">present</text>
+    <line x1="220" y1="80" x2="258" y2="116" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <line x1="380" y1="118" x2="418" y2="82" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <line x1="540" y1="80" x2="570" y2="116" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+  </svg>
+  <figcaption>The cull, draw, cull, draw chain from section 3 as batches. Each orange arrow is one semaphore wait, at the start of a batch. Every change of queue that carries a result is a new batch on the waiting side.</figcaption>
+</figure>
+
+<div class="callout rule">
+  <strong>Two rules keep the batches safe</strong>
+  <ul>
+    <li><b>Submit the signal before the wait.</b> Timeline semaphores allow a wait to be submitted first, but then nothing may stop the signal from coming. Submitting batches in the order they were cut is simplest: every wait names a submit that already went out.</li>
+    <li><b>A failed submit signals nothing.</b> A later wait for its value would block forever. Stop the frame there, or lower the wait to a value that was really signaled.</li>
+  </ul>
+</div>
 
 <p>A <a href="render-graphs.html">render graph</a> knows every pass's reads and writes, so it can place these waits itself. Where it would put a barrier on one queue, it puts a semaphore wait between two.</p>
 
-<h2><span class="n">5</span>Sharing resources between queues</h2>
+<h2 id="sharing"><span class="n">5</span>Sharing resources between queues</h2>
 
 <p>Each buffer and image is created for some queue families. There are two ways to use one on two families:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Sharing mode</th><th>How</th><th>Cost</th></tr>
-  <tr><td>Exclusive + ownership transfer</td><td>The resource belongs to one family at a time. Passing it is a <b>release</b> barrier on the old queue and an <b>acquire</b> barrier on the new one, around the semaphore (<a href="gpu-sync.html">GPU synchronization</a>, section on queue families).</td><td>More code, and a pair of barriers per handoff. The image keeps its best memory layout and compression.</td></tr>
-  <tr><td>Concurrent</td><td>The resource is created for both families and either queue may use it at any time. The semaphores still order the work.</td><td>No transfers. Some GPUs compress concurrent images less, so they can be slower to read and write.</td></tr>
-</table>
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 320 130" role="img" aria-label="An image is used on the graphics queue. A release barrier on the graphics queue and an acquire barrier on the compute queue pass it to the compute queue, with the semaphore between them.">
+      <rect x="62" y="12" width="254" height="44" rx="5" class="zone"/>
+      <rect x="62" y="72" width="254" height="44" rx="5" class="zone"/>
+      <text x="4" y="38" class="small">graphics</text>
+      <text x="4" y="98" class="small">compute</text>
+      <rect x="70" y="20" width="70" height="28" rx="4" class="mem"/><text x="105" y="38" class="mid small">image</text>
+      <line x1="152" y1="16" x2="152" y2="52" class="arrow hot thick"/>
+      <text x="160" y="38" class="small t-hot">release</text>
+      <line x1="152" y1="54" x2="196" y2="74" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <line x1="200" y1="76" x2="200" y2="112" class="arrow hot thick"/>
+      <text x="192" y="98" class="end small t-hot">acquire</text>
+      <rect x="212" y="80" width="70" height="28" rx="4" class="mem"/><text x="247" y="98" class="mid small">image</text>
+    </svg>
+    <h4>Exclusive + ownership transfer</h4>
+    <p>The resource belongs to one family at a time. Passing it is a <b>release</b> barrier on the old queue and an <b>acquire</b> barrier on the new one, around the semaphore (<a href="gpu-sync.html">GPU synchronization</a>, section on queue families).</p>
+    <p class="cost"><b>Cost:</b> more code, and a pair of barriers per handoff. The image keeps its best memory layout and compression.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 130" role="img" aria-label="An image sits between the two queues. A pass on the graphics queue and a pass on the compute queue both use it, with no transfer.">
+      <rect x="62" y="6" width="254" height="34" rx="5" class="zone"/>
+      <rect x="62" y="90" width="254" height="34" rx="5" class="zone"/>
+      <text x="4" y="28" class="small">graphics</text>
+      <text x="4" y="112" class="small">compute</text>
+      <rect x="80" y="11" width="80" height="24" rx="4" class="gpu"/><text x="120" y="27" class="mid small">pass</text>
+      <rect x="218" y="95" width="80" height="24" rx="4" class="shader"/><text x="258" y="111" class="mid small">pass</text>
+      <rect x="149" y="50" width="80" height="30" rx="4" class="mem"/><text x="189" y="69" class="mid small">image</text>
+      <line x1="130" y1="35" x2="158" y2="50" class="arrow" marker-start="url(#ah)" marker-end="url(#ah)"/>
+      <line x1="248" y1="95" x2="220" y2="80" class="arrow" marker-start="url(#ah)" marker-end="url(#ah)"/>
+    </svg>
+    <h4>Concurrent</h4>
+    <p>The resource is created for both families and either queue may use it at any time. The semaphores still order the work.</p>
+    <p class="cost"><b>Cost:</b> no transfers. Some GPUs compress concurrent images less, so they can be slower to read and write.</p>
+  </div>
 </div>
 
-<p>Layout transitions still happen in both modes. A compute queue can only name compute stages in its barriers: it has no vertex, fragment or attachment stages. A transition there of an image that the graphics queue last used as a depth attachment waits for "all commands" instead, which chains to the semaphore wait at the start of the batch.</p>
+<div class="callout">
+  <strong>Layout transitions still happen in both modes</strong>
+  <p>A compute queue can only name compute stages in its barriers: it has no vertex, fragment or attachment stages. A transition there of an image that the graphics queue last used as a depth attachment waits for "all commands" instead, which chains to the semaphore wait at the start of the batch.</p>
+</div>
 
-<h2><span class="n">6</span>Timing work on two queues</h2>
+<h2 id="timing"><span class="n">6</span>Timing work on two queues</h2>
 
-<p>Each queue writes timestamps into a query pool, so you can time each pass: a timestamp before and one after, on the same queue. But a timestamp from one queue and one from another may count from different origins. So "latest end minus earliest start" across both queues can be wrong by milliseconds. Keep a frame's total on one queue, and treat the other queue's timers as durations only. The sum of all pass times can now be <b>more</b> than the frame time, because some passes ran at the same time.</p>
+<p>Each queue writes timestamps into a query pool, so you can time each pass: a timestamp before and one after, on the same queue. But a timestamp from one queue and one from another may count from different origins.</p>
 
-<p>The honest measure of async compute is the frame time itself, with the GPU as the limit: turn off vsync (or measure on the GPU), and compare the same scene with and without it, more than once.</p>
+<figure class="diagram">
+  <svg viewBox="0 0 760 218" role="img" aria-label="Two queues, each with its own clock. The compute clock starts at a different moment than the graphics clock. A pass timed with two timestamps of the same queue gives a right duration. Subtracting a compute timestamp from a graphics timestamp gives a wrong number.">
+    <text x="20" y="48" class="small">graphics</text>
+    <text x="20" y="166" class="small">compute</text>
+    <line x1="110" y1="70" x2="730" y2="70" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <path d="M110,62V78" class="arrow gpu thick"/>
+    <text x="110" y="94" class="mid small t-gpu">clock 0</text>
+    <rect x="250" y="30" width="230" height="30" rx="5" class="gpu"/><text x="365" y="50" class="mid small">a graphics pass</text>
+    <path d="M250,60V78M480,60V78" class="arrow gpu"/>
+    <line x1="254" y1="88" x2="476" y2="88" class="arrow ok" marker-start="url(#ah-ok)" marker-end="url(#ah-ok)"/>
+    <text x="365" y="104" class="mid small t-ok">end − start on one queue: right</text>
 
-<h2><span class="n">7</span>When it pays off</h2>
+    <line x1="254" y1="128" x2="656" y2="128" class="arrow bad dashed" marker-start="url(#ah-bad)" marker-end="url(#ah-bad)"/>
+    <text x="455" y="122" class="mid small t-bad">compute end − graphics start: can be wrong by milliseconds</text>
+    <line x1="190" y1="186" x2="730" y2="186" class="arrow shader" marker-end="url(#ah)"/>
+    <path d="M190,178V194" class="arrow shader thick"/>
+    <text x="190" y="210" class="mid small t-shader">clock 0</text>
+    <rect x="530" y="146" width="130" height="30" rx="5" class="shader"/><text x="595" y="166" class="mid small">a compute pass</text>
+    <path d="M530,176V194M660,176V194" class="arrow shader"/>
+    <path d="M110,100V162M190,146V176" class="dashed"/>
+    <line x1="112" y1="156" x2="188" y2="156" class="arrow bad" marker-start="url(#ah-bad)" marker-end="url(#ah-bad)"/>
+    <text x="150" y="148" class="mid small t-bad">unknown offset</text>
+  </svg>
+  <figcaption>Two timestamps of the same queue give a duration. Two timestamps of different queues may not share a clock.</figcaption>
+</figure>
+
+<p>So "latest end minus earliest start" across both queues can be wrong by milliseconds. Keep a frame's total on one queue, and treat the other queue's timers as durations only. The sum of all pass times can now be <b>more</b> than the frame time, because some passes ran at the same time.</p>
+
+<div class="callout">
+  <strong>The honest measure is the frame time itself</strong>
+  <p>Measure with the GPU as the limit: turn off vsync (or measure on the GPU), and compare the same scene with and without async compute, more than once.</p>
+</div>
+
+<h2 id="when"><span class="n">7</span>When it pays off</h2>
 
 <div class="split">
-  <div>
+  <div class="good">
     <h4>Good candidates</h4>
     <ul>
       <li>Compute next to depth-only or raster-heavy passes: culling or light binning next to <b>shadow maps</b>.</li>
@@ -223,7 +470,7 @@
       <li>Work for a second view while the first view draws.</li>
     </ul>
   </div>
-  <div>
+  <div class="bad">
     <h4>Poor candidates</h4>
     <ul>
       <li>A strict chain, where each step waits for the last.</li>
@@ -234,28 +481,73 @@
   </div>
 </div>
 
-<h2><span class="n">8</span>Pitfalls</h2>
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
 
-<ul>
-  <li><b>Hazards across frames.</b> Next frame's compute may start while this frame's graphics still reads a buffer. A buffer with one copy needs a wait across frames too. One copy per frame slot avoids it.</li>
-  <li><b>Graphics stages on a compute queue.</b> A barrier there may not name fragment, vertex or attachment stages or accesses. Code shared by both queues must fit its barriers to the queue.</li>
-  <li><b>The swapchain's binary semaphore.</b> The acquire semaphore may be waited for once. A frame of several graphics submits waits for it in the first one only.</li>
-  <li><b>Uploads on one queue, readers on the other.</b> A copy's barriers order it only on its own queue. A reader on the other queue must wait for the copy's submit, and the copy must wait for the other queue's earlier reads of what it overwrites.</li>
-  <li><b>The handoff cost.</b> Each semaphore wait leaves the waiting queue idle until the signal. Many small batches can make a frame slower than one queue.</li>
-</ul>
+<dl class="pitfalls">
+  <div><dt>Hazards across frames</dt><dd>Next frame's compute may start while this frame's graphics still reads a buffer. A buffer with one copy needs a wait across frames too. One copy per frame slot avoids it.</dd></div>
+  <div><dt>Graphics stages on a compute queue</dt><dd>A barrier there may not name fragment, vertex or attachment stages or accesses. Code shared by both queues must fit its barriers to the queue.</dd></div>
+  <div><dt>The swapchain's binary semaphore</dt><dd>The acquire semaphore may be waited for once. A frame of several graphics submits waits for it in the first one only.</dd></div>
+  <div><dt>Uploads on one queue, readers on the other</dt><dd>A copy's barriers order it only on its own queue. A reader on the other queue must wait for the copy's submit, and the copy must wait for the other queue's earlier reads of what it overwrites.</dd></div>
+  <div><dt>The handoff cost</dt><dd>Each semaphore wait leaves the waiting queue idle until the signal. Many small batches can make a frame slower than one queue.</dd></div>
+</dl>
 
-<h2><span class="n">9</span>A worked example</h2>
+<h2 id="example"><span class="n">9</span>A worked example</h2>
 
 <p>Say a frame has three passes, timed alone on the GPU: culling 0.4 ms (compute), a shadow map 1.2 ms (graphics) and the main draw 2.0 ms (graphics). The main draw needs the culling; the shadow map needs nothing.</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Setup</th><th>What runs when</th><th>Frame</th></tr>
-  <tr><td>One queue</td><td>culling, then shadow map, then main draw</td><td>0.4 + 1.2 + 2.0 = 3.6 ms</td></tr>
-  <tr><td>Two queues, perfect overlap</td><td>culling next to the shadow map, then main draw</td><td>max(0.4, 1.2) + 2.0 = 3.2 ms</td></tr>
-  <tr><td>Two queues, real</td><td>the shadow map runs a little slower while culling shares its cores, and the main draw waits for one handoff</td><td>about 3.3 ms</td></tr>
-  <tr><td>Two queues, chain only (no shadow map)</td><td>culling, handoff, main draw</td><td>0.4 + 2.0 + a handoff: a little more than one queue's 0.4 + 2.0 = 2.4 ms</td></tr>
-</table>
+<div class="legend">
+  <span><i class="shader"></i>culling, 0.4 ms</span>
+  <span><i class="gpu"></i>graphics passes</span>
+  <span><i></i>a handoff</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Four timelines to the same scale. One queue: culling, shadow map and main draw in a row end at 3.6 milliseconds. Two queues with perfect overlap: culling runs under the shadow map and the frame ends at 3.2. Two queues, real: the shadow map is a little slower and there is one handoff, about 3.3. Two queues with no shadow map: culling, a handoff, then the main draw, a little more than 2.4.">
+    <path d="M150,14V266M300,14V266M450,14V266M600,14V266" class="grid"/>
+    <text x="150" y="284" class="mid small">0</text>
+    <text x="300" y="284" class="mid small">1 ms</text>
+    <text x="450" y="284" class="mid small">2 ms</text>
+    <text x="600" y="284" class="mid small">3 ms</text>
+
+    <text x="10" y="40" class="small">One queue</text>
+    <rect x="150" y="22" width="60" height="28" rx="4" class="shader"/><text x="180" y="40" class="mid small">Cull</text>
+    <rect x="210" y="22" width="180" height="28" rx="4" class="gpu"/><text x="300" y="40" class="mid small">Shadow map</text>
+    <rect x="390" y="22" width="300" height="28" rx="4" class="gpu"/><text x="540" y="40" class="mid small">Main draw</text>
+    <text x="698" y="41" class="title">3.6 ms</text>
+
+    <text x="10" y="86" class="small">Two queues,</text>
+    <text x="10" y="100" class="small">perfect overlap</text>
+    <rect x="150" y="72" width="180" height="28" rx="4" class="gpu"/><text x="240" y="90" class="mid small">Shadow map</text>
+    <rect x="330" y="72" width="300" height="28" rx="4" class="gpu"/><text x="480" y="90" class="mid small">Main draw</text>
+    <rect x="150" y="102" width="60" height="20" rx="4" class="shader"/><text x="180" y="116" class="mid small">Cull</text>
+    <text x="638" y="91" class="title t-ok">3.2 ms</text>
+
+    <text x="10" y="150" class="small">Two queues,</text>
+    <text x="10" y="164" class="small">real</text>
+    <rect x="150" y="136" width="188" height="28" rx="4" class="gpu"/><text x="244" y="154" class="mid small">Shadow map, a little slower</text>
+    <rect x="338" y="136" width="7" height="28" class="box"/>
+    <rect x="345" y="136" width="300" height="28" rx="4" class="gpu"/><text x="495" y="154" class="mid small">Main draw</text>
+    <rect x="150" y="166" width="60" height="20" rx="4" class="shader"/><text x="180" y="180" class="mid small">Cull</text>
+    <text x="653" y="155" class="title">≈ 3.3 ms</text>
+
+    <text x="10" y="214" class="small">Two queues,</text>
+    <text x="10" y="228" class="small">chain only</text>
+    <rect x="210" y="200" width="10" height="28" class="box"/>
+    <rect x="220" y="200" width="300" height="28" rx="4" class="gpu"/><text x="370" y="218" class="mid small">Main draw</text>
+    <rect x="150" y="230" width="60" height="20" rx="4" class="shader"/><text x="180" y="244" class="mid small">Cull</text>
+    <line x1="510" y1="194" x2="510" y2="256" class="arrow bad dashed"/>
+    <text x="528" y="212" class="title t-bad">&gt; 2.4 ms</text>
+    <text x="528" y="230" class="small">one queue: 2.4 ms</text>
+    <text x="528" y="244" class="small">(the dashed line)</text>
+  </svg>
+  <figcaption>The four setups to the same scale. The grey slivers are handoffs between the queues.</figcaption>
+</figure>
+
+<div class="stats">
+  <div><b>3.6 ms</b><span>One queue: culling, then shadow map, then main draw</span><small>0.4 + 1.2 + 2.0</small></div>
+  <div><b>3.2 ms</b><span>Two queues, perfect overlap: culling next to the shadow map, then main draw</span><small>max(0.4, 1.2) + 2.0</small></div>
+  <div><b>≈ 3.3 ms</b><span>Two queues, real: the shadow map runs a little slower while culling shares its cores, and the main draw waits for one handoff</span></div>
+  <div><b>&gt; 2.4 ms</b><span>Two queues, chain only (no shadow map): culling, handoff, main draw. A little more than one queue's 0.4 + 2.0 = 2.4 ms</span><small>0.4 + 2.0 + a handoff</small></div>
 </div>
 
 <p>The saving is at most the time of the work that overlaps, here 0.4 ms. Without anything to overlap, the second queue only adds handoffs.</p>
@@ -264,33 +556,41 @@
 
 <p>RASM has an optional compute queue. With <code>EngineConfig::asyncCompute</code> on, and a GPU with a compute family that has no graphics, the scene view's culling and Hi-Z passes run on it. They are added with <code>RenderGraph::addAsyncComputePass</code>, and the graph places the semaphore waits. With the option off (the default), or without such a family, every pass runs on the graphics queue in one submit, as before.</p>
 
+<div class="legend">
+  <span><i class="shader"></i>compute batches</span>
+  <span><i class="gpu"></i>graphics batches</span>
+  <span><i class="hot"></i>semaphore waits that the graph placed</span>
+</div>
+
 <figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="Frame N as four batches: compute Cull 1, graphics Scene 1, compute Hi-Z and Cull 2, graphics Scene 2 and the stats overlay, then present. Frame N plus 1's Cull 1 runs on the compute queue while frame N's Scene 2 still runs on the graphics queue, because it writes the other frame slot's visible draws.">
-    <text x="20" y="30" class="title">One scene view with async compute</text>
-    <text x="20" y="74" class="small">compute</text>
-    <text x="20" y="160" class="small">graphics</text>
+  <svg viewBox="0 0 760 180" role="img" aria-label="Frame N as four batches: compute Cull 1, graphics Scene 1, compute Hi-Z and Cull 2, graphics Scene 2 and the stats overlay, then present. Frame N plus 1's Cull 1 runs on the compute queue while frame N's Scene 2 still runs on the graphics queue, because it writes the other frame slot's visible draws.">
+    <text x="20" y="22" class="title">One scene view with async compute</text>
+    <rect x="80" y="34" width="670" height="54" rx="6" class="zone"/>
+    <rect x="80" y="110" width="670" height="54" rx="6" class="zone"/>
+    <text x="20" y="66" class="small">compute</text>
+    <text x="20" y="142" class="small">graphics</text>
 
-    <rect x="90" y="54" width="80" height="34" rx="5" class="shader"/>
-    <text x="130" y="75" class="mid small">Cull 1</text>
-    <line x1="170" y1="88" x2="186" y2="138" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <rect x="188" y="140" width="150" height="34" rx="5" class="gpu"/>
-    <text x="263" y="161" class="mid small">Scene 1</text>
-    <line x1="338" y1="140" x2="354" y2="90" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <rect x="356" y="54" width="120" height="34" rx="5" class="shader"/>
-    <text x="416" y="75" class="mid small">Hi-Z, Cull 2</text>
-    <line x1="476" y1="88" x2="492" y2="138" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <rect x="494" y="140" width="150" height="34" rx="5" class="gpu"/>
-    <text x="569" y="161" class="mid small">Scene 2, overlay</text>
-    <line x1="644" y1="157" x2="672" y2="157" class="arrow" marker-end="url(#ah)"/>
-    <text x="678" y="161" class="small">present</text>
+    <rect x="90" y="44" width="80" height="34" rx="5" class="shader"/>
+    <text x="130" y="65" class="mid small">Cull 1</text>
+    <line x1="170" y1="78" x2="188" y2="118" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <rect x="190" y="120" width="150" height="34" rx="5" class="gpu"/>
+    <text x="265" y="141" class="mid small">Scene 1</text>
+    <line x1="340" y1="120" x2="356" y2="80" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <rect x="358" y="44" width="120" height="34" rx="5" class="shader"/>
+    <text x="418" y="65" class="mid small">Hi-Z, Cull 2</text>
+    <line x1="478" y1="78" x2="494" y2="118" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <rect x="496" y="120" width="150" height="34" rx="5" class="gpu"/>
+    <text x="571" y="141" class="mid small">Scene 2, overlay</text>
+    <line x1="646" y1="137" x2="668" y2="137" class="arrow" marker-end="url(#ah)"/>
+    <text x="674" y="141" class="small">present</text>
 
-    <rect x="520" y="54" width="80" height="34" rx="5" class="shader"/>
-    <text x="560" y="75" class="mid small">Cull 1</text>
-    <text x="560" y="106" class="mid small t-faint">frame N+1</text>
-    <text x="90" y="214" class="small">Red arrows: semaphore waits that the graph placed. Frame N+1's Cull 1 writes the other</text>
-    <text x="90" y="232" class="small">frame slot's visible draws, so it waits for nothing of frame N and runs next to Scene 2.</text>
+    <rect x="520" y="44" width="80" height="34" rx="5" class="shader o-75"/>
+    <text x="560" y="65" class="mid small">Cull 1</text>
+    <text x="608" y="65" class="small t-faint">of frame N+1</text>
+    <path d="M520,96V102H600V96" class="arrow ok"/>
+    <text x="608" y="103" class="small t-ok">runs next to Scene 2</text>
   </svg>
-  <figcaption>Batches are cut while the frame is recorded and all submitted at the end of the frame, in that order. The last graphics batch waits for all of the frame's compute work and presents.</figcaption>
+  <figcaption>Frame N+1's <code>Cull 1</code> writes the other frame slot's visible draws, so it waits for nothing of frame N and runs next to <code>Scene 2</code>. Batches are cut while the frame is recorded and all submitted at the end of the frame, in that order. The last graphics batch waits for all of the frame's compute work and presents.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -313,6 +613,11 @@
 </div>
 
 <h3>Is it faster?</h3>
+
+<div class="stats">
+  <div><b>1.68 to 1.69 ms</b><span>a frame without async compute</span></div>
+  <div><b>1.71 to 1.72 ms</b><span>a frame with async compute</span></div>
+</div>
 
 <p>Not yet. On <code>05_city</code> (an RTX 3060, Release, vsync off for the test, two runs each), a frame took 1.68 to 1.69 ms without async compute and 1.71 to 1.72 ms with it. The scene passes are the chain from section 3, so the handoffs cost a little more than the one overlap saves. That is why <code>asyncCompute</code> is off by default. It should pay off once a frame has graphics work that does not need the culling, like shadow maps or a second view. <code>examples/03_instances</code> turns it on, so the path runs under validation.</p>
 

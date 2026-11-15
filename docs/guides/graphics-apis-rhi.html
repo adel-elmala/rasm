@@ -19,6 +19,8 @@
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
   </defs>
 </svg>
 
@@ -42,7 +44,7 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>What a graphics API does</h2>
+<h2 id="what"><span class="n">1</span>What a graphics API does</h2>
 
 <p>A GPU is a separate processor with its own memory and its own command stream. A program cannot call it like a function. It writes commands into memory, hands them to the driver, and the GPU runs them later. The <b>graphics API</b> is the contract for this: how to create objects on the GPU, how to record commands, and how to know when they are done.</p>
 
@@ -89,14 +91,23 @@
   <figcaption>The same work has to happen in both. Explicit APIs only move it to the side that knows what the program will do next.</figcaption>
 </figure>
 
-<p>An older driver has to guess. When a texture is drawn into and then sampled, it must notice that, and flush caches in between. It does not know which shader combinations will be used, so it compiles them on the first draw, and the frame stutters. Explicit APIs remove the guessing: the application says what it needs, when it needs it. That makes the driver smaller and faster, and it makes the application longer. An engine absorbs that extra code once, so games and tools built on it do not have to.</p>
+<p>An older driver has to guess. When a texture is drawn into and then sampled, it must notice that, and flush caches in between. It does not know which shader combinations will be used, so it compiles them on the first draw, and the frame stutters.</p>
 
-<h2><span class="n">2</span>The shared model</h2>
+<p>Explicit APIs remove the guessing: the application says what it needs, when it needs it. That makes the driver smaller and faster, and it makes the application longer. An engine absorbs that extra code once, so games and tools built on it do not have to.</p>
+
+<h2 id="shared-model"><span class="n">2</span>The shared model</h2>
 
 <p>Vulkan, Direct3D 12, Metal and WebGPU were designed in the same years, for the same GPUs. Underneath their names, they have the same parts:</p>
 
+<div class="legend">
+  <span><i class="cpu"></i>work on the CPU</span>
+  <span><i class="gpu"></i>the GPU</span>
+  <span><i class="mem"></i>memory and sync objects</span>
+  <span><i class="shader"></i>shaders</span>
+</div>
+
 <figure class="diagram">
-  <svg viewBox="0 0 760 280" role="img" aria-label="The device creates resources, pipelines and bindings. A command buffer records commands that use them. A queue runs submitted command buffers on the GPU, signals a fence the CPU can wait on, and presents swapchain images.">
+  <svg viewBox="0 0 760 262" role="img" aria-label="The device creates resources, pipelines and bindings. A command buffer records commands that use them. A queue runs submitted command buffers on the GPU, signals a fence the CPU can wait on, and presents swapchain images.">
     <rect x="20" y="110" width="120" height="56" rx="6" class="cpu"/>
     <text x="80" y="134" class="mid title">Device</text>
     <text x="80" y="152" class="mid small">creates objects</text>
@@ -137,7 +148,6 @@
     <rect x="628" y="30" width="112" height="46" rx="6" class="mem"/>
     <text x="684" y="50" class="mid">Swapchain</text>
     <text x="684" y="66" class="mid small">present an image</text>
-    <text x="20" y="272" class="small">Blue: work on the CPU. Green: the GPU. Amber: memory and sync objects. Purple: shaders.</text>
   </svg>
   <figcaption>The CPU creates objects once and records commands every frame. The GPU only sees command buffers that were submitted to a queue.</figcaption>
 </figure>
@@ -167,9 +177,51 @@
   <li><b>Submit and present.</b> Hand the command buffer to a queue, with a fence to signal. Then present the image.</li>
 </ol>
 
-<h2><span class="n">3</span>Where they differ</h2>
+<h2 id="differences"><span class="n">3</span>Where they differ</h2>
 
-<p>The shared model hides real differences. These are the ones an engine feels most:</p>
+<p>The shared model hides real differences. Four of them at a glance:</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>the application does it</span>
+  <span><i></i>the API does it, or does not have it</span>
+  <span><i class="hot"></i>the API has it</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 246" role="img" aria-label="A grid: four APIs against four questions. Who places barriers: the application on Vulkan and Direct3D 12, the driver on Metal unless a resource opts out, always the API on WebGPU. Raw pointers in shaders: yes on Vulkan and Metal, no on Direct3D 12 and WebGPU. Shader format: SPIR-V, DXIL, MSL, WGSL. Runs on: Windows, Linux and Android; Windows and Xbox; Apple only; browsers and native libraries.">
+    <text x="263" y="26" class="mid title">Vulkan</text>
+    <text x="398" y="26" class="mid title">Direct3D 12</text>
+    <text x="533" y="26" class="mid title">Metal</text>
+    <text x="668" y="26" class="mid title">WebGPU</text>
+
+    <text x="20" y="64" >Who places barriers</text>
+    <rect x="200" y="40" width="127" height="40" rx="6" class="cpu"/><text x="263" y="64" class="mid small">the application</text>
+    <rect x="335" y="40" width="127" height="40" rx="6" class="cpu"/><text x="398" y="64" class="mid small">the application</text>
+    <rect x="470" y="40" width="127" height="40" rx="6" class="box"/><text x="533" y="64" class="mid small">the driver (opt out)</text>
+    <rect x="605" y="40" width="127" height="40" rx="6" class="box"/><text x="668" y="64" class="mid small">always the API</text>
+
+    <text x="20" y="112">Raw pointers in shaders</text>
+    <rect x="200" y="88" width="127" height="40" rx="6" class="accent"/><text x="263" y="112" class="mid small">yes: device address</text>
+    <rect x="335" y="88" width="127" height="40" rx="6" class="box"/><text x="398" y="112" class="mid small">no: descriptors</text>
+    <rect x="470" y="88" width="127" height="40" rx="6" class="accent"/><text x="533" y="112" class="mid small">yes</text>
+    <rect x="605" y="88" width="127" height="40" rx="6" class="box"/><text x="668" y="112" class="mid small">no: bindings</text>
+
+    <text x="20" y="160">Shader format</text>
+    <rect x="200" y="136" width="127" height="40" rx="6" class="shader"/><text x="263" y="160" class="mid mono">SPIR-V</text>
+    <rect x="335" y="136" width="127" height="40" rx="6" class="shader"/><text x="398" y="160" class="mid mono">DXIL</text>
+    <rect x="470" y="136" width="127" height="40" rx="6" class="shader"/><text x="533" y="160" class="mid mono">MSL</text>
+    <rect x="605" y="136" width="127" height="40" rx="6" class="shader"/><text x="668" y="160" class="mid mono">WGSL</text>
+
+    <text x="20" y="208">Runs on</text>
+    <rect x="200" y="184" width="127" height="46" rx="6" class="box"/><text x="263" y="203" class="mid small">Windows, Linux,</text><text x="263" y="218" class="mid small">Android</text>
+    <rect x="335" y="184" width="127" height="46" rx="6" class="box"/><text x="398" y="211" class="mid small">Windows, Xbox</text>
+    <rect x="470" y="184" width="127" height="46" rx="6" class="box"/><text x="533" y="211" class="mid small">Apple only</text>
+    <rect x="605" y="184" width="127" height="46" rx="6" class="box"/><text x="668" y="203" class="mid small">browsers,</text><text x="668" y="218" class="mid small">native libraries</text>
+  </svg>
+  <figcaption>No column is the same as another. The table below has every area, and what each one means for an engine.</figcaption>
+</figure>
+
+<p>These are the ones an engine feels most:</p>
 
 <div class="table-wrap">
 <table>
@@ -184,9 +236,38 @@
 </table>
 </div>
 
-<h2><span class="n">4</span>Why put a layer on top</h2>
+<h2 id="why-layer"><span class="n">4</span>Why put a layer on top</h2>
 
-<p>An engine could call Vulkan directly everywhere. Then every renderer feature, every pass and every upload is written in Vulkan terms, and a second API means rewriting all of them. An <b>RHI</b> puts a line through the engine instead. Above the line, code knows only neutral types: a buffer, a texture, a pipeline, a command buffer. Below it, one <b>backend</b> per API turns them into native objects.</p>
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Four parts of an engine: renderer, passes, uploads, scene. Each one calls Vulkan directly.">
+      <rect x="10" y="12" width="68" height="36" rx="4" class="bad"/><text x="44" y="28" class="mid small">renderer</text><text x="44" y="42" class="mid small t-bad">Vulkan</text>
+      <rect x="86" y="12" width="68" height="36" rx="4" class="bad"/><text x="120" y="28" class="mid small">passes</text><text x="120" y="42" class="mid small t-bad">Vulkan</text>
+      <rect x="162" y="12" width="68" height="36" rx="4" class="bad"/><text x="196" y="28" class="mid small">uploads</text><text x="196" y="42" class="mid small t-bad">Vulkan</text>
+      <rect x="238" y="12" width="68" height="36" rx="4" class="bad"/><text x="272" y="28" class="mid small">scene</text><text x="272" y="42" class="mid small t-bad">Vulkan</text>
+      <rect x="100" y="84" width="120" height="28" rx="4" class="gpu"/><text x="160" y="102" class="mid small">Vulkan</text>
+      <path d="M44,48L124,82M120,48L148,82M196,48L172,82M272,48L196,82" class="arrow bad"/>
+      <text x="160" y="132" class="mid small t-bad">a second API: rewrite all four</text>
+    </svg>
+    <h4>Vulkan calls everywhere</h4>
+    <p>Every renderer feature, every pass and every upload is written in Vulkan terms. A second API means rewriting all of them.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same four parts use neutral types. A line, the RHI, sits under them. Below the line are a Vulkan backend and room for a second backend.">
+      <rect x="10" y="12" width="68" height="30" rx="4" class="cpu"/><text x="44" y="31" class="mid small">renderer</text>
+      <rect x="86" y="12" width="68" height="30" rx="4" class="cpu"/><text x="120" y="31" class="mid small">passes</text>
+      <rect x="162" y="12" width="68" height="30" rx="4" class="cpu"/><text x="196" y="31" class="mid small">uploads</text>
+      <rect x="238" y="12" width="68" height="30" rx="4" class="cpu"/><text x="272" y="31" class="mid small">scene</text>
+      <rect x="10" y="52" width="296" height="20" rx="4" class="accent"/><text x="158" y="66" class="mid small">RHI: neutral types</text>
+      <rect x="30" y="86" width="120" height="28" rx="4" class="box"/><text x="90" y="104" class="mid small">Vulkan backend</text>
+      <rect x="170" y="86" width="120" height="28" rx="4" class="ok"/><text x="230" y="104" class="mid small">second backend</text>
+      <path d="M90,72V86M230,72V86" class="arrow"/>
+      <text x="160" y="134" class="mid small t-ok">a second API: one more box below</text>
+    </svg>
+    <h4>A line through the engine</h4>
+    <p>Above the line, code knows only neutral types: a buffer, a texture, a pipeline, a command buffer. Below it, one <b>backend</b> per API turns them into native objects. That line is the <b>RHI</b>.</p>
+  </div>
+</div>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 270" role="img" aria-label="Renderer, passes and the scene sit above an RHI interface. Below it are four backends, one for each API, each talking to its own native API.">
@@ -240,47 +321,62 @@
   </div>
 </div>
 
-<h2><span class="n">5</span>Design choices</h2>
+<h2 id="design"><span class="n">5</span>Design choices</h2>
 
 <h3>How thin?</h3>
 
 <p>The first choice is the level of the interface. It ranges from "the same objects as the APIs" to "draw this mesh with this material".</p>
 
-<figure class="diagram">
-  <svg viewBox="0 0 760 230" role="img" aria-label="A line from thin to thick. Thin: the same objects as the APIs, the engine places barriers. Middle: resources and passes, the layer places barriers from declared uses. Thick: meshes, materials and lights, the layer is a renderer.">
-    <line x1="40" y1="50" x2="720" y2="50" class="arrow" marker-start="url(#ah)" marker-end="url(#ah)"/>
-    <text x="40" y="30" class="title">Thin</text>
-    <text x="720" y="30" class="end title">Thick</text>
-    <circle cx="140" cy="50" r="7" class="cpu"/>
-    <circle cx="380" cy="50" r="7" class="cpu"/>
-    <circle cx="620" cy="50" r="7" class="cpu"/>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three RHI calls, each mapped one to one to the same call of the API.">
+      <text x="60" y="18" class="mid small">RHI</text>
+      <text x="180" y="18" class="mid small">API</text>
+      <rect x="16" y="26" width="88" height="24" rx="4" class="cpu"/><text x="60" y="42" class="mid small">createBuffer</text>
+      <rect x="16" y="60" width="88" height="24" rx="4" class="cpu"/><text x="60" y="76" class="mid small">barrier</text>
+      <rect x="16" y="94" width="88" height="24" rx="4" class="cpu"/><text x="60" y="110" class="mid small">draw</text>
+      <rect x="136" y="26" width="88" height="24" rx="4" class="gpu"/><text x="180" y="42" class="mid small">create buffer</text>
+      <rect x="136" y="60" width="88" height="24" rx="4" class="gpu"/><text x="180" y="76" class="mid small">barrier</text>
+      <rect x="136" y="94" width="88" height="24" rx="4" class="gpu"/><text x="180" y="110" class="mid small">draw</text>
+      <line x1="104" y1="38" x2="134" y2="38" class="arrow" marker-end="url(#ah)"/><line x1="104" y1="72" x2="134" y2="72" class="arrow" marker-end="url(#ah)"/><line x1="104" y1="106" x2="134" y2="106" class="arrow" marker-end="url(#ah)"/>
+    </svg>
+    <h4>Thin: mirror the APIs</h4>
+    <p>createBuffer, createPipeline, barrier, draw, submit. Full control, little overhead.</p>
+    <p class="cost"><b>But:</b> the engine places barriers, and the layer is close to one API's shape.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A pass that reads resource A and writes resource B. The barrier in front of the pass is placed by the layer.">
+      <rect x="10" y="44" width="48" height="28" rx="14" class="mem"/><text x="34" y="62" class="mid small">A</text>
+      <rect x="182" y="44" width="48" height="28" rx="14" class="mem"/><text x="206" y="62" class="mid small">B</text>
+      <rect x="92" y="38" width="68" height="40" rx="6" class="gpu"/><text x="126" y="62" class="mid small">pass</text>
+      <rect x="78" y="32" width="8" height="52" rx="2" class="accent"/>
+      <line x1="58" y1="58" x2="76" y2="58" class="arrow" marker-end="url(#ah)"/>
+      <line x1="160" y1="58" x2="180" y2="58" class="hot" marker-end="url(#ah-hot)"/>
+      <text x="62" y="26" class="mid small">reads</text>
+      <text x="172" y="26" class="mid small">writes</text>
+      <text x="120" y="110" class="mid small t-hot">the barrier comes from that</text>
+    </svg>
+    <h4>Middle: resources and passes</h4>
+    <p>"This pass reads A, writes B": barriers come from that. Hard to get sync wrong, and it maps well to every API.</p>
+    <p class="cost"><b>But:</b> some tracking cost.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A mesh, a material and a light: the layer takes whole scene objects.">
+      <polygon points="24,86 52,36 80,86" class="solid"/>
+      <rect x="100" y="44" width="42" height="42" class="mem"/>
+      <path d="M114,44V86M128,44V86M100,58H142M100,72H142" class="grid"/>
+      <circle cx="190" cy="64" r="16" class="light"/>
+      <text x="52" y="108" class="mid small">mesh</text>
+      <text x="121" y="108" class="mid small">material</text>
+      <text x="190" y="108" class="mid small">light</text>
+    </svg>
+    <h4>Thick: a renderer</h4>
+    <p>drawMesh, setMaterial, addLight. Each backend can optimize.</p>
+    <p class="cost"><b>But:</b> every feature is written N times. Not really a hardware layer.</p>
+  </div>
+</div>
 
-    <rect x="40" y="76" width="200" height="140" rx="6" class="box"/>
-    <text x="140" y="98" class="mid title">Mirror the APIs</text>
-    <text x="54" y="122" class="small">createBuffer, createPipeline,</text>
-    <text x="54" y="138" class="small">barrier, draw, submit</text>
-    <text x="54" y="162" class="small">+ full control, little overhead</text>
-    <text x="54" y="180" class="small">− the engine places barriers</text>
-    <text x="54" y="198" class="small">− close to one API's shape</text>
-
-    <rect x="280" y="76" width="200" height="140" rx="6" class="box"/>
-    <text x="380" y="98" class="mid title">Resources and passes</text>
-    <text x="294" y="122" class="small">"this pass reads A, writes B"</text>
-    <text x="294" y="138" class="small">barriers come from that</text>
-    <text x="294" y="162" class="small">+ hard to get sync wrong</text>
-    <text x="294" y="180" class="small">+ maps well to every API</text>
-    <text x="294" y="198" class="small">− some tracking cost</text>
-
-    <rect x="520" y="76" width="200" height="140" rx="6" class="box"/>
-    <text x="620" y="98" class="mid title">A renderer</text>
-    <text x="534" y="122" class="small">drawMesh, setMaterial,</text>
-    <text x="534" y="138" class="small">addLight</text>
-    <text x="534" y="162" class="small">+ each backend can optimize</text>
-    <text x="534" y="180" class="small">− every feature written N times</text>
-    <text x="534" y="198" class="small">− not really a hardware layer</text>
-  </svg>
-  <figcaption>Most engines pick the left or the middle. The thick end is a renderer per API, which is exactly the duplication an RHI should avoid.</figcaption>
-</figure>
+<p>Most engines pick the thin end or the middle. The thick end is a renderer per API, which is exactly the duplication an RHI should avoid.</p>
 
 <p>A common mix: a thin RHI with explicit barriers, and above it a <a href="render-graphs.html">render graph</a> that turns "reads" and "writes" into those barriers. The RHI stays simple, and passes still do not write barriers by hand.</p>
 
@@ -317,12 +413,32 @@
 
 <p>Almost every RHI creates objects from a plain <b>descriptor struct</b>: a list of fields such as size, format and usage. It is easy to read, easy to hash (for caches) and easy to store for debugging. The object it creates can be named in two ways:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Name</th><th>What the engine holds</th><th>Good</th><th>Bad</th></tr>
-  <tr><td>Pointer</td><td>a pointer to the RHI object</td><td>no lookup, simple</td><td>a stale pointer crashes, or worse, works on a new object</td></tr>
-  <tr><td>Handle</td><td>a small integer, looked up in a table</td><td>can be checked; safe to copy and store; fits in GPU data</td><td>one lookup per use</td></tr>
-</table>
+<div class="split">
+  <div>
+    <svg viewBox="0 0 320 120" role="img" aria-label="The engine holds a pointer. The object it pointed to was destroyed, but the pointer still points there.">
+      <rect x="10" y="28" width="116" height="40" rx="6" class="cpu"/><text x="68" y="52" class="mid small">engine: a pointer</text>
+      <line x1="126" y1="48" x2="188" y2="48" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <rect x="190" y="28" width="120" height="40" rx="6" class="ghost"/><text x="250" y="52" class="mid small t-faint">destroyed object</text>
+      <text x="160" y="100" class="mid small t-bad">a stale pointer still points here</text>
+    </svg>
+    <h4>Pointer</h4>
+    <p>The engine holds a pointer to the RHI object. No lookup, simple. But a stale pointer crashes, or worse, works on a new object.</p>
+  </div>
+  <div>
+    <svg viewBox="0 0 320 120" role="img" aria-label="The engine holds the number 7. A table maps 7 to the object. The lookup can be checked.">
+      <rect x="10" y="40" width="92" height="40" rx="6" class="cpu"/><text x="56" y="64" class="mid small">engine: 7</text>
+      <rect x="130" y="8" width="56" height="26" class="box"/><text x="158" y="26" class="mid mono">5</text>
+      <rect x="130" y="34" width="56" height="26" class="box"/><text x="158" y="52" class="mid mono">6</text>
+      <rect x="130" y="60" width="56" height="26" class="accent"/><text x="158" y="78" class="mid mono">7</text>
+      <rect x="130" y="86" width="56" height="26" class="box"/><text x="158" y="104" class="mid mono">8</text>
+      <line x1="102" y1="66" x2="128" y2="72" class="arrow" marker-end="url(#ah)"/>
+      <line x1="186" y1="73" x2="216" y2="73" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <rect x="218" y="53" width="92" height="40" rx="6" class="mem"/><text x="264" y="77" class="mid small">the object</text>
+      <text x="264" y="36" class="mid small t-ok">checked lookup</text>
+    </svg>
+    <h4>Handle</h4>
+    <p>The engine holds a small integer, looked up in a table. It can be checked; it is safe to copy and store; it fits in GPU data. Costs one lookup per use.</p>
+  </div>
 </div>
 
 <p>A handle with a <b>generation</b> counter can tell a live object from a destroyed one: see <a href="generational-handles.html">generational handles</a>. Under the handle, a backend usually keeps a neutral base struct and <b>derives</b> its own from it, adding the native members:</p>
@@ -357,10 +473,33 @@
 
 <div class="split">
   <div>
+    <svg viewBox="0 0 320 124" role="img" aria-label="Three RHI calls. Each one records its native command at once.">
+      <rect x="20" y="10" width="110" height="24" rx="4" class="cpu"/><text x="75" y="26" class="mid small">RHI bind</text>
+      <rect x="20" y="42" width="110" height="24" rx="4" class="cpu"/><text x="75" y="58" class="mid small">RHI draw</text>
+      <rect x="20" y="74" width="110" height="24" rx="4" class="cpu"/><text x="75" y="90" class="mid small">RHI copy</text>
+      <rect x="190" y="10" width="110" height="24" rx="4" class="gpu"/><text x="245" y="26" class="mid small">native bind</text>
+      <rect x="190" y="42" width="110" height="24" rx="4" class="gpu"/><text x="245" y="58" class="mid small">native draw</text>
+      <rect x="190" y="74" width="110" height="24" rx="4" class="gpu"/><text x="245" y="90" class="mid small">native copy</text>
+      <line x1="130" y1="22" x2="188" y2="22" class="arrow" marker-end="url(#ah)"/><line x1="130" y1="54" x2="188" y2="54" class="arrow" marker-end="url(#ah)"/><line x1="130" y1="86" x2="188" y2="86" class="arrow" marker-end="url(#ah)"/>
+      <text x="160" y="118" class="mid small">each call records at once</text>
+    </svg>
     <h4>Direct</h4>
     <p>Each RHI call records the native command at once: <var>draw</var> becomes the API's draw. Simple and fast. The RHI's command buffer is a thin wrapper around the native one.</p>
   </div>
   <div>
+    <svg viewBox="0 0 320 124" role="img" aria-label="Three RHI calls write into the engine's own command list. Later, the backend translates the list into native commands.">
+      <rect x="8" y="10" width="84" height="24" rx="4" class="cpu"/><text x="50" y="26" class="mid small">RHI bind</text>
+      <rect x="8" y="42" width="84" height="24" rx="4" class="cpu"/><text x="50" y="58" class="mid small">RHI draw</text>
+      <rect x="8" y="74" width="84" height="24" rx="4" class="cpu"/><text x="50" y="90" class="mid small">RHI copy</text>
+      <rect x="120" y="10" width="72" height="88" class="mem"/>
+      <path d="M120,39H192M120,68H192" class="arrow mem"/>
+      <text x="156" y="58" class="mid small">own list</text>
+      <line x1="92" y1="22" x2="118" y2="22" class="arrow" marker-end="url(#ah)"/><line x1="92" y1="54" x2="118" y2="54" class="arrow" marker-end="url(#ah)"/><line x1="92" y1="86" x2="118" y2="86" class="arrow" marker-end="url(#ah)"/>
+      <line x1="192" y1="54" x2="226" y2="54" class="arrow dashed" marker-end="url(#ah)"/>
+      <text x="209" y="44" class="mid small">later</text>
+      <rect x="228" y="30" width="84" height="48" rx="4" class="gpu"/><text x="270" y="50" class="mid small">backend</text><text x="270" y="66" class="mid small">translates</text>
+      <text x="160" y="118" class="mid small">the list can be sorted, merged, replayed</text>
+    </svg>
     <h4>Deferred</h4>
     <p>RHI calls write a compact list of the engine's own commands. Later, often on another thread, the backend translates the list. Costs a second pass, but the list can be sorted, merged, or replayed, and the engine does not depend on the API's threading rules.</p>
   </div>
@@ -368,16 +507,53 @@
 
 <h3>Who places the barriers?</h3>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Choice</th><th>How</th><th>Trade-off</th></tr>
-  <tr><td>The caller</td><td>The RHI has a barrier call, close to Vulkan's.</td><td>Fast and flexible. Every caller must know the rules from <a href="gpu-sync.html">GPU synchronization</a>.</td></tr>
-  <tr><td>The RHI tracks state</td><td>Each resource remembers its last use. Each use records a barrier if needed.</td><td>Hard to get wrong. Costs a lookup per use, and knows only the past, not the future.</td></tr>
-  <tr><td>A render graph</td><td>Passes declare reads and writes up front. The graph places barriers for the whole frame.</td><td>Sees the whole frame, so it can batch and move barriers. Needs a graph. See <a href="render-graphs.html">render graphs</a>.</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The caller puts a barrier between two uses by hand.">
+      <rect x="70" y="8" width="100" height="26" rx="4" class="cpu"/><text x="120" y="25" class="mid small">the caller</text>
+      <line x1="120" y1="34" x2="120" y2="50" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <rect x="114" y="54" width="12" height="62" rx="2" class="accent"/>
+      <rect x="16" y="64" width="84" height="42" rx="4" class="gpu"/><text x="58" y="89" class="mid small">use 1</text>
+      <rect x="140" y="64" width="84" height="42" rx="4" class="gpu"/><text x="182" y="89" class="mid small">use 2</text>
+    </svg>
+    <h4>The caller</h4>
+    <p>The RHI has a barrier call, close to Vulkan's.</p>
+    <p class="cost">Fast and flexible. Every caller must know the rules from <a href="gpu-sync.html">GPU synchronization</a>.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A resource remembers its last use. Before the next use, the RHI records a barrier from that.">
+      <rect x="16" y="8" width="208" height="30" rx="4" class="mem"/><text x="120" y="27" class="mid small">resource · last use: written</text>
+      <line x1="120" y1="38" x2="120" y2="50" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <rect x="114" y="54" width="12" height="62" rx="2" class="accent"/>
+      <rect x="16" y="64" width="84" height="42" rx="4" class="gpu"/><text x="58" y="89" class="mid small">use 1</text>
+      <rect x="140" y="64" width="84" height="42" rx="4" class="gpu"/><text x="182" y="89" class="mid small">use 2</text>
+    </svg>
+    <h4>The RHI tracks state</h4>
+    <p>Each resource remembers its last use. Each use records a barrier if needed.</p>
+    <p class="cost">Hard to get wrong. Costs a lookup per use, and knows only the past, not the future.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three passes of one frame with the resources they write and read. The graph places a barrier between each pair.">
+      <rect x="6" y="6" width="228" height="54" rx="6" class="zone"/>
+      <rect x="14" y="16" width="58" height="34" rx="4" class="gpu"/><text x="43" y="37" class="mid small">pass</text>
+      <rect x="91" y="16" width="58" height="34" rx="4" class="gpu"/><text x="120" y="37" class="mid small">pass</text>
+      <rect x="168" y="16" width="58" height="34" rx="4" class="gpu"/><text x="197" y="37" class="mid small">pass</text>
+      <rect x="77" y="12" width="9" height="42" rx="2" class="accent"/>
+      <rect x="154" y="12" width="9" height="42" rx="2" class="accent"/>
+      <rect x="50" y="88" width="62" height="26" rx="13" class="mem"/><text x="81" y="105" class="mid small">A</text>
+      <rect x="128" y="88" width="62" height="26" rx="13" class="mem"/><text x="159" y="105" class="mid small">B</text>
+      <line x1="43" y1="50" x2="66" y2="86" class="hot" marker-end="url(#ah-hot)"/>
+      <line x1="96" y1="88" x2="114" y2="52" class="arrow" marker-end="url(#ah)"/>
+      <line x1="126" y1="50" x2="144" y2="86" class="hot" marker-end="url(#ah-hot)"/>
+      <line x1="174" y1="88" x2="194" y2="52" class="arrow" marker-end="url(#ah)"/>
+    </svg>
+    <h4>A render graph</h4>
+    <p>Passes declare reads and writes up front. The graph places barriers for the whole frame.</p>
+    <p class="cost">Sees the whole frame, so it can batch and move barriers. Needs a graph. See <a href="render-graphs.html">render graphs</a>.</p>
+  </div>
 </div>
 
-<h2><span class="n">6</span>How to add a backend</h2>
+<h2 id="add-backend"><span class="n">6</span>How to add a backend</h2>
 
 <ol class="steps">
   <li><b>Check the shaders first.</b> Can the shader compiler target the new API, and does the shader code use only features it has (pointers, bindless arrays, subgroup operations)? This is usually the biggest job.</li>
@@ -389,18 +565,15 @@
   <li><b>Compare images.</b> Render the same frames on the old and the new backend and diff them. Run each API's validation layer.</li>
 </ol>
 
-<h2><span class="n">7</span>Pitfalls</h2>
+<h2 id="pitfalls"><span class="n">7</span>Pitfalls</h2>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Pitfall</th><th>What happens</th><th>Instead</th></tr>
-  <tr><td>One API's shape in the interface</td><td>Vulkan's layouts or descriptor sets appear above the line. The next backend has to fake them.</td><td>Design each call from what all planned APIs can do. Ask "how would Metal do this?"</td></tr>
-  <tr><td>Native types leak up</td><td>A <var>VkImage</var> in an engine header. Now the engine depends on Vulkan again.</td><td>Native types only in the backend's files.</td></tr>
-  <tr><td>Lowest common denominator</td><td>The engine cannot use a feature because one API lacks it.</td><td>Capability tiers: a "supported?" query, and a fallback path.</td></tr>
-  <tr><td>Hidden work in the RHI</td><td>A simple-looking call allocates, waits or flushes.</td><td>Make expensive things look expensive: separate calls, clear names.</td></tr>
-  <tr><td>Only one backend tested</td><td>The interface "works", but only for the API that exists.</td><td>A fake backend in unit tests, image tests per backend.</td></tr>
-</table>
-</div>
+<dl class="pitfalls">
+  <div><dt>One API's shape in the interface</dt><dd>Vulkan's layouts or descriptor sets appear above the line. The next backend has to fake them. <b>Instead:</b> design each call from what all planned APIs can do. Ask "how would Metal do this?"</dd></div>
+  <div><dt>Native types leak up</dt><dd>A <var>VkImage</var> in an engine header. Now the engine depends on Vulkan again. <b>Instead:</b> native types only in the backend's files.</dd></div>
+  <div><dt>Lowest common denominator</dt><dd>The engine cannot use a feature because one API lacks it. <b>Instead:</b> capability tiers: a "supported?" query, and a fallback path.</dd></div>
+  <div><dt>Hidden work in the RHI</dt><dd>A simple-looking call allocates, waits or flushes. <b>Instead:</b> make expensive things look expensive: separate calls, clear names.</dd></div>
+  <div><dt>Only one backend tested</dt><dd>The interface "works", but only for the API that exists. <b>Instead:</b> a fake backend in unit tests, image tests per backend.</dd></div>
+</dl>
 
 <h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
 

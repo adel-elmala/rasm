@@ -18,7 +18,10 @@
     <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
   </defs>
 </svg>
 
@@ -42,56 +45,137 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>Two questions per attachment</h2>
+<h2 id="two-questions"><span class="n">1</span>Two questions per attachment</h2>
 
 <p>A render pass draws into one or more <b>attachments</b>: color images, and often one depth image. Before the first triangle, the GPU asks "what is in this image now?". After the last triangle, it asks "do you need what I drew?". The program answers both questions, once per attachment, when it begins the pass.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 220" role="img" aria-label="An attachment in memory holds old contents. The load op decides what reaches the render pass: LOAD keeps the old contents, CLEAR fills it with one value, DONT_CARE starts with anything. The pass draws. The store op decides what reaches memory: STORE writes it back, DONT_CARE may throw it away, NONE does not write at all.">
-    <text x="234" y="24" class="mid title">start of the pass</text>
-    <text x="524" y="24" class="mid title">end of the pass</text>
-    <rect x="20" y="40" width="150" height="56" rx="6" class="mem"/>
-    <text x="95" y="63" class="mid">Attachment</text>
-    <text x="95" y="82" class="mid small">old contents</text>
-    <line x1="170" y1="68" x2="298" y2="68" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="234" y="60" class="mid small t-hot">load op</text>
-    <rect x="300" y="40" width="160" height="56" rx="6" class="gpu"/>
-    <text x="380" y="63" class="mid">Render pass</text>
-    <text x="380" y="82" class="mid small">draws into it</text>
-    <line x1="460" y1="68" x2="588" y2="68" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="524" y="60" class="mid small t-hot">store op</text>
-    <rect x="590" y="40" width="150" height="56" rx="6" class="mem"/>
-    <text x="665" y="63" class="mid">Attachment</text>
-    <text x="665" y="82" class="mid small">new contents</text>
+  <svg viewBox="0 0 760 190" role="img" aria-label="An attachment in memory holds old contents. The load op decides what reaches the render pass: LOAD keeps the old contents, CLEAR fills it with one value, DONT_CARE starts with anything. The pass draws. The store op decides what reaches memory: STORE writes it back, DONT_CARE may throw it away, NONE does not write at all.">
+    <text x="235" y="20" class="mid title">start of the pass</text>
+    <text x="525" y="20" class="mid title">end of the pass</text>
 
-    <text x="140" y="128" class="mono t-mem">LOAD</text>
-    <text x="230" y="128" class="small">keep the old contents</text>
-    <text x="140" y="152" class="mono t-gpu">CLEAR</text>
-    <text x="230" y="152" class="small">fill with one value</text>
-    <text x="140" y="176" class="mono t-gpu">DONT_CARE</text>
-    <text x="230" y="176" class="small">start with anything</text>
+    <rect x="20" y="34" width="150" height="100" rx="6" class="mem"/>
+    <polygon points="40,120 82,58 118,120" class="solid o-50"/>
+    <circle cx="136" cy="64" r="14" class="solid o-50"/>
+    <text x="95" y="154" class="mid">Attachment</text>
+    <text x="95" y="172" class="mid small">old contents, in memory</text>
 
-    <text x="450" y="128" class="mono t-mem">STORE</text>
-    <text x="545" y="128" class="small">write it back</text>
-    <text x="450" y="152" class="mono t-gpu">DONT_CARE</text>
-    <text x="545" y="152" class="small">may throw it away</text>
-    <text x="450" y="176" class="mono t-gpu">NONE</text>
-    <text x="545" y="176" class="small">do not write at all</text>
-    <text x="20" y="208" class="small">Amber ops move bytes between the GPU and memory. Green ops move none.</text>
+    <line x1="174" y1="84" x2="296" y2="84" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <text x="232" y="72" class="mid title t-hot">load op</text>
+    <text x="232" y="106" class="mid small">what is in this</text>
+    <text x="232" y="120" class="mid small">image now?</text>
+
+    <rect x="300" y="34" width="160" height="100" rx="6" class="gpu"/>
+    <polygon points="318,122 356,52 392,100" class="accent"/>
+    <polygon points="380,122 412,70 444,122" class="accent"/>
+    <text x="380" y="154" class="mid">Render pass</text>
+    <text x="380" y="172" class="mid small">draws into it</text>
+
+    <line x1="464" y1="84" x2="586" y2="84" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <text x="522" y="72" class="mid title t-hot">store op</text>
+    <text x="522" y="106" class="mid small">do you need</text>
+    <text x="522" y="120" class="mid small">what I drew?</text>
+
+    <rect x="590" y="34" width="150" height="100" rx="6" class="mem"/>
+    <polygon points="606,122 640,58 672,102" class="accent"/>
+    <polygon points="662,122 690,74 722,122" class="accent"/>
+    <text x="665" y="154" class="mid">Attachment</text>
+    <text x="665" y="172" class="mid small">new contents, in memory</text>
   </svg>
   <figcaption>Every attachment has its own pair: each color attachment, and the depth (and stencil) attachment.</figcaption>
 </figure>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Op</th><th>Meaning</th><th>Use it when</th></tr>
-  <tr><td>load <b>LOAD</b></td><td>The pass starts with what the image holds.</td><td>An earlier pass drew into it and this pass draws on top: transparent objects over opaque ones, a UI over the scene.</td></tr>
-  <tr><td>load <b>CLEAR</b></td><td>Every pixel starts as one clear value: a color, or a depth.</td><td>This is the first pass on the image this frame, and some pixels may stay empty.</td></tr>
-  <tr><td>load <b>DONT_CARE</b></td><td>The start contents are undefined. They can be old data, or garbage.</td><td>The pass writes every pixel anyway: a full-screen post effect.</td></tr>
-  <tr><td>store <b>STORE</b></td><td>What the pass drew is written to the image in memory.</td><td>A later pass reads it, it is shown on screen, or the next frame needs it.</td></tr>
-  <tr><td>store <b>DONT_CARE</b></td><td>The new contents may be lost. Afterwards the image is undefined.</td><td>Nobody reads it after this pass. Depth after the last 3D pass is the usual case.</td></tr>
-  <tr><td>store <b>NONE</b></td><td>The pass did not change the image, so nothing is written back, and the old contents stay.</td><td>The pass only reads the attachment, for example a depth test with depth writes off.</td></tr>
-</table>
+<p>The load op has three answers. One of them moves bytes from memory to the GPU; the other two move none.</p>
+
+<div class="legend">
+  <span><i class="mem"></i>the image in memory; an op that moves bytes</span>
+  <span><i class="gpu"></i>the image as the pass has it; an op that moves none</span>
+</div>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 112" role="img" aria-label="The image in memory holds an old picture. LOAD copies it, and the pass starts with the same picture.">
+      <rect x="10" y="20" width="80" height="60" rx="4" class="mem"/><polygon points="20,72 42,36 62,72" class="solid o-50"/><circle cx="72" cy="38" r="8" class="solid o-50"/>
+      <line x1="94" y1="50" x2="144" y2="50" class="arrow mem flowing" marker-end="url(#ah-mem)"/><text x="120" y="40" class="mid small t-mem">copy in</text>
+      <rect x="150" y="20" width="80" height="60" rx="4" class="gpu"/><polygon points="160,72 182,36 202,72" class="solid o-50"/><circle cx="212" cy="38" r="8" class="solid o-50"/>
+      <text x="50" y="100" class="mid small">in memory</text>
+      <text x="190" y="100" class="mid small">pass starts with</text>
+    </svg>
+    <h4>load: LOAD</h4>
+    <p>The pass starts with what the image holds: the old contents are kept.</p>
+    <p><b>Use it when:</b> an earlier pass drew into it and this pass draws on top: transparent objects over opaque ones, a UI over the scene.</p>
+    <p class="cost"><b>Moves bytes:</b> the image is read</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 112" role="img" aria-label="The image in memory holds an old picture. CLEAR does not read it: the pass starts with one flat value in every pixel.">
+      <rect x="10" y="20" width="80" height="60" rx="4" class="mem"/><polygon points="20,72 42,36 62,72" class="solid o-50"/><circle cx="72" cy="38" r="8" class="solid o-50"/>
+      <text x="120" y="54" class="mid small t-gpu">no read</text>
+      <rect x="150" y="20" width="80" height="60" rx="4" class="gpu"/><text x="190" y="54" class="mid small">one value</text>
+      <text x="50" y="100" class="mid small">in memory</text>
+      <text x="190" y="100" class="mid small">pass starts with</text>
+    </svg>
+    <h4>load: CLEAR</h4>
+    <p>Every pixel starts as one clear value: a color, or a depth.</p>
+    <p><b>Use it when:</b> this is the first pass on the image this frame, and some pixels may stay empty.</p>
+    <p class="cost">Moves no bytes</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 112" role="img" aria-label="The image in memory holds an old picture. DONT_CARE does not read it: the pass starts with undefined contents.">
+      <rect x="10" y="20" width="80" height="60" rx="4" class="mem"/><polygon points="20,72 42,36 62,72" class="solid o-50"/><circle cx="72" cy="38" r="8" class="solid o-50"/>
+      <text x="120" y="54" class="mid small t-gpu">no read</text>
+      <rect x="150" y="20" width="80" height="60" rx="4" class="ghost"/><text x="190" y="57" class="mid big t-faint">?</text>
+      <text x="50" y="100" class="mid small">in memory</text>
+      <text x="190" y="100" class="mid small">pass starts with</text>
+    </svg>
+    <h4>load: DONT_CARE</h4>
+    <p>The start contents are undefined. They can be old data, or garbage.</p>
+    <p><b>Use it when:</b> the pass writes every pixel anyway: a full-screen post effect.</p>
+    <p class="cost">Moves no bytes</p>
+  </div>
+</div>
+
+<p>The store op has three answers too:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 112" role="img" aria-label="The pass drew a new picture. STORE copies it to the image in memory.">
+      <rect x="10" y="20" width="80" height="60" rx="4" class="gpu"/><polygon points="20,72 38,32 54,58" class="accent"/><polygon points="54,72 68,44 82,72" class="accent"/>
+      <line x1="94" y1="50" x2="144" y2="50" class="arrow mem flowing" marker-end="url(#ah-mem)"/><text x="120" y="40" class="mid small t-mem">copy out</text>
+      <rect x="150" y="20" width="80" height="60" rx="4" class="mem"/><polygon points="160,72 178,32 194,58" class="accent"/><polygon points="194,72 208,44 222,72" class="accent"/>
+      <text x="50" y="100" class="mid small">the pass drew</text>
+      <text x="190" y="100" class="mid small">in memory</text>
+    </svg>
+    <h4>store: STORE</h4>
+    <p>What the pass drew is written to the image in memory.</p>
+    <p><b>Use it when:</b> a later pass reads it, it is shown on screen, or the next frame needs it.</p>
+    <p class="cost"><b>Moves bytes:</b> the image is written</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 112" role="img" aria-label="The pass drew a new picture. DONT_CARE does not write it: the image in memory is undefined afterwards.">
+      <rect x="10" y="20" width="80" height="60" rx="4" class="gpu"/><polygon points="20,72 38,32 54,58" class="accent"/><polygon points="54,72 68,44 82,72" class="accent"/>
+      <text x="120" y="54" class="mid small t-gpu">no write</text>
+      <rect x="150" y="20" width="80" height="60" rx="4" class="ghost"/><text x="190" y="57" class="mid big t-faint">?</text>
+      <text x="50" y="100" class="mid small">the pass drew</text>
+      <text x="190" y="100" class="mid small">in memory</text>
+    </svg>
+    <h4>store: DONT_CARE</h4>
+    <p>The new contents may be lost. Afterwards the image is undefined.</p>
+    <p><b>Use it when:</b> nobody reads it after this pass. Depth after the last 3D pass is the usual case.</p>
+    <p class="cost">Moves no bytes</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 112" role="img" aria-label="The pass only read the attachment. NONE writes nothing: the image in memory keeps its old picture.">
+      <rect x="10" y="20" width="80" height="60" rx="4" class="gpu"/><polygon points="20,72 42,36 62,72" class="solid o-50"/><circle cx="72" cy="38" r="8" class="solid o-50"/>
+      <text x="120" y="54" class="mid small t-gpu">no write</text>
+      <rect x="150" y="20" width="80" height="60" rx="4" class="mem"/><polygon points="160,72 182,36 202,72" class="solid o-50"/><circle cx="212" cy="38" r="8" class="solid o-50"/>
+      <text x="50" y="100" class="mid small">the pass only read</text>
+      <text x="190" y="100" class="mid small">memory keeps it</text>
+    </svg>
+    <h4>store: NONE</h4>
+    <p>The pass did not change the image, so nothing is written back, and the old contents stay.</p>
+    <p><b>Use it when:</b> the pass only reads the attachment, for example a depth test with depth writes off.</p>
+    <p class="cost">Moves no bytes</p>
+  </div>
 </div>
 
 <p>Every modern API has the same two choices, with different names:</p>
@@ -183,61 +267,121 @@
 
 <p>Take a 1920×1080 screen with an RGBA8 color image (4 bytes per pixel) and a 32-bit depth image (also 4 bytes per pixel). Count the bytes a tile-based GPU moves between tile memory and VRAM. (MB here means 1,000,000 bytes.)</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Attachment</th><th>Size</th></tr>
-  <tr><td>color, RGBA8</td><td>1920 × 1080 × 4 = 8,294,400 bytes ≈ 8.3 MB</td></tr>
-  <tr><td>depth, 32-bit float</td><td>1920 × 1080 × 4 = 8,294,400 bytes ≈ 8.3 MB</td></tr>
-</table>
+<div class="stats">
+  <div><b>8.3 MB</b><span>color, RGBA8</span><small>1920 × 1080 × 4 = 8,294,400 bytes</small></div>
+  <div><b>8.3 MB</b><span>depth, 32-bit float</span><small>1920 × 1080 × 4 = 8,294,400 bytes</small></div>
 </div>
 
-<p>One pass, with three choices of ops:</p>
+<p>One pass, with three choices of ops. Each amber block is one image that crosses between tile memory and VRAM:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Color ops</th><th>Depth ops</th><th>Read</th><th>Written</th><th>Per frame</th><th>At 60 fps</th></tr>
-  <tr><td>LOAD, STORE</td><td>LOAD, STORE</td><td>16.6 MB</td><td>16.6 MB</td><td>33.2 MB</td><td>1.99 GB/s</td></tr>
-  <tr><td>CLEAR, STORE</td><td>CLEAR, STORE</td><td>0</td><td>16.6 MB</td><td>16.6 MB</td><td>1.00 GB/s</td></tr>
-  <tr><td>CLEAR, STORE</td><td>CLEAR, DONT_CARE</td><td>0</td><td>8.3 MB</td><td>8.3 MB</td><td>0.50 GB/s</td></tr>
-</table>
-</div>
+<figure class="diagram">
+  <svg viewBox="0 0 760 196" role="img" aria-label="Bytes moved by one pass for three choices of ops. Color and depth both LOAD and STORE: 16.6 MB read and 16.6 MB written, 33.2 MB per frame, 1.99 GB/s at 60 fps. Both CLEAR and STORE: nothing read, 16.6 MB written, 16.6 MB per frame, 1.00 GB/s. Color CLEAR and STORE, depth CLEAR and DONT_CARE: nothing read, 8.3 MB written, 8.3 MB per frame, 0.50 GB/s.">
+    <text x="20" y="20" class="small">ops (color · depth)</text>
+    <text x="270" y="20" class="mid title">read from memory</text>
+    <text x="450" y="20" class="mid title">written to memory</text>
+    <text x="548" y="20" class="title">per frame · at 60 fps</text>
 
-<p>The same pass, the same image on screen, and 4 times fewer bytes. Now a frame with three passes on the same images: opaque objects, then transparent objects (which test against the opaque depth), then a UI on top (with no depth).</p>
+    <text x="20" y="50" class="small">color <tspan class="t-mem">LOAD</tspan>, <tspan class="t-mem">STORE</tspan></text>
+    <text x="20" y="66" class="small">depth <tspan class="t-mem">LOAD</tspan>, <tspan class="t-mem">STORE</tspan></text>
+    <rect x="190" y="36" width="80" height="36" rx="3" class="mem"/><text x="230" y="58" class="mid small">color 8.3</text>
+    <rect x="270" y="36" width="80" height="36" rx="3" class="mem"/><text x="310" y="58" class="mid small">depth 8.3</text>
+    <rect x="370" y="36" width="80" height="36" rx="3" class="mem"/><text x="410" y="58" class="mid small">color 8.3</text>
+    <rect x="450" y="36" width="80" height="36" rx="3" class="mem"/><text x="490" y="58" class="mid small">depth 8.3</text>
+    <text x="548" y="52" class="title t-bad">33.2 MB · 1.99 GB/s</text>
+    <text x="548" y="68" class="small">16.6 MB read + 16.6 MB written</text>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Pass</th><th>Ops (color · depth)</th><th>Bytes</th></tr>
-  <tr><td>Opaque</td><td>CLEAR, STORE · CLEAR, STORE</td><td>8.3 + 8.3 = 16.6 MB</td></tr>
-  <tr><td>Transparent</td><td>LOAD, STORE · LOAD, DONT_CARE</td><td>16.6 + 8.3 = 24.9 MB</td></tr>
-  <tr><td>UI</td><td>LOAD, STORE · no depth</td><td>16.6 MB</td></tr>
-  <tr><td><b>Total</b></td><td></td><td><b>58,060,800 bytes ≈ 58.1 MB</b> → 3.48 GB/s at 60 fps</td></tr>
-</table>
-</div>
+    <text x="20" y="102" class="small">color <tspan class="t-gpu">CLEAR</tspan>, <tspan class="t-mem">STORE</tspan></text>
+    <text x="20" y="118" class="small">depth <tspan class="t-gpu">CLEAR</tspan>, <tspan class="t-mem">STORE</tspan></text>
+    <rect x="190" y="88" width="160" height="36" rx="3" class="ghost"/><text x="270" y="110" class="mid small t-gpu">0: cleared on chip</text>
+    <rect x="370" y="88" width="80" height="36" rx="3" class="mem"/><text x="410" y="110" class="mid small">color 8.3</text>
+    <rect x="450" y="88" width="80" height="36" rx="3" class="mem"/><text x="490" y="110" class="mid small">depth 8.3</text>
+    <text x="548" y="104" class="title">16.6 MB · 1.00 GB/s</text>
+    <text x="548" y="120" class="small">0 read + 16.6 MB written</text>
+
+    <text x="20" y="154" class="small">color <tspan class="t-gpu">CLEAR</tspan>, <tspan class="t-mem">STORE</tspan></text>
+    <text x="20" y="170" class="small">depth <tspan class="t-gpu">CLEAR</tspan>, <tspan class="t-gpu">DONT_CARE</tspan></text>
+    <rect x="190" y="140" width="160" height="36" rx="3" class="ghost"/><text x="270" y="162" class="mid small t-gpu">0: cleared on chip</text>
+    <rect x="370" y="140" width="80" height="36" rx="3" class="mem"/><text x="410" y="162" class="mid small">color 8.3</text>
+    <rect x="450" y="140" width="80" height="36" rx="3" class="ghost"/><text x="490" y="162" class="mid small t-gpu">not stored</text>
+    <text x="548" y="156" class="title t-ok">8.3 MB · 0.50 GB/s</text>
+    <text x="548" y="172" class="small">0 read + 8.3 MB written</text>
+  </svg>
+  <figcaption>The same pass, the same image on screen, and 4 times fewer bytes.</figcaption>
+</figure>
+
+<p>Now a frame with three passes on the same images: opaque objects, then transparent objects (which test against the opaque depth), then a UI on top (with no depth). An arrow up is a LOAD, an arrow down is a STORE; each one moves 8.3 MB.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="Three passes on the same color and depth images, with the bytes each one moves between tile memory and VRAM. Opaque: color CLEAR then STORE, depth CLEAR then STORE: two stores, 8.3 plus 8.3 is 16.6 MB. Transparent: color LOAD then STORE, depth LOAD then DONT_CARE: two loads and one store, 16.6 plus 8.3 is 24.9 MB. UI: color LOAD then STORE, no depth: one load and one store, 16.6 MB. Total 58,060,800 bytes, about 58.1 MB, 3.48 GB/s at 60 fps.">
+    <text x="20" y="18" class="small">on chip: tile memory</text>
+
+    <rect x="20" y="28" width="230" height="86" rx="8" class="gpu"/>
+    <text x="135" y="48" class="mid title">Opaque</text>
+    <text x="80" y="66" class="mid small">color</text><text x="190" y="66" class="mid small">depth</text>
+    <rect x="28" y="72" width="104" height="30" rx="4" class="paper"/><text x="80" y="91" class="mid small"><tspan class="t-gpu">CLEAR</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <rect x="138" y="72" width="104" height="30" rx="4" class="paper"/><text x="190" y="91" class="mid small"><tspan class="t-gpu">CLEAR</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <line x1="96" y1="118" x2="96" y2="192" class="arrow mem thick" marker-end="url(#ah-mem)"/><text x="104" y="160" class="small t-mem">8.3</text>
+    <line x1="206" y1="118" x2="206" y2="192" class="arrow mem thick" marker-end="url(#ah-mem)"/><text x="214" y="160" class="small t-mem">8.3</text>
+
+    <rect x="265" y="28" width="230" height="86" rx="8" class="gpu"/>
+    <text x="380" y="48" class="mid title">Transparent</text>
+    <text x="325" y="66" class="mid small">color</text><text x="435" y="66" class="mid small">depth</text>
+    <rect x="273" y="72" width="104" height="30" rx="4" class="paper"/><text x="325" y="91" class="mid small"><tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <rect x="383" y="72" width="104" height="30" rx="4" class="paper"/><text x="435" y="91" class="mid small"><tspan class="t-mem">LOAD</tspan> → <tspan class="t-gpu">DONT_CARE</tspan></text>
+    <line x1="309" y1="194" x2="309" y2="120" class="arrow mem thick" marker-end="url(#ah-mem)"/><text x="301" y="160" class="end small t-mem">8.3</text>
+    <line x1="341" y1="118" x2="341" y2="192" class="arrow mem thick" marker-end="url(#ah-mem)"/><text x="349" y="160" class="small t-mem">8.3</text>
+    <line x1="419" y1="194" x2="419" y2="120" class="arrow mem thick" marker-end="url(#ah-mem)"/><text x="411" y="160" class="end small t-mem">8.3</text>
+    <text x="431" y="160" class="small t-gpu">not stored</text>
+
+    <rect x="510" y="28" width="230" height="86" rx="8" class="gpu"/>
+    <text x="625" y="48" class="mid title">UI</text>
+    <text x="570" y="66" class="mid small">color</text><text x="680" y="66" class="mid small">depth</text>
+    <rect x="518" y="72" width="104" height="30" rx="4" class="paper"/><text x="570" y="91" class="mid small"><tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan></text>
+    <rect x="628" y="72" width="104" height="30" rx="4" class="ghost"/><text x="680" y="91" class="mid small t-faint">no depth</text>
+    <line x1="554" y1="194" x2="554" y2="120" class="arrow mem thick" marker-end="url(#ah-mem)"/><text x="546" y="160" class="end small t-mem">8.3</text>
+    <line x1="586" y1="118" x2="586" y2="192" class="arrow mem thick" marker-end="url(#ah-mem)"/><text x="594" y="160" class="small t-mem">8.3</text>
+
+    <rect x="20" y="196" width="720" height="32" rx="6" class="mem"/>
+    <text x="380" y="217" class="mid">VRAM: the color image and the depth image</text>
+
+    <text x="135" y="250" class="mid">8.3 + 8.3 = 16.6 MB</text>
+    <text x="380" y="250" class="mid">16.6 + 8.3 = 24.9 MB</text>
+    <text x="625" y="250" class="mid">16.6 MB</text>
+    <text x="380" y="278" class="mid title">Total: 58,060,800 bytes ≈ 58.1 MB → 3.48 GB/s at 60 fps</text>
+  </svg>
+  <figcaption>Clears and DONT_CARE draw no arrow: they cost nothing. The transparent pass pays most, because it must load what the opaque pass stored.</figcaption>
+</figure>
+
+<p>Compare this frame with two other ways to write it:</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 200" role="img" aria-label="Bytes moved per frame by the three-pass frame. Every pass loading and storing both images: 99.5 MB, 5.97 GB/s. Ops chosen per pass: 58.1 MB, 3.48 GB/s. All three as one pass: 8.3 MB, 0.50 GB/s.">
     <text x="20" y="22" class="title">Three passes at 1920×1080, bytes per frame</text>
     <text x="20" y="54" class="small">Every pass: LOAD + STORE,</text>
     <text x="20" y="68" class="small">color and depth</text>
-    <rect x="215" y="40" width="133" height="34" class="mem"/><rect x="348" y="40" width="133" height="34" class="mem"/><rect x="481" y="40" width="132" height="34" class="mem"/>
+    <rect x="215" y="40" width="133" height="34" class="bad"/><rect x="348" y="40" width="133" height="34" class="bad"/><rect x="481" y="40" width="132" height="34" class="bad"/>
     <text x="281" y="61" class="mid small">Opaque</text><text x="414" y="61" class="mid small">Transparent</text><text x="547" y="61" class="mid small">UI</text>
-    <text x="621" y="61" class="small">99.5 MB · 5.97 GB/s</text>
+    <text x="621" y="61" class="small t-bad">99.5 MB · 5.97 GB/s</text>
 
     <text x="20" y="109" class="small">Ops chosen per pass</text>
-    <text x="20" y="123" class="small">(the table above)</text>
+    <text x="20" y="123" class="small">(the figure above)</text>
     <rect x="215" y="95" width="66" height="34" class="mem"/><rect x="281" y="95" width="100" height="34" class="mem"/><rect x="381" y="95" width="66" height="34" class="mem"/>
     <text x="248" y="116" class="mid small">Opaque</text><text x="331" y="116" class="mid small">Transp.</text><text x="414" y="116" class="mid small">UI</text>
-    <text x="455" y="116" class="small">58.1 MB · 3.48 GB/s</text>
+    <text x="455" y="116" class="small t-mem">58.1 MB · 3.48 GB/s</text>
 
     <text x="20" y="164" class="small">One merged pass: CLEAR,</text>
     <text x="20" y="178" class="small">store color only</text>
-    <rect x="215" y="150" width="33" height="34" class="mem"/>
-    <text x="256" y="171" class="small">8.3 MB · 0.50 GB/s</text>
+    <rect x="215" y="150" width="33" height="34" class="ok"/>
+    <text x="256" y="171" class="small t-ok">8.3 MB · 0.50 GB/s</text>
   </svg>
   <figcaption>4 pixels of bar per MB. Good ops save about 40% here. Merging the passes (<a href="#variants">section 5</a>) saves much more, because the images stay on the chip between the passes.</figcaption>
 </figure>
 
-<p>A phone has a few tens of GB/s of memory bandwidth in total, shared with the CPU. A few GB/s for one image is a large part of it. These numbers are the tile-based model. An immediate-mode GPU moves bytes in a different way, so the numbers do not apply there directly.</p>
+<div class="callout">
+  <strong>How much is that?</strong>
+  <p>A phone has a few tens of GB/s of memory bandwidth in total, shared with the CPU. A few GB/s for one image is a large part of it.</p>
+  <p>These numbers are the tile-based model. An immediate-mode GPU moves bytes in a different way, so the numbers do not apply there directly.</p>
+</div>
 
 <h2 id="choosing"><span class="n">4</span>Choosing the ops</h2>
 
@@ -305,10 +449,49 @@
 
 <div class="split">
   <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A barrier from the UNDEFINED layout throws the old contents away. Before a pass that clears, that is fine: the image ends up clean. Before a pass that loads, the image to load is gone.">
+      <text x="83" y="12" class="mid small t-hot">from UNDEFINED</text>
+      <rect x="10" y="20" width="56" height="42" rx="3" class="mem"/>
+      <polygon points="18,56 32,30 46,56" class="solid o-50"/><circle cx="54" cy="32" r="5" class="solid o-50"/>
+      <line x1="68" y1="41" x2="98" y2="41" class="arrow" marker-end="url(#ah)"/>
+      <line x1="83" y1="18" x2="83" y2="64" class="hot"/>
+      <rect x="102" y="20" width="56" height="42" rx="3" class="ghost"/><text x="130" y="47" class="mid big t-faint">?</text>
+      <line x1="160" y1="41" x2="212" y2="41" class="arrow" marker-end="url(#ah)"/>
+      <text x="186" y="33" class="mid mono small t-gpu">CLEAR</text>
+      <rect x="216" y="20" width="56" height="42" rx="3" class="ok"/>
+      <text x="296" y="47" class="mid big t-ok">✓</text>
+
+      <rect x="10" y="86" width="56" height="42" rx="3" class="mem"/>
+      <polygon points="18,122 32,96 46,122" class="solid o-50"/><circle cx="54" cy="98" r="5" class="solid o-50"/>
+      <line x1="68" y1="107" x2="98" y2="107" class="arrow" marker-end="url(#ah)"/>
+      <line x1="83" y1="84" x2="83" y2="130" class="hot"/>
+      <rect x="102" y="86" width="56" height="42" rx="3" class="ghost"/><text x="130" y="113" class="mid big t-faint">?</text>
+      <line x1="160" y1="107" x2="212" y2="107" class="arrow" marker-end="url(#ah)"/>
+      <text x="186" y="99" class="mid mono small t-mem">LOAD</text>
+      <rect x="216" y="86" width="56" height="42" rx="3" class="bad"/><text x="244" y="113" class="mid big t-bad">?</text>
+      <text x="296" y="113" class="mid big t-bad">✗</text>
+    </svg>
     <h4>Discard in a barrier</h4>
     <p>An image barrier can change the layout from <b>UNDEFINED</b>. That also says "I do not need the old contents", like DONT_CARE. A pass that clears or does not care can use it: the driver may skip decompressing the old data. A pass that loads must <b>not</b>: the barrier would throw away what it wants to load. See <a href="gpu-sync.html">GPU synchronization</a>.</p>
   </div>
   <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="Left: two passes in a row. The first stores the images to VRAM and the second loads them again. Right: the two as one pass. The images stay on the chip and nothing is copied.">
+      <text x="80" y="12" class="mid small">two passes</text>
+      <rect x="10" y="20" width="64" height="34" rx="5" class="gpu"/><text x="42" y="41" class="mid small">pass 1</text>
+      <rect x="86" y="20" width="64" height="34" rx="5" class="gpu"/><text x="118" y="41" class="mid small">pass 2</text>
+      <line x1="58" y1="56" x2="58" y2="100" class="arrow mem thick" marker-end="url(#ah-mem)"/>
+      <line x1="102" y1="102" x2="102" y2="58" class="arrow mem thick" marker-end="url(#ah-mem)"/>
+      <text x="50" y="82" class="end small t-mem">STORE</text>
+      <text x="110" y="82" class="small t-mem">LOAD</text>
+      <rect x="10" y="104" width="140" height="26" rx="4" class="mem"/><text x="80" y="121" class="mid small">VRAM</text>
+
+      <line x1="165" y1="6" x2="165" y2="134" class="dashed"/>
+
+      <text x="245" y="12" class="mid small">one pass</text>
+      <rect x="180" y="20" width="130" height="34" rx="5" class="gpu"/><text x="245" y="41" class="mid small">pass 1 + 2, on chip</text>
+      <text x="245" y="82" class="mid small t-ok">no copy between</text>
+      <rect x="180" y="104" width="130" height="26" rx="4" class="ghost"/><text x="245" y="121" class="mid small t-faint">VRAM</text>
+    </svg>
     <h4>Merging passes</h4>
     <p>Two passes in a row on the same images pay a STORE and a LOAD in between. If they are one pass, the images stay on the chip and both copies go away (the last bar in <a href="#bandwidth">section 3</a>). Vulkan <b>subpasses</b> and tile-local reads let a pass even read the previous step's pixel while it is still on the chip, for example for deferred lighting.</p>
   </div>
@@ -316,53 +499,67 @@
 
 <p>Multisampling (MSAA) shows the store op at its best. A 4× MSAA image has 4 samples per pixel, but the screen needs only one. At the end of the pass, the GPU <b>resolves</b> the samples to one value, and stores only that.</p>
 
+<div class="legend">
+  <span><i class="hot"></i>covered by the triangle</span>
+  <span><i class="mem"></i>written to memory</span>
+</div>
+
 <figure class="diagram">
-  <svg viewBox="0 0 760 240" role="img" aria-label="On chip, the MSAA color with 4 samples per pixel is resolved to one value per pixel. Only the resolved image is stored to VRAM, 8.3 MB. The MSAA image uses DONT_CARE and is never written, so it needs no memory: it can be memoryless.">
-    <rect x="20" y="34" width="480" height="88" class="zone"/>
-    <text x="490" y="50" class="end small">on chip</text>
-    <rect x="40" y="56" width="160" height="50" rx="6" class="gpu"/>
-    <text x="120" y="77" class="mid">MSAA color</text>
-    <text x="120" y="95" class="mid small">4 samples per pixel</text>
-    <line x1="200" y1="81" x2="258" y2="81" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="229" y="73" class="mid small">resolve</text>
-    <rect x="260" y="56" width="160" height="50" rx="6" class="gpu"/>
-    <text x="340" y="77" class="mid">Resolved color</text>
-    <text x="340" y="95" class="mid small">1 value per pixel</text>
+  <svg viewBox="0 0 760 300" role="img" aria-label="On chip, four pixels of the MSAA color image hold 4 samples each; a triangle covers 1, 0, 4 and 2 of them. The resolve turns each pixel into one value: a quarter, none, all and half of the triangle's color. Only the resolved image is stored to VRAM, 8.3 MB. The MSAA image uses DONT_CARE and is never written, 33.2 MB that need no memory.">
+    <rect x="20" y="24" width="720" height="166" rx="8" class="zone"/>
+    <text x="728" y="44" class="end small">on chip</text>
+    <text x="120" y="44" class="mid small">MSAA color: 4 samples per pixel</text>
+    <rect x="60" y="54" width="120" height="120" class="paper"/>
+    <polygon points="60,78 180,174 60,174" class="accent"/>
+    <path d="M60,54H180V174H60ZM120,54V174M60,114H180" class="arrow"/>
+    <circle cx="82" cy="64" r="4" class="box"/><circle cx="110" cy="76" r="4" class="box"/><circle cx="70" cy="92" r="4" class="badge"/><circle cx="98" cy="104" r="4" class="box"/>
+    <circle cx="142" cy="64" r="4" class="box"/><circle cx="170" cy="76" r="4" class="box"/><circle cx="130" cy="92" r="4" class="box"/><circle cx="158" cy="104" r="4" class="box"/>
+    <circle cx="82" cy="124" r="4" class="badge"/><circle cx="110" cy="136" r="4" class="badge"/><circle cx="70" cy="152" r="4" class="badge"/><circle cx="98" cy="164" r="4" class="badge"/>
+    <circle cx="142" cy="124" r="4" class="box"/><circle cx="170" cy="136" r="4" class="box"/><circle cx="130" cy="152" r="4" class="badge"/><circle cx="158" cy="164" r="4" class="badge"/>
 
-    <line x1="120" y1="106" x2="120" y2="160" class="arrow dashed"/>
-    <text x="128" y="140" class="small t-faint">DONT_CARE</text>
-    <line x1="340" y1="106" x2="340" y2="160" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <text x="348" y="140" class="small t-mem">STORE</text>
+    <line x1="196" y1="114" x2="404" y2="114" class="arrow gpu thick" marker-end="url(#ah-gpu)"/>
+    <text x="300" y="104" class="mid title t-gpu">resolve</text>
+    <text x="300" y="134" class="mid small">average the 4 samples of each pixel</text>
 
-    <rect x="20" y="146" width="480" height="78" class="zone"/>
-    <text x="490" y="162" class="end small">VRAM</text>
-    <rect x="40" y="162" width="160" height="48" rx="6" class="ghost"/>
-    <text x="120" y="183" class="mid t-faint">MSAA image</text>
-    <text x="120" y="200" class="mid small">33.2 MB, never written</text>
-    <rect x="260" y="162" width="160" height="48" rx="6" class="mem"/>
-    <text x="340" y="183" class="mid">Resolved image</text>
-    <text x="340" y="200" class="mid small">8.3 MB written</text>
+    <text x="480" y="44" class="mid small">resolved color: 1 value per pixel</text>
+    <rect x="420" y="54" width="120" height="120" class="paper"/>
+    <rect x="420" y="54" width="60" height="60" class="accent o-25"/>
+    <rect x="420" y="114" width="60" height="60" class="accent"/>
+    <rect x="480" y="114" width="60" height="60" class="accent o-50"/>
+    <path d="M420,54H540V174H420ZM480,54V174M420,114H540" class="arrow"/>
+    <text x="450" y="89" class="mid mono">1/4</text><text x="510" y="89" class="mid mono">0</text>
+    <text x="450" y="149" class="mid mono">4/4</text><text x="510" y="149" class="mid mono">2/4</text>
 
-    <text x="525" y="60" class="title">Memoryless</text>
-    <text x="525" y="84" class="small">With load CLEAR and store DONT_CARE,</text>
-    <text x="525" y="100" class="small">the MSAA image is never read or</text>
-    <text x="525" y="116" class="small">written in memory. A tile-based GPU</text>
-    <text x="525" y="132" class="small">then needs no memory for it at all.</text>
-    <text x="525" y="162" class="small">Vulkan: a transient attachment in</text>
-    <text x="525" y="178" class="small">lazily allocated memory.</text>
-    <text x="525" y="194" class="small">Metal: memoryless storage.</text>
+    <line x1="120" y1="178" x2="120" y2="222" class="dashed"/>
+    <text x="130" y="206" class="small halo t-faint">DONT_CARE: no write</text>
+    <line x1="480" y1="178" x2="480" y2="222" class="arrow mem thick" marker-end="url(#ah-mem)"/>
+    <text x="490" y="206" class="small halo t-mem">STORE</text>
+
+    <rect x="20" y="214" width="720" height="76" rx="8" class="zone"/>
+    <text x="728" y="234" class="end small">VRAM</text>
+    <rect x="40" y="228" width="160" height="50" rx="6" class="ghost"/>
+    <text x="120" y="249" class="mid t-faint">MSAA image</text>
+    <text x="120" y="267" class="mid small">33.2 MB, never written</text>
+    <rect x="400" y="228" width="160" height="50" rx="6" class="mem"/>
+    <text x="480" y="249" class="mid">Resolved image</text>
+    <text x="480" y="267" class="mid small">8.3 MB written</text>
   </svg>
   <figcaption>1920×1080, RGBA8, 4× MSAA: the MSAA image is 4 × 8.3 = 33.2 MB. A resolve is just another store op: Metal names it a store action, Direct3D 12 an ending access.</figcaption>
 </figure>
 
-<p>The same works for depth that is cleared at the start and not stored at the end: it can be memoryless too, as long as no other pass needs it.</p>
+<div class="callout">
+  <strong>Memoryless</strong>
+  <p>With load CLEAR and store DONT_CARE, the MSAA image is never read or written in memory. A tile-based GPU then needs no memory for it at all.</p>
+  <p>Vulkan: a transient attachment in lazily allocated memory. Metal: memoryless storage.</p>
+  <p>The same works for depth that is cleared at the start and not stored at the end: it can be memoryless too, as long as no other pass needs it.</p>
+</div>
 
 <h2 id="graph"><span class="n">6</span>How a render graph picks the ops</h2>
 
 <p>A <a href="render-graphs.html">render graph</a> knows every pass, in the order they run, and what each pass writes and reads. That is exactly what the two questions need. Here is a frame with four passes, and the ops the graph finds for each image:</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="A grid with four passes as columns, Opaque, Transparent, Tonemap and UI, and three images as rows. HDR color: Opaque CLEAR then STORE, Transparent LOAD then STORE, Tonemap samples it. Depth: Opaque CLEAR then STORE, Transparent LOAD then DONT_CARE. Swapchain: Tonemap DONT_CARE then STORE, UI LOAD then STORE, then presented.">
+  <svg viewBox="0 0 760 232" role="img" aria-label="A grid with four passes as columns, Opaque, Transparent, Tonemap and UI, and three images as rows. HDR color: Opaque CLEAR then STORE, Transparent LOAD then STORE, Tonemap samples it. Depth: Opaque CLEAR then STORE, Transparent LOAD then DONT_CARE. Swapchain: Tonemap DONT_CARE then STORE, UI LOAD then STORE, then presented.">
     <text x="245" y="30" class="mid title">1 Opaque</text>
     <text x="385" y="30" class="mid title">2 Transparent</text>
     <text x="525" y="30" class="mid title">3 Tonemap</text>
@@ -389,9 +586,11 @@
     <rect x="600" y="172" width="130" height="40" rx="6" class="box"/>
     <text x="665" y="197" class="mid small"><tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan></text>
 
-    <text x="20" y="238" class="small">Tonemap draws every pixel, so it does not care. Nobody reads depth after Transparent, so it is not stored. The screen reads the swapchain.</text>
+    <line x1="450" y1="72" x2="468" y2="72" class="arrow shader" marker-end="url(#ah-shader)"/>
+    <line x1="730" y1="192" x2="748" y2="192" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="748" y="222" class="end small t-mem">to the screen</text>
   </svg>
-  <figcaption>Each box is one pass drawing into one image: its load op, then its store op. The purple pill is a read as a texture, which also counts as "read later".</figcaption>
+  <figcaption>Each box is one pass drawing into one image: its load op, then its store op. The purple pill is a read as a texture, which also counts as "read later". Tonemap draws every pixel, so it does not care. Nobody reads depth after Transparent, so it is not stored. The screen reads the swapchain.</figcaption>
 </figure>
 
 <p>After sorting the passes, the graph walks them in order:</p>
@@ -407,17 +606,14 @@
 
 <h2 id="pitfalls"><span class="n">7</span>Pitfalls</h2>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Mistake</th><th>What you see</th><th>Fix</th></tr>
-  <tr><td>DONT_CARE store, and a later pass reads the image</td><td>Garbage, flicker, or black. Often only on some GPUs: an immediate-mode GPU may keep the data by luck, a tile-based one drops it.</td><td>STORE whenever anything reads after.</td></tr>
-  <tr><td>Depth DONT_CARE, but the next pass LOADs depth</td><td>The depth test runs against garbage: objects flicker, vanish, or draw over each other.</td><td>The pass before a depth LOAD must STORE depth.</td></tr>
-  <tr><td>LOAD on the first use of an image (or on the swapchain)</td><td>Old or random pixels from a previous frame show through. On a tiler it also costs a full read.</td><td>CLEAR, or DONT_CARE when every pixel is drawn.</td></tr>
-  <tr><td>Clearing with a draw call, or with a clear command after a LOAD</td><td>A correct image, but the pass reads the whole image and then writes it again.</td><td>Use the CLEAR load op: it is free.</td></tr>
-  <tr><td>UNDEFINED layout in the barrier before a LOAD</td><td>The loaded contents are lost, even though the op is LOAD.</td><td>Keep the old layout when the pass loads.</td></tr>
-  <tr><td>Splitting one pass into many small ones</td><td>Every split adds a STORE and a LOAD of the same images.</td><td>Keep draws to the same images in one pass when you can.</td></tr>
-</table>
-</div>
+<dl class="pitfalls">
+  <div><dt>Garbage, flicker, or black, often only on some GPUs</dt><dd>A DONT_CARE store, and a later pass reads the image. An immediate-mode GPU may keep the data by luck, a tile-based one drops it. STORE whenever anything reads after.</dd></div>
+  <div><dt>Objects flicker, vanish, or draw over each other</dt><dd>Depth is DONT_CARE, but the next pass LOADs depth, so the depth test runs against garbage. The pass before a depth LOAD must STORE depth.</dd></div>
+  <div><dt>Old or random pixels from a previous frame show through</dt><dd>LOAD on the first use of an image (or on the swapchain). On a tiler it also costs a full read. Use CLEAR, or DONT_CARE when every pixel is drawn.</dd></div>
+  <div><dt>A correct image, but the pass reads the whole image and then writes it again</dt><dd>Clearing with a draw call, or with a clear command after a LOAD. Use the CLEAR load op: it is free.</dd></div>
+  <div><dt>The loaded contents are lost, even though the op is LOAD</dt><dd>An UNDEFINED layout in the barrier before a LOAD. Keep the old layout when the pass loads.</dd></div>
+  <div><dt>Every split adds a STORE and a LOAD of the same images</dt><dd>Splitting one pass into many small ones. Keep draws to the same images in one pass when you can.</dd></div>
+</dl>
 
 <div class="callout warn">
   <strong>Bugs that hide on desktop</strong>
