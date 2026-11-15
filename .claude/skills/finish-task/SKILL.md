@@ -55,7 +55,9 @@ Get the date with `date +%F`. Never guess it.
 
 **HTML docs (`docs/guides/`, `docs/api/`)**: run the `sync-docs` skill. It lists the pages that describe the
 files this change touched, and its `check` must pass. Every change to engine code, shaders, examples or the
-public API goes through it, so the HTML docs never fall behind `main`.
+public API goes through it, so the HTML docs never fall behind `main`. A change that adds a new concept,
+algorithm or technique also gets a new concept guide (see `sync-docs`); write it without waiting to be asked, and
+name it in the report.
 
 **`CLAUDE.md`, `docs/coding_style.md`**: only when a rule or workflow changed.
 
@@ -79,6 +81,6 @@ PRs are squash-merged with the branch commits listed in the body, so one commit 
 
 - what changed (files, behavior),
 - verification results (verdicts, image same/DIFF, validation counts),
-- docs updated, with IDs,
+- docs updated, with IDs, and the new guide (or why none was needed),
 - problems found that already existed before this change,
 - the drafted commit message.

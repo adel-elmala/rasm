@@ -124,6 +124,25 @@
   </div>
 </div>
 
+<div class="api" id="SceneShadow">
+  <pre class="sig">struct SceneShadow
+{
+    CameraHandle       camera;
+    RenderTargetHandle renderTarget;
+    LightHandle        light;
+
+    bool operator==(const SceneShadow&amp;) const = default;
+};</pre>
+  <div class="body">
+    <p>A shadow map for <a href="engine.html#addScenePasses"><code>addScenePasses</code></a>: the light camera, and the depth-only target (<code>D32_SFLOAT</code> depth, no color) that the scene passes of that camera draw, and the directional light it darkens. All empty (the default) means no shadow. See <a href="../guides/shadow-mapping.html">Shadow mapping</a>.</p>
+    <dl>
+      <dt>camera</dt><dd>The light's view. It must be orthographic; point it along <code>light</code>. What is outside its box is lit.</dd>
+      <dt>renderTarget</dt><dd>The shadow map. Its size is the shadow's resolution: 2048 × 2048 in <code>examples/06_shadows</code>.</dd>
+      <dt>light</dt><dd>The directional light the map darkens; other lights are not shadowed. It must be in the scene's lights to be shadowed: one taken out of the scene casts no shadow.</dd>
+    </dl>
+  </div>
+</div>
+
 <h2 id="entities"><span class="n">2</span>Entities</h2>
 
 <p>An entity is not drawn the moment you create it. It moves through these states. Each arrow happens inside <code>beginFrame</code>.</p>

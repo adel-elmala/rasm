@@ -143,7 +143,11 @@ struct SceneData
     uint32_t            viewportHeight;
     float               lodErrorPixels;     // culling picks the coarsest LOD whose error stays under this on screen
     int32_t             forcedLod;          // >= 0: every draw uses this LOD (or its mesh's coarsest), for debugging
-    uint32_t            padding;
+    uint32_t            shadowTexture;      // bindless index of the shadow map's depth, INVALID_TEXTURE_INDEX without one
+    float4x4            shadowMatrix;       // world to the shadow map's clip space: the light camera's projection * view
+    int32_t             shadowLight;        // index in lights of the light the shadow map darkens, -1 without one
+    float               lodPixelsPerUnit;   // the LOD camera's pixels per world unit at view depth 1 (lodSelection.slang)
+    float4              lodDepthPlane;      // dot(lodDepthPlane, float4(p, 1)) is p's view depth from the LOD camera; 0 if orthographic
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.

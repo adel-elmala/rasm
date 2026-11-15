@@ -59,6 +59,8 @@ namespace rasm
         SceneHandle                     scene;
         CameraHandle                    camera;
         RenderTargetHandle              renderTarget;
+        SceneShadow                     shadow                                                              = {};
+        bool                            depthOnly                                                           = false;
         BufferHandle                    visibleDraws[MAX_FRAMES_IN_FLIGHT]                                  = {};
         uint32_t                        visibleCapacity[MAX_FRAMES_IN_FLIGHT]                               = {};
         BufferHandle                    hiz[MAX_FRAMES_IN_FLIGHT]                                           = {};
@@ -79,6 +81,7 @@ namespace rasm
         GpuTable                        materials;
         BufferHandle                    sceneData[MAX_FRAMES_IN_FLIGHT]                                     = {};
         PipelineHandle                  pipeline                                                            = {};
+        PipelineHandle                  depthPipeline                                                       = {};
         PipelineHandle                  cullCountPipeline                                                   = {};
         PipelineHandle                  cullWritePipeline                                                   = {};
         PipelineHandle                  hizPipeline                                                         = {};

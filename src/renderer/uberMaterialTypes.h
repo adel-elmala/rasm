@@ -143,7 +143,11 @@ namespace rasm::gfx
         uint32_t         viewportHeight;
         float            lodErrorPixels;
         int32_t          forcedLod;
-        uint32_t         padding;
+        uint32_t         shadowTexture;
+        glm::mat4        shadowMatrix;
+        int32_t          shadowLight;
+        float            lodPixelsPerUnit;
+        glm::vec4        lodDepthPlane;
     };
 
     struct PushConstants
@@ -174,7 +178,7 @@ namespace rasm::gfx
     static_assert(offsetof(GeometryData, boundsRadius) == 16, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lodCount) == 20, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lods) == 24, "GeometryData must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 768, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 856, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, lights) == 144, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, vertsPtr) == 528, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, instancesPtr) == 544, "SceneData must match the shader's scalar layout");
@@ -196,7 +200,11 @@ namespace rasm::gfx
     static_assert(offsetof(SceneData, viewportHeight) == 752, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, lodErrorPixels) == 756, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, forcedLod) == 760, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, padding) == 764, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, shadowTexture) == 764, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, shadowMatrix) == 768, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, shadowLight) == 832, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, lodPixelsPerUnit) == 836, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, lodDepthPlane) == 840, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(PushConstants) == PUSH_CONSTANTS_SIZE, "PushConstants must fill the pipelines' push-constant range");
 
 

@@ -600,7 +600,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <tr><td><code>COLOR_ATTACHMENT</code></td><td>drawn into</td><td>yes</td></tr>
       <tr><td><code>DEPTH_STENCIL_ATTACHMENT</code></td><td>depth buffer</td><td>yes</td></tr>
       <tr><td><code>SAMPLED_COLOR_ATTACHMENT</code></td><td>drawn into, then read (render target color)</td><td>–</td></tr>
-      <tr><td><code>SAMPLED_DEPTH_ATTACHMENT</code></td><td>depth buffer that shaders can also read: with <code>EngineConfig::occlusionCulling</code>, the swapchain depth and render target depth in <code>D32_SFLOAT</code> (<a href="render-graph.html#readDepth">readDepth</a>)</td><td>–</td></tr>
+      <tr><td><code>SAMPLED_DEPTH_ATTACHMENT</code></td><td>depth buffer that shaders can also read: with <code>EngineConfig::occlusionCulling</code>, the swapchain depth and render target depth in <code>D32_SFLOAT</code>; always, a depth-only target's depth (<a href="render-graph.html#readDepth">readDepth</a>)</td><td>–</td></tr>
       <tr><td><code>TRANSFER_SRC</code>, <code>TRANSFER_DST</code>, <code>STORAGE</code>, <code>TRANSIENT_ATTACHMENT</code>, <code>INPUT_ATTACHMENT</code></td><td>only passed on to the backend; no RASM call uses them</td><td>–</td></tr>
       <tr><td><code>PRESENT_SRC</code></td><td>–</td><td>yes (swapchain image before present)</td></tr>
       <tr><td><code>UNKNOWN</code></td><td>–</td><td>the start; never a target (contents thrown away)</td></tr>
@@ -846,7 +846,7 @@ struct BindlessDescriptorSetLayoutDescHash
   <pre class="sig">RenderTargetHandle createRenderTarget(const RenderTargetDesc&amp; desc);</pre>
   <div class="body">
     <p>What <a href="render-graph.html#createRenderTarget">Engine::createRenderTarget</a> calls: a color and a depth texture, or one pair per frame slot with <code>history</code>, the colors made bindless with <code>LINEAR_CLAMP</code>. See <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>. The copies of a history target are cleared to <code>clearColor</code> by <a href="#clearNewHistory">clearNewHistory</a> at the start of the next frame.</p>
-    <p><span class="tag">errors</span> These stop in the debugger in a debug build and return an invalid handle: no color format (<code>a render target needs at least one color format.</code>), a gap in <code>colorFormats</code> (<code>a render target's color formats can't have a gap.</code>), or no depth format (<code>a render target needs a depth format.</code>). <code>createTransientRenderTarget</code> checks the same.</p>
+    <p><span class="tag">errors</span> These stop in the debugger in a debug build and return an invalid handle: a gap in <code>colorFormats</code> (<code>a render target's color formats can't have a gap.</code>), or no depth format (<code>a render target needs a depth format.</code>). <code>createTransientRenderTarget</code> checks the same.</p>
   </div>
 </div>
 

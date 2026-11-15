@@ -575,18 +575,17 @@ pixels = e × s × P11 × H / 2 = e × s × H / (top − bottom)</code></pre>
   <figcaption>The draw list on the CPU always holds LOD 0's index range. Culling writes the packed visible draws with the chosen level's range instead, so the vertex shader never knows which level it draws: every level shares the vertices.</figcaption>
 </figure>
 
-<pre><code class="lang-slang">float pixelsPerUnit = abs(scene->projection[1][1]) * 0.5 * float(scene->viewportHeight);
-if (scene->projection[3][3] == 0.0)
+<pre><code class="lang-slang">float pixelsPerUnit = scene->lodPixelsPerUnit;
+if (any(scene->lodDepthPlane != float4(0.0)))
 {
-    float4 clip = mul(scene->projection, mul(scene->view, float4(sphere.center, 1.0)));
-    float depth = clip.w - sphere.radius;
+    float depth = dot(scene->lodDepthPlane, float4(sphere.center, 1.0)) - sphere.radius;
     if (depth <= 0.0)
         return 0;
     pixelsPerUnit /= depth;
 }
 float limit = scene->lodErrorPixels / (pixelsPerUnit * sphere.scale);</code></pre>
 
-<p>The core of <code>selectLod</code>, shortened. Then it loops over the levels and keeps the last one with <code>lods[i].error &lt;= limit</code>.</p>
+<p>The core of <code>selectLod</code>, shortened. Then it loops over the levels and keeps the last one with <code>lods[i].error &lt;= limit</code>. The CPU (<code>prepareSceneView</code>) works out the camera's part once per view: <code>lodPixelsPerUnit</code> is |<var>P</var><sub>11</sub>| × <var>H</var> / 2, and <code>lodDepthPlane</code> is row 3 of projection × view, so its dot product with a point is the point's <var>w</var>.</p>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
 
@@ -594,15 +593,15 @@ float limit = scene->lodErrorPixels / (pixelsPerUnit * sphere.scale);</code></pr
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Rule</td><td>screen-space error, coarsest level under <var>τ</var></td><td>The same. <var>τ</var> is <code>EngineConfig::lodErrorPixels</code>, copied into each scene view's <code>SceneData</code> every frame. 0 or less always draws LOD 0.</td></tr>
-  <tr><td>Formula</td><td><var>e</var> × <var>s</var> × <var>P</var><sub>11</sub> × <var>H</var> / 2 / <var>w</var>, turned around once per object</td><td>The same, turned around into <code>limit</code>. <var>H</var> is <code>viewportHeight</code>, the height of the target the scene view draws into. The absolute value of <var>P</var><sub>11</sub> is used.</td></tr>
-  <tr><td>Depth</td><td>view depth of the sphere's nearest point</td><td><code>clip.w</code> of the sphere's center minus its radius. Zero or less: LOD 0.</td></tr>
+  <tr><td>Formula</td><td><var>e</var> × <var>s</var> × <var>P</var><sub>11</sub> × <var>H</var> / 2 / <var>w</var>, turned around once per object</td><td>The same, turned around into <code>limit</code>. <var>H</var> is the height of the target the LOD camera's view draws into. The absolute value of <var>P</var><sub>11</sub> is used.</td></tr>
+  <tr><td>Depth</td><td>view depth of the sphere's nearest point</td><td><var>w</var> of the sphere's center (<code>lodDepthPlane</code>) minus its radius. Zero or less: LOD 0.</td></tr>
   <tr><td>Scale</td><td>the largest stretch</td><td><code>Sphere::scale</code> from <code>getWorldSphere</code>, the same bound frustum culling uses for the radius.</td></tr>
-  <tr><td>Orthographic</td><td>no depth division</td><td>When <code>projection[3][3]</code> is not 0, the matrix is orthographic and <code>pixelsPerUnit</code> is not divided by a depth.</td></tr>
+  <tr><td>Orthographic</td><td>no depth division</td><td>For an orthographic camera <code>lodDepthPlane</code> is all zeros and <code>pixelsPerUnit</code> is not divided by a depth.</td></tr>
   <tr><td>What gets a level</td><td>an object</td><td>Each draw: one sub-mesh of one entity. Sub-meshes of one model can draw different levels; their borders are locked, so they still meet.</td></tr>
   <tr><td>When</td><td>every frame</td><td>Every frame and scene view, in <code>countMain</code>, only for visible draws. A scene view drawn without the culling pipelines draws LOD 0.</td></tr>
   <tr><td>Hysteresis, cross-fade, geomorph</td><td>section 9</td><td>None. The choice is made from scratch every frame and keeps no state, and a switch happens in one frame. With the 1-pixel default, popping is hard to see.</td></tr>
   <tr><td>Debugging</td><td>—</td><td><code>EngineConfig::forcedLod</code> ≥ 0 forces that level (or the mesh's coarsest). <kbd>F2</kbd> cycles it: by error (−1), LOD 0, 1, … 7, by error. The stats overlay (<kbd>F1</kbd>) shows the mode, the visible draws per level, and the triangles saved against LOD 0.</td></tr>
-  <tr><td>Other views, budgets, clusters</td><td>section 10</td><td>None: one camera per scene view, a level per draw, no triangle budget.</td></tr>
+  <tr><td>Other views, budgets, clusters</td><td>section 10</td><td>One LOD camera per scene view: its own, except a shadow map's view, which uses the camera of the view that reads the map, so caster and surface match (<a href="shadow-mapping.html#in-rasm">shadow mapping</a>). A level per draw, no triangle budget.</td></tr>
 </table>
 </div>
 

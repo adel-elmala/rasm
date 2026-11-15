@@ -42,8 +42,10 @@ Read the diff of each changed source (`git diff <stamp> <target> -- <file>`) and
 - New public function, type or constant → its `.api` block on the right API page (signature copied from the
   header), and its row in the `engine.html` index table if it is an `Engine` method.
 - A removed name must disappear from every page (`check` finds them).
-- A new topic that deserves its own guide: ask the user first. Then add the page to `SECTIONS` in
-  `docs/assets/site.js` (the only list of pages) and link it from `docs/index.html`.
+- A new concept, algorithm or technique in the change (one a contributor would need explained to follow the
+  code) gets its own concept guide, written in the same change without asking. Only a small variation of a topic a
+  guide already covers extends that guide instead. Add the page to `SECTIONS` in `docs/assets/site.js` (the only
+  list of pages), link it from `docs/index.html`, and link to it from the API entries and guides that mention it.
 - Keep `docs/architecture.md` in step through `finish-task`; this skill owns the HTML pages only.
 
 ### House style (keep every page consistent)
