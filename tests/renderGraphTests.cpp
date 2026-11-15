@@ -817,3 +817,21 @@ TEST_CASE("a per-frame buffer's barrier covers only the frame's slot")
     CHECK(after == rasm::PipelineStage::GRAPHICS);
     CHECK_FALSE(graph.barrierBefore(2, before, after));
 }
+
+TEST_CASE("the dump lists the passes in order and each resource's lifetime")
+{
+    TestGraph graph;
+    graph.addTexturePass({TEXTURE_A}, {});          // 0: reads A, runs last
+    graph.addTexturePass({}, {TEXTURE_A});          // 1: writes A, runs first
+    graph.addTexturePass({TEXTURE_B}, {TEXTURE_C}); // 2: reads B, which nothing writes
+
+    graph.compile();
+    const std::string text = graph.dump();
+
+    REQUIRE(graph.order() == std::vector<uint32_t>{1, 2, 0});
+    CHECK(text.find("Render graph: 3 passes, in the order they run") != std::string::npos);
+    CHECK(text.find("[0] pass (graphics)\n    reads:  -\n    writes: texture #1") != std::string::npos);
+    CHECK(text.find("before: [2] pass") != std::string::npos);
+    CHECK(text.find("    W-R  texture #1\n") != std::string::npos);
+    CHECK(text.find("    .R.  texture #2\n") != std::string::npos);
+}

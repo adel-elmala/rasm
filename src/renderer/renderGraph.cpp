@@ -30,6 +30,13 @@ namespace rasm
             bool operator==(const ResourceKey &) const = default;
         };
 
+        // One row of the lifetime table in RenderGraph::dump: a mark per position in the order.
+        struct LifetimeRow
+        {
+            std::string label;
+            std::string marks;
+        };
+
         struct ResourceKeyHash
         {
             size_t operator()(const ResourceKey &key) const
@@ -101,6 +108,48 @@ namespace rasm
             return std::any_of(pass.inputRenderTargets.begin(), pass.inputRenderTargets.end(), transient) ||
                    std::any_of(pass.depthRenderTargets.begin(), pass.depthRenderTargets.end(), transient) ||
                    (pass.outputRenderTarget.isValid() && transient(pass.outputRenderTarget));
+        }
+
+        std::string quoted(const std::string &kind, const std::string &name, uint64_t index)
+        {
+            return kind + (name.empty() ? " #" + std::to_string(index) : " '" + name + "'");
+        }
+
+        // A graph without an engine (the tests) has no names to show.
+        std::string labelOf(Engine *engine, TextureHandle handle)
+        {
+            return quoted("texture", engine ? engine->getRenderContext().getTextureDesc(handle).name : "", handle.index);
+        }
+
+        std::string labelOf(Engine *engine, BufferHandle handle)
+        {
+            return quoted("buffer", engine ? engine->getRenderContext().getBufferDesc(handle).name : "", handle.index);
+        }
+
+        std::string labelOf(Engine *engine, RenderTargetHandle handle)
+        {
+            return quoted("target", engine ? engine->getRenderContext().getRenderTarget(handle).name : "", handle.index);
+        }
+
+        std::string joined(const std::vector<std::string> &items)
+        {
+            std::string text;
+            for (const auto &item : items)
+                text += (text.empty() ? "" : ", ") + item;
+            return text.empty() ? "-" : text;
+        }
+
+        // W beats R, and R beats P (a read of the frame before), so a mark shows the strongest use at that position.
+        void markUse(std::vector<LifetimeRow> &rows, std::unordered_map<ResourceKey, uint32_t, ResourceKeyHash> &rowOf, const ResourceKey &key,
+                     const std::string &label, uint32_t position, uint32_t positions, char mark)
+        {
+            auto [it, added] = rowOf.try_emplace(key, static_cast<uint32_t>(rows.size()));
+            if (added)
+                rows.push_back({.label = label, .marks = std::string(positions, ' ')});
+            char &current = rows[it->second].marks[position];
+            const std::string rank = " PRW";
+            if (rank.find(mark) > rank.find(current))
+                current = mark;
         }
 
         // Depth textures are sampleable only with occlusion culling (TextureUsage::SAMPLED_DEPTH_ATTACHMENT).
@@ -359,6 +408,12 @@ namespace rasm
         auto &ctx = engine->getRenderContext();
         const bool placed = compiled && placeTransients();
 
+        if (engine->graphDumpRequested)
+        {
+            engine->graphDumpRequested = false;
+            spdlog::info("{}", dump());
+        }
+
         if (!engine->beginFrame(camera))
             return;
 
@@ -419,6 +474,116 @@ namespace rasm
             engine->resetRenderTarget();
         }
         engine->endFrame();
+    }
+
+    // The passes in the order they run, then each resource's lifetime: one column per pass in that order, W where a
+    // pass writes it, R where one reads it, P where one reads what the frame before left, - between its first and
+    // last use. A per-frame buffer is one row, named by its first slot. A graph that did not compile lists its passes
+    // in the order they were added.
+    std::string RenderGraph::dump() const
+    {
+        std::vector<uint32_t> order = executionOrder;
+        if (!compiled)
+        {
+            order.clear();
+            for (uint32_t i = 0; i < passes.size(); ++i)
+                order.push_back(i);
+        }
+        std::vector<uint32_t> positionOf(passes.size(), NO_PASS);
+        for (uint32_t position = 0; position < order.size(); ++position)
+            positionOf[order[position]] = position;
+
+        const auto positions = static_cast<uint32_t>(order.size());
+        std::string text = "Render graph: " + std::to_string(passes.size()) + " passes, " +
+                           (compiled ? "in the order they run" : "not compiled, in the order they were added") +
+                           (engine ? (engine->asyncCompute ? ", async compute on" : ", async compute off") : "") + "\n";
+        std::vector<LifetimeRow> rows;
+        std::unordered_map<ResourceKey, uint32_t, ResourceKeyHash> rowOf;
+        const ResourceKey swapchain = {.kind = ResourceKind::SWAPCHAIN};
+        for (uint32_t position = 0; position < positions; ++position)
+        {
+            const Pass &pass = passes[order[position]];
+            std::vector<std::string> reads;
+            std::vector<std::string> writes;
+            auto use = [&](const ResourceKey &key, const std::string &label, char mark, const char *note)
+            {
+                (mark == 'W' ? writes : reads).push_back(label + note);
+                markUse(rows, rowOf, key, label, position, positions, mark);
+            };
+            for (auto handle : pass.inputTextures)
+                use(keyOf(handle), labelOf(engine, handle), 'R', "");
+            for (auto handle : pass.inputBuffers)
+                use(keyOf(handle), labelOf(engine, handle), 'R', "");
+            for (const auto &buffers : pass.frameInputBuffers)
+                use(keyOf(buffers.slots[0]), labelOf(engine, buffers.slots[0]), 'R', " (per frame)");
+            for (auto handle : pass.previousBuffers)
+                use(keyOf(handle), labelOf(engine, handle), 'P', " (frame before)");
+            for (auto handle : pass.inputRenderTargets)
+                use(keyOf(handle), labelOf(engine, handle), 'R', "");
+            for (auto handle : pass.previousRenderTargets)
+                use(keyOf(handle), labelOf(engine, handle), 'P', " (frame before)");
+            for (auto handle : pass.depthRenderTargets)
+                use(keyOf(handle), labelOf(engine, handle), 'R', " (depth)");
+            if (pass.readsSwapchainDepth)
+                use(swapchain, "swapchain", 'R', " (depth)");
+            for (auto handle : pass.outputTextures)
+                use(keyOf(handle), labelOf(engine, handle), 'W', "");
+            for (auto handle : pass.outputBuffers)
+                use(keyOf(handle), labelOf(engine, handle), 'W', "");
+            for (const auto &buffers : pass.frameOutputBuffers)
+                use(keyOf(buffers.slots[0]), labelOf(engine, buffers.slots[0]), 'W', " (per frame)");
+            if (pass.outputRenderTarget.isValid())
+                use(keyOf(pass.outputRenderTarget), labelOf(engine, pass.outputRenderTarget), 'W', "");
+            if (pass.writesSwapchain)
+                use(swapchain, "swapchain", 'W', "");
+
+            const char *queue = pass.async ? "async compute" : (pass.compute ? "compute" : "graphics");
+            text += "\n[" + std::to_string(position) + "] " + pass.name + " (" + queue + ")\n";
+            text += "    reads:  " + joined(reads) + "\n";
+            text += "    writes: " + joined(writes) + "\n";
+            if (!pass.compute)
+            {
+                const AttachmentOps &ops = pass.attachmentOps;
+                text += std::string("    attachments: ") + (ops.loadColor ? "load color" : "clear color") + ", " + (ops.loadDepth ? "load depth" : "clear depth") + ", " +
+                        (ops.storeDepth ? "store depth" : "discard depth") + "\n";
+            }
+            if (compiled)
+            {
+                // A per-frame buffer adds an edge per slot, so a successor can be listed more than once.
+                std::vector<uint32_t> after;
+                for (uint32_t successor : pass.successors)
+                    after.push_back(positionOf[successor]);
+                std::sort(after.begin(), after.end());
+                after.erase(std::unique(after.begin(), after.end()), after.end());
+                std::vector<std::string> next;
+                for (uint32_t later : after)
+                    next.push_back("[" + std::to_string(later) + "] " + passes[order[later]].name);
+                text += "    before: " + joined(next) + "\n";
+            }
+        }
+
+        for (auto target : transientTargets)
+        {
+            auto it = rowOf.find(keyOf(target));
+            if (it != rowOf.end())
+                rows[it->second].label += " (transient)";
+        }
+        text += "\nLifetimes (W write, R read, P read of the frame before, - alive):\n    ";
+        for (uint32_t position = 0; position < positions; ++position)
+            text += static_cast<char>('0' + position % 10);
+        text += "\n";
+        for (auto &row : rows)
+        {
+            const size_t first = row.marks.find_first_not_of(' ');
+            const size_t last = row.marks.find_last_not_of(' ');
+            for (size_t i = 0; i < row.marks.size(); ++i)
+            {
+                if (row.marks[i] == ' ')
+                    row.marks[i] = (i > first && i < last) ? '-' : '.';
+            }
+            text += "    " + row.marks + "  " + row.label + "\n";
+        }
+        return text;
     }
 
     // A failed placement, here or at a resize, leaves targets without textures. It is tried again every frame, and

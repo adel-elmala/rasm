@@ -86,7 +86,7 @@ namespace rasm
         // Everything but the textures, which createAttachments makes.
         RenderTarget renderTargetFromDesc(const RenderTargetDesc &desc, glm::uvec2 size)
         {
-            RenderTarget rt = {.width = size.x, .height = size.y, .colorCount = colorAttachmentCount(desc.colorFormats), .depthFormat = desc.depthFormat, .clearColor = desc.clearColor, .history = desc.history};
+            RenderTarget rt = {.width = size.x, .height = size.y, .colorCount = colorAttachmentCount(desc.colorFormats), .depthFormat = desc.depthFormat, .clearColor = desc.clearColor, .history = desc.history, .name = desc.name};
             std::copy(std::begin(desc.colorFormats), std::end(desc.colorFormats), std::begin(rt.colorFormats));
             return rt;
         }

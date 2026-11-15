@@ -140,6 +140,7 @@ public:
     RenderTargetHandle createRenderTarget(const RenderTargetDesc&amp; desc);
     void               compile();
     void               execute(CameraHandle camera);
+    std::string        dump() const;
 };</pre>
   <div class="body">
     <p>The pass list and its order. Make one with <code>createRenderGraph</code> rather than with the constructor. Passes cannot be removed; build a new graph to change the frame.</p>
@@ -461,6 +462,38 @@ struct Access
       <dt>camera</dt><dd>Gets this frame's mouse and keyboard input (through <a href="camera.html#pollEvents">pollEvents</a>). It is not given to the passes: <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> takes its own camera.</dd>
     </dl>
     <p>When <code>beginFrame</code> returns false (window minimized, swapchain being re-created, failed wait), no pass runs that frame. If no pass draws into the swapchain, <code>endFrame</code> clears it so it can be presented. If the transient targets cannot be placed (out of memory), no pass runs either, and the graph tries again the next frame.</p>
+  </div>
+</div>
+
+<div class="api" id="dump">
+  <pre class="sig">std::string dump() const;</pre>
+  <div class="body">
+    <p>Returns the graph as text, for debugging. Press <kbd>F3</kbd> to log it: the next graph that runs <code>execute</code> writes it with <code>spdlog::info</code>. It has two parts:</p>
+    <ul>
+      <li><b>The passes</b>, in the order they run. Each shows its queue, what it reads and writes, its load and store ops, and the passes that wait for it (<code>before</code>).</li>
+      <li><b>The lifetimes</b>: one row per resource, one column per pass. <code>W</code> write, <code>R</code> read, <code>P</code> read of what the frame before left, <code>-</code> alive between its first and last use, <code>.</code> not used.</li>
+    </ul>
+    <p>The scene passes of <code>05_city</code>, cut short:</p>
+    <pre><code class="lang-text">Render graph: 5 passes, in the order they run, async compute off
+
+[0] Cull 1 (async compute)
+    reads:  buffer 'Visibility Buffer' (frame before)
+    writes: buffer 'Visible Draw Buffer' (per frame)
+    before: [1] Scene 1, [3] Cull 2
+
+[1] Scene 1 (graphics)
+    reads:  buffer 'Visible Draw Buffer' (per frame)
+    writes: swapchain
+    attachments: clear color, clear depth, store depth
+    before: [2] Hi-Z, [3] Cull 2, [4] Scene 2
+...
+Lifetimes (W write, R read, P read of the frame before, - alive):
+    01234
+    P--W.  buffer 'Visibility Buffer'
+    WR-WR  buffer 'Visible Draw Buffer'
+    .WR-W  swapchain
+    ..WR.  buffer 'Hi-Z Buffer'</code></pre>
+    <p>Names come from the descs (<code>BufferDesc::name</code>, <code>TextureDesc::name</code>, <code>RenderTargetDesc::name</code>). A per-frame buffer is one row, named after its first slot. A transient target is marked <samp>(transient)</samp>; targets in columns that do not overlap can share memory. A graph that did not compile lists its passes in the order they were added, with no <code>before</code> lines. To see each pass's GPU time, use the <a href="engine.html#getFrameStats">frame stats</a>.</p>
   </div>
 </div>
 

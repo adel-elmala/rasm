@@ -334,6 +334,7 @@ struct RenderTarget
     Format                  depthFormat;
     glm::vec4               clearColor;
     bool                    history;
+    std::string             name;
 };</pre>
   <div class="body">
     <p>A render target as <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns it: the values of its <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>, plus one <code>RenderTargetAttachments</code> entry (its colors, its depth) per frame slot. Only the first <code>colorCount</code> colors are used. Without <code>history</code> every entry holds the same textures; with it each slot has its own. <code>getRenderTargetTexture(rt, i)</code> picks <code>attachments[slot].color[i]</code> for the current slot, and <code>getPreviousRenderTargetTexture</code> the previous slot's.</p>
