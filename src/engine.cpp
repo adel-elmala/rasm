@@ -262,6 +262,12 @@ namespace rasm
     PipelineHandle Engine::createPipeline(const std::string &name, const std::string &shaderSource, const RenderTargetHandle &renderTarget)
     {
         const auto &rt = ctx.getRenderTarget(renderTarget);
+        // Every render target has a depth format, so an invalid or stale handle is the one without.
+        if (rt.depthFormat == Format::UNKNOWN)
+        {
+            spdlog::error("Pipeline '{}' needs a valid render target.", name);
+            return {};
+        }
         return createGraphicsPipeline(name, shaderSource, rt.colorFormats, rt.depthFormat);
     }
 

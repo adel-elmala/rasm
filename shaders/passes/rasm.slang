@@ -97,6 +97,7 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     info.numLights              = pc.scene->numLights;
     info.lights                 = pc.scene->lights;
     info.shadow                 = sampleShadow(gTextures, pc.scene, input.worldPosition, info.backFace ? -input.worldNormal : input.worldNormal);
+    info.shadowLight            = pc.scene->shadowLight;
     info.material               = material;
 
     return shadePBR(gTextures, info);

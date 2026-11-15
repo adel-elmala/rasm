@@ -203,13 +203,16 @@ namespace rasm
                 current = mark;
         }
 
-        // Depth textures are sampleable with occlusion culling, and a depth-only target's always
-        // (TextureUsage::SAMPLED_DEPTH_ATTACHMENT). colorCount is the target's, 1 for the swapchain.
-        bool canReadDepth(const Engine *engine, const Pass &pass, uint32_t colorCount)
+        // A depth texture is sampleable when it is D32_SFLOAT and occlusion culling is on, or its target is depth-only
+        // (TextureUsage::SAMPLED_DEPTH_ATTACHMENT, see depthTextureDesc in renderContext.cpp). The swapchain's depth is
+        // D32_SFLOAT with one color.
+        bool canReadDepth(const Engine *engine, const Pass &pass, uint32_t colorCount, Format depthFormat)
         {
-            if (!engine || engine->getConfig().occlusionCulling || colorCount == 0)
+            if (!engine)
                 return true;
-            spdlog::error("Pass '{}' reads the depth of a target with colors, which needs EngineConfig::occlusionCulling; the read is ignored.", pass.name);
+            if ((engine->getConfig().occlusionCulling || colorCount == 0) && depthFormat == Format::D32_SFLOAT)
+                return true;
+            spdlog::error("Pass '{}' reads a depth texture that can't be sampled: it needs D32_SFLOAT depth, and EngineConfig::occlusionCulling unless its target is depth-only; the read is ignored.", pass.name);
             return false;
         }
     }
@@ -626,14 +629,15 @@ namespace rasm
     }
 
     // A failed placement, here or at a resize, leaves targets without textures. It is tried again every frame, and
-    // until it works the frames draw no passes.
+    // until it works the frames draw no passes. Every target has a depth, depth-only ones included, so that is what
+    // is looked at.
     bool RenderGraph::placeTransients()
     {
         if (transientTargets.empty())
             return true;
         auto &ctx = engine->getRenderContext();
         const bool missing = std::any_of(transientTargets.begin(), transientTargets.end(), [&ctx](const RenderTargetHandle &target)
-                                         { return !ctx.getRenderTarget(target).attachments[0].color[0].isValid(); });
+                                         { return !ctx.getRenderTarget(target).attachments[0].depth.isValid(); });
         if (!transientsPlaced || missing)
             transientsPlaced = ctx.placeTransientRenderTargets(transientTargets.data(), transientFirstPasses.data(), transientLastPasses.data(), static_cast<uint32_t>(transientTargets.size()));
         return transientsPlaced;
@@ -889,14 +893,14 @@ namespace rasm
 
     void RenderGraph::readDepth(uint32_t passIdx, RenderTargetHandle h)
     {
-        const uint32_t colorCount = engine ? engine->getRenderContext().getRenderTarget(h).colorCount : 1;
-        if (canReadDepth(engine, passes[passIdx], colorCount))
+        const RenderTarget *target = engine ? &engine->getRenderContext().getRenderTarget(h) : nullptr;
+        if (canReadDepth(engine, passes[passIdx], target ? target->colorCount : 1, target ? target->depthFormat : Format::D32_SFLOAT))
             passes[passIdx].depthRenderTargets.push_back(h);
     }
 
     void RenderGraph::readSwapchainDepth(uint32_t passIdx)
     {
-        if (canReadDepth(engine, passes[passIdx], 1))
+        if (canReadDepth(engine, passes[passIdx], 1, Format::D32_SFLOAT))
             passes[passIdx].readsSwapchainDepth = true;
     }
 

@@ -11,6 +11,7 @@
 #include "tracy/Tracy.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <vector>
 
@@ -519,11 +520,23 @@ namespace rasm
                 return false;
             }
         }
-        if (shadow.renderTarget.isValid() || shadow.camera.isValid())
+        // shadow.slang turns a texel into world units and depth with the light camera's matrix, which holds only for an
+        // orthographic camera: a directional light's.
+        if (shadow.renderTarget.isValid() || shadow.camera.isValid() || shadow.light.isValid())
         {
             if (!shadow.camera.isValid() || shadow.camera.index >= registry.cameras.size() || !shadow.renderTarget.isValid() || !isDepthOnly(shadow.renderTarget))
             {
                 spdlog::error("addScenePasses needs a shadow with a valid camera and a render target with D32_SFLOAT depth only.");
+                return false;
+            }
+            if (registry.cameras[shadow.camera.index].projection.type != CameraProjection::Type::ORTHOGRAPHIC)
+            {
+                spdlog::error("addScenePasses needs an orthographic shadow camera.");
+                return false;
+            }
+            if (!shadow.light.isValid() || shadow.light.index >= registry.lights.size() || registry.lights[shadow.light.index].type != LightType::DIRECTIONAL)
+            {
+                spdlog::error("addScenePasses needs a shadow with a valid directional light.");
                 return false;
             }
             if (depthOnly)
@@ -544,13 +557,14 @@ namespace rasm
             }
         }
 
-        const uint32_t view = createSceneView(scene, camera, renderTarget, shadow);
+        const uint32_t view = createSceneView(scene, camera, renderTarget, shadow, depthOnly);
         if (view == UINT32_MAX)
             return false;
         graph.sceneViews.push_back(view);
         const SceneView &sceneView = gpuScene->views[view];
         const bool occlusion = sceneView.visibility.isValid();
         const std::string prefix = depthOnly ? "Shadow " : "";
+        const std::string drawName = depthOnly ? "Shadow" : "Scene";
 
         // Each frame uses only its slot's draw list and Hi-Z, so culling the next frame does not wait for
         // this frame's draws on the other queue.
@@ -581,7 +595,7 @@ namespace rasm
                 recordSceneCulling(view, CULL_EARLY);
             });
         graph.addPass(
-            depthOnly ? (occlusion ? "Shadow 1" : "Shadow") : (occlusion ? "Scene 1" : "Scene"),
+            occlusion ? drawName + " 1" : drawName,
             drawScenePass,
             [this, view](RenderContext &)
             { drawSceneView(view); });
@@ -614,7 +628,7 @@ namespace rasm
                     recordSceneCulling(view, CULL_LATE);
             });
         graph.addPass(
-            depthOnly ? "Shadow 2" : "Scene 2",
+            drawName + " 2",
             drawScenePass,
             [this, view](RenderContext &)
             {
@@ -626,7 +640,7 @@ namespace rasm
 
     // A view lives while a graph holds it, so graphs built for the same scene, camera, target and shadow share it. Its
     // buffers start small and grow in prepareSceneView under the same handles.
-    uint32_t Engine::createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget, const SceneShadow &shadow)
+    uint32_t Engine::createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle &renderTarget, const SceneShadow &shadow, bool depthOnly)
     {
         uint32_t freeSlot = UINT32_MAX;
         for (uint32_t i = 0; i < MAX_SCENE_VIEWS; ++i)
@@ -649,7 +663,6 @@ namespace rasm
             return UINT32_MAX;
         }
 
-        const bool depthOnly = renderTarget.isValid() && ctx.getRenderTarget(renderTarget).colorCount == 0;
         SceneView view = {.scene = scene, .camera = camera, .renderTarget = renderTarget, .shadow = shadow, .depthOnly = depthOnly, .graphs = 1};
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
@@ -869,12 +882,42 @@ namespace rasm
         sceneData.lodErrorPixels = config.lodErrorPixels;
         sceneData.forcedLod = config.forcedLod;
         sceneData.shadowTexture = INVALID_TEXTURE_INDEX;
+        sceneData.shadowLight = -1;
         if (view.shadow.renderTarget.isValid())
         {
             const auto &shadowData = ctx.getRenderTarget(view.shadow.renderTarget);
             const float shadowAspect = static_cast<float>(shadowData.width) / static_cast<float>(shadowData.height);
             sceneData.shadowMatrix = getProjectionMatrix(view.shadow.camera, shadowAspect) * getViewMatrix(view.shadow.camera);
             sceneData.shadowTexture = getBindlessTextureIndex(shadowData.attachments[frame].depth);
+            // A light taken out of the scene casts no shadow.
+            for (uint32_t i = 0; i < sceneData.numLights; ++i)
+            {
+                if (sceneRef.lights[i] == view.shadow.light)
+                    sceneData.shadowLight = static_cast<int32_t>(i);
+            }
+        }
+
+        // A shadow map's casters take their LODs from the camera of the view that reads the map, so a surface is shadowed
+        // by the same triangles it is drawn with. Any other view takes them from its own camera.
+        CameraHandle lodCamera = view.camera;
+        uint32_t lodWidth = width;
+        uint32_t lodHeight = height;
+        for (uint32_t i = 0; view.depthOnly && i < MAX_SCENE_VIEWS; ++i)
+        {
+            const SceneView &reader = gpuScene->views[i];
+            if (reader.graphs == 0 || reader.scene != view.scene || reader.shadow.renderTarget != view.renderTarget || reader.shadow.camera != view.camera)
+                continue;
+            lodCamera = reader.camera;
+            lodWidth = reader.renderTarget.isValid() ? ctx.getRenderTarget(reader.renderTarget).width : swapchain.width;
+            lodHeight = reader.renderTarget.isValid() ? ctx.getRenderTarget(reader.renderTarget).height : swapchain.height;
+            break;
+        }
+        const glm::mat4 lodProjection = getProjectionMatrix(lodCamera, static_cast<float>(lodWidth) / static_cast<float>(lodHeight));
+        sceneData.lodPixelsPerUnit = std::abs(lodProjection[1][1]) * 0.5f * static_cast<float>(lodHeight);
+        if (lodProjection[3][3] == 0.0f)
+        {
+            const glm::mat4 lodViewProjection = lodProjection * getViewMatrix(lodCamera);
+            sceneData.lodDepthPlane = glm::vec4(lodViewProjection[0][3], lodViewProjection[1][3], lodViewProjection[2][3], lodViewProjection[3][3]);
         }
         ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData));
 

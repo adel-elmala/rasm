@@ -116,7 +116,7 @@ Goal: passes describe what they use, and the graph does the synchronization and 
 Goal: production look and completeness for glTF content. The order is roughly by value to the target users.
 
 - [ ] An HDR color target plus a separate tone-map pass (ACES or AgX) with exposure. Remove Reinhard from the material shader.
-- [ ] **Shadows**: cascaded shadow maps for directional lights, and spot and point light shadows. Add real spot lights (`B15`). One shadow map for the first directional light, from a light camera the application places, is done (2026-11-15, `SceneShadow`, example `06_shadows`).
+- [ ] **Shadows**: cascaded shadow maps for directional lights, and spot and point light shadows. Add real spot lights (`B15`). One shadow map for one directional light (`SceneShadow::light`), from an orthographic light camera the application places, is done (2026-11-15, `SceneShadow`, example `06_shadows`).
 - [ ] **Image-based lighting**: an environment map, prefiltered specular, irradiance and a BRDF LUT.
 - [ ] **glTF completeness**:
   - alpha modes (`MASK` with alpha-to-coverage, and `BLEND` as a sorted transparent pass),

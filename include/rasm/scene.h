@@ -30,6 +30,7 @@ namespace rasm
     {
         CameraHandle                camera;
         RenderTargetHandle          renderTarget;
+        LightHandle                 light;
 
         bool                        operator==(const SceneShadow&) const = default;
     };

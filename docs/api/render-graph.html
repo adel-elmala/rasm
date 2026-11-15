@@ -275,7 +275,7 @@ void readSwapchainDepth();</pre>
       <li>The next pass that draws the target moves the depth back to an attachment and loads it.</li>
     </ul>
     <p>The scene's <code>Hi-Z</code> pass uses it to build its depth pyramid between <code>Scene 1</code> and <code>Scene 2</code>, and a shadowed scene view reads its shadow map with it (<a href="engine.html#addScenePasses"><code>addScenePasses</code></a>).</p>
-    <p><span class="tag">errors</span> The depth of a depth-only target (no color formats) can always be read. The depth of any other target, or of the swapchain, needs <code>EngineConfig::occlusionCulling</code>: only then are those <code>D32_SFLOAT</code> depth textures sampleable and in the bindless set. Without it, it logs <code>Pass '…' reads the depth of a target with colors, which needs EngineConfig::occlusionCulling; the read is ignored.</code> A pass that reads the depth of the target it draws to makes <code>compile</code> fail with <code>Pass '…' reads the render target it draws to.</code></p>
+    <p><span class="tag">errors</span> Only a <code>D32_SFLOAT</code> depth can be sampled. That of a depth-only target (no color formats) can always be read. The depth of any other target, or of the swapchain, needs <code>EngineConfig::occlusionCulling</code>: only then are those depth textures sampleable and in the bindless set. Otherwise it logs <code>Pass '…' reads a depth texture that can't be sampled: it needs D32_SFLOAT depth, and EngineConfig::occlusionCulling unless its target is depth-only; the read is ignored.</code> A pass that reads the depth of the target it draws to makes <code>compile</code> fail with <code>Pass '…' reads the render target it draws to.</code></p>
   </div>
 </div>
 
@@ -665,7 +665,7 @@ Lifetimes (W write, R read, P read of the frame before, - alive between uses, . 
       <dt>colorFormats</dt><dd>One format per color attachment, up to <a href="types.html#MAX_COLOR_ATTACHMENTS">MAX_COLOR_ATTACHMENTS</a> (4); the list ends at the first <code>UNKNOWN</code>, so <code>.colorFormats = {format}</code> makes one. None makes a depth-only target, such as a shadow map: its passes draw only depth. For <a href="engine.html#addScenePasses"><code>addScenePasses</code></a>, or a pipeline from the two-argument <code>createPipeline</code>, use one attachment in the swapchain format: <code>engine.getRenderContext().getSwapchainImageFormat()</code>. For several, make the pipeline with <a href="#createPipeline-target">createPipeline(name, source, renderTarget)</a>.</dd>
       <dt>depthFormat</dt><dd>Needed: every pass binds a depth attachment. Use <code>Format::D32_SFLOAT</code> for the same reason. Only a <code>D32_SFLOAT</code> depth can be sampled (<a href="#readDepth">readDepth</a>, with <code>EngineConfig::occlusionCulling</code> or on a depth-only target), and occlusion culling needs that.</dd>
       <dt>clearColor</dt><dd>Linear color, the same for every color attachment. The first pass that writes the target clears to it, and each new history copy is cleared to it before the next frame's passes.</dd>
-      <dt>history</dt><dd><code>true</code> keeps one copy per frame slot, so a pass can read last frame's color with <code>readPrevious</code>. It costs twice the memory. Leave it <code>false</code> for a target that is drawn and read in the same frame.</dd>
+      <dt>history</dt><dd><code>true</code> keeps one copy per frame slot, so a pass can read last frame's color with <code>readPrevious</code>. It costs twice the memory. Leave it <code>false</code> for a target that is drawn and read in the same frame. A depth-only target can't have it: history keeps only colors.</dd>
     </dl>
     <p>The full target, with its per-slot textures, is the <a href="types.html#RenderTarget">RenderTarget</a> that <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns.</p>
   </div>
@@ -847,6 +847,7 @@ if (engine.beginFrame(camera))
     float4 mask : SV_TARGET1;
 };</code></pre>
     <p>A depth-only target (no color formats) gives a pipeline without colors: its fragment shader writes no color.</p>
+    <p><span class="tag">errors</span> An invalid or destroyed <code>renderTarget</code> logs <code>Pipeline '…' needs a valid render target.</code> and returns an invalid handle.</p>
   </div>
 </div>
 

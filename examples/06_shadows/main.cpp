@@ -113,7 +113,8 @@ int main()
     engine.addCameraToScene(scene, camera);
 
     const glm::vec3 lightDirection = glm::normalize(glm::vec3(-0.5f, -1.0f, -0.35f));
-    engine.addLightToScene(scene, engine.createLight(rasm::LightType::DIRECTIONAL, glm::vec3(1.0f, 0.95f, 0.85f), glm::vec3(0.0f), lightDirection, 4.0f, 0.0f));
+    const rasm::LightHandle sun = engine.createLight(rasm::LightType::DIRECTIONAL, glm::vec3(1.0f, 0.95f, 0.85f), glm::vec3(0.0f), lightDirection, 4.0f, 0.0f);
+    engine.addLightToScene(scene, sun);
 
     // The shadow map is the light's view of the scene: an orthographic camera looking along the light, far enough
     // back that the whole scene is in front of its near plane.
@@ -127,7 +128,7 @@ int main()
                                                          rasm::Transform{-lightDirection * 30.0f,
                                                                          glm::quatLookAt(lightDirection, glm::vec3(0.0f, 1.0f, 0.0f)),
                                                                          glm::vec3(1.0f)});
-    if (!camera.isValid() || !lightCamera.isValid())
+    if (!camera.isValid() || !lightCamera.isValid() || !sun.isValid())
         return 1;
 
     rasm::RenderGraph graph = engine.createRenderGraph();
@@ -149,9 +150,10 @@ int main()
     });
 
     // 1. Shadow: the scene from the light camera, into the depth-only target.
-    // 2. Forward: the scene from the camera, shaded with that shadow map. Its passes read the map, so they run after.
+    // 2. Forward: the scene from the camera, shaded with that shadow map, which darkens the sun. Its passes read the
+    //    map, so they run after.
     if (!engine.addScenePasses(graph, scene, lightCamera, shadowMap) ||
-        !engine.addScenePasses(graph, scene, camera, sceneTarget, rasm::SceneShadow{.camera = lightCamera, .renderTarget = shadowMap}))
+        !engine.addScenePasses(graph, scene, camera, sceneTarget, rasm::SceneShadow{.camera = lightCamera, .renderTarget = shadowMap, .light = sun}))
     {
         return 1;
     }

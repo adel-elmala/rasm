@@ -321,7 +321,7 @@ engine.endPass();</code></pre>
       <dt>scene</dt><dd>Invalid: logs <code>addScenePasses needs a valid scene handle.</code>, adds nothing and returns <code>false</code>.</dd>
       <dt>camera</dt><dd>The view. Its projection is fitted to the target's aspect ratio every frame; the camera itself does not change. Invalid: logs an error, adds nothing and returns <code>false</code>.</dd>
       <dt>renderTarget</dt><dd>Where the scene is drawn. Invalid (the default): the window, through the swapchain. A target needs one color in the swapchain's format and <code>D32_SFLOAT</code> depth, the formats of the scene's pipeline. A target with <code>D32_SFLOAT</code> depth and no color is depth-only: the scene's depth is drawn and nothing else, in passes named <code>Shadow 1</code>, <code>Shadow 2</code>, …, so it can be a shadow map. Make it with <a href="render-graph.html#RenderGraph-createRenderTarget"><code>RenderGraph::createRenderTarget</code></a> before this call.</dd>
-      <dt>shadow</dt><dd>A shadow map for the first directional light of the scene (<a href="scene.html#SceneShadow"><code>SceneShadow</code></a>): the light camera and the depth-only target that another <code>addScenePasses</code> call draws from it. The draw passes read its depth, so the graph runs them after the shadow passes. Empty (the default): no shadow. A shadow with an invalid camera or a target that is not depth-only, or a shadow on a depth-only view, logs an error, adds nothing and returns <code>false</code>.</dd>
+      <dt>shadow</dt><dd>A shadow map (<a href="scene.html#SceneShadow"><code>SceneShadow</code></a>): the light camera, the depth-only target that another <code>addScenePasses</code> call draws from it, and the directional light it darkens. That other call picks each caster's level of detail from this view's camera, so both draw a mesh at the same level. The draw passes read its depth, so the graph runs them after the shadow passes. Empty (the default): no shadow. A shadow with an invalid or perspective camera, a target that is not depth-only, or a light that is not directional, or a shadow on a depth-only view, logs an error, adds nothing and returns <code>false</code>.</dd>
       <dt>returns</dt><dd><code>true</code> when the passes were added. On <code>false</code> nothing was added.</dd>
     </dl>
   </div>
@@ -435,12 +435,12 @@ const rasm::RenderTargetHandle shadowMap = graph.createRenderTarget({
 });
 
 if (!engine.addScenePasses(graph, scene, lightCamera, shadowMap) ||
-    !engine.addScenePasses(graph, scene, camera, sceneTarget, rasm::SceneShadow{.camera = lightCamera, .renderTarget = shadowMap}))
+    !engine.addScenePasses(graph, scene, camera, sceneTarget, rasm::SceneShadow{.camera = lightCamera, .renderTarget = shadowMap, .light = sun}))
 {
     return 1;
 }</code></pre>
 
-<p>The light camera is yours: make it orthographic, place it behind the scene and point it along the light (<code>glm::quatLookAt</code>). Its box decides what can cast a shadow; a point outside it is lit. The shadow uses 3x3 PCF and offsets that assume an orthographic camera. Only the first directional light is shadowed; other lights and the ambient term are not. How it works: <a href="../guides/shadow-mapping.html">Shadow mapping</a>.</p>
+<p>The light camera is yours: make it orthographic, place it behind the scene and point it along the light (<code>glm::quatLookAt</code>). Its box decides what can cast a shadow; a point outside it is lit. The shadow uses 3x3 PCF and offsets that assume an orthographic camera. Only <code>light</code> is shadowed; other lights and the ambient term are not. How it works: <a href="../guides/shadow-mapping.html">Shadow mapping</a>.</p>
 
 <p><b>Scene views.</b> Each (scene, camera, target, shadow) is a <i>scene view</i>, with its own culling buffers on the GPU. A view lives while a graph holds it: graphs built for the same four share it, and when the last of them is destroyed or replaced, the view's buffers are freed. Views let one frame draw several scenes, cameras or targets. The scene's lights are read every frame. Nothing is drawn, with no error, while the scene is empty or all its entities still load: the target keeps its clear color.</p>
 <p>Culling also picks each visible draw's <a href="../guides/lod-selection.html">level of detail</a> from its distance to the camera and <code>EngineConfig::lodErrorPixels</code>. A view drawn without culling draws LOD 0.</p>

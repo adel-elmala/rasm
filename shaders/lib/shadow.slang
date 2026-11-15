@@ -3,24 +3,13 @@
 
 #include "core.slang"
 
-// The first directional light is the one the shadow map belongs to (pbr.slang applies it to that light).
-int getShadowLight(SceneData *scene)
-{
-    for (uint i = 0; i < min(scene->numLights, MAX_LIGHTS); ++i)
-    {
-        if (scene->lights[i].type == LightType.DIRECTIONAL)
-            return int(i);
-    }
-    return -1;
-}
-
-// How much of the shadow light reaches worldPosition: 1 lit, 0 in shadow. 3x3 PCF with bilinear weights, so 4x4 texels.
-// The map was drawn with reversed-Z, so a texel nearer the light holds a larger depth. The offsets assume an
-// orthographic light camera (a directional light): its matrix's rows 0 and 2 then scale world units to NDC x and
-// depth, which turns one texel into world units and into depth.
+// How much of the shadow light (SceneData::shadowLight) reaches worldPosition: 1 lit, 0 in shadow. 3x3 PCF with
+// bilinear weights, so 4x4 texels, read as four 2x2 gathers. The map was drawn with reversed-Z, so a texel nearer the
+// light holds a larger depth. The offsets assume an orthographic light camera (addScenePasses accepts no other): its
+// matrix's rows 0 and 2 then scale world units to NDC x and depth, which turns one texel into world units and depth.
 float sampleShadow(Sampler2D gTextures[], SceneData *scene, float3 worldPosition, float3 normal)
 {
-    int lightIndex          = getShadowLight(scene);
+    int lightIndex          = scene->shadowLight;
     if (!hasTexture(scene->shadowTexture) || lightIndex < 0)
         return 1.0;
 
@@ -40,20 +29,27 @@ float sampleShadow(Sampler2D gTextures[], SceneData *scene, float3 worldPosition
     float depthBias         = texelWorld * length(scene->shadowMatrix[2].xyz);
 
     // Clip space is Y-up and v = 0 is the map's top row, as in every RASM target.
-    float2 texel            = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * float2(width, height) - 0.5;
-    int2 base               = int2(floor(texel));
-    float2 f                = texel - float2(base);
-    int2 last               = int2(width, height) - 1;
+    float2 size             = float2(width, height);
+    float2 texel            = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * size - 0.5;
+    float2 base             = floor(texel);
+    float2 f                = texel - base;
+    // Column (and row) weights of the 4x4 texels: the bilinear weights of 3x3 taps one texel apart, added up.
+    float4 wx               = float4(1.0 - f.x, 1.0, 1.0, f.x);
+    float4 wy               = float4(1.0 - f.y, 1.0, 1.0, f.y);
     float lit               = 0.0;
-    for (int y = 0; y < 4; ++y)
+    for (int qy = 0; qy < 2; ++qy)
     {
-        float wy            = y == 0 ? 1.0 - f.y : (y == 3 ? f.y : 1.0);
-        for (int x = 0; x < 4; ++x)
+        for (int qx = 0; qx < 2; ++qx)
         {
-            float wx        = x == 0 ? 1.0 - f.x : (x == 3 ? f.x : 1.0);
-            int2 p          = clamp(base + int2(x - 1, y - 1), int2(0), last);
-            float occluder  = shadowMap.Load(int3(p, 0)).r;
-            lit            += (ndc.z + depthBias >= occluder ? 1.0 : 0.0) * wx * wy;
+            // The corner shared by texels base - 1 + 2q and base + 2q: the gather reads those 2x2, clamped at the
+            // edges by the depth's sampler. Its order is (x, y + 1), (x + 1, y + 1), (x + 1, y), (x, y).
+            float4 occluder = shadowMap.Gather((base + float2(2 * qx, 2 * qy)) / size);
+            float4 lit4     = float4(ndc.z + depthBias >= occluder);
+            float x0        = wx[2 * qx];
+            float x1        = wx[2 * qx + 1];
+            float y0        = wy[2 * qy];
+            float y1        = wy[2 * qy + 1];
+            lit            += dot(lit4, float4(x0 * y1, x1 * y1, x1 * y0, x0 * y0));
         }
     }
     return lit / 9.0;

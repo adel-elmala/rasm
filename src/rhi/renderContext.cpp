@@ -56,14 +56,16 @@ namespace rasm
         }
 
         // Every pass draws with a depth attachment, and colors are attachments 0 to n-1, so a gap would be dropped.
-        // A target without colors is depth-only, like a shadow map.
+        // A target without colors is depth-only, like a shadow map. History keeps only the colors of the previous
+        // frame, so a depth-only target has none.
         bool checkRenderTargetDesc(const RenderTargetDesc &desc, const char *caller)
         {
             const uint32_t colorCount = colorAttachmentCount(desc.colorFormats);
             const bool contiguous = std::all_of(desc.colorFormats + colorCount, std::end(desc.colorFormats), [](Format format)
                                                 { return format == Format::UNKNOWN; });
             return checkArgument(contiguous, caller, "a render target's color formats can't have a gap.") &&
-                   checkArgument(desc.depthFormat != Format::UNKNOWN, caller, "a render target needs a depth format.");
+                   checkArgument(desc.depthFormat != Format::UNKNOWN, caller, "a render target needs a depth format.") &&
+                   checkArgument(colorCount > 0 || !desc.history, caller, "history keeps a render target's colors, so a depth-only target can't have it.");
         }
 
         glm::uvec2 renderTargetSize(const RenderTargetDesc &desc, glm::uvec2 swapchainExtent)
