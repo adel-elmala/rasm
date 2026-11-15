@@ -423,15 +423,16 @@
 
 <h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
-<p>RASM uses two slots (<code>MAX_FRAMES_IN_FLIGHT</code> = 2) and one timeline fence, <code>Engine::frameFence</code>. <code>frameCount</code> is the slot, 0 or 1, not a frame counter. Everything that writes a slot's resources runs right after the wait in <code>beginFrame</code>.</p>
+<p>RASM uses two slots (<code>MAX_FRAMES_IN_FLIGHT</code> = 2) and one timeline fence per queue: <code>Engine::frameFence</code> for the graphics queue, and <code>Engine::computeFence</code> for the compute queue when <a href="async-compute.html">async compute</a> is on. A slot remembers the last value of each (<code>FrameResources::fenceValue</code>, <code>FrameResources::computeFenceValue</code>), and <code>beginFrame</code> waits for both. <code>frameCount</code> is the slot, 0 or 1, not a frame counter. Everything that writes a slot's resources runs right after the wait in <code>beginFrame</code>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 360" role="img" aria-label="beginFrame waits on frameFence for the slot's fenceValue, then runs updateFrameStats, updateStatsOverlay and syncGpuScene, which write only this slot's buffers, then acquires an image and begins the slot's command buffer. endFrame submits the slot's one command buffer with signal frameFenceValue plus 1. Only when the submit succeeds do frameFenceValue and the slot's fenceValue take the new value. Then frameCount flips.">
+  <svg viewBox="0 0 760 360" role="img" aria-label="beginFrame waits on frameFence for the slot's fenceValue, and on computeFence for its computeFenceValue with async compute, then runs updateFrameStats, updateStatsOverlay and syncGpuScene, which write only this slot's buffers, then acquires an image and opens the graphics batch. endFrame submits the frame's batches; each signals the next value of its queue's fence. Only when a submit succeeds do the last value and the slot's value of that fence take the new value. Then frameCount flips.">
     <text x="20" y="22" class="title t-cpu">beginFrame</text>
     <rect x="20" y="34" width="170" height="66" rx="6" class="cpu"/>
     <rect x="20" y="34" width="170" height="66" rx="6" class="hot"/>
-    <text x="105" y="60" class="mid mono">waitForFence</text>
-    <text x="105" y="80" class="mid small">for the slot's fenceValue</text>
+    <text x="105" y="56" class="mid mono">waitForFence</text>
+    <text x="105" y="74" class="mid small">the slot's fenceValue,</text>
+    <text x="105" y="90" class="mid small">and computeFenceValue</text>
     <line x1="190" y1="67" x2="218" y2="67" class="arrow" marker-end="url(#ah)"/>
     <rect x="220" y="34" width="310" height="66" rx="6" class="cpu"/>
     <text x="375" y="54" class="mid mono">updateFrameStats, updateStatsOverlay,</text>
@@ -440,26 +441,27 @@
     <line x1="530" y1="67" x2="558" y2="67" class="arrow" marker-end="url(#ah)"/>
     <rect x="560" y="34" width="180" height="66" rx="6" class="cpu"/>
     <text x="650" y="60" class="mid mono">acquireNextImage</text>
-    <text x="650" y="80" class="mid small">begin the slot's command buffer</text>
+    <text x="650" y="80" class="mid small">open the graphics batch</text>
 
     <line x1="650" y1="100" x2="650" y2="148" class="arrow" marker-end="url(#ah)"/>
-    <text x="640" y="128" class="end small">passes record into the slot's command buffer</text>
+    <text x="640" y="128" class="end small">passes record into their queue's batch (one batch without async compute)</text>
 
     <text x="20" y="170" class="title t-cpu">endFrame</text>
     <rect x="460" y="150" width="280" height="56" rx="6" class="cpu"/>
-    <text x="600" y="172" class="mid mono">submit(frame, frameFence, v)</text>
-    <text x="600" y="192" class="mid small">v = frameFenceValue + 1</text>
+    <text x="600" y="172" class="mid mono">submitBatches()</text>
+    <text x="600" y="192" class="mid small">each signals v = last value + 1</text>
     <line x1="600" y1="206" x2="600" y2="232" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <text x="608" y="224" class="small t-gpu">ok</text>
-    <rect x="460" y="234" width="280" height="66" rx="6" class="mem"/>
-    <text x="600" y="254" class="mid mono">frameFenceValue = v</text>
-    <text x="600" y="272" class="mid mono">frameResources[frameCount]</text>
-    <text x="600" y="290" class="mid mono">.fenceValue = v</text>
+    <rect x="460" y="234" width="280" height="80" rx="6" class="mem"/>
+    <text x="600" y="252" class="mid mono">frameFenceValue = v</text>
+    <text x="600" y="268" class="mid mono">frameResources[frameCount]</text>
+    <text x="600" y="284" class="mid mono">.fenceValue = v</text>
+    <text x="600" y="303" class="mid small">compute: computeFenceValue, the same way</text>
     <line x1="460" y1="178" x2="322" y2="178" class="arrow" marker-end="url(#ah)"/>
     <text x="391" y="170" class="mid small">failed</text>
     <rect x="120" y="150" width="200" height="56" rx="6" class="ghost"/>
     <text x="220" y="172" class="mid mono">discardRecording</text>
-    <text x="220" y="192" class="mid small">values stay as they were</text>
+    <text x="220" y="192" class="mid small">its values stay as they were</text>
     <line x1="460" y1="267" x2="322" y2="267" class="arrow" marker-end="url(#ah)"/>
     <line x1="220" y1="206" x2="220" y2="232" class="arrow" marker-end="url(#ah)"/>
     <rect x="120" y="234" width="200" height="66" rx="6" class="cpu"/>
@@ -468,7 +470,7 @@
     <text x="20" y="328" class="small">The slot flips after every frame that reached endFrame, submitted or not.</text>
     <text x="20" y="346" class="small">A frame that beginFrame skipped (minimized window, failed acquire) does not flip it.</text>
   </svg>
-  <figcaption>The present after a successful submit is left out here; see <a href="swapchain.html#in-rasm">the swapchain</a>. For the whole frame, see <a href="frame-loop.html">one frame, step by step</a>.</figcaption>
+  <figcaption>The present after a successful submit is left out here; see <a href="swapchain.html#in-rasm">the swapchain</a>. For the whole frame and its batches, see <a href="frame-loop.html#batches">one frame, step by step</a>. The frame's last graphics submit waits for all of its compute work, so the graphics value alone already covers the whole frame; <code>beginFrame</code> still waits for both.</figcaption>
 </figure>
 
 <h3>What has one copy per slot</h3>
@@ -476,7 +478,8 @@
 <div class="table-wrap">
 <table>
   <tr><th>Per slot</th><th>Where</th><th>Written by</th></tr>
-  <tr><td>Frame command buffer, depth texture, fence value</td><td><code>FrameResources</code> in <code>Engine::frameResources</code></td><td><code>beginFrame</code>, the passes</td></tr>
+  <tr><td>Depth texture, fence values</td><td><code>FrameResources</code> in <code>Engine::frameResources</code></td><td><code>beginFrame</code>, the passes, <code>submitBatches</code></td></tr>
+  <tr><td>Command buffers, one per batch and queue</td><td><code>Engine::batchCommandBuffers</code></td><td>the passes; <code>FrameResources::commandBuffer</code> names the one being recorded</td></tr>
   <tr><td>GPU scene tables: instances, materials</td><td><code>GpuTable::buffers</code></td><td><code>syncGpuScene</code>, through <code>GpuTable::upload</code></td></tr>
   <tr><td>Draw lists, one per scene</td><td><code>SceneDrawList::buffers</code></td><td><code>syncGpuScene</code>, through <code>uploadDrawList</code></td></tr>
   <tr><td>Scene data, one per scene view</td><td><code>GpuScene::sceneData</code> (host-visible)</td><td><code>prepareSceneView</code>, at the start of the view's <code>Cull</code> pass</td></tr>
@@ -489,9 +492,11 @@
 
 <p>A changed table row is marked dirty in <b>every</b> slot (<code>GpuTable::setRow</code>). Each slot then uploads it once, in its own frame, after its own wait. That is why <code>EngineConfig::maxInstances</code> costs its memory twice.</p>
 
-<p>One GPU-only buffer per scene view is shared on purpose: <code>SceneView::visibility</code>, what the last frame's occlusion culling saw. The next frame reads it, so it must survive the frame. The queue runs frames in order, and the <code>Cull 1</code> pass declares it with <code>readPrevious</code>, so the graph puts a compute-to-compute barrier before it: one copy is safe (see <a href="occlusion-culling.html#in-rasm">occlusion culling</a>).</p>
+<p>One GPU-only buffer per scene view is shared on purpose: <code>SceneView::visibility</code>, what the last frame's occlusion culling saw. The next frame reads it, so it must survive the frame. Only compute passes use it, and they run on one queue in frame order, and the <code>Cull 1</code> pass declares it with <code>readPrevious</code>, so the graph puts a compute-to-compute barrier before it: one copy is safe (see <a href="occlusion-culling.html#in-rasm">occlusion culling</a>).</p>
 
-<p>A render target without <code>history</code> also has one copy that both slots share. Each frame draws it before it reads it, and the queue runs the frames in order, so the next frame's draw waits behind the barriers of this one (see <a href="temporal-history.html#in-rasm">temporal history</a>).</p>
+<p>A render target without <code>history</code> also has one copy that both slots share. Each frame draws it before it reads it, and the queue runs the frames in order, so the next frame's draw waits behind the barriers of this one (see <a href="temporal-history.html#in-rasm">temporal history</a>). A use on the other queue waits for it instead (<a href="render-graphs.html#rasm-queues">render graphs</a>).</p>
+
+<p>The visible-draw lists and the Hi-Z have one copy per slot for a second reason: with async compute, <code>Cull 1</code> of the next frame then does not wait for this frame's draws, and can run next to them.</p>
 
 <p>The geometry pool, textures, pipelines and the one bindless descriptor set have a single copy. They are only added to: new ranges, new textures, new bindless slots, never a change to something a running frame reads. The bindless set's layout uses update-after-bind, which allows writing new slots while earlier frames still run. Nothing is freed while frames are in flight, because nothing can be destroyed yet (<b>D4</b>). Resize is the exception: it waits for the device to go idle, then replaces the depth textures and rebuilds the render targets sized from the window (<code>RenderContext::resizeRenderTargets</code>).</p>
 
@@ -502,7 +507,7 @@
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Slots</td><td><var>N</var> = 2 or 3</td><td>2, fixed at compile time (<code>MAX_FRAMES_IN_FLIGHT</code> in <code>include/rasm/types.h</code>).</td></tr>
   <tr><td>Slot index</td><td>frame number mod <var>N</var></td><td><code>frameCount</code> holds only the slot; there is no frame number. It flips in <code>endFrame</code>.</td></tr>
-  <tr><td>Fence</td><td>binary per slot, or one timeline</td><td>One timeline: <code>frameFence</code>, a Vulkan timeline semaphore. <code>frameFenceValue</code> is the last value signaled; <code>FrameResources::fenceValue</code> is the slot's.</td></tr>
+  <tr><td>Fence</td><td>binary per slot, or one timeline</td><td>One timeline per queue: <code>frameFence</code>, a Vulkan timeline semaphore. <code>frameFenceValue</code> is the last value signaled; <code>FrameResources::fenceValue</code> is the slot's. With async compute, <code>computeFence</code>, <code>computeFenceValue</code> and <code>FrameResources::computeFenceValue</code> do the same for the compute queue. A frame may signal several values of each, one per batch.</td></tr>
   <tr><td>Where to wait</td><td>start of the frame</td><td>In <code>beginFrame</code>, after input, finished loads and swapchain recreation, before anything writes the slot.</td></tr>
   <tr><td>Value only on success</td><td>store it after the submit</td><td>The same: a failed submit leaves both values, and calls <code>discardRecording</code>.</td></tr>
   <tr><td>Wait timeout</td><td>a timeout</td><td>None: <code>waitForFence</code> waits with <code>UINT64_MAX</code>. A failed wait skips the frame.</td></tr>
@@ -518,8 +523,8 @@
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>The slot count</td><td><code>MAX_FRAMES_IN_FLIGHT</code> in <code>include/rasm/types.h</code></td></tr>
-  <tr><td>Slot state</td><td><code>FrameResources</code> in <code>include/rasm/types.h</code>; <code>frameResources</code>, <code>frameFence</code>, <code>frameFenceValue</code> in <code>include/rasm/engine.h</code></td></tr>
-  <tr><td>The wait, the submit, the flip</td><td><code>Engine::beginFrame</code> and <code>Engine::endFrame</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Slot state</td><td><code>FrameResources</code> in <code>include/rasm/types.h</code>; <code>frameResources</code>, <code>frameFence</code>, <code>frameFenceValue</code>, <code>computeFence</code>, <code>computeFenceValue</code>, <code>batchCommandBuffers</code> in <code>include/rasm/engine.h</code></td></tr>
+  <tr><td>The wait, the submits, the flip</td><td><code>Engine::beginFrame</code>, <code>Engine::endFrame</code> and <code>Engine::submitBatches</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Per-slot tables</td><td><code>GpuTable</code> in <code>src/renderer/gpuTable.cpp</code></td></tr>
   <tr><td>Timeline fence</td><td><code>VulkanDevice::createFence</code>, <code>waitForFence</code>, <code>getFenceValue</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; signaled in <code>VulkanQueue::submit</code></td></tr>
 </table>
@@ -531,6 +536,7 @@
     <li>Per-frame mutable buffers are indexed by <code>frameCount</code>, and written only after <code>beginFrame</code>'s wait for that slot.</li>
     <li>GPU scene tables are written only in <code>syncGpuScene</code>. Change rows through <code>GpuTable::setRow</code>, never by writing a slot's buffer.</li>
     <li>A slot takes a fence value only after a submit that signals it succeeded.</li>
+    <li><code>beginFrame</code> waits for both of the slot's fences before anything reuses its command buffers or writes its buffers.</li>
     <li>A resource with one copy is only added to while frames are in flight. Replacing or freeing one needs the device idle (as resize does) until deferred destruction exists (<b>D4</b>).</li>
   </ul>
 </div>

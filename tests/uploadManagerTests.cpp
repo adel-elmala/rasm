@@ -75,6 +75,7 @@ namespace
         std::vector<BufferCopy> copies;
         FakeFence *fence = nullptr;
         uint64_t signalValue = 0;
+        std::vector<FenceWait> waits;
     };
 
     class FakeQueue : public Queue
@@ -91,7 +92,7 @@ namespace
             {
                 auto *commandBuffer = static_cast<FakeCommandBuffer *>(desc.commandBuffers[i]);
                 commandBuffer->inFlight = true;
-                submissions.push_back({.commandBuffer = commandBuffer, .src = commandBuffer->src, .copies = commandBuffer->copies, .fence = static_cast<FakeFence *>(desc.signalFence), .signalValue = desc.signalValue});
+                submissions.push_back({.commandBuffer = commandBuffer, .src = commandBuffer->src, .copies = commandBuffer->copies, .fence = static_cast<FakeFence *>(desc.signalFence), .signalValue = desc.signalValue, .waits = std::vector<FenceWait>(desc.waits, desc.waits + desc.waitCount)});
             }
             return true;
         }
@@ -177,6 +178,7 @@ namespace
         void destroyQueryPool(QueryPool *) override {}
         void destroyHeap(Heap *) override {}
         Queue *getQueue(QueueType) override { return &queue; }
+        bool hasAsyncCompute() const override { return false; }
         bool fillBuffer(Buffer *buffer, const void *data, size_t size, size_t offset) override
         {
             auto *fake = static_cast<FakeBuffer *>(buffer);
@@ -190,7 +192,7 @@ namespace
         }
         bool readBuffer(Buffer *, void *, size_t, size_t) override { return false; }
         void resetQueries(QueryPool *) override {}
-        bool getTimestamps(QueryPool *, uint32_t, uint64_t *) override { return false; }
+        bool getTimestamps(QueryPool *, uint32_t, uint32_t, uint64_t *) override { return false; }
         bool fillTexture(Texture *, const void *) override { return false; }
         void updateBindlessTexture(DescriptorSet *, uint32_t, Texture *, Sampler *) override {}
         bool waitForFence(Fence *fence, uint64_t value, uint64_t) override
@@ -646,4 +648,25 @@ TEST_CASE_FIXTURE(UploadFixture, "a failed submit keeps its batch, and the next 
 
     CHECK(holds(a, 0, dataA));
     CHECK(holds(b, 0, dataB));
+}
+
+TEST_CASE_FIXTURE(UploadFixture, "every flush waits for the other queue's last submit, the ones made while recording too")
+{
+    auto *dst = createDeviceLocal(64);
+    const auto data = makeBytes(64, 7);
+    FakeFence computeFence;
+    uploads.waitFor({.fence = &computeFence, .value = 3});
+
+    // Writing a range twice flushes the first write from inside upload.
+    REQUIRE(upload(dst, data, 0));
+    REQUIRE(upload(dst, data, 0));
+    REQUIRE(uploads.flush());
+
+    REQUIRE(device.queue.submissions.size() == 2);
+    for (const auto &submission : device.queue.submissions)
+    {
+        REQUIRE(submission.waits.size() == 1);
+        CHECK(submission.waits[0].fence == &computeFence);
+        CHECK(submission.waits[0].value == 3);
+    }
 }

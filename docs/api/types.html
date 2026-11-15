@@ -118,7 +118,7 @@ struct Handle
   <tr><td><code>RenderTargetHandle</code></td><td>an offscreen color + depth target: <a href="render-graph.html#createRenderTarget">createRenderTarget</a></td></tr>
   <tr><td><code>PipelineHandle</code></td><td>a graphics or compute pipeline: <a href="render-graph.html#createPipeline">createPipeline</a>, <a href="render-graph.html#createComputePipeline">createComputePipeline</a></td></tr>
   <tr><td><code>ShaderHandle</code></td><td>a compiled shader: <a href="low-level.html#createShader">createShader</a></td></tr>
-  <tr><td><code>CommandBufferHandle</code></td><td>a command buffer: <a href="low-level.html#createCommandBuffer">createCommandBuffer</a>; the frame's one in <code>FrameResources</code></td></tr>
+  <tr><td><code>CommandBufferHandle</code></td><td>a command buffer: <a href="low-level.html#createCommandBuffer">createCommandBuffer</a>; the one being recorded in <code>FrameResources</code></td></tr>
   <tr><td><code>FenceHandle</code></td><td>a timeline fence: <a href="low-level.html#createFence">createFence</a></td></tr>
   <tr><td><code>QueryPoolHandle</code></td><td>timestamp queries: <a href="low-level.html#createTimestampQueryPool">createTimestampQueryPool</a></td></tr>
   <tr><td><code>DescriptorSetLayoutHandle</code></td><td>a descriptor set layout: <a href="low-level.html#createBindlessDescriptorSetLayout">createBindlessDescriptorSetLayout</a></td></tr>
@@ -291,6 +291,7 @@ private:
     bool        meshLods              = true;
     float       lodErrorPixels        = 1.0f;
     int32_t     forcedLod             = -1;
+    bool        asyncCompute          = false;
 };</pre>
   <div class="body">
     <p>The engine's settings, given to its constructor. Every field is explained on the <a href="engine.html#EngineConfig">Engine page</a>.</p>
@@ -302,14 +303,16 @@ private:
 {
     CommandBufferHandle commandBuffer;
     TextureHandle       depthTexture;
-    uint64_t            fenceValue = 0;
+    uint64_t            fenceValue          = 0;
+    uint64_t            computeFenceValue   = 0;
 };</pre>
   <div class="body">
     <p>One frame slot's objects, from <a href="low-level.html#getCurrentFrameResources">getCurrentFrameResources</a>.</p>
     <dl>
-      <dt>commandBuffer</dt><dd>The frame's command buffer. Record into it between <code>beginFrame</code> and <code>endFrame</code>.</dd>
+      <dt>commandBuffer</dt><dd>The command buffer being recorded right now. Record into it between <code>beginFrame</code> and <code>endFrame</code>. With <code>EngineConfig::asyncCompute</code> a frame has several, one per batch of passes on one queue, and the render graph moves this field between them as passes change queue. So fetch it inside each pass.</dd>
       <dt>depthTexture</dt><dd>The <code>D32_SFLOAT</code> depth of swapchain passes, swapchain-sized. Replaced when the window is resized.</dd>
-      <dt>fenceValue</dt><dd>The frame fence value that this slot's last submit signals; <code>beginFrame</code> waits for it.</dd>
+      <dt>fenceValue</dt><dd>The frame fence value that this slot's last graphics submit signals; <code>beginFrame</code> waits for it.</dd>
+      <dt>computeFenceValue</dt><dd>The compute fence value that this slot's last compute submit signals. With async compute <code>beginFrame</code> waits for it too. 0 without a compute queue.</dd>
     </dl>
   </div>
 </div>

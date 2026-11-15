@@ -136,6 +136,27 @@ namespace rasm::rhi
             return mask;
         }
 
+        constexpr VkPipelineStageFlags2 COMPUTE_QUEUE_STAGES = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT | VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+                                                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COPY_BIT |
+                                                               VK_PIPELINE_STAGE_2_CLEAR_BIT | VK_PIPELINE_STAGE_2_HOST_BIT | VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        constexpr VkAccessFlags2 GRAPHICS_ONLY_ACCESS = VK_ACCESS_2_INDEX_READ_BIT | VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT |
+                                                        VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                                                        VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+        // A compute queue runs no graphics stages. Graphics work on the other queue is ordered by the semaphore
+        // the submit waits on, which blocks all commands, so a source scope that named it waits for all commands
+        // instead and chains to that wait. Graphics accesses have nothing to make available or visible here.
+        void fitToComputeQueue(VkPipelineStageFlags2 &srcStage, VkAccessFlags2 &srcAccess, VkPipelineStageFlags2 &dstStage, VkAccessFlags2 &dstAccess)
+        {
+            if ((srcStage & ~COMPUTE_QUEUE_STAGES) != 0)
+                srcStage = (srcStage & COMPUTE_QUEUE_STAGES) | VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            dstStage &= COMPUTE_QUEUE_STAGES;
+            if (dstStage == 0)
+                dstStage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            srcAccess &= ~GRAPHICS_ONLY_ACCESS;
+            dstAccess &= ~GRAPHICS_ONLY_ACCESS;
+        }
+
         VkCullModeFlags toVkCullMode(CullMode cullMode)
         {
             switch (cullMode)
@@ -159,8 +180,9 @@ namespace rasm::rhi
             vkDestroyCommandPool(device.getVkDevice(), pool, nullptr);
     }
 
-    bool VulkanCommandBuffer::initialize(uint32_t queueFamilyIndex, const std::string &name)
+    bool VulkanCommandBuffer::initialize(uint32_t queueFamilyIndex, bool onComputeQueue, const std::string &name)
     {
+        computeQueue = onComputeQueue;
         // One pool per command buffer, reset as a whole in begin(): the buffer is re-recorded every time it is used.
         VkCommandPoolCreateInfo poolInfo = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -235,6 +257,8 @@ namespace rasm::rhi
         VkPipelineStageFlags2 dstStageMask = 0;
         if (!getSrcScope(oldUsage, srcAccessMask, srcStageMask) || !getDstScope(newUsage, dstAccessMask, dstStageMask))
             return false;
+        if (computeQueue)
+            fitToComputeQueue(srcStageMask, srcAccessMask, dstStageMask, dstAccessMask);
 
         VkImageMemoryBarrier2 barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                                          .srcStageMask = srcStageMask,
@@ -393,6 +417,8 @@ namespace rasm::rhi
                                     .srcAccessMask = toVkWriteMask(before),
                                     .dstStageMask = toVkStageMask(after),
                                     .dstAccessMask = toVkReadMask(after) | toVkWriteMask(after)};
+        if (computeQueue)
+            fitToComputeQueue(barrier.srcStageMask, barrier.srcAccessMask, barrier.dstStageMask, barrier.dstAccessMask);
         VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
         vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
     }
@@ -401,14 +427,16 @@ namespace rasm::rhi
     // An image barrier covers only its own image, so this one is global. Reads before it only have to finish.
     void VulkanCommandBuffer::aliasingBarrier()
     {
-        constexpr VkPipelineStageFlags2 attachmentStages = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR |
-                                                           VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR;
+        constexpr VkPipelineStageFlags2 ATTACHMENT_STAGES = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR |
+                                                            VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR;
         VkMemoryBarrier2 barrier = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
-                                    .srcStageMask = attachmentStages | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                    .srcStageMask = ATTACHMENT_STAGES | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                     .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                                    .dstStageMask = attachmentStages,
+                                    .dstStageMask = ATTACHMENT_STAGES,
                                     .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
                                                      VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT};
+        if (computeQueue)
+            fitToComputeQueue(barrier.srcStageMask, barrier.srcAccessMask, barrier.dstStageMask, barrier.dstAccessMask);
         VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
         vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
     }

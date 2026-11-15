@@ -112,7 +112,8 @@ TEST_CASE("texture states of commands that are never submitted are put back")
 
     SUBCASE("a submitted recording keeps its state")
     {
-        states.submitted();
+        CommandBuffer *submitted[] = {&commandBuffer};
+        states.submitted(submitted, 1);
         states.discardUnsubmitted();
         CHECK(texture.state == TextureUsage::DEPTH_STENCIL_ATTACHMENT);
     }
@@ -123,4 +124,22 @@ TEST_CASE("texture states of commands that are never submitted are put back")
         states.discardUnsubmitted();
         CHECK(texture.state == TextureUsage::DEPTH_STENCIL_ATTACHMENT);
     }
+}
+
+TEST_CASE("texture states of a frame split into submits are kept up to the last one that went out")
+{
+    FakeCommandBuffer first;
+    FakeCommandBuffer second;
+    TextureStates states;
+    Texture texture;
+    texture.state = TextureUsage::SAMPLED;
+
+    states.transition(first, &texture, TextureUsage::COLOR_ATTACHMENT, true);
+    states.transition(second, &texture, TextureUsage::SAMPLED, false);
+    states.transition(second, &texture, TextureUsage::DEPTH_STENCIL_ATTACHMENT, false);
+
+    CommandBuffer *submitted[] = {&first};
+    states.submitted(submitted, 1);
+    states.discardUnsubmitted();
+    CHECK(texture.state == TextureUsage::COLOR_ATTACHMENT);
 }

@@ -47,16 +47,16 @@ In scalar layout, every type aligns to its largest scalar.
 
 ## Verify
 
-1. **Debug build.** `validateRasmStructs` runs inside `assert(...)`, so Release builds (NDEBUG) skip it completely (`B23`). Once `B23`, `C11` or `C12` is fixed, update this skill.
+1. **Any build.** `validateRasmStructs` runs after every link, in Debug and Release (`B23` is fixed). Once `C11` or `C12` is fixed, update this skill.
 2. Compile errors from step 3 come first. A failed `static_assert` means your expected offsets are wrong. Recompute them, don't just copy the compiler's numbers.
-3. Run the `verify-change` skill. A missed side fails at startup with exact numbers:
+3. Run the `verify-change` skill. A missed side fails with exact numbers, and the shader is not compiled, so the scene is not drawn (it is retried every frame):
    ```
-   02_gltf  FAIL  | app exited (code 3) before frame 60
-      [error] Size mismatch for SceneData: C++ 552, shader 560
-      [error] Offset mismatch for SceneData.lights: C++ 144, shader 148
-      [error] Offset mismatch for SceneData.vertsPtr: C++ 528, shader 536
-      Assertion failed: validateRasmStructs(...)
+   [error] Size mismatch for SceneData: C++ 768, shader 776
+   [error] Offset mismatch for SceneData.lights: C++ 144, shader 148
+   [error] Offset mismatch for SceneData.vertsPtr: C++ 528, shader 536
+   [error] The C++ structs do not match shaders/lib/core.slang; 'rasm.vert.slang' is not compiled.
+   [error] Failed to create the uber material pipeline for the scene.
    ```
 4. If the new field changes rendering, check the image (DIFF) and read the field back with the `frame-debug` skill: `rdc.py buffer "Scene Data Buffer" --offset <off> --format ...`.
 
-Tested on 2026-11-04 by adding `float exposure` after `SceneData::numLights`. The Slang-only change failed as shown above. Steps 1–4 then passed with an identical image.
+Tested on 2026-11-04 by adding `float exposure` after `SceneData::numLights`, and again in Release on 2026-11-15. The Slang-only change failed as shown above. Steps 1–4 then passed with an identical image.

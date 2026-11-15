@@ -16,6 +16,8 @@ namespace rasm::rhi
         void                        cleanup();
         bool                        upload(Buffer* dst, const void* data, size_t size, size_t offset);
         bool                        flush();
+        FenceWait                   lastSubmit() const;
+        void                        waitFor(const FenceWait& wait);
         void                        cancelUploads(const Buffer* buffer);
 
     private:
@@ -44,6 +46,7 @@ namespace rasm::rhi
         Batch                       batches[2]          = {};
         uint32_t                    currentBatch        = 0;
         uint64_t                    submittedValue      = 0;
+        FenceWait                   queueWait           = {};   // another queue's last submit, which every flush waits for
         uint64_t                    head                = 0;
         uint64_t                    tail                = 0;
         std::vector<BufferCopy>     pendingCopies;

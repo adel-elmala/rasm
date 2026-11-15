@@ -15,6 +15,7 @@ namespace rasm
     {
         QueryPoolHandle                         timestamps;
         std::string                             timerNames[MAX_GPU_TIMERS];
+        bool                                    timerOnCompute[MAX_GPU_TIMERS]  = {};
         uint32_t                                timerCount          = 0;
         uint64_t                                readFenceValue      = 0;
         bool                                    measuring           = false;    // the slot's last frame was measured

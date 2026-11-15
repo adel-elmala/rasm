@@ -165,7 +165,7 @@ namespace rasm::rhi
     {
         VkSemaphoreSubmitInfo waits[2] = {};
         uint32_t waitCount = 0;
-        if (acquiredSlot != NO_ACQUIRE)
+        if (acquiredSlot != NO_ACQUIRE && !acquireWaited)
         {
             waits[waitCount++] = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                                   .semaphore = acquireSemaphores[acquiredSlot],
@@ -178,6 +178,7 @@ namespace rasm::rhi
                                   .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
         }
         acquiredSlot = NO_ACQUIRE;
+        acquireWaited = false;
         presentPending = false;
         if (waitCount == 0)
             return;
@@ -240,7 +241,34 @@ namespace rasm::rhi
         return status;
     }
 
-    bool VulkanSwapchain::getSubmitSemaphores(VkSemaphoreSubmitInfo &acquireWait, VkSemaphoreSubmitInfo &presentSignal, VkSemaphoreSubmitInfo &releaseSignal) const
+    // The first submit of a frame that touches the image waits for it. A frame split into several submits
+    // waits only once: the semaphore is binary, so a second wait would never end.
+    bool VulkanSwapchain::getAcquireWait(VkSemaphoreSubmitInfo &acquireWait, uint32_t &waitCount) const
+    {
+        waitCount = 0;
+        if (acquiredSlot == NO_ACQUIRE)
+        {
+            spdlog::error("A submit that uses the swapchain image needs one acquired since the last present.");
+            return false;
+        }
+        if (acquireWaited)
+            return true;
+
+        // Writing the image starts at color output, which the barrier out of UNKNOWN also waits for, so the
+        // layout transition happens after the acquire.
+        acquireWait = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                       .semaphore = acquireSemaphores[acquiredSlot],
+                       .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT};
+        waitCount = 1;
+        return true;
+    }
+
+    void VulkanSwapchain::onAcquireWaited()
+    {
+        acquireWaited = true;
+    }
+
+    bool VulkanSwapchain::getPresentSignals(VkSemaphoreSubmitInfo &presentSignal, VkSemaphoreSubmitInfo &releaseSignal) const
     {
         if (acquiredSlot == NO_ACQUIRE)
         {
@@ -248,11 +276,6 @@ namespace rasm::rhi
             return false;
         }
 
-        // Writing the image starts at color output, which the barrier out of UNKNOWN also waits for, so the
-        // layout transition happens after the acquire.
-        acquireWait = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                       .semaphore = acquireSemaphores[acquiredSlot],
-                       .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT};
         presentSignal = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                          .semaphore = presentSemaphores[imageIndex],
                          .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
@@ -268,6 +291,7 @@ namespace rasm::rhi
         ++releaseValue;
         acquireReleaseValues[acquiredSlot] = releaseValue;
         acquiredSlot = NO_ACQUIRE;
+        acquireWaited = false;
         presentPending = true;
     }
 

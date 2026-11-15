@@ -1069,7 +1069,7 @@ void compactMain(uint3 id : SV_DispatchThreadID)
 
 <figure class="diagram">
   <svg viewBox="0 0 760 210" role="img" aria-label="The frame's command buffer: the Cull pass runs countMain, a barrier and writeMain and writes the visible draws and counts. The graph records a compute to graphics barrier. The Scene pass reads them with one drawIndexedIndirectCount per run.">
-    <text x="20" y="18" class="small">the frame's command buffer, in graph order</text>
+    <text x="20" y="18" class="small">the frame's command buffer, in graph order (async compute off)</text>
 
     <rect x="20" y="30" width="260" height="80" rx="8" class="shader"/>
     <text x="150" y="54" class="mid title">Cull (compute)</text>
@@ -1092,7 +1092,7 @@ void compactMain(uint3 id : SV_DispatchThreadID)
     <text x="196" y="150" class="end small">writes</text>
     <text x="566" y="150" class="small">reads</text>
   </svg>
-  <figcaption>Both passes are in the frame's one command buffer, in the graph's order. With <a href="occlusion-culling.html#in-rasm">occlusion culling</a> they are <code>Cull 1</code> and <code>Scene 1</code>, and <code>Cull 2</code> runs the same two dispatches again after the Hi-Z.</figcaption>
+  <figcaption>Both passes are in the frame's one command buffer, in the graph's order. With <code>EngineConfig::asyncCompute</code>, <code>Cull</code> runs on the compute queue, and the barrier becomes a wait between the queues (<a href="async-compute.html">async compute</a>). With <a href="occlusion-culling.html#in-rasm">occlusion culling</a> they are <code>Cull 1</code> and <code>Scene 1</code>, and <code>Cull 2</code> runs the same two dispatches again after the Hi-Z.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>

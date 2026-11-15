@@ -39,6 +39,7 @@ namespace rasm
             TextureHandle colors[MAX_COLOR_ATTACHMENTS];
             uint32_t colorCount = 0;
             glm::vec4 clearColor = glm::vec4(0.0f);
+            const rhi::CommandBuffer *commandBuffer = nullptr; // the clear was recorded into it
         };
     }
 
@@ -317,7 +318,8 @@ namespace rasm
                                                    .window = &window,
                                                    .enableValidation = config.enableValidation,
                                                    .enableSyncValidation = config.enableSyncValidation,
-                                                   .enableGpuValidation = config.enableGpuValidation});
+                                                   .enableGpuValidation = config.enableGpuValidation,
+                                                   .asyncCompute = config.asyncCompute});
         if (!impl->device)
             return false;
 
@@ -510,9 +512,9 @@ namespace rasm
         return handle;
     }
 
-    CommandBufferHandle RenderContext::createCommandBuffer(const std::string &name)
+    CommandBufferHandle RenderContext::createCommandBuffer(const std::string &name, QueueType queue)
     {
-        auto *rhiCommandBuffer = impl->device->createCommandBuffer(rhi::QueueType::GRAPHICS, name);
+        auto *rhiCommandBuffer = impl->device->createCommandBuffer(queue, name);
         if (!rhiCommandBuffer)
             return {};
 
@@ -642,8 +644,12 @@ namespace rasm
     // The clears run before the frame's passes. A frame that is not submitted gives them back for the next one.
     void RenderContext::clearNewHistory(const CommandBufferHandle &commandBuffer)
     {
-        for (const auto &clear : impl->pendingClears)
+        const auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        if (!rhiCommandBuffer)
+            return;
+        for (auto &clear : impl->pendingClears)
         {
+            clear.commandBuffer = rhiCommandBuffer;
             for (uint32_t i = 0; i < clear.colorCount; ++i)
                 transitionImageLayout(commandBuffer, clear.colors[i], TextureUsage::COLOR_ATTACHMENT, true);
             beginRendering(commandBuffer, clear.colors, clear.colorCount, {}, clear.clearColor);
@@ -985,12 +991,12 @@ namespace rasm
             impl->device->resetQueries(rhiPool);
     }
 
-    bool RenderContext::getTimestamps(const QueryPoolHandle &pool, uint32_t count, uint64_t *nanoseconds)
+    bool RenderContext::getTimestamps(const QueryPoolHandle &pool, uint32_t firstQuery, uint32_t count, uint64_t *nanoseconds)
     {
         auto *rhiPool = lookup(impl->queryPools, pool, __func__);
-        if (!rhiPool || !checkArgument(count <= rhiPool->count && (count == 0 || nanoseconds != nullptr), __func__, "count is past the pool's queries."))
+        if (!rhiPool || !checkArgument(firstQuery <= rhiPool->count && count <= rhiPool->count - firstQuery && (count == 0 || nanoseconds != nullptr), __func__, "the queries are past the pool's."))
             return false;
-        return impl->device->getTimestamps(rhiPool, count, nanoseconds);
+        return impl->device->getTimestamps(rhiPool, firstQuery, count, nanoseconds);
     }
 
     void RenderContext::writeTimestamp(const CommandBufferHandle &commandBuffer, const QueryPoolHandle &pool, uint32_t index)
@@ -1199,45 +1205,77 @@ namespace rasm
         return true;
     }
 
-    bool RenderContext::submit(const CommandBufferHandle *commandBuffers, uint32_t commandBufferCount, FenceHandle signalFence, uint64_t signalValue, bool presentsSwapchainImage)
+    bool RenderContext::submit(const SubmitInfo &info)
     {
         ZoneScoped;
 
         // They run in this order on the queue, as one submission.
-        if (!checkArgument(commandBufferCount <= rhi::MAX_SUBMIT_COMMAND_BUFFERS, __func__, "too many command buffers."))
+        if (!checkArgument(info.commandBufferCount <= rhi::MAX_SUBMIT_COMMAND_BUFFERS, __func__, "too many command buffers."))
+            return false;
+        // A compute submit keeps one wait for the uploads.
+        const bool computeQueue = info.queue == QueueType::COMPUTE && impl->device->hasAsyncCompute();
+        if (!checkArgument(info.waitCount + (computeQueue ? 1 : 0) <= rhi::MAX_SUBMIT_WAITS, __func__, "too many fence waits."))
             return false;
         rhi::CommandBuffer *rhiCommandBuffers[rhi::MAX_SUBMIT_COMMAND_BUFFERS] = {};
-        for (uint32_t i = 0; i < commandBufferCount; ++i)
+        for (uint32_t i = 0; i < info.commandBufferCount; ++i)
         {
-            rhiCommandBuffers[i] = lookup(impl->commandBuffers, commandBuffers[i], __func__);
+            rhiCommandBuffers[i] = lookup(impl->commandBuffers, info.commandBuffers[i], __func__);
             if (!rhiCommandBuffers[i])
                 return false;
         }
 
-        rhi::Fence *fence = nullptr;
-        if (signalFence.isValid())
+        rhi::FenceWait waits[rhi::MAX_SUBMIT_WAITS] = {};
+        uint32_t waitCount = 0;
+        for (uint32_t i = 0; i < info.waitCount; ++i)
         {
-            fence = lookup(impl->fences, signalFence, __func__);
+            auto *fence = lookup(impl->fences, info.waits[i].fence, __func__);
             if (!fence)
+                return false;
+            waits[waitCount++] = {.fence = fence, .value = info.waits[i].value};
+        }
+
+        rhi::Fence *signalFence = nullptr;
+        if (info.signal.fence.isValid())
+        {
+            signalFence = lookup(impl->fences, info.signal.fence, __func__);
+            if (!signalFence)
                 return false;
         }
 
-        // Uploads go first on the same queue, so this submit sees their data. A failed batch is logged and
-        // retried with the next submit; the frame still goes out so the swapchain keeps moving.
+        // Uploads go first, on the graphics queue, so this submit sees their data: the same queue through the
+        // barriers in the copies, the compute queue by waiting for them. Every upload submit also waits for the
+        // last compute submit, which may still read what the copies overwrite (UploadManager::waitFor). A failed
+        // batch is logged and retried with the next submit; the frame still goes out so the swapchain keeps moving.
         impl->uploads.flush();
+        const rhi::FenceWait uploads = impl->uploads.lastSubmit();
+        if (computeQueue && uploads.value > 0)
+            waits[waitCount++] = uploads;
 
         rhi::SubmitDesc submitDesc = {
             .commandBuffers = rhiCommandBuffers,
-            .commandBufferCount = commandBufferCount,
-            .swapchain = presentsSwapchainImage ? impl->swapchain : nullptr,
-            .signalFence = fence,
-            .signalValue = signalValue,
+            .commandBufferCount = info.commandBufferCount,
+            .waits = waits,
+            .waitCount = waitCount,
+            .acquireSwapchain = info.waitsForSwapchainImage ? impl->swapchain : nullptr,
+            .presentSwapchain = info.presentsSwapchainImage ? impl->swapchain : nullptr,
+            .signalFence = signalFence,
+            .signalValue = info.signal.value,
         };
-        if (!impl->device->getQueue(rhi::QueueType::GRAPHICS)->submit(submitDesc))
+        if (!impl->device->getQueue(info.queue)->submit(submitDesc))
             return false;
-        impl->textureStates.submitted();
-        impl->recordedClears.clear();
+        if (computeQueue && signalFence != nullptr)
+            impl->uploads.waitFor({.fence = signalFence, .value = info.signal.value});
+
+        // Only what these command buffers recorded is on the GPU now; a frame may have more submits to go.
+        impl->textureStates.submitted(rhiCommandBuffers, info.commandBufferCount);
+        std::erase_if(impl->recordedClears, [&rhiCommandBuffers, &info](const HistoryClear &clear)
+                      { return std::find(rhiCommandBuffers, rhiCommandBuffers + info.commandBufferCount, clear.commandBuffer) != rhiCommandBuffers + info.commandBufferCount; });
         return true;
+    }
+
+    bool RenderContext::hasAsyncCompute() const
+    {
+        return impl->device->hasAsyncCompute();
     }
 
     // For commands that were recorded but will not run, a failed submit included: the textures go back to
