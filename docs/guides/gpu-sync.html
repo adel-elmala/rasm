@@ -512,25 +512,25 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
 <h3>Remembering texture states</h3>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 170" role="img" aria-label="Recording a transition changes the texture's state at once, and TextureStates remembers the state from before its first transition since the last submit. A successful submit forgets these. discardRecording, for commands that will not run, puts the old states back.">
+  <svg viewBox="0 0 760 170" role="img" aria-label="Recording a transition changes the texture's state at once, and TextureStates remembers every transition not yet submitted, with its command buffer and the state from before it. A successful submit forgets those of its own command buffers. discardRecording, for commands that will not run, puts the old states back, last first.">
     <rect x="20" y="50" width="200" height="56" rx="6" class="cpu"/>
     <text x="120" y="72" class="mid mono small">TextureStates::transition</text>
     <text x="120" y="90" class="mid small">texture state = new usage</text>
     <line x1="220" y1="78" x2="288" y2="78" class="arrow" marker-end="url(#ah)"/>
-    <text x="254" y="70" class="mid small">first time</text>
+    <text x="254" y="70" class="mid small">each time</text>
     <rect x="290" y="50" width="190" height="56" rx="6" class="mem"/>
     <text x="385" y="72" class="mid mono small">unsubmitted</text>
-    <text x="385" y="90" class="mid small">texture, state before it</text>
+    <text x="385" y="90" class="mid small">texture, command buffer, before</text>
     <line x1="480" y1="66" x2="548" y2="40" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <line x1="480" y1="92" x2="548" y2="122" class="arrow hot" marker-end="url(#ah-hot)"/>
     <rect x="550" y="14" width="190" height="50" rx="6" class="gpu"/>
     <text x="645" y="34" class="mid mono small">submitted</text>
-    <text x="645" y="52" class="mid small">forget them: the GPU runs it</text>
+    <text x="645" y="52" class="mid small">forget its command buffers' ones</text>
     <rect x="550" y="100" width="190" height="50" rx="6" class="ghost"/>
     <text x="645" y="120" class="mid mono small">discardUnsubmitted</text>
-    <text x="645" y="138" class="mid small">put the old states back</text>
+    <text x="645" y="138" class="mid small">put the rest back, last first</text>
   </svg>
-  <figcaption><code>SAMPLED</code> → <code>SAMPLED</code> records nothing (read after read). Any other same-usage transition is still recorded, because attachments are written: <code>COLOR_ATTACHMENT</code> → <code>COLOR_ATTACHMENT</code> orders earlier draws before a pass that loads the image. <code>endFrame</code> calls <code>discardRecording</code> when it does not submit, so the next frame starts from the layouts the GPU really has.</figcaption>
+  <figcaption><code>SAMPLED</code> → <code>SAMPLED</code> records nothing (read after read). Any other same-usage transition is still recorded, because attachments are written: <code>COLOR_ATTACHMENT</code> → <code>COLOR_ATTACHMENT</code> orders earlier draws before a pass that loads the image. <code>submitBatches</code> calls <code>discardRecording</code> when a submit fails or the frame is dropped, so the next frame starts from the layouts the GPU really has. With async compute a frame is several submits, so each submit forgets only its own command buffers' changes: the batches that went out keep theirs.</figcaption>
 </figure>
 
 <h3>The barriers of one frame</h3>
@@ -632,7 +632,7 @@ vkCmdPipelineBarrier2(commandBuffer, &dependency);</code></pre>
   <tr><td>Discard</td><td>UNDEFINED as old layout</td><td>The <code>discard</code> flag, or <code>UNKNOWN</code> as the state. <code>beginPass</code> discards the attachments a pass clears, and keeps the ones it loads.</td></tr>
   <tr><td>Split barriers, events</td><td>possible</td><td>None.</td></tr>
   <tr><td>Queues</td><td>semaphores, ownership transfers</td><td>A graphics queue, and a compute queue when <code>EngineConfig::asyncCompute</code> is on and the GPU has one. Timeline fence waits between them, and concurrent sharing instead of ownership transfers (<b>P11</b>). Uploads go on the graphics queue and need no semaphore there: <code>copyBuffers</code> brackets them with all-commands barriers. No transfer queue (<b>D13</b>).</td></tr>
-  <tr><td>Host reads</td><td>barrier to host, fence, invalidate</td><td>All three: <code>COMPUTE</code> → <code>HOST</code> at the end of the frame and of each compute batch, the slot's fences, and <code>readBuffer</code> invalidates the range.</td></tr>
+  <tr><td>Host reads</td><td>barrier to host, fence, invalidate</td><td>All three: <code>COMPUTE</code> → <code>HOST</code> at the end of the frame, or of its last compute batch with async compute, the slot's fences, and <code>readBuffer</code> invalidates the range.</td></tr>
   <tr><td>Host-side layout change</td><td>—</td><td>Loaded textures use host image copy: <code>fillTexture</code> transitions and fills them on the CPU, with no GPU barrier.</td></tr>
 </table>
 </div>

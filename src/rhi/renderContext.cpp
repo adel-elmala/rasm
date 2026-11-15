@@ -39,6 +39,7 @@ namespace rasm
             TextureHandle colors[MAX_COLOR_ATTACHMENTS];
             uint32_t colorCount = 0;
             glm::vec4 clearColor = glm::vec4(0.0f);
+            const rhi::CommandBuffer *commandBuffer = nullptr; // the clear was recorded into it
         };
     }
 
@@ -267,7 +268,6 @@ namespace rasm
         std::vector<TransientGroup>                                                                                             transientGroups;
         std::vector<HistoryClear>                                                                                               pendingClears;  // made since the last frame began
         std::vector<HistoryClear>                                                                                               recordedClears; // in a frame not yet submitted
-        rhi::FenceWait                                                                                                          lastComputeSubmit;  // what the last compute submit signals
 
         // Dedup caches, only for immutable objects keyed on their full state. Mutable resources
         // (buffers, textures, descriptor pools/sets) are always created fresh (B1).
@@ -644,8 +644,12 @@ namespace rasm
     // The clears run before the frame's passes. A frame that is not submitted gives them back for the next one.
     void RenderContext::clearNewHistory(const CommandBufferHandle &commandBuffer)
     {
-        for (const auto &clear : impl->pendingClears)
+        const auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
+        if (!rhiCommandBuffer)
+            return;
+        for (auto &clear : impl->pendingClears)
         {
+            clear.commandBuffer = rhiCommandBuffer;
             for (uint32_t i = 0; i < clear.colorCount; ++i)
                 transitionImageLayout(commandBuffer, clear.colors[i], TextureUsage::COLOR_ATTACHMENT, true);
             beginRendering(commandBuffer, clear.colors, clear.colorCount, {}, clear.clearColor);
@@ -987,12 +991,12 @@ namespace rasm
             impl->device->resetQueries(rhiPool);
     }
 
-    bool RenderContext::getTimestamps(const QueryPoolHandle &pool, uint32_t count, uint64_t *nanoseconds)
+    bool RenderContext::getTimestamps(const QueryPoolHandle &pool, uint32_t firstQuery, uint32_t count, uint64_t *nanoseconds)
     {
         auto *rhiPool = lookup(impl->queryPools, pool, __func__);
-        if (!rhiPool || !checkArgument(count <= rhiPool->count && (count == 0 || nanoseconds != nullptr), __func__, "count is past the pool's queries."))
+        if (!rhiPool || !checkArgument(firstQuery <= rhiPool->count && count <= rhiPool->count - firstQuery && (count == 0 || nanoseconds != nullptr), __func__, "the queries are past the pool's."))
             return false;
-        return impl->device->getTimestamps(rhiPool, count, nanoseconds);
+        return impl->device->getTimestamps(rhiPool, firstQuery, count, nanoseconds);
     }
 
     void RenderContext::writeTimestamp(const CommandBufferHandle &commandBuffer, const QueryPoolHandle &pool, uint32_t index)
@@ -1208,8 +1212,9 @@ namespace rasm
         // They run in this order on the queue, as one submission.
         if (!checkArgument(info.commandBufferCount <= rhi::MAX_SUBMIT_COMMAND_BUFFERS, __func__, "too many command buffers."))
             return false;
-        // One wait is kept for the uploads.
-        if (!checkArgument(info.waitCount < rhi::MAX_SUBMIT_WAITS, __func__, "too many fence waits."))
+        // A compute submit keeps one wait for the uploads.
+        const bool computeQueue = info.queue == QueueType::COMPUTE && impl->device->hasAsyncCompute();
+        if (!checkArgument(info.waitCount + (computeQueue ? 1 : 0) <= rhi::MAX_SUBMIT_WAITS, __func__, "too many fence waits."))
             return false;
         rhi::CommandBuffer *rhiCommandBuffers[rhi::MAX_SUBMIT_COMMAND_BUFFERS] = {};
         for (uint32_t i = 0; i < info.commandBufferCount; ++i)
@@ -1238,11 +1243,10 @@ namespace rasm
         }
 
         // Uploads go first, on the graphics queue, so this submit sees their data: the same queue through the
-        // barriers in the copies, the compute queue by waiting for them. The copies also wait for the compute
-        // queue, which may still read what they overwrite. A failed batch is logged and retried with the next
-        // submit; the frame still goes out so the swapchain keeps moving.
-        const bool computeQueue = info.queue == QueueType::COMPUTE && impl->device->hasAsyncCompute();
-        impl->uploads.flush(&impl->lastComputeSubmit, impl->lastComputeSubmit.fence != nullptr ? 1 : 0);
+        // barriers in the copies, the compute queue by waiting for them. Every upload submit also waits for the
+        // last compute submit, which may still read what the copies overwrite (UploadManager::waitFor). A failed
+        // batch is logged and retried with the next submit; the frame still goes out so the swapchain keeps moving.
+        impl->uploads.flush();
         const rhi::FenceWait uploads = impl->uploads.lastSubmit();
         if (computeQueue && uploads.value > 0)
             waits[waitCount++] = uploads;
@@ -1260,9 +1264,12 @@ namespace rasm
         if (!impl->device->getQueue(info.queue)->submit(submitDesc))
             return false;
         if (computeQueue && signalFence != nullptr)
-            impl->lastComputeSubmit = {.fence = signalFence, .value = info.signal.value};
-        impl->textureStates.submitted();
-        impl->recordedClears.clear();
+            impl->uploads.waitFor({.fence = signalFence, .value = info.signal.value});
+
+        // Only what these command buffers recorded is on the GPU now; a frame may have more submits to go.
+        impl->textureStates.submitted(rhiCommandBuffers, info.commandBufferCount);
+        std::erase_if(impl->recordedClears, [&rhiCommandBuffers, &info](const HistoryClear &clear)
+                      { return std::find(rhiCommandBuffers, rhiCommandBuffers + info.commandBufferCount, clear.commandBuffer) != rhiCommandBuffers + info.commandBufferCount; });
         return true;
     }
 

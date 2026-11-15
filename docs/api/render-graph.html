@@ -518,7 +518,7 @@ struct Access
   <tr><td>A buffer it reads, which the other queue wrote</td><td>waits for the other queue's batch that wrote it</td></tr>
   <tr><td>A buffer it writes, which the other queue wrote or read</td><td>waits for the other queue's batch that used it last</td></tr>
   <tr><td>A texture, render target or swapchain image the other queue used</td><td>waits as for a buffer write: every texture use counts as a write, since the first use on a queue is often a layout transition. On the same queue, the layout transitions order textures.</td></tr>
-  <tr><td>The first pass of a <a href="#transient">transient</a> target</td><td>waits for all of the other queue's work so far, which may have used the memory</td></tr>
+  <tr><td>The first pass of a <a href="#transient">transient</a> target</td><td>waits for the other queue's last pass this frame that used a transient target, which may have used the memory</td></tr>
   <tr><td>A resource it does not declare</td><td>no wait, like no barrier</td></tr>
 </table>
 </div>

@@ -748,7 +748,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
 </table>
 </div>
 
-<p>Texture state lives in <code>RenderContext</code>: <code>rhi::TextureStates</code> remembers each texture's last usage, so <code>transitionImageLayout</code> takes only the new one. If a recorded frame is never submitted, <code>RenderContext::discardRecording</code> puts the old states back. Buffers are reached through <a href="device-addresses.html">device addresses</a>, so the graph cannot see them; it trusts the declarations. For each declared buffer it keeps an <code>Access</code> (<code>bufferAccess</code>): per queue, the stage of the last write, the stages that read since, and the batch that used it last. All of a pass's buffers fold into one global <code>memoryBarrier</code>. This is <code>examples/04_compute</code> over two frames:</p>
+<p>Texture state lives in <code>RenderContext</code>: <code>rhi::TextureStates</code> remembers each texture's last usage, so <code>transitionImageLayout</code> takes only the new one. If recorded commands are never submitted, <code>RenderContext::discardRecording</code> puts the old states back; the command buffers that did go out keep theirs. Buffers are reached through <a href="device-addresses.html">device addresses</a>, so the graph cannot see them; it trusts the declarations. For each declared buffer it keeps an <code>Access</code> (<code>bufferAccess</code>): per queue, the stage of the last write, the stages that read since, and the batch that used it last. All of a pass's buffers fold into one global <code>memoryBarrier</code>. This is <code>examples/04_compute</code> over two frames:</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 200" role="img" aria-label="Frame N: before Animate, a barrier from compute and graphics to compute; Animate writes, so the buffer's state is write COMPUTE, no reads. Before Draw, a barrier from compute to graphics; after Draw the state is write COMPUTE, reads GRAPHICS. Frame N plus 1 repeats the same two barriers, because the state carried over.">
@@ -868,7 +868,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
   <tr><td>reads a buffer</td><td>wrote it</td><td><code>Engine::waitForQueue</code> with the value of that queue's batch</td></tr>
   <tr><td>writes a buffer</td><td>wrote it or read it</td><td>the same</td></tr>
   <tr><td>uses a texture or a render target</td><td>used it</td><td>the same: every texture use counts as a write, since the first use on a queue is often a layout transition</td></tr>
-  <tr><td>is a transient target's first pass</td><td>anything so far</td><td><code>Engine::waitForQueueWork</code>: the memory may have held what the other queue used</td></tr>
+  <tr><td>is a transient target's first pass</td><td>used a transient target this frame</td><td><code>Engine::waitForQueue</code> with the value of its last such pass (<code>transientUses</code>): the memory may have held what it used</td></tr>
   <tr><td>uses an undeclared resource</td><td>–</td><td>nothing, like no barrier</td></tr>
 </table>
 </div>

@@ -62,27 +62,30 @@ namespace rasm
         const uint64_t fenceValue = frameResources[frame].fenceValue;
         if (slot.measuring && fenceValue != slot.readFenceValue)
         {
-            // Timer 0 spans the frame on the graphics queue, so the frame's GPU time goes from its start to the latest
-            // end there. Async compute timers are left out: a timestamp of another queue may count from another
-            // origin. Each timer begins and ends on one queue, so its own time holds. They are listed in the order
-            // they were recorded, which is the order each queue runs them.
+            // Timer 0 spans the frame on the graphics queue and its begin is the first query, so the frame's GPU time
+            // runs from 0 to the latest end there. A timestamp of another queue may count from another origin, so an
+            // async compute timer is left out of it, and its time is read from its own two queries. They are listed
+            // in the order they were recorded, which is the order each queue runs them.
             uint64_t nanoseconds[2 * MAX_GPU_TIMERS];
-            if (slot.timerCount > 0 && ctx.getTimestamps(slot.timestamps, 2 * slot.timerCount, nanoseconds))
+            if (slot.timerCount > 0 && ctx.getTimestamps(slot.timestamps, 0, 2 * slot.timerCount, nanoseconds))
             {
-                uint64_t end = nanoseconds[1];
+                uint64_t end = 0;
                 for (uint32_t i = 0; i < slot.timerCount; ++i)
                 {
                     if (!slot.timerOnCompute[i])
                         end = std::max(end, nanoseconds[2 * i + 1]);
                 }
-                stats.gpuFrameMs = static_cast<float>(static_cast<double>(end - nanoseconds[0]) * 1e-6);
+                stats.gpuFrameMs = static_cast<float>(static_cast<double>(end) * 1e-6);
 
                 stats.gpuTimerCount = slot.timerCount - 1;
                 for (uint32_t i = 0; i < stats.gpuTimerCount; ++i)
                 {
-                    const size_t timer = i + 1;
+                    const uint32_t timer = i + 1;
+                    uint64_t pair[2] = {nanoseconds[2 * timer], nanoseconds[2 * timer + 1]};
+                    if (slot.timerOnCompute[timer] && !ctx.getTimestamps(slot.timestamps, 2 * timer, 2, pair))
+                        pair[1] = pair[0];
                     stats.gpuTimers[i] = {.name = slot.timerNames[timer],
-                                          .milliseconds = static_cast<float>(static_cast<double>(nanoseconds[2 * timer + 1] - nanoseconds[2 * timer]) * 1e-6)};
+                                          .milliseconds = static_cast<float>(static_cast<double>(pair[1] - std::min(pair[0], pair[1])) * 1e-6)};
                 }
             }
 

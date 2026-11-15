@@ -94,13 +94,13 @@ namespace rasm
             return queue == QueueType::GRAPHICS ? QueueType::COMPUTE : QueueType::GRAPHICS;
         }
 
-        void addRenderTargetTextures(Engine &engine, RenderTargetHandle renderTarget, bool previous, std::vector<TextureHandle> &textures)
+        bool usesTransient(const Pass &pass, const std::vector<RenderTargetHandle> &transientTargets)
         {
-            const uint32_t colorCount = engine.getRenderContext().getRenderTarget(renderTarget).colorCount;
-            for (uint32_t i = 0; i < colorCount; ++i)
-                textures.push_back(previous ? engine.getPreviousRenderTargetTexture(renderTarget, i) : engine.getRenderTargetTexture(renderTarget, i));
-            if (!previous)
-                textures.push_back(engine.getRenderTargetDepthTexture(renderTarget));
+            auto transient = [&transientTargets](RenderTargetHandle renderTarget)
+            { return std::find(transientTargets.begin(), transientTargets.end(), renderTarget) != transientTargets.end(); };
+            return std::any_of(pass.inputRenderTargets.begin(), pass.inputRenderTargets.end(), transient) ||
+                   std::any_of(pass.depthRenderTargets.begin(), pass.depthRenderTargets.end(), transient) ||
+                   (pass.outputRenderTarget.isValid() && transient(pass.outputRenderTarget));
         }
 
         // Depth textures are sampleable only with occlusion culling (TextureUsage::SAMPLED_DEPTH_ATTACHMENT).
@@ -362,27 +362,36 @@ namespace rasm
         if (!engine->beginFrame(camera))
             return;
 
+        std::fill(std::begin(transientUses), std::end(transientUses), 0);
         const uint32_t passCount = placed ? static_cast<uint32_t>(executionOrder.size()) : 0;
         for (uint32_t position = 0; position < passCount; ++position)
         {
             auto &pass = passes[executionOrder[position]];
 
             // An async pass records into the compute queue's batch, every other pass into the graphics one. Without
-            // a compute queue both are the graphics batch, and nothing waits across queues.
-            engine->useQueue(pass.async ? QueueType::COMPUTE : QueueType::GRAPHICS);
+            // a compute queue both are the graphics batch, and nothing waits across queues. A batch that can't be
+            // opened drops the frame, and endFrame submits nothing.
+            if (!engine->useQueue(pass.async ? QueueType::COMPUTE : QueueType::GRAPHICS))
+                break;
             const QueueType queue = engine->recordingQueue;
             const auto commandBuffer = engine->getCurrentFrameResources().commandBuffer;
 
             // Barriers are not allowed inside a render pass, so all of them go before the pass begins. beginPass
             // moves the attachments it draws to, and endPass leaves a render target's color SAMPLED for its readers.
             // A depth read moves the depth here, and the next pass that draws the target moves it back.
-            // A transient target's first pass draws over memory that other targets used before, last frame's included,
-            // and the other queue may have used them.
+            // A transient target's first pass draws over memory that other targets used before. On its own queue the
+            // aliasing barrier covers them; on the other queue it waits for this frame's passes there that used a
+            // transient target. The frame before is covered by its end, where graphics waits for all compute work: a
+            // first pass draws, so it is a graphics pass.
             if (std::find(transientFirstPasses.begin(), transientFirstPasses.end(), position) != transientFirstPasses.end())
             {
-                engine->waitForQueueWork(queue, otherQueue(queue));
+                const QueueType other = otherQueue(queue);
+                if (transientUses[static_cast<uint32_t>(other)] > 0)
+                    engine->waitForQueue(queue, other, transientUses[static_cast<uint32_t>(other)]);
                 ctx.aliasingBarrier(commandBuffer);
             }
+            if (usesTransient(pass, transientTargets))
+                transientUses[static_cast<uint32_t>(queue)] = engine->openBatchValue(queue);
             if (engine->asyncCompute)
                 textureWaits(pass, queue);
             PipelineStage before = {};
@@ -577,32 +586,48 @@ namespace rasm
     // since the first use on a queue is often a layout transition, which writes the image.
     void RenderGraph::textureWaits(const Pass &pass, QueueType queue)
     {
-        std::vector<TextureHandle> textures(pass.inputTextures.begin(), pass.inputTextures.end());
-        textures.insert(textures.end(), pass.outputTextures.begin(), pass.outputTextures.end());
-        for (auto renderTarget : pass.inputRenderTargets)
-            addRenderTargetTextures(*engine, renderTarget, false, textures);
-        for (auto renderTarget : pass.previousRenderTargets)
-            addRenderTargetTextures(*engine, renderTarget, true, textures);
-        for (auto renderTarget : pass.depthRenderTargets)
-            textures.push_back(engine->getRenderTargetDepthTexture(renderTarget));
-        if (pass.outputRenderTarget.isValid())
-            addRenderTargetTextures(*engine, pass.outputRenderTarget, false, textures);
-        if (pass.readsSwapchainDepth || pass.writesSwapchain)
-            textures.push_back(engine->getCurrentFrameResources().depthTexture);
-        if (pass.writesSwapchain)
-            textures.push_back(engine->swapchain.imageHandles[engine->imageIdx]);
-
         const PipelineStage stage = pass.compute ? PipelineStage::COMPUTE : PipelineStage::GRAPHICS;
         const uint64_t value = engine->openBatchValue(queue);
-        for (auto texture : textures)
+        auto use = [&](TextureHandle texture)
         {
             if (!texture.isValid())
-                continue;
+                return;
             auto &access = textureAccess[texture];
             waitForOtherQueue(access, queue, true);
             access = {};
             access.queues[static_cast<uint32_t>(queue)] = {.writeStages = stage, .value = value};
-        }
+        };
+        // A render target's colors and depth, from this frame's slot, or only the colors from the previous one.
+        const uint32_t slot = static_cast<uint32_t>(engine->frameCount);
+        const uint32_t previousSlot = (slot + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
+        auto useRenderTarget = [&](RenderTargetHandle renderTarget, bool previous)
+        {
+            const RenderTarget &data = engine->getRenderContext().getRenderTarget(renderTarget);
+            if (previous && !data.history)
+                return;
+            const RenderTargetAttachments &attachments = data.attachments[previous ? previousSlot : slot];
+            for (uint32_t i = 0; i < data.colorCount; ++i)
+                use(attachments.color[i]);
+            if (!previous)
+                use(attachments.depth);
+        };
+
+        for (auto texture : pass.inputTextures)
+            use(texture);
+        for (auto texture : pass.outputTextures)
+            use(texture);
+        for (auto renderTarget : pass.inputRenderTargets)
+            useRenderTarget(renderTarget, false);
+        for (auto renderTarget : pass.previousRenderTargets)
+            useRenderTarget(renderTarget, true);
+        for (auto renderTarget : pass.depthRenderTargets)
+            use(engine->getRenderTargetDepthTexture(renderTarget));
+        if (pass.outputRenderTarget.isValid())
+            useRenderTarget(pass.outputRenderTarget, false);
+        if (pass.readsSwapchainDepth || pass.writesSwapchain)
+            use(engine->getCurrentFrameResources().depthTexture);
+        if (pass.writesSwapchain)
+            use(engine->swapchain.imageHandles[engine->imageIdx]);
     }
 
     TextureHandle RenderGraph::createTexture(const TextureDesc &desc)
@@ -637,8 +662,6 @@ namespace rasm
 
     void RenderGraph::read(uint32_t passIdx, RenderTargetHandle h) { passes[passIdx].inputRenderTargets.push_back(h); }
 
-    // Last frame's copy is never written this frame, so the read adds no edge. The copy is always SAMPLED: the frame
-    // before drew it, or it was cleared when it was made.
     void RenderGraph::read(uint32_t passIdx, const BufferHandle (&perFrame)[MAX_FRAMES_IN_FLIGHT])
     {
         FrameBuffers buffers;
@@ -646,6 +669,8 @@ namespace rasm
         passes[passIdx].frameInputBuffers.push_back(buffers);
     }
 
+    // Last frame's copy is never written this frame, so the read adds no edge. The copy is always SAMPLED: the frame
+    // before drew it, or it was cleared when it was made.
     void RenderGraph::readPrevious(uint32_t passIdx, BufferHandle h) { passes[passIdx].previousBuffers.push_back(h); }
 
     void RenderGraph::readPrevious(uint32_t passIdx, RenderTargetHandle h)

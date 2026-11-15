@@ -1324,14 +1324,15 @@ namespace rasm::rhi
         vkResetQueryPool(device.device, static_cast<VulkanQueryPool *>(pool)->pool, 0, pool->count);
     }
 
-    // Nanoseconds since the earliest of the queries. False when any of them has not been written since the last reset.
-    bool VulkanDevice::getTimestamps(QueryPool *pool, uint32_t count, uint64_t *nanoseconds)
+    // Nanoseconds since the first of the queries; one before it reads 0. False when any of them has not been
+    // written since the last reset.
+    bool VulkanDevice::getTimestamps(QueryPool *pool, uint32_t firstQuery, uint32_t count, uint64_t *nanoseconds)
     {
-        assert(count <= pool->count);
+        assert(firstQuery + count <= pool->count);
         if (count == 0)
             return true;
 
-        auto result = vkGetQueryPoolResults(device.device, static_cast<VulkanQueryPool *>(pool)->pool, 0, count, count * sizeof(uint64_t),
+        auto result = vkGetQueryPoolResults(device.device, static_cast<VulkanQueryPool *>(pool)->pool, firstQuery, count, count * sizeof(uint64_t),
                                             nanoseconds, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
         if (result != VK_SUCCESS)
         {
@@ -1340,20 +1341,18 @@ namespace rasm::rhi
             return false;
         }
 
-        // The counter wraps after timestampValidBits, so each value is turned into its signed distance from the
-        // first one, modulo the valid bits. That holds while the queries span less than half the counter's range.
+        // The counter wraps after timestampValidBits, so each value is turned into its distance from the first one,
+        // modulo the valid bits, and one in the upper half of that range counts as before the first. That holds while
+        // the queries span less than half the counter's range. Queries written on another queue may count from
+        // another origin, so their values can be far off; they are clamped, never wrapped.
+        constexpr double MAX_NANOSECONDS = 9.0e18;
         const uint64_t first = nanoseconds[0];
-        int64_t earliest = 0;
         for (uint32_t i = 0; i < count; ++i)
         {
-            uint64_t ticks = (nanoseconds[i] - first) & timestampMask;
-            if (ticks > timestampMask >> 1)
-                ticks |= ~timestampMask;
-            nanoseconds[i] = ticks;
-            earliest = std::min(earliest, static_cast<int64_t>(ticks));
+            const uint64_t ticks = (nanoseconds[i] - first) & timestampMask;
+            const bool before = ticks > timestampMask >> 1;
+            nanoseconds[i] = before ? 0 : static_cast<uint64_t>(std::min(static_cast<double>(ticks) * timestampPeriod, MAX_NANOSECONDS));
         }
-        for (uint32_t i = 0; i < count; ++i)
-            nanoseconds[i] = static_cast<uint64_t>(static_cast<double>(static_cast<int64_t>(nanoseconds[i]) - earliest) * timestampPeriod);
         return true;
     }
 

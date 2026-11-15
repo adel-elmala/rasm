@@ -150,7 +150,7 @@ namespace rasm
 
     protected:
         bool                                                        createSwapchainResources();
-        void                                                        useQueue(QueueType queue);
+        bool                                                        useQueue(QueueType queue);
         uint64_t                                                    openBatchValue(QueueType queue) const;
         void                                                        waitForQueue(QueueType waiter, QueueType queue, uint64_t value);
         void                                                        waitForQueueWork(QueueType waiter, QueueType queue);
@@ -171,13 +171,14 @@ namespace rasm
             uint64_t                                                value                                   = 0;
         };
 
-        std::vector<CommandBufferHandle>                            batchCommandBuffers[MAX_FRAMES_IN_FLIGHT][QUEUE_COUNT] = {};
+        std::vector<CommandBufferHandle>                            batchCommandBuffers[MAX_FRAMES_IN_FLIGHT][QUEUE_COUNT];
         uint32_t                                                    batchesUsed[QUEUE_COUNT]                = {};
         bool                                                        batchOpen[QUEUE_COUNT]                  = {};
         uint64_t                                                    batchWaits[QUEUE_COUNT][QUEUE_COUNT]    = {};
         uint64_t                                                    batchValues[QUEUE_COUNT]                = {};
         std::vector<ClosedBatch>                                    closedBatches;
         QueueType                                                   recordingQueue                          = QueueType::GRAPHICS;
+        bool                                                        recordingFailed                         = false; // the frame is dropped at endFrame
         bool                                                        asyncCompute                            = false;
         Swapchain                                                   swapchain                               = {};
         std::unique_ptr<GeometryPool>                               geometryPool                            = {};

@@ -149,6 +149,7 @@ namespace rasm
         std::vector<RenderTargetHandle>                             transientTargets;
         std::vector<uint32_t>                                       transientFirstPasses;
         std::vector<uint32_t>                                       transientLastPasses;
+        uint64_t                                                    transientUses[QUEUE_COUNT] = {}; // per queue, the batch value of this frame's last pass that used a transient target
         bool                                                        transientsPlaced = false;
         std::vector<uint32_t>                                       sceneViews;     // Engine::addScenePasses's views
         Engine*                                                     engine   = nullptr;

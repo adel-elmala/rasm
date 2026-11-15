@@ -234,7 +234,7 @@ namespace rasm::rhi
         virtual bool                    fillBuffer(Buffer* buffer, const void* data, size_t size, size_t offset) = 0;
         virtual bool                    readBuffer(Buffer* buffer, void* data, size_t size, size_t offset) = 0;
         virtual void                    resetQueries(QueryPool* pool) = 0;
-        virtual bool                    getTimestamps(QueryPool* pool, uint32_t count, uint64_t* nanoseconds) = 0;
+        virtual bool                    getTimestamps(QueryPool* pool, uint32_t firstQuery, uint32_t count, uint64_t* nanoseconds) = 0;
         virtual bool                    fillTexture(Texture* texture, const void* data) = 0;
         virtual void                    updateBindlessTexture(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, Sampler* sampler) = 0;
         virtual bool                    waitForFence(Fence* fence, uint64_t value, uint64_t timeout) = 0;

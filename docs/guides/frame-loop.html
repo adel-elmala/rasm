@@ -430,7 +430,7 @@
 
   <div class="step">
     <h4>9. endFrame closes the command buffer</h4>
-    <svg viewBox="0 0 730 232" role="img" aria-label="endFrame records the stats overlay in a pass of its own, the barrier to PRESENT_SRC, a compute-to-host barrier for the cull stats, closes the frame timer and ends the command buffer.">
+    <svg viewBox="0 0 730 232" role="img" aria-label="endFrame records the stats overlay in a pass of its own, the barrier to PRESENT_SRC, a compute-to-host barrier for the cull stats, closes the frame timer and closes the batch. submitBatches ends its command buffer.">
       <!--strip 5-->
       <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
       <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
@@ -448,11 +448,12 @@
       <rect x="218" y="78" width="140" height="28" rx="4" class="cpu"/><text x="288" y="96" class="mid small">barrier: → PRESENT_SRC</text>
       <rect x="362" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="404" y="96" class="mid small">barrier C→H</text>
       <rect x="450" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="492" y="96" class="mid small">ts Frame end</text>
-      <rect x="538" y="78" width="44"  height="28" rx="4" class="cpu"/><text x="560" y="96" class="mid small">end</text>
+      <rect x="538" y="78" width="44"  height="28" rx="4" class="cpu"/><text x="560" y="96" class="mid small">close</text>
       <text x="14" y="146" class="small">overlay pass — the stats overlay, only when it is shown (F1): a pass of its own that loads the image's color.</text>
       <text x="14" y="164" class="small">barrier → PRESENT_SRC — once per frame: the swapchain image goes COLOR_ATTACHMENT → PRESENT_SRC.</text>
       <text x="14" y="182" class="small">barrier C→H — COMPUTE → HOST: the CPU reads the cull stats after this slot's next fence wait.</text>
-      <text x="14" y="212" class="small t-hot">No pass drew to the swapchain? endFrame first records an empty pass named "Clear", so present still works.</text>
+      <text x="14" y="198" class="small">With a compute queue the culling runs there, and the barrier goes in its last batch instead.</text>
+      <text x="14" y="220" class="small t-hot">No pass drew to the swapchain? endFrame first records an empty pass named "Clear", so present still works.</text>
     </svg>
     <p>Present needs the image in <code>PRESENT_SRC</code>. A frame that only draws into render targets gets the empty <code>"Clear"</code> pass, so it presents the clear color (there is no offscreen-only frame yet, <b>D7</b>). A render target pass instead leaves its color textures <code>SAMPLED</code> in <code>endPass</code>, for later passes.</p>
   </div>
@@ -495,7 +496,7 @@
       <text x="384" y="238" class="small">hands out the same image again</text>
       <text x="384" y="256" class="small">a value nothing signals is never waited for</text>
     </svg>
-    <p>The upload copies go out first on the same queue, so the frame sees their data (<a href="gpu-memory.html#in-rasm">GPU memory and uploads</a>). A slot takes the new fence value only after a successful submit: waiting for a value that nothing signals would block forever.</p>
+    <p><code>submitBatches</code> ends the command buffer, then submits it. The upload copies go out first on the same queue, so the frame sees their data (<a href="gpu-memory.html#in-rasm">GPU memory and uploads</a>). A slot takes the new fence value only after a successful submit: waiting for a value that nothing signals would block forever.</p>
   </div>
 
   <div class="step">
@@ -528,7 +529,7 @@
 
 <h3 id="batches">With async compute: a frame of batches</h3>
 
-<p>With <code>EngineConfig::asyncCompute</code>, on a GPU with a compute queue, the steps are the same, but recording moves between two queues. A <b>batch</b> is one command buffer and one submit on one queue. Each queue has one open batch (<code>Engine::useQueue</code>), and <code>FrameResources::commandBuffer</code> names the one being recorded. A batch is closed when the other queue needs what it did (<code>Engine::waitForQueue</code>, called by the graph) or at the end of the frame. <code>endFrame</code> submits all batches together, in the order they were closed (<code>Engine::submitBatches</code>), so every wait is on a submit that already went out.</p>
+<p>With <code>EngineConfig::asyncCompute</code>, on a GPU with a compute queue, the steps are the same, but recording moves between two queues. A <b>batch</b> is one command buffer and one submit on one queue. Each queue has one open batch (<code>Engine::useQueue</code>), and <code>FrameResources::commandBuffer</code> names the one being recorded. A batch is closed when the other queue needs what it did (<code>Engine::waitForQueue</code>, called by the graph) or at the end of the frame. <code>endFrame</code> submits all batches together, in the order they were closed (<code>Engine::submitBatches</code>), so every wait is on a submit that already went out. Their command buffers end only there, so the frame's last compute batch, closed long before the end, still takes the cull stats barrier. If a batch's command buffer can't be made or begun, <code>useQueue</code> returns false and the frame is dropped: the graph stops, and <code>submitBatches</code> ends every batch and submits none.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 300" role="img" aria-label="The scene passes make four batches. Batch 1, compute: Cull 1, closed when Scene 1 reads its draws. Batch 2, graphics: Scene 1, closed when Hi-Z reads its depth. Batch 3, compute: Hi-Z and Cull 2, closed when Scene 2 reads the draws. Batch 4, graphics: Scene 2 and the overlay, closed by endFrame. Then four submits in that order: submit 1 signals compute value c+1; submit 2 waits for c+1 and the image and signals graphics value g+1; submit 3 waits for g+1 and signals c+2; submit 4 waits for c+2, signals g+2 and presents.">
@@ -578,7 +579,7 @@
   <figcaption><code>Cull 1</code> uses this slot's visible draws, which frame N-2 used last, so it waits only for that frame, which the fence wait in step 3 already covers. It can run next to the previous frame's <code>Scene 2</code>. The last graphics submit waits for all of the frame's compute work, so <code>fenceValue</code> covers the whole frame. Only the first graphics submit waits for the image (<a href="swapchain.html#in-rasm">the swapchain</a>). The idea: <a href="async-compute.html">Async compute and multiple queues</a>; how the graph picks the waits: <a href="render-graphs.html#rasm-queues">render graphs</a>.</figcaption>
 </figure>
 
-<p>Pending uploads still go out first, on the graphics queue. Their copies wait for the last compute submit, and a compute submit waits for them, so a frame with uploads loses the overlap. With async compute off, or on a GPU without a compute family that has no graphics, there is one batch, as in the steps above. Async compute costs a little more than it saves on the scene passes today, so it is off by default (<b>P11</b>).</p>
+<p>Pending uploads still go out first, on the graphics queue. Their copies wait for the last compute submit, the copies flushed while recording too, and a compute submit waits for them, so a frame with uploads loses the overlap. With async compute off, or on a GPU without a compute family that has no graphics, there is one batch, as in the steps above. Async compute costs a little more than it saves on the scene passes today, so it is off by default (<b>P11</b>).</p>
 
 <h2><span class="n">3</span>Two slots over time</h2>
 
@@ -632,7 +633,7 @@
   </div>
   <div>
     <h4>A frame that fails to submit</h4>
-    <p>It was recorded, but the slot keeps its old fence value, so the next wait on it passes at once. <code>frameCount</code> still moves. The image stays acquired, and the next acquire returns it again. Its timestamps are not read, because the slot's value did not change. <code>submitBatches</code> calls <code>discardRecording</code>, so the textures it moved go back to the layouts they still have on the GPU. With several batches, a failed submit ends the frame there, since later ones may wait for it; the submits before it already dropped the saved texture states, so they cannot be put back (<b>B30</b>).</p>
+    <p>It was recorded, but the slot keeps its old fence value, so the next wait on it passes at once. <code>frameCount</code> still moves. The image stays acquired, and the next acquire returns it again. Its timestamps are not read, because the slot's value did not change. <code>submitBatches</code> calls <code>discardRecording</code>, so the textures it moved go back to the layouts they still have on the GPU. With several batches, a failed submit ends the frame there, since later ones may wait for it; the textures go back only to the layouts the batches that went out left them in.</p>
   </div>
 </div>
 
@@ -661,7 +662,7 @@
   <tr><td><code>prepareSceneView</code></td><td>start of the <code>Cull</code> pass, on the CPU</td><td>writes the view's <code>SceneData</code> slot, which the GPU reads after the whole frame is recorded</td></tr>
   <tr><td><code>recordSceneCulling</code>, <code>recordHiz</code></td><td>the <code>Cull</code> and <code>Hi-Z</code> compute passes</td><td>dispatches are not allowed inside a render pass</td></tr>
   <tr><td><code>drawSceneView</code></td><td>the <code>Scene</code> graphics passes</td><td>records draws; needs a rendering scope</td></tr>
-  <tr><td>cull stats barrier</td><td><code>endFrame</code>, after the last pass, and at the end of each compute batch</td><td><code>COMPUTE → HOST</code>, so the CPU can read the counters after the fences</td></tr>
+  <tr><td>cull stats barrier</td><td><code>endFrame</code>, after the last pass; with a compute queue, <code>submitBatches</code>, at the end of the last compute batch</td><td><code>COMPUTE → HOST</code>, so the CPU can read the counters after the fences</td></tr>
   <tr><td>submits</td><td><code>submitBatches</code>, at the end of <code>endFrame</code></td><td>the GPU starts the frame once it is recorded, and every wait is on a submit already made</td></tr>
   <tr><td>upload flush</td><td>inside <code>RenderContext::submit</code></td><td>the copies must run before the frame that reads them</td></tr>
 </table>
@@ -671,7 +672,6 @@
   <strong>Known issues</strong>
   <p><b>D7</b>: the engine owns the event loop: <code>pollEvents</code> runs inside <code>beginFrame</code>, and there is no offscreen-only frame.</p>
   <p><b>B21</b>: the swapchain always uses <code>VK_PRESENT_MODE_FIFO_KHR</code>, so the frame rate is capped at the display refresh rate.</p>
-  <p><b>B30</b>: a frame that fails partway through its submits cannot put its texture states back.</p>
   <p><b>P11</b>: async compute does not pay off for the scene passes yet, so it is off by default.</p>
 </div>
 

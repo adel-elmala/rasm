@@ -980,7 +980,7 @@ struct BindlessDescriptorSetLayoutDescHash
       </svg>
       <figcaption>Each queue has its own timeline fence. A submit signals its fence; a submit on the other queue lists that value in <code>waits</code>. The engine's frame does this for its async compute passes.</figcaption>
     </figure>
-    <p>On success the texture states the commands recorded are kept (see <a href="#transitionImageLayout"><code>transitionImageLayout</code></a>). On failure it returns <code>false</code>: call <code>discardRecording</code>. More than 8 command buffers or more than 3 waits log an error and submit nothing.</p>
+    <p>On success the texture states the commands recorded are kept (see <a href="#transitionImageLayout"><code>transitionImageLayout</code></a>). On failure it returns <code>false</code>: call <code>discardRecording</code>. More than 8 command buffers, or more than 4 waits (3 on the compute queue, which keeps one for the uploads), log an error and submit nothing.</p>
   </div>
 </div>
 
@@ -994,7 +994,7 @@ struct BindlessDescriptorSetLayoutDescHash
 <div class="api" id="discardRecording">
   <pre class="sig">void discardRecording();</pre>
   <div class="body">
-    <p>Says that the commands recorded since the last successful <code>submit</code> will not run, a failed submit included. Every texture they moved goes back to the usage it had before them, which is still the GPU's layout. <code>endFrame</code> calls it when a submit of the frame fails. In a frame of several submits, only the states since the last successful one go back (<code>B30</code>). Without it, the next barrier on such a texture would start from a layout the texture never reached.</p>
+    <p>Says that the commands recorded since the last successful <code>submit</code> will not run, a failed submit included. Every texture they moved goes back to the usage it had before them, which is still the GPU's layout. The engine calls it when a submit of the frame fails, or when it drops a frame. A successful <code>submit</code> keeps only what its own command buffers recorded, so in a frame of several submits, the textures go back to the states the submitted ones left. Without it, the next barrier on such a texture would start from a layout the texture never reached.</p>
   </div>
 </div>
 
@@ -1044,10 +1044,10 @@ glm::uvec2                 getSwapchainExtent();</pre>
 </div>
 
 <div class="api" id="getTimestamps">
-  <pre class="sig">bool getTimestamps(const QueryPoolHandle&amp; pool, uint32_t count,
+  <pre class="sig">bool getTimestamps(const QueryPoolHandle&amp; pool, uint32_t firstQuery, uint32_t count,
                    uint64_t* nanoseconds);</pre>
   <div class="body">
-    <p>Reads the first <code>count</code> queries into <code>nanoseconds</code>, as nanoseconds after the earliest of them. It does not wait: it returns <code>false</code> if any of them has not been written since the last reset.</p>
+    <p>Reads <code>count</code> queries from <code>firstQuery</code> into <code>nanoseconds</code>, as nanoseconds after the first of them; a query before it reads 0. Queries written on another queue may count from another origin, so read a compute timer's two queries on their own. It does not wait: it returns <code>false</code> if any of them has not been written since the last reset.</p>
   </div>
 </div>
 

@@ -76,7 +76,7 @@ namespace rasm
         bool                                fillBuffer(const BufferHandle& buffer, const void* data, size_t size, size_t offset = 0);
         bool                                readBuffer(const BufferHandle& buffer, void* data, size_t size, size_t offset = 0);
         void                                resetQueries(const QueryPoolHandle& pool);
-        bool                                getTimestamps(const QueryPoolHandle& pool, uint32_t count, uint64_t* nanoseconds);
+        bool                                getTimestamps(const QueryPoolHandle& pool, uint32_t firstQuery, uint32_t count, uint64_t* nanoseconds);
         void                                writeTimestamp(const CommandBufferHandle& commandBuffer, const QueryPoolHandle& pool, uint32_t index);
         bool                                fillTexture(const TextureHandle& texture, const void* data);
         [[nodiscard]] SwapchainStatus       recreateSwapchain();

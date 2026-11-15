@@ -52,7 +52,7 @@ namespace rasm::rhi
         bool                        fillBuffer(Buffer* buffer, const void* data, size_t size, size_t offset) override;
         bool                        readBuffer(Buffer* buffer, void* data, size_t size, size_t offset) override;
         void                        resetQueries(QueryPool* pool) override;
-        bool                        getTimestamps(QueryPool* pool, uint32_t count, uint64_t* nanoseconds) override;
+        bool                        getTimestamps(QueryPool* pool, uint32_t firstQuery, uint32_t count, uint64_t* nanoseconds) override;
         bool                        fillTexture(Texture* texture, const void* data) override;
         void                        updateBindlessTexture(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, Sampler* sampler) override;
         bool                        waitForFence(Fence* fence, uint64_t value, uint64_t timeout) override;

@@ -340,7 +340,7 @@
     <li>A buffer that each frame writes for itself should be declared per frame slot, or the next frame's compute waits for this frame's graphics.</li>
     <li>Code that records through <code>FrameResources::commandBuffer</code> may be on either queue. Only compute work belongs in an async pass.</li>
     <li>Keep the batches in the order they were closed when submitting, and never wait for a value that a failed submit did not signal.</li>
-    <li>A frame that fails partway through its submits cannot put its texture states back (<b>B30</b>).</li>
+    <li>A texture used on both queues must be declared, so a wait orders its layout changes: the texture states of a frame that fails partway through its submits are put back per command buffer, which holds only when each texture's changes go out in the order they were recorded.</li>
   </ul>
 </div>
 

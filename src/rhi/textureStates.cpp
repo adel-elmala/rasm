@@ -15,29 +15,30 @@ namespace rasm::rhi
         if (!commandBuffer.transitionTexture(texture, discard ? TextureUsage::UNKNOWN : texture->state, newUsage))
             return false;
 
-        const bool known = std::any_of(unsubmitted.begin(), unsubmitted.end(), [texture](const std::pair<Texture *, TextureUsage> &entry)
-                                       { return entry.first == texture; });
-        if (!known)
-            unsubmitted.push_back({texture, texture->state});
+        unsubmitted.push_back({.texture = texture, .commandBuffer = &commandBuffer, .before = texture->state});
         texture->state = newUsage;
         return true;
     }
 
-    void TextureStates::submitted()
+    // A frame may go out in several submits, and only the changes recorded into these command buffers are on the
+    // GPU now. A texture's changes in a later submit start from the state these leave.
+    void TextureStates::submitted(CommandBuffer *const *commandBuffers, uint32_t commandBufferCount)
     {
-        unsubmitted.clear();
+        std::erase_if(unsubmitted, [commandBuffers, commandBufferCount](const Change &change)
+                      { return std::find(commandBuffers, commandBuffers + commandBufferCount, change.commandBuffer) != commandBuffers + commandBufferCount; });
     }
 
+    // Backwards, so a texture ends at the state from before its first change that was not submitted.
     void TextureStates::discardUnsubmitted()
     {
-        for (const auto &[texture, state] : unsubmitted)
-            texture->state = state;
+        for (auto it = unsubmitted.rbegin(); it != unsubmitted.rend(); ++it)
+            it->texture->state = it->before;
         unsubmitted.clear();
     }
 
     void TextureStates::forget(Texture *texture)
     {
-        std::erase_if(unsubmitted, [texture](const std::pair<Texture *, TextureUsage> &entry)
-                      { return entry.first == texture; });
+        std::erase_if(unsubmitted, [texture](const Change &change)
+                      { return change.texture == texture; });
     }
 }
