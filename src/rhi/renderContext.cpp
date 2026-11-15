@@ -86,7 +86,7 @@ namespace rasm
         // Everything but the textures, which createAttachments makes.
         RenderTarget renderTargetFromDesc(const RenderTargetDesc &desc, glm::uvec2 size)
         {
-            RenderTarget rt = {.width = size.x, .height = size.y, .colorCount = colorAttachmentCount(desc.colorFormats), .depthFormat = desc.depthFormat, .clearColor = desc.clearColor, .history = desc.history, .name = desc.name};
+            RenderTarget rt = {.width = size.x, .height = size.y, .colorCount = colorAttachmentCount(desc.colorFormats), .depthFormat = desc.depthFormat, .clearColor = desc.clearColor, .history = desc.history};
             std::copy(std::begin(desc.colorFormats), std::end(desc.colorFormats), std::begin(rt.colorFormats));
             return rt;
         }
@@ -894,6 +894,17 @@ namespace rasm
             return emptyRenderTarget;
         }
         return it->second;
+    }
+
+    RenderTargetDesc RenderContext::getRenderTargetDesc(const RenderTargetHandle &handle)
+    {
+        auto it = impl->renderTargetInfos.find(handle);
+        if (it == impl->renderTargetInfos.end())
+        {
+            spdlog::error("Render target handle not found.");
+            return {};
+        }
+        return it->second.desc;
     }
 
     void RenderContext::destroyTexture(const TextureHandle &texture)

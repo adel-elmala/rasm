@@ -18,7 +18,7 @@ namespace rasm
     {
     public:
         explicit                    Renderer(Engine& owner);
-        void                        render(const RenderView& view);
+        void                        render(const RenderView& view, bool dumpGraph);
 
     private:
         Engine&                     engine;

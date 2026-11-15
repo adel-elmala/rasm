@@ -830,8 +830,36 @@ TEST_CASE("the dump lists the passes in order and each resource's lifetime")
 
     REQUIRE(graph.order() == std::vector<uint32_t>{1, 2, 0});
     CHECK(text.find("Render graph: 3 passes, in the order they run") != std::string::npos);
-    CHECK(text.find("[0] pass (graphics)\n    reads:  -\n    writes: texture #1") != std::string::npos);
+    CHECK(text.find("[0] pass (graphics)\n    reads:  -\n    writes: texture #1:1") != std::string::npos);
     CHECK(text.find("before: [2] pass") != std::string::npos);
-    CHECK(text.find("    W-R  texture #1\n") != std::string::npos);
-    CHECK(text.find("    .R.  texture #2\n") != std::string::npos);
+    CHECK(text.find("    W-R  texture #1:1\n") != std::string::npos);
+    CHECK(text.find("    .R.  texture #2:1\n") != std::string::npos);
+}
+
+TEST_CASE("the dump gives the swapchain depth its own row")
+{
+    const rasm::BufferHandle hiz{1, 1};
+
+    TestGraph graph;
+    graph.addComputePass(
+        "hiz",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.readSwapchainDepth();
+            builder.write(hiz);
+        },
+        [](rasm::RenderContext &) {});
+    graph.addPass(
+        "draw",
+        [](rasm::PassBuilder &builder)
+        { builder.writeSwapchain(); },
+        [](rasm::RenderContext &) {});
+
+    graph.compile();
+    const std::string text = graph.dump();
+
+    REQUIRE(graph.order() == std::vector<uint32_t>{1, 0});
+    CHECK(text.find("[0] draw (graphics)\n    reads:  -\n    writes: swapchain, swapchain depth\n") != std::string::npos);
+    CHECK(text.find("    W.  swapchain\n") != std::string::npos);
+    CHECK(text.find("    WR  swapchain depth\n") != std::string::npos);
 }
