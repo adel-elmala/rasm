@@ -19,6 +19,9 @@
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+    <marker id="ah-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head light"/></marker>
   </defs>
 </svg>
 
@@ -42,137 +45,145 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>The problem</h2>
+<h2 id="problem"><span class="n">1</span>The problem</h2>
 
 <p><a href="frustum-culling.html">Frustum culling</a> removes what is outside the view. In a city, a building interior or a forest, most of what is inside the view is hidden behind something closer. The GPU still runs the vertex shader for those objects, rasterizes their triangles, and only then throws each pixel away in the depth test. Drawing pixels that are later covered, or that fail the depth test, is called <b>overdraw</b>.</p>
 
+<div class="legend">
+  <span><i class="ok"></i>seen</span>
+  <span><i class="shade"></i>hidden behind the wall</span>
+  <span><i></i>inside the frustum, but hidden: occlusion culling removes these</span>
+</div>
+
 <figure class="diagram">
-  <svg viewBox="0 0 760 290" role="img" aria-label="Side view. A camera looks right. A wall stands in the middle of the view. One object is in front of the wall and visible. Three objects behind the wall are inside the frustum but hidden.">
+  <svg viewBox="0 0 760 256" role="img" aria-label="Side view. A camera looks right. A wall stands in the middle of the view. One object is in front of the wall and visible. Three objects behind the wall are inside the frustum but hidden.">
     <polygon points="60,130 740,20 740,240" class="zone"/>
+    <polygon points="356,82 740,20 740,240 356,178" class="shade"/>
     <line x1="60" y1="130" x2="740" y2="20" class="arrow"/>
     <line x1="60" y1="130" x2="740" y2="240" class="arrow"/>
-    <circle cx="60" cy="130" r="7" class="cpu"/>
+    <line x1="67" y1="128" x2="330" y2="86" class="arrow light"/>
+    <line x1="67" y1="132" x2="330" y2="174" class="arrow light"/>
+    <line x1="67" y1="130" x2="194" y2="146" class="arrow light" marker-end="url(#ah-light)"/>
+    <circle cx="60" cy="130" r="8" class="cpu"/>
     <text x="60" y="160" class="mid small">camera</text>
-    <rect x="330" y="60" width="26" height="140" rx="3" class="box"/>
-    <text x="343" y="220" class="mid small">wall</text>
-    <circle cx="220" cy="150" r="24" class="gpu"/>
+    <rect x="330" y="50" width="26" height="160" rx="3" class="solid"/>
+    <text x="343" y="230" class="mid small">wall</text>
+    <circle cx="220" cy="150" r="24" class="ok"/>
     <text x="220" y="154" class="mid small">seen</text>
-    <circle cx="470" cy="110" r="30" class="ghost"/>
-    <circle cx="560" cy="160" r="26" class="ghost"/>
-    <circle cx="640" cy="100" r="22" class="ghost"/>
-    <line x1="67" y1="128" x2="330" y2="85" class="arrow dashed"/>
-    <line x1="67" y1="132" x2="330" y2="180" class="arrow dashed"/>
-    <text x="560" y="266" class="mid small t-hot">inside the frustum, but hidden:</text>
-    <text x="560" y="282" class="mid small t-hot">occlusion culling removes these</text>
+    <circle cx="470" cy="118" r="30" class="box"/>
+    <circle cx="570" cy="160" r="26" class="box"/>
+    <circle cx="650" cy="96" r="22" class="box"/>
+    <text x="470" y="122" class="mid small">hidden</text>
+    <text x="570" y="164" class="mid small">hidden</text>
+    <text x="650" y="100" class="mid small">hidden</text>
   </svg>
   <figcaption>Frustum culling keeps all four objects. Only the one in front of the wall makes pixels.</figcaption>
 </figure>
 
 <p>Occlusion culling is the same idea as frustum culling, with a different test: <i>is this whole object behind what is already in the depth buffer?</i> And the same rule applies: it may keep an invisible object, but it must <b>never</b> remove a visible one.</p>
 
-<h2><span class="n">2</span>Ways to find hidden objects</h2>
+<h2 id="methods"><span class="n">2</span>Ways to find hidden objects</h2>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Method</th><th>How</th><th>Good</th><th>Bad</th></tr>
-  <tr><td>Precomputed visibility (PVS, portals)</td><td>Offline, split the level into cells and store which cells can see which.</td><td>Free at run time.</td><td>Static scenes only, long bake times.</td></tr>
-  <tr><td>CPU software rasterization</td><td>Draw a few big, simple occluders into a small depth buffer on the CPU, then test object boxes against it.</td><td>No GPU work, no latency.</td><td>Needs hand-made occluder meshes, costs CPU time.</td></tr>
-  <tr><td>Hardware occlusion queries</td><td>Draw each object's box with color and depth writes off and ask the GPU how many pixels passed.</td><td>Exact pixel counts.</td><td>The answer comes back late; waiting stalls the CPU, not waiting uses a stale answer. One query per object.</td></tr>
-  <tr><td><b>Hi-Z on the GPU</b></td><td>Build a depth pyramid, test every object's bounds against it in a compute shader.</td><td>Thousands of objects in a fraction of a millisecond, no CPU readback.</td><td>Conservative (a bit coarse), and the depth must come from somewhere (section 7).</td></tr>
-</table>
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 320 110" role="img" aria-label="A level split into eight cells. From the camera's cell, a stored list says which cells can be seen: three of them.">
+      <rect x="40" y="15" width="60" height="40" class="ok"/><rect x="100" y="15" width="60" height="40" class="ok"/><rect x="160" y="15" width="60" height="40" class="box"/><rect x="220" y="15" width="60" height="40" class="box"/>
+      <rect x="40" y="55" width="60" height="40" class="cpu"/><rect x="100" y="55" width="60" height="40" class="ok"/><rect x="160" y="55" width="60" height="40" class="box"/><rect x="220" y="55" width="60" height="40" class="box"/>
+      <circle cx="70" cy="75" r="6" class="solid"/>
+      <text x="130" y="39" class="mid small">can see</text>
+      <text x="250" y="39" class="mid small">cannot see</text>
+    </svg>
+    <h4>Precomputed visibility (PVS, portals)</h4>
+    <p>Offline, split the level into cells and store which cells can see which.</p>
+    <p><b class="c-ok">Good:</b> free at run time.</p>
+    <p class="cost"><b>Bad:</b> static scenes only, long bake times.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 110" role="img" aria-label="A small, coarse depth buffer on the CPU with one big occluder drawn into it. An object's box is tested against it.">
+      <rect x="20" y="15" width="160" height="80" class="paper"/>
+      <rect x="40" y="35" width="100" height="60" class="solid"/>
+      <path d="M20,15V95M40,15V95M60,15V95M80,15V95M100,15V95M120,15V95M140,15V95M160,15V95M180,15V95M20,15H180M20,35H180M20,55H180M20,75H180M20,95H180" class="grid"/>
+      <rect x="64" y="52" width="40" height="30" class="hot"/>
+      <text x="196" y="40" class="small">a small depth</text>
+      <text x="196" y="56" class="small">buffer on the CPU</text>
+      <text x="196" y="80" class="small t-hot">the object's box</text>
+    </svg>
+    <h4>CPU software rasterization</h4>
+    <p>Draw a few big, simple occluders into a small depth buffer on the CPU, then test object boxes against it.</p>
+    <p><b class="c-ok">Good:</b> no GPU work, no latency.</p>
+    <p class="cost"><b>Bad:</b> needs hand-made occluder meshes, costs CPU time.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 110" role="img" aria-label="The CPU asks the GPU in frame N how many pixels of a box pass the depth test. The answer arrives in frame N plus 1.">
+      <rect x="6" y="6" width="150" height="98" rx="5" class="zone"/>
+      <rect x="164" y="6" width="150" height="98" rx="5" class="zone"/>
+      <text x="14" y="22" class="small t-faint">frame N</text>
+      <text x="172" y="22" class="small t-faint">frame N+1</text>
+      <rect x="16" y="32" width="60" height="24" rx="4" class="cpu"/><text x="46" y="48" class="mid small">ask</text>
+      <rect x="70" y="72" width="150" height="24" rx="4" class="gpu"/><text x="145" y="88" class="mid small">draw the box, count pixels</text>
+      <rect x="226" y="32" width="76" height="24" rx="4" class="cpu"/><text x="264" y="48" class="mid small">the answer</text>
+      <line x1="60" y1="56" x2="76" y2="70" class="arrow" marker-end="url(#ah)"/>
+      <line x1="220" y1="74" x2="240" y2="58" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <text x="196" y="48" class="mid small t-bad">late</text>
+    </svg>
+    <h4>Hardware occlusion queries</h4>
+    <p>Draw each object's box with color and depth writes off and ask the GPU how many pixels passed.</p>
+    <p><b class="c-ok">Good:</b> exact pixel counts.</p>
+    <p class="cost"><b>Bad:</b> the answer comes back late; waiting stalls the CPU, not waiting uses a stale answer. One query per object.</p>
+  </div>
+  <div class="vcard pick">
+    <svg viewBox="0 0 320 110" role="img" aria-label="A depth pyramid: an 8 by 8 grid, then 4 by 4, 2 by 2 and 1 by 1. A compute shader tests every object's bounds against it.">
+      <rect x="20" y="15" width="80" height="80" class="mem"/><path d="M20,15V95M30,15V95M40,15V95M50,15V95M60,15V95M70,15V95M80,15V95M90,15V95M100,15V95M20,15H100M20,25H100M20,35H100M20,45H100M20,55H100M20,65H100M20,75H100M20,85H100M20,95H100" class="arrow mem thin"/>
+      <rect x="120" y="27" width="56" height="56" class="mem"/><path d="M120,27V83M134,27V83M148,27V83M162,27V83M176,27V83M120,27H176M120,41H176M120,55H176M120,69H176M120,83H176" class="arrow mem thin"/>
+      <rect x="196" y="37" width="36" height="36" class="mem"/><path d="M196,37V73M214,37V73M232,37V73M196,37H232M196,55H232M196,73H232" class="arrow mem thin"/>
+      <rect x="252" y="45" width="20" height="20" class="mem"/>
+      <rect x="130" y="41" width="28" height="28" class="hot"/>
+      <text x="296" y="59" class="mid small">Hi-Z</text>
+    </svg>
+    <h4>Hi-Z on the GPU</h4>
+    <p>Build a depth pyramid, test every object's bounds against it in a compute shader.</p>
+    <p><b class="c-ok">Good:</b> thousands of objects in a fraction of a millisecond, no CPU readback.</p>
+    <p class="cost"><b>Bad:</b> conservative (a bit coarse), and the depth must come from somewhere (section 7).</p>
+  </div>
 </div>
 
 <p>The Hi-Z test fits <a href="gpu-driven.html">GPU-driven rendering</a> well: the culling shader that already does the frustum test adds a few lines, and the visible list goes straight into an indirect draw. The rest of this page is about it.</p>
 
-<h2><span class="n">3</span>The depth pyramid (Hi-Z)</h2>
+<h2 id="pyramid"><span class="n">3</span>The depth pyramid (Hi-Z)</h2>
 
 <p>The depth buffer has one value per pixel. Testing an object that covers 10,000 pixels would need 10,000 reads. The fix is a pyramid like a mip chain, where each level is half the size of the one before. A texel in a coarse level summarizes a square of pixels with one number: the <b>farthest</b> depth in that square.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 196" role="img" aria-label="A depth buffer of 8 by 6 pixels is level 0. Level 1 is 4 by 3, level 2 is 2 by 2, level 3 is 1 by 1. Each texel holds the farthest depth of the 2 by 2 texels under it.">
-    <text x="20" y="24" class="small">level 0 = the depth · 8 × 6</text>
-    <rect x="20" y="40" width="14" height="14" class="box"/>
-    <rect x="34" y="40" width="14" height="14" class="box"/>
-    <rect x="48" y="40" width="14" height="14" class="box"/>
-    <rect x="62" y="40" width="14" height="14" class="box"/>
-    <rect x="76" y="40" width="14" height="14" class="box"/>
-    <rect x="90" y="40" width="14" height="14" class="box"/>
-    <rect x="104" y="40" width="14" height="14" class="box"/>
-    <rect x="118" y="40" width="14" height="14" class="box"/>
-    <rect x="20" y="54" width="14" height="14" class="box"/>
-    <rect x="34" y="54" width="14" height="14" class="box"/>
-    <rect x="48" y="54" width="14" height="14" class="box"/>
-    <rect x="62" y="54" width="14" height="14" class="box"/>
-    <rect x="76" y="54" width="14" height="14" class="box"/>
-    <rect x="90" y="54" width="14" height="14" class="box"/>
-    <rect x="104" y="54" width="14" height="14" class="box"/>
-    <rect x="118" y="54" width="14" height="14" class="box"/>
-    <rect x="20" y="68" width="14" height="14" class="box"/>
-    <rect x="34" y="68" width="14" height="14" class="box"/>
-    <rect x="48" y="68" width="14" height="14" class="box"/>
-    <rect x="62" y="68" width="14" height="14" class="box"/>
-    <rect x="76" y="68" width="14" height="14" class="box"/>
-    <rect x="90" y="68" width="14" height="14" class="box"/>
-    <rect x="104" y="68" width="14" height="14" class="box"/>
-    <rect x="118" y="68" width="14" height="14" class="box"/>
-    <rect x="20" y="82" width="14" height="14" class="box"/>
-    <rect x="34" y="82" width="14" height="14" class="box"/>
-    <rect x="48" y="82" width="14" height="14" class="box"/>
-    <rect x="62" y="82" width="14" height="14" class="box"/>
-    <rect x="76" y="82" width="14" height="14" class="box"/>
-    <rect x="90" y="82" width="14" height="14" class="box"/>
-    <rect x="104" y="82" width="14" height="14" class="box"/>
-    <rect x="118" y="82" width="14" height="14" class="box"/>
-    <rect x="20" y="96" width="14" height="14" class="box"/>
-    <rect x="34" y="96" width="14" height="14" class="box"/>
-    <rect x="48" y="96" width="14" height="14" class="box"/>
-    <rect x="62" y="96" width="14" height="14" class="box"/>
-    <rect x="76" y="96" width="14" height="14" class="box"/>
-    <rect x="90" y="96" width="14" height="14" class="box"/>
-    <rect x="104" y="96" width="14" height="14" class="box"/>
-    <rect x="118" y="96" width="14" height="14" class="box"/>
-    <rect x="20" y="110" width="14" height="14" class="box"/>
-    <rect x="34" y="110" width="14" height="14" class="box"/>
-    <rect x="48" y="110" width="14" height="14" class="box"/>
-    <rect x="62" y="110" width="14" height="14" class="box"/>
-    <rect x="76" y="110" width="14" height="14" class="box"/>
-    <rect x="90" y="110" width="14" height="14" class="box"/>
-    <rect x="104" y="110" width="14" height="14" class="box"/>
-    <rect x="118" y="110" width="14" height="14" class="box"/>
-    <rect x="20" y="40" width="28" height="28" class="hot dashed"/>
-    <line x1="140" y1="82" x2="188" y2="82" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="200" y="24" class="small">level 1 · 4 × 3</text>
-    <rect x="200" y="40" width="24" height="24" class="box"/>
-    <rect x="224" y="40" width="24" height="24" class="box"/>
-    <rect x="248" y="40" width="24" height="24" class="box"/>
-    <rect x="272" y="40" width="24" height="24" class="box"/>
-    <rect x="200" y="64" width="24" height="24" class="box"/>
-    <rect x="224" y="64" width="24" height="24" class="box"/>
-    <rect x="248" y="64" width="24" height="24" class="box"/>
-    <rect x="272" y="64" width="24" height="24" class="box"/>
-    <rect x="200" y="88" width="24" height="24" class="box"/>
-    <rect x="224" y="88" width="24" height="24" class="box"/>
-    <rect x="248" y="88" width="24" height="24" class="box"/>
-    <rect x="272" y="88" width="24" height="24" class="box"/>
-    <rect x="200" y="40" width="24" height="24" class="hot dashed"/>
-    <line x1="304" y1="82" x2="352" y2="82" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="364" y="24" class="small">level 2 · 2 × 2</text>
-    <rect x="364" y="40" width="30" height="30" class="box"/>
-    <rect x="394" y="40" width="30" height="30" class="box"/>
-    <rect x="364" y="70" width="30" height="30" class="box"/>
-    <rect x="394" y="70" width="30" height="30" class="box"/>
-    <line x1="432" y1="82" x2="470" y2="82" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="482" y="24" class="small">level 3 · 1 × 1</text>
-    <rect x="482" y="64" width="36" height="36" class="box"/>
-    <text x="550" y="62" class="small">Each texel = the farthest depth</text>
-    <text x="550" y="80" class="small">of the 2 × 2 texels under it.</text>
-    <text x="550" y="108" class="small">Standard depth (far = 1): max.</text>
-    <text x="550" y="126" class="small t-hot">Reversed-Z (far = 0): min.</text>
-    <text x="20" y="162" class="small">A texel of level L covers a square of 2^L × 2^L pixels. Level 3 here holds the farthest depth on the whole screen.</text>
-    <text x="20" y="180" class="small">Memory: each level is a quarter of the one before, so all levels together cost about a third of the depth buffer.</text>
+  <svg viewBox="0 0 760 236" role="img" aria-label="A depth buffer of 4 by 4 pixels with reversed-Z depth values is level 0. Level 1 is 2 by 2: each texel holds the smallest, so farthest, of the 2 by 2 values under it. The top left block 0.9, 0.8, 0.7, 0.6 becomes 0.6. Level 2 is 1 by 1 and holds 0, the farthest depth on the whole screen.">
+    <text x="20" y="22" class="small">level 0 = the depth · 4 × 4</text>
+    <rect x="20" y="34" width="176" height="176" class="mem"/>
+    <path d="M20,34V210M64,34V210M108,34V210M152,34V210M196,34V210M20,34H196M20,78H196M20,122H196M20,166H196M20,210H196" class="arrow mem thin"/><text x="42" y="60" class="mid mono">0.9</text><text x="86" y="60" class="mid mono">0.8</text><text x="130" y="60" class="mid mono">0.3</text><text x="174" y="60" class="mid mono">0.3</text><text x="42" y="104" class="mid mono">0.7</text><text x="86" y="104" class="mid mono">0.6</text><text x="130" y="104" class="mid mono">0.3</text><text x="174" y="104" class="mid mono">0.2</text><text x="42" y="148" class="mid mono">0.5</text><text x="86" y="148" class="mid mono">0.5</text><text x="130" y="148" class="mid mono">0.1</text><text x="174" y="148" class="mid mono">0</text><text x="42" y="192" class="mid mono">0.4</text><text x="86" y="192" class="mid mono">0.5</text><text x="130" y="192" class="mid mono">0</text><text x="174" y="192" class="mid mono">0</text>
+    <rect x="20" y="34" width="88" height="88" class="hot"/>
+
+    <line x1="204" y1="122" x2="286" y2="122" class="arrow gpu thick" marker-end="url(#ah-gpu)"/>
+    <text x="245" y="112" class="mid small t-gpu">farthest of</text>
+    <text x="245" y="140" class="mid small t-gpu">each 2 × 2</text>
+
+    <text x="290" y="52" class="small">level 1 · 2 × 2</text>
+    <rect x="290" y="62" width="120" height="120" class="mem"/>
+    <path d="M290,62V182M350,62V182M410,62V182M290,62H410M290,122H410M290,182H410" class="arrow mem thin"/><text x="320" y="96" class="mid mono">0.6</text><text x="380" y="96" class="mid mono">0.2</text><text x="320" y="156" class="mid mono">0.4</text><text x="380" y="156" class="mid mono">0</text>
+    <rect x="290" y="62" width="60" height="60" class="hot"/>
+
+    <line x1="418" y1="122" x2="496" y2="122" class="arrow gpu thick" marker-end="url(#ah-gpu)"/>
+
+    <text x="500" y="76" class="small">level 2 · 1 × 1</text>
+    <rect x="500" y="87" width="70" height="70" class="mem"/>
+    <text x="535" y="126" class="mid mono">0</text>
+
+    <text x="600" y="100" class="small">Reversed-Z depth:</text>
+    <text x="600" y="118" class="small">1 = near, 0 = far.</text>
+    <text x="600" y="144" class="small t-hot">min(0.9, 0.8, 0.7, 0.6)</text>
+    <text x="600" y="162" class="small t-hot">= 0.6, the farthest</text>
   </svg>
-  <figcaption>Why the farthest? If an object is behind the farthest depth in a square, it is behind every pixel in that square. The nearest depth would prove nothing.</figcaption>
+  <figcaption>Why the farthest? If an object is behind the farthest depth in a square, it is behind every pixel in that square. The nearest depth would prove nothing. A texel of level <var>L</var> covers a square of 2<sup><var>L</var></sup> × 2<sup><var>L</var></sup> pixels. The top level holds the farthest depth on the whole screen.</figcaption>
 </figure>
+
+<p>Memory: each level is a quarter of the one before, so all levels together cost about a third of the depth buffer.</p>
 
 <h3>Farthest means max or min</h3>
 
@@ -184,52 +195,148 @@
 </table>
 </div>
 
-<p>Getting this backwards is the classic Hi-Z bug: the pyramid then holds the nearest depth, and objects vanish whenever something small stands in front of part of them.</p>
+<p>One texel can cover a thin pole near the camera and a wall far away. Which depth it stores decides what happens to an object between them:</p>
+
+<div class="split">
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Side view of what one texel covers: a thin pole near the camera, an object behind it, and a far wall. The texel stores the wall's depth. The object is in front of the wall, so it is kept.">
+      <line x1="16" y1="70" x2="290" y2="22" class="dashed"/>
+      <line x1="16" y1="70" x2="290" y2="118" class="dashed"/>
+      <circle cx="12" cy="70" r="6" class="cpu"/>
+      <line x1="292" y1="14" x2="292" y2="126" class="surface"/>
+      <rect x="100" y="60" width="8" height="20" class="solid"/>
+      <circle cx="200" cy="70" r="22" class="ok"/>
+      <text x="200" y="74" class="mid small">object</text>
+      <text x="104" y="52" class="mid small">pole</text>
+      <text x="284" y="136" class="end small">far wall</text>
+      <line x1="280" y1="26" x2="280" y2="114" class="arrow ok thick"/>
+      <text x="268" y="16" class="mid small t-ok">stored</text>
+    </svg>
+    <h4>Keep the farthest</h4>
+    <p>The texel stores the wall. The object is in front of it, so the test keeps it. Right: most of it can be seen around the pole.</p>
+  </div>
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same view. The texel stores the pole's depth. The object is behind the pole, so the test culls it, although most of it can be seen.">
+      <line x1="16" y1="70" x2="290" y2="22" class="dashed"/>
+      <line x1="16" y1="70" x2="290" y2="118" class="dashed"/>
+      <circle cx="12" cy="70" r="6" class="cpu"/>
+      <line x1="292" y1="14" x2="292" y2="126" class="surface"/>
+      <rect x="100" y="60" width="8" height="20" class="solid"/>
+      <circle cx="200" cy="70" r="22" class="ghost"/>
+      <text x="200" y="74" class="mid small">object</text>
+      <text x="104" y="52" class="mid small">pole</text>
+      <text x="284" y="136" class="end small">far wall</text>
+      <line x1="118" y1="26" x2="118" y2="114" class="arrow bad thick"/>
+      <text x="136" y="16" class="mid small t-bad">stored</text>
+    </svg>
+    <h4>Keep the nearest</h4>
+    <p>Getting this backwards is the classic Hi-Z bug: the pyramid then holds the nearest depth, and objects vanish whenever something small stands in front of part of them.</p>
+  </div>
+</div>
 
 <h3>Odd sizes</h3>
 
-<p>A 1920 × 1080 screen halves to 960 × 540, then 480 × 270, then 240 × 135. Now 135 is odd. If the next level is 67 rows and each texel reads 2 rows, the last row of the 135 is read by nobody. Its depth may be the farthest one, so the level above is wrong in the unsafe direction.</p>
+<p>A 1920 × 1080 screen halves to 960 × 540, then 480 × 270, then 240 × 135. Now 135 is odd. If the next level is 67 rows and each texel reads 2 rows, the last row of the 135 is read by nobody. Its depth may be the farthest one, so the level above is wrong in the unsafe direction. Here is a row of 5 texels (reversed-Z depth); the last one is the farthest:</p>
 
-<figure class="diagram">
-  <svg viewBox="0 0 760 264" role="img" aria-label="A row of 5 texels: 0.2, 0.5, 0.3, 0.6, 0.1. Rounding the next size up gives 3 texels: 0.2, 0.3 and 0.1, which reads the last texel twice. Rounding down to 2 texels gives 0.2 and 0.3, and the farthest value 0.1 is lost.">
-    <text x="20" y="30" class="small">a row of 5 texels</text>
-    <text x="20" y="46" class="small">(reversed-Z depth)</text>
-<rect x="160" y="20" width="50" height="30" rx="4" class="box"/><text x="185" y="39" class="mid mono">0.2</text>
-<rect x="216" y="20" width="50" height="30" rx="4" class="box"/><text x="241" y="39" class="mid mono">0.5</text>
-<rect x="272" y="20" width="50" height="30" rx="4" class="box"/><text x="297" y="39" class="mid mono">0.3</text>
-<rect x="328" y="20" width="50" height="30" rx="4" class="box"/><text x="353" y="39" class="mid mono">0.6</text>
-<rect x="384" y="20" width="50" height="30" rx="4" class="hot"/><text x="409" y="39" class="mid mono">0.1</text>
-    <text x="20" y="112" class="title t-gpu">round up: 3 texels</text>
-    <text x="20" y="128" class="small">the last reads its texel twice</text>
-<rect x="160" y="96" width="100" height="30" rx="4" class="gpu"/><text x="210" y="115" class="mid mono">0.2</text>
-    <line x1="185" y1="52" x2="190" y2="94" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <line x1="241" y1="52" x2="230" y2="94" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-<rect x="272" y="96" width="100" height="30" rx="4" class="gpu"/><text x="322" y="115" class="mid mono">0.3</text>
-    <line x1="297" y1="52" x2="302" y2="94" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <line x1="353" y1="52" x2="342" y2="94" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-<rect x="384" y="96" width="100" height="30" rx="4" class="gpu"/><text x="434" y="115" class="mid mono">0.1</text>
-    <line x1="409" y1="52" x2="414" y2="94" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <line x1="409" y1="52" x2="454" y2="94" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="500" y="115" class="small t-gpu">every texel is covered: safe</text>
-    <text x="20" y="196" class="title t-hot">round down: 2 texels</text>
-    <text x="20" y="212" class="small">with a 2-wide read</text>
-<rect x="160" y="180" width="100" height="30" rx="4" class="ghost"/><text x="210" y="199" class="mid mono">0.2</text>
-<rect x="272" y="180" width="100" height="30" rx="4" class="ghost"/><text x="322" y="199" class="mid mono">0.3</text>
-    <text x="400" y="192" class="small t-hot">texel 4 (0.1, the farthest!) is read by nobody.</text>
-    <text x="400" y="210" class="small">A test could say "hidden" for something</text>
-    <text x="400" y="226" class="small">that is in front of it there: unsafe.</text>
-    <text x="20" y="254" class="small">Round down only works when the last texel of each odd level also reads a third column (and row).</text>
-  </svg>
-  <figcaption>Two safe choices: round the size up and let the last texel read its source twice (clamp the address), or round down and make the last texel read three columns or rows.</figcaption>
-</figure>
+<div class="split">
+  <div class="good">
+    <svg viewBox="0 0 320 150" role="img" aria-label="A row of 5 texels: 0.2, 0.5, 0.3, 0.6, 0.1. Rounding the next size up gives 3 texels: 0.2, 0.3 and 0.1. The last one reads the last source texel twice.">
+      <rect x="20" y="14" width="56" height="30" class="mem"/><text x="48" y="34" class="mid mono">0.2</text>
+      <rect x="76" y="14" width="56" height="30" class="mem"/><text x="104" y="34" class="mid mono">0.5</text>
+      <rect x="132" y="14" width="56" height="30" class="mem"/><text x="160" y="34" class="mid mono">0.3</text>
+      <rect x="188" y="14" width="56" height="30" class="mem"/><text x="216" y="34" class="mid mono">0.6</text>
+      <rect x="244" y="14" width="56" height="30" class="accent"/><text x="272" y="34" class="mid mono">0.1</text>
+      <line x1="48" y1="46" x2="66" y2="92" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="104" y1="46" x2="86" y2="92" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="160" y1="46" x2="178" y2="92" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="216" y1="46" x2="198" y2="92" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="264" y1="46" x2="264" y2="92" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="280" y1="46" x2="280" y2="92" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <rect x="20" y="94" width="112" height="30" class="ok"/><text x="76" y="114" class="mid mono">0.2</text>
+      <rect x="132" y="94" width="112" height="30" class="ok"/><text x="188" y="114" class="mid mono">0.3</text>
+      <rect x="244" y="94" width="56" height="30" class="ok"/><text x="272" y="114" class="mid mono">0.1</text>
+      <text x="160" y="144" class="mid small t-ok">every texel is covered: safe</text>
+    </svg>
+    <h4>Round up: 3 texels</h4>
+    <p>The last texel reads its source twice (clamp the address).</p>
+  </div>
+  <div class="bad">
+    <svg viewBox="0 0 320 150" role="img" aria-label="The same row. Rounding down gives 2 texels: 0.2 and 0.3. The last source texel, 0.1, the farthest, is read by nobody.">
+      <rect x="20" y="14" width="56" height="30" class="mem"/><text x="48" y="34" class="mid mono">0.2</text>
+      <rect x="76" y="14" width="56" height="30" class="mem"/><text x="104" y="34" class="mid mono">0.5</text>
+      <rect x="132" y="14" width="56" height="30" class="mem"/><text x="160" y="34" class="mid mono">0.3</text>
+      <rect x="188" y="14" width="56" height="30" class="mem"/><text x="216" y="34" class="mid mono">0.6</text>
+      <rect x="244" y="14" width="56" height="30" class="bad"/><text x="272" y="34" class="mid mono">0.1</text>
+      <line x1="48" y1="46" x2="66" y2="92" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="104" y1="46" x2="86" y2="92" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="160" y1="46" x2="178" y2="92" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="216" y1="46" x2="198" y2="92" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <rect x="20" y="94" width="112" height="30" class="box"/><text x="76" y="114" class="mid mono">0.2</text>
+      <rect x="132" y="94" width="112" height="30" class="box"/><text x="188" y="114" class="mid mono">0.3</text>
+      <text x="272" y="68" class="mid small t-bad">read by</text>
+      <text x="272" y="82" class="mid small t-bad">nobody</text>
+      <text x="160" y="144" class="mid small t-bad">0.1, the farthest, is lost: unsafe</text>
+    </svg>
+    <h4>Round down: 2 texels, with a 2-wide read</h4>
+    <p>A test could say "hidden" for something that is in front of the lost texel there.</p>
+  </div>
+</div>
+
+<p>Two safe choices: round the size up and let the last texel read its source twice (clamp the address), or round down and make the last texel read three columns or rows. Round down only works when the last texel of each odd level also reads a third column (and row).</p>
 
 <h3>Building it</h3>
 
-<p>Each level is a compute dispatch (or a full-screen draw) that reads the level before and writes the min or max of 2 × 2. Each level depends on the one before, so there is a barrier between levels: about 11 dispatches for a 1080p screen. Two common speed-ups:</p>
-<ul>
-  <li><b>Single-pass downsampling</b> (AMD FidelityFX SPD): one dispatch builds up to 12 levels, with groups that finish last carrying on to the small levels.</li>
-  <li><b>Min/max samplers</b> (Vulkan's <i>sampler filter minmax</i>, core since 1.2): a bilinear fetch returns the min or max of the 4 texels it touches, so one fetch replaces four reads.</li>
-</ul>
+<p>Each level is a compute dispatch (or a full-screen draw) that reads the level before and writes the min or max of 2 × 2. Each level depends on the one before, so there is a barrier between levels. Two common speed-ups exist:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 110" role="img" aria-label="Four levels of shrinking size in a row, with a barrier between each two.">
+      <rect x="14" y="27" width="56" height="56" class="mem"/>
+      <line x1="84" y1="20" x2="84" y2="90" class="arrow hot thick"/>
+      <rect x="98" y="37" width="36" height="36" class="mem"/>
+      <line x1="148" y1="20" x2="148" y2="90" class="arrow hot thick"/>
+      <rect x="162" y="44" width="22" height="22" class="mem"/>
+      <line x1="198" y1="20" x2="198" y2="90" class="arrow hot thick"/>
+      <rect x="212" y="49" width="12" height="12" class="mem"/>
+      <text x="120" y="106" class="mid small t-hot">a barrier between levels</text>
+    </svg>
+    <h4>One dispatch per level</h4>
+    <p>The plain way. Each dispatch reads the level before.</p>
+    <p class="cost">about 11 dispatches for a 1080p screen</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 110" role="img" aria-label="One dispatch writes all the levels.">
+      <rect x="10" y="38" width="76" height="34" rx="17" class="shader"/>
+      <text x="48" y="59" class="mid small">1 dispatch</text>
+      <line x1="86" y1="48" x2="118" y2="26" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="86" y1="52" x2="158" y2="44" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="86" y1="58" x2="186" y2="68" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <line x1="86" y1="64" x2="206" y2="90" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <rect x="120" y="6" width="36" height="36" class="mem"/>
+      <rect x="160" y="32" width="26" height="26" class="mem"/>
+      <rect x="188" y="60" width="18" height="18" class="mem"/>
+      <rect x="208" y="84" width="12" height="12" class="mem"/>
+    </svg>
+    <h4>Single-pass downsampling</h4>
+    <p>AMD FidelityFX SPD: one dispatch builds up to 12 levels, with groups that finish last carrying on to the small levels.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 110" role="img" aria-label="One bilinear fetch in the middle of four texels returns their min or max.">
+      <rect x="20" y="15" width="80" height="80" class="mem"/>
+      <path d="M60,15V95M20,55H100" class="arrow mem thin"/>
+      <text x="40" y="39" class="mid mono">0.6</text><text x="80" y="39" class="mid mono">0.2</text>
+      <text x="40" y="79" class="mid mono">0.4</text><text x="80" y="79" class="mid mono">0.5</text>
+      <circle cx="60" cy="55" r="6" class="accent"/>
+      <line x1="68" y1="55" x2="158" y2="55" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="124" y="46" class="mid small t-hot halo">1 fetch</text>
+      <rect x="160" y="35" width="60" height="40" class="mem"/>
+      <text x="190" y="59" class="mid mono">0.2</text>
+      <text x="190" y="92" class="mid small">the min</text>
+    </svg>
+    <h4>Min/max samplers</h4>
+    <p>Vulkan's <i>sampler filter minmax</i>, core since 1.2: a bilinear fetch returns the min or max of the 4 texels it touches, so one fetch replaces four reads.</p>
+  </div>
+</div>
 
 <h2 id="project"><span class="n">4</span>From a bounding volume to a screen rectangle</h2>
 
@@ -267,21 +374,50 @@
     <text x="600" y="134" class="small">nearest corner's depth</text>
     <text x="600" y="166" class="small t-hot">a corner behind the</text>
     <text x="600" y="182" class="small t-hot">camera → just keep it</text>
-    <text x="380" y="240" class="small">Near face corners project bigger, far face corners smaller (perspective).</text>
   </svg>
-  <figcaption>The box contains the sphere, so its rectangle contains the sphere's, and its nearest corner is at least as near. Both errors go in the safe direction.</figcaption>
+  <figcaption>The box contains the sphere, so its rectangle contains the sphere's, and its nearest corner is at least as near. Both errors go in the safe direction. Near face corners project bigger, far face corners smaller (perspective).</figcaption>
 </figure>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Way to get the rectangle</th><th>Cost</th><th>Tightness</th></tr>
-  <tr><td>Project the 8 corners of a box (around the sphere, or the object's own box)</td><td>8 matrix multiplies</td><td>A bit loose for spheres. Works for any projection, perspective or orthographic.</td></tr>
-  <tr><td>Exact bounds of a projected sphere (Mara and McGuire, 2013)</td><td>a few square roots</td><td>The tightest rectangle a sphere can have, for perspective cameras.</td></tr>
-  <tr><td>Center ± radius / depth</td><td>very cheap</td><td><b>Wrong</b> near the screen's edges, where a projected sphere is an ellipse wider than that. Avoid.</td></tr>
-</table>
+<p>Three ways to get the rectangle. The pictures show the sphere on screen and the rectangle each way gives:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A circle on screen with a rectangle around it that is a little larger than needed. Eight dots mark the projected corners.">
+      <circle cx="120" cy="65" r="34" class="gpu"/>
+      <rect x="74" y="19" width="92" height="92" class="hot"/>
+      <circle cx="74" cy="19" r="3" class="cpu"/><circle cx="166" cy="19" r="3" class="cpu"/><circle cx="74" cy="111" r="3" class="cpu"/><circle cx="166" cy="111" r="3" class="cpu"/>
+      <circle cx="86" cy="31" r="3" class="cpu"/><circle cx="154" cy="31" r="3" class="cpu"/><circle cx="86" cy="99" r="3" class="cpu"/><circle cx="154" cy="99" r="3" class="cpu"/>
+    </svg>
+    <h4>Project the 8 corners of a box</h4>
+    <p>The box around the sphere, or the object's own box. A bit loose for spheres. Works for any projection, perspective or orthographic.</p>
+    <p class="cost">8 matrix multiplies</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An ellipse on screen with a rectangle that touches it on all four sides.">
+      <ellipse cx="120" cy="65" rx="46" ry="34" class="gpu"/>
+      <rect x="74" y="31" width="92" height="68" class="hot"/>
+    </svg>
+    <h4>Exact bounds of a projected sphere</h4>
+    <p>Mara and McGuire, 2013. The tightest rectangle a sphere can have, for perspective cameras.</p>
+    <p class="cost">a few square roots</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Near the screen's edge the projected sphere is a wide ellipse. A square of center plus and minus radius over depth is narrower: the ellipse sticks out on both sides.">
+      <ellipse cx="120" cy="60" rx="64" ry="32" class="bad"/>
+      <rect x="88" y="33" width="64" height="54" class="gpu"/>
+      <rect x="88" y="28" width="64" height="64" class="hot"/>
+      <text x="120" y="116" class="mid small t-bad">red: pixels the rectangle misses</text>
+    </svg>
+    <h4>Center ± radius / depth</h4>
+    <p><b>Wrong</b> near the screen's edges, where a projected sphere is an ellipse wider than that. Avoid.</p>
+    <p class="cost">very cheap</p>
+  </div>
 </div>
 
-<p>When the volume crosses the near plane, or reaches behind the camera, the projection breaks down: points behind the eye flip to the other side of the screen. The only safe answer is "visible". Objects that close are almost always visible anyway.</p>
+<div class="callout warn">
+  <strong>Crossing the near plane: say "visible"</strong>
+  <p>When the volume crosses the near plane, or reaches behind the camera, the projection breaks down: points behind the eye flip to the other side of the screen. The only safe answer is "visible". Objects that close are almost always visible anyway.</p>
+</div>
 
 <h2 id="level"><span class="n">5</span>Picking the level</h2>
 
@@ -292,362 +428,67 @@
 <p>At that level a texel is at least as big as the rectangle, so the rectangle touches at most 2 texels in each direction, however it is placed. But the guess is sometimes one level too coarse. A better way is to check the real texel coordinates and go one level finer when they still fit:</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 254" role="img" aria-label="A rectangle of 5 by 5 pixels on a 16 by 16 screen. At level 0 it touches 5 by 5 texels, at level 1 3 by 3 texels, at level 2 2 by 2 texels, so level 2 is used.">
-    <rect x="30" y="30" width="10" height="10" class="zone"/>
-    <rect x="40" y="30" width="10" height="10" class="zone"/>
-    <rect x="50" y="30" width="10" height="10" class="zone"/>
-    <rect x="60" y="30" width="10" height="10" class="zone"/>
-    <rect x="70" y="30" width="10" height="10" class="zone"/>
-    <rect x="80" y="30" width="10" height="10" class="zone"/>
-    <rect x="90" y="30" width="10" height="10" class="zone"/>
-    <rect x="100" y="30" width="10" height="10" class="zone"/>
-    <rect x="110" y="30" width="10" height="10" class="zone"/>
-    <rect x="120" y="30" width="10" height="10" class="zone"/>
-    <rect x="130" y="30" width="10" height="10" class="zone"/>
-    <rect x="140" y="30" width="10" height="10" class="zone"/>
-    <rect x="150" y="30" width="10" height="10" class="zone"/>
-    <rect x="160" y="30" width="10" height="10" class="zone"/>
-    <rect x="170" y="30" width="10" height="10" class="zone"/>
-    <rect x="180" y="30" width="10" height="10" class="zone"/>
-    <rect x="30" y="40" width="10" height="10" class="zone"/>
-    <rect x="40" y="40" width="10" height="10" class="zone"/>
-    <rect x="50" y="40" width="10" height="10" class="zone"/>
-    <rect x="60" y="40" width="10" height="10" class="zone"/>
-    <rect x="70" y="40" width="10" height="10" class="zone"/>
-    <rect x="80" y="40" width="10" height="10" class="zone"/>
-    <rect x="90" y="40" width="10" height="10" class="zone"/>
-    <rect x="100" y="40" width="10" height="10" class="zone"/>
-    <rect x="110" y="40" width="10" height="10" class="zone"/>
-    <rect x="120" y="40" width="10" height="10" class="zone"/>
-    <rect x="130" y="40" width="10" height="10" class="zone"/>
-    <rect x="140" y="40" width="10" height="10" class="zone"/>
-    <rect x="150" y="40" width="10" height="10" class="zone"/>
-    <rect x="160" y="40" width="10" height="10" class="zone"/>
-    <rect x="170" y="40" width="10" height="10" class="zone"/>
-    <rect x="180" y="40" width="10" height="10" class="zone"/>
-    <rect x="30" y="50" width="10" height="10" class="zone"/>
-    <rect x="40" y="50" width="10" height="10" class="zone"/>
-    <rect x="50" y="50" width="10" height="10" class="zone"/>
-    <rect x="60" y="50" width="10" height="10" class="zone"/>
-    <rect x="70" y="50" width="10" height="10" class="zone"/>
-    <rect x="80" y="50" width="10" height="10" class="zone"/>
-    <rect x="90" y="50" width="10" height="10" class="zone"/>
-    <rect x="100" y="50" width="10" height="10" class="zone"/>
-    <rect x="110" y="50" width="10" height="10" class="zone"/>
-    <rect x="120" y="50" width="10" height="10" class="zone"/>
-    <rect x="130" y="50" width="10" height="10" class="zone"/>
-    <rect x="140" y="50" width="10" height="10" class="zone"/>
-    <rect x="150" y="50" width="10" height="10" class="zone"/>
-    <rect x="160" y="50" width="10" height="10" class="zone"/>
-    <rect x="170" y="50" width="10" height="10" class="zone"/>
-    <rect x="180" y="50" width="10" height="10" class="zone"/>
-    <rect x="30" y="60" width="10" height="10" class="zone"/>
-    <rect x="40" y="60" width="10" height="10" class="zone"/>
-    <rect x="50" y="60" width="10" height="10" class="zone"/>
-    <rect x="60" y="60" width="10" height="10" class="zone"/>
-    <rect x="70" y="60" width="10" height="10" class="zone"/>
-    <rect x="80" y="60" width="10" height="10" class="zone"/>
-    <rect x="90" y="60" width="10" height="10" class="zone"/>
-    <rect x="100" y="60" width="10" height="10" class="zone"/>
-    <rect x="110" y="60" width="10" height="10" class="zone"/>
-    <rect x="120" y="60" width="10" height="10" class="zone"/>
-    <rect x="130" y="60" width="10" height="10" class="zone"/>
-    <rect x="140" y="60" width="10" height="10" class="zone"/>
-    <rect x="150" y="60" width="10" height="10" class="zone"/>
-    <rect x="160" y="60" width="10" height="10" class="zone"/>
-    <rect x="170" y="60" width="10" height="10" class="zone"/>
-    <rect x="180" y="60" width="10" height="10" class="zone"/>
-    <rect x="30" y="70" width="10" height="10" class="zone"/>
-    <rect x="40" y="70" width="10" height="10" class="zone"/>
-    <rect x="50" y="70" width="10" height="10" class="zone"/>
-    <rect x="60" y="70" width="10" height="10" class="zone"/>
-    <rect x="70" y="70" width="10" height="10" class="zone"/>
-    <rect x="80" y="70" width="10" height="10" class="zone"/>
-    <rect x="90" y="70" width="10" height="10" class="zone"/>
-    <rect x="100" y="70" width="10" height="10" class="zone"/>
-    <rect x="110" y="70" width="10" height="10" class="zone"/>
-    <rect x="120" y="70" width="10" height="10" class="zone"/>
-    <rect x="130" y="70" width="10" height="10" class="zone"/>
-    <rect x="140" y="70" width="10" height="10" class="zone"/>
-    <rect x="150" y="70" width="10" height="10" class="zone"/>
-    <rect x="160" y="70" width="10" height="10" class="zone"/>
-    <rect x="170" y="70" width="10" height="10" class="zone"/>
-    <rect x="180" y="70" width="10" height="10" class="zone"/>
-    <rect x="30" y="80" width="10" height="10" class="zone"/>
-    <rect x="40" y="80" width="10" height="10" class="zone"/>
-    <rect x="50" y="80" width="10" height="10" class="gpu"/>
-    <rect x="60" y="80" width="10" height="10" class="gpu"/>
-    <rect x="70" y="80" width="10" height="10" class="gpu"/>
-    <rect x="80" y="80" width="10" height="10" class="gpu"/>
-    <rect x="90" y="80" width="10" height="10" class="gpu"/>
-    <rect x="100" y="80" width="10" height="10" class="zone"/>
-    <rect x="110" y="80" width="10" height="10" class="zone"/>
-    <rect x="120" y="80" width="10" height="10" class="zone"/>
-    <rect x="130" y="80" width="10" height="10" class="zone"/>
-    <rect x="140" y="80" width="10" height="10" class="zone"/>
-    <rect x="150" y="80" width="10" height="10" class="zone"/>
-    <rect x="160" y="80" width="10" height="10" class="zone"/>
-    <rect x="170" y="80" width="10" height="10" class="zone"/>
-    <rect x="180" y="80" width="10" height="10" class="zone"/>
-    <rect x="30" y="90" width="10" height="10" class="zone"/>
-    <rect x="40" y="90" width="10" height="10" class="zone"/>
-    <rect x="50" y="90" width="10" height="10" class="gpu"/>
-    <rect x="60" y="90" width="10" height="10" class="gpu"/>
-    <rect x="70" y="90" width="10" height="10" class="gpu"/>
-    <rect x="80" y="90" width="10" height="10" class="gpu"/>
-    <rect x="90" y="90" width="10" height="10" class="gpu"/>
-    <rect x="100" y="90" width="10" height="10" class="zone"/>
-    <rect x="110" y="90" width="10" height="10" class="zone"/>
-    <rect x="120" y="90" width="10" height="10" class="zone"/>
-    <rect x="130" y="90" width="10" height="10" class="zone"/>
-    <rect x="140" y="90" width="10" height="10" class="zone"/>
-    <rect x="150" y="90" width="10" height="10" class="zone"/>
-    <rect x="160" y="90" width="10" height="10" class="zone"/>
-    <rect x="170" y="90" width="10" height="10" class="zone"/>
-    <rect x="180" y="90" width="10" height="10" class="zone"/>
-    <rect x="30" y="100" width="10" height="10" class="zone"/>
-    <rect x="40" y="100" width="10" height="10" class="zone"/>
-    <rect x="50" y="100" width="10" height="10" class="gpu"/>
-    <rect x="60" y="100" width="10" height="10" class="gpu"/>
-    <rect x="70" y="100" width="10" height="10" class="gpu"/>
-    <rect x="80" y="100" width="10" height="10" class="gpu"/>
-    <rect x="90" y="100" width="10" height="10" class="gpu"/>
-    <rect x="100" y="100" width="10" height="10" class="zone"/>
-    <rect x="110" y="100" width="10" height="10" class="zone"/>
-    <rect x="120" y="100" width="10" height="10" class="zone"/>
-    <rect x="130" y="100" width="10" height="10" class="zone"/>
-    <rect x="140" y="100" width="10" height="10" class="zone"/>
-    <rect x="150" y="100" width="10" height="10" class="zone"/>
-    <rect x="160" y="100" width="10" height="10" class="zone"/>
-    <rect x="170" y="100" width="10" height="10" class="zone"/>
-    <rect x="180" y="100" width="10" height="10" class="zone"/>
-    <rect x="30" y="110" width="10" height="10" class="zone"/>
-    <rect x="40" y="110" width="10" height="10" class="zone"/>
-    <rect x="50" y="110" width="10" height="10" class="gpu"/>
-    <rect x="60" y="110" width="10" height="10" class="gpu"/>
-    <rect x="70" y="110" width="10" height="10" class="gpu"/>
-    <rect x="80" y="110" width="10" height="10" class="gpu"/>
-    <rect x="90" y="110" width="10" height="10" class="gpu"/>
-    <rect x="100" y="110" width="10" height="10" class="zone"/>
-    <rect x="110" y="110" width="10" height="10" class="zone"/>
-    <rect x="120" y="110" width="10" height="10" class="zone"/>
-    <rect x="130" y="110" width="10" height="10" class="zone"/>
-    <rect x="140" y="110" width="10" height="10" class="zone"/>
-    <rect x="150" y="110" width="10" height="10" class="zone"/>
-    <rect x="160" y="110" width="10" height="10" class="zone"/>
-    <rect x="170" y="110" width="10" height="10" class="zone"/>
-    <rect x="180" y="110" width="10" height="10" class="zone"/>
-    <rect x="30" y="120" width="10" height="10" class="zone"/>
-    <rect x="40" y="120" width="10" height="10" class="zone"/>
-    <rect x="50" y="120" width="10" height="10" class="gpu"/>
-    <rect x="60" y="120" width="10" height="10" class="gpu"/>
-    <rect x="70" y="120" width="10" height="10" class="gpu"/>
-    <rect x="80" y="120" width="10" height="10" class="gpu"/>
-    <rect x="90" y="120" width="10" height="10" class="gpu"/>
-    <rect x="100" y="120" width="10" height="10" class="zone"/>
-    <rect x="110" y="120" width="10" height="10" class="zone"/>
-    <rect x="120" y="120" width="10" height="10" class="zone"/>
-    <rect x="130" y="120" width="10" height="10" class="zone"/>
-    <rect x="140" y="120" width="10" height="10" class="zone"/>
-    <rect x="150" y="120" width="10" height="10" class="zone"/>
-    <rect x="160" y="120" width="10" height="10" class="zone"/>
-    <rect x="170" y="120" width="10" height="10" class="zone"/>
-    <rect x="180" y="120" width="10" height="10" class="zone"/>
-    <rect x="30" y="130" width="10" height="10" class="zone"/>
-    <rect x="40" y="130" width="10" height="10" class="zone"/>
-    <rect x="50" y="130" width="10" height="10" class="zone"/>
-    <rect x="60" y="130" width="10" height="10" class="zone"/>
-    <rect x="70" y="130" width="10" height="10" class="zone"/>
-    <rect x="80" y="130" width="10" height="10" class="zone"/>
-    <rect x="90" y="130" width="10" height="10" class="zone"/>
-    <rect x="100" y="130" width="10" height="10" class="zone"/>
-    <rect x="110" y="130" width="10" height="10" class="zone"/>
-    <rect x="120" y="130" width="10" height="10" class="zone"/>
-    <rect x="130" y="130" width="10" height="10" class="zone"/>
-    <rect x="140" y="130" width="10" height="10" class="zone"/>
-    <rect x="150" y="130" width="10" height="10" class="zone"/>
-    <rect x="160" y="130" width="10" height="10" class="zone"/>
-    <rect x="170" y="130" width="10" height="10" class="zone"/>
-    <rect x="180" y="130" width="10" height="10" class="zone"/>
-    <rect x="30" y="140" width="10" height="10" class="zone"/>
-    <rect x="40" y="140" width="10" height="10" class="zone"/>
-    <rect x="50" y="140" width="10" height="10" class="zone"/>
-    <rect x="60" y="140" width="10" height="10" class="zone"/>
-    <rect x="70" y="140" width="10" height="10" class="zone"/>
-    <rect x="80" y="140" width="10" height="10" class="zone"/>
-    <rect x="90" y="140" width="10" height="10" class="zone"/>
-    <rect x="100" y="140" width="10" height="10" class="zone"/>
-    <rect x="110" y="140" width="10" height="10" class="zone"/>
-    <rect x="120" y="140" width="10" height="10" class="zone"/>
-    <rect x="130" y="140" width="10" height="10" class="zone"/>
-    <rect x="140" y="140" width="10" height="10" class="zone"/>
-    <rect x="150" y="140" width="10" height="10" class="zone"/>
-    <rect x="160" y="140" width="10" height="10" class="zone"/>
-    <rect x="170" y="140" width="10" height="10" class="zone"/>
-    <rect x="180" y="140" width="10" height="10" class="zone"/>
-    <rect x="30" y="150" width="10" height="10" class="zone"/>
-    <rect x="40" y="150" width="10" height="10" class="zone"/>
-    <rect x="50" y="150" width="10" height="10" class="zone"/>
-    <rect x="60" y="150" width="10" height="10" class="zone"/>
-    <rect x="70" y="150" width="10" height="10" class="zone"/>
-    <rect x="80" y="150" width="10" height="10" class="zone"/>
-    <rect x="90" y="150" width="10" height="10" class="zone"/>
-    <rect x="100" y="150" width="10" height="10" class="zone"/>
-    <rect x="110" y="150" width="10" height="10" class="zone"/>
-    <rect x="120" y="150" width="10" height="10" class="zone"/>
-    <rect x="130" y="150" width="10" height="10" class="zone"/>
-    <rect x="140" y="150" width="10" height="10" class="zone"/>
-    <rect x="150" y="150" width="10" height="10" class="zone"/>
-    <rect x="160" y="150" width="10" height="10" class="zone"/>
-    <rect x="170" y="150" width="10" height="10" class="zone"/>
-    <rect x="180" y="150" width="10" height="10" class="zone"/>
-    <rect x="30" y="160" width="10" height="10" class="zone"/>
-    <rect x="40" y="160" width="10" height="10" class="zone"/>
-    <rect x="50" y="160" width="10" height="10" class="zone"/>
-    <rect x="60" y="160" width="10" height="10" class="zone"/>
-    <rect x="70" y="160" width="10" height="10" class="zone"/>
-    <rect x="80" y="160" width="10" height="10" class="zone"/>
-    <rect x="90" y="160" width="10" height="10" class="zone"/>
-    <rect x="100" y="160" width="10" height="10" class="zone"/>
-    <rect x="110" y="160" width="10" height="10" class="zone"/>
-    <rect x="120" y="160" width="10" height="10" class="zone"/>
-    <rect x="130" y="160" width="10" height="10" class="zone"/>
-    <rect x="140" y="160" width="10" height="10" class="zone"/>
-    <rect x="150" y="160" width="10" height="10" class="zone"/>
-    <rect x="160" y="160" width="10" height="10" class="zone"/>
-    <rect x="170" y="160" width="10" height="10" class="zone"/>
-    <rect x="180" y="160" width="10" height="10" class="zone"/>
-    <rect x="30" y="170" width="10" height="10" class="zone"/>
-    <rect x="40" y="170" width="10" height="10" class="zone"/>
-    <rect x="50" y="170" width="10" height="10" class="zone"/>
-    <rect x="60" y="170" width="10" height="10" class="zone"/>
-    <rect x="70" y="170" width="10" height="10" class="zone"/>
-    <rect x="80" y="170" width="10" height="10" class="zone"/>
-    <rect x="90" y="170" width="10" height="10" class="zone"/>
-    <rect x="100" y="170" width="10" height="10" class="zone"/>
-    <rect x="110" y="170" width="10" height="10" class="zone"/>
-    <rect x="120" y="170" width="10" height="10" class="zone"/>
-    <rect x="130" y="170" width="10" height="10" class="zone"/>
-    <rect x="140" y="170" width="10" height="10" class="zone"/>
-    <rect x="150" y="170" width="10" height="10" class="zone"/>
-    <rect x="160" y="170" width="10" height="10" class="zone"/>
-    <rect x="170" y="170" width="10" height="10" class="zone"/>
-    <rect x="180" y="170" width="10" height="10" class="zone"/>
-    <rect x="30" y="180" width="10" height="10" class="zone"/>
-    <rect x="40" y="180" width="10" height="10" class="zone"/>
-    <rect x="50" y="180" width="10" height="10" class="zone"/>
-    <rect x="60" y="180" width="10" height="10" class="zone"/>
-    <rect x="70" y="180" width="10" height="10" class="zone"/>
-    <rect x="80" y="180" width="10" height="10" class="zone"/>
-    <rect x="90" y="180" width="10" height="10" class="zone"/>
-    <rect x="100" y="180" width="10" height="10" class="zone"/>
-    <rect x="110" y="180" width="10" height="10" class="zone"/>
-    <rect x="120" y="180" width="10" height="10" class="zone"/>
-    <rect x="130" y="180" width="10" height="10" class="zone"/>
-    <rect x="140" y="180" width="10" height="10" class="zone"/>
-    <rect x="150" y="180" width="10" height="10" class="zone"/>
-    <rect x="160" y="180" width="10" height="10" class="zone"/>
-    <rect x="170" y="180" width="10" height="10" class="zone"/>
-    <rect x="180" y="180" width="10" height="10" class="zone"/>
+  <svg viewBox="0 0 760 222" role="img" aria-label="A rectangle of 5 by 5 pixels on a 16 by 16 screen. At level 0 it touches 5 by 5 texels, at level 1 3 by 3 texels, at level 2 2 by 2 texels, so level 2 is used.">
+    <rect x="30" y="30" width="160" height="160" class="zone"/>
+    <rect x="50" y="80" width="50" height="50" class="gpu"/>
+    <path d="M30,30V190M40,30V190M50,30V190M60,30V190M70,30V190M80,30V190M90,30V190M100,30V190M110,30V190M120,30V190M130,30V190M140,30V190M150,30V190M160,30V190M170,30V190M180,30V190M190,30V190M30,30H190M30,40H190M30,50H190M30,60H190M30,70H190M30,80H190M30,90H190M30,100H190M30,110H190M30,120H190M30,130H190M30,140H190M30,150H190M30,160H190M30,170H190M30,180H190M30,190H190" class="grid"/>
     <rect x="50" y="80" width="50" height="50" class="hot"/>
     <text x="110" y="22" class="mid small">level 0: texel = 1 × 1 px</text>
-    <text x="110" y="212" class="mid small">5 × 5 texels: too many</text>
-    <rect x="280" y="30" width="20" height="20" class="zone"/>
-    <rect x="300" y="30" width="20" height="20" class="zone"/>
-    <rect x="320" y="30" width="20" height="20" class="zone"/>
-    <rect x="340" y="30" width="20" height="20" class="zone"/>
-    <rect x="360" y="30" width="20" height="20" class="zone"/>
-    <rect x="380" y="30" width="20" height="20" class="zone"/>
-    <rect x="400" y="30" width="20" height="20" class="zone"/>
-    <rect x="420" y="30" width="20" height="20" class="zone"/>
-    <rect x="280" y="50" width="20" height="20" class="zone"/>
-    <rect x="300" y="50" width="20" height="20" class="zone"/>
-    <rect x="320" y="50" width="20" height="20" class="zone"/>
-    <rect x="340" y="50" width="20" height="20" class="zone"/>
-    <rect x="360" y="50" width="20" height="20" class="zone"/>
-    <rect x="380" y="50" width="20" height="20" class="zone"/>
-    <rect x="400" y="50" width="20" height="20" class="zone"/>
-    <rect x="420" y="50" width="20" height="20" class="zone"/>
-    <rect x="280" y="70" width="20" height="20" class="zone"/>
-    <rect x="300" y="70" width="20" height="20" class="gpu"/>
-    <rect x="320" y="70" width="20" height="20" class="gpu"/>
-    <rect x="340" y="70" width="20" height="20" class="gpu"/>
-    <rect x="360" y="70" width="20" height="20" class="zone"/>
-    <rect x="380" y="70" width="20" height="20" class="zone"/>
-    <rect x="400" y="70" width="20" height="20" class="zone"/>
-    <rect x="420" y="70" width="20" height="20" class="zone"/>
-    <rect x="280" y="90" width="20" height="20" class="zone"/>
-    <rect x="300" y="90" width="20" height="20" class="gpu"/>
-    <rect x="320" y="90" width="20" height="20" class="gpu"/>
-    <rect x="340" y="90" width="20" height="20" class="gpu"/>
-    <rect x="360" y="90" width="20" height="20" class="zone"/>
-    <rect x="380" y="90" width="20" height="20" class="zone"/>
-    <rect x="400" y="90" width="20" height="20" class="zone"/>
-    <rect x="420" y="90" width="20" height="20" class="zone"/>
-    <rect x="280" y="110" width="20" height="20" class="zone"/>
-    <rect x="300" y="110" width="20" height="20" class="gpu"/>
-    <rect x="320" y="110" width="20" height="20" class="gpu"/>
-    <rect x="340" y="110" width="20" height="20" class="gpu"/>
-    <rect x="360" y="110" width="20" height="20" class="zone"/>
-    <rect x="380" y="110" width="20" height="20" class="zone"/>
-    <rect x="400" y="110" width="20" height="20" class="zone"/>
-    <rect x="420" y="110" width="20" height="20" class="zone"/>
-    <rect x="280" y="130" width="20" height="20" class="zone"/>
-    <rect x="300" y="130" width="20" height="20" class="zone"/>
-    <rect x="320" y="130" width="20" height="20" class="zone"/>
-    <rect x="340" y="130" width="20" height="20" class="zone"/>
-    <rect x="360" y="130" width="20" height="20" class="zone"/>
-    <rect x="380" y="130" width="20" height="20" class="zone"/>
-    <rect x="400" y="130" width="20" height="20" class="zone"/>
-    <rect x="420" y="130" width="20" height="20" class="zone"/>
-    <rect x="280" y="150" width="20" height="20" class="zone"/>
-    <rect x="300" y="150" width="20" height="20" class="zone"/>
-    <rect x="320" y="150" width="20" height="20" class="zone"/>
-    <rect x="340" y="150" width="20" height="20" class="zone"/>
-    <rect x="360" y="150" width="20" height="20" class="zone"/>
-    <rect x="380" y="150" width="20" height="20" class="zone"/>
-    <rect x="400" y="150" width="20" height="20" class="zone"/>
-    <rect x="420" y="150" width="20" height="20" class="zone"/>
-    <rect x="280" y="170" width="20" height="20" class="zone"/>
-    <rect x="300" y="170" width="20" height="20" class="zone"/>
-    <rect x="320" y="170" width="20" height="20" class="zone"/>
-    <rect x="340" y="170" width="20" height="20" class="zone"/>
-    <rect x="360" y="170" width="20" height="20" class="zone"/>
-    <rect x="380" y="170" width="20" height="20" class="zone"/>
-    <rect x="400" y="170" width="20" height="20" class="zone"/>
-    <rect x="420" y="170" width="20" height="20" class="zone"/>
+    <text x="110" y="212" class="mid small t-bad">5 × 5 texels: too many</text>
+
+    <rect x="280" y="30" width="160" height="160" class="zone"/>
+    <rect x="300" y="70" width="60" height="60" class="gpu"/>
+    <path d="M280,30V190M300,30V190M320,30V190M340,30V190M360,30V190M380,30V190M400,30V190M420,30V190M440,30V190M280,30H440M280,50H440M280,70H440M280,90H440M280,110H440M280,130H440M280,150H440M280,170H440M280,190H440" class="grid"/>
     <rect x="300" y="80" width="50" height="50" class="hot"/>
     <text x="360" y="22" class="mid small">level 1: texel = 2 × 2 px</text>
-    <text x="360" y="212" class="mid small">3 × 3 texels: too many</text>
-    <rect x="530" y="30" width="40" height="40" class="zone"/>
-    <rect x="570" y="30" width="40" height="40" class="zone"/>
-    <rect x="610" y="30" width="40" height="40" class="zone"/>
-    <rect x="650" y="30" width="40" height="40" class="zone"/>
-    <rect x="530" y="70" width="40" height="40" class="gpu"/>
-    <rect x="570" y="70" width="40" height="40" class="gpu"/>
-    <rect x="610" y="70" width="40" height="40" class="zone"/>
-    <rect x="650" y="70" width="40" height="40" class="zone"/>
-    <rect x="530" y="110" width="40" height="40" class="gpu"/>
-    <rect x="570" y="110" width="40" height="40" class="gpu"/>
-    <rect x="610" y="110" width="40" height="40" class="zone"/>
-    <rect x="650" y="110" width="40" height="40" class="zone"/>
-    <rect x="530" y="150" width="40" height="40" class="zone"/>
-    <rect x="570" y="150" width="40" height="40" class="zone"/>
-    <rect x="610" y="150" width="40" height="40" class="zone"/>
-    <rect x="650" y="150" width="40" height="40" class="zone"/>
+    <text x="360" y="212" class="mid small t-bad">3 × 3 texels: too many</text>
+
+    <rect x="530" y="30" width="160" height="160" class="zone"/>
+    <rect x="530" y="70" width="80" height="80" class="gpu"/>
+    <path d="M530,30V190M570,30V190M610,30V190M650,30V190M690,30V190M530,30H690M530,70H690M530,110H690M530,150H690M530,190H690" class="grid"/>
     <rect x="550" y="80" width="50" height="50" class="hot"/>
     <text x="610" y="22" class="mid small">level 2: texel = 4 × 4 px</text>
-    <text x="610" y="212" class="mid small t-gpu">2 × 2 texels: use this level</text>
-    <text x="30" y="244" class="small">The orange rectangle is the object on screen: pixels 2 to 6 across, 5 to 9 down. Green texels are the ones it touches.</text>
+    <text x="610" y="212" class="mid small t-ok">2 × 2 texels: use this level</text>
   </svg>
-  <figcaption>The texel range at level <var>L</var> is the pixel range shifted right by <var>L</var> bits: <var>x</var><sub>min</sub> &gt;&gt; <var>L</var> to <var>x</var><sub>max</sub> &gt;&gt; <var>L</var>. Here the formula gives level 3 (log<sub>2</sub> 5 ≈ 2.3, rounded up), one level coarser than needed.</figcaption>
+  <figcaption>The orange rectangle is the object on screen: pixels 2 to 6 across, 5 to 9 down. Green texels are the ones it touches. The texel range at level <var>L</var> is the pixel range shifted right by <var>L</var> bits: <var>x</var><sub>min</sub> &gt;&gt; <var>L</var> to <var>x</var><sub>max</sub> &gt;&gt; <var>L</var>. Here the formula gives level 3 (log<sub>2</sub> 5 ≈ 2.3, rounded up), one level coarser than needed.</figcaption>
 </figure>
 
 <p>A finer level is not only fewer reads: its texels cover less space around the object, so they are less likely to include a far background pixel that makes the test fail.</p>
 
-<h2><span class="n">6</span>The test, and staying conservative</h2>
+<h2 id="test"><span class="n">6</span>The test, and staying conservative</h2>
 
 <p>Read the 2 × 2 texels, take the farthest of them, and compare it with the object's nearest depth:</p>
+
+<div class="legend">
+  <span><i class="mem"></i>the 4 texels' depths</span>
+  <span><i class="hot"></i>f: the farthest of them</span>
+  <span><i class="gpu"></i>the object's nearest point</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Two lines of distance from the camera. On each, four marks are the depths of the four texels; the farthest one is f. On the first line the object's nearest point is farther than f: it is behind everything drawn in that area, so it is occluded. On the second line the object's nearest point is nearer than f: something in the area is behind it, so it may be visible and is kept.">
+    <circle cx="36" cy="56" r="9" class="cpu"/>
+    <line x1="52" y1="56" x2="720" y2="56" class="arrow" marker-end="url(#ah)"/>
+    <text x="724" y="42" class="end small">distance from the camera</text>
+    <path d="M250,44V68M300,44V68M330,44V68" class="arrow mem thick"/>
+    <line x1="400" y1="40" x2="400" y2="72" class="arrow hot thick"/>
+    <text x="400" y="32" class="mid small t-hot">f</text>
+    <rect x="400" y="50" width="130" height="12" class="shade"/>
+    <circle cx="530" cy="56" r="8" class="gpu"/>
+    <text x="530" y="36" class="mid small t-gpu">nearest</text>
+    <text x="250" y="90" class="small">nearest is behind f: nothing in the area is farther → occluded, cull it</text>
+
+    <circle cx="36" cy="146" r="9" class="cpu"/>
+    <line x1="52" y1="146" x2="720" y2="146" class="arrow" marker-end="url(#ah)"/>
+    <path d="M250,134V158M300,134V158M330,134V158" class="arrow mem thick"/>
+    <line x1="400" y1="130" x2="400" y2="162" class="arrow hot thick"/>
+    <text x="400" y="122" class="mid small t-hot">f</text>
+    <circle cx="364" cy="146" r="8" class="ok"/>
+    <text x="364" y="126" class="mid small t-ok">nearest</text>
+    <text x="250" y="180" class="small t-ok">nearest is in front of f: it may show through there → visible, keep it</text>
+  </svg>
+  <figcaption>In words: an object is occluded when its closest point is farther away than the farthest thing drawn anywhere in that area.</figcaption>
+</figure>
 
 <div class="table-wrap">
 <table>
@@ -657,7 +498,7 @@
 </table>
 </div>
 
-<p>In words: the object's closest point is farther away than the farthest thing drawn anywhere in that area. Every step on the way rounds in the same direction:</p>
+<p>Every step on the way rounds in the same direction:</p>
 
 <div class="table-wrap">
 <table>
@@ -670,25 +511,64 @@
 </table>
 </div>
 
-<p>The price of all this rounding is <b>false visibles</b>: objects that are hidden but kept. That is a cost in time only.</p>
+<div class="callout">
+  <strong>The price: false visibles</strong>
+  <p>All this rounding gives <b>false visibles</b>: objects that are hidden but kept. That is a cost in time only.</p>
+</div>
 
 <h2 id="two-pass"><span class="n">7</span>Where the depth comes from</h2>
 
 <p>Here is the catch. To test objects against the depth buffer before drawing them, the depth buffer must already exist, but it is made by drawing them. There are three ways around this.</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Way</th><th>How</th><th>Problem</th></tr>
-  <tr><td>Occluder prepass</td><td>Draw a hand-picked set of big occluders first, build the Hi-Z from them.</td><td>Someone must choose the occluders; small objects never occlude.</td></tr>
-  <tr><td>Last frame's depth, reprojected</td><td>Move last frame's depth into this frame's view, build the Hi-Z from it.</td><td>Reprojection leaves holes where something was hidden last frame; moving objects make it wrong. It needs care to stay conservative.</td></tr>
-  <tr><td><b>Two-pass</b></td><td>Draw what was visible last frame, build the Hi-Z from that, then test everything else.</td><td>Two culling passes and a Hi-Z build in the middle of the frame.</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 110" role="img" aria-label="Two big occluders are drawn first and go into the Hi-Z. Small objects are not drawn into it.">
+      <rect x="14" y="20" width="44" height="70" class="solid"/>
+      <rect x="66" y="40" width="50" height="50" class="solid"/>
+      <circle cx="40" cy="100" r="5" class="ghost"/><circle cx="96" cy="26" r="5" class="ghost"/><circle cx="124" cy="98" r="5" class="ghost"/>
+      <line x1="126" y1="60" x2="158" y2="60" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <rect x="162" y="32" width="56" height="56" class="mem"/><path d="M162,32V88M176,32V88M190,32V88M204,32V88M218,32V88M162,32H218M162,46H218M162,60H218M162,74H218M162,88H218" class="arrow mem thin"/>
+      <text x="190" y="104" class="mid small">Hi-Z</text>
+    </svg>
+    <h4>Occluder prepass</h4>
+    <p>Draw a hand-picked set of big occluders first, build the Hi-Z from them.</p>
+    <p class="cost"><b>Problem:</b> someone must choose the occluders; small objects never occlude.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 110" role="img" aria-label="Last frame's depth is moved into this frame's view. Some texels have no value: holes.">
+      <rect x="14" y="24" width="72" height="54" class="ghost"/>
+      <text x="50" y="96" class="mid small t-faint">last frame</text>
+      <line x1="92" y1="51" x2="124" y2="51" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <rect x="130" y="24" width="96" height="54" class="mem"/>
+      <rect x="154" y="24" width="24" height="18" class="bad"/><rect x="202" y="42" width="24" height="18" class="bad"/><rect x="130" y="60" width="24" height="18" class="bad"/>
+      <path d="M154,24V78M178,24V78M202,24V78M130,42H226M130,60H226" class="arrow mem thin"/>
+      <text x="178" y="96" class="mid small t-bad">holes</text>
+    </svg>
+    <h4>Last frame's depth, reprojected</h4>
+    <p>Move last frame's depth into this frame's view, build the Hi-Z from it.</p>
+    <p class="cost"><b>Problem:</b> reprojection leaves holes where something was hidden last frame; moving objects make it wrong. It needs care to stay conservative.</p>
+  </div>
+  <div class="vcard pick">
+    <svg viewBox="0 0 240 110" role="img" aria-label="Three steps: draw what was visible last frame, build the Hi-Z from that, test everything else.">
+      <rect x="8" y="34" width="66" height="42" rx="5" class="gpu"/>
+      <text x="41" y="52" class="mid small">draw last</text><text x="41" y="66" class="mid small">frame's</text>
+      <line x1="74" y1="55" x2="88" y2="55" class="arrow" marker-end="url(#ah)"/>
+      <rect x="90" y="34" width="56" height="42" rx="5" class="mem"/>
+      <text x="118" y="59" class="mid small">Hi-Z</text>
+      <line x1="146" y1="55" x2="160" y2="55" class="arrow" marker-end="url(#ah)"/>
+      <rect x="162" y="34" width="70" height="42" rx="21" class="shader"/>
+      <text x="197" y="52" class="mid small">test the</text><text x="197" y="66" class="mid small">rest</text>
+    </svg>
+    <h4>Two-pass</h4>
+    <p>Draw what was visible last frame, build the Hi-Z from that, then test everything else.</p>
+    <p class="cost"><b>Problem:</b> two culling passes and a Hi-Z build in the middle of the frame.</p>
+  </div>
 </div>
 
 <p>The two-pass scheme (Haar and Aaltonen, SIGGRAPH 2015) is the usual choice today. It keeps one flag per object: <i>was it visible last frame?</i></p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 236" role="img" aria-label="Frame N: the early pass culls with the frustum and last frame's flags and draws those objects. The Hi-Z is built from their depth. The late pass tests every object against it, draws the newly visible ones, and writes the flags that frame N plus 1's early pass reads.">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Frame N: the early pass culls with the frustum and last frame's flags and draws those objects. The Hi-Z is built from their depth. The late pass tests every object against it, draws the newly visible ones, and writes the flags that frame N plus 1's early pass reads.">
     <rect x="10" y="40" width="130" height="62" rx="31" class="shader"/>
     <text x="75" y="64" class="mid title">Early cull</text>
     <text x="75" y="82" class="mid small">frustum + flag = 1</text>
@@ -716,26 +596,45 @@
     <path d="M500,102 V170 H462" class="arrow mem" marker-end="url(#ah-mem)"/>
     <path d="M300,170 H75 V104" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
     <text x="190" y="162" class="mid small">read by the next frame's early cull</text>
-    <text x="10" y="226" class="small">The image is complete after the late draw: every visible object was drawn in one of the two passes.</text>
   </svg>
-  <figcaption>The early pass is a guess. The late pass checks the guess against real depth from this frame, and fixes it.</figcaption>
+  <figcaption>The early pass is a guess. The late pass checks the guess against real depth from this frame, and fixes it. The image is complete after the late draw: every visible object was drawn in one of the two passes.</figcaption>
 </figure>
 
 <h3>Why the guess only costs time</h3>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Last frame</th><th>This frame</th><th>What happens</th><th>Cost</th></tr>
-  <tr><td>visible</td><td>visible</td><td>drawn early</td><td>none: the common case</td></tr>
-  <tr><td>visible</td><td>hidden</td><td>drawn early anyway; the late test clears its flag</td><td>one wasted draw, for one frame</td></tr>
-  <tr><td>hidden</td><td>visible</td><td>skipped early; the late test sees it against this frame's depth and draws it</td><td>none for the image; it is drawn late</td></tr>
-  <tr><td>hidden</td><td>hidden</td><td>skipped early, culled late</td><td>none: this is the saving</td></tr>
-</table>
-</div>
+<figure class="diagram">
+  <svg viewBox="0 0 760 236" role="img" aria-label="A table of four cases. Visible last frame and visible now: drawn early, no cost, the common case. Visible last frame and hidden now: drawn early anyway, the late test clears its flag, one wasted draw for one frame. Hidden last frame and visible now: skipped early, the late test sees it against this frame's depth and draws it, no cost for the image. Hidden both frames: skipped early, culled late, no cost, this is the saving.">
+    <text x="330" y="24" class="mid title">this frame: visible</text>
+    <text x="590" y="24" class="mid title">this frame: hidden</text>
+    <text x="20" y="76" class="title">last frame:</text>
+    <text x="20" y="94" class="title">visible</text>
+    <text x="20" y="172" class="title">last frame:</text>
+    <text x="20" y="190" class="title">hidden</text>
+
+    <rect x="205" y="36" width="250" height="88" rx="6" class="ok"/>
+    <text x="330" y="68" class="mid title">drawn early</text>
+    <text x="330" y="100" class="mid small">cost: none, the common case</text>
+
+    <rect x="465" y="36" width="250" height="88" rx="6" class="accent"/>
+    <text x="590" y="60" class="mid title">drawn early anyway</text>
+    <text x="590" y="80" class="mid small">the late test clears its flag</text>
+    <text x="590" y="106" class="mid small t-hot">cost: one wasted draw, for one frame</text>
+
+    <rect x="205" y="132" width="250" height="88" rx="6" class="ok"/>
+    <text x="330" y="156" class="mid title">skipped early, drawn late</text>
+    <text x="330" y="176" class="mid small">the late test sees it against this frame's depth</text>
+    <text x="330" y="202" class="mid small">cost: none for the image</text>
+
+    <rect x="465" y="132" width="250" height="88" rx="6" class="ok"/>
+    <text x="590" y="164" class="mid title">skipped early, culled late</text>
+    <text x="590" y="196" class="mid small">cost: none, this is the saving</text>
+  </svg>
+  <figcaption>A wrong guess is either one wasted draw or an object that is drawn late. No case loses a visible object.</figcaption>
+</figure>
 
 <p>The Hi-Z of the late pass holds only the early objects. It may lack some occluders, but missing occluders only make objects look <i>more</i> visible, never less. So the late test is still conservative. A new object, or a camera cut, starts with no good history: the early pass draws little, and the late pass does most of the work for one frame.</p>
 
-<h2><span class="n">8</span>Worked example</h2>
+<h2 id="example"><span class="n">8</span>Worked example</h2>
 
 <p>A tiny screen of 16 × 16 pixels, reversed-Z with an infinite far plane, so depth = near / distance, with near = 0.1. A wall 2.5 units away covers the left 12 columns. Click through the steps (or use the arrow keys).</p>
 
@@ -1763,26 +1662,44 @@
   </div>
 </div>
 
-<h2><span class="n">9</span>Variants and pitfalls</h2>
+<h2 id="pitfalls"><span class="n">9</span>Variants and pitfalls</h2>
 
 <div class="split">
   <div>
+    <svg viewBox="0 0 320 110" role="img" aria-label="A long wall split into eight clusters. Six are hidden and culled; the two at one end are visible and drawn.">
+      <rect x="20" y="36" width="35" height="36" class="ghost"/><rect x="55" y="36" width="35" height="36" class="ghost"/><rect x="90" y="36" width="35" height="36" class="ghost"/>
+      <rect x="125" y="36" width="35" height="36" class="ghost"/><rect x="160" y="36" width="35" height="36" class="ghost"/><rect x="195" y="36" width="35" height="36" class="ghost"/>
+      <rect x="230" y="36" width="35" height="36" class="ok"/><rect x="265" y="36" width="35" height="36" class="ok"/>
+      <text x="125" y="92" class="mid small t-faint">hidden clusters: culled</text>
+      <text x="265" y="92" class="mid small t-ok">visible</text>
+      <text x="160" y="24" class="mid small">one long wall, 8 clusters</text>
+    </svg>
     <h4>Finer culling</h4>
     <p>Whole objects are coarse: a long wall with one visible corner is drawn whole. Engines that split meshes into small <b>clusters</b> (meshlets) of about 64 to 128 triangles run the same test per cluster, and some go down to single triangles.</p>
   </div>
   <div>
+    <svg viewBox="0 0 320 110" role="img" aria-label="Two views, the main camera and a light. Each has its own Hi-Z pyramid and its own visibility flags.">
+      <circle cx="30" cy="40" r="8" class="cpu"/>
+      <text x="30" y="68" class="mid small">camera</text>
+      <rect x="62" y="20" width="40" height="40" class="mem"/><rect x="108" y="28" width="24" height="24" class="mem"/><rect x="138" y="33" width="14" height="14" class="mem"/>
+      <text x="106" y="78" class="mid small">its Hi-Z + flags</text>
+      <circle cx="190" cy="40" r="8" class="light"/>
+      <text x="190" y="68" class="mid small">light</text>
+      <rect x="222" y="20" width="40" height="40" class="mem"/><rect x="268" y="28" width="24" height="24" class="mem"/><rect x="298" y="33" width="14" height="14" class="mem"/>
+      <text x="266" y="78" class="mid small">its Hi-Z + flags</text>
+    </svg>
     <h4>Other views</h4>
     <p>Each camera needs its own Hi-Z and its own history. A shadow map's light view sees different occluders than the main camera.</p>
   </div>
 </div>
 
-<ul>
-  <li><b>Transparent and alpha-blended objects</b> must not write the depth the Hi-Z is built from: they do not hide what is behind them.</li>
-  <li><b>History is per object and per view.</b> If the flags of two cameras get mixed, the result is still correct, only slower.</li>
-  <li><b>Draw order can change.</b> An object moves between the early and the late pass when its test flips. Two surfaces at exactly the same depth can then swap which one wins. Fix z-fighting in the content; do not rely on draw order.</li>
-  <li><b>Viewport and depth range.</b> The test maps clip space onto the Hi-Z. If the pass draws into part of the target, or with another depth range, that mapping must include it.</li>
-  <li><b>Build cost.</b> The Hi-Z build is a fixed cost per view. In a scene with little occlusion, it can cost more than it saves. Measure it with a <a href="gpu-timing.html">GPU timer</a>.</li>
-</ul>
+<dl class="pitfalls">
+  <div><dt>Transparent and alpha-blended objects</dt><dd>They must not write the depth the Hi-Z is built from: they do not hide what is behind them.</dd></div>
+  <div><dt>History is per object and per view</dt><dd>If the flags of two cameras get mixed, the result is still correct, only slower.</dd></div>
+  <div><dt>Draw order can change</dt><dd>An object moves between the early and the late pass when its test flips. Two surfaces at exactly the same depth can then swap which one wins. Fix z-fighting in the content; do not rely on draw order.</dd></div>
+  <div><dt>Viewport and depth range</dt><dd>The test maps clip space onto the Hi-Z. If the pass draws into part of the target, or with another depth range, that mapping must include it.</dd></div>
+  <div><dt>Build cost</dt><dd>The Hi-Z build is a fixed cost per view. In a scene with little occlusion, it can cost more than it saves. Measure it with a <a href="gpu-timing.html">GPU timer</a>.</dd></div>
+</dl>
 
 <h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
 

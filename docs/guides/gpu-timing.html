@@ -19,6 +19,8 @@
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
   </defs>
 </svg>
 
@@ -42,12 +44,12 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>Two clocks: CPU time and GPU time</h2>
+<h2 id="two-clocks"><span class="n">1</span>Two clocks: CPU time and GPU time</h2>
 
 <p>A frame has two kinds of time. <b>CPU time</b> is how long the CPU works on the frame: game logic, culling, recording command buffers. <b>GPU time</b> is how long the GPU works on it: running the shaders, writing pixels. The two run at the same time, on different frames.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="A timeline with two rows. The CPU records frame 1, then frame 2, then frame 3. The GPU runs frame 1 while the CPU records frame 2, and frame 2 while the CPU records frame 3. The frame rate is set by the slower of the two.">
+  <svg viewBox="0 0 760 165" role="img" aria-label="A timeline with two rows. The CPU records frame 1, then frame 2, then frame 3. The GPU runs frame 1 while the CPU records frame 2, and frame 2 while the CPU records frame 3. The frame rate is set by the slower of the two.">
     <line x1="90" y1="30" x2="750" y2="30" class="arrow" marker-end="url(#ah)"/>
     <text x="20" y="34" class="small">time →</text>
     <text x="20" y="74" class="title t-cpu">CPU</text>
@@ -67,31 +69,120 @@
     <line x1="250" y1="88" x2="250" y2="112" class="arrow dashed" marker-end="url(#ah)"/>
     <line x1="420" y1="88" x2="480" y2="112" class="arrow dashed" marker-end="url(#ah)"/>
     <text x="256" y="104" class="small">submit</text>
-    <text x="90" y="186" class="small">Here the GPU needs 230 units per frame and the CPU 160. The GPU is the slower one: the frame</text>
-    <text x="90" y="202" class="small">is <tspan class="t-hot">GPU-bound</tspan>, and the CPU ends up waiting. Making the CPU faster would change nothing.</text>
-    <text x="90" y="226" class="small">If the CPU were slower, the GPU would sit idle between frames: <tspan class="t-hot">CPU-bound</tspan>.</text>
   </svg>
-  <figcaption>The frame rate follows the slower side. So the first question of any optimization is "which side is slow?", and that needs both numbers.</figcaption>
+  <figcaption>The frame rate follows the slower side. Here the GPU needs 230 units per frame and the CPU 160, so the CPU ends up waiting. The first question of any optimization is "which side is slow?", and that needs both numbers.</figcaption>
 </figure>
+
+<div class="split">
+  <div>
+    <svg viewBox="0 0 320 110" role="img" aria-label="The GPU row is full of work with no gaps. The CPU row has a wait after each frame it records.">
+      <text x="10" y="38" class="small t-cpu">CPU</text>
+      <text x="10" y="80" class="small t-gpu">GPU</text>
+      <rect x="50"  y="22" width="60" height="26" rx="3" class="cpu"/>
+      <rect x="110" y="22" width="40" height="26" rx="3" class="ghost"/>
+      <rect x="150" y="22" width="60" height="26" rx="3" class="cpu"/>
+      <rect x="210" y="22" width="40" height="26" rx="3" class="ghost"/>
+      <rect x="250" y="22" width="60" height="26" rx="3" class="cpu"/>
+      <text x="130" y="39" class="mid small t-faint">waits</text>
+      <text x="230" y="39" class="mid small t-faint">waits</text>
+      <rect x="110" y="64" width="100" height="26" rx="3" class="gpu"/>
+      <rect x="210" y="64" width="100" height="26" rx="3" class="gpu"/>
+    </svg>
+    <h4>GPU-bound</h4>
+    <p>The GPU is the slower one, and the CPU ends up waiting. Making the CPU faster would change nothing.</p>
+  </div>
+  <div>
+    <svg viewBox="0 0 320 110" role="img" aria-label="The CPU row is full of work with no gaps. The GPU row has an idle gap after each frame it runs.">
+      <text x="10" y="38" class="small t-cpu">CPU</text>
+      <text x="10" y="80" class="small t-gpu">GPU</text>
+      <rect x="50"  y="22" width="100" height="26" rx="3" class="cpu"/>
+      <rect x="150" y="22" width="100" height="26" rx="3" class="cpu"/>
+      <rect x="250" y="22" width="60" height="26" rx="3" class="cpu"/>
+      <rect x="150" y="64" width="50" height="26" rx="3" class="gpu"/>
+      <rect x="200" y="64" width="50" height="26" rx="3" class="ghost"/>
+      <rect x="250" y="64" width="50" height="26" rx="3" class="gpu"/>
+      <text x="225" y="81" class="mid small t-faint">idle</text>
+    </svg>
+    <h4>CPU-bound</h4>
+    <p>The CPU is the slower one. The GPU sits idle between frames.</p>
+  </div>
+</div>
 
 <p>The time from one frame start to the next is the <b>frame time</b>. It is easy to measure on the CPU, and it is what the player feels. But it is neither the CPU time nor the GPU time: it is the larger of the two, plus any waiting. With vertical sync on, it is also rounded up to the display's refresh interval (16.7 ms at 60 Hz), even if both sides finish in 3 ms.</p>
 
-<h2><span class="n">2</span>Why the CPU cannot time GPU work</h2>
+<figure class="diagram">
+  <svg viewBox="0 0 760 150" role="img" aria-label="Three bars on one time axis. The CPU time is 3 milliseconds. The GPU time is 3 milliseconds. The frame time with vertical sync is 16.7 milliseconds, the display's refresh interval.">
+    <text x="110" y="34" class="end small">CPU time</text>
+    <rect x="120" y="16" width="108" height="28" rx="3" class="cpu"/>
+    <text x="236" y="35" class="small">3 ms</text>
+    <text x="110" y="74" class="end small">GPU time</text>
+    <rect x="120" y="56" width="108" height="28" rx="3" class="gpu"/>
+    <text x="236" y="75" class="small">3 ms</text>
+    <text x="110" y="114" class="end small">frame time</text>
+    <rect x="120" y="96" width="601" height="28" rx="3" class="accent"/>
+    <text x="420" y="115" class="mid small">16.7 ms: rounded up to the refresh interval at 60 Hz</text>
+    <line x1="721" y1="10" x2="721" y2="132" class="hot dashed"/>
+    <text x="716" y="144" class="end small t-hot">next refresh</text>
+  </svg>
+  <figcaption>With vertical sync on, the frame time is not the CPU time and not the GPU time.</figcaption>
+</figure>
+<h2 id="cpu-timer"><span class="n">2</span>Why the CPU cannot time GPU work</h2>
 
 <p>The obvious idea fails: start a CPU timer before a draw call and stop it after. The draw call only <i>writes a command</i> into a command buffer. It returns in microseconds, long before the GPU starts it. Waiting for the GPU does not work either:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>CPU-side attempt</th><th>What it really measures</th></tr>
-  <tr><td>Timer around the draw call</td><td>the cost of recording the command</td></tr>
-  <tr><td>Timer from submit to "the fence is signalled"</td><td>the GPU work plus the queue wait (earlier frames still running), the driver's delay, and the moment the CPU noticed the fence</td></tr>
-  <tr><td>Submit each pass alone and wait for it</td><td>the pass, but the GPU now idles between passes and cannot overlap them. The frame becomes much slower, and the numbers describe that slower frame.</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The timer covers a very short piece of CPU time. The GPU does the real work much later.">
+      <text x="10" y="50" class="small t-cpu">CPU</text>
+      <text x="10" y="94" class="small t-gpu">GPU</text>
+      <rect x="44" y="36" width="22" height="24" rx="3" class="cpu"/>
+      <path d="M44,28v-8h22v8" class="hot"/>
+      <text x="55" y="14" class="mid small t-hot">timer</text>
+      <rect x="120" y="78" width="106" height="24" rx="3" class="gpu"/>
+      <text x="173" y="95" class="mid small">the real work</text>
+      <line x1="66" y1="54" x2="118" y2="84" class="arrow dashed" marker-end="url(#ah)"/>
+      <text x="135" y="120" class="mid small">time →</text>
+    </svg>
+    <h4>Timer around the draw call</h4>
+    <p><b>Really measures:</b> the cost of recording the command.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The timer runs from the submit to the moment the CPU notices the fence. That span holds earlier frames, the work itself and a delay.">
+      <text x="10" y="50" class="small t-cpu">CPU</text>
+      <text x="10" y="94" class="small t-gpu">GPU</text>
+      <path d="M44,60v-8h182v8" class="hot"/>
+      <text x="135" y="44" class="mid small t-hot">timer: submit → fence seen</text>
+      <rect x="44" y="78" width="70" height="24" rx="3" class="ghost"/>
+      <text x="79" y="95" class="mid small t-faint">earlier</text>
+      <rect x="114" y="78" width="76" height="24" rx="3" class="gpu"/>
+      <text x="152" y="95" class="mid small">work</text>
+      <rect x="190" y="78" width="36" height="24" rx="3" class="ghost"/>
+      <text x="135" y="120" class="mid small">time →</text>
+    </svg>
+    <h4>Timer from submit to "the fence is signalled"</h4>
+    <p><b>Really measures:</b> the GPU work plus the queue wait (earlier frames still running), the driver's delay, and the moment the CPU noticed the fence.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three passes on the GPU with idle gaps between them, because the CPU waits for each one before it submits the next.">
+      <text x="10" y="50" class="small t-cpu">CPU</text>
+      <text x="10" y="94" class="small t-gpu">GPU</text>
+      <path d="M44,36h14v24h-14zM110,36h14v24h-14zM176,36h14v24h-14z" class="cpu"/>
+      <rect x="58"  y="78" width="40" height="24" rx="3" class="gpu"/>
+      <rect x="98"  y="78" width="26" height="24" rx="3" class="ghost"/>
+      <rect x="124" y="78" width="40" height="24" rx="3" class="gpu"/>
+      <rect x="164" y="78" width="26" height="24" rx="3" class="ghost"/>
+      <rect x="190" y="78" width="36" height="24" rx="3" class="gpu"/>
+      <text x="135" y="20" class="mid small">submit, wait, submit, wait…</text>
+      <text x="135" y="120" class="mid small t-bad">the GPU idles between passes</text>
+    </svg>
+    <h4>Submit each pass alone and wait for it</h4>
+    <p><b>Really measures:</b> the pass, but the GPU now idles between passes and cannot overlap them. The frame becomes much slower, and the numbers describe that slower frame.</p>
+  </div>
 </div>
 
 <p>The only reliable clock for GPU work is the GPU's own clock. The GPU must write it down at the right moments, while it runs the frame as usual.</p>
 
-<h2><span class="n">3</span>Timestamp queries</h2>
+<h2 id="timestamps"><span class="n">3</span>Timestamp queries</h2>
 
 <p>A <b>query</b> is a small slot that the GPU fills with an answer. A <b>query pool</b> is an array of them. A <b>timestamp</b> query is filled with the value of the GPU's clock. The command that fills it goes into the command buffer, between other commands, like a bookmark:</p>
 
@@ -116,9 +207,9 @@
     <line x1="55" y1="74" x2="55" y2="132" class="arrow hot" marker-end="url(#ah-hot)"/>
     <line x1="389" y1="74" x2="200" y2="132" class="arrow hot" marker-end="url(#ah-hot)"/>
     <line x1="551" y1="74" x2="330" y2="132" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="400" y="110" class="small">the GPU writes its clock when it gets there</text>
+    <text x="470" y="112" class="small">the GPU writes its clock when it gets there</text>
 
-    <text x="20" y="128" class="small">query pool</text>
+    <text x="552" y="160" class="small">query pool</text>
     <rect x="20" y="136" width="130" height="40" rx="4" class="mem"/>
     <text x="85" y="160" class="mid mono small">1,250,000</text>
     <rect x="150" y="136" width="130" height="40" rx="4" class="mem"/>
@@ -160,6 +251,27 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
 
 <p>This works as long as the measured work is shorter than one full turn of the counter. Even with 32 bits and a 1 ns tick, a turn is 4.3 seconds.</p>
 
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="The counter as a line from 0 to 2 to the power 32. The begin timestamp is close to the right end. The counter runs to the end, wraps to 0, and the end timestamp is close to the left end. The real distance is the short way through the wrap: 8192 ticks.">
+    <line x1="60" y1="90" x2="700" y2="90" class="arrow thick"/>
+    <path d="M60,80v20M700,80v20" class="arrow"/>
+    <text x="60" y="118" class="mid mono">0</text>
+    <text x="700" y="118" class="mid mono">2^32</text>
+    <circle cx="630" cy="90" r="7" class="mem"/>
+    <text x="630" y="118" class="mid small">begin</text>
+    <text x="630" y="134" class="mid mono">0xFFFFF000</text>
+    <circle cx="130" cy="90" r="7" class="mem"/>
+    <text x="130" y="118" class="mid small">end</text>
+    <text x="130" y="134" class="mid mono">0x00001000</text>
+    <line x1="638" y1="82" x2="698" y2="82" class="arrow ok thick" marker-end="url(#ah-ok)"/>
+    <line x1="62" y1="82" x2="122" y2="82" class="arrow ok thick" marker-end="url(#ah-ok)"/>
+    <path d="M700,74 C700,10 60,10 60,74" class="arrow ok dashed" marker-end="url(#ah-ok)"/>
+    <text x="380" y="20" class="mid small t-ok halo">the counter wraps to 0</text>
+    <text x="380" y="62" class="mid small t-ok">(end − begin) &amp; mask = 8192 ticks: the short way, through the wrap</text>
+    <text x="380" y="160" class="mid small t-bad">plain end − begin: the long way back, a huge number</text>
+  </svg>
+  <figcaption>The masked subtraction measures forward from begin, through the wrap, to end. The picture is not to scale.</figcaption>
+</figure>
 <h3>Rules of query pools</h3>
 
 <ol class="steps">
@@ -168,12 +280,12 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
   <li><b>Do not reuse while in flight.</b>A pool that the GPU is still writing cannot be reset by the CPU. With several frames in flight, each frame needs its own pool (section 4).</li>
 </ol>
 
-<h2><span class="n">4</span>Reading results without stalling</h2>
+<h2 id="readback"><span class="n">4</span>Reading results without stalling</h2>
 
 <p>The timestamps of frame N are written while the GPU runs frame N, which is after the CPU has moved on. If the CPU waited for them right away, it would lose the overlap of section 1. Instead, each <a href="frames-in-flight.html">frame-in-flight</a> slot gets its own query pool. The CPU reads a slot's pool at the moment it must wait for that slot anyway: after the slot's fence, just before it records the slot's next frame.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 300" role="img" aria-label="Two frames in flight. Frame N uses slot A and writes its timestamps into pool A. Frame N+1 uses slot B. Frame N+2 uses slot A again: it waits for frame N's fence, reads pool A, resets it, and records new timestamps into it. The numbers shown during frame N+2 belong to frame N.">
+  <svg viewBox="0 0 760 272" role="img" aria-label="Two frames in flight. Frame N uses slot A and writes its timestamps into pool A. Frame N+1 uses slot B. Frame N+2 uses slot A again: it waits for frame N's fence, reads pool A, resets it, and records new timestamps into it. The numbers shown during frame N+2 belong to frame N.">
     <line x1="90" y1="30" x2="750" y2="30" class="arrow" marker-end="url(#ah)"/>
     <text x="20" y="34" class="small">time →</text>
     <text x="200" y="20" class="mid small">frame N · slot A</text>
@@ -205,14 +317,13 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
     <text x="310" y="246" class="mid small">writes the timestamps into pool A</text>
     <rect x="470" y="200" width="240" height="60" rx="6" class="ghost"/>
     <text x="590" y="234" class="mid small t-faint">frame N+1 runs</text>
-    <text x="90" y="290" class="small">With N frames in flight, the numbers you show are N frames old. At 60 fps and N = 2, that is 33 ms: nobody can tell.</text>
   </svg>
-  <figcaption>The CPU already waits for the fence before it reuses a slot. Reading the queries there costs no extra waiting, and the pool is free to reset.</figcaption>
+  <figcaption>The CPU already waits for the fence before it reuses a slot. Reading the queries there costs no extra waiting, and the pool is free to reset. With N frames in flight, the numbers you show are N frames old. At 60 fps and N = 2, that is 33 ms: nobody can tell.</figcaption>
 </figure>
 
 <p>The same pattern works for anything the GPU writes for the CPU: counters (section 7), readback of pixels, GPU-generated lists. A frame that was recorded but never submitted wrote nothing, so the reader must notice that (for example, by checking that the fence value moved) and skip the slot.</p>
 
-<h2><span class="n">5</span>Per-pass timers</h2>
+<h2 id="pass-timers"><span class="n">5</span>Per-pass timers</h2>
 
 <p>A timer is a pair of timestamps: one before a piece of work, one after it. Put a pair around the whole frame and one around each pass, and you have a profile of the frame. A pool with 2<var>k</var> queries holds <var>k</var> timers: timer <var>i</var> uses query 2<var>i</var> for its begin and 2<var>i</var> + 1 for its end.</p>
 
@@ -240,61 +351,143 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
   <figcaption>Timers can nest. The work of two command buffers can also run back to back, or even overlap, so the frame's GPU time is best taken from the earliest begin to the latest end of all timers.</figcaption>
 </figure>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Thing to know</th><th>Why it matters</th></tr>
-  <tr><td>Pass times do not add up to the frame time</td><td>A GPU overlaps work: the next pass may start before the previous one has fully drained. Nested timers are counted twice if added.</td></tr>
-  <tr><td>Timestamps are cheap, not free</td><td>A timestamp waits for earlier work to reach its stage. Many timers inside a pass can reduce overlap a little. A few per pass are fine.</td></tr>
-  <tr><td>Tile-based GPUs (most phones)</td><td>Inside a render pass, the GPU works tile by tile, not draw by draw. Timestamps between draws in one pass are not meaningful there; time whole passes.</td></tr>
-  <tr><td>Clock speed changes</td><td>A GPU with little work lowers its clock. A light frame can then show longer times than expected. Profile with a stable workload, or ask the driver for a stable clock.</td></tr>
-  <tr><td>Fixed pool size</td><td>A pool holds a fixed number of timers. When a frame wants more, the extra ones must be dropped, ideally with one warning, not one per frame.</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two pass timers overlap in time. The frame's time is shorter than the two added together.">
+      <rect x="20" y="20" width="120" height="24" rx="3" class="gpu"/><text x="80" y="37" class="mid small">pass A</text>
+      <rect x="104" y="52" width="116" height="24" rx="3" class="gpu"/><text x="162" y="69" class="mid small">pass B</text>
+      <path d="M104,14V84M140,14V84" class="hot dashed"/>
+      <path d="M20,98v8h200v-8" class="arrow"/>
+      <text x="120" y="124" class="mid small">frame: less than A + B</text>
+    </svg>
+    <h4>Pass times do not add up to the frame time</h4>
+    <p>A GPU overlaps work: the next pass may start before the previous one has fully drained. Nested timers are counted twice if added.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A row of commands with a timestamp between every two of them.">
+      <path d="M20,46h30v30h-30zM62,46h30v30h-30zM104,46h30v30h-30zM146,46h30v30h-30zM188,46h30v30h-30z" class="box"/>
+      <path d="M56,40V82M98,40V82M140,40V82M182,40V82" class="arrow hot thick"/>
+      <text x="120" y="28" class="mid small t-hot">a timestamp after every draw</text>
+      <text x="120" y="108" class="mid small">each one waits for the work before it</text>
+    </svg>
+    <h4>Timestamps are cheap, not free</h4>
+    <p>A timestamp waits for earlier work to reach its stage. Many timers inside a pass can reduce overlap a little. A few per pass are fine.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The screen as a grid of tiles. An arrow goes through the tiles one after the other.">
+      <rect x="48" y="14" width="144" height="96" class="paper"/>
+      <path d="M84,14V110M120,14V110M156,14V110M48,46H192M48,78H192" class="arrow"/>
+      <path d="M66,30H174L66,62H174L66,94H170" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="120" y="126" class="mid small">tile by tile, not draw by draw</text>
+    </svg>
+    <h4>Tile-based GPUs (most phones)</h4>
+    <p>Inside a render pass, the GPU works tile by tile, not draw by draw. Timestamps between draws in one pass are not meaningful there; time whole passes.</p>
+  </div>
 </div>
 
-<h2><span class="n">6</span>Pipeline statistics, and other counters</h2>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 320 110" role="img" aria-label="The same work as two bars. With a fast clock the bar is short. With a slow clock it is long.">
+      <text x="14" y="34" class="small">busy GPU, fast clock</text>
+      <rect x="150" y="18" width="60" height="24" rx="3" class="gpu"/>
+      <text x="14" y="76" class="small">light frame, slow clock</text>
+      <rect x="150" y="60" width="150" height="24" rx="3" class="gpu o-50"/>
+      <text x="225" y="102" class="mid small">the same work takes longer</text>
+    </svg>
+    <h4>Clock speed changes</h4>
+    <p>A GPU with little work lowers its clock. A light frame can then show longer times than expected. Profile with a stable workload, or ask the driver for a stable clock.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 110" role="img" aria-label="A pool of eight timer slots, all full. Two more timers do not fit and are dropped.">
+      <path d="M20,30h26v30h-26zM46,30h26v30h-26zM72,30h26v30h-26zM98,30h26v30h-26zM124,30h26v30h-26zM150,30h26v30h-26zM176,30h26v30h-26zM202,30h26v30h-26z" class="mem"/>
+      <rect x="244" y="30" width="26" height="30" class="ghost"/>
+      <rect x="274" y="30" width="26" height="30" class="ghost"/>
+      <text x="124" y="84" class="mid small">the pool: full</text>
+      <text x="272" y="84" class="mid small t-bad">dropped</text>
+    </svg>
+    <h4>Fixed pool size</h4>
+    <p>A pool holds a fixed number of timers. When a frame wants more, the extra ones must be dropped, ideally with one warning, not one per frame.</p>
+  </div>
+</div>
+
+<h2 id="pipeline-stats"><span class="n">6</span>Pipeline statistics, and other counters</h2>
 
 <p>Timestamps say how long. Other questions are "how much": how many vertices, triangles or pixels did the GPU really process? APIs have query types for that too:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Query type</th><th>Counts</th></tr>
-  <tr><td><b>Pipeline statistics</b></td><td>per pipeline stage: input vertices and primitives, vertex shader runs, primitives after clipping, fragment shader runs, compute shader runs. Chosen by flags when the pool is made.</td></tr>
-  <tr><td><b>Occlusion</b></td><td>samples that passed the depth test between begin and end. Used for occlusion tests and lens flares.</td></tr>
-  <tr><td>Vendor counters</td><td>cache hits, memory traffic, occupancy. Seen in tools like Nsight, Radeon GPU Profiler or PIX, not usually inside the engine.</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three pipeline stages in a row. Each one has its own counter under it.">
+      <rect x="12"  y="24" width="64" height="34" rx="4" class="gpu"/><text x="44"  y="45" class="mid small">vertex</text>
+      <rect x="88"  y="24" width="64" height="34" rx="4" class="gpu"/><text x="120" y="45" class="mid small">clip</text>
+      <rect x="164" y="24" width="64" height="34" rx="4" class="gpu"/><text x="196" y="45" class="mid small">fragment</text>
+      <path d="M76,41h12M152,41h12" class="arrow"/>
+      <path d="M44,58v16M120,58v16M196,58v16" class="arrow mem"/>
+      <rect x="20"  y="74" width="48" height="24" rx="3" class="mem"/><text x="44"  y="91" class="mid mono">n</text>
+      <rect x="96"  y="74" width="48" height="24" rx="3" class="mem"/><text x="120" y="91" class="mid mono">n</text>
+      <rect x="172" y="74" width="48" height="24" rx="3" class="mem"/><text x="196" y="91" class="mid mono">n</text>
+      <text x="120" y="120" class="mid small">one count per stage</text>
+    </svg>
+    <h4>Pipeline statistics</h4>
+    <p>Counts per pipeline stage: input vertices and primitives, vertex shader runs, primitives after clipping, fragment shader runs, compute shader runs. Chosen by flags when the pool is made.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A ball half hidden behind a wall. Only the samples on its visible half are counted.">
+      <circle cx="130" cy="58" r="40" class="ok"/>
+      <rect x="40" y="10" width="90" height="100" class="solid"/>
+      <path d="M140,36h6M152,36h6M140,50h6M152,50h6M164,50h6M140,64h6M152,64h6M164,64h6M140,78h6M152,78h6" class="arrow ok thick"/>
+      <text x="85" y="64" class="mid small">wall</text>
+      <text x="170" y="122" class="mid small t-ok">passed: counted</text>
+    </svg>
+    <h4>Occlusion</h4>
+    <p>Counts samples that passed the depth test between begin and end. Used for occlusion tests and lens flares.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A tool window with a bar chart.">
+      <rect x="30" y="12" width="180" height="96" rx="6" class="paper"/>
+      <line x1="30" y1="30" x2="210" y2="30" class="arrow"/>
+      <path d="M50,96V60h22V96zM86,96V44h22V96zM122,96V72h22V96zM158,96V52h22V96z" class="cpu"/>
+      <text x="120" y="124" class="mid small">a profiling tool</text>
+    </svg>
+    <h4>Vendor counters</h4>
+    <p>Cache hits, memory traffic, occupancy. Seen in tools like Nsight, Radeon GPU Profiler or PIX, not usually inside the engine.</p>
+  </div>
 </div>
 
 <p>Pipeline statistics have the same timing as timestamps (begin, end, read frames later). They are optional on some hardware and have a small cost. They cannot answer questions about the engine's own work, such as "how many objects did culling keep?". For that, the shaders count by themselves.</p>
 
-<h2><span class="n">7</span>Counting in shaders, with atomics</h2>
+<h2 id="atomics"><span class="n">7</span>Counting in shaders, with atomics</h2>
 
 <p>In a <a href="gpu-driven.html">GPU-driven</a> renderer the GPU decides what to draw, so the CPU does not know how many objects survived culling or how many triangles were drawn. The shader that decides can count. Thousands of threads add to the same counter, so the add must be an <b>atomic</b> operation: a read-modify-write that no other thread can interrupt.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="Left: every thread adds 1 to a global counter with an atomic: 64 atomics per group, all on one address. Right: the threads of a group first add up their results in shared memory, and one thread adds the group's total with a single atomic.">
-    <text x="190" y="20" class="mid title">Naive: one atomic per thread</text>
-    <rect x="30" y="40" width="320" height="50" rx="6" class="gpu"/>
-    <text x="190" y="62" class="mid small">64 threads of one group</text>
-    <text x="190" y="80" class="mid small">each kept object: atomicAdd(counter, 1)</text>
-    <line x1="80" y1="90" x2="170" y2="168" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <line x1="140" y1="90" x2="180" y2="168" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <line x1="240" y1="90" x2="200" y2="168" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <line x1="300" y1="90" x2="210" y2="168" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <rect x="140" y="170" width="100" height="36" rx="4" class="mem"/>
-    <text x="190" y="193" class="mid small">counter</text>
-    <text x="190" y="232" class="mid small">thousands of atomics on one address: they queue up</text>
+  <svg viewBox="0 0 760 230" role="img" aria-label="Left: every thread adds 1 to a global counter with an atomic: 64 atomics per group, all on one address. Right: the threads of a group first add up their results in shared memory, and one thread adds the group's total with a single atomic.">
+    <text x="190" y="20" class="mid title t-bad">Naive: one atomic per thread</text>
+    <rect x="40" y="40" width="120" height="120" class="gpu"/>
+    <path d="M55,40V160M70,40V160M85,40V160M100,40V160M115,40V160M130,40V160M145,40V160M40,55H160M40,70H160M40,85H160M40,100H160M40,115H160M40,130H160M40,145H160" class="arrow gpu thin"/>
+    <text x="100" y="178" class="mid small">64 threads of one group</text>
+    <path d="M162,48L256,96M162,66L256,98M162,84L256,99M162,100H256M162,116L256,101M162,134L256,102M162,152L256,104" class="arrow bad"/>
+    <rect x="258" y="82" width="90" height="36" rx="4" class="mem"/>
+    <text x="303" y="105" class="mid small">counter</text>
+    <text x="190" y="200" class="mid mono">atomicAdd(counter, 1)</text>
+    <text x="190" y="220" class="mid small t-bad">thousands of atomics on one address: they queue up</text>
 
-    <text x="570" y="20" class="mid title">Better: reduce in the group first</text>
-    <rect x="410" y="40" width="320" height="50" rx="6" class="gpu"/>
-    <text x="570" y="62" class="mid small">64 threads write their result to shared memory</text>
-    <text x="570" y="80" class="mid small">one thread adds them up (or a wave/subgroup op)</text>
-    <line x1="570" y1="90" x2="570" y2="168" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="580" y="134" class="small">one atomicAdd(counter, total)</text>
-    <rect x="520" y="170" width="100" height="36" rx="4" class="mem"/>
-    <text x="570" y="193" class="mid small">counter</text>
-    <text x="570" y="232" class="mid small">64 times fewer atomics</text>
+    <line x1="380" y1="30" x2="380" y2="222" class="dashed"/>
+
+    <text x="570" y="20" class="mid title t-ok">Better: reduce in the group first</text>
+    <rect x="410" y="40" width="120" height="120" class="gpu"/>
+    <path d="M425,40V160M440,40V160M455,40V160M470,40V160M485,40V160M500,40V160M515,40V160M410,55H530M410,70H530M410,85H530M410,100H530M410,115H530M410,130H530M410,145H530" class="arrow gpu thin"/>
+    <text x="470" y="178" class="mid small">64 threads of one group</text>
+    <path d="M532,60L566,92M532,100H566M532,140L566,108" class="arrow"/>
+    <rect x="568" y="82" width="64" height="36" rx="4" class="box"/>
+    <text x="600" y="105" class="mid small">total</text>
+    <text x="600" y="72" class="mid small">shared memory</text>
+    <line x1="632" y1="100" x2="676" y2="100" class="arrow ok thick" marker-end="url(#ah-ok)"/>
+    <rect x="678" y="82" width="72" height="36" rx="4" class="mem"/>
+    <text x="714" y="105" class="mid small">counter</text>
+    <text x="570" y="200" class="mid mono">atomicAdd(counter, total)</text>
+    <text x="570" y="220" class="mid small t-ok">one atomic per group: 64 times fewer</text>
   </svg>
-  <figcaption>The counter buffer is small and in memory that the CPU can read. It is zeroed before the frame and read after the frame's fence, exactly like the query pool in section 4.</figcaption>
+  <figcaption>Right: the 64 threads write their result to shared memory, and one thread adds them up (or a wave/subgroup op does). The counter buffer is small and in memory that the CPU can read. It is zeroed before the frame and read after the frame's fence, exactly like the query pool in section 4.</figcaption>
 </figure>
 
 <h3>64-bit counts from 32-bit atomics</h3>
@@ -310,12 +503,15 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
       <text x="40" y="80" class="mono">sum  = low + x</text>
       <text x="40" y="102" class="mono">high = high + (sum &lt; low ? 1 : 0)</text>
       <text x="40" y="124" class="mono">low  = sum</text>
-      <text x="400" y="58" class="small">A 32-bit add wraps past 4,294,967,295.</text>
-      <text x="400" y="76" class="small">After a wrap the sum is smaller than</text>
-      <text x="400" y="94" class="small">what we started with: that is the carry.</text>
-      <text x="20" y="156" class="small">This part has no atomics: one thread owns these two words.</text>
+      <text x="400" y="34" class="small">low, before the add: almost full</text>
+      <rect x="400" y="42" width="290" height="22" class="ghost"/>
+      <rect x="400" y="42" width="262" height="22" class="mem"/>
+      <text x="400" y="92" class="small">sum = low + x: wrapped past 4,294,967,295</text>
+      <rect x="400" y="100" width="290" height="22" class="ghost"/>
+      <rect x="400" y="100" width="34" height="22" class="accent"/>
+      <text x="400" y="148" class="small t-hot">sum is smaller than low: that is the carry</text>
     </svg>
-    <p>Unsigned 32-bit math wraps around, it does not fail. So "the result went down" means "it passed 2<sup>32</sup>".</p>
+    <p>Unsigned 32-bit math wraps around, it does not fail. So "the result went down" means "it passed 2<sup>32</sup>". This part has no atomics: one thread owns these two words.</p>
   </div>
   <div class="step">
     <h4>2. Add the group's total to the buffer</h4>
@@ -350,29 +546,88 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
   </div>
 </div>
 
-<h2><span class="n">8</span>Turning numbers into something readable</h2>
+<h2 id="readable"><span class="n">8</span>Turning numbers into something readable</h2>
 
 <p>A frame time changes every frame by a little, and sometimes by a lot (a spike). Printing every frame's value makes an unreadable blur. Common fixes:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Method</th><th>How</th><th>Good for</th></tr>
-  <tr><td>Sample and hold</td><td>show the latest value, but update the text only a few times per second</td><td>the simplest; readable; hides spikes between updates</td></tr>
-  <tr><td>Mean over a window</td><td>keep the last <var>n</var> values in a ring, show their average</td><td>steady numbers; needs memory for <var>n</var> values</td></tr>
-  <tr><td><b>Exponential moving average</b></td><td>avg = avg + <var>α</var> · (value − avg), with <var>α</var> = 0.05 to 0.2</td><td>one number of state; reacts in about 1/<var>α</var> frames</td></tr>
-  <tr><td>Max, or percentiles</td><td>the worst frame of the last second; the 99th percentile ("1% low" fps)</td><td>stutter: the average hides it, the max shows it</td></tr>
-  <tr><td>A graph</td><td>a strip of the last few hundred frame times</td><td>seeing spikes and patterns at a glance</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A noisy line with one spike. The shown value is a staircase that changes only a few times, and misses the spike.">
+      <polyline points="20,80 36,72 52,86 68,68 84,82 100,30 116,78 132,84 148,70 164,82 180,74 196,86 212,76 224,80" class="arrow o-50"/>
+      <path d="M20,80H84V82H148V70H212V76H224" class="arrow hot thick"/>
+      <text x="100" y="22" class="mid small t-faint">spike: missed</text>
+      <text x="120" y="118" class="mid small">frames →</text>
+    </svg>
+    <h4>Sample and hold</h4>
+    <p>Show the latest value, but update the text only a few times per second.</p>
+    <p class="cost">The simplest; readable; hides spikes between updates</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The same noisy line. The mean over a window is a smooth line with a low, wide bump after the spike.">
+      <polyline points="20,80 36,72 52,86 68,68 84,82 100,30 116,78 132,84 148,70 164,82 180,74 196,86 212,76 224,80" class="arrow o-50"/>
+      <polyline points="20,78 52,78 84,77 100,68 116,68 148,68 164,78 196,79 224,79" class="arrow hot thick"/>
+      <path d="M100,104v6h64v-6" class="arrow"/>
+      <text x="132" y="124" class="mid small">window of n frames</text>
+    </svg>
+    <h4>Mean over a window</h4>
+    <p>Keep the last <var>n</var> values in a ring, show their average.</p>
+    <p class="cost">Steady numbers; needs memory for n values</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The same noisy line. The moving average jumps a little at the spike and then slides back slowly.">
+      <polyline points="20,80 36,72 52,86 68,68 84,82 100,30 116,78 132,84 148,70 164,82 180,74 196,86 212,76 224,80" class="arrow o-50"/>
+      <polyline points="20,78 84,78 100,72 116,73 148,75 180,77 224,78" class="arrow hot thick"/>
+      <text x="120" y="118" class="mid small">frames →</text>
+    </svg>
+    <h4>Exponential moving average</h4>
+    <p>avg = avg + <var>α</var> · (value − avg), with <var>α</var> = 0.05 to 0.2.</p>
+    <p class="cost">One number of state; reacts in about 1/α frames</p>
+  </div>
 </div>
 
-<p>An example with <var>α</var> = 0.1. Frames take 16.7 ms, then one takes 40 ms, then 16.7 ms again. The average moves from 16.7 to 16.7 + 0.1 · (40 − 16.7) = 19.0, then to 19.0 + 0.1 · (16.7 − 19.0) = 18.8, and slowly back. The spike is visible, but it does not take over the display. The max of the last second would show 40.</p>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 320 110" role="img" aria-label="The same noisy line. A flat line at the height of the spike shows the worst frame.">
+      <polyline points="30,74 54,66 78,80 102,62 126,76 150,24 174,72 198,78 222,64 246,76 270,68 294,74" class="arrow o-50"/>
+      <line x1="30" y1="24" x2="294" y2="24" class="arrow bad thick"/>
+      <circle cx="150" cy="24" r="5" class="bad"/>
+      <text x="222" y="42" class="mid small t-bad">max of the last second</text>
+      <text x="160" y="102" class="mid small">frames →</text>
+    </svg>
+    <h4>Max, or percentiles</h4>
+    <p>The worst frame of the last second; the 99th percentile ("1% low" fps).</p>
+    <p class="cost">Stutter: the average hides it, the max shows it</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 110" role="img" aria-label="A strip of thin bars, one per frame. One bar is much taller than the others.">
+      <path d="M30,86V58h8V86zM42,86V62h8V86zM54,86V56h8V86zM66,86V60h8V86zM78,86V64h8V86zM90,86V58h8V86zM102,86V60h8V86zM114,86V56h8V86zM138,86V62h8V86zM150,86V58h8V86zM162,86V64h8V86zM174,86V60h8V86zM186,86V56h8V86zM198,86V62h8V86zM210,86V58h8V86zM222,86V60h8V86zM234,86V64h8V86zM246,86V58h8V86zM258,86V62h8V86zM270,86V56h8V86zM282,86V60h8V86z" class="cpu"/>
+      <rect x="126" y="14" width="8" height="72" class="bad"/>
+      <line x1="24" y1="86" x2="298" y2="86" class="arrow"/>
+      <text x="160" y="104" class="mid small">one bar per frame</text>
+    </svg>
+    <h4>A graph</h4>
+    <p>A strip of the last few hundred frame times.</p>
+    <p class="cost">Seeing spikes and patterns at a glance</p>
+  </div>
+</div>
+
+<p>An example with <var>α</var> = 0.1. Frames take 16.7 ms, then one takes 40 ms, then 16.7 ms again:</p>
+
+<div class="stats">
+  <div><b>16.7 ms</b><span>the average before the spike</span></div>
+  <div><b>19.0 ms</b><span>the average after the 40 ms frame</span><small>16.7 + 0.1 · (40 − 16.7)</small></div>
+  <div><b>18.8 ms</b><span>one frame later; then slowly back</span><small>19.0 + 0.1 · (16.7 − 19.0)</small></div>
+  <div><b>40 ms</b><span>what the max of the last second would show</span></div>
+</div>
+
+<p>The spike is visible, but it does not take over the display.</p>
 
 <div class="callout">
   <strong>Average times, not frames per second</strong>
   <p>Frame rate is 1000 / ms, which is not linear. Two frames of 10 ms and 30 ms average 20 ms, which is 50 fps. Averaging their rates (100 fps and 33 fps) gives 67 fps, which is wrong. Average the times, then convert.</p>
 </div>
 
-<h2><span class="n">9</span>Measure only when someone looks</h2>
+<h2 id="on-demand"><span class="n">9</span>Measure only when someone looks</h2>
 
 <p>Timers, counters and readback are cheap but not free: a few commands per pass, some atomics in the shaders, a buffer read and a text update per frame. A common rule is to measure only while an overlay is shown or a tool asks for the numbers. Two details follow:</p>
 
@@ -381,10 +636,24 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
   <li>A counter that the shaders always add to (because skipping the atomics would need a shader branch) must be zeroed before the first measured frame, or it shows garbage from earlier frames.</li>
 </ul>
 
-<h2><span class="n">10</span>Memory numbers</h2>
+<h2 id="memory"><span class="n">10</span>Memory numbers</h2>
 
 <p>The other number people ask for is "how much video memory do we use?". The API can tell, per <b>memory heap</b>:</p>
 
+<figure class="diagram">
+  <svg viewBox="0 0 760 130" role="img" aria-label="One memory heap as a bar. The usage fills the left part. The budget is a line further right. The heap size is the whole bar; the part past the budget cannot really be used now.">
+    <rect x="60" y="44" width="640" height="36" rx="4" class="ghost"/>
+    <rect x="60" y="44" width="280" height="36" rx="4" class="mem"/>
+    <text x="200" y="67" class="mid">usage</text>
+    <line x1="520" y1="28" x2="520" y2="96" class="arrow hot thick"/>
+    <text x="520" y="20" class="mid t-hot">budget</text>
+    <text x="430" y="67" class="mid small">free to use</text>
+    <text x="610" y="67" class="mid small t-faint">not usable now</text>
+    <path d="M60,102v8h640v-8" class="arrow"/>
+    <text x="380" y="126" class="mid small">heap size</text>
+  </svg>
+  <figcaption>The budget moves with what other programs use. The heap size never moves.</figcaption>
+</figure>
 <div class="table-wrap">
 <table>
   <tr><th>Number</th><th>Meaning</th></tr>

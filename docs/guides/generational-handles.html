@@ -19,6 +19,8 @@
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
   </defs>
 </svg>
 
@@ -42,9 +44,60 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>The problem: naming an object</h2>
+<h2 id="problem"><span class="n">1</span>The problem: naming an object</h2>
 
 <p>An application asks the engine to load a mesh. The engine must give back <i>something</i> the application can keep and pass back later: "draw this mesh". There are three common choices.</p>
+
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A pointer p holds the memory address of object B and points straight at it.">
+      <rect x="70" y="12" width="100" height="28" rx="4" class="cpu"/><text x="120" y="31" class="mid mono">p = &amp;B</text>
+      <line x1="120" y1="40" x2="120" y2="70" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <rect x="24"  y="74" width="48" height="34" rx="3" class="mem"/><text x="48"  y="96" class="mid">A</text>
+      <rect x="96"  y="74" width="48" height="34" rx="3" class="mem"/><text x="120" y="96" class="mid">B</text>
+      <rect x="168" y="74" width="48" height="34" rx="3" class="mem"/><text x="192" y="96" class="mid">C</text>
+      <text x="120" y="124" class="mid small">objects somewhere in memory</text>
+    </svg>
+    <h4>Pointer</h4>
+    <p>The address of the object. <b>Good:</b> the fastest, no lookup at all.</p>
+    <p><b>Breaks when</b> the object moves (an array grows, a level is compacted) or is freed. Using it then is undefined behaviour: a crash, or worse, wrong data.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An index i equal to 1 names position 1 in a table of slots, which holds B.">
+      <rect x="70" y="12" width="100" height="28" rx="4" class="cpu"/><text x="120" y="31" class="mid mono">i = 1</text>
+      <line x1="120" y1="40" x2="120" y2="62" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <rect x="48"  y="66" width="48" height="34" class="mem"/><text x="72"  y="88" class="mid">A</text>
+      <rect x="96"  y="66" width="48" height="34" class="mem"/><text x="120" y="88" class="mid">B</text>
+      <rect x="144" y="66" width="48" height="34" class="mem"/><text x="168" y="88" class="mid">C</text>
+      <text x="72" y="118" class="mid small">0</text><text x="120" y="118" class="mid small">1</text><text x="168" y="118" class="mid small">2</text>
+    </svg>
+    <h4>Index</h4>
+    <p>A position in a table. <b>Good:</b> small (4 bytes), survives moves, easy to send to the GPU.</p>
+    <p><b>Breaks when</b> the slot is reused. The old index now names a different object, and nothing notices. This is called the <b>ABA problem</b>.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A handle holds index 1 and generation 1. Slot 1 of the table holds B and also stores generation 1, so the two can be compared.">
+      <rect x="60" y="12" width="120" height="28" rx="4" class="cpu"/><text x="120" y="31" class="mid mono">h = {1, 1}</text>
+      <line x1="120" y1="40" x2="120" y2="62" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <rect x="48"  y="66" width="48" height="34" class="mem"/><text x="72"  y="88" class="mid">A · 1</text>
+      <rect x="96"  y="66" width="48" height="34" class="mem"/><text x="120" y="88" class="mid">B · 1</text>
+      <rect x="144" y="66" width="48" height="34" class="mem"/><text x="168" y="88" class="mid">C · 1</text>
+      <text x="72" y="118" class="mid small">0</text><text x="120" y="118" class="mid small">1</text><text x="168" y="118" class="mid small">2</text>
+    </svg>
+    <h4>Generational handle</h4>
+    <p>An index plus a generation. <b>Good:</b> small, survives moves, and detects reuse.</p>
+    <p><b>Breaks</b> only when the generation counter wraps around (section 4).</p>
+  </div>
+</div>
+
+<p>The picture shows how each one fails. Follow B: it is named, then it goes away.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>an object</span>
+  <span><i class="mem"></i>a new object in a reused slot</span>
+  <span><i class="bad"></i>wrong, and nobody notices</span>
+  <span><i class="ok"></i>detected</span>
+</div>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 300" role="img" aria-label="Three ways to name an object. A pointer dangles when the array grows and moves its elements. A plain index points to a new object after the old one was freed and its slot reused. A handle with a generation notices that the slot was reused.">
@@ -61,53 +114,46 @@
     <rect x="560" y="14" width="60" height="34" rx="4" class="cpu"/><text x="590" y="36" class="mid">A</text>
     <rect x="620" y="14" width="60" height="34" rx="4" class="cpu"/><text x="650" y="36" class="mid">B</text>
     <rect x="680" y="14" width="60" height="34" rx="4" class="cpu"/><text x="710" y="36" class="mid">C</text>
-    <line x1="480" y1="76" x2="480" y2="52" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="480" y="90" class="mid small t-hot">p points to freed memory</text>
+    <line x1="480" y1="76" x2="480" y2="52" class="arrow bad" marker-end="url(#ah-bad)"/>
+    <text x="480" y="90" class="mid small t-bad">p points to freed memory</text>
 
-    <text x="20" y="124" class="title">Index</text>
-    <text x="20" y="140" class="small">a position in a table</text>
-    <rect x="160" y="114" width="60" height="34" rx="4" class="cpu"/><text x="190" y="136" class="mid">A</text>
-    <rect x="220" y="114" width="60" height="34" rx="4" class="cpu"/><text x="250" y="136" class="mid">B</text>
-    <line x1="250" y1="176" x2="250" y2="152" class="arrow" marker-end="url(#ah)"/>
-    <text x="250" y="190" class="mid small">i = 1</text>
-    <line x1="300" y1="131" x2="548" y2="131" class="arrow" marker-end="url(#ah)"/>
-    <text x="424" y="122" class="mid small">free B, then make D in the same slot</text>
-    <rect x="560" y="114" width="60" height="34" rx="4" class="cpu"/><text x="590" y="136" class="mid">A</text>
-    <rect x="620" y="114" width="60" height="34" rx="4" class="mem"/><text x="650" y="136" class="mid">D</text>
-    <line x1="650" y1="176" x2="650" y2="152" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="650" y="190" class="mid small t-hot">i = 1 now means D, silently</text>
+    <path d="M20,104H740" class="grid"/>
+    <text x="20" y="130" class="title">Index</text>
+    <text x="20" y="146" class="small">a position in a table</text>
+    <rect x="160" y="120" width="60" height="34" rx="4" class="cpu"/><text x="190" y="142" class="mid">A</text>
+    <rect x="220" y="120" width="60" height="34" rx="4" class="cpu"/><text x="250" y="142" class="mid">B</text>
+    <line x1="250" y1="182" x2="250" y2="158" class="arrow" marker-end="url(#ah)"/>
+    <text x="250" y="196" class="mid small">i = 1</text>
+    <line x1="300" y1="137" x2="548" y2="137" class="arrow" marker-end="url(#ah)"/>
+    <text x="424" y="128" class="mid small">free B, then make D in the same slot</text>
+    <rect x="560" y="120" width="60" height="34" rx="4" class="cpu"/><text x="590" y="142" class="mid">A</text>
+    <rect x="620" y="120" width="60" height="34" rx="4" class="mem"/><text x="650" y="142" class="mid">D</text>
+    <line x1="650" y1="182" x2="650" y2="158" class="arrow bad" marker-end="url(#ah-bad)"/>
+    <text x="650" y="196" class="mid small t-bad">i = 1 now means D, silently</text>
 
-    <text x="20" y="224" class="title">Handle</text>
-    <text x="20" y="240" class="small">index + generation</text>
-    <rect x="160" y="214" width="60" height="34" rx="4" class="cpu"/><text x="190" y="236" class="mid">A · 1</text>
-    <rect x="220" y="214" width="60" height="34" rx="4" class="cpu"/><text x="250" y="236" class="mid">B · 1</text>
-    <line x1="250" y1="276" x2="250" y2="252" class="arrow" marker-end="url(#ah)"/>
-    <text x="250" y="290" class="mid small">h = {1, 1}</text>
-    <line x1="300" y1="231" x2="548" y2="231" class="arrow" marker-end="url(#ah)"/>
-    <text x="424" y="222" class="mid small">the same: free B, make D</text>
-    <rect x="560" y="214" width="60" height="34" rx="4" class="cpu"/><text x="590" y="236" class="mid">A · 1</text>
-    <rect x="620" y="214" width="60" height="34" rx="4" class="mem"/><text x="650" y="236" class="mid">D · 2</text>
-    <line x1="650" y1="276" x2="650" y2="252" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="650" y="290" class="mid small t-gpu">1 ≠ 2: "B is gone", safely</text>
+    <path d="M20,208H740" class="grid"/>
+    <text x="20" y="234" class="title">Handle</text>
+    <text x="20" y="250" class="small">index + generation</text>
+    <rect x="160" y="224" width="60" height="34" rx="4" class="cpu"/><text x="190" y="246" class="mid">A · 1</text>
+    <rect x="220" y="224" width="60" height="34" rx="4" class="cpu"/><text x="250" y="246" class="mid">B · 1</text>
+    <line x1="250" y1="282" x2="250" y2="262" class="arrow" marker-end="url(#ah)"/>
+    <text x="250" y="296" class="mid small">h = {1, 1}</text>
+    <line x1="300" y1="241" x2="548" y2="241" class="arrow" marker-end="url(#ah)"/>
+    <text x="424" y="232" class="mid small">the same: free B, make D</text>
+    <rect x="560" y="224" width="60" height="34" rx="4" class="cpu"/><text x="590" y="246" class="mid">A · 1</text>
+    <rect x="620" y="224" width="60" height="34" rx="4" class="mem"/><text x="650" y="246" class="mid">D · 2</text>
+    <line x1="650" y1="282" x2="650" y2="262" class="arrow ok" marker-end="url(#ah-ok)"/>
+    <text x="650" y="296" class="mid small t-ok">1 ≠ 2: "B is gone", safely</text>
   </svg>
   <figcaption>The number after each object is its slot's generation. Only the handle can tell "the object I meant" from "a new object in the same place".</figcaption>
 </figure>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Choice</th><th>Good</th><th>Breaks when</th></tr>
-  <tr><td>Pointer</td><td>Fastest: no lookup at all.</td><td>The object moves (an array grows, a level is compacted) or is freed. Using it then is undefined behaviour: a crash, or worse, wrong data.</td></tr>
-  <tr><td>Index</td><td>Small (4 bytes), survives moves, easy to send to the GPU.</td><td>The slot is reused. The old index now names a different object, and nothing notices. This is called the <b>ABA problem</b>.</td></tr>
-  <tr><td>Generational handle</td><td>Small, survives moves, and detects reuse.</td><td>Only when the generation counter wraps around (section 4).</td></tr>
-</table>
-</div>
-
-<h2><span class="n">2</span>The idea: index plus generation</h2>
+<h2 id="idea"><span class="n">2</span>The idea: index plus generation</h2>
 
 <p>The engine keeps each kind of object in a table of <b>slots</b>. Each slot stores the object and a <b>generation</b> number. A handle stores two numbers: the slot's <b>index</b>, and the generation the slot had when the handle was made.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 270" role="img" aria-label="A handle with index 2 and generation 5 looks up slot 2 of the table. The slot's generation is 5, the same, so the lookup returns the object. A second handle with index 2 and generation 4 finds generation 5 and fails as stale.">
+  <svg viewBox="0 0 760 236" role="img" aria-label="A handle with index 2 and generation 5 looks up slot 2 of the table. The slot's generation is 5, the same, so the lookup returns the object. A second handle with index 2 and generation 4 finds generation 5 and fails as stale.">
     <rect x="20" y="40" width="150" height="64" rx="6" class="cpu"/>
     <text x="95" y="62" class="mid title">handle</text>
     <text x="95" y="82" class="mid mono">index = 2</text>
@@ -125,22 +171,21 @@
     <text x="560" y="58" class="mid small">object</text>
     <rect x="276" y="66" width="390" height="34" rx="4" class="box"/>
     <text x="300" y="88" class="mid mono">0</text><text x="380" y="88" class="mid mono">1</text><text x="560" y="88" class="mid">mesh "rock"</text>
-    <rect x="276" y="104" width="390" height="34" rx="4" class="box"/>
+    <rect x="276" y="104" width="390" height="34" rx="4" class="ghost"/>
     <text x="300" y="126" class="mid mono">1</text><text x="380" y="126" class="mid mono">3</text><text x="560" y="126" class="mid t-faint">free</text>
     <rect x="276" y="142" width="390" height="34" rx="4" class="mem"/>
     <text x="300" y="164" class="mid mono">2</text><text x="380" y="164" class="mid mono t-hot">5</text><text x="560" y="164" class="mid">mesh "tree"</text>
     <rect x="276" y="180" width="390" height="34" rx="4" class="box"/>
     <text x="300" y="202" class="mid mono">3</text><text x="380" y="202" class="mid mono">1</text><text x="560" y="202" class="mid">mesh "car"</text>
 
-    <path d="M170,72 H220 V159 H274" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <path d="M170,192 H240 V166 H274" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="700" y="150" class="small t-gpu">5 = 5</text>
-    <text x="700" y="166" class="small t-gpu">→ "tree"</text>
-    <text x="700" y="190" class="small t-hot">4 ≠ 5</text>
-    <text x="700" y="206" class="small t-hot">→ stale</text>
-    <text x="20" y="258" class="small">The old handle was made for an object that lived in slot 2 before "tree". That object was destroyed, so the slot's generation went from 4 to 5.</text>
+    <path d="M170,72 H220 V153 H274" class="arrow ok" marker-end="url(#ah-ok)"/>
+    <path d="M170,192 H240 V166 H274" class="arrow bad" marker-end="url(#ah-bad)"/>
+    <text x="692" y="150" class="small t-ok">5 = 5</text>
+    <text x="692" y="166" class="small t-ok">→ "tree"</text>
+    <text x="692" y="190" class="small t-bad">4 ≠ 5</text>
+    <text x="692" y="206" class="small t-bad">→ stale</text>
   </svg>
-  <figcaption>The lookup is one array access and one compare. It is almost as cheap as a plain index.</figcaption>
+  <figcaption>The old handle was made for an object that lived in slot 2 before "tree". That object was destroyed, so the slot's generation went from 4 to 5. The lookup is one array access and one compare. It is almost as cheap as a plain index.</figcaption>
 </figure>
 
 <p>The lookup in pseudo-code:</p>
@@ -154,12 +199,44 @@
     return slot.object</code></pre>
 
 <p>Two more rules make this complete:</p>
-<ul>
-  <li><b>Destroying</b> an object adds 1 to its slot's generation. Every handle made before is now stale, at once, without finding them.</li>
-  <li><b>Generation 0 means "no object".</b> Slots start at generation 1. So a handle that is all zeros, which is what a default-constructed handle is, never matches a slot. It is the handle version of a null pointer.</li>
-</ul>
 
-<h2><span class="n">3</span>Reusing slots: the free list</h2>
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 320 120" role="img" aria-label="Destroying the object in slot 2 changes the slot's generation from 4 to 5. Three copies of the handle with generation 4 all become stale at the same moment.">
+      <rect x="16" y="14" width="120" height="40" rx="4" class="ghost"/>
+      <text x="76" y="31" class="mid small">slot 2 · destroyed</text>
+      <text x="76" y="47" class="mid mono">gen 4 → <tspan class="t-hot">5</tspan></text>
+      <rect x="190" y="10"  width="114" height="26" rx="4" class="bad"/><text x="247" y="28"  class="mid mono">{2, 4}</text>
+      <rect x="190" y="42"  width="114" height="26" rx="4" class="bad"/><text x="247" y="60"  class="mid mono">{2, 4}</text>
+      <rect x="190" y="74"  width="114" height="26" rx="4" class="bad"/><text x="247" y="92"  class="mid mono">{2, 4}</text>
+      <line x1="136" y1="30" x2="186" y2="24" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <line x1="136" y1="36" x2="186" y2="54" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <line x1="136" y1="42" x2="186" y2="84" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <text x="76" y="84" class="mid small t-bad">every copy: 4 ≠ 5</text>
+      <text x="76" y="100" class="mid small t-bad">stale at once</text>
+    </svg>
+    <h4>Destroying adds 1 to the generation</h4>
+    <p>Every handle made before is now stale, at once, without finding them.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 120" role="img" aria-label="A default handle is all zeros. Every slot has a generation of 1 or more, so the handle with generation 0 matches none of them.">
+      <rect x="16" y="14" width="110" height="40" rx="4" class="cpu"/>
+      <text x="71" y="31" class="mid small">default handle</text>
+      <text x="71" y="47" class="mid mono">{0, 0}</text>
+      <rect x="190" y="10" width="114" height="26" rx="4" class="mem"/><text x="247" y="28" class="mid mono">slot 0 · gen 1</text>
+      <rect x="190" y="42" width="114" height="26" rx="4" class="mem"/><text x="247" y="60" class="mid mono">slot 1 · gen 3</text>
+      <rect x="190" y="74" width="114" height="26" rx="4" class="mem"/><text x="247" y="92" class="mid mono">slot 2 · gen 1</text>
+      <line x1="126" y1="30" x2="164" y2="26" class="arrow dashed"/>
+      <path d="M166,18l12,12m0,-12l-12,12" class="arrow bad thick"/>
+      <text x="71" y="84" class="mid small">0 is never a slot's</text>
+      <text x="71" y="100" class="mid small">generation: no match</text>
+    </svg>
+    <h4>Generation 0 means "no object"</h4>
+    <p>Slots start at generation 1. So a handle that is all zeros, which is what a default-constructed handle is, never matches a slot. It is the handle version of a null pointer.</p>
+  </div>
+</div>
+
+<h2 id="free-list"><span class="n">3</span>Reusing slots: the free list</h2>
 
 <p>Without reuse, the table grows by one slot for every object ever made. A game that spawns and removes bullets would grow it forever. So a destroyed slot goes on a <b>free list</b>, and the next create takes a slot from it. The generation is what makes this reuse safe. Click through an example (or use the arrow keys).</p>
 
@@ -193,7 +270,7 @@
       <text x="120" y="114" class="mono">[1]</text>
       <text x="20" y="150" class="title">handles</text>
       <text x="120" y="150" class="mono">A = {0, 1}</text><text x="250" y="150" class="mono">B = {1, 1}</text><text x="380" y="150" class="mono">C = {2, 1}</text>
-      <text x="250" y="168" class="small t-hot">stale: 1 ≠ 2</text>
+      <text x="250" y="168" class="small t-bad">stale: 1 ≠ 2</text>
       <text x="20" y="184" class="small">Nobody had to find the copies of B's handle. The generation alone makes all of them stale.</text>
     </svg>
     <p>The object is destroyed, the generation goes up, the index goes on the free list.</p>
@@ -225,9 +302,9 @@
       <rect x="380" y="14" width="120" height="50" rx="4" class="mem"/><text x="440" y="36" class="mid title">C</text><text x="440" y="54" class="mid small">gen 1</text>
       <text x="180" y="80" class="mid small">0</text><text x="310" y="80" class="mid small">1</text><text x="440" y="80" class="mid small">2</text>
       <text x="20" y="118" class="mono">lookup({1, 1})</text>
-      <text x="200" y="118" class="small t-hot">slot 1 has gen 2, the handle has 1 → null: "B is gone"</text>
+      <text x="200" y="118" class="small t-bad">slot 1 has gen 2, the handle has 1 → null: "B is gone"</text>
       <text x="20" y="146" class="mono">lookup({1, 2})</text>
-      <text x="200" y="146" class="small t-gpu">slot 1 has gen 2, the handle has 2 → D</text>
+      <text x="200" y="146" class="small t-ok">slot 1 has gen 2, the handle has 2 → D</text>
       <text x="20" y="178" class="small">Without the generation, lookup({1}) would return D to code that still means B. That is the bug handles exist to stop.</text>
     </svg>
     <p>The stale lookup fails in a defined way. The caller can log it, skip the work, or treat it as a bug.</p>
@@ -236,16 +313,42 @@
 
 <div class="split">
   <div>
+    <svg viewBox="0 0 320 112" role="img" aria-label="Six slots. Slots 0, 2 and 4 hold objects. Slots 1, 3 and 5 are free, and each free slot stores the index of the next free slot: 1 points to 3, 3 points to 5, 5 is the end. One number, first free equals 1, starts the chain.">
+      <text x="22" y="16" class="small t-hot">first free = 1</text>
+      <rect x="22"  y="50" width="46" height="32" class="mem"/><text x="45"  y="71" class="mid">A</text>
+      <rect x="68"  y="50" width="46" height="32" class="ghost"/><text x="91"  y="71" class="mid mono t-hot">→ 3</text>
+      <rect x="114" y="50" width="46" height="32" class="mem"/><text x="137" y="71" class="mid">C</text>
+      <rect x="160" y="50" width="46" height="32" class="ghost"/><text x="183" y="71" class="mid mono t-hot">→ 5</text>
+      <rect x="206" y="50" width="46" height="32" class="mem"/><text x="229" y="71" class="mid">E</text>
+      <rect x="252" y="50" width="46" height="32" class="ghost"/><text x="275" y="71" class="mid small t-faint">end</text>
+      <path d="M91,22 V46" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <path d="M99,48 C110,24 172,24 181,46" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <path d="M191,48 C202,24 264,24 273,46" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="45" y="100" class="mid small">0</text><text x="91" y="100" class="mid small">1</text><text x="137" y="100" class="mid small">2</text><text x="183" y="100" class="mid small">3</text><text x="229" y="100" class="mid small">4</text><text x="275" y="100" class="mid small">5</text>
+    </svg>
     <h4>Where the free list lives</h4>
     <p>A free slot holds no object, so its memory can store the index of the next free slot. The free list then needs no extra memory: one "first free" index, and a chain through the free slots. This is an <b>intrusive</b> free list.</p>
   </div>
   <div>
+    <svg viewBox="0 0 320 118" role="img" aria-label="Slots 1, 3 and 5 were freed in that order. A stack reuses slot 5, the last one freed, first. A queue reuses slot 1, the first one freed, first.">
+      <text x="196" y="14" class="mid small t-faint">freed first → freed last</text>
+      <text x="16" y="42" class="title">stack</text>
+      <rect x="120" y="24" width="44" height="28" rx="3" class="ghost"/><text x="142" y="43" class="mid mono">1</text>
+      <rect x="174" y="24" width="44" height="28" rx="3" class="ghost"/><text x="196" y="43" class="mid mono">3</text>
+      <rect x="228" y="24" width="44" height="28" rx="3" class="accent"/><text x="250" y="43" class="mid mono">5</text>
+      <text x="16" y="88" class="title">queue</text>
+      <rect x="120" y="70" width="44" height="28" rx="3" class="accent"/><text x="142" y="89" class="mid mono">1</text>
+      <rect x="174" y="70" width="44" height="28" rx="3" class="ghost"/><text x="196" y="89" class="mid mono">3</text>
+      <rect x="228" y="70" width="44" height="28" rx="3" class="ghost"/><text x="250" y="89" class="mid mono">5</text>
+      <text x="250" y="64" class="mid small t-hot">reused next</text>
+      <text x="142" y="110" class="mid small t-hot">reused next</text>
+    </svg>
     <h4>Which slot to reuse first</h4>
     <p>A stack (last freed, first reused) is simplest and keeps memory warm in the cache. A queue (first freed, first reused) spreads reuse over all free slots, so each generation grows more slowly. That delays the wrap-around of section 4.</p>
   </div>
 </div>
 
-<h2><span class="n">4</span>How many bits</h2>
+<h2 id="bits"><span class="n">4</span>How many bits</h2>
 
 <p>Handles are often packed into one 32-bit or 64-bit integer, so they are cheap to copy, hash and store in GPU buffers. The bits are split between the index and the generation. The index bits limit how many objects can live at once. The generation bits limit how many times one slot can be reused before its generation <b>wraps</b> back to an old value.</p>
 
@@ -274,17 +377,44 @@
 </div>
 
 <p>A wrap only causes a bug if old code still holds a handle from exactly one full cycle ago, and uses it. That is rare, but a small generation makes it possible. Two common fixes:</p>
-<ul>
-  <li><b>Retire the slot.</b> When its generation reaches the maximum, do not put it on the free list again. It is lost, but no handle can ever alias.</li>
-  <li><b>Spread the reuse.</b> A queue-ordered free list (section 3) reuses each slot less often.</li>
-</ul>
 
-<h2><span class="n">5</span>Dense storage for fast loops</h2>
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 320 118" role="img" aria-label="Three slots. The middle one has reached the largest generation. It is crossed out: it is never put on the free list again.">
+      <rect x="20"  y="24" width="88" height="44" rx="4" class="mem"/><text x="64"  y="43" class="mid">A</text><text x="64" y="60" class="mid small">gen 7</text>
+      <rect x="116" y="24" width="88" height="44" rx="4" class="ghost"/><text x="160" y="43" class="mid t-faint">retired</text><text x="160" y="60" class="mid small t-bad">gen = max</text>
+      <rect x="212" y="24" width="88" height="44" rx="4" class="mem"/><text x="256" y="43" class="mid">C</text><text x="256" y="60" class="mid small">gen 2</text>
+      <path d="M192,14l12,12m0,-12l-12,12" class="arrow bad thick"/>
+      <text x="160" y="92" class="mid small">not on the free list again:</text>
+      <text x="160" y="108" class="mid small">one slot is lost, no handle can alias</text>
+    </svg>
+    <h4>Retire the slot</h4>
+    <p>When its generation reaches the maximum, do not put it on the free list again. It is lost, but no handle can ever alias.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 118" role="img" aria-label="Three free slots are reused six times in total. With a stack, one slot takes all six reuses and reaches generation 7 while the others stay at 1. With a queue, each slot is reused twice and all three reach generation 3.">
+      <text x="72" y="14" class="mid title">stack</text>
+      <rect x="24" y="23" width="28" height="63" class="accent"/><text x="38" y="19" class="mid small mono t-hot">7</text>
+      <rect x="58" y="77" width="28" height="9"  class="mem"/><text x="72"  y="72" class="mid small mono">1</text>
+      <rect x="92" y="77" width="28" height="9"  class="mem"/><text x="106" y="72" class="mid small mono">1</text>
+      <text x="248" y="14" class="mid title">queue</text>
+      <rect x="200" y="59" width="28" height="27" class="mem"/><text x="214" y="54" class="mid small mono">3</text>
+      <rect x="234" y="59" width="28" height="27" class="mem"/><text x="248" y="54" class="mid small mono">3</text>
+      <rect x="268" y="59" width="28" height="27" class="mem"/><text x="282" y="54" class="mid small mono">3</text>
+      <path d="M16,86H128M192,86H304" class="arrow"/>
+      <text x="160" y="106" class="mid small">generation of 3 slots after 6 reuses</text>
+    </svg>
+    <h4>Spread the reuse</h4>
+    <p>A queue-ordered free list (section 3) reuses each slot less often.</p>
+  </div>
+</div>
+
+<h2 id="slot-map"><span class="n">5</span>Dense storage for fast loops</h2>
 
 <p>A table with holes is slow to loop over: the loop must skip the free slots, and the live objects are spread out in memory. Systems that loop over every object each frame (all entities, all particles) often add one more layer. This is usually called a <b>slot map</b>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 270" role="img" aria-label="A slot map. Handles index the sparse slot array, which holds a generation and the position of the object in a dense array. The dense array has no holes. A back array maps each dense position to its slot. Removing an object moves the last dense object into the hole.">
+  <svg viewBox="0 0 760 276" role="img" aria-label="A slot map. Handles index the sparse slot array, which holds a generation and the position of the object in a dense array. The dense array has no holes. A back array maps each dense position to its slot: position 0 to slot 0, position 1 to slot 3, position 2 to slot 2.">
     <text x="20" y="40" class="title">sparse slots</text>
     <text x="20" y="56" class="small">what handles index</text>
     <rect x="160" y="22" width="110" height="44" rx="4" class="box"/><text x="215" y="40" class="mid small">gen 1</text><text x="215" y="58" class="mid mono">→ 0</text>
@@ -302,19 +432,94 @@
     <rect x="160" y="152" width="110" height="44" rx="4" class="mem"/><text x="215" y="179" class="mid">A</text>
     <rect x="280" y="152" width="110" height="44" rx="4" class="mem"/><text x="335" y="179" class="mid">D</text>
     <rect x="400" y="152" width="110" height="44" rx="4" class="mem"/><text x="455" y="179" class="mid">C</text>
-    <text x="215" y="214" class="mid small">0</text><text x="335" y="214" class="mid small">1</text><text x="455" y="214" class="mid small">2</text>
-    <text x="580" y="174" class="small">no holes: a loop</text>
-    <text x="580" y="190" class="small">reads 3 objects in a row</text>
+    <text x="580" y="170" class="small">no holes: a loop</text>
+    <text x="580" y="186" class="small">reads 3 objects in a row</text>
 
-    <text x="20" y="246" class="small">A third array maps each dense position back to its slot (0 → 0, 1 → 3, 2 → 2). Removing an object moves the last dense object into</text>
-    <text x="20" y="262" class="small">the hole ("swap and pop"), and the back array says which slot to repoint. The order of the dense array is not kept.</text>
+    <text x="20" y="232" class="title">back array</text>
+    <text x="20" y="248" class="small">position → its slot</text>
+    <rect x="160" y="214" width="110" height="34" rx="4" class="box"/><text x="215" y="236" class="mid mono">slot 0</text>
+    <rect x="280" y="214" width="110" height="34" rx="4" class="box"/><text x="335" y="236" class="mid mono">slot 3</text>
+    <rect x="400" y="214" width="110" height="34" rx="4" class="box"/><text x="455" y="236" class="mid mono">slot 2</text>
+    <text x="215" y="266" class="mid small">0</text><text x="335" y="266" class="mid small">1</text><text x="455" y="266" class="mid small">2</text>
   </svg>
-  <figcaption>Lookup is now two steps (slot, then dense position) instead of one. In exchange, loops are as fast as over a plain array.</figcaption>
+  <figcaption>Lookup is now two steps (slot, then dense position) instead of one. In exchange, loops are as fast as over a plain array. A third array maps each dense position back to its slot (0 → 0, 1 → 3, 2 → 2).</figcaption>
 </figure>
 
-<h2><span class="n">6</span>Type-safe handles</h2>
+<p>Removing an object moves the last dense object into the hole ("swap and pop"), and the back array says which slot to repoint. The order of the dense array is not kept.</p>
+
+<div class="split">
+  <div>
+    <svg viewBox="0 0 320 156" role="img" aria-label="Before: slot 0 points to dense position 0 with A, slot 3 to position 1 with D, slot 2 to position 2 with C. D is about to be removed.">
+      <rect x="16"  y="10" width="66" height="36" rx="3" class="box"/><text x="49"  y="25" class="mid small">gen 1</text><text x="49"  y="40" class="mid mono">→ 0</text>
+      <rect x="90"  y="10" width="66" height="36" rx="3" class="ghost"/><text x="123" y="25" class="mid small t-faint">gen 2</text><text x="123" y="40" class="mid small t-faint">free</text>
+      <rect x="164" y="10" width="66" height="36" rx="3" class="box"/><text x="197" y="25" class="mid small">gen 1</text><text x="197" y="40" class="mid mono">→ 2</text>
+      <rect x="238" y="10" width="66" height="36" rx="3" class="box"/><text x="271" y="25" class="mid small">gen 3</text><text x="271" y="40" class="mid mono">→ 1</text>
+      <line x1="49"  y1="46" x2="49"  y2="96" class="arrow" marker-end="url(#ah)"/>
+      <line x1="197" y1="46" x2="197" y2="96" class="arrow" marker-end="url(#ah)"/>
+      <line x1="271" y1="46" x2="127" y2="96" class="arrow" marker-end="url(#ah)"/>
+      <rect x="16"  y="100" width="66" height="32" rx="3" class="mem"/><text x="49"  y="121" class="mid">A</text>
+      <rect x="90"  y="100" width="66" height="32" rx="3" class="bad"/><text x="123" y="121" class="mid">D</text>
+      <rect x="164" y="100" width="66" height="32" rx="3" class="mem"/><text x="197" y="121" class="mid">C</text>
+      <text x="123" y="150" class="mid small t-bad">remove D</text>
+    </svg>
+    <h4>Before</h4>
+    <p>D sits in the middle of the dense array. Its slot is slot 3.</p>
+  </div>
+  <div>
+    <svg viewBox="0 0 320 156" role="img" aria-label="After: C, the last dense object, moved into position 1. Slot 2 now points to position 1. Slot 3 is free and its generation went from 3 to 4. The dense array holds A and C with no hole.">
+      <rect x="16"  y="10" width="66" height="36" rx="3" class="box"/><text x="49"  y="25" class="mid small">gen 1</text><text x="49"  y="40" class="mid mono">→ 0</text>
+      <rect x="90"  y="10" width="66" height="36" rx="3" class="ghost"/><text x="123" y="25" class="mid small t-faint">gen 2</text><text x="123" y="40" class="mid small t-faint">free</text>
+      <rect x="164" y="10" width="66" height="36" rx="3" class="accent"/><text x="197" y="25" class="mid small">gen 1</text><text x="197" y="40" class="mid mono t-hot">→ 1</text>
+      <rect x="238" y="10" width="66" height="36" rx="3" class="ghost"/><text x="271" y="25" class="mid small t-hot">gen 4</text><text x="271" y="40" class="mid small t-faint">free</text>
+      <line x1="49"  y1="46" x2="49"  y2="96" class="arrow" marker-end="url(#ah)"/>
+      <line x1="197" y1="46" x2="127" y2="96" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <rect x="16"  y="100" width="66" height="32" rx="3" class="mem"/><text x="49"  y="121" class="mid">A</text>
+      <rect x="90"  y="100" width="66" height="32" rx="3" class="mem"/><text x="123" y="121" class="mid">C</text>
+      <rect x="164" y="100" width="66" height="32" rx="3" class="ghost"/>
+      <path d="M197,134 C185,152 140,152 127,136" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+      <text x="238" y="150" class="small t-hot">C moved</text>
+    </svg>
+    <h4>After "swap and pop"</h4>
+    <p>C fills the hole, slot 2 is repointed, and slot 3 is free with a new generation. No object is skipped in a loop.</p>
+  </div>
+</div>
+
+<h2 id="tags"><span class="n">6</span>Type-safe handles</h2>
 
 <p>A mesh handle and a texture handle are both "two integers". If they are the same C++ type, nothing stops code from passing a mesh handle to a function that wants a texture. The lookup then reads the wrong table, and may even pass the generation check by luck.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 132" role="img" aria-label="With one handle type, a mesh handle with index 2 is passed to a function that binds a texture. It compiles, and the lookup reads slot 2 of the texture table: the wrong object.">
+      <rect x="10" y="12" width="130" height="30" rx="4" class="cpu"/><text x="75" y="32" class="mid small">mesh handle {2, 1}</text>
+      <line x1="140" y1="27" x2="176" y2="27" class="arrow" marker-end="url(#ah)"/>
+      <rect x="180" y="12" width="130" height="30" rx="4" class="box"/><text x="245" y="32" class="mid small">bind a texture</text>
+      <line x1="245" y1="42" x2="245" y2="68" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <text x="16" y="92" class="small">texture table</text>
+      <rect x="110" y="72" width="60" height="30" class="mem"/><text x="140" y="92" class="mid mono">0</text>
+      <rect x="170" y="72" width="60" height="30" class="mem"/><text x="200" y="92" class="mid mono">1</text>
+      <rect x="230" y="72" width="60" height="30" class="bad"/><text x="260" y="92" class="mid mono">2</text>
+      <text x="160" y="124" class="mid small t-bad">it compiles, and reads texture 2</text>
+    </svg>
+    <h4>One type for every handle</h4>
+    <p>The compiler sees two integers. The mistake shows up at runtime, as the wrong texture.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 132" role="img" aria-label="With a tag per kind, a MeshHandle cannot be passed to a function that wants a TextureHandle. The compiler stops it, and the texture table is never read.">
+      <rect x="10" y="12" width="130" height="30" rx="4" class="cpu"/><text x="75" y="32" class="mid small">MeshHandle {2, 1}</text>
+      <line x1="140" y1="27" x2="152" y2="27" class="arrow dashed"/>
+      <path d="M154,20l14,14m0,-14l-14,14" class="arrow bad thick"/>
+      <rect x="180" y="12" width="130" height="30" rx="4" class="box"/><text x="245" y="32" class="mid small">wants a TextureHandle</text>
+      <text x="16" y="92" class="small t-faint">texture table</text>
+      <rect x="110" y="72" width="60" height="30" class="ghost"/><text x="140" y="92" class="mid mono t-faint">0</text>
+      <rect x="170" y="72" width="60" height="30" class="ghost"/><text x="200" y="92" class="mid mono t-faint">1</text>
+      <rect x="230" y="72" width="60" height="30" class="ghost"/><text x="260" y="92" class="mid mono t-faint">2</text>
+      <text x="160" y="124" class="mid small t-ok">compile error: the types differ</text>
+    </svg>
+    <h4>A tag per kind of handle</h4>
+    <p>The mistake never runs. The table is not touched.</p>
+  </div>
+</div>
 
 <p>The fix is a <b>tag type</b>: an empty type that is never defined and never used at runtime. It is only there to make each kind of handle a different type.</p>
 
@@ -335,7 +540,7 @@ void bindTexture(TextureHandle texture);</code></pre>
 
 <p>Now <var>bindTexture</var>(<var>mesh</var>) is a compile error. The tag costs nothing: both types have the same two fields and the same size. This pattern is also called a <b>phantom type</b> or a <b>strong typedef</b>.</p>
 
-<h2><span class="n">7</span>Who owns the object</h2>
+<h2 id="ownership"><span class="n">7</span>Who owns the object</h2>
 
 <p>A handle is a <b>weak reference</b>. Holding it does not keep the object alive. The object belongs to its table, and it lives until someone calls destroy. This is different from a reference-counted pointer.</p>
 
@@ -381,7 +586,7 @@ void bindTexture(TextureHandle texture);</code></pre>
 
 <p>The same delay matters for the slot. If the slot is reused too early, and the GPU still reads the old object's index from a buffer, the GPU reads the new object. So a slot whose index the GPU knows should also go back on the free list only after that fence.</p>
 
-<h2><span class="n">8</span>Handles for things made from a description</h2>
+<h2 id="dedup"><span class="n">8</span>Handles for things made from a description</h2>
 
 <p>Some objects are fully described by their creation settings, and never change after. A compiled shader, a pipeline, a sampler and a descriptor layout are like this. If two parts of the program ask for the same one, they can share it. The table then keeps a second map: from the <b>description</b> to the handle. This is called <b>interning</b> or a <b>dedup cache</b>.</p>
 
@@ -395,9 +600,9 @@ void bindTexture(TextureHandle texture);</code></pre>
     <text x="310" y="96" class="mid">hash(desc), then</text>
     <text x="310" y="114" class="mid">compare every field</text>
     <text x="310" y="130" class="mid small">in the cache map</text>
-    <path d="M400,90 H440 V45 H478" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <text x="434" y="40" class="end small t-gpu">equal found</text>
-    <rect x="480" y="22" width="260" height="46" rx="6" class="gpu"/>
+    <path d="M400,90 H440 V45 H478" class="arrow ok" marker-end="url(#ah-ok)"/>
+    <text x="434" y="40" class="end small t-ok">equal found</text>
+    <rect x="480" y="22" width="260" height="46" rx="6" class="ok"/>
     <text x="610" y="42" class="mid">return the cached handle</text>
     <text x="610" y="58" class="mid small">nothing is created</text>
     <path d="M400,120 H440 V165 H478" class="arrow" marker-end="url(#ah)"/>
@@ -410,33 +615,53 @@ void bindTexture(TextureHandle texture);</code></pre>
 </figure>
 
 <div class="split">
-  <div>
+  <div class="good">
+    <svg viewBox="0 0 320 124" role="img" aria-label="Two users ask for the same pipeline description. Both get the same handle and read the one shared pipeline.">
+      <rect x="12" y="14" width="96" height="30" rx="4" class="cpu"/><text x="60" y="34" class="mid small">user 1: create</text>
+      <rect x="12" y="74" width="96" height="30" rx="4" class="cpu"/><text x="60" y="94" class="mid small">user 2: create</text>
+      <line x1="108" y1="32" x2="186" y2="52" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <line x1="108" y1="86" x2="186" y2="66" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <rect x="190" y="36" width="118" height="46" rx="4" class="mem"/>
+      <text x="249" y="56" class="mid">one pipeline</text>
+      <text x="249" y="73" class="mid small">read only</text>
+      <text x="249" y="106" class="mid small t-ok">the same handle twice</text>
+    </svg>
     <h4>Dedup is right for immutable objects</h4>
     <p>Shaders, pipelines, samplers, layouts. Nobody writes into them after creation, so sharing one is the same as having two. It saves memory and creation time; a pipeline can take milliseconds to compile.</p>
   </div>
-  <div>
+  <div class="bad">
+    <svg viewBox="0 0 320 124" role="img" aria-label="Two users ask for a buffer with the same description. If they shared one buffer, each write would land on the other user's data.">
+      <rect x="12" y="14" width="96" height="30" rx="4" class="cpu"/><text x="60" y="34" class="mid small">user 1: write</text>
+      <rect x="12" y="74" width="96" height="30" rx="4" class="cpu"/><text x="60" y="94" class="mid small">user 2: write</text>
+      <line x1="108" y1="32" x2="186" y2="52" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <line x1="108" y1="86" x2="186" y2="66" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <rect x="190" y="36" width="118" height="46" rx="4" class="bad"/>
+      <text x="249" y="56" class="mid">one buffer</text>
+      <text x="249" y="73" class="mid small">both write here</text>
+      <text x="249" y="106" class="mid small t-bad">they overwrite each other</text>
+    </svg>
     <h4>Dedup is wrong for mutable objects</h4>
     <p>Buffers and textures. Two users that ask for "a 1 MiB storage buffer" want <i>two</i> buffers, because each will write its own data. Sharing one would make them overwrite each other.</p>
   </div>
 </div>
 
-<p>Every field must take part in both the equality and the hash. A field that is left out of the compare makes two different descriptions look equal, and one user silently gets the other's object. A field left out of only the hash is still correct, just slower (more collisions).</p>
+<div class="callout warn">
+  <strong>Every field must take part in both the equality and the hash</strong>
+  <p>A field that is left out of the compare makes two different descriptions look equal, and one user silently gets the other's object. A field left out of only the hash is still correct, just slower (more collisions).</p>
+</div>
 
 <p>Asset loading often uses the same idea one level up: a map from the file path to the handle. Loading the same file twice then gives the same mesh, and the file is read once.</p>
 
-<h2><span class="n">9</span>Pitfalls</h2>
+<h2 id="pitfalls"><span class="n">9</span>Pitfalls</h2>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Mistake</th><th>What happens</th><th>Fix</th></tr>
-  <tr><td>Lookup checks only the index</td><td>Stale handles find the new object: the ABA bug is back.</td><td>Always compare the generation.</td></tr>
-  <tr><td>Slots start at generation 0</td><td>A zero-initialized handle matches slot 0.</td><td>Start at 1; keep 0 for "invalid".</td></tr>
-  <tr><td>Keeping a reference to the object across a create</td><td>The table may grow and move every object; the reference dangles.</td><td>Look the handle up again after anything that can create.</td></tr>
-  <tr><td>Freeing memory the GPU still reads</td><td>Garbage on screen, or a lost device.</td><td>Deferred destruction, tied to the frame fence.</td></tr>
-  <tr><td>Reusing a slot whose index is in a GPU buffer</td><td>The GPU reads the new object for one or two frames.</td><td>Return the slot to the free list after the fence, too.</td></tr>
-  <tr><td>Using a counter as the index (never reusing)</td><td>Simple, and stale handles are found by a hash-map miss. But a table indexed by it grows forever.</td><td>Fine for objects that are rarely made. Use a free list for objects made every frame.</td></tr>
-</table>
-</div>
+<dl class="pitfalls">
+  <div><dt>Lookup checks only the index</dt><dd>Stale handles find the new object: the ABA bug is back. <b>Fix:</b> always compare the generation.</dd></div>
+  <div><dt>Slots start at generation 0</dt><dd>A zero-initialized handle matches slot 0. <b>Fix:</b> start at 1; keep 0 for "invalid".</dd></div>
+  <div><dt>Keeping a reference to the object across a create</dt><dd>The table may grow and move every object; the reference dangles. <b>Fix:</b> look the handle up again after anything that can create.</dd></div>
+  <div><dt>Freeing memory the GPU still reads</dt><dd>Garbage on screen, or a lost device. <b>Fix:</b> deferred destruction, tied to the frame fence.</dd></div>
+  <div><dt>Reusing a slot whose index is in a GPU buffer</dt><dd>The GPU reads the new object for one or two frames. <b>Fix:</b> return the slot to the free list after the fence, too.</dd></div>
+  <div><dt>Using a counter as the index (never reusing)</dt><dd>Simple, and stale handles are found by a hash-map miss. But a table indexed by it grows forever. Fine for objects that are rarely made. Use a free list for objects made every frame.</dd></div>
+</dl>
 
 <h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
 
@@ -523,6 +748,26 @@ void bindTexture(TextureHandle texture);</code></pre>
 </div>
 
 <p>Indices start at 1 and the check is <code>index &gt;= MAX_*</code>, so slot 0 is never used. That is why every registry holds one less than its limit: 7 meshes fit in 8.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 132" role="img" aria-label="The mesh registry with MAX_MESHES equal to 8. Position 0 is never used, because indices start at 1. Positions 1 to 7 hold meshes. The next handle would have index 8, which is not less than MAX_MESHES, so the create returns an invalid handle.">
+    <text x="20" y="20" class="small">the mesh registry, MAX_MESHES = 8</text>
+    <rect x="20"  y="32" width="68" height="44" rx="4" class="ghost"/><text x="54"  y="51" class="mid mono t-faint">[0]</text><text x="54" y="68" class="mid small t-faint">unused</text>
+    <rect x="92"  y="32" width="68" height="44" rx="4" class="cpu"/><text x="126" y="51" class="mid mono">[1]</text><text x="126" y="68" class="mid small">Mesh</text>
+    <rect x="164" y="32" width="68" height="44" rx="4" class="cpu"/><text x="198" y="51" class="mid mono">[2]</text><text x="198" y="68" class="mid small">Mesh</text>
+    <rect x="236" y="32" width="68" height="44" rx="4" class="cpu"/><text x="270" y="51" class="mid mono">[3]</text><text x="270" y="68" class="mid small">Mesh</text>
+    <rect x="308" y="32" width="68" height="44" rx="4" class="cpu"/><text x="342" y="51" class="mid mono">[4]</text><text x="342" y="68" class="mid small">Mesh</text>
+    <rect x="380" y="32" width="68" height="44" rx="4" class="cpu"/><text x="414" y="51" class="mid mono">[5]</text><text x="414" y="68" class="mid small">Mesh</text>
+    <rect x="452" y="32" width="68" height="44" rx="4" class="cpu"/><text x="486" y="51" class="mid mono">[6]</text><text x="486" y="68" class="mid small">Mesh</text>
+    <rect x="524" y="32" width="68" height="44" rx="4" class="cpu"/><text x="558" y="51" class="mid mono">[7]</text><text x="558" y="68" class="mid small">Mesh</text>
+    <rect x="620" y="32" width="120" height="44" rx="4" class="bad"/><text x="680" y="51" class="mid mono">{8, 1}</text><text x="680" y="68" class="mid small t-bad">8 &gt;= 8: rejected</text>
+    <path d="M92,86 V92 H592 V86" class="arrow cpu"/>
+    <text x="342" y="112" class="mid small">7 usable</text>
+    <text x="54" y="112" class="mid small t-faint">index 0</text>
+    <text x="680" y="112" class="mid small t-bad">an invalid handle</text>
+  </svg>
+  <figcaption>The same holds for every registry: one position less than its limit.</figcaption>
+</figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
 

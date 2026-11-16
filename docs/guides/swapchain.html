@@ -19,6 +19,8 @@
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
   </defs>
 </svg>
 
@@ -42,9 +44,41 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>Why not draw onto the screen</h2>
+<h2 id="why"><span class="n">1</span>Why not draw onto the screen</h2>
 
-<p>The display reads its picture from memory, line by line, about 60 to 240 times per second. If the program drew into that same memory, the display would show half-drawn frames. So there are several images. The display shows one, while the program draws into another. When the new one is done, they swap. That is the old idea of <b>double buffering</b>, and a swapchain is its modern, explicit form.</p>
+<p>The display reads its picture from memory, line by line, about 60 to 240 times per second. What happens when the program draws into that same memory?</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A screen. Above the line the display is reading, it shows the new frame, where a box has moved to the right. Below the line it still shows the old frame. The box is cut in two.">
+      <rect x="60" y="10" width="200" height="112" rx="4" class="paper"/>
+      <rect x="94" y="34" width="36" height="32" class="solid"/>
+      <rect x="70" y="66" width="36" height="32" class="solid"/>
+      <line x1="60" y1="66" x2="260" y2="66" class="arrow bad dashed"/>
+      <text x="68" y="28" class="small">new frame</text>
+      <text x="68" y="114" class="small">old frame</text>
+      <text x="252" y="60" class="end small t-bad">the display reads here</text>
+    </svg>
+    <h4>One image</h4>
+    <p>The program draws into the memory the display reads. The display shows half-drawn frames.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Two images. The display shows the first, a finished frame. The program draws the next frame into the second. They swap when it is done.">
+      <text x="80" y="16" class="mid small">on screen</text>
+      <rect x="10" y="24" width="140" height="84" rx="4" class="paper"/>
+      <rect x="52" y="50" width="44" height="32" class="solid"/>
+      <text x="240" y="16" class="mid small">drawn into</text>
+      <rect x="170" y="24" width="140" height="84" rx="4" class="paper"/>
+      <rect x="236" y="50" width="44" height="32" class="solid o-50"/>
+      <line x1="152" y1="66" x2="168" y2="66" class="arrow ok" marker-start="url(#ah-ok)" marker-end="url(#ah-ok)"/>
+      <text x="160" y="130" class="mid small t-ok">swap when the new one is done</text>
+    </svg>
+    <h4>Several images</h4>
+    <p>The display shows one, while the program draws into another. When the new one is done, they swap.</p>
+  </div>
+</div>
+
+<p>That is the old idea of <b>double buffering</b>, and a swapchain is its modern, explicit form.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 300" role="img" aria-label="Three swapchain images go round a cycle. A free image is acquired by the program, which draws into it. Present queues it for display. At the next refresh it goes on screen. When the next image replaces it, it is free again.">
@@ -77,15 +111,17 @@
 
 <p>The images belong to the presentation engine, not to the program. The program asks for one, may draw into it until it gives it back, and must not touch it after that. The engine decides which image comes next, and when.</p>
 
-<h2><span class="n">2</span>The loop: acquire, render, present</h2>
+<h2 id="loop"><span class="n">2</span>The loop: acquire, render, present</h2>
 
-<ol class="steps">
-  <li><b>Acquire.</b> Ask the swapchain for the next image. The answer is an index into its images. It may block when every image is in use.</li>
-  <li><b>Render.</b> Record commands that draw into that image, and submit them.</li>
-  <li><b>Present.</b> Give the image back, with a request to show it.</li>
+<ol class="flow">
+  <li class="cpu"><b>1. Acquire</b><span>Ask the swapchain for the next image. The answer is an index into its images. It may block when every image is in use.</span></li>
+  <li class="gpu"><b>2. Render</b><span>Record commands that draw into that image, and submit them.</span></li>
+  <li class="cpu"><b>3. Present</b><span>Give the image back, with a request to show it.</span></li>
 </ol>
 
-<p>There is a catch in step 1. Acquire returns as soon as the swapchain <i>knows</i> which image comes next, which can be before the display has stopped reading it. So the index alone does not make it safe to draw. The image becomes free at some later moment, and only the GPU timeline knows when. Two <b>semaphores</b> handle this. A semaphore is a GPU-side signal: one submission signals it, and another one waits for it. The CPU never waits on it.</p>
+<p>There is a catch in step 1. Acquire returns as soon as the swapchain <i>knows</i> which image comes next, which can be before the display has stopped reading it. So the index alone does not make it safe to draw. The image becomes free at some later moment, and only the GPU timeline knows when.</p>
+
+<p>Two <b>semaphores</b> handle this. A semaphore is a GPU-side signal: one submission signals it, and another one waits for it. The CPU never waits on it.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 330" role="img" aria-label="Three lanes: CPU, GPU queue and presentation engine. The CPU calls acquire, which returns an index at once. The presentation engine signals the acquire semaphore when the image is really free. The GPU work waits for it only at the color output stage, so work before drawing to the image already runs. The submit signals the present semaphore when it is done. Present waits for it, then the image goes on screen.">
@@ -149,9 +185,36 @@
 </table>
 </div>
 
-<p>Keeping one present semaphore per frame in flight looks right and works on many machines, but the present of frame <var>n</var> may still hold it when frame <var>n</var> + 2 signals it again. Validation layers now report this.</p>
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A timeline. The present of frame n still waits on semaphore S0 when frame n plus 2 signals S0 again.">
+      <rect x="16" y="24" width="200" height="28" rx="4" class="mem"/><text x="24" y="42" class="small">present n: waits on S0</text>
+      <rect x="150" y="68" width="154" height="28" rx="4" class="bad"/><text x="227" y="86" class="mid small">frame n + 2 signals S0</text>
+      <line x1="150" y1="14" x2="150" y2="104" class="arrow bad dashed"/>
+      <line x1="16" y1="112" x2="304" y2="112" class="arrow" marker-end="url(#ah)"/>
+      <text x="304" y="130" class="end small">time</text>
+      <text x="16" y="130" class="small t-bad">S0 is used twice at once</text>
+    </svg>
+    <h4>One present semaphore per frame in flight</h4>
+    <p>It looks right and works on many machines, but the present of frame <var>n</var> may still hold it when frame <var>n</var> + 2 signals it again. Validation layers now report this.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Three swapchain images. Each has its own present semaphore.">
+      <rect x="20" y="16" width="80" height="52" rx="4" class="mem"/><text x="60" y="46" class="mid small">image 0</text>
+      <rect x="120" y="16" width="80" height="52" rx="4" class="mem"/><text x="160" y="46" class="mid small">image 1</text>
+      <rect x="220" y="16" width="80" height="52" rx="4" class="mem"/><text x="260" y="46" class="mid small">image 2</text>
+      <rect x="36" y="80" width="48" height="24" rx="12" class="ok"/><text x="60" y="96" class="mid small">S0</text>
+      <rect x="136" y="80" width="48" height="24" rx="12" class="ok"/><text x="160" y="96" class="mid small">S1</text>
+      <rect x="236" y="80" width="48" height="24" rx="12" class="ok"/><text x="260" y="96" class="mid small">S2</text>
+      <path d="M60,68V80M160,68V80M260,68V80" class="arrow ok"/>
+      <text x="160" y="128" class="mid small t-ok">a semaphore follows its image</text>
+    </svg>
+    <h4>One per swapchain image</h4>
+    <p>An image is acquired again only after its last present finished. By then its semaphore is free.</p>
+  </div>
+</div>
 
-<h2><span class="n">3</span>Present modes and vsync</h2>
+<h2 id="present-modes"><span class="n">3</span>Present modes and vsync</h2>
 
 <p>The display refreshes at fixed times, the <b>vertical blank</b> (vblank). The present mode says what happens to a presented image between two of them.</p>
 
@@ -257,42 +320,162 @@
   <figcaption>A 60 Hz display and a GPU that needs 10 ms per frame, 6 pixels per millisecond. In FIFO with two images, the GPU starts the next frame only when a refresh frees an image. Orange lines: the screen switches images while the display is drawing it.</figcaption>
 </figure>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Mode (Vulkan name)</th><th>At a refresh</th><th>Tearing</th><th>Latency</th><th>Notes</th></tr>
-  <tr><td><b>FIFO</b></td><td>shows the oldest queued image; a full queue makes acquire or present block</td><td>no</td><td>higher</td><td>"vsync on". Always supported. Saves power: the GPU does not render frames nobody sees.</td></tr>
-  <tr><td><b>FIFO_RELAXED</b></td><td>like FIFO, but an image that arrives late is shown at once</td><td>only when late</td><td>higher</td><td>Avoids a whole lost refresh when a frame is a little late.</td></tr>
-  <tr><td><b>MAILBOX</b></td><td>shows the newest image; a new present replaces the queued one</td><td>no</td><td>low</td><td>"Triple buffering" in the classic sense. The GPU runs flat out; frames are wasted.</td></tr>
-  <tr><td><b>IMMEDIATE</b></td><td>does not wait for a refresh</td><td>yes</td><td>lowest</td><td>"vsync off". Liked by competitive games.</td></tr>
-</table>
+<p>The four modes, by their Vulkan names:</p>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two presented images wait in a queue. At the vblank the oldest one goes on screen.">
+      <text x="65" y="32" class="mid small">queue</text>
+      <rect x="10" y="40" width="110" height="50" rx="6" class="zone"/>
+      <rect x="20" y="50" width="40" height="30" class="mem"/><text x="40" y="70" class="mid mono">2</text>
+      <rect x="70" y="50" width="40" height="30" class="mem"/><text x="90" y="70" class="mid mono">1</text>
+      <line x1="138" y1="24" x2="138" y2="112" class="dashed"/>
+      <text x="138" y="16" class="mid small">vblank</text>
+      <line x1="120" y1="65" x2="154" y2="65" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <rect x="158" y="36" width="72" height="58" rx="4" class="paper"/><text x="194" y="71" class="mid big">1</text>
+      <text x="194" y="112" class="mid small">screen</text>
+    </svg>
+    <h4>FIFO</h4>
+    <p>At a refresh, shows the oldest queued image. A full queue makes acquire or present block.</p>
+    <p>"vsync on". Always supported. Saves power: the GPU does not render frames nobody sees.</p>
+    <p class="cost">Tearing: no · Latency: higher</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The queue is empty at the vblank. An image arrives a little later and goes on screen at once, in the middle of a refresh, with a tear line.">
+      <text x="65" y="32" class="mid small">queue</text>
+      <rect x="10" y="40" width="110" height="50" rx="6" class="zone"/>
+      <text x="65" y="70" class="mid small t-faint">empty</text>
+      <line x1="100" y1="24" x2="100" y2="112" class="dashed"/>
+      <text x="100" y="16" class="mid small">vblank</text>
+      <rect x="126" y="100" width="28" height="22" class="mem"/><text x="140" y="116" class="mid mono">1</text>
+      <path d="M140,100 V65 H154" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <text x="126" y="58" class="small t-hot">late</text>
+      <rect x="158" y="36" width="72" height="58" rx="4" class="paper"/>
+      <text x="194" y="56" class="mid mono">0</text>
+      <text x="194" y="86" class="mid mono">1</text>
+      <line x1="158" y1="65" x2="230" y2="65" class="hot"/>
+      <text x="194" y="112" class="mid small">screen</text>
+    </svg>
+    <h4>FIFO_RELAXED</h4>
+    <p>Like FIFO, but an image that arrives late is shown at once.</p>
+    <p>Avoids a whole lost refresh when a frame is a little late.</p>
+    <p class="cost">Tearing: only when late · Latency: higher</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A queue with one place. A newer image replaces the one that was waiting. At the vblank the newest goes on screen.">
+      <text x="65" y="32" class="mid small">one place</text>
+      <rect x="10" y="40" width="110" height="50" rx="6" class="zone"/>
+      <rect x="20" y="50" width="40" height="30" class="ghost"/><text x="40" y="70" class="mid mono t-faint">2</text>
+      <rect x="70" y="50" width="40" height="30" class="mem"/><text x="90" y="70" class="mid mono">3</text>
+      <text x="40" y="106" class="mid small t-faint">replaced</text>
+      <line x1="138" y1="24" x2="138" y2="112" class="dashed"/>
+      <text x="138" y="16" class="mid small">vblank</text>
+      <line x1="120" y1="65" x2="154" y2="65" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <rect x="158" y="36" width="72" height="58" rx="4" class="paper"/><text x="194" y="71" class="mid big">3</text>
+      <text x="194" y="112" class="mid small">screen</text>
+    </svg>
+    <h4>MAILBOX</h4>
+    <p>At a refresh, shows the newest image. A new present replaces the queued one.</p>
+    <p>"Triple buffering" in the classic sense. The GPU runs flat out; frames are wasted.</p>
+    <p class="cost">Tearing: no · Latency: low</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="No queue. Each image goes on screen as soon as it is presented. The screen shows the new image above a tear line and the old one below.">
+      <rect x="20" y="54" width="40" height="30" class="mem"/><text x="40" y="74" class="mid mono">1</text>
+      <text x="40" y="44" class="mid small">presented</text>
+      <line x1="60" y1="69" x2="124" y2="69" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <text x="92" y="60" class="mid small">at once</text>
+      <rect x="128" y="20" width="100" height="78" rx="4" class="paper"/>
+      <text x="178" y="48" class="mid mono">1</text>
+      <text x="178" y="88" class="mid mono">0</text>
+      <line x1="128" y1="62" x2="228" y2="62" class="hot"/>
+      <text x="178" y="116" class="mid small t-hot">tear line</text>
+    </svg>
+    <h4>IMMEDIATE</h4>
+    <p>Does not wait for a refresh.</p>
+    <p>"vsync off". Liked by competitive games.</p>
+    <p class="cost">Tearing: yes · Latency: lowest</p>
+  </div>
 </div>
 
 <h3>Worked example: when the GPU is too slow for FIFO</h3>
 
 <p>A 60 Hz display refreshes every 16.7 ms. With FIFO, a frame can only appear at a refresh. These numbers come from stepping the rules above with a fixed GPU time per frame:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>GPU per frame</th><th>Images</th><th>Frames shown per second</th><th>Time each frame stays on screen</th></tr>
-  <tr><td>10 ms</td><td>2 or 3</td><td>60</td><td>16.7 ms, every time</td></tr>
-  <tr><td>20 ms</td><td>2</td><td><b>30</b></td><td>33.3 ms, every time</td></tr>
-  <tr><td>20 ms</td><td>3</td><td>about 50</td><td>mostly 16.7 ms, every fifth frame 33.3 ms</td></tr>
-</table>
+<div class="stats">
+  <div><b>60</b><span>frames shown per second: GPU 10 ms per frame, 2 or 3 images</span><small>each stays 16.7 ms, every time</small></div>
+  <div><b>30</b><span>frames shown per second: GPU 20 ms per frame, 2 images</span><small>each stays 33.3 ms, every time</small></div>
+  <div><b>about 50</b><span>frames shown per second: GPU 20 ms per frame, 3 images</span><small>mostly 16.7 ms, every fifth 33.3 ms</small></div>
 </div>
 
-<p>With 2 images and 20 ms frames, a finished frame waits for the next refresh, and the GPU has no free image during that wait. It loses the rest of each refresh, so it drops all the way to 30. A third image lets the GPU start the next frame during the wait. The average is close to the GPU's own 50, but the timing is uneven, which the eye notices as <b>judder</b>.</p>
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="FIFO with two images and a GPU that needs 20 milliseconds per frame. The GPU finishes frame 0 at 20 milliseconds, then has no free image until the vblank at 33.3 milliseconds shows frame 0 and frees the other image. It then draws frame 1 until 53.3 and waits again until 66.7. Each frame stays on screen for 33.3 milliseconds.">
+    <text x="20" y="20" class="title">FIFO, 2 images, 20 ms per frame</text>
+    <path d="M220,32V112M320,32V112M420,32V112M520,32V112M620,32V112M720,32V112" class="dashed"/>
+    <text x="110" y="62" class="end small t-gpu">GPU</text>
+    <rect x="120" y="48" width="120" height="20" rx="3" class="gpu"/><text x="180" y="62" class="mid small">0</text>
+    <rect x="240" y="48" width="80" height="20" rx="3" class="bad"/><text x="280" y="62" class="mid small">no free image</text>
+    <rect x="320" y="48" width="120" height="20" rx="3" class="gpu"/><text x="380" y="62" class="mid small">1</text>
+    <rect x="440" y="48" width="80" height="20" rx="3" class="bad"/><text x="480" y="62" class="mid small">no free image</text>
+    <rect x="520" y="48" width="120" height="20" rx="3" class="gpu"/><text x="580" y="62" class="mid small">2</text>
+    <rect x="640" y="48" width="80" height="20" rx="3" class="bad"/><text x="680" y="62" class="mid small">no free image</text>
+    <text x="110" y="94" class="end small">screen</text>
+    <rect x="320" y="80" width="200" height="20" rx="3" class="box"/><text x="420" y="94" class="mid small">0</text>
+    <rect x="520" y="80" width="200" height="20" rx="3" class="box"/><text x="620" y="94" class="mid small">1</text>
+    <line x1="120" y1="130" x2="720" y2="130" class="arrow"/>
+    <text x="120" y="148" class="mid small">0</text>
+    <text x="220" y="148" class="mid small">16.7</text>
+    <text x="320" y="148" class="mid small">33.3</text>
+    <text x="420" y="148" class="mid small">50</text>
+    <text x="520" y="148" class="mid small">66.7</text>
+    <text x="620" y="148" class="mid small">83.3</text>
+    <text x="720" y="148" class="mid small">100 ms</text>
+  </svg>
+  <figcaption>Dashed: a vblank. A finished frame waits for the next refresh, and the GPU has no free image during that wait.</figcaption>
+</figure>
 
-<h2><span class="n">4</span>When the swapchain no longer fits</h2>
+<p>With 2 images and 20 ms frames, the GPU loses the rest of each refresh, so it drops all the way to 30. A third image lets the GPU start the next frame during the wait. The average is close to the GPU's own 50, but the timing is uneven, which the eye notices as <b>judder</b>.</p>
+
+<h2 id="rebuild"><span class="n">4</span>When the swapchain no longer fits</h2>
 
 <p>A swapchain is built for one window size and one surface. When the window changes, acquire and present report it:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Result</th><th>Meaning</th><th>What to do</th></tr>
-  <tr><td><b>Suboptimal</b></td><td>The image was acquired or presented, but the swapchain no longer matches the surface exactly (for example, its size).</td><td>Finish and present this frame. Rebuild before the next one.</td></tr>
-  <tr><td><b>Out of date</b></td><td>The swapchain cannot be used any more. From acquire: no image was acquired.</td><td>Skip this frame. Rebuild.</td></tr>
-  <tr><td>Surface size 0 × 0</td><td>The window is minimized. No swapchain can be built for it.</td><td>Skip frames, ideally sleeping until a window event, until the size is back.</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A window that has grown. The swapchain image is smaller than the window and is stretched to fill it.">
+      <rect x="16" y="12" width="208" height="106" rx="4" class="ghost"/>
+      <rect x="16" y="12" width="110" height="72" rx="4" class="mem"/>
+      <text x="71" y="52" class="mid small">swapchain image</text>
+      <line x1="130" y1="88" x2="216" y2="112" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="216" y="30" class="end small t-faint">the window now</text>
+      <text x="26" y="108" class="small t-hot">stretched to fit</text>
+    </svg>
+    <h4>Suboptimal</h4>
+    <p>The image was acquired or presented, but the swapchain no longer matches the surface exactly (for example, its size).</p>
+    <p class="cost"><b>Do:</b> finish and present this frame. Rebuild before the next one.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A swapchain image crossed out: it cannot be used any more.">
+      <rect x="50" y="20" width="140" height="84" rx="4" class="mem"/>
+      <path d="M62,30L178,94M178,30L62,94" class="arrow bad"/>
+      <text x="120" y="122" class="mid small t-bad">no image acquired</text>
+    </svg>
+    <h4>Out of date</h4>
+    <p>The swapchain cannot be used any more. From acquire: no image was acquired.</p>
+    <p class="cost"><b>Do:</b> skip this frame. Rebuild.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An empty desktop. The window is only an icon in the task bar. Its surface is 0 by 0.">
+      <rect x="20" y="14" width="200" height="102" rx="4" class="paper"/>
+      <rect x="20" y="98" width="200" height="18" class="box"/>
+      <rect x="30" y="102" width="26" height="10" rx="2" class="accent"/>
+      <text x="120" y="62" class="mid small t-faint">surface: 0 × 0</text>
+      <text x="62" y="111" class="small">the window</text>
+    </svg>
+    <h4>Surface size 0 × 0</h4>
+    <p>The window is minimized. No swapchain can be built for it.</p>
+    <p class="cost"><b>Do:</b> skip frames, ideally sleeping until a window event, until the size is back.</p>
+  </div>
 </div>
 
 <p>Most programs also listen to the window system's own resize event, because not every platform reports out of date in time. Rebuilding works like this:</p>
@@ -310,23 +493,28 @@
   <p>A rebuild can happen between acquire and present. Then an acquire semaphore may be signaled and never waited on, and a binary semaphore in that state cannot be signaled again. A robust rebuild first makes sure every signaled semaphore is waited on (for example, with an empty submission that only waits), or destroys and recreates the semaphores.</p>
 </div>
 
-<h2><span class="n">5</span>Format and color space</h2>
+<h2 id="format"><span class="n">5</span>Format and color space</h2>
 
-<p>The swapchain also fixes the pixel format and the color space the display expects. A common choice is an 8-bit BGRA or RGBA format with an <b>sRGB</b> encoding. With an sRGB format, the hardware converts the shader's linear output into sRGB when it writes. HDR displays need other color spaces and wider formats. See <a href="color-spaces.html">color spaces: sRGB and linear</a>.</p>
+<p>The swapchain also fixes the pixel format and the color space the display expects. A common choice is an 8-bit BGRA or RGBA format with an <b>sRGB</b> encoding.</p>
 
-<h2><span class="n">6</span>Pitfalls</h2>
+<ol class="flow">
+  <li class="shader"><b>Shader</b><span>outputs linear color</span></li>
+  <li class="mem"><b>sRGB format</b><span>the hardware converts linear to sRGB when it writes</span></li>
+  <li><b>Display</b><span>gets the sRGB it expects</span></li>
+</ol>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Pitfall</th><th>What happens</th></tr>
-  <tr><td>Drawing as soon as acquire returns, with no semaphore wait</td><td>The display may still read the image: flicker or garbage, on some machines only.</td></tr>
-  <tr><td>Present semaphores per frame in flight</td><td>A semaphore is signaled while a present still waits on it (section 2).</td></tr>
-  <tr><td>Treating the image index as the frame slot</td><td>The order of images is up to the swapchain, and their count is not the number of frames in flight. Index frame resources by the slot (see <a href="frames-in-flight.html">frames in flight</a>).</td></tr>
-  <tr><td>Ignoring suboptimal or out of date</td><td>A stretched picture after resize, or errors on every frame.</td></tr>
-  <tr><td>Forgetting the layout change to "present"</td><td>The display reads an image in a layout it does not understand.</td></tr>
-  <tr><td>Not presenting an acquired image</td><td>The image stays out of the ring. After a few such frames, acquire has no image left to give.</td></tr>
-</table>
-</div>
+<p>HDR displays need other color spaces and wider formats. See <a href="color-spaces.html">color spaces: sRGB and linear</a>.</p>
+
+<h2 id="pitfalls"><span class="n">6</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Drawing as soon as acquire returns, with no semaphore wait</dt><dd>The display may still read the image: flicker or garbage, on some machines only.</dd></div>
+  <div><dt>Present semaphores per frame in flight</dt><dd>A semaphore is signaled while a present still waits on it (section 2).</dd></div>
+  <div><dt>Treating the image index as the frame slot</dt><dd>The order of images is up to the swapchain, and their count is not the number of frames in flight. Index frame resources by the slot (see <a href="frames-in-flight.html">frames in flight</a>).</dd></div>
+  <div><dt>Ignoring suboptimal or out of date</dt><dd>A stretched picture after resize, or errors on every frame.</dd></div>
+  <div><dt>Forgetting the layout change to "present"</dt><dd>The display reads an image in a layout it does not understand.</dd></div>
+  <div><dt>Not presenting an acquired image</dt><dd>The image stays out of the ring. After a few such frames, acquire has no image left to give.</dd></div>
+</dl>
 
 <h2 id="in-rasm"><span class="n">7</span>In RASM</h2>
 

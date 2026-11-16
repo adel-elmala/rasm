@@ -42,18 +42,72 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>The problem</h2>
+<h2 id="problem"><span class="n">1</span>The problem</h2>
 
-<p>Normal text rendering is a large system: load a font file (TrueType, OpenType), turn the outlines of each glyph into pixels, pack them into a texture, lay out the string with the right spacing and kerning, then draw one textured quad per character. That is the right tool for game UI. It is too much for a debug overlay that must work on the first day of a new engine, with nothing else in place.</p>
+<p>Normal text rendering is a large system. It is the right tool for game UI:</p>
 
-<p>The minimal version gives up a lot on purpose: one fixed size, one fixed width per character, plain ASCII, no smoothing. In return it needs a short shader, a little C++, no assets, and one draw call.</p>
+<ol class="flow">
+  <li><b>Font file</b><span>load TrueType or OpenType</span></li>
+  <li><b>Rasterize</b><span>turn the outlines of each glyph into pixels</span></li>
+  <li class="mem"><b>Atlas</b><span>pack the glyphs into a texture</span></li>
+  <li class="cpu"><b>Layout</b><span>place the string with the right spacing and kerning</span></li>
+  <li class="gpu"><b>Draw</b><span>one textured quad per character</span></li>
+</ol>
 
-<h2><span class="n">2</span>A font as bits</h2>
+<p>That is too much for a debug overlay that must work on the first day of a new engine, with nothing else in place. The minimal version gives up a lot on purpose:</p>
+
+<div class="split">
+  <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A texture that holds a grid of glyphs, and a row of quads of different widths, one per character of the word Frame.">
+      <rect x="14" y="20" width="84" height="84" class="mem"/>
+      <path d="M42,20V104M70,20V104M14,48H98M14,76H98" class="grid"/>
+      <text x="28" y="39" class="mid">A</text><text x="56" y="39" class="mid">B</text><text x="84" y="39" class="mid">C</text>
+      <text x="28" y="67" class="mid">a</text><text x="56" y="67" class="mid">b</text><text x="84" y="67" class="mid">c</text>
+      <text x="28" y="95" class="mid">1</text><text x="56" y="95" class="mid">2</text><text x="84" y="95" class="mid">3</text>
+      <text x="56" y="124" class="mid small">glyphs in a texture</text>
+      <line x1="102" y1="62" x2="126" y2="62" class="arrow" marker-end="url(#ah)"/>
+      <rect x="130" y="44" width="24" height="36" class="box"/><text x="142" y="68" class="mid big">F</text>
+      <rect x="158" y="44" width="16" height="36" class="box"/><text x="166" y="68" class="mid big">r</text>
+      <rect x="178" y="44" width="22" height="36" class="box"/><text x="189" y="68" class="mid big">a</text>
+      <rect x="204" y="44" width="32" height="36" class="box"/><text x="220" y="68" class="mid big">m</text>
+      <rect x="240" y="44" width="22" height="36" class="box"/><text x="251" y="68" class="mid big">e</text>
+      <text x="282" y="68" class="mid big">…</text>
+      <text x="200" y="124" class="mid small">one quad per character</text>
+    </svg>
+    <h4>A full text renderer</h4>
+    <p>A font file, a texture, a layout step, and a quad for every character, each with its own width.</p>
+  </div>
+  <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="One rectangle cut into 14 cells of the same width. Each cell holds one character of the text Frame 16.67 ms.">
+      <text x="160" y="30" class="mid small">one quad, 14 cells of the same size</text>
+      <rect x="20" y="44" width="280" height="40" class="box"/>
+      <path d="M40,44V84M60,44V84M80,44V84M100,44V84M120,44V84M140,44V84M160,44V84M180,44V84M200,44V84M220,44V84M240,44V84M260,44V84M280,44V84" class="grid"/>
+      <text x="30" y="69" class="mid mono">F</text>
+      <text x="50" y="69" class="mid mono">r</text>
+      <text x="70" y="69" class="mid mono">a</text>
+      <text x="90" y="69" class="mid mono">m</text>
+      <text x="110" y="69" class="mid mono">e</text>
+      <text x="150" y="69" class="mid mono">1</text>
+      <text x="170" y="69" class="mid mono">6</text>
+      <text x="190" y="69" class="mid mono">.</text>
+      <text x="210" y="69" class="mid mono">6</text>
+      <text x="230" y="69" class="mid mono">7</text>
+      <text x="270" y="69" class="mid mono">m</text>
+      <text x="290" y="69" class="mid mono">s</text>
+      <text x="160" y="108" class="mid small">font: bits in the shader</text>
+      <text x="160" y="124" class="mid small">text: character codes in a buffer</text>
+    </svg>
+    <h4>The minimal version</h4>
+    <p>One fixed size, one fixed width per character, plain ASCII, no smoothing. In return it needs a short shader, a little C++, no assets, and one draw call.</p>
+  </div>
+</div>
+
+<h2 id="font-bits"><span class="n">2</span>A font as bits</h2>
 
 <p>A <b>bitmap font</b> stores each glyph as a grid of pixels that are either on or off. Old computers worked this way: the IBM PC's VGA text mode drew every character from an 8×8 or 8×16 grid stored in ROM. An 8×8 grid has 8 rows of 8 pixels. One row is 8 bits, exactly one byte.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 260" role="img" aria-label="The letter A as an 8 by 8 grid of pixels. Each row is one byte: 0x0C, 0x1E, 0x33, 0x33, 0x3F, 0x33, 0x33, 0x00. The lowest bit is the leftmost pixel.">
+  <svg viewBox="0 0 760 250" role="img" aria-label="The letter A as an 8 by 8 grid of pixels. Each row is one byte: 0x0C, 0x1E, 0x33, 0x33, 0x3F, 0x33, 0x33, 0x00. Row 2 is shown enlarged: pixels 0, 1, 4 and 5 are on, so bits 0, 1, 4 and 5 are 1. Written as a binary number, 0011 0011, the lowest bit is on the right, so the pixels are the number read right to left.">
     <rect x="60" y="40" width="176" height="176" class="ghost"/>
     <rect x="104" y="40" width="44" height="22" class="head"/>
     <rect x="82" y="62" width="88" height="22" class="head"/>
@@ -66,40 +120,112 @@
     <rect x="148" y="150" width="44" height="22" class="head"/>
     <rect x="60" y="172" width="44" height="22" class="head"/>
     <rect x="148" y="172" width="44" height="22" class="head"/>
-    <text x="71" y="32" class="mid mono small">0</text>
-    <text x="93" y="32" class="mid mono small">1</text>
-    <text x="115" y="32" class="mid mono small">2</text>
-    <text x="137" y="32" class="mid mono small">3</text>
-    <text x="225" y="32" class="mid mono small">7</text>
-    <text x="148" y="236" class="mid small">x: bit 0 is the leftmost pixel</text>
-    <text x="50" y="56" class="end mono small">0</text>
-    <text x="50" y="210" class="end mono small">7</text>
+    <path d="M82,40V216M104,40V216M126,40V216M148,40V216M170,40V216M192,40V216M214,40V216M60,62H236M60,84H236M60,106H236M60,128H236M60,150H236M60,172H236M60,194H236" class="grid"/>
+    <text x="71" y="32" class="mid mono small">0</text><text x="93" y="32" class="mid mono small">1</text><text x="115" y="32" class="mid mono small">2</text><text x="137" y="32" class="mid mono small">3</text>
+    <text x="159" y="32" class="mid mono small">4</text><text x="181" y="32" class="mid mono small">5</text><text x="203" y="32" class="mid mono small">6</text><text x="225" y="32" class="mid mono small">7</text>
+    <text x="50" y="56" class="end mono small">0</text><text x="50" y="78" class="end mono small">1</text><text x="50" y="100" class="end mono small">2</text><text x="50" y="122" class="end mono small">3</text>
+    <text x="50" y="144" class="end mono small">4</text><text x="50" y="166" class="end mono small">5</text><text x="50" y="188" class="end mono small">6</text><text x="50" y="210" class="end mono small">7</text>
+    <text x="148" y="238" class="mid small">x: bit 0 is the leftmost pixel</text>
 
-    <text x="290" y="56" class="mono small">row 0   0000 1100   0x0C</text>
-    <text x="290" y="78" class="mono small">row 1   0001 1110   0x1E</text>
-    <text x="290" y="100" class="mono small">row 2   0011 0011   0x33</text>
-    <text x="290" y="122" class="mono small">row 3   0011 0011   0x33</text>
-    <text x="290" y="144" class="mono small">row 4   0011 1111   0x3F</text>
-    <text x="290" y="166" class="mono small">row 5   0011 0011   0x33</text>
-    <text x="290" y="188" class="mono small">row 6   0011 0011   0x33</text>
-    <text x="290" y="210" class="mono small">row 7   0000 0000   0x00</text>
-    <text x="540" y="56" class="small">Written in binary, the highest</text>
-    <text x="540" y="72" class="small">bit is on the left. With "bit 0 is</text>
-    <text x="540" y="88" class="small">the leftmost pixel", the picture</text>
-    <text x="540" y="104" class="small">is the binary number read</text>
-    <text x="540" y="120" class="small">right to left.</text>
-    <text x="540" y="152" class="small">The other order (bit 7 left) is</text>
-    <text x="540" y="168" class="small">just as common. A font file</text>
-    <text x="540" y="184" class="small">and its reader must agree.</text>
+    <text x="248" y="32" class="small">byte</text>
+    <text x="248" y="56" class="mono small">0x0C</text>
+    <text x="248" y="78" class="mono small">0x1E</text>
+    <text x="248" y="100" class="mono small">0x33</text>
+    <text x="248" y="122" class="mono small">0x33</text>
+    <text x="248" y="144" class="mono small">0x3F</text>
+    <text x="248" y="166" class="mono small">0x33</text>
+    <text x="248" y="188" class="mono small">0x33</text>
+    <text x="248" y="210" class="mono small">0x00</text>
+    <rect x="56" y="82" width="230" height="26" class="hot"/>
+    <line x1="288" y1="95" x2="366" y2="95" class="arrow hot" marker-end="url(#ah-hot)"/>
+
+    <text x="372" y="60" class="title">Row 2 = 0x33</text>
+    <rect x="372" y="75" width="80" height="40" class="head"/>
+    <rect x="532" y="75" width="80" height="40" class="head"/>
+    <rect x="372" y="75" width="320" height="40" class="ghost"/>
+    <path d="M412,75V115M452,75V115M492,75V115M532,75V115M572,75V115M612,75V115M652,75V115" class="grid"/>
+    <text x="392" y="132" class="mid small">0</text><text x="432" y="132" class="mid small">1</text><text x="472" y="132" class="mid small">2</text><text x="512" y="132" class="mid small">3</text>
+    <text x="552" y="132" class="mid small">4</text><text x="592" y="132" class="mid small">5</text><text x="632" y="132" class="mid small">6</text><text x="672" y="132" class="mid small">7</text>
+    <text x="700" y="132" class="small">bit</text>
+    <text x="392" y="152" class="mid mono">1</text><text x="432" y="152" class="mid mono">1</text><text x="472" y="152" class="mid mono">0</text><text x="512" y="152" class="mid mono">0</text>
+    <text x="552" y="152" class="mid mono">1</text><text x="592" y="152" class="mid mono">1</text><text x="632" y="152" class="mid mono">0</text><text x="672" y="152" class="mid mono">0</text>
+    <text x="700" y="152" class="small">value</text>
+
+    <text x="372" y="184" class="small">Written as a binary number, the highest bit is on the left:</text>
+    <text x="392" y="206" class="mid mono">0</text><text x="432" y="206" class="mid mono">0</text><text x="472" y="206" class="mid mono">1</text><text x="512" y="206" class="mid mono">1</text>
+    <text x="552" y="206" class="mid mono">0</text><text x="592" y="206" class="mid mono">0</text><text x="632" y="206" class="mid mono">1</text><text x="672" y="206" class="mid mono">1</text>
+    <line x1="690" y1="218" x2="376" y2="218" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="532" y="238" class="mid small t-hot">the pixels are this number read right to left</text>
   </svg>
   <figcaption>The last row and the rightmost two columns are empty. They are the space between lines and between letters, so the glyphs can be drawn edge to edge.</figcaption>
 </figure>
 
-<p>A font only needs the characters it will show. The printable ASCII characters go from <samp>!</samp> (code 33) to <samp>~</samp> (code 126): 94 glyphs. The space (code 32) needs no glyph: it is all background.</p>
+<div class="callout">
+  <strong>A font and its reader must agree on the bit order</strong>
+  <p>Here bit 0 is the leftmost pixel. The other order (bit 7 on the left) is just as common.</p>
+</div>
 
-<h2><span class="n">3</span>Packing glyphs into integers</h2>
+<p>A font only needs the characters it will show:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 100" role="img" aria-label="The ASCII codes from 0 to 127 as a bar. Codes 0 to 31 are control codes. Code 32 is the space, with no glyph. Codes 33 to 126, from the exclamation mark to the tilde, are the 94 glyphs of the font.">
+    <text x="20" y="20" class="small">ASCII codes 0 … 127</text>
+    <rect x="20" y="30" width="180" height="32" class="ghost"/>
+    <text x="110" y="51" class="mid small">0 … 31: control codes</text>
+    <rect x="200" y="30" width="6" height="32" class="box"/>
+    <rect x="206" y="30" width="528" height="32" class="mem"/>
+    <text x="470" y="51" class="mid">! (33) … ~ (126): 94 glyphs in the font</text>
+    <rect x="734" y="30" width="6" height="32" class="ghost"/>
+    <line x1="203" y1="62" x2="203" y2="76" class="arrow"/>
+    <text x="203" y="92" class="mid small">32: the space, no glyph</text>
+  </svg>
+  <figcaption>The printable ASCII characters go from <samp>!</samp> (code 33) to <samp>~</samp> (code 126): 94 glyphs. The space (code 32) needs no glyph: it is all background.</figcaption>
+</figure>
+
+<h2 id="packing"><span class="n">3</span>Packing glyphs into integers</h2>
 
 <p>Shaders work best with 32-bit integers. Four rows fit in one, so a glyph is two integers: rows 0 to 3 in the first, rows 4 to 7 in the second. The first row goes in the lowest byte:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="The 8 row bytes of the letter A go into two 32-bit words. Word 0 holds rows 3, 2, 1, 0 from the highest byte to the lowest: 0x33331E0C. Word 1 holds rows 7, 6, 5, 4: 0x0033333F.">
+    <rect x="72" y="50" width="32" height="16" class="head"/>
+    <rect x="56" y="66" width="64" height="16" class="head"/>
+    <rect x="40" y="82" width="32" height="16" class="head"/><rect x="104" y="82" width="32" height="16" class="head"/>
+    <rect x="40" y="98" width="32" height="16" class="head"/><rect x="104" y="98" width="32" height="16" class="head"/>
+    <rect x="40" y="114" width="96" height="16" class="head"/>
+    <rect x="40" y="130" width="32" height="16" class="head"/><rect x="104" y="130" width="32" height="16" class="head"/>
+    <rect x="40" y="146" width="32" height="16" class="head"/><rect x="104" y="146" width="32" height="16" class="head"/>
+    <rect x="40" y="50" width="128" height="128" class="ghost"/>
+    <text x="180" y="62" class="mono small">0x0C</text>
+    <text x="180" y="78" class="mono small">0x1E</text>
+    <text x="180" y="94" class="mono small">0x33</text>
+    <text x="180" y="110" class="mono small">0x33</text>
+    <text x="180" y="126" class="mono small">0x3F</text>
+    <text x="180" y="142" class="mono small">0x33</text>
+    <text x="180" y="158" class="mono small">0x33</text>
+    <text x="180" y="174" class="mono small">0x00</text>
+    <text x="104" y="198" class="mid small">'A', one byte per row</text>
+    <path d="M220,54h8v56h-8" class="arrow mem"/>
+    <path d="M220,118h8v56h-8" class="arrow mem"/>
+    <line x1="228" y1="82" x2="326" y2="74" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="228" y1="146" x2="326" y2="170" class="arrow mem" marker-end="url(#ah-mem)"/>
+
+    <text x="330" y="24" class="small">a 32-bit word, written high byte first: row 0 is in the lowest byte</text>
+    <text x="375" y="44" class="mid small">bits 31–24</text><text x="465" y="44" class="mid small">23–16</text><text x="555" y="44" class="mid small">15–8</text><text x="645" y="44" class="mid small">7–0</text>
+    <rect x="330" y="50" width="90" height="46" class="mem"/><text x="375" y="70" class="mid mono">0x33</text><text x="375" y="88" class="mid small">row 3</text>
+    <rect x="420" y="50" width="90" height="46" class="mem"/><text x="465" y="70" class="mid mono">0x33</text><text x="465" y="88" class="mid small">row 2</text>
+    <rect x="510" y="50" width="90" height="46" class="mem"/><text x="555" y="70" class="mid mono">0x1E</text><text x="555" y="88" class="mid small">row 1</text>
+    <rect x="600" y="50" width="90" height="46" class="mem"/><text x="645" y="70" class="mid mono">0x0C</text><text x="645" y="88" class="mid small">row 0</text>
+    <text x="330" y="116" class="mono">word 0 = 0x33331E0C</text>
+
+    <rect x="330" y="146" width="90" height="46" class="mem"/><text x="375" y="166" class="mid mono">0x00</text><text x="375" y="184" class="mid small">row 7</text>
+    <rect x="420" y="146" width="90" height="46" class="mem"/><text x="465" y="166" class="mid mono">0x33</text><text x="465" y="184" class="mid small">row 6</text>
+    <rect x="510" y="146" width="90" height="46" class="mem"/><text x="555" y="166" class="mid mono">0x33</text><text x="555" y="184" class="mid small">row 5</text>
+    <rect x="600" y="146" width="90" height="46" class="mem"/><text x="645" y="166" class="mid mono">0x3F</text><text x="645" y="184" class="mid small">row 4</text>
+    <text x="330" y="212" class="mono">word 1 = 0x0033333F</text>
+  </svg>
+  <figcaption>One glyph is 64 bits: two words of four row bytes each.</figcaption>
+</figure>
 
 <pre><code class="lang-text">word 0 = row0 | row1 &lt;&lt; 8 | row2 &lt;&lt; 16 | row3 &lt;&lt; 24
 word 1 = row4 | row5 &lt;&lt; 8 | row6 &lt;&lt; 16 | row7 &lt;&lt; 24
@@ -107,85 +233,238 @@ word 1 = row4 | row5 &lt;&lt; 8 | row6 &lt;&lt; 16 | row7 &lt;&lt; 24
 'A':  word 0 = 0x33 &lt;&lt; 24 | 0x33 &lt;&lt; 16 | 0x1E &lt;&lt; 8 | 0x0C = 0x33331E0C
       word 1 = 0x00 &lt;&lt; 24 | 0x33 &lt;&lt; 16 | 0x33 &lt;&lt; 8 | 0x3F = 0x0033333F</code></pre>
 
-<p>The whole font is an array of 94 × 2 = 188 integers, 752 bytes. That is small enough to be a constant array in the shader source. No texture, no upload, no sampler. To read pixel (<var>x</var>, <var>y</var>) of the glyph for character <var>c</var>:</p>
+<div class="stats">
+  <div><b>188</b><span>integers in the whole font</span><small>94 · 2</small></div>
+  <div><b>752 bytes</b><span>small enough to be a constant array in the shader source</span><small>188 · 4</small></div>
+  <div><b>0</b><span>textures, uploads and samplers</span></div>
+</div>
+
+<p>To read pixel (<var>x</var>, <var>y</var>) of the glyph for character <var>c</var>, go from the word to the byte to the bit:</p>
+
+<ol class="flow">
+  <li class="mem"><b>word</b><span>the integer: rows 0–3 or rows 4–7</span></li>
+  <li class="mem"><b>row</b><span>the byte inside the word</span></li>
+  <li class="shader"><b>lit</b><span>the bit inside the byte: the pixel</span></li>
+</ol>
 
 <pre><code class="lang-text">word = font[(c − 33) · 2 + y / 4]       the integer: rows 0–3 or 4–7
 row  = (word &gt;&gt; ((y % 4) · 8)) &amp; 0xFF    the byte: the row
 lit  = (row &gt;&gt; x) &amp; 1                   the bit: the pixel</code></pre>
 
-<p>A 64-bit integer would hold a whole glyph, but 64-bit integers in shaders are optional on some hardware. Two 32-bit words work everywhere.</p>
+<div class="callout">
+  <strong>Why not one 64-bit integer?</strong>
+  <p>A 64-bit integer would hold a whole glyph, but 64-bit integers in shaders are optional on some hardware. Two 32-bit words work everywhere.</p>
+</div>
 
-<h2><span class="n">4</span>The text as a grid</h2>
+<h2 id="grid"><span class="n">4</span>The text as a grid</h2>
 
 <p>With every glyph the same width, text layout is trivial: character <var>i</var> of line <var>j</var> goes in column <var>i</var>, row <var>j</var> of a grid. The CPU builds the grid as one string, row by row. Each line is padded with spaces to the width of the longest one, so every row has the same length, and the position of a cell is simple arithmetic:</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 240" role="img" aria-label="Two lines of text become a grid of 14 columns and 2 rows. The second line is padded with spaces. The grid is one string, row by row: cell (column, row) is at index row times columns plus column. In the buffer, four characters share one 32-bit word, the first in the lowest byte.">
+  <svg viewBox="0 0 760 270" role="img" aria-label="Two lines of text become a grid of 14 columns and 2 rows. The second line is padded with three spaces. The grid is one string, row by row: cell (column, row) is at index row times columns plus column, so P at (1, 1) is index 15. In the buffer, four characters share one 32-bit word, the first in the lowest byte: 28 characters make 7 words. Word 3 holds m, s, G, P: the end of row 0 and the start of row 1.">
     <text x="20" y="30" class="small">lines</text>
-    <text x="20" y="54" class="mono">Frame 16.67 ms</text>
-    <text x="20" y="74" class="mono">GPU 1.31 ms</text>
-    <line x1="160" y1="60" x2="208" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <text x="184" y="50" class="mid small">pad</text>
+    <text x="20" y="62" class="mono">Frame 16.67 ms</text>
+    <text x="20" y="88" class="mono">GPU 1.31 ms</text>
+    <line x1="140" y1="70" x2="192" y2="70" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="166" y="60" class="mid small">pad</text>
 
-    <text x="210" y="30" class="small">grid: 14 columns × 2 rows</text>
-    <rect x="210" y="38" width="294" height="21" class="box"/>
-    <rect x="210" y="59" width="294" height="21" class="box"/>
-    <text x="215" y="54" class="mono">F r a m e   1 6 . 6 7   m s</text>
-    <text x="215" y="75" class="mono">G P U   1 . 3 1   m s · · ·</text>
-    <text x="520" y="54" class="small">row 0: index 0 … 13</text>
-    <text x="520" y="75" class="small">row 1: index 14 … 27</text>
-    <text x="520" y="96" class="small">· = padding spaces</text>
+    <text x="200" y="18" class="small">grid: 14 columns × 2 rows</text>
+    <text x="213" y="38" class="mid small">0</text>
+    <text x="239" y="38" class="mid small">1</text>
+    <text x="265" y="38" class="mid small">2</text>
+    <text x="291" y="38" class="mid small">3</text>
+    <text x="317" y="38" class="mid small">4</text>
+    <text x="343" y="38" class="mid small">5</text>
+    <text x="369" y="38" class="mid small">6</text>
+    <text x="395" y="38" class="mid small">7</text>
+    <text x="421" y="38" class="mid small">8</text>
+    <text x="447" y="38" class="mid small">9</text>
+    <text x="473" y="38" class="mid small">10</text>
+    <text x="499" y="38" class="mid small">11</text>
+    <text x="525" y="38" class="mid small">12</text>
+    <text x="551" y="38" class="mid small">13</text>
+    <rect x="200" y="44" width="26" height="26" class="box"/>
+    <text x="213" y="62" class="mid mono">F</text>
+    <rect x="226" y="44" width="26" height="26" class="box"/>
+    <text x="239" y="62" class="mid mono">r</text>
+    <rect x="252" y="44" width="26" height="26" class="box"/>
+    <text x="265" y="62" class="mid mono">a</text>
+    <rect x="278" y="44" width="26" height="26" class="box"/>
+    <text x="291" y="62" class="mid mono">m</text>
+    <rect x="304" y="44" width="26" height="26" class="box"/>
+    <text x="317" y="62" class="mid mono">e</text>
+    <rect x="330" y="44" width="26" height="26" class="box"/>
+    <rect x="356" y="44" width="26" height="26" class="box"/>
+    <text x="369" y="62" class="mid mono">1</text>
+    <rect x="382" y="44" width="26" height="26" class="box"/>
+    <text x="395" y="62" class="mid mono">6</text>
+    <rect x="408" y="44" width="26" height="26" class="box"/>
+    <text x="421" y="62" class="mid mono">.</text>
+    <rect x="434" y="44" width="26" height="26" class="box"/>
+    <text x="447" y="62" class="mid mono">6</text>
+    <rect x="460" y="44" width="26" height="26" class="box"/>
+    <text x="473" y="62" class="mid mono">7</text>
+    <rect x="486" y="44" width="26" height="26" class="box"/>
+    <rect x="512" y="44" width="26" height="26" class="box"/>
+    <text x="525" y="62" class="mid mono">m</text>
+    <rect x="538" y="44" width="26" height="26" class="box"/>
+    <text x="551" y="62" class="mid mono">s</text>
+    <rect x="200" y="70" width="26" height="26" class="box"/>
+    <text x="213" y="88" class="mid mono">G</text>
+    <rect x="226" y="70" width="26" height="26" class="accent"/>
+    <text x="239" y="88" class="mid mono">P</text>
+    <rect x="252" y="70" width="26" height="26" class="box"/>
+    <text x="265" y="88" class="mid mono">U</text>
+    <rect x="278" y="70" width="26" height="26" class="box"/>
+    <rect x="304" y="70" width="26" height="26" class="box"/>
+    <text x="317" y="88" class="mid mono">1</text>
+    <rect x="330" y="70" width="26" height="26" class="box"/>
+    <text x="343" y="88" class="mid mono">.</text>
+    <rect x="356" y="70" width="26" height="26" class="box"/>
+    <text x="369" y="88" class="mid mono">3</text>
+    <rect x="382" y="70" width="26" height="26" class="box"/>
+    <text x="395" y="88" class="mid mono">1</text>
+    <rect x="408" y="70" width="26" height="26" class="box"/>
+    <rect x="434" y="70" width="26" height="26" class="box"/>
+    <text x="447" y="88" class="mid mono">m</text>
+    <rect x="460" y="70" width="26" height="26" class="box"/>
+    <text x="473" y="88" class="mid mono">s</text>
+    <rect x="486" y="70" width="26" height="26" class="ghost"/>
+    <text x="499" y="88" class="mid mono">·</text>
+    <rect x="512" y="70" width="26" height="26" class="ghost"/>
+    <text x="525" y="88" class="mid mono">·</text>
+    <rect x="538" y="70" width="26" height="26" class="ghost"/>
+    <text x="551" y="88" class="mid mono">·</text>
+    <text x="574" y="62" class="small">row 0: index 0 … 13</text>
+    <text x="574" y="88" class="small">row 1: index 14 … 27</text>
+    <text x="574" y="112" class="small t-faint">· = padding spaces</text>
 
     <text x="20" y="128" class="mono small">index(column, row) = row · columns + column</text>
-    <text x="20" y="148" class="mono small">'P' is at (1, 1) → index 1 · 14 + 1 = 15</text>
+    <text x="20" y="148" class="mono small t-hot">'P' is at (1, 1) → index 1 · 14 + 1 = 15</text>
 
-    <text x="20" y="184" class="small">buffer, 4 characters per 32-bit word, first in the low byte</text>
-    <rect x="20" y="192" width="170" height="36" class="mem"/>
-    <text x="105" y="214" class="mid mono small">word 0: 'F' 'r' 'a' 'm'</text>
-    <rect x="200" y="192" width="170" height="36" class="mem"/>
-    <text x="285" y="214" class="mid mono small">…</text>
-    <rect x="380" y="192" width="170" height="36" class="mem"/>
-    <text x="465" y="214" class="mid mono small">word 3: 'm' 's' 'G' 'P'</text>
-    <rect x="560" y="192" width="180" height="36" class="ghost"/>
-    <text x="650" y="214" class="mid small">index i → word i / 4, byte i % 4</text>
+    <text x="20" y="180" class="small">buffer: 4 characters per 32-bit word, the first in the low byte</text>
+    <rect x="20" y="190" width="24" height="30" class="mem"/>
+    <text x="32" y="210" class="mid mono">F</text>
+    <rect x="44" y="190" width="24" height="30" class="mem"/>
+    <text x="56" y="210" class="mid mono">r</text>
+    <rect x="68" y="190" width="24" height="30" class="mem"/>
+    <text x="80" y="210" class="mid mono">a</text>
+    <rect x="92" y="190" width="24" height="30" class="mem"/>
+    <text x="104" y="210" class="mid mono">m</text>
+    <rect x="124" y="190" width="24" height="30" class="mem"/>
+    <text x="136" y="210" class="mid mono">e</text>
+    <rect x="148" y="190" width="24" height="30" class="mem"/>
+    <rect x="172" y="190" width="24" height="30" class="mem"/>
+    <text x="184" y="210" class="mid mono">1</text>
+    <rect x="196" y="190" width="24" height="30" class="mem"/>
+    <text x="208" y="210" class="mid mono">6</text>
+    <rect x="228" y="190" width="24" height="30" class="mem"/>
+    <text x="240" y="210" class="mid mono">.</text>
+    <rect x="252" y="190" width="24" height="30" class="mem"/>
+    <text x="264" y="210" class="mid mono">6</text>
+    <rect x="276" y="190" width="24" height="30" class="mem"/>
+    <text x="288" y="210" class="mid mono">7</text>
+    <rect x="300" y="190" width="24" height="30" class="mem"/>
+    <rect x="332" y="190" width="24" height="30" class="mem"/>
+    <text x="344" y="210" class="mid mono">m</text>
+    <rect x="356" y="190" width="24" height="30" class="mem"/>
+    <text x="368" y="210" class="mid mono">s</text>
+    <rect x="380" y="190" width="24" height="30" class="mem"/>
+    <text x="392" y="210" class="mid mono">G</text>
+    <rect x="404" y="190" width="24" height="30" class="accent"/>
+    <text x="416" y="210" class="mid mono">P</text>
+    <rect x="436" y="190" width="24" height="30" class="mem"/>
+    <text x="448" y="210" class="mid mono">U</text>
+    <rect x="460" y="190" width="24" height="30" class="mem"/>
+    <rect x="484" y="190" width="24" height="30" class="mem"/>
+    <text x="496" y="210" class="mid mono">1</text>
+    <rect x="508" y="190" width="24" height="30" class="mem"/>
+    <text x="520" y="210" class="mid mono">.</text>
+    <rect x="540" y="190" width="24" height="30" class="mem"/>
+    <text x="552" y="210" class="mid mono">3</text>
+    <rect x="564" y="190" width="24" height="30" class="mem"/>
+    <text x="576" y="210" class="mid mono">1</text>
+    <rect x="588" y="190" width="24" height="30" class="mem"/>
+    <rect x="612" y="190" width="24" height="30" class="mem"/>
+    <text x="624" y="210" class="mid mono">m</text>
+    <rect x="644" y="190" width="24" height="30" class="mem"/>
+    <text x="656" y="210" class="mid mono">s</text>
+    <rect x="668" y="190" width="24" height="30" class="ghost"/>
+    <text x="680" y="210" class="mid mono">·</text>
+    <rect x="692" y="190" width="24" height="30" class="ghost"/>
+    <text x="704" y="210" class="mid mono">·</text>
+    <rect x="716" y="190" width="24" height="30" class="ghost"/>
+    <text x="728" y="210" class="mid mono">·</text>
+    <text x="68" y="236" class="mid small">word 0</text>
+    <text x="172" y="236" class="mid small">word 1</text>
+    <text x="276" y="236" class="mid small">word 2</text>
+    <text x="380" y="236" class="mid small t-hot">word 3</text>
+    <text x="484" y="236" class="mid small">word 4</text>
+    <text x="588" y="236" class="mid small">word 5</text>
+    <text x="692" y="236" class="mid small">word 6</text>
+    <rect x="330" y="188" width="100" height="34" class="hot"/>
+    <text x="20" y="260" class="small">index i → word i / 4, byte i % 4. Word 3 holds the end of row 0 and the start of row 1.</text>
   </svg>
   <figcaption>The buffer only holds codes, one byte each. A 40 × 25 grid is 1000 bytes. The CPU rewrites it whenever the text changes.</figcaption>
 </figure>
 
 <p>Shaders often cannot read single bytes from a buffer, so the grid is read as 32-bit words and the byte is picked out: word <var>i</var> / 4, then shift by (<var>i</var> % 4) · 8 and mask with 0xFF. A space, or any code outside the font's range, is drawn as background.</p>
 
-<h2><span class="n">5</span>One quad, and a lookup per pixel</h2>
+<h2 id="quad"><span class="n">5</span>One quad, and a lookup per pixel</h2>
 
-<p>The draw itself is the simplest possible: one rectangle (two triangles, 6 vertices) over the area where the text goes. It needs no vertex buffer: the vertex shader makes the 4 corners from the vertex index and the panel's size. All the work happens in the fragment shader, once per pixel of the rectangle.</p>
+<p>The draw itself is the simplest possible: one rectangle over the area where the text goes. All the work happens in the fragment shader, once per pixel of the rectangle.</p>
+
+<ol class="flow">
+  <li class="cpu"><b>CPU</b><span>text grid, grid size, scale</span></li>
+  <li class="mem"><b>Text buffer</b><span>character codes</span></li>
+  <li class="shader"><b>Vertex shader × 6</b><span>corner → pixel → clip space</span></li>
+  <li class="gpu"><b>Rasterizer</b><span>one fragment per covered pixel</span></li>
+  <li class="shader"><b>Fragment shader</b><span>per pixel: cell, character, glyph pixel, bit</span></li>
+</ol>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 270" role="img" aria-label="The pipeline. The CPU writes the text grid into a buffer and passes its address, the grid size, the scale and the screen size. The vertex shader turns 6 vertex indices into a rectangle in pixels, then into clip space. The fragment shader, for each pixel, finds the cell, the character, the glyph pixel and the bit, and outputs the text color or the background.">
-    <rect x="20" y="30" width="200" height="60" rx="6" class="cpu"/>
-    <text x="120" y="54" class="mid title">CPU</text>
-    <text x="120" y="74" class="mid small">text grid, grid size, scale</text>
-    <line x1="120" y1="90" x2="120" y2="128" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <rect x="20" y="130" width="200" height="50" rx="6" class="mem"/>
-    <text x="120" y="152" class="mid title">text buffer</text>
-    <text x="120" y="170" class="mid small">character codes</text>
+  <svg viewBox="0 0 760 250" role="img" aria-label="Three pictures. First, a window with one rectangle in its top-left corner, made of two triangles. Second, the rectangle enlarged: it is a grid of cells, one per character, and a pixel falls into one cell, the letter P. Third, that cell enlarged: the 8 by 8 glyph of P, where the pixel hits one bit. The bit decides between the text color and the background color.">
+    <circle cx="30" cy="24" r="10" class="badge"/><text x="30" y="28" class="badge-n">1</text>
+    <text x="48" y="29" class="title">One quad on the screen</text>
+    <rect x="20" y="44" width="230" height="150" class="paper"/>
+    <rect x="150" y="128" width="44" height="54" class="solid o-50"/>
+    <circle cx="96" cy="152" r="24" class="solid o-50"/>
+    <polygon points="34,56 164,56 34,100" class="shader"/>
+    <polygon points="164,56 164,100 34,100" class="shader"/>
+    <circle cx="34" cy="56" r="3" class="badge"/><circle cx="164" cy="56" r="3" class="badge"/><circle cx="34" cy="100" r="3" class="badge"/><circle cx="164" cy="100" r="3" class="badge"/>
+    <text x="20" y="212" class="small">2 triangles, 6 vertices, no vertex buffer:</text>
+    <text x="20" y="228" class="small">the corners come from the vertex index</text>
 
-    <line x1="220" y1="60" x2="268" y2="60" class="arrow" marker-end="url(#ah)"/>
-    <rect x="270" y="30" width="210" height="60" rx="30" class="shader"/>
-    <text x="375" y="54" class="mid title">vertex shader × 6</text>
-    <text x="375" y="74" class="mid small">corner → pixel → clip space</text>
-    <line x1="480" y1="60" x2="528" y2="60" class="arrow" marker-end="url(#ah)"/>
-    <rect x="530" y="30" width="210" height="60" rx="6" class="gpu"/>
-    <text x="635" y="54" class="mid title">rasterizer</text>
-    <text x="635" y="74" class="mid small">one fragment per covered pixel</text>
-    <line x1="635" y1="90" x2="635" y2="128" class="arrow" marker-end="url(#ah)"/>
-    <rect x="270" y="130" width="470" height="120" rx="8" class="shader"/>
-    <text x="285" y="152" class="title">fragment shader, per pixel</text>
-    <text x="285" y="176" class="mono small">pixel → font pixel → cell, glyph pixel</text>
-    <text x="285" y="196" class="mono small">cell → character code (from the text buffer)</text>
-    <text x="285" y="216" class="mono small">code, glyph pixel → bit (from the font array)</text>
-    <text x="285" y="236" class="mono small">bit ? text color : background color</text>
-    <line x1="220" y1="155" x2="268" y2="190" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="254" y1="100" x2="284" y2="100" class="arrow" marker-end="url(#ah)"/>
+
+    <circle cx="300" cy="24" r="10" class="badge"/><text x="300" y="28" class="badge-n">2</text>
+    <text x="318" y="29" class="title">Pixel → cell → code</text>
+    <rect x="290" y="70" width="210" height="60" class="box"/>
+    <path d="M320,70V130M350,70V130M380,70V130M410,70V130M440,70V130M470,70V130M290,100H500" class="grid"/>
+    <text x="305" y="90" class="mid mono">F</text><text x="335" y="90" class="mid mono">r</text><text x="365" y="90" class="mid mono">a</text><text x="395" y="90" class="mid mono">m</text><text x="425" y="90" class="mid mono">e</text><text x="485" y="90" class="mid mono">1</text>
+    <text x="305" y="120" class="mid mono">G</text><text x="335" y="120" class="mid mono">P</text><text x="365" y="120" class="mid mono">U</text><text x="425" y="120" class="mid mono">1</text><text x="455" y="120" class="mid mono">.</text><text x="485" y="120" class="mid mono">3</text>
+    <rect x="320" y="100" width="30" height="30" class="hot"/>
+    <text x="290" y="152" class="small">the cell says which character;</text>
+    <text x="290" y="168" class="small">its code comes from the text buffer</text>
+    <rect x="290" y="180" width="210" height="26" class="mem"/>
+    <text x="395" y="198" class="mid mono small">… 'm' 's' 'G' 'P' 'U' …</text>
+
+    <line x1="504" y1="115" x2="552" y2="150" class="arrow hot" marker-end="url(#ah-hot)"/>
+
+    <circle cx="570" cy="24" r="10" class="badge"/><text x="570" y="28" class="badge-n">3</text>
+    <text x="588" y="29" class="title">Glyph pixel → bit</text>
+    <rect x="560" y="50" width="120" height="20" class="head"/>
+    <rect x="580" y="70" width="40" height="20" class="head"/><rect x="660" y="70" width="40" height="20" class="head"/>
+    <rect x="580" y="90" width="40" height="20" class="head"/><rect x="660" y="90" width="40" height="20" class="head"/>
+    <rect x="580" y="110" width="100" height="20" class="head"/>
+    <rect x="580" y="130" width="40" height="20" class="head"/>
+    <rect x="580" y="150" width="40" height="20" class="head"/>
+    <rect x="560" y="170" width="80" height="20" class="head"/>
+    <rect x="560" y="50" width="160" height="160" class="ghost"/>
+    <rect x="578" y="148" width="24" height="24" class="hot"/>
+    <text x="640" y="232" class="mid small">on: text color · off: background</text>
   </svg>
-  <figcaption>No textures and no blending. Every pixel of the rectangle gets a color, so the panel is an opaque box behind the text.</figcaption>
+  <figcaption>No textures and no blending. Every pixel of the rectangle gets a color, so the panel is an opaque box behind the text. The rectangle is two triangles (6 vertices) and needs no vertex buffer: the vertex shader makes the 4 corners from the vertex index and the panel's size.</figcaption>
 </figure>
 
 <h3>From a pixel to its bit</h3>
@@ -204,7 +483,7 @@ lit  = bit g.x of row g.y of the glyph of code</code></pre>
 
 <p>Every step is integer math. Division drops the remainder, and <var>%</var> keeps it. Because the scale is a whole number, each font pixel covers exactly <var>s</var> × <var>s</var> screen pixels, and the edges stay sharp.</p>
 
-<h2><span class="n">6</span>Worked example</h2>
+<h2 id="example"><span class="n">6</span>Worked example</h2>
 
 <p>The two lines from section 4 (14 columns, 2 rows) on a 3840 × 2160 screen, with scale <var>s</var> = 2 and the text starting at <var>o</var> = (16, 16). Which color does the fragment at pixel (34, 42) get?</p>
 
@@ -375,40 +654,225 @@ lit  = bit g.x of row g.y of the glyph of code</code></pre>
   </div>
 </div>
 
-<h2><span class="n">7</span>Placing, scaling, readability</h2>
+<h2 id="placing"><span class="n">7</span>Placing, scaling, readability</h2>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Choice</th><th>Options</th><th>Notes</th></tr>
-  <tr><td>Scale</td><td>a whole number, picked from the screen size, for example screen height / 1080</td><td>8×8 glyphs are tiny on a 4K screen. A whole-number scale keeps every font pixel the same size; a fractional one makes some font pixels one screen pixel wider than others.</td></tr>
-  <tr><td>Position</td><td>in screen pixels, from a corner</td><td>The vertex shader turns pixels into clip space: <var>x</var><sub>clip</sub> = <var>x</var> / width · 2 − 1, and <var>y</var> flipped if the API's clip space points up.</td></tr>
-  <tr><td>Background</td><td>opaque box, translucent box, outline, drop shadow, nothing</td><td>An opaque box is always readable and needs no blending. A translucent one needs alpha blending. Text with no box needs an outline or a shadow to stay readable over a bright scene.</td></tr>
-  <tr><td>Depth</td><td>draw last with depth test off, or at the nearest depth</td><td>The overlay must win over the scene. Either turn the depth test off, or put the quad at the depth value that means "nearest".</td></tr>
-  <tr><td>Update rate</td><td>every frame, or a few times per second</td><td>Numbers that change every frame cannot be read. See <a href="gpu-timing.html">GPU timing</a>.</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two rows of font pixels. With scale 2 every font pixel is 2 screen pixels wide. With scale 1.5 they are 1 or 2 screen pixels wide, in turn.">
+      <text x="24" y="16" class="small t-ok">scale 2: every font pixel 2 wide</text>
+      <rect x="24" y="24" width="24" height="26" class="head"/><rect x="72" y="24" width="48" height="26" class="head"/><rect x="144" y="24" width="24" height="26" class="head"/>
+      <rect x="24" y="24" width="144" height="26" class="ghost"/>
+      <path d="M48,24V50M72,24V50M96,24V50M120,24V50M144,24V50" class="grid"/>
+      <text x="24" y="78" class="small t-bad">scale 1.5: 1 or 2 wide</text>
+      <rect x="24" y="86" width="12" height="26" class="head"/><rect x="60" y="86" width="36" height="26" class="head"/><rect x="108" y="86" width="24" height="26" class="head"/>
+      <rect x="24" y="86" width="108" height="26" class="ghost"/>
+      <path d="M36,86V112M60,86V112M72,86V112M96,86V112M108,86V112" class="grid"/>
+    </svg>
+    <h4>Scale</h4>
+    <p>A whole number, picked from the screen size, for example screen height / 1080. 8×8 glyphs are tiny on a 4K screen. A whole-number scale keeps every font pixel the same size.</p>
+    <p class="cost"><b>Fractional:</b> some font pixels are one screen pixel wider than others</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A screen with a small panel near its top-left corner. Two arrows measure the panel's distance from the left and the top edge in pixels. Below, the same width runs from minus 1 to plus 1 in clip space.">
+      <rect x="20" y="12" width="200" height="94" class="paper"/>
+      <rect x="46" y="34" width="84" height="30" class="box"/>
+      <path d="M54,45H114M54,54H98" class="arrow"/>
+      <line x1="20" y1="49" x2="44" y2="49" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="88" y1="12" x2="88" y2="32" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="20" y="123" class="small">−1</text>
+      <text x="120" y="123" class="mid small">x in clip space</text>
+      <text x="220" y="123" class="end small">+1</text>
+    </svg>
+    <h4>Position</h4>
+    <p>In screen pixels, from a corner. The vertex shader turns pixels into clip space: <var>x</var><sub>clip</sub> = <var>x</var> / width · 2 − 1, and <var>y</var> flipped if the API's clip space points up.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The same word four times over a bright scene: in an opaque box, in a translucent box, with an outline, and with nothing behind it.">
+      <rect x="0" y="0" width="240" height="130" class="lit"/>
+      <rect x="12" y="16" width="102" height="40" class="box"/>
+      <text x="63" y="41" class="mid mono">opaque</text>
+      <rect x="126" y="16" width="102" height="40" class="shade"/>
+      <text x="177" y="41" class="mid mono">translucent</text>
+      <text x="63" y="99" class="mid mono halo">outline</text>
+      <text x="177" y="99" class="mid mono">nothing</text>
+    </svg>
+    <h4>Background</h4>
+    <p>An opaque box, a translucent box, an outline, a drop shadow, or nothing. An opaque box is always readable and needs no blending. A translucent one needs alpha blending.</p>
+    <p class="cost"><b>No box:</b> needs an outline or a shadow to stay readable over a bright scene</p>
+  </div>
 </div>
 
-<h2><span class="n">8</span>Alternatives, and what they cost</h2>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A side view: the eye on the left, the overlay as a plane right in front of it, the objects of the scene farther away.">
+      <circle cx="24" cy="65" r="7" class="cpu"/>
+      <line x1="34" y1="65" x2="224" y2="65" class="dashed"/>
+      <line x1="72" y1="30" x2="72" y2="100" class="arrow hot thick"/>
+      <rect x="132" y="46" width="26" height="38" class="solid"/>
+      <circle cx="198" cy="65" r="16" class="solid"/>
+      <text x="24" y="92" class="mid small">eye</text>
+      <text x="72" y="20" class="mid small t-hot">overlay</text>
+      <text x="72" y="118" class="mid small t-hot">nearest</text>
+      <text x="168" y="20" class="mid small">scene</text>
+      <text x="168" y="118" class="mid small">farther</text>
+    </svg>
+    <h4>Depth</h4>
+    <p>The overlay must win over the scene. Either draw it last with the depth test off, or put the quad at the depth value that means "nearest".</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two time lines. On the first, the number changes at every frame and cannot be read. On the second, it changes a few times per second.">
+      <text x="16" y="18" class="small t-bad">every frame: the digits flicker</text>
+      <line x1="16" y1="40" x2="224" y2="40" class="arrow"/>
+      <path d="M16,32V48M29,32V48M42,32V48M55,32V48M68,32V48M81,32V48M94,32V48M107,32V48M120,32V48M133,32V48M146,32V48M159,32V48M172,32V48M185,32V48M198,32V48M211,32V48M224,32V48" class="arrow bad"/>
+      <text x="16" y="76" class="small t-ok">a few times per second: readable</text>
+      <line x1="16" y1="98" x2="224" y2="98" class="arrow"/>
+      <path d="M16,90V106M85,90V106M154,90V106M223,90V106" class="arrow ok"/>
+      <text x="50" y="122" class="mid mono small">16.7</text><text x="119" y="122" class="mid mono small">16.9</text><text x="188" y="122" class="mid mono small">16.6</text>
+    </svg>
+    <h4>Update rate</h4>
+    <p>Every frame, or a few times per second. Numbers that change every frame cannot be read. See <a href="gpu-timing.html">GPU timing</a>.</p>
+  </div>
+</div>
+
+<h2 id="alternatives"><span class="n">8</span>Alternatives, and what they cost</h2>
 
 <p>The per-pixel bitmap font is the simplest end of a range. Each step up the range solves a limit of the one before:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Method</th><th>How</th><th>Good</th><th>Limits</th></tr>
-  <tr><td><b>Bitmap font, per-pixel lookup</b> (this page)</td><td>one quad over the text area; the fragment shader finds the bit</td><td>no assets, no textures, one draw, a few lines of code</td><td>one size, fixed width, ASCII only, no smoothing; every pixel of the box runs the shader, blank or not</td></tr>
-  <tr><td><b>Font atlas</b></td><td>glyphs rasterized from a TrueType font (for example with stb_truetype or FreeType) into one texture; one textured quad per character</td><td>any font, proportional widths, kerning, anti-aliased edges, many languages</td><td>a texture per size; a layout step on the CPU; blurry when scaled up</td></tr>
-  <tr><td><b>Signed distance field</b> (SDF) atlas</td><td>the atlas stores the distance to the glyph's edge instead of coverage; the shader thresholds it (Green, 2007)</td><td>one atlas for many sizes; cheap outlines, shadows and glow</td><td>round corners at large sizes; <b>MSDF</b> (multi-channel) keeps corners sharp</td></tr>
-  <tr><td>Vector glyphs on the GPU</td><td>the shader evaluates the glyph's curves directly (Loop and Blinn, 2005; the Slug library)</td><td>sharp at every size and angle, for text in the 3D world</td><td>much more complex; heavier per pixel</td></tr>
-  <tr><td>A UI library</td><td>Dear ImGui and similar: an atlas, plus widgets</td><td>windows, buttons, graphs, input</td><td>a dependency, its own render pass</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard pick">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The letter A made of large square pixels.">
+      <rect x="96" y="17" width="24" height="12" class="head"/>
+      <rect x="84" y="29" width="48" height="12" class="head"/>
+      <rect x="72" y="41" width="24" height="12" class="head"/><rect x="120" y="41" width="24" height="12" class="head"/>
+      <rect x="72" y="53" width="24" height="12" class="head"/><rect x="120" y="53" width="24" height="12" class="head"/>
+      <rect x="72" y="65" width="72" height="12" class="head"/>
+      <rect x="72" y="77" width="24" height="12" class="head"/><rect x="120" y="77" width="24" height="12" class="head"/>
+      <rect x="72" y="89" width="24" height="12" class="head"/><rect x="120" y="89" width="24" height="12" class="head"/>
+      <rect x="72" y="17" width="96" height="96" class="ghost"/>
+    </svg>
+    <h4>Bitmap font, per-pixel lookup</h4>
+    <p>This page. One quad over the text area; the fragment shader finds the bit.</p>
+    <p><b>Good:</b> no assets, no textures, one draw, a few lines of code.</p>
+    <p class="cost"><b>Limits:</b> one size, fixed width, ASCII only, no smoothing; every pixel of the box runs the shader, blank or not</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A texture with a grid of glyphs, and four quads of different widths that each show one glyph.">
+      <rect x="16" y="23" width="84" height="84" class="mem"/>
+      <path d="M44,23V107M72,23V107M16,51H100M16,79H100" class="grid"/>
+      <text x="30" y="42" class="mid">A</text><text x="58" y="42" class="mid">B</text><text x="86" y="42" class="mid">C</text>
+      <text x="30" y="70" class="mid">a</text><text x="58" y="70" class="mid">b</text><text x="86" y="70" class="mid">c</text>
+      <text x="30" y="98" class="mid">1</text><text x="58" y="98" class="mid">2</text><text x="86" y="98" class="mid">3</text>
+      <line x1="104" y1="65" x2="120" y2="65" class="arrow" marker-end="url(#ah)"/>
+      <rect x="126" y="47" width="24" height="36" class="box"/><text x="138" y="71" class="mid big">T</text>
+      <rect x="153" y="47" width="20" height="36" class="box"/><text x="163" y="71" class="mid big">e</text>
+      <rect x="176" y="47" width="20" height="36" class="box"/><text x="186" y="71" class="mid big">x</text>
+      <rect x="199" y="47" width="15" height="36" class="box"/><text x="206.5" y="71" class="mid big">t</text>
+    </svg>
+    <h4>Font atlas</h4>
+    <p>Glyphs rasterized from a TrueType font (for example with stb_truetype or FreeType) into one texture; one textured quad per character.</p>
+    <p><b>Good:</b> any font, proportional widths, kerning, anti-aliased edges, many languages.</p>
+    <p class="cost"><b>Limits:</b> a texture per size; a layout step on the CPU; blurry when scaled up</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The edge of a round glyph, with rings of equal distance inside and outside it.">
+      <circle cx="78" cy="65" r="54" class="ghost"/>
+      <circle cx="78" cy="65" r="42" class="ghost"/>
+      <circle cx="78" cy="65" r="30" class="accent"/>
+      <circle cx="78" cy="65" r="18" class="ghost"/>
+      <text x="142" y="48" class="small t-hot">edge: distance 0</text>
+      <text x="142" y="72" class="small">rings: equal</text>
+      <text x="142" y="86" class="small">distance to it</text>
+    </svg>
+    <h4>Signed distance field (SDF) atlas</h4>
+    <p>The atlas stores the distance to the glyph's edge instead of coverage; the shader thresholds it (Green, 2007).</p>
+    <p><b>Good:</b> one atlas for many sizes; cheap outlines, shadows and glow.</p>
+    <p class="cost"><b>Limits:</b> round corners at large sizes; <b>MSDF</b> (multi-channel) keeps corners sharp</p>
+  </div>
 </div>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A smooth curve between two end points, with its control point above. The area under the curve is inside the glyph.">
+      <path d="M40,108 Q120,-8 200,108 Z" class="accent"/>
+      <path d="M40,108 L120,12 L200,108" class="dashed"/>
+      <circle cx="40" cy="108" r="5" class="cpu"/><circle cx="120" cy="12" r="5" class="cpu"/><circle cx="200" cy="108" r="5" class="cpu"/>
+      <text x="120" y="98" class="mid small">inside</text>
+      <text x="132" y="18" class="small t-cpu">control point</text>
+    </svg>
+    <h4>Vector glyphs on the GPU</h4>
+    <p>The shader evaluates the glyph's curves directly (Loop and Blinn, 2005; the Slug library).</p>
+    <p><b>Good:</b> sharp at every size and angle, for text in the 3D world.</p>
+    <p class="cost"><b>Limits:</b> much more complex; heavier per pixel</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A small window with a title bar, a button, two lines of text and a graph.">
+      <rect x="30" y="14" width="180" height="102" rx="6" class="box"/>
+      <rect x="30" y="14" width="180" height="22" rx="6" class="cpu"/>
+      <text x="40" y="30" class="small">Stats</text>
+      <rect x="44" y="48" width="62" height="22" rx="4" class="accent"/>
+      <text x="75" y="63" class="mid small">Button</text>
+      <path d="M44,86H100M44,98H88" class="arrow"/>
+      <polyline points="120,102 134,86 148,94 162,68 176,80 196,54" class="arrow gpu"/>
+    </svg>
+    <h4>A UI library</h4>
+    <p>Dear ImGui and similar: an atlas, plus widgets.</p>
+    <p><b>Good:</b> windows, buttons, graphs, input.</p>
+    <p class="cost"><b>Limits:</b> a dependency, its own render pass</p>
+  </div>
+</div>
+
+<p>The two ways to cover the text with geometry:</p>
 
 <div class="split">
   <div>
+    <svg viewBox="0 0 320 96" role="img" aria-label="One rectangle covers the whole line of text, the spaces too.">
+      <rect x="20" y="26" width="280" height="40" class="shader"/>
+      <text x="30" y="51" class="mid mono">F</text>
+      <text x="50" y="51" class="mid mono">r</text>
+      <text x="70" y="51" class="mid mono">a</text>
+      <text x="90" y="51" class="mid mono">m</text>
+      <text x="110" y="51" class="mid mono">e</text>
+      <text x="150" y="51" class="mid mono">1</text>
+      <text x="170" y="51" class="mid mono">6</text>
+      <text x="190" y="51" class="mid mono">.</text>
+      <text x="210" y="51" class="mid mono">6</text>
+      <text x="230" y="51" class="mid mono">7</text>
+      <text x="270" y="51" class="mid mono">m</text>
+      <text x="290" y="51" class="mid mono">s</text>
+      <text x="160" y="86" class="mid small">the shader runs on every pixel of the box</text>
+    </svg>
     <h4>One big quad</h4>
     <p>6 vertices for any amount of text. Cost: the fragment shader runs on every pixel of the box, including empty space and padding. For a small box that is a few hundred thousand pixels at most: tiny for a GPU.</p>
   </div>
   <div>
+    <svg viewBox="0 0 320 96" role="img" aria-label="Each character of the line has its own small rectangle. The spaces have none.">
+      <rect x="20" y="26" width="280" height="40" class="ghost"/>
+      <rect x="21" y="29" width="18" height="34" class="shader"/>
+      <text x="30" y="51" class="mid mono">F</text>
+      <rect x="41" y="29" width="18" height="34" class="shader"/>
+      <text x="50" y="51" class="mid mono">r</text>
+      <rect x="61" y="29" width="18" height="34" class="shader"/>
+      <text x="70" y="51" class="mid mono">a</text>
+      <rect x="81" y="29" width="18" height="34" class="shader"/>
+      <text x="90" y="51" class="mid mono">m</text>
+      <rect x="101" y="29" width="18" height="34" class="shader"/>
+      <text x="110" y="51" class="mid mono">e</text>
+      <rect x="141" y="29" width="18" height="34" class="shader"/>
+      <text x="150" y="51" class="mid mono">1</text>
+      <rect x="161" y="29" width="18" height="34" class="shader"/>
+      <text x="170" y="51" class="mid mono">6</text>
+      <rect x="181" y="29" width="18" height="34" class="shader"/>
+      <text x="190" y="51" class="mid mono">.</text>
+      <rect x="201" y="29" width="18" height="34" class="shader"/>
+      <text x="210" y="51" class="mid mono">6</text>
+      <rect x="221" y="29" width="18" height="34" class="shader"/>
+      <text x="230" y="51" class="mid mono">7</text>
+      <rect x="261" y="29" width="18" height="34" class="shader"/>
+      <text x="270" y="51" class="mid mono">m</text>
+      <rect x="281" y="29" width="18" height="34" class="shader"/>
+      <text x="290" y="51" class="mid mono">s</text>
+      <text x="160" y="86" class="mid small">only the glyph areas are shaded</text>
+    </svg>
     <h4>One quad per character</h4>
     <p>6 vertices per character, built on the CPU or expanded by a shader. Only glyph areas are shaded, and each character can have its own size and position. This is how most text renderers work.</p>
   </div>
@@ -456,7 +920,7 @@ lit  = bit g.x of row g.y of the glyph of code</code></pre>
 <h3>The push constant</h3>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 170" role="img" aria-label="The 16-byte push constant: bytes 0 to 7 hold the text buffer's device address, bytes 8 to 11 pack columns, rows and scale, bytes 12 to 15 pack the screen width and height.">
+  <svg viewBox="0 0 760 140" role="img" aria-label="The 16-byte push constant: bytes 0 to 7 hold the text buffer's device address, bytes 8 to 11 pack columns, rows and scale, bytes 12 to 15 pack the screen width and height.">
     <text x="20"  y="22" class="mono small">byte 0</text>
     <text x="420" y="22" class="mono small">8</text>
     <text x="580" y="22" class="mono small">12</text>
@@ -474,12 +938,9 @@ lit  = bit g.x of row g.y of the glyph of code</code></pre>
     <text x="420" y="126" class="mono small">= 0x00020B1D</text>
     <text x="580" y="108" class="mono small">3840 | 2160&lt;&lt;16</text>
     <text x="580" y="126" class="mono small">= 0x08700F00</text>
-    <text x="20" y="108" class="small">OverlayPushConstants in statsOverlay.cpp mirrors</text>
-    <text x="20" y="126" class="small">PushConstants in statsOverlay.slang. A static_assert</text>
-    <text x="20" y="144" class="small">checks it is exactly PUSH_CONSTANTS_SIZE (16 bytes).</text>
-    <text x="420" y="152" class="small">example: a 29 × 11 grid at 3840 × 2160, scale 2</text>
+    <text x="20" y="108" class="small">example: a 29 × 11 grid at 3840 × 2160, scale 2</text>
   </svg>
-  <figcaption>RASM's push-constant range is 16 bytes, so the grid size, the scale and the screen size are packed into two words. Columns and rows fit 8 bits each (at most 40 and 26); the screen size fits 16 bits per side.</figcaption>
+  <figcaption>RASM's push-constant range is 16 bytes, so the grid size, the scale and the screen size are packed into two words. Columns and rows fit 8 bits each (at most 40 and 26); the screen size fits 16 bits per side. <code>OverlayPushConstants</code> in <code>statsOverlay.cpp</code> mirrors <code>PushConstants</code> in <code>statsOverlay.slang</code>. A <code>static_assert</code> checks it is exactly <code>PUSH_CONSTANTS_SIZE</code> (16 bytes).</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>

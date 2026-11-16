@@ -19,6 +19,8 @@
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
   </defs>
 </svg>
 
@@ -42,52 +44,88 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>Perspective: divide by the distance</h2>
+<h2 id="perspective"><span class="n">1</span>Perspective: divide by the distance</h2>
 
 <p>A pinhole camera sees a point at height <var>y</var> and distance <var>D</var> in front of it at the image height <var>y</var> / <var>D</var> (similar triangles). Twice as far means half as big. In view space the camera looks down −Z, so <var>D</var> = −<var>z</var>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 320" role="img" aria-label="Side view. The eye on the left looks right. The field of view is bounded by two lines at plus and minus half of fovY. A point P at distance D and height y projects through the plane at distance 1 at the height y divided by D. The near and far planes cut the view.">
-    <circle cx="60" cy="160" r="6" class="cpu"/>
-    <text x="52" y="186" class="mid small">eye</text>
-    <line x1="60" y1="160" x2="320" y2="160" class="arrow dashed" marker-end="url(#ah)"/>
-    <text x="324" y="164" class="small">−Z</text>
-    <line x1="60" y1="160" x2="300" y2="21.4"  class="arrow"/>
-    <line x1="60" y1="160" x2="300" y2="298.6" class="arrow"/>
-    <polygon points="100,136.9 300,21.4 300,298.6 100,183.1" class="zone"/>
-    <line x1="100" y1="136.9" x2="100" y2="183.1" class="gpu"/>
-    <line x1="300" y1="21.4" x2="300" y2="298.6" class="gpu"/>
-    <text x="100" y="204" class="mid small">near</text>
-    <text x="300" y="316" class="mid small">far</text>
-    <path d="M100,160 A40,40 0 0,0 94.6,140" class="arrow hot"/>
-    <text x="106" y="150" class="small t-hot">fovY/2</text>
-
-    <line x1="140" y1="113.8" x2="140" y2="206.2" class="arrow hot"/>
-    <text x="140" y="226" class="mid small t-hot">plane at distance 1</text>
-    <circle cx="260" cy="80" r="6" class="gpu"/>
-    <text x="270" y="76" class="small">P (y, z)</text>
-    <line x1="60" y1="160" x2="255" y2="82" class="arrow dashed"/>
-    <circle cx="140" cy="128" r="4" class="hot"/>
-    <line x1="260" y1="86" x2="260" y2="160" class="arrow dashed"/>
-    <text x="266" y="130" class="small">y</text>
-    <text x="200" y="176" class="mid small">D = −z</text>
-
-    <text x="400" y="50"  class="title">Similar triangles</text>
-    <text x="400" y="76"  class="mono">y_image = y / D</text>
-    <text x="400" y="100" class="small">The view reaches tan(fovY/2) on the plane at</text>
-    <text x="400" y="116" class="small">distance 1. Scale that to 1 for NDC:</text>
-    <text x="400" y="144" class="mono">focal = 1 / tan(fovY / 2)</text>
-    <text x="400" y="168" class="mono">y_ndc = focal · y / D</text>
-    <text x="400" y="192" class="mono">x_ndc = focal / aspect · x / D</text>
-    <text x="400" y="224" class="small">aspect = width / height. Dividing x by it keeps</text>
-    <text x="400" y="240" class="small">square things square on a wide screen.</text>
+  <svg viewBox="0 0 760 285" role="img" aria-label="Side view, upper half of the view. The eye on the left looks right along minus Z. The field of view is bounded by a line at half of fovY. The near and far planes cut the view. Two posts of the same height y stand at distance D and at distance 2 D. Lines from the eye to their tops cross the plane at distance 1 at the heights y divided by D and y divided by 2 D: the far post's image is half as big.">
+    <polygon points="95,250 95,235.2 700,35.5 700,250" class="zone"/>
+    <line x1="50" y1="250" x2="700" y2="35.5" class="arrow"/>
+    <line x1="50" y1="250" x2="735" y2="250" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="742" y="254" class="small">−Z</text>
+    <line x1="95" y1="235.2" x2="95" y2="250" class="arrow gpu thick"/>
+    <line x1="700" y1="35.5" x2="700" y2="250" class="arrow gpu thick"/>
+    <line x1="50" y1="250" x2="330" y2="170" class="dashed"/>
+    <line x1="50" y1="250" x2="610" y2="170" class="dashed"/>
+    <line x1="210" y1="197.2" x2="210" y2="250" class="arrow hot"/>
+    <line x1="207" y1="250" x2="207" y2="204.3" class="arrow ok thick"/>
+    <line x1="213" y1="250" x2="213" y2="227.1" class="arrow thick"/>
+    <rect x="324" y="170" width="12" height="80" class="ok"/>
+    <rect x="604" y="170" width="12" height="80" class="solid"/>
+    <text x="330" y="162" class="mid title t-ok">A</text>
+    <text x="610" y="162" class="mid title">B</text>
+    <text x="342" y="206" class="small halo">y</text>
+    <text x="622" y="214" class="small">y</text>
+    <path d="M110,250 A60,60 0 0,0 107,231.2" class="arrow hot"/>
+    <text x="116" y="247" class="small t-hot halo">fovY/2</text>
+    <circle cx="50" cy="250" r="7" class="cpu"/>
+    <text x="50" y="272" class="mid small">eye</text>
+    <text x="95" y="272" class="mid small t-gpu">near</text>
+    <text x="210" y="272" class="mid small t-hot">plane at distance 1</text>
+    <text x="330" y="272" class="mid small">distance D = −z</text>
+    <text x="610" y="272" class="mid small">distance 2D</text>
+    <text x="700" y="272" class="mid small t-gpu">far</text>
+    <text x="60" y="40" class="t-ok">A, at distance D: image height y / D</text>
+    <text x="60" y="62">B, twice as far: image height y / 2D, half as big</text>
   </svg>
   <figcaption>The vertical field of view <var>fovY</var> fixes how much of the scene fits on screen from top to bottom. The width follows from the aspect ratio.</figcaption>
 </figure>
 
-<h2><span class="n">2</span>Why the 4th coordinate: <var>w</var></h2>
+<div class="formula">
+  <p class="eq">y_image = y / D</p>
+  <p class="eq">focal = 1 / tan(fovY / 2)</p>
+  <p class="eq">y_ndc = focal · y / D</p>
+  <p class="eq">x_ndc = focal / aspect · x / D</p>
+  <dl>
+    <dt>y / D</dt><dd>similar triangles</dd>
+    <dt>focal</dt><dd>The view reaches tan(fovY/2) on the plane at distance 1. <i>focal</i> scales that to 1 for NDC.</dd>
+    <dt>aspect</dt><dd>width / height. Dividing x by it keeps square things square on a wide screen.</dd>
+  </dl>
+</div>
 
-<p>A matrix can only multiply and add. It cannot divide by <var>D</var>. So the projection matrix puts <var>D</var> into a fourth coordinate, <var>w</var>, and the GPU divides <var>x</var>, <var>y</var> and <var>z</var> by it later. This is the <b>perspective divide</b>. The point before the divide is in <b>clip space</b>; after it, in <b>NDC</b> (see <a href="coordinate-spaces.html">Coordinate spaces</a>).</p>
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A wide screen. A square object is drawn as a wide rectangle.">
+      <rect x="30" y="20" width="260" height="100" class="paper"/>
+      <rect x="105" y="45" width="110" height="50" class="solid"/>
+    </svg>
+    <h4>x not divided by aspect</h4>
+    <p>NDC is a square stretched over a wide screen, so a square object looks wide.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A wide screen. A square object is drawn as a square.">
+      <rect x="30" y="20" width="260" height="100" class="paper"/>
+      <rect x="135" y="45" width="50" height="50" class="solid"/>
+    </svg>
+    <h4>x divided by aspect</h4>
+    <p>Square things stay square.</p>
+  </div>
+</div>
+
+<h2 id="w"><span class="n">2</span>Why the 4th coordinate: <var>w</var></h2>
+
+<p>A matrix can only multiply and add. It cannot divide by <var>D</var>. So the projection matrix puts <var>D</var> into a fourth coordinate, <var>w</var>, and the GPU divides <var>x</var>, <var>y</var> and <var>z</var> by it later. This is the <b>perspective divide</b>.</p>
+
+<ol class="flow">
+  <li><b>(x, y, z, 1)</b><span>view space</span></li>
+  <li class="shader"><b>× projection</b><span>in the vertex shader; copies D into w</span></li>
+  <li class="shader"><b>clip space</b><span>the point before the divide</span></li>
+  <li class="gpu"><b>÷ w</b><span>the perspective divide, done by the GPU</span></li>
+  <li class="gpu"><b>NDC</b><span>the point after the divide</span></li>
+</ol>
+
+<p>See <a href="coordinate-spaces.html">Coordinate spaces</a> for the spaces themselves.</p>
 
 <pre><code class="lang-text">| x_c |   | focal/aspect   0     0   0 |   | x |
 | y_c | = |      0       focal   0   0 | · | y |
@@ -97,10 +135,36 @@
 w_c = −z = D        then   NDC = (x_c, y_c, z_c) / w_c</code></pre>
 
 <p>Keeping <var>w</var> until after the vertex shader has two more uses:</p>
-<ul>
-  <li><b>Clipping</b> happens before the divide, against −<var>w</var> ≤ <var>x</var>, <var>y</var> ≤ <var>w</var>. A point behind the camera has <var>w</var> &lt; 0; after a divide it would flip to the other side of the screen.</li>
-  <li><b>Perspective-correct interpolation.</b> Texture coordinates and colors are not linear across a triangle on screen. The GPU interpolates <var>value</var>/<var>w</var> and 1/<var>w</var>, which are linear on screen, and divides.</li>
-</ul>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Seen from above: a camera looks up at the screen. A point behind the camera, on its left, would land on the right side of the screen if it were divided by its negative w.">
+      <line x1="30" y1="28" x2="210" y2="28" class="arrow hot thick"/>
+      <text x="30" y="18" class="small t-hot">screen</text>
+      <line x1="120" y1="72" x2="50" y2="28" class="dashed"/>
+      <line x1="120" y1="72" x2="190" y2="28" class="dashed"/>
+      <line x1="92" y1="106" x2="156" y2="29" class="arrow bad dashed" marker-end="url(#ah-bad)"/>
+      <circle cx="120" cy="72" r="6" class="cpu"/>
+      <circle cx="92" cy="106" r="5" class="bad"/>
+      <text x="102" y="112" class="small t-bad">behind the camera: w &lt; 0</text>
+      <text x="166" y="46" class="small t-bad">flips here</text>
+    </svg>
+    <h4>Clipping</h4>
+    <p>It happens before the divide, against −<var>w</var> ≤ <var>x</var>, <var>y</var> ≤ <var>w</var>. A point behind the camera has <var>w</var> &lt; 0; after a divide it would flip to the other side of the screen.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two floors seen in perspective, with stripes of equal size. Left, interpolated linearly on screen: the stripes are evenly spaced, which is wrong. Right, interpolated with the divide by w: the stripes get thinner with distance, which is right.">
+      <polygon points="20,112 110,112 85,22 45,22" class="box"/>
+      <path d="M26.3,89.5H103.7M32.5,67H97.5M38.8,44.5H91.2" class="arrow bad"/>
+      <polygon points="130,112 220,112 195,22 155,22" class="box"/>
+      <path d="M140.7,73.4H209.3M147.3,49.7H202.7M151.8,33.6H198.2" class="arrow ok"/>
+      <text x="65" y="126" class="mid small t-bad">linear on screen</text>
+      <text x="175" y="126" class="mid small t-ok">with ÷ w</text>
+    </svg>
+    <h4>Perspective-correct interpolation</h4>
+    <p>Texture coordinates and colors are not linear across a triangle on screen. The GPU interpolates <var>value</var>/<var>w</var> and 1/<var>w</var>, which are linear on screen, and divides.</p>
+  </div>
+</div>
 
 <h2 id="depth-row"><span class="n">3</span>The depth row</h2>
 
@@ -151,27 +215,66 @@ w_c = −z = D        then   NDC = (x_c, y_c, z_c) / w_c</code></pre>
   <figcaption>On paper the two curves are mirror images and carry the same information. The difference appears only when the numbers are stored in a float (next section).</figcaption>
 </figure>
 
-<h2><span class="n">4</span>Orthographic projection</h2>
+<p>Read the standard curve as a bar, and the problem shows: most of the depth range goes to the first few meters.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 140" role="img" aria-label="The standard depth range from 0 to 1 as a bar, near 0.1 and far 1000. Distances 0.1 to 0.2 take the first half of the range. Distances 0.2 to 1 take 40 percent. Distances 1 to 10 take 9 percent. Distances 10 to 1000 take the last 1 percent.">
+    <text x="40" y="18" class="small">standard depth, near 0.1, far 1000: the distances that each part of the range 0..1 holds</text>
+    <rect x="40" y="48" width="340" height="44" class="box"/>
+    <rect x="380" y="48" width="272" height="44" class="zone"/>
+    <rect x="652" y="48" width="61.2" height="44" class="box"/>
+    <rect x="713.2" y="48" width="6.8" height="44" class="bad"/>
+    <text x="210" y="68" class="mid">D = 0.1 to 0.2</text>
+    <text x="210" y="84" class="mid small">half of the range</text>
+    <text x="516" y="68" class="mid">D = 0.2 to 1</text>
+    <text x="516" y="84" class="mid small">40%</text>
+    <text x="682" y="74" class="mid small">1 to 10</text>
+    <text x="40" y="42" class="mid small">0</text>
+    <text x="380" y="42" class="mid small">0.5</text>
+    <text x="652" y="42" class="mid small">0.9</text>
+    <text x="711" y="42" class="end small">0.99</text>
+    <text x="723" y="42" class="small">1</text>
+    <line x1="716.6" y1="94" x2="716.6" y2="112" class="arrow bad"/>
+    <text x="712" y="126" class="end small t-bad">D = 10 to 1000: the last 1% of the range</text>
+    <text x="40" y="112" class="small t-faint">depth →</text>
+  </svg>
+  <figcaption>Everything farther than 100 times the near plane shares one hundredth of the range.</figcaption>
+</figure>
+
+<h2 id="orthographic"><span class="n">4</span>Orthographic projection</h2>
 
 <p>An orthographic camera has no perspective: parallel lines stay parallel and size does not change with distance. The view volume is a box (<var>left</var>, <var>right</var>, <var>bottom</var>, <var>top</var>, <var>near</var>, <var>far</var>), and the matrix only scales and moves it onto the NDC box. <var>w</var> stays 1, so depth is linear in distance.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 240" role="img" aria-label="Left: a perspective view volume is a frustum and depth is linear in one over distance. Right: an orthographic view volume is a box and depth is linear in distance.">
-    <text x="190" y="24" class="mid title">Perspective: a frustum</text>
-    <circle cx="40" cy="120" r="5" class="cpu"/>
-    <polygon points="90,100 330,40 330,200 90,140" class="zone"/>
-    <polygon points="90,100 330,40 330,200 90,140" class="gpu"/>
-    <rect x="130" y="100" width="22" height="22" class="box"/>
-    <rect x="270" y="100" width="22" height="22" class="box"/>
-    <text x="190" y="228" class="mid small">far things are smaller · w = distance</text>
+  <svg viewBox="0 0 760 290" role="img" aria-label="Left: a perspective view volume is a frustum; sight lines meet at the eye. Two boxes of the same size, one near and one far, appear big and small on screen. Right: an orthographic view volume is a box; sight lines are parallel. The same two boxes appear with the same size on screen.">
+    <text x="190" y="22" class="mid title">Perspective: a frustum</text>
+    <polygon points="90,105 330,45 330,205 90,145" class="gpu"/>
+    <line x1="40" y1="125" x2="90" y2="105" class="dashed"/>
+    <line x1="40" y1="125" x2="90" y2="145" class="dashed"/>
+    <circle cx="40" cy="125" r="6" class="cpu"/>
+    <rect x="130" y="113" width="24" height="24" class="solid"/>
+    <rect x="270" y="113" width="24" height="24" class="solid"/>
+    <rect x="40" y="222" width="110" height="56" class="paper"/>
+    <rect x="56" y="232" width="36" height="36" class="solid"/>
+    <rect x="112" y="243" width="15" height="15" class="solid"/>
+    <text x="162" y="240" class="small t-faint">on screen</text>
+    <text x="162" y="256" class="small">far things are smaller</text>
+    <text x="162" y="272" class="small">w = distance</text>
 
-    <text x="570" y="24" class="mid title">Orthographic: a box</text>
-    <circle cx="420" cy="120" r="5" class="cpu"/>
-    <rect x="450" y="40" width="250" height="160" class="zone"/>
-    <rect x="450" y="40" width="250" height="160" class="gpu"/>
-    <rect x="490" y="100" width="22" height="22" class="box"/>
-    <rect x="630" y="100" width="22" height="22" class="box"/>
-    <text x="570" y="228" class="mid small">same size at any distance · w = 1</text>
+    <line x1="380" y1="10" x2="380" y2="284" class="dashed"/>
+
+    <text x="570" y="22" class="mid title">Orthographic: a box</text>
+    <rect x="450" y="45" width="250" height="160" class="gpu"/>
+    <line x1="422" y1="45" x2="422" y2="205" class="arrow cpu thick"/>
+    <path d="M424,65H450M424,125H450M424,185H450" class="dashed"/>
+    <rect x="490" y="113" width="24" height="24" class="solid"/>
+    <rect x="630" y="113" width="24" height="24" class="solid"/>
+    <rect x="420" y="222" width="110" height="56" class="paper"/>
+    <rect x="440" y="238" width="24" height="24" class="solid"/>
+    <rect x="486" y="238" width="24" height="24" class="solid"/>
+    <text x="542" y="240" class="small t-faint">on screen</text>
+    <text x="542" y="256" class="small">same size at any distance</text>
+    <text x="542" y="272" class="small">w = 1</text>
   </svg>
   <figcaption>Orthographic views are used for CAD and map views, 2D and UI, and shadow maps of directional lights.</figcaption>
 </figure>
@@ -244,14 +347,57 @@ depth = (f − D) / (f − n)       reversed: again, swap n and f</code></pre>
 </table>
 </div>
 
-<p>Near 0.1, far 1000, in scene units (say meters). With standard depth, a wall at 900 m cannot be told apart from a poster 30 cm in front of it. With reversed-Z, the step stays below 0.01 mm everywhere.</p>
+<p>Near 0.1, far 1000, in scene units (say meters).</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A poster on a wall, far away. Stripes of the wall show through the poster.">
+      <rect x="50" y="12" width="220" height="116" class="box"/>
+      <rect x="120" y="40" width="80" height="60" class="accent"/>
+      <polygon points="120,48 200,42 200,48 120,55" class="box"/>
+      <polygon points="120,64 200,57 200,64 120,72" class="box"/>
+      <polygon points="120,80 200,73 200,80 120,88" class="box"/>
+      <polygon points="120,95 200,89 200,94 120,100" class="box"/>
+    </svg>
+    <h4>Standard depth</h4>
+    <p>A wall at 900 m cannot be told apart from a poster 30 cm in front of it.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same poster on the wall, drawn cleanly.">
+      <rect x="50" y="12" width="220" height="116" class="box"/>
+      <rect x="120" y="40" width="80" height="60" class="accent"/>
+    </svg>
+    <h4>Reversed-Z</h4>
+    <p>The step stays below 0.01 mm everywhere.</p>
+  </div>
+</div>
 
 <div class="split">
   <div>
+    <svg viewBox="0 0 320 134" role="img" aria-label="Two rulers from 0 to 1. The 32-bit float ruler has ticks that get denser toward 0. The 24-bit integer ruler has even ticks. Between 0.5 and 1 both have the same spacing.">
+      <text x="20" y="16" class="small">32-bit float</text>
+      <rect x="20" y="24" width="35" height="20" class="box"/>
+      <path d="M160,24v20M170,24v20M180,24v20M190,24v20M200,24v20M210,24v20M220,24v20M230,24v20M240,24v20M250,24v20M260,24v20M270,24v20M280,24v20M290,24v20M300,24v20M90,24v20M95,24v20M100,24v20M105,24v20M110,24v20M115,24v20M120,24v20M125,24v20M130,24v20M135,24v20M140,24v20M145,24v20M150,24v20M155,24v20M55,24v20M57.5,24v20M60,24v20M62.5,24v20M65,24v20M67.5,24v20M70,24v20M72.5,24v20M75,24v20M77.5,24v20M80,24v20M82.5,24v20M85,24v20M87.5,24v20" class="arrow thin"/>
+      <text x="20" y="72" class="small">24-bit integer</text>
+      <path d="M20,80v20M30,80v20M40,80v20M50,80v20M60,80v20M70,80v20M80,80v20M90,80v20M100,80v20M110,80v20M120,80v20M130,80v20M140,80v20M150,80v20M160,80v20M170,80v20M180,80v20M190,80v20M200,80v20M210,80v20M220,80v20M230,80v20M240,80v20M250,80v20M260,80v20M270,80v20M280,80v20M290,80v20M300,80v20" class="arrow thin"/>
+      <rect x="156" y="20" width="148" height="84" rx="4" class="hot"/>
+      <text x="20" y="118" class="mid small">0</text>
+      <text x="160" y="118" class="mid small">0.5</text>
+      <text x="300" y="118" class="mid small">1</text>
+      <text x="230" y="130" class="mid small t-hot">the same gaps: 2⁻²⁴</text>
+    </svg>
     <h4>A float buffer alone does not help</h4>
     <p>Standard depth in a 32-bit float buffer is no better than a 24-bit integer buffer: near 1, floats have the same 2<sup>−24</sup> spacing as the integers. The gain comes only from <b>reversed</b> depth <b>and</b> a float buffer together.</p>
   </div>
   <div>
+    <svg viewBox="0 0 320 134" role="img" aria-label="Two bars for the step size of standard depth at the same distance. With the near plane at 0.01 the bar is long. With the near plane at 0.1 it is ten times shorter.">
+      <text x="20" y="16" class="small">step size at one distance, standard depth</text>
+      <text x="20" y="40" class="small t-bad">near plane at 0.01</text>
+      <rect x="20" y="46" width="280" height="18" class="bad"/>
+      <text x="20" y="90" class="small t-ok">near plane at 0.1</text>
+      <rect x="20" y="96" width="28" height="18" class="ok"/>
+      <text x="58" y="109" class="small">10 times smaller</text>
+    </svg>
     <h4>The near plane matters most</h4>
     <p>With standard depth, the step size is about <var>D</var>² / <var>n</var> × 6 × 10<sup>−8</sup>. Moving the near plane from 0.01 to 0.1 makes every step 10 times smaller. With reversed-Z, the near plane hardly matters.</p>
   </div>
@@ -263,15 +409,53 @@ depth = (f − D) / (f − n)       reversed: again, swap n and f</code></pre>
 
 <p>It is not one change but three, and all three must change together:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Setting</th><th>Standard</th><th>Reversed</th></tr>
-  <tr><td>Projection</td><td>near → 0, far → 1</td><td>near → 1, far → 0 (swap <var>n</var> and <var>f</var>)</td></tr>
-  <tr><td>Depth clear value</td><td>1 (the far plane)</td><td>0 (the far plane)</td></tr>
-  <tr><td>Depth test</td><td>LESS: nearer is smaller</td><td>GREATER: nearer is larger</td></tr>
-  <tr><td>Depth format</td><td>24-bit integer is enough</td><td>32-bit float, or there is no gain</td></tr>
-  <tr><td>Clip depth range</td><td>0..1 or −1..1</td><td>0..1. With OpenGL's −1..1, far values sit near −1, where floats are coarse, and the gain is lost; OpenGL needs <var>glClipControl</var>.</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A view frustum from the side. The near plane maps to depth 1 and the far plane to depth 0.">
+      <polygon points="60,53 200,13 200,117 60,77" class="zone"/>
+      <line x1="60" y1="53" x2="60" y2="77" class="arrow hot thick"/>
+      <line x1="200" y1="13" x2="200" y2="117" class="arrow thick"/>
+      <circle cx="24" cy="65" r="6" class="cpu"/>
+      <text x="68" y="69" class="small t-hot">near → 1</text>
+      <text x="192" y="69" class="end small">far → 0</text>
+    </svg>
+    <h4>Projection</h4>
+    <p><b>Standard:</b> near → 0, far → 1.</p>
+    <p><b>Reversed:</b> near → 1, far → 0 (swap <var>n</var> and <var>f</var>).</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A depth buffer whose texels all hold 0 after the clear.">
+      <rect x="50" y="20" width="140" height="90" class="mem"/>
+      <path d="M85,20V110M120,20V110M155,20V110M50,50H190M50,80H190" class="grid"/>
+      <text x="67.5" y="41" class="mid mono">0</text><text x="102.5" y="41" class="mid mono">0</text><text x="137.5" y="41" class="mid mono">0</text><text x="172.5" y="41" class="mid mono">0</text><text x="67.5" y="71" class="mid mono">0</text><text x="102.5" y="71" class="mid mono">0</text><text x="137.5" y="71" class="mid mono">0</text><text x="172.5" y="71" class="mid mono">0</text><text x="67.5" y="101" class="mid mono">0</text><text x="102.5" y="101" class="mid mono">0</text><text x="137.5" y="101" class="mid mono">0</text><text x="172.5" y="101" class="mid mono">0</text>
+    </svg>
+    <h4>Depth clear value</h4>
+    <p><b>Standard:</b> 1 (the far plane).</p>
+    <p><b>Reversed:</b> 0 (the far plane).</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An eye looks at two surfaces. The nearer one has depth 0.4, the farther one 0.1. 0.4 is greater, so the nearer one wins.">
+      <line x1="32" y1="65" x2="104" y2="65" class="arrow" marker-end="url(#ah)"/>
+      <line x1="112" y1="65" x2="188" y2="65" class="dashed"/>
+      <line x1="110" y1="32" x2="110" y2="98" class="arrow ok thick"/>
+      <line x1="190" y1="32" x2="190" y2="98" class="arrow thick"/>
+      <circle cx="24" cy="65" r="6" class="cpu"/>
+      <text x="110" y="24" class="mid mono t-ok">0.4</text>
+      <text x="190" y="24" class="mid mono">0.1</text>
+      <text x="120" y="122" class="mid small">0.4 &gt; 0.1: the nearer one wins</text>
+    </svg>
+    <h4>Depth test</h4>
+    <p><b>Standard:</b> LESS: nearer is smaller.</p>
+    <p><b>Reversed:</b> GREATER: nearer is larger.</p>
+  </div>
+</div>
+
+<div class="callout warn">
+  <strong>Two more conditions, or there is no gain</strong>
+  <ul>
+    <li><b>Depth format.</b> For standard depth a 24-bit integer is enough. Reversed needs a 32-bit float.</li>
+    <li><b>Clip depth range.</b> Standard works with 0..1 or −1..1. Reversed needs 0..1. With OpenGL's −1..1, far values sit near −1, where floats are coarse, and the gain is lost; OpenGL needs <var>glClipControl</var>.</li>
+  </ul>
 </div>
 
 <figure class="diagram">
@@ -302,86 +486,153 @@ depth = (f − D) / (f − n)       reversed: again, swap n and f</code></pre>
 
 <h2 id="infinite"><span class="n">7</span>The infinite far plane</h2>
 
-<p>A far plane clips away distant geometry, and choosing its value is a trade-off with standard depth. With reversed-Z there is little reason to have one. Let <var>f</var> go to infinity in the reversed row: <var>A</var> → 0 and <var>B</var> → <var>n</var>.</p>
+<p>With reversed-Z there is little reason to have a far plane. Let <var>f</var> go to infinity in the reversed row: <var>A</var> → 0 and <var>B</var> → <var>n</var>.</p>
 
 <pre><code class="lang-text">| focal/aspect   0     0   0 |
 |      0       focal   0   0 |          depth = n / D
 |      0         0     0   n |
 |      0         0    −1   0 |</code></pre>
 
-<p>The depth falls toward 0 but never reaches it, so nothing is ever clipped by distance. The step size stays about <var>D</var> × 7 × 10<sup>−8</sup>: 0.07 mm at 1 km and 0.9 mm at 10 km for <var>n</var> = 0.1. For frustum culling, the "far plane" of this matrix comes out as (0, 0, 0, <var>n</var>), which every point passes (<a href="frustum-culling.html#planes">Frustum culling</a>).</p>
+<div class="split">
+  <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A view frustum closed by a far plane. An object inside is drawn; an object past the far plane is clipped away.">
+      <polygon points="50,61 230,24.3 230,115.7 50,79" class="zone"/>
+      <line x1="230" y1="24.3" x2="230" y2="115.7" class="arrow thick"/>
+      <circle cx="24" cy="70" r="6" class="cpu"/>
+      <rect x="130" y="58" width="24" height="24" class="solid"/>
+      <rect x="256" y="56" width="28" height="28" class="ghost"/>
+      <text x="270" y="102" class="mid small t-bad">clipped</text>
+      <text x="230" y="134" class="mid small">far</text>
+    </svg>
+    <h4>A far plane</h4>
+    <p>It clips away distant geometry, and choosing its value is a trade-off with standard depth.</p>
+  </div>
+  <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A view frustum with no far plane: it stays open. Both objects are drawn.">
+      <path d="M300,10L50,61V79L300,130" class="zone"/>
+      <circle cx="24" cy="70" r="6" class="cpu"/>
+      <rect x="130" y="58" width="24" height="24" class="solid"/>
+      <rect x="256" y="56" width="28" height="28" class="solid"/>
+      <text x="270" y="102" class="mid small t-ok">drawn</text>
+    </svg>
+    <h4>No far plane</h4>
+    <p>The depth falls toward 0 but never reaches it, so nothing is ever clipped by distance.</p>
+  </div>
+</div>
 
-<p>The same limit with standard depth gives depth = 1 − <var>n</var> / <var>D</var>: the whole scene squeezed against 1, the worst case of section 5.</p>
+<div class="stats">
+  <div><b>n / D</b><span>the depth at distance D</span></div>
+  <div><b>D × 7 × 10<sup>−8</sup></b><span>the step size, about, at every distance</span></div>
+  <div><b>0.07 mm</b><span>step at 1 km</span><small>n = 0.1</small></div>
+  <div><b>0.9 mm</b><span>step at 10 km</span><small>n = 0.1</small></div>
+</div>
 
-<h2><span class="n">8</span>Worked example</h2>
+<p>For frustum culling, the "far plane" of this matrix comes out as (0, 0, 0, <var>n</var>), which every point passes (<a href="frustum-culling.html#planes">Frustum culling</a>).</p>
+
+<div class="callout warn">
+  <strong>Only with reversed-Z</strong>
+  <p>The same limit with standard depth gives depth = 1 − <var>n</var> / <var>D</var>: the whole scene squeezed against 1, the worst case of section 5.</p>
+</div>
+
+<h2 id="example"><span class="n">8</span>Worked example</h2>
 
 <p>Near 0.1, far 1000, a 32-bit float depth buffer. Follow a surface at distance 10, then ask whether a second surface right behind it can be told apart.</p>
 
 <div class="stepper">
   <div class="step">
     <h4>1. The depth rows</h4>
-    <svg viewBox="0 0 760 150" role="img" aria-label="Standard: A is minus 1.0001, B is minus 0.10001. Reversed: A is 0.00010001, B is 0.10001.">
-      <text x="20"  y="34" class="title t-cpu">standard 0..1</text>
-      <text x="20"  y="60" class="mono">A = −f / (f − n)  = −1.0001</text>
-      <text x="20"  y="84" class="mono">B = −fn / (f − n) = −0.10001</text>
-      <text x="400" y="34" class="title t-hot">reversed 0..1</text>
-      <text x="400" y="60" class="mono">A = n / (f − n)  = 0.00010001</text>
-      <text x="400" y="84" class="mono">B = fn / (f − n) = 0.10001</text>
-      <text x="20" y="124" class="small">Reversed: the same formulas as standard with n and f swapped, and the signs follow.</text>
+    <svg viewBox="0 0 760 160" role="img" aria-label="A 4 by 4 matrix with its third row, 0 0 A B, marked. Standard: A is minus 1.0001, B is minus 0.10001. Reversed: A is 0.00010001, B is 0.10001.">
+      <rect x="20" y="24" width="136" height="104" class="paper"/>
+      <rect x="20" y="76" width="136" height="26" class="accent"/>
+      <path d="M54,24V128M88,24V128M122,24V128M20,50H156M20,76H156M20,102H156" class="grid"/>
+      <text x="37" y="94" class="mid mono">0</text><text x="71" y="94" class="mid mono">0</text><text x="105" y="94" class="mid mono">A</text><text x="139" y="94" class="mid mono">B</text>
+      <text x="88" y="148" class="mid small">the projection matrix</text>
+      <text x="190" y="38" class="title t-cpu">standard 0..1</text>
+      <text x="190" y="62" class="mono">A = −f / (f − n)  = −1.0001</text>
+      <text x="190" y="84" class="mono">B = −fn / (f − n) = −0.10001</text>
+      <text x="480" y="38" class="title t-hot">reversed 0..1</text>
+      <text x="480" y="62" class="mono">A = n / (f − n)  = 0.00010001</text>
+      <text x="480" y="84" class="mono">B = fn / (f − n) = 0.10001</text>
+      <text x="190" y="118" class="small">Reversed: the same formulas as standard with n and f swapped, and the signs follow.</text>
     </svg>
     <p>Only the third row of the matrix differs. The <var>x</var>, <var>y</var> and <var>w</var> rows are the same.</p>
   </div>
   <div class="step">
     <h4>2. A point at distance 10</h4>
-    <svg viewBox="0 0 760 150" role="img" aria-label="z is minus 10 and w is 10. Standard: z_c is 9.901, depth 0.9901. Reversed: z_c is 0.099, depth 0.0099.">
-      <text x="20"  y="34" class="mono">z = −10   →   w_c = 10</text>
-      <text x="20"  y="70" class="mono t-cpu">standard: z_c = −1.0001 · (−10) − 0.10001 = 9.901</text>
-      <text x="20"  y="94" class="mono t-cpu">          depth = 9.901 / 10 = 0.9901</text>
-      <text x="20"  y="124" class="mono t-hot">reversed: z_c = 0.00010001 · (−10) + 0.10001 = 0.0990   depth = 0.0099</text>
+    <svg viewBox="0 0 760 200" role="img" aria-label="z is minus 10 and w is 10. Standard: z_c is 9.901, depth 0.9901. Reversed: z_c is 0.099, depth 0.0099. On a line from 0 to 1 the two depths sit at opposite ends.">
+      <text x="20"  y="28" class="mono">z = −10   →   w_c = 10</text>
+      <text x="20"  y="56" class="mono t-cpu">standard: z_c = −1.0001 · (−10) − 0.10001 = 9.901</text>
+      <text x="20"  y="78" class="mono t-cpu">          depth = 9.901 / 10 = 0.9901</text>
+      <text x="20"  y="104" class="mono t-hot">reversed: z_c = 0.00010001 · (−10) + 0.10001 = 0.0990   depth = 0.0099</text>
+      <line x1="40" y1="160" x2="720" y2="160" class="arrow"/>
+      <path d="M40,152v16M720,152v16" class="arrow"/>
+      <text x="40" y="186" class="mid small">0</text>
+      <text x="720" y="186" class="mid small">1</text>
+      <text x="380" y="186" class="mid small">depth</text>
+      <circle cx="46.7" cy="160" r="6" class="accent"/>
+      <text x="58" y="146" class="small t-hot">reversed: 0.0099</text>
+      <circle cx="713.3" cy="160" r="6" class="cpu"/>
+      <text x="704" y="146" class="end small t-cpu">standard: 0.9901</text>
     </svg>
     <p>Same distance, mirror-image depths: 0.9901 = 1 − 0.0099.</p>
   </div>
   <div class="step">
     <h4>3. How finely each value is stored</h4>
-    <svg viewBox="0 0 760 150" role="img" aria-label="Near 0.99 floats are 6 times 10 to the minus 8 apart, which is 0.06 millimeters of distance at 10. Near 0.0099 floats are 9.3 times 10 to the minus 10 apart, which is under 0.001 millimeters.">
-      <text x="20" y="34" class="mono t-cpu">0.9901: float gap 6.0e−8  → distance step 6.0e−5  (0.06 mm)</text>
-      <text x="20" y="64" class="mono t-hot">0.0099: float gap 9.3e−10 → distance step 9.3e−7  (0.001 mm)</text>
-      <text x="20" y="104" class="small">Distance step = float gap / (n / D²) = gap · 1000. Both are fine at distance 10.</text>
+    <svg viewBox="0 0 760 200" role="img" aria-label="Near 0.99 floats are 6 times 10 to the minus 8 apart, which is 0.06 millimeters of distance at 10. Near 0.0099 floats are 9.3 times 10 to the minus 10 apart, which is under 0.001 millimeters. Drawn as rulers at the same scale, 64 of the small gaps fit in one of the large gaps.">
+      <text x="20" y="28" class="mono t-cpu">0.9901: float gap 6.0e−8  → distance step 6.0e−5  (0.06 mm)</text>
+      <text x="20" y="52" class="mono t-hot">0.0099: float gap 9.3e−10 → distance step 9.3e−7  (0.001 mm)</text>
+      <text x="20" y="100" class="small t-cpu">floats near 0.99</text>
+      <path d="M120,86v20M184,86v20M248,86v20M312,86v20M376,86v20M440,86v20M504,86v20M568,86v20M632,86v20M696,86v20" class="arrow cpu"/>
+      <line x1="120" y1="106" x2="696" y2="106" class="arrow cpu"/>
+      <text x="124" y="80" class="small">one gap: 6.0e−8</text>
+      <text x="20" y="144" class="small t-hot">floats near 0.0099</text>
+      <rect x="120" y="130" width="576" height="20" class="accent"/>
+      <text x="408" y="144" class="mid small">64 gaps of 9.3e−10 in each gap above</text>
+      <text x="20" y="184" class="small">Distance step = float gap / (n / D²) = gap · 1000. Both are fine at distance 10.</text>
     </svg>
     <p>At short range both work. The difference grows with distance, as the table in section 5 shows.</p>
   </div>
   <div class="step">
     <h4>4. Two surfaces 30 cm apart, 900 away</h4>
-    <svg viewBox="0 0 760 150" role="img" aria-label="Standard depth at 900 and at 900.3 rounds to the same float, 0.99998891, so the surfaces z-fight. Reversed depth gives 1.1112e-5 and 1.1075e-5, two different floats.">
-      <text x="20" y="34" class="mono t-cpu">standard: 900 → 0.99998891   900.3 → 0.99998891   same float: z-fighting</text>
-      <text x="20" y="70" class="mono t-hot">reversed: 900 → 1.1112e−5    900.3 → 1.1075e−5    different: the nearer wins</text>
-      <text x="20" y="110" class="small">Rounded to 32-bit floats. The reversed values are about 40,000 float steps apart.</text>
+    <svg viewBox="0 0 760 210" role="img" aria-label="Standard depth at 900 and at 900.3 rounds to the same float, 0.99998891, so the surfaces z-fight. Reversed depth gives 1.1112e-5 and 1.1075e-5, two different floats far apart.">
+      <text x="20" y="28" class="mono t-cpu">standard: 900 → 0.99998891   900.3 → 0.99998891   same float: z-fighting</text>
+      <text x="20" y="52" class="mono t-hot">reversed: 900 → 1.1112e−5    900.3 → 1.1075e−5    different: the nearer wins</text>
+      <text x="20" y="100" class="small t-cpu">standard</text>
+      <path d="M120,86v20M184,86v20M248,86v20M312,86v20M376,86v20M440,86v20M504,86v20M568,86v20M632,86v20M696,86v20" class="arrow cpu"/>
+      <line x1="120" y1="106" x2="696" y2="106" class="arrow cpu"/>
+      <circle cx="376" cy="106" r="7" class="bad"/>
+      <text x="376" y="78" class="mid small t-bad">900 and 900.3: one float</text>
+      <text x="20" y="164" class="small t-hot">reversed</text>
+      <line x1="120" y1="160" x2="696" y2="160" class="arrow hot"/>
+      <circle cx="220" cy="160" r="7" class="ok"/>
+      <circle cx="580" cy="160" r="7" class="ok"/>
+      <text x="220" y="144" class="mid small">900.3</text>
+      <text x="580" y="144" class="mid small">900</text>
+      <text x="400" y="152" class="mid small t-ok">about 40,000 float steps apart</text>
+      <text x="20" y="198" class="small">Rounded to 32-bit floats.</text>
     </svg>
     <p>With standard depth, the farther surface shows through in stripes that move with the camera.</p>
   </div>
 </div>
 
-<h2><span class="n">9</span>Pitfalls</h2>
+<h2 id="pitfalls"><span class="n">9</span>Pitfalls</h2>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Symptom</th><th>Usual cause</th></tr>
-  <tr><td>Nothing is drawn</td><td>Reversed projection with the old clear (1) or the old test (LESS). The three settings must change together.</td></tr>
-  <tr><td>Everything is drawn in the wrong order</td><td>Reversed clear and test, but a standard projection.</td></tr>
-  <tr><td>Far surfaces flicker in stripes</td><td>Standard depth with a small near plane. Move the near plane out, or use reversed-Z with a float buffer.</td></tr>
-  <tr><td>No gain from reversed-Z</td><td>A 24-bit integer buffer, or OpenGL's −1..1 clip range.</td></tr>
-  <tr><td>Objects stretched on a wide window</td><td>The aspect ratio is not updated when the window or the render target changes size.</td></tr>
-  <tr><td>Linear depth from the buffer is wrong</td><td>The inverse formula of the other convention. For reversed infinite: <var>D</var> = <var>n</var> / <var>depth</var>.</td></tr>
-  <tr><td>Shadows get acne or peter-panning after the switch</td><td>Depth bias still pushes toward larger depth.</td></tr>
-</table>
-</div>
+<dl class="pitfalls">
+  <div><dt>Nothing is drawn</dt><dd>Reversed projection with the old clear (1) or the old test (LESS). The three settings must change together.</dd></div>
+  <div><dt>Everything is drawn in the wrong order</dt><dd>Reversed clear and test, but a standard projection.</dd></div>
+  <div><dt>Far surfaces flicker in stripes</dt><dd>Standard depth with a small near plane. Move the near plane out, or use reversed-Z with a float buffer.</dd></div>
+  <div><dt>No gain from reversed-Z</dt><dd>A 24-bit integer buffer, or OpenGL's −1..1 clip range.</dd></div>
+  <div><dt>Objects stretched on a wide window</dt><dd>The aspect ratio is not updated when the window or the render target changes size.</dd></div>
+  <div><dt>Linear depth from the buffer is wrong</dt><dd>The inverse formula of the other convention. For reversed infinite: <var>D</var> = <var>n</var> / <var>depth</var>.</dd></div>
+  <div><dt>Shadows get acne or peter-panning after the switch</dt><dd>Depth bias still pushes toward larger depth.</dd></div>
+</dl>
 
 <h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
 
 <p>RASM uses reversed-Z everywhere, with a 32-bit float depth buffer, a 0..1 clip range, and by default an infinite far plane. The three settings of <a href="#reversed">section 6</a> are fixed for every pass and every pipeline.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="A CameraProjection goes into toProjectionMatrix, which picks one of three matrices: glm ortho with near and far swapped, glm perspective with near and far swapped, or a hand-written infinite reversed matrix when farZ is 0 or infinity. prepareSceneView writes it into SceneData. vertMain uses it. The depth attachment is D32_SFLOAT, cleared to 0, tested with GREATER_OR_EQUAL. Frustum planes, occlusion culling and the stats overlay all follow reversed-Z.">
+  <svg viewBox="0 0 760 276" role="img" aria-label="A CameraProjection goes into toProjectionMatrix, which picks one of three matrices: glm ortho with near and far swapped, glm perspective with near and far swapped, or a hand-written infinite reversed matrix when farZ is 0 or infinity. prepareSceneView writes it into SceneData. vertMain uses it. The depth attachment is D32_SFLOAT, cleared to 0, tested with GREATER_OR_EQUAL. Frustum planes, occlusion culling and the stats overlay all follow reversed-Z.">
     <rect x="15" y="20" width="170" height="56" rx="6" class="box"/>
     <text x="100" y="44" class="mid mono">CameraProjection</text>
     <text x="100" y="62" class="mid small">fovY in degrees</text>
@@ -419,12 +670,14 @@ depth = (f − D) / (f − n)       reversed: again, swap n and f</code></pre>
     <text x="692" y="236" class="mid small">clear 0</text>
     <text x="692" y="254" class="mid small">≥ passes</text>
 
-    <text x="15" y="288" class="small">Also reversed-Z: getFrustumPlanes (plane 4 is the far plane), occlusion culling (the Hi-Z keeps the minimum,</text>
-    <text x="15" y="304" class="small">the farthest), and the stats overlay, whose panel sits at depth 1 (the near plane).</text>
-    <text x="15" y="320" class="small">prepareSceneView fits the aspect ratio to each target's size; the stored camera does not change.</text>
   </svg>
   <figcaption>glm builds standard 0..1 matrices because <code>GLM_FORCE_DEPTH_ZERO_TO_ONE</code> is set in CMake (<code>B2</code>). Passing far as glm's near and near as glm's far reverses them, as in <a href="#depth-row">section 3</a>.</figcaption>
 </figure>
+
+<ul>
+  <li>Also reversed-Z: <code>getFrustumPlanes</code> (plane 4 is the far plane), occlusion culling (the Hi-Z keeps the minimum, the farthest), and the stats overlay, whose panel sits at depth 1 (the near plane).</li>
+  <li><code>prepareSceneView</code> fits the aspect ratio to each target's size; the stored camera does not change.</li>
+</ul>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
 
@@ -440,7 +693,7 @@ depth = (f − D) / (f − n)       reversed: again, swap n and f</code></pre>
   <tr><td>Depth test</td><td>GREATER</td><td><code>VK_COMPARE_OP_GREATER_OR_EQUAL</code>, depth test and write on, in <code>createGraphicsPipeline</code>, for every graphics pipeline. Equal depths pass.</td></tr>
   <tr><td>Validation</td><td>—</td><td><code>isValidProjection</code> refuses a perspective <code>nearZ</code> that is not finite and &gt; 0, a finite <code>farZ</code> not &gt; <code>nearZ</code>, and an orthographic camera without finite <code>nearZ</code> &lt; <code>farZ</code>. NaN fails every check. <code>createCamera</code> then returns an invalid handle; <code>setCameraProjection</code> keeps the old projection.</td></tr>
   <tr><td>Aspect ratio</td><td>update on resize</td><td><code>updateCameraAspectRatio</code> runs after the swapchain is (re)created. <code>Engine::prepareSceneView</code> also fits a copy to each scene view's target size with <code>getProjectionMatrix(camera, aspect)</code>. An orthographic camera keeps its center and width; its height becomes width / aspect.</td></tr>
-  <tr><td>Depth bias, depth clamp</td><td>—</td><td>Neither is used (no shadow maps yet).</td></tr>
+  <tr><td>Depth bias, depth clamp</td><td>—</td><td>Neither is used. The shadow pass biases in the shader instead (<a href="shadow-mapping.html#in-rasm">Shadow mapping</a>).</td></tr>
 </table>
 </div>
 

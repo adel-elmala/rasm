@@ -19,6 +19,10 @@
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+    <marker id="ah-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head light"/></marker>
   </defs>
 </svg>
 
@@ -53,7 +57,7 @@
   <a class="card" href="gpu-scene.html"><span class="num">Stop 3</span><b>The GPU scene tables</b><span>The tables the GPU draws from, and how an entity gets into them.</span></a>
 </div>
 
-<h2><span class="n">1</span>The layers</h2>
+<h2 id="layers"><span class="n">1</span>The layers</h2>
 
 <p>Each layer only talks to the one under it. The arrows show what crosses each boundary: handles at the top, <code>rhi::</code> pointers in the middle, native Vulkan calls at the bottom.</p>
 
@@ -127,7 +131,59 @@
 
 <p>Today <code>Engine</code> does many jobs: window, input, assets, scene, frame loop and renderer (<b>D3</b>). The work is split over many <code>.cpp</code> files, but they are all <code>Engine</code> methods. The next section shows which folder holds which part.</p>
 
-<h2><span class="n">2</span>The source folders</h2>
+<h2 id="folders"><span class="n">2</span>The source folders</h2>
+
+<p>The map shows the four groups of folders. The table under it lists the main files of each.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 346" role="img" aria-label="A map of the repository. Public: include/rasm and include/rasm/render, the headers applications include. Private: the src folders core, platform, assets, scene, renderer, rhi and rhi/vulkan. Shaders: shaders/lib and shaders/passes, compiled at run time. Programs: examples and tests. The programs include the public headers; the tests also have src on their include path.">
+    <rect x="20" y="14" width="330" height="92" rx="8" class="zone"/>
+    <text x="36" y="36" class="title">public · what applications include</text>
+    <rect x="36" y="46" width="150" height="22" rx="4" class="cpu"/><text x="44" y="62" class="mono">include/rasm/</text>
+    <text x="194" y="61" class="small">Engine, handles, types</text>
+    <rect x="36" y="74" width="150" height="22" rx="4" class="cpu"/><text x="44" y="90" class="mono">include/rasm/render/</text>
+    <text x="194" y="89" class="small">the low-level API</text>
+
+    <rect x="20" y="116" width="330" height="216" rx="8" class="zone"/>
+    <text x="36" y="138" class="title">private · src/</text>
+    <rect x="36" y="148" width="120" height="22" rx="4" class="box"/><text x="44" y="164" class="mono">src/core/</text>
+    <text x="164" y="163" class="small">handle manager, file reading</text>
+    <rect x="36" y="174" width="120" height="22" rx="4" class="box"/><text x="44" y="190" class="mono">src/platform/</text>
+    <text x="164" y="189" class="small">SDL3 window and input, paths</text>
+    <rect x="36" y="200" width="120" height="22" rx="4" class="box"/><text x="44" y="216" class="mono">src/assets/</text>
+    <text x="164" y="215" class="small">mesh, texture, material loading</text>
+    <rect x="36" y="226" width="120" height="22" rx="4" class="box"/><text x="44" y="242" class="mono">src/scene/</text>
+    <text x="164" y="241" class="small">entities, cameras, lights</text>
+    <rect x="36" y="252" width="120" height="22" rx="4" class="box"/><text x="44" y="268" class="mono">src/renderer/</text>
+    <text x="164" y="267" class="small">GPU scene tables, passes, graph</text>
+    <rect x="36" y="278" width="120" height="22" rx="4" class="box"/><text x="44" y="294" class="mono">src/rhi/</text>
+    <text x="164" y="293" class="small">RenderContext, rhi::Device</text>
+    <rect x="36" y="304" width="120" height="22" rx="4" class="box"/><text x="44" y="320" class="mono">src/rhi/vulkan/</text>
+    <text x="164" y="319" class="small">the Vulkan backend</text>
+
+    <rect x="410" y="14" width="330" height="92" rx="8" class="zone"/>
+    <text x="426" y="36" class="title">shaders · compiled at run time</text>
+    <rect x="426" y="46" width="130" height="22" rx="4" class="shader"/><text x="434" y="62" class="mono">shaders/lib/</text>
+    <text x="564" y="61" class="small">Slang modules</text>
+    <rect x="426" y="74" width="130" height="22" rx="4" class="shader"/><text x="434" y="90" class="mono">shaders/passes/</text>
+    <text x="564" y="89" class="small">pass entry points</text>
+
+    <rect x="410" y="116" width="330" height="92" rx="8" class="zone"/>
+    <text x="426" y="138" class="title">programs that use the library</text>
+    <rect x="426" y="148" width="130" height="22" rx="4" class="gpu"/><text x="434" y="164" class="mono">examples/</text>
+    <text x="564" y="163" class="small">one program per feature</text>
+    <rect x="426" y="176" width="130" height="22" rx="4" class="gpu"/><text x="434" y="192" class="mono">tests/</text>
+    <text x="564" y="191" class="small">rasm_tests: CPU code, no GPU</text>
+
+    <path d="M410,150 H380 V60 H353" class="arrow" marker-end="url(#ah)"/>
+    <path d="M410,187 H380 V240 H353" class="arrow dashed" marker-end="url(#ah)"/>
+    <line x1="426" y1="240" x2="462" y2="240" class="arrow" marker-end="url(#ah)"/>
+    <text x="472" y="244" class="small">includes</text>
+    <line x1="426" y1="264" x2="462" y2="264" class="arrow dashed" marker-end="url(#ah)"/>
+    <text x="472" y="268" class="small">the tests only: src/ is on their include path too</text>
+  </svg>
+  <figcaption>Applications, the examples among them, see only the public group. Section 3 shows how the public headers hide the private ones.</figcaption>
+</figure>
 
 <div class="table-wrap">
 <table>
@@ -149,7 +205,7 @@
 
 <p><code>src/thirdparty_impl.cpp</code> is the only file that defines the <code>*_IMPLEMENTATION</code> macros of the single-header libraries.</p>
 
-<h2><span class="n">3</span>Public and private headers</h2>
+<h2 id="headers"><span class="n">3</span>Public and private headers</h2>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 252" role="img" aria-label="The application includes only the public headers. Public headers forward-declare private types and hold them through unique_ptr; the private files define them.">
@@ -196,7 +252,7 @@
   <p><code>rasm_tests</code> links <code>rasm::rasm</code> like an application, but it also has <code>src/</code> on its include path, to test private classes against a fake <code>rhi::Device</code>.</p>
 </div>
 
-<h2><span class="n">4</span>Handles and the two kinds of owner</h2>
+<h2 id="owners"><span class="n">4</span>Handles and the two kinds of owner</h2>
 
 <p>The application never holds a pointer. It holds a handle: <code>Handle</code>, an <code>index</code> and a <code>generation</code>. A default handle has <code>generation == 0</code> and is invalid (<code>isValid</code>). Its tag makes each handle its own C++ type, so a <code>MeshHandle</code> cannot go where a <code>TextureHandle</code> is expected. Why handles, and what the generation is for, is in <a href="generational-handles.html">Generational handles</a>. This section shows who owns what in RASM.</p>
 
@@ -256,14 +312,26 @@
   <figcaption><code>RenderContext</code> is a friend of <code>Engine</code>, and takes its handles from the same <code>HandleManager</code>. The map values are typed as <code>rhi::</code> pointers; the objects behind them are the backend's derived structs (see <a href="graphics-apis-rhi.html#in-rasm">Graphics APIs and the RHI</a>).</figcaption>
 </figure>
 
+<p>The two owners create an object in a different order:</p>
+
 <div class="split">
   <div>
     <h4>CPU object: <code>createEntity</code></h4>
-    <p>1. <code>getNextEntityHandle</code> gives <code>{3, 1}</code>.<br>2. <code>index &gt;= MAX_ENTITIES</code>? Then warn and return an invalid handle.<br>3. <code>registry.entities.resize(4)</code>, then <code>entities[3]</code> = the new <code>Entity</code>.<br>4. With a mesh: <code>queueInstanceRows</code>, so the GPU scene gives it rows later.</p>
+    <ol class="steps">
+      <li><b>Take a handle.</b> <code>getNextEntityHandle</code> gives <code>{3, 1}</code>.</li>
+      <li><b>Check the limit.</b> <code>index &gt;= MAX_ENTITIES</code>? Then warn and return an invalid handle.</li>
+      <li><b>Store the object.</b> <code>registry.entities.resize(4)</code>, then <code>entities[3]</code> = the new <code>Entity</code>.</li>
+      <li><b>Queue its rows.</b> With a mesh: <code>queueInstanceRows</code>, so the GPU scene gives it rows later.</li>
+    </ol>
   </div>
   <div>
     <h4>GPU object: <code>createBuffer</code></h4>
-    <p>1. <code>device-&gt;createBuffer(desc)</code> returns an <code>rhi::Buffer</code> pointer, or null on failure (then an invalid handle).<br>2. <code>getNextBufferHandle</code> gives <code>{5, 1}</code>.<br>3. <code>buffers[{5, 1}]</code> = that pointer.<br>4. Every later call looks the handle up, and logs an error if it is not found.</p>
+    <ol class="steps">
+      <li><b>Make the object first.</b> <code>device-&gt;createBuffer(desc)</code> returns an <code>rhi::Buffer</code> pointer, or null on failure (then an invalid handle).</li>
+      <li><b>Take a handle.</b> <code>getNextBufferHandle</code> gives <code>{5, 1}</code>.</li>
+      <li><b>Store the pointer.</b> <code>buffers[{5, 1}]</code> = that pointer.</li>
+      <li><b>Look it up later.</b> Every later call looks the handle up, and logs an error if it is not found.</li>
+    </ol>
   </div>
 </div>
 
@@ -288,12 +356,12 @@
   <p><b>B13</b>: a handle index is taken before validation, so a failed create still uses up an index.</p>
 </div>
 
-<h2><span class="n">5</span>Descriptors and creation dedup</h2>
+<h2 id="dedup"><span class="n">5</span>Descriptors and creation dedup</h2>
 
 <p>Each GPU resource has its own creation descriptor in <code>rasm/render/resource.h</code>: <code>BufferDesc</code>, <code>TextureDesc</code>, <code>ShaderDesc</code>, <code>PipelineDesc</code>, <code>RenderTargetDesc</code>, <code>BindlessDescriptorSetLayoutDesc</code>, <code>DescriptorPoolDesc</code>. Each has a <code>name</code>, default values for every field, and a defaulted <code>operator==</code>. You fill them with designated initializers.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 236" role="img" aria-label="createShader looks the descriptor up in a cache: an equal descriptor returns the cached handle, a new one creates the object and stores it. createBuffer always creates a new object.">
+  <svg viewBox="0 0 760 200" role="img" aria-label="createShader looks the descriptor up in a cache: an equal descriptor returns the cached handle, a new one creates the object and stores it. createBuffer always creates a new object.">
     <rect x="20" y="40" width="150" height="50" rx="6" class="cpu"/>
     <text x="95" y="62" class="mid mono">createShader(desc)</text>
     <text x="95" y="80" class="mid small">also pipeline, layout</text>
@@ -302,9 +370,9 @@
     <text x="275" y="62" class="mid">look up desc</text>
     <text x="275" y="80" class="mid mono">shaderDescCache</text>
 
-    <line x1="350" y1="55" x2="408" y2="38" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="350" y1="55" x2="408" y2="38" class="arrow ok" marker-end="url(#ah-ok)"/>
     <text x="372" y="34" class="mid small">equal</text>
-    <rect x="410" y="16" width="170" height="40" rx="6" class="cpu"/>
+    <rect x="410" y="16" width="170" height="40" rx="6" class="ok"/>
     <text x="495" y="41" class="mid">return cached handle</text>
 
     <line x1="350" y1="75" x2="408" y2="92" class="arrow cpu" marker-end="url(#ah-cpu)"/>
@@ -324,10 +392,36 @@
     <line x1="390" y1="170" x2="408" y2="170" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <rect x="410" y="150" width="170" height="40" rx="6" class="cpu"/>
     <text x="495" y="175" class="mid">always a new handle</text>
-    <text x="20" y="220" class="small">Buffers, textures, descriptor pools and descriptor sets have no cache: they are mutable, so two equal descs must stay two objects (B1).</text>
   </svg>
-  <figcaption>The cache key is the whole descriptor. Equality is the defaulted <code>operator==</code>, so it covers every field, including the name and the SPIR-V bytes.</figcaption>
+  <figcaption>The cache key is the whole descriptor. Equality is the defaulted <code>operator==</code>, so it covers every field, including the name and the SPIR-V bytes. Buffers, textures, descriptor pools and descriptor sets have no cache: they are mutable, so two equal descs must stay two objects (<b>B1</b>).</figcaption>
 </figure>
+
+<div class="split">
+  <div>
+    <svg viewBox="0 0 320 112" role="img" aria-label="Two createShader calls with equal descriptors lead to one shader object. Both calls get the same handle.">
+      <rect x="10" y="12" width="150" height="26" rx="4" class="cpu"/><text x="85" y="30" class="mid mono">createShader(desc)</text>
+      <rect x="10" y="62" width="150" height="26" rx="4" class="cpu"/><text x="85" y="80" class="mid mono">createShader(desc)</text>
+      <line x1="160" y1="27" x2="206" y2="44" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <line x1="160" y1="73" x2="206" y2="56" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <rect x="210" y="32" width="100" height="36" rx="4" class="mem"/><text x="260" y="55" class="mid">one shader</text>
+      <text x="260" y="88" class="mid small t-ok">both get {4, 1}</text>
+    </svg>
+    <h4>The same shader descriptor, twice</h4>
+    <p>One object. The second call returns the cached handle.</p>
+  </div>
+  <div>
+    <svg viewBox="0 0 320 112" role="img" aria-label="Two createBuffer calls with equal descriptors make two buffers, each with its own handle.">
+      <rect x="10" y="12" width="150" height="26" rx="4" class="cpu"/><text x="85" y="30" class="mid mono">createBuffer(desc)</text>
+      <rect x="10" y="62" width="150" height="26" rx="4" class="cpu"/><text x="85" y="80" class="mid mono">createBuffer(desc)</text>
+      <line x1="160" y1="25" x2="206" y2="25" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <line x1="160" y1="75" x2="206" y2="75" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <rect x="210" y="8"  width="100" height="34" rx="4" class="mem"/><text x="260" y="30" class="mid">buffer {5, 1}</text>
+      <rect x="210" y="58" width="100" height="34" rx="4" class="mem"/><text x="260" y="80" class="mid">buffer {6, 1}</text>
+    </svg>
+    <h4>The same buffer descriptor, twice</h4>
+    <p>Two objects, two handles. Each caller writes its own data.</p>
+  </div>
+</div>
 
 <div class="table-wrap">
 <table>
@@ -343,7 +437,7 @@
 
 <p>The hashes live in <code>src/rhi/resource.cpp</code>. They fold the fields with <code>hashCombine</code> from <code>rasm/handle.h</code>, which depends on the order of the fields. <code>HandleHash</code> uses it too.</p>
 
-<h2><span class="n">6</span>How the user objects relate</h2>
+<h2 id="objects"><span class="n">6</span>How the user objects relate</h2>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 290" role="img" aria-label="A scene lists entities, cameras and lights. An entity points to a mesh, a material and has a transform. A mesh has sub-meshes; each sub-mesh has a geometry range in the pool, a node transform and an optional material. A material points to textures.">
@@ -417,24 +511,125 @@
 
 <h2 id="examples"><span class="n">7</span>Follow the examples</h2>
 
-<p>Each example puts a few parts of the engine to work. Read its <code>main.cpp</code> next to the pages in the last column.</p>
+<p>Each example puts a few parts of the engine to work. The pictures show what each one draws. The table lists the engine parts it uses and the pages to read next to its <code>main.cpp</code>.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three bunnies in a row on the ground, with three lights above them.">
+      <circle cx="40" cy="22" r="7" class="light"/><circle cx="120" cy="14" r="7" class="light"/><circle cx="200" cy="22" r="7" class="light"/>
+      <ellipse cx="46" cy="92" rx="18" ry="14" class="solid"/><circle cx="60" cy="74" r="8" class="solid"/><ellipse cx="57" cy="60" rx="3" ry="9" class="solid"/><ellipse cx="65" cy="61" rx="3" ry="9" class="solid"/>
+      <ellipse cx="116" cy="92" rx="18" ry="14" class="solid"/><circle cx="130" cy="74" r="8" class="solid"/><ellipse cx="127" cy="60" rx="3" ry="9" class="solid"/><ellipse cx="135" cy="61" rx="3" ry="9" class="solid"/>
+      <ellipse cx="186" cy="92" rx="18" ry="14" class="solid"/><circle cx="200" cy="74" r="8" class="solid"/><ellipse cx="197" cy="60" rx="3" ry="9" class="solid"/><ellipse cx="205" cy="61" rx="3" ry="9" class="solid"/>
+      <line x1="14" y1="108" x2="226" y2="108" class="surface"/>
+    </svg>
+    <h4><code>00_hello_scene</code></h4>
+    <p>Three bunnies from one OBJ mesh and one texture, three lights.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An image in which a square moves to the right and leaves a trail of fainter and fainter copies behind it.">
+      <rect x="20" y="16" width="200" height="98" class="paper"/>
+      <rect x="40"  y="52" width="26" height="26" class="solid o-25"/>
+      <rect x="78"  y="52" width="26" height="26" class="solid o-50"/>
+      <rect x="116" y="52" width="26" height="26" class="solid o-75"/>
+      <rect x="154" y="52" width="26" height="26" class="solid"/>
+      <line x1="44" y1="96" x2="186" y2="96" class="arrow hot" marker-end="url(#ah-hot)"/>
+    </svg>
+    <h4><code>01_render_graph</code></h4>
+    <p>The scene into a render target, a fading trail from last frame's image, a pass with two color outputs, then the swapchain. Two of the targets share memory.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three different models next to each other on the ground: a round one, a faceted one and a tall one.">
+      <circle cx="52" cy="82" r="24" class="solid"/><ellipse cx="44" cy="72" rx="8" ry="5" class="lit"/>
+      <polygon points="120,48 146,70 136,106 104,106 94,70" class="solid"/><path d="M94,70H146M120,48V106" class="grid"/>
+      <rect x="176" y="50" width="30" height="56" rx="8" class="solid"/><rect x="184" y="38" width="14" height="14" rx="3" class="solid"/>
+      <line x1="14" y1="108" x2="226" y2="108" class="surface"/>
+    </svg>
+    <h4><code>02_gltf</code></h4>
+    <p>Three glTF models with their PBR materials.</p>
+  </div>
+</div>
+
+<div class="vgrid two">
+  <div class="vcard">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A large grid of small cubes. A few of them are turned, and one is highlighted.">
+      <path d="M32,16h12v12h-12zM56,16h12v12h-12zM80,16h12v12h-12zM104,16h12v12h-12zM128,16h12v12h-12zM152,16h12v12h-12zM176,16h12v12h-12zM200,16h12v12h-12zM224,16h12v12h-12zM248,16h12v12h-12zM272,16h12v12h-12zM32,40h12v12h-12zM56,40h12v12h-12zM104,40h12v12h-12zM128,40h12v12h-12zM152,40h12v12h-12zM176,40h12v12h-12zM200,40h12v12h-12zM224,40h12v12h-12zM248,40h12v12h-12zM272,40h12v12h-12zM32,64h12v12h-12zM56,64h12v12h-12zM80,64h12v12h-12zM104,64h12v12h-12zM128,64h12v12h-12zM152,64h12v12h-12zM200,64h12v12h-12zM224,64h12v12h-12zM248,64h12v12h-12zM272,64h12v12h-12zM32,88h12v12h-12zM56,88h12v12h-12zM80,88h12v12h-12zM104,88h12v12h-12zM152,88h12v12h-12zM176,88h12v12h-12zM200,88h12v12h-12zM224,88h12v12h-12zM272,88h12v12h-12zM32,112h12v12h-12zM56,112h12v12h-12zM80,112h12v12h-12zM104,112h12v12h-12zM128,112h12v12h-12zM152,112h12v12h-12zM176,112h12v12h-12zM200,112h12v12h-12zM224,112h12v12h-12zM248,112h12v12h-12zM272,112h12v12h-12z" class="solid"/>
+      <polygon points="86,37 95,46 86,55 77,46" class="accent"/>
+      <polygon points="182,61 191,70 182,79 173,70" class="accent"/>
+      <polygon points="254,85 263,94 254,103 245,94" class="accent"/>
+      <rect x="128" y="88" width="12" height="12" class="light"/>
+    </svg>
+    <h4><code>03_instances</code></h4>
+    <p>10 000 cubes. A few spin, new ones appear, one material pulses. Culling runs on the compute queue.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A compute pass writes particle positions into a buffer. A draw reads the buffer and draws the particles as moving points.">
+      <rect x="14" y="14" width="96" height="30" rx="15" class="shader"/><text x="62" y="34" class="mid small">compute pass</text>
+      <line x1="62" y1="44" x2="62" y2="88" class="arrow shader flowing" marker-end="url(#ah-shader)"/>
+      <rect x="14" y="92" width="130" height="30" class="mem"/>
+      <path d="M40,92V122M66,92V122M92,92V122M118,92V122" class="grid"/>
+      <text x="79" y="136" class="mid small">4096 particles</text>
+      <line x1="144" y1="107" x2="178" y2="107" class="arrow mem flowing" marker-end="url(#ah-mem)"/>
+      <rect x="182" y="14" width="124" height="108" class="paper"/>
+      <circle cx="204" cy="40" r="3" class="accent"/><circle cx="232" cy="30" r="3" class="accent"/><circle cx="268" cy="44" r="3" class="accent"/><circle cx="290" cy="30" r="3" class="accent"/>
+      <circle cx="216" cy="70" r="3" class="accent"/><circle cx="250" cy="62" r="3" class="accent"/><circle cx="284" cy="76" r="3" class="accent"/><circle cx="200" cy="100" r="3" class="accent"/>
+      <circle cx="236" cy="96" r="3" class="accent"/><circle cx="266" cy="106" r="3" class="accent"/><circle cx="294" cy="100" r="3" class="accent"/>
+      <path d="M222,74l10,8M256,58l10,-8M240,100l12,2" class="arrow hot"/>
+    </svg>
+    <h4><code>04_compute</code></h4>
+    <p>A compute pass moves 4096 particles in a buffer that a draw then reads.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A city skyline at night: buildings of different heights with lit windows, and small cars on the road in front.">
+      <rect x="14"  y="60" width="34" height="58" class="solid"/>
+      <rect x="52"  y="34" width="30" height="84" class="solid"/>
+      <rect x="86"  y="72" width="40" height="46" class="solid"/>
+      <rect x="130" y="20" width="28" height="98" class="solid"/>
+      <rect x="162" y="52" width="38" height="66" class="solid"/>
+      <rect x="204" y="80" width="30" height="38" class="solid"/>
+      <rect x="238" y="42" width="32" height="76" class="solid"/>
+      <rect x="274" y="66" width="32" height="52" class="solid"/>
+      <path d="M20,68h4v4h-4zM29,68h4v4h-4zM38,68h4v4h-4zM20,79h4v4h-4zM29,79h4v4h-4zM38,79h4v4h-4zM20,101h4v4h-4zM29,101h4v4h-4zM38,101h4v4h-4zM58,42h4v4h-4zM67,42h4v4h-4zM58,53h4v4h-4zM67,75h4v4h-4zM58,86h4v4h-4zM101,80h4v4h-4zM101,91h4v4h-4zM110,91h4v4h-4zM92,102h4v4h-4zM101,102h4v4h-4zM145,28h4v4h-4zM136,39h4v4h-4zM145,61h4v4h-4zM136,72h4v4h-4zM136,83h4v4h-4zM145,83h4v4h-4zM136,94h4v4h-4zM136,105h4v4h-4zM145,105h4v4h-4zM177,60h4v4h-4zM186,60h4v4h-4zM168,71h4v4h-4zM177,71h4v4h-4zM168,82h4v4h-4zM177,82h4v4h-4zM186,82h4v4h-4zM177,93h4v4h-4zM186,93h4v4h-4zM177,104h4v4h-4zM219,88h4v4h-4zM210,99h4v4h-4zM219,99h4v4h-4zM244,61h4v4h-4zM253,61h4v4h-4zM244,72h4v4h-4zM253,72h4v4h-4zM244,83h4v4h-4zM280,74h4v4h-4zM289,74h4v4h-4zM280,96h4v4h-4z" class="light"/>
+      <line x1="10" y1="120" x2="310" y2="120" class="surface"/>
+      <rect x="40" y="126" width="14" height="6" rx="2" class="accent"/><rect x="118" y="126" width="14" height="6" rx="2" class="accent"/><rect x="176" y="126" width="14" height="6" rx="2" class="accent"/><rect x="262" y="126" width="14" height="6" rx="2" class="accent"/>
+    </svg>
+    <h4><code>05_city</code></h4>
+    <p>A night city of about 146 000 instances. 5000 cars move every frame.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A light on the upper left shines on a bunny, two pillars and a turned cube. Each one casts a shadow on the ground to its right.">
+      <circle cx="26" cy="22" r="10" class="light"/>
+      <line x1="38" y1="30" x2="74" y2="58" class="arrow light" marker-end="url(#ah-light)"/>
+      <polygon points="92,116 132,116 150,126 104,126" class="shade"/>
+      <polygon points="152,116 166,116 196,126 176,126" class="shade"/>
+      <polygon points="206,116 220,116 250,126 230,126" class="shade"/>
+      <polygon points="268,116 296,116 312,126 282,126" class="shade"/>
+      <ellipse cx="78" cy="102" rx="18" ry="14" class="solid"/><circle cx="92" cy="84" r="8" class="solid"/><ellipse cx="89" cy="70" rx="3" ry="9" class="solid"/><ellipse cx="97" cy="71" rx="3" ry="9" class="solid"/>
+      <rect x="152" y="46" width="14" height="70" class="solid"/>
+      <rect x="206" y="46" width="14" height="70" class="solid"/>
+      <polygon points="268,74 290,84 280,106 258,96" class="solid"/>
+      <line x1="10" y1="116" x2="310" y2="116" class="surface"/>
+    </svg>
+    <h4><code>06_shadows</code></h4>
+    <p>A bunny, pillars and a spinning cube with a shadow map, then a vignette pass. No barrier in the example.</p>
+  </div>
+</div>
 
 <div class="table-wrap">
 <table>
-  <tr><th>Example</th><th>What it does</th><th>Engine parts it uses</th><th>Read</th></tr>
-  <tr><td><code>00_hello_scene</code></td><td>three bunnies from one OBJ mesh and one texture, three lights</td><td><code>loadMesh</code>, <code>loadTexture</code>, <code>createEntity</code>, <code>render</code></td><td><a href="frame-loop.html">stop 2</a>, <a href="gpu-scene.html">stop 3</a>, <a href="gpu-driven.html">GPU-driven rendering</a></td></tr>
-  <tr><td><code>01_render_graph</code></td><td>the scene into a render target, a fading trail from last frame's image, a pass with two color outputs, then the swapchain; two of the targets share memory</td><td><code>RenderGraph</code>, <code>createRenderTarget</code>, <code>addScenePasses</code>, <code>createPipeline</code></td><td><a href="render-graphs.html">Render graphs</a>, <a href="memory-aliasing.html">Transient memory</a>, <a href="temporal-history.html">History buffers</a>, <a href="multiple-render-targets.html">Multiple render targets</a></td></tr>
-  <tr><td><code>02_gltf</code></td><td>three glTF models with their PBR materials</td><td><code>loadGLTF</code>, sub-meshes, material rows</td><td><a href="asset-streaming.html">Streaming assets</a>, <a href="pbr.html">PBR</a>, <a href="bindless.html">Bindless</a></td></tr>
-  <tr><td><code>03_instances</code></td><td>10 000 cubes; a few spin, new ones appear, one material pulses; culling runs on the compute queue</td><td><code>createMesh</code>, <code>updateTransform</code>, <code>updateMaterial</code>, <code>EngineConfig::asyncCompute</code></td><td><a href="gpu-scene.html">stop 3</a>, <a href="gpu-memory.html">GPU memory and uploads</a>, <a href="async-compute.html">Async compute</a></td></tr>
-  <tr><td><code>04_compute</code></td><td>a compute pass moves 4096 particles in a buffer that a draw then reads</td><td><code>addComputePass</code>, <code>createComputePipeline</code></td><td><a href="device-addresses.html">Buffer device addresses</a>, <a href="gpu-sync.html">GPU synchronization</a></td></tr>
-  <tr><td><code>05_city</code></td><td>a night city of about 146 000 instances; 5000 cars move every frame</td><td>culling, Hi-Z, LODs, <code>fillTexture</code></td><td><a href="frustum-culling.html">Frustum</a> and <a href="occlusion-culling.html">occlusion culling</a>, <a href="lod-selection.html">LOD selection</a></td></tr>
-  <tr><td><code>06_shadows</code></td><td>a bunny, pillars and a spinning cube with a shadow map, then a vignette pass; no barrier in the example</td><td>depth-only render target, <code>addScenePasses</code> with <code>SceneShadow</code>, <code>readDepth</code></td><td><a href="shadow-mapping.html">Shadow mapping</a>, <a href="render-graphs.html">Render graphs</a></td></tr>
+  <tr><th>Example</th><th>Engine parts it uses</th><th>Read</th></tr>
+  <tr><td><code>00_hello_scene</code></td><td><code>loadMesh</code>, <code>loadTexture</code>, <code>createEntity</code>, <code>render</code></td><td><a href="frame-loop.html">stop 2</a>, <a href="gpu-scene.html">stop 3</a>, <a href="gpu-driven.html">GPU-driven rendering</a></td></tr>
+  <tr><td><code>01_render_graph</code></td><td><code>RenderGraph</code>, <code>createRenderTarget</code>, <code>addScenePasses</code>, <code>createPipeline</code></td><td><a href="render-graphs.html">Render graphs</a>, <a href="memory-aliasing.html">Transient memory</a>, <a href="temporal-history.html">History buffers</a>, <a href="multiple-render-targets.html">Multiple render targets</a></td></tr>
+  <tr><td><code>02_gltf</code></td><td><code>loadGLTF</code>, sub-meshes, material rows</td><td><a href="asset-streaming.html">Streaming assets</a>, <a href="pbr.html">PBR</a>, <a href="bindless.html">Bindless</a></td></tr>
+  <tr><td><code>03_instances</code></td><td><code>createMesh</code>, <code>updateTransform</code>, <code>updateMaterial</code>, <code>EngineConfig::asyncCompute</code></td><td><a href="gpu-scene.html">stop 3</a>, <a href="gpu-memory.html">GPU memory and uploads</a>, <a href="async-compute.html">Async compute</a></td></tr>
+  <tr><td><code>04_compute</code></td><td><code>addComputePass</code>, <code>createComputePipeline</code></td><td><a href="device-addresses.html">Buffer device addresses</a>, <a href="gpu-sync.html">GPU synchronization</a></td></tr>
+  <tr><td><code>05_city</code></td><td>culling, Hi-Z, LODs, <code>fillTexture</code></td><td><a href="frustum-culling.html">Frustum</a> and <a href="occlusion-culling.html">occlusion culling</a>, <a href="lod-selection.html">LOD selection</a></td></tr>
+  <tr><td><code>06_shadows</code></td><td>depth-only render target, <code>addScenePasses</code> with <code>SceneShadow</code>, <code>readDepth</code></td><td><a href="shadow-mapping.html">Shadow mapping</a>, <a href="render-graphs.html">Render graphs</a></td></tr>
 </table>
 </div>
 
 <p>Every example sets <code>enableValidation</code>, <code>assetRoot</code> and <code>shaderDir</code>, so it runs from any folder and picks up shader edits at its next start. A new one is added with <code>rasm_add_example</code> in <code>examples/CMakeLists.txt</code>.</p>
 
-<h2><span class="n">8</span>Where it lives in code</h2>
+<h2 id="code"><span class="n">8</span>Where it lives in code</h2>
 
 <div class="table-wrap">
 <table class="code-map">
@@ -452,7 +647,7 @@
 </table>
 </div>
 
-<h2><span class="n">9</span>Rules when you change it</h2>
+<h2 id="rules"><span class="n">9</span>Rules when you change it</h2>
 
 <div class="callout rule">
   <strong>Keep these true</strong>

@@ -19,6 +19,8 @@
     <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
     <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
     <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
   </defs>
 </svg>
 
@@ -41,64 +43,117 @@
   </ul>
 </div>
 
-<h2><span class="n">1</span>How shaders usually find buffers</h2>
+<h2 id="bindings"><span class="n">1</span>How shaders usually find buffers</h2>
 
 <p>In the classic model, a shader declares buffers at fixed <b>binding slots</b>: "set 0, binding 2 is the material buffer". Before a draw, the CPU fills a <b>descriptor</b> for each slot (which buffer, which range) and binds the descriptor set.</p>
 
+<div class="legend">
+  <span><i class="shader"></i>the shader's slots</span>
+  <span><i class="cpu"></i>written by the CPU</span>
+  <span><i class="mem"></i>buffers</span>
+</div>
+
 <figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="Classic binding: the shader declares binding 0, 1 and 2. A descriptor set layout describes the slots. The CPU writes a descriptor set that points each slot at a buffer, and binds the set before the draw.">
-    <rect x="20" y="30" width="200" height="130" rx="6" class="shader"/>
-    <text x="120" y="54" class="mid title">shader</text>
-    <text x="36" y="82" class="mono small">binding 0: camera</text>
-    <text x="36" y="104" class="mono small">binding 1: instances</text>
-    <text x="36" y="126" class="mono small">binding 2: materials</text>
-    <text x="120" y="150" class="mid small">fixed at compile time</text>
+  <svg viewBox="0 0 760 180" role="img" aria-label="Classic binding: the shader declares binding 0, 1 and 2. A descriptor set layout describes the slots. The CPU writes a descriptor set that points each slot at a buffer, and binds the set before the draw.">
+    <rect x="20" y="20" width="200" height="140" rx="6" class="shader"/>
+    <text x="120" y="44" class="mid title">shader</text>
+    <text x="36" y="74" class="mono small">binding 0: camera</text>
+    <text x="36" y="96" class="mono small">binding 1: instances</text>
+    <text x="36" y="118" class="mono small">binding 2: materials</text>
+    <text x="120" y="146" class="mid small">fixed at compile time</text>
 
-    <rect x="280" y="30" width="200" height="130" rx="6" class="cpu"/>
-    <text x="380" y="54" class="mid title">descriptor set</text>
-    <rect x="296" y="66" width="168" height="24" rx="3" class="box"/><text x="380" y="83" class="mid small">slot 0 → buffer A</text>
-    <rect x="296" y="96" width="168" height="24" rx="3" class="box"/><text x="380" y="113" class="mid small">slot 1 → buffer B</text>
-    <rect x="296" y="126" width="168" height="24" rx="3" class="box"/><text x="380" y="143" class="mid small">slot 2 → buffer C</text>
+    <rect x="280" y="20" width="200" height="140" rx="6" class="cpu"/>
+    <text x="380" y="44" class="mid title">descriptor set</text>
+    <rect x="296" y="58" width="168" height="24" rx="3" class="paper"/><text x="380" y="75" class="mid small">slot 0 → buffer A</text>
+    <rect x="296" y="88" width="168" height="24" rx="3" class="paper"/><text x="380" y="105" class="mid small">slot 1 → buffer B</text>
+    <rect x="296" y="118" width="168" height="24" rx="3" class="paper"/><text x="380" y="135" class="mid small">slot 2 → buffer C</text>
 
-    <rect x="560" y="30" width="180" height="36" rx="4" class="mem"/><text x="650" y="53" class="mid">buffer A</text>
-    <rect x="560" y="80" width="180" height="36" rx="4" class="mem"/><text x="650" y="103" class="mid">buffer B</text>
-    <rect x="560" y="130" width="180" height="36" rx="4" class="mem"/><text x="650" y="153" class="mid">buffer C</text>
-    <line x1="220" y1="95" x2="278" y2="95" class="arrow" marker-end="url(#ah)"/>
-    <line x1="464" y1="78" x2="558" y2="50" class="arrow" marker-end="url(#ah)"/>
-    <line x1="464" y1="108" x2="558" y2="98" class="arrow" marker-end="url(#ah)"/>
-    <line x1="464" y1="138" x2="558" y2="148" class="arrow" marker-end="url(#ah)"/>
-
-    <text x="20" y="196" class="small">To use a different buffer, the CPU writes or binds another set. Each pipeline needs a layout that matches the shader's slots.</text>
-    <text x="20" y="214" class="small">The number of slots is limited, and a shader can only reach buffers that were bound before the draw.</text>
-    <text x="20" y="232" class="small">Fine for a few buffers per draw. Awkward when a GPU-driven frame wants one draw to reach every table of the scene.</text>
+    <rect x="560" y="24" width="180" height="36" rx="4" class="mem"/><text x="650" y="47" class="mid">buffer A</text>
+    <rect x="560" y="72" width="180" height="36" rx="4" class="mem"/><text x="650" y="95" class="mid">buffer B</text>
+    <rect x="560" y="120" width="180" height="36" rx="4" class="mem"/><text x="650" y="143" class="mid">buffer C</text>
+    <line x1="220" y1="90" x2="278" y2="90" class="arrow" marker-end="url(#ah)"/>
+    <line x1="464" y1="70" x2="558" y2="44" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="464" y1="100" x2="558" y2="91" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="464" y1="130" x2="558" y2="138" class="arrow cpu" marker-end="url(#ah-cpu)"/>
   </svg>
   <figcaption>The binding model: the CPU decides, before each draw, which buffers the shader can see.</figcaption>
 </figure>
 
-<h2><span class="n">2</span>The idea: a GPU pointer</h2>
+<ol class="flow">
+  <li class="cpu"><b>Write</b><span>one descriptor per slot: which buffer, which range</span></li>
+  <li class="cpu"><b>Bind</b><span>the descriptor set, before the draw</span></li>
+  <li class="gpu"><b>Draw</b><span>with a pipeline whose layout matches the shader's slots</span></li>
+  <li class="shader"><b>Read</b><span>the shader reaches only the buffers that were bound</span></li>
+</ol>
+
+<p>To use a different buffer, the CPU writes or binds another set. Each pipeline needs a layout that matches the shader's slots. The number of slots is limited, and a shader can only reach buffers that were bound before the draw.</p>
+
+<div class="callout">
+  <strong>Where it stops working well</strong>
+  <p>Fine for a few buffers per draw. Awkward when a GPU-driven frame wants one draw to reach every table of the scene.</p>
+</div>
+
+<h2 id="idea"><span class="n">2</span>The idea: a GPU pointer</h2>
 
 <p>The GPU has a virtual address space, just like a CPU process. Every buffer is placed somewhere in it. A <b>device address</b> is the 64-bit number where the buffer starts. A shader that knows the number can read the buffer directly, with no descriptor in between.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 210" role="img" aria-label="The GPU virtual address space as a long strip. Buffer A starts at address 0x1_0000_0000, buffer B at 0x1_0010_0000 and buffer C at 0x1_0020_0000. A pointer is just one of these numbers.">
+  <svg viewBox="0 0 760 180" role="img" aria-label="The GPU virtual address space as a long strip. Buffer A starts at address 0x1_0000_0000, buffer B at 0x1_0010_0000 and buffer C at 0x1_0020_0000. A pointer in a shader holds the number 0x1_0020_0000, so it points at the start of buffer C.">
     <text x="20" y="22" class="title">GPU virtual address space</text>
-    <rect x="20" y="40" width="720" height="50" rx="4" class="box"/>
-    <rect x="80" y="40" width="140" height="50" rx="4" class="mem"/><text x="150" y="70" class="mid">buffer A</text>
-    <rect x="300" y="40" width="100" height="50" rx="4" class="mem"/><text x="350" y="70" class="mid">buffer B</text>
-    <rect x="480" y="40" width="200" height="50" rx="4" class="mem"/><text x="580" y="70" class="mid">buffer C</text>
-    <line x1="80" y1="120" x2="80" y2="94" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="80" y="136" class="mid mono">0x1_0000_0000</text>
-    <line x1="300" y1="120" x2="300" y2="94" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="300" y="136" class="mid mono">0x1_0010_0000</text>
-    <line x1="480" y1="120" x2="480" y2="94" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="480" y="136" class="mid mono">0x1_0020_0000</text>
-    <text x="20" y="174" class="small">A pointer is one of these numbers, stored as a 64-bit integer. The shader can keep it in a variable, in a push constant,</text>
-    <text x="20" y="192" class="small">or inside another buffer. Adding to it moves inside the buffer, exactly like pointer math in C. (Addresses here are made up.)</text>
+    <rect x="20" y="36" width="720" height="50" rx="4" class="box"/>
+    <rect x="80" y="36" width="140" height="50" rx="4" class="mem"/><text x="150" y="66" class="mid">buffer A</text>
+    <rect x="300" y="36" width="100" height="50" rx="4" class="mem"/><text x="350" y="66" class="mid">buffer B</text>
+    <rect x="480" y="36" width="200" height="50" rx="4" class="mem"/><text x="580" y="66" class="mid">buffer C</text>
+    <text x="260" y="65" class="mid small t-faint">free</text>
+    <text x="440" y="65" class="mid small t-faint">free</text>
+    <line x1="80" y1="116" x2="80" y2="90" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="80" y="132" class="mid mono">0x1_0000_0000</text>
+    <line x1="300" y1="116" x2="300" y2="90" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="300" y="132" class="mid mono">0x1_0010_0000</text>
+    <line x1="480" y1="118" x2="480" y2="90" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <rect x="440" y="118" width="220" height="52" rx="6" class="shader"/>
+    <text x="550" y="138" class="mid small">a pointer in a shader</text>
+    <text x="550" y="158" class="mid mono">p = 0x1_0020_0000</text>
   </svg>
-  <figcaption>Descriptors say "the buffer in slot 2". An address says "the bytes at 0x1_0020_0000". The second needs no setup per draw.</figcaption>
+  <figcaption>A pointer is one of these numbers, stored as a 64-bit integer. (Addresses here are made up.)</figcaption>
 </figure>
 
-<h2><span class="n">3</span>Getting an address in Vulkan</h2>
+<div class="split">
+  <div>
+    <svg viewBox="0 0 320 110" role="img" aria-label="The shader names slot 2. The descriptor set says slot 2 is buffer C. Two steps to reach the buffer.">
+      <rect x="6" y="30" width="84" height="50" rx="5" class="shader"/>
+      <text x="48" y="51" class="mid small">shader</text>
+      <text x="48" y="68" class="mid mono">slot 2</text>
+      <line x1="90" y1="55" x2="118" y2="55" class="arrow" marker-end="url(#ah)"/>
+      <rect x="120" y="14" width="106" height="82" rx="5" class="cpu"/>
+      <text x="173" y="32" class="mid small">descriptor set</text>
+      <rect x="128" y="40" width="90" height="20" rx="3" class="paper"/><text x="173" y="54" class="mid small">2 → buffer C</text>
+      <rect x="128" y="66" width="90" height="20" rx="3" class="paper"/><text x="173" y="80" class="mid small t-faint">…</text>
+      <line x1="226" y1="55" x2="252" y2="55" class="arrow" marker-end="url(#ah)"/>
+      <rect x="254" y="30" width="60" height="50" rx="5" class="mem"/>
+      <text x="284" y="60" class="mid">C</text>
+    </svg>
+    <h4>A descriptor says</h4>
+    <p>"The buffer in slot 2." The CPU must fill the slot before the draw.</p>
+  </div>
+  <div>
+    <svg viewBox="0 0 320 110" role="img" aria-label="The shader holds the number 0x1_0020_0000 and reads buffer C directly.">
+      <rect x="6" y="30" width="130" height="50" rx="5" class="shader"/>
+      <text x="71" y="51" class="mid small">shader</text>
+      <text x="71" y="68" class="mid mono">0x1_0020_0000</text>
+      <line x1="136" y1="55" x2="252" y2="55" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="194" y="46" class="mid small t-hot">reads directly</text>
+      <rect x="254" y="30" width="60" height="50" rx="5" class="mem"/>
+      <text x="284" y="60" class="mid">C</text>
+    </svg>
+    <h4>An address says</h4>
+    <p>"The bytes at 0x1_0020_0000." It needs no setup per draw.</p>
+  </div>
+</div>
+
+<p>The shader can keep the number in a variable, in a push constant, or inside another buffer. Adding to it moves inside the buffer, exactly like pointer math in C.</p>
+
+<h2 id="vulkan"><span class="n">3</span>Getting an address in Vulkan</h2>
 
 <p>The feature is <b>buffer device address</b>. It started as the extension VK_KHR_buffer_device_address and is core since Vulkan 1.2. Four steps:</p>
 
@@ -120,7 +175,7 @@
 </table>
 </div>
 
-<h2><span class="n">4</span>Pointers in a shader</h2>
+<h2 id="shader"><span class="n">4</span>Pointers in a shader</h2>
 
 <p>Here is a compute shader in Slang that moves particles. The push constant holds a pointer to the particle array and a count. There are no buffer bindings at all.</p>
 
@@ -155,33 +210,45 @@ void update(uint index)
 <p>A table of rows that are 108 bytes each, in a buffer at address 0x1_0020_0000. The shader wants field <var>m</var> of row 5. The field starts 64 bytes into the row.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 210" role="img" aria-label="Rows of 108 bytes start at 0x1_0020_0000. Row 5 starts 540 bytes later, at 0x1_0020_021C. Its field at offset 64 is at 0x1_0020_025C.">
-    <rect x="20" y="40" width="720" height="44" rx="4" class="box"/>
-    <rect x="20"  y="40" width="100" height="44" rx="3" class="mem"/><text x="70"  y="67" class="mid small">row 0</text>
-    <rect x="120" y="40" width="100" height="44" rx="3" class="mem"/><text x="170" y="67" class="mid small">row 1</text>
-    <rect x="220" y="40" width="100" height="44" rx="3" class="mem"/><text x="270" y="67" class="mid small">row 2</text>
-    <rect x="320" y="40" width="100" height="44" rx="3" class="mem"/><text x="370" y="67" class="mid small">row 3</text>
-    <rect x="420" y="40" width="100" height="44" rx="3" class="mem"/><text x="470" y="67" class="mid small">row 4</text>
-    <rect x="520" y="40" width="100" height="44" rx="3" class="hot"/><text x="570" y="67" class="mid small">row 5</text>
-    <rect x="620" y="40" width="100" height="44" rx="3" class="mem"/><text x="670" y="67" class="mid small">row 6</text>
-    <line x1="579" y1="30" x2="579" y2="40" class="hot"/>
-    <text x="579" y="24" class="mid small t-hot">field m</text>
-    <line x1="20" y1="110" x2="20" y2="88" class="arrow" marker-end="url(#ah)"/>
-    <text x="24" y="124" class="mono small">base = 0x1_0020_0000</text>
-    <line x1="520" y1="110" x2="520" y2="88" class="arrow hot" marker-end="url(#ah-hot)"/>
-    <text x="516" y="124" class="end mono small t-hot">row 5 = base + 540</text>
-    <text x="20" y="160" class="mono">row 5:   base + 5 × 108      = base + 540 = 0x1_0020_021C</text>
-    <text x="20" y="184" class="mono">field m: base + 540 + 64     = base + 604 = 0x1_0020_025C</text>
+  <svg viewBox="0 0 760 236" role="img" aria-label="Rows of 108 bytes start at 0x1_0020_0000. Row 5 starts 540 bytes later, at 0x1_0020_021C. A zoom into row 5 shows field m at offset 64, so it is at base plus 604, 0x1_0020_025C.">
+    <text x="270" y="22" class="mid small">5 rows × 108 bytes = 540 bytes</text>
+    <line x1="22" y1="32" x2="518" y2="32" class="arrow" marker-start="url(#ah)" marker-end="url(#ah)"/>
+    <rect x="20"  y="44" width="100" height="36" class="mem"/><text x="70"  y="67" class="mid small">row 0</text>
+    <rect x="120" y="44" width="100" height="36" class="mem"/><text x="170" y="67" class="mid small">row 1</text>
+    <rect x="220" y="44" width="100" height="36" class="mem"/><text x="270" y="67" class="mid small">row 2</text>
+    <rect x="320" y="44" width="100" height="36" class="mem"/><text x="370" y="67" class="mid small">row 3</text>
+    <rect x="420" y="44" width="100" height="36" class="mem"/><text x="470" y="67" class="mid small">row 4</text>
+    <rect x="520" y="44" width="100" height="36" class="accent"/><text x="570" y="67" class="mid small">row 5</text>
+    <rect x="620" y="44" width="100" height="36" class="mem"/><text x="670" y="67" class="mid small">row 6</text>
+    <line x1="20" y1="108" x2="20" y2="84" class="arrow" marker-end="url(#ah)"/>
+    <text x="28" y="110" class="mono small">base = 0x1_0020_0000</text>
+
+    <line x1="520" y1="80" x2="120" y2="146" class="dashed"/>
+    <line x1="620" y1="80" x2="660" y2="146" class="dashed"/>
+    <rect x="120" y="146" width="540" height="40" class="accent"/>
+    <rect x="440" y="146" width="60" height="40" class="shader"/>
+    <text x="280" y="171" class="mid small">row 5, zoomed: 108 bytes</text>
+    <text x="470" y="171" class="mid title">m</text>
+    <text x="112" y="171" class="end mono small">base + 540</text>
+    <text x="470" y="138" class="mid mono small t-hot">base + 604</text>
+    <text x="120" y="202" class="mid small">0</text>
+    <text x="440" y="202" class="mid small">64</text>
+    <text x="660" y="202" class="mid small">108</text>
+    <line x1="122" y1="214" x2="438" y2="214" class="arrow" marker-start="url(#ah)" marker-end="url(#ah)"/>
+    <text x="280" y="230" class="mid small">64 bytes into the row</text>
   </svg>
   <figcaption>All the shader does is multiply and add. It does not know where the table ends, and it does not check that row 5 exists.</figcaption>
 </figure>
 
-<h2><span class="n">5</span>The root pointer pattern</h2>
+<pre><code class="lang-text">row 5:   base + 5 × 108      = base + 540 = 0x1_0020_021C
+field m: base + 540 + 64     = base + 604 = 0x1_0020_025C</code></pre>
+
+<h2 id="root-pointer"><span class="n">5</span>The root pointer pattern</h2>
 
 <p>Pointers can be stored in buffers too. So one small struct can hold the addresses of every table in the scene, and the shader needs only the address of that struct. Push constants are the cheapest way to pass a few bytes per draw, so the usual design is:</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="A push constant of a few bytes holds one pointer to a frame struct. The frame struct holds the camera and pointers to the vertex, instance and material tables. A shader follows push constant, then frame, then table, then row.">
+  <svg viewBox="0 0 760 226" role="img" aria-label="A push constant of a few bytes holds one pointer to a frame struct. The frame struct holds the camera and pointers to the vertex, instance and material tables. A shader follows push constant, then frame, then table, then row.">
     <rect x="20" y="95" width="160" height="60" rx="6" class="box"/>
     <text x="100" y="118" class="mid title">push constant</text>
     <text x="100" y="138" class="mid mono small">frame (8 bytes)</text>
@@ -204,55 +271,231 @@ void update(uint index)
     <rect x="530" y="88"  width="210" height="34" rx="4" class="mem"/><text x="635" y="110" class="mid">instance table</text>
     <rect x="530" y="132" width="210" height="34" rx="4" class="mem"/><text x="635" y="154" class="mid">material table</text>
     <rect x="530" y="176" width="210" height="34" rx="4" class="mem"/><text x="635" y="198" class="mid">draw list</text>
-    <text x="20" y="242" class="small">The CPU changes what a whole pass sees by writing a few addresses, not by building and binding descriptor sets.</text>
   </svg>
   <figcaption>One pointer in, everything reachable. A different camera or a different scene is just a different frame struct.</figcaption>
 </figure>
 
+<p>The CPU changes what a whole pass sees by writing a few addresses, not by building and binding descriptor sets.</p>
+
 <div class="split">
   <div>
+    <svg viewBox="0 0 320 120" role="img" aria-label="Three boxes in a chain: push constant, frame struct, table row. Read 1 gets the frame struct, read 2 gets the row. The first reads are the same for every thread of a draw.">
+      <rect x="6" y="26" width="84" height="40" rx="5" class="box"/>
+      <text x="48" y="50" class="mid small">push constant</text>
+      <line x1="90" y1="46" x2="116" y2="46" class="arrow" marker-end="url(#ah)"/>
+      <rect x="118" y="26" width="84" height="40" rx="5" class="mem"/>
+      <text x="160" y="50" class="mid small">frame struct</text>
+      <line x1="202" y1="46" x2="228" y2="46" class="arrow" marker-end="url(#ah)"/>
+      <rect x="230" y="26" width="84" height="40" rx="5" class="mem"/>
+      <text x="272" y="50" class="mid small">table row</text>
+      <circle cx="103" cy="18" r="10" class="badge"/><text x="103" y="22" class="badge-n">1</text>
+      <circle cx="215" cy="18" r="10" class="badge"/><text x="215" y="22" class="badge-n">2</text>
+      <path d="M8,78V86H200V78" class="arrow ok"/>
+      <text x="104" y="104" class="mid small t-ok">the same for every thread: cached</text>
+    </svg>
     <h4>The cost: dependent loads</h4>
     <p>Each arrow is a memory read that must finish before the next address is known. A deep chain adds latency. In practice the first two levels are the same for every thread of a draw, so they stay in the cache and cost little.</p>
   </div>
   <div>
+    <svg viewBox="0 0 320 120" role="img" aria-label="One buffer holds three arrays one after another. Three pointers point at the start of each: the base, the base plus the size of array A, and the base plus the sizes of A and B.">
+      <rect x="10" y="20" width="120" height="36" class="mem"/><text x="70" y="43" class="mid small">array A</text>
+      <rect x="130" y="20" width="100" height="36" class="mem"/><text x="180" y="43" class="mid small">array B</text>
+      <rect x="230" y="20" width="80" height="36" class="mem"/><text x="270" y="43" class="mid small">array C</text>
+      <line x1="12" y1="84" x2="12" y2="60" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="130" y1="84" x2="130" y2="60" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <line x1="230" y1="84" x2="230" y2="60" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="10" y="100" class="small t-hot">base</text>
+      <text x="130" y="100" class="mid small t-hot">base + A</text>
+      <text x="246" y="100" class="mid small t-hot">base + A + B</text>
+    </svg>
     <h4>Sub-arrays in one buffer</h4>
     <p>Because a pointer can point anywhere inside a buffer, one allocation can hold several arrays one after another. Each gets its own pointer: the base plus the size of the arrays before it.</p>
   </div>
 </div>
 
-<h2><span class="n">6</span>Alignment</h2>
+<h2 id="alignment"><span class="n">6</span>Alignment</h2>
 
 <p>A load through a pointer must be <b>aligned</b>: the address of a value must be a multiple of that value's alignment. A <var>float</var> needs a multiple of 4, a 64-bit integer or pointer a multiple of 8. A misaligned access is undefined behaviour: on some GPUs it works, on others it reads the wrong bytes.</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Case</th><th>Aligned?</th><th>Why</th></tr>
-  <tr><td>Buffer start</td><td>yes</td><td>Buffers are placed at the memory alignment the driver asks for, at least 16 bytes in practice.</td></tr>
-  <tr><td>Row <var>i</var> of 108-byte rows of floats</td><td>yes</td><td>108 is a multiple of 4, and floats need 4.</td></tr>
-  <tr><td>Packed 12-byte rows: a 64-bit pointer, then a 4-byte count</td><td><b>no</b></td><td>Row 1, and so its pointer, starts at 12: not a multiple of 8. Pad the row to 16 bytes (C++ does this by itself; a hand-packed layout may not).</td></tr>
-  <tr><td>A sub-array of <var>uint</var> after <var>N</var> 20-byte records</td><td>yes</td><td>20 × <var>N</var> is a multiple of 4.</td></tr>
-  <tr><td>A <var>float4</var> loaded as one 16-byte load</td><td>depends</td><td>Some compilers emit one wide load only when they can prove 16-byte alignment. GLSL lets you state it with <var>buffer_reference_align</var>.</td></tr>
-</table>
+<p>The classic mistake is a hand-packed row: a 64-bit pointer, then a 4-byte count.</p>
+
+<div class="legend">
+  <span><i class="ok"></i>pointer at a multiple of 8</span>
+  <span><i class="bad"></i>pointer at a wrong offset</span>
+  <span><i></i>the 4-byte count</span>
 </div>
 
-<h2><span class="n">7</span>Lifetime and safety</h2>
+<figure class="diagram">
+  <svg viewBox="0 0 760 164" role="img" aria-label="A byte ruler with a mark every 8 bytes. Packed rows of 12 bytes: the pointers start at offsets 0, 12, 24 and 36, and 12 and 36 are not multiples of 8. Rows padded to 16 bytes: the pointers start at 0, 16 and 32, all multiples of 8.">
+    <text x="100" y="20" class="title t-bad">Packed: 12-byte rows</text>
+    <path d="M100,26V70M196,26V70M292,26V70M388,26V70M484,26V70M580,26V70M676,26V70" class="dashed"/>
+    <rect x="100" y="30" width="96" height="30" class="ok"/><text x="148" y="50" class="mid mono small">ptr @ 0</text>
+    <rect x="196" y="30" width="48" height="30" class="box"/><text x="220" y="50" class="mid small">n</text>
+    <rect x="244" y="30" width="96" height="30" class="bad"/><text x="292" y="50" class="mid mono small">ptr @ 12</text>
+    <rect x="340" y="30" width="48" height="30" class="box"/><text x="364" y="50" class="mid small">n</text>
+    <rect x="388" y="30" width="96" height="30" class="ok"/><text x="436" y="50" class="mid mono small">ptr @ 24</text>
+    <rect x="484" y="30" width="48" height="30" class="box"/><text x="508" y="50" class="mid small">n</text>
+    <rect x="532" y="30" width="96" height="30" class="bad"/><text x="580" y="50" class="mid mono small">ptr @ 36</text>
+    <rect x="628" y="30" width="48" height="30" class="box"/><text x="652" y="50" class="mid small">n</text>
+
+    <text x="88" y="86" class="end small">byte offset</text>
+    <text x="100" y="86" class="mid small">0</text>
+    <text x="196" y="86" class="mid small">8</text>
+    <text x="292" y="86" class="mid small">16</text>
+    <text x="388" y="86" class="mid small">24</text>
+    <text x="484" y="86" class="mid small">32</text>
+    <text x="580" y="86" class="mid small">40</text>
+    <text x="676" y="86" class="mid small">48</text>
+
+    <text x="100" y="110" class="title t-ok">Padded: 16-byte rows</text>
+    <path d="M100,116V156M196,116V156M292,116V156M388,116V156M484,116V156M580,116V156M676,116V156" class="dashed"/>
+    <rect x="100" y="120" width="96" height="30" class="ok"/><text x="148" y="140" class="mid mono small">ptr @ 0</text>
+    <rect x="196" y="120" width="48" height="30" class="box"/><text x="220" y="140" class="mid small">n</text>
+    <rect x="244" y="120" width="48" height="30" class="ghost"/><text x="268" y="140" class="mid small t-faint">pad</text>
+    <rect x="292" y="120" width="96" height="30" class="ok"/><text x="340" y="140" class="mid mono small">ptr @ 16</text>
+    <rect x="388" y="120" width="48" height="30" class="box"/><text x="412" y="140" class="mid small">n</text>
+    <rect x="436" y="120" width="48" height="30" class="ghost"/><text x="460" y="140" class="mid small t-faint">pad</text>
+    <rect x="484" y="120" width="96" height="30" class="ok"/><text x="532" y="140" class="mid mono small">ptr @ 32</text>
+    <rect x="580" y="120" width="48" height="30" class="box"/><text x="604" y="140" class="mid small">n</text>
+    <rect x="628" y="120" width="48" height="30" class="ghost"/><text x="652" y="140" class="mid small t-faint">pad</text>
+  </svg>
+  <figcaption>Packed 12-byte rows: row 1, and so its pointer, starts at 12, which is not a multiple of 8. Pad the row to 16 bytes. C++ does this by itself; a hand-packed layout may not.</figcaption>
+</figure>
+
+<p>Four more cases:</p>
+
+<div class="vgrid two">
+  <div class="vcard good">
+    <svg viewBox="0 0 320 100" role="img" aria-label="An address line with a mark every 16 bytes. The buffer starts exactly on a mark.">
+      <path d="M20,70H300M20,64V76M60,64V76M100,64V76M140,64V76M180,64V76M220,64V76M260,64V76M300,64V76" class="arrow"/>
+      <rect x="100" y="26" width="160" height="34" class="mem"/>
+      <text x="180" y="48" class="mid small">buffer</text>
+      <line x1="100" y1="20" x2="100" y2="76" class="arrow ok thick"/>
+      <text x="160" y="94" class="mid small">a mark every 16 bytes</text>
+    </svg>
+    <h4>Buffer start: aligned</h4>
+    <p>Buffers are placed at the memory alignment the driver asks for, at least 16 bytes in practice.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 320 100" role="img" aria-label="Three rows of 108 bytes. They start at offsets 0, 108 and 216, all multiples of 4.">
+      <rect x="20" y="26" width="92" height="34" class="mem"/><text x="66" y="48" class="mid small">row 0</text>
+      <rect x="112" y="26" width="92" height="34" class="mem"/><text x="158" y="48" class="mid small">row 1</text>
+      <rect x="204" y="26" width="92" height="34" class="mem"/><text x="250" y="48" class="mid small">row 2</text>
+      <text x="20" y="78" class="mid mono small">0</text>
+      <text x="112" y="78" class="mid mono small">108</text>
+      <text x="204" y="78" class="mid mono small">216</text>
+      <text x="296" y="78" class="mid mono small">324</text>
+      <text x="160" y="96" class="mid small t-ok">all multiples of 4</text>
+    </svg>
+    <h4>Row <var>i</var> of 108-byte rows of floats: aligned</h4>
+    <p>108 is a multiple of 4, and floats need 4.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 320 100" role="img" aria-label="N records of 20 bytes, then an array of uint that starts at offset 20 times N.">
+      <rect x="20" y="26" width="160" height="34" class="box"/>
+      <path d="M60,26V60M100,26V60M140,26V60" class="arrow"/>
+      <text x="100" y="20" class="mid small">N records × 20 bytes</text>
+      <rect x="180" y="26" width="120" height="34" class="mem"/><text x="240" y="48" class="mid small">uint array</text>
+      <line x1="180" y1="84" x2="180" y2="64" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <text x="180" y="97" class="mid small t-ok">starts at 20 × N</text>
+    </svg>
+    <h4>A sub-array of <var>uint</var> after <var>N</var> 20-byte records: aligned</h4>
+    <p>20 × <var>N</var> is a multiple of 4.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 100" role="img" aria-label="Four floats x, y, z, w side by side, read with one load of 16 bytes.">
+      <rect x="60" y="30" width="50" height="30" class="mem"/><text x="85" y="50" class="mid small">x</text>
+      <rect x="110" y="30" width="50" height="30" class="mem"/><text x="135" y="50" class="mid small">y</text>
+      <rect x="160" y="30" width="50" height="30" class="mem"/><text x="185" y="50" class="mid small">z</text>
+      <rect x="210" y="30" width="50" height="30" class="mem"/><text x="235" y="50" class="mid small">w</text>
+      <rect x="54" y="24" width="212" height="42" rx="4" class="hot"/>
+      <text x="160" y="88" class="mid small t-hot">one 16-byte load?</text>
+    </svg>
+    <h4>A <var>float4</var> loaded as one 16-byte load: depends</h4>
+    <p>Some compilers emit one wide load only when they can prove 16-byte alignment. GLSL lets you state it with <var>buffer_reference_align</var>.</p>
+  </div>
+</div>
+
+<h2 id="safety"><span class="n">7</span>Lifetime and safety</h2>
 
 <p>An address is just a number. Nothing ties it to the buffer it came from, so all the classic pointer bugs are possible:</p>
 
-<div class="table-wrap">
-<table>
-  <tr><th>Bug</th><th>What happens</th><th>How engines avoid it</th></tr>
-  <tr><td><b>Out of bounds</b>: index past the end</td><td>Reads another buffer's bytes, or faults. The robust-access features do not cover pointer access.</td><td>Pass counts next to pointers and check them; size tables from known limits.</td></tr>
-  <tr><td><b>Use after free</b>: the buffer was destroyed</td><td>The address may now belong to another buffer, or to nothing: garbage, or a lost device.</td><td>Destroy only after the frames that could use it are done (<a href="frames-in-flight.html">Frames in flight</a>).</td></tr>
-  <tr><td><b>Stale address</b>: the buffer was recreated (for example to grow it)</td><td>The new buffer has a new address. Old copies of the old one point at freed memory.</td><td>Write the addresses again every frame, from the current buffers.</td></tr>
-  <tr><td><b>Null</b>: an unused pointer left at 0</td><td>Reading address 0 faults, usually a lost device.</td><td>A flag or count next to the pointer says whether it may be read.</td></tr>
-  <tr><td><b>Wrong type</b></td><td>The shader reads the bytes as a different struct. No error.</td><td>Keep CPU and GPU struct definitions in sync, and check them (<a href="struct-layout.html">Struct layout rules</a>).</td></tr>
-</table>
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A table of 6 rows. The pointer reads row 9, which lies inside another buffer.">
+      <rect x="20" y="56" width="120" height="30" class="mem"/>
+      <path d="M40,56V86M60,56V86M80,56V86M100,56V86M120,56V86" class="arrow mem"/>
+      <text x="80" y="104" class="mid small">6 rows</text>
+      <rect x="156" y="56" width="70" height="30" class="box"/>
+      <text x="191" y="104" class="mid small">another buffer</text>
+      <line x1="210" y1="32" x2="210" y2="54" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <text x="210" y="24" class="mid mono t-bad">p[9]</text>
+    </svg>
+    <h4>Out of bounds</h4>
+    <p>An index past the end reads another buffer's bytes, or faults. The robust-access features do not cover pointer access.</p>
+    <p class="cost"><b>Avoid:</b> pass counts next to pointers and check them; size tables from known limits.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A pointer still points at the place where a destroyed buffer was.">
+      <rect x="60" y="56" width="120" height="30" class="ghost"/>
+      <text x="120" y="75" class="mid small t-faint">destroyed</text>
+      <line x1="62" y1="28" x2="62" y2="54" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <text x="72" y="32" class="mono t-bad">p</text>
+      <text x="120" y="108" class="mid small">garbage, or a lost device</text>
+    </svg>
+    <h4>Use after free</h4>
+    <p>The buffer was destroyed. The address may now belong to another buffer, or to nothing.</p>
+    <p class="cost"><b>Avoid:</b> destroy only after the frames that could use it are done (<a href="frames-in-flight.html">Frames in flight</a>).</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A buffer was recreated bigger at a new place. An old copy of its address still points at the old, freed place.">
+      <rect x="16" y="56" width="70" height="30" class="ghost"/><text x="51" y="75" class="mid small t-faint">old</text>
+      <rect x="130" y="56" width="96" height="30" class="mem"/><text x="178" y="75" class="mid small">new, bigger</text>
+      <line x1="90" y1="71" x2="126" y2="71" class="arrow" marker-end="url(#ah)"/>
+      <line x1="18" y1="28" x2="18" y2="54" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <text x="26" y="32" class="small t-bad">old copy</text>
+      <line x1="132" y1="28" x2="132" y2="54" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <text x="140" y="32" class="small t-ok">written this frame</text>
+      <text x="120" y="110" class="mid small">a new buffer has a new address</text>
+    </svg>
+    <h4>Stale address</h4>
+    <p>The buffer was recreated, for example to grow it. Old copies of the old address point at freed memory.</p>
+    <p class="cost"><b>Avoid:</b> write the addresses again every frame, from the current buffers.</p>
+  </div>
+</div>
+
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 110" role="img" aria-label="The address space starts at 0. A pointer that was never set holds 0 and points at the very start, where there is no buffer.">
+      <rect x="16" y="52" width="208" height="30" class="box"/>
+      <rect x="110" y="52" width="80" height="30" class="mem"/>
+      <text x="150" y="71" class="mid small">buffer</text>
+      <line x1="18" y1="24" x2="18" y2="50" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <text x="26" y="28" class="mono t-bad">p = 0</text>
+      <text x="16" y="100" class="small">address 0: nothing there</text>
+    </svg>
+    <h4>Null</h4>
+    <p>An unused pointer left at 0. Reading address 0 faults, usually a lost device.</p>
+    <p class="cost"><b>Avoid:</b> a flag or count next to the pointer says whether it may be read.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 110" role="img" aria-label="The same 16 bytes. They were written as three floats and then an integer, but are read as an integer and then three floats.">
+      <text x="16" y="20" class="small">written as</text>
+      <rect x="16" y="26" width="156" height="24" class="mem"/><text x="94" y="43" class="mid small">3 floats</text>
+      <rect x="172" y="26" width="52" height="24" class="mem"/><text x="198" y="43" class="mid small">uint</text>
+      <text x="16" y="72" class="small t-bad">read as</text>
+      <rect x="16" y="78" width="52" height="24" class="bad"/><text x="42" y="95" class="mid small">uint</text>
+      <rect x="68" y="78" width="156" height="24" class="bad"/><text x="146" y="95" class="mid small">3 floats</text>
+    </svg>
+    <h4>Wrong type</h4>
+    <p>The shader reads the bytes as a different struct. No error.</p>
+    <p class="cost"><b>Avoid:</b> keep CPU and GPU struct definitions in sync, and check them (<a href="struct-layout.html">Struct layout rules</a>).</p>
+  </div>
 </div>
 
 <p>Tools help a little. The Vulkan validation layers have a GPU-assisted mode that can check some pointer accesses at run time. Capture tools such as RenderDoc need the <var>bufferDeviceAddressCaptureReplay</var> feature to replay a frame with the same addresses.</p>
 
-<h2><span class="n">8</span>Addresses or descriptors?</h2>
+<h2 id="compare"><span class="n">8</span>Addresses or descriptors?</h2>
 
 <div class="table-wrap">
 <table>
@@ -272,6 +515,11 @@ void update(uint index)
 <h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
 <p>RASM binds no buffer through a descriptor. Every buffer gets a device address at creation, and shaders reach all scene data from one root pointer in a 16-byte push constant: the pattern of section 5. Textures go through the bindless descriptor set.</p>
+
+<div class="legend">
+  <span><i class="mem"></i>buffers</span>
+  <span><i class="hot"></i>a pointer computed on the CPU, into the middle of a buffer</span>
+</div>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 400" role="img" aria-label="The push constant holds scene, firstDraw and argument. scene points to one SceneData in the Scene Data Buffer of this frame slot, at slot address plus view index times 768. SceneData holds twelve pointers: vertsPtr to the geometry vertex pool, drawInfoPtr to the visible draw buffer, instancesPtr and materialsPtr to this slot's tables, geometryPtr to the geometry table, allDrawsPtr to the draw info buffer, drawCountsPtr, cullSlotsPtr and groupCountsPtr into the visible draw buffer after the draws, cullStatsPtr, visibilityPtr and hizPtr.">
