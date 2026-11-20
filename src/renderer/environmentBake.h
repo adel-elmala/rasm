@@ -87,6 +87,7 @@ namespace rasm
         PipelineHandle              brdfPipeline;
     };
 
+    bool                            isBakeUsable(BakeState state);
     bool                            writeSceneEnvironment(const Environments& environments, const SceneEnvironment& environment, gfx::SceneData& sceneData);
 }
 // clang-format on

@@ -44,11 +44,18 @@ void cubeMain(uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= pc.size || id.y >= pc.size)
         return;
+    // The sampler repeats, so u wraps around the image's seam; v must not wrap, or the top row blends with the bottom
+    // one at the poles, so it stays half a texel inside the image.
+    uint width, height;
+    gTextures[pc.source].GetDimensions(width, height);
+    float halfTexel = 0.5 / float(height);
     float3 color = float3(0.0);
     for (uint i = 0; i < 4; ++i)
     {
         float2 st   = (float2(id.xy) + float2(0.25 + 0.5 * float(i & 1), 0.25 + 0.5 * float(i >> 1))) / float(pc.size);
-        color      += gTextures[pc.source].SampleLevel(getEquirectUV(getCubeDirection(id.z, st)), 0.0).rgb;
+        float2 uv   = getEquirectUV(getCubeDirection(id.z, st));
+        uv.y        = clamp(uv.y, halfTexel, 1.0 - halfTexel);
+        color      += gTextures[pc.source].SampleLevel(uv, 0.0).rgb;
     }
     gStorageImages[pc.target][id] = float4(color * 0.25, 1.0);
 }

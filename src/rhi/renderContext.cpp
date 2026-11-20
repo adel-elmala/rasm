@@ -410,6 +410,12 @@ namespace rasm
         const bool depthAttachment = desc.usage == TextureUsage::DEPTH_STENCIL_ATTACHMENT || desc.usage == TextureUsage::SAMPLED_DEPTH_ATTACHMENT;
         if (!checkArgument(!desc.cube || depthAttachment || desc.usage == TextureUsage::SAMPLED_STORAGE, __func__, "a cube texture is a depth attachment or a storage texture."))
             return {};
+        // Attachments are drawn into one mip, and fillTexture makes mips only for RGBA8, so only storage textures (whose
+        // mips compute writes) and RGBA8 sampled ones take a mip count.
+        const bool rgba8 = desc.format == Format::R8G8B8A8_UNORM || desc.format == Format::R8G8B8A8_SRGB || desc.format == Format::B8G8R8A8_SRGB;
+        if (!checkArgument(desc.mipLevels <= 1 || desc.usage == TextureUsage::SAMPLED_STORAGE || (desc.usage == TextureUsage::SAMPLED && rgba8), __func__,
+                           "only a SAMPLED_STORAGE texture or a sampled RGBA8 texture takes more than one mip."))
+            return {};
         auto *texture = impl->device->createTexture(desc);
         if (!texture)
             return {};
@@ -1105,18 +1111,12 @@ namespace rasm
     {
         auto *descriptorSet = lookup(impl->descriptorSets, bindlessSet, __func__);
         auto *rhiTexture = lookup(impl->textures, texture, __func__);
-        if (!descriptorSet || !rhiTexture || !checkArgument(slot < MAX_BINDLESS_STORAGE_IMAGES, __func__, "the slot is past MAX_BINDLESS_STORAGE_IMAGES.") ||
+        if (!descriptorSet || !rhiTexture || !checkArgument(slot < descriptorSet->storageImageCount, __func__, "the slot is past the set layout's storageImageCount.") ||
             !checkArgument(rhiTexture->desc.usage == TextureUsage::SAMPLED_STORAGE, __func__, "the texture is not a SAMPLED_STORAGE texture.") ||
             !checkArgument(mip < rhiTexture->mipLevels, __func__, "the texture has no such mip."))
             return false;
         impl->device->updateBindlessStorageImage(descriptorSet, slot, rhiTexture, mip);
         return true;
-    }
-
-    uint32_t RenderContext::getTextureMipLevels(const TextureHandle &texture)
-    {
-        auto *rhiTexture = lookup(impl->textures, texture, __func__);
-        return rhiTexture ? rhiTexture->mipLevels : 0;
     }
 
     TextureUsage RenderContext::getTextureState(const TextureHandle &texture)

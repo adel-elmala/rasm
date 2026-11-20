@@ -18,33 +18,30 @@ namespace rasm
         // numthreads of every entry point in shaders/passes/environment.slang.
         constexpr uint32_t BAKE_GROUP_SIZE = 8;
 
-        bool isUsable(BakeState state)
+        bool bakePipelinesReady(const Environments &environments, bool lut, bool environment)
         {
-            return state == BakeState::RECORDED || state == BakeState::READY;
+            return (!lut || environments.brdfPipeline.isValid()) &&
+                   (!environment || (environments.cubePipeline.isValid() && environments.downsamplePipeline.isValid() &&
+                                     environments.specularPipeline.isValid() && environments.irradiancePipeline.isValid()));
         }
 
         // A shader error logs and retries next frame, like the scene's pipelines, so a fix on disk is picked up. The LUT
         // needs only its own entry point, so an application without environments compiles only that one.
         bool createBakePipelines(Engine &engine, Environments &environments, const std::string &shaderDir, bool lut, bool environment)
         {
-            const bool lutReady = !lut || environments.brdfPipeline.isValid();
-            const bool environmentReady = !environment || (environments.cubePipeline.isValid() && environments.downsamplePipeline.isValid() &&
-                                                           environments.specularPipeline.isValid() && environments.irradiancePipeline.isValid());
-            if (lutReady && environmentReady)
+            if (bakePipelinesReady(environments, lut, environment))
                 return true;
             const std::string source = readFile(pathFromUtf8(shaderDir) / "passes/environment.slang");
-            if (!lutReady)
+            if (lut && !environments.brdfPipeline.isValid())
                 environments.brdfPipeline = engine.createComputePipeline("brdfLut", source, "brdfMain");
-            if (!environmentReady)
+            if (environment && !bakePipelinesReady(environments, false, true))
             {
                 environments.cubePipeline = engine.createComputePipeline("environmentCube", source, "cubeMain");
                 environments.downsamplePipeline = engine.createComputePipeline("environmentDownsample", source, "downsampleMain");
                 environments.specularPipeline = engine.createComputePipeline("environmentSpecular", source, "specularMain");
                 environments.irradiancePipeline = engine.createComputePipeline("environmentIrradiance", source, "irradianceMain");
             }
-            if ((!lut || environments.brdfPipeline.isValid()) &&
-                (!environment || (environments.cubePipeline.isValid() && environments.downsamplePipeline.isValid() &&
-                                  environments.specularPipeline.isValid() && environments.irradiancePipeline.isValid())))
+            if (bakePipelinesReady(environments, lut, environment))
                 return true;
             spdlog::error("Failed to create the environment bake pipelines; the bake waits for them.");
             return false;
@@ -107,6 +104,11 @@ namespace rasm
         }
     }
 
+    bool isBakeUsable(BakeState state)
+    {
+        return state == BakeState::RECORDED || state == BakeState::READY;
+    }
+
     bool writeSceneEnvironment(const Environments &environments, const SceneEnvironment &environment, gfx::SceneData &sceneData)
     {
         sceneData.environmentSpecular = INVALID_TEXTURE_INDEX;
@@ -118,10 +120,10 @@ namespace rasm
         sceneData.environmentRotation = glm::vec2(1.0f, 0.0f);
 
         const uint64_t index = environment.environment.index;
-        if (!environment.environment.isValid() || index >= environments.environments.size() || !isUsable(environments.brdfLutState))
+        if (!environment.environment.isValid() || index >= environments.environments.size() || !isBakeUsable(environments.brdfLutState))
             return false;
         const Environment &source = environments.environments[index];
-        if (!isUsable(source.state))
+        if (!isBakeUsable(source.state))
             return false;
 
         sceneData.environmentSpecular = source.specularSlot;

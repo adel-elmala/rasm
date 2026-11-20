@@ -118,6 +118,7 @@ namespace rasm::rhi
     struct DescriptorSet
     {
         std::string                         name;
+        uint32_t                            storageImageCount   = 0;    // binding 1's size, from its layout
     };
 
     struct Fence

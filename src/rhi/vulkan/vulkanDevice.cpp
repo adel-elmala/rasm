@@ -1034,6 +1034,7 @@ namespace rasm::rhi
 
         auto *descriptorSet = new VulkanDescriptorSet();
         descriptorSet->name = name;
+        descriptorSet->storageImageCount = vkLayout->desc.storageImageCount;
 
         auto result = vkAllocateDescriptorSets(device.device, &allocInfo, &descriptorSet->set);
         if (result != VK_SUCCESS)

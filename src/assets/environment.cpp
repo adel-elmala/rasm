@@ -68,8 +68,7 @@ namespace rasm
     {
         if (!environment.isValid() || environment.index >= environments->environments.size())
             return false;
-        const BakeState state = environments->environments[environment.index].state;
-        return state == BakeState::RECORDED || state == BakeState::READY;
+        return isBakeUsable(environments->environments[environment.index].state);
     }
 
     // Makes the image and the three cubes, so the next frame can bake them. A failure leaves the environment without

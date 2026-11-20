@@ -319,6 +319,7 @@
 <dl class="pitfalls">
   <div><dt>White sparkles on rough reflections</dt><dd>Fireflies from a small bright light: each sample read mip 0. Read the mip from the sample's pdf (<a href="#sampling">section 6</a>), or take far more samples.</dd></div>
   <div><dt>The sun turns into infinity or black</dt><dd>A 16-bit float stores at most 65504. Clamp the photo's brightest texels when converting it, or one bad texel spreads over the whole blurred map.</dd></div>
+  <div><dt>Ground color in the sky straight up</dt><dd>The sampler repeats in v as well as in u, so bilinear filtering at the top row blends in the bottom row. Repeat only in u (the seam), or keep v half a texel inside the image.</dd></div>
   <div><dt>Visible seams on the cube's edges</dt><dd>Faces sampled as six 2D textures. Sample the cube as a cube, so the GPU filters across faces.</dd></div>
   <div><dt>Blocky or shimmering sky near the top and bottom</dt><dd>The panorama's rows near the poles are squeezed into few cube texels. Take several reads per cube texel, then build the mips by averaging.</dd></div>
   <div><dt>Rough metal looks too bright or too dark compared to direct light</dt><dd>Roughness mapped to mips differently in the filter and in the shader, or the table read with α (roughness²) instead of roughness. Use the same rule in both places.</dd></div>
@@ -411,7 +412,7 @@ engine.setSceneEnvironment(scene, rasm::SceneEnvironment{.environment = sunset, 
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Input</td><td>an equirectangular panorama or a cube</td><td>A Radiance <samp>.hdr</samp> panorama only (<code>Engine::loadEnvironment</code>), decoded with <code>stbi_loadf</code>, clamped to 65504 and packed to half floats on a worker.</td></tr>
-  <tr><td>Cube size</td><td>a quarter of the width</td><td><code>getEnvironmentCubeSize</code>: a quarter of the width as a power of two, 64 to 1024 (<code>ENVIRONMENT_MIN_CUBE_SIZE</code>, <code>ENVIRONMENT_MAX_CUBE_SIZE</code>). 4 reads of the image per texel, then a 2x2 box per mip.</td></tr>
+  <tr><td>Cube size</td><td>a quarter of the width</td><td><code>getEnvironmentCubeSize</code>: a quarter of the width as a power of two, 64 to 1024 (<code>ENVIRONMENT_MIN_CUBE_SIZE</code>, <code>ENVIRONMENT_MAX_CUBE_SIZE</code>). 4 reads of the image per texel, v kept half a texel inside it (the sampler repeats, for u), then a 2x2 box per mip.</td></tr>
   <tr><td>Irradiance</td><td>a small cube or 9 SH numbers</td><td>A cube of <code>IRRADIANCE_CUBE_SIZE</code> (32), 512 cosine samples per texel, filtered importance sampling.</td></tr>
   <tr><td>Specular</td><td>one roughness per mip</td><td><code>SPECULAR_CUBE_SIZE</code> (256) with <code>SPECULAR_MIPS</code> (6): mip m is roughness m / 5, 256 GGX samples per texel, mip 0 a copy. The shader reads <code>roughness × 5</code>, with perceptual roughness.</td></tr>
   <tr><td>BRDF table</td><td>2 channels, per engine</td><td><code>BRDF_LUT_SIZE</code> (128), 512 samples, in an RGBA16F texture (x and y used), baked in the engine's first frame.</td></tr>

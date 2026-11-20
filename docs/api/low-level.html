@@ -576,7 +576,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <dt>format</dt><dd>See <a href="types.html#Format">Format</a>. Color data uses <code>R8G8B8A8_SRGB</code>; normal, metallic-roughness and occlusion data <code>R8G8B8A8_UNORM</code>.</dd>
       <dt>usage</dt><dd>What the texture is created for, see <a href="#TextureUsage">TextureUsage</a>.</dd>
       <dt>cube</dt><dd><code>true</code>: <code>CUBE_FACES</code> square layers, one per face of a cube, in Vulkan's order +X, −X, +Y, −Y, +Z, −Z. Its bindless slot holds a cube view, which a shader reads as a <var>SamplerCube</var>; each face also has its own view, which <a href="#beginRendering"><code>beginRendering</code></a> draws into. A render target with <code>RenderTargetDesc::cube</code> makes one for its depth. Only a depth attachment (<code>DEPTH_STENCIL_ATTACHMENT</code> or <code>SAMPLED_DEPTH_ATTACHMENT</code>) or a <code>SAMPLED_STORAGE</code> texture can be a cube: <code>createTexture</code> rejects any other usage with an error.</dd>
-      <dt>mipLevels</dt><dd>0: the rule above. Any other count makes that many levels, at most the full chain down to 1 × 1. <code>getTextureMipLevels</code> returns the count it got.</dd>
+      <dt>mipLevels</dt><dd>0: the rule above. Any other count makes that many levels, at most the full chain down to 1 × 1. Only a <code>SAMPLED_STORAGE</code> texture (compute writes its mips) or a <code>SAMPLED</code> RGBA8 one (<code>fillTexture</code> makes them) may ask for more than 1: <code>createTexture</code> refuses any other with an error, since an attachment is drawn into one mip and <code>fillTexture</code> makes mips only for RGBA8.</dd>
     </dl>
   </div>
 </div>
@@ -636,11 +636,6 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
   </div>
 </div>
 
-<div class="api" id="getTextureMipLevels">
-  <pre class="sig">uint32_t getTextureMipLevels(const TextureHandle&amp; texture);</pre>
-  <div class="body"><p>The texture's mip count. An unknown handle logs an error and returns 0.</p></div>
-</div>
-
 <div class="api" id="getTextureState">
   <pre class="sig">TextureUsage getTextureState(const TextureHandle&amp; texture);</pre>
   <div class="body">
@@ -685,7 +680,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
     <pre><code class="lang-slang">[[vk::binding(1, 0)]]
 [format("rgba16f")] RWTexture2DArray&lt;float4&gt; gStorageImages[];</code></pre>
     <p>Move the texture to <code>STORAGE</code> with <code>transitionImageLayout</code> before the dispatches, and to <code>SAMPLED</code> after them. A dispatch that reads a mip another one wrote needs <code>memoryBarrier(COMPUTE, COMPUTE)</code> between them. The slot is overwritten even while earlier frames are on the GPU, so it must not be one they still use: wait for those frames (<code>getFenceValue</code>) before you reuse a slot.</p>
-    <p><span class="tag">errors</span> A slot at or past <code>MAX_BINDLESS_STORAGE_IMAGES</code>, a texture that is not <code>SAMPLED_STORAGE</code>, a mip it does not have, or an unknown set or texture logs an error and returns <code>false</code>.</p>
+    <p><span class="tag">errors</span> A slot at or past the set layout's <code>storageImageCount</code> (<code>MAX_BINDLESS_STORAGE_IMAGES</code> for the engine's set; 0 for a layout without binding 1), a texture that is not <code>SAMPLED_STORAGE</code>, a mip it does not have, or an unknown set or texture logs an error and returns <code>false</code>.</p>
   </div>
 </div>
 
