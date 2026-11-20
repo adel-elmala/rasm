@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/bindless.js"></script>
 </head>
 <body data-root="../" data-page="guides/bindless.html">
 
@@ -157,6 +159,19 @@
     <line x1="560" y1="124" x2="510" y2="194" class="arrow hot" marker-end="url(#ah-hot)"/>
   </svg>
   <figcaption>The record says "which"; the array says "what". A material change is a change of a few numbers in a buffer. The slot numbers are plain integers. They can live in any buffer the shader reads: material tables, instance tables, push constants.</figcaption>
+</figure>
+
+<p>Try it. Pick the record a draw reads, then write other slot numbers into it.</p>
+
+<div class="legend">
+  <span><i class="mem"></i>records and written slots</span>
+  <span><i class="hot"></i>the base color lookup</span>
+  <span><i class="shader"></i>the shader and its normal lookup</span>
+  <span><i class="bad"></i>an empty slot that is read</span>
+</div>
+
+<figure class="lab" data-lab="slot-index" data-title="Follow the slot numbers">
+  <figcaption>Click the three records: only the numbers the shader reads change. Then give a record another base color, a normal map as its color, and an empty slot.</figcaption>
 </figure>
 
 <p>Now a draw needs nothing bound of its own. Two draws with different materials differ only in which record they read, and that is data. Data can be written by the GPU too, so a compute shader can build the whole list of draws.</p>
@@ -500,6 +515,19 @@ free(slot):
     <p>The wait is <var>F</var> frames for <var>F</var> frames in flight. With 2 frames, a slot is reused at the earliest two frame starts after its free.</p>
   </div>
 </div>
+
+<p>The picture below runs the allocator of section 5 with this retire list, two frames in flight. Then turn the list off, and see what goes wrong.</p>
+
+<div class="legend">
+  <span><i class="mem"></i>slot in use</span>
+  <span><i class="hot"></i>freed, waits for the GPU</span>
+  <span><i></i>free; dashed: never used</span>
+  <span><i class="bad"></i>reused too early</span>
+</div>
+
+<figure class="lab" data-lab="slot-lifetime" data-title="Free a slot, and reuse it">
+  <figcaption>Free a texture, then press "Next frame" until its slot reaches the free list: two frame starts. Turn the retire list off, free a texture and add a new one in the same frame.</figcaption>
+</figure>
 
 <div class="callout rule">
   <strong>The two rules of slot lifetime</strong>

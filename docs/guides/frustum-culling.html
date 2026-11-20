@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/frustum-culling.js"></script>
 </head>
 <body data-root="../" data-page="guides/frustum-culling.html">
 
@@ -330,6 +332,18 @@
     }
     return true;
 }</code></pre>
+
+<p>The picture below runs this test from above, with 4 of the 6 planes (left, right, near, far). Turn the camera and move the big sphere across an edge of the frustum.</p>
+
+<div class="legend">
+  <span><i class="gpu"></i>kept: drawn</span>
+  <span><i></i>culled (dashed)</span>
+  <span><i class="hot"></i>the frustum; the line to the nearest plane</span>
+</div>
+
+<figure class="lab" data-lab="frustum-cull" data-title="Cull a field of spheres">
+  <figcaption>Drag the orange point in front of the camera to turn it, and the point in the big sphere to move it. A sphere stays as long as any part of it is inside: watch it turn red only when the distance passes −26.</figcaption>
+</figure>
 
 <p>That is 6 dot products and 6 compares per object. Each plane is stored as a <code class="lang-text">float4</code>: the normal in <code class="lang-text">xyz</code>, <var>d</var> in <code class="lang-text">w</code>.</p>
 

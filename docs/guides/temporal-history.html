@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/temporal-history.js"></script>
 </head>
 <body data-root="../" data-page="guides/temporal-history.html">
 
@@ -267,6 +269,12 @@
 const uint32_t drawIndex = frameIndex % 2;
 const uint32_t readIndex = (frameIndex + 1) % 2;</code></pre>
 
+<p>Here are two real copies. A ball moves, and each frame writes the ball over the darkened old image, so the ball leaves a trail.</p>
+
+<figure class="lab" data-lab="ping-pong" data-title="Step through the swap">
+  <figcaption>Pause, then press <b>Next frame</b> a few times and watch which copy gets the new ball. Then turn the swap off: copy B is never drawn, so there is nothing old to read.</figcaption>
+</figure>
+
 <h2 id="other-ways"><span class="n">4</span>Other ways to keep the past</h2>
 
 <p>Ping-pong is the usual choice, but not the only one:</p>
@@ -451,6 +459,12 @@ const uint32_t readIndex = (frameIndex + 1) % 2;</code></pre>
     <text x="20" y="282" class="small">The object leaves after frame 9. The trail drops from 1.0, the average from 0.80, both by × 0.85 per frame.</text>
   </svg>
   <figcaption>The trail jumps to full brightness at once and lags only on the way down. The average lags both ways: after 10 frames it has reached only 1 − 0.85<sup>10</sup> = 0.80.</figcaption>
+</figure>
+
+<p>The same two formulas on a whole image. A ball crosses a noisy background and covers each pixel for 10 frames.</p>
+
+<figure class="lab" data-lab="history-blend" data-title="Trail against average">
+  <figcaption>Lower <var>α</var> until the noise is gone, and see what happens to the ball in the average. Then raise it. The trail never averages: it keeps the brightest noise it has seen.</figcaption>
 </figure>
 
 <h3>How long does a trail last?</h3>

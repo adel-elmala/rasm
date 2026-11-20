@@ -279,7 +279,7 @@ int main()
   <tr><th>Way</th><th>Use it for</th><th>Example</th><th>Reference</th></tr>
   <tr><td>A · <code>render</code></td><td>One scene, one camera, straight to the window.</td><td><code>00_hello_scene</code>, <code>02_gltf</code>, <code>03_instances</code>, <code>05_city</code></td><td><a href="engine.html#render">engine.html#render</a></td></tr>
   <tr><td>B · <code>beginFrame</code> / <code>endFrame</code></td><td>A few passes in a fixed order, your own pipelines. It cannot draw a scene: the scene is drawn by graph passes.</td><td>none</td><td><a href="engine.html#beginFrame">engine.html#beginFrame</a></td></tr>
-  <tr><td>C · <code>RenderGraph</code></td><td>Offscreen render targets, post effects, compute work, a scene into a render target (<a href="engine.html#addScenePasses"><code>addScenePasses</code></a>). The graph orders the passes and records their barriers.</td><td><code>01_render_graph</code>, <code>04_compute</code></td><td><a href="render-graph.html">render-graph.html</a></td></tr>
+  <tr><td>C · <code>RenderGraph</code></td><td>Offscreen render targets, post effects, compute work, a scene into a render target (<a href="engine.html#addScenePasses"><code>addScenePasses</code></a>). The graph orders the passes and records their barriers.</td><td><code>01_render_graph</code>, <code>04_compute</code>, <code>06_shadows</code></td><td><a href="render-graph.html">render-graph.html</a></td></tr>
 </table>
 </div>
 

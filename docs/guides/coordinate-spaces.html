@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/coordinate-spaces.js"></script>
 </head>
 <body data-root="../" data-page="guides/coordinate-spaces.html">
 
@@ -656,6 +658,18 @@ V  =  |  u.x   u.y   u.z   −u·eye |
       |  0     0     0      1     |</code></pre>
 
 <p>Each row asks one question about a world point <var>p</var>: how far is it to the right (<var>r</var>), up (<var>u</var>), and behind (−<var>f</var>) the camera? A point in front of the camera gets a negative <var>z</var>.</p>
+
+<p>Try it from above. The picture builds this matrix from the two orange handles and applies it to one fixed point. The last two numbers use the projection of the <a href="#example">worked example</a>.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>the camera, and what it can see</span>
+  <span><i class="gpu"></i>the point</span>
+  <span><i class="hot"></i>drag: the camera, and where it looks</span>
+</div>
+
+<figure class="lab" data-lab="world-to-view" data-title="Move the camera, watch the numbers">
+  <figcaption>Drag the camera around the point: the point never moves in the world, but it moves in view space. Then turn the camera away until the point leaves the image, and put the point behind the camera.</figcaption>
+</figure>
 
 <h2 id="clip-ndc"><span class="n">6</span>Clip space, NDC and pixels</h2>
 

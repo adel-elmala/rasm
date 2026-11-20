@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/projection-depth.js"></script>
 </head>
 <body data-root="../" data-page="guides/projection-depth.html">
 
@@ -241,6 +243,18 @@ w_c = −z = D        then   NDC = (x_c, y_c, z_c) / w_c</code></pre>
   <figcaption>Everything farther than 100 times the near plane shares one hundredth of the range.</figcaption>
 </figure>
 
+<p>Try other planes. The bars below use the formulas of the table, cut at the depth of one distance <var>D</var>.</p>
+
+<div class="legend">
+  <span><i class="box"></i>the part of the depth range for near to <var>D</var></span>
+  <span><i class="bad"></i>the part for <var>D</var> to far</span>
+  <span><i class="hot"></i>the distance <var>D</var></span>
+</div>
+
+<figure class="lab" data-lab="depth-range" data-title="Who gets the depth range">
+  <figcaption>Move the far plane: almost nothing changes. Then move the near plane from 0.1 out to 1: the part for everything past <var>D</var> grows ten times.</figcaption>
+</figure>
+
 <h2 id="orthographic"><span class="n">4</span>Orthographic projection</h2>
 
 <p>An orthographic camera has no perspective: parallel lines stay parallel and size does not change with distance. The view volume is a box (<var>left</var>, <var>right</var>, <var>bottom</var>, <var>top</var>, <var>near</var>, <var>far</var>), and the matrix only scales and moves it onto the NDC box. <var>w</var> stays 1, so depth is linear in distance.</p>
@@ -371,6 +385,19 @@ depth = (f − D) / (f − n)       reversed: again, swap n and f</code></pre>
     <p>The step stays below 0.01 mm everywhere.</p>
   </div>
 </div>
+
+<p>Try it with real floats. The picture computes both depths of two close surfaces, rounds them to 32 bits, and counts the floats between them. The far plane is at 1000.</p>
+
+<div class="legend">
+  <span><i class="ok"></i>a float that holds one surface</span>
+  <span><i class="bad"></i>a float that holds both: z-fighting</span>
+  <span><i class="cpu"></i>standard depth</span>
+  <span><i class="hot"></i>reversed depth</span>
+</div>
+
+<figure class="lab" data-lab="z-fight" data-title="Make two surfaces z-fight">
+  <figcaption>Bring the surfaces closer to the camera until standard depth can tell them apart. Go back to 900, and move the near plane out instead. Then try to make reversed depth fail.</figcaption>
+</figure>
 
 <div class="split">
   <div>

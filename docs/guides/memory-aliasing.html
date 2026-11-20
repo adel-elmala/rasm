@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/memory-aliasing.js"></script>
 </head>
 <body data-root="../" data-page="guides/memory-aliasing.html">
 
@@ -545,6 +547,12 @@
 </div>
 
 <p>Sizes and offsets in MiB. The result, 48 MiB, equals the peak, so it is the best possible for this frame. That is not always so: when many resources start and end at different times, the greedy result can be above the peak. In practice it is close, and it is fast: <var>n</var> resources need about <var>n</var>² overlap tests, which is nothing for a few dozen render targets.</p>
+
+<p>Try other lifetimes. The picture below runs the same greedy packing each time a lifetime changes.</p>
+
+<figure class="lab" data-lab="pack-lifetimes" data-title="Change the lifetimes, pack again">
+  <figcaption>Click an empty cell to stretch a lifetime to that pass. Click the first or last cell of a bar to make it shorter. Stretch the G-buffer to pass 3 and watch LDR lose its place. Can you make the heap larger than the peak?</figcaption>
+</figure>
 
 <pre><code>struct Request
 {

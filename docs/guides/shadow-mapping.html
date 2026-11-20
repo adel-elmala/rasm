@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/shadow-mapping.js"></script>
 </head>
 <body data-root="../" data-page="guides/shadow-mapping.html">
 
@@ -381,6 +383,19 @@ lit    = d is not behind stored
     <text x="570" y="262" class="mid small">the comparison moved past half a step: all lit</text>
   </svg>
   <figcaption>The steeper the surface as the light sees it, the larger the depth change inside one texel, so the more bias it needs. Acne disappears once the bias is larger than half a texel's depth change.</figcaption>
+</figure>
+
+<p>Try it. The picture below runs the real test for every point of the ground, against a small shadow map. Start with no bias, then raise it slowly.</p>
+
+<div class="legend">
+  <span><i class="light"></i>lit (right)</span>
+  <span><i class="shade"></i>in shadow (right)</span>
+  <span><i class="bad"></i>acne: wrongly in shadow</span>
+  <span><i class="hot"></i>wrongly lit; stored depth + bias (dashed)</span>
+</div>
+
+<figure class="lab" data-lab="shadow-bias" data-title="Find the bias">
+  <figcaption>Set the sun low (a large angle) and the map small: the steps get taller and need more bias. Then push the bias far past the needed value and watch the shadow leave the ball.</figcaption>
 </figure>
 
 <p>Four fixes, often combined:</p>

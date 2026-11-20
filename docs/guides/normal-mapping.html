@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/normal-mapping.js"></script>
 </head>
 <body data-root="../" data-page="guides/normal-mapping.html">
 
@@ -212,6 +214,12 @@
   </div>
 </div>
 
+<p>Try it. The square below is flat. Each pixel reads three bytes from the map on the left, turns them back into a normal with the formula above, normalizes it, and computes <var>n</var>·<var>l</var>.</p>
+
+<figure class="lab" data-lab="lit-normal-map" data-title="Light a flat square">
+  <figcaption>Turn the light around the square: the bright sides of the bumps follow the sun. Switch the map off to see the flat square. Then read green with the other convention, and compare the bright sides with the sun again.</figcaption>
+</figure>
+
 <h2 id="tangent-space"><span class="n">3</span>Tangent space</h2>
 
 <p>In which coordinate system are the stored normals? There are two choices.</p>
@@ -336,6 +344,18 @@
     <text x="648" y="62" class="title t-mem">n</text>
   </svg>
   <figcaption>On the right, the sum seen from the side (here <var>y</var> = 0). The inverse (the transpose) goes the other way: from world to tangent space. Some engines move the light and view vectors into tangent space in the vertex shader instead, and light in tangent space. Today most engines move the normal to world space, as here.</figcaption>
+</figure>
+
+<p>Try the sum. The picture is the side view again (<var>y</var> = 0), with a surface that can tilt.</p>
+
+<div class="legend">
+  <span><i class="hot"></i>T, and the step T·x</span>
+  <span><i class="box"></i>N, and the step N·z (dashed)</span>
+  <span><i class="mem"></i>the normal from the texel</span>
+</div>
+
+<figure class="lab" data-lab="tbn-frame" data-title="One texel, any surface">
+  <figcaption>Choose a texel, then tilt the surface: the stored bytes stay the same and the world-space normal turns with the surface. Set the texel's <var>x</var> to 0 to get <var>N</var> itself.</figcaption>
 </figure>
 
 <p>With (0, 0, 1), the flat texel, the result is <var>N</var>: no change. When <var>T</var>, <var>B</var>, <var>N</var> are unit length and at right angles, the inverse of the matrix is its transpose.</p>

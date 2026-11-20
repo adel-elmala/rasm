@@ -1,2 +1,2 @@
 // Written by .claude/skills/sync-docs/scripts/docsync.py. Do not edit by hand.
-window.RASM_DOCS_SYNC = { commit: "fa8ec804dc4e03a8d19241fd0f8a2ef639922388", date: "2026-11-13" };
+window.RASM_DOCS_SYNC = { commit: "f24c4782a5bbab091358280be54309764f93ddb2", date: "2026-11-16" };

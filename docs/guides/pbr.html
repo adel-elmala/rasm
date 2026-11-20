@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/pbr.js"></script>
 </head>
 <body data-root="../" data-page="guides/pbr.html">
 
@@ -688,6 +690,19 @@ cos θ = v·h  (the same as l·h)</code></pre>
 
 <p>At 60°: 0.04 + 0.96 · 0.5⁵ = 0.04 + 0.96 · 0.03125 = 0.070.</p>
 
+<p>Try it. The picture below runs Schlick's formula for one facet. Move the eye, and check the numbers against the table.</p>
+
+<div class="legend">
+  <span><i class="light"></i>light coming in</span>
+  <span><i class="cpu"></i>to the eye</span>
+  <span><i class="hot"></i>reflected: <var>F</var></span>
+  <span><i class="gpu"></i>goes into the surface: 1 − <var>F</var></span>
+</div>
+
+<figure class="lab" data-lab="fresnel-angle" data-title="Look at a facet from a low angle">
+  <figcaption>Drag the orange point down toward the surface: nothing changes for a long time, then the reflection grows fast. Then raise <var>F</var><sub>0</sub> to 0.9, a bright metal: the curve starts high and has little room to rise.</figcaption>
+</figure>
+
 <p><var>F</var> is a color, not a single number: <var>F</var><sub>0</sub> has three channels.</p>
 
 <div class="vgrid two">
@@ -781,6 +796,12 @@ cos θ = v·h  (the same as l·h)</code></pre>
     <text x="385" y="210" class="small">into D and G</text>
   </svg>
   <figcaption>The same base color means "the diffuse color" for a non-metal and "the specular color" for a metal. Metallic is meant to be 0 or 1. Values in between are for the borders of a texture (rust on steel, dust on gold), where a pixel is part one, part the other.</figcaption>
+</figure>
+
+<p>Try it. The sphere below is shaded pixel by pixel with these three values and the formulas of sections 4 to 8. Its base color is the gold of the table above, (1.00, 0.71, 0.29).</p>
+
+<figure class="lab" data-lab="pbr-sphere" data-title="One base color, two materials">
+  <figcaption>Set metallic to 1: the diffuse light goes away and the highlight takes the base color. Then lower the roughness: the highlight gets smaller and brighter. Move the light past 90° to see the Fresnel rim. One light with <var>E</var> = 3 comes from the upper left; the result goes through <var>c</var> / (<var>c</var> + 1) to fit the screen (<a href="#ambient">section 11</a>).</figcaption>
 </figure>
 
 <div class="split">

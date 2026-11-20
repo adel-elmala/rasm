@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/mesh-simplification.js"></script>
 </head>
 <body data-root="../" data-page="guides/mesh-simplification.html">
 
@@ -464,6 +466,12 @@ target = u for a half-edge collapse, the best new point for a full one</code></p
 </div>
 
 <p>A quadric gives the <b>sum</b> of squared distances to many planes, so its square root is an estimate, not an exact distance. In practice it is close to the largest deviation, and it is the number simplifiers usually report.</p>
+
+<p>Try it on a closed outline, 5 units wide. The picture below runs the algorithm of <a href="#algorithm">section 5</a> in 2D, with the same quadrics and half-edge collapses as the 7-point example, and measures the real gap beside the error it reports.</p>
+
+<figure class="lab" data-lab="collapse-outline" data-title="Simplify an outline">
+  <figcaption>Lower the number of points slowly and watch which ones go first. Find the last count where the spike and the round end are still there. Then switch the order to "every second point" and compare the gap at the same count.</figcaption>
+</figure>
 
 <h2 id="borders"><span class="n">7</span>Borders, seams and attributes</h2>
 

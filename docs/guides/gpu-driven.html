@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/gpu-driven.js"></script>
 </head>
 <body data-root="../" data-page="guides/gpu-driven.html">
 
@@ -769,6 +771,19 @@
     <p>The CPU recorded 2 state changes and 2 calls. It did not know that 5 draws would be visible, nor which ones. The draw-index built-in restarts at 0 in every call. A shader that reads the record by draw index must add the run's first slot, which the CPU passes in, for example as a push constant.</p>
   </div>
 </div>
+
+<p>Try it. The picture below is the same draw list. You decide which objects are visible; it packs the records and writes the counts, as steps 2 and 3 do.</p>
+
+<div class="legend">
+  <span><i class="gpu"></i>visible record</span>
+  <span><i></i>culled, or an unused slot (dashed)</span>
+  <span><i class="mem"></i>written by the GPU: packed records, counts</span>
+  <span><i class="cpu"></i>recorded by the CPU</span>
+</div>
+
+<figure class="lab" data-lab="indirect-count" data-title="Hide objects, count the calls">
+  <figcaption>Click records to hide and show their objects. The number of calls a CPU loop records follows the visible objects. The two indirect calls never change: only the counts do. Hide all of run B and see that its call stays.</figcaption>
+</figure>
 
 <h3>The same idea at scale</h3>
 

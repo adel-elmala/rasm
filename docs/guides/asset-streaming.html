@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/asset-streaming.js"></script>
 </head>
 <body data-root="../" data-page="guides/asset-streaming.html">
 
@@ -599,6 +601,20 @@
     <p>A texture starts at 0 ms and at 3 ms, so 2 textures = 6 ms per frame. Every frame stays smooth. All 30 are in after 15 frames, 0.25 s.</p>
   </div>
 </div>
+
+<p>Play with it. The picture below loads 30 textures. Reading and decoding one takes 100 ms; finishing it on the main thread takes 3 ms, as above. A frame's own work takes 10 ms here, so 6.7 ms are free for loading.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU work: a worker reads and decodes; a frame's own work</span>
+  <span><i class="mem"></i>ready, waits for the main thread</span>
+  <span><i class="gpu"></i>in the scene</span>
+  <span><i class="hot"></i>loading work in a frame</span>
+  <span><i class="bad"></i>a frame that is too long</span>
+</div>
+
+<figure class="lab" data-lab="load-budget" data-title="Load 30 textures">
+  <figcaption>The clock runs slower than real time. Try the three ways to load. With workers and no budget, raise the number of workers until a frame goes over the line. Then turn the budget on, and find the largest budget that keeps every frame on time.</figcaption>
+</figure>
 
 <p>A smaller budget gives smoother frames, but the scene fills in more slowly. A big item that cannot be split, such as one huge texture, needs to be split into pieces (one mip level or one tile at a time) to stay under the budget.</p>
 
