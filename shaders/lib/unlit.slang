@@ -3,7 +3,7 @@
 
 #include "core.slang"
 
-// Base color only (KHR_materials_unlit). Not tone mapped, so authored colors reach the display unchanged.
+// Base color only (KHR_materials_unlit), without lights. The tone-map pass still maps it, like every color of the scene.
 float4 shadeUnlit(Sampler2D gTextures[], MetallicRoughnessMaterial material, float2 baseColorUV)
 {
     return sampleBaseColor(gTextures, material, baseColorUV);

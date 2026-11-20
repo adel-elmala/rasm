@@ -320,6 +320,33 @@ namespace rasm
         cam.controller = controller;
     }
 
+    void Engine::setCameraExposure(CameraHandle camera, float exposure)
+    {
+        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        {
+            spdlog::error("Invalid camera handle.");
+            return;
+        }
+        if (!(exposure > 0.0f))
+        {
+            spdlog::error("A camera's exposure must be positive, got {}.", exposure);
+            return;
+        }
+
+        registry.cameras[camera.index].exposure = exposure;
+    }
+
+    float Engine::getCameraExposure(CameraHandle camera)
+    {
+        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        {
+            spdlog::error("Invalid camera handle.");
+            return 1.0f;
+        }
+
+        return registry.cameras[camera.index].exposure;
+    }
+
     CameraController Engine::getCameraController(CameraHandle camera)
     {
         if (!camera.isValid() || camera.index >= registry.cameras.size())

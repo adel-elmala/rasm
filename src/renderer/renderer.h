@@ -4,9 +4,15 @@
 #include "rasm/handle.h"
 #include "rasm/render/renderGraph.h"
 
+#include "glm/glm.hpp"
+
 namespace rasm
 {
     class Engine;
+
+    // The frame's background, linear. The scene's HDR target clears to it, and the tone-map pass maps it like the
+    // scene's light, so exposure changes it. A frame with no pass on the swapchain shows it unmapped.
+    constexpr glm::vec4             BACKGROUND_COLOR    = glm::vec4(0.018f, 0.018f, 0.018f, 1.0f);
 
     struct RenderView
     {

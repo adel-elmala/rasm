@@ -19,7 +19,6 @@ namespace rasm
             BUFFER,
             RENDER_TARGET,
             SWAPCHAIN,
-            SWAPCHAIN_DEPTH, // only the dump keeps it apart: for ordering, a depth read reads the swapchain
         };
 
         struct ResourceKey
@@ -96,8 +95,6 @@ namespace rasm
                 accesses.push_back({.key = keyOf(handle), .mark = 'P'});
             for (auto handle : pass.depthRenderTargets)
                 accesses.push_back({.key = keyOf(handle), .depth = true});
-            if (pass.readsSwapchainDepth)
-                accesses.push_back({.key = swapchain, .depth = true});
             for (auto handle : pass.outputTextures)
                 accesses.push_back({.key = keyOf(handle), .mark = 'W'});
             for (auto handle : pass.outputBuffers)
@@ -162,8 +159,6 @@ namespace rasm
                 break;
             case ResourceKind::SWAPCHAIN:
                 return "swapchain";
-            case ResourceKind::SWAPCHAIN_DEPTH:
-                return "swapchain depth";
             }
             return kind + (name.empty() ? " #" + std::to_string(key.index) + ":" + std::to_string(key.generation) : " '" + name + "'");
         }
@@ -204,8 +199,7 @@ namespace rasm
         }
 
         // A depth texture is sampleable when it is D32_SFLOAT and occlusion culling is on, or its target is depth-only
-        // (TextureUsage::SAMPLED_DEPTH_ATTACHMENT, see depthTextureDesc in renderContext.cpp). The swapchain's depth is
-        // D32_SFLOAT with one color.
+        // (TextureUsage::SAMPLED_DEPTH_ATTACHMENT, see depthTextureDesc in renderContext.cpp).
         bool canReadDepth(const Engine *engine, const Pass &pass, uint32_t colorCount, Format depthFormat)
         {
             if (!engine)
@@ -313,7 +307,7 @@ namespace rasm
             // Its color or depth would be sampled while it is an attachment.
             const bool readsColor = std::find(pass.inputRenderTargets.begin(), pass.inputRenderTargets.end(), pass.outputRenderTarget) != pass.inputRenderTargets.end();
             const bool readsDepth = std::find(pass.depthRenderTargets.begin(), pass.depthRenderTargets.end(), pass.outputRenderTarget) != pass.depthRenderTargets.end();
-            if ((pass.outputRenderTarget.isValid() && (readsColor || readsDepth)) || (pass.writesSwapchain && pass.readsSwapchainDepth))
+            if ((pass.outputRenderTarget.isValid() && (readsColor || readsDepth)))
             {
                 spdlog::error("Pass '{}' reads the render target it draws to.", pass.name);
                 valid = false;
@@ -506,8 +500,6 @@ namespace rasm
                 ctx.transitionImageLayout(commandBuffer, texture, TextureUsage::SAMPLED);
             for (auto renderTarget : pass.depthRenderTargets)
                 ctx.transitionImageLayout(commandBuffer, engine->getRenderTargetDepthTexture(renderTarget), TextureUsage::SAMPLED);
-            if (pass.readsSwapchainDepth)
-                ctx.transitionImageLayout(commandBuffer, engine->getCurrentFrameResources().depthTexture, TextureUsage::SAMPLED);
 
             if (pass.compute)
             {
@@ -527,9 +519,8 @@ namespace rasm
 
     // The passes in the order they run, then each resource's lifetime: one column per pass in that order, W where a
     // pass writes it, R where one reads it, P where one reads what the frame before left, - between its first and
-    // last use, . outside them. A per-frame buffer is one row, named by its first slot. The swapchain's depth has its
-    // own row: a pass that draws to the swapchain writes both. A graph that did not compile lists its passes in the
-    // order they were added.
+    // last use, . outside them. A per-frame buffer is one row, named by its first slot. A graph that did not compile
+    // lists its passes in the order they were added.
     std::string RenderGraph::dump() const
     {
         std::vector<uint32_t> order = executionOrder;
@@ -549,7 +540,6 @@ namespace rasm
                            (engine ? (engine->asyncCompute ? ", async compute on" : ", async compute off") : "") + "\n";
         std::vector<LifetimeRow> rows;
         std::unordered_map<ResourceKey, uint32_t, ResourceKeyHash> rowOf;
-        const ResourceKey swapchainDepth = {.kind = ResourceKind::SWAPCHAIN_DEPTH};
         for (uint32_t position = 0; position < positions; ++position)
         {
             const Pass &pass = passes[order[position]];
@@ -565,16 +555,8 @@ namespace rasm
             {
                 if (access.slot > 0)
                     continue;
-                const bool swapchain = access.key.kind == ResourceKind::SWAPCHAIN;
-                if (swapchain && access.depth)
-                {
-                    use(swapchainDepth, access.mark, "");
-                    continue;
-                }
                 const char *note = access.mark == 'P' ? " (frame before)" : (access.perFrame ? " (per frame)" : (access.depth ? " (depth)" : ""));
                 use(access.key, access.mark, note);
-                if (swapchain && access.mark == 'W')
-                    use(swapchainDepth, 'W', "");
             }
 
             // Without async compute an async pass runs on the graphics queue, like any compute pass.
@@ -586,8 +568,8 @@ namespace rasm
             if (!pass.compute)
             {
                 const AttachmentOps &ops = pass.attachmentOps;
-                text += std::string("    attachments: ") + (ops.loadColor ? "load color" : "clear color") + ", " + (ops.loadDepth ? "load depth" : "clear depth") + ", " +
-                        (ops.storeDepth ? "store depth" : "discard depth") + "\n";
+                const std::string depth = pass.writesSwapchain ? "no depth" : std::string(ops.loadDepth ? "load depth" : "clear depth") + ", " + (ops.storeDepth ? "store depth" : "discard depth");
+                text += std::string("    attachments: ") + (ops.loadColor ? "load color" : "clear color") + ", " + depth + "\n";
             }
             if (compiled)
             {
@@ -645,6 +627,7 @@ namespace rasm
 
     // Passes that draw to one target run in the order they were added, so the first clears it, and each later one loads
     // what the one before drew, depth included, which that one must then store. So must the pass before a depth read.
+    // The swapchain has no depth, so its passes load only color.
     void RenderGraph::assignAttachmentOps(const std::vector<uint32_t> &order)
     {
         std::unordered_map<RenderTargetHandle, uint32_t, HandleHash> lastWriters;
@@ -659,16 +642,14 @@ namespace rasm
                 if (it != lastWriters.end() && it->second != NO_PASS)
                     passes[it->second].attachmentOps.storeDepth = true;
             }
-            if (pass.readsSwapchainDepth && lastSwapchainWriter != NO_PASS)
-                passes[lastSwapchainWriter].attachmentOps.storeDepth = true;
             if (pass.compute)
                 continue;
             uint32_t &previous = pass.writesSwapchain ? lastSwapchainWriter : lastWriters.try_emplace(pass.outputRenderTarget, NO_PASS).first->second;
             if (previous != NO_PASS)
             {
                 pass.attachmentOps.loadColor = true;
-                pass.attachmentOps.loadDepth = true;
-                passes[previous].attachmentOps.storeDepth = true;
+                pass.attachmentOps.loadDepth = !pass.writesSwapchain;
+                passes[previous].attachmentOps.storeDepth = !pass.writesSwapchain;
             }
             previous = passIdx;
         }
@@ -832,8 +813,6 @@ namespace rasm
             use(engine->getRenderTargetDepthTexture(renderTarget));
         if (pass.outputRenderTarget.isValid())
             useRenderTarget(pass.outputRenderTarget, false);
-        if (pass.readsSwapchainDepth || pass.writesSwapchain)
-            use(engine->getCurrentFrameResources().depthTexture);
         if (pass.writesSwapchain)
             use(engine->swapchain.imageHandles[engine->imageIdx]);
     }
@@ -898,12 +877,6 @@ namespace rasm
             passes[passIdx].depthRenderTargets.push_back(h);
     }
 
-    void RenderGraph::readSwapchainDepth(uint32_t passIdx)
-    {
-        if (canReadDepth(engine, passes[passIdx], 1, Format::D32_SFLOAT))
-            passes[passIdx].readsSwapchainDepth = true;
-    }
-
     void RenderGraph::write(uint32_t passIdx, TextureHandle h) { passes[passIdx].outputTextures.push_back(h); }
 
     void RenderGraph::write(uint32_t passIdx, BufferHandle h) { passes[passIdx].outputBuffers.push_back(h); }
@@ -947,8 +920,6 @@ namespace rasm
     void PassBuilder::readPrevious(BufferHandle handle) { graph.readPrevious(currentPass, handle); }
 
     void PassBuilder::readDepth(RenderTargetHandle handle) { graph.readDepth(currentPass, handle); }
-
-    void PassBuilder::readSwapchainDepth() { graph.readSwapchainDepth(currentPass); }
 
     void PassBuilder::write(TextureHandle handle) { graph.write(currentPass, handle); }
 

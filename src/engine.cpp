@@ -23,7 +23,6 @@ namespace rasm
 {
     namespace
     {
-        constexpr glm::vec4 SWAPCHAIN_CLEAR_COLOR(0.018f, 0.018f, 0.018f, 1.0f);
         // Main-thread time a frame spends finishing loads. The load that crosses it still finishes.
         constexpr std::chrono::milliseconds LOAD_BUDGET(4);
 
@@ -143,7 +142,6 @@ namespace rasm
             return;
         }
 
-        // Swapchain images and depth textures. The depth textures go in the bindless set, so they come after it.
         if (!createSwapchainResources())
             return;
 
@@ -251,10 +249,11 @@ namespace rasm
         return graph;
     }
 
+    // The swapchain has no depth, so neither has the pipeline.
     PipelineHandle Engine::createPipeline(const std::string &name, const std::string &shaderSource)
     {
         const Format colorFormats[MAX_COLOR_ATTACHMENTS] = {ctx.getSwapchainImageFormat()};
-        return createGraphicsPipeline(name, shaderSource, colorFormats, DEPTH_FORMAT);
+        return createGraphicsPipeline(name, shaderSource, colorFormats, Format::UNKNOWN);
     }
 
     // The pipeline draws into targets with the formats of this one: its colors, in order, and its depth. A depth-only
@@ -583,8 +582,9 @@ namespace rasm
         uint32_t height = swapchain.height;
         TextureHandle colors[MAX_COLOR_ATTACHMENTS] = {swapchain.imageHandles[imageIdx]};
         uint32_t colorCount = 1;
-        TextureHandle depth = currentFrame.depthTexture;
-        glm::vec4 clearColor = SWAPCHAIN_CLEAR_COLOR;
+        // The swapchain has no depth: the scene draws into a render target, and the tone-map pass brings it here.
+        TextureHandle depth = {};
+        glm::vec4 clearColor = BACKGROUND_COLOR;
         if (currentRenderTarget.isValid())
         {
             const auto &renderTargetData = ctx.getRenderTarget(currentRenderTarget);
@@ -599,7 +599,8 @@ namespace rasm
         // What the pass clears is dropped.
         for (uint32_t i = 0; i < colorCount; ++i)
             ctx.transitionImageLayout(currentFrame.commandBuffer, colors[i], TextureUsage::COLOR_ATTACHMENT, !ops.loadColor);
-        ctx.transitionImageLayout(currentFrame.commandBuffer, depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT, !ops.loadDepth);
+        if (depth.isValid())
+            ctx.transitionImageLayout(currentFrame.commandBuffer, depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT, !ops.loadDepth);
         ctx.beginRendering(currentFrame.commandBuffer, colors, colorCount, depth, clearColor, ops);
 
         // begin dynamic rendering
@@ -666,36 +667,6 @@ namespace rasm
         auto extent = ctx.getSwapchainExtent();
         swapchain.width = extent.x;
         swapchain.height = extent.y;
-
-        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
-        {
-            const TextureDesc depthTextureDesc = {.name = "DepthTexture for Frame " + std::to_string(i),
-                                                  .width = swapchain.width,
-                                                  .height = swapchain.height,
-                                                  .format = DEPTH_FORMAT,
-                                                  .usage = config.occlusionCulling ? TextureUsage::SAMPLED_DEPTH_ATTACHMENT : TextureUsage::DEPTH_STENCIL_ATTACHMENT};
-
-            // The device is idle, so the old texture is unused, and the new one takes its bindless slot.
-            uint32_t depthSlot = MAX_BINDLESS_TEXTURES;
-            if (frameResources[i].depthTexture.isValid())
-            {
-                const uint32_t oldSlot = getBindlessTextureIndex(frameResources[i].depthTexture);
-                if (oldSlot != UINT32_MAX)
-                    depthSlot = oldSlot;
-                registry.bindlessTextureIndexMap.erase(frameResources[i].depthTexture);
-                ctx.destroyTexture(frameResources[i].depthTexture);
-            }
-            frameResources[i].depthTexture = ctx.createTexture(depthTextureDesc);
-            if (!frameResources[i].depthTexture.isValid())
-            {
-                spdlog::error("Failed to create depth texture for frame {}", i);
-                return false;
-            }
-
-            // The Hi-Z pass of addScenePasses samples it. Without a slot the scene is only frustum culled.
-            if (config.occlusionCulling)
-                addBindlessTexture(bindlessDescriptorSet, frameResources[i].depthTexture, SamplerType::NEAREST_CLAMP, depthSlot);
-        }
 
         ctx.resizeRenderTargets();
         updateCameraAspectRatio(static_cast<float>(swapchain.width) / static_cast<float>(swapchain.height));

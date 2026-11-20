@@ -691,7 +691,7 @@
   <li><b>Consume pending signals.</b> <code>releasePendingSemaphores</code> submits a wait-only batch for an image that was acquired but not submitted, and for one submitted but not presented.</li>
   <li><b>Go idle and rebuild.</b> The device waits idle, the old image views go, and the new swapchain is built with the old one as <code>oldSwapchain</code>. The old one is destroyed either way. If the build fails, there is no swapchain, and acquire reports <code>OUT_OF_DATE</code> until a rebuild works.</li>
   <li><b>New handles.</b> <code>RenderContext::recreateSwapchain</code> registers the new images under new texture handles.</li>
-  <li><b>Screen-sized resources.</b> <code>Engine::createSwapchainResources</code> recreates the depth texture of each frame slot at the new size, keeps its bindless slot, and sets the camera aspect ratio from the swapchain's extent.</li>
+  <li><b>Screen-sized resources.</b> <code>Engine::createSwapchainResources</code> rebuilds the render targets sized from the swapchain (<code>RenderContext::resizeRenderTargets</code>), which keep their bindless slots, and sets the camera aspect ratio from the swapchain's extent.</li>
 </ol>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>

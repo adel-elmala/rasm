@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cameras and Input · RASM</title>
 <meta name="description" content="Create and control cameras: projections, trackball and free-fly controllers, view and projection matrices, and the input that drives them.">
-<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/engine.h include/rasm/window.h include/rasm/scene.h src/scene/camera.cpp src/platform/window.cpp src/engine.cpp src/renderer/gpuScene.cpp src/scene/scene.cpp src/core/handle.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp">
+<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/engine.h include/rasm/window.h include/rasm/scene.h src/scene/camera.cpp src/platform/window.cpp src/engine.cpp src/renderer/gpuScene.cpp src/renderer/toneMap.cpp src/scene/scene.cpp src/core/handle.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -102,6 +102,7 @@
     <li>Pass the camera to <code>render</code>, <code>beginFrame</code> or <code>RenderGraph::execute</code>. That camera receives the mouse and keyboard input of the frame.</li>
     <li>The projection is reversed-Z: near is depth 1, far is depth 0. A perspective <code>farZ</code> of 0 (the default when you leave it out) means an infinite far plane.</li>
     <li><code>fovY</code> is in degrees. Free-fly <code>yaw</code> and <code>pitch</code> are in radians.</li>
+    <li>The camera also holds the <code>exposure</code> the tone-map pass uses: 1 by default, 2 is one stop brighter.</li>
     <li>An invalid handle logs <code>Invalid camera handle.</code> and the call does nothing (setters) or returns a default value (getters).</li>
   </ul>
 </div>
@@ -286,7 +287,7 @@ engine.setCameraController(camera, rasm::CameraController{
   </div>
 </div>
 
-<h2><span class="n">3</span>Set and read the pose and projection</h2>
+<h2><span class="n">3</span>Set and read the pose, projection and exposure</h2>
 
 <div class="table-wrap">
 <table>
@@ -325,6 +326,24 @@ engine.setCameraController(camera, rasm::CameraController{
   <pre class="sig">CameraProjection getCameraProjection(CameraHandle camera);</pre>
   <div class="body">
     <p>Returns a copy of the stored projection. Its aspect is the one of the last swapchain creation, unless you set another one after it. An invalid handle logs an error and returns <code>CameraProjection{}</code>.</p>
+  </div>
+</div>
+
+<div class="api" id="setCameraExposure">
+  <pre class="sig">void setCameraExposure(CameraHandle camera, float exposure);</pre>
+  <div class="body">
+    <p>How bright the camera sees the scene: the <a href="engine.html#addToneMapPass">tone-map pass</a> multiplies the scene's light by it before the tone curve, like a camera's exposure. 1 is the default; 2 is one stop brighter, 0.5 one stop darker. The pass reads it every time it runs, so the next frame shows it. How it works: <a href="../guides/tone-mapping.html">Tone mapping</a>.</p>
+    <dl>
+      <dt>exposure</dt><dd>A linear factor. 0, a negative value or NaN logs an error and keeps the old one.</dd>
+    </dl>
+    <pre><code>engine.setCameraExposure(camera, 2.0f); // one stop brighter</code></pre>
+  </div>
+</div>
+
+<div class="api" id="getCameraExposure">
+  <pre class="sig">float getCameraExposure(CameraHandle camera);</pre>
+  <div class="body">
+    <p>Returns the camera's exposure. An invalid handle logs an error and returns 1.</p>
   </div>
 </div>
 
@@ -453,12 +472,14 @@ engine.setCameraController(camera, rasm::CameraController{
     CameraController controller;
     Transform        transform;
     Transform        targetTransform;
+    float            exposure = 1.0f;
 };</pre>
   <div class="body">
     <p>What the engine stores per camera. You never get a <code>Camera</code> directly; use the getters above.</p>
     <dl>
       <dt>transform</dt><dd>The rendered pose, used by <code>getViewMatrix</code>.</dd>
       <dt>targetTransform</dt><dd>Where the controller wants the camera; <code>transform</code> eases toward it each frame.</dd>
+      <dt>exposure</dt><dd>The factor the tone-map pass multiplies the scene's light by (<a href="#setCameraExposure"><code>setCameraExposure</code></a>).</dd>
     </dl>
   </div>
 </div>

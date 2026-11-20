@@ -157,6 +157,13 @@ namespace rasm::gfx
         uint32_t         argument;
     };
 
+    // The tone-map pass's own push constants (shaders/passes/toneMap.slang).
+    struct ToneMapPushConstants
+    {
+        uint32_t         source;
+        float            exposure;
+    };
+
     // These structs are read by shaders/passes/rasm.slang through buffer-device-address pointers,
     // compiled with GLSL scalar layout. Any drift here silently corrupts the GPU reads (a wrong
     // vertsPtr/instancesPtr turns into a device lost on the first draw).
@@ -206,6 +213,8 @@ namespace rasm::gfx
     static_assert(offsetof(SceneData, lodPixelsPerUnit) == 836, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, lodDepthPlane) == 840, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(PushConstants) == PUSH_CONSTANTS_SIZE, "PushConstants must fill the pipelines' push-constant range");
+    static_assert(sizeof(ToneMapPushConstants) == 8, "ToneMapPushConstants must match the shader's scalar layout");
+    static_assert(offsetof(ToneMapPushConstants, exposure) == 4, "ToneMapPushConstants must match the shader's scalar layout");
 
 
 } // namespace rasm::gfx

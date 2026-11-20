@@ -98,8 +98,8 @@
   <pre class="sig">enum class MaterialType { PBR, UNLIT, COUNT };</pre>
   <div class="body">
     <dl>
-      <dt>PBR</dt><dd>Lit by the scene's lights (metallic-roughness model), tone mapped. Reads the texture slots listed in <a href="#PbrSlot">the slot table</a>.</dd>
-      <dt>UNLIT</dt><dd>Only the base color (texture × factor), not lit and not tone mapped, so authored colors reach the screen unchanged.</dd>
+      <dt>PBR</dt><dd>Lit by the scene's lights (metallic-roughness model). Reads the texture slots listed in <a href="#PbrSlot">the slot table</a>.</dd>
+      <dt>UNLIT</dt><dd>Only the base color (texture × factor), not lit. It goes through the tone map like every other color (<a href="../guides/tone-mapping.html">Tone mapping</a>).</dd>
       <dt>COUNT</dt><dd>Not a type; it counts the values.</dd>
     </dl>
   </div>

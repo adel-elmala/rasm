@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Color Spaces: sRGB and Linear · RASM</title>
 <meta name="description" content="How sRGB and linear color work: the sRGB transfer function, why lighting, filtering and blending must happen in linear light, which textures are color and which are data, how _SRGB formats convert in hardware, tone mapping, and how RASM does it.">
-<meta name="rasm-sources" content="src/assets/material.cpp src/assets/texture.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/engine.cpp include/rasm/types.h include/rasm/engine.h shaders/lib/pbr.slang shaders/lib/unlit.slang shaders/lib/core.slang shaders/passes/rasm.slang shaders/passes/statsOverlay.slang examples/05_city/main.cpp">
+<meta name="rasm-sources" content="src/assets/material.cpp src/assets/texture.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/engine.cpp include/rasm/types.h include/rasm/engine.h shaders/lib/pbr.slang shaders/lib/unlit.slang shaders/lib/core.slang shaders/passes/rasm.slang shaders/passes/statsOverlay.slang shaders/passes/toneMap.slang src/renderer/toneMap.cpp src/renderer/renderer.cpp examples/05_city/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -769,7 +769,7 @@ encode (linear light L → sRGB code s):
     <text x="380" y="240" class="mid small t-faint">a lamp-lit white wall</text>
     <text x="14" y="120" class="small">display</text>
   </svg>
-  <figcaption>Reinhard is the simplest tone map. Film-like curves (filmic, ACES, AgX) keep more contrast in the mid tones and handle saturated colors better. Most also multiply by an <b>exposure</b> first, like a camera.</figcaption>
+  <figcaption>Reinhard is the simplest tone map. Film-like curves (filmic, ACES, AgX) keep more contrast in the mid tones and handle saturated colors better. Most also multiply by an <b>exposure</b> first, like a camera. The <a href="tone-mapping.html">tone mapping</a> guide explains exposure and these curves in full.</figcaption>
 </figure>
 
 <h3>Reinhard, then encode</h3>
@@ -814,7 +814,7 @@ encode (linear light L → sRGB code s):
 
 <h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
-<p>RASM follows the textbook pipeline with 8-bit textures and an 8-bit sRGB swapchain. The GPU decodes color textures and encodes the output. Shaders work in linear only, and the PBR shader tone maps each pixel itself.</p>
+<p>RASM follows the textbook pipeline with 8-bit textures, a 16-bit float scene target and an 8-bit sRGB swapchain. The GPU decodes color textures and encodes the output. Shaders work in linear only. The material shaders write unbounded light, and one tone-map pass brings it to the swapchain.</p>
 
 <div class="legend">
   <span><i class="mem"></i>images and their formats</span>
@@ -823,7 +823,7 @@ encode (linear light L → sRGB code s):
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 200" role="img" aria-label="Base color and emissive textures are created as R8G8B8A8_SRGB; metallic-roughness, normal and occlusion as R8G8B8A8_UNORM. Their mips are made in linear light. The sampler decodes sRGB textures. shadePBR lights in linear with linear glTF factors and applies Reinhard. shadeUnlit returns factor times texture with no tone map. The swapchain, B8G8R8A8_SRGB, encodes on write.">
+  <svg viewBox="0 0 760 296" role="img" aria-label="Base color and emissive textures are created as R8G8B8A8_SRGB; metallic-roughness, normal and occlusion as R8G8B8A8_UNORM. Their mips are made in linear light. The sampler decodes sRGB textures. shadePBR lights in linear with linear glTF factors, with no upper limit. shadeUnlit returns factor times texture. Both write the 16-bit float target scene_hdr. The Tone Map pass multiplies by the exposure and applies AgX, into the swapchain, B8G8R8A8_SRGB, which encodes on write.">
     <text x="20" y="22" class="title t-cpu">CPU · texture formats</text>
     <rect x="20" y="34" width="200" height="56" rx="6" class="mem"/>
     <text x="120" y="56" class="mid mono small">R8G8B8A8_SRGB</text>
@@ -843,17 +843,25 @@ encode (linear light L → sRGB code s):
     <text x="510" y="22" class="mid title t-shader">GPU · fragMain</text>
     <rect x="420" y="34" width="180" height="56" rx="28" class="shader"/>
     <text x="510" y="56" class="mid mono">shadePBR</text>
-    <text x="510" y="76" class="mid small">linear light, then Reinhard</text>
+    <text x="510" y="76" class="mid small">linear light, no upper limit</text>
     <rect x="420" y="104" width="180" height="56" rx="28" class="shader"/>
     <text x="510" y="126" class="mid mono">shadeUnlit</text>
-    <text x="510" y="146" class="mid small">factor × texture, no tone map</text>
+    <text x="510" y="146" class="mid small">factor × texture</text>
 
-    <line x1="600" y1="62"  x2="638" y2="88"  class="arrow" marker-end="url(#ah)"/>
-    <line x1="600" y1="132" x2="638" y2="108" class="arrow" marker-end="url(#ah)"/>
-    <rect x="640" y="70" width="110" height="56" rx="6" class="mem"/>
-    <text x="695" y="92" class="mid small">swapchain</text>
-    <text x="695" y="112" class="mid mono small">B8G8R8A8_SRGB</text>
-    <text x="695" y="144" class="mid small">encodes on write</text>
+    <line x1="600" y1="62"  x2="624" y2="88"  class="arrow" marker-end="url(#ah)"/>
+    <line x1="600" y1="132" x2="624" y2="108" class="arrow" marker-end="url(#ah)"/>
+    <rect x="626" y="70" width="128" height="56" rx="6" class="mem"/>
+    <text x="690" y="92" class="mid mono small">scene_hdr</text>
+    <text x="690" y="112" class="mid small">16-bit float, linear</text>
+    <line x1="690" y1="126" x2="690" y2="156" class="arrow" marker-end="url(#ah)"/>
+    <rect x="626" y="158" width="128" height="52" rx="26" class="shader"/>
+    <text x="690" y="180" class="mid mono">Tone Map</text>
+    <text x="690" y="198" class="mid small">× exposure, AgX</text>
+    <line x1="690" y1="210" x2="690" y2="232" class="arrow" marker-end="url(#ah)"/>
+    <rect x="626" y="234" width="128" height="52" rx="6" class="mem"/>
+    <text x="690" y="256" class="mid small">swapchain</text>
+    <text x="690" y="274" class="mid mono small">B8G8R8A8_SRGB</text>
+    <text x="614" y="264" class="end small">encodes on write</text>
   </svg>
   <figcaption>glTF factors (base color, emissive, metallic, roughness) are linear in the file and are copied as they are. No shader applies the sRGB curve: the formats do it. Blending is off in every RASM pipeline, so the alpha the shaders return is not used for transparency.</figcaption>
 </figure>
@@ -868,11 +876,11 @@ encode (linear light L → sRGB code s):
   <tr><td>Mips</td><td>averaged in linear</td><td>Yes, for sRGB formats (see <a href="mipmaps-sampling.html#in-rasm">mipmaps</a>).</td></tr>
   <tr><td>Factors</td><td>linear</td><td>glTF factors are linear and copied as they are. Hand-made materials start with white base color (<code>createMaterial</code>); a color typed in by hand must be linear.</td></tr>
   <tr><td>Lighting</td><td>linear</td><td>Yes: <code>shadePBR</code> in <code>shaders/lib/pbr.slang</code>.</td></tr>
-  <tr><td>HDR target</td><td>16-bit float, tone map in a final pass</td><td>None. The scene draws straight into the 8-bit swapchain (or a render target of the same format), so each material shader tone maps its own result.</td></tr>
-  <tr><td>Tone mapping</td><td>exposure + a curve, before the encode</td><td>Reinhard, <code class="lang-text">c / (c + 1)</code> per channel, at the end of <code>shadePBR</code>; no exposure. <code>shadeUnlit</code> does not tone map: an unlit texture shows its own colors.</td></tr>
-  <tr><td>Output and encode</td><td>an _SRGB target encodes</td><td>The swapchain asks for <code>VK_FORMAT_B8G8R8A8_SRGB</code> with <code>VK_COLOR_SPACE_SRGB_NONLINEAR_KHR</code>. Render targets that <code>Engine::addScenePasses</code> draws into must have the swapchain's color format, so they are sRGB too, and are decoded again when a later pass samples them.</td></tr>
+  <tr><td>HDR target</td><td>16-bit float, tone map in a final pass</td><td>The same: the scene passes draw into a <code>SCENE_COLOR_FORMAT</code> (<code>R16G16B16A16_SFLOAT</code>) target, and <code>Engine::addToneMapPass</code> maps it to the swapchain in a pass of its own.</td></tr>
+  <tr><td>Tone mapping</td><td>exposure + a curve, before the encode</td><td>The camera's <code>exposure</code>, then AgX (<a href="tone-mapping.html#in-rasm">tone mapping</a>). Unlit materials and the clear color go through the same curve, so an unlit texture does not show its exact colors.</td></tr>
+  <tr><td>Output and encode</td><td>an _SRGB target encodes</td><td>The swapchain asks for <code>VK_FORMAT_B8G8R8A8_SRGB</code> with <code>VK_COLOR_SPACE_SRGB_NONLINEAR_KHR</code>. The scene targets are float, with no curve; only the swapchain encodes.</td></tr>
   <tr><td>Blending</td><td>in linear, by the _SRGB target</td><td>Not used: every pipeline has blending off.</td></tr>
-  <tr><td>Linear constants</td><td>clear colors are linear</td><td><code>SWAPCHAIN_CLEAR_COLOR</code> is 0.018 linear, which the encode turns into byte 36. The stats overlay's colors in <code>statsOverlay.slang</code> are linear too.</td></tr>
+  <tr><td>Linear constants</td><td>clear colors are linear</td><td><code>Engine::render</code> clears <code>scene_hdr</code> to <code>BACKGROUND_COLOR</code>, 0.018 linear, which then goes through the tone map. The same constant clears passes that draw straight to the swapchain, not tone mapped; the encode turns it into byte 36. The stats overlay's colors in <code>statsOverlay.slang</code> are linear too, and are not tone mapped.</td></tr>
 </table>
 </div>
 
@@ -886,7 +894,8 @@ encode (linear light L → sRGB code s):
   <tr><td>Loading a texture file</td><td><code>Engine::loadTexture</code> in <code>src/assets/texture.cpp</code>; its default format in <code>include/rasm/engine.h</code></td></tr>
   <tr><td>sRGB-correct mips</td><td><code>VulkanDevice::fillTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>Swapchain format</td><td><code>buildSwapchain</code> in <code>src/rhi/vulkan/vulkanSwapchain.cpp</code></td></tr>
-  <tr><td>Lighting and tone mapping</td><td><code>shadePBR</code> in <code>shaders/lib/pbr.slang</code>; <code>shadeUnlit</code> in <code>shaders/lib/unlit.slang</code></td></tr>
+  <tr><td>Lighting</td><td><code>shadePBR</code> in <code>shaders/lib/pbr.slang</code>; <code>shadeUnlit</code> in <code>shaders/lib/unlit.slang</code></td></tr>
+  <tr><td>Tone mapping</td><td><code>Engine::addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code>; the curve in <code>shaders/passes/toneMap.slang</code></td></tr>
   <tr><td>Hand-made textures, both kinds</td><td><code>createFilledTexture</code> calls in <code>examples/05_city/main.cpp</code></td></tr>
 </table>
 </div>
@@ -896,14 +905,15 @@ encode (linear light L → sRGB code s):
   <ul>
     <li>Normal, metallic-roughness and occlusion textures are <code>R8G8B8A8_UNORM</code>; color and emissive textures are <code>R8G8B8A8_SRGB</code>.</li>
     <li>Shaders output linear color. Never apply the sRGB curve in a shader: the swapchain format encodes.</li>
-    <li>The swapchain and any render target that <code>Engine::addScenePasses</code> draws into must be an sRGB format; with a UNORM one, the image comes out too dark.</li>
+    <li>The swapchain must be an sRGB format; with a UNORM one, the image comes out too dark.</li>
+    <li>Tone map once, in the tone-map pass. Material shaders write unbounded linear light.</li>
     <li>Material factors are linear. Convert a color from an sRGB color picker before storing it.</li>
   </ul>
 </div>
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>No HDR render target, no exposure, and no tone-mapping pass: Reinhard runs per material, and the unlit path is not tone mapped. The swapchain format is a request: <code>set_desired_format</code> asks vk-bootstrap for <code>VK_FORMAT_B8G8R8A8_SRGB</code>, and nothing checks the format it really chose.</p>
+  <p>No automatic exposure and no output to HDR displays. The swapchain format is a request: <code>set_desired_format</code> asks vk-bootstrap for <code>VK_FORMAT_B8G8R8A8_SRGB</code>, and nothing checks the format it really chose.</p>
 </div>
 
 <h3>Further reading</h3>

@@ -44,6 +44,7 @@ target_sources(rasm PRIVATE
     "renderer/renderer.cpp"
     "renderer/shaderCompiler.cpp"
     "renderer/statsOverlay.cpp"
+    "renderer/toneMap.cpp"
     "rhi/device.cpp"
     "rhi/memoryAliasing.cpp"
     "rhi/renderContext.cpp"

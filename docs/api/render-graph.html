@@ -219,7 +219,6 @@ public:
     void               readPrevious(RenderTargetHandle handle);
     void               readPrevious(BufferHandle handle);
     void               readDepth(RenderTargetHandle handle);
-    void               readSwapchainDepth();
     void               write(TextureHandle handle);
     void               write(BufferHandle handle);
     void               write(RenderTargetHandle rt);
@@ -265,17 +264,16 @@ void read(RenderTargetHandle handle);</pre>
 </div>
 
 <div class="api" id="readDepth">
-  <pre class="sig">void readDepth(RenderTargetHandle handle);
-void readSwapchainDepth();</pre>
+  <pre class="sig">void readDepth(RenderTargetHandle handle);</pre>
   <div class="body">
-    <p>This pass samples the depth of <code>handle</code>, or of the swapchain. Fetch the texture with <a href="#getRenderTargetDepthTexture">getRenderTargetDepthTexture</a> (the swapchain's is <code>getCurrentFrameResources().depthTexture</code>) and its index with <a href="materials.html#getBindlessTextureIndex">getBindlessTextureIndex</a>. It orders like <code>read(handle)</code>: after the last pass added before it that draws the target.</p>
+    <p>This pass samples the depth of <code>handle</code>. The swapchain has no depth to read. Fetch the texture with <a href="#getRenderTargetDepthTexture">getRenderTargetDepthTexture</a> and its index with <a href="materials.html#getBindlessTextureIndex">getBindlessTextureIndex</a>. It orders like <code>read(handle)</code>: after the last pass added before it that draws the target.</p>
     <ul>
       <li>The last pass before it that drew the target stores its depth.</li>
       <li>The graph moves the depth to <code>SAMPLED</code> before this pass.</li>
       <li>The next pass that draws the target moves the depth back to an attachment and loads it.</li>
     </ul>
     <p>The scene's <code>Hi-Z</code> pass uses it to build its depth pyramid between <code>Scene 1</code> and <code>Scene 2</code>, and a shadowed scene view reads its shadow map with it (<a href="engine.html#addScenePasses"><code>addScenePasses</code></a>).</p>
-    <p><span class="tag">errors</span> Only a <code>D32_SFLOAT</code> depth can be sampled. That of a depth-only target (no color formats) can always be read. The depth of any other target, or of the swapchain, needs <code>EngineConfig::occlusionCulling</code>: only then are those depth textures sampleable and in the bindless set. Otherwise it logs <code>Pass '…' reads a depth texture that can't be sampled: it needs D32_SFLOAT depth, and EngineConfig::occlusionCulling unless its target is depth-only; the read is ignored.</code> A pass that reads the depth of the target it draws to makes <code>compile</code> fail with <code>Pass '…' reads the render target it draws to.</code></p>
+    <p><span class="tag">errors</span> Only a <code>D32_SFLOAT</code> depth can be sampled. That of a depth-only target (no color formats) can always be read. The depth of any other target needs <code>EngineConfig::occlusionCulling</code>: only then are those depth textures sampleable and in the bindless set. Otherwise it logs <code>Pass '…' reads a depth texture that can't be sampled: it needs D32_SFLOAT depth, and EngineConfig::occlusionCulling unless its target is depth-only; the read is ignored.</code> A pass that reads the depth of the target it draws to makes <code>compile</code> fail with <code>Pass '…' reads the render target it draws to.</code></p>
   </div>
 </div>
 
@@ -334,13 +332,12 @@ void write(const BufferHandle (&amp;perFrame)[MAX_FRAMES_IN_FLIGHT]);</pre>
     bool                                compute             = false;
     bool                                async               = false;
     bool                                writesSwapchain     = false;
-    bool                                readsSwapchainDepth = false;
 
     uint32_t                inDegree = 0;
     std::vector&lt;uint32_t&gt;   successors;
 };</pre>
   <div class="body">
-    <p>What the graph stores per pass. <code>read</code> and <code>write</code> fill the input and output lists (the per-frame ones fill <code>frameInputBuffers</code> and <code>frameOutputBuffers</code>), <code>addComputePass</code> sets <code>compute</code>, <code>addAsyncComputePass</code> sets <code>compute</code> and <code>async</code>, <code>readPrevious</code> fills <code>previousRenderTargets</code> or <code>previousBuffers</code>, <code>readDepth</code> fills <code>depthRenderTargets</code>, <code>readSwapchainDepth</code> sets <code>readsSwapchainDepth</code>, and <code>writeSwapchain</code> sets <code>writesSwapchain</code>. <code>compile</code> fills <code>attachmentOps</code> (see <a href="#load-store">Load and store</a>). <code>inDegree</code> and <code>successors</code> are filled by <code>compile</code>: the number of passes that must run first, and the passes that wait for this one. You never build a <code>Pass</code> yourself.</p>
+    <p>What the graph stores per pass. <code>read</code> and <code>write</code> fill the input and output lists (the per-frame ones fill <code>frameInputBuffers</code> and <code>frameOutputBuffers</code>), <code>addComputePass</code> sets <code>compute</code>, <code>addAsyncComputePass</code> sets <code>compute</code> and <code>async</code>, <code>readPrevious</code> fills <code>previousRenderTargets</code> or <code>previousBuffers</code>, <code>readDepth</code> fills <code>depthRenderTargets</code>, and <code>writeSwapchain</code> sets <code>writesSwapchain</code>. <code>compile</code> fills <code>attachmentOps</code> (see <a href="#load-store">Load and store</a>). <code>inDegree</code> and <code>successors</code> are filled by <code>compile</code>: the number of passes that must run first, and the passes that wait for this one. You never build a <code>Pass</code> yourself.</p>
   </div>
 </div>
 
@@ -474,7 +471,7 @@ struct Access
       <li><b>The lifetimes</b>: one row per resource, one column per pass. <code>W</code> write, <code>R</code> read, <code>P</code> read of what the frame before left, <code>-</code> alive between its first and last use, <code>.</code> not used.</li>
     </ul>
     <p>The scene passes of <code>05_city</code>, cut short:</p>
-    <pre><code class="lang-text">Render graph: 5 passes, in the order they run, async compute off
+    <pre><code class="lang-text">Render graph: 6 passes, in the order they run, async compute off
 
 [0] Cull 1 (compute)
     reads:  buffer 'Visibility Buffer' (frame before)
@@ -483,18 +480,23 @@ struct Access
 
 [1] Scene 1 (graphics)
     reads:  buffer 'Visible Draw Buffer' (per frame)
-    writes: swapchain, swapchain depth
+    writes: target 'scene_hdr'
     attachments: clear color, clear depth, store depth
     before: [2] Hi-Z, [3] Cull 2, [4] Scene 2
 ...
+[5] Tone Map (graphics)
+    reads:  target 'scene_hdr'
+    writes: swapchain
+    attachments: clear color, no depth
+
 Lifetimes (W write, R read, P read of the frame before, - alive between uses, . not used):
-    01234
-    P--W.  buffer 'Visibility Buffer'
-    WR-WR  buffer 'Visible Draw Buffer'
-    .W--W  swapchain
-    .WR-W  swapchain depth
-    ..WR.  buffer 'Hi-Z Buffer'</code></pre>
-    <p>Names come from the descs (<code>BufferDesc::name</code>, <code>TextureDesc::name</code>, <code>RenderTargetDesc::name</code>); an unnamed resource shows its handle as <samp>#index:generation</samp>. A per-frame buffer is one row, named after its first slot. The swapchain and its depth have a row each: a pass that draws to the swapchain writes both, and a <code>readSwapchainDepth</code> reads only the depth. A transient target is marked <samp>(transient)</samp>; targets in columns that do not overlap can share memory. A graph that did not compile lists its passes in the order they were added, with no <code>before</code> lines. To see each pass's GPU time, use the <a href="engine.html#getFrameStats">frame stats</a>.</p>
+    012345
+    P--W..  buffer 'Visibility Buffer'
+    WR-WR.  buffer 'Visible Draw Buffer'
+    .WR-WR  target 'scene_hdr' (transient)
+    ..WR..  buffer 'Hi-Z Buffer'
+    .....W  swapchain</code></pre>
+    <p>Names come from the descs (<code>BufferDesc::name</code>, <code>TextureDesc::name</code>, <code>RenderTargetDesc::name</code>); an unnamed resource shows its handle as <samp>#index:generation</samp>. A per-frame buffer is one row, named after its first slot. The swapchain has a row and no depth: its passes show <samp>no depth</samp>. A transient target is marked <samp>(transient)</samp>; targets in columns that do not overlap can share memory. A graph that did not compile lists its passes in the order they were added, with no <code>before</code> lines. To see each pass's GPU time, use the <a href="engine.html#getFrameStats">frame stats</a>.</p>
   </div>
 </div>
 
@@ -508,8 +510,8 @@ Lifetimes (W write, R read, P read of the frame before, - alive between uses, . 
   <tr><td><code>read(texture)</code></td><td><code>transitionImageLayout(texture, SAMPLED)</code></td><td>unless it is <code>SAMPLED</code> already</td></tr>
   <tr><td><code>read(renderTarget)</code></td><td>nothing</td><td><code>endPass</code> of the pass that drew it left the color sampled</td></tr>
   <tr><td><code>readPrevious(renderTarget)</code></td><td><code>transitionImageLayout(previous copy, SAMPLED)</code>, after a clear if no frame drew it yet</td><td>the clear only once per copy</td></tr>
-  <tr><td><code>readDepth(renderTarget)</code> or <code>readSwapchainDepth()</code></td><td><code>transitionImageLayout(depth, SAMPLED)</code></td><td>the pass before that drew the target stores its depth</td></tr>
-  <tr><td><code>write(renderTarget)</code> or <code>writeSwapchain()</code></td><td><code>beginPass</code> moves color and depth to attachments, dropping their contents</td><td>the first pass on the target, which clears it</td></tr>
+  <tr><td><code>readDepth(renderTarget)</code></td><td><code>transitionImageLayout(depth, SAMPLED)</code></td><td>the pass before that drew the target stores its depth</td></tr>
+  <tr><td><code>write(renderTarget)</code> or <code>writeSwapchain()</code></td><td><code>beginPass</code> moves color and depth (the swapchain has only color) to attachments, dropping their contents</td><td>the first pass on the target, which clears it</td></tr>
   <tr><td>the same, after an earlier pass on the target</td><td><code>beginPass</code> moves them to attachments and keeps the contents</td><td>later passes, which load, also after a depth read</td></tr>
   <tr><td><code>read(buffer)</code></td><td><code>memoryBarrier</code>: last write's stage → this pass's stage</td><td>once per stage after each write</td></tr>
   <tr><td><code>readPrevious(buffer)</code></td><td><code>memoryBarrier</code>: last write's stage → this pass's stage</td><td>the last write is the previous frame's</td></tr>
@@ -562,25 +564,24 @@ Lifetimes (W write, R read, P read of the frame before, - alive between uses, . 
 <h3 id="load-store">Load and store</h3>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 150" role="img" aria-label="Three passes draw to the swapchain in add order: Background, UI, then the engine's stats overlay. Background clears color and depth and stores depth because UI loads it. UI loads color and depth. The stats overlay, drawn by endFrame, loads color and has no depth attachment.">
-    <text x="20" y="20" class="title">passes on one target, in add order</text>
+  <svg viewBox="0 0 760 150" role="img" aria-label="Two passes draw to one render target in add order: Opaque clears color and depth and stores depth because Transparent loads it; Transparent loads color and depth. Passes on the swapchain have no depth: the first clears color, each later one, the stats overlay included, loads color.">
+    <text x="20" y="20" class="title">passes on one render target, in add order</text>
     <rect x="20" y="34" width="210" height="70" rx="6" class="gpu"/>
-    <text x="125" y="56" class="mid mono">Background</text>
+    <text x="125" y="56" class="mid mono">Opaque</text>
     <text x="125" y="76" class="mid small">clear color + depth</text>
     <text x="125" y="93" class="mid small">store depth</text>
     <line x1="230" y1="69" x2="268" y2="69" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <rect x="270" y="34" width="210" height="70" rx="6" class="gpu"/>
-    <text x="375" y="56" class="mid mono">UI</text>
+    <text x="375" y="56" class="mid mono">Transparent</text>
     <text x="375" y="76" class="mid small">load color + depth</text>
     <text x="375" y="93" class="mid small">draws on top</text>
-    <line x1="480" y1="69" x2="518" y2="69" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <rect x="520" y="34" width="220" height="70" rx="6" class="cpu"/>
-    <text x="630" y="56" class="mid mono">stats overlay</text>
-    <text x="630" y="76" class="mid small">endFrame, if shown</text>
-    <text x="630" y="93" class="mid small">load color, no depth</text>
+    <text x="630" y="56" class="mid mono">swapchain passes</text>
+    <text x="630" y="76" class="mid small">no depth attachment</text>
+    <text x="630" y="93" class="mid small">first clears, later ones load color</text>
     <text x="20" y="132" class="small">The graph sets each pass's AttachmentOps in compile. A pass that loads waits for the one before; nothing is cleared twice.</text>
   </svg>
-  <figcaption>Each graphics pass gets <a href="engine.html#AttachmentOps">AttachmentOps</a> from <code>compile</code>: the first pass on a target clears it, each later one loads color and depth, and the pass before a loading one, or before a depth read, stores its depth. Color is always stored. Read the result in <code>Pass::attachmentOps</code>.</figcaption>
+  <figcaption>Each graphics pass gets <a href="engine.html#AttachmentOps">AttachmentOps</a> from <code>compile</code>: the first pass on a target clears it, each later one loads color and depth (only color on the swapchain, which has no depth), and the pass before a loading one, or before a depth read, stores its depth. Color is always stored. Read the result in <code>Pass::attachmentOps</code>.</figcaption>
 </figure>
 
 <h3>What one frame records: <code>examples/04_compute</code></h3>
@@ -662,7 +663,7 @@ Lifetimes (W write, R read, P read of the frame before, - alive between uses, . 
       <dt>name</dt><dd>A label. The textures are named <code>"&lt;name&gt; Color Texture"</code> (then <code>"&lt;name&gt; Color Texture 1"</code>, …) and <code>"&lt;name&gt; Depth Texture"</code> in debug tools.</dd>
       <dt>width, height</dt><dd>Pixels. Used when <code>swapchainScale</code> is 0.</dd>
       <dt>swapchainScale</dt><dd>Above 0: the size is the window's (the swapchain's, in pixels) times this, at least 1 × 1, and follows each resize. <code>1.0f</code> for full size, <code>0.5f</code> for half. A rebuilt history target loses last frame's image, and its first read after the resize sees <code>clearColor</code>.</dd>
-      <dt>colorFormats</dt><dd>One format per color attachment, up to <a href="types.html#MAX_COLOR_ATTACHMENTS">MAX_COLOR_ATTACHMENTS</a> (4); the list ends at the first <code>UNKNOWN</code>, so <code>.colorFormats = {format}</code> makes one. None makes a depth-only target, such as a shadow map: its passes draw only depth. For <a href="engine.html#addScenePasses"><code>addScenePasses</code></a>, or a pipeline from the two-argument <code>createPipeline</code>, use one attachment in the swapchain format: <code>engine.getRenderContext().getSwapchainImageFormat()</code>. For several, make the pipeline with <a href="#createPipeline-target">createPipeline(name, source, renderTarget)</a>.</dd>
+      <dt>colorFormats</dt><dd>One format per color attachment, up to <a href="types.html#MAX_COLOR_ATTACHMENTS">MAX_COLOR_ATTACHMENTS</a> (4); the list ends at the first <code>UNKNOWN</code>, so <code>.colorFormats = {format}</code> makes one. None makes a depth-only target, such as a shadow map: its passes draw only depth. For <a href="engine.html#addScenePasses"><code>addScenePasses</code></a>, use one attachment in <a href="types.html#SCENE_COLOR_FORMAT"><code>SCENE_COLOR_FORMAT</code></a>. Every target has a depth, so a pipeline that draws into one comes from <a href="#createPipeline-target">createPipeline(name, source, renderTarget)</a>.</dd>
       <dt>depthFormat</dt><dd>Needed: every pass binds a depth attachment. Use <code>Format::D32_SFLOAT</code> for the same reason. Only a <code>D32_SFLOAT</code> depth can be sampled (<a href="#readDepth">readDepth</a>, with <code>EngineConfig::occlusionCulling</code> or on a depth-only target), and occlusion culling needs that.</dd>
       <dt>clearColor</dt><dd>Linear color, the same for every color attachment. The first pass that writes the target clears to it, and each new history copy is cleared to it before the next frame's passes.</dd>
       <dt>history</dt><dd><code>true</code> keeps one copy per frame slot, so a pass can read last frame's color with <code>readPrevious</code>. It costs twice the memory. Leave it <code>false</code> for a target that is drawn and read in the same frame. A depth-only target can't have it: history keeps only colors.</dd>
@@ -816,8 +817,8 @@ if (engine.beginFrame(camera))
   <tr><td>Inputs</td><td>No vertex buffers: use <code>SV_VertexID</code> and read data through pointers</td><td><code>SV_DispatchThreadID</code>; data through pointers</td></tr>
   <tr><td>Push constants</td><td colspan="2"><code>PUSH_CONSTANTS_SIZE</code> = 16 bytes, <code>[[vk::push_constant]]</code>, e.g. one 8-byte buffer address + two 4-byte values</td></tr>
   <tr><td>Textures</td><td>Bindless array at <code>[[vk::binding(0, 0)]]</code></td><td>The same bindless array: bind it with <code>bindDescriptorSet</code>. No storage images, so compute writes buffers only.</td></tr>
-  <tr><td>Fixed state</td><td>Triangle list, no blending, depth test and write on (<code>GREATER_OR_EQUAL</code>), front face counter-clockwise, cull mode from the pass</td><td>–</td></tr>
-  <tr><td>Attachments</td><td>Swapchain color format + <code>D32_SFLOAT</code> depth, or the formats of a render target you pass</td><td>–</td></tr>
+  <tr><td>Fixed state</td><td>Triangle list, no blending, depth test and write on (<code>GREATER_OR_EQUAL</code>) when the pipeline has a depth, front face counter-clockwise, cull mode from the pass</td><td>–</td></tr>
+  <tr><td>Attachments</td><td>Swapchain color format with no depth, or the formats of a render target you pass</td><td>–</td></tr>
   <tr><td>Imports</td><td colspan="2">The search path is <code>&lt;shaderDir&gt;/lib</code>, so <code>import core;</code> works. Scalar layout, column-major matrices.</td></tr>
 </table>
 </div>
@@ -826,7 +827,7 @@ if (engine.beginFrame(camera))
   <pre class="sig">PipelineHandle createPipeline(const std::string&amp; name,
                               const std::string&amp; shaderSource);</pre>
   <div class="body">
-    <p>Compiles <code>shaderSource</code> (Slang) twice, for <code>vertMain</code> and <code>fragMain</code>, and makes a graphics pipeline from them. It compiles at once, on the calling thread, which can take a moment: create pipelines before the loop, not every frame.</p>
+    <p>Compiles <code>shaderSource</code> (Slang) twice, for <code>vertMain</code> and <code>fragMain</code>, and makes a graphics pipeline from them, for passes that draw into the swapchain: its color format and no depth. It compiles at once, on the calling thread, which can take a moment: create pipelines before the loop, not every frame.</p>
     <dl>
       <dt>name</dt><dd>A label for logs and debug tools. Two pipelines may share one name.</dd>
       <dt>shaderSource</dt><dd>The full Slang source, as a string (a raw string literal works well, see below). The same name and source give back the same pipeline.</dd>
@@ -840,7 +841,7 @@ if (engine.beginFrame(camera))
                               const std::string&amp; shaderSource,
                               const RenderTargetHandle&amp; renderTarget);</pre>
   <div class="body">
-    <p>The same, but the pipeline draws into targets with <code>renderTarget</code>'s formats: its color formats, in order, and its depth format. Use it for a target with several color attachments, or with formats other than the swapchain's. The target's textures need not exist yet: a transient target's handle is enough. In the shader, <code>fragMain</code> returns a struct with one output per attachment, in the target's order:</p>
+    <p>The same, but the pipeline draws into targets with <code>renderTarget</code>'s formats: its color formats, in order, and its depth format. Use it for every pass that draws into a render target: a target always has a depth, and the two-argument overload has none. The target's textures need not exist yet: a transient target's handle is enough. In the shader, <code>fragMain</code> returns a struct with one output per attachment, in the target's order:</p>
     <pre><code class="lang-slang">struct Targets
 {
     float4 color : SV_TARGET0;
@@ -908,7 +909,6 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
 
 // fullScreenTriangle is Slang source: a vertMain that covers the screen, the bindless
 // array, and push constants with two texture indices. Each pipeline adds its fragMain.
-auto trailPipeline = engine.createPipeline("trail", fullScreenTriangle + trailFragment);
 auto presentPipeline = engine.createPipeline("present", fullScreenTriangle + presentFragment);
 
 auto drawFullScreen = [&amp;engine](rasm::RenderContext &amp;ctx, rasm::PipelineHandle pipeline, uint32_t first, uint32_t second)
@@ -923,6 +923,7 @@ auto drawFullScreen = [&amp;engine](rasm::RenderContext &amp;ctx, rasm::Pipeline
 
 // History: one copy per frame slot, so the pass reads last frame's trail.
 rasm::RenderTargetHandle trailHandle{};
+rasm::PipelineHandle trailPipeline{};
 graph.addPass(
     "Trail",
     [&amp;](rasm::PassBuilder &amp;builder)
@@ -945,6 +946,9 @@ graph.addPass(
         drawFullScreen(ctx, trailPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(rtHandle)),
                        engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTexture(trailHandle)));
     });
+
+// The pipeline takes its formats, depth included, from the target it draws into.
+trailPipeline = engine.createPipeline("trail", fullScreenTriangle + trailFragment, trailHandle);
 
 // Transient. It starts after offscreen_rt's last pass, so the two share memory.
 // Two color attachments: the trail's color, and a mask of where the bunny is.
