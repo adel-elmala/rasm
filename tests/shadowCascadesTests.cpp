@@ -93,3 +93,11 @@ TEST_CASE("Moving the camera moves the cascade by whole texels")
         CHECK(std::abs(texels - std::round(texels)) < 1e-2f);
     }
 }
+
+TEST_CASE("An orthographic camera with its near plane behind it splits evenly")
+{
+    float splits[4] = {};
+    rasm::getShadowSplits(-10.0f, DISTANCE, 0.7f, 4, splits);
+    for (int i = 0; i < 4; ++i)
+        CHECK(splits[i] == doctest::Approx(-10.0f + (DISTANCE + 10.0f) * static_cast<float>(i + 1) / 4.0f));
+}

@@ -146,7 +146,7 @@ namespace rasm::gfx
         int32_t          forcedLod;
         uint32_t         shadowCascadeCount;
         int32_t          shadowLight;
-        glm::vec4        shadowSplits;
+        float            shadowSplits[MAX_SHADOW_CASCADES];
         glm::mat4        shadowMatrices[MAX_SHADOW_CASCADES];
         uint32_t         shadowTextures[MAX_SHADOW_CASCADES];
         float            lodPixelsPerUnit;

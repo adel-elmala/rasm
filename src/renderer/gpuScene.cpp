@@ -45,21 +45,25 @@ namespace rasm
             buffer = {};
         }
 
+        // An orthographic camera can see from a near plane at or behind itself.
         float getNearZ(const Camera &camera)
         {
-            const float nearZ = camera.projection.type == CameraProjection::Type::PERSPECTIVE ? camera.projection.perspective.nearZ : camera.projection.orthographic.nearZ;
-            return std::max(nearZ, 0.01f);
+            return camera.projection.type == CameraProjection::Type::PERSPECTIVE ? camera.projection.perspective.nearZ : camera.projection.orthographic.nearZ;
         }
 
         // The shadow's cascades fitted to the camera's view this frame. The view that reads them and their own views
-        // both call it, so the maps are drawn and read with the same matrices.
-        void fitShadowCascades(const Camera &camera, const glm::mat4 &projection, const glm::mat4 &view, const glm::vec3 &lightDirection, const SceneShadow &shadow, uint32_t mapSize, ShadowCascade *cascades, float *splits)
+        // both call it, so the maps are drawn and read with the same matrices. False, and no shadow, when the camera's
+        // near plane has moved to the shadow's distance or beyond since addShadowPasses.
+        bool fitShadowCascades(const Camera &camera, const glm::mat4 &projection, const glm::mat4 &view, const glm::vec3 &lightDirection, const SceneShadow &shadow, uint32_t mapSize, ShadowCascade *cascades, float *splits)
         {
             const float nearZ = getNearZ(camera);
+            if (!(shadow.distance > nearZ))
+                return false;
             getShadowSplits(nearZ, shadow.distance, shadow.splitLambda, shadow.cascadeCount, splits);
             const glm::mat4 world = glm::inverse(view);
             for (uint32_t i = 0; i < shadow.cascadeCount; ++i)
                 cascades[i] = fitShadowCascade(projection, world, lightDirection, i == 0 ? nearZ : splits[i - 1], splits[i], mapSize, shadow.distance);
+            return true;
         }
 
         // Level 0 is half the pass's size, rounded up, and each level halves the one before, down to 1x1 (occlusionCulling.slang).
@@ -502,7 +506,7 @@ namespace rasm
 
     // The scene in passes of the graph: culling, the draws, and with occlusion culling the Hi-Z build, the late culling
     // and the late draws. They draw into renderTarget, so later passes on that target load what they drew. A
-    // depth-only target gets only depth (passes named "Shadow ..."). Each view (scene, camera, target, shadow) culls
+    // depth-only target gets only depth (passes named "Shadow ...", or "Cascade i ..." for a shadow cascade). Each view (scene, camera, target, shadow) culls
     // into buffers of its own, kept from frame to frame while a graph holds the view, which its passes declare:
     // per-slot buffers by both slots, so their handles hold for every frame. The cull stats are not declared: the views
     // only add to them atomically, and only the CPU reads them, after the slot's fence, so views need no order between
@@ -562,6 +566,16 @@ namespace rasm
                 spdlog::error("addScenePasses needs a shadow that addShadowPasses made for the same scene and camera in this graph.");
                 return false;
             }
+            // The cascades are fitted to the aspect ratio of the one view that reads them.
+            for (uint32_t heldView : graph.sceneViews)
+            {
+                const SceneView &held = gpuScene->views[heldView];
+                if (!held.depthOnly && held.shadow == shadow)
+                {
+                    spdlog::error("addScenePasses: a shadow from addShadowPasses is read by one view only.");
+                    return false;
+                }
+            }
         }
 
         return addSceneViewPasses(graph, scene, camera, renderTarget, shadow, depthOnly);
@@ -591,6 +605,16 @@ namespace rasm
             !(desc.splitLambda >= 0.0f && desc.splitLambda <= 1.0f))
         {
             spdlog::error("addShadowPasses needs 1 to {} cascades, a size above 0, a distance beyond the camera's near plane and a splitLambda from 0 to 1.", MAX_SHADOW_CASCADES);
+            return {};
+        }
+
+        // Each cascade is a new view, so check for room before adding any, and leave no cascade without a reader.
+        uint32_t freeViews = 0;
+        for (const SceneView &view : gpuScene->views)
+            freeViews += view.graphs == 0 ? 1 : 0;
+        if (freeViews < desc.cascadeCount)
+        {
+            spdlog::error("addShadowPasses needs {} free scene views, and {} of {} are free.", desc.cascadeCount, freeViews, MAX_SCENE_VIEWS);
             return {};
         }
 
@@ -911,13 +935,23 @@ namespace rasm
         const glm::mat4 cameraProjection = getProjectionMatrix(view.camera, static_cast<float>(cameraWidth) / static_cast<float>(cameraHeight));
         const glm::mat4 cameraView = getViewMatrix(view.camera);
 
+        // A light taken out of the scene casts no shadow, and its cascades draw nothing.
+        int32_t shadowLight = -1;
+        for (uint32_t i = 0; view.shadow.cascadeCount > 0 && i < sceneRef.lights.size(); ++i)
+        {
+            if (sceneRef.lights[i] == view.shadow.light)
+                shadowLight = static_cast<int32_t>(i);
+        }
         ShadowCascade cascades[MAX_SHADOW_CASCADES] = {};
         float splits[MAX_SHADOW_CASCADES] = {};
-        if (view.shadow.cascadeCount > 0)
+        if (shadowLight >= 0)
         {
             const glm::vec3 lightDirection = registry.lights[view.shadow.light.index].direction;
-            fitShadowCascades(cameraRef, cameraProjection, cameraView, lightDirection, view.shadow, ctx.getRenderTarget(view.shadow.cascades[0]).width, cascades, splits);
+            if (!fitShadowCascades(cameraRef, cameraProjection, cameraView, lightDirection, view.shadow, ctx.getRenderTarget(view.shadow.cascades[0]).width, cascades, splits))
+                shadowLight = -1;
         }
+        if (cascade && shadowLight < 0)
+            return;
 
         gfx::SceneData sceneData{};
         sceneData.projection = cameraProjection;
@@ -976,20 +1010,15 @@ namespace rasm
         sceneData.forcedLod = config.forcedLod;
         sceneData.shadowCascadeCount = 0;
         sceneData.shadowLight = -1;
-        // A light taken out of the scene casts no shadow.
-        for (uint32_t i = 0; !view.depthOnly && view.shadow.cascadeCount > 0 && i < sceneData.numLights; ++i)
+        if (!view.depthOnly && shadowLight >= 0)
         {
-            if (sceneRef.lights[i] == view.shadow.light)
-                sceneData.shadowLight = static_cast<int32_t>(i);
-        }
-        if (sceneData.shadowLight >= 0)
-        {
+            sceneData.shadowLight = shadowLight;
             sceneData.shadowCascadeCount = view.shadow.cascadeCount;
             for (uint32_t i = 0; i < view.shadow.cascadeCount; ++i)
             {
                 sceneData.shadowMatrices[i] = cascades[i].projection * cascades[i].view;
                 sceneData.shadowTextures[i] = getBindlessTextureIndex(ctx.getRenderTarget(view.shadow.cascades[i]).attachments[frame].depth);
-                sceneData.shadowSplits[static_cast<int>(i)] = splits[i];
+                sceneData.shadowSplits[i] = splits[i];
             }
         }
 

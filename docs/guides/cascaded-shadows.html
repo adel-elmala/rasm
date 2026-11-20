@@ -459,7 +459,7 @@ if (shadow.cascadeCount == 0 || !engine.addScenePasses(graph, scene, camera, sce
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Lights</td><td>a directional light</td><td>One directional light per shadow, <code>ShadowDesc::light</code>. Other lights and the ambient term are not shadowed. Spot and point light shadows are planned (<a href="../development_plan.md">development plan</a>, phase 4).</td></tr>
   <tr><td>Cascades</td><td>2 to 4</td><td>1 to <code>MAX_SHADOW_CASCADES</code> (4), <code>cascadeCount</code>; each a <code>size</code> × <code>size</code> depth-only target, <samp>shadow_cascade_0</samp> and up, made in the graph.</td></tr>
-  <tr><td>Splits</td><td>the lambda mix</td><td>The same formula in <code>getShadowSplits</code>, from the camera's near plane (at least 0.01) to <code>distance</code>, with <code>splitLambda</code>.</td></tr>
+  <tr><td>Splits</td><td>the lambda mix</td><td>The same formula in <code>getShadowSplits</code>, from the camera's near plane to <code>distance</code>, with <code>splitLambda</code>. An orthographic camera whose near plane is at or behind it gets the even split only. When the near plane has moved to <code>distance</code> or beyond, there is no shadow and the cascades draw nothing.</td></tr>
   <tr><td>Fit</td><td>a sphere on the view axis</td><td><code>fitShadowCascade</code>: the formula above, from the camera's projection fitted to the shaded view's target. The light's up axis is world +y, or +z when the light is almost vertical.</td></tr>
   <tr><td>Casters toward the light</td><td>extend the box</td><td>The box starts <code>distance</code> before the sphere, toward the light.</td></tr>
   <tr><td>Snap</td><td>whole texels</td><td>Yes: the sphere's centre, rounded down to whole texels in the light's frame.</td></tr>
@@ -487,7 +487,7 @@ if (shadow.cascadeCount == 0 || !engine.addScenePasses(graph, scene, camera, sce
 <div class="callout rule">
   <strong>Keep these true</strong>
   <ul>
-    <li>The views that draw the cascades and the view that reads them must fit with the same inputs in the same frame: the same camera, the same aspect ratio, the same <code>SceneShadow</code>. <code>addScenePasses</code> rejects a shadow that <code>addShadowPasses</code> did not make for the same scene and camera in the same graph.</li>
+    <li>The views that draw the cascades and the view that reads them must fit with the same inputs in the same frame: the same camera, the same aspect ratio, the same <code>SceneShadow</code>. <code>addScenePasses</code> rejects a shadow that <code>addShadowPasses</code> did not make for the same scene and camera in the same graph, and a second view that reads the same shadow.</li>
     <li>The sphere's radius must not depend on the camera's direction, and the box must move in whole texels, or shadows shimmer and crawl.</li>
     <li><code>MAX_SHADOW_CASCADES</code> in <code>include/rasm/scene.h</code> and in <code>shaders/lib/core.slang</code> must match.</li>
     <li>The cascade loop in <code>sampleShadow</code> stays unrolled, so each texture index is uniform over the draw.</li>

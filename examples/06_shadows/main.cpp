@@ -23,7 +23,9 @@ namespace
 
 namespace
 {
+    // The inset shader below draws one tile per cascade, for MAX_SHADOW_CASCADES cascades.
     constexpr uint32_t CASCADE_COUNT = 4;
+    static_assert(CASCADE_COUNT == rasm::MAX_SHADOW_CASCADES, "the inset shader draws MAX_SHADOW_CASCADES tiles");
 
     rasm::MeshHandle createCube(rasm::Engine &engine)
     {

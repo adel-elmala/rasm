@@ -9,14 +9,15 @@ namespace rasm
 {
     // Each split is where a cascade ends, as a view depth. A logarithmic split gives every cascade the same ratio of
     // far to near, so the texels on screen stay the same size; an even split gives the far cascades more of the
-    // near ones' detail. splitLambda mixes the two. The last split is distance.
+    // near ones' detail. splitLambda mixes the two. The last split is distance. An orthographic camera's near plane
+    // can be at or behind it, where only the even split exists.
     void getShadowSplits(float nearZ, float distance, float splitLambda, uint32_t count, float *splits)
     {
         for (uint32_t i = 1; i <= count; ++i)
         {
             const float t = static_cast<float>(i) / static_cast<float>(count);
-            const float logarithmic = nearZ * std::pow(distance / nearZ, t);
             const float even = nearZ + (distance - nearZ) * t;
+            const float logarithmic = nearZ > 0.0f ? nearZ * std::pow(distance / nearZ, t) : even;
             splits[i - 1] = splitLambda * logarithmic + (1.0f - splitLambda) * even;
         }
         splits[count - 1] = distance;

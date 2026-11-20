@@ -148,7 +148,7 @@ struct SceneData
     int32_t             forcedLod;          // >= 0: every draw uses this LOD (or its mesh's coarsest), for debugging
     uint32_t            shadowCascadeCount; // 0: no shadow
     int32_t             shadowLight;        // index in lights of the light the shadow darkens, -1 without one
-    float4              shadowSplits;       // the view depth where each cascade ends; the last one is the shadow's distance
+    float               shadowSplits[MAX_SHADOW_CASCADES]; // the view depth where each cascade ends; the last one is the shadow's distance
     float4x4            shadowMatrices[MAX_SHADOW_CASCADES]; // world to each cascade's clip space: its projection * view
     uint32_t            shadowTextures[MAX_SHADOW_CASCADES]; // bindless index of each cascade's depth
     float               lodPixelsPerUnit;   // the LOD camera's pixels per world unit at view depth 1 (lodSelection.slang)
