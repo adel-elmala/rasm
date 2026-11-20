@@ -221,7 +221,7 @@ public:
     void               readDepth(RenderTargetHandle handle);
     void               write(TextureHandle handle);
     void               write(BufferHandle handle);
-    void               write(RenderTargetHandle rt);
+    void               write(RenderTargetHandle rt, uint32_t face = 0);
     void               write(const BufferHandle (&amp;perFrame)[MAX_FRAMES_IN_FLIGHT]);
     void               writeSwapchain();
 };</pre>
@@ -299,9 +299,10 @@ void write(const BufferHandle (&amp;perFrame)[MAX_FRAMES_IN_FLIGHT]);</pre>
 </div>
 
 <div class="api" id="write-renderTarget">
-  <pre class="sig">void write(RenderTargetHandle rt);</pre>
+  <pre class="sig">void write(RenderTargetHandle rt, uint32_t face = 0);</pre>
   <div class="body">
     <p>This graphics pass draws into <code>rt</code>. A pass has one output target: a second call replaces the first. Passes that draw into the same <code>rt</code> run in the order they were added, and a pass that reads <code>rt</code> runs after the last of them added before it.</p>
+    <p><code>face</code> is the face of a cube target (<a href="#RenderTargetDesc"><code>RenderTargetDesc::cube</code></a>), 0 to <code>CUBE_FACES</code> − 1, in Vulkan's order +X, −X, +Y, −Y, +Z, −Z. Each face's first pass clears it, and a later pass on that face loads it. Any other target has only face 0: a higher one makes <code>compile</code> fail. A point light's shadow draws its cube this way (<a href="../guides/local-light-shadows.html">Spot and point light shadows</a>).</p>
   </div>
 </div>
 
@@ -327,6 +328,7 @@ void write(const BufferHandle (&amp;perFrame)[MAX_FRAMES_IN_FLIGHT]);</pre>
     std::vector&lt;FrameBuffers&gt;           frameInputBuffers;
     std::vector&lt;FrameBuffers&gt;           frameOutputBuffers;
     RenderTargetHandle                  outputRenderTarget;
+    uint32_t                            outputFace          = 0;
     std::function&lt;void(RenderContext&amp;)&gt; execute;
     AttachmentOps                       attachmentOps;
     bool                                compute             = false;
@@ -655,6 +657,7 @@ Lifetimes (W write, R read, P read of the frame before, - alive between uses, . 
     Format      depthFormat    = Format::UNKNOWN;
     glm::vec4   clearColor     = glm::vec4(0.0f);
     bool        history        = false;
+    bool        cube           = false;
 
     bool operator==(const RenderTargetDesc&amp;) const = default;
 };</pre>
@@ -667,6 +670,7 @@ Lifetimes (W write, R read, P read of the frame before, - alive between uses, . 
       <dt>depthFormat</dt><dd>Needed: every pass binds a depth attachment. Use <code>Format::D32_SFLOAT</code> for the same reason. Only a <code>D32_SFLOAT</code> depth can be sampled (<a href="#readDepth">readDepth</a>, with <code>EngineConfig::occlusionCulling</code> or on a depth-only target), and occlusion culling needs that.</dd>
       <dt>clearColor</dt><dd>Linear color, the same for every color attachment. The first pass that writes the target clears to it, and each new history copy is cleared to it before the next frame's passes.</dd>
       <dt>history</dt><dd><code>true</code> keeps one copy per frame slot, so a pass can read last frame's color with <code>readPrevious</code>. It costs twice the memory. Leave it <code>false</code> for a target that is drawn and read in the same frame. A depth-only target can't have it: history keeps only colors.</dd>
+      <dt>cube</dt><dd><code>true</code>: the depth is a cube texture of <code>CUBE_FACES</code> (6) square faces, sampled in a shader as a <var>SamplerCube</var>. Only for a depth-only target with a fixed square size (no colors, <code>swapchainScale</code> 0, <code>width</code> = <code>height</code>); anything else is rejected. Each pass draws one face, named with <a href="#write-renderTarget"><code>write(rt, face)</code></a>. A point light's shadow is one (<a href="../guides/local-light-shadows.html">Spot and point light shadows</a>).</dd>
     </dl>
     <p>The full target, with its per-slot textures, is the <a href="types.html#RenderTarget">RenderTarget</a> that <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns.</p>
   </div>
@@ -778,9 +782,9 @@ Lifetimes (W write, R read, P read of the frame before, - alive between uses, . 
 </ul>
 
 <div class="api" id="setRenderTarget">
-  <pre class="sig">void setRenderTarget(const RenderTargetHandle&amp; renderTarget);</pre>
+  <pre class="sig">void setRenderTarget(const RenderTargetHandle&amp; renderTarget, uint32_t face = 0);</pre>
   <div class="body">
-    <p>The next <code>beginPass</code> draws into this target instead of the swapchain. For frames you write by hand with <code>beginFrame</code> / <code>beginPass</code>; <code>RenderGraph::execute</code> calls it for each pass from the pass's <code>write</code>.</p>
+    <p>The next <code>beginPass</code> draws into this target instead of the swapchain; into face <code>face</code> of a cube target. For frames you write by hand with <code>beginFrame</code> / <code>beginPass</code>; <code>RenderGraph::execute</code> calls it for each pass from the pass's <code>write</code>.</p>
   </div>
 </div>
 

@@ -390,10 +390,10 @@
 
 <h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
-<p>RASM has cascaded shadows for one directional light per shaded view. <code>Engine::addShadowPasses</code> makes the cascades: one depth-only render target and one set of scene passes per cascade, all drawn from the application's camera. It returns a <code>SceneShadow</code>, which <code>addScenePasses</code> takes for the view that is shaded with it. No light camera exists: every view of the shadow fits the cascades again each frame, with the same function, so the maps are drawn and read with the same matrices. <code>examples/06_shadows</code> shows it.</p>
+<p>RASM has cascaded shadows for directional lights; a shaded view reads up to <code>MAX_VIEW_SHADOWS</code> (4) shadows. <code>Engine::addShadowPasses</code> makes the cascades: one depth-only render target and one set of scene passes per cascade, all drawn from the application's camera. It returns a <code>SceneShadow</code>, which <code>addScenePasses</code> takes for the view that is shaded with it. No light camera exists: every view of the shadow fits the cascades again each frame, with the same function, so the maps are drawn and read with the same matrices. <code>examples/06_shadows</code> shows it.</p>
 
 <pre><code>const rasm::SceneShadow shadow = engine.addShadowPasses(graph, scene, camera, rasm::ShadowDesc{.light = sun, .cascadeCount = CASCADE_COUNT, .size = 2048, .distance = 60.0f, .splitLambda = 0.7f});
-if (shadow.cascadeCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTarget, shadow))
+if (shadow.mapCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTarget, &amp;shadow, 1))
     return 1;</code></pre>
 
 <div class="legend">
@@ -404,19 +404,19 @@ if (shadow.cascadeCount == 0 || !engine.addScenePasses(graph, scene, camera, sce
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 400" role="img" aria-label="The application calls addShadowPasses, which creates four depth-only targets and adds Cascade passes for each, then addScenePasses with the SceneShadow. Every frame, prepareSceneView of each view calls fitShadowCascades: getShadowSplits and fitShadowCascade per cascade. The cascade passes draw depth into shadow_cascade_0 to 3; the Scene passes read them with readDepth. In fragMain, sampleShadow picks a cascade by view depth and sampleCascade does the normal offset and PCF; shadePBR applies the result to lights[shadowLight].">
+  <svg viewBox="0 0 760 400" role="img" aria-label="The application calls addShadowPasses, which creates four depth-only targets and adds Cascade passes for each, then addScenePasses with the SceneShadow. Every frame, prepareSceneView of each view calls getShadowMaps: getShadowSplits and fitShadowCascade per cascade. The cascade passes draw depth into shadow_cascade_0 to 3; the Scene passes read them with readDepth. In fragMain, sampleShadow picks a cascade by view depth and sampleShadowMap does the offset and PCF; shadePBR applies the result to that light.">
     <text x="20" y="22" class="title t-cpu">application · once, when building the graph</text>
     <rect x="20"  y="32" width="340" height="56" rx="6" class="cpu"/>
     <text x="190" y="54" class="mid mono small">addShadowPasses(graph, scene, camera,</text>
     <text x="190" y="72" class="mid mono small">ShadowDesc{light, cascadeCount, ...})</text>
     <rect x="400" y="32" width="340" height="56" rx="6" class="cpu"/>
     <text x="570" y="54" class="mid mono small">addScenePasses(graph, scene, camera,</text>
-    <text x="570" y="72" class="mid mono small">sceneTarget, shadow)</text>
+    <text x="570" y="72" class="mid mono small">sceneTarget, &amp;shadow, 1)</text>
     <line x1="360" y1="60" x2="398" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
 
     <text x="20" y="116" class="title t-cpu">every frame, each view's prepareSceneView</text>
     <rect x="20" y="126" width="720" height="40" rx="6" class="cpu"/>
-    <text x="380" y="151" class="mid small">fitShadowCascades: getShadowSplits, then fitShadowCascade per cascade (sphere, box along the light, snap)</text>
+    <text x="380" y="151" class="mid small">getShadowMaps: getShadowSplits, then fitShadowCascade per cascade (sphere, box along the light, snap)</text>
 
     <text x="20" y="194" class="title t-gpu">GPU · in graph order</text>
     <rect x="20"  y="204" width="200" height="50" rx="6" class="gpu"/>
@@ -429,15 +429,15 @@ if (shadow.cascadeCount == 0 || !engine.addScenePasses(graph, scene, camera, sce
     <text x="479" y="220" class="mid small">readDepth</text>
     <rect x="510" y="204" width="230" height="50" rx="6" class="gpu"/>
     <text x="625" y="225" class="mid">Cull, Scene (rasm.slang)</text>
-    <text x="625" y="242" class="mid small">SceneData: splits, matrices, textures</text>
+    <text x="625" y="242" class="mid small">SceneData::shadowMaps: matrix, texture, split</text>
 
-    <text x="20" y="286" class="title t-shader">fragMain → sampleShadow → sampleCascade (shaders/lib/shadow.slang)</text>
+    <text x="20" y="286" class="title t-shader">fragMain → sampleShadow → sampleShadowMap (shaders/lib/shadow.slang)</text>
     <rect x="20"  y="296" width="170" height="60" rx="30" class="shader"/>
     <text x="105" y="320" class="mid small">view depth →</text>
     <text x="105" y="338" class="mid small">first split beyond it</text>
     <line x1="190" y1="326" x2="208" y2="326" class="arrow" marker-end="url(#ah)"/>
     <rect x="210" y="296" width="170" height="60" rx="30" class="shader"/>
-    <text x="295" y="320" class="mid small">normal offset, PCF;</text>
+    <text x="295" y="320" class="mid small">offset, PCF;</text>
     <text x="295" y="338" class="mid small">off the edge → next</text>
     <line x1="380" y1="326" x2="398" y2="326" class="arrow" marker-end="url(#ah)"/>
     <rect x="400" y="296" width="160" height="60" rx="30" class="shader"/>
@@ -446,8 +446,8 @@ if (shadow.cascadeCount == 0 || !engine.addScenePasses(graph, scene, camera, sce
     <line x1="560" y1="326" x2="578" y2="326" class="arrow" marker-end="url(#ah)"/>
     <rect x="580" y="296" width="160" height="60" rx="30" class="shader"/>
     <text x="660" y="320" class="mid small">lit 0..1 → shadePBR</text>
-    <text x="660" y="338" class="mid small">lights[shadowLight]</text>
-    <text x="20" y="384" class="small">Four cascades and the shaded view use 5 of the 8 scene views (MAX_SCENE_VIEWS).</text>
+    <text x="660" y="338" class="mid small">× that light (shadows[i])</text>
+    <text x="20" y="384" class="small">Four cascades and the shaded view use 5 of the 16 scene views (MAX_SCENE_VIEWS).</text>
   </svg>
   <figcaption>Each cascade is an ordinary scene view of the application's camera, culled on the GPU with the cascade's own matrices. Its passes are named <samp>Cascade 0 Cull 1</samp>, <samp>Cascade 0 1</samp> and so on in the GPU timers and the graph dump. A cascade takes each caster's LOD from the camera and from the shaded view's target size, so a surface is shadowed by the same triangles it is drawn with (<a href="lod-selection.html">LOD selection</a>).</figcaption>
 </figure>
@@ -457,15 +457,15 @@ if (shadow.cascadeCount == 0 || !engine.addScenePasses(graph, scene, camera, sce
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Lights</td><td>a directional light</td><td>One directional light per shadow, <code>ShadowDesc::light</code>. Other lights and the ambient term are not shadowed. Spot and point light shadows are planned (<a href="../development_plan.md">development plan</a>, phase 4).</td></tr>
+  <tr><td>Lights</td><td>a directional light</td><td>One directional light per shadow, <code>ShadowDesc::light</code>; a view reads up to <code>MAX_VIEW_SHADOWS</code> (4) shadows. Spot and point lights have shadows of their own kind (<a href="local-light-shadows.html">Spot and point light shadows</a>). The ambient term is not shadowed.</td></tr>
   <tr><td>Cascades</td><td>2 to 4</td><td>1 to <code>MAX_SHADOW_CASCADES</code> (4), <code>cascadeCount</code>; each a <code>size</code> × <code>size</code> depth-only target, <samp>shadow_cascade_0</samp> and up, made in the graph.</td></tr>
   <tr><td>Splits</td><td>the lambda mix</td><td>The same formula in <code>getShadowSplits</code>, from the camera's near plane to <code>distance</code>, with <code>splitLambda</code>. An orthographic camera whose near plane is at or behind it gets the even split only. When the near plane has moved to <code>distance</code> or beyond, there is no shadow and the cascades draw nothing.</td></tr>
   <tr><td>Fit</td><td>a sphere on the view axis</td><td><code>fitShadowCascade</code>: the formula above, from the camera's projection fitted to the shaded view's target. The light's up axis is world +y, or +z when the light is almost vertical.</td></tr>
   <tr><td>Casters toward the light</td><td>extend the box</td><td>The box starts <code>distance</code> before the sphere, toward the light.</td></tr>
   <tr><td>Snap</td><td>whole texels</td><td>Yes: the sphere's centre, rounded down to whole texels in the light's frame.</td></tr>
-  <tr><td>Who fits</td><td>once per frame</td><td><code>prepareSceneView</code> of every view of the shadow calls <code>fitShadowCascades</code> with the same inputs, so the drawing and the reading views agree.</td></tr>
-  <tr><td>Picking</td><td>by view depth</td><td><code>sampleShadow</code>: the first cascade whose <code>shadowSplits</code> entry is at least the view depth; a lookup that <code>sampleCascade</code> finds off the map goes on to the next. Unrolled over <code>MAX_SHADOW_CASCADES</code>.</td></tr>
-  <tr><td>Filtering, bias</td><td>as for one map</td><td>Per cascade, from <a href="shadow-mapping.html">Shadow mapping</a>: normal offset of 1 to 3 texels, one texel of depth bias, 3x3 PCF with bilinear weights. Both offsets in the texels of the cascade that is read.</td></tr>
+  <tr><td>Who fits</td><td>once per frame</td><td><code>prepareSceneView</code> of every view of the shadow calls <code>getShadowMaps</code> with the same inputs, so the drawing and the reading views agree.</td></tr>
+  <tr><td>Picking</td><td>by view depth</td><td><code>sampleShadow</code>: the first cascade whose <code>split</code> (in <code>SceneData::shadowMaps</code>) is at least the view depth; a lookup that <code>sampleShadowMap</code> finds off the map goes on to the next. Unrolled over <code>MAX_SHADOW_CASCADES</code>.</td></tr>
+  <tr><td>Filtering, bias</td><td>as for one map</td><td>Per cascade, from <a href="shadow-mapping.html">Shadow mapping</a>: 1 to 3 texels along the normal and one toward the light, 3x3 PCF with bilinear weights. Both offsets in the texels of the cascade that is read.</td></tr>
   <tr><td>Seams</td><td>blend over a band</td><td>No blend: the cascade changes at the split. A fade over the last tenth of <code>distance</code>.</td></tr>
 </table>
 </div>
@@ -477,9 +477,9 @@ if (shadow.cascadeCount == 0 || !engine.addScenePasses(graph, scene, camera, sce
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>The API</td><td><code>ShadowDesc</code>, <code>SceneShadow</code>, <code>MAX_SHADOW_CASCADES</code> in <code>include/rasm/scene.h</code>; <code>Engine::addShadowPasses</code>, <code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Split and fit math</td><td><code>getShadowSplits</code>, <code>fitShadowCascade</code>, <code>ShadowCascade</code> in <code>src/renderer/shadowCascades.cpp</code>; tested in <code>tests/shadowCascadesTests.cpp</code></td></tr>
-  <tr><td>Fitting every frame</td><td><code>fitShadowCascades</code> and <code>Engine::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>GPU fields</td><td><code>shadowCascadeCount</code>, <code>shadowLight</code>, <code>shadowSplits</code>, <code>shadowMatrices</code>, <code>shadowTextures</code> in <code>SceneData</code>: <code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
-  <tr><td>The lookup</td><td><code>sampleShadow</code> and <code>sampleCascade</code> in <code>shaders/lib/shadow.slang</code>; applied by <code>shadePBR</code> in <code>shaders/lib/pbr.slang</code></td></tr>
+  <tr><td>Fitting every frame</td><td><code>getShadowMaps</code> and <code>Engine::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>GPU fields</td><td><code>shadowMaps</code> in <code>SceneData</code> (a cascade's <code>matrix</code>, <code>texture</code> and <code>split</code>) and the light's <code>shadowMap</code>, <code>shadowMapCount</code>: <code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
+  <tr><td>The lookup</td><td><code>sampleShadow</code> and <code>sampleShadowMap</code> in <code>shaders/lib/shadow.slang</code>; applied by <code>shadePBR</code> in <code>shaders/lib/pbr.slang</code></td></tr>
   <tr><td>An example</td><td><code>examples/06_shadows/main.cpp</code>: four cascades, and an inset with the four maps</td></tr>
 </table>
 </div>
@@ -491,7 +491,7 @@ if (shadow.cascadeCount == 0 || !engine.addScenePasses(graph, scene, camera, sce
     <li>The sphere's radius must not depend on the camera's direction, and the box must move in whole texels, or shadows shimmer and crawl.</li>
     <li><code>MAX_SHADOW_CASCADES</code> in <code>include/rasm/scene.h</code> and in <code>shaders/lib/core.slang</code> must match.</li>
     <li>The cascade loop in <code>sampleShadow</code> stays unrolled, so each texture index is uniform over the draw.</li>
-    <li>The offsets read a texel's size from rows 0 and 2 of a cascade's matrix, which holds because the box is orthographic.</li>
+    <li>The offsets read a texel's size from row 0 of a cascade's matrix and the point's clip w, which is 1 in the orthographic box.</li>
   </ul>
 </div>
 

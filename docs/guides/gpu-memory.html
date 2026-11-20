@@ -855,7 +855,7 @@
 <table>
   <tr><th>Buffer</th><th>Kind</th><th>Copies</th><th>Written by</th></tr>
   <tr><td>Upload staging ring</td><td><code>hostVisible</code></td><td>1</td><td><code>UploadManager::upload</code></td></tr>
-  <tr><td>Scene data</td><td><code>hostVisible</code></td><td>1 per frame slot, room for <code>MAX_SCENE_VIEWS</code> = 8 scene views</td><td><code>prepareSceneView</code></td></tr>
+  <tr><td>Scene data</td><td><code>hostVisible</code></td><td>1 per frame slot, room for <code>MAX_SCENE_VIEWS</code> = 16 scene views</td><td><code>prepareSceneView</code></td></tr>
   <tr><td>Cull stats</td><td><code>hostVisible</code> + <code>hostReadable</code></td><td>1 per frame slot</td><td>the GPU; read by <code>updateFrameStats</code></td></tr>
   <tr><td>Instance and material tables</td><td>default</td><td>1 per frame slot</td><td><code>GpuTable::upload</code></td></tr>
   <tr><td>Vertex pool, index pool, geometry table</td><td>default</td><td>1</td><td><code>GeometryPool::upload</code></td></tr>

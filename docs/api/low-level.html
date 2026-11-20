@@ -309,11 +309,13 @@ constexpr uint32_t QUEUE_COUNT = 2;</pre>
                     uint32_t colorCount,
                     TextureHandle depthAttachment,
                     const glm::vec4&amp; clearColor,
-                    const AttachmentOps&amp; ops = {});</pre>
+                    const AttachmentOps&amp; ops = {},
+                    uint32_t face = 0);</pre>
   <div class="body">
     <p>Starts a render pass into <code>colorCount</code> color textures (1 to <code>MAX_COLOR_ATTACHMENTS</code>) and one depth texture. By default every color is cleared to <code>clearColor</code> and depth to 0; one load op serves all colors. Color is kept (stored) at the end of the pass; depth only with <code>ops.storeDepth</code>. Pass an invalid <code>depthAttachment</code> for a pass without depth; its pipelines must then have <code>Format::UNKNOWN</code> as their depth format.</p>
     <dl>
       <dt>ops</dt><dd>See <a href="engine.html#AttachmentOps">AttachmentOps</a>. <code>loadColor</code> / <code>loadDepth</code> keep what an attachment holds instead of clearing it. Use them to draw on top of an earlier pass, as the scene's <code>Scene 2</code> pass does after <code>Scene 1</code> and the Hi-Z build. Before a load, transition the attachment to <code>COLOR_ATTACHMENT</code> or <code>DEPTH_STENCIL_ATTACHMENT</code> without <code>discard</code>, even when it is already in that layout: the barrier orders the earlier writes before the load. <code>storeDepth</code> keeps depth for a later load or a read; without it depth may be thrown away, which saves memory bandwidth.</dd>
+      <dt>face</dt><dd>Of a cube depth (<a href="#TextureDesc"><code>TextureDesc::cube</code></a>): the face to draw into, 0 to <code>CUBE_FACES</code> − 1. Must be 0 for any other depth.</dd>
     </dl>
     <p><code>Engine::beginPass</code> calls this after the layout transitions, with its <code>ops</code> (a render graph sets them for each pass), and also sets the viewport, scissor and cull mode, so use <code>beginPass</code> unless you build the whole frame yourself.</p>
   </div>
@@ -563,6 +565,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
     uint32_t     height = 0;
     Format       format = Format::UNKNOWN;
     TextureUsage usage  = TextureUsage::SAMPLED;
+    bool         cube   = false;
 
     bool operator==(const TextureDesc&amp;) const = default;
 };</pre>
@@ -571,7 +574,15 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <dt>width, height</dt><dd>Pixels.</dd>
       <dt>format</dt><dd>See <a href="types.html#Format">Format</a>. Color data uses <code>R8G8B8A8_SRGB</code>; normal, metallic-roughness and occlusion data <code>R8G8B8A8_UNORM</code>.</dd>
       <dt>usage</dt><dd>What the texture is created for, see <a href="#TextureUsage">TextureUsage</a>.</dd>
+      <dt>cube</dt><dd><code>true</code>: <code>CUBE_FACES</code> square layers, one per face of a cube, in Vulkan's order +X, −X, +Y, −Y, +Z, −Z. Its bindless slot holds a cube view, which a shader reads as a <var>SamplerCube</var>; each face also has its own view, which <a href="#beginRendering"><code>beginRendering</code></a> draws into. A render target with <code>RenderTargetDesc::cube</code> makes one for its depth. Only a depth attachment can be a cube (<code>DEPTH_STENCIL_ATTACHMENT</code> or <code>SAMPLED_DEPTH_ATTACHMENT</code>): <code>createTexture</code> rejects any other usage with an error.</dd>
     </dl>
+  </div>
+</div>
+
+<div class="api" id="CUBE_FACES">
+  <pre class="sig">constexpr uint32_t CUBE_FACES = 6;</pre>
+  <div class="body">
+    <p>The faces of a cube texture (<code>rasm/render/resource.h</code>).</p>
   </div>
 </div>
 

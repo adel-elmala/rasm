@@ -1,0 +1,811 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local Light Shadows · RASM</title>
+<meta name="description" content="How spot lights and point lights cast shadows: a perspective shadow map at the light. The spot light's cone and its one map, the point light's cube map with six 90 degree faces, how a direction picks its face, why the faces' cameras are mirrored, why the bias grows with distance, and seamless filtering. Then how RASM does it.">
+<meta name="rasm-sources" content="src/renderer/localShadows.cpp src/renderer/localShadows.h shaders/lib/shadow.slang shaders/lib/pbr.slang shaders/passes/rasm.slang shaders/lib/core.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/uberMaterialTypes.h src/renderer/renderGraph.cpp src/scene/light.cpp src/rhi/vulkan/vulkanDevice.cpp include/rasm/scene.h include/rasm/engine.h include/rasm/light.h include/rasm/render/resource.h include/rasm/render/renderGraph.h tests/localShadowsTests.cpp examples/07_lights/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/local-light-shadows.js"></script>
+</head>
+<body data-root="../" data-page="guides/local-light-shadows.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+    <marker id="ah-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head light"/></marker>
+    <marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Shadows of spot and point lights</h1>
+<p class="lead">A spot light and a point light sit at one point and shine outward. Their shadow maps are drawn by a <b>perspective</b> camera at the light: one camera along the cone for a spot light, six cameras in a cube for a point light. This page explains the cone, the cube map and how a direction picks its face, why the cube's cameras are mirrored, and why the bias must grow with distance. It builds on <a href="shadow-mapping.html">Shadow mapping</a>. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Rays leave the light from one point, so the light's camera is a <b>perspective</b> camera at the light, not an orthographic box.</li>
+    <li>A <b>spot light</b> has a cone: full light inside the inner angle, a smooth fade to 0 at the outer angle. Its shadow is <b>one square map</b> along the cone's axis, with a field of view of 2 × the outer angle.</li>
+    <li>A <b>point light</b> shines everywhere. Its shadow is a <b>cube map</b>: 6 faces, each a 90° view. A direction belongs to the face of its <b>biggest axis</b>, and the depth to compare is the distance <b>along that axis</b>.</li>
+    <li>The cube faces' cameras are <b>mirrored</b>, so the face passes swap back-face and front-face culling.</li>
+    <li>In a perspective map a texel gets <b>bigger with distance</b>, so the bias grows with distance too.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>The problem: rays from one point</h2>
+
+<p>The sun is far away, so its rays are parallel and an orthographic box fits them. A lamp is close. Its rays fan out from one point, so the camera that draws its shadow map must fan out the same way.</p>
+
+<div class="legend">
+  <span><i class="light"></i>light rays</span>
+  <span><i class="hot"></i>the shadow map's camera</span>
+  <span><i class="shade"></i>in shadow</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="Left: the sun's parallel rays come down into an orthographic box. Its texel columns have the same width near and far. Right: a lamp at one point. Its rays fan out, and the shadow map's camera is a perspective frustum from the lamp. Its texel columns get wider with distance.">
+    <text x="20" y="22" class="title">Sun: parallel rays</text>
+    <line x1="70"  y1="38" x2="70"  y2="80" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="130" y1="38" x2="130" y2="80" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="190" y1="38" x2="190" y2="80" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="250" y1="38" x2="250" y2="80" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="310" y1="38" x2="310" y2="80" class="arrow light" marker-end="url(#ah-light)"/>
+    <rect x="40" y="88" width="300" height="104" class="hot"/>
+    <path d="M100,88V192M160,88V192M220,88V192M280,88V192" class="grid"/>
+    <rect x="112" y="146" width="36" height="40" class="solid"/>
+    <rect x="112" y="186" width="36" height="6" class="shade"/>
+    <circle cx="250" cy="170" r="16" class="solid"/>
+    <line x1="40" y1="192" x2="340" y2="192" class="surface"/>
+    <text x="190" y="112" class="mid small t-hot halo">orthographic box</text>
+    <text x="190" y="216" class="mid small">texels: the same size near and far</text>
+
+    <line x1="380" y1="10" x2="380" y2="230" class="dashed"/>
+
+    <text x="410" y="22" class="title">Spot or point light: rays from one point</text>
+    <polygon points="562,58 578,58 700,192 440,192" class="hot"/>
+    <path d="M570,46L505,192M570,46L570,192M570,46L635,192" class="grid"/>
+    <line x1="565" y1="58" x2="514" y2="136" class="arrow light" marker-end="url(#ah-light)"/>
+    <line x1="575" y1="58" x2="626" y2="136" class="arrow light" marker-end="url(#ah-light)"/>
+    <circle cx="570" cy="44" r="9" class="light"/>
+    <rect x="552" y="150" width="36" height="36" class="solid"/>
+    <polygon points="552,186 588,186 594,192 546,192" class="shade"/>
+    <line x1="430" y1="192" x2="710" y2="192" class="surface"/>
+    <text x="588" y="48" class="small t-hot">near plane</text>
+    <text x="750" y="120" class="end small t-hot">perspective</text>
+    <text x="570" y="216" class="mid small">texels: bigger far from the light</text>
+  </svg>
+  <figcaption>The test is the same as for the sun (<a href="shadow-mapping.html#test">Shadow mapping, section 4</a>): move the point into the light's clip space, divide by <var>w</var>, read the map, compare. Only the camera changes. With a perspective camera, <var>w</var> is the depth from the light, not 1.</figcaption>
+</figure>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Parallel rays and four boxes of growing size, one per cascade.">
+      <line x1="60"  y1="6" x2="60"  y2="30" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="120" y1="6" x2="120" y2="30" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="180" y1="6" x2="180" y2="30" class="arrow light" marker-end="url(#ah-light)"/>
+      <rect x="20"  y="84" width="30" height="30" class="hot"/>
+      <rect x="56"  y="70" width="44" height="44" class="hot"/>
+      <rect x="106" y="56" width="58" height="58" class="hot"/>
+      <rect x="170" y="42" width="52" height="72" class="hot"/>
+    </svg>
+    <h4>Directional (sun)</h4>
+    <p>Orthographic boxes along the light, often several <a href="cascaded-shadows.html">cascades</a>.</p>
+    <p class="cost">1 to 4 maps</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="One light at the top. One perspective frustum opens downward along the cone.">
+      <polygon points="114,26 126,26 196,118 44,118" class="hot"/>
+      <polygon points="120,16 186,110 54,110" class="lit o-50"/>
+      <circle cx="120" cy="14" r="7" class="light"/>
+      <text x="120" y="100" class="mid small">one map</text>
+    </svg>
+    <h4>Spot</h4>
+    <p>One perspective map along the cone's axis (sections 2 and 3).</p>
+    <p class="cost">1 map</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A light inside a cube. The cube's diagonals split the space around it into four 90 degree wedges in this view.">
+      <rect x="65" y="10" width="110" height="110" class="hot"/>
+      <line x1="65" y1="10" x2="175" y2="120" class="dashed"/>
+      <line x1="175" y1="10" x2="65" y2="120" class="dashed"/>
+      <circle cx="120" cy="65" r="7" class="light"/>
+      <text x="182" y="62" class="small">6 faces,</text>
+      <text x="182" y="78" class="small">90° each</text>
+    </svg>
+    <h4>Point</h4>
+    <p>A cube map: six perspective maps of 90°, one per face (sections 4 to 6).</p>
+    <p class="cost">6 maps in one cube</p>
+  </div>
+</div>
+
+<h2 id="spot"><span class="n">2</span>The spot light's cone</h2>
+
+<p>A spot light shines inside a cone around its direction. Two angles, measured from the axis, shape it: inside the <b>inner</b> angle the light is full; between inner and <b>outer</b> it fades; outside the outer angle there is no light.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 260" role="img" aria-label="Left: a side view of a spot light shining down. The inner cone is fully lit, the ring between the inner and the outer cone fades, and outside the outer cone it is dark. Right: a graph of the light against the angle from the axis. The cone factor is 1 up to the inner angle of 18 degrees, then falls to 0 at the outer angle of 30 degrees. Its square, which is applied to the light, starts and ends more smoothly.">
+    <polygon points="190,30 311,240 69,240" class="lit o-50"/>
+    <polygon points="190,30 258,240 122,240" class="lit"/>
+    <line x1="190" y1="30" x2="311" y2="240" class="arrow light"/>
+    <line x1="190" y1="30" x2="69"  y2="240" class="arrow light"/>
+    <line x1="190" y1="30" x2="258" y2="240" class="dashed"/>
+    <line x1="190" y1="30" x2="122" y2="240" class="dashed"/>
+    <line x1="190" y1="30" x2="190" y2="250" class="dashed"/>
+    <path d="M190,90 A60,60 0 0,0 220,82" class="arrow hot"/>
+    <path d="M190,130 A100,100 0 0,1 159,125" class="arrow hot"/>
+    <circle cx="190" cy="28" r="9" class="light"/>
+    <text x="236" y="100" class="small t-hot halo">outer</text>
+    <text x="172" y="152" class="mid small t-hot halo">inner</text>
+    <text x="190" y="214" class="mid small halo">full light</text>
+    <text x="280" y="232" class="mid small halo">fade</text>
+    <text x="100" y="232" class="mid small halo">fade</text>
+    <text x="326" y="150" class="small t-faint">no light</text>
+    <text x="16" y="150" class="small t-faint">no light</text>
+
+    <text x="440" y="26" class="title">The light, by angle from the axis</text>
+    <path d="M440,50V210H735" class="arrow" marker-end="url(#ah)"/>
+    <path d="M440,50H593L601.5,60.4L610,71.4L618.5,82.9L627,94.9L635.5,107.5L644,120.6L652.5,134.2L661,148.3L669.5,163L678,178.2L686.5,193.8L695,210H729" class="arrow light dashed"/>
+    <path d="M440,50H593L601.5,70.2L610,89.9L618.5,109L627,127.2L635.5,144.3L644,160L652.5,174.1L661,186.2L669.5,196.2L678,203.7L686.5,208.4L695,210H729" class="arrow light thick"/>
+    <line x1="593" y1="44" x2="593" y2="214" class="dashed"/>
+    <line x1="695" y1="44" x2="695" y2="214" class="dashed"/>
+    <text x="432" y="54" class="end small">1</text>
+    <text x="432" y="214" class="end small">0</text>
+    <text x="593" y="230" class="mid small t-hot">inner 18°</text>
+    <text x="695" y="230" class="mid small t-hot">outer 30°</text>
+    <text x="516" y="230" class="mid small">angle →</text>
+    <text x="634" y="92" class="small">cone</text>
+    <text x="650" y="186" class="end small">cone²</text>
+  </svg>
+  <figcaption>The dashed curve is the cone factor. The light is multiplied by its square (the thick curve), which starts and ends the fade more softly. The factor uses the cosine of the angle, so the shader needs no <var>acos</var>.</figcaption>
+</figure>
+
+<p>The rule is the one of the glTF lights extension (<samp>KHR_lights_punctual</samp>). Two numbers per light, worked out once on the CPU, turn the cosine into the cone factor:</p>
+
+<div class="formula">
+  <p class="eq">cone = saturate(cos θ · scale + offset)</p>
+  <p class="eq">scale = 1 / max(cos(inner) − cos(outer), 0.001)</p>
+  <p class="eq">offset = −cos(outer) · scale</p>
+  <p class="eq">light = color · intensity · cone² / distance²</p>
+  <dl>
+    <dt>cos θ</dt><dd>dot(light direction, −l): the cosine of the angle between the axis and the ray to the point</dd>
+    <dt>saturate</dt><dd>clamp to 0..1: 1 at cos(inner), 0 at cos(outer)</dd>
+    <dt>0.001</dt><dd>keeps the division finite when inner and outer are equal: the fade becomes a hard edge</dd>
+    <dt>distance²</dt><dd>the usual inverse-square falloff of a light at a point, often with a smooth window that ends at the light's range</dd>
+  </dl>
+</div>
+
+<h2 id="spot-map"><span class="n">3</span>The spot light's shadow map</h2>
+
+<p>A spot light needs only one map. Its camera sits at the light and looks along the axis. The field of view is 2 × the outer angle, so the cone just fits. The map is square, so the cone is the circle inside the square.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 290" role="img" aria-label="Left: a side view. The spot light's camera is a perspective frustum at the light with a field of view of twice the outer angle, the same as the cone. A box casts a shadow onto the ground. Right: the shadow map as the light sees it, a square with a texel grid. The outer cone is the circle that touches the square's sides; the inner cone is a smaller circle in the middle. The square's corners are in the map but get no light.">
+    <polygon points="161,50 179,50 283,230 57,230" class="lit o-50"/>
+    <polygon points="161,50 179,50 283,230 57,230" class="hot"/>
+    <line x1="170" y1="34" x2="104" y2="230" class="dashed"/>
+    <line x1="170" y1="34" x2="236" y2="230" class="dashed"/>
+    <polygon points="150,140 133,230 207,230 190,140" class="shade"/>
+    <rect x="150" y="140" width="40" height="30" class="solid"/>
+    <line x1="40" y1="230" x2="300" y2="230" class="surface"/>
+    <path d="M170,84 A50,50 0 0,1 145,77" class="arrow hot"/>
+    <path d="M170,84 A50,50 0 0,0 195,77" class="arrow hot"/>
+    <circle cx="170" cy="32" r="9" class="light"/>
+    <text x="186" y="47" class="small t-hot">near</text>
+    <text x="204" y="80" class="small t-hot">field of view = 2 × outer</text>
+    <text x="170" y="262" class="mid small">one perspective map along the axis</text>
+    <text x="170" y="278" class="mid small t-faint">outside the map: no shadow test</text>
+
+    <line x1="320" y1="130" x2="450" y2="130" class="arrow" marker-end="url(#ah)"/>
+    <text x="385" y="120" class="mid small">seen from the light</text>
+
+    <rect x="470" y="20" width="220" height="220" class="paper"/>
+    <circle cx="580" cy="130" r="110" class="lit o-50"/>
+    <circle cx="580" cy="130" r="62" class="lit"/>
+    <path d="M525,20V240M580,20V240M635,20V240M470,75H690M470,130H690M470,185H690" class="grid"/>
+    <rect x="470" y="20" width="220" height="220" class="hot"/>
+    <circle cx="580" cy="130" r="110" class="arrow light"/>
+    <circle cx="580" cy="130" r="62" class="dashed"/>
+    <text x="580" y="134" class="mid small halo">full light</text>
+    <text x="580" y="50" class="mid small halo">fade</text>
+    <text x="702" y="134" class="small t-hot">map</text>
+    <text x="580" y="262" class="mid small">the cone is the circle inside the square map</text>
+    <text x="580" y="278" class="mid small t-faint">corners: in the map, but no light</text>
+  </svg>
+  <figcaption>The corners hold about a fifth of the texels and get no light, so they are wasted. That is the price of a square texture for a round cone. A point outside the map has no shadow information; with a field of view of 2 × outer, every such point is outside the cone and gets no light anyway.</figcaption>
+</figure>
+
+<p>Try the cone and its map. The light is at the top and shines down. Drag the point <b>P</b>, and change the two angles.</p>
+
+<div class="legend">
+  <span><i class="light"></i>the cone: full, then fading</span>
+  <span><i class="hot"></i>the map's width at P's depth</span>
+</div>
+
+<figure class="lab" data-lab="spot-cone" data-title="Shape a spot light">
+  <figcaption>Move P from the axis to the cone's edge and watch cone² fall. Then open the outer angle wide: the map's width at P grows quickly, and so does one texel. Set inner above outer to see the fade disappear.</figcaption>
+</figure>
+
+<h2 id="cube"><span class="n">4</span>The point light's cube map</h2>
+
+<p>A point light shines in all directions. No single perspective camera sees everything: a field of view must stay well below 180°. Six cameras of 90° do it, one along each axis: +X, −X, +Y, −Y, +Z, −Z. Their images are the six faces of a <b>cube map</b>, one texture with six square layers.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 310" role="img" aria-label="The six faces of a cube map, unfolded into a cross. The middle row from left to right is minus X, plus Z, plus X, minus Z. Plus Y is above plus Z and minus Y below it. Each face shows its layer number and the world directions in which its texel coordinates s and t grow. On the right: in every face, s grows to the right and t grows down, from (0, 0) at the top left corner to (1, 1) at the bottom right. Neighbour faces in the cross share their edge texels' directions.">
+    <rect x="120" y="20"  width="90" height="90" class="mem"/>
+    <rect x="30"  y="110" width="90" height="90" class="mem"/>
+    <rect x="120" y="110" width="90" height="90" class="mem"/>
+    <rect x="210" y="110" width="90" height="90" class="mem"/>
+    <rect x="300" y="110" width="90" height="90" class="mem"/>
+    <rect x="120" y="200" width="90" height="90" class="mem"/>
+    <rect x="205" y="110" width="10" height="90" class="accent"/>
+
+    <text x="165" y="56"  class="mid big">+Y</text><text x="165" y="74"  class="mid small">layer 2</text><text x="165" y="94"  class="mid small">s: +x · t: +z</text>
+    <text x="75"  y="146" class="mid big">−X</text><text x="75"  y="164" class="mid small">layer 1</text><text x="75"  y="184" class="mid small">s: +z · t: −y</text>
+    <text x="165" y="146" class="mid big">+Z</text><text x="165" y="164" class="mid small">layer 4</text><text x="165" y="184" class="mid small">s: +x · t: −y</text>
+    <text x="255" y="146" class="mid big">+X</text><text x="255" y="164" class="mid small">layer 0</text><text x="255" y="184" class="mid small">s: −z · t: −y</text>
+    <text x="345" y="146" class="mid big">−Z</text><text x="345" y="164" class="mid small">layer 5</text><text x="345" y="184" class="mid small">s: −x · t: −y</text>
+    <text x="165" y="236" class="mid big">−Y</text><text x="165" y="254" class="mid small">layer 3</text><text x="165" y="274" class="mid small">s: +x · t: −z</text>
+
+    <text x="440" y="30" class="title">Every face, as a texture</text>
+    <rect x="470" y="56" width="120" height="120" class="mem"/>
+    <line x1="470" y1="46" x2="600" y2="46" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="460" y1="56" x2="460" y2="186" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="606" y="50" class="small t-hot">s</text>
+    <text x="448" y="190" class="small t-hot">t</text>
+    <circle cx="470" cy="56" r="4" class="solid"/>
+    <circle cx="590" cy="176" r="4" class="solid"/>
+    <text x="478" y="72" class="small">(0, 0)</text>
+    <text x="582" y="168" class="end small">(1, 1)</text>
+    <text x="610" y="110" class="small">s grows right,</text>
+    <text x="610" y="126" class="small">t grows down</text>
+    <text x="440" y="222" class="small">"s: −z" means: s grows toward −z.</text>
+    <text x="440" y="242" class="small">The marked edge: +Z's right side is +X's left side.</text>
+    <text x="440" y="262" class="small">In this cross, every edge between two drawn</text>
+    <text x="440" y="278" class="small">faces joins with no jump.</text>
+  </svg>
+  <figcaption>The layers follow the GPU's order: +X, −X, +Y, −Y, +Z, −Z are layers 0 to 5. Which way <var>s</var> and <var>t</var> run on each face is fixed by the API, not chosen by the engine (next table).</figcaption>
+</figure>
+
+<p>The GPU reads a cube map with a <b>direction</b> <var>r</var>, not with texture coordinates. Vulkan's cube map face table says which face and which texel a direction falls on. <var>ma</var> is the biggest of <var>r</var>'s three parts, the <b>major axis</b>:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Biggest part</th><th>Face</th><th>Layer</th><th><var>sc</var></th><th><var>tc</var></th><th><var>ma</var></th></tr>
+  <tr><td>|<var>r<sub>x</sub></var>|, <var>r<sub>x</sub></var> &gt; 0</td><td>+X</td><td>0</td><td>−<var>r<sub>z</sub></var></td><td>−<var>r<sub>y</sub></var></td><td><var>r<sub>x</sub></var></td></tr>
+  <tr><td>|<var>r<sub>x</sub></var>|, <var>r<sub>x</sub></var> &lt; 0</td><td>−X</td><td>1</td><td>+<var>r<sub>z</sub></var></td><td>−<var>r<sub>y</sub></var></td><td><var>r<sub>x</sub></var></td></tr>
+  <tr><td>|<var>r<sub>y</sub></var>|, <var>r<sub>y</sub></var> &gt; 0</td><td>+Y</td><td>2</td><td>+<var>r<sub>x</sub></var></td><td>+<var>r<sub>z</sub></var></td><td><var>r<sub>y</sub></var></td></tr>
+  <tr><td>|<var>r<sub>y</sub></var>|, <var>r<sub>y</sub></var> &lt; 0</td><td>−Y</td><td>3</td><td>+<var>r<sub>x</sub></var></td><td>−<var>r<sub>z</sub></var></td><td><var>r<sub>y</sub></var></td></tr>
+  <tr><td>|<var>r<sub>z</sub></var>|, <var>r<sub>z</sub></var> &gt; 0</td><td>+Z</td><td>4</td><td>+<var>r<sub>x</sub></var></td><td>−<var>r<sub>y</sub></var></td><td><var>r<sub>z</sub></var></td></tr>
+  <tr><td>|<var>r<sub>z</sub></var>|, <var>r<sub>z</sub></var> &lt; 0</td><td>−Z</td><td>5</td><td>−<var>r<sub>x</sub></var></td><td>−<var>r<sub>y</sub></var></td><td><var>r<sub>z</sub></var></td></tr>
+</table>
+</div>
+
+<pre><code class="lang-text">s = (sc / |ma| + 1) / 2     0 at the left edge, 1 at the right edge
+t = (tc / |ma| + 1) / 2     0 at the top row, 1 at the bottom row
+</code></pre>
+
+<h2 id="lookup"><span class="n">5</span>Reading the cube: face and depth</h2>
+
+<p>To test a point <var>P</var>, take the vector from the light, <var>d</var> = <var>P</var> − light. Its biggest part picks the face. The 90° faces meet at the cube's diagonals, so the face is the one whose axis is nearest to <var>d</var>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="A view from above of a point light with its four side faces as 90 degree wedges between the cube's diagonals. The point P at d = (3, 0.4, -1.4) is in the plus X wedge. A thick line along the x axis shows the depth along the face's axis, 3. The line from the light to P is longer: 3.33. On the right, the steps of the lookup: the parts of d, the biggest one, the face, the depth and the texel coordinates s and t.">
+    <polygon points="180,150 310,20 310,280" class="accent o-50"/>
+    <line x1="50" y1="20" x2="310" y2="280" class="dashed"/>
+    <line x1="310" y1="20" x2="50" y2="280" class="dashed"/>
+    <rect x="150" y="120" width="60" height="60" class="hot"/>
+    <line x1="276" y1="105" x2="276" y2="150" class="dashed"/>
+    <line x1="186" y1="150" x2="276" y2="150" class="arrow hot thick"/>
+    <line x1="186" y1="147" x2="270" y2="108" class="arrow" marker-end="url(#ah)"/>
+    <circle cx="180" cy="150" r="8" class="light"/>
+    <circle cx="276" cy="105" r="6" class="bad"/>
+    <text x="284" y="100" class="title">P</text>
+    <text x="232" y="168" class="mid small t-hot">depth 3</text>
+    <text x="196" y="108" class="small halo">|d| = 3.33</text>
+    <text x="300" y="154" class="end title t-hot">+X</text>
+    <text x="64" y="154" class="title">−X</text>
+    <text x="180" y="42" class="mid title">−Z</text>
+    <text x="180" y="270" class="mid title">+Z</text>
+    <line x1="20" y1="290" x2="56" y2="290" class="arrow" marker-end="url(#ah)"/>
+    <text x="62" y="294" class="small">x</text>
+    <line x1="20" y1="254" x2="20" y2="286" class="arrow" marker-end="url(#ah)"/>
+    <text x="26" y="252" class="small">z</text>
+
+    <rect x="360" y="20" width="390" height="260" rx="8" class="zone"/>
+    <text x="376" y="46" class="title">Look up P = light + (3, 0.4, −1.4)</text>
+    <text x="376" y="76" class="mono">|d.x| = 3 · |d.y| = 0.4 · |d.z| = 1.4</text>
+    <text x="376" y="100" class="mono">biggest: x, and d.x &gt; 0 → face +X</text>
+    <text x="376" y="124" class="mono">depth along +X = |d.x| = 3</text>
+    <text x="376" y="148" class="mono">not the length |d| = 3.33</text>
+    <text x="376" y="180" class="mono">s = (−d.z / 3 + 1) / 2 = 0.733</text>
+    <text x="376" y="204" class="mono">t = (−d.y / 3 + 1) / 2 = 0.433</text>
+    <text x="376" y="236" class="small">The top view hides d.y = 0.4: it points out of the page.</text>
+    <text x="376" y="256" class="small">+Y and −Y sit above and below the light.</text>
+  </svg>
+  <figcaption>Each face's projection maps view depth, the distance <b>along the face's axis</b>, to the stored depth. So the value to compare is |<var>d.x</var>| on the +X face, not the length of <var>d</var>.</figcaption>
+</figure>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A light faces a wall straight ahead, at depth 3 along the face's axis. The map stores 3 for every point of the wall. Point P on the wall, off the axis, has a distance of 3.13 from the light. Compared with the stored 3 it seems behind, so it is wrongly in shadow.">
+      <line x1="230" y1="8" x2="230" y2="132" class="surface"/>
+      <line x1="42" y1="100" x2="222" y2="100" class="dashed"/>
+      <line x1="42" y1="97" x2="222" y2="26" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <circle cx="30" cy="100" r="9" class="light"/>
+      <circle cx="230" cy="24" r="6" class="bad"/>
+      <text x="240" y="28" class="small t-bad">P</text>
+      <text x="120" y="48" class="mid small t-bad halo">|d| = 3.13</text>
+      <text x="136" y="118" class="mid small">stored: 3</text>
+      <text x="240" y="100" class="small">wall</text>
+    </svg>
+    <h4>Compare the distance |d|</h4>
+    <p>3.13 &gt; 3: P seems behind the wall itself and shadows itself. The error grows toward the face's edges, up to √3 at the corners.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same light and wall. P is projected onto the face's axis: its depth along the axis is 3, the same as stored, so it is lit.">
+      <line x1="230" y1="8" x2="230" y2="132" class="surface"/>
+      <line x1="42" y1="100" x2="222" y2="100" class="arrow ok thick" marker-end="url(#ah-ok)"/>
+      <line x1="42" y1="97" x2="222" y2="26" class="dashed"/>
+      <circle cx="30" cy="100" r="9" class="light"/>
+      <circle cx="230" cy="24" r="6" class="ok"/>
+      <text x="240" y="28" class="small t-ok">P</text>
+      <text x="130" y="116" class="mid small t-ok">depth along the axis: 3</text>
+      <text x="130" y="132" class="mid small">stored: 3</text>
+      <text x="240" y="100" class="small">wall</text>
+    </svg>
+    <h4>Compare the depth along the axis</h4>
+    <p>3 = 3: P is the first surface, so it is lit, like every other point of the wall.</p>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>Another way: store the distance</strong>
+  <p>Some engines write the distance |<var>d</var>| into the faces from a fragment shader, and compare |<var>d</var>| when reading. That works too. The two sides must only agree. Storing the depth the hardware writes needs no fragment shader in the shadow pass.</p>
+</div>
+
+<p>Try it. The picture is the slice through the light at its height, seen from above. Drag <b>P</b>, and move it up or down with the height slider: when |<var>d.y</var>| is the biggest, P falls on the +Y or −Y face.</p>
+
+<div class="legend">
+  <span><i class="hot"></i>the face that holds P, and its depth</span>
+  <span><i class="light"></i>the light</span>
+  <span><i class="mem"></i>the face's image</span>
+</div>
+
+<figure class="lab" data-lab="cube-face" data-title="Pick the face">
+  <figcaption>Drag P across a diagonal: the face changes where two parts of <var>d</var> are equal. Put P near a face's corner and compare the depth with |<var>d</var>|. Then make the map smaller and move P away from the light: the texel at P grows.</figcaption>
+</figure>
+
+<h2 id="mirror"><span class="n">6</span>Drawing a face: a mirrored camera</h2>
+
+<p>To draw a face so that the lookup above finds each depth, the face's camera must put texel (<var>s</var>, <var>t</var>) where the table expects it. So the camera looks along the face's axis <var>F</var>, its image's right is <var>S</var> (where <var>s</var> grows), and its image's up is −<var>T</var> (<var>t</var> grows down). That camera is not a normal one:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="Left: a normal camera's axes: right, up, and back toward the viewer. Right times up is back, so the determinant of its rows is plus 1. Right: a cube face's camera: S to the right, minus T up. S times minus T points forward, away from the viewer, along the face's axis F. The rows S, minus T, minus F have determinant minus 1: the camera mirrors the world.">
+    <text x="20" y="24" class="title t-ok">A normal camera</text>
+    <line x1="110" y1="140" x2="210" y2="140" class="arrow" marker-end="url(#ah)"/>
+    <line x1="110" y1="140" x2="110" y2="52" class="arrow" marker-end="url(#ah)"/>
+    <line x1="110" y1="140" x2="66" y2="180" class="arrow ok" marker-end="url(#ah-ok)"/>
+    <text x="216" y="144" class="small">right</text>
+    <text x="118" y="56" class="small">up</text>
+    <text x="76" y="196" class="small t-ok">back (toward you)</text>
+    <text x="236" y="70" class="small">right × up = back</text>
+    <text x="236" y="94" class="title t-ok">det = +1</text>
+
+    <line x1="380" y1="10" x2="380" y2="200" class="dashed"/>
+
+    <text x="410" y="24" class="title t-bad">A cube face's camera</text>
+    <line x1="490" y1="140" x2="590" y2="140" class="arrow" marker-end="url(#ah)"/>
+    <line x1="490" y1="140" x2="490" y2="52" class="arrow" marker-end="url(#ah)"/>
+    <line x1="490" y1="140" x2="534" y2="100" class="arrow bad" marker-end="url(#ah-bad)"/>
+    <text x="596" y="144" class="small">S (s grows)</text>
+    <text x="498" y="56" class="small">−T (t grows down)</text>
+    <text x="540" y="98" class="small t-bad">F (away)</text>
+    <text x="616" y="70" class="small">S × (−T) = F</text>
+    <text x="616" y="94" class="title t-bad">det = −1</text>
+    <text x="616" y="112" class="small t-bad">mirrored</text>
+  </svg>
+  <figcaption>A view matrix's rows are the camera's right, up and back axes. For a normal camera, right × up = back, so the determinant is +1. For a face, the rows are <var>S</var>, −<var>T</var>, −<var>F</var>, and <var>S</var> × (−<var>T</var>) = +<var>F</var>: the determinant is −1. The cube map table is left-handed, so every face's camera is.</figcaption>
+</figure>
+
+<pre><code class="lang-text">+X face:  F = (1, 0, 0)   S = (0, 0, −1)   T = (0, −1, 0)
+rows:     S = (0, 0, −1)   −T = (0, 1, 0)   −F = (−1, 0, 0)
+det = (S × −T) · (−F) = (1, 0, 0) · (−1, 0, 0) = −1
+</code></pre>
+
+<p>A mirror reverses the winding of every triangle on screen (<a href="face-culling.html#mirror">Face culling, section 5</a>). Through a face's camera, the triangles that face the light turn clockwise and look like back faces. The fix is cheap: in a face's pass, swap the cull mode.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A light on the left and a closed box. With back-face culling as usual, the box's side toward the light is culled, and the map stores its far side. A thin plane casts no shadow at all.">
+      <circle cx="30" cy="70" r="9" class="light"/>
+      <line x1="42" y1="70" x2="110" y2="70" class="arrow light" marker-end="url(#ah-light)"/>
+      <rect x="120" y="36" width="70" height="68" class="box"/>
+      <line x1="120" y1="36" x2="120" y2="104" class="dashed"/>
+      <line x1="190" y1="36" x2="190" y2="104" class="arrow bad thick"/>
+      <line x1="256" y1="30" x2="256" y2="110" class="dashed"/>
+      <text x="124" y="124" class="small t-faint">culled</text>
+      <text x="196" y="40" class="small t-bad">stored</text>
+      <text x="262" y="74" class="small t-faint">plane:</text>
+      <text x="262" y="88" class="small t-faint">culled</text>
+    </svg>
+    <h4>Cull back faces, as usual</h4>
+    <p>The side toward the light is culled. The map holds the far side of closed objects, and open meshes (a plane, a leaf) cast no shadow.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same scene with the cull mode swapped. The box's side toward the light is drawn and stored, and the thin plane is drawn too.">
+      <circle cx="30" cy="70" r="9" class="light"/>
+      <line x1="42" y1="70" x2="110" y2="70" class="arrow light" marker-end="url(#ah-light)"/>
+      <rect x="120" y="36" width="70" height="68" class="box"/>
+      <line x1="120" y1="36" x2="120" y2="104" class="arrow ok thick"/>
+      <line x1="190" y1="36" x2="190" y2="104" class="dashed"/>
+      <line x1="256" y1="30" x2="256" y2="110" class="arrow ok thick"/>
+      <text x="124" y="124" class="small t-ok">stored</text>
+      <text x="262" y="74" class="small t-ok">plane:</text>
+      <text x="262" y="88" class="small t-ok">stored</text>
+    </svg>
+    <h4>Swap the cull mode</h4>
+    <p>Cull the faces the GPU calls front: through the mirror, they are the real back faces. The faces toward the light are drawn, as in every other view.</p>
+  </div>
+</div>
+
+<div class="callout rule">
+  <strong>Find the mirror from the matrix</strong>
+  <p>Do not keep a list of mirrored views by hand. A view is mirrored when the determinant of its 3×3 part is negative. Test that once per view, and swap the culling when it is.</p>
+</div>
+
+<h2 id="bias"><span class="n">7</span>The bias grows with distance</h2>
+
+<p>The fixes for shadow acne (<a href="shadow-mapping.html#acne">Shadow mapping, section 5</a>) are best measured in texels. In an orthographic map, a texel has the same size everywhere. In a perspective map it does not: the texels' rays fan out, so one texel covers more of the world the farther it is from the light.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Left: a perspective map from a light on the left. Its texel rays fan out. Near the light a texel is small and the lookup is moved a little; far away a texel is big and the lookup is moved more. Right: an orthographic map with parallel texel rays. A texel and the offset are the same size near and far.">
+    <text x="20" y="22" class="title">Perspective: texels grow</text>
+    <path d="M40,120L360,40M40,120L360,60M40,120L360,80M40,120L360,100M40,120L360,120M40,120L360,140M40,120L360,160M40,120L360,180M40,120L360,200" class="grid"/>
+    <circle cx="40" cy="120" r="9" class="light"/>
+    <line x1="120" y1="96" x2="120" y2="144" class="surface"/>
+    <line x1="320" y1="40" x2="320" y2="200" class="surface"/>
+    <line x1="114" y1="120" x2="114" y2="115" class="arrow hot thick"/>
+    <line x1="300" y1="120" x2="300" y2="102" class="arrow hot thick"/>
+    <text x="120" y="164" class="mid small">near: small texel,</text>
+    <text x="120" y="178" class="mid small">small offset</text>
+    <text x="270" y="216" class="mid small">far: big texel, bigger offset</text>
+
+    <line x1="380" y1="10" x2="380" y2="220" class="dashed"/>
+
+    <text x="410" y="22" class="title">Orthographic: one texel size</text>
+    <path d="M420,40H740M420,60H740M420,80H740M420,100H740M420,120H740M420,140H740M420,160H740M420,180H740M420,200H740" class="grid"/>
+    <line x1="500" y1="96" x2="500" y2="144" class="surface"/>
+    <line x1="700" y1="40" x2="700" y2="200" class="surface"/>
+    <line x1="490" y1="120" x2="490" y2="102" class="arrow hot thick"/>
+    <line x1="690" y1="120" x2="690" y2="102" class="arrow hot thick"/>
+    <text x="580" y="216" class="mid small">the same offset near and far</text>
+  </svg>
+  <figcaption>The short thick lines are the offsets: about one texel. A fixed offset that is right near the light is too small far away (acne), and one that is right far away is too big near the light (peter-panning).</figcaption>
+</figure>
+
+<p>So compute the texel's size at the point being shaded:</p>
+
+<div class="formula">
+  <p class="eq">texel ≈ 2 · depth · tan(fov / 2) / size</p>
+  <p class="eq">cube face (fov = 90°, tan 45° = 1):   texel = 2 · depth / size</p>
+  <p class="eq">from the matrix:   texel = 2 · w / (|row 0 of M| · size)</p>
+  <dl>
+    <dt>depth</dt><dd>the point's distance from the light along the map's axis</dd>
+    <dt>fov</dt><dd>the map's field of view; <var>size</var> its width in texels</dd>
+    <dt>M</dt><dd>the light's view-projection matrix. The length of its first row is the projection's x scale: 1 / tan(fov / 2) for a square perspective map, 2 / box width for an orthographic one</dd>
+    <dt>w</dt><dd>the point's clip-space <var>w</var>: 1 in an orthographic map, the depth from the light in a perspective one. So the last line is right for both kinds</dd>
+  </dl>
+</div>
+
+<p>Then the lookup point leaves the surface by about one texel, in two directions:</p>
+
+<div class="formula">
+  <p class="eq">p' = p + n · texel · (1 + 2 · (1 − n·l)) + l · texel</p>
+  <dl>
+    <dt>n · texel · …</dt><dd>along the normal: 1 texel where the surface faces the light, up to 3 where the light grazes it</dd>
+    <dt>l · texel</dt><dd>toward the light: 1 texel</dd>
+  </dl>
+</div>
+
+<p>Both terms use the texel at <var>p</var>, so a far point moves more than a near one. For a cube, <var>depth</var> is the biggest part of <var>d</var>, the depth on the point's face.</p>
+
+<h2 id="filter"><span class="n">8</span>Soft edges across faces</h2>
+
+<p>PCF (<a href="shadow-mapping.html#pcf">Shadow mapping, section 6</a>) reads a block of texels around the lookup. Near a face's edge, part of that block is on the next face. A cube map handles this by itself when it is read with directions: GPUs sample cube maps <b>seamlessly</b>, so a filter at a face's edge reads the neighbour face's texels. Those texels hold the depth along the <i>neighbour's</i> axis, so each part of the filter compares with the point's depth along the axis of the face it reads. Near the edge the two depths are almost equal, but not quite, and comparing with the wrong one gives a thin line of light or acne along the cube's edges.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="One face read as a plain 2D image. A 4 by 4 block of texels at its right edge sticks out of the face; the texels outside are clamped copies of the edge column. A seam shows at the face's edge.">
+      <rect x="20" y="20" width="150" height="100" class="mem"/>
+      <path d="M50,20V120M80,20V120M110,20V120M140,20V120M20,45H170M20,70H170M20,95H170" class="grid"/>
+      <rect x="110" y="45" width="60" height="50" class="hot"/>
+      <rect x="170" y="45" width="60" height="50" class="dashed"/>
+      <text x="236" y="66" class="small t-bad">clamped:</text>
+      <text x="236" y="80" class="small t-bad">copies of the</text>
+      <text x="236" y="94" class="small t-bad">edge column</text>
+    </svg>
+    <h4>Each face as a 2D image</h4>
+    <p>The block stops at the face's edge. The result jumps there: a seam along every cube edge.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Two neighbour faces joined at their shared edge. The 4 by 4 block crosses the edge and reads the neighbour face's texels.">
+      <rect x="20"  y="20" width="140" height="100" class="mem"/>
+      <rect x="160" y="20" width="140" height="100" class="mem"/>
+      <path d="M50,20V120M80,20V120M110,20V120M140,20V120M190,20V120M220,20V120M250,20V120M280,20V120M20,45H300M20,70H300M20,95H300" class="grid"/>
+      <line x1="160" y1="14" x2="160" y2="126" class="arrow hot thick"/>
+      <rect x="110" y="45" width="100" height="50" class="hot"/>
+      <text x="90" y="136" class="mid small">face +Z</text>
+      <text x="230" y="136" class="mid small">face +X</text>
+    </svg>
+    <h4>Read through the cube</h4>
+    <p>Turn each gather's texel corner back into a direction and sample the cube: the block crosses the edge with no seam.</p>
+  </div>
+</div>
+
+<h2 id="cost"><span class="n">9</span>Cost: renders per light</h2>
+
+<p>Each map is one more render of the scene's depth. A point light is the most expensive light to shadow.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 110" role="img" aria-label="Four boxes, one per cascade: four renders.">
+      <rect x="20"  y="66" width="30" height="30" class="hot"/>
+      <rect x="58"  y="52" width="44" height="44" class="hot"/>
+      <rect x="110" y="38" width="58" height="58" class="hot"/>
+      <rect x="176" y="24" width="50" height="72" class="hot"/>
+      <text x="120" y="16" class="mid big">4</text>
+    </svg>
+    <h4>Sun, 4 cascades</h4>
+    <p>One orthographic render per cascade.</p>
+    <p class="cost">4 renders</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 110" role="img" aria-label="One frustum: one render.">
+      <polygon points="114,32 126,32 180,100 60,100" class="hot"/>
+      <circle cx="120" cy="24" r="7" class="light"/>
+      <text x="160" y="40" class="big">1</text>
+    </svg>
+    <h4>Spot light</h4>
+    <p>One perspective render along the cone.</p>
+    <p class="cost">1 render</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 110" role="img" aria-label="A light in a cube: six renders, one per face.">
+      <rect x="80" y="20" width="80" height="80" class="hot"/>
+      <line x1="80" y1="20" x2="160" y2="100" class="dashed"/>
+      <line x1="160" y1="20" x2="80" y2="100" class="dashed"/>
+      <circle cx="120" cy="60" r="7" class="light"/>
+      <text x="176" y="66" class="big">6</text>
+    </svg>
+    <h4>Point light</h4>
+    <p>One 90° render per face.</p>
+    <p class="cost">6 renders</p>
+  </div>
+</div>
+
+<p>Six renders do not mean six times the triangles. Each face is culled with its own 90° frustum, so an object is drawn only by the faces that see it: most objects fall in one or two faces. What does add up six times is the fixed cost of a view: its culling pass, its draw calls and its barriers.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Way to make it cheaper</th><th>Idea</th></tr>
+  <tr><td>One pass for all faces</td><td>Cull once against all six frusta and draw into the six layers in one pass (layered rendering or multiview).</td></tr>
+  <tr><td>Smaller maps for far lights</td><td>A light that covers few pixels on screen needs fewer texels.</td></tr>
+  <tr><td>Update less often</td><td>When nothing near a light moves, last frame's cube is still right.</td></tr>
+  <tr><td>Skip faces</td><td>A light on a wall or a ceiling has faces that see only the wall.</td></tr>
+</table>
+</div>
+
+<h2 id="example"><span class="n">10</span>Worked example</h2>
+
+<p>A point light with a 1024 × 1024 cube, and a point <var>P</var> at <var>d</var> = (3, 0.4, −1.4) from it:</p>
+
+<div class="stats">
+  <div><b>+X</b><span>the face, layer 0</span><small>|d.x| = 3 is the biggest</small></div>
+  <div><b>3</b><span>the depth to compare</span><small>|d.x|, not |d| = 3.33</small></div>
+  <div><b>(750, 443)</b><span>the texel: s = 0.733, t = 0.433</span><small>s · 1024, t · 1024</small></div>
+  <div><b>0.0059</b><span>world units per texel at P</span><small>2 · 3 / 1024</small></div>
+</div>
+
+<p>So the normal offset moves the lookup by 0.006 units where the surface faces the light, and up to 0.018 where the light grazes it.</p>
+
+<p>A spot light with an inner angle of 14°, an outer angle of 22° and a 2048 × 2048 map, and a point 18° off the axis, 10 units along it:</p>
+
+<div class="stats">
+  <div><b>23.2, −21.5</b><span>scale and offset</span><small>1 / (cos 14° − cos 22°)</small></div>
+  <div><b>0.31</b><span>of the light reaches the point</span><small>cone = 0.55, squared</small></div>
+  <div><b>44°</b><span>the map's field of view</span><small>2 × 22°</small></div>
+  <div><b>0.0039</b><span>world units per texel at the point</span><small>2 · 10 · tan 22° / 2048</small></div>
+</div>
+
+<p>With an outer angle of 80°, the same texel is 14 times bigger: tan 80° / tan 22° = 14.</p>
+
+<h2 id="pitfalls"><span class="n">11</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Acne that grows toward the cube's edges and corners</dt><dd>The lookup compares the distance |<var>d</var>| against a depth stored along the face's axis. |<var>d</var>| is up to √3 times larger at a corner. Compare the depth along the face's axis, or store distances.</dd></div>
+  <div><dt>A point light's shadows vanish, or objects shadow themselves</dt><dd>The faces' mirrored cameras were not handled: back-face culling removes the faces toward the light. Swap the cull mode when the view's determinant is negative.</dd></div>
+  <div><dt>Shadows are mirrored, or sit on the wrong side of the light</dt><dd>A face's camera does not match the cube map table, so a face is drawn turned or flipped. Build each camera from the table's <var>S</var> and <var>T</var>, and test every face against the table.</dd></div>
+  <div><dt>An object very close to the light casts no shadow</dt><dd>It is nearer than the near plane, so it is clipped away. Make the near plane small; reversed-Z keeps the depth precise down to it.</dd></div>
+  <div><dt>A very wide spot light has blurry, blocky shadows</dt><dd>A field of view near 180° spreads the map's texels thin: tan(fov / 2) grows without end. Limit the field of view, and accept that light outside the map is not shadowed; or use a cube for a very wide cone.</dd></div>
+  <div><dt>Acne far from the light, peter-panning near it</dt><dd>The offsets are fixed in world units. In a perspective map, compute them from the texel size at the point.</dd></div>
+  <div><dt>Seams along the cube's edges</dt><dd>The PCF reads each face as a 2D image. Read the cube with directions, so the GPU filters across faces.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">12</span>In RASM</h2>
+
+<p>RASM shadows spot and point lights with the same two calls as the sun. <code>Engine::addShadowPasses</code> takes a <code>ShadowDesc</code> for any light and returns a <code>SceneShadow</code>; <code>Engine::addScenePasses</code> takes up to <code>MAX_VIEW_SHADOWS</code> (4) of them, each of a different light. For a spot or point light, <code>ShadowDesc::distance</code> is the far plane, measured from the light, and the near plane is that distance / 200. Each map is drawn by a depth-only scene view, so it is culled on the GPU like any view, in ordinary <a href="render-graphs.html">render graph</a> passes. <code>examples/07_lights</code> shows it: a weak moon with cascades, a spot lamp and a point lantern, with a spinning cube whose shadow moves.</p>
+
+<pre><code>const rasm::LightHandle lamp = engine.createLight(rasm::LightType::SPOT, glm::vec3(1.0f, 0.95f, 0.8f), lampPosition, lampDirection, 900.0f, 40.0f, glm::radians(14.0f), glm::radians(22.0f));
+const rasm::LightHandle lantern = engine.createLight(rasm::LightType::POINT, glm::vec3(1.0f, 0.6f, 0.3f), lanternPosition, glm::vec3(0.0f), 25.0f, 14.0f);
+
+const rasm::SceneShadow shadows[] = {
+    engine.addShadowPasses(graph, scene, camera, rasm::ShadowDesc{.light = lamp, .size = 2048, .distance = 40.0f}),
+    engine.addShadowPasses(graph, scene, camera, rasm::ShadowDesc{.light = lantern, .size = 1024, .distance = 14.0f}),
+};
+engine.addScenePasses(graph, scene, camera, sceneTarget, shadows, 2);
+</code></pre>
+
+<p>The cone angles are in radians. The outer angle's default is <code>SPOT_OUTER_CONE_ANGLE</code> (π/4, glTF's default), and <code>Engine::createLight</code> rejects a spot light unless 0 ≤ inner &lt; outer ≤ π/2.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>the application</span>
+  <span><i class="gpu"></i>graph passes</span>
+  <span><i class="mem"></i>textures</span>
+  <span><i class="shader"></i>shader steps</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 460" role="img" aria-label="The application creates a spot and a point light, calls addShadowPasses for each and passes the SceneShadows to addScenePasses. On the GPU, the spot light's passes, Spot Cull 1, Spot 1 and so on, draw one view into shadow_spot plus the light's index. The point light's passes, Face 0 Cull, Face 0 up to Face 5, draw six mirrored views without Hi-Z into the six layers of shadow_cube plus the light's index. The Scene passes read both maps through readDepth. In fragMain, sampleShadow runs per light: sampleShadowMap for a spot light, sampleShadowCube with getCubeFace for a point light. Both move the lookup with offsetLookup and filter with four gathers and getPcfWeights. The result goes to PBRInfo shadows, which shadePBR multiplies into each light with the cone.">
+    <text x="20" y="22" class="title t-cpu">application · once, when building the graph</text>
+    <rect x="20" y="32" width="230" height="66" rx="6" class="cpu"/>
+    <text x="135" y="52" class="mid mono">createLight(SPOT, ...,</text>
+    <text x="135" y="68" class="mid mono">inner, outer)</text>
+    <text x="135" y="88" class="mid mono">createLight(POINT, ...)</text>
+    <rect x="265" y="32" width="230" height="66" rx="6" class="cpu"/>
+    <text x="380" y="52" class="mid mono">addShadowPasses(graph,</text>
+    <text x="380" y="68" class="mid mono">scene, camera,</text>
+    <text x="380" y="88" class="mid mono">{light, size, distance})</text>
+    <rect x="510" y="32" width="230" height="66" rx="6" class="cpu"/>
+    <text x="625" y="52" class="mid mono">addScenePasses(graph,</text>
+    <text x="625" y="68" class="mid mono">scene, camera, target,</text>
+    <text x="625" y="88" class="mid mono">shadows, count)</text>
+
+    <line x1="380" y1="98" x2="380" y2="136" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="625" y1="98" x2="625" y2="136" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="20" y="128" class="title t-gpu">GPU · every frame, in graph order</text>
+
+    <rect x="20" y="140" width="210" height="74" rx="6" class="gpu"/>
+    <text x="125" y="162" class="mid mono">Spot i Cull 1, Spot i 1, …</text>
+    <text x="125" y="182" class="mid small">one view along the cone</text>
+    <text x="125" y="200" class="mid small">fov 2 × outer, at most 160°</text>
+    <line x1="230" y1="177" x2="268" y2="177" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="270" y="140" width="180" height="74" rx="6" class="mem"/>
+    <text x="360" y="162" class="mid mono">shadow_spot_&lt;i&gt;</text>
+    <text x="360" y="182" class="mid small">one 2D depth texture</text>
+    <text x="360" y="200" class="mid small">size × size</text>
+
+    <rect x="20" y="226" width="210" height="84" rx="6" class="gpu"/>
+    <text x="125" y="248" class="mid mono">Cube i Face 0 Cull,</text>
+    <text x="125" y="264" class="mid mono">Cube i Face 0, … Face 5</text>
+    <text x="125" y="282" class="mid small">six mirrored views</text>
+    <text x="125" y="298" class="mid small">frustum culling only</text>
+    <line x1="230" y1="268" x2="268" y2="268" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="270" y="226" width="180" height="84" rx="6" class="mem"/>
+    <text x="360" y="248" class="mid mono">shadow_cube_&lt;i&gt;</text>
+    <text x="360" y="266" class="mid small">6 layers: one cube view,</text>
+    <text x="360" y="282" class="mid small">one 2D view per face</text>
+    <text x="360" y="298" class="mid small">later faces keep the others</text>
+
+    <line x1="450" y1="177" x2="508" y2="210" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="450" y1="268" x2="508" y2="238" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="478" y="168" class="mid small">readDepth</text>
+    <rect x="510" y="140" width="230" height="170" rx="6" class="gpu"/>
+    <text x="625" y="164" class="mid mono">Cull, Scene (rasm.slang)</text>
+    <text x="625" y="190" class="mid small">SceneData::shadowMaps:</text>
+    <text x="625" y="206" class="mid small">matrix, texture, split</text>
+    <text x="625" y="232" class="mid small">each light: shadowMap (first map,</text>
+    <text x="625" y="248" class="mid small">−1 = none), shadowMapCount,</text>
+    <text x="625" y="264" class="mid small">spotScale, spotOffset</text>
+    <text x="625" y="290" class="mid small">a cube's matrix: the projection only</text>
+
+    <text x="20" y="346" class="title t-shader">fragMain → sampleShadow, once per light (shaders/lib/shadow.slang)</text>
+    <rect x="20" y="380" width="130" height="44" rx="22" class="shader"/>
+    <text x="85" y="398" class="mid small">sampleShadow:</text>
+    <text x="85" y="414" class="mid small">by light type</text>
+    <line x1="150" y1="394" x2="168" y2="378" class="arrow" marker-end="url(#ah)"/>
+    <line x1="150" y1="410" x2="168" y2="426" class="arrow" marker-end="url(#ah)"/>
+    <rect x="170" y="356" width="190" height="40" rx="20" class="shader"/>
+    <text x="265" y="372" class="mid small">spot: sampleShadowMap</text>
+    <text x="265" y="388" class="mid small">matrix → uv, depth</text>
+    <rect x="170" y="408" width="190" height="40" rx="20" class="shader"/>
+    <text x="265" y="424" class="mid small">point: sampleShadowCube</text>
+    <text x="265" y="440" class="mid small">getCubeFace, depth on its axis</text>
+    <line x1="360" y1="376" x2="378" y2="394" class="arrow" marker-end="url(#ah)"/>
+    <line x1="360" y1="428" x2="378" y2="410" class="arrow" marker-end="url(#ah)"/>
+    <rect x="380" y="380" width="180" height="44" rx="22" class="shader"/>
+    <text x="470" y="398" class="mid small">offsetLookup, 4 gathers,</text>
+    <text x="470" y="414" class="mid small">getPcfWeights</text>
+    <line x1="560" y1="402" x2="578" y2="402" class="arrow" marker-end="url(#ah)"/>
+    <rect x="580" y="380" width="160" height="44" rx="22" class="shader"/>
+    <text x="660" y="398" class="mid small">shadows[i] → shadePBR:</text>
+    <text x="660" y="414" class="mid small">light × cone² × shadow</text>
+  </svg>
+  <figcaption>The spot light's view uses occlusion culling when it is on (passes <samp>Spot 2 Cull 1</samp>, <samp>Spot 2 1</samp>, <samp>Spot 2 Hi-Z</samp>, <samp>Spot 2 Cull 2</samp>, <samp>Spot 2 2</samp> for light 2: the passes, like the targets, name the light, so two spot or point lights can be told apart). A cube face's passes are <samp>Cube 3 Face 0 Cull</samp> and <samp>Cube 3 Face 0</samp>, up to face 5. The cube's faces are only frustum culled, because the Hi-Z build reads a 2D depth. The render graph clears each face in its first pass. The barrier of a cube covers all six layers, so only the cube's first pass of the frame may drop its old contents (<code>AttachmentOps::firstWrite</code>); the later face passes keep the faces already drawn.</figcaption>
+</figure>
+
+<h3>Where RASM follows this page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Cone</td><td>glTF's inner and outer angles, cone²</td><td>The same. <code>setSpotCone</code> computes <code>spotScale</code> and <code>spotOffset</code> on the CPU every frame; <code>shadePBR</code> multiplies the light by cone², after the inverse square and the range window.</td></tr>
+  <tr><td>Spot map</td><td>one perspective map, fov 2 × outer</td><td>One depth-only render target <samp>shadow_spot_&lt;light index&gt;</samp>, <code>ShadowDesc::size</code> squared. <code>getSpotShadowView</code> and <code>getSpotShadowProjection</code> build its matrices; the field of view is clamped to at most 160° (<code>MAX_SPOT_HALF_ANGLE</code>), so light more than 80° off the axis is not shadowed.</td></tr>
+  <tr><td>Near plane</td><td>small, behind every caster</td><td>distance / 200 (<code>NEAR_PART</code>), with reversed-Z, like every RASM projection.</td></tr>
+  <tr><td>Cube</td><td>6 faces in the API's order</td><td>One cube render target <samp>shadow_cube_&lt;light index&gt;</samp>, made with <code>RenderTargetDesc::cube</code>. Its depth texture has <code>TextureDesc::cube</code>: <code>CUBE_FACES</code> (6) layers, a cube view for sampling and one 2D view per face for drawing. Each face's pass draws one face with <code>PassBuilder::write</code>(target, face).</td></tr>
+  <tr><td>Face cameras</td><td>from the cube map table</td><td><code>getCubeFaceView</code> builds rows <var>S</var>, −<var>T</var>, −<var>F</var> from the tables <code>CUBE_FORWARD</code>, <code>CUBE_S</code>, <code>CUBE_T</code>; <code>getCubeFaceProjection</code> is the shared 90° projection. <code>tests/localShadowsTests.cpp</code> checks every face against Vulkan's table.</td></tr>
+  <tr><td>Mirrored faces</td><td>swap the cull mode</td><td><code>SceneView::mirrored</code> is set when the view's 3×3 determinant is negative, and <code>Engine::drawSceneView</code> swaps <code>CullMode::BACK</code> and <code>CullMode::FRONT</code>.</td></tr>
+  <tr><td>Depth compared</td><td>along the face's axis</td><td>The depth the hardware writes. <code>sampleShadowCube</code> turns the depth on the face's axis into clip depth with the face projection, which is the map's <code>matrix</code> for a point light.</td></tr>
+  <tr><td>Bias</td><td>about one texel, from the texel size at the point</td><td><code>offsetLookup</code>: along the normal 1 to 3 texels, and 1 texel toward the light. <code>sampleShadowMap</code> takes the texel from 2 · w / (|row 0| · size), right for cascades and spot maps; <code>sampleShadowCube</code> from 2 · depth / size.</td></tr>
+  <tr><td>Filtering</td><td>PCF through the cube, seamless</td><td>3x3 PCF with bilinear weights as four 2x2 <code>Gather</code>s (<code>getPcfWeights</code>). For the cube, each gather's corner becomes a direction into <code>gCubeTextures</code>, a <code>SamplerCube</code> array on the same binding as <code>gTextures</code>, and each gather compares with the depth along the axis of the face it reads (<code>getCubeFace</code> of the corner, <code>getCubeDepth</code>).</td></tr>
+  <tr><td>Cost</td><td>1 render per spot, 6 per point light</td><td>One scene view per map: a sun with 4 cascades, a spot light, a point light and the shaded view take 12 of the <code>MAX_SCENE_VIEWS</code> (16). Drawing all faces in one view is <code>D20</code> in <code>docs/code_review.md</code>.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The API</td><td><code>Engine::createLight</code> in <code>src/scene/light.cpp</code>; <code>SPOT_OUTER_CONE_ANGLE</code> in <code>include/rasm/light.h</code>; <code>ShadowDesc</code>, <code>SceneShadow</code>, <code>MAX_VIEW_SHADOWS</code>, <code>MAX_SCENE_VIEWS</code> in <code>include/rasm/scene.h</code>; <code>Engine::addShadowPasses</code>, <code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>The maps' matrices</td><td><code>getSpotShadowView</code>, <code>getSpotShadowProjection</code>, <code>getCubeFaceView</code>, <code>getCubeFaceProjection</code> in <code>src/renderer/localShadows.cpp</code>; <code>getShadowMaps</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>The views, mirrored culling</td><td><code>Engine::createSceneView</code>, <code>Engine::prepareSceneView</code>, <code>Engine::drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code>; <code>SceneView</code> in <code>src/renderer/gpuScene.h</code></td></tr>
+  <tr><td>Cube targets and textures</td><td><code>CUBE_FACES</code>, <code>TextureDesc</code>, <code>RenderTargetDesc</code>, <code>AttachmentOps</code> in <code>include/rasm/render/resource.h</code>; the image and its views in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
+  <tr><td>Drawing one face, keeping the others</td><td><code>PassBuilder::write</code> in <code>include/rasm/render/renderGraph.h</code>; <code>RenderGraph::assignAttachmentOps</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>GPU fields</td><td><code>gfx::ShadowMap</code>, <code>gfx::Light</code>, <code>SceneData::shadowMaps</code> in <code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
+  <tr><td>The lookup</td><td><code>sampleShadow</code>, <code>sampleShadowMap</code>, <code>sampleShadowCube</code>, <code>getCubeFace</code>, <code>offsetLookup</code>, <code>getPcfWeights</code> in <code>shaders/lib/shadow.slang</code>; <code>gCubeTextures</code> and <code>fragMain</code> in <code>shaders/passes/rasm.slang</code></td></tr>
+  <tr><td>The cone, applying the shadow</td><td><code>shadePBR</code> and <code>PBRInfo::shadows</code> in <code>shaders/lib/pbr.slang</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/localShadowsTests.cpp</code></td></tr>
+  <tr><td>An example</td><td><code>examples/07_lights/main.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li><code>CUBE_FORWARD</code>, <code>CUBE_S</code> and <code>CUBE_T</code> exist twice, in <code>src/renderer/localShadows.cpp</code> and <code>shaders/lib/shadow.slang</code>. They must stay equal and match Vulkan's cube map face table; <code>tests/localShadowsTests.cpp</code> checks the C++ side.</li>
+    <li>A mirrored view must swap its culling. <code>SceneView::mirrored</code> comes from the view matrix, so a new kind of view gets it for free; a pipeline that sets its own cull mode does not.</li>
+    <li>A cube render target is depth-only and square, with a fixed size. <code>addScenePasses</code> does not take one as its color target.</li>
+    <li>Only the cube's first pass of the frame may drop its contents (<code>AttachmentOps::firstWrite</code>). One barrier covers the whole cube, so the later face passes must keep the faces drawn before them.</li>
+    <li>A point light's <code>gfx::ShadowMap</code> holds only the faces' projection. The shader builds the face's view from the light's position, so it must use the same tables as <code>getCubeFaceView</code>.</li>
+    <li>Every index into <code>gTextures</code> and <code>gCubeTextures</code> comes from the scene data and is the same for every pixel of the draw.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>The Vulkan specification, section "Cube Map Face Selection" (in "Image Operations"): the face table used on this page.</li>
+  <li>Khronos, the glTF extension <samp>KHR_lights_punctual</samp>: the spot light's cone and its falloff.</li>
+  <li>Microsoft, "Common Techniques to Improve Shadow Depth Maps" (Windows DirectX documentation).</li>
+  <li>Elmar Eisemann and others, <i>Real-Time Shadows</i> (2011): omnidirectional shadow maps.</li>
+  <li>RenderMan's cube face convention, which the APIs inherited: the reason the table is left-handed.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

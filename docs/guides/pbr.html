@@ -944,6 +944,35 @@ cos θ = v·h  (the same as l·h)</code></pre>
 </table>
 </div>
 
+<h3>The spot cone</h3>
+
+<p>A spot light is a point light times a <b>cone factor</b>. The factor depends on the angle θ between the spot's axis and the line to the pixel. Inside the <b>inner</b> angle it is 1, outside the <b>outer</b> angle it is 0, and between them it fades smoothly. glTF (<samp>KHR_lights_punctual</samp>) writes it with cosines, so the shader needs no angle at all, only a dot product:</p>
+
+<pre><code class="lang-text">scale  = 1 / max(cos(inner) − cos(outer), 0.001)
+offset = −cos(outer) · scale
+cone   = clamp(cos θ · scale + offset, 0, 1)²</code></pre>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="Left: a spot light's cone from above, with a bright inner cone and a fading ring out to the outer angle. Right: the cone factor against the angle: 1 up to the inner angle, a smooth fall to 0 at the outer angle, 0 beyond.">
+    <path d="M150,20 L40,190 L260,190 Z" class="light"/>
+    <path d="M150,20 L95,190 L205,190 Z" class="hot"/>
+    <circle cx="150" cy="20" r="8" class="light"/>
+    <text x="150" y="150" class="mid small">cone = 1</text>
+    <text x="280" y="60" class="small">inner 14°: full light</text>
+    <text x="280" y="80" class="small">14° to 22°: fades</text>
+    <text x="280" y="100" class="small">outer 22°: no light</text>
+    <line x1="420" y1="180" x2="740" y2="180" class="arrow" marker-end="url(#ah)"/>
+    <line x1="420" y1="180" x2="420" y2="30" class="arrow" marker-end="url(#ah)"/>
+    <polyline points="420,50 560,50 570,75 580,99 590,121 600,140 610,156 620,169 630,177 640,180 730,180" class="hot"/>
+    <text x="560" y="198" class="mid small">inner</text>
+    <text x="640" y="198" class="mid small">outer</text>
+    <text x="736" y="170" class="end small">θ</text>
+    <text x="414" y="54" class="end small">1</text>
+    <text x="414" y="184" class="end small">0</text>
+  </svg>
+  <figcaption>The square at the end makes the fade start and end softly. Inner 14°, outer 22°, as the spot lamp of <code>examples/07_lights</code>.</figcaption>
+</figure>
+
 <div class="callout">
   <strong>Light units</strong>
   <p>Physical light units are a separate choice. A physical engine gives a point light in lumens or candela and the sun in lux, and divides by 4π where needed. Many engines just use a unitless "intensity" that the artist tunes by eye.</p>
@@ -1185,7 +1214,9 @@ cos θ = v·h  (the same as l·h)</code></pre>
   <tr><td>Roughness</td><td>clamp to a minimum</td><td>Clamped to [0.045, 1] before squaring. Metallic is clamped to [0, 1].</td></tr>
   <tr><td><var>F</var><sub>0</sub> of non-metals</td><td>0.04, or a value per material</td><td>Always 0.04. No <samp>KHR_materials_specular</samp> or <samp>KHR_materials_ior</samp>.</td></tr>
   <tr><td>Multiple scattering</td><td>not covered here</td><td>None, so very rough metals are a little too dark (single-scattering microfacet models lose energy).</td></tr>
-  <tr><td>Light types</td><td>directional, point, spot</td><td><code>LightType</code> has <code>DIRECTIONAL</code> and <code>POINT</code>. No spot lights (<code>B15</code>).</td></tr>
+  <tr><td>Light types</td><td>directional, point, spot</td><td><code>LightType</code> has <code>DIRECTIONAL</code>, <code>POINT</code> and <code>SPOT</code>.</td></tr>
+  <tr><td>Spot cone</td><td>the glTF cone factor</td><td>The same. <code>prepareSceneView</code> turns <code>innerConeAngle</code> and <code>outerConeAngle</code> into <code>spotScale</code> and <code>spotOffset</code> (<code>setSpotCone</code>), so <code>shadePBR</code> needs one dot product per light.</td></tr>
+  <tr><td>Shadows</td><td>not covered here</td><td>Each light is multiplied by its shadow, <code>PBRInfo::shadows</code> (<a href="shadow-mapping.html">Shadow mapping</a>, <a href="local-light-shadows.html">Spot and point light shadows</a>).</td></tr>
   <tr><td>Directional <var>l</var></td><td>minus the light's direction</td><td>The same: <code>direction</code> points from the light toward the surface, <var>l</var> = −<code>direction</code>. No falloff.</td></tr>
   <tr><td>Point attenuation</td><td>1 / <var>d</var>² × window</td><td>The same formula. <var>d</var>² is clamped to at least 10⁻⁶. A <code>range</code> of 0 means no window. The default <code>range</code> is 10.</td></tr>
   <tr><td>Light units</td><td>physical or unitless</td><td>Unitless: <code>color</code> × <code>intensity</code>, no 4π.</td></tr>
@@ -1236,13 +1267,13 @@ cos θ = v·h  (the same as l·h)</code></pre>
     <li><code>Light</code>, <code>Material</code> and <code>SceneData</code> are CPU↔GPU structs: a change to them follows <a href="struct-layout.html#in-rasm">the struct layout rules</a>, on both sides.</li>
     <li>Color and emissive textures are <code>R8G8B8A8_SRGB</code>; metallic-roughness, normal and occlusion textures are <code>R8G8B8A8_UNORM</code>. The shader expects linear values from all of them.</li>
     <li><code>shadePBR</code> outputs linear color with no upper limit. Do not tone map or apply the sRGB curve in the shader: the tone-map pass and the swapchain do.</li>
-    <li>A light's <code>direction</code> points from the light toward the surface.</li>
+    <li>A light's <code>direction</code> points from the light toward the surface; for a spot light it is the cone's axis.</li>
   </ul>
 </div>
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>From the development plan, phase 4: spot and point light shadows, spot lights (<code>B15</code>), image-based lighting, alpha modes (the pipeline has no blending, so base color alpha does nothing today), and clustered lighting to remove the fixed limit of 8 lights.</p>
+  <p>From the development plan, phase 4: image-based lighting, alpha modes (the pipeline has no blending, so base color alpha does nothing today), and clustered lighting to remove the fixed limit of 8 lights.</p>
 </div>
 
 <h3>Further reading</h3>
