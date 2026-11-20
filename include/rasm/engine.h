@@ -121,6 +121,7 @@ namespace rasm
         void                        endPass();
         void                        render(SceneHandle scene, CameraHandle camera);
         bool                        addScenePasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, const SceneShadow& shadow = {});
+        SceneShadow                 addShadowPasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const ShadowDesc& desc);
         bool                        addToneMapPass(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera);
         bool                        running() const;
         bool                        recreateSwapchain();
@@ -242,6 +243,7 @@ namespace rasm
         void                        markDrawListsDirty(EntityHandle entity);
         void                        rebuildDrawList(SceneHandle scene);
         void                        uploadDrawList(SceneDrawList& drawList);
+        bool                        addSceneViewPasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, const SceneShadow& shadow, bool depthOnly);
         uint32_t                    createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, const SceneShadow& shadow, bool depthOnly);
         void                        releaseSceneView(uint32_t view);
         void                        prepareSceneView(uint32_t view);

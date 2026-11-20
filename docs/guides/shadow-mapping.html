@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Shadow Mapping · RASM</title>
 <meta name="description" content="How shadow mapping works: draw the scene's depth from the light, then compare each pixel's depth against it. The light's camera, the depth test, shadow acne and its fixes (depth bias, normal offset), soft edges with PCF, resolution and cascades. Then how RASM does it.">
-<meta name="rasm-sources" content="shaders/lib/shadow.slang shaders/passes/shadow.slang shaders/lib/pbr.slang shaders/passes/rasm.slang shaders/lib/core.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/uberMaterialTypes.h include/rasm/scene.h include/rasm/engine.h src/rhi/renderContext.cpp src/renderer/renderGraph.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp examples/06_shadows/main.cpp">
+<meta name="rasm-sources" content="src/renderer/shadowCascades.cpp shaders/lib/shadow.slang shaders/passes/shadow.slang shaders/lib/pbr.slang shaders/passes/rasm.slang shaders/lib/core.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/uberMaterialTypes.h include/rasm/scene.h include/rasm/engine.h src/rhi/renderContext.cpp src/renderer/renderGraph.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp examples/06_shadows/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -613,7 +613,7 @@ lit    = d is not behind stored
     <text x="656" y="36" class="mid small t-hot">3</text>
     <text x="580" y="244" class="mid small">small texels near the camera, large ones far away</text>
   </svg>
-  <figcaption>Each cascade has the same number of texels. The shader picks the cascade by the fragment's distance from the camera.</figcaption>
+  <figcaption>Each cascade has the same number of texels. The shader picks the cascade by the fragment's distance from the camera. <a href="cascaded-shadows.html">Cascaded shadow maps</a> explains where to split, how to fit each box and how to keep it still.</figcaption>
 </figure>
 
 <div class="table-wrap">
@@ -654,7 +654,7 @@ lit    = d is not behind stored
 
 <h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
 
-<p>RASM has one shadow map per shaded view, for one directional light the application names, from an orthographic light camera it places. Both passes are ordinary <a href="render-graphs.html">render graph</a> passes from <code>addScenePasses</code>, so the graph orders them and adds every barrier. <code>examples/06_shadows</code> shows it, followed by a post pass, with no barrier in the example.</p>
+<p>RASM shadows one directional light per shaded view with <a href="cascaded-shadows.html">cascaded shadow maps</a>: up to four maps, each fitted every frame to a slice of the camera's view. <code>addShadowPasses</code> adds a depth-only scene view per cascade, and <code>addScenePasses</code> adds the shaded view that reads them. All are ordinary <a href="render-graphs.html">render graph</a> passes, so the graph orders them and adds every barrier. <code>examples/06_shadows</code> shows it, followed by a post pass, with no barrier in the example.</p>
 
 <div class="legend">
   <span><i class="cpu"></i>the application</span>
@@ -664,54 +664,62 @@ lit    = d is not behind stored
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 380" role="img" aria-label="The application calls addScenePasses twice: with the light camera and a depth-only target, then with the camera, a color target and SceneShadow (camera, map and light). The first call adds Shadow passes that draw depth with shadow.slang. The second adds Cull and Scene passes; their draws read the shadow map through readDepth. In fragMain, sampleShadow offsets the position along the normal, multiplies by shadowMatrix, reads 16 texels as four 2x2 gathers with bilinear weights and returns a lit factor that shadePBR applies to the light SceneShadow names (SceneData shadowLight).">
+  <svg viewBox="0 0 760 400" role="img" aria-label="The application calls addShadowPasses with the camera and a ShadowDesc, which returns a SceneShadow, then addScenePasses with the camera, a color target and that SceneShadow. addShadowPasses adds Cascade passes, one set per cascade, that draw depth with shadow.slang into shadow_cascade_0 to 3. The Cull and Scene passes of the shaded view read the cascades through readDepth. In fragMain, sampleShadow picks the cascade by view depth, then sampleCascade offsets the position along the normal, multiplies by the cascade's matrix, reads 16 texels as four 2x2 gathers with bilinear weights and returns a lit factor that shadePBR applies to the light the shadow names (SceneData shadowLight).">
     <text x="20" y="22" class="title t-cpu">application · once, when building the graph</text>
     <rect x="20"  y="32" width="340" height="62" rx="6" class="cpu"/>
-    <text x="190" y="52" class="mid mono small">addScenePasses(graph, scene,</text>
-    <text x="190" y="68" class="mid mono small">lightCamera, shadowMap)</text>
-    <text x="190" y="85" class="mid small">shadowMap: D32_SFLOAT depth, no colorFormats</text>
+    <text x="190" y="52" class="mid mono small">shadow = addShadowPasses(graph, scene,</text>
+    <text x="190" y="68" class="mid mono small">camera, {sun, 4 cascades, ...})</text>
+    <text x="190" y="85" class="mid small">makes the cascades' depth-only targets</text>
     <rect x="400" y="32" width="340" height="62" rx="6" class="cpu"/>
     <text x="570" y="52" class="mid mono small">addScenePasses(graph, scene, camera,</text>
-    <text x="570" y="68" class="mid mono small">target, {lightCamera, shadowMap, sun})</text>
-    <text x="570" y="85" class="mid small">the shaded view, with a SceneShadow</text>
+    <text x="570" y="68" class="mid mono small">target, shadow)</text>
+    <text x="570" y="85" class="mid small">the shaded view, with the SceneShadow</text>
 
-    <line x1="200" y1="94" x2="200" y2="128" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <line x1="700" y1="94" x2="700" y2="128" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <text x="250" y="118" class="title t-gpu">GPU · every frame, in graph order</text>
-    <rect x="20"  y="130" width="200" height="50" rx="6" class="gpu"/>
-    <text x="120" y="151" class="mid mono">Shadow Cull, Shadow</text>
-    <text x="120" y="168" class="mid small">depthPipeline: shadow.slang</text>
-    <line x1="220" y1="155" x2="278" y2="155" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <rect x="280" y="135" width="150" height="40" rx="6" class="mem"/>
-    <text x="355" y="160" class="mid mono">shadowMap</text>
-    <line x1="430" y1="155" x2="488" y2="155" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <text x="459" y="146" class="mid small">readDepth</text>
-    <rect x="490" y="130" width="250" height="50" rx="6" class="gpu"/>
-    <text x="615" y="151" class="mid mono">Cull, Scene (rasm.slang)</text>
-    <text x="615" y="168" class="mid small">SceneData: shadow matrix, map, light</text>
+    <line x1="190" y1="94" x2="190" y2="126" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="700" y1="94" x2="700" y2="126" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <text x="250" y="116" class="title t-gpu">GPU · every frame, in graph order</text>
+    <rect x="20"  y="128" width="200" height="66" rx="6" class="gpu"/>
+    <text x="120" y="150" class="mid mono">Cascade 0 … 3:</text>
+    <text x="120" y="166" class="mid mono small">Cull, draw (shadow.slang)</text>
+    <text x="120" y="183" class="mid small">one view per cascade</text>
+    <line x1="220" y1="161" x2="268" y2="161" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="270" y="128" width="150" height="66" rx="6" class="mem"/>
+    <text x="345" y="150" class="mid mono small">shadow_cascade_0</text>
+    <text x="345" y="166" class="mid small">…</text>
+    <text x="345" y="183" class="mid mono small">shadow_cascade_3</text>
+    <line x1="420" y1="161" x2="488" y2="161" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="454" y="152" class="mid small">readDepth</text>
+    <rect x="490" y="128" width="250" height="66" rx="6" class="gpu"/>
+    <text x="615" y="150" class="mid mono">Cull, Scene (rasm.slang)</text>
+    <text x="615" y="166" class="mid small">SceneData: cascade count, splits,</text>
+    <text x="615" y="183" class="mid small">matrices, maps, light</text>
 
-    <text x="20" y="212" class="title t-shader">fragMain → sampleShadow (shaders/lib/shadow.slang)</text>
-    <rect x="20"  y="222" width="170" height="64" rx="32" class="shader"/>
-    <text x="105" y="246" class="mid small">p + n · texel ·</text>
-    <text x="105" y="264" class="mid small">(1 + 2 (1 − n·l))</text>
-    <line x1="190" y1="254" x2="208" y2="254" class="arrow" marker-end="url(#ah)"/>
-    <rect x="210" y="222" width="160" height="64" rx="32" class="shader"/>
-    <text x="290" y="246" class="mid small">× shadowMatrix</text>
-    <text x="290" y="264" class="mid small">→ uv, depth</text>
-    <line x1="370" y1="254" x2="388" y2="254" class="arrow" marker-end="url(#ah)"/>
-    <rect x="390" y="222" width="170" height="64" rx="32" class="shader"/>
-    <text x="475" y="246" class="mid small">4 gathers = 16 texels</text>
-    <text x="475" y="264" class="mid small">bilinear-weighted PCF</text>
-    <line x1="560" y1="254" x2="578" y2="254" class="arrow" marker-end="url(#ah)"/>
-    <rect x="580" y="222" width="160" height="64" rx="32" class="shader"/>
-    <text x="660" y="246" class="mid small">lit 0..1 → shadePBR</text>
-    <text x="660" y="264" class="mid small">lights[shadowLight]</text>
+    <text x="20" y="226" class="title t-shader">fragMain → sampleShadow → sampleCascade (shaders/lib/shadow.slang)</text>
+    <rect x="20"  y="236" width="130" height="64" rx="32" class="shader"/>
+    <text x="85" y="260" class="mid small">view depth →</text>
+    <text x="85" y="278" class="mid small">first split beyond</text>
+    <line x1="150" y1="268" x2="166" y2="268" class="arrow" marker-end="url(#ah)"/>
+    <rect x="168" y="236" width="140" height="64" rx="32" class="shader"/>
+    <text x="238" y="260" class="mid small">p + n · texel ·</text>
+    <text x="238" y="278" class="mid small">(1 + 2 (1 − n·l))</text>
+    <line x1="308" y1="268" x2="324" y2="268" class="arrow" marker-end="url(#ah)"/>
+    <rect x="326" y="236" width="130" height="64" rx="32" class="shader"/>
+    <text x="391" y="260" class="mid small">× its matrix</text>
+    <text x="391" y="278" class="mid small">→ uv, depth</text>
+    <line x1="456" y1="268" x2="472" y2="268" class="arrow" marker-end="url(#ah)"/>
+    <rect x="474" y="236" width="130" height="64" rx="32" class="shader"/>
+    <text x="539" y="260" class="mid small">4 gathers =</text>
+    <text x="539" y="278" class="mid small">16 texels, PCF</text>
+    <line x1="604" y1="268" x2="620" y2="268" class="arrow" marker-end="url(#ah)"/>
+    <rect x="622" y="236" width="118" height="64" rx="32" class="shader"/>
+    <text x="681" y="260" class="mid small">lit 0..1 →</text>
+    <text x="681" y="278" class="mid small">shadePBR</text>
 
-    <text x="20" y="316" class="small">Lit when depth + 1 texel of depth ≥ the map's (reversed-Z). Outside the map, or with no shadow map: lit.</text>
-    <text x="20" y="336" class="small">Both offsets read the texel size from rows 0 and 2 of shadowMatrix: right for an orthographic light camera.</text>
-    <text x="20" y="356" class="small">The graph stores the map's depth after the Shadow passes and moves it to SAMPLED before the Scene passes.</text>
+    <text x="20" y="330" class="small">Lit when depth + 1 texel of depth ≥ the map's (reversed-Z). Off a cascade's edge: the next cascade. Past the last split: lit, faded in.</text>
+    <text x="20" y="350" class="small">Both offsets read the texel size from rows 0 and 2 of the cascade's matrix: right for its orthographic box.</text>
+    <text x="20" y="370" class="small">The graph stores each cascade's depth after its passes and moves it to SAMPLED before the Scene passes.</text>
   </svg>
-  <figcaption>The shadow view is a normal scene view, so it is culled on the GPU from the light camera, with occlusion culling too when it is on. Pass names start with <code>Shadow</code> so the GPU timers and the graph dump tell the two views apart. The shadow view picks each caster's LOD from the shaded view's camera, not the light's, so a surface is shadowed by the same triangles it is drawn with (<a href="lod-selection.html">LOD selection</a>).</figcaption>
+  <figcaption>Each cascade is a normal scene view, culled on the GPU with the cascade's box, with occlusion culling too when it is on. Pass names start with <code>Cascade</code> and the cascade's number, so the GPU timers and the graph dump tell the views apart. A cascade's view picks each caster's LOD from the shaded view's camera and size, so a surface is shadowed by the same triangles it is drawn with (<a href="lod-selection.html">LOD selection</a>).</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -719,16 +727,16 @@ lit    = d is not behind stored
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Lights</td><td>directional, spot, point</td><td>One directional light, named by <code>SceneShadow::light</code>; <code>prepareSceneView</code> writes its index in the scene's lights to <code>shadowLight</code>. Other lights and the ambient term are not shadowed. Spot lights do not exist yet (<code>B15</code>).</td></tr>
-  <tr><td>Light camera</td><td>derived from the light, often fitted to the view</td><td>The application's: an orthographic camera it places and points along the light (<code>glm::quatLookAt</code> in <code>examples/06_shadows</code>). <code>addScenePasses</code> rejects a perspective one. Nothing fits or snaps the box.</td></tr>
-  <tr><td>Shadow map</td><td>a depth texture</td><td>A depth-only render target: <code>RenderTargetDesc</code> with <code>D32_SFLOAT</code> and no <code>colorFormats</code>. Its depth is always <code>SAMPLED_DEPTH_ATTACHMENT</code> and in the bindless set (<code>NEAREST_CLAMP</code>), even without occlusion culling.</td></tr>
-  <tr><td>Shadow pass</td><td>depth only</td><td><code>addScenePasses</code> into a depth-only target: the same culling, and the draws with <code>depthPipeline</code> (<code>shaders/passes/shadow.slang</code>: the vertex pulling of <code>rasm.slang</code> and an empty <code>fragMain</code>).</td></tr>
+  <tr><td>Lights</td><td>directional, spot, point</td><td>One directional light, named by <code>ShadowDesc::light</code>; <code>prepareSceneView</code> writes its index in the scene's lights to <code>shadowLight</code>. Other lights and the ambient term are not shadowed. Spot lights do not exist yet (<code>B15</code>).</td></tr>
+  <tr><td>Light camera</td><td>derived from the light, often fitted to the view</td><td>Derived: no light camera exists. <code>fitShadowCascade</code> builds each cascade's orthographic box along the light, around a slice of the camera's view, snapped to whole texels, every frame (<a href="cascaded-shadows.html">Cascaded shadow maps</a>).</td></tr>
+  <tr><td>Shadow map</td><td>a depth texture</td><td>One depth-only render target per cascade, made by <code>addShadowPasses</code>: <code>ShadowDesc::size</code> squared, <code>D32_SFLOAT</code> and no <code>colorFormats</code>. Its depth is always <code>SAMPLED_DEPTH_ATTACHMENT</code> and in the bindless set (<code>NEAREST_CLAMP</code>), even without occlusion culling.</td></tr>
+  <tr><td>Shadow pass</td><td>depth only</td><td>A scene view per cascade: the same culling, and the draws with <code>depthPipeline</code> (<code>shaders/passes/shadow.slang</code>: the vertex pulling of <code>rasm.slang</code> and an empty <code>fragMain</code>).</td></tr>
   <tr><td>Depth convention</td><td>standard or reversed-Z</td><td>Reversed-Z: cleared to 0, compare <code>GREATER_OR_EQUAL</code>, so lit means depth ≥ stored.</td></tr>
-  <tr><td>Acne fixes</td><td>constant, slope-scaled, normal offset</td><td>Normal offset of 1 to 3 texels (more where the light grazes) plus a constant bias of 1 texel of depth, both in texels. No rasterizer depth bias; the shadow pass culls like the main pass.</td></tr>
+  <tr><td>Acne fixes</td><td>constant, slope-scaled, normal offset</td><td>Normal offset of 1 to 3 texels (more where the light grazes) plus a constant bias of 1 texel of depth, both in the cascade's texels. No rasterizer depth bias; the shadow pass culls like the main pass.</td></tr>
   <tr><td>Filtering</td><td>PCF, comparison samplers, PCSS</td><td>3x3 PCF with bilinear weights over 4x4 texels, read as four 2x2 <code>Gather</code>s, in the shader; no comparison sampler.</td></tr>
-  <tr><td>Caster detail</td><td>the same mesh in both passes</td><td>Meshes have LODs. The shadow view takes them from the camera of the view that reads the map (<code>lodPixelsPerUnit</code>, <code>lodDepthPlane</code>), so both views draw a mesh at the same LOD.</td></tr>
-  <tr><td>Coverage</td><td>fixed, fitted, cascades</td><td>One map, fixed box. Cascades are planned (<a href="../development_plan.md">development plan</a>, phase 4).</td></tr>
-  <tr><td>Synchronization</td><td>a barrier between the passes</td><td>The render graph's: the scene passes declare <code>readDepth</code> on the map, so they run after the shadow passes and the graph records the layout changes.</td></tr>
+  <tr><td>Caster detail</td><td>the same mesh in both passes</td><td>Meshes have LODs. A cascade's view takes them from the camera and size of the view that reads it (<code>lodPixelsPerUnit</code>, <code>lodDepthPlane</code>), so all views draw a mesh at the same LOD.</td></tr>
+  <tr><td>Coverage</td><td>fixed, fitted, cascades</td><td>Cascades: 1 to <code>MAX_SHADOW_CASCADES</code> (4), out to <code>ShadowDesc::distance</code> from the camera.</td></tr>
+  <tr><td>Synchronization</td><td>a barrier between the passes</td><td>The render graph's: the scene passes declare <code>readDepth</code> on every cascade, so they run after the cascade passes and the graph records the layout changes.</td></tr>
 </table>
 </div>
 
@@ -737,11 +745,12 @@ lit    = d is not behind stored
 <div class="table-wrap">
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
-  <tr><td>The API</td><td><code>SceneShadow</code> in <code>include/rasm/scene.h</code>; <code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Depth-only views, the shadow matrix</td><td><code>Engine::prepareSceneView</code>, <code>Engine::drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code>; <code>SceneView</code> in <code>src/renderer/gpuScene.h</code></td></tr>
-  <tr><td>GPU fields</td><td><code>shadowTexture</code>, <code>shadowMatrix</code>, <code>shadowLight</code>, and the LOD camera's <code>lodPixelsPerUnit</code>, <code>lodDepthPlane</code> in <code>SceneData</code>: <code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
+  <tr><td>The API</td><td><code>ShadowDesc</code>, <code>SceneShadow</code>, <code>MAX_SHADOW_CASCADES</code> in <code>include/rasm/scene.h</code>; <code>Engine::addShadowPasses</code>, <code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Splits and boxes</td><td><code>getShadowSplits</code>, <code>fitShadowCascade</code> in <code>src/renderer/shadowCascades.cpp</code>; <code>fitShadowCascades</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Depth-only views, the cascades' matrices</td><td><code>Engine::prepareSceneView</code>, <code>Engine::drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code>; <code>SceneView</code> in <code>src/renderer/gpuScene.h</code></td></tr>
+  <tr><td>GPU fields</td><td><code>shadowCascadeCount</code>, <code>shadowLight</code>, <code>shadowSplits</code>, <code>shadowMatrices</code>, <code>shadowTextures</code>, and the LOD camera's <code>lodPixelsPerUnit</code>, <code>lodDepthPlane</code> in <code>SceneData</code>: <code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
   <tr><td>The shadow pass shader</td><td><code>shaders/passes/shadow.slang</code></td></tr>
-  <tr><td>The lookup and PCF</td><td><code>sampleShadow</code> in <code>shaders/lib/shadow.slang</code>; called from <code>fragMain</code> in <code>shaders/passes/rasm.slang</code></td></tr>
+  <tr><td>The lookup and PCF</td><td><code>sampleShadow</code>, <code>sampleCascade</code> in <code>shaders/lib/shadow.slang</code>; called from <code>fragMain</code> in <code>shaders/passes/rasm.slang</code></td></tr>
   <tr><td>Applying it</td><td><code>shadePBR</code> in <code>shaders/lib/pbr.slang</code> (the attenuation of <code>lights[shadowLight]</code>)</td></tr>
   <tr><td>Depth-only targets</td><td><code>checkRenderTargetDesc</code> and the depth texture's usage in <code>src/rhi/renderContext.cpp</code>; <code>VulkanCommandBuffer::beginRendering</code> (render area from the depth); <code>canReadDepth</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
   <tr><td>An example</td><td><code>examples/06_shadows/main.cpp</code></td></tr>
@@ -752,11 +761,11 @@ lit    = d is not behind stored
   <strong>Keep these true</strong>
   <ul>
     <li><code>sampleShadow</code> and <code>shadePBR</code> both use <code>SceneData::shadowLight</code>; neither picks a light by itself.</li>
-    <li>The offsets assume an orthographic light camera, so <code>addScenePasses</code> takes no other. A perspective one (spot lights) needs the texel size from the fragment's distance instead.</li>
-    <li>The light camera should look along the named light: the map's shadows fall along the camera, the bias follows the light.</li>
+    <li>The offsets assume an orthographic box, which a directional light's cascade is. A perspective light camera (spot lights) needs the texel size from the fragment's distance instead.</li>
+    <li>The cascades' views and the shaded view must fit the cascades with the same inputs (camera, the shaded view's aspect ratio, light, <code>SceneShadow</code>), or the maps are read with other matrices than they were drawn with. <code>addScenePasses</code> only takes a shadow that <code>addShadowPasses</code> made for the same scene and camera in the same graph.</li>
     <li>The test direction follows reversed-Z. Changing the depth convention changes it too (<a href="projection-depth.html">Projection and reversed-Z depth</a>).</li>
-    <li>The scene passes must declare <code>readDepth</code> on the shadow map, or they get no barrier and read it while it is still an attachment.</li>
-    <li><code>shadowTexture</code> is the bindless index of this frame slot's depth texture: <code>prepareSceneView</code> looks it up every frame.</li>
+    <li>The scene passes must declare <code>readDepth</code> on every cascade, or they get no barrier and read one while it is still an attachment.</li>
+    <li><code>shadowTextures</code> holds the bindless index of this frame slot's depth texture of each cascade: <code>prepareSceneView</code> looks them up every frame.</li>
   </ul>
 </div>
 
