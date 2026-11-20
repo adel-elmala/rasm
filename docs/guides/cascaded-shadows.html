@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cascaded Shadow Maps · RASM</title>
+<meta name="description" content="How cascaded shadow maps work: split the camera's view by depth, give each slice its own shadow map, fit a stable box around each slice, snap it to whole texels, and pick the cascade per pixel. Then how RASM does it.">
+<meta name="rasm-sources" content="src/renderer/shadowCascades.cpp src/renderer/shadowCascades.h shaders/lib/shadow.slang shaders/lib/core.slang shaders/lib/pbr.slang src/renderer/gpuScene.cpp src/renderer/uberMaterialTypes.h include/rasm/scene.h include/rasm/engine.h examples/06_shadows/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/cascaded-shadows.js"></script>
+</head>
+<body data-root="../" data-page="guides/cascaded-shadows.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head light"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Cascaded shadow maps</h1>
+<p class="lead">One shadow map over a big outdoor view has the same texel size everywhere: too coarse next to the camera, and wasted far away. Cascaded shadow maps cut the camera's view into slices by distance and give each slice its own map. This page explains where to cut, how to fit a map around a slice so shadows stay still, and how a pixel picks its map. It builds on <a href="shadow-mapping.html">Shadow mapping</a>. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Split the camera's view depth into 2 to 4 <b>slices</b>. Each slice gets its own shadow map, a <b>cascade</b>, with the same number of texels.</li>
+    <li>Near slices are small, so their texels are small: sharp shadows next to the camera, and still shadows far away.</li>
+    <li>The <b>split depths</b> mix an even split and a logarithmic one, with one number, <b>lambda</b>.</li>
+    <li>Each cascade's box surrounds a <b>sphere</b> around its slice, so its size does not change when the camera turns, and it moves in <b>whole texels</b>, so shadow edges do not crawl.</li>
+    <li>The pixel shader picks the cascade by the pixel's <b>view depth</b>, and fades the shadow out at the end of the last one.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>The problem: one map for a big view</h2>
+
+<p>A shadow map texel covers <var>box width</var> / <var>map size</var> world units, the same everywhere in the box. A screen pixel is different: it covers a small area near the camera and a large area far away. Compare the two at both ends of the view.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>what the camera sees (from above)</span>
+  <span><i class="hot"></i>the shadow map's box and texels</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A top view. One shadow map box covers the whole view of the camera, out to 60 units, with large texels. Next to the camera, one texel covers many pixels: blocky shadows. At the far end, one pixel covers about one texel.">
+    <polygon points="40,125 470,30 470,220" class="cpu o-50"/>
+    <rect x="30" y="20" width="450" height="210" class="hot"/>
+    <path d="M105,20V230M180,20V230M255,20V230M330,20V230M405,20V230M30,90H480M30,160H480" class="grid"/>
+    <circle cx="40" cy="125" r="6" class="solid"/>
+    <text x="22" y="148" class="small">camera</text>
+
+    <circle cx="90" cy="125" r="22" class="ghost"/>
+    <line x1="112" y1="125" x2="540" y2="70" class="dashed"/>
+    <circle cx="440" cy="125" r="22" class="ghost"/>
+    <line x1="462" y1="125" x2="540" y2="180" class="dashed"/>
+
+    <rect x="540" y="30" width="200" height="80" rx="6" class="paper"/>
+    <rect x="552" y="40" width="60" height="60" class="hot"/>
+    <path d="M556,44h6v6h-6zM566,44h6v6h-6zM576,44h6v6h-6zM556,54h6v6h-6zM566,54h6v6h-6z" class="cpu"/>
+    <text x="622" y="58" class="small">near: 1 texel,</text>
+    <text x="622" y="74" class="small t-bad">many pixels</text>
+    <text x="622" y="90" class="small">→ blocky</text>
+
+    <rect x="540" y="140" width="200" height="80" rx="6" class="paper"/>
+    <rect x="552" y="150" width="60" height="60" class="hot"/>
+    <rect x="552" y="150" width="60" height="60" class="cpu o-50"/>
+    <text x="622" y="168" class="small">far: 1 texel,</text>
+    <text x="622" y="184" class="small t-ok">about 1 pixel</text>
+    <text x="622" y="200" class="small">→ fine</text>
+  </svg>
+  <figcaption>With one map fitted to a 60-unit view, a 2048 texel map has texels of about 5 cm. A 720-pixel-high image with a 45° field of view has pixels of 0.6 cm at 5 units: one texel covers about 9 × 9 pixels there.</figcaption>
+</figure>
+
+<p>Making the map bigger helps a little and costs a lot: twice the resolution is four times the memory and the drawing. What helps is spending the texels where the pixels are small.</p>
+
+<h2 id="idea"><span class="n">2</span>The idea: one map per slice of the view</h2>
+
+<p>Cut the camera's view into slices by distance. Give each slice its own shadow map with the same number of texels. The near slice is short and narrow, so its map covers a small area and its texels are small.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="A top view of the camera's view, cut into four slices at increasing distances. Each slice has its own square shadow map box: a small one next to the camera, then bigger ones. Each box has the same number of texels, so the texels grow with distance.">
+    <polygon points="40,120 720,10 720,230" class="cpu o-50"/>
+    <polygon points="110,108.7 200,94.1 200,145.9 110,131.3" class="zone"/>
+    <polygon points="360,68.2 720,10 720,230 360,171.8" class="zone"/>
+    <line x1="110" y1="108.7" x2="110" y2="131.3" class="dashed"/>
+    <line x1="200" y1="94.1" x2="200" y2="145.9" class="dashed"/>
+    <line x1="360" y1="68.2" x2="360" y2="171.8" class="dashed"/>
+    <rect x="48" y="104" width="66" height="32" class="hot"/>
+    <path d="M64.5,104V136M81,104V136M97.5,104V136M48,112H114M48,120H114M48,128H114" class="grid"/>
+    <rect x="106" y="90" width="98" height="60" class="hot"/>
+    <path d="M130.5,90V150M155,90V150M179.5,90V150M106,105H204M106,120H204M106,135H204" class="grid"/>
+    <rect x="196" y="64" width="168" height="112" class="hot"/>
+    <path d="M238,64V176M280,64V176M322,64V176M196,92H364M196,120H364M196,148H364" class="grid"/>
+    <rect x="352" y="8" width="370" height="224" class="hot"/>
+    <path d="M444.5,8V232M537,8V232M629.5,8V232M352,64H722M352,120H722M352,176H722" class="grid"/>
+    <circle cx="40" cy="120" r="6" class="solid"/>
+    <text x="81" y="99" class="mid small t-hot">0</text>
+    <text x="155" y="85" class="mid small t-hot">1</text>
+    <text x="280" y="59" class="mid small t-hot">2</text>
+    <text x="362" y="26" class="small t-hot">3</text>
+  </svg>
+  <figcaption>Four cascades, numbered from 0 next to the camera. Each box has the same 4 × 4 texels in this drawing (2048 × 2048 in a real one), so the texels grow with the box. The boxes overlap a little at the splits.</figcaption>
+</figure>
+
+<ol class="flow">
+  <li class="cpu"><b>Split</b> the view depth from near to the shadow distance into slices.</li>
+  <li class="cpu"><b>Fit</b> a box along the light around each slice, and snap it to whole texels.</li>
+  <li class="gpu"><b>Draw</b> the scene's depth once per box, into that cascade's map.</li>
+  <li class="shader"><b>Pick</b> the cascade per pixel by its view depth, and test it like one shadow map.</li>
+</ol>
+
+<h2 id="splits"><span class="n">3</span>Where to split</h2>
+
+<p>The split depths decide how big each slice is. Two simple rules, and a mix of them:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Even split: the view is cut into four slices of the same length.">
+      <polygon points="14,65 226,14 226,116" class="cpu o-50"/>
+      <path d="M67,52V78M120,39V91M173,27V103" class="dashed"/>
+      <text x="67" y="124" class="mid small mono">15</text>
+      <text x="120" y="124" class="mid small mono">30</text>
+      <text x="173" y="124" class="mid small mono">45</text>
+      <text x="222" y="124" class="mid small mono">60</text>
+    </svg>
+    <h4>Even</h4>
+    <p>Same length for every slice. The first slice is long, so near texels stay big.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Logarithmic split: the first slices are very short, the last one is long.">
+      <polygon points="14,65 226,14 226,116" class="cpu o-50"/>
+      <path d="M16,64V66M22,62V68M57,55V75" class="dashed"/>
+      <text x="57" y="124" class="mid small mono">12</text>
+      <text x="222" y="124" class="mid small mono">60</text>
+      <text x="12" y="30" class="small">first two end at 0.5 and 2.4</text>
+    </svg>
+    <h4>Logarithmic</h4>
+    <p>Each slice is the same <i>ratio</i> longer: texels on screen stay the same size. The first slice is tiny.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A mix with lambda 0.7: short slices near the camera, longer ones far away, and a first slice of a useful length.">
+      <polygon points="14,65 226,14 226,116" class="cpu o-50"/>
+      <path d="M31,61V69M52,56V74M92,46V84" class="dashed"/>
+      <text x="28" y="124" class="mid small mono">4.9</text>
+      <text x="54" y="124" class="mid small mono">11</text>
+      <text x="92" y="124" class="mid small mono">22</text>
+      <text x="222" y="124" class="mid small mono">60</text>
+    </svg>
+    <h4>Mix (lambda 0.7)</h4>
+    <p>Mostly logarithmic, with some even split so the first slice is long enough to matter.</p>
+  </div>
+</div>
+
+<div class="formula">
+  <p class="eq">split<sub>i</sub> = λ · log<sub>i</sub> + (1 − λ) · even<sub>i</sub>,   i = 1 … N</p>
+  <p class="eq">log<sub>i</sub> = n · (f / n)<sup>i / N</sup></p>
+  <p class="eq">even<sub>i</sub> = n + (f − n) · i / N</p>
+  <dl>
+    <dt>n</dt><dd>the camera's near plane</dd>
+    <dt>f</dt><dd>the shadow distance: the last split. Past it there is no shadow.</dd>
+    <dt>N</dt><dd>the number of cascades</dd>
+    <dt>λ</dt><dd>the mix: 0 is even, 1 is logarithmic. 0.5 to 0.8 is common.</dd>
+  </dl>
+</div>
+
+<figure class="lab" data-lab="csm-splits" data-title="Split the view">
+  <figcaption>Change the number of cascades, the mix and the distance. Find the mix where cascade 0 is short but not wasted: with lambda 1 it ends half a unit from the camera. The camera has a 45° field of view and a 16:9 image; each map has 2048 texels per side, and a unit is one meter.</figcaption>
+</figure>
+
+<h2 id="fit"><span class="n">4</span>Fitting a box around a slice</h2>
+
+<p>A slice is a frustum piece with 8 corners. Its map needs a box along the light that holds all 8. The tightest box changes shape whenever the camera turns, and so does the texel size. Shadows then swim. A sphere around the slice does not change when the camera turns, so a box around the sphere keeps its size.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Two tight boxes around the same slice, seen from the light, for two camera directions. The boxes have different sizes.">
+      <polygon points="40,60 110,30 130,90 60,110" class="cpu o-50"/>
+      <rect x="40" y="30" width="90" height="80" class="hot"/>
+      <polygon points="200,40 290,60 270,110 180,90" class="cpu o-50"/>
+      <rect x="180" y="40" width="110" height="70" class="hot"/>
+      <text x="85" y="130" class="mid small">90 × 80</text>
+      <text x="235" y="130" class="mid small">110 × 70</text>
+    </svg>
+    <h4>Tight box</h4>
+    <p>The camera turns, the box changes size. Texels grow and shrink: edges shimmer.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Boxes around a sphere around the same slice, for two camera directions. Both boxes have the same size.">
+      <polygon points="50,60 120,35 135,85 65,108" class="cpu o-50"/>
+      <circle cx="92" cy="70" r="48" class="ghost"/>
+      <rect x="44" y="22" width="96" height="96" class="hot"/>
+      <polygon points="195,45 280,58 265,108 185,92" class="cpu o-50"/>
+      <circle cx="232" cy="70" r="48" class="ghost"/>
+      <rect x="184" y="22" width="96" height="96" class="hot"/>
+      <text x="92" y="134" class="mid small">96 × 96</text>
+      <text x="232" y="134" class="mid small">96 × 96</text>
+    </svg>
+    <h4>Box around a sphere</h4>
+    <p>The sphere does not turn, so the box keeps its size. It wastes some texels in the corners.</p>
+  </div>
+</div>
+
+<p>The smallest sphere whose centre is on the view axis has a simple formula. In view space, the slice's near corners are at depth <var>z<sub>n</sub></var>, at distance <var>r<sub>n</sub></var> from the axis; its far corners are at <var>z<sub>f</sub></var>, at <var>r<sub>f</sub></var>. The centre at depth <var>c</var> is as far from the near corners as from the far ones:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 245" role="img" aria-label="A side view of one slice of the view: near corners at depth zn and distance rn from the axis, far corners at depth zf and distance rf. A sphere with centre c on the axis passes through both the near and the far corners.">
+    <line x1="40" y1="115" x2="720" y2="115" class="dashed"/>
+    <polygon points="160,85 340,40 340,190 160,145" class="cpu o-50"/>
+    <circle cx="263" cy="115" r="107" class="ghost"/>
+    <circle cx="263" cy="115" r="4" class="solid"/>
+    <line x1="263" y1="115" x2="338" y2="42" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="263" y1="115" x2="162" y2="86" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="306" y="70" class="small t-hot halo">r</text>
+    <text x="206" y="92" class="small t-hot halo">r</text>
+    <text x="263" y="134" class="mid small">c</text>
+    <circle cx="40" cy="115" r="6" class="solid"/>
+    <text x="40" y="140" class="mid small">camera</text>
+    <line x1="160" y1="145" x2="160" y2="222" class="dashed"/>
+    <line x1="340" y1="190" x2="340" y2="222" class="dashed"/>
+    <text x="160" y="238" class="mid small">z<tspan baseline-shift="sub">n</tspan></text>
+    <text x="340" y="238" class="mid small">z<tspan baseline-shift="sub">f</tspan></text>
+    <text x="150" y="104" class="end small">r<tspan baseline-shift="sub">n</tspan></text>
+    <text x="350" y="70" class="small">r<tspan baseline-shift="sub">f</tspan></text>
+    <text x="420" y="60" class="small">h = √(tan²x + tan²y): half the diagonal</text>
+    <text x="420" y="78" class="small">of the view at depth 1</text>
+    <text x="420" y="160" class="small">The sphere does not depend on</text>
+    <text x="420" y="178" class="small">where the camera looks.</text>
+  </svg>
+  <figcaption>Drawn from the side. A perspective slice widens with depth, so <var>r<sub>n</sub></var> = <var>z<sub>n</sub></var> · <var>h</var> and <var>r<sub>f</sub></var> = <var>z<sub>f</sub></var> · <var>h</var>. For an orthographic camera <var>r</var> is the same at both ends.</figcaption>
+</figure>
+
+<div class="formula">
+  <p class="eq">c = (z<sub>f</sub>² + r<sub>f</sub>² − z<sub>n</sub>² − r<sub>n</sub>²) / (2 (z<sub>f</sub> − z<sub>n</sub>))</p>
+  <p class="eq">c = clamp(c, z<sub>n</sub>, z<sub>f</sub>)</p>
+  <p class="eq">r = max( √((c − z<sub>n</sub>)² + r<sub>n</sub>²),  √((z<sub>f</sub> − c)² + r<sub>f</sub>²) )</p>
+  <dl>
+    <dt>c</dt><dd>the centre's depth on the view axis. It moves to the far end when the far corners are wide: then the sphere is just the far corners' circle.</dd>
+    <dt>r</dt><dd>the radius. It depends only on the projection and the two depths, never on where the camera looks.</dd>
+  </dl>
+</div>
+
+<p>The box is an orthographic camera that looks along the light, with a square side of 2<var>r</var>. Its depth range must also hold the <b>casters</b>: a tree or a wall outside the slice, between the slice and the sun, still throws its shadow into the slice. So the box starts well before the sphere, toward the light.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 285" role="img" aria-label="A side view. The sun is upper left. A sphere around a slice sits on the ground. The cascade's box runs along the light, and it starts far before the sphere, toward the sun, so a tall tower outside the slice is inside the box and throws its shadow into the slice.">
+    <polygon points="324.3,23.3 598.6,187.8 547.2,273.6 272.9,109.1" class="hot"/>
+    <circle cx="530" cy="205" r="50" class="ghost"/>
+    <polygon points="384,250 384,120 589,250" class="shade"/>
+    <rect x="360" y="120" width="24" height="130" class="solid"/>
+    <line x1="20" y1="250" x2="740" y2="250" class="surface"/>
+    <circle cx="60" cy="50" r="16" class="light"/>
+    <line x1="90" y1="70" x2="240" y2="160" class="arrow light" marker-end="url(#ah-light)"/>
+    <text x="530" y="200" class="mid small">slice</text>
+    <text x="372" y="110" class="mid small halo">caster</text>
+    <text x="264" y="40" class="end small">the box reaches back</text>
+    <text x="264" y="56" class="end small">toward the light</text>
+    <text x="604" y="236" class="small">the sphere</text>
+  </svg>
+  <figcaption>The caster is outside the slice and outside its sphere, but inside the box, so it is drawn into the map. A box that started at the sphere would miss it, and the shadow would be cut off.</figcaption>
+</figure>
+
+<h2 id="snap"><span class="n">5</span>Stable shadows: move in whole texels</h2>
+
+<p>The box follows the camera every frame. If it moves by part of a texel, the texel grid slides over the world, and every shadow edge is sampled at new places: edges crawl and flicker while the camera walks. Moving the box only in whole texels, along the light's own x and y, keeps the grid fixed in the world.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A texel grid over the edge of a shadow, shown twice. In the second frame the grid has moved by part of a texel, so different texels are dark along the edge.">
+      <polygon points="20,20 120,20 70,120 20,120" class="shade"/>
+      <path d="M20,20V120M45,20V120M70,20V120M95,20V120M120,20V120M20,20H120M20,45H120M20,70H120M20,95H120M20,120H120" class="grid"/>
+      <polygon points="180,20 280,20 230,120 180,120" class="shade"/>
+      <path d="M192,20V120M217,20V120M242,20V120M267,20V120M180,32H290M180,57H290M180,82H290M180,107H290" class="grid"/>
+      <text x="70" y="136" class="mid small">frame 1</text>
+      <text x="235" y="136" class="mid small">frame 2: moved 0.5 texel</text>
+    </svg>
+    <h4>Free move</h4>
+    <p>The grid slides over the world. Edge texels change every frame: crawling edges.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same shadow edge with a texel grid that moved by exactly one texel: every texel covers the same part of the world as before.">
+      <polygon points="20,20 120,20 70,120 20,120" class="shade"/>
+      <path d="M20,20V120M45,20V120M70,20V120M95,20V120M120,20V120M20,20H120M20,45H120M20,70H120M20,95H120M20,120H120" class="grid"/>
+      <polygon points="180,20 280,20 230,120 180,120" class="shade"/>
+      <path d="M180,20V120M205,20V120M230,20V120M255,20V120M280,20V120M180,20H280M180,45H280M180,70H280M180,95H280M180,120H280" class="grid"/>
+      <text x="70" y="136" class="mid small">frame 1</text>
+      <text x="230" y="136" class="mid small">frame 2: moved 1 texel</text>
+    </svg>
+    <h4>Whole texels</h4>
+    <p>The grid stays on the same world lines. The same texels are dark: still edges.</p>
+  </div>
+</div>
+
+<div class="formula">
+  <p class="eq">t = 2 r / size</p>
+  <p class="eq">x′ = ⌊x / t⌋ · t,   y′ = ⌊y / t⌋ · t</p>
+  <dl>
+    <dt>t</dt><dd>one texel in world units</dd>
+    <dt>x, y</dt><dd>the sphere's centre in the light's frame (its right and up axes)</dd>
+    <dt>x′, y′</dt><dd>the box's centre: on the texel grid of a frame that never moves</dd>
+  </dl>
+</div>
+
+<div class="callout">
+  <strong>Both halves are needed</strong>
+  The snap keeps the grid's <i>position</i> fixed; the sphere keeps the texel's <i>size</i> fixed. A snapped tight box still shimmers when the camera turns, because its texels change size.
+</div>
+
+<h2 id="pick"><span class="n">6</span>Picking the cascade in the shader</h2>
+
+<p>The main pass knows every cascade's matrix and split depth. For each pixel:</p>
+
+<ol class="flow">
+  <li class="shader"><b>Depth</b> the pixel's distance along the camera's axis.</li>
+  <li class="shader"><b>Choose</b> the first cascade whose split is beyond it.</li>
+  <li class="shader"><b>Test</b> in that map: normal offset, bias, PCF.</li>
+  <li class="shader"><b>Off the edge?</b> Use the next, bigger cascade.</li>
+  <li class="shader"><b>Fade</b> out near the shadow distance.</li>
+</ol>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="A graph of the shadow's strength against view depth. It is full up to 90 percent of the shadow distance, then falls in a straight line to zero at the distance. Under it, the cascades 0 to 3 as bands that end at their split depths.">
+    <line x1="60" y1="110" x2="720" y2="110" class="arrow" marker-end="url(#ah)"/>
+    <line x1="60" y1="110" x2="60" y2="20" class="arrow" marker-end="url(#ah)"/>
+    <polyline points="60,40 640,40 700,110" class="hot nofill"/>
+    <text x="50" y="44" class="end small">full</text>
+    <text x="50" y="114" class="end small">none</text>
+    <text x="640" y="30" class="mid small">0.9 f</text>
+    <text x="700" y="30" class="mid small">f</text>
+    <line x1="640" y1="40" x2="640" y2="110" class="dashed"/>
+    <rect x="60" y="126" width="52" height="22" class="accent"/>
+    <rect x="112" y="126" width="62" height="22" class="zone"/>
+    <rect x="174" y="126" width="121" height="22" class="accent"/>
+    <rect x="295" y="126" width="405" height="22" class="zone"/>
+    <text x="86" y="141" class="mid small">0</text>
+    <text x="143" y="141" class="mid small">1</text>
+    <text x="234" y="141" class="mid small">2</text>
+    <text x="497" y="141" class="mid small">3</text>
+    <text x="730" y="114" class="small">depth</text>
+    <text x="60" y="164" class="small t-faint">the cascades under the graph end at their splits (4.9, 10.7, 22 and 60 for lambda 0.7)</text>
+  </svg>
+  <figcaption>The shadow's strength against the pixel's view depth. Past the distance <var>f</var> there is no map, so the point is lit.</figcaption>
+</figure>
+
+<div class="callout warn">
+  <strong>Neighbouring pixels can pick different cascades</strong>
+  So the shader cannot read "the cascade's texture" through one index that differs per pixel, unless it marks the index as non-uniform (<samp>NonUniformResourceIndex</samp> in HLSL and Slang), which some compilers turn into extra requirements. A loop over the cascades with a constant count, unrolled, avoids it: each copy of the loop body reads one fixed cascade, whose texture index is the same for every pixel of the draw.
+</div>
+
+<h2 id="example"><span class="n">7</span>Worked example</h2>
+
+<p>A camera with a 45° vertical field of view, a 16:9 image 720 pixels high and a near plane at 0.1. The shadow reaches 60 units, with 4 cascades of 2048 × 2048, and lambda 0.7. Then <var>h</var> = √(0.414² + 0.736²) = 0.845.</p>
+
+<div class="stats">
+  <div><b>4.87</b><span>end of cascade 0</span><small>0.7 · 0.1 · 600<sup>¼</sup> + 0.3 · 15.08</small></div>
+  <div><b>10.73</b><span>end of cascade 1</span><small>0.7 · 2.45 + 0.3 · 30.05</small></div>
+  <div><b>21.99</b><span>end of cascade 2 (cascade 3 ends at the distance, 60)</span><small>0.7 · 12.12 + 0.3 · 45.03</small></div>
+  <div><b>0.41 cm</b><span>texel of cascade 0 (r = 4.16)</span><small>2 · 4.16 / 2048</small></div>
+  <div><b>0.89 · 1.81 · 4.95 cm</b><span>texels of cascades 1, 2, 3 (r = 9.07, 18.6, 50.7)</span><small>2 r / 2048</small></div>
+  <div><b>5.0 cm</b><span>texel of one map over all 60 units (r = 51.4)</span><small>12 times cascade 0's</small></div>
+  <div><b>1.4 texels</b><span>per pixel at the end of each cascade</span><small>pixel = 2 z · 0.414 / 720</small></div>
+  <div><b>64 MiB</b><span>map memory, 32-bit depth</span><small>4 · 2048 · 2048 · 4 bytes</small></div>
+</div>
+
+<p>Cascades 1 to 3 have their centre at their far end (<var>c</var> = <var>z<sub>f</sub></var>): their far corners are wider than the slice is long. Cascade 0 is the only one where the sphere's centre sits inside the slice (<var>c</var> = 4.26).</p>
+
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Shadow edges crawl when the camera moves</dt><dd>The box is not snapped to whole texels.</dd></div>
+  <div><dt>Shadow edges shimmer when the camera turns</dt><dd>The box is fitted tightly to the slice, so its size changes. Fit it around a sphere.</dd></div>
+  <div><dt>A shadow is cut off, or a caster's shadow is missing</dt><dd>The box starts at the sphere, so casters between the slice and the light are clipped. Extend it toward the light.</dd></div>
+  <div><dt>A visible line where the shadow changes sharpness</dt><dd>The seam between two cascades. A higher resolution, a lambda closer to even, or blending the two cascades over a short band hides it.</dd></div>
+  <div><dt>The shadow ends in a hard line far away</dt><dd>No fade at the shadow distance.</dd></div>
+  <div><dt>Blocky shadows next to the camera even with cascades</dt><dd>Lambda too low (cascade 0 is too long), or too high (cascade 0 ends before anything visible, and cascade 1 does the work).</dd></div>
+  <div><dt>Acne in the far cascades only</dt><dd>A bias in world units. Bias in texels of the cascade that is read: its texels are bigger.</dd></div>
+  <div><dt>Shadows flicker between frames for no reason</dt><dd>The pass that draws a cascade and the pass that reads it use different matrices, for example one frame apart. Compute both from the same camera in the same frame.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p>RASM has cascaded shadows for one directional light per shaded view. <code>Engine::addShadowPasses</code> makes the cascades: one depth-only render target and one set of scene passes per cascade, all drawn from the application's camera. It returns a <code>SceneShadow</code>, which <code>addScenePasses</code> takes for the view that is shaded with it. No light camera exists: every view of the shadow fits the cascades again each frame, with the same function, so the maps are drawn and read with the same matrices. <code>examples/06_shadows</code> shows it.</p>
+
+<pre><code>const rasm::SceneShadow shadow = engine.addShadowPasses(graph, scene, camera, rasm::ShadowDesc{.light = sun, .cascadeCount = CASCADE_COUNT, .size = 2048, .distance = 60.0f, .splitLambda = 0.7f});
+if (shadow.cascadeCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTarget, shadow))
+    return 1;</code></pre>
+
+<div class="legend">
+  <span><i class="cpu"></i>the application and the CPU side</span>
+  <span><i class="gpu"></i>graph passes</span>
+  <span><i class="mem"></i>textures</span>
+  <span><i class="shader"></i>shader steps</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 400" role="img" aria-label="The application calls addShadowPasses, which creates four depth-only targets and adds Cascade passes for each, then addScenePasses with the SceneShadow. Every frame, prepareSceneView of each view calls fitShadowCascades: getShadowSplits and fitShadowCascade per cascade. The cascade passes draw depth into shadow_cascade_0 to 3; the Scene passes read them with readDepth. In fragMain, sampleShadow picks a cascade by view depth and sampleCascade does the normal offset and PCF; shadePBR applies the result to lights[shadowLight].">
+    <text x="20" y="22" class="title t-cpu">application · once, when building the graph</text>
+    <rect x="20"  y="32" width="340" height="56" rx="6" class="cpu"/>
+    <text x="190" y="54" class="mid mono small">addShadowPasses(graph, scene, camera,</text>
+    <text x="190" y="72" class="mid mono small">ShadowDesc{light, cascadeCount, ...})</text>
+    <rect x="400" y="32" width="340" height="56" rx="6" class="cpu"/>
+    <text x="570" y="54" class="mid mono small">addScenePasses(graph, scene, camera,</text>
+    <text x="570" y="72" class="mid mono small">sceneTarget, shadow)</text>
+    <line x1="360" y1="60" x2="398" y2="60" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+
+    <text x="20" y="116" class="title t-cpu">every frame, each view's prepareSceneView</text>
+    <rect x="20" y="126" width="720" height="40" rx="6" class="cpu"/>
+    <text x="380" y="151" class="mid small">fitShadowCascades: getShadowSplits, then fitShadowCascade per cascade (sphere, box along the light, snap)</text>
+
+    <text x="20" y="194" class="title t-gpu">GPU · in graph order</text>
+    <rect x="20"  y="204" width="200" height="50" rx="6" class="gpu"/>
+    <text x="120" y="225" class="mid">Cascade 0 … 3</text>
+    <text x="120" y="242" class="mid small">cull + depth-only draws</text>
+    <line x1="220" y1="229" x2="278" y2="229" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="280" y="209" width="170" height="40" rx="6" class="mem"/>
+    <text x="365" y="234" class="mid mono small">shadow_cascade_0…3</text>
+    <line x1="450" y1="229" x2="508" y2="229" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="479" y="220" class="mid small">readDepth</text>
+    <rect x="510" y="204" width="230" height="50" rx="6" class="gpu"/>
+    <text x="625" y="225" class="mid">Cull, Scene (rasm.slang)</text>
+    <text x="625" y="242" class="mid small">SceneData: splits, matrices, textures</text>
+
+    <text x="20" y="286" class="title t-shader">fragMain → sampleShadow → sampleCascade (shaders/lib/shadow.slang)</text>
+    <rect x="20"  y="296" width="170" height="60" rx="30" class="shader"/>
+    <text x="105" y="320" class="mid small">view depth →</text>
+    <text x="105" y="338" class="mid small">first split beyond it</text>
+    <line x1="190" y1="326" x2="208" y2="326" class="arrow" marker-end="url(#ah)"/>
+    <rect x="210" y="296" width="170" height="60" rx="30" class="shader"/>
+    <text x="295" y="320" class="mid small">normal offset, PCF;</text>
+    <text x="295" y="338" class="mid small">off the edge → next</text>
+    <line x1="380" y1="326" x2="398" y2="326" class="arrow" marker-end="url(#ah)"/>
+    <rect x="400" y="296" width="160" height="60" rx="30" class="shader"/>
+    <text x="480" y="320" class="mid small">fade over the last</text>
+    <text x="480" y="338" class="mid small">tenth of the distance</text>
+    <line x1="560" y1="326" x2="578" y2="326" class="arrow" marker-end="url(#ah)"/>
+    <rect x="580" y="296" width="160" height="60" rx="30" class="shader"/>
+    <text x="660" y="320" class="mid small">lit 0..1 → shadePBR</text>
+    <text x="660" y="338" class="mid small">lights[shadowLight]</text>
+    <text x="20" y="384" class="small">Four cascades and the shaded view use 5 of the 8 scene views (MAX_SCENE_VIEWS).</text>
+  </svg>
+  <figcaption>Each cascade is an ordinary scene view of the application's camera, culled on the GPU with the cascade's own matrices. Its passes are named <samp>Cascade 0 Cull 1</samp>, <samp>Cascade 0 1</samp> and so on in the GPU timers and the graph dump. A cascade takes each caster's LOD from the camera and from the shaded view's target size, so a surface is shadowed by the same triangles it is drawn with (<a href="lod-selection.html">LOD selection</a>).</figcaption>
+</figure>
+
+<h3>Where RASM follows this page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Lights</td><td>a directional light</td><td>One directional light per shadow, <code>ShadowDesc::light</code>. Other lights and the ambient term are not shadowed. Spot and point light shadows are planned (<a href="../development_plan.md">development plan</a>, phase 4).</td></tr>
+  <tr><td>Cascades</td><td>2 to 4</td><td>1 to <code>MAX_SHADOW_CASCADES</code> (4), <code>cascadeCount</code>; each a <code>size</code> × <code>size</code> depth-only target, <samp>shadow_cascade_0</samp> and up, made in the graph.</td></tr>
+  <tr><td>Splits</td><td>the lambda mix</td><td>The same formula in <code>getShadowSplits</code>, from the camera's near plane (at least 0.01) to <code>distance</code>, with <code>splitLambda</code>.</td></tr>
+  <tr><td>Fit</td><td>a sphere on the view axis</td><td><code>fitShadowCascade</code>: the formula above, from the camera's projection fitted to the shaded view's target. The light's up axis is world +y, or +z when the light is almost vertical.</td></tr>
+  <tr><td>Casters toward the light</td><td>extend the box</td><td>The box starts <code>distance</code> before the sphere, toward the light.</td></tr>
+  <tr><td>Snap</td><td>whole texels</td><td>Yes: the sphere's centre, rounded down to whole texels in the light's frame.</td></tr>
+  <tr><td>Who fits</td><td>once per frame</td><td><code>prepareSceneView</code> of every view of the shadow calls <code>fitShadowCascades</code> with the same inputs, so the drawing and the reading views agree.</td></tr>
+  <tr><td>Picking</td><td>by view depth</td><td><code>sampleShadow</code>: the first cascade whose <code>shadowSplits</code> entry is at least the view depth; a lookup that <code>sampleCascade</code> finds off the map goes on to the next. Unrolled over <code>MAX_SHADOW_CASCADES</code>.</td></tr>
+  <tr><td>Filtering, bias</td><td>as for one map</td><td>Per cascade, from <a href="shadow-mapping.html">Shadow mapping</a>: normal offset of 1 to 3 texels, one texel of depth bias, 3x3 PCF with bilinear weights. Both offsets in the texels of the cascade that is read.</td></tr>
+  <tr><td>Seams</td><td>blend over a band</td><td>No blend: the cascade changes at the split. A fade over the last tenth of <code>distance</code>.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The API</td><td><code>ShadowDesc</code>, <code>SceneShadow</code>, <code>MAX_SHADOW_CASCADES</code> in <code>include/rasm/scene.h</code>; <code>Engine::addShadowPasses</code>, <code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Split and fit math</td><td><code>getShadowSplits</code>, <code>fitShadowCascade</code>, <code>ShadowCascade</code> in <code>src/renderer/shadowCascades.cpp</code>; tested in <code>tests/shadowCascadesTests.cpp</code></td></tr>
+  <tr><td>Fitting every frame</td><td><code>fitShadowCascades</code> and <code>Engine::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>GPU fields</td><td><code>shadowCascadeCount</code>, <code>shadowLight</code>, <code>shadowSplits</code>, <code>shadowMatrices</code>, <code>shadowTextures</code> in <code>SceneData</code>: <code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
+  <tr><td>The lookup</td><td><code>sampleShadow</code> and <code>sampleCascade</code> in <code>shaders/lib/shadow.slang</code>; applied by <code>shadePBR</code> in <code>shaders/lib/pbr.slang</code></td></tr>
+  <tr><td>An example</td><td><code>examples/06_shadows/main.cpp</code>: four cascades, and an inset with the four maps</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>The views that draw the cascades and the view that reads them must fit with the same inputs in the same frame: the same camera, the same aspect ratio, the same <code>SceneShadow</code>. <code>addScenePasses</code> rejects a shadow that <code>addShadowPasses</code> did not make for the same scene and camera in the same graph.</li>
+    <li>The sphere's radius must not depend on the camera's direction, and the box must move in whole texels, or shadows shimmer and crawl.</li>
+    <li><code>MAX_SHADOW_CASCADES</code> in <code>include/rasm/scene.h</code> and in <code>shaders/lib/core.slang</code> must match.</li>
+    <li>The cascade loop in <code>sampleShadow</code> stays unrolled, so each texture index is uniform over the draw.</li>
+    <li>The offsets read a texel's size from rows 0 and 2 of a cascade's matrix, which holds because the box is orthographic.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Rouslan Dimitrov, "Cascaded Shadow Maps", NVIDIA, 2007.</li>
+  <li>Fan Zhang and others, "Parallel-Split Shadow Maps for Large-scale Virtual Environments", 2006: the lambda split.</li>
+  <li>Microsoft, "Cascaded Shadow Maps" (Windows DirectX documentation): fitting, and snapping to texels.</li>
+  <li>Michal Valient, "Stable Rendering of Cascaded Shadow Maps", <i>ShaderX6</i>, 2008.</li>
+  <li>Elmar Eisemann and others, <i>Real-Time Shadows</i> (2011).</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

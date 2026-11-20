@@ -1194,7 +1194,7 @@ cos θ = v·h  (the same as l·h)</code></pre>
   <tr><td>AO</td><td>ambient only</td><td>Ambient only, mixed by the occlusion <code>strength</code>.</td></tr>
   <tr><td>Emission</td><td>added as it is</td><td><code>emissiveFactor</code> × the emissive texture, added after the lights. No emissive-strength extension.</td></tr>
   <tr><td>Tone mapping</td><td>a separate step on the HDR image</td><td>The same: <code>shadePBR</code> writes unbounded light into a <code>SCENE_COLOR_FORMAT</code> target, and the <code>Tone Map</code> pass applies the camera's <code>exposure</code> and AgX.</td></tr>
-  <tr><td>Shadows</td><td>needed for real direct light</td><td>One shadow map for one directional light, the one <code>SceneShadow::light</code> names (<a href="shadow-mapping.html#in-rasm">Shadow mapping</a>). Every other light reaches every surface that faces it.</td></tr>
+  <tr><td>Shadows</td><td>needed for real direct light</td><td>Cascaded shadow maps for one directional light, the one <code>ShadowDesc::light</code> names (<a href="shadow-mapping.html#in-rasm">Shadow mapping</a>, <a href="cascaded-shadows.html">Cascaded shadow maps</a>). Every other light reaches every surface that faces it.</td></tr>
 </table>
 </div>
 
@@ -1242,7 +1242,7 @@ cos θ = v·h  (the same as l·h)</code></pre>
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>From the development plan, phase 4: cascaded shadow maps and spot and point light shadows, spot lights (<code>B15</code>), image-based lighting, alpha modes (the pipeline has no blending, so base color alpha does nothing today), and clustered lighting to remove the fixed limit of 8 lights.</p>
+  <p>From the development plan, phase 4: spot and point light shadows, spot lights (<code>B15</code>), image-based lighting, alpha modes (the pipeline has no blending, so base color alpha does nothing today), and clustered lighting to remove the fixed limit of 8 lights.</p>
 </div>
 
 <h3>Further reading</h3>

@@ -124,21 +124,45 @@
   </div>
 </div>
 
+<div class="api" id="ShadowDesc">
+  <pre class="sig">struct ShadowDesc
+{
+    LightHandle light;
+    uint32_t    cascadeCount = 4;
+    uint32_t    size         = 2048;
+    float       distance     = 50.0f;
+    float       splitLambda  = 0.7f;
+};</pre>
+  <div class="body">
+    <p>What <a href="engine.html#addShadowPasses"><code>addShadowPasses</code></a> makes: a directional light's shadow as <a href="../guides/cascaded-shadows.html">cascaded shadow maps</a>.</p>
+    <dl>
+      <dt>light</dt><dd>The directional light to shadow; other lights are not shadowed. It must be in the scene's lights to be shadowed: one taken out of the scene casts no shadow.</dd>
+      <dt>cascadeCount</dt><dd>Maps, 1 to <code>MAX_SHADOW_CASCADES</code> (4). Each is one slice of the camera's view and one scene view. More cascades: sharper far shadows, more passes.</dd>
+      <dt>size</dt><dd>Width and height of each map in texels. A 2048 map of 32-bit depth is 16 MiB.</dd>
+      <dt>distance</dt><dd>How far from the camera the shadow reaches, in world units. It must be beyond the camera's near plane. Farther points are lit, faded in over the last tenth.</dd>
+      <dt>splitLambda</dt><dd>Where the slices end: 0 splits the distance evenly, 1 logarithmically (each slice the same factor longer than the one before), in between a mix. Higher values give the near cascades more detail.</dd>
+    </dl>
+  </div>
+</div>
+
 <div class="api" id="SceneShadow">
   <pre class="sig">struct SceneShadow
 {
-    CameraHandle       camera;
-    RenderTargetHandle renderTarget;
     LightHandle        light;
+    RenderTargetHandle cascades[MAX_SHADOW_CASCADES] = {};
+    uint32_t           cascadeCount                  = 0;
+    float              distance                      = 0.0f;
+    float              splitLambda                   = 0.0f;
 
     bool operator==(const SceneShadow&amp;) const = default;
 };</pre>
   <div class="body">
-    <p>A shadow map for <a href="engine.html#addScenePasses"><code>addScenePasses</code></a>: the light camera, and the depth-only target (<code>D32_SFLOAT</code> depth, no color) that the scene passes of that camera draw, and the directional light it darkens. All empty (the default) means no shadow. See <a href="../guides/shadow-mapping.html">Shadow mapping</a>.</p>
+    <p>A cascaded shadow, as <a href="engine.html#addShadowPasses"><code>addShadowPasses</code></a> returns it, for <a href="engine.html#addScenePasses"><code>addScenePasses</code></a>. Do not build one yourself: <code>addScenePasses</code> takes only a shadow that <code>addShadowPasses</code> made for the same scene and camera in the same graph. All empty (the default) means no shadow. See <a href="../guides/shadow-mapping.html">Shadow mapping</a>.</p>
     <dl>
-      <dt>camera</dt><dd>The light's view. It must be orthographic; point it along <code>light</code>. What is outside its box is lit.</dd>
-      <dt>renderTarget</dt><dd>The shadow map. Its size is the shadow's resolution: 2048 × 2048 in <code>examples/06_shadows</code>.</dd>
-      <dt>light</dt><dd>The directional light the map darkens; other lights are not shadowed. It must be in the scene's lights to be shadowed: one taken out of the scene casts no shadow.</dd>
+      <dt>light</dt><dd>The directional light it darkens, from <code>ShadowDesc::light</code>.</dd>
+      <dt>cascades</dt><dd>The depth-only targets (<code>D32_SFLOAT</code>, no color) of the first <code>cascadeCount</code> cascades, nearest first. A pass of yours can read one with <code>readDepth</code>, as the inset of <code>examples/06_shadows</code> does.</dd>
+      <dt>cascadeCount</dt><dd>0 when <code>addShadowPasses</code> failed.</dd>
+      <dt>distance, splitLambda</dt><dd>From the <code>ShadowDesc</code>; every view of the shadow fits the cascades with them each frame.</dd>
     </dl>
   </div>
 </div>
@@ -601,7 +625,8 @@ engine.addLightToScene(scene, lamp);</code></pre>
   <tr><td><code>MAX_LIGHTS</code></td><td>8</td><td>7</td><td>lights in total</td></tr>
   <tr><td><code>MAX_LIGHTS_PER_SCENE</code></td><td>8</td><td>8</td><td>light entries in one scene</td></tr>
   <tr><td><code>MAX_CAMERAS_PER_SCENE</code></td><td>8</td><td>8</td><td>camera entries in one scene</td></tr>
-  <tr><td><code>MAX_SCENE_VIEWS</code></td><td>8</td><td>8</td><td>scene views: (scene, camera, target) sets given to <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> and held by render graphs at once</td></tr>
+  <tr><td><code>MAX_SCENE_VIEWS</code></td><td>8</td><td>8</td><td>scene views: (scene, camera, target) sets given to <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> and held by render graphs at once; each shadow cascade is one</td></tr>
+  <tr><td><code>MAX_SHADOW_CASCADES</code></td><td>4</td><td>4</td><td>cascades of one shadow (<a href="#ShadowDesc"><code>ShadowDesc::cascadeCount</code></a>)</td></tr>
   <tr><td><code>MAX_VERTEX_UV_SETS</code></td><td>3</td><td>3</td><td>UV sets per vertex</td></tr>
   <tr><td><code>MAX_MESH_LODS</code></td><td>8</td><td>8</td><td>LODs per sub-mesh, LOD 0 included</td></tr>
   <tr><td><code>EngineConfig::maxInstances</code></td><td>65,536</td><td>all</td><td>sub-meshes of all entities together</td></tr>

@@ -43,6 +43,7 @@
   <tr><td><a href="#beginFrame"><code>beginFrame</code></a> / <a href="#endFrame"><code>endFrame</code></a></td><td>start and finish a frame</td><td>this page</td></tr>
   <tr><td><a href="#beginPass"><code>beginPass</code></a> / <a href="#endPass"><code>endPass</code></a></td><td>start and finish a render pass</td><td>this page</td></tr>
   <tr><td><a href="#addScenePasses"><code>addScenePasses</code></a></td><td>add a scene's culling and draw passes to a graph</td><td>this page</td></tr>
+  <tr><td><a href="#addShadowPasses"><code>addShadowPasses</code></a></td><td>add a sun's cascaded shadow passes to a graph</td><td>this page</td></tr>
   <tr><td><a href="#addToneMapPass"><code>addToneMapPass</code></a></td><td>map an HDR target into the window</td><td>this page</td></tr>
   <tr><td><a href="#getCurrentFrameResources"><code>getCurrentFrameResources</code></a></td><td>this frame's command buffer and depth</td><td>this page</td></tr>
   <tr><td><a href="#recreateSwapchain"><code>recreateSwapchain</code></a></td><td>rebuild after a resize</td><td>this page</td></tr>
@@ -322,8 +323,8 @@ engine.endPass();</code></pre>
       <dt>graph</dt><dd>The graph to add to, before its <code>compile</code>. Add your own passes before or after.</dd>
       <dt>scene</dt><dd>Invalid: logs <code>addScenePasses needs a valid scene handle.</code>, adds nothing and returns <code>false</code>.</dd>
       <dt>camera</dt><dd>The view. Its projection is fitted to the target's aspect ratio every frame; the camera itself does not change. Invalid: logs an error, adds nothing and returns <code>false</code>.</dd>
-      <dt>renderTarget</dt><dd>Where the scene is drawn. A target needs one color in <a href="types.html#SCENE_COLOR_FORMAT"><code>SCENE_COLOR_FORMAT</code></a> and <code>D32_SFLOAT</code> depth, the formats of the scene's pipeline. The color is linear light with no upper limit: draw it to the window with <a href="#addToneMapPass"><code>addToneMapPass</code></a>. Invalid: logs an error, adds nothing and returns <code>false</code>. A target with <code>D32_SFLOAT</code> depth and no color is depth-only: the scene's depth is drawn and nothing else, in passes named <code>Shadow 1</code>, <code>Shadow 2</code>, …, so it can be a shadow map. Make it with <a href="render-graph.html#RenderGraph-createRenderTarget"><code>RenderGraph::createRenderTarget</code></a> before this call.</dd>
-      <dt>shadow</dt><dd>A shadow map (<a href="scene.html#SceneShadow"><code>SceneShadow</code></a>): the light camera, the depth-only target that another <code>addScenePasses</code> call draws from it, and the directional light it darkens. That other call picks each caster's level of detail from this view's camera, so both draw a mesh at the same level. The draw passes read its depth, so the graph runs them after the shadow passes. Empty (the default): no shadow. A shadow with an invalid or perspective camera, a target that is not depth-only, or a light that is not directional, or a shadow on a depth-only view, logs an error, adds nothing and returns <code>false</code>.</dd>
+      <dt>renderTarget</dt><dd>Where the scene is drawn. A target needs one color in <a href="types.html#SCENE_COLOR_FORMAT"><code>SCENE_COLOR_FORMAT</code></a> and <code>D32_SFLOAT</code> depth, the formats of the scene's pipeline. The color is linear light with no upper limit: draw it to the window with <a href="#addToneMapPass"><code>addToneMapPass</code></a>. Invalid: logs an error, adds nothing and returns <code>false</code>. A target with <code>D32_SFLOAT</code> depth and no color is depth-only: the scene's depth is drawn and nothing else, in passes named <code>Shadow 1</code>, <code>Shadow 2</code>, … (a depth pre-pass, for example; shadows come from <a href="#addShadowPasses"><code>addShadowPasses</code></a>). Make it with <a href="render-graph.html#RenderGraph-createRenderTarget"><code>RenderGraph::createRenderTarget</code></a> before this call.</dd>
+      <dt>shadow</dt><dd>The cascaded shadow (<a href="scene.html#SceneShadow"><code>SceneShadow</code></a>) that <a href="#addShadowPasses"><code>addShadowPasses</code></a> returned for the same scene and camera in this graph. The draw passes read every cascade's depth, so the graph runs them after the cascade passes. Empty (the default): no shadow. A shadow that <code>addShadowPasses</code> did not make for this scene and camera in this graph, or a shadow on a depth-only view, logs an error, adds nothing and returns <code>false</code>.</dd>
       <dt>returns</dt><dd><code>true</code> when the passes were added. On <code>false</code> nothing was added.</dd>
     </dl>
   </div>
@@ -399,7 +400,21 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
     return 1;
 }</code></pre>
 
-<p><b>Shadows.</b> Call <code>addScenePasses</code> twice: once from the light camera into a depth-only target, then from your camera with that target as its <code>shadow</code>. The order you add them in does not matter: the graph sorts them by the depth read.</p>
+<div class="api" id="addShadowPasses">
+  <pre class="sig">SceneShadow addShadowPasses(RenderGraph&amp; graph, SceneHandle scene, CameraHandle camera, const ShadowDesc&amp; desc);</pre>
+  <div class="body">
+    <p>Adds a directional light's shadow to <code>graph</code> as <a href="../guides/cascaded-shadows.html">cascaded shadow maps</a>: <code>desc.cascadeCount</code> depth-only maps, each covering one slice of <code>camera</code>'s view out to <code>desc.distance</code>. The engine fits each map to its slice every frame, so the shadow follows the camera: sharp near it, still there far away. Give the returned <code>SceneShadow</code> to <a href="#addScenePasses"><code>addScenePasses</code></a> for the same scene and camera.</p>
+    <dl>
+      <dt>graph</dt><dd>The graph to add to, before its <code>compile</code>. It owns the cascades' targets (<samp>shadow_cascade_0</samp>, …), so they live as long as the graph.</dd>
+      <dt>scene</dt><dd>The scene whose depth the cascades hold. Invalid: logs an error and returns an empty shadow.</dd>
+      <dt>camera</dt><dd>The view the cascades follow: the camera you then give <code>addScenePasses</code>. Each cascade is a scene view of this camera, culled with the cascade's box, and takes its level of detail from this camera, so a mesh is drawn at the same level in both. Invalid: logs an error and returns an empty shadow.</dd>
+      <dt>desc</dt><dd>The light and the cascades (<a href="scene.html#ShadowDesc"><code>ShadowDesc</code></a>). A light that is not directional, 0 or more than <code>MAX_SHADOW_CASCADES</code> (4) cascades, a <code>size</code> of 0, a <code>distance</code> not beyond the camera's near plane or a <code>splitLambda</code> outside 0 to 1 logs an error and returns an empty shadow.</dd>
+      <dt>returns</dt><dd>The shadow, with <code>cascadeCount</code> 0 on failure. Each cascade's depth is <code>cascades[i]</code>, which a pass of yours can read with <code>readDepth</code>.</dd>
+    </dl>
+  </div>
+</div>
+
+<p><b>Shadows.</b> Call <code>addShadowPasses</code>, then <code>addScenePasses</code> with the shadow it returns. The order of the passes does not matter: the graph sorts them by the depth reads. Each cascade is one scene view, so 4 cascades and the shaded view take 5 of the <code>MAX_SCENE_VIEWS</code> (8).</p>
 
 <div class="legend">
   <span><i class="gpu"></i>engine passes</span>
@@ -408,13 +423,13 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 300" role="img" aria-label="examples/06_shadows: the shadow passes draw the scene from the light camera into shadow_map, a depth-only target. The scene passes draw from the camera into scene_rt, a 16-bit float target, and read shadow_map's depth. The Post pass reads scene_rt and draws post_rt, also 16-bit float. The Tone Map pass reads post_rt and draws to the swapchain. The Inset pass then reads shadow_map's depth and draws it in a corner of the swapchain, after the tone map. The graph adds every barrier.">
+  <svg viewBox="0 0 760 300" role="img" aria-label="examples/06_shadows: the cascade passes draw the scene's depth for each of four slices of the camera's view into shadow_cascade_0 to 3, depth-only targets. The scene passes draw from the camera into scene_rt, a 16-bit float target, and read the cascades' depth. The Post pass reads scene_rt and draws post_rt, also 16-bit float. The Tone Map pass reads post_rt and draws to the swapchain. The Inset pass then reads the cascades' depth and draws them in a row in a corner of the swapchain, after the tone map. The graph adds every barrier.">
     <text x="10" y="20" class="title">examples/06_shadows: no barrier in the example</text>
-    <rect x="10"  y="40" width="160" height="56" rx="6" class="gpu"/><text x="90"  y="62" class="mid mono">Shadow Cull, Shadow</text><text x="90"  y="80" class="mid small">from lightCamera</text>
+    <rect x="10"  y="40" width="160" height="56" rx="6" class="gpu"/><text x="90"  y="62" class="mid mono">Cascade 0 … 3</text><text x="90"  y="80" class="mid small">Cull, depth, per slice</text>
     <rect x="200" y="40" width="160" height="56" rx="6" class="gpu"/><text x="280" y="62" class="mid mono">Cull, Scene</text><text x="280" y="80" class="mid small">from camera, shadowed</text>
     <rect x="390" y="40" width="160" height="56" rx="6" class="cpu"/><text x="470" y="62" class="mid mono">Post</text><text x="470" y="80" class="mid small">vignette</text>
     <rect x="580" y="40" width="160" height="56" rx="6" class="gpu"/><text x="660" y="62" class="mid mono">Tone Map</text><text x="660" y="80" class="mid small">exposure, AgX</text>
-    <rect x="10"  y="140" width="160" height="40" rx="6" class="mem"/><text x="90"  y="157" class="mid mono">shadow_map</text><text x="90"  y="172" class="mid small">D32_SFLOAT, no color</text>
+    <rect x="10"  y="140" width="160" height="40" rx="6" class="mem"/><text x="90"  y="157" class="mid mono small">shadow_cascade_0…3</text><text x="90"  y="172" class="mid small">D32_SFLOAT, no color</text>
     <rect x="200" y="140" width="160" height="40" rx="6" class="mem"/><text x="280" y="157" class="mid mono">scene_rt</text><text x="280" y="172" class="mid small">HDR color + depth</text>
     <rect x="390" y="140" width="160" height="40" rx="6" class="mem"/><text x="470" y="157" class="mid mono">post_rt</text><text x="470" y="172" class="mid small">HDR color + depth</text>
     <rect x="580" y="140" width="160" height="40" rx="6" class="mem"/><text x="660" y="165" class="mid mono">swapchain</text>
@@ -428,30 +443,21 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
     <text x="366" y="124" class="end small">read</text>
     <path d="M550,150 C565,150 570,90 578,80" class="arrow mem" marker-end="url(#ah-mem)"/>
     <text x="556" y="124" class="end small">read</text>
-    <rect x="580" y="212" width="160" height="48" rx="6" class="cpu"/><text x="660" y="232" class="mid mono">Inset</text><text x="660" y="250" class="mid small">raw depth, a corner</text>
+    <rect x="580" y="212" width="160" height="48" rx="6" class="cpu"/><text x="660" y="232" class="mid mono">Inset</text><text x="660" y="250" class="mid small">raw depths, a corner</text>
     <line x1="660" y1="212" x2="660" y2="182" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <path d="M90,180 L90,236 L576,236" class="arrow mem" marker-end="url(#ah-mem)"/>
     <text x="330" y="230" class="mid small">readDepth, after Tone Map</text>
-    <text x="10" y="290" class="small">Before each read the graph moves the map's depth to SAMPLED; the next frame's first Shadow pass moves it back.</text>
+    <text x="10" y="290" class="small">Before each read the graph moves a cascade's depth to SAMPLED; the next frame's first pass of that cascade moves it back.</text>
   </svg>
-  <figcaption>The scene is drawn twice: depth only from the light, then shaded from the camera. A fragment whose depth in the light's view is behind the map's depth is in shadow. Post stays in HDR, and the engine's tone-map pass brings the result to the window. Inset draws the shadow map over the tone-mapped image, so its depths are not changed by the curve.</figcaption>
+  <figcaption>The scene is drawn once per cascade, depth only, then shaded from the camera. A fragment whose depth in its cascade is behind the map's depth is in shadow. Post stays in HDR, and the engine's tone-map pass brings the result to the window. Inset draws the cascades over the tone-mapped image, so their depths are not changed by the curve.</figcaption>
 </figure>
 
 <pre><code>// From examples/06_shadows/main.cpp
-const rasm::RenderTargetHandle shadowMap = graph.createRenderTarget({
-    .name = "shadow_map",
-    .width = SHADOW_MAP_SIZE,
-    .height = SHADOW_MAP_SIZE,
-    .depthFormat = rasm::Format::D32_SFLOAT,
-});
+const rasm::SceneShadow shadow = engine.addShadowPasses(graph, scene, camera, rasm::ShadowDesc{.light = sun, .cascadeCount = CASCADE_COUNT, .size = 2048, .distance = 60.0f, .splitLambda = 0.7f});
+if (shadow.cascadeCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTarget, shadow))
+    return 1;</code></pre>
 
-if (!engine.addScenePasses(graph, scene, lightCamera, shadowMap) ||
-    !engine.addScenePasses(graph, scene, camera, sceneTarget, rasm::SceneShadow{.camera = lightCamera, .renderTarget = shadowMap, .light = sun}))
-{
-    return 1;
-}</code></pre>
-
-<p>The light camera is yours: make it orthographic, place it behind the scene and point it along the light (<code>glm::quatLookAt</code>). Its box decides what can cast a shadow; a point outside it is lit. The shadow uses 3x3 PCF and offsets that assume an orthographic camera. Only <code>light</code> is shadowed; other lights and the ambient term are not. How it works: <a href="../guides/shadow-mapping.html">Shadow mapping</a>.</p>
+<p>Points farther than <code>distance</code> from the camera are lit; the shadow fades out over the last tenth of it. Casters up to <code>distance</code> toward the sun from a slice are in its map. The shadow uses 3x3 PCF. Only <code>light</code> is shadowed; other lights and the ambient term are not. How it works: <a href="../guides/shadow-mapping.html">Shadow mapping</a> and <a href="../guides/cascaded-shadows.html">Cascaded shadow maps</a>.</p>
 
 <p><b>Scene views.</b> Each (scene, camera, target, shadow) is a <i>scene view</i>, with its own culling buffers on the GPU. A view lives while a graph holds it: graphs built for the same four share it, and when the last of them is destroyed or replaced, the view's buffers are freed. Views let one frame draw several scenes, cameras or targets. The scene's lights are read every frame. Nothing is drawn, with no error, while the scene is empty or all its entities still load: the target keeps its clear color.</p>
 <p>Culling also picks each visible draw's <a href="../guides/lod-selection.html">level of detail</a> from its distance to the camera and <code>EngineConfig::lodErrorPixels</code>. A view drawn without culling draws LOD 0.</p>
