@@ -579,7 +579,7 @@
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 180" role="img" aria-label="Frame N as four batches: compute Cull 1, graphics Scene 1, compute Hi-Z and Cull 2, graphics Scene 2 and the stats overlay, then present. Frame N plus 1's Cull 1 runs on the compute queue while frame N's Scene 2 still runs on the graphics queue, because it writes the other frame slot's visible draws.">
+  <svg viewBox="0 0 760 180" role="img" aria-label="Frame N as four batches: compute Cull 1, graphics Scene 1, compute Hi-Z and Cull 2, graphics Scene 2, Tone Map and the stats overlay, then present. Frame N plus 1's Cull 1 runs on the compute queue while frame N's Scene 2 still runs on the graphics queue, because it writes the other frame slot's visible draws.">
     <text x="20" y="22" class="title">One scene view with async compute</text>
     <rect x="80" y="34" width="670" height="54" rx="6" class="zone"/>
     <rect x="80" y="110" width="670" height="54" rx="6" class="zone"/>
@@ -596,7 +596,7 @@
     <text x="418" y="65" class="mid small">Hi-Z, Cull 2</text>
     <line x1="478" y1="78" x2="494" y2="118" class="arrow hot thick" marker-end="url(#ah-hot)"/>
     <rect x="496" y="120" width="150" height="34" rx="5" class="gpu"/>
-    <text x="571" y="141" class="mid small">Scene 2, overlay</text>
+    <text x="571" y="134" class="mid small">Scene 2, Tone Map</text><text x="571" y="148" class="mid small">overlay</text>
     <line x1="646" y1="137" x2="668" y2="137" class="arrow" marker-end="url(#ah)"/>
     <text x="674" y="141" class="small">present</text>
 

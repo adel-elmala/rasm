@@ -66,10 +66,12 @@ int main()
 
     // Targets made through the graph belong to it. Without history they are transient: each lives only from the
     // first pass that uses it to the last, so the graph lets offscreen_rt and composite_rt share memory.
+    // The scene passes draw into an HDR target. The bunny is unlit and its colors are already in display range, so
+    // this graph shows them as they are, with no tone-map pass. Engine::render tone maps unlit colors like the rest.
     const rasm::RenderTargetHandle rtHandle = graph.createRenderTarget({
         .name = "offscreen_rt",
         .swapchainScale = 1.0f,
-        .colorFormats = {colorFormat},
+        .colorFormats = {rasm::SCENE_COLOR_FORMAT},
         .depthFormat = rasm::Format::D32_SFLOAT,
         .clearColor = glm::vec4(0.0f), // alpha 0 marks the background
     });
@@ -110,17 +112,6 @@ int main()
         ConstantBuffer<PushConstants> pc;
     )";
 
-    // Blends the forward image over last frame's trail, so a moving bunny leaves a fading ghost.
-    auto trailPipeline = engine.createPipeline("trail", fullScreenTriangle + R"(
-        [shader("fragment")]
-        float4 fragMain(VSOutput input) : SV_TARGET
-        {
-            float4 current = gTextures[pc.indices[0]].Sample(input.UV);
-            float4 previous = gTextures[pc.indices[1]].Sample(input.UV);
-            return max(current, previous * 0.85);
-        }
-    )");
-
     // Paints the background green, where Background's mask is 0.
     auto presentPipeline = engine.createPipeline("present", fullScreenTriangle + R"(
         [shader("fragment")]
@@ -134,7 +125,7 @@ int main()
         }
     )");
 
-    if (!trailPipeline.isValid() || !presentPipeline.isValid())
+    if (!presentPipeline.isValid())
     {
         return 1;
     }
@@ -153,6 +144,7 @@ int main()
     // A history target lives across frames with a copy per frame slot, so the pass can read the frame before while
     // it draws this one. Fetch both textures every frame: they swap.
     rasm::RenderTargetHandle trailHandle{};
+    rasm::PipelineHandle trailPipeline{};
     graph.addPass(
         "Trail",
         [&rtHandle, &trailHandle, colorFormat](rasm::PassBuilder &builder)
@@ -175,6 +167,22 @@ int main()
             drawFullScreen(ctx, trailPipeline, engine.getBindlessTextureIndex(engine.getRenderTargetTexture(rtHandle)),
                            engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTexture(trailHandle)));
         });
+
+    // Blends the forward image over last frame's trail, so a moving bunny leaves a fading ghost.
+    trailPipeline = engine.createPipeline("trail", fullScreenTriangle + R"(
+        [shader("fragment")]
+        float4 fragMain(VSOutput input) : SV_TARGET
+        {
+            float4 current = gTextures[pc.indices[0]].Sample(input.UV);
+            float4 previous = gTextures[pc.indices[1]].Sample(input.UV);
+            return max(current, previous * 0.85);
+        }
+    )",
+                                          trailHandle);
+    if (!trailPipeline.isValid())
+    {
+        return 1;
+    }
 
     // Two color attachments: the trail's color, and a mask that is 1 where the bunny writes alpha 1 over the clear
     // color's 0. The pipeline takes its formats from the target it draws into.

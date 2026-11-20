@@ -747,7 +747,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
 <table>
   <tr><th>Timer</th><th>Started by</th><th>Name</th></tr>
   <tr><td>The frame on the graphics queue</td><td><code>beginFrame</code>, ended in <code>endFrame</code></td><td>"Frame" (always timer 0, not listed)</td></tr>
-  <tr><td>Each graphics pass</td><td><code>beginPass</code> / <code>endPass</code></td><td>the pass name: "Scene 1" and "Scene 2" of the scene passes ("Scene" without occlusion culling), "Clear" for the empty swapchain pass, or your graph pass's name</td></tr>
+  <tr><td>Each graphics pass</td><td><code>beginPass</code> / <code>endPass</code></td><td>the pass name: "Scene 1" and "Scene 2" of the scene passes ("Scene" without occlusion culling), "Tone Map", "Clear" for the empty swapchain pass, or your graph pass's name</td></tr>
   <tr><td>Each render graph compute pass, on its queue</td><td><code>RenderGraph::execute</code></td><td>the pass name: "Cull 1", "Hi-Z" and "Cull 2" of the scene passes ("Cull" without occlusion culling), or your graph pass's name</td></tr>
   <tr><td>The application's own work</td><td><code>Engine::beginGpuTimer</code> / <code>Engine::endGpuTimer</code></td><td>its own name</td></tr>
 </table>

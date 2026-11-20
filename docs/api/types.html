@@ -302,7 +302,6 @@ private:
   <pre class="sig">struct FrameResources
 {
     CommandBufferHandle commandBuffer;
-    TextureHandle       depthTexture;
     uint64_t            fenceValue          = 0;
     uint64_t            computeFenceValue   = 0;
 };</pre>
@@ -310,7 +309,6 @@ private:
     <p>One frame slot's objects, from <a href="low-level.html#getCurrentFrameResources">getCurrentFrameResources</a>.</p>
     <dl>
       <dt>commandBuffer</dt><dd>The command buffer being recorded right now. Record into it between <code>beginFrame</code> and <code>endFrame</code>. With <code>EngineConfig::asyncCompute</code> a frame has several, one per batch of passes on one queue, and the render graph moves this field between them as passes change queue. So fetch it inside each pass.</dd>
-      <dt>depthTexture</dt><dd>The <code>D32_SFLOAT</code> depth of swapchain passes, swapchain-sized. Replaced when the window is resized.</dd>
       <dt>fenceValue</dt><dd>The frame fence value that this slot's last graphics submit signals; <code>beginFrame</code> waits for it.</dd>
       <dt>computeFenceValue</dt><dd>The compute fence value that this slot's last compute submit signals. With async compute <code>beginFrame</code> waits for it too. 0 without a compute queue.</dd>
     </dl>
@@ -383,7 +381,7 @@ struct RenderTarget
     <dl>
       <dt>handle</dt><dd>Valid when the window exists.</dd>
       <dt>width, height</dt><dd>Logical size, the units of mouse coordinates.</dd>
-      <dt>pixelWidth, pixelHeight</dt><dd>Drawable size in pixels. Larger than width and height on HiDPI displays. The swapchain, depth textures and camera aspect follow these. Use them for viewport math, as <code>examples/01_render_graph</code> does.</dd>
+      <dt>pixelWidth, pixelHeight</dt><dd>Drawable size in pixels. Larger than width and height on HiDPI displays. The swapchain, the render targets sized from it and the camera aspect follow these. Use them for viewport math, as <code>examples/01_render_graph</code> does.</dd>
       <dt>mouseDragActive</dt><dd>A mouse button is held down.</dd>
       <dt>resized</dt><dd>The pixel size changed; <code>beginFrame</code> re-creates the swapchain and clears it.</dd>
       <dt>minimized</dt><dd>The window is minimized; frames are skipped.</dd>
@@ -440,6 +438,7 @@ struct RenderTarget
   <tr id="MAX_MATERIALS"><td><code>MAX_MATERIALS</code><br><code>rasm/engine.h</code></td><td>256</td><td>Materials: 255 fit, and the engine's default material takes one.</td></tr>
   <tr id="MAX_CAMERAS"><td><code>MAX_CAMERAS</code><br><code>rasm/engine.h</code></td><td>8</td><td>Cameras: 7 fit.</td></tr>
   <tr id="MAX_GPU_TIMERS"><td><code>MAX_GPU_TIMERS</code><br><code>rasm/engine.h</code></td><td>16</td><td>GPU timers per frame: the frame, and 15 for passes and <code>beginGpuTimer</code>. <code>FrameStats::gpuTimers</code> has 15 entries.</td></tr>
+  <tr id="SCENE_COLOR_FORMAT"><td><code>SCENE_COLOR_FORMAT</code><br><code>rasm/engine.h</code></td><td><code>Format::R16G16B16A16_SFLOAT</code></td><td>Not a limit: the color format of a target that <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> draws into, linear light with no upper limit. <a href="engine.html#addToneMapPass"><code>addToneMapPass</code></a> brings it to the window.</td></tr>
   <tr id="MAX_ENTITIES"><td><code>MAX_ENTITIES</code><br><code>rasm/entity.h</code></td><td>262144 (2<sup>18</sup>)</td><td>Entities: 262143 fit.</td></tr>
   <tr id="MAX_LIGHTS"><td><code>MAX_LIGHTS</code><br><code>rasm/light.h</code></td><td>8</td><td>Lights: 7 fit. Also the size of the light array the shader gets.</td></tr>
   <tr id="MAX_TEXTURE_SLOTS"><td><code>MAX_TEXTURE_SLOTS</code><br><code>rasm/material.h</code></td><td>6 (<code>PbrSlot::COUNT</code>)</td><td>Textures per material, one per <a href="materials.html#PbrSlot">PbrSlot</a>.</td></tr>

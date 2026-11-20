@@ -597,10 +597,11 @@ TEST_CASE("the first pass that draws a target clears it, and each later one load
     CHECK(transparent.loadDepth);
     CHECK_FALSE(transparent.storeDepth);
 
+    // The swapchain has no depth.
     CHECK_FALSE(ui.loadColor);
-    CHECK(ui.storeDepth);
+    CHECK_FALSE(ui.storeDepth);
     CHECK(present.loadColor);
-    CHECK(present.loadDepth);
+    CHECK_FALSE(present.loadDepth);
     CHECK_FALSE(present.storeDepth);
 }
 
@@ -735,32 +736,6 @@ TEST_CASE("a depth read runs between the passes that draw the target, and the pa
     CHECK(graph.lastPass(0) == 2);
 }
 
-TEST_CASE("a swapchain depth read makes the swapchain pass before it store its depth")
-{
-    const rasm::BufferHandle hiz{1, 1};
-
-    TestGraph graph;
-    graph.addPass(
-        "early",
-        [](rasm::PassBuilder &builder)
-        { builder.writeSwapchain(); },
-        [](rasm::RenderContext &) {});
-    graph.addComputePass(
-        "hiz",
-        [&](rasm::PassBuilder &builder)
-        {
-            builder.readSwapchainDepth();
-            builder.write(hiz);
-        },
-        [](rasm::RenderContext &) {});
-
-    graph.compile();
-
-    REQUIRE(graph.isCompiled());
-    CHECK(graph.order() == std::vector<uint32_t>{0, 1});
-    CHECK(graph.pass(0).attachmentOps.storeDepth);
-}
-
 TEST_CASE("a pass that reads the depth of the target it draws to fails to compile")
 {
     const rasm::RenderTargetHandle scene{1, 1};
@@ -836,19 +811,9 @@ TEST_CASE("the dump lists the passes in order and each resource's lifetime")
     CHECK(text.find("    .R.  texture #2:1\n") != std::string::npos);
 }
 
-TEST_CASE("the dump gives the swapchain depth its own row")
+TEST_CASE("the dump lists a swapchain pass without depth")
 {
-    const rasm::BufferHandle hiz{1, 1};
-
     TestGraph graph;
-    graph.addComputePass(
-        "hiz",
-        [&](rasm::PassBuilder &builder)
-        {
-            builder.readSwapchainDepth();
-            builder.write(hiz);
-        },
-        [](rasm::RenderContext &) {});
     graph.addPass(
         "draw",
         [](rasm::PassBuilder &builder)
@@ -858,8 +823,8 @@ TEST_CASE("the dump gives the swapchain depth its own row")
     graph.compile();
     const std::string text = graph.dump();
 
-    REQUIRE(graph.order() == std::vector<uint32_t>{1, 0});
-    CHECK(text.find("[0] draw (graphics)\n    reads:  -\n    writes: swapchain, swapchain depth\n") != std::string::npos);
-    CHECK(text.find("    W.  swapchain\n") != std::string::npos);
-    CHECK(text.find("    WR  swapchain depth\n") != std::string::npos);
+    CHECK(text.find("[0] draw (graphics)") != std::string::npos);
+    CHECK(text.find("    writes: swapchain") != std::string::npos);
+    CHECK(text.find("    attachments: clear color, no depth") != std::string::npos);
+    CHECK(text.find("swapchain depth") == std::string::npos);
 }

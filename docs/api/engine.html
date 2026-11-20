@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Engine · RASM</title>
 <meta name="description" content="The Engine class: EngineConfig, construction and shutdown, the frame functions, loading, frame stats, paths and the window, plus an index of every Engine method.">
-<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/window.cpp src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/renderer.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp">
+<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/window.cpp src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/renderer.cpp src/renderer/toneMap.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -43,6 +43,7 @@
   <tr><td><a href="#beginFrame"><code>beginFrame</code></a> / <a href="#endFrame"><code>endFrame</code></a></td><td>start and finish a frame</td><td>this page</td></tr>
   <tr><td><a href="#beginPass"><code>beginPass</code></a> / <a href="#endPass"><code>endPass</code></a></td><td>start and finish a render pass</td><td>this page</td></tr>
   <tr><td><a href="#addScenePasses"><code>addScenePasses</code></a></td><td>add a scene's culling and draw passes to a graph</td><td>this page</td></tr>
+  <tr><td><a href="#addToneMapPass"><code>addToneMapPass</code></a></td><td>map an HDR target into the window</td><td>this page</td></tr>
   <tr><td><a href="#getCurrentFrameResources"><code>getCurrentFrameResources</code></a></td><td>this frame's command buffer and depth</td><td>this page</td></tr>
   <tr><td><a href="#recreateSwapchain"><code>recreateSwapchain</code></a></td><td>rebuild after a resize</td><td>this page</td></tr>
   <tr><td><a href="#waitForLoads"><code>waitForLoads</code></a></td><td>finish every background load now</td><td>this page</td></tr>
@@ -69,6 +70,7 @@
   <tr><td><a href="camera.html#createCamera"><code>createCamera</code></a></td><td>new camera</td><td>camera.html</td></tr>
   <tr><td><a href="camera.html#getCameraTransform"><code>getCameraTransform</code></a> / <a href="camera.html#setCameraTransform"><code>setCameraTransform</code></a></td><td>camera position and rotation</td><td>camera.html</td></tr>
   <tr><td><a href="camera.html#getCameraProjection"><code>getCameraProjection</code></a> / <a href="camera.html#setCameraProjection"><code>setCameraProjection</code></a></td><td>perspective or orthographic</td><td>camera.html</td></tr>
+  <tr><td><a href="camera.html#getCameraExposure"><code>getCameraExposure</code></a> / <a href="camera.html#setCameraExposure"><code>setCameraExposure</code></a></td><td>brightness before tone mapping</td><td>camera.html</td></tr>
   <tr><td><a href="camera.html#getCameraController"><code>getCameraController</code></a> / <a href="camera.html#setCameraController"><code>setCameraController</code></a></td><td>trackball or free-fly</td><td>camera.html</td></tr>
   <tr><td><a href="camera.html#getProjectionMatrix"><code>getProjectionMatrix</code></a>, <a href="camera.html#getProjectionMatrix-aspect"><code>getProjectionMatrix(camera, aspect)</code></a>, <a href="camera.html#getViewMatrix"><code>getViewMatrix</code></a></td><td>camera matrices</td><td>camera.html</td></tr>
   <tr><td><a href="camera.html#updateCameraAspectRatio"><code>updateCameraAspectRatio</code></a></td><td>aspect of every camera</td><td>camera.html</td></tr>
@@ -234,13 +236,13 @@ if (!engine.running())
     <text x="10" y="270" class="small">Then the frame slot flips (0 → 1 → 0 …). The next beginFrame waits until the GPU finished the last frame of that slot,</text>
     <text x="10" y="288" class="small">so the CPU records at most 2 frames ahead (MAX_FRAMES_IN_FLIGHT = 2).</text>
   </svg>
-  <figcaption>When <code>beginFrame</code> returns false, record nothing and do not call <code>endFrame</code>. Try again next loop. A resize is handled inside <code>beginFrame</code>: it rebuilds the swapchain and the depth textures.</figcaption>
+  <figcaption>When <code>beginFrame</code> returns false, record nothing and do not call <code>endFrame</code>. Try again next loop. A resize is handled inside <code>beginFrame</code>: it rebuilds the swapchain and the render targets sized from it.</figcaption>
 </figure>
 
 <div class="api" id="render">
   <pre class="sig">void render(SceneHandle scene, CameraHandle camera);</pre>
   <div class="body">
-    <p>One whole frame of the scene, drawn into the window. The engine keeps a <a href="render-graph.html">render graph</a> with the scene's passes (<a href="#addScenePasses"><code>addScenePasses</code></a> into the swapchain) and runs it with <code>RenderGraph::execute</code>: <code>beginFrame(camera)</code>, the passes, <code>endFrame</code>. It builds the graph again only when <code>scene</code> or <code>camera</code> is not the same as in the last call. When <code>beginFrame</code> returns false, no pass runs.</p>
+    <p>One whole frame of the scene, drawn into the window. The engine keeps a <a href="render-graph.html">render graph</a> with the scene's passes (<a href="#addScenePasses"><code>addScenePasses</code></a> into a 16-bit float target, then <a href="#addToneMapPass"><code>addToneMapPass</code></a> into the swapchain) and runs it with <code>RenderGraph::execute</code>: <code>beginFrame(camera)</code>, the passes, <code>endFrame</code>. It builds the graph again only when <code>scene</code> or <code>camera</code> is not the same as in the last call, also after a failure: a view whose passes could not be added is not tried again until one of them changes. When <code>beginFrame</code> returns false, no pass runs.</p>
     <dl>
       <dt>scene</dt><dd>The scene to draw. Invalid: an error is logged once, and the window is only cleared.</dd>
       <dt>camera</dt><dd>Gets this frame's input (mouse, keys) and is the view. It does not need to be in the scene.</dd>
@@ -278,7 +280,7 @@ if (!engine.running())
       <dt>name</dt><dd>Label of the pass. It names the pass's GPU timer in <code>getFrameStats</code> and the stats overlay.</dd>
       <dt>ops</dt><dd>Which attachments to keep instead of clearing, and whether to keep depth at the end. See <a href="#AttachmentOps">AttachmentOps</a>. A render graph sets them for you.</dd>
     </dl>
-    <p>The window is cleared to a dark gray. A render target is cleared to its own <code>clearColor</code>.</p>
+    <p>The window is cleared to a dark gray and has no depth: draw anything that needs a depth test into a render target. A render target is cleared to its own <code>clearColor</code>.</p>
   </div>
 </div>
 
@@ -296,10 +298,10 @@ if (!engine.running())
       <dt>storeDepth</dt><dd><code>true</code>: keep depth at the end of the pass, for a later pass that loads it or samples it. Color is always kept. A render graph sets it on the pass before one that loads the target or reads its depth (<a href="render-graph.html#readDepth"><code>readDepth</code></a>).</dd>
     </dl>
     <pre><code>// A hand-written frame: two passes on the window, the second on top of the first
-engine.beginPass("Background", {.storeDepth = true});
+engine.beginPass("Background");
 // ... draw the background
 engine.endPass();
-engine.beginPass("UI", {.loadColor = true, .loadDepth = true});
+engine.beginPass("UI", {.loadColor = true});
 // ... draw the UI
 engine.endPass();</code></pre>
   </div>
@@ -313,14 +315,14 @@ engine.endPass();</code></pre>
 </div>
 
 <div class="api" id="addScenePasses">
-  <pre class="sig">bool addScenePasses(RenderGraph&amp; graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle&amp; renderTarget = {}, const SceneShadow&amp; shadow = {});</pre>
+  <pre class="sig">bool addScenePasses(RenderGraph&amp; graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle&amp; renderTarget, const SceneShadow&amp; shadow = {});</pre>
   <div class="body">
     <p>Adds the passes that draw <code>scene</code> from <code>camera</code> to <code>graph</code>. They are ordinary graph passes: the graph sorts them with your passes, records their barriers from what they declare, and times each one under its name. <code>render</code> calls it for you; call it yourself when you build your own graph. The culling passes and <code>Hi-Z</code> are <a href="render-graph.html#addAsyncComputePass">async compute passes</a>: with <code>EngineConfig::asyncCompute</code> they run on the compute queue.</p>
     <dl>
       <dt>graph</dt><dd>The graph to add to, before its <code>compile</code>. Add your own passes before or after.</dd>
       <dt>scene</dt><dd>Invalid: logs <code>addScenePasses needs a valid scene handle.</code>, adds nothing and returns <code>false</code>.</dd>
       <dt>camera</dt><dd>The view. Its projection is fitted to the target's aspect ratio every frame; the camera itself does not change. Invalid: logs an error, adds nothing and returns <code>false</code>.</dd>
-      <dt>renderTarget</dt><dd>Where the scene is drawn. Invalid (the default): the window, through the swapchain. A target needs one color in the swapchain's format and <code>D32_SFLOAT</code> depth, the formats of the scene's pipeline. A target with <code>D32_SFLOAT</code> depth and no color is depth-only: the scene's depth is drawn and nothing else, in passes named <code>Shadow 1</code>, <code>Shadow 2</code>, …, so it can be a shadow map. Make it with <a href="render-graph.html#RenderGraph-createRenderTarget"><code>RenderGraph::createRenderTarget</code></a> before this call.</dd>
+      <dt>renderTarget</dt><dd>Where the scene is drawn. A target needs one color in <a href="types.html#SCENE_COLOR_FORMAT"><code>SCENE_COLOR_FORMAT</code></a> and <code>D32_SFLOAT</code> depth, the formats of the scene's pipeline. The color is linear light with no upper limit: draw it to the window with <a href="#addToneMapPass"><code>addToneMapPass</code></a>. Invalid: logs an error, adds nothing and returns <code>false</code>. A target with <code>D32_SFLOAT</code> depth and no color is depth-only: the scene's depth is drawn and nothing else, in passes named <code>Shadow 1</code>, <code>Shadow 2</code>, …, so it can be a shadow map. Make it with <a href="render-graph.html#RenderGraph-createRenderTarget"><code>RenderGraph::createRenderTarget</code></a> before this call.</dd>
       <dt>shadow</dt><dd>A shadow map (<a href="scene.html#SceneShadow"><code>SceneShadow</code></a>): the light camera, the depth-only target that another <code>addScenePasses</code> call draws from it, and the directional light it darkens. That other call picks each caster's level of detail from this view's camera, so both draw a mesh at the same level. The draw passes read its depth, so the graph runs them after the shadow passes. Empty (the default): no shadow. A shadow with an invalid or perspective camera, a target that is not depth-only, or a light that is not directional, or a shadow on a depth-only view, logs an error, adds nothing and returns <code>false</code>.</dd>
       <dt>returns</dt><dd><code>true</code> when the passes were added. On <code>false</code> nothing was added.</dd>
     </dl>
@@ -352,7 +354,7 @@ engine.endPass();</code></pre>
     <line x1="678" y1="94" x2="678" y2="148" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <text x="686" y="126" class="small">loads, draws</text>
     <rect x="160" y="150" width="586" height="36" rx="6" class="mem"/>
-    <text x="453" y="173" class="mid small">renderTarget, or the swapchain: one color + D32_SFLOAT depth</text>
+    <text x="453" y="173" class="mid small">renderTarget: one SCENE_COLOR_FORMAT color + D32_SFLOAT depth</text>
 
     <text x="10" y="218" class="title">without it</text>
     <rect x="10"  y="228" width="136" height="36" rx="6" class="gpu"/><text x="78"  y="251" class="mid mono">Cull</text>
@@ -365,14 +367,14 @@ engine.endPass();</code></pre>
 </figure>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 222" role="img" aria-label="With EngineConfig::asyncCompute the scene passes make four batches on two queues: compute Cull 1, graphics Scene 1, compute Hi-Z and Cull 2, graphics Scene 2 and the overlay, which presents. Each batch waits for the one before it on the other queue. Cull 1 of the next frame can run next to this frame's Scene 2.">
+  <svg viewBox="0 0 760 222" role="img" aria-label="With EngineConfig::asyncCompute the scene passes make four batches on two queues: compute Cull 1, graphics Scene 1, compute Hi-Z and Cull 2, graphics Scene 2, Tone Map and the overlay, which presents. Each batch waits for the one before it on the other queue. Cull 1 of the next frame can run next to this frame's Scene 2.">
     <text x="10" y="20" class="title">with EngineConfig::asyncCompute</text>
     <text x="10" y="64" class="small">compute queue</text>
     <text x="10" y="154" class="small">graphics queue</text>
     <rect x="120" y="40" width="120" height="40" rx="6" class="gpu"/><text x="180" y="65" class="mid mono">Cull 1</text>
     <rect x="270" y="130" width="140" height="40" rx="6" class="gpu"/><text x="340" y="155" class="mid mono">Scene 1</text>
     <rect x="440" y="40" width="140" height="40" rx="6" class="gpu"/><text x="510" y="65" class="mid mono">Hi-Z, Cull 2</text>
-    <rect x="600" y="130" width="150" height="40" rx="6" class="gpu"/><text x="675" y="149" class="mid mono">Scene 2, overlay</text><text x="675" y="164" class="mid small">present</text>
+    <rect x="600" y="130" width="150" height="40" rx="6" class="gpu"/><text x="675" y="149" class="mid mono">Scene 2, Tone Map</text><text x="675" y="164" class="mid small">overlay, present</text>
     <path d="M240,60 C258,60 258,150 268,150" class="arrow hot" marker-end="url(#ah-hot)"/>
     <path d="M410,150 C428,150 428,60 438,60" class="arrow hot" marker-end="url(#ah-hot)"/>
     <path d="M580,60 C592,60 592,150 598,150" class="arrow hot" marker-end="url(#ah-hot)"/>
@@ -386,7 +388,7 @@ engine.endPass();</code></pre>
 const rasm::RenderTargetHandle rtHandle = graph.createRenderTarget({
     .name = "offscreen_rt",
     .swapchainScale = 1.0f,
-    .colorFormats = {colorFormat},
+    .colorFormats = {rasm::SCENE_COLOR_FORMAT},
     .depthFormat = rasm::Format::D32_SFLOAT,
     .clearColor = glm::vec4(0.0f), // alpha 0 marks the background
 });
@@ -400,30 +402,39 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
 <p><b>Shadows.</b> Call <code>addScenePasses</code> twice: once from the light camera into a depth-only target, then from your camera with that target as its <code>shadow</code>. The order you add them in does not matter: the graph sorts them by the depth read.</p>
 
 <div class="legend">
-  <span><i class="gpu"></i>scene passes</span>
+  <span><i class="gpu"></i>engine passes</span>
   <span><i class="mem"></i>targets</span>
   <span><i class="cpu"></i>your pass</span>
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 210" role="img" aria-label="examples/06_shadows: the shadow passes draw the scene from the light camera into shadow_map, a depth-only target. The scene passes draw from the camera into scene_rt and read shadow_map's depth. The Post pass reads scene_rt and shadow_map and draws to the swapchain. The graph adds every barrier.">
+  <svg viewBox="0 0 760 300" role="img" aria-label="examples/06_shadows: the shadow passes draw the scene from the light camera into shadow_map, a depth-only target. The scene passes draw from the camera into scene_rt, a 16-bit float target, and read shadow_map's depth. The Post pass reads scene_rt and draws post_rt, also 16-bit float. The Tone Map pass reads post_rt and draws to the swapchain. The Inset pass then reads shadow_map's depth and draws it in a corner of the swapchain, after the tone map. The graph adds every barrier.">
     <text x="10" y="20" class="title">examples/06_shadows: no barrier in the example</text>
-    <rect x="10"  y="40" width="170" height="56" rx="6" class="gpu"/><text x="95"  y="62" class="mid mono">Shadow Cull, Shadow</text><text x="95"  y="80" class="mid small">from lightCamera</text>
-    <rect x="290" y="40" width="170" height="56" rx="6" class="gpu"/><text x="375" y="62" class="mid mono">Cull, Scene</text><text x="375" y="80" class="mid small">from camera, shadowed</text>
-    <rect x="570" y="40" width="170" height="56" rx="6" class="cpu"/><text x="655" y="62" class="mid mono">Post</text><text x="655" y="80" class="mid small">vignette + map inset</text>
-    <rect x="10"  y="140" width="170" height="40" rx="6" class="mem"/><text x="95"  y="157" class="mid mono">shadow_map</text><text x="95" y="172" class="mid small">D32_SFLOAT, no color</text>
-    <rect x="290" y="140" width="170" height="40" rx="6" class="mem"/><text x="375" y="157" class="mid mono">scene_rt</text><text x="375" y="172" class="mid small">color + depth</text>
-    <rect x="570" y="140" width="170" height="40" rx="6" class="mem"/><text x="655" y="165" class="mid mono">swapchain</text>
-    <line x1="95"  y1="96" x2="95"  y2="138" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <line x1="375" y1="96" x2="375" y2="138" class="arrow gpu" marker-end="url(#ah-gpu)"/>
-    <line x1="655" y1="96" x2="655" y2="138" class="arrow cpu" marker-end="url(#ah-cpu)"/>
-    <path d="M180,150 C230,150 240,90 288,80" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <text x="256" y="72" class="end small">readDepth</text>
-    <path d="M460,150 C510,150 520,90 568,80" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <text x="536" y="72" class="end small">read</text>
-    <text x="10" y="204" class="small">Before each read the graph moves the map's depth to SAMPLED; the next frame's first Shadow pass moves it back.</text>
+    <rect x="10"  y="40" width="160" height="56" rx="6" class="gpu"/><text x="90"  y="62" class="mid mono">Shadow Cull, Shadow</text><text x="90"  y="80" class="mid small">from lightCamera</text>
+    <rect x="200" y="40" width="160" height="56" rx="6" class="gpu"/><text x="280" y="62" class="mid mono">Cull, Scene</text><text x="280" y="80" class="mid small">from camera, shadowed</text>
+    <rect x="390" y="40" width="160" height="56" rx="6" class="cpu"/><text x="470" y="62" class="mid mono">Post</text><text x="470" y="80" class="mid small">vignette</text>
+    <rect x="580" y="40" width="160" height="56" rx="6" class="gpu"/><text x="660" y="62" class="mid mono">Tone Map</text><text x="660" y="80" class="mid small">exposure, AgX</text>
+    <rect x="10"  y="140" width="160" height="40" rx="6" class="mem"/><text x="90"  y="157" class="mid mono">shadow_map</text><text x="90"  y="172" class="mid small">D32_SFLOAT, no color</text>
+    <rect x="200" y="140" width="160" height="40" rx="6" class="mem"/><text x="280" y="157" class="mid mono">scene_rt</text><text x="280" y="172" class="mid small">HDR color + depth</text>
+    <rect x="390" y="140" width="160" height="40" rx="6" class="mem"/><text x="470" y="157" class="mid mono">post_rt</text><text x="470" y="172" class="mid small">HDR color + depth</text>
+    <rect x="580" y="140" width="160" height="40" rx="6" class="mem"/><text x="660" y="165" class="mid mono">swapchain</text>
+    <line x1="90"  y1="96" x2="90"  y2="138" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="280" y1="96" x2="280" y2="138" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="470" y1="96" x2="470" y2="138" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="660" y1="96" x2="660" y2="138" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <path d="M170,150 C185,150 190,90 198,80" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="176" y="124" class="end small">readDepth</text>
+    <path d="M360,150 C375,150 380,90 388,80" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="366" y="124" class="end small">read</text>
+    <path d="M550,150 C565,150 570,90 578,80" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="556" y="124" class="end small">read</text>
+    <rect x="580" y="212" width="160" height="48" rx="6" class="cpu"/><text x="660" y="232" class="mid mono">Inset</text><text x="660" y="250" class="mid small">raw depth, a corner</text>
+    <line x1="660" y1="212" x2="660" y2="182" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <path d="M90,180 L90,236 L576,236" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="330" y="230" class="mid small">readDepth, after Tone Map</text>
+    <text x="10" y="290" class="small">Before each read the graph moves the map's depth to SAMPLED; the next frame's first Shadow pass moves it back.</text>
   </svg>
-  <figcaption>The scene is drawn twice: depth only from the light, then shaded from the camera. A fragment whose depth in the light's view is behind the map's depth is in shadow.</figcaption>
+  <figcaption>The scene is drawn twice: depth only from the light, then shaded from the camera. A fragment whose depth in the light's view is behind the map's depth is in shadow. Post stays in HDR, and the engine's tone-map pass brings the result to the window. Inset draws the shadow map over the tone-mapped image, so its depths are not changed by the curve.</figcaption>
 </figure>
 
 <pre><code>// From examples/06_shadows/main.cpp
@@ -450,16 +461,32 @@ if (!engine.addScenePasses(graph, scene, lightCamera, shadowMap) ||
   <tr><th>Rule</th><th>What happens otherwise</th></tr>
   <tr><td>At most <code>MAX_SCENE_VIEWS</code> (8) scene views held by graphs at once</td><td>An error (<i>"At most 8 views (scene, camera, target) can be held by render graphs at once."</i>), nothing added, <code>false</code></td></tr>
   <tr><td>One graph adds each scene view once</td><td>An error, nothing added, <code>false</code></td></tr>
-  <tr><td>A render target has one color in the window's format and <code>D32_SFLOAT</code> depth</td><td>An error, nothing added, <code>false</code></td></tr>
+  <tr><td>A valid render target with one <code>SCENE_COLOR_FORMAT</code> color and <code>D32_SFLOAT</code> depth, or <code>D32_SFLOAT</code> depth only</td><td>An error, nothing added, <code>false</code></td></tr>
   <tr><td>The scene shader <code>passes/rasm.slang</code> must compile</td><td>An error is logged; the engine tries again next frame, so a fixed shader file is picked up while the program runs</td></tr>
   <tr><td>The culling shader <code>passes/cull.slang</code> should compile</td><td>The scene is still drawn, only without culling. Without <code>passes/hiz.slang</code>, or when the view's occlusion buffers cannot be made, it is frustum culled only.</td></tr>
 </table>
 </div>
 
+<div class="api" id="addToneMapPass">
+  <pre class="sig">bool addToneMapPass(RenderGraph&amp; graph, const RenderTargetHandle&amp; source, CameraHandle camera);</pre>
+  <div class="body">
+    <p>Adds a graphics pass named <code>Tone Map</code> that draws <code>source</code> into the window. It multiplies the color by the camera's exposure and maps it to the range the screen shows with AgX; the sRGB swapchain then encodes it. <code>render</code> calls it after the scene passes; call it yourself as the last pass of your own graph that draws the scene. How it works: <a href="../guides/tone-mapping.html">Tone mapping</a>.</p>
+    <dl>
+      <dt>graph</dt><dd>The graph to add to, before its <code>compile</code>. The pass reads <code>source</code>, so the graph runs it after the passes that draw it.</dd>
+      <dt>source</dt><dd>Color 0 is read, as linear light. Usually a <a href="types.html#SCENE_COLOR_FORMAT"><code>SCENE_COLOR_FORMAT</code></a> target that <a href="#addScenePasses"><code>addScenePasses</code></a> or your post passes drew. Invalid, or a depth-only target: logs an error, adds nothing and returns <code>false</code>.</dd>
+      <dt>camera</dt><dd>Its <a href="camera.html#setCameraExposure">exposure</a> is read each time the pass runs, so changing it needs no new graph. Invalid: logs an error, adds nothing and returns <code>false</code>.</dd>
+      <dt>returns</dt><dd><code>true</code> when the pass was added. The pipeline is made the first time the pass runs. If <code>passes/toneMap.slang</code> does not compile, the pass logs an error, draws nothing (the window shows the clear color) and tries again next frame, so a fixed shader file is picked up while the program runs.</dd>
+    </dl>
+    <pre><code>// From examples/06_shadows/main.cpp: post_rt holds the vignetted HDR image
+if (!engine.addToneMapPass(graph, postTarget, camera))
+    return 1;</code></pre>
+  </div>
+</div>
+
 <div class="api" id="getCurrentFrameResources">
   <pre class="sig">const FrameResources&amp; getCurrentFrameResources();</pre>
   <div class="body">
-    <p>The current frame slot's <a href="types.html#FrameResources"><code>FrameResources</code></a>: <code>commandBuffer</code> (the one being recorded: record your own draws and dispatches into it), <code>depthTexture</code> (the window pass's depth), <code>fenceValue</code> and <code>computeFenceValue</code>. Fetch it every frame, because the slot changes every frame. With <code>EngineConfig::asyncCompute</code> fetch it inside each pass, because the command buffer changes when a pass runs on the other queue. The depth textures are replaced on resize.</p>
+    <p>The current frame slot's <a href="types.html#FrameResources"><code>FrameResources</code></a>: <code>commandBuffer</code> (the one being recorded: record your own draws and dispatches into it), <code>fenceValue</code> and <code>computeFenceValue</code>. Fetch it every frame, because the slot changes every frame. With <code>EngineConfig::asyncCompute</code> fetch it inside each pass, because the command buffer changes when a pass runs on the other queue.</p>
     <pre><code>auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
 ctx.bindPipeline(commandBuffer, pipeline);
 ctx.draw(commandBuffer, 3);</code></pre>
@@ -469,7 +496,7 @@ ctx.draw(commandBuffer, 3);</code></pre>
 <div class="api" id="recreateSwapchain">
   <pre class="sig">bool recreateSwapchain();</pre>
   <div class="body">
-    <p>Rebuilds the swapchain, the depth textures, and the aspect ratio of every camera, from the window's current pixel size. <code>beginFrame</code> already calls it after a resize or an out-of-date swapchain, so a program does not need to.</p>
+    <p>Rebuilds the swapchain, the render targets sized from it, and the aspect ratio of every camera, from the window's current pixel size. <code>beginFrame</code> already calls it after a resize or an out-of-date swapchain, so a program does not need to.</p>
     <dl>
       <dt>returns</dt><dd><code>false</code> while the window has 0 pixels, or when the rebuild failed. <code>beginFrame</code> then tries again next frame.</dd>
     </dl>
@@ -641,7 +668,7 @@ engine.endGpuTimer(commandBuffer, timer);</code></pre>
   </div>
   <div>
     <h4>Two sizes</h4>
-    <p><code>width</code>, <code>height</code>: logical size, the unit of mouse positions.<br><code>pixelWidth</code>, <code>pixelHeight</code>: the drawable size. They differ on HiDPI screens. The swapchain, depth and viewports use the pixel size.</p>
+    <p><code>width</code>, <code>height</code>: logical size, the unit of mouse positions.<br><code>pixelWidth</code>, <code>pixelHeight</code>: the drawable size. They differ on HiDPI screens. The swapchain, the render targets sized from it and the viewports use the pixel size.</p>
   </div>
 </div>
 

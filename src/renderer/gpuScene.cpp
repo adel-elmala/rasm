@@ -483,8 +483,7 @@ namespace rasm
     }
 
     // The scene in passes of the graph: culling, the draws, and with occlusion culling the Hi-Z build, the late culling
-    // and the late draws. They draw into renderTarget, or the swapchain when it is invalid, so later passes on that
-    // target load what they drew. A depth-only target gets only depth (a shadow map, passes named "Shadow ..."). Each
+    // and the late draws. They draw into renderTarget, so later passes on that target load what they drew. A depth-only target gets only depth (a shadow map, passes named "Shadow ..."). Each
     // view (scene, camera, target, shadow) culls into buffers of its own, kept from frame to frame while a graph holds
     // the view, which its passes declare: per-slot buffers by both slots, so their handles hold for every frame. The cull
     // stats are not declared: the views only add to them atomically, and only the CPU reads them, after the slot's
@@ -508,17 +507,19 @@ namespace rasm
             const auto &targetData = ctx.getRenderTarget(target);
             return targetData.colorCount == 0 && targetData.depthFormat == DEPTH_FORMAT;
         };
-        bool depthOnly = false;
-        if (renderTarget.isValid())
+        // The scene's radiance is unbounded, so a color target is HDR, and a tone-map pass reads it.
+        if (!renderTarget.isValid())
         {
-            const auto &renderTargetData = ctx.getRenderTarget(renderTarget);
-            depthOnly = isDepthOnly(renderTarget);
-            const bool color = renderTargetData.colorCount == 1 && renderTargetData.colorFormats[0] == swapchain.imageFormat && renderTargetData.depthFormat == DEPTH_FORMAT;
-            if (!depthOnly && !color)
-            {
-                spdlog::error("addScenePasses needs a render target with one color attachment in the swapchain's format and D32_SFLOAT depth, or D32_SFLOAT depth only.");
-                return false;
-            }
+            spdlog::error("addScenePasses needs a valid render target.");
+            return false;
+        }
+        const auto &renderTargetData = ctx.getRenderTarget(renderTarget);
+        const bool depthOnly = isDepthOnly(renderTarget);
+        const bool color = renderTargetData.colorCount == 1 && renderTargetData.colorFormats[0] == SCENE_COLOR_FORMAT && renderTargetData.depthFormat == DEPTH_FORMAT;
+        if (!depthOnly && !color)
+        {
+            spdlog::error("addScenePasses needs a render target with one SCENE_COLOR_FORMAT color attachment and D32_SFLOAT depth, or D32_SFLOAT depth only.");
+            return false;
         }
         // shadow.slang turns a texel into world units and depth with the light camera's matrix, which holds only for an
         // orthographic camera: a directional light's.
@@ -575,10 +576,7 @@ namespace rasm
             builder.read(sceneView.visibleDraws);
             if (shadow.renderTarget.isValid())
                 builder.readDepth(shadow.renderTarget);
-            if (renderTarget.isValid())
-                builder.write(renderTarget);
-            else
-                builder.writeSwapchain();
+            builder.write(renderTarget);
         };
 
         graph.addAsyncComputePass(
@@ -606,10 +604,7 @@ namespace rasm
             prefix + "Hi-Z",
             [&](PassBuilder &builder)
             {
-                if (renderTarget.isValid())
-                    builder.readDepth(renderTarget);
-                else
-                    builder.readSwapchainDepth();
+                builder.readDepth(renderTarget);
                 builder.write(sceneView.hiz);
             },
             [this, view](RenderContext &)
@@ -750,7 +745,7 @@ namespace rasm
         // A shader error retries every frame, so a shader fixed on disk is picked up while the application runs.
         if (!view.depthOnly && !gpuScene->pipeline.isValid())
         {
-            gpuScene->pipeline = createPipeline("rasm", readFile(pathFromUtf8(config.shaderDir) / "passes/rasm.slang"));
+            gpuScene->pipeline = createPipeline("rasm", readFile(pathFromUtf8(config.shaderDir) / "passes/rasm.slang"), view.renderTarget);
             if (!gpuScene->pipeline.isValid())
             {
                 spdlog::error("Failed to create the uber material pipeline for the scene.");
@@ -785,16 +780,10 @@ namespace rasm
                 spdlog::error("Failed to create the Hi-Z pipeline; the scene is drawn without occlusion culling.");
         }
 
-        uint32_t width = swapchain.width;
-        uint32_t height = swapchain.height;
-        TextureHandle depthTexture = frameResources[frame].depthTexture;
-        if (view.renderTarget.isValid())
-        {
-            const auto &renderTargetData = ctx.getRenderTarget(view.renderTarget);
-            width = renderTargetData.width;
-            height = renderTargetData.height;
-            depthTexture = renderTargetData.attachments[frame].depth;
-        }
+        const auto &renderTargetData = ctx.getRenderTarget(view.renderTarget);
+        const uint32_t width = renderTargetData.width;
+        const uint32_t height = renderTargetData.height;
+        const TextureHandle depthTexture = renderTargetData.attachments[frame].depth;
 
         // The buffer holds the packed draws, then culling's scratch. Only this slot's last frame used the old
         // buffer, and the fence wait covered it.
@@ -812,7 +801,7 @@ namespace rasm
         }
 
         // Occlusion culling samples the pass's depth, which is in the bindless set from its creation
-        // (createSwapchainResources, RenderContext::createAttachments). Its Hi-Z covers the whole attachment.
+        // (RenderContext::createAttachments). Its Hi-Z covers the whole attachment.
         const uint32_t depthSlot = getBindlessTextureIndex(depthTexture);
         if (culled && config.occlusionCulling && gpuScene->hizPipeline.isValid() && depthSlot != UINT32_MAX && view.visibility.isValid())
         {
@@ -908,8 +897,8 @@ namespace rasm
             if (reader.graphs == 0 || reader.scene != view.scene || reader.shadow.renderTarget != view.renderTarget || reader.shadow.camera != view.camera)
                 continue;
             lodCamera = reader.camera;
-            lodWidth = reader.renderTarget.isValid() ? ctx.getRenderTarget(reader.renderTarget).width : swapchain.width;
-            lodHeight = reader.renderTarget.isValid() ? ctx.getRenderTarget(reader.renderTarget).height : swapchain.height;
+            lodWidth = ctx.getRenderTarget(reader.renderTarget).width;
+            lodHeight = ctx.getRenderTarget(reader.renderTarget).height;
             break;
         }
         const glm::mat4 lodProjection = getProjectionMatrix(lodCamera, static_cast<float>(lodWidth) / static_cast<float>(lodHeight));

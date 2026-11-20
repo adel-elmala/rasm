@@ -1,0 +1,748 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tone Mapping and Exposure · RASM</title>
+<meta name="description" content="How tone mapping works: scene light spans many stops, a screen shows 0 to 1. Exposure as a multiplier in stops, the tone curves (clip, Reinhard, an ACES fit, AgX), why per-channel curves shift the hue of bright colors, AgX step by step, where the pass sits in a frame, the HDR format, pitfalls, a worked example. Then how RASM does it.">
+<meta name="rasm-sources" content="shaders/passes/toneMap.slang src/renderer/toneMap.cpp src/renderer/renderer.cpp include/rasm/engine.h include/rasm/camera.h src/scene/camera.cpp shaders/lib/pbr.slang shaders/lib/unlit.slang src/renderer/gpuScene.cpp src/renderer/statsOverlay.cpp src/engine.cpp src/rhi/vulkan/vulkanSwapchain.cpp examples/06_shadows/main.cpp examples/01_render_graph/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/tone-mapping.js"></script>
+</head>
+<body data-root="../" data-page="guides/tone-mapping.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Tone mapping and exposure</h1>
+<p class="lead">Light in a scene has no upper limit: a lamp can be a thousand times brighter than the wall it lights. A screen shows values from 0 to 1. <b>Exposure</b> picks which part of the scene's range matters, and a <b>tone curve</b> squeezes the whole range into 0 to 1 so that bright things roll off into white instead of being cut. This page explains both, the common curves, what they do to color, and the AgX curve step by step. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Lighting gives <b>linear</b> light, often far above 1. Writing it to the screen as it is <b>clips</b> every bright area to the same flat white.</li>
+    <li><b>Exposure</b> is one multiplier before the curve. Photographers count it in <b>stops</b>: +1 stop is ×2, −1 stop is ×0.5.</li>
+    <li>A <b>tone curve</b> maps 0 … ∞ to 0 … 1, keeps the order of brightness, and keeps contrast in the mid tones. Common ones: Reinhard, filmic curves like the ACES fit, and <b>AgX</b>.</li>
+    <li>A curve applied to each channel on its own changes the <b>hue</b> of bright saturated colors: a red light turns orange, then yellow. AgX mixes the channels a little first, so bright colors go to white instead.</li>
+    <li>Tone mapping runs once, on a 16-bit float image, after lighting and HDR effects like bloom, and before the UI and the sRGB encode.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>The problem: too much range</h2>
+
+<p>Light values in a scene spread over many <b>stops</b>, where one stop is a factor of 2. Below, a few example values on a log axis, where each grid step is one stop. A screen shows values from 0 to 1: everything at or above 1 is the same white.</p>
+
+<div class="legend">
+  <span><i class="ok"></i>what the screen can show: 0 to 1</span>
+  <span><i class="bad"></i>above 1: all the same white</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="A log axis of light values, one grid step per stop. Example values: a dark corner 0.005, a gray wall 0.18, a lamp-lit wall 4, a sunlit spot 20, a lamp 100. Under the axis, a bar shows what the screen can show: values up to 1. Everything above 1, the lamp-lit wall, the sunlit spot and the lamp, falls in the clipped part, all the same white.">
+    <path d="M60,74V122M98.8,74V122M137.6,74V122M176.5,74V122M215.3,74V122M254.1,74V122M292.9,74V122M331.8,74V122M370.6,74V122M409.4,74V122M448.2,74V122M487.1,74V122M525.9,74V122M564.7,74V122M603.5,74V122M642.4,74V122M681.2,74V122M720,74V122" class="grid"/>
+    <line x1="60" y1="122" x2="740" y2="122" class="arrow" marker-end="url(#ah)"/>
+
+    <circle cx="151.5" cy="104" r="6" class="solid"/>
+    <text x="151.5" y="30" class="mid small">dark corner</text>
+    <text x="151.5" y="46" class="mid mono">0.005</text>
+    <circle cx="352.2" cy="104" r="6" class="solid"/>
+    <text x="352.2" y="30" class="mid small">gray wall</text>
+    <text x="352.2" y="46" class="mid mono">0.18</text>
+    <circle cx="525.9" cy="104" r="6" class="light"/>
+    <text x="525.9" y="30" class="mid small">lamp-lit wall</text>
+    <text x="525.9" y="46" class="mid mono">4</text>
+    <circle cx="616" cy="104" r="6" class="light"/>
+    <text x="616" y="30" class="mid small">sunlit spot</text>
+    <text x="616" y="46" class="mid mono">20</text>
+    <circle cx="706.2" cy="104" r="6" class="light"/>
+    <text x="706.2" y="30" class="mid small">a lamp</text>
+    <text x="706.2" y="46" class="mid mono">100</text>
+    <text x="448.2" y="66" class="mid mono t-hot">1</text>
+    <line x1="448.2" y1="70" x2="448.2" y2="180" class="arrow hot dashed"/>
+
+    <rect x="60" y="140" width="388.2" height="26" class="ok"/>
+    <text x="254" y="158" class="mid small">the screen: 0 to 1, each value its own shade</text>
+    <rect x="448.2" y="140" width="291.8" height="26" class="bad"/>
+    <text x="594" y="158" class="mid small">clipped: one flat white</text>
+    <text x="60" y="200" class="small">one grid step = one stop = twice the light. From 0.005 to 100 is about 14 stops.</text>
+    <text x="60" y="218" class="small t-faint">example values, in the units the lights are set in</text>
+  </svg>
+  <figcaption>An 8-bit screen has 256 codes for its whole range. A scene has detail in every stop: the shape of a lamp, a bright cloud, the edge of a sunlit spot. Clipping keeps the dark stops and throws away the bright ones.</figcaption>
+</figure>
+
+<p>The bars below show the same four values on screen, as the byte the display gets. Clipping makes three of them equal. A tone curve keeps them apart.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Four bars for scene values 0.18, 1, 4 and 20. Clipped, they show bytes 118, 255, 255 and 255: the last three are the same white.">
+      <line x1="20" y1="25" x2="300" y2="25" class="dashed"/>
+      <text x="300" y="18" class="end small t-faint">white</text>
+      <rect x="40"  y="73.5" width="44" height="41.5" class="light"/>
+      <rect x="110" y="25" width="44" height="90" class="bad"/>
+      <rect x="180" y="25" width="44" height="90" class="bad"/>
+      <rect x="250" y="25" width="44" height="90" class="bad"/>
+      <text x="62"  y="67" class="mid mono">118</text>
+      <text x="132" y="45" class="mid mono">255</text>
+      <text x="202" y="45" class="mid mono">255</text>
+      <text x="272" y="45" class="mid mono">255</text>
+      <line x1="20" y1="115" x2="300" y2="115" class="surface"/>
+      <text x="62"  y="132" class="mid small">0.18</text>
+      <text x="132" y="132" class="mid small">1</text>
+      <text x="202" y="132" class="mid small">4</text>
+      <text x="272" y="132" class="mid small">20</text>
+    </svg>
+    <h4>Clip</h4>
+    <p>1, 4 and 20 all become byte 255. The lamp-lit wall and the sun look the same.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same four values through a tone curve (AgX): bytes 128, 202, 239 and 255. Each value keeps its own brightness.">
+      <line x1="20" y1="25" x2="300" y2="25" class="dashed"/>
+      <text x="300" y="18" class="end small t-faint">white</text>
+      <rect x="40"  y="70" width="44" height="45" class="light"/>
+      <rect x="110" y="43.7" width="44" height="71.3" class="light"/>
+      <rect x="180" y="30.8" width="44" height="84.2" class="light"/>
+      <rect x="250" y="25.1" width="44" height="89.9" class="light"/>
+      <text x="62"  y="63" class="mid mono">128</text>
+      <text x="132" y="37" class="mid mono">202</text>
+      <text x="202" y="50" class="mid mono halo">239</text>
+      <text x="272" y="45" class="mid mono halo">255</text>
+      <line x1="20" y1="115" x2="300" y2="115" class="surface"/>
+      <text x="62"  y="132" class="mid small">0.18</text>
+      <text x="132" y="132" class="mid small">1</text>
+      <text x="202" y="132" class="mid small">4</text>
+      <text x="272" y="132" class="mid small">20</text>
+    </svg>
+    <h4>Tone map</h4>
+    <p>Every value keeps its own shade. Bright values get closer together, but never equal, until far above the range.</p>
+  </div>
+</div>
+
+<p>Bar heights are the screen code (the sRGB value) from 0 to 1, which is close to how bright each bar looks. To have values above 1 to map at all, the scene must be drawn into an image that can store them: a floating-point format (<a href="#frame">section 6</a>). Such an image is called <b>HDR</b> (high dynamic range); the 0 to 1 image for the screen is <b>LDR</b> or SDR.</p>
+
+<h2 id="exposure"><span class="n">2</span>Exposure: one multiplier, counted in stops</h2>
+
+<p>A camera lets more or less light reach the sensor. A renderer does the same with one number: it multiplies the scene's linear color before the tone curve.</p>
+
+<div class="formula">
+  <p class="eq">exposed = scene · 2<sup>EV</sup></p>
+  <dl>
+    <dt>scene</dt><dd>the linear color from lighting, any value from 0 up</dd>
+    <dt>EV</dt><dd>the exposure in stops: +1 doubles the light, −1 halves it, 0 changes nothing</dd>
+    <dt>2<sup>EV</sup></dt><dd>the linear factor: +2 stops is ×4, −3 stops is ×0.125, +3.32 stops is ×10</dd>
+  </dl>
+</div>
+
+<p>On a log axis, a multiplier is a shift. Exposure slides the range the curve can show along the scene's values, and so decides which scene value becomes <b>middle gray</b>: 0.18, the value of a surface that reflects 18% of the light, which looks halfway between black and white.</p>
+
+<div class="legend">
+  <span><i class="shader"></i>the scene values the curve can show (16.5 stops for AgX)</span>
+  <span><i class="hot"></i>the scene value that becomes middle gray</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 252" role="img" aria-label="Three rows over the same log axis of scene values. At minus 2 stops, times 0.25, the shown range moves right and the scene value 0.72 becomes middle gray. At 0 stops, 0.18 becomes middle gray. At plus 2 stops, times 4, the range moves left and 0.045 becomes middle gray.">
+    <path d="M139.8,44V214M236.4,44V214M333.1,44V214M454.4,44V214M526.4,44V214M623,44V214M719.6,44V214" class="grid"/>
+
+    <text x="90" y="40" class="small">−2 stops · × 0.25: darker, bright values get room</text>
+    <rect x="221.7" y="48" width="480" height="24" rx="4" class="shader"/>
+    <circle cx="512.6" cy="60" r="6" class="accent"/>
+    <text x="522" y="64" class="small halo">0.72 → middle gray</text>
+
+    <text x="90" y="100" class="small">0 stops · × 1</text>
+    <rect x="163.5" y="108" width="480" height="24" rx="4" class="shader"/>
+    <circle cx="454.4" cy="120" r="6" class="accent"/>
+    <text x="464" y="124" class="small halo">0.18 → middle gray</text>
+
+    <text x="90" y="160" class="small">+2 stops · × 4: brighter, dark values get room</text>
+    <rect x="105.3" y="168" width="480" height="24" rx="4" class="shader"/>
+    <circle cx="396.2" cy="180" r="6" class="accent"/>
+    <text x="406" y="184" class="small halo">0.045 → middle gray</text>
+
+    <line x1="90" y1="214" x2="740" y2="214" class="arrow" marker-end="url(#ah)"/>
+    <text x="139.8" y="230" class="mid small">0.0001</text>
+    <text x="236.4" y="230" class="mid small">0.001</text>
+    <text x="333.1" y="230" class="mid small">0.01</text>
+    <text x="454.4" y="230" class="mid small">0.18</text>
+    <text x="526.4" y="230" class="mid small">1</text>
+    <text x="623" y="230" class="mid small">10</text>
+    <text x="719.6" y="230" class="mid small">100</text>
+    <text x="90" y="248" class="small">scene value, linear, on a log axis →</text>
+  </svg>
+  <figcaption>The range keeps its width of 16.5 stops; exposure only moves it. A scene lit by the sun needs a lower exposure than a room lit by one lamp, exactly like a real camera.</figcaption>
+</figure>
+
+<p>Three ways to choose the number:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A slider with a handle: the exposure is set by hand.">
+      <line x1="30" y1="64" x2="210" y2="64" class="arrow thick"/>
+      <circle cx="140" cy="64" r="11" class="accent"/>
+      <text x="30" y="96" class="mid small">−4</text>
+      <text x="120" y="96" class="mid small">0</text>
+      <text x="210" y="96" class="mid small">+4</text>
+      <text x="120" y="30" class="mid small">stops</text>
+    </svg>
+    <h4>Manual</h4>
+    <p>The artist or the app sets it per camera or per level. Simple, and the same image every frame.</p>
+    <p class="cost">Needs a value per lighting setup</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An image is reduced to one average value, which sets the exposure for the next frames.">
+      <rect x="16" y="26" width="70" height="70" class="paper"/>
+      <path d="M16,49H86M16,72H86M39,26V96M62,26V96" class="grid"/>
+      <rect x="62" y="26" width="24" height="23" class="light"/>
+      <line x1="90" y1="61" x2="128" y2="61" class="arrow" marker-end="url(#ah)"/>
+      <rect x="132" y="48" width="26" height="26" class="mem"/>
+      <text x="145" y="92" class="mid small">average</text>
+      <line x1="162" y1="61" x2="196" y2="61" class="arrow" marker-end="url(#ah)"/>
+      <text x="216" y="66" class="mid title">EV</text>
+    </svg>
+    <h4>Automatic (eye adaptation)</h4>
+    <p>Each frame, measure the image's average log brightness (or a histogram) and set the exposure that maps it to middle gray. Change it slowly, like an eye.</p>
+    <p class="cost">A reduction pass per frame</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A camera lens with three settings: aperture, shutter time and ISO.">
+      <circle cx="70" cy="64" r="36" class="box"/>
+      <circle cx="70" cy="64" r="18" class="solid"/>
+      <text x="126" y="44" class="small">f/8 aperture</text>
+      <text x="126" y="68" class="small">1/125 s shutter</text>
+      <text x="126" y="92" class="small">ISO 100</text>
+    </svg>
+    <h4>Physical camera</h4>
+    <p>Lights in real units, and the exposure from aperture, shutter time and ISO, as on a real camera (EV100).</p>
+    <p class="cost">Needs physical light units everywhere</p>
+  </div>
+</div>
+
+<h2 id="curves"><span class="n">3</span>Tone curves</h2>
+
+<p>A tone curve maps any value from 0 up to the range 0 to 1. A good one keeps black at 0, keeps the mid tones bright and with contrast, and bends the bright values slowly into white. The four common answers, plotted on the same log axis (screen code up, scene value across, the dot is 0.18):</p>
+
+<div class="vgrid two">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Clip: the curve rises and hits 1 at scene value 1, then stays flat.">
+      <rect x="20" y="14" width="200" height="98" class="zone"/>
+      <path d="M115.3,14V112M140,14V112" class="grid"/>
+      <path d="M20,111.7 L25,111.6 L30,111.4 L35,111.1 L40,110.8 L45,110.3 L50,109.5 L55,108.5 L60,107.1 L65,105.5 L70,103.7 L75,101.6 L80,99.1 L85,96.3 L90,93.0 L95,89.2 L100,84.8 L105,79.8 L110,73.9 L115,67.2 L120,59.4 L125,50.3 L130,39.9 L135,27.9 L140,14.0 L220,14.0" class="arrow bad dashed thick"/>
+      <circle cx="115.3" cy="66.8" r="4" class="accent"/>
+      <text x="115.3" y="125" class="mid small">0.18</text>
+      <text x="140" y="125" class="mid small">1</text>
+    </svg>
+    <h4>Clip</h4>
+    <p><code class="lang-text">min(x, 1)</code></p>
+    <p>No curve at all. Correct up to 1, then one flat white.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Reinhard: the curve rises slowly and approaches 1 without reaching it.">
+      <rect x="20" y="14" width="200" height="98" class="zone"/>
+      <path d="M115.3,14V112M140,14V112" class="grid"/>
+      <path d="M20,111.7 L30,111.4 L40,110.8 L50,109.5 L60,107.1 L65,105.6 L70,103.7 L75,101.6 L80,99.2 L85,96.5 L90,93.3 L95,89.7 L100,85.6 L105,81.1 L110,76.0 L115,70.5 L120,64.5 L125,58.3 L130,52.0 L135,45.8 L140,39.9 L145,34.7 L150,30.1 L155,26.3 L160,23.2 L165,20.8 L170,19.0 L175,17.6 L180,16.6 L185,15.8 L190,15.3 L195,14.9 L200,14.7 L210,14.3 L220,14.2" class="arrow gpu thick"/>
+      <circle cx="115.3" cy="70.2" r="4" class="accent"/>
+      <text x="115.3" y="125" class="mid small">0.18</text>
+      <text x="140" y="125" class="mid small">1</text>
+    </svg>
+    <h4>Reinhard</h4>
+    <p><code class="lang-text">x / (1 + x)</code></p>
+    <p>Never clips. But mid tones get darker (0.18 → 0.153) and the image looks flat and gray.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="ACES fit: an S-shaped curve, darker in the shadows, bright and steep in the mid tones, reaching 1 at about scene value 4.">
+      <rect x="20" y="14" width="200" height="98" class="zone"/>
+      <path d="M115.3,14V112M140,14V112" class="grid"/>
+      <path d="M20,111.9 L35,111.8 L45,111.6 L55,111.1 L60,110.6 L65,109.9 L70,108.6 L75,106.7 L80,104.1 L85,100.9 L90,96.7 L95,91.4 L100,84.8 L105,76.9 L110,67.9 L115,58.3 L120,48.8 L125,40.1 L130,32.9 L135,27.2 L140,23.0 L145,19.9 L150,17.8 L155,16.2 L160,15.2 L165,14.4 L170,14.0 L220,14.0" class="arrow hot thick"/>
+      <circle cx="115.3" cy="57.8" r="4" class="accent"/>
+      <text x="115.3" y="125" class="mid small">0.18</text>
+      <text x="140" y="125" class="mid small">1</text>
+    </svg>
+    <h4>Filmic: the ACES fit</h4>
+    <p><code class="lang-text">x (2.51 x + 0.03) / (x (2.43 x + 0.59) + 0.14)</code></p>
+    <p>An S-curve like film: deep shadows, punchy mid tones, white from about 4. Fitted to the ACES film look.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="AgX: a smooth S-curve over 16.5 stops, 0.18 near the middle of the screen range, white from about 13.">
+      <rect x="20" y="14" width="200" height="98" class="zone"/>
+      <path d="M115.3,14V112M140,14V112" class="grid"/>
+      <path d="M20,112.0 L35,111.9 L45,111.8 L50,111.6 L55,111.3 L60,110.6 L65,109.4 L70,107.2 L75,104.2 L80,100.7 L85,96.7 L90,92.1 L95,87.0 L100,81.5 L105,75.6 L110,69.5 L115,63.3 L120,57.0 L125,50.9 L130,45.0 L135,39.5 L140,34.4 L145,29.9 L150,26.0 L155,22.8 L160,20.3 L165,18.3 L170,16.8 L175,15.5 L180,14.2 L220,14.1" class="arrow shader thick"/>
+      <circle cx="115.3" cy="62.9" r="4" class="accent"/>
+      <text x="115.3" y="125" class="mid small">0.18</text>
+      <text x="140" y="125" class="mid small">1</text>
+    </svg>
+    <h4>AgX</h4>
+    <p><code class="lang-text">log2 encode, S-curve, matrices</code></p>
+    <p>A gentle S-curve over 16.5 stops, with a color step before and after. 0.18 lands on byte 128. <a href="#agx">Section 5</a>.</p>
+  </div>
+</div>
+
+<p>Try the four curves. The plot runs each formula, and the ramp under it draws the same scene values through the chosen curve.</p>
+
+<div class="legend">
+  <span><i class="bad"></i>clip</span>
+  <span><i class="gpu"></i>Reinhard</span>
+  <span><i class="hot"></i>ACES fit</span>
+  <span><i class="shader"></i>AgX</span>
+</div>
+
+<figure class="lab" data-lab="tone-curve" data-title="Expose and map">
+  <figcaption>Pick Reinhard and raise the exposure until middle gray reaches about byte 128: then look where white begins. Then pick Clip and lower the exposure: the bright end only moves, it never rolls off.</figcaption>
+</figure>
+
+<div class="callout">
+  <strong>Many more curves exist</strong>
+  <p>Hable's filmic curve (from <i>Uncharted 2</i>), the full ACES reference transforms, Khronos PBR Neutral, Lottes, and many in-house curves. They differ in shadow and highlight shape and in how they treat color. The rest of this page uses the four above.</p>
+</div>
+
+<h2 id="color"><span class="n">4</span>What curves do to color</h2>
+
+<p>Clip, Reinhard and the ACES fit are applied to each channel on its own. For a gray that is fine: all three channels are equal and stay equal. For a saturated color it is not. Take a red light, (1, 0.05, 0.02), made 16 times brighter: (16, 0.8, 0.32).</p>
+
+<ol class="flow">
+  <li class="mem"><b>16, 0.8, 0.32</b><span>a bright red light</span></li>
+  <li class="shader"><b>each channel</b><span>through the curve on its own</span></li>
+  <li><b>R stops at 1</b><span>G and B are still on the steep part</span></li>
+  <li><b>orange</b><span>G caught up with R: the hue moved</span></li>
+</ol>
+
+<div class="legend">
+  <span><i class="bad"></i>red channel</span>
+  <span><i class="ok"></i>green channel</span>
+  <span><i class="cpu"></i>blue channel</span>
+</div>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 150" role="img" aria-label="Left, the light's own mix: red 1, green 0.05, blue 0.02. Right, on screen through the ACES fit at 16 times: red 1, green 0.75, blue 0.46. Green has caught up with red: orange.">
+      <text x="80" y="18" class="mid small">the light's mix</text>
+      <rect x="35"  y="28" width="26" height="90" class="bad"/>
+      <rect x="67"  y="113.5" width="26" height="4.5" class="ok"/>
+      <rect x="99"  y="116.2" width="26" height="1.8" class="cpu"/>
+      <text x="240" y="18" class="mid small">on screen, ACES fit</text>
+      <rect x="195" y="28" width="26" height="90" class="bad"/>
+      <rect x="227" y="50.3" width="26" height="67.7" class="ok"/>
+      <rect x="259" y="76.4" width="26" height="41.6" class="cpu"/>
+      <line x1="20" y1="118" x2="300" y2="118" class="surface"/>
+      <text x="48" y="134" class="mid small">R</text><text x="80" y="134" class="mid small">G</text><text x="112" y="134" class="mid small">B</text>
+      <text x="208" y="134" class="mid small">R</text><text x="240" y="134" class="mid small">G</text><text x="272" y="134" class="mid small">B</text>
+      <text x="240" y="44" class="mid mono halo">0.75</text>
+      <text x="272" y="70" class="mid mono halo">0.46</text>
+      <text x="160" y="148" class="mid small t-bad">hue 2° red → 32° orange</text>
+    </svg>
+    <h4>Per channel: the ACES fit</h4>
+    <p>The big channel is stuck at 1, the small ones keep rising. Red goes to orange, then yellow, then white. Blue goes to cyan or purple.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 150" role="img" aria-label="Left, the light's own mix: red 1, green 0.05, blue 0.02. Right, on screen through AgX at 16 times: red 1, green 0.66, blue 0.57. Green and blue rise together: a paler red, toward white.">
+      <text x="80" y="18" class="mid small">the light's mix</text>
+      <rect x="35"  y="28" width="26" height="90" class="bad"/>
+      <rect x="67"  y="113.5" width="26" height="4.5" class="ok"/>
+      <rect x="99"  y="116.2" width="26" height="1.8" class="cpu"/>
+      <text x="240" y="18" class="mid small">on screen, AgX</text>
+      <rect x="195" y="28" width="26" height="90" class="bad"/>
+      <rect x="227" y="58.5" width="26" height="59.5" class="ok"/>
+      <rect x="259" y="66.6" width="26" height="51.4" class="cpu"/>
+      <line x1="20" y1="118" x2="300" y2="118" class="surface"/>
+      <text x="48" y="134" class="mid small">R</text><text x="80" y="134" class="mid small">G</text><text x="112" y="134" class="mid small">B</text>
+      <text x="208" y="134" class="mid small">R</text><text x="240" y="134" class="mid small">G</text><text x="272" y="134" class="mid small">B</text>
+      <text x="240" y="52" class="mid mono halo">0.66</text>
+      <text x="272" y="60" class="mid mono halo">0.57</text>
+      <text x="160" y="148" class="mid small t-ok">hue 2° red → 13° pale red</text>
+    </svg>
+    <h4>AgX: mix first, then curve</h4>
+    <p>Green and blue rise <b>together</b>, so the color gets paler but stays near its hue, and ends as white.</p>
+  </div>
+</div>
+
+<p>Bar heights are the linear values on screen. The hue is the angle on the color wheel: 0° red, 30° orange, 60° yellow. Make the light brighter below and watch each row.</p>
+
+<figure class="lab" data-lab="hue-shift" data-title="A bright light, stop by stop">
+  <figcaption>Keep red and move the brightness from +0 to +8: the ACES row turns orange and yellow, the AgX row turns pale and then white. Then try blue.</figcaption>
+</figure>
+
+<div class="callout">
+  <strong>Why this matters</strong>
+  <p>Fire, neon signs, sunsets, colored lamps and emissive materials are bright and saturated. With a per-channel curve they shift hue as they get brighter, and an artist cannot make a "brighter red" any more: it turns orange. A bright light that goes toward white, like on film, looks brighter, not differently colored.</p>
+</div>
+
+<h2 id="agx"><span class="n">5</span>AgX, step by step</h2>
+
+<p>AgX is the tone mapper of Blender 4, designed by Troy Sobotka. Real-time engines usually use the "minimal" form by Benjamin Wrensch: two 3×3 matrices, a log2 step and a polynomial fitted to Blender's curve. Five steps, on linear RGB:</p>
+
+<ol class="flow">
+  <li class="shader"><b>inset</b><span>mix the channels a little</span></li>
+  <li class="shader"><b>log2</b><span>16.5 stops → 0 … 1</span></li>
+  <li class="shader"><b>S-curve</b><span>contrast</span></li>
+  <li class="shader"><b>outset</b><span>saturation back</span></li>
+  <li class="mem"><b>decode</b><span>^ 2.2 → linear</span></li>
+</ol>
+
+<h3>Inset and outset: the color step</h3>
+
+<p>The <b>inset</b> matrix keeps about 84 to 88% of each channel and mixes about 4 to 8% of each other channel into it. Each row adds up to 1, so a gray stays the same gray: 0.18 stays 0.18. A saturated color moves a little toward gray: the red light (16, 0.8, 0.32) becomes (13.6, 1.41, 1.02). Its small channels are no longer tiny, so they climb the curve with the big one, and the color heads to white. The <b>outset</b> matrix after the curve roughly undoes the mix, so mid-tone colors keep their saturation.</p>
+
+<pre><code class="lang-text">inset (row by row: out.r = 0.8425 r + 0.0784 g + 0.0792 b, ...)
+    0.842479062253094    0.0784335999999992   0.0792237451477643
+    0.0423282422610123   0.878468636469772    0.0791661274605434
+    0.0423756549057051   0.0784336            0.879142973793104
+
+outset
+    1.19687900512017    -0.0980208811401368  -0.0990297440797205
+   -0.0528968517574562   1.15190312990417    -0.0989611768448433
+   -0.0529716355144438  -0.0980434501171241   1.15107367264116</code></pre>
+
+<h3>The log2 window: 16.5 stops around middle gray</h3>
+
+<p>The curve works on stops, not on light. It takes log2 of each channel and keeps a window from 10 stops below middle gray to 6.5 stops above it. Below the window is black, above it white.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 190" role="img" aria-label="A bar of 16.5 stops. Its left end is 10 stops below 0.18, the value 0.00018, which maps to 0. Its right end is 6.5 stops above 0.18, the value 16.3, which maps to 1. 0.18 sits at 0.606 of the bar, and 1.0 at 0.756. Values below the bar become black, values above it white.">
+    <rect x="20" y="70" width="40" height="34" class="shade"/>
+    <rect x="720" y="70" width="30" height="34" class="lit"/>
+    <rect x="60" y="70" width="660" height="34" class="shader"/>
+    <path d="M100,70V104M140,70V104M180,70V104M220,70V104M260,70V104M300,70V104M340,70V104M380,70V104M420,70V104M500,70V104M540,70V104M580,70V104M620,70V104M660,70V104M700,70V104" class="grid"/>
+    <line x1="460" y1="58" x2="460" y2="116" class="arrow hot thick"/>
+    <line x1="559" y1="58" x2="559" y2="116" class="arrow hot"/>
+
+    <text x="60" y="30" class="mid mono">0.00018</text>
+    <text x="60" y="48" class="mid small">2^−12.47</text>
+    <text x="460" y="30" class="mid mono t-hot">0.18</text>
+    <text x="460" y="48" class="mid small">2^−2.47</text>
+    <text x="559" y="30" class="mid mono">1.0</text>
+    <text x="559" y="48" class="mid small">2^0</text>
+    <text x="710" y="30" class="mid mono">16.3</text>
+    <text x="710" y="48" class="mid small">2^4.03</text>
+
+    <text x="60" y="132" class="mid mono">0</text>
+    <text x="460" y="132" class="mid mono t-hot">0.606</text>
+    <text x="559" y="132" class="mid mono">0.756</text>
+    <text x="710" y="132" class="mid mono">1</text>
+    <text x="40" y="160" class="mid small">black</text>
+    <text x="735" y="160" class="mid small">white</text>
+    <text x="260" y="160" class="mid small">10 stops below middle gray</text>
+    <text x="610" y="160" class="mid small">6.5 above</text>
+    <text x="390" y="182" class="mid small t-faint">top: the value and its log2 · bottom: where it lands in 0 … 1, the curve's input</text>
+  </svg>
+  <figcaption>The window is lopsided on purpose: most of a scene's detail is in the shadows and mid tones. 1.0, the brightest value an SDR image could hold, is only 2.47 stops above middle gray.</figcaption>
+</figure>
+
+<h3>The S-curve</h3>
+
+<p>A sigmoid (an S-shaped curve) on the window's 0 … 1. Flat near the ends, so shadows and highlights fade gently; steep in the middle, which gives the mid tones their contrast.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 262" role="img" aria-label="Plot of the AgX polynomial from 0 to 1. It is flat near 0, steep in the middle and flat near 1. Middle gray at 0.606 maps to 0.497. Scene 1.0 at 0.756 maps to 0.787.">
+    <rect x="80" y="30" width="300" height="200" class="zone"/>
+    <path d="M140,30V230M200,30V230M260,30V230M320,30V230M80,130H380" class="grid"/>
+    <line x1="80" y1="230" x2="380" y2="30" class="arrow dashed"/>
+    <path d="M80,230.5 L92,229.4 L104,228.5 L116,227.6 L128,226.7 L140,225.4 L152,223.4 L164,220.2 L176,215.6 L188,209.3 L200,201.0 L212,190.7 L224,178.5 L236,164.6 L248,149.3 L260,133.1 L272,116.7 L284,100.5 L296,85.1 L308,71.3 L320,59.5 L332,49.9 L344,42.7 L356,37.6 L368,33.9 L380,30.3" class="arrow shader thick"/>
+    <path d="M261.8,230V130.7H80" class="arrow hot dashed"/>
+    <circle cx="261.8" cy="130.7" r="5" class="accent"/>
+    <path d="M306.8,230V72.6H80" class="arrow dashed"/>
+    <circle cx="306.8" cy="72.6" r="5" class="accent"/>
+    <text x="74" y="234" class="end small">0</text>
+    <text x="74" y="134" class="end small t-hot">0.497</text>
+    <text x="74" y="76" class="end small">0.787</text>
+    <text x="74" y="34" class="end small">1</text>
+    <text x="80" y="246" class="mid small">0</text>
+    <text x="261.8" y="246" class="mid small t-hot">0.606</text>
+    <text x="306.8" y="246" class="mid small">0.756</text>
+    <text x="380" y="246" class="mid small">1</text>
+    <text x="230" y="20" class="mid small">curve output (still display-encoded)</text>
+    <text x="230" y="260" class="mid small">position in the log2 window</text>
+
+    <rect x="420" y="30" width="330" height="200" rx="8" class="paper"/>
+    <text x="436" y="54" class="title">The polynomial (fit to Blender's curve)</text>
+    <text x="436" y="80" class="mono small">y = 15.5 x^6 − 40.14 x^5 + 31.96 x^4</text>
+    <text x="436" y="98" class="mono small">  − 6.868 x^3 + 0.4298 x^2 + 0.1191 x</text>
+    <text x="436" y="116" class="mono small">  − 0.00232</text>
+    <text x="436" y="146" class="small">x = 0 gives −0.002: clamped to black later.</text>
+    <text x="436" y="166" class="small">x = 1 gives 0.9986: just under white.</text>
+    <text x="436" y="186" class="small">Steepest near x = 0.62: most contrast</text>
+    <text x="436" y="204" class="small">just above middle gray.</text>
+  </svg>
+  <figcaption>Dashed straight line: no contrast change. The curve's output is a display value with a 2.2 gamma built in, not linear light yet; the last step decodes it.</figcaption>
+</figure>
+
+<h3>The whole curve</h3>
+
+<pre><code class="lang-text">v = inset · max(color, 0)       linear color, after exposure
+v = clamp(log2(max(v, 1e-10)), −12.47393, 4.026069)
+v = (v + 12.47393) / 16.5       window → 0 … 1
+v = curve(v)                    the polynomial
+v = outset · v
+display = saturate(v) ^ 2.2     linear, for an sRGB target</code></pre>
+
+<p>−12.47393 and 4.026069 are log2(0.18) − 10 and log2(0.18) + 6.5. The last step returns linear display light because the target encodes to sRGB on write. A target without that encode would take the curve's output as it is.</p>
+
+<div class="callout warn">
+  <strong>Matrix order</strong>
+  <p>The matrices above are written row by row: <var>out.r</var> is the first row times (r, g, b). In shading languages where a matrix constructor fills columns (GLSL), the same numbers must be written transposed, or the color step mixes the wrong way.</p>
+</div>
+
+<h2 id="frame"><span class="n">6</span>Where it sits in a frame</h2>
+
+<p>Everything before the tone map works on linear HDR light, everything after it on display values from 0 to 1. Tone mapping runs once, in a full-screen pass.</p>
+
+<div class="legend">
+  <span><i class="shader"></i>shader work</span>
+  <span><i class="mem"></i>images</span>
+  <span><i class="gpu"></i>other passes</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Top row, linear HDR: lighting writes an RGBA16F image, HDR effects like bloom, depth of field and motion blur read and write it, then the tone map pass with exposure. Bottom row, display range: effects that want display values, like FXAA and film grain, then the UI, then the swapchain with its sRGB encode.">
+    <text x="20" y="22" class="title">linear light, no upper limit (HDR)</text>
+    <rect x="20"  y="34" width="150" height="58" rx="29" class="shader"/>
+    <text x="95" y="58" class="mid title">lighting</text>
+    <text x="95" y="76" class="mid small">materials, lights</text>
+    <line x1="170" y1="63" x2="196" y2="63" class="arrow" marker-end="url(#ah)"/>
+    <rect x="198" y="34" width="150" height="58" rx="6" class="mem"/>
+    <text x="273" y="58" class="mid title">HDR image</text>
+    <text x="273" y="76" class="mid small">RGBA 16-bit float</text>
+    <line x1="348" y1="63" x2="374" y2="63" class="arrow" marker-end="url(#ah)"/>
+    <rect x="376" y="34" width="170" height="58" rx="6" class="gpu"/>
+    <text x="461" y="58" class="mid title">HDR effects</text>
+    <text x="461" y="76" class="mid small">bloom, depth of field, blur</text>
+    <line x1="546" y1="63" x2="572" y2="63" class="arrow" marker-end="url(#ah)"/>
+    <rect x="574" y="34" width="166" height="58" rx="29" class="shader"/>
+    <rect x="570" y="30" width="174" height="66" rx="33" class="hot"/>
+    <text x="657" y="58" class="mid title">tone map</text>
+    <text x="657" y="76" class="mid small">× exposure, curve</text>
+
+    <path d="M657,96 V122 H120 V148" class="arrow" marker-end="url(#ah)"/>
+    <text x="740" y="140" class="end title">display values, 0 to 1 (LDR)</text>
+    <rect x="20"  y="150" width="200" height="58" rx="6" class="gpu"/>
+    <text x="120" y="174" class="mid title">LDR effects</text>
+    <text x="120" y="192" class="mid small">FXAA, film grain, dithering</text>
+    <line x1="220" y1="179" x2="256" y2="179" class="arrow" marker-end="url(#ah)"/>
+    <rect x="258" y="150" width="180" height="58" rx="6" class="gpu"/>
+    <text x="348" y="174" class="mid title">UI, text</text>
+    <text x="348" y="192" class="mid small">exact colors, no curve</text>
+    <line x1="438" y1="179" x2="474" y2="179" class="arrow" marker-end="url(#ah)"/>
+    <rect x="476" y="150" width="264" height="58" rx="6" class="mem"/>
+    <text x="608" y="174" class="mid title">swapchain, sRGB format</text>
+    <text x="608" y="192" class="mid small">encodes on write → display</text>
+  </svg>
+  <figcaption>Bloom must see values above 1, or every bright spot glows the same. The UI goes after the curve, so a white button is exactly white. The sRGB encode is the very last step, done by the target's format (<a href="color-spaces.html">Color spaces</a>).</figcaption>
+</figure>
+
+<p>The HDR image needs a format that stores values above 1 with enough precision in the dark:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Format</th><th>Bytes per pixel</th><th>Largest value</th><th>Precision</th><th>For HDR?</th></tr>
+  <tr><td><samp>RGBA8 UNORM</samp></td><td>4</td><td>1</td><td>256 even steps</td><td>No: clamps at 1, bands in the dark</td></tr>
+  <tr><td><samp>R11G11B10 float</samp></td><td>4</td><td>about 65000</td><td>6, 6 and 5 mantissa bits, about 1.6 to 3%</td><td>Often: half the memory, but no alpha and no negative values</td></tr>
+  <tr><td><samp>RGBA16 float</samp></td><td>8</td><td>65504</td><td>10 mantissa bits, about 0.1%</td><td><b>The usual choice</b></td></tr>
+  <tr><td><samp>RGBA32 float</samp></td><td>16</td><td>about 3 · 10<sup>38</sup></td><td>23 mantissa bits</td><td>More than needed; twice the bandwidth</td></tr>
+</table>
+</div>
+
+<p>At 1920 × 1080, a 16-bit float RGBA image is 15.8 MiB, twice an 8-bit one (7.9 MiB). Floats keep the same relative precision at every brightness, which suits light: a step in the shadows is as small, relative to the value, as a step in the highlights.</p>
+
+<h2 id="example"><span class="n">7</span>Worked example</h2>
+
+<p>Middle gray, 0.18, with exposure 0 stops, through AgX:</p>
+
+<div class="stats">
+  <div><b>0.18</b><span>after the inset: a gray stays gray</span><small>each row sums to 1</small></div>
+  <div><b>−2.474</b><span>log2</span><small>log2(0.18)</small></div>
+  <div><b>0.606</b><span>place in the window</span><small>(−2.474 + 12.474) / 16.5</small></div>
+  <div><b>0.497</b><span>after the S-curve and the outset</span><small>polynomial at 0.606</small></div>
+  <div><b>0.2145</b><span>linear display light</span><small>0.497 ^ 2.2</small></div>
+  <div><b>0.50 · 128</b><span>sRGB code and byte on screen</span><small>sRGB encode of 0.2145</small></div>
+</div>
+
+<p>So middle gray lands in the middle of the screen's range. The same for scene value 1.0: window 0.756, curve 0.787, linear <b>0.590</b>, code 0.792, byte <b>202</b>. One stop more exposure turns 0.18 into 0.36: linear 0.351, byte 160.</p>
+
+<p>The same values through every curve, as the byte on screen:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Scene value</th><th>Clip</th><th>Reinhard</th><th>ACES fit</th><th>AgX</th></tr>
+  <tr><td>0.01</td><td>25</td><td>25</td><td>12</td><td>18</td></tr>
+  <tr><td>0.18</td><td>118</td><td>109</td><td>141</td><td>128</td></tr>
+  <tr><td>1</td><td>255</td><td>188</td><td>232</td><td>202</td></tr>
+  <tr><td>4</td><td>255</td><td>231</td><td>252</td><td>239</td></tr>
+  <tr><td>16</td><td>255</td><td>248</td><td>255</td><td>254</td></tr>
+</table>
+</div>
+
+<p>Read it by column. Clip spends all its range below 1. Reinhard keeps the brights apart but makes 0.18 darker than without any curve. The ACES fit has the most contrast and crushes the shadows (0.01 → byte 12). AgX sits between them.</p>
+
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>The image is flat, gray and too dark in the brights</dt><dd>Tone mapping twice: a material shader applies a curve, and the final pass applies another. Tone map once, in one pass; material shaders write unbounded linear light.</dd></div>
+  <div><dt>Wrong contrast, colors look odd</dt><dd>Tone mapping values that are already sRGB-encoded. The curve expects linear light: run it before the encode, and decode any sRGB input first.</dd></div>
+  <div><dt>UI looks dim or tinted; text is gray instead of white</dt><dd>The UI was drawn into the HDR image and went through the curve (AgX maps 1.0 to byte 202). Draw the UI after the tone map, onto the display image.</dd></div>
+  <div><dt>Bright areas are flat white even with a curve</dt><dd>An 8-bit or UNORM target between lighting and the tone map clamped the values to 1. Every image before the tone map, including post passes, must be float.</dd></div>
+  <div><dt>Bloom glows the same around every light</dt><dd>Bloom runs after the tone map, on values that stop at 1. Run it on the HDR image.</dd></div>
+  <div><dt>Bright saturated lights change hue</dt><dd>A per-channel curve (<a href="#color">section 4</a>). Use a curve with a color step like AgX, or tone map a luminance and keep the color ratios.</dd></div>
+  <div><dt>Transparent edges or blended UI look wrong</dt><dd>The curve was applied to alpha, or to colors already multiplied by alpha. Alpha is coverage, not light: pass it through, or write 1 for the final image.</dd></div>
+  <div><dt>The whole image pumps brighter and darker</dt><dd>Automatic exposure that adapts too fast. Smooth it over time.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p>RASM draws the scene into a 16-bit float target and maps it to the swapchain in one pass, <code>Tone Map</code>, with AgX in its minimal form. The default frame of <code>Engine::render</code> builds it as a <a href="render-graphs.html">render graph</a>:</p>
+
+<div class="legend">
+  <span><i class="gpu"></i>graph passes</span>
+  <span><i class="mem"></i>images</span>
+  <span><i class="shader"></i>shader steps</span>
+  <span><i class="cpu"></i>the application</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Renderer::render creates the graph target scene_hdr: R16G16B16A16_SFLOAT color with D32_SFLOAT depth, cleared to 0.018 gray. The scene passes Cull 1, Scene 1, Hi-Z, Cull 2 and Scene 2 draw into it. The Tone Map pass reads its color, multiplies by the camera's exposure, applies AgX and a 2.2 power, and writes the swapchain, B8G8R8A8_SRGB, which encodes to sRGB. After the graph, endFrame draws the stats overlay onto the swapchain without tone mapping, then presents. setCameraExposure changes the factor the pass reads.">
+    <text x="20" y="22" class="title t-gpu">the graph of Engine::render, every frame</text>
+    <rect x="20" y="34" width="230" height="64" rx="6" class="gpu"/>
+    <text x="135" y="56" class="mid title">scene passes</text>
+    <text x="135" y="74" class="mid mono small">Cull 1, Scene 1, Hi-Z,</text>
+    <text x="135" y="90" class="mid mono small">Cull 2, Scene 2</text>
+    <line x1="250" y1="66" x2="286" y2="66" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="288" y="34" width="190" height="64" rx="6" class="mem"/>
+    <text x="383" y="56" class="mid mono">scene_hdr</text>
+    <text x="383" y="74" class="mid mono small">R16G16B16A16_SFLOAT</text>
+    <text x="383" y="90" class="mid small">+ D32_SFLOAT depth</text>
+    <line x1="478" y1="66" x2="514" y2="66" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="516" y="34" width="224" height="64" rx="6" class="gpu"/>
+    <rect x="512" y="30" width="232" height="72" rx="8" class="hot"/>
+    <text x="628" y="56" class="mid mono">Tone Map</text>
+    <text x="628" y="74" class="mid small">reads color 0,</text>
+    <text x="628" y="90" class="mid small">writes the swapchain</text>
+
+    <text x="20" y="130" class="title t-shader">toneMap.slang, per pixel</text>
+    <rect x="20"  y="140" width="130" height="50" rx="25" class="shader"/>
+    <text x="85" y="161" class="mid small">sample source</text>
+    <text x="85" y="177" class="mid small">(bindless)</text>
+    <line x1="150" y1="165" x2="166" y2="165" class="arrow" marker-end="url(#ah)"/>
+    <rect x="168" y="140" width="130" height="50" rx="25" class="shader"/>
+    <text x="233" y="161" class="mid small">× exposure</text>
+    <text x="233" y="177" class="mid small">(push constant)</text>
+    <line x1="298" y1="165" x2="314" y2="165" class="arrow" marker-end="url(#ah)"/>
+    <rect x="316" y="140" width="130" height="50" rx="25" class="shader"/>
+    <text x="381" y="161" class="mid small">agx: inset, log2,</text>
+    <text x="381" y="177" class="mid small">curve, outset</text>
+    <line x1="446" y1="165" x2="462" y2="165" class="arrow" marker-end="url(#ah)"/>
+    <rect x="464" y="140" width="110" height="50" rx="25" class="shader"/>
+    <text x="519" y="161" class="mid small">^ 2.2,</text>
+    <text x="519" y="177" class="mid small">alpha = 1</text>
+    <line x1="574" y1="165" x2="590" y2="165" class="arrow" marker-end="url(#ah)"/>
+    <rect x="592" y="140" width="148" height="50" rx="6" class="mem"/>
+    <text x="666" y="161" class="mid mono small">B8G8R8A8_SRGB</text>
+    <text x="666" y="177" class="mid small">encodes on write</text>
+
+    <text x="20" y="222" class="title">after the graph: Engine::endFrame</text>
+    <rect x="20" y="232" width="300" height="50" rx="6" class="gpu"/>
+    <text x="170" y="253" class="mid mono small">drawStatsOverlay</text>
+    <text x="170" y="270" class="mid small">onto the swapchain, not tone mapped</text>
+    <line x1="320" y1="257" x2="356" y2="257" class="arrow" marker-end="url(#ah)"/>
+    <rect x="358" y="232" width="120" height="50" rx="6" class="box"/>
+    <text x="418" y="262" class="mid">present</text>
+
+    <rect x="516" y="232" width="224" height="50" rx="6" class="cpu"/>
+    <text x="628" y="253" class="mid mono small">setCameraExposure(camera, e)</text>
+    <text x="628" y="270" class="mid small">read by the pass when it runs</text>
+    <path d="M628,232 V203 H233 V192" class="arrow cpu dashed" marker-end="url(#ah-cpu)"/>
+
+    <text x="20" y="310" class="small">scene_hdr is cleared to BACKGROUND_COLOR, 0.018 linear gray, which also goes through the curve: byte 33 on screen.</text>
+    <text x="20" y="326" class="small">Without occlusion culling the scene passes are just Cull and Scene.</text>
+  </svg>
+  <figcaption>The graph is built once per view and kept; the exposure is read inside the pass's record function, so changing it costs nothing. Applications with their own graph add the pass themselves with <a href="../api/engine.html#addToneMapPass"><code>Engine::addToneMapPass</code></a>, after any HDR post passes.</figcaption>
+</figure>
+
+<p>An application that builds its own graph, as <code>examples/06_shadows</code> does with a post pass in between:</p>
+
+<pre><code>const rasm::RenderTargetHandle sceneTarget = graph.createRenderTarget({
+    .name = "scene_rt",
+    .swapchainScale = 1.0f,
+    .colorFormats = {rasm::SCENE_COLOR_FORMAT},
+    .depthFormat = rasm::Format::D32_SFLOAT,
+});
+if (!engine.addScenePasses(graph, scene, camera, sceneTarget))
+    return 1;
+if (!engine.addToneMapPass(graph, sceneTarget, camera))
+    return 1;
+graph.compile();
+
+engine.setCameraExposure(camera, 2.0f);</code></pre>
+
+<p><code>2.0f</code> is one stop brighter. In <code>examples/06_shadows</code> the Post pass (a vignette) reads <samp>scene_rt</samp> and writes <samp>post_rt</samp>, also <code>SCENE_COLOR_FORMAT</code>, and the tone map reads <samp>post_rt</samp>. Its Inset pass then draws the shadow map's raw depths in a corner of the swapchain, after the tone map, so the curve does not change them. <code>examples/01_render_graph</code> draws an unlit bunny into an HDR target and has no tone-map pass: its unlit colors are already in display range.</p>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Curve</td><td>clip, Reinhard, ACES fit, AgX</td><td>AgX only, the minimal form: Blender's matrices, the 16.5-stop window and the polynomial fit (<code>AGX_INSET</code>, <code>AGX_OUTSET</code>, <code>AGX_MIN_EV</code>, <code>AGX_MAX_EV</code>, <code>agxContrast</code>). No choice of curve, and none of Blender's "looks".</td></tr>
+  <tr><td>Exposure</td><td>manual, automatic, physical camera</td><td>Manual only, per camera: <code>Camera::exposure</code>, a <b>linear factor</b> (not stops), 1 by default. <a href="../api/camera.html#setCameraExposure"><code>Engine::setCameraExposure</code></a> logs an error and keeps the old value for zero or a negative value. No automatic exposure, no EV100.</td></tr>
+  <tr><td>What goes through the curve</td><td>the lit scene</td><td>Everything in the source target: PBR materials, <b>unlit materials</b> and the clear color. So an unlit white (1.0) shows as byte 202, not 255.</td></tr>
+  <tr><td>HDR format</td><td>RGBA 16-bit float</td><td><code>SCENE_COLOR_FORMAT</code>, <code>R16G16B16A16_SFLOAT</code>. <code>Engine::addScenePasses</code> takes no other color format; its only other choice is a depth-only target, for shadows.</td></tr>
+  <tr><td>Where it sits</td><td>after HDR effects, before UI and the encode</td><td>The last pass of the default graph; no HDR effects are built in (an app adds its own before the pass). The stats overlay draws after it, not tone mapped, and so do debug views like the shadow-map inset of <code>examples/06_shadows</code>. The swapchain encodes.</td></tr>
+  <tr><td>Display decode</td><td>power 2.2, then the target's sRGB encode</td><td>The same: <code>pow(saturate(v), 2.2)</code>, then <code>B8G8R8A8_SRGB</code>. The two curves differ near black: a curve output of 0.05 shows as code 0.018.</td></tr>
+  <tr><td>Alpha</td><td>pass through, or 1</td><td>The pass writes 1.</td></tr>
+  <tr><td>Display</td><td>SDR or HDR displays</td><td>SDR only: an 8-bit sRGB swapchain. No HDR10 or scRGB output.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The curve</td><td><code>agx</code>, <code>agxContrast</code> and the constants in <code>shaders/passes/toneMap.slang</code>; <code>fragMain</code> multiplies by <code>exposure</code> first</td></tr>
+  <tr><td>The pass</td><td><code>Engine::addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code>: checks the camera and the source and adds <code>Tone Map</code> with <code>read</code> of the source and <code>writeSwapchain</code>. The pass creates <code>toneMapPipeline</code> the first time it runs; on a shader error it draws nothing and tries again next frame.</td></tr>
+  <tr><td>Push constants</td><td><code>gfx::ToneMapPushConstants</code> in <code>src/renderer/uberMaterialTypes.h</code> and <code>ToneMapPushConstants</code> in <code>shaders/passes/toneMap.slang</code>: <code>source</code> (bindless index), <code>exposure</code>. <code>validateRasmStructs</code> in <code>src/renderer/shaderCompiler.cpp</code> compares them.</td></tr>
+  <tr><td>The default frame</td><td><code>Renderer::render</code> in <code>src/renderer/renderer.cpp</code>: the <samp>scene_hdr</samp> target, cleared to <code>BACKGROUND_COLOR</code> (<code>src/renderer/renderer.h</code>)</td></tr>
+  <tr><td>The HDR format</td><td><code>SCENE_COLOR_FORMAT</code> in <code>include/rasm/engine.h</code>; checked in <code>Engine::addScenePasses</code>, <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Exposure</td><td><code>Camera::exposure</code> in <code>include/rasm/camera.h</code>; <code>Engine::setCameraExposure</code>, <code>Engine::getCameraExposure</code> in <code>src/scene/camera.cpp</code></td></tr>
+  <tr><td>Material output</td><td><code>shadePBR</code> in <code>shaders/lib/pbr.slang</code> and <code>shadeUnlit</code> in <code>shaders/lib/unlit.slang</code>: linear, no curve</td></tr>
+  <tr><td>After the tone map</td><td><code>drawStatsOverlay</code> in <code>src/renderer/statsOverlay.cpp</code>, from <code>Engine::endFrame</code> in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Examples</td><td><code>examples/06_shadows/main.cpp</code> (scene → Post → tone map → Inset); <code>examples/01_render_graph/main.cpp</code> (HDR target, no tone map)</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Tone map once. <code>shadePBR</code> and <code>shadeUnlit</code> return unbounded linear light; no material shader applies a curve.</li>
+    <li>Every target between the scene passes and <code>Tone Map</code> is <code>SCENE_COLOR_FORMAT</code>, post passes too, or the values clamp at 1 before the curve.</li>
+    <li>The shader returns linear display light and relies on the sRGB swapchain to encode. It never applies the sRGB curve itself.</li>
+    <li>The C++ and Slang <code>ToneMapPushConstants</code> keep the same name and layout: <code>validateRasmStructs</code> finds the shader's struct by its name, and the <code>static_assert</code>s in <code>uberMaterialTypes.h</code> pin the C++ side.</li>
+    <li>UI and debug overlays draw after <code>Tone Map</code>, onto the swapchain.</li>
+    <li>A change to the curve's matrices, window or polynomial changes the labs on this page too (<code>docs/assets/labs/tone-mapping.js</code> copies them).</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Troy Sobotka, AgX: the original design and its notes on "display rendering" (github.com/sobotka/AgX); Blender 4.0 manual, "Color Management".</li>
+  <li>Benjamin Wrensch, "Minimal AgX implementation" (iolite engine blog, 2023): the matrices and the polynomial fit used here.</li>
+  <li>Krzysztof Narkowicz, "ACES Filmic Tone Mapping Curve" (2016): the ACES fit.</li>
+  <li>Erik Reinhard, Michael Stark, Peter Shirley, James Ferwerda, "Photographic Tone Reproduction for Digital Images", SIGGRAPH 2002.</li>
+  <li>Sébastien Lagarde, Charles de Rousiers, "Moving Frostbite to Physically Based Rendering" (SIGGRAPH 2014 course): physical light units and camera exposure.</li>
+  <li>John Hable, "Filmic Tonemapping Operators" (2010): the Uncharted 2 curve.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

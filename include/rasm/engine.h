@@ -33,9 +33,10 @@ namespace rasm
     struct FrameStatsCollector;
     struct StatsOverlay;
 
-    constexpr uint32_t MAX_MATERIALS    = 256;
-    constexpr uint32_t MAX_CAMERAS      = 8;
-    constexpr uint32_t MAX_GPU_TIMERS   = 16;
+    constexpr uint32_t MAX_MATERIALS        = 256;
+    constexpr uint32_t MAX_CAMERAS          = 8;
+    constexpr uint32_t MAX_GPU_TIMERS       = 16;
+    constexpr Format   SCENE_COLOR_FORMAT   = Format::R16G16B16A16_SFLOAT;
 
     struct GpuTimer
     {
@@ -99,6 +100,7 @@ namespace rasm
         Transform                   getCameraTransform(CameraHandle camera);
         CameraProjection            getCameraProjection(CameraHandle camera);
         CameraController            getCameraController(CameraHandle camera);
+        float                       getCameraExposure(CameraHandle camera);
         glm::mat4                   getProjectionMatrix(CameraHandle camera);
         // The camera's projection fitted to another aspect ratio. The camera itself does not change.
         glm::mat4                   getProjectionMatrix(CameraHandle camera, float aspect);
@@ -109,6 +111,7 @@ namespace rasm
         void                        setCameraTransform(CameraHandle camera, Transform transform);
         void                        setCameraProjection(CameraHandle camera, CameraProjection projection);
         void                        setCameraController(CameraHandle camera, CameraController controller);
+        void                        setCameraExposure(CameraHandle camera, float exposure);
         // Returns false when the frame must be skipped (minimized, swapchain out of date); then do not
         // record anything or call endFrame.
         [[nodiscard]] bool          beginFrame(CameraHandle camera);
@@ -117,7 +120,8 @@ namespace rasm
         void                        beginPass(const std::string& name = "Pass", const AttachmentOps& ops = {});
         void                        endPass();
         void                        render(SceneHandle scene, CameraHandle camera);
-        bool                        addScenePasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget = {}, const SceneShadow& shadow = {});
+        bool                        addScenePasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, const SceneShadow& shadow = {});
+        bool                        addToneMapPass(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera);
         bool                        running() const;
         bool                        recreateSwapchain();
         void                        setRenderTarget(const RenderTargetHandle& renderTarget);
@@ -186,6 +190,7 @@ namespace rasm
         std::unique_ptr<FrameStatsCollector>                        frameStats                              = {};
         std::unique_ptr<StatsOverlay>                               statsOverlay                            = {};
         std::unique_ptr<Renderer>                                   renderer                                = {};
+        PipelineHandle                                              toneMapPipeline                         = {};
         RenderContext                                               ctx;
         std::unique_ptr<ShaderCompiler>                             shaderCompiler                          = {};
         HandleManager                                               handleManager                           = {};

@@ -1947,7 +1947,7 @@
     <text x="609" y="184" class="mid small t-hot">depth → attachment</text>
     <text x="10" y="212" class="small">Orange: barriers between passes, from what each pass declares. "barrier" in a box: one between two dispatches.</text>
   </svg>
-  <figcaption>Each box has its own GPU timer in the <a href="gpu-timing.html">frame stats</a>. <code>Scene 1</code> stores its depth because <code>Hi-Z</code> reads it (<code>PassBuilder::readDepth</code>, or <code>readSwapchainDepth</code> for the swapchain) and <code>Scene 2</code> loads it, so the early draws stay. In a frame whose <code>hizLevelCount</code> is 0, <code>Hi-Z</code>, <code>Cull 2</code> and <code>Scene 2</code> record nothing. With async compute on, the frame is four batches: compute <code>Cull 1</code>, graphics <code>Scene 1</code>, compute <code>Hi-Z</code> and <code>Cull 2</code>, graphics <code>Scene 2</code>. A barrier between two passes on different queues becomes a semaphore wait at the start of a batch; the layout transitions are still recorded, on the queue of the pass that needs them (<a href="render-graphs.html#rasm-queues">render graphs</a>).</figcaption>
+  <figcaption>Each box has its own GPU timer in the <a href="gpu-timing.html">frame stats</a>. <code>Scene 1</code> stores its depth because <code>Hi-Z</code> reads it (<code>PassBuilder::readDepth</code>) and <code>Scene 2</code> loads it, so the early draws stay. In a frame whose <code>hizLevelCount</code> is 0, <code>Hi-Z</code>, <code>Cull 2</code> and <code>Scene 2</code> record nothing. With async compute on, the frame is four batches: compute <code>Cull 1</code>, graphics <code>Scene 1</code>, compute <code>Hi-Z</code> and <code>Cull 2</code>, graphics <code>Scene 2</code> with the passes after it (<code>Tone Map</code>). A barrier between two passes on different queues becomes a semaphore wait at the start of a batch; the layout transitions are still recorded, on the queue of the pass that needs them (<a href="render-graphs.html#rasm-queues">render graphs</a>).</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -1985,8 +1985,8 @@
   <tr><td>When to occlusion-cull this frame</td><td><code>Engine::prepareSceneView</code> (sets <code>hizLevelCount</code>)</td></tr>
   <tr><td>Early and late dispatches</td><td><code>Engine::recordSceneCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Hi-Z dispatches</td><td><code>Engine::recordHiz</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Depth stored, moved to <code>SAMPLED</code></td><td><code>RenderGraph::assignAttachmentOps</code>, <code>PassBuilder::readDepth</code>, <code>PassBuilder::readSwapchainDepth</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
-  <tr><td>Depth sampleable</td><td><code>Engine::createSwapchainResources</code> in <code>src/engine.cpp</code>; <code>RenderContext::createAttachments</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Depth stored, moved to <code>SAMPLED</code></td><td><code>RenderGraph::assignAttachmentOps</code>, <code>PassBuilder::readDepth</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>Depth sampleable</td><td><code>RenderContext::createAttachments</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>Switch</td><td><code>EngineConfig::occlusionCulling</code> in <code>include/rasm/types.h</code></td></tr>
   <tr><td>Shader inputs</td><td><code>hizPtr</code>, <code>visibilityPtr</code>, <code>hizLevelCount</code>, <code>depthTexture</code>, <code>viewportWidth</code>, <code>viewportHeight</code> in <code>SceneData</code> (<code>shaders/lib/core.slang</code>)</td></tr>
 </table>

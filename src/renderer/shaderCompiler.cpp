@@ -129,6 +129,14 @@ namespace rasm
                 }
             }
 
+            // The tone-map pass has its own push constants.
+            if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "ToneMapPushConstants") == 0)
+            {
+                return validateStruct(pushConstants, "ToneMapPushConstants", sizeof(gfx::ToneMapPushConstants),
+                                      {{"source", offsetof(gfx::ToneMapPushConstants, source)},
+                                       {"exposure", offsetof(gfx::ToneMapPushConstants, exposure)}});
+            }
+
             // Custom pipelines bring their own push constants and do not share core.slang.
             auto scene = fieldStruct(pushConstants, "scene");
             if (!scene || std::strcmp(scene->getName(), "SceneData") != 0)

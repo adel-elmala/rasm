@@ -87,6 +87,7 @@ namespace rasm
         CameraController    controller;
         Transform           transform;       // current (rendered) camera transform
         Transform           targetTransform; // desired transform, eased toward each frame
+        float               exposure        = 1.0f;
     };
 
 }
