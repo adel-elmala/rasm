@@ -182,9 +182,11 @@ namespace rasm
                                      {"viewportHeight", offsetof(gfx::SceneData, viewportHeight)},
                                      {"lodErrorPixels", offsetof(gfx::SceneData, lodErrorPixels)},
                                      {"forcedLod", offsetof(gfx::SceneData, forcedLod)},
-                                     {"shadowTexture", offsetof(gfx::SceneData, shadowTexture)},
-                                     {"shadowMatrix", offsetof(gfx::SceneData, shadowMatrix)},
+                                     {"shadowCascadeCount", offsetof(gfx::SceneData, shadowCascadeCount)},
                                      {"shadowLight", offsetof(gfx::SceneData, shadowLight)},
+                                     {"shadowSplits", offsetof(gfx::SceneData, shadowSplits)},
+                                     {"shadowMatrices", offsetof(gfx::SceneData, shadowMatrices)},
+                                     {"shadowTextures", offsetof(gfx::SceneData, shadowTextures)},
                                      {"lodPixelsPerUnit", offsetof(gfx::SceneData, lodPixelsPerUnit)},
                                      {"lodDepthPlane", offsetof(gfx::SceneData, lodDepthPlane)}});
 

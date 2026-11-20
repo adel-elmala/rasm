@@ -16,6 +16,9 @@ static const uint MAX_VERTEX_UV_SETS = 3;
 // Must match rasm::MAX_MESH_LODS.
 static const uint MAX_MESH_LODS = 8;
 
+// Must match rasm::MAX_SHADOW_CASCADES.
+static const uint MAX_SHADOW_CASCADES = 4;
+
 struct VertexFull       { float3 pos; float3 normal; float2 uv[MAX_VERTEX_UV_SETS]; float4 tangent; };
 struct VertexPosOnly    { float3 pos; };
 
@@ -143,9 +146,11 @@ struct SceneData
     uint32_t            viewportHeight;
     float               lodErrorPixels;     // culling picks the coarsest LOD whose error stays under this on screen
     int32_t             forcedLod;          // >= 0: every draw uses this LOD (or its mesh's coarsest), for debugging
-    uint32_t            shadowTexture;      // bindless index of the shadow map's depth, INVALID_TEXTURE_INDEX without one
-    float4x4            shadowMatrix;       // world to the shadow map's clip space: the light camera's projection * view
-    int32_t             shadowLight;        // index in lights of the light the shadow map darkens, -1 without one
+    uint32_t            shadowCascadeCount; // 0: no shadow
+    int32_t             shadowLight;        // index in lights of the light the shadow darkens, -1 without one
+    float4              shadowSplits;       // the view depth where each cascade ends; the last one is the shadow's distance
+    float4x4            shadowMatrices[MAX_SHADOW_CASCADES]; // world to each cascade's clip space: its projection * view
+    uint32_t            shadowTextures[MAX_SHADOW_CASCADES]; // bindless index of each cascade's depth
     float               lodPixelsPerUnit;   // the LOD camera's pixels per world unit at view depth 1 (lodSelection.slang)
     float4              lodDepthPlane;      // dot(lodDepthPlane, float4(p, 1)) is p's view depth from the LOD camera; 0 if orthographic
 };

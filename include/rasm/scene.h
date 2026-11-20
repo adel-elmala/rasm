@@ -17,6 +17,7 @@ namespace rasm
     constexpr uint32_t  MAX_LIGHTS_PER_SCENE        = MAX_LIGHTS;
     constexpr uint32_t  MAX_SCENES                  = 16;
     constexpr uint32_t  MAX_SCENE_VIEWS             = 8;
+    constexpr uint32_t  MAX_SHADOW_CASCADES         = 4;
 
     struct Scene
     {
@@ -26,11 +27,22 @@ namespace rasm
         std::vector<LightHandle>    lights;
     };
 
+    struct ShadowDesc
+    {
+        LightHandle                 light;
+        uint32_t                    cascadeCount                        = 4;
+        uint32_t                    size                                = 2048;
+        float                       distance                            = 50.0f;
+        float                       splitLambda                         = 0.7f;
+    };
+
     struct SceneShadow
     {
-        CameraHandle                camera;
-        RenderTargetHandle          renderTarget;
         LightHandle                 light;
+        RenderTargetHandle          cascades[MAX_SHADOW_CASCADES]       = {};
+        uint32_t                    cascadeCount                        = 0;
+        float                       distance                            = 0.0f;
+        float                       splitLambda                         = 0.0f;
 
         bool                        operator==(const SceneShadow&) const = default;
     };

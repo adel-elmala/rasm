@@ -9,23 +9,21 @@
 #include <vector>
 
 // Shadow, forward, post and tone-map passes in one render graph, with no hand-written barrier: every pass declares
-// what it reads and writes, and the graph orders the passes and moves the shadow map between depth attachment and
-// sampled.
+// what it reads and writes, and the graph orders the passes and moves the shadow cascades between depth attachment
+// and sampled. The sun's shadow is four cascades that follow the camera: sharp near it, and still there far away.
 
 namespace
 {
     // Must match PushConstants in the inset shader below.
     struct InsetPushConstants
     {
-        uint32_t shadowDepth;
-        float screenHeight;
+        uint32_t cascades[rasm::MAX_SHADOW_CASCADES];
     };
 }
 
 namespace
 {
-    constexpr uint32_t SHADOW_MAP_SIZE = 2048;
-    constexpr float SHADOW_EXTENT = 14.0f; // half the side of the square the light camera sees
+    constexpr uint32_t CASCADE_COUNT = 4;
 
     rasm::MeshHandle createCube(rasm::Engine &engine)
     {
@@ -94,7 +92,7 @@ int main()
     const rasm::MaterialHandle warm = createColorMaterial(engine, glm::vec3(0.9f, 0.5f, 0.25f), 0.5f);
     const rasm::MaterialHandle cool = createColorMaterial(engine, glm::vec3(0.25f, 0.5f, 0.9f), 0.4f);
 
-    engine.addEntityToScene(scene, engine.createEntity("ground", cube, ground, makeTransform(glm::vec3(0.0f, -0.25f, 0.0f), glm::vec3(24.0f, 0.5f, 24.0f))));
+    engine.addEntityToScene(scene, engine.createEntity("ground", cube, ground, makeTransform(glm::vec3(0.0f, -0.25f, 0.0f), glm::vec3(120.0f, 0.5f, 120.0f))));
     // The bunny's vertices are centered on its origin and reach 247.6 below it, so it is lifted to stand on the ground.
     engine.addEntityToScene(scene, engine.createEntity("bunny", bunnyMesh, warm, makeTransform(glm::vec3(0.0f, 247.6f * 0.01f, 0.0f), glm::vec3(0.01f))));
     for (int i = 0; i < 4; ++i)
@@ -103,6 +101,15 @@ int main()
         const float height = 1.5f + static_cast<float>(i);
         const glm::vec3 position(std::cos(angle) * 6.0f, height * 0.5f, std::sin(angle) * 6.0f);
         engine.addEntityToScene(scene, engine.createEntity("pillar", cube, cool, makeTransform(position, glm::vec3(1.0f, height, 1.0f))));
+    }
+    // Rows of pillars far behind the bunny, so the far cascades have shadows to show.
+    for (int row = 0; row < 4; ++row)
+    {
+        for (int column = -3; column <= 3; ++column)
+        {
+            const glm::vec3 position(static_cast<float>(column) * 6.0f, 2.0f, -14.0f - static_cast<float>(row) * 10.0f);
+            engine.addEntityToScene(scene, engine.createEntity("far pillar", cube, cool, makeTransform(position, glm::vec3(1.0f, 4.0f, 1.0f))));
+        }
     }
     rasm::EntityHandle spinner = engine.createEntity("spinner", cube, warm, makeTransform(glm::vec3(3.0f, 4.0f, 3.0f), glm::vec3(1.5f)));
     engine.addEntityToScene(scene, spinner);
@@ -127,30 +134,11 @@ int main()
     const rasm::LightHandle sun = engine.createLight(rasm::LightType::DIRECTIONAL, glm::vec3(1.0f, 0.95f, 0.85f), glm::vec3(0.0f), lightDirection, 4.0f, 0.0f);
     engine.addLightToScene(scene, sun);
 
-    // The shadow map is the light's view of the scene: an orthographic camera looking along the light, far enough
-    // back that the whole scene is in front of its near plane.
-    rasm::CameraHandle lightCamera = engine.createCamera(rasm::CameraProjection{.type = rasm::CameraProjection::Type::ORTHOGRAPHIC,
-                                                                                .orthographic{.left = -SHADOW_EXTENT,
-                                                                                              .right = SHADOW_EXTENT,
-                                                                                              .bottom = -SHADOW_EXTENT,
-                                                                                              .top = SHADOW_EXTENT,
-                                                                                              .nearZ = 0.1f,
-                                                                                              .farZ = 60.0f}},
-                                                         rasm::Transform{-lightDirection * 30.0f,
-                                                                         glm::quatLookAt(lightDirection, glm::vec3(0.0f, 1.0f, 0.0f)),
-                                                                         glm::vec3(1.0f)});
-    if (!camera.isValid() || !lightCamera.isValid() || !sun.isValid())
+    if (!camera.isValid() || !sun.isValid())
         return 1;
 
     rasm::RenderGraph graph = engine.createRenderGraph();
 
-    // Depth only: the shadow passes draw just depth, and later passes sample it.
-    const rasm::RenderTargetHandle shadowMap = graph.createRenderTarget({
-        .name = "shadow_map",
-        .width = SHADOW_MAP_SIZE,
-        .height = SHADOW_MAP_SIZE,
-        .depthFormat = rasm::Format::D32_SFLOAT,
-    });
     const rasm::RenderTargetHandle sceneTarget = graph.createRenderTarget({
         .name = "scene_rt",
         .swapchainScale = 1.0f,
@@ -165,14 +153,13 @@ int main()
         .depthFormat = rasm::Format::D32_SFLOAT,
     });
 
-    // 1. Shadow: the scene from the light camera, into the depth-only target.
-    // 2. Forward: the scene from the camera, shaded with that shadow map, which darkens the sun. Its passes read the
-    //    map, so they run after.
-    if (!engine.addScenePasses(graph, scene, lightCamera, shadowMap) ||
-        !engine.addScenePasses(graph, scene, camera, sceneTarget, rasm::SceneShadow{.camera = lightCamera, .renderTarget = shadowMap, .light = sun}))
-    {
+    // 1. Shadow: the scene from the sun, depth only, once per cascade. Each cascade covers a slice of the camera's
+    //    view, out to 60 units from it.
+    // 2. Forward: the scene from the camera, shaded with those cascades, which darken the sun. Its passes read the
+    //    cascades, so they run after.
+    const rasm::SceneShadow shadow = engine.addShadowPasses(graph, scene, camera, rasm::ShadowDesc{.light = sun, .cascadeCount = CASCADE_COUNT, .size = 2048, .distance = 60.0f, .splitLambda = 0.7f});
+    if (shadow.cascadeCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTarget, shadow))
         return 1;
-    }
 
     // 3. Post: a vignette over the forward image. It stays in HDR.
     auto postPipeline = engine.createPipeline("post", R"(
@@ -237,7 +224,8 @@ int main()
     if (!engine.addToneMapPass(graph, postTarget, camera))
         return 1;
 
-    // 5. Inset: the shadow map in the bottom-left corner, over the tone-mapped image, so it shows the raw depths.
+    // 5. Inset: the cascades in a row in the top-left corner, nearest first, over the tone-mapped image, so it shows
+    //    their raw depths.
     auto insetPipeline = engine.createPipeline("inset", R"(
         [shader("vertex")]
         float4 vertMain(uint vertexID : SV_VertexID) : SV_POSITION
@@ -251,22 +239,33 @@ int main()
 
         struct PushConstants
         {
-            uint shadowDepth;
-            float screenHeight;
+            uint cascades[4];
         };
 
         [[vk::push_constant]]
         ConstantBuffer<PushConstants> pc;
 
+        static const float INSET_SIZE = 160.0;
+        static const float GAP = 8.0;
+
         [shader("fragment")]
         float4 fragMain(float4 pixel : SV_POSITION) : SV_TARGET
         {
-            float insetSize = pc.screenHeight * 0.3;
-            float2 inset = (pixel.xy - float2(16.0, pc.screenHeight - 16.0 - insetSize)) / insetSize;
+            float2 position = (pixel.xy - 16.0) / (INSET_SIZE + GAP);
+            if (position.x < 0.0 || position.x >= 4.0)
+                discard;
+            int cascade = int(position.x);
+            float2 inset = (position - float2(cascade, 0.0)) * (INSET_SIZE + GAP) / INSET_SIZE;
             if (any(inset < 0.0) || any(inset > 1.0))
                 discard;
-            // Reversed-Z: near the light is white.
-            float depth = gTextures[pc.shadowDepth].Sample(inset).r;
+            // Reversed-Z: near the light is white. Each cascade's index is a constant element of the push constants.
+            float depth = 0.0;
+            [unroll]
+            for (int i = 0; i < 4; ++i)
+            {
+                if (i == cascade)
+                    depth = gTextures[pc.cascades[i]].SampleLevel(inset, 0.0).r;
+            }
             return float4(depth.xxx, 1.0);
         }
     )");
@@ -277,14 +276,16 @@ int main()
         "Inset",
         [&](rasm::PassBuilder &builder)
         {
-            builder.readDepth(shadowMap);
+            for (uint32_t i = 0; i < CASCADE_COUNT; ++i)
+                builder.readDepth(shadow.cascades[i]);
             builder.writeSwapchain();
         },
         [&](rasm::RenderContext &ctx)
         {
             auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
-            const InsetPushConstants pushConstants = {.shadowDepth = engine.getBindlessTextureIndex(engine.getRenderTargetDepthTexture(shadowMap)),
-                                                      .screenHeight = static_cast<float>(ctx.getSwapchainExtent().y)};
+            InsetPushConstants pushConstants = {};
+            for (uint32_t i = 0; i < CASCADE_COUNT; ++i)
+                pushConstants.cascades[i] = engine.getBindlessTextureIndex(engine.getRenderTargetDepthTexture(shadow.cascades[i]));
             ctx.bindPipeline(commandBuffer, insetPipeline);
             ctx.bindDescriptorSet(commandBuffer, insetPipeline, engine.getBindlessDescriptorSet(), 0);
             ctx.pushConstants(commandBuffer, insetPipeline, rasm::ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);

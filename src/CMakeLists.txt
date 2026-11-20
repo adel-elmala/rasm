@@ -43,6 +43,7 @@ target_sources(rasm PRIVATE
     "renderer/renderGraph.cpp"
     "renderer/renderer.cpp"
     "renderer/shaderCompiler.cpp"
+    "renderer/shadowCascades.cpp"
     "renderer/statsOverlay.cpp"
     "renderer/toneMap.cpp"
     "rhi/device.cpp"
