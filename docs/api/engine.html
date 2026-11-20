@@ -43,7 +43,7 @@
   <tr><td><a href="#beginFrame"><code>beginFrame</code></a> / <a href="#endFrame"><code>endFrame</code></a></td><td>start and finish a frame</td><td>this page</td></tr>
   <tr><td><a href="#beginPass"><code>beginPass</code></a> / <a href="#endPass"><code>endPass</code></a></td><td>start and finish a render pass</td><td>this page</td></tr>
   <tr><td><a href="#addScenePasses"><code>addScenePasses</code></a></td><td>add a scene's culling and draw passes to a graph</td><td>this page</td></tr>
-  <tr><td><a href="#addShadowPasses"><code>addShadowPasses</code></a></td><td>add a sun's cascaded shadow passes to a graph</td><td>this page</td></tr>
+  <tr><td><a href="#addShadowPasses"><code>addShadowPasses</code></a></td><td>add a light's shadow passes to a graph</td><td>this page</td></tr>
   <tr><td><a href="#addToneMapPass"><code>addToneMapPass</code></a></td><td>map an HDR target into the window</td><td>this page</td></tr>
   <tr><td><a href="#getCurrentFrameResources"><code>getCurrentFrameResources</code></a></td><td>this frame's command buffer and depth</td><td>this page</td></tr>
   <tr><td><a href="#recreateSwapchain"><code>recreateSwapchain</code></a></td><td>rebuild after a resize</td><td>this page</td></tr>
@@ -288,15 +288,17 @@ if (!engine.running())
 <div class="api" id="AttachmentOps">
   <pre class="sig">struct AttachmentOps
 {
-    bool loadColor  = false;
-    bool loadDepth  = false;
-    bool storeDepth = false;
+    bool loadColor      = false;
+    bool loadDepth      = false;
+    bool storeDepth     = false;
+    bool firstWrite     = false;
 };</pre>
   <div class="body">
     <p>What a pass does with its attachments. The defaults clear both and throw depth away at the end.</p>
     <dl>
       <dt>loadColor, loadDepth</dt><dd><code>true</code>: keep what the attachment holds, and draw on top. <code>false</code>: clear it (color to the target's clear color, depth to 0).</dd>
       <dt>storeDepth</dt><dd><code>true</code>: keep depth at the end of the pass, for a later pass that loads it or samples it. Color is always kept. A render graph sets it on the pass before one that loads the target or reads its depth (<a href="render-graph.html#readDepth"><code>readDepth</code></a>).</dd>
+      <dt>firstWrite</dt><dd><code>true</code>: no earlier pass drew into the target this frame. For a cube target (<a href="render-graph.html#RenderTargetDesc"><code>RenderTargetDesc::cube</code></a>) a pass draws one face, but the layout change before it covers all six. Only with this set does <code>beginPass</code> let a clearing pass drop the whole cube's old contents; otherwise it keeps the other faces. A render graph sets it on a target's first pass of the frame. Leave it <code>false</code> when you draw a cube's faces by hand: every face you draw stays.</dd>
     </dl>
     <pre><code>// A hand-written frame: two passes on the window, the second on top of the first
 engine.beginPass("Background");
@@ -316,7 +318,7 @@ engine.endPass();</code></pre>
 </div>
 
 <div class="api" id="addScenePasses">
-  <pre class="sig">bool addScenePasses(RenderGraph&amp; graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle&amp; renderTarget, const SceneShadow&amp; shadow = {});</pre>
+  <pre class="sig">bool addScenePasses(RenderGraph&amp; graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle&amp; renderTarget, const SceneShadow* shadows = nullptr, uint32_t shadowCount = 0);</pre>
   <div class="body">
     <p>Adds the passes that draw <code>scene</code> from <code>camera</code> to <code>graph</code>. They are ordinary graph passes: the graph sorts them with your passes, records their barriers from what they declare, and times each one under its name. <code>render</code> calls it for you; call it yourself when you build your own graph. The culling passes and <code>Hi-Z</code> are <a href="render-graph.html#addAsyncComputePass">async compute passes</a>: with <code>EngineConfig::asyncCompute</code> they run on the compute queue.</p>
     <dl>
@@ -324,7 +326,7 @@ engine.endPass();</code></pre>
       <dt>scene</dt><dd>Invalid: logs <code>addScenePasses needs a valid scene handle.</code>, adds nothing and returns <code>false</code>.</dd>
       <dt>camera</dt><dd>The view. Its projection is fitted to the target's aspect ratio every frame; the camera itself does not change. Invalid: logs an error, adds nothing and returns <code>false</code>.</dd>
       <dt>renderTarget</dt><dd>Where the scene is drawn. A target needs one color in <a href="types.html#SCENE_COLOR_FORMAT"><code>SCENE_COLOR_FORMAT</code></a> and <code>D32_SFLOAT</code> depth, the formats of the scene's pipeline. The color is linear light with no upper limit: draw it to the window with <a href="#addToneMapPass"><code>addToneMapPass</code></a>. Invalid: logs an error, adds nothing and returns <code>false</code>. A target with <code>D32_SFLOAT</code> depth and no color is depth-only: the scene's depth is drawn and nothing else, in passes named <code>Shadow 1</code>, <code>Shadow 2</code>, … (a depth pre-pass, for example; shadows come from <a href="#addShadowPasses"><code>addShadowPasses</code></a>). Make it with <a href="render-graph.html#RenderGraph-createRenderTarget"><code>RenderGraph::createRenderTarget</code></a> before this call.</dd>
-      <dt>shadow</dt><dd>The cascaded shadow (<a href="scene.html#SceneShadow"><code>SceneShadow</code></a>) that <a href="#addShadowPasses"><code>addShadowPasses</code></a> returned for the same scene and camera in this graph. The draw passes read every cascade's depth, so the graph runs them after the cascade passes. Empty (the default): no shadow. A shadow that <code>addShadowPasses</code> did not make for this scene and camera in this graph, a shadow that another view in the graph already reads (the cascades are fitted to one view's aspect ratio), or a shadow on a depth-only view, logs an error, adds nothing and returns <code>false</code>.</dd>
+      <dt>shadows, shadowCount</dt><dd>Up to <code>MAX_VIEW_SHADOWS</code> (4) shadows (<a href="scene.html#SceneShadow"><code>SceneShadow</code></a>), of different lights, that <a href="#addShadowPasses"><code>addShadowPasses</code></a> returned for the same scene and camera in this graph. Each darkens its own light. The draw passes read every map's depth, so the graph runs them after the map passes. <code>nullptr</code> and 0 (the default): no shadow. More than 4, two of one light, a shadow that <code>addShadowPasses</code> did not make for this scene and camera in this graph, a shadow that another view in the graph already reads (cascades are fitted to one view's aspect ratio), or shadows on a depth-only view, log an error, add nothing and return <code>false</code>. A cube render target (<a href="render-graph.html#RenderTargetDesc"><code>RenderTargetDesc::cube</code></a>) is not a valid <code>renderTarget</code>.</dd>
       <dt>returns</dt><dd><code>true</code> when the passes were added. On <code>false</code> nothing was added.</dd>
     </dl>
   </div>
@@ -403,18 +405,26 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
 <div class="api" id="addShadowPasses">
   <pre class="sig">SceneShadow addShadowPasses(RenderGraph&amp; graph, SceneHandle scene, CameraHandle camera, const ShadowDesc&amp; desc);</pre>
   <div class="body">
-    <p>Adds a directional light's shadow to <code>graph</code> as <a href="../guides/cascaded-shadows.html">cascaded shadow maps</a>: <code>desc.cascadeCount</code> depth-only maps, each covering one slice of <code>camera</code>'s view out to <code>desc.distance</code>. The engine fits each map to its slice every frame, so the shadow follows the camera: sharp near it, still there far away. Give the returned <code>SceneShadow</code> to <a href="#addScenePasses"><code>addScenePasses</code></a> for the same scene and camera.</p>
+    <p>Adds a light's shadow to <code>graph</code>: depth-only maps of the scene, each drawn by a scene view of <code>camera</code>. Give the returned <code>SceneShadow</code> to <a href="#addScenePasses"><code>addScenePasses</code></a> for the same scene and camera. The maps depend on the light's type:</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Light</th><th>Maps</th><th>Scene views</th><th>Guide</th></tr>
+      <tr><td><code>DIRECTIONAL</code></td><td><code>cascadeCount</code> cascades, <samp>shadow_cascade_0</samp>, …, each covering a slice of the camera's view out to <code>distance</code>, fitted every frame</td><td><code>cascadeCount</code></td><td><a href="../guides/cascaded-shadows.html">Cascaded shadow maps</a></td></tr>
+      <tr><td><code>SPOT</code></td><td>one perspective map at the light along its cone, <samp>shadow_spot_&lt;light index&gt;</samp></td><td>1</td><td rowspan="2"><a href="../guides/local-light-shadows.html">Spot and point light shadows</a></td></tr>
+      <tr><td><code>POINT</code></td><td>one cube map, <samp>shadow_cube_&lt;light index&gt;</samp></td><td>6 (one per face)</td></tr>
+    </table>
+    </div>
     <dl>
-      <dt>graph</dt><dd>The graph to add to, before its <code>compile</code>. It owns the cascades' targets (<samp>shadow_cascade_0</samp>, …), so they live as long as the graph.</dd>
-      <dt>scene</dt><dd>The scene whose depth the cascades hold. Invalid: logs an error and returns an empty shadow.</dd>
-      <dt>camera</dt><dd>The view the cascades follow: the camera you then give <code>addScenePasses</code>. Each cascade is a scene view of this camera, culled with the cascade's box, and takes its level of detail from this camera, so a mesh is drawn at the same level in both. Invalid: logs an error and returns an empty shadow.</dd>
-      <dt>desc</dt><dd>The light and the cascades (<a href="scene.html#ShadowDesc"><code>ShadowDesc</code></a>). A light that is not directional, 0 or more than <code>MAX_SHADOW_CASCADES</code> (4) cascades, a <code>size</code> of 0, a <code>distance</code> not beyond the camera's near plane or a <code>splitLambda</code> outside 0 to 1 logs an error and returns an empty shadow. So do fewer free scene views than cascades: nothing is added then.</dd>
-      <dt>returns</dt><dd>The shadow, with <code>cascadeCount</code> 0 on failure. Each cascade's depth is <code>cascades[i]</code>, which a pass of yours can read with <code>readDepth</code>.</dd>
+      <dt>graph</dt><dd>The graph to add to, before its <code>compile</code>. It owns the maps' targets, so they live as long as the graph.</dd>
+      <dt>scene</dt><dd>The scene whose depth the maps hold. Invalid: logs an error and returns an empty shadow.</dd>
+      <dt>camera</dt><dd>The camera you then give <code>addScenePasses</code>. A directional light's cascades follow its view. Every map's view takes its level of detail from this camera, so a mesh is drawn at the same level in both. Invalid: logs an error and returns an empty shadow.</dd>
+      <dt>desc</dt><dd>The light and its maps (<a href="scene.html#ShadowDesc"><code>ShadowDesc</code></a>). An invalid light or a <code>size</code> of 0 logs an error and returns an empty shadow. So does, for a directional light, 0 or more than <code>MAX_SHADOW_CASCADES</code> (4) cascades, a <code>distance</code> not beyond the camera's near plane or a <code>splitLambda</code> outside 0 to 1, and for a spot or point light a <code>distance</code> that is not finite and above 0. So do fewer free scene views than the shadow needs: nothing is added then.</dd>
+      <dt>returns</dt><dd>The shadow, with <code>mapCount</code> 0 on failure. Each map's depth is <code>maps[i]</code>, which a pass of yours can read with <code>readDepth</code>.</dd>
     </dl>
   </div>
 </div>
 
-<p><b>Shadows.</b> Call <code>addShadowPasses</code>, then <code>addScenePasses</code> with the shadow it returns. The order of the passes does not matter: the graph sorts them by the depth reads. Each cascade is one scene view, so 4 cascades and the shaded view take 5 of the <code>MAX_SCENE_VIEWS</code> (8).</p>
+<p><b>Shadows.</b> Call <code>addShadowPasses</code> for each light, then <code>addScenePasses</code> with the shadows it returned. The order of the passes does not matter: the graph sorts them by the depth reads. Each cascade, spot map and cube face is one scene view: a sun with 4 cascades, a spot light, a point light and the shaded view take 12 of the <code>MAX_SCENE_VIEWS</code> (16).</p>
 
 <div class="legend">
   <span><i class="gpu"></i>engine passes</span>
@@ -454,18 +464,27 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
 
 <pre><code>// From examples/06_shadows/main.cpp
 const rasm::SceneShadow shadow = engine.addShadowPasses(graph, scene, camera, rasm::ShadowDesc{.light = sun, .cascadeCount = CASCADE_COUNT, .size = 2048, .distance = 60.0f, .splitLambda = 0.7f});
-if (shadow.cascadeCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTarget, shadow))
+if (shadow.mapCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTarget, &amp;shadow, 1))
+    return 1;
+
+// From examples/07_lights/main.cpp: three lights, each with its own shadow, read by one view.
+const rasm::SceneShadow shadows[] = {
+    engine.addShadowPasses(graph, scene, camera, rasm::ShadowDesc{.light = moon, .cascadeCount = 4, .size = 2048, .distance = 40.0f}),
+    engine.addShadowPasses(graph, scene, camera, rasm::ShadowDesc{.light = lamp, .size = 2048, .distance = 40.0f}),
+    engine.addShadowPasses(graph, scene, camera, rasm::ShadowDesc{.light = lantern, .size = 1024, .distance = 14.0f}),
+};
+if (!engine.addScenePasses(graph, scene, camera, sceneTarget, shadows, 3))
     return 1;</code></pre>
 
-<p>A light taken out of the scene casts no shadow, and its cascades draw nothing; so does a camera whose near plane is moved to <code>distance</code> or beyond. Points farther than <code>distance</code> from the camera are lit; the shadow fades out over the last tenth of it. Casters up to <code>distance</code> toward the sun from a slice are in its map. The shadow uses 3x3 PCF. Only <code>light</code> is shadowed; other lights and the ambient term are not. How it works: <a href="../guides/shadow-mapping.html">Shadow mapping</a> and <a href="../guides/cascaded-shadows.html">Cascaded shadow maps</a>.</p>
+<p>A light taken out of the scene casts no shadow, and its maps draw nothing; so does a directional light's shadow when the camera's near plane is moved to <code>distance</code> or beyond. Points farther than <code>distance</code> from the camera are lit; a directional shadow fades out over the last tenth of it. Casters up to <code>distance</code> toward the sun from a slice are in its map. A spot or point light shadows up to <code>distance</code> from the light. Every shadow uses 3x3 PCF. Each shadow darkens only its own light; lights without one and the ambient term are not shadowed. How it works: <a href="../guides/shadow-mapping.html">Shadow mapping</a>, <a href="../guides/cascaded-shadows.html">Cascaded shadow maps</a> and <a href="../guides/local-light-shadows.html">Spot and point light shadows</a>.</p>
 
-<p><b>Scene views.</b> Each (scene, camera, target, shadow) is a <i>scene view</i>, with its own culling buffers on the GPU. A view lives while a graph holds it: graphs built for the same four share it, and when the last of them is destroyed or replaced, the view's buffers are freed. Views let one frame draw several scenes, cameras or targets. The scene's lights are read every frame. Nothing is drawn, with no error, while the scene is empty or all its entities still load: the target keeps its clear color.</p>
+<p><b>Scene views.</b> Each (scene, camera, target, face, shadows) is a <i>scene view</i>, with its own culling buffers on the GPU; the face is a cube's, for a point light's map. A view lives while a graph holds it: graphs built for the same five share it, and when the last of them is destroyed or replaced, the view's buffers are freed. Views let one frame draw several scenes, cameras or targets. The scene's lights are read every frame. Nothing is drawn, with no error, while the scene is empty or all its entities still load: the target keeps its clear color.</p>
 <p>Culling also picks each visible draw's <a href="../guides/lod-selection.html">level of detail</a> from its distance to the camera and <code>EngineConfig::lodErrorPixels</code>. A view drawn without culling draws LOD 0.</p>
 
 <div class="table-wrap">
 <table>
   <tr><th>Rule</th><th>What happens otherwise</th></tr>
-  <tr><td>At most <code>MAX_SCENE_VIEWS</code> (8) scene views held by graphs at once</td><td>An error (<i>"At most 8 views (scene, camera, target) can be held by render graphs at once."</i>), nothing added, <code>false</code></td></tr>
+  <tr><td>At most <code>MAX_SCENE_VIEWS</code> (16) scene views held by graphs at once</td><td>An error (<i>"At most 16 views (scene, camera, target) can be held by render graphs at once."</i>), nothing added, <code>false</code></td></tr>
   <tr><td>One graph adds each scene view once</td><td>An error, nothing added, <code>false</code></td></tr>
   <tr><td>A valid render target with one <code>SCENE_COLOR_FORMAT</code> color and <code>D32_SFLOAT</code> depth, or <code>D32_SFLOAT</code> depth only</td><td>An error, nothing added, <code>false</code></td></tr>
   <tr><td>The scene shader <code>passes/rasm.slang</code> must compile</td><td>An error is logged; the engine tries again next frame, so a fixed shader file is picked up while the program runs</td></tr>

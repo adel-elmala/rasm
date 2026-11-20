@@ -182,11 +182,7 @@ namespace rasm
                                      {"viewportHeight", offsetof(gfx::SceneData, viewportHeight)},
                                      {"lodErrorPixels", offsetof(gfx::SceneData, lodErrorPixels)},
                                      {"forcedLod", offsetof(gfx::SceneData, forcedLod)},
-                                     {"shadowCascadeCount", offsetof(gfx::SceneData, shadowCascadeCount)},
-                                     {"shadowLight", offsetof(gfx::SceneData, shadowLight)},
-                                     {"shadowSplits", offsetof(gfx::SceneData, shadowSplits)},
-                                     {"shadowMatrices", offsetof(gfx::SceneData, shadowMatrices)},
-                                     {"shadowTextures", offsetof(gfx::SceneData, shadowTextures)},
+                                     {"shadowMaps", offsetof(gfx::SceneData, shadowMaps)},
                                      {"lodPixelsPerUnit", offsetof(gfx::SceneData, lodPixelsPerUnit)},
                                      {"lodDepthPlane", offsetof(gfx::SceneData, lodDepthPlane)}});
 
@@ -196,7 +192,16 @@ namespace rasm
                                      {"color", offsetof(gfx::Light, color)},
                                      {"range", offsetof(gfx::Light, range)},
                                      {"direction", offsetof(gfx::Light, direction)},
-                                     {"type", offsetof(gfx::Light, type)}});
+                                     {"type", offsetof(gfx::Light, type)},
+                                     {"spotScale", offsetof(gfx::Light, spotScale)},
+                                     {"spotOffset", offsetof(gfx::Light, spotOffset)},
+                                     {"shadowMap", offsetof(gfx::Light, shadowMap)},
+                                     {"shadowMapCount", offsetof(gfx::Light, shadowMapCount)}});
+
+            valid &= validateStruct(fieldStruct(scene, "shadowMaps"), "ShadowMap", sizeof(gfx::ShadowMap),
+                                    {{"matrix", offsetof(gfx::ShadowMap, matrix)},
+                                     {"texture", offsetof(gfx::ShadowMap, texture)},
+                                     {"split", offsetof(gfx::ShadowMap, split)}});
 
             valid &= validateStruct(fieldStruct(scene, "vertsPtr"), "VertexFull", sizeof(gfx::VertexFull),
                                     {{"pos", offsetof(gfx::VertexFull, pos)},

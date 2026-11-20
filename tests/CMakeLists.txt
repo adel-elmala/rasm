@@ -9,6 +9,7 @@ add_executable(rasm_tests
             "gpuTableTests.cpp"
             "handleTests.cpp"
             "importMeshText.cpp"
+            "localShadowsTests.cpp"
             "memoryAliasingTests.cpp"
             "meshLodTests.cpp"
             "meshTests.cpp"

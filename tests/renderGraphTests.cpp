@@ -9,7 +9,7 @@
 
 namespace
 {
-    // compile() never touches the engine, so a graph without one can be sorted but not executed.
+    // compile() needs no engine, so a graph without one can be sorted but not executed.
     class TestGraph : public rasm::RenderGraph
     {
     public:
@@ -603,6 +603,48 @@ TEST_CASE("the first pass that draws a target clears it, and each later one load
     CHECK(present.loadColor);
     CHECK_FALSE(present.loadDepth);
     CHECK_FALSE(present.storeDepth);
+}
+
+TEST_CASE("each face of a cube target clears in its first pass, and only the cube's first pass may drop the other faces")
+{
+    const rasm::RenderTargetHandle cube{1, 1};
+    const auto drawFace = [&](uint32_t face)
+    {
+        return [&cube, face](rasm::PassBuilder &builder)
+        { builder.write(cube, face); };
+    };
+
+    TestGraph graph;
+    graph.addPass("face 0", drawFace(0), [](rasm::RenderContext &) {});
+    graph.addPass("face 1", drawFace(1), [](rasm::RenderContext &) {});
+    graph.addPass("face 0 again", drawFace(0), [](rasm::RenderContext &) {});
+    graph.addPass(
+        "shade",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.readDepth(cube);
+            builder.writeSwapchain();
+        },
+        [](rasm::RenderContext &) {});
+
+    graph.compile();
+    REQUIRE(graph.isCompiled());
+    CHECK(graph.order() == std::vector<uint32_t>{0, 1, 2, 3});
+
+    const rasm::AttachmentOps &face0 = graph.pass(0).attachmentOps;
+    const rasm::AttachmentOps &face1 = graph.pass(1).attachmentOps;
+    const rasm::AttachmentOps &face0Again = graph.pass(2).attachmentOps;
+
+    CHECK_FALSE(face0.loadDepth);
+    CHECK(face0.firstWrite);
+    CHECK(face0.storeDepth);
+    // Face 1 has nothing to load yet, but the barrier before it must not drop face 0.
+    CHECK_FALSE(face1.loadDepth);
+    CHECK_FALSE(face1.firstWrite);
+    CHECK(face1.storeDepth);
+    CHECK(face0Again.loadDepth);
+    CHECK_FALSE(face0Again.firstWrite);
+    CHECK(face0Again.storeDepth);
 }
 
 TEST_CASE("a compute pass and a lone graphics pass get the default attachment ops")

@@ -58,6 +58,7 @@ const SECTIONS = [
             { path: "guides/tone-mapping.html",          title: "Tone mapping and exposure",           blurb: "Bring unbounded scene light into the screen's 0 to 1." },
             { path: "guides/shadow-mapping.html",        title: "Shadow mapping",                      blurb: "Depth from the light answers \"is this point lit?\"." },
             { path: "guides/cascaded-shadows.html",      title: "Cascaded shadow maps",                blurb: "One shadow map per slice of the view: sharp near, still there far." },
+            { path: "guides/local-light-shadows.html",   title: "Shadows of spot and point lights",    blurb: "A perspective map along a cone, and a cube map of six faces." },
             { path: "guides/normal-mapping.html",        title: "Normal mapping and tangent space",    blurb: "Fine surface detail from a texture." },
             { path: "guides/coordinate-spaces.html",     title: "Coordinate spaces and the view matrix", blurb: "Object, world, view, clip, NDC, pixels." },
             { path: "guides/camera-controllers.html",    title: "Camera controllers and easing",       blurb: "Mouse and keys become a smooth camera." },

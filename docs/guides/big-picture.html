@@ -627,6 +627,21 @@
     <h4><code>06_shadows</code></h4>
     <p>A bunny, pillars and a spinning cube with cascaded shadows from the sun, then a vignette pass and the tone map. No barrier in the example.</p>
   </div>
+  <div class="vcard">
+    <svg viewBox="0 0 320 140" role="img" aria-label="At night, a spot light on the upper left throws a bunny's shadow on a wall, and a small lantern on the right lights the ground around it, with a turning cube's shadow pointing away from it.">
+      <rect x="40" y="20" width="270" height="70" class="solid"/>
+      <circle cx="22" cy="18" r="8" class="light"/>
+      <path d="M22,18 L120,110 L60,124 Z" class="light"/>
+      <ellipse cx="160" cy="62" rx="20" ry="16" class="shade"/>
+      <ellipse cx="110" cy="104" rx="16" ry="12" class="solid"/><circle cx="122" cy="88" r="7" class="solid"/>
+      <circle cx="262" cy="104" r="5" class="light"/>
+      <polygon points="214,98 232,98 232,116 214,116" class="solid"/>
+      <polygon points="214,116 232,116 150,132 120,132" class="shade"/>
+      <line x1="10" y1="116" x2="310" y2="116" class="surface"/>
+    </svg>
+    <h4><code>07_lights</code></h4>
+    <p>A weak moon, a spot lamp and a point lantern, each with its own shadow, read by one view: cascades, a perspective map and a cube map.</p>
+  </div>
 </div>
 
 <div class="table-wrap">
@@ -639,6 +654,7 @@
   <tr><td><code>04_compute</code></td><td><code>addComputePass</code>, <code>createComputePipeline</code></td><td><a href="device-addresses.html">Buffer device addresses</a>, <a href="gpu-sync.html">GPU synchronization</a></td></tr>
   <tr><td><code>05_city</code></td><td>culling, Hi-Z, LODs, <code>fillTexture</code></td><td><a href="frustum-culling.html">Frustum</a> and <a href="occlusion-culling.html">occlusion culling</a>, <a href="lod-selection.html">LOD selection</a></td></tr>
   <tr><td><code>06_shadows</code></td><td><code>addShadowPasses</code> with <code>ShadowDesc</code>, <code>addScenePasses</code> with the <code>SceneShadow</code>, <code>readDepth</code> on depth-only targets, <code>addToneMapPass</code></td><td><a href="shadow-mapping.html">Shadow mapping</a>, <a href="render-graphs.html">Render graphs</a>, <a href="tone-mapping.html">Tone mapping</a></td></tr>
+  <tr><td><code>07_lights</code></td><td><code>LightType::SPOT</code>, <code>addShadowPasses</code> for directional, spot and point lights, <code>addScenePasses</code> with three shadows</td><td><a href="local-light-shadows.html">Spot and point light shadows</a>, <a href="pbr.html">PBR</a></td></tr>
 </table>
 </div>
 

@@ -34,6 +34,7 @@ namespace rasm
         std::vector<FrameBuffers>           frameInputBuffers;
         std::vector<FrameBuffers>           frameOutputBuffers;
         RenderTargetHandle                  outputRenderTarget;
+        uint32_t                            outputFace          = 0;    // of a cube target
         std::function<void(RenderContext&)> execute;
         AttachmentOps                       attachmentOps;
         bool                                compute             = false;
@@ -68,7 +69,7 @@ namespace rasm
         void                    readDepth(RenderTargetHandle handle);
         void                    write(TextureHandle handle);
         void                    write(BufferHandle handle);
-        void                    write(RenderTargetHandle rt);
+        void                    write(RenderTargetHandle rt, uint32_t face = 0);
         void                    write(const BufferHandle (&perFrame)[MAX_FRAMES_IN_FLIGHT]);
         void                    writeSwapchain();
 
@@ -136,7 +137,7 @@ namespace rasm
         void                readDepth(uint32_t passIdx, RenderTargetHandle h);
         void                write(uint32_t passIdx, TextureHandle h);
         void                write(uint32_t passIdx, BufferHandle h);
-        void                write(uint32_t passIdx, RenderTargetHandle h);
+        void                write(uint32_t passIdx, RenderTargetHandle h, uint32_t face);
         void                write(uint32_t passIdx, const BufferHandle (&perFrame)[MAX_FRAMES_IN_FLIGHT]);
         void                writeSwapchain(uint32_t passIdx);
 

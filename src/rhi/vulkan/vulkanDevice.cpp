@@ -323,9 +323,16 @@ namespace rasm::rhi
             return pipelineLayout;
         }
 
-        // Drivers may accept an oversized image instead of failing, so this can't be left to image creation.
-        bool fitsDevice(const TextureDesc &desc, uint32_t maxExtent)
+        // Drivers may accept an oversized image instead of failing, so this can't be left to image creation. A cube's
+        // faces are square and have their own limit.
+        bool fitsDevice(const TextureDesc &desc, const VkPhysicalDeviceLimits &limits)
         {
+            if (desc.cube && desc.width != desc.height)
+            {
+                spdlog::error("Cube texture '{}' is {}x{}, and a cube's faces must be square.", desc.name, desc.width, desc.height);
+                return false;
+            }
+            const uint32_t maxExtent = desc.cube ? limits.maxImageDimensionCube : limits.maxImageDimension2D;
             if (desc.width <= maxExtent && desc.height <= maxExtent)
                 return true;
             spdlog::error("Texture '{}' is {}x{}, the device limit is {}.", desc.name, desc.width, desc.height, maxExtent);
@@ -357,7 +364,8 @@ namespace rasm::rhi
             imageInfo.extent.height = desc.height;
             imageInfo.extent.depth = 1;
             imageInfo.mipLevels = mipLevels;
-            imageInfo.arrayLayers = 1;
+            imageInfo.arrayLayers = desc.cube ? CUBE_FACES : 1;
+            imageInfo.flags = desc.cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
             imageInfo.format = toVkFormat(desc.format);
             imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
             imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -369,16 +377,38 @@ namespace rasm::rhi
             return imageInfo;
         }
 
-        VkResult createImageView(VkDevice device, VulkanTexture &texture)
+        void destroyImageViews(VkDevice device, VulkanTexture &texture)
+        {
+            vkDestroyImageView(device, texture.view, nullptr);
+            for (VkImageView &faceView : texture.faceViews)
+            {
+                vkDestroyImageView(device, faceView, nullptr);
+                faceView = VK_NULL_HANDLE;
+            }
+            texture.view = VK_NULL_HANDLE;
+        }
+
+        // A cube gets a cube view of all its faces, for sampling, and a 2D view of each face, for drawing into it.
+        VkResult createImageViews(VkDevice device, VulkanTexture &texture)
         {
             VkImageViewCreateInfo viewInfo = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             viewInfo.image = texture.image;
-            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            viewInfo.viewType = texture.desc.cube ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D;
             viewInfo.format = toVkFormat(texture.desc.format);
             viewInfo.subresourceRange.aspectMask = toVkAspectMask(texture.desc.format);
             viewInfo.subresourceRange.levelCount = texture.mipLevels;
-            viewInfo.subresourceRange.layerCount = 1;
-            return vkCreateImageView(device, &viewInfo, nullptr, &texture.view);
+            viewInfo.subresourceRange.layerCount = texture.desc.cube ? CUBE_FACES : 1;
+            VkResult result = vkCreateImageView(device, &viewInfo, nullptr, &texture.view);
+            for (uint32_t face = 0; texture.desc.cube && result == VK_SUCCESS && face < CUBE_FACES; ++face)
+            {
+                viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                viewInfo.subresourceRange.baseArrayLayer = face;
+                viewInfo.subresourceRange.layerCount = 1;
+                result = vkCreateImageView(device, &viewInfo, nullptr, &texture.faceViews[face]);
+            }
+            if (result != VK_SUCCESS)
+                destroyImageViews(device, texture);
+            return result;
         }
     }
 
@@ -542,7 +572,7 @@ namespace rasm::rhi
 
     Texture *VulkanDevice::createTexture(const TextureDesc &desc)
     {
-        if (!fitsDevice(desc, physicalDevice.properties.limits.maxImageDimension2D))
+        if (!fitsDevice(desc, physicalDevice.properties.limits))
             return nullptr;
 
         const uint32_t mipLevels = mipLevelCount(desc);
@@ -570,7 +600,7 @@ namespace rasm::rhi
             return nullptr;
         }
 
-        result = createImageView(device.device, *texture);
+        result = createImageViews(device.device, *texture);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create image view for '{}'. Error: {}", desc.name, toVkResultString(result));
@@ -619,7 +649,7 @@ namespace rasm::rhi
     // The image does not own its memory: destroyTexture frees only the image, and the heap outlives it.
     Texture *VulkanDevice::createPlacedTexture(const TextureDesc &desc, Heap *heap, uint64_t offset)
     {
-        if (!fitsDevice(desc, physicalDevice.properties.limits.maxImageDimension2D))
+        if (!fitsDevice(desc, physicalDevice.properties.limits))
             return nullptr;
 
         const uint32_t mipLevels = mipLevelCount(desc);
@@ -637,7 +667,7 @@ namespace rasm::rhi
             return nullptr;
         }
 
-        result = createImageView(device.device, *texture);
+        result = createImageViews(device.device, *texture);
         if (result != VK_SUCCESS)
         {
             spdlog::error("Failed to create image view for '{}'. Error: {}", desc.name, toVkResultString(result));
@@ -1068,7 +1098,7 @@ namespace rasm::rhi
     void VulkanDevice::destroyTexture(Texture *texture)
     {
         auto *vkTexture = static_cast<VulkanTexture *>(texture);
-        vkDestroyImageView(device.device, vkTexture->view, nullptr);
+        destroyImageViews(device.device, *vkTexture);
         vmaDestroyImage(allocator, vkTexture->image, vkTexture->allocation);
         delete vkTexture;
     }

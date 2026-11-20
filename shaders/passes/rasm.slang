@@ -66,6 +66,11 @@ VSOutput vertMain(VSInput input)
 [[vk::binding(0, 0)]]
 Sampler2D gTextures[];
 
+// The same bindless array, for the slots that hold a cube (a point light's shadow). A slot is read only through the
+// declaration that matches its texture.
+[[vk::binding(0, 0)]]
+SamplerCube gCubeTextures[];
+
 [shader("fragment")]
 float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
 {
@@ -96,8 +101,13 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     info.emissiveUV             = selectUV(material.emissive.emissiveTextureCoordinate, input.uv0, input.uv1, input.uv2);
     info.numLights              = pc.scene->numLights;
     info.lights                 = pc.scene->lights;
-    info.shadow                 = sampleShadow(gTextures, pc.scene, input.worldPosition, info.backFace ? -input.worldNormal : input.worldNormal);
-    info.shadowLight            = pc.scene->shadowLight;
+    float3 shadowNormal         = info.backFace ? -input.worldNormal : input.worldNormal;
+    for (uint i = 0; i < MAX_LIGHTS; ++i)
+    {
+        info.shadows[i]         = 1.0;
+        if (i < info.numLights)
+            info.shadows[i]     = sampleShadow(gTextures, gCubeTextures, pc.scene, info.lights[i], input.worldPosition, shadowNormal);
+    }
     info.material               = material;
 
     return shadePBR(gTextures, info);

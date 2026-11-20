@@ -90,6 +90,9 @@ namespace rasm
         COUNT,
     };
 
+    // The faces of a cube texture in Vulkan's order: +X, -X, +Y, -Y, +Z, -Z.
+    constexpr uint32_t              CUBE_FACES                      = 6;
+
     struct BufferDesc
     {
         std::string                 name;
@@ -108,6 +111,7 @@ namespace rasm
         uint32_t                    height                          = 0;
         Format                      format                          = Format::UNKNOWN;
         TextureUsage                usage                           = TextureUsage::SAMPLED;
+        bool                        cube                            = false;    // CUBE_FACES layers, sampled as a cube, drawn one face at a time
 
         bool                        operator==(const TextureDesc&) const = default;
     };
@@ -146,6 +150,7 @@ namespace rasm
         Format                      depthFormat                                   = Format::UNKNOWN;
         glm::vec4                   clearColor                                    = glm::vec4(0.0f); // linear; every pass that writes the target starts from this
         bool                        history                                       = false;
+        bool                        cube                                          = false; // depth-only and square: its depth is a cube texture, and each pass draws one face
 
         bool                        operator==(const RenderTargetDesc&) const = default;
     };
@@ -157,6 +162,7 @@ namespace rasm
         bool                        loadColor                       = false;
         bool                        loadDepth                       = false;
         bool                        storeDepth                      = false;
+        bool                        firstWrite                      = false;    // no earlier pass drew into the target this frame, so a cube's other faces may be dropped
     };
 
     struct BindlessDescriptorSetLayoutDesc

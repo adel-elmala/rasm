@@ -134,13 +134,13 @@
     float       splitLambda  = 0.7f;
 };</pre>
   <div class="body">
-    <p>What <a href="engine.html#addShadowPasses"><code>addShadowPasses</code></a> makes: a directional light's shadow as <a href="../guides/cascaded-shadows.html">cascaded shadow maps</a>.</p>
+    <p>What <a href="engine.html#addShadowPasses"><code>addShadowPasses</code></a> makes: a light's shadow. A directional light gets <a href="../guides/cascaded-shadows.html">cascaded shadow maps</a>, a spot light one perspective map along its cone, a point light a cube map (<a href="../guides/local-light-shadows.html">Spot and point light shadows</a>).</p>
     <dl>
-      <dt>light</dt><dd>The directional light to shadow; other lights are not shadowed. It must be in the scene's lights to be shadowed: one taken out of the scene casts no shadow.</dd>
-      <dt>cascadeCount</dt><dd>Maps, 1 to <code>MAX_SHADOW_CASCADES</code> (4). Each is one slice of the camera's view and one scene view. More cascades: sharper far shadows, more passes.</dd>
-      <dt>size</dt><dd>Width and height of each map in texels. A 2048 map of 32-bit depth is 16 MiB.</dd>
-      <dt>distance</dt><dd>How far from the camera the shadow reaches, in world units. It must be beyond the camera's near plane. Farther points are lit, faded in over the last tenth.</dd>
-      <dt>splitLambda</dt><dd>Where the slices end: 0 splits the distance evenly, 1 logarithmically (each slice the same factor longer than the one before), in between a mix. Higher values give the near cascades more detail.</dd>
+      <dt>light</dt><dd>The light to shadow, of any <a href="#LightType"><code>LightType</code></a>. It must be in the scene's lights to be shadowed: one taken out of the scene casts no shadow.</dd>
+      <dt>cascadeCount</dt><dd>Directional lights only: maps, 1 to <code>MAX_SHADOW_CASCADES</code> (4). Each is one slice of the camera's view and one scene view. More cascades: sharper far shadows, more passes. A spot light has one map, a point light one cube of 6 faces (6 scene views).</dd>
+      <dt>size</dt><dd>Width and height of each map (each cube face) in texels. A 2048 map of 32-bit depth is 16 MiB; a 1024 cube is 24 MiB.</dd>
+      <dt>distance</dt><dd>How far the shadow reaches, in world units. Directional light: from the camera, beyond its near plane; farther points are lit, faded in over the last tenth. Spot and point light: from the light, finite and above 0; it is the map's far plane, and its near plane is <samp>distance / 200</samp>.</dd>
+      <dt>splitLambda</dt><dd>Directional lights only. Where the slices end: 0 splits the distance evenly, 1 logarithmically (each slice the same factor longer than the one before), in between a mix. Higher values give the near cascades more detail.</dd>
     </dl>
   </div>
 </div>
@@ -149,20 +149,20 @@
   <pre class="sig">struct SceneShadow
 {
     LightHandle        light;
-    RenderTargetHandle cascades[MAX_SHADOW_CASCADES] = {};
-    uint32_t           cascadeCount                  = 0;
-    float              distance                      = 0.0f;
-    float              splitLambda                   = 0.0f;
+    RenderTargetHandle maps[MAX_SHADOW_CASCADES] = {};
+    uint32_t           mapCount                  = 0;
+    float              distance                  = 0.0f;
+    float              splitLambda               = 0.0f;
 
     bool operator==(const SceneShadow&amp;) const = default;
 };</pre>
   <div class="body">
-    <p>A cascaded shadow, as <a href="engine.html#addShadowPasses"><code>addShadowPasses</code></a> returns it, for <a href="engine.html#addScenePasses"><code>addScenePasses</code></a>. Do not build one yourself: <code>addScenePasses</code> takes only a shadow that <code>addShadowPasses</code> made for the same scene and camera in the same graph. All empty (the default) means no shadow. See <a href="../guides/shadow-mapping.html">Shadow mapping</a>.</p>
+    <p>A light's shadow, as <a href="engine.html#addShadowPasses"><code>addShadowPasses</code></a> returns it, for <a href="engine.html#addScenePasses"><code>addScenePasses</code></a>. Do not build one yourself: <code>addScenePasses</code> takes only a shadow that <code>addShadowPasses</code> made for the same scene and camera in the same graph. A view reads up to <code>MAX_VIEW_SHADOWS</code> (4), of different lights. See <a href="../guides/shadow-mapping.html">Shadow mapping</a>.</p>
     <dl>
-      <dt>light</dt><dd>The directional light it darkens, from <code>ShadowDesc::light</code>.</dd>
-      <dt>cascades</dt><dd>The depth-only targets (<code>D32_SFLOAT</code>, no color) of the first <code>cascadeCount</code> cascades, nearest first. A pass of yours can read one with <code>readDepth</code>, as the inset of <code>examples/06_shadows</code> does.</dd>
-      <dt>cascadeCount</dt><dd>0 when <code>addShadowPasses</code> failed.</dd>
-      <dt>distance, splitLambda</dt><dd>From the <code>ShadowDesc</code>; every view of the shadow fits the cascades with them each frame.</dd>
+      <dt>light</dt><dd>The light it darkens, from <code>ShadowDesc::light</code>.</dd>
+      <dt>maps</dt><dd>The depth-only targets (<code>D32_SFLOAT</code>, no color) of the first <code>mapCount</code> maps: a directional light's cascades, nearest first; a spot light's one map; a point light's one cube (<a href="render-graph.html#RenderTargetDesc"><code>RenderTargetDesc::cube</code></a>). A pass of yours can read one with <code>readDepth</code>, as the inset of <code>examples/06_shadows</code> does with the cascades.</dd>
+      <dt>mapCount</dt><dd>0 when <code>addShadowPasses</code> failed.</dd>
+      <dt>distance, splitLambda</dt><dd>From the <code>ShadowDesc</code>; every view of the shadow builds the maps' matrices with them each frame.</dd>
     </dl>
   </div>
 </div>
@@ -554,28 +554,38 @@ rasm::MeshHandle cube = engine.createMesh(std::move(vertices), std::move(indices
     <h4><code>LightType::POINT</code></h4>
     <p>Like a bulb: light / distance². Uses <code>position</code>, <code>color</code>, <code>intensity</code> and <code>range</code>. With <code>range</code> &gt; 0 the light fades smoothly to zero at <code>range</code>; 0 means no limit. <code>direction</code> is ignored.</p>
   </div>
+  <div>
+    <h4><code>LightType::SPOT</code></h4>
+    <p>Like a flashlight: a point light that shines only in a cone around <code>direction</code>. Full light inside <code>innerConeAngle</code>, a smooth fade to zero at <code>outerConeAngle</code> (the glTF rule).</p>
+  </div>
 </div>
 <p>Lights shade <code>PBR</code> materials. <code>UNLIT</code> materials ignore them. There is also a small fixed ambient term, so unlit sides are not fully black.</p>
 
 <div class="api" id="createLight">
-  <pre class="sig">LightHandle createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f), float intensity = 1.0f, float range = 10.0f);</pre>
+  <pre class="sig">LightHandle createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f), float intensity = 1.0f, float range = 10.0f, float innerConeAngle = 0.0f, float outerConeAngle = SPOT_OUTER_CONE_ANGLE);</pre>
   <div class="body">
     <p>Creates a light. Add it to a scene with <code>addLightToScene</code>. A light cannot be changed after creation: there is no function to update or move it.</p>
     <dl>
-      <dt>type</dt><dd><code>DIRECTIONAL</code> or <code>POINT</code>.</dd>
+      <dt>type</dt><dd><code>DIRECTIONAL</code>, <code>POINT</code> or <code>SPOT</code>.</dd>
       <dt>color</dt><dd>Linear RGB, multiplied by <code>intensity</code>.</dd>
-      <dt>position</dt><dd>World position (point lights).</dd>
-      <dt>direction</dt><dd>Direction the light travels (directional lights). Pass a unit vector.</dd>
-      <dt>intensity</dt><dd>Strength. Point lights fall off with distance², so they need larger values (the examples use 40).</dd>
-      <dt>range</dt><dd>Point lights: distance where the light reaches zero; 0 = no limit.</dd>
+      <dt>position</dt><dd>World position (point and spot lights).</dd>
+      <dt>direction</dt><dd>Direction the light travels (directional lights), or the cone's axis (spot lights). Pass a unit vector.</dd>
+      <dt>intensity</dt><dd>Strength. Point and spot lights fall off with distance², so they need larger values (the examples use 25 to 900).</dd>
+      <dt>range</dt><dd>Point and spot lights: distance where the light reaches zero; 0 = no limit.</dd>
+      <dt>innerConeAngle, outerConeAngle</dt><dd>Spot lights: angles from <code>direction</code>, in radians. Full light inside the inner one, none outside the outer one. They must keep 0 ≤ inner &lt; outer ≤ π/2; the defaults are 0 and <code>SPOT_OUTER_CONE_ANGLE</code> (π/4), as in glTF.</dd>
     </dl>
-    <p>Returns an invalid handle and logs a warning when <code>MAX_LIGHTS</code> is reached: 7 lights can exist in total, because handle indices start at 1.</p>
+    <p>Returns an invalid handle and logs a warning when <code>MAX_LIGHTS</code> is reached: 7 lights can exist in total, because handle indices start at 1. A spot light with angles outside the rule logs an error and also returns an invalid handle.</p>
     <pre><code>rasm::LightHandle lamp = engine.createLight(rasm::LightType::POINT,
                                             glm::vec3(1.0f, 0.85f, 0.65f), // color
                                             glm::vec3(0.0f, 3.0f, -7.0f),  // position
                                             glm::vec3(0.0f),               // direction (unused)
                                             40.0f, 18.0f);                 // intensity, range
-engine.addLightToScene(scene, lamp);</code></pre>
+engine.addLightToScene(scene, lamp);
+
+// A spot light from above, pointing down: full light within 14 degrees, none past 22.
+rasm::LightHandle spot = engine.createLight(rasm::LightType::SPOT, glm::vec3(1.0f), glm::vec3(0.0f, 8.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 900.0f, 40.0f, glm::radians(14.0f),
+                                            glm::radians(22.0f));
+engine.addLightToScene(scene, spot);</code></pre>
   </div>
 </div>
 
@@ -584,18 +594,25 @@ engine.addLightToScene(scene, lamp);</code></pre>
 {
     LightHandle handle;
     LightType   type;
-    float       intensity = 1.0f;
-    float       range     = 10.0f;
-    glm::vec3   color     = glm::vec3(1.0f);
-    glm::vec3   position  = glm::vec3(1.0f);
-    glm::vec3   direction = glm::vec3(0.0f, -1.0f, 0.0f);
+    float       intensity      = 1.0f;
+    float       range          = 10.0f;
+    glm::vec3   color          = glm::vec3(1.0f);
+    glm::vec3   position       = glm::vec3(1.0f);
+    glm::vec3   direction      = glm::vec3(0.0f, -1.0f, 0.0f);
+    float       innerConeAngle = 0.0f;
+    float       outerConeAngle = SPOT_OUTER_CONE_ANGLE;
 };</pre>
   <div class="body"><p>The record the engine keeps for each light. Each frame, the scene's culling pass copies the scene's lights into the GPU's scene data of each scene view.</p></div>
 </div>
 
 <div class="api" id="LightType">
-  <pre class="sig">enum class LightType { DIRECTIONAL, POINT };</pre>
-  <div class="body"><p>The two light kinds. The order matches the shader's <code>LightType</code> in <code>shaders/lib/core.slang</code>.</p></div>
+  <pre class="sig">enum class LightType { DIRECTIONAL, POINT, SPOT };</pre>
+  <div class="body"><p>The three light kinds. The order matches the shader's <code>LightType</code> in <code>shaders/lib/core.slang</code>.</p></div>
+</div>
+
+<div class="api" id="SPOT_OUTER_CONE_ANGLE">
+  <pre class="sig">constexpr float SPOT_OUTER_CONE_ANGLE = 0.785398163f;</pre>
+  <div class="body"><p>π/4: the default outer angle of a spot light's cone, glTF's default (<code>rasm/light.h</code>).</p></div>
 </div>
 
 <h2 id="timing"><span class="n">6</span>When changes reach the GPU</h2>
@@ -625,7 +642,8 @@ engine.addLightToScene(scene, lamp);</code></pre>
   <tr><td><code>MAX_LIGHTS</code></td><td>8</td><td>7</td><td>lights in total</td></tr>
   <tr><td><code>MAX_LIGHTS_PER_SCENE</code></td><td>8</td><td>8</td><td>light entries in one scene</td></tr>
   <tr><td><code>MAX_CAMERAS_PER_SCENE</code></td><td>8</td><td>8</td><td>camera entries in one scene</td></tr>
-  <tr><td><code>MAX_SCENE_VIEWS</code></td><td>8</td><td>8</td><td>scene views: (scene, camera, target) sets given to <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> and held by render graphs at once; each shadow cascade is one</td></tr>
+  <tr><td><code>MAX_SCENE_VIEWS</code></td><td>16</td><td>16</td><td>scene views: (scene, camera, target) sets given to <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> and held by render graphs at once; each shadow cascade, spot light map and cube face is one</td></tr>
+  <tr><td><code>MAX_VIEW_SHADOWS</code></td><td>4</td><td>4</td><td>shadows one view reads (<a href="engine.html#addScenePasses"><code>addScenePasses</code></a>'s <code>shadowCount</code>)</td></tr>
   <tr><td><code>MAX_SHADOW_CASCADES</code></td><td>4</td><td>4</td><td>cascades of one shadow (<a href="#ShadowDesc"><code>ShadowDesc::cascadeCount</code></a>)</td></tr>
   <tr><td><code>MAX_VERTEX_UV_SETS</code></td><td>3</td><td>3</td><td>UV sets per vertex</td></tr>
   <tr><td><code>MAX_MESH_LODS</code></td><td>8</td><td>8</td><td>LODs per sub-mesh, LOD 0 included</td></tr>

@@ -41,6 +41,13 @@ namespace rasm
             bool depth = false;
         };
 
+        // The last pass that drew each face of a target in RenderGraph::assignAttachmentOps; a target that is not a cube
+        // has only face 0. UINT32_MAX is no pass.
+        struct FaceWriters
+        {
+            uint32_t faces[CUBE_FACES] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};
+        };
+
         // One row of the lifetime table in RenderGraph::dump: a mark per position in the order.
         struct LifetimeRow
         {
@@ -318,6 +325,13 @@ namespace rasm
                 spdlog::error("Pass '{}' must write either one render target or the swapchain.", pass.name);
                 valid = false;
             }
+            const bool cube = engine && pass.outputRenderTarget.isValid() && engine->getRenderContext().getRenderTargetDesc(pass.outputRenderTarget).cube;
+            // Without an engine (a test) the target's desc is unknown, so any face passes.
+            if (engine && pass.outputFace >= (cube ? CUBE_FACES : 1))
+            {
+                spdlog::error("Pass '{}' writes face {}, and its target has {}.", pass.name, pass.outputFace, cube ? CUBE_FACES : 1);
+                valid = false;
+            }
             // Compute writes only buffers, so a compute pass that declares no write is missing its buffers.
             if (pass.compute && pass.outputBuffers.empty() && pass.frameOutputBuffers.empty())
             {
@@ -508,7 +522,7 @@ namespace rasm
                 engine->endGpuTimer(commandBuffer, timer);
                 continue;
             }
-            engine->setRenderTarget(pass.outputRenderTarget);
+            engine->setRenderTarget(pass.outputRenderTarget, pass.outputFace);
             engine->beginPass(pass.name, pass.attachmentOps);
             pass.execute(ctx);
             engine->endPass();
@@ -569,7 +583,9 @@ namespace rasm
             {
                 const AttachmentOps &ops = pass.attachmentOps;
                 const std::string depth = pass.writesSwapchain ? "no depth" : std::string(ops.loadDepth ? "load depth" : "clear depth") + ", " + (ops.storeDepth ? "store depth" : "discard depth");
-                text += std::string("    attachments: ") + (ops.loadColor ? "load color" : "clear color") + ", " + depth + "\n";
+                const bool cube = engine && pass.outputRenderTarget.isValid() && engine->getRenderContext().getRenderTargetDesc(pass.outputRenderTarget).cube;
+                const std::string face = cube ? ", face " + std::to_string(pass.outputFace) + (ops.firstWrite ? ", first write" : "") : "";
+                text += std::string("    attachments: ") + (ops.loadColor ? "load color" : "clear color") + ", " + depth + face + "\n";
             }
             if (compiled)
             {
@@ -627,10 +643,11 @@ namespace rasm
 
     // Passes that draw to one target run in the order they were added, so the first clears it, and each later one loads
     // what the one before drew, depth included, which that one must then store. So must the pass before a depth read.
-    // The swapchain has no depth, so its passes load only color.
+    // The swapchain has no depth, so its passes load only color. Each face of a cube is a target of its own here, but
+    // a pass's barrier covers the whole cube, so only the cube's first pass of the frame may drop it (firstWrite).
     void RenderGraph::assignAttachmentOps(const std::vector<uint32_t> &order)
     {
-        std::unordered_map<RenderTargetHandle, uint32_t, HandleHash> lastWriters;
+        std::unordered_map<RenderTargetHandle, FaceWriters, HandleHash> lastWriters;
         uint32_t lastSwapchainWriter = NO_PASS;
         for (uint32_t passIdx : order)
         {
@@ -639,19 +656,28 @@ namespace rasm
             for (auto renderTarget : pass.depthRenderTargets)
             {
                 auto it = lastWriters.find(renderTarget);
-                if (it != lastWriters.end() && it->second != NO_PASS)
-                    passes[it->second].attachmentOps.storeDepth = true;
+                for (uint32_t face = 0; it != lastWriters.end() && face < CUBE_FACES; ++face)
+                {
+                    if (it->second.faces[face] != NO_PASS)
+                        passes[it->second.faces[face]].attachmentOps.storeDepth = true;
+                }
             }
             if (pass.compute)
                 continue;
-            uint32_t &previous = pass.writesSwapchain ? lastSwapchainWriter : lastWriters.try_emplace(pass.outputRenderTarget, NO_PASS).first->second;
-            if (previous != NO_PASS)
+            uint32_t *previous = &lastSwapchainWriter;
+            if (!pass.writesSwapchain)
+            {
+                auto [it, first] = lastWriters.try_emplace(pass.outputRenderTarget);
+                pass.attachmentOps.firstWrite = first;
+                previous = &it->second.faces[pass.outputFace];
+            }
+            if (*previous != NO_PASS)
             {
                 pass.attachmentOps.loadColor = true;
                 pass.attachmentOps.loadDepth = !pass.writesSwapchain;
-                passes[previous].attachmentOps.storeDepth = !pass.writesSwapchain;
+                passes[*previous].attachmentOps.storeDepth = !pass.writesSwapchain;
             }
-            previous = passIdx;
+            *previous = passIdx;
         }
     }
 
@@ -881,7 +907,11 @@ namespace rasm
 
     void RenderGraph::write(uint32_t passIdx, BufferHandle h) { passes[passIdx].outputBuffers.push_back(h); }
 
-    void RenderGraph::write(uint32_t passIdx, RenderTargetHandle h) { passes[passIdx].outputRenderTarget = h; }
+    void RenderGraph::write(uint32_t passIdx, RenderTargetHandle h, uint32_t face)
+    {
+        passes[passIdx].outputRenderTarget = h;
+        passes[passIdx].outputFace = face;
+    }
 
     void RenderGraph::write(uint32_t passIdx, const BufferHandle (&perFrame)[MAX_FRAMES_IN_FLIGHT])
     {
@@ -925,7 +955,7 @@ namespace rasm
 
     void PassBuilder::write(BufferHandle handle) { graph.write(currentPass, handle); }
 
-    void PassBuilder::write(RenderTargetHandle handle) { graph.write(currentPass, handle); }
+    void PassBuilder::write(RenderTargetHandle handle, uint32_t face) { graph.write(currentPass, handle, face); }
 
     void PassBuilder::write(const BufferHandle (&perFrame)[MAX_FRAMES_IN_FLIGHT]) { graph.write(currentPass, perFrame); }
 

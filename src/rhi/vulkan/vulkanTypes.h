@@ -18,10 +18,11 @@ namespace rasm::rhi
 
     struct VulkanTexture : Texture
     {
-        VkImage                 image           = VK_NULL_HANDLE;
-        VkImageView             view            = VK_NULL_HANDLE;
-        VmaAllocation           allocation      = nullptr;
-        uint32_t                mipLevels       = 1;
+        VkImage                 image                   = VK_NULL_HANDLE;
+        VkImageView             view                    = VK_NULL_HANDLE;   // a cube's view samples all its faces
+        VkImageView             faceViews[CUBE_FACES]   = {};               // a cube's attachments, one face each
+        VmaAllocation           allocation              = nullptr;
+        uint32_t                mipLevels               = 1;
     };
 
     struct VulkanHeap : Heap

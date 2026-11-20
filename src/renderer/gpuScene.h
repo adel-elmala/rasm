@@ -59,8 +59,11 @@ namespace rasm
         SceneHandle                     scene;
         CameraHandle                    camera;
         RenderTargetHandle              renderTarget;
-        SceneShadow                     shadow                                                              = {};
+        uint32_t                        face                                                                = 0;    // of a cube target
+        SceneShadow                     shadows[MAX_VIEW_SHADOWS]                                           = {};   // a depth-only view's own shadow is shadows[0]
+        uint32_t                        shadowCount                                                         = 0;
         bool                            depthOnly                                                           = false;
+        bool                            mirrored                                                            = false;    // its view matrix mirrors the world (a cube face), so front faces turn clockwise
         BufferHandle                    visibleDraws[MAX_FRAMES_IN_FLIGHT]                                  = {};
         uint32_t                        visibleCapacity[MAX_FRAMES_IN_FLIGHT]                               = {};
         BufferHandle                    hiz[MAX_FRAMES_IN_FLIGHT]                                           = {};

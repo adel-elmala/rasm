@@ -23,16 +23,30 @@ namespace rasm::gfx
     struct VertexFull       { glm::vec3 pos; glm::vec3 normal; glm::vec2 uv[MAX_VERTEX_UV_SETS]; glm::vec4 tangent; };
     struct VertexPosOnly    { glm::vec3 pos; };
 
-    enum class LightType : uint32_t { DIRECTIONAL, POINT };
+    // Each shadowed light of a view has up to MAX_SHADOW_CASCADES maps. Must match shaders/lib/core.slang.
+    constexpr uint32_t      MAX_SHADOW_MAPS     = MAX_VIEW_SHADOWS * MAX_SHADOW_CASCADES;
+
+    enum class LightType : uint32_t { DIRECTIONAL, POINT, SPOT };
 
     struct Light
     {
-        glm::vec3   position;
+        glm::vec3   position;       // point and spot lights
         float       intensity;
         glm::vec3   color;
-        float       range;      // Only used for point lights
-        glm::vec3   direction;  // Only used for directional lights
+        float       range;          // point and spot lights
+        glm::vec3   direction;      // directional and spot lights
         LightType   type;
+        float       spotScale;      // the cone's falloff: saturate(dot(direction, -l) * spotScale + spotOffset)
+        float       spotOffset;
+        int32_t     shadowMap;      // the light's first map in SceneData::shadowMaps, -1 without a shadow
+        uint32_t    shadowMapCount; // its cascades, or 1 for a spot or a point light (a cube)
+    };
+
+    struct ShadowMap
+    {
+        glm::mat4   matrix;         // world to clip: a cascade's or a spot's projection * view; a point light's face projection
+        uint32_t    texture;        // bindless index of the depth; a point light's is a cube
+        float       split;          // a cascade's: the view depth where it ends
     };
 
 
@@ -144,11 +158,7 @@ namespace rasm::gfx
         uint32_t         viewportHeight;
         float            lodErrorPixels;
         int32_t          forcedLod;
-        uint32_t         shadowCascadeCount;
-        int32_t          shadowLight;
-        float            shadowSplits[MAX_SHADOW_CASCADES];
-        glm::mat4        shadowMatrices[MAX_SHADOW_CASCADES];
-        uint32_t         shadowTextures[MAX_SHADOW_CASCADES];
+        ShadowMap        shadowMaps[MAX_SHADOW_MAPS];
         float            lodPixelsPerUnit;
         glm::vec4        lodDepthPlane;
     };
@@ -170,7 +180,12 @@ namespace rasm::gfx
     // These structs are read by shaders/passes/rasm.slang through buffer-device-address pointers,
     // compiled with GLSL scalar layout. Any drift here silently corrupts the GPU reads (a wrong
     // vertsPtr/instancesPtr turns into a device lost on the first draw).
-    static_assert(sizeof(Light) == 48, "Light must match the shader's scalar layout");
+    static_assert(sizeof(Light) == 64, "Light must match the shader's scalar layout");
+    static_assert(offsetof(Light, spotScale) == 48, "Light must match the shader's scalar layout");
+    static_assert(offsetof(Light, shadowMap) == 56, "Light must match the shader's scalar layout");
+    static_assert(sizeof(ShadowMap) == 72, "ShadowMap must match the shader's scalar layout");
+    static_assert(offsetof(ShadowMap, texture) == 64, "ShadowMap must match the shader's scalar layout");
+    static_assert(offsetof(ShadowMap, split) == 68, "ShadowMap must match the shader's scalar layout");
     static_assert(sizeof(VertexFull) == 64, "VertexFull must match the shader's scalar layout");
     static_assert(offsetof(VertexFull, tangent) == 48, "VertexFull must match the shader's scalar layout");
     static_assert(sizeof(MetallicRoughnessMaterial) == 36, "MetallicRoughnessMaterial must match the shader's scalar layout");
@@ -188,35 +203,31 @@ namespace rasm::gfx
     static_assert(offsetof(GeometryData, boundsRadius) == 16, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lodCount) == 20, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lods) == 24, "GeometryData must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 1080, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 2064, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, lights) == 144, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, vertsPtr) == 528, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, instancesPtr) == 544, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, geometryPtr) == 560, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, allDrawsPtr) == 568, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, drawCountsPtr) == 576, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, cullSlotsPtr) == 584, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, groupCountsPtr) == 592, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, cullStatsPtr) == 600, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, visibilityPtr) == 608, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, hizPtr) == 616, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, frustumPlanes) == 624, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, drawCount) == 720, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, runCount) == 724, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, runFirst) == 728, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, hizLevelCount) == 740, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, depthTexture) == 744, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, viewportWidth) == 748, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, viewportHeight) == 752, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, lodErrorPixels) == 756, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, forcedLod) == 760, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, shadowCascadeCount) == 764, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, shadowLight) == 768, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, shadowSplits) == 772, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, shadowMatrices) == 788, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, shadowTextures) == 1044, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, lodPixelsPerUnit) == 1060, "SceneData must match the shader's scalar layout");
-    static_assert(offsetof(SceneData, lodDepthPlane) == 1064, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, vertsPtr) == 656, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, instancesPtr) == 672, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, geometryPtr) == 688, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, allDrawsPtr) == 696, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, drawCountsPtr) == 704, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, cullSlotsPtr) == 712, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, groupCountsPtr) == 720, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, cullStatsPtr) == 728, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, visibilityPtr) == 736, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, hizPtr) == 744, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, frustumPlanes) == 752, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, drawCount) == 848, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, runCount) == 852, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, runFirst) == 856, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, hizLevelCount) == 868, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, depthTexture) == 872, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, viewportWidth) == 876, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, viewportHeight) == 880, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, lodErrorPixels) == 884, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, forcedLod) == 888, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, shadowMaps) == 892, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, lodPixelsPerUnit) == 2044, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, lodDepthPlane) == 2048, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(PushConstants) == PUSH_CONSTANTS_SIZE, "PushConstants must fill the pipelines' push-constant range");
     static_assert(sizeof(ToneMapPushConstants) == 8, "ToneMapPushConstants must match the shader's scalar layout");
     static_assert(offsetof(ToneMapPushConstants, exposure) == 4, "ToneMapPushConstants must match the shader's scalar layout");

@@ -18,6 +18,8 @@ static const uint MAX_MESH_LODS = 8;
 
 // Must match rasm::MAX_SHADOW_CASCADES.
 static const uint MAX_SHADOW_CASCADES = 4;
+// Must match rasm::gfx::MAX_SHADOW_MAPS: rasm::MAX_VIEW_SHADOWS lights of up to MAX_SHADOW_CASCADES maps.
+static const uint MAX_SHADOW_MAPS = 16;
 
 struct VertexFull       { float3 pos; float3 normal; float2 uv[MAX_VERTEX_UV_SETS]; float4 tangent; };
 struct VertexPosOnly    { float3 pos; };
@@ -31,19 +33,31 @@ struct DrawInfo
     uint32_t        firstInstance;
 };
 
-enum class LightType : uint32_t { DIRECTIONAL, POINT };
+enum class LightType : uint32_t { DIRECTIONAL, POINT, SPOT };
 
 // Must match rasm::gfx::Light exactly (scalar layout): the lights array sits between numLights and
 // the buffer device addresses in SceneData, so any size drift shifts vertsPtr/drawInfoPtr/
 // instancesPtr and the shader dereferences a garbage address (device lost).
 struct Light
 {
-    float3      position;
+    float3      position;       // point and spot lights
     float       intensity;
     float3      color;
-    float       range;      // Only used for point lights
-    float3      direction;  // Only used for directional lights
+    float       range;          // point and spot lights
+    float3      direction;      // directional and spot lights
     LightType   type;
+    float       spotScale;      // the cone's falloff: saturate(dot(direction, -l) * spotScale + spotOffset)
+    float       spotOffset;
+    int32_t     shadowMap;      // the light's first map in SceneData::shadowMaps, -1 without a shadow
+    uint32_t    shadowMapCount; // its cascades, or 1 for a spot or a point light (a cube)
+};
+
+// Must match rasm::gfx::ShadowMap.
+struct ShadowMap
+{
+    float4x4    matrix;         // world to clip: a cascade's or a spot's projection * view; a point light's face projection
+    uint32_t    texture;        // bindless index of the depth; a point light's is a cube (gCubeTextures)
+    float       split;          // a cascade's: the view depth where it ends
 };
 
 struct MetallicRoughnessMaterial
@@ -146,11 +160,7 @@ struct SceneData
     uint32_t            viewportHeight;
     float               lodErrorPixels;     // culling picks the coarsest LOD whose error stays under this on screen
     int32_t             forcedLod;          // >= 0: every draw uses this LOD (or its mesh's coarsest), for debugging
-    uint32_t            shadowCascadeCount; // 0: no shadow
-    int32_t             shadowLight;        // index in lights of the light the shadow darkens, -1 without one
-    float               shadowSplits[MAX_SHADOW_CASCADES]; // the view depth where each cascade ends; the last one is the shadow's distance
-    float4x4            shadowMatrices[MAX_SHADOW_CASCADES]; // world to each cascade's clip space: its projection * view
-    uint32_t            shadowTextures[MAX_SHADOW_CASCADES]; // bindless index of each cascade's depth
+    ShadowMap           shadowMaps[MAX_SHADOW_MAPS]; // the maps of the shadowed lights, found through Light::shadowMap
     float               lodPixelsPerUnit;   // the LOD camera's pixels per world unit at view depth 1 (lodSelection.slang)
     float4              lodDepthPlane;      // dot(lodDepthPlane, float4(p, 1)) is p's view depth from the LOD camera; 0 if orthographic
 };
