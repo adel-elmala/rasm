@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/gpu-scene.js"></script>
 </head>
 <body data-root="../" data-page="guides/gpu-scene.html">
 
@@ -460,6 +462,19 @@
     <p>The upload runs after the fence wait for this slot, so no GPU work still reads these buffers. A change made after <code>beginFrame</code> (for example <code>updateTransform</code> while recording) reaches the GPU in the next frame.</p>
   </div>
 </div>
+
+<p>The last step uploads one frame slot only. Try it on a small instance table of 8 rows (RASM's has <code>maxInstances</code> rows). The meshes here are already loaded, so a new entity gets its rows in the next frame.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>the CPU copy (<code>shadow</code>)</span>
+  <span><i class="mem"></i>buffer row, up to date</span>
+  <span><i class="hot"></i>dirty: the buffer holds old data</span>
+  <span><i class="ok"></i>uploaded by the last frame</span>
+</div>
+
+<figure class="lab" data-lab="table-sync" data-title="Change rows and upload them, one slot per frame">
+  <figcaption>Click a row of the CPU copy to move its entity (<code>updateTransform</code>): its rows become dirty in both buffers. Press "Next frame" and count the frames until both buffers are clean again. Then add entities with <code>createEntity</code> until the table is full.</figcaption>
+</figure>
 
 <h2 id="runs"><span class="n">4</span>Draw lists and cull-mode runs</h2>
 

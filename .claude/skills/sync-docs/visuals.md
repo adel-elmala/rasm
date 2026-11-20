@@ -12,6 +12,7 @@ its patterns.
 | 2 to 6 variants, options, fixes, kinds | `.vgrid` of `.vcard`s: a small drawing each, a title, one or two lines, an optional `.cost` line | a table with a paragraph per cell |
 | wrong against right, before against after | `.split` with `class="bad"` / `class="good"` columns, each with a small SVG; or a `.vgrid` with `.vcard.bad` / `.vcard.good` | two paragraphs |
 | a short chain of steps (3 to 6) with no branching | `ol.flow` (add `cpu` / `gpu` / `mem` / `shader` to an item for its color) | a sentence with arrows |
+| an idea with a parameter the reader can change (an angle, a distance, a size, a bias, a count), or a rule that sorts things (in / out, lit / dark, kept / culled) | a **lab**: a `figure.lab` the reader drags, slides or clicks (see "Labs" below), next to the static picture that names the parts | a table of cases, or three near-identical static pictures |
 | a process that changes one picture over time | `.stepper` with one `.step` per state, each with its own SVG and one `<p>` | one crowded diagram, or a numbered list |
 | numbers from a worked example | `.stats` tiles (`<b>` value, `<span>` meaning, `<small>` how it is computed) | a two-column table |
 | a formula | `.formula` (`p.eq` lines, then a `dl` naming each term), or `<pre><code class="lang-text">` for several aligned lines | a formula inside a sentence |
@@ -56,6 +57,63 @@ become pictures.
 - Put a `.legend` above a diagram that uses more than two colors.
 - Estimate text width as 6.5px per character at 13px and 5.5px at 11px (`mono`: 7.2px at 12px). Text must
   fit its box with 6px to spare and must not cross an arrow or another label.
+
+## Labs: pictures the reader can change
+
+A lab is a small simulation of the section's idea: it computes the real thing (the real plane test, the real
+depth compare, the real allocator) and draws the result, so the reader can find the edge cases by hand.
+`docs/guides/shadow-mapping.html` ("Find the bias") and `docs/guides/frustum-culling.html` are the models.
+
+**In the page.** Two script tags in the `<head>`, after `site.js`, and one empty figure where the lab goes:
+
+```html
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/frustum-culling.js"></script>
+...
+<figure class="lab" data-lab="frustum-cull" data-title="Cull a field of spheres">
+  <figcaption>What to try, in one or two sentences.</figcaption>
+</figure>
+```
+
+**In `docs/assets/labs/<page name>.js`.** One `RasmLab.register("name", function (lab) { ... })` per lab. The
+function builds the picture once, then gives `lab.draw` the one function that updates it from the controls:
+
+| Helper | Gives |
+|---|---|
+| `lab.svg(w, h, label)` | an `<svg>` (use width 760); `lab.el(parent, tag, attrs)` adds a child, `lab.set(el, attrs)` changes it (`text` sets the content), `lab.clear(el)` empties a group |
+| `lab.canvas(w, h, label)` | a 2D canvas context, only for per-pixel pictures (shading, textures); `lab.css("--gpu")` reads a theme color for it |
+| `lab.slider({ label, min, max, step, value, format })` | a slider; read `.value` |
+| `lab.choice({ label, options, value })` | a row of buttons, one active; `options` are strings or `{ value, label }` |
+| `lab.toggle({ label, value })`, `lab.button(label, fn)` | a checkbox; a button |
+| `lab.handle(svg, { x, y, label, minX, maxX, minY, maxY })` | a point the reader drags (arrow keys work too); read `.x`, `.y` |
+| `lab.clickable(el, label, fn)` | makes an SVG element a button (cells, slots, passes) |
+| `lab.readout(label)` | a number tile under the picture: `.set(text, "ok" / "bad" / "gpu" / ...)` |
+| `lab.note()` | one sentence under the controls that says what the picture shows now: `.set(text, "ok" / "bad")` |
+| `lab.animate(fn(dt, t))` | calls `fn` every frame while the lab is on screen, with a Play / Pause button |
+| `lab.draw(fn)`, `lab.redraw()` | the update function; controls call it by themselves |
+
+Rules:
+
+- A lab has a goal the reader can reach: a state that is right, a state that breaks. The `lab.note()` says which
+  one the picture is in, and why, in plain words. The `figcaption` says what to try.
+- Compute, do not fake: the picture comes from the same formula or algorithm as the text above it. Numbers in
+  the readouts must agree with the page's worked example where they overlap.
+- Same drawing rules as a static SVG: only classes from `style.css`, the same color meanings, text that fits.
+  Set a `fill` or `stroke` attribute only when the color is data (a shaded pixel, a depth value as gray).
+- At most 3 controls and 3 readouts. One idea per lab. A second idea is a second lab.
+- No RASM names in a concept section's lab; a lab in "In RASM" may use the engine's real numbers and names.
+- Keep the static figure that names the parts. A lab replaces a picture only when it shows everything the
+  picture did, at its default state.
+- Motion is for things that move in time (frames, queues, a ring of images). It must be pausable, which
+  `lab.animate` gives. Do not animate decoration.
+- The page must still read without JavaScript: the text and static figures carry the facts.
+- The script is plain JavaScript like `site.js`: 4 spaces, `const` / `let`, `function` expressions, no
+  libraries, no network, deterministic (seed your own random numbers).
+
+Check labs with `python .claude/skills/sync-docs/scripts/docsync.py labs [page]`: it opens each page in
+headless Chrome with `?labtest`, which moves every control to its ends, and fails on a lab that throws or does
+not mount. Then look at it: `page.html?labonly=<name>&theme=dark` (and `light`) shows one lab alone, for a
+900 × 760 screenshot. To see another state, change the control's default for the screenshot and put it back.
 
 ## Check the picture
 

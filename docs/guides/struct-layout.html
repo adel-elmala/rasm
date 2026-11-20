@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/struct-layout.js"></script>
 </head>
 <body data-root="../" data-page="guides/struct-layout.html">
 
@@ -460,6 +462,19 @@ static_assert(offsetof(Light, intensity) == 12);</code></pre>
     <p>The size is 96. The C++ struct is 72, so the two sides disagree from <var>b</var> on.</p>
   </div>
 </div>
+
+<p>Now try it yourself. The picture below runs the same algorithm twice on these five fields: with the C++ rules, and with the shader rules you pick.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>where C++ writes a field</span>
+  <span><i class="ok"></i>the shader reads the same bytes</span>
+  <span><i class="bad"></i>the shader reads other bytes</span>
+  <span><i></i>dashed: padding</span>
+</div>
+
+<figure class="lab" data-lab="layout-rules" data-title="Lay out the struct">
+  <figcaption>In std430, move the fields until only <var>m</var> is wrong (hint: put a <var>float</var> right after the <var>float3</var>). Then pick scalar: every order matches C++, with no padding.</figcaption>
+</figure>
 
 <h2 id="traps"><span class="n">6</span>The usual traps</h2>
 

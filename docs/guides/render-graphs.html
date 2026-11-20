@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/render-graphs.js"></script>
 </head>
 <body data-root="../" data-page="guides/render-graphs.html">
 
@@ -658,6 +660,19 @@ if order has fewer passes than the graph: there is a cycle</code></pre>
 </figure>
 
 <p>This is what makes debug views free when they are off: the pass is still declared, but nothing reads its output. A pass with effects the graph cannot see, such as a readback to the CPU, must be marked so that it is never culled.</p>
+
+<p>Try it on the frame of this page. Every read is a dot: cut one, or connect the debug view to Post, and the graph is compiled again.</p>
+
+<div class="legend">
+  <span><i class="gpu"></i>a pass that runs</span>
+  <span><i class="mem"></i>a resource</span>
+  <span><i class="hot"></i>a read that a running pass needs; its dot cuts it</span>
+  <span><i></i>dashed: a culled pass, a cut read</span>
+</div>
+
+<figure class="lab" data-lab="graph-compile" data-title="Cut a read, and compile again">
+  <figcaption>Cut the read between the shadow map and Lighting: Shadow is culled. Then connect the debug view to Post: Debug runs, and Post needs one more layout transition. The order always comes from the sort of section 5.</figcaption>
+</figure>
 
 <h2 id="barriers"><span class="n">7</span>Barriers and layout transitions</h2>
 

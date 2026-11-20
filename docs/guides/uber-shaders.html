@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/uber-shaders.js"></script>
 </head>
 <body data-root="../" data-page="guides/uber-shaders.html">
 
@@ -71,6 +73,12 @@
     <text x="380" y="300" class="mid small">Add skinning (× 2) or vertex colors (× 2), and it doubles again.</text>
   </svg>
   <figcaption>The count <b>multiplies</b>: each new on/off feature doubles it. This is the <b>permutation explosion</b>.</figcaption>
+</figure>
+
+<p>Try it. Build the material model one feature at a time and watch the count. The single orange cell is the other answer, an uber shader (<a href="#uber">section 3</a>).</p>
+
+<figure class="lab" data-lab="permutations" data-title="Grow the grid">
+  <figcaption>Switch every feature off, then put them back one by one. Each feature multiplies the number of shaders to compile. The uber shader stays one shader: it only gets one more test.</figcaption>
 </figure>
 
 <p>Not every combination is used by a real scene, so engines only compile the ones they meet. But they do not know which ones until the content is loaded, and the set changes with every new asset.</p>
@@ -264,6 +272,12 @@ if (material.normalTexture != NO_TEXTURE)
     <text x="580" y="272" class="small">both sides, for every lane</text>
   </svg>
   <figcaption>A divergent branch costs the sum of both sides. Lanes that are switched off wait; they do no useful work.</figcaption>
+</figure>
+
+<p>Try it with the same wave: side A costs 100 steps, side B 300.</p>
+
+<figure class="lab" data-lab="wave-branch" data-title="Make a wave diverge">
+  <figcaption>Press "All lanes: A", then click one lane. One lane that disagrees is enough: the wave runs both sides, and the other seven lanes wait for it.</figcaption>
 </figure>
 
 <p>So the question is not "does the shader branch?" but "<b>is the branch the same for all lanes of a wave?</b>". There are three kinds of values a branch can test:</p>

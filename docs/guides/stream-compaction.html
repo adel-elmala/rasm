@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/stream-compaction.js"></script>
 </head>
 <body data-root="../" data-page="guides/stream-compaction.html">
 
@@ -303,6 +305,18 @@
   <figcaption>Three steps: flag, scan, scatter. Every kept item gets a different place, and the places grow in input order, so the result is packed <b>and</b> stable.</figcaption>
 </figure>
 
+<p>Try it with your own flags, and compare the two ways to give out places:</p>
+
+<div class="legend">
+  <span><i class="gpu"></i>a kept item and its flag</span>
+  <span><i class="mem"></i>its place, and the output</span>
+  <span><i class="hot"></i>a write that breaks the input order</span>
+</div>
+
+<figure class="lab" data-lab="compact-flags" data-title="Pack the kept items">
+  <figcaption>Click items to keep or drop them, and follow the arrows. Then switch to the atomic counter and press "Run again" a few times: the count stays, the order does not.</figcaption>
+</figure>
+
 <p>Steps 1 and 3 are trivially parallel: each thread works alone. All the difficulty is in step 2, computing a scan with many threads. The next two sections do that, first inside one workgroup, then across many.</p>
 
 <h2 id="workgroup"><span class="n">4</span>A scan inside one workgroup</h2>
@@ -570,6 +584,12 @@
   <div><b>321</b><span>additions, Hillis–Steele</span><small>6 steps</small></div>
   <div><b>126</b><span>additions, Blelloch</span><small>12 steps</small></div>
 </div>
+
+<p>The three scans run below on one group, and every addition is counted:</p>
+
+<figure class="lab" data-lab="scan-cost" data-title="Count the additions">
+  <figcaption>Grow the group from 4 to 256 items. Watch the naive loop's bar push the other two toward zero, and count the steps on the right.</figcaption>
+</figure>
 
 <p>On a GPU, the number of barriers often matters more than the number of additions, which is why the next idea wins.</p>
 

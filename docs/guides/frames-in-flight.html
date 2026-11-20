@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/frames-in-flight.js"></script>
 </head>
 <body data-root="../" data-page="guides/frames-in-flight.html">
 
@@ -561,6 +563,19 @@
   <tr><td>3</td><td>10 ms</td><td>100</td><td>16 ms</td></tr>
 </table>
 </div>
+
+<p>The same rule, stepped live for any costs. The middle row shows the frames that are recorded but not yet on the GPU.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>the CPU records a frame</span>
+  <span><i class="hot"></i>a recorded frame waits for the GPU; the latency of one frame</span>
+  <span><i class="gpu"></i>the GPU runs a frame</span>
+  <span><i></i>dashed: the CPU waits for its slot, or the GPU is idle</span>
+</div>
+
+<figure class="lab" data-lab="slots-timeline" data-title="Slots against latency">
+  <figcaption>Go from 2 slots to 3 and 4: the time per frame stays, the latency grows. Then make the CPU slower than the GPU, and change the slots again.</figcaption>
+</figure>
 
 <div class="split">
   <div>

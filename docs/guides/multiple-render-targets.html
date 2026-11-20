@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/multiple-render-targets.js"></script>
 </head>
 <body data-root="../" data-page="guides/multiple-render-targets.html">
 
@@ -265,6 +267,12 @@ GBufferOutput fragMain(VSOutput input)
 
 <p>Everything before the fragment shader is shared. The rasterizer finds the pixels once. The depth test runs once, and if it fails, none of the outputs are written. If it passes, all of them are. So the images can never disagree about which surface is visible.</p>
 
+<p>Here is one such pass on a small scene. Each pixel finds its surface once and writes three outputs. There is no lighting: the images hold raw surface data.</p>
+
+<figure class="lab" data-lab="mrt-outputs" data-title="One pass, three images and a depth">
+  <figcaption>Move the front ball over the other balls: all four images change together, at the same pixels. Move the probe: the three values always belong to the same surface. In the material image, red is metallic and green is roughness.</figcaption>
+</figure>
+
 <h2 id="rules"><span class="n">3</span>The rules</h2>
 
 <p>The attachments of one pass are not fully free. They share some things and keep others apart:</p>
@@ -453,6 +461,12 @@ write+read  83 MB per frame     × 60 frames/s ≈ 5.0 GB/s</code></pre>
 </div>
 
 <p>These are lower bounds. A pixel covered by several triangles is written several times (<b>overdraw</b>), the depth test also reads depth, and later passes may read the images more than once. A mid-range GPU has a few hundred GB/s in total, so a fat G-buffer at 4K takes a real part of the frame.</p>
+
+<p>Build a layout yourself. The bar starts as the fat layout from the picture above.</p>
+
+<figure class="lab" data-lab="gbuffer-bytes" data-title="Pack a G-buffer">
+  <figcaption>Click the three boxes to change a format, and try to reach 20 bytes per pixel with a velocity. Then change the screen size: the cost grows with the number of pixels.</figcaption>
+</figure>
 
 <h3>Packing: fewer bytes for the same data</h3>
 

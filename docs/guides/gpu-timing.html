@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/gpu-timing.js"></script>
 </head>
 <body data-root="../" data-page="guides/gpu-timing.html">
 
@@ -321,6 +323,18 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
   <figcaption>The CPU already waits for the fence before it reuses a slot. Reading the queries there costs no extra waiting, and the pool is free to reset. With N frames in flight, the numbers you show are N frames old. At 60 fps and N = 2, that is 33 ms: nobody can tell.</figcaption>
 </figure>
 
+<p>Step through it. Each frame reads the pool of its own slot, which an older frame wrote.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>the frame the CPU records now</span>
+  <span><i class="gpu"></i>in flight: results not read yet</span>
+  <span><i class="mem"></i>query pool</span>
+  <span><i class="hot"></i>the frame that is read now</span>
+</div>
+<figure class="lab" data-lab="query-readback" data-title="Which frame is on screen?">
+  <figcaption>Pause and press <b>Next frame</b>. Frames 4 and 10 are slow (9.5 ms): count how many frames pass before that number is read. Then change the number of frames in flight.</figcaption>
+</figure>
+
 <p>The same pattern works for anything the GPU writes for the CPU: counters (section 7), readback of pixels, GPU-generated lists. A frame that was recorded but never submitted wrote nothing, so the reader must notice that (for example, by checking that the fence value moved) and skip the slot.</p>
 
 <h2 id="pass-timers"><span class="n">5</span>Per-pass timers</h2>
@@ -621,6 +635,12 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
 </div>
 
 <p>The spike is visible, but it does not take over the display.</p>
+
+<p>Try the four methods on the same frames: 16.7 ms with some noise, and one frame of 40 ms.</p>
+
+<figure class="lab" data-lab="smoothing" data-title="Smooth a frame time">
+  <figcaption>Turn the noise off and keep <var>n</var> = 10: the moving average shows the 19.0 ms of the example above. Then try sample and hold with <var>n</var> = 10 and <var>n</var> = 7, and compare the mean and the max.</figcaption>
+</figure>
 
 <div class="callout">
   <strong>Average times, not frames per second</strong>

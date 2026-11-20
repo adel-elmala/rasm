@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/device-addresses.js"></script>
 </head>
 <body data-root="../" data-page="guides/device-addresses.html">
 
@@ -243,6 +245,19 @@ void update(uint index)
 <pre><code class="lang-text">row 5:   base + 5 × 108      = base + 540 = 0x1_0020_021C
 field m: base + 540 + 64     = base + 604 = 0x1_0020_025C</code></pre>
 
+<p>Do the same math for other rows. The shader multiplies by the row size it was compiled with, so also try a row size that is not the real one.</p>
+
+<div class="legend">
+  <span><i class="mem"></i>a row of the table</span>
+  <span><i class="shader"></i>field <var>m</var></span>
+  <span><i class="ok"></i>the load is on <var>m</var> of the wanted row</span>
+  <span><i class="bad"></i>the load is somewhere else</span>
+</div>
+
+<figure class="lab" data-lab="pointer-math" data-title="Follow the pointer math">
+  <figcaption>Keep the row size at 108 and raise the index past row 6. Then set the index to 5 and pick 96 or 112: the load moves off <var>m</var>, into the middle of another row.</figcaption>
+</figure>
+
 <h2 id="root-pointer"><span class="n">5</span>The root pointer pattern</h2>
 
 <p>Pointers can be stored in buffers too. So one small struct can hold the addresses of every table in the scene, and the shader needs only the address of that struct. Push constants are the cheapest way to pass a few bytes per draw, so the usual design is:</p>
@@ -360,6 +375,18 @@ field m: base + 540 + 64     = base + 604 = 0x1_0020_025C</code></pre>
     <rect x="628" y="120" width="48" height="30" class="ghost"/><text x="652" y="140" class="mid small t-faint">pad</text>
   </svg>
   <figcaption>Packed 12-byte rows: row 1, and so its pointer, starts at 12, which is not a multiple of 8. Pad the row to 16 bytes. C++ does this by itself; a hand-packed layout may not.</figcaption>
+</figure>
+
+<p>Change the row size and the order of the two fields, and watch where the pointers start:</p>
+
+<div class="legend">
+  <span><i class="ok"></i>pointer at a multiple of 8</span>
+  <span><i class="bad"></i>pointer at a wrong offset</span>
+  <span><i></i>the 4-byte count; dashed: padding</span>
+</div>
+
+<figure class="lab" data-lab="pointer-align" data-title="Keep the pointers on a multiple of 8">
+  <figcaption>Try 12, 16, 20 and 24 bytes. Then put the count first: now a row size that is a multiple of 8 is the worst one.</figcaption>
 </figure>
 
 <p>Four more cases:</p>

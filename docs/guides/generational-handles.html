@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/generational-handles.js"></script>
 </head>
 <body data-root="../" data-page="guides/generational-handles.html">
 
@@ -310,6 +312,19 @@
     <p>The stale lookup fails in a defined way. The caller can log it, skip the work, or treat it as a bug.</p>
   </div>
 </div>
+
+<p>Now run the same table by hand. It starts where step 1 ends.</p>
+
+<div class="legend">
+  <span><i class="mem"></i>a slot with an object</span>
+  <span><i class="ok"></i>a handle whose lookup works</span>
+  <span><i></i>a free slot, or a stale handle that fails safely</span>
+  <span><i class="bad"></i>a lookup that returns the wrong thing</span>
+</div>
+
+<figure class="lab" data-lab="slot-reuse" data-title="Destroy, reuse, look up">
+  <figcaption>Click B to destroy it, then create an object: it gets slot 1 with generation 2, and the handle of B fails safely. Then turn the compare off and see what the same handle returns.</figcaption>
+</figure>
 
 <div class="split">
   <div>

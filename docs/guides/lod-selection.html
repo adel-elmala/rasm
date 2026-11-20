@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/lod-selection.js"></script>
 </head>
 <body data-root="../" data-page="guides/lod-selection.html">
 
@@ -475,6 +477,12 @@ level         = the last level with e ≤ eMax</code></pre>
     <p>A 20° field of view gives <var>P</var><sub>11</sub> = 5.67, 3.27 times more. The switch depths grow by the same factor, so a zoomed-in far object gets its full detail back.</p>
   </div>
 </div>
+
+<p>Now try it with your own numbers. The bands on top are the depths where each level is used.</p>
+
+<figure class="lab" data-lab="lod-pick" data-title="Pick the level yourself">
+  <figcaption>Move the depth to 5, 20, 60 and 200 m: you get the four pictures above. Then change the screen height or the field of view, and watch every switch depth move by the same factor.</figcaption>
+</figure>
 
 <h2 id="orthographic"><span class="n">8</span>The orthographic case</h2>
 

@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/gpu-memory.js"></script>
 </head>
 <body data-root="../" data-page="guides/gpu-memory.html">
 
@@ -373,6 +375,18 @@
     <p>This wait stalls the CPU. It only happens when more than a ring's worth of data is uploaded before the GPU catches up, for example a big level loaded in one frame.</p>
   </div>
 </div>
+
+<p>Now run the ring yourself. It starts at step 3: 40 MiB are submitted as batch 1, and the GPU has not finished them.</p>
+
+<div class="legend">
+  <span><i class="mem"></i>pending: written, not submitted</span>
+  <span><i class="gpu"></i>submitted: the GPU may still read it</span>
+  <span><i></i>free; dashed: skipped</span>
+</div>
+
+<figure class="lab" data-lab="staging-ring" data-title="Fill the ring">
+  <figcaption>Click the GPU, then upload 16 MiB and 12 MiB: this is step 4. Reload the page and upload them without clicking the GPU: the 12 MiB do not fit, and the CPU stalls, as in step 5.</figcaption>
+</figure>
 
 <p>The ring size is a trade-off. Bigger means fewer stalls but more memory that sits idle most of the time. As a rough number, a 64 MiB ring can move a lot per frame before the bus itself becomes the limit:</p>
 

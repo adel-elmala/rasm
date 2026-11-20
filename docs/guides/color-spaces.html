@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/color-spaces.js"></script>
 </head>
 <body data-root="../" data-page="guides/color-spaces.html">
 
@@ -178,6 +180,12 @@ encode (linear light L → sRGB code s):
 </figure>
 
 <p>The value people find surprising: a pixel stored as byte <b>128</b>, "half" of 255, shows only <b>21%</b> of full light. And half of full light is byte <b>188</b>.</p>
+
+<p>Try any byte. The picture below runs the decode formula on it.</p>
+
+<figure class="lab" data-lab="srgb-byte" data-title="What light does a byte show?">
+  <figcaption>Find the byte that shows half of full light. Then go below byte 10, where the curve is a straight line, and compare the last two numbers.</figcaption>
+</figure>
 
 <h3>Values to remember</h3>
 
@@ -726,6 +734,12 @@ encode (linear light L → sRGB code s):
   <div><b>128</b><span>the mix computed on codes</span><small>21% light: too dark</small></div>
   <div><b>188</b><span>the mix computed in linear</span><small>50% light: correct</small></div>
 </div>
+
+<p>The same mix at any ratio, and with colors. Both bars below go from the first color to the second in small steps; only the space of the math differs.</p>
+
+<figure class="lab" data-lab="mix-colors" data-title="Mix two colors, on codes and in linear">
+  <figcaption>Keep black + white at 50 % and read the two bytes: they are the 128 and 188 from above. Then try red + green and look at the middle of the top bar.</figcaption>
+</figure>
 
 <p>On codes, every mix is too dark. Thin bright lines (text, wires, stars) look thinner and darker than they should, and edges look jagged even with anti-aliasing.</p>
 

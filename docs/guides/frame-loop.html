@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/frame-loop.js"></script>
 </head>
 <body data-root="../" data-page="guides/frame-loop.html">
 
@@ -659,6 +661,19 @@
 </figure>
 
 <p>Nothing is reset: the fence values only grow. A skipped frame needs no cleanup, because it signaled nothing and changed no slot value.</p>
+
+<p>Play both sides to see the rule work. You are the CPU and the GPU. It starts where step 3 above did: frame 7 wants slot 0, which last signaled 5, and the GPU has reached 4.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>the CPU writes the slot</span>
+  <span><i class="gpu"></i>the GPU still uses the slot</span>
+  <span><i class="hot"></i>this frame's slot</span>
+  <span><i class="bad"></i>the CPU is blocked</span>
+</div>
+
+<figure class="lab" data-lab="frame-slots" data-title="Run the CPU and the GPU by hand">
+  <figcaption>Press only "CPU: next step" and see how far the CPU gets before <code>beginFrame</code> blocks. Then let the GPU finish a frame. Try to make the CPU write a slot that the GPU still uses: the fence wait never lets it.</figcaption>
+</figure>
 
 <h3>What has one copy per slot</h3>
 

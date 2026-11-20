@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/graphics-apis-rhi.js"></script>
 </head>
 <body data-root="../" data-page="guides/graphics-apis-rhi.html">
 
@@ -167,6 +169,20 @@
   <tr><td>Shader format</td><td>SPIR-V</td><td>DXIL (from HLSL)</td><td>MSL, or compiled metallib</td><td>WGSL</td></tr>
 </table>
 </div>
+
+<p>The same picture, read in one API at a time. The parts and the arrows stay; only the names change, and one box.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>the application does it</span>
+  <span><i class="gpu"></i>the GPU</span>
+  <span><i class="mem"></i>memory and sync objects</span>
+  <span><i class="shader"></i>shaders</span>
+  <span><i></i>bindings; in the box "Ordering between uses": the API does it</span>
+</div>
+
+<figure class="lab" data-lab="api-names" data-title="One model, four sets of names">
+  <figcaption>Choose each API and watch the box "Ordering between uses". On two of them the application does that work, on the other two the API does.</figcaption>
+</figure>
 
 <h3>One frame, in any of them</h3>
 <ol class="steps">

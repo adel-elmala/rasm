@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/async-compute.js"></script>
 </head>
 <body data-root="../" data-page="guides/async-compute.html">
 
@@ -552,6 +554,19 @@
 </div>
 
 <p>The saving is at most the time of the work that overlaps, here 0.4 ms. Without anything to overlap, the second queue only adds handoffs.</p>
+
+<p>Change the numbers. In the picture below, the shadow map runs at 7/8 of its speed while the compute pass runs next to it, and the main draw waits for one handoff.</p>
+
+<div class="legend">
+  <span><i class="shader"></i>the compute pass (culling)</span>
+  <span><i class="gpu"></i>graphics passes</span>
+  <span><i></i>a handoff</span>
+  <span><i class="hot"></i>the wait for the compute result</span>
+</div>
+
+<figure class="lab" data-lab="queue-overlap" data-title="When does the second queue win?">
+  <figcaption>Set the shadow map to 0: the frame is a chain, and two queues are slower. Then give it its 1.2 ms back and raise the handoff until the saving is gone.</figcaption>
+</figure>
 
 <h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
 

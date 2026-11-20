@@ -12,6 +12,7 @@ code the pages describe (shown at the bottom of every page). Each page lists the
 ```sh
 python .claude/skills/sync-docs/scripts/docsync.py status [--target main]   # what changed, which pages
 python .claude/skills/sync-docs/scripts/docsync.py check                    # names, paths, links, API coverage
+python .claude/skills/sync-docs/scripts/docsync.py labs [page]              # run the interactive pictures in Chrome
 python .claude/skills/sync-docs/scripts/docsync.py stamp [--rev main]       # docs now match --rev (a main commit)
 ```
 
@@ -63,6 +64,9 @@ Read the diff of each changed source (`git diff <stamp> <target> -- <file>`) and
   code only, no history. Known issues by ID from `docs/code_review.md`. Read `visuals.md` (next to this file)
   before writing or changing a guide: it says which block fits which content (picture cards, wrong/right pairs,
   flows, steppers, stat tiles, pitfalls) and how to draw the SVGs. `docs/guides/shadow-mapping.html` is the model.
+- An idea with a parameter gets a **lab**, an interactive picture (`figure.lab`, built by `docs/assets/lab.js`
+  from the page's own `docs/assets/labs/<page>.js`). `visuals.md` has the helpers and the rules. A code change
+  that changes a number or a rule a lab computes must change the lab's script too.
 - Only classes from `docs/assets/style.css`; no inline styles, no `<style>`/`<script>` inside SVGs, no libraries.
   Colors keep their meaning: `cpu` blue, `gpu` green, `mem` amber (buffers), `shader` purple.
 - `site.js` builds the sidebar, the "On this page" list (from the page's `<h2>`s), the figure numbers, the
@@ -84,7 +88,7 @@ Read the diff of each changed source (`git diff <stamp> <target> -- <file>`) and
 python .claude/skills/sync-docs/scripts/docsync.py check
 ```
 
-Fix everything it reports. Then screenshot each page you edited and read the image; fix text that overflows
+Fix everything it reports. If the page has labs, run `docsync.py labs <page>` too. Then screenshot each page you edited and read the image; fix text that overflows
 its box or crosses an arrow:
 
 ```sh
