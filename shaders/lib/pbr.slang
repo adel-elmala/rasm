@@ -99,8 +99,7 @@ struct PBRInfo
     float2      emissiveUV;          // UV coordinates for the emissive texture
     uint        numLights;           // number of lights
     Light       lights[MAX_LIGHTS];  // array of lights
-    float       shadow;              // how much of lights[shadowLight] reaches the fragment (shadow.slang)
-    int         shadowLight;         // the light the shadow map darkens (SceneData::shadowLight), -1 without one
+    float       shadows[MAX_LIGHTS]; // how much of each light reaches the fragment (shadow.slang), 1 without a shadow
     Material    material;            // material properties
 };
 
@@ -174,28 +173,33 @@ float4 shadePBR(Sampler2D gTextures[], PBRInfo pbrInfo)
         Light light = pbrInfo.lights[i];
 
         float3 l;
-        float attenuation = 1.0;
+        float attenuation = pbrInfo.shadows[i];
 
         if (light.type == LightType.DIRECTIONAL) {
             // Directional Light: direction points from the light towards the surface,
             // L points from the surface towards the light.
             l = normalize(-light.direction);
-            if (i == pbrInfo.shadowLight)
-                attenuation = pbrInfo.shadow;
         }
         else {
-            // Point Light
+            // Point and spot lights
             float3 lightDir         = light.position - pbrInfo.vPosition;
             float distanceSquared = max(dot(lightDir, lightDir), 1e-6);
             float distanceToLight = sqrt(distanceSquared);
             l = lightDir / distanceToLight;
 
             // Physical inverse-square law attenuation with clamping range
-            attenuation = 1.0 / distanceSquared;
+            attenuation *= 1.0 / distanceSquared;
             // Optional smooth falloff window:
             // A zero range means unbounded inverse-square falloff.
             if (light.range > 0.0)
                 attenuation *= pow(max(1.0 - pow(distanceToLight / light.range, 4.0), 0.0), 2.0);
+            // glTF KHR_lights_punctual: full light inside the inner cone, none outside the outer one, a smooth fade
+            // between them.
+            if (light.type == LightType.SPOT)
+            {
+                float cone = saturate(dot(normalize(light.direction), -l) * light.spotScale + light.spotOffset);
+                attenuation *= cone * cone;
+            }
         }
 
         float3 halfVector = v + l;

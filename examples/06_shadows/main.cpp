@@ -160,7 +160,7 @@ int main()
     // 2. Forward: the scene from the camera, shaded with those cascades, which darken the sun. Its passes read the
     //    cascades, so they run after.
     const rasm::SceneShadow shadow = engine.addShadowPasses(graph, scene, camera, rasm::ShadowDesc{.light = sun, .cascadeCount = CASCADE_COUNT, .size = 2048, .distance = 60.0f, .splitLambda = 0.7f});
-    if (shadow.cascadeCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTarget, shadow))
+    if (shadow.mapCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTarget, &shadow, 1))
         return 1;
 
     // 3. Post: a vignette over the forward image. It stays in HDR.
@@ -279,7 +279,7 @@ int main()
         [&](rasm::PassBuilder &builder)
         {
             for (uint32_t i = 0; i < CASCADE_COUNT; ++i)
-                builder.readDepth(shadow.cascades[i]);
+                builder.readDepth(shadow.maps[i]);
             builder.writeSwapchain();
         },
         [&](rasm::RenderContext &ctx)
@@ -287,7 +287,7 @@ int main()
             auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
             InsetPushConstants pushConstants = {};
             for (uint32_t i = 0; i < CASCADE_COUNT; ++i)
-                pushConstants.cascades[i] = engine.getBindlessTextureIndex(engine.getRenderTargetDepthTexture(shadow.cascades[i]));
+                pushConstants.cascades[i] = engine.getBindlessTextureIndex(engine.getRenderTargetDepthTexture(shadow.maps[i]));
             ctx.bindPipeline(commandBuffer, insetPipeline);
             ctx.bindDescriptorSet(commandBuffer, insetPipeline, engine.getBindlessDescriptorSet(), 0);
             ctx.pushConstants(commandBuffer, insetPipeline, rasm::ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);

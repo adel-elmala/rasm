@@ -70,7 +70,7 @@ namespace rasm
         SceneHandle                 createScene();
         EntityHandle                createEntity(const std::string& name, MeshHandle mesh = MeshHandle{}, MaterialHandle material = MaterialHandle{}, Transform transform = Transform{});
         CameraHandle                createCamera(CameraProjection projection, Transform transform);
-        LightHandle                 createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f), float intensity = 1.0f, float range = 10.0f);
+        LightHandle                 createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f), float intensity = 1.0f, float range = 10.0f, float innerConeAngle = 0.0f, float outerConeAngle = SPOT_OUTER_CONE_ANGLE);
         void                        addEntityToScene(SceneHandle scene, EntityHandle entity);
         void                        addCameraToScene(SceneHandle scene, CameraHandle camera);
         void                        addLightToScene(SceneHandle scene, LightHandle light);
@@ -120,7 +120,7 @@ namespace rasm
         void                        beginPass(const std::string& name = "Pass", const AttachmentOps& ops = {});
         void                        endPass();
         void                        render(SceneHandle scene, CameraHandle camera);
-        bool                        addScenePasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, const SceneShadow& shadow = {});
+        bool                        addScenePasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, const SceneShadow* shadows = nullptr, uint32_t shadowCount = 0);
         SceneShadow                 addShadowPasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const ShadowDesc& desc);
         bool                        addToneMapPass(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera);
         bool                        running() const;
@@ -244,8 +244,8 @@ namespace rasm
         void                        markDrawListsDirty(EntityHandle entity);
         void                        rebuildDrawList(SceneHandle scene);
         void                        uploadDrawList(SceneDrawList& drawList);
-        bool                        addSceneViewPasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, const SceneShadow& shadow, bool depthOnly);
-        uint32_t                    createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, const SceneShadow& shadow, bool depthOnly);
+        bool                        addSceneViewPasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, uint32_t face, const SceneShadow* shadows, uint32_t shadowCount, bool depthOnly);
+        uint32_t                    createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, uint32_t face, const SceneShadow* shadows, uint32_t shadowCount, bool depthOnly);
         void                        releaseSceneView(uint32_t view);
         void                        prepareSceneView(uint32_t view);
         void                        recordSceneCulling(uint32_t view, uint32_t phase);
