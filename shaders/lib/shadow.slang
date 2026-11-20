@@ -34,6 +34,13 @@ float4 getPcfWeights(float2 f, int qx, int qy)
     return float4(x0 * y1, x1 * y1, x1 * y0, x0 * y0) / 9.0;
 }
 
+// The reversed-Z depth a cube face's projection gives a point at depth along the face's axis: clip z / clip w at view
+// z = -depth.
+float getCubeDepth(float4x4 faceProjection, float depth)
+{
+    return (faceProjection[2][3] - faceProjection[2][2] * depth) / depth;
+}
+
 // The lookup leaves the surface by about one texel of the map, in world units, so the surface does not shadow
 // itself: along its normal, more where the light grazes it, and toward the light. A texel covers 2 / (row 0's length
 // * size) at clip w 1: everywhere for an orthographic map, and at depth 1 from the light for a perspective one.
@@ -78,7 +85,8 @@ float sampleShadowMap(Sampler2D shadowMap, float4x4 shadowMatrix, float3 worldPo
 // How much of a point light at lightPosition reaches worldPosition, from its cube: 1 lit, 0 in shadow. Every face
 // has the same 90° projection, whose depth along the face's axis is the lookup's depth. The PCF works on the face of
 // the lookup like a 2D map's, and its gathers turn the texels' corners back into directions, so a gather on a face's
-// edge reads the next face's texels (Vulkan cube sampling is seamless).
+// edge reads the next face's texels (Vulkan cube sampling is seamless). Those hold the depth along the next face's
+// axis, so each gather compares with the lookup's depth along the axis of the face it reads.
 float sampleShadowCube(SamplerCube shadowCube, float4x4 faceProjection, float3 lightPosition, float3 worldPosition, float3 normal)
 {
     uint width, height;
@@ -92,8 +100,7 @@ float sampleShadowCube(SamplerCube shadowCube, float4x4 faceProjection, float3 l
 
     uint face               = getCubeFace(d);
     float depth             = dot(d, CUBE_FORWARD[face]);
-    // The projection's clip z and w at view z = -depth.
-    float z                 = (faceProjection[2][3] - faceProjection[2][2] * depth) / depth;
+    float z                 = getCubeDepth(faceProjection, depth);
     if (z < 0.0 || z > 1.0)
         return 1.0;
 
@@ -109,7 +116,8 @@ float sampleShadowCube(SamplerCube shadowCube, float4x4 faceProjection, float3 l
             float2 corner   = (base + float2(2 * qx, 2 * qy)) / size;
             float3 r        = CUBE_FORWARD[face] + CUBE_S[face] * (corner.x * 2.0 - 1.0) + CUBE_T[face] * (corner.y * 2.0 - 1.0);
             float4 occluder = shadowCube.Gather(r);
-            lit            += dot(float4(z >= occluder), getPcfWeights(texel - base, qx, qy));
+            float gatherZ   = getCubeDepth(faceProjection, max(dot(d, CUBE_FORWARD[getCubeFace(r)]), 1e-6));
+            lit            += dot(float4(gatherZ >= occluder), getPcfWeights(texel - base, qx, qy));
         }
     }
     return lit;

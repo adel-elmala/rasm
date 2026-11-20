@@ -605,7 +605,7 @@ TEST_CASE("the first pass that draws a target clears it, and each later one load
     CHECK_FALSE(present.storeDepth);
 }
 
-TEST_CASE("each face of a cube target clears in its first pass, and a later face keeps the faces drawn before it")
+TEST_CASE("each face of a cube target clears in its first pass, and only the cube's first pass may drop the other faces")
 {
     const rasm::RenderTargetHandle cube{1, 1};
     const auto drawFace = [&](uint32_t face)
@@ -636,14 +636,14 @@ TEST_CASE("each face of a cube target clears in its first pass, and a later face
     const rasm::AttachmentOps &face0Again = graph.pass(2).attachmentOps;
 
     CHECK_FALSE(face0.loadDepth);
-    CHECK_FALSE(face0.keepOtherFaces);
+    CHECK(face0.firstWrite);
     CHECK(face0.storeDepth);
     // Face 1 has nothing to load yet, but the barrier before it must not drop face 0.
     CHECK_FALSE(face1.loadDepth);
-    CHECK(face1.keepOtherFaces);
+    CHECK_FALSE(face1.firstWrite);
     CHECK(face1.storeDepth);
     CHECK(face0Again.loadDepth);
-    CHECK(face0Again.keepOtherFaces);
+    CHECK_FALSE(face0Again.firstWrite);
     CHECK(face0Again.storeDepth);
 }
 

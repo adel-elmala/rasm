@@ -41,6 +41,13 @@ namespace rasm
             bool depth = false;
         };
 
+        // The last pass that drew each face of a target in RenderGraph::assignAttachmentOps; a target that is not a cube
+        // has only face 0. UINT32_MAX is no pass.
+        struct FaceWriters
+        {
+            uint32_t faces[CUBE_FACES] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};
+        };
+
         // One row of the lifetime table in RenderGraph::dump: a mark per position in the order.
         struct LifetimeRow
         {
@@ -577,7 +584,7 @@ namespace rasm
                 const AttachmentOps &ops = pass.attachmentOps;
                 const std::string depth = pass.writesSwapchain ? "no depth" : std::string(ops.loadDepth ? "load depth" : "clear depth") + ", " + (ops.storeDepth ? "store depth" : "discard depth");
                 const bool cube = engine && pass.outputRenderTarget.isValid() && engine->getRenderContext().getRenderTargetDesc(pass.outputRenderTarget).cube;
-                const std::string face = cube ? ", face " + std::to_string(pass.outputFace) + (ops.keepOtherFaces ? ", keep other faces" : "") : "";
+                const std::string face = cube ? ", face " + std::to_string(pass.outputFace) + (ops.firstWrite ? ", first write" : "") : "";
                 text += std::string("    attachments: ") + (ops.loadColor ? "load color" : "clear color") + ", " + depth + face + "\n";
             }
             if (compiled)
@@ -637,13 +644,9 @@ namespace rasm
     // Passes that draw to one target run in the order they were added, so the first clears it, and each later one loads
     // what the one before drew, depth included, which that one must then store. So must the pass before a depth read.
     // The swapchain has no depth, so its passes load only color. Each face of a cube is a target of its own here, but
-    // a pass's barrier covers the whole cube, so a pass after the cube's first keeps the faces drawn before it.
+    // a pass's barrier covers the whole cube, so only the cube's first pass of the frame may drop it (firstWrite).
     void RenderGraph::assignAttachmentOps(const std::vector<uint32_t> &order)
     {
-        struct FaceWriters
-        {
-            uint32_t faces[CUBE_FACES] = {NO_PASS, NO_PASS, NO_PASS, NO_PASS, NO_PASS, NO_PASS};
-        };
         std::unordered_map<RenderTargetHandle, FaceWriters, HandleHash> lastWriters;
         uint32_t lastSwapchainWriter = NO_PASS;
         for (uint32_t passIdx : order)
@@ -665,7 +668,7 @@ namespace rasm
             if (!pass.writesSwapchain)
             {
                 auto [it, first] = lastWriters.try_emplace(pass.outputRenderTarget);
-                pass.attachmentOps.keepOtherFaces = !first;
+                pass.attachmentOps.firstWrite = first;
                 previous = &it->second.faces[pass.outputFace];
             }
             if (*previous != NO_PASS)

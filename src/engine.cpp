@@ -597,11 +597,12 @@ namespace rasm
             clearColor = renderTargetData.clearColor;
         }
 
-        // What the pass clears is dropped. The barrier covers all of a cube's faces, so it keeps the ones drawn before.
+        // What the pass clears is dropped. The barrier covers all of a cube's faces, so it drops a cube only in the frame's
+        // first pass on it: a pass that clears one face keeps the others.
         for (uint32_t i = 0; i < colorCount; ++i)
             ctx.transitionImageLayout(currentFrame.commandBuffer, colors[i], TextureUsage::COLOR_ATTACHMENT, !ops.loadColor);
         if (depth.isValid())
-            ctx.transitionImageLayout(currentFrame.commandBuffer, depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT, !ops.loadDepth && !ops.keepOtherFaces);
+            ctx.transitionImageLayout(currentFrame.commandBuffer, depth, TextureUsage::DEPTH_STENCIL_ATTACHMENT, !ops.loadDepth && (ops.firstWrite || !ctx.getTextureDesc(depth).cube));
         ctx.beginRendering(currentFrame.commandBuffer, colors, colorCount, depth, clearColor, ops, currentRenderTarget.isValid() ? currentFace : 0);
 
         // begin dynamic rendering

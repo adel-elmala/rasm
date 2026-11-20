@@ -403,8 +403,13 @@ namespace rasm
         return handle;
     }
 
+    // A cube is drawn one face at a time through its face views, which only a depth attachment has, and nothing
+    // uploads its faces, so it is a depth attachment.
     TextureHandle RenderContext::createTexture(const TextureDesc &desc)
     {
+        const bool depthAttachment = desc.usage == TextureUsage::DEPTH_STENCIL_ATTACHMENT || desc.usage == TextureUsage::SAMPLED_DEPTH_ATTACHMENT;
+        if (!checkArgument(!desc.cube || depthAttachment, __func__, "a cube texture is a depth attachment."))
+            return {};
         auto *texture = impl->device->createTexture(desc);
         if (!texture)
             return {};

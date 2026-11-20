@@ -55,10 +55,9 @@ namespace rasm
         // The view and projection of each of the shadow's maps this frame. The view that reads them and the maps' own
         // views both call it, so the maps are drawn and read with the same matrices. A directional light's cascades are
         // fitted to the camera's view, and also give their splits; a spot light's map follows its cone; a point
-        // light's cube has one projection for its faces, each of which has its own view (getCubeFaceView). False, and
-        // no shadow, when the camera's near plane has moved to a directional shadow's distance or beyond since
-        // addShadowPasses.
-        bool getShadowMaps(const Light &light, const Camera &camera, const glm::mat4 &projection, const glm::mat4 &view, const SceneShadow &shadow, uint32_t mapSize, ShadowCascade *maps, float *splits)
+        // light's cube has one projection for its faces, and the view of face. False, and no shadow, when the camera's near
+        // plane has moved to a directional shadow's distance or beyond since addShadowPasses.
+        bool getShadowMaps(const Light &light, const Camera &camera, const glm::mat4 &projection, const glm::mat4 &view, const SceneShadow &shadow, uint32_t mapSize, uint32_t face, ShadowCascade *maps, float *splits)
         {
             if (light.type == LightType::SPOT)
             {
@@ -67,7 +66,7 @@ namespace rasm
             }
             if (light.type == LightType::POINT)
             {
-                maps[0] = {.view = glm::mat4(1.0f), .projection = getCubeFaceProjection(shadow.distance)};
+                maps[0] = {.view = getCubeFaceView(light.position, face), .projection = getCubeFaceProjection(shadow.distance)};
                 return true;
             }
             const float nearZ = getNearZ(camera);
@@ -718,11 +717,13 @@ namespace rasm
         std::string drawName = depthOnly ? "Shadow" : "Scene";
         if (depthOnly && shadowCount > 0)
         {
+            // Local lights' passes name the light, like their targets, so two of them can be told apart.
             const LightType type = registry.lights[shadows[0].light.index].type;
+            const std::string light = std::to_string(shadows[0].light.index);
             if (type == LightType::SPOT)
-                drawName = "Spot";
+                drawName = "Spot " + light;
             if (type == LightType::POINT)
-                drawName = "Face " + std::to_string(face);
+                drawName = "Cube " + light + " Face " + std::to_string(face);
             for (uint32_t i = 0; type == LightType::DIRECTIONAL && i < shadows[0].mapCount; ++i)
             {
                 if (shadows[0].maps[i] == renderTarget)
@@ -1024,7 +1025,7 @@ namespace rasm
                 if (sceneRef.lights[i] == shadow.light)
                     shadowLights[s] = static_cast<int32_t>(i);
             }
-            if (shadowLights[s] >= 0 && !getShadowMaps(registry.lights[shadow.light.index], cameraRef, cameraProjection, cameraView, shadow, ctx.getRenderTarget(shadow.maps[0]).width, shadowMaps[s], splits[s]))
+            if (shadowLights[s] >= 0 && !getShadowMaps(registry.lights[shadow.light.index], cameraRef, cameraProjection, cameraView, shadow, ctx.getRenderTarget(shadow.maps[0]).width, view.face, shadowMaps[s], splits[s]))
                 shadowLights[s] = -1;
         }
         if (shadowView && shadowLights[0] < 0)
@@ -1040,8 +1041,6 @@ namespace rasm
             sceneData.projection = shadowMaps[0][i].projection;
             sceneData.view = shadowMaps[0][i].view;
         }
-        if (shadowView && registry.lights[view.shadows[0].light.index].type == LightType::POINT)
-            sceneData.view = getCubeFaceView(registry.lights[view.shadows[0].light.index].position, view.face);
         view.mirrored = glm::determinant(glm::mat3(sceneData.view)) < 0.0f;
         getFrustumPlanes(sceneData.projection * sceneData.view, sceneData.frustumPlanes);
         sceneData.cameraWorldPosition = cameraRef.transform.position;

@@ -162,7 +162,7 @@ namespace rasm
         bool                        loadColor                       = false;
         bool                        loadDepth                       = false;
         bool                        storeDepth                      = false;
-        bool                        keepOtherFaces                  = false;    // an earlier pass drew into the target this frame: of a cube, other faces
+        bool                        firstWrite                      = false;    // no earlier pass drew into the target this frame, so a cube's other faces may be dropped
     };
 
     struct BindlessDescriptorSetLayoutDesc
