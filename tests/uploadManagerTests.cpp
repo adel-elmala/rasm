@@ -195,6 +195,7 @@ namespace
         bool getTimestamps(QueryPool *, uint32_t, uint32_t, uint64_t *) override { return false; }
         bool fillTexture(Texture *, const void *) override { return false; }
         void updateBindlessTexture(DescriptorSet *, uint32_t, Texture *, Sampler *) override {}
+        void updateBindlessStorageImage(DescriptorSet *, uint32_t, Texture *, uint32_t) override {}
         bool waitForFence(Fence *fence, uint64_t value, uint64_t) override
         {
             auto *fake = static_cast<FakeFence *>(fence);

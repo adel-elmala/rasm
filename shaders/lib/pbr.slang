@@ -2,39 +2,8 @@
 #pragma once
 
 #include "core.slang"
-
-// Constants
-static const float  PI                  = 3.14159265359;
-
-// Normal distribution function (GGX / Trowbridge-Reitz)
-float D_GGX(float NoH, float roughness)
-{
-    float a = NoH * roughness;
-    float k = roughness / (1.0 - NoH * NoH + a * a);
-    return k * k * (1.0 / PI);
-}
-
-// Fresnel term (Schlick's approximation)
-float3 F_Schlick(float u, float3 f0)
-{
-    float f = pow(1.0 - u, 5.0);
-    return f + f0 * (1.0 - f);
-}
-
-// Height-correlated Smith-GGX visibility (shadowing/masking)
-float V_SmithGGXCorrelated(float NoV, float NoL, float roughness)
-{
-    float a2 = roughness * roughness;
-    float GGXL = NoV * sqrt((-NoL * a2 + NoL) * NoL + a2);
-    float GGXV = NoL * sqrt((-NoV * a2 + NoV) * NoV + a2);
-    return 0.5 / max(GGXV + GGXL, 1e-8);
-}
-
-// Lambertian diffuse BRDF
-float Fd_Lambert()
-{
-    return 1.0 / PI;
-}
+#include "brdf.slang"
+#include "environment.slang"
 
 // Perturb the normal with a tangent-space normal map. Meshes with glTF TANGENTs (tangent.w = ±1) use the
 // authored frame. Otherwise a UV-aligned frame is reconstructed from fragment derivatives, which supports
@@ -101,9 +70,10 @@ struct PBRInfo
     Light       lights[MAX_LIGHTS];  // array of lights
     float       shadows[MAX_LIGHTS]; // how much of each light reaches the fragment (shadow.slang), 1 without a shadow
     Material    material;            // material properties
+    EnvironmentLight environment;    // the scene's environment; specular is INVALID_TEXTURE_INDEX without one
 };
 
-float4 shadePBR(Sampler2D gTextures[], PBRInfo pbrInfo)
+float4 shadePBR(Sampler2D gTextures[], SamplerCube gCubeTextures[], PBRInfo pbrInfo)
 {
     float metallicFactor    = pbrInfo.material.metallicRoughness.metallicFactor;
     float roughnessFactor   = pbrInfo.material.metallicRoughness.roughnessFactor;
@@ -223,8 +193,11 @@ float4 shadePBR(Sampler2D gTextures[], PBRInfo pbrInfo)
         }
     }
 
-    // 5. Ambient / Environment lighting approximation
-    float3 ambient = float3(0.03) * diffuseColor * ao; // Simple ambient baseline
+    // 5. The light from around the scene: the environment's (image-based lighting), or without one a small constant.
+    // Neither is shadowed.
+    float3 ambient = float3(0.03) * diffuseColor * ao;
+    if (hasTexture(pbrInfo.environment.specular))
+        ambient = getEnvironmentLight(gCubeTextures, gTextures, pbrInfo.environment, n, v, NoV, roughness, f0, diffuseColor) * ao;
 
     // 6. Final color composition. Radiance goes out unbounded, into the HDR target; the tone-map pass brings it to
     // display range.

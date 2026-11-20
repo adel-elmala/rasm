@@ -12,14 +12,16 @@
 
 namespace rasm
 {
-    constexpr uint32_t  MAX_FRAMES_IN_FLIGHT    = 2;
-    constexpr uint32_t  MAX_COLOR_ATTACHMENTS   = 4;
-    constexpr uint32_t  MAX_DESCRIPTOR_TYPES    = 1;
-    constexpr uint32_t  MAX_BINDLESS_TEXTURES   = 1024;
-    constexpr uint32_t  PUSH_CONSTANTS_SIZE     = 16;
+    constexpr uint32_t  MAX_FRAMES_IN_FLIGHT        = 2;
+    constexpr uint32_t  MAX_COLOR_ATTACHMENTS       = 4;
+    constexpr uint32_t  MAX_DESCRIPTOR_TYPES        = 2;
+    constexpr uint32_t  MAX_BINDLESS_TEXTURES       = 1024;
+    // Binding 1 of the bindless set: storage images, each one mip of a texture, that compute shaders write.
+    constexpr uint32_t  MAX_BINDLESS_STORAGE_IMAGES = 32;
+    constexpr uint32_t  PUSH_CONSTANTS_SIZE         = 16;
     // Sentinel written by the CPU when a material slot has no texture bound; the shader must
     // never sample the bindless array with this index.
-    constexpr uint32_t  INVALID_TEXTURE_INDEX   = 0xFFFFFFFF;
+    constexpr uint32_t  INVALID_TEXTURE_INDEX       = 0xFFFFFFFF;
 
     enum class Backend
     {
@@ -124,6 +126,13 @@ namespace rasm
         uint32_t        width   = 0;
         uint32_t        height  = 0;
         unsigned char*  data    = nullptr;
+    };
+
+    struct EnvironmentRaw
+    {
+        uint32_t                width   = 0;
+        uint32_t                height  = 0;
+        std::vector<uint16_t>   pixels;         // RGBA16F, linear
     };
 
     struct RenderTargetAttachments

@@ -35,6 +35,8 @@ namespace rasm::rhi
                 return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
             case TextureUsage::SAMPLED:
                 return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            case TextureUsage::STORAGE:
+                return VK_IMAGE_LAYOUT_GENERAL;
             default:
                 return VK_IMAGE_LAYOUT_UNDEFINED;
             }
@@ -51,7 +53,7 @@ namespace rasm::rhi
                 srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR |
                                VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
                 return true;
             case TextureUsage::COLOR_ATTACHMENT:
                 srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -60,6 +62,10 @@ namespace rasm::rhi
             case TextureUsage::DEPTH_STENCIL_ATTACHMENT:
                 srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR;
                 srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                return true;
+            case TextureUsage::STORAGE:
+                srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
                 return true;
             case TextureUsage::SAMPLED:
                 // Reads make nothing available, so only their stage is waited on.
@@ -92,6 +98,11 @@ namespace rasm::rhi
             case TextureUsage::SAMPLED:
                 dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                return true;
+            case TextureUsage::STORAGE:
+                // Compute writes storage images, and reads them too (one mip from the one before it).
+                dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
                 return true;
             default:
                 spdlog::error("Unsupported new texture usage for layout transition.");

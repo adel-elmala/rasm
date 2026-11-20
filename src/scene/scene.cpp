@@ -1,7 +1,10 @@
 #include "rasm/scene.h"
 #include "rasm/engine.h"
+#include "renderer/environmentBake.h"
 
 #include "spdlog/spdlog.h"
+
+#include <cmath>
 
 namespace rasm
 {
@@ -97,4 +100,24 @@ namespace rasm
         sceneRef.lights.push_back(light);
     }
 
+    void Engine::setSceneEnvironment(SceneHandle scene, const SceneEnvironment &environment)
+    {
+        if (!scene.isValid() || scene.index >= registry.scenes.size())
+        {
+            spdlog::error("Invalid scene handle for setting the environment.");
+            return;
+        }
+        // An invalid handle is no environment; a handle loadEnvironment never gave is a mistake.
+        if (environment.environment.isValid() && environment.environment.index >= environments->environments.size())
+        {
+            spdlog::error("Invalid environment handle for scene {}.", scene.index);
+            return;
+        }
+        if (!(environment.intensity >= 0.0f) || !std::isfinite(environment.intensity) || !std::isfinite(environment.rotation))
+        {
+            spdlog::error("An environment needs a finite intensity of at least 0 and a finite rotation.");
+            return;
+        }
+        registry.scenes[scene.index].environment = environment;
+    }
 } // namespace rasm

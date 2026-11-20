@@ -2,23 +2,7 @@
 #pragma once
 
 #include "core.slang"
-
-// The faces of a cube in Vulkan's order (+X, -X, +Y, -Y, +Z, -Z): the axis a face looks along, and the directions in
-// which its texel coordinates s and t grow (Vulkan's cube map face table). Must match localShadows.cpp.
-static const float3 CUBE_FORWARD[6] = { float3(1, 0, 0), float3(-1, 0, 0), float3(0, 1, 0), float3(0, -1, 0), float3(0, 0, 1), float3(0, 0, -1) };
-static const float3 CUBE_S[6]       = { float3(0, 0, -1), float3(0, 0, 1), float3(1, 0, 0), float3(1, 0, 0), float3(1, 0, 0), float3(-1, 0, 0) };
-static const float3 CUBE_T[6]       = { float3(0, -1, 0), float3(0, -1, 0), float3(0, 0, 1), float3(0, 0, -1), float3(0, -1, 0), float3(0, -1, 0) };
-
-// The face a direction from the cube's centre falls on: the one of its biggest axis.
-uint getCubeFace(float3 d)
-{
-    float3 a = abs(d);
-    if (a.x >= a.y && a.x >= a.z)
-        return d.x >= 0.0 ? 0 : 1;
-    if (a.y >= a.z)
-        return d.y >= 0.0 ? 2 : 3;
-    return d.z >= 0.0 ? 4 : 5;
-}
+#include "cubeMap.slang"
 
 // A 3x3 PCF with bilinear weights reads 4x4 texels, as four 2x2 gathers. These are the weights of gather (qx, qy)'s
 // texels, in a gather's order: (x, y + 1), (x + 1, y + 1), (x + 1, y), (x, y). f is the lookup's place in its texel.

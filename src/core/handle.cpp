@@ -82,6 +82,11 @@ namespace rasm
         return LightHandle{nextHandle.light++, 1};
     }
 
+    EnvironmentHandle HandleManager::getNextEnvironmentHandle()
+    {
+        return EnvironmentHandle{nextHandle.environment++, 1};
+    }
+
     SceneHandle HandleManager::getNextSceneHandle()
     {
         return SceneHandle{nextHandle.scene++, 1};

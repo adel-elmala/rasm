@@ -115,6 +115,7 @@ namespace rasm::rhi
                 .descriptorIndexing = VK_TRUE,
                 .shaderSampledImageArrayNonUniformIndexing = VK_TRUE,
                 .descriptorBindingSampledImageUpdateAfterBind = VK_TRUE,
+                .descriptorBindingStorageImageUpdateAfterBind = VK_TRUE,
                 .descriptorBindingPartiallyBound = VK_TRUE,
                 .descriptorBindingVariableDescriptorCount = VK_TRUE,
                 .runtimeDescriptorArray = VK_TRUE,
@@ -254,6 +255,8 @@ namespace rasm::rhi
                 return VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
             case TextureUsage::SAMPLED_DEPTH_ATTACHMENT:
                 return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            case TextureUsage::SAMPLED_STORAGE:
+                return VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
             case TextureUsage::TRANSIENT_ATTACHMENT:
                 return VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
             case TextureUsage::INPUT_ATTACHMENT:
@@ -273,6 +276,8 @@ namespace rasm::rhi
                 return VK_DESCRIPTOR_TYPE_SAMPLER;
             case DescriptorType::COMBINED_IMAGE_SAMPLER:
                 return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            case DescriptorType::STORAGE_IMAGE:
+                return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             default:
                 return VK_DESCRIPTOR_TYPE_MAX_ENUM;
             }
@@ -339,18 +344,21 @@ namespace rasm::rhi
             return false;
         }
 
-        // Only sampled RGBA8 images use the mip upload/generation path. Render targets and other formats keep one level.
+        // Only sampled RGBA8 images use the mip upload/generation path. Render targets and other formats keep one level,
+        // unless the desc asks for more; a count past the full chain is clamped to it.
         uint32_t mipLevelCount(const TextureDesc &desc)
         {
-            uint32_t mipLevels = 1;
+            uint32_t fullChain = 1;
+            for (uint32_t size = std::max(desc.width, desc.height); size > 1; size /= 2)
+                ++fullChain;
+            fullChain = std::min(fullChain, MAX_TEXTURE_MIPS);
+            if (desc.mipLevels > 0)
+                return std::min(desc.mipLevels, fullChain);
             if (desc.usage == TextureUsage::SAMPLED &&
                 (desc.format == Format::R8G8B8A8_UNORM || desc.format == Format::R8G8B8A8_SRGB ||
                  desc.format == Format::B8G8R8A8_SRGB))
-            {
-                for (uint32_t size = std::max(desc.width, desc.height); size > 1; size /= 2)
-                    ++mipLevels;
-            }
-            return mipLevels;
+                return fullChain;
+            return 1;
         }
 
         // TODO: check if the format is supported by the device, and if not, find a compatible one
@@ -385,10 +393,17 @@ namespace rasm::rhi
                 vkDestroyImageView(device, faceView, nullptr);
                 faceView = VK_NULL_HANDLE;
             }
+            for (VkImageView &mipView : texture.mipViews)
+            {
+                vkDestroyImageView(device, mipView, nullptr);
+                mipView = VK_NULL_HANDLE;
+            }
             texture.view = VK_NULL_HANDLE;
         }
 
-        // A cube gets a cube view of all its faces, for sampling, and a 2D view of each face, for drawing into it.
+        // A cube gets a cube view of all its faces, for sampling, and a 2D view of each face's first mip, for drawing into
+        // it. A storage texture gets a 2D array view of each mip with every layer, for compute to write: a storage view
+        // holds one mip, and one view type serves a 2D texture (1 layer) and a cube (6) alike.
         VkResult createImageViews(VkDevice device, VulkanTexture &texture)
         {
             VkImageViewCreateInfo viewInfo = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
@@ -404,7 +419,17 @@ namespace rasm::rhi
                 viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
                 viewInfo.subresourceRange.baseArrayLayer = face;
                 viewInfo.subresourceRange.layerCount = 1;
+                viewInfo.subresourceRange.levelCount = 1;
                 result = vkCreateImageView(device, &viewInfo, nullptr, &texture.faceViews[face]);
+            }
+            for (uint32_t mip = 0; texture.desc.usage == TextureUsage::SAMPLED_STORAGE && result == VK_SUCCESS && mip < texture.mipLevels; ++mip)
+            {
+                viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+                viewInfo.subresourceRange.baseMipLevel = mip;
+                viewInfo.subresourceRange.levelCount = 1;
+                viewInfo.subresourceRange.baseArrayLayer = 0;
+                viewInfo.subresourceRange.layerCount = texture.desc.cube ? CUBE_FACES : 1;
+                result = vkCreateImageView(device, &viewInfo, nullptr, &texture.mipViews[mip]);
             }
             if (result != VK_SUCCESS)
                 destroyImageViews(device, texture);
@@ -910,27 +935,34 @@ namespace rasm::rhi
 
     DescriptorSetLayout *VulkanDevice::createBindlessDescriptorSetLayout(const BindlessDescriptorSetLayoutDesc &desc)
     {
-        // Allow updating after binding, and allow empty slots in our giant array
-        VkDescriptorBindingFlags bindlessFlags =
-            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
-            VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+        // Allow updating after binding, and allow empty slots in our giant arrays. Binding 1 holds the storage images,
+        // when the desc asks for them.
+        const VkDescriptorBindingFlags bindlessFlags[2] = {
+            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
+            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
+        };
+        const uint32_t bindingCount = desc.storageImageCount > 0 ? 2 : 1;
 
         VkDescriptorSetLayoutBindingFlagsCreateInfo extendedInfo = {};
         extendedInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-        extendedInfo.bindingCount = 1;
-        extendedInfo.pBindingFlags = &bindlessFlags;
+        extendedInfo.bindingCount = bindingCount;
+        extendedInfo.pBindingFlags = bindlessFlags;
 
-        VkDescriptorSetLayoutBinding samplerLayoutBinding = {};
-        samplerLayoutBinding.binding = 0;
-        samplerLayoutBinding.descriptorType = toVkDescriptorType(desc.type);
-        samplerLayoutBinding.descriptorCount = desc.count;
-        samplerLayoutBinding.stageFlags = toVkShaderStageFlags(desc.stage);
+        VkDescriptorSetLayoutBinding bindings[2] = {};
+        bindings[0].binding = 0;
+        bindings[0].descriptorType = toVkDescriptorType(desc.type);
+        bindings[0].descriptorCount = desc.count;
+        bindings[0].stageFlags = toVkShaderStageFlags(desc.stage);
+        bindings[1].binding = 1;
+        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bindings[1].descriptorCount = desc.storageImageCount;
+        bindings[1].stageFlags = toVkShaderStageFlags(desc.stage);
 
         VkDescriptorSetLayoutCreateInfo layoutInfo = {};
         layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-        layoutInfo.bindingCount = 1;
-        layoutInfo.pBindings = &samplerLayoutBinding;
+        layoutInfo.bindingCount = bindingCount;
+        layoutInfo.pBindings = bindings;
         layoutInfo.pNext = &extendedInfo;
 
         auto *layout = new VulkanDescriptorSetLayout();
@@ -953,6 +985,8 @@ namespace rasm::rhi
         std::vector<VkDescriptorPoolSize> poolSizes;
         for (const auto &poolSize : desc.sizes)
         {
+            if (poolSize.count == 0)
+                continue;
             VkDescriptorPoolSize vkPoolSize = {};
             vkPoolSize.type = toVkDescriptorType(poolSize.type);
             vkPoolSize.descriptorCount = poolSize.count;
@@ -1316,6 +1350,29 @@ namespace rasm::rhi
             .dstArrayElement = slot,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &imageInfo,
+        };
+
+        vkUpdateDescriptorSets(device.device, 1, &descriptorWrite, 0, nullptr);
+    }
+
+    // Storage images are written in GENERAL, the layout the STORAGE state transitions to.
+    void VulkanDevice::updateBindlessStorageImage(DescriptorSet *descriptorSet, uint32_t slot, Texture *texture, uint32_t mip)
+    {
+        auto *vkTexture = static_cast<VulkanTexture *>(texture);
+        assert(texture->desc.usage == TextureUsage::SAMPLED_STORAGE && mip < texture->mipLevels);
+        VkDescriptorImageInfo imageInfo = {
+            .imageView = vkTexture->mipViews[mip],
+            .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+        };
+
+        VkWriteDescriptorSet descriptorWrite = {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = static_cast<VulkanDescriptorSet *>(descriptorSet)->set,
+            .dstBinding = 1,
+            .dstArrayElement = slot,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
             .pImageInfo = &imageInfo,
         };
 

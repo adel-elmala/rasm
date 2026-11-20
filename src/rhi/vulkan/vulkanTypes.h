@@ -9,6 +9,9 @@
 
 namespace rasm::rhi
 {
+    // A full chain of the largest texture any GPU allows (32768) has 16 levels.
+    constexpr uint32_t          MAX_TEXTURE_MIPS    = 16;
+
     struct VulkanBuffer : Buffer
     {
         VkBuffer                buffer          = VK_NULL_HANDLE;
@@ -18,11 +21,11 @@ namespace rasm::rhi
 
     struct VulkanTexture : Texture
     {
-        VkImage                 image                   = VK_NULL_HANDLE;
-        VkImageView             view                    = VK_NULL_HANDLE;   // a cube's view samples all its faces
-        VkImageView             faceViews[CUBE_FACES]   = {};               // a cube's attachments, one face each
-        VmaAllocation           allocation              = nullptr;
-        uint32_t                mipLevels               = 1;
+        VkImage                 image                       = VK_NULL_HANDLE;
+        VkImageView             view                        = VK_NULL_HANDLE;   // a cube's view samples all its faces
+        VkImageView             faceViews[CUBE_FACES]       = {};               // a cube's attachments, one face each
+        VkImageView             mipViews[MAX_TEXTURE_MIPS]  = {};               // a storage texture's: one mip, every layer, as a 2D array
+        VmaAllocation           allocation                  = nullptr;
     };
 
     struct VulkanHeap : Heap

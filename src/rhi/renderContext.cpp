@@ -408,7 +408,7 @@ namespace rasm
     TextureHandle RenderContext::createTexture(const TextureDesc &desc)
     {
         const bool depthAttachment = desc.usage == TextureUsage::DEPTH_STENCIL_ATTACHMENT || desc.usage == TextureUsage::SAMPLED_DEPTH_ATTACHMENT;
-        if (!checkArgument(!desc.cube || depthAttachment, __func__, "a cube texture is a depth attachment."))
+        if (!checkArgument(!desc.cube || depthAttachment || desc.usage == TextureUsage::SAMPLED_STORAGE, __func__, "a cube texture is a depth attachment or a storage texture."))
             return {};
         auto *texture = impl->device->createTexture(desc);
         if (!texture)
@@ -1099,6 +1099,38 @@ namespace rasm
         return targetSlot;
     }
 
+    // A storage slot holds one mip of a texture, written by compute in the STORAGE state. A slot the GPU may still use
+    // must not be rewritten: the caller waits for the frames that used it.
+    bool RenderContext::updateBindlessStorageImage(const DescriptorSetHandle &bindlessSet, uint32_t slot, const TextureHandle &texture, uint32_t mip)
+    {
+        auto *descriptorSet = lookup(impl->descriptorSets, bindlessSet, __func__);
+        auto *rhiTexture = lookup(impl->textures, texture, __func__);
+        if (!descriptorSet || !rhiTexture || !checkArgument(slot < MAX_BINDLESS_STORAGE_IMAGES, __func__, "the slot is past MAX_BINDLESS_STORAGE_IMAGES.") ||
+            !checkArgument(rhiTexture->desc.usage == TextureUsage::SAMPLED_STORAGE, __func__, "the texture is not a SAMPLED_STORAGE texture.") ||
+            !checkArgument(mip < rhiTexture->mipLevels, __func__, "the texture has no such mip."))
+            return false;
+        impl->device->updateBindlessStorageImage(descriptorSet, slot, rhiTexture, mip);
+        return true;
+    }
+
+    uint32_t RenderContext::getTextureMipLevels(const TextureHandle &texture)
+    {
+        auto *rhiTexture = lookup(impl->textures, texture, __func__);
+        return rhiTexture ? rhiTexture->mipLevels : 0;
+    }
+
+    TextureUsage RenderContext::getTextureState(const TextureHandle &texture)
+    {
+        auto *rhiTexture = lookup(impl->textures, texture, __func__);
+        return rhiTexture ? rhiTexture->state : TextureUsage::UNKNOWN;
+    }
+
+    uint64_t RenderContext::getFenceValue(FenceHandle fence)
+    {
+        auto *rhiFence = lookup(impl->fences, fence, __func__);
+        return rhiFence ? impl->device->getFenceValue(rhiFence) : 0;
+    }
+
     bool RenderContext::waitForFence(FenceHandle fence, uint64_t value, uint64_t timeout)
     {
         ZoneScoped;
@@ -1145,7 +1177,8 @@ namespace rasm
     {
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         auto *rhiTexture = lookup(impl->textures, texture, __func__);
-        if (!rhiCommandBuffer || !rhiTexture || !checkArgument(!impl->insidePass, __func__, "barriers must be recorded outside a render pass."))
+        if (!rhiCommandBuffer || !rhiTexture || !checkArgument(!impl->insidePass, __func__, "barriers must be recorded outside a render pass.") ||
+            !checkArgument(newUsage != TextureUsage::STORAGE || rhiTexture->desc.usage == TextureUsage::SAMPLED_STORAGE, __func__, "only a SAMPLED_STORAGE texture can be a storage image."))
             return false;
         return impl->textureStates.transition(*rhiCommandBuffer, rhiTexture, newUsage, discard);
     }

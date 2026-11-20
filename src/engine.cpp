@@ -1,5 +1,6 @@
 #include "rasm/engine.h"
 #include "platform/paths.h"
+#include "renderer/environmentBake.h"
 #include "renderer/geometryPool.h"
 #include "renderer/frameStats.h"
 #include "renderer/gpuScene.h"
@@ -45,7 +46,7 @@ namespace rasm
         }
     }
 
-    Engine::Engine(const EngineConfig &config) : config(config), geometryPool(std::make_unique<GeometryPool>()), gpuScene(std::make_unique<GpuScene>()), frameStats(std::make_unique<FrameStatsCollector>()), statsOverlay(std::make_unique<StatsOverlay>()), ctx(this), shaderCompiler(std::make_unique<ShaderCompiler>())
+    Engine::Engine(const EngineConfig &config) : config(config), geometryPool(std::make_unique<GeometryPool>()), gpuScene(std::make_unique<GpuScene>()), environments(std::make_unique<Environments>()), frameStats(std::make_unique<FrameStatsCollector>()), statsOverlay(std::make_unique<StatsOverlay>()), ctx(this), shaderCompiler(std::make_unique<ShaderCompiler>())
     {
         // In a real implementation, this is where we'd initialize the window, graphics context, etc.
         spdlog::info("initializing engine with config: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
@@ -119,7 +120,8 @@ namespace rasm
         bindlessDescriptorSetLayout = ctx.createBindlessDescriptorSetLayout({.name = "BindlessDescriptorSetLayout",
                                                                              .stage = ShaderType::ALL,
                                                                              .count = MAX_BINDLESS_TEXTURES,
-                                                                             .type = DescriptorType::COMBINED_IMAGE_SAMPLER});
+                                                                             .type = DescriptorType::COMBINED_IMAGE_SAMPLER,
+                                                                             .storageImageCount = MAX_BINDLESS_STORAGE_IMAGES});
         if (!bindlessDescriptorSetLayout.isValid())
         {
             spdlog::error("Failed to create bindless descriptor set layout.");
@@ -127,7 +129,8 @@ namespace rasm
         }
 
         bindlessDescriptorPool = ctx.createDescriptorPool({.name = "BindlessDescriptorPool",
-                                                           .sizes = {{.type = DescriptorType::COMBINED_IMAGE_SAMPLER, .count = MAX_BINDLESS_TEXTURES}},
+                                                           .sizes = {{.type = DescriptorType::COMBINED_IMAGE_SAMPLER, .count = MAX_BINDLESS_TEXTURES},
+                                                                     {.type = DescriptorType::STORAGE_IMAGE, .count = MAX_BINDLESS_STORAGE_IMAGES}},
                                                            .maxSets = 1});
         if (!bindlessDescriptorPool.isValid())
         {
@@ -142,7 +145,7 @@ namespace rasm
             return;
         }
 
-        if (!createSwapchainResources())
+        if (!createSwapchainResources() || !createEnvironments())
             return;
 
         // Its pipeline is built with the bindless layout, so it comes after it.
@@ -225,6 +228,17 @@ namespace rasm
             }
             finishMeshLoad(pendingMeshes[i]);
             pendingMeshes.erase(pendingMeshes.begin() + i);
+        }
+
+        for (size_t i = 0; i < pendingEnvironments.size() && !overBudget();)
+        {
+            if (!wait && pendingEnvironments[i].result.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            {
+                ++i;
+                continue;
+            }
+            finishEnvironmentLoad(pendingEnvironments[i]);
+            pendingEnvironments.erase(pendingEnvironments.begin() + i);
         }
     }
 
@@ -372,6 +386,7 @@ namespace rasm
             return false;
         frameStats->frameTimer = beginGpuTimer(currentFrame.commandBuffer, "Frame");
         ctx.clearNewHistory(currentFrame.commandBuffer);
+        recordEnvironmentBakes();
         return true;
     }
 
@@ -409,7 +424,9 @@ namespace rasm
         }
         closeBatch(QueueType::COMPUTE);
         closeBatch(QueueType::GRAPHICS);
-        if (submitBatches())
+        const bool presenting = submitBatches();
+        finishEnvironmentBakes();
+        if (presenting)
         {
             auto status = ctx.present();
             if (status == SwapchainStatus::SUBOPTIMAL || status == SwapchainStatus::OUT_OF_DATE)

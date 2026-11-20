@@ -72,6 +72,7 @@ namespace rasm
         uint32_t                        graphs                                                              = 0;    // graphs that hold it; 0 is a free slot
         bool                            ready                                                               = false;
         bool                            culled                                                              = false;
+        bool                            sky                                                                 = false;    // this frame's SceneData names a sky to draw
         uint32_t                        groupCount                                                          = 0;
         uint32_t                        hizLevelCount                                                       = 0;
         uint32_t                        width                                                               = 0;
@@ -88,6 +89,7 @@ namespace rasm
         PipelineHandle                  cullCountPipeline                                                   = {};
         PipelineHandle                  cullWritePipeline                                                   = {};
         PipelineHandle                  hizPipeline                                                         = {};
+        PipelineHandle                  skyPipeline                                                         = {};
         BufferHandle                    cullStats[MAX_FRAMES_IN_FLIGHT]                                     = {};
         SceneView                       views[MAX_SCENE_VIEWS];
         DrawTotals                      drawTotals[MAX_FRAMES_IN_FLIGHT]                                    = {};

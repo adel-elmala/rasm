@@ -38,6 +38,7 @@ namespace rasm
         DEPTH_STENCIL_ATTACHMENT,
         SAMPLED_COLOR_ATTACHMENT,
         SAMPLED_DEPTH_ATTACHMENT,
+        SAMPLED_STORAGE,            // created for both: compute writes it as STORAGE, then shaders sample it
         TRANSIENT_ATTACHMENT,
         INPUT_ATTACHMENT,
         PRESENT_SRC,
@@ -77,6 +78,7 @@ namespace rasm
         UNIFORM_BUFFER,
         SAMPLER,
         COMBINED_IMAGE_SAMPLER,
+        STORAGE_IMAGE,
     };
 
     enum class SamplerType
@@ -112,6 +114,7 @@ namespace rasm
         Format                      format                          = Format::UNKNOWN;
         TextureUsage                usage                           = TextureUsage::SAMPLED;
         bool                        cube                            = false;    // CUBE_FACES layers, sampled as a cube, drawn one face at a time
+        uint32_t                    mipLevels                       = 0;        // 0: one, or the full chain for a sampled RGBA8 texture; at most the full chain
 
         bool                        operator==(const TextureDesc&) const = default;
     };
@@ -171,6 +174,7 @@ namespace rasm
         ShaderType                  stage                           = ShaderType::FRAGMENT;
         uint32_t                    count                           = 0;
         DescriptorType              type                            = DescriptorType::COMBINED_IMAGE_SAMPLER;
+        uint32_t                    storageImageCount               = 0;        // binding 1, of STORAGE_IMAGE, when above 0
 
         bool                        operator==(const BindlessDescriptorSetLayoutDesc&) const = default;
     };

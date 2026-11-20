@@ -109,8 +109,14 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
             info.shadows[i]     = sampleShadow(gTextures, gCubeTextures, pc.scene, info.lights[i], input.worldPosition, shadowNormal);
     }
     info.material               = material;
+    info.environment.specular       = pc.scene->environmentSpecular;
+    info.environment.specularMips   = pc.scene->environmentSpecularMips;
+    info.environment.irradiance     = pc.scene->environmentIrradiance;
+    info.environment.brdfLut        = pc.scene->brdfLut;
+    info.environment.intensity      = pc.scene->environmentIntensity;
+    info.environment.rotation       = pc.scene->environmentRotation;
 
-    return shadePBR(gTextures, info);
+    return shadePBR(gTextures, gCubeTextures, info);
 }
 
 // clang-format on

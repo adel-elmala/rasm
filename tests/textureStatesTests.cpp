@@ -143,3 +143,39 @@ TEST_CASE("texture states of a frame split into submits are kept up to the last 
     states.discardUnsubmitted();
     CHECK(texture.state == TextureUsage::COLOR_ATTACHMENT);
 }
+
+TEST_CASE("a storage image is written, then sampled, and a dropped bake goes back")
+{
+    FakeCommandBuffer commandBuffer;
+    TextureStates states;
+    Texture texture;
+
+    SUBCASE("storage after storage still gets a barrier, since it is written")
+    {
+        REQUIRE(states.transition(commandBuffer, &texture, TextureUsage::STORAGE, true));
+        REQUIRE(states.transition(commandBuffer, &texture, TextureUsage::STORAGE, false));
+        REQUIRE(commandBuffer.transitions.size() == 2);
+        CHECK(commandBuffer.transitions[1].oldUsage == TextureUsage::STORAGE);
+    }
+
+    SUBCASE("the sampled state after the writes is what later passes start from")
+    {
+        REQUIRE(states.transition(commandBuffer, &texture, TextureUsage::STORAGE, true));
+        REQUIRE(states.transition(commandBuffer, &texture, TextureUsage::SAMPLED, false));
+        CHECK(commandBuffer.transitions[1].oldUsage == TextureUsage::STORAGE);
+        CHECK(texture.state == TextureUsage::SAMPLED);
+
+        CommandBuffer *submitted[] = {&commandBuffer};
+        states.submitted(submitted, 1);
+        states.discardUnsubmitted();
+        CHECK(texture.state == TextureUsage::SAMPLED);
+    }
+
+    SUBCASE("a bake that is not submitted leaves the texture as it was")
+    {
+        REQUIRE(states.transition(commandBuffer, &texture, TextureUsage::STORAGE, true));
+        REQUIRE(states.transition(commandBuffer, &texture, TextureUsage::SAMPLED, false));
+        states.discardUnsubmitted();
+        CHECK(texture.state == TextureUsage::UNKNOWN);
+    }
+}

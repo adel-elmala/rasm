@@ -14,7 +14,7 @@ namespace rasm
     {
         // The faces of a cube in Vulkan's order (+X, -X, +Y, -Y, +Z, -Z): the axis a face looks along, and the
         // directions in which its texel coordinates s and t grow (Vulkan's cube map face table). Must match
-        // shaders/lib/shadow.slang.
+        // shaders/lib/cubeMap.slang.
         const glm::vec3 CUBE_FORWARD[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
         const glm::vec3 CUBE_S[6] = {{0, 0, -1}, {0, 0, 1}, {1, 0, 0}, {1, 0, 0}, {1, 0, 0}, {-1, 0, 0}};
         const glm::vec3 CUBE_T[6] = {{0, -1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}, {0, -1, 0}, {0, -1, 0}};

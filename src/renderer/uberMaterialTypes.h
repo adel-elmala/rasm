@@ -161,6 +161,13 @@ namespace rasm::gfx
         ShadowMap        shadowMaps[MAX_SHADOW_MAPS];
         float            lodPixelsPerUnit;
         glm::vec4        lodDepthPlane;
+        uint32_t         environmentSpecular;       // bindless cube; INVALID_TEXTURE_INDEX: no environment, a constant ambient
+        uint32_t         environmentSpecularMips;
+        uint32_t         environmentIrradiance;     // bindless cube
+        uint32_t         environmentSky;            // bindless cube drawn behind the scene; INVALID_TEXTURE_INDEX: no sky
+        uint32_t         brdfLut;                   // bindless 2D
+        float            environmentIntensity;
+        glm::vec2        environmentRotation;       // cos and sin of the environment's turn around +Y
     };
 
     struct PushConstants
@@ -168,6 +175,16 @@ namespace rasm::gfx
         uint64_t         scene;
         uint32_t         firstDraw;
         uint32_t         argument;
+    };
+
+    // The environment bake's push constants (shaders/passes/environment.slang). source is a bindless texture or a
+    // storage slot, target a storage slot, size the target mip's width.
+    struct EnvironmentPushConstants
+    {
+        uint32_t         source;
+        uint32_t         target;
+        float            roughness;
+        uint32_t         size;
     };
 
     // The tone-map pass's own push constants (shaders/passes/toneMap.slang).
@@ -203,7 +220,7 @@ namespace rasm::gfx
     static_assert(offsetof(GeometryData, boundsRadius) == 16, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lodCount) == 20, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lods) == 24, "GeometryData must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 2064, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 2096, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, lights) == 144, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, vertsPtr) == 656, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, instancesPtr) == 672, "SceneData must match the shader's scalar layout");
@@ -228,8 +245,13 @@ namespace rasm::gfx
     static_assert(offsetof(SceneData, shadowMaps) == 892, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, lodPixelsPerUnit) == 2044, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, lodDepthPlane) == 2048, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, environmentSpecular) == 2064, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, brdfLut) == 2080, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, environmentRotation) == 2088, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(PushConstants) == PUSH_CONSTANTS_SIZE, "PushConstants must fill the pipelines' push-constant range");
     static_assert(sizeof(ToneMapPushConstants) == 8, "ToneMapPushConstants must match the shader's scalar layout");
+    static_assert(sizeof(EnvironmentPushConstants) == PUSH_CONSTANTS_SIZE, "EnvironmentPushConstants must fill the pipelines' push-constant range");
+    static_assert(offsetof(EnvironmentPushConstants, size) == 12, "EnvironmentPushConstants must match the shader's scalar layout");
     static_assert(offsetof(ToneMapPushConstants, exposure) == 4, "ToneMapPushConstants must match the shader's scalar layout");
 
 
