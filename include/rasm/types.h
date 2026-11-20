@@ -107,7 +107,6 @@ namespace rasm
     struct FrameResources
     {
         CommandBufferHandle commandBuffer;
-        TextureHandle       depthTexture;
         uint64_t            fenceValue          = 0; // frameFence value the slot's last graphics submit signals
         uint64_t            computeFenceValue   = 0;
     };

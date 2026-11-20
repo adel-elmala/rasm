@@ -70,7 +70,7 @@
 <div class="api" id="getCurrentFrameResources">
   <pre class="sig">const FrameResources&amp; getCurrentFrameResources();</pre>
   <div class="body">
-    <p>The resources of the current frame slot (0 or 1): the <code>commandBuffer</code> being recorded, the swapchain-sized <code>depthTexture</code> and the slot's fence values. See <a href="types.html#FrameResources">FrameResources</a>. Between <code>beginFrame</code> and <code>endFrame</code> the command buffer is recording; record your commands into it. The slot changes in <code>endFrame</code>, so fetch it every frame. With <code>EngineConfig::asyncCompute</code> the command buffer also changes from pass to pass (an async compute pass records into one of the compute queue), so fetch it inside the pass that records.</p>
+    <p>The resources of the current frame slot (0 or 1): the <code>commandBuffer</code> being recorded and the slot's fence values. The swapchain has no depth: a pass that needs one draws into a render target. See <a href="types.html#FrameResources">FrameResources</a>. Between <code>beginFrame</code> and <code>endFrame</code> the command buffer is recording; record your commands into it. The slot changes in <code>endFrame</code>, so fetch it every frame. With <code>EngineConfig::asyncCompute</code> the command buffer also changes from pass to pass (an async compute pass records into one of the compute queue), so fetch it inside the pass that records.</p>
   </div>
 </div>
 
@@ -600,7 +600,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <tr><td><code>COLOR_ATTACHMENT</code></td><td>drawn into</td><td>yes</td></tr>
       <tr><td><code>DEPTH_STENCIL_ATTACHMENT</code></td><td>depth buffer</td><td>yes</td></tr>
       <tr><td><code>SAMPLED_COLOR_ATTACHMENT</code></td><td>drawn into, then read (render target color)</td><td>–</td></tr>
-      <tr><td><code>SAMPLED_DEPTH_ATTACHMENT</code></td><td>depth buffer that shaders can also read: with <code>EngineConfig::occlusionCulling</code>, the swapchain depth and render target depth in <code>D32_SFLOAT</code>; always, a depth-only target's depth (<a href="render-graph.html#readDepth">readDepth</a>)</td><td>–</td></tr>
+      <tr><td><code>SAMPLED_DEPTH_ATTACHMENT</code></td><td>depth buffer that shaders can also read: with <code>EngineConfig::occlusionCulling</code>, a render target's depth in <code>D32_SFLOAT</code>; always, a depth-only target's depth (<a href="render-graph.html#readDepth">readDepth</a>)</td><td>–</td></tr>
       <tr><td><code>TRANSFER_SRC</code>, <code>TRANSFER_DST</code>, <code>STORAGE</code>, <code>TRANSIENT_ATTACHMENT</code>, <code>INPUT_ATTACHMENT</code></td><td>only passed on to the backend; no RASM call uses them</td><td>–</td></tr>
       <tr><td><code>PRESENT_SRC</code></td><td>–</td><td>yes (swapchain image before present)</td></tr>
       <tr><td><code>UNKNOWN</code></td><td>–</td><td>the start; never a target (contents thrown away)</td></tr>

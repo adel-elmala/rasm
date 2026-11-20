@@ -39,7 +39,6 @@ namespace rasm
         bool                                compute             = false;
         bool                                async               = false;
         bool                                writesSwapchain     = false;
-        bool                                readsSwapchainDepth = false;
 
         // For Sorting
         uint32_t                inDegree = 0;
@@ -67,7 +66,6 @@ namespace rasm
         void                    readPrevious(RenderTargetHandle handle);
         void                    readPrevious(BufferHandle handle);
         void                    readDepth(RenderTargetHandle handle);
-        void                    readSwapchainDepth();
         void                    write(TextureHandle handle);
         void                    write(BufferHandle handle);
         void                    write(RenderTargetHandle rt);
@@ -136,7 +134,6 @@ namespace rasm
         void                readPrevious(uint32_t passIdx, RenderTargetHandle h);
         void                readPrevious(uint32_t passIdx, BufferHandle h);
         void                readDepth(uint32_t passIdx, RenderTargetHandle h);
-        void                readSwapchainDepth(uint32_t passIdx);
         void                write(uint32_t passIdx, TextureHandle h);
         void                write(uint32_t passIdx, BufferHandle h);
         void                write(uint32_t passIdx, RenderTargetHandle h);

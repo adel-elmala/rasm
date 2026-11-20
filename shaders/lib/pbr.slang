@@ -222,11 +222,9 @@ float4 shadePBR(Sampler2D gTextures[], PBRInfo pbrInfo)
     // 5. Ambient / Environment lighting approximation
     float3 ambient = float3(0.03) * diffuseColor * ao; // Simple ambient baseline
 
-    // 6. Final color composition
+    // 6. Final color composition. Radiance goes out unbounded, into the HDR target; the tone-map pass brings it to
+    // display range.
     float3 finalColor = ambient + totalDirectLighting + emissive;
-
-    // Reinhard maps HDR radiance to display range. The sRGB attachment performs encoding.
-    finalColor = finalColor / (finalColor + float3(1.0)); // Reinhard tone mapping
 
     return float4(finalColor, baseColorTex.a);
 }

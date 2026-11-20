@@ -751,8 +751,9 @@ namespace rasm::rhi
 
         VkPipelineDepthStencilStateCreateInfo depthStencilInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-            .depthTestEnable = VK_TRUE,
-            .depthWriteEnable = VK_TRUE,
+            // A pipeline without depth (a swapchain pass) has no depth to test.
+            .depthTestEnable = desc.depthStencilAttachmentFormat != Format::UNKNOWN ? VK_TRUE : VK_FALSE,
+            .depthWriteEnable = desc.depthStencilAttachmentFormat != Format::UNKNOWN ? VK_TRUE : VK_FALSE,
             .depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL, // reversed-Z: nearer is larger; pairs with the 0 clear in VulkanCommandBuffer::beginRendering
             .depthBoundsTestEnable = VK_FALSE,
             .stencilTestEnable = VK_FALSE};

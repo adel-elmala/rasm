@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>One Frame · RASM</title>
 <meta name="description" content="Engine::render, beginFrame, the scene passes and endFrame step by step: two frame slots, the timeline fences, swapchain acquire, one command buffer or a few batches with async compute, submit and present, skipped frames, resize, and where loads, scene sync, stats and culling run.">
-<meta name="rasm-sources" content="src/engine.cpp include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/renderContext.h src/rhi/renderContext.cpp src/rhi/uploadManager.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/platform/window.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/renderer.h src/renderer/renderer.cpp src/renderer/frameStats.cpp src/renderer/frameStats.h src/renderer/statsOverlay.cpp src/renderer/renderGraph.cpp include/rasm/render/renderGraph.h src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/device.h">
+<meta name="rasm-sources" content="src/engine.cpp include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/renderContext.h src/rhi/renderContext.cpp src/rhi/uploadManager.cpp src/renderer/toneMap.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/platform/window.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/renderer.h src/renderer/renderer.cpp src/renderer/frameStats.cpp src/renderer/frameStats.h src/renderer/statsOverlay.cpp src/renderer/renderGraph.cpp include/rasm/render/renderGraph.h src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/device.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -46,7 +46,7 @@
 <div class="tldr">
   <h3>In short</h3>
   <ul>
-    <li><code>Engine::render</code> runs a render graph (<code>Renderer::render</code>): <code>beginFrame</code>, the scene passes from <code>addScenePasses</code>, <code>endFrame</code>.</li>
+    <li><code>Engine::render</code> runs a render graph (<code>Renderer::render</code>): <code>beginFrame</code>, the scene passes from <code>addScenePasses</code> into a 16-bit float target, the <code>Tone Map</code> pass from <code>addToneMapPass</code> into the swapchain, <code>endFrame</code>.</li>
     <li>The scene passes are <code>Cull 1</code>, <code>Scene 1</code>, <code>Hi-Z</code>, <code>Cull 2</code>, <code>Scene 2</code> (only <code>Cull</code> and <code>Scene</code> without occlusion culling). The graph puts the barriers between them.</li>
     <li><code>frameCount</code> is the <b>slot</b> (0 or 1), not a frame counter. <code>MAX_FRAMES_IN_FLIGHT</code> = 2.</li>
     <li>Each graphics submit signals the next value of <code>frameFence</code>, and each compute submit the next value of <code>computeFence</code>. Before a slot is reused, <code>beginFrame</code> waits for the values its last submits signaled.</li>
@@ -59,7 +59,7 @@
 <h2 id="ways"><span class="n">1</span>Three ways to run a frame</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 196" role="img" aria-label="Engine::render builds a render graph with the scene passes once and runs it with RenderGraph::execute. RenderGraph::execute and a manual frame both call beginFrame first and endFrame last, with passes in between.">
+  <svg viewBox="0 0 760 196" role="img" aria-label="Engine::render builds a render graph with the scene passes and the tone-map pass once and runs it with RenderGraph::execute. RenderGraph::execute and a manual frame both call beginFrame first and endFrame last, with passes in between.">
     <rect x="10" y="10" width="236" height="176" rx="8" class="zone"/>
     <text x="24" y="32" class="title mono">render(scene, camera)</text>
     <rect x="262" y="10" width="236" height="176" rx="8" class="zone"/>
@@ -71,6 +71,7 @@
     <rect x="24" y="76" width="208" height="58" rx="4" class="ghost"/>
     <text x="128" y="98" class="mid small">first frame, or new scene or camera:</text>
     <text x="128" y="114" class="mid small">a new graph + addScenePasses</text>
+    <text x="128" y="128" class="mid small">+ addToneMapPass</text>
     <rect x="24" y="148" width="208" height="26" rx="4" class="cpu"/><text x="128" y="165" class="mid mono">graph.execute(camera)</text>
     <path d="M232,161 H252 V44 H260" class="arrow cpu" marker-end="url(#ah-cpu)"/>
 
@@ -86,7 +87,7 @@
     <text x="632" y="114" class="mid small">your own draws, endPass</text>
     <rect x="528" y="148" width="208" height="26" rx="4" class="cpu"/><text x="632" y="165" class="mid mono">endFrame()</text>
   </svg>
-  <figcaption>All three use the same frame functions. <code>render</code> keeps one graph and builds it again only when the scene or the camera changes. The stepper below walks that frame. Only graph passes draw the scene: an app with its own graph calls <code>addScenePasses</code> itself (<a href="render-graphs.html#in-rasm">render graphs</a>).</figcaption>
+  <figcaption>All three use the same frame functions. <code>render</code> keeps one graph and builds it again only when the scene or the camera changes. The stepper below walks that frame. Only graph passes draw the scene: an app with its own graph calls <code>addScenePasses</code> and <code>addToneMapPass</code> itself (<a href="render-graphs.html#in-rasm">render graphs</a>).</figcaption>
 </figure>
 
 <h2 id="steps"><span class="n">2</span>One frame, step by step</h2>
@@ -339,7 +340,7 @@
 
   <div class="step">
     <h4>7. Scene 1: the early draws</h4>
-    <svg viewBox="0 0 730 266" role="img" aria-label="The Scene 1 graphics pass: a compute-to-graphics barrier, a timestamp, the swapchain image and depth barriers, beginRendering with clear, viewport, scissor and cull mode NONE. drawSceneView binds the pipeline, the bindless set and the index buffer, then per run sets the cull mode, pushes the SceneData address and records one indirect count draw. endPass ends rendering.">
+    <svg viewBox="0 0 730 266" role="img" aria-label="The Scene 1 graphics pass: a compute-to-graphics barrier, a timestamp, the color and depth barriers of the scene_hdr target, beginRendering with clear, viewport, scissor and cull mode NONE. drawSceneView binds the pipeline, the bindless set and the index buffer, then per run sets the cull mode, pushes the SceneData address and records one indirect count draw. endPass ends rendering.">
       <!--strip 5-->
       <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
       <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
@@ -380,8 +381,8 @@
       <path d="M300,235 H328 V176" class="arrow mem" marker-end="url(#ah-mem)"/>
       <text x="340" y="235" class="small">its address goes in the push constant</text>
     </svg>
-    <p><b>barrier C→G</b>: from the graph. <code>Cull 1</code> wrote the visible draws and counts these draws read.<br><b>image and depth</b> start from <code>UNKNOWN</code> (discard): <code>Scene 1</code> is the target's first pass, so it clears both.</p>
-    <p>A barrier call names only the new usage: <code>RenderContext</code> remembers the layout each texture is in (<code>TextureStates</code>). With <code>discard</code> set, as here, the old contents are dropped and the barrier starts from <code>UNKNOWN</code>. <code>acquireNextImage</code> marks the acquired image <code>UNKNOWN</code> too, and the image barrier waits at color output, after the acquire. Barriers must be recorded outside a render pass. See <a href="gpu-sync.html#in-rasm">GPU synchronization</a>.</p>
+    <p><b>barrier C→G</b>: from the graph. <code>Cull 1</code> wrote the visible draws and counts these draws read.<br><b>image and depth</b> of <code>scene_hdr</code>, the 16-bit float target <code>Renderer</code> makes, start from <code>UNKNOWN</code> (discard): <code>Scene 1</code> is the target's first pass, so it clears both.</p>
+    <p>A barrier call names only the new usage: <code>RenderContext</code> remembers the layout each texture is in (<code>TextureStates</code>). With <code>discard</code> set, as here, the old contents are dropped and the barrier starts from <code>UNKNOWN</code>. <code>acquireNextImage</code> marks the acquired swapchain image <code>UNKNOWN</code> too, and its barrier, in the <code>Tone Map</code> pass, waits at color output, after the acquire. Barriers must be recorded outside a render pass. See <a href="gpu-sync.html#in-rasm">GPU synchronization</a>.</p>
     <p>The draw lists and runs <code>drawSceneView</code> uses are in <a href="gpu-scene.html#runs">stop 3</a>. The ideas: <a href="gpu-driven.html">indirect draws</a>, <a href="device-addresses.html">device addresses</a> for the push constant, <a href="vertex-pulling.html">vertex pulling</a> and <a href="uber-shaders.html">the uber shader</a> for what each draw runs.</p>
   </div>
 
@@ -423,13 +424,13 @@
       <rect x="578" y="210" width="80"  height="28" rx="4" class="cpu"/><text x="618" y="228" class="mid small">endRendering</text>
       <rect x="662" y="210" width="40"  height="28" rx="4" class="cpu"/><text x="682" y="228" class="mid small">ts end</text>
     </svg>
-    <p><b>depth → SAMPLED</b>: <code>Hi-Z</code> declares <code>readSwapchainDepth</code>, so the graph makes <code>Scene 1</code> store its depth.<br><b>hizMain</b> builds one level per dispatch: level 0 from the depth of the early draws, each next one from the one before.<br><b>late countMain</b>: seen = in the frustum and not occluded. It writes the visibility flags and keeps what <code>Scene 1</code> missed.<br><b>Scene 2</b> loads color and depth (no discard). <code>Hi-Z</code>, <code>Cull 2</code> and <code>Scene 2</code> dispatch and draw nothing when the view has no Hi-Z.</p>
+    <p><b>depth → SAMPLED</b>: <code>Hi-Z</code> declares <code>readDepth</code> of the target, so the graph makes <code>Scene 1</code> store its depth.<br><b>hizMain</b> builds one level per dispatch: level 0 from the depth of the early draws, each next one from the one before.<br><b>late countMain</b>: seen = in the frustum and not occluded. It writes the visibility flags and keeps what <code>Scene 1</code> missed.<br><b>Scene 2</b> loads color and depth (no discard). <code>Hi-Z</code>, <code>Cull 2</code> and <code>Scene 2</code> dispatch and draw nothing when the view has no Hi-Z.</p>
     <p>Each step is a pass of its own, so no dispatch ever sits inside a render pass. The late culling rewrites the same visible-draw list and counts that <code>Scene 1</code> read, so the graph's barrier before <code>Cull 2</code> waits for the early draws. <code>Cull 1</code> reads the visibility flags that this pass wrote last frame (<code>readPrevious</code>). Without <code>occlusionCulling</code>, <code>addScenePasses</code> adds only <code>Cull</code> and <code>Scene</code>, and this step is not there. Why two passes, and how a Hi-Z works, is in <a href="occlusion-culling.html#in-rasm">Occlusion culling with Hi-Z</a>.</p>
   </div>
 
   <div class="step">
-    <h4>9. endFrame closes the command buffer</h4>
-    <svg viewBox="0 0 730 124" role="img" aria-label="endFrame records the stats overlay in a pass of its own, the barrier to PRESENT_SRC, a compute-to-host barrier for the cull stats, closes the frame timer and closes the batch. submitBatches ends its command buffer.">
+    <h4>9. Tone Map, then endFrame closes the command buffer</h4>
+    <svg viewBox="0 0 730 124" role="img" aria-label="The graph's last pass, Tone Map, draws the HDR target into the swapchain image. Then endFrame records the stats overlay in a pass of its own, the barrier to PRESENT_SRC, a compute-to-host barrier for the cull stats, closes the frame timer and closes the batch. submitBatches ends its command buffer.">
       <!--strip 5-->
       <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
       <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
@@ -439,17 +440,19 @@
       <rect x="520" y="8" width="98" height="28" rx="5" class="cpu"/><rect x="518" y="6" width="102" height="32" rx="7" class="hot"/><text x="569" y="26" class="mid small title">record</text>
       <rect x="622" y="8" width="98" height="28" rx="5" class="ghost"/><text x="671" y="26" class="mid small t-faint">submit · present</text>
       <!--/strip-->
-      <path d="M128,64 V58 H582 V64" class="arrow"/>
-      <text x="355" y="52" class="mid small mono">endFrame()</text>
+      <text x="136" y="64" class="mid small mono">"Tone Map"</text>
+      <path d="M188,64 V58 H642 V64" class="arrow"/>
+      <text x="415" y="52" class="mid small mono">endFrame()</text>
       <rect x="10" y="70" width="710" height="44" rx="6" class="zone"/>
-      <rect x="14"  y="78" width="110" height="28" rx="4" class="ghost"/><text x="69"  y="96" class="mid small t-faint">… Scene 2</text>
-      <rect x="128" y="78" width="86"  height="28" rx="4" class="cpu"/><text x="171" y="96" class="mid small">overlay pass</text>
-      <rect x="218" y="78" width="140" height="28" rx="4" class="cpu"/><text x="288" y="96" class="mid small">barrier: → PRESENT_SRC</text>
-      <rect x="362" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="404" y="96" class="mid small">barrier C→H</text>
-      <rect x="450" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="492" y="96" class="mid small">ts Frame end</text>
-      <rect x="538" y="78" width="44"  height="28" rx="4" class="cpu"/><text x="560" y="96" class="mid small">close</text>
+      <rect x="14"  y="78" width="70"  height="28" rx="4" class="ghost"/><text x="49"  y="96" class="mid small t-faint">… Scene 2</text>
+      <rect x="88"  y="78" width="96"  height="28" rx="4" class="gpu"/><text x="136" y="96" class="mid small">exposure, AgX</text>
+      <rect x="188" y="78" width="86"  height="28" rx="4" class="cpu"/><text x="231" y="96" class="mid small">overlay pass</text>
+      <rect x="278" y="78" width="140" height="28" rx="4" class="cpu"/><text x="348" y="96" class="mid small">barrier: → PRESENT_SRC</text>
+      <rect x="422" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="464" y="96" class="mid small">barrier C→H</text>
+      <rect x="510" y="78" width="84"  height="28" rx="4" class="cpu"/><text x="552" y="96" class="mid small">ts Frame end</text>
+      <rect x="598" y="78" width="44"  height="28" rx="4" class="cpu"/><text x="620" y="96" class="mid small">close</text>
     </svg>
-    <p><b>overlay pass</b>: the stats overlay, only when it is shown (F1). It is a pass of its own that loads the image's color.<br><b>barrier → PRESENT_SRC</b>: once per frame, the swapchain image goes <code>COLOR_ATTACHMENT</code> → <code>PRESENT_SRC</code>.<br><b>barrier C→H</b>: <code>COMPUTE → HOST</code>. The CPU reads the cull stats after this slot's next fence wait. With a compute queue the culling runs there, and the barrier goes in its last batch instead.<br><b>No pass drew to the swapchain?</b> <code>endFrame</code> first records an empty pass named <code>"Clear"</code>, so present still works.</p>
+    <p><b>Tone Map</b>: the graph's last pass. The graph moves <code>scene_hdr</code>'s color to <code>SAMPLED</code>; the pass draws one triangle over the swapchain image (<code>UNKNOWN</code> → <code>COLOR_ATTACHMENT</code>) that multiplies by the camera's exposure and applies AgX. See <a href="tone-mapping.html#in-rasm">Tone mapping</a>.<br><b>overlay pass</b>: the stats overlay, only when it is shown (F1). It draws after the tone map, so its colors are not mapped. It is a pass of its own that loads the image's color.<br><b>barrier → PRESENT_SRC</b>: once per frame, the swapchain image goes <code>COLOR_ATTACHMENT</code> → <code>PRESENT_SRC</code>.<br><b>barrier C→H</b>: <code>COMPUTE → HOST</code>. The CPU reads the cull stats after this slot's next fence wait. With a compute queue the culling runs there, and the barrier goes in its last batch instead.<br><b>No pass drew to the swapchain?</b> <code>endFrame</code> first records an empty pass named <code>"Clear"</code>, so present still works.</p>
     <p>Present needs the image in <code>PRESENT_SRC</code>. A frame that only draws into render targets gets the empty <code>"Clear"</code> pass, so it presents the clear color (there is no offscreen-only frame yet, <b>D7</b>). A render target pass instead leaves its color textures <code>SAMPLED</code> in <code>endPass</code>, for later passes.</p>
   </div>
 
@@ -528,26 +531,26 @@
 
 <div class="split">
   <div>
-    <svg viewBox="0 0 320 96" role="img" aria-label="Async compute off: one batch on the graphics queue holds every pass of the frame.">
+    <svg viewBox="0 0 340 96" role="img" aria-label="Async compute off: one batch on the graphics queue holds every pass of the frame, Tone Map last.">
       <text x="10" y="30" class="small">compute</text>
       <text x="10" y="66" class="small">graphics</text>
-      <path d="M70,26H310" class="grid"/>
-      <rect x="70" y="48" width="240" height="28" rx="5" class="gpu"/>
-      <text x="190" y="66" class="mid small">Cull 1 · Scene 1 · Hi-Z · Cull 2 · Scene 2</text>
-      <text x="190" y="92" class="mid small">1 command buffer, 1 submit</text>
+      <path d="M70,26H330" class="grid"/>
+      <rect x="70" y="48" width="260" height="28" rx="5" class="gpu"/>
+      <text x="200" y="66" class="mid small">Cull 1 · Scene 1 · … · Scene 2 · Tone Map</text>
+      <text x="200" y="92" class="mid small">1 command buffer, 1 submit</text>
     </svg>
     <h4>Async compute off (the default)</h4>
     <p>One batch. Every pass is recorded into it.</p>
   </div>
   <div>
-    <svg viewBox="0 0 320 96" role="img" aria-label="Async compute on: four batches. Cull 1 on the compute queue, Scene 1 on the graphics queue, Hi-Z and Cull 2 on the compute queue, Scene 2 on the graphics queue.">
+    <svg viewBox="0 0 340 96" role="img" aria-label="Async compute on: four batches. Cull 1 on the compute queue, Scene 1 on the graphics queue, Hi-Z and Cull 2 on the compute queue, Scene 2 and Tone Map on the graphics queue.">
       <text x="10" y="30" class="small">compute</text>
       <text x="10" y="66" class="small">graphics</text>
       <rect x="70"  y="12" width="50" height="28" rx="5" class="gpu"/><text x="95"  y="30" class="mid small">Cull 1</text>
       <rect x="124" y="48" width="56" height="28" rx="5" class="gpu"/><text x="152" y="66" class="mid small">Scene 1</text>
       <rect x="184" y="12" width="68" height="28" rx="5" class="gpu"/><text x="218" y="30" class="mid small">Hi-Z, Cull 2</text>
-      <rect x="256" y="48" width="56" height="28" rx="5" class="gpu"/><text x="284" y="66" class="mid small">Scene 2</text>
-      <text x="190" y="92" class="mid small">4 command buffers, 4 submits</text>
+      <rect x="256" y="48" width="76" height="28" rx="5" class="gpu"/><text x="294" y="60" class="mid small">Scene 2</text><text x="294" y="72" class="mid small">Tone Map</text>
+      <text x="200" y="92" class="mid small">4 command buffers, 4 submits</text>
     </svg>
     <h4>Async compute on</h4>
     <p>Recording moves between the queues. Each move closes a batch.</p>
@@ -567,7 +570,7 @@
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 300" role="img" aria-label="The scene passes make four batches. Batch 1, compute: Cull 1, closed when Scene 1 reads its draws. Batch 2, graphics: Scene 1, closed when Hi-Z reads its depth. Batch 3, compute: Hi-Z and Cull 2, closed when Scene 2 reads the draws. Batch 4, graphics: Scene 2 and the overlay, closed by endFrame. Then four submits in that order: submit 1 signals compute value c+1; submit 2 waits for c+1 and the image and signals graphics value g+1; submit 3 waits for g+1 and signals c+2; submit 4 waits for c+2, signals g+2 and presents.">
+  <svg viewBox="0 0 760 300" role="img" aria-label="The scene passes make four batches. Batch 1, compute: Cull 1, closed when Scene 1 reads its draws. Batch 2, graphics: Scene 1, closed when Hi-Z reads its depth. Batch 3, compute: Hi-Z and Cull 2, closed when Scene 2 reads the draws. Batch 4, graphics: Scene 2, Tone Map and the overlay, closed by endFrame. Then four submits in that order: submit 1 signals compute value c+1; submit 2 waits for c+1 and the image and signals graphics value g+1; submit 3 waits for g+1 and signals c+2; submit 4 waits for c+2, signals g+2 and presents.">
     <text x="10" y="70" class="title">compute</text>
     <text x="10" y="140" class="title">graphics</text>
 
@@ -582,7 +585,7 @@
     <text x="485" y="79" class="mid small">closed for Scene 2</text>
     <rect x="600" y="110" width="150" height="50" rx="6" class="gpu"/>
     <text x="675" y="131" class="mid title">4 · Scene 2</text>
-    <text x="675" y="149" class="mid small">overlay; endFrame closes</text>
+    <text x="675" y="149" class="mid small">+ Tone Map, overlay</text>
 
     <line x1="200" y1="90" x2="248" y2="108" class="arrow hot" marker-end="url(#ah-hot)"/>
     <line x1="362" y1="110" x2="408" y2="92" class="arrow hot" marker-end="url(#ah-hot)"/>
@@ -784,13 +787,13 @@
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 200" role="img" aria-label="Before the resize: a small window, its swapchain images and two depth textures. recreateSwapchain waits until the device is idle. After: a larger window, new swapchain images with new handles, two new depth textures at the new size, and the camera's aspect ratio updated.">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Before the resize: a small window, its swapchain images and the render targets sized from it. recreateSwapchain waits until the device is idle. After: a larger window, new swapchain images with new handles, the render targets rebuilt at the new size, and the camera's aspect ratio updated.">
     <text x="20" y="22" class="title">before</text>
     <rect x="20" y="34" width="120" height="80" rx="4" class="ghost"/><text x="80" y="78" class="mid small t-faint">window</text>
     <rect x="160" y="34" width="60" height="40" class="ghost"/><rect x="168" y="42" width="60" height="40" class="ghost"/><rect x="176" y="50" width="60" height="40" class="ghost"/>
     <text x="206" y="108" class="mid small t-faint">swapchain images</text>
     <rect x="160" y="124" width="60" height="40" class="ghost"/><rect x="172" y="132" width="60" height="40" class="ghost"/>
-    <text x="206" y="188" class="mid small t-faint">2 depth textures</text>
+    <text x="206" y="188" class="mid small t-faint">swapchain-sized targets</text>
 
     <line x1="262" y1="100" x2="398" y2="100" class="arrow hot thick" marker-end="url(#ah-hot)"/>
     <text x="330" y="84" class="mid mono">recreateSwapchain</text>
@@ -802,7 +805,7 @@
     <rect x="600" y="34" width="84" height="56" class="mem"/><rect x="608" y="42" width="84" height="56" class="mem"/><rect x="616" y="50" width="84" height="56" class="mem"/>
     <text x="658" y="83" class="mid small">new handles</text>
     <rect x="600" y="118" width="84" height="56" class="mem"/><rect x="612" y="126" width="84" height="56" class="mem"/>
-    <text x="654" y="159" class="mid small">new depth</text>
+    <text x="654" y="159" class="mid small">rebuilt</text>
     <text x="500" y="160" class="mid small">camera aspect ratio</text>
     <text x="500" y="174" class="mid small">updated</text>
   </svg>
@@ -814,7 +817,7 @@
   <li><b>The next <code>beginFrame</code> recreates.</b> It calls <code>Engine::recreateSwapchain</code>, which calls <code>RenderContext::recreateSwapchain</code>.</li>
   <li><b>The swapchain is rebuilt.</b> A 0 × 0 surface returns <code>OUT_OF_DATE</code> and keeps the old swapchain. Otherwise it releases pending semaphores, waits until the device is idle, and builds the new swapchain.</li>
   <li><b>Image handles change.</b> The old swapchain image handles are dropped and new ones are registered. Handles from an earlier <code>getSwapchainImages</code> are no longer valid.</li>
-  <li><b>Sizes follow.</b> <code>createSwapchainResources</code> recreates both depth textures at the new size and calls <code>updateCameraAspectRatio</code>. The device is idle, so the old depth textures can be destroyed at once. With occlusion culling, it puts each new depth texture into the bindless slot of the old one, where the <code>Hi-Z</code> pass samples it.</li>
+  <li><b>Sizes follow.</b> <code>createSwapchainResources</code> calls <code>RenderContext::resizeRenderTargets</code>, which rebuilds every target with a <code>swapchainScale</code> at the new size, and <code>updateCameraAspectRatio</code>. The device is idle, so the old textures can be destroyed at once. A rebuilt target keeps its bindless slots, so the <code>Hi-Z</code> pass still finds its depth. The swapchain itself has no depth.</li>
 </ol>
 
 <p>Everything swapchain-sized uses the swapchain extent in pixels. <code>Window::width</code> and <code>height</code> are the logical size, used only for the mouse. They differ on HiDPI screens.</p>
@@ -822,7 +825,7 @@
 <h2 id="jobs"><span class="n">6</span>Where each job runs in the frame</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 244" role="img" aria-label="The jobs of a frame in order. In beginFrame: finishLoads, the fence wait, updateFrameStats, updateStatsOverlay, syncGpuScene, acquire. In RenderGraph::execute, for each pass: graph barriers and queue waits, then the pass: prepareSceneView and recordSceneCulling in a Cull pass, drawSceneView in a Scene pass, recordHiz in the Hi-Z pass. In endFrame: the cull stats barrier, submitBatches, the upload flush inside RenderContext::submit, present.">
+  <svg viewBox="0 0 760 244" role="img" aria-label="The jobs of a frame in order. In beginFrame: finishLoads, the fence wait, updateFrameStats, updateStatsOverlay, syncGpuScene, acquire. In RenderGraph::execute, for each pass: graph barriers and queue waits, then the pass: prepareSceneView and recordSceneCulling in a Cull pass, drawSceneView in a Scene pass, recordHiz in the Hi-Z pass, the tone-map draw in the Tone Map pass. In endFrame: the cull stats barrier, submitBatches, the upload flush inside RenderContext::submit, present.">
     <rect x="20" y="14" width="220" height="220" rx="8" class="zone"/>
     <text x="36" y="36" class="title mono">beginFrame</text>
     <rect x="36" y="46"  width="188" height="24" rx="4" class="cpu"/><text x="130" y="63"  class="mid mono">finishLoads</text>
@@ -837,11 +840,12 @@
     <rect x="270" y="14" width="220" height="220" rx="8" class="zone"/>
     <text x="286" y="36" class="title mono">RenderGraph::execute</text>
     <text x="286" y="56" class="small">for each pass, in sorted order:</text>
-    <rect x="286" y="66"  width="188" height="24" rx="4" class="cpu"/><text x="380" y="83"  class="mid">barriers, queue waits</text>
-    <rect x="286" y="100" width="188" height="42" rx="4" class="shader"/><text x="380" y="117" class="mid mono">prepareSceneView</text><text x="380" y="134" class="mid mono">recordSceneCulling</text>
-    <rect x="286" y="148" width="188" height="24" rx="4" class="gpu"/><text x="380" y="165" class="mid mono">drawSceneView</text>
-    <rect x="286" y="178" width="188" height="24" rx="4" class="shader"/><text x="380" y="195" class="mid mono">recordHiz</text>
-    <text x="286" y="222" class="small">purple: compute passes · green: Scene</text>
+    <rect x="286" y="62"  width="188" height="22" rx="4" class="cpu"/><text x="380" y="78"  class="mid">barriers, queue waits</text>
+    <rect x="286" y="90"  width="188" height="40" rx="4" class="shader"/><text x="380" y="106" class="mid mono">prepareSceneView</text><text x="380" y="122" class="mid mono">recordSceneCulling</text>
+    <rect x="286" y="136" width="188" height="22" rx="4" class="gpu"/><text x="380" y="152" class="mid mono">drawSceneView</text>
+    <rect x="286" y="164" width="188" height="22" rx="4" class="shader"/><text x="380" y="180" class="mid mono">recordHiz</text>
+    <rect x="286" y="192" width="188" height="22" rx="4" class="gpu"/><text x="380" y="208" class="mid">Tone Map draw</text>
+    <text x="286" y="228" class="small">purple: compute · green: graphics</text>
 
     <line x1="490" y1="124" x2="518" y2="124" class="arrow cpu" marker-end="url(#ah-cpu)"/>
 
@@ -867,6 +871,7 @@
   <tr><td><code>prepareSceneView</code></td><td>start of the <code>Cull</code> pass, on the CPU</td><td>writes the view's <code>SceneData</code> slot, which the GPU reads after the whole frame is recorded</td></tr>
   <tr><td><code>recordSceneCulling</code>, <code>recordHiz</code></td><td>the <code>Cull</code> and <code>Hi-Z</code> compute passes</td><td>dispatches are not allowed inside a render pass</td></tr>
   <tr><td><code>drawSceneView</code></td><td>the <code>Scene</code> graphics passes</td><td>records draws; needs a rendering scope</td></tr>
+  <tr><td>tone map</td><td>the <code>Tone Map</code> pass, the graph's last</td><td>reads the finished HDR image; the overlay draws after it, in <code>endFrame</code>, so the overlay is not tone mapped</td></tr>
   <tr><td>cull stats barrier</td><td><code>endFrame</code>, after the last pass; with a compute queue, <code>submitBatches</code>, at the end of the last compute batch</td><td><code>COMPUTE → HOST</code>, so the CPU can read the counters after the fences</td></tr>
   <tr><td>submits</td><td><code>submitBatches</code>, at the end of <code>endFrame</code></td><td>the GPU starts the frame once it is recorded, and every wait is on a submit already made</td></tr>
   <tr><td>upload flush</td><td>inside <code>RenderContext::submit</code></td><td>the copies must run before the frame that reads them</td></tr>
@@ -887,6 +892,7 @@
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Frame functions</td><td><code>Engine::render</code>, <code>Engine::beginFrame</code>, <code>Engine::endFrame</code>, <code>Engine::beginPass</code>, <code>Engine::endPass</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>The graph behind <code>render</code></td><td><code>Renderer::render</code> in <code>src/renderer/renderer.cpp</code></td></tr>
+  <tr><td>Tone map</td><td><code>Engine::addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code>; the shader in <code>shaders/passes/toneMap.slang</code></td></tr>
   <tr><td>Load budget</td><td><code>Engine::finishLoads</code>, <code>LOAD_BUDGET</code> in <code>src/engine.cpp</code></td></tr>
   <tr><td>Frame slot state</td><td><code>FrameResources</code> in <code>include/rasm/types.h</code>; <code>frameFence</code>, <code>frameFenceValue</code>, <code>computeFence</code>, <code>computeFenceValue</code>, <code>frameCount</code> in <code>include/rasm/engine.h</code></td></tr>
   <tr><td>Batches</td><td><code>Engine::useQueue</code>, <code>Engine::waitForQueue</code>, <code>Engine::waitForQueueWork</code>, <code>Engine::closeBatch</code>, <code>Engine::submitBatches</code> in <code>src/engine.cpp</code></td></tr>

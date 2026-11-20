@@ -8,8 +8,19 @@
 #include <string>
 #include <vector>
 
-// Shadow, forward and post passes in one render graph, with no hand-written barrier: every pass declares what it
-// reads and writes, and the graph orders the passes and moves the shadow map between depth attachment and sampled.
+// Shadow, forward, post and tone-map passes in one render graph, with no hand-written barrier: every pass declares
+// what it reads and writes, and the graph orders the passes and moves the shadow map between depth attachment and
+// sampled.
+
+namespace
+{
+    // Must match PushConstants in the inset shader below.
+    struct InsetPushConstants
+    {
+        uint32_t shadowDepth;
+        float screenHeight;
+    };
+}
 
 namespace
 {
@@ -132,7 +143,6 @@ int main()
         return 1;
 
     rasm::RenderGraph graph = engine.createRenderGraph();
-    const rasm::Format colorFormat = engine.getRenderContext().getSwapchainImageFormat();
 
     // Depth only: the shadow passes draw just depth, and later passes sample it.
     const rasm::RenderTargetHandle shadowMap = graph.createRenderTarget({
@@ -144,9 +154,15 @@ int main()
     const rasm::RenderTargetHandle sceneTarget = graph.createRenderTarget({
         .name = "scene_rt",
         .swapchainScale = 1.0f,
-        .colorFormats = {colorFormat},
+        .colorFormats = {rasm::SCENE_COLOR_FORMAT},
         .depthFormat = rasm::Format::D32_SFLOAT,
         .clearColor = glm::vec4(0.35f, 0.45f, 0.6f, 1.0f),
+    });
+    const rasm::RenderTargetHandle postTarget = graph.createRenderTarget({
+        .name = "post_rt",
+        .swapchainScale = 1.0f,
+        .colorFormats = {rasm::SCENE_COLOR_FORMAT},
+        .depthFormat = rasm::Format::D32_SFLOAT,
     });
 
     // 1. Shadow: the scene from the light camera, into the depth-only target.
@@ -158,7 +174,7 @@ int main()
         return 1;
     }
 
-    // 3. Post: a vignette over the forward image, with the shadow map in the bottom-left corner.
+    // 3. Post: a vignette over the forward image. It stays in HDR.
     auto postPipeline = engine.createPipeline("post", R"(
         struct VSOutput
         {
@@ -182,7 +198,6 @@ int main()
         struct PushConstants
         {
             uint sceneColor;
-            uint shadowDepth;
         };
 
         [[vk::push_constant]]
@@ -191,25 +206,13 @@ int main()
         [shader("fragment")]
         float4 fragMain(VSOutput input) : SV_TARGET
         {
-            uint width, height;
-            gTextures[pc.sceneColor].GetDimensions(width, height);
-            float2 pixel = input.UV * float2(width, height);
-
-            float insetSize = float(height) * 0.3;
-            float2 inset = (pixel - float2(16.0, float(height) - 16.0 - insetSize)) / insetSize;
-            if (all(inset >= 0.0) && all(inset <= 1.0))
-            {
-                // Reversed-Z: near the light is white.
-                float depth = gTextures[pc.shadowDepth].Sample(inset).r;
-                return float4(depth.xxx, 1.0);
-            }
-
             float3 color = gTextures[pc.sceneColor].Sample(input.UV).rgb;
             float2 centered = input.UV - 0.5;
             float vignette = saturate(1.0 - dot(centered, centered) * 1.2);
             return float4(color * vignette, 1.0);
         }
-    )");
+    )",
+                                              postTarget);
     if (!postPipeline.isValid())
         return 1;
 
@@ -218,17 +221,73 @@ int main()
         [&](rasm::PassBuilder &builder)
         {
             builder.read(sceneTarget);
+            builder.write(postTarget);
+        },
+        [&](rasm::RenderContext &ctx)
+        {
+            auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
+            const uint32_t sceneColor = engine.getBindlessTextureIndex(engine.getRenderTargetTexture(sceneTarget));
+            ctx.bindPipeline(commandBuffer, postPipeline);
+            ctx.bindDescriptorSet(commandBuffer, postPipeline, engine.getBindlessDescriptorSet(), 0);
+            ctx.pushConstants(commandBuffer, postPipeline, rasm::ShaderType::VERTEX_FRAGMENT, &sceneColor, sizeof(sceneColor), 0);
+            ctx.draw(commandBuffer, 3);
+        });
+
+    // 4. Tone map: the post image to the display, into the swapchain.
+    if (!engine.addToneMapPass(graph, postTarget, camera))
+        return 1;
+
+    // 5. Inset: the shadow map in the bottom-left corner, over the tone-mapped image, so it shows the raw depths.
+    auto insetPipeline = engine.createPipeline("inset", R"(
+        [shader("vertex")]
+        float4 vertMain(uint vertexID : SV_VertexID) : SV_POSITION
+        {
+            float2 uv = float2((vertexID << 1) & 2, vertexID & 2);
+            return float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+        }
+
+        [[vk::binding(0, 0)]]
+        Sampler2D gTextures[];
+
+        struct PushConstants
+        {
+            uint shadowDepth;
+            float screenHeight;
+        };
+
+        [[vk::push_constant]]
+        ConstantBuffer<PushConstants> pc;
+
+        [shader("fragment")]
+        float4 fragMain(float4 pixel : SV_POSITION) : SV_TARGET
+        {
+            float insetSize = pc.screenHeight * 0.3;
+            float2 inset = (pixel.xy - float2(16.0, pc.screenHeight - 16.0 - insetSize)) / insetSize;
+            if (any(inset < 0.0) || any(inset > 1.0))
+                discard;
+            // Reversed-Z: near the light is white.
+            float depth = gTextures[pc.shadowDepth].Sample(inset).r;
+            return float4(depth.xxx, 1.0);
+        }
+    )");
+    if (!insetPipeline.isValid())
+        return 1;
+
+    graph.addPass(
+        "Inset",
+        [&](rasm::PassBuilder &builder)
+        {
             builder.readDepth(shadowMap);
             builder.writeSwapchain();
         },
         [&](rasm::RenderContext &ctx)
         {
             auto commandBuffer = engine.getCurrentFrameResources().commandBuffer;
-            const uint32_t indices[2] = {engine.getBindlessTextureIndex(engine.getRenderTargetTexture(sceneTarget)),
-                                         engine.getBindlessTextureIndex(engine.getRenderTargetDepthTexture(shadowMap))};
-            ctx.bindPipeline(commandBuffer, postPipeline);
-            ctx.bindDescriptorSet(commandBuffer, postPipeline, engine.getBindlessDescriptorSet(), 0);
-            ctx.pushConstants(commandBuffer, postPipeline, rasm::ShaderType::VERTEX_FRAGMENT, indices, sizeof(indices), 0);
+            const InsetPushConstants pushConstants = {.shadowDepth = engine.getBindlessTextureIndex(engine.getRenderTargetDepthTexture(shadowMap)),
+                                                      .screenHeight = static_cast<float>(ctx.getSwapchainExtent().y)};
+            ctx.bindPipeline(commandBuffer, insetPipeline);
+            ctx.bindDescriptorSet(commandBuffer, insetPipeline, engine.getBindlessDescriptorSet(), 0);
+            ctx.pushConstants(commandBuffer, insetPipeline, rasm::ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
             ctx.draw(commandBuffer, 3);
         });
 

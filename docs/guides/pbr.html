@@ -1052,7 +1052,7 @@ cos θ = v·h  (the same as l·h)</code></pre>
   <li class="gpu"><b>Encode</b><span>the linear value is encoded for the display</span></li>
 </ol>
 
-<p>The simplest tone map is Reinhard: <var>c</var> / (<var>c</var> + 1), which maps 1 to 0.5 and 3 to 0.75. Others (ACES, AgX) keep colors and contrast better. For the encode, see <a href="color-spaces.html">Color spaces</a>.</p>
+<p>The simplest tone map is Reinhard: <var>c</var> / (<var>c</var> + 1), which maps 1 to 0.5 and 3 to 0.75. Others (ACES, AgX) keep colors and contrast better; see <a href="tone-mapping.html">Tone mapping</a>. For the encode, see <a href="color-spaces.html">Color spaces</a>.</p>
 
 <h2 id="example"><span class="n">12</span>Worked example</h2>
 
@@ -1136,7 +1136,7 @@ cos θ = v·h  (the same as l·h)</code></pre>
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="shadePBR in six steps: sample the textures and combine them with the material factors; find the normal; compute F0, the diffuse color and alpha; loop over up to 8 lights with D_GGX, F_Schlick and V_SmithGGXCorrelated plus Lambert; add a constant ambient and the emissive color; tone map with Reinhard and return.">
+  <svg viewBox="0 0 760 330" role="img" aria-label="shadePBR in six steps: sample the textures and combine them with the material factors; find the normal; compute F0, the diffuse color and alpha; loop over up to 8 lights with D_GGX, F_Schlick and V_SmithGGXCorrelated plus Lambert; add a constant ambient and the emissive color; return the sum, with no upper limit.">
     <rect x="20" y="20" width="230" height="64" rx="6" class="mem"/>
     <text x="135" y="42" class="mid title">MaterialData row</text>
     <text x="135" y="60" class="mid small">factors + bindless texture indices</text>
@@ -1168,9 +1168,9 @@ cos θ = v·h  (the same as l·h)</code></pre>
     <rect x="305" y="226" width="420" height="34" rx="17" class="shader"/>
     <text x="320" y="248" class="small">5  + 0.03 · diffuse · ao  + emissive</text>
     <rect x="305" y="266" width="420" height="34" rx="17" class="shader"/>
-    <text x="320" y="288" class="small">6  Reinhard c / (c + 1); alpha = base color alpha</text>
+    <text x="320" y="288" class="small">6  return the sum, unbounded; alpha = base color alpha</text>
   </svg>
-  <figcaption>The result goes to an sRGB color attachment, which does the sRGB encoding. The shader works in linear values only.</figcaption>
+  <figcaption>The result goes to a 16-bit float target. A later pass multiplies it by the camera's exposure and tone maps it with AgX (<a href="tone-mapping.html#in-rasm">Tone mapping</a>), into the sRGB swapchain, which does the sRGB encoding. The shader works in linear values only.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -1193,7 +1193,7 @@ cos θ = v·h  (the same as l·h)</code></pre>
   <tr><td>Ambient</td><td>constant, hemisphere, IBL or GI</td><td>Constant: 0.03 × diffuse color × AO. Specular gets no ambient, so a fully metallic surface is black on every side that no light faces. No IBL.</td></tr>
   <tr><td>AO</td><td>ambient only</td><td>Ambient only, mixed by the occlusion <code>strength</code>.</td></tr>
   <tr><td>Emission</td><td>added as it is</td><td><code>emissiveFactor</code> × the emissive texture, added after the lights. No emissive-strength extension.</td></tr>
-  <tr><td>Tone mapping</td><td>a separate step on the HDR image</td><td>Reinhard per channel, at the end of <code>shadePBR</code>. There is no HDR target, so each pixel is mapped as it is drawn.</td></tr>
+  <tr><td>Tone mapping</td><td>a separate step on the HDR image</td><td>The same: <code>shadePBR</code> writes unbounded light into a <code>SCENE_COLOR_FORMAT</code> target, and the <code>Tone Map</code> pass applies the camera's <code>exposure</code> and AgX.</td></tr>
   <tr><td>Shadows</td><td>needed for real direct light</td><td>One shadow map for one directional light, the one <code>SceneShadow::light</code> names (<a href="shadow-mapping.html#in-rasm">Shadow mapping</a>). Every other light reaches every surface that faces it.</td></tr>
 </table>
 </div>
@@ -1213,7 +1213,7 @@ cos θ = v·h  (the same as l·h)</code></pre>
 </table>
 </div>
 
-<p>A hand-made material from <code>createMaterial</code> starts as a white, non-metallic, fully rough surface (base color 1, metallic 0, roughness 1). A glTF material with <samp>KHR_materials_unlit</samp> gets <code>UNLIT</code>, and <code>fragMain</code> sends it to <code>shadeUnlit</code> instead: base color only, no lights, no tone mapping.</p>
+<p>A hand-made material from <code>createMaterial</code> starts as a white, non-metallic, fully rough surface (base color 1, metallic 0, roughness 1). A glTF material with <samp>KHR_materials_unlit</samp> gets <code>UNLIT</code>, and <code>fragMain</code> sends it to <code>shadeUnlit</code> instead: base color only, no lights. The tone-map pass maps it like every other pixel.</p>
 
 <h3>Where it lives in code</h3>
 
@@ -1221,7 +1221,7 @@ cos θ = v·h  (the same as l·h)</code></pre>
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>The BRDF terms</td><td><code>D_GGX</code>, <code>F_Schlick</code>, <code>V_SmithGGXCorrelated</code>, <code>Fd_Lambert</code> in <code>shaders/lib/pbr.slang</code></td></tr>
-  <tr><td>Textures, lights loop, ambient, tone map</td><td><code>shadePBR</code> and <code>PBRInfo</code> in <code>shaders/lib/pbr.slang</code></td></tr>
+  <tr><td>Textures, lights loop, ambient</td><td><code>shadePBR</code> and <code>PBRInfo</code> in <code>shaders/lib/pbr.slang</code></td></tr>
   <tr><td>Material branch, UV sets, back faces</td><td><code>fragMain</code> in <code>shaders/passes/rasm.slang</code></td></tr>
   <tr><td>GPU light and material structs</td><td><code>Light</code>, <code>LightType</code>, <code>Material</code>, <code>MaterialData</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
   <tr><td>Public light type</td><td><code>Light</code>, <code>LightType</code>, <code>MAX_LIGHTS</code> in <code>include/rasm/light.h</code>; <code>Engine::createLight</code> in <code>src/scene/light.cpp</code></td></tr>
@@ -1235,14 +1235,14 @@ cos θ = v·h  (the same as l·h)</code></pre>
   <ul>
     <li><code>Light</code>, <code>Material</code> and <code>SceneData</code> are CPU↔GPU structs: a change to them follows <a href="struct-layout.html#in-rasm">the struct layout rules</a>, on both sides.</li>
     <li>Color and emissive textures are <code>R8G8B8A8_SRGB</code>; metallic-roughness, normal and occlusion textures are <code>R8G8B8A8_UNORM</code>. The shader expects linear values from all of them.</li>
-    <li><code>shadePBR</code> outputs linear color. The sRGB attachment encodes it; do not apply the sRGB curve in the shader.</li>
+    <li><code>shadePBR</code> outputs linear color with no upper limit. Do not tone map or apply the sRGB curve in the shader: the tone-map pass and the swapchain do.</li>
     <li>A light's <code>direction</code> points from the light toward the surface.</li>
   </ul>
 </div>
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>From the development plan, phase 4: an HDR color target with a separate tone-map pass (and Reinhard removed from the material shader), cascaded shadow maps and spot and point light shadows, spot lights (<code>B15</code>), image-based lighting, alpha modes (the pipeline has no blending, so base color alpha does nothing today), and clustered lighting to remove the fixed limit of 8 lights.</p>
+  <p>From the development plan, phase 4: cascaded shadow maps and spot and point light shadows, spot lights (<code>B15</code>), image-based lighting, alpha modes (the pipeline has no blending, so base color alpha does nothing today), and clustered lighting to remove the fixed limit of 8 lights.</p>
 </div>
 
 <h3>Further reading</h3>

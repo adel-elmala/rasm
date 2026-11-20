@@ -656,7 +656,7 @@
     <text x="630" y="54" class="mid title">last pass</text>
     <text x="630" y="72" class="mid small">color <tspan class="t-mem">LOAD</tspan> → <tspan class="t-mem">STORE</tspan></text>
     <text x="630" y="88" class="mid small">depth <tspan class="t-mem">LOAD</tspan> → <tspan class="t-gpu">DONT_CARE</tspan></text>
-    <text x="20" y="116" class="small">Depth is stored only when a later pass on the target loads it, or a pass reads it (readDepth, readSwapchainDepth).</text>
+    <text x="20" y="116" class="small">Depth is stored only when a later pass on the target loads it, or a pass reads it (readDepth). The swapchain has no depth.</text>
 
     <text x="20" y="150" class="title">The scene passes with occlusion culling: a depth read between two passes</text>
     <rect x="20" y="166" width="200" height="56" rx="6" class="gpu"/>
@@ -692,7 +692,7 @@
   <figcaption>The graph never clears a target twice in a frame, and never loads one that nothing drew. A depth read between two passes on one target makes the pass before it store depth, and the pass after it loads depth.</figcaption>
 </figure>
 
-<p>Passes that draw to one target already run in the order they were added: <code>compile</code> adds an edge from each writer of a target to the next one. So <code>assignAttachmentOps</code> only walks the sorted order once and remembers the last writer of each target (the swapchain counts as one target). When a pass finds an earlier writer, it loads color and depth, and it sets <code>storeDepth</code> on that earlier pass. A pass that reads a target's depth (<code>readDepth</code>, <code>readSwapchainDepth</code>) sets <code>storeDepth</code> on the target's last writer before it, too. <code>RenderGraph::execute</code> then passes <code>Pass::attachmentOps</code> to <code>beginPass</code> unchanged.</p>
+<p>Passes that draw to one target already run in the order they were added: <code>compile</code> adds an edge from each writer of a target to the next one. So <code>assignAttachmentOps</code> only walks the sorted order once and remembers the last writer of each target (the swapchain counts as one target). When a pass finds an earlier writer, it loads color and depth (only color on the swapchain, which has no depth), and it sets <code>storeDepth</code> on that earlier pass. A pass that reads a target's depth (<code>readDepth</code>) sets <code>storeDepth</code> on the target's last writer before it, too. <code>RenderGraph::execute</code> then passes <code>Pass::attachmentOps</code> to <code>beginPass</code> unchanged.</p>
 
 <p><code>beginPass</code> also does the barrier from <a href="#variants">section 5</a>. It calls <code>transitionImageLayout</code> with <code>discard</code> for each attachment that it clears, so the old layout is <code>VK_IMAGE_LAYOUT_UNDEFINED</code>. An attachment that it loads keeps its layout, and the barrier orders the earlier pass's writes before the load.</p>
 
@@ -712,7 +712,7 @@ engine.endPass();</code></pre>
   <tr><td>Load ops</td><td>LOAD, CLEAR, DONT_CARE (and NONE)</td><td>LOAD or CLEAR only (<code>loadColor</code>, <code>loadDepth</code>). No DONT_CARE load: a full-screen pass clears first. On a tile-based GPU a clear is as cheap.</td></tr>
   <tr><td>Store ops</td><td>STORE, DONT_CARE, NONE</td><td>Color is always STORE. Depth is STORE with <code>storeDepth</code>, else DONT_CARE. No NONE.</td></tr>
   <tr><td>Per attachment</td><td>one pair per attachment</td><td>One <code>loadColor</code> for all color attachments of a pass (<a href="multiple-render-targets.html">multiple render targets</a>). A stencil aspect shares depth's ops.</td></tr>
-  <tr><td>Clear values</td><td>any, per attachment</td><td>Color: the target's <code>clearColor</code>, or <code>SWAPCHAIN_CLEAR_COLOR</code> for the swapchain. Depth: always 0, the far plane in <a href="projection-depth.html#reversed">reversed-Z</a>.</td></tr>
+  <tr><td>Clear values</td><td>any, per attachment</td><td>Color: the target's <code>clearColor</code>, or <code>BACKGROUND_COLOR</code> for the swapchain. Depth: always 0, the far plane in <a href="projection-depth.html#reversed">reversed-Z</a>.</td></tr>
   <tr><td>Who picks the ops</td><td>the graph, from writers before and readers after</td><td>The graph, from the writers before and the depth reads after (<code>RenderGraph::assignAttachmentOps</code>, review item <code>D9</code>). The first pass on a target clears it; you cannot ask it to load or to not care.</td></tr>
   <tr><td>Store of color</td><td>only if read later</td><td>Always. The graph does not check readers: <code>endPass</code> leaves a render target's color sampled for any later pass (<code>B10</code>).</td></tr>
   <tr><td>Store of depth</td><td>only if read later</td><td>Only if a later pass on the target loads it or reads it. With <code>EngineConfig::occlusionCulling</code> (the default) the scene's <code>Hi-Z</code> pass reads it, so <code>Scene 1</code> stores it (<a href="occlusion-culling.html#in-rasm">occlusion culling</a>).</td></tr>
@@ -747,7 +747,7 @@ engine.endPass();</code></pre>
   <strong>Keep these true</strong>
   <ul>
     <li>Passes that draw to one target must keep running in add order. <code>assignAttachmentOps</code> depends on the edges that <code>compile</code> adds between them.</li>
-    <li>A pass that loads depth needs the pass before it to store depth. A pass that samples a depth declares <code>readDepth</code> or <code>readSwapchainDepth</code>, so the pass that drew it stores it.</li>
+    <li>A pass that loads depth needs the pass before it to store depth. A pass that samples a depth declares <code>readDepth</code>, so the pass that drew it stores it. The swapchain has no depth, so its passes load and store only color.</li>
     <li>Clear only with <code>discard</code>, load only without it. A discard before a load drops the contents.</li>
     <li>Color stays stored: later passes sample render targets without telling the pass that drew them.</li>
     <li>The depth clear value 0 pairs with the <code>VK_COMPARE_OP_GREATER_OR_EQUAL</code> depth test (reversed-Z). Change both or neither.</li>

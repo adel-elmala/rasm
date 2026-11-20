@@ -733,7 +733,7 @@ depth = (f − D) / (f − n)       reversed: again, swap n and f</code></pre>
   <tr><td>The matrices</td><td><code>toProjectionMatrix</code>, <code>hasInfiniteFar</code>, <code>setProjectionAspect</code> in <code>src/scene/camera.cpp</code></td></tr>
   <tr><td>Checks</td><td><code>isValidProjection</code> in <code>src/scene/camera.cpp</code></td></tr>
   <tr><td>Per-pass aspect</td><td><code>Engine::getProjectionMatrix</code> (with an aspect), called by <code>Engine::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Depth textures</td><td><code>DEPTH_FORMAT</code> in <code>include/rasm/engine.h</code>; created in <code>src/engine.cpp</code></td></tr>
+  <tr><td>Depth textures</td><td><code>DEPTH_FORMAT</code> in <code>include/rasm/engine.h</code>; created with each render target in <code>src/rhi/renderContext.cpp</code> (the swapchain has none)</td></tr>
   <tr><td>Clear to 0</td><td><code>VulkanCommandBuffer::beginRendering</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>Compare op</td><td><code>VulkanDevice::createGraphicsPipeline</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>glm's 0..1 range</td><td><code>GLM_FORCE_DEPTH_ZERO_TO_ONE</code> in <code>src/CMakeLists.txt</code></td></tr>
