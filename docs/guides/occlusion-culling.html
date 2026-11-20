@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/occlusion-culling.js"></script>
 </head>
 <body data-root="../" data-page="guides/occlusion-culling.html">
 
@@ -233,6 +235,12 @@
     <p>Getting this backwards is the classic Hi-Z bug: the pyramid then holds the nearest depth, and objects vanish whenever something small stands in front of part of them.</p>
   </div>
 </div>
+
+<p>Build a pyramid by hand. Here the depth is one row of 16 texels, so each coarser texel covers 2 texels, not 2 × 2:</p>
+
+<figure class="lab" data-lab="hiz-pyramid" data-title="Build the pyramid">
+  <figcaption>Click texels to change their depth. Make one texel far (0) in a near area and watch it travel to the top. Then switch to "the nearest" to see the bug: one near texel now speaks for the whole row.</figcaption>
+</figure>
 
 <h3>Odd sizes</h3>
 
@@ -515,6 +523,20 @@
   <strong>The price: false visibles</strong>
   <p>All this rounding gives <b>false visibles</b>: objects that are hidden but kept. That is a cost in time only.</p>
 </div>
+
+<p>Here is the whole test, seen from above. The screen is one row of 32 pixels, and depth is the distance from the camera, so the farthest depth is the largest one.</p>
+
+<div class="legend">
+  <span><i class="mem"></i>stored depths of the level that is read</span>
+  <span><i class="hot"></i>the texels the test reads; f is the farthest</span>
+  <span><i class="gpu"></i>the object's nearest depth</span>
+  <span><i class="ok"></i>kept, and seen</span>
+  <span><i class="bad"></i>culled, but seen</span>
+</div>
+
+<figure class="lab" data-lab="hiz-test" data-title="Hide the object">
+  <figcaption>Drag the object. Behind the middle of the wall it is culled (dashed). Near the wall's edge it is hidden but kept (gray): a false visible. Then put it at the wall's lower edge, where a part of it can be seen, and switch to "the nearest": the bug culls it.</figcaption>
+</figure>
 
 <h2 id="two-pass"><span class="n">7</span>Where the depth comes from</h2>
 

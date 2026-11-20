@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/swapchain.js"></script>
 </head>
 <body data-root="../" data-page="guides/swapchain.html">
 
@@ -435,6 +437,19 @@
 </figure>
 
 <p>With 2 images and 20 ms frames, the GPU loses the rest of each refresh, so it drops all the way to 30. A third image lets the GPU start the next frame during the wait. The average is close to the GPU's own 50, but the timing is uneven, which the eye notices as <b>judder</b>.</p>
+
+<p>Step the same rules yourself, for any GPU time. The display stays at 60 Hz.</p>
+
+<div class="legend">
+  <span><i class="gpu"></i>the GPU draws a frame</span>
+  <span><i></i>the frame on screen; dashed: a frame that is never shown</span>
+  <span><i class="bad"></i>the GPU waits: no free image</span>
+  <span><i class="hot"></i>a tear line</span>
+</div>
+
+<figure class="lab" data-lab="present-modes" data-title="Present modes against the GPU time">
+  <figcaption>In FIFO, raise the GPU time past 16.7 ms with 2 images, then with 3. Then try MAILBOX and IMMEDIATE at 10 ms and watch the small screen.</figcaption>
+</figure>
 
 <h2 id="rebuild"><span class="n">4</span>When the swapchain no longer fits</h2>
 

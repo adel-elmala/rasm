@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/face-culling.js"></script>
 </head>
 <body data-root="../" data-page="guides/face-culling.html">
 
@@ -333,6 +335,19 @@
   </div>
 </div>
 
+<p>Try the whole test on one triangle. The picture computes the signed area of section 3 from the three corners, then applies the two settings.</p>
+
+<div class="legend">
+  <span><i class="ok"></i>front face, drawn</span>
+  <span><i class="box"></i>back face, drawn</span>
+  <span><i class="ghost"></i>culled</span>
+  <span><i class="hot"></i>the direction of 0 → 1 → 2</span>
+</div>
+
+<figure class="lab" data-lab="winding-test" data-title="Wind a triangle, then cull it">
+  <figcaption>Drag corner 0 down through the edge between 1 and 2: the area changes sign and the triangle is culled. Then change the front-face setting or the cull mode to bring it back.</figcaption>
+</figure>
+
 <div class="callout warn">
   <strong>Mixing conventions is a common bug</strong>
   <p>A model exported clockwise into a counter-clockwise engine appears inside out, with its far inner walls visible and its near outer walls missing: the "front" card above, when "back" was meant.</p>
@@ -416,6 +431,18 @@
     <p>det = +1. Two mirrors: a 180° rotation, counter-clockwise again.</p>
   </div>
 </div>
+
+<p>Try it. The front face is counter-clockwise and the camera looks at the outside of the triangle.</p>
+
+<div class="legend">
+  <span><i class="ok"></i>drawn</span>
+  <span><i class="bad"></i>culled by mistake</span>
+  <span><i class="hot"></i>the direction of 0 → 1 → 2</span>
+</div>
+
+<figure class="lab" data-lab="mirror-cull" data-title="Mirror an object">
+  <figcaption>Make one scale negative: the triangle is mirrored and back culling removes it. Switch the cull mode to follow the determinant. Then make both scales negative.</figcaption>
+</figure>
 
 <p>Mirrors are common: a level designer reuses a left door as a right door with a negative scale, and glTF files may contain nodes with negative scale. Because the determinant is a product, a hierarchy is mirrored when an odd number of its matrices are.</p>
 

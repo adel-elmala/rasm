@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/camera-controllers.js"></script>
 </head>
 <body data-root="../" data-page="guides/camera-controllers.html">
 
@@ -570,6 +572,18 @@ so                         t = 1 − e^(−k · dt)</code></pre>
   <figcaption><var>k</var> = 6. The dots are the frames at 30 fps; they sit on the same curve that 144 fps would follow. With a fixed factor the result depends on the frame rate by a factor of 400.</figcaption>
 </figure>
 
+<p>Try other frame rates. The picture steps both kinds of factor frame by frame, with the formula above.</p>
+
+<div class="legend">
+  <span><i class="hot"></i>steps with <var>t</var> = 1 − e<sup>−<var>k</var>·<var>dt</var></sup></span>
+  <span><i class="bad"></i>steps with a fixed <var>t</var> = 0.1</span>
+  <span><i class="ghost"></i>dashed: e<sup>−<var>k</var>·<var>time</var></sup></span>
+</div>
+
+<figure class="lab" data-lab="easing-rate" data-title="One curve at every frame rate">
+  <figcaption>Move the frame rate from 30 to 144 fps. The orange steps stay on the dashed curve; the red steps do not. Find the one frame rate where the fixed factor is right.</figcaption>
+</figure>
+
 <h3>Rotations and orbits</h3>
 
 <p>Positions blend with a straight mix. Rotations should not: mixing two quaternions number by number and normalizing moves at an uneven speed. <b>Slerp</b> (spherical linear interpolation) moves along the arc at a constant speed, and takes the same <var>t</var>.</p>
@@ -618,6 +632,18 @@ so                         t = 1 − e^(−k · dt)</code></pre>
   <li class="cpu"><b>2. Distance</b><span>mix the distance by <var>t</var></span></li>
   <li class="cpu"><b>3. Position</b><span>center + distance · (<var>R</var> · +Z)</span></li>
 </ol>
+
+<p>Try other angles. The picture blends one turn both ways, and plots the distance to the center on the right.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>current and target</span>
+  <span><i class="bad"></i>straight mix of the positions</span>
+  <span><i class="ok"></i>blend of the rotation: along the arc</span>
+</div>
+
+<figure class="lab" data-lab="orbit-mix" data-title="Blend an orbit turn">
+  <figcaption>Slide <var>t</var> from 0 to 1 and watch the red point cut the corner. Then make the turn larger: at 180° the straight mix goes through the center.</figcaption>
+</figure>
 
 <div class="split">
   <div>

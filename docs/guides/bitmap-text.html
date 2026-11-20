@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/bitmap-text.js"></script>
 </head>
 <body data-root="../" data-page="guides/bitmap-text.html">
 
@@ -232,6 +234,12 @@ word 1 = row4 | row5 &lt;&lt; 8 | row6 &lt;&lt; 16 | row7 &lt;&lt; 24
 
 'A':  word 0 = 0x33 &lt;&lt; 24 | 0x33 &lt;&lt; 16 | 0x1E &lt;&lt; 8 | 0x0C = 0x33331E0C
       word 1 = 0x00 &lt;&lt; 24 | 0x33 &lt;&lt; 16 | 0x33 &lt;&lt; 8 | 0x3F = 0x0033333F</code></pre>
+
+<p>Draw a glyph and watch the two words change. The grid starts with the 'A' from the picture.</p>
+
+<figure class="lab" data-lab="glyph-editor" data-title="Draw a glyph, read its two words">
+  <figcaption>Click a pixel in row 0: only the lowest byte of word 0 changes. Click one in row 7: the highest byte of word 1 changes. The small picture shows the glyph three times, edge to edge, as text draws it.</figcaption>
+</figure>
 
 <div class="stats">
   <div><b>188</b><span>integers in the whole font</span><small>94 · 2</small></div>
@@ -653,6 +661,12 @@ lit  = bit g.x of row g.y of the glyph of code</code></pre>
     <p>One array read, two shifts and two masks. The pixel is part of the stem of the P.</p>
   </div>
 </div>
+
+<p>Now move the pixel yourself. The panel below is drawn by running this lookup for every screen pixel. It starts at pixel (34, 42).</p>
+
+<figure class="lab" data-lab="pixel-lookup" data-title="Look up any pixel">
+  <figcaption>Drag the orange point over a letter, a space, the padding and the area outside the panel. Then set the scale to 1: the same pixel now falls in another place.</figcaption>
+</figure>
 
 <h2 id="placing"><span class="n">7</span>Placing, scaling, readability</h2>
 

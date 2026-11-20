@@ -4,7 +4,9 @@
                                              working tree, or in --target), and which pages describe those files
   python docsync.py check                    problems in the pages: unknown names in <code>, missing paths,
                                              broken links and anchors, pages missing from site.js, public
-                                             API names no API page mentions
+                                             API names no API page mentions, labs without a script
+  python docsync.py labs [page]              run every interactive picture (lab) in headless Chrome: each must
+                                             mount and survive all its controls being moved
   python docsync.py stamp [--rev main]       record that the docs now match the code at --rev, a commit on main
                                              (writes docs/assets/sync.js)
 
@@ -20,6 +22,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from html.parser import HTMLParser
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
@@ -308,6 +311,83 @@ def check_snippet_format(path, name, problems):
     return True
 
 
+LAB_USE = re.compile(r'<figure class="lab" data-lab="([\w-]+)"')
+LAB_DEF = re.compile(r'RasmLab\.register\("([\w-]+)"')
+
+
+def page_labs(path):
+    """(labs the page places, labs its script docs/assets/labs/<page>.js registers, the script's path)."""
+    with open(path, encoding="utf-8") as f:
+        used = LAB_USE.findall(f.read())
+    script = os.path.join(DOCS, "assets", "labs", os.path.splitext(os.path.basename(path))[0] + ".js")
+    defined = []
+    if os.path.isfile(script) and os.path.basename(os.path.dirname(path)) == "guides":
+        with open(script, encoding="utf-8") as f:
+            defined = LAB_DEF.findall(f.read())
+    return used, defined, script
+
+
+def check_labs(path, name, problems):
+    used, defined, script = page_labs(path)
+    if not used and not defined:
+        return
+    with open(path, encoding="utf-8") as f:
+        src = f.read()
+    for tag in ("../assets/lab.js", "../assets/labs/" + os.path.basename(script)):
+        if f'<script defer src="{tag}"></script>' not in src:
+            problems.append(f"{name}: has labs but no <script defer src=\"{tag}\">")
+    for lab in used:
+        if lab not in defined:
+            problems.append(f"{name}: lab `{lab}` is not registered in {rel(script)}")
+        if used.count(lab) > 1:
+            problems.append(f"{name}: lab `{lab}` is placed more than once")
+    for lab in defined:
+        if lab not in used:
+            problems.append(f"{rel(script)}: lab `{lab}` is registered but {name} does not place it")
+
+
+def find_chrome():
+    candidates = [os.environ.get("CHROME", ""),
+                  r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                  r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                  "/usr/bin/google-chrome", "/usr/bin/chromium"]
+    return next((c for c in candidates if c and os.path.isfile(c)), None)
+
+
+def cmd_labs(args):
+    """Open every page that has labs in headless Chrome with ?labtest: each lab must mount, and survive every
+    control being moved."""
+    chrome = find_chrome()
+    if chrome is None:
+        sys.exit("Chrome not found: set CHROME to its path")
+    problems = []
+    count = 0
+    for path in pages():
+        used = page_labs(path)[0]
+        if not used or (args.page and args.page not in rel(path)):
+            continue
+        url = "file:///" + os.path.abspath(path).replace("\\", "/").lstrip("/") + "?labtest"
+        # its own profile folder, so a Chrome that is already open does not take the request over
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as profile:
+            result = subprocess.run([chrome, "--headless=new", "--disable-gpu", "--virtual-time-budget=4000",
+                                     "--user-data-dir=" + profile, "--dump-dom", url],
+                                    capture_output=True, text=True, encoding="utf-8", errors="replace")
+        dom = result.stdout
+        for lab in used:
+            count += 1
+            m = re.search(r'<figure class="lab[^"]*" data-lab="' + re.escape(lab) + r'"[^>]*>', dom)
+            tag = m.group(0) if m else ""
+            if "lab-error" in tag or 'data-mounted="1"' not in tag or "data-tested=" not in tag:
+                error = re.search(r'data-lab="' + re.escape(lab) + r'".*?lab-error-text">([^<]*)', dom, re.S)
+                problems.append(f"{rel(path)}: lab `{lab}`: {html.unescape(error.group(1)) if error else 'did not mount'}")
+    if problems:
+        print("\n".join(problems))
+        print(f"\n{len(problems)} problem(s).")
+        sys.exit(1)
+    print(f"OK: {count} labs mounted and survived every control.")
+
+
 def public_api_names():
     """Public function, type and constant names declared in the public headers. Protected and private
     sections (up to the class's closing brace at namespace indentation) and forward declarations are skipped."""
@@ -350,6 +430,7 @@ def cmd_check(args):
                 problems.append(f"{name}: rasm-sources `{s}` does not exist")
         check_code_names(name, page, words, files, problems)
         check_links(p, name, page, parsed, problems)
+        check_labs(p, name, problems)
         if formatter:
             formatter = check_snippet_format(p, name, problems)
     for short in sorted(listed):
@@ -392,10 +473,12 @@ def main():
     s = sub.add_parser("status")
     s.add_argument("--target", default=None, help="commit or branch to compare with (default: the working tree)")
     sub.add_parser("check")
+    labs = sub.add_parser("labs")
+    labs.add_argument("page", nargs="?", default=None, help="only pages whose path contains this text")
     st = sub.add_parser("stamp")
     st.add_argument("--rev", default=MAIN)
     args = parser.parse_args()
-    {"status": cmd_status, "check": cmd_check, "stamp": cmd_stamp}[args.cmd](args)
+    {"status": cmd_status, "check": cmd_check, "labs": cmd_labs, "stamp": cmd_stamp}[args.cmd](args)
 
 
 if __name__ == "__main__":

@@ -881,6 +881,82 @@ svg a:hover text { text-decoration: underline; }
 .stepper.js .step > h4 { display: none; }
 .stepper .step > svg { display: block; width: 100%; height: auto; }
 
+/* ---------- lab: an interactive picture, built by docs/assets/lab.js ----------
+   <figure class="lab" data-lab="name" data-title="Title"><figcaption>What to try.</figcaption></figure> */
+
+figure.lab {
+    margin: 26px 0;
+    border: 1px solid var(--line);
+    border-top: 3px solid var(--accent);
+    border-radius: var(--radius);
+    background: var(--bg-raised);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+}
+.lab-head { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--bg-soft); font-size: 15px; }
+.lab-badge {
+    padding: 1px 9px;
+    border-radius: 20px;
+    background: var(--accent);
+    color: var(--bg);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+.lab-stage { padding: 16px 16px 6px; }
+.lab-stage svg { display: block; width: 100%; height: auto; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.lab-stage canvas { display: block; max-width: 100%; height: auto; margin: 0 auto; border-radius: 6px; }
+.lab-stage:has(> canvas + svg), .lab-stage:has(> svg + canvas) { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; align-items: center; }
+
+.lab-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; padding: 10px 16px; border-top: 1px dashed var(--line); font-size: 14px; }
+.lab-control { display: flex; align-items: center; gap: 8px; color: var(--fg-soft); }
+.lab-control > span { white-space: nowrap; }
+.lab-control input[type="range"] { width: 150px; accent-color: var(--accent); cursor: pointer; }
+.lab-control input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+.lab-control output { min-width: 46px; color: var(--fg); font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+.lab-check { cursor: pointer; }
+.lab-seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.lab-seg button, .lab-button {
+    font: inherit;
+    font-size: 13px;
+    padding: 4px 12px;
+    border: 0;
+    background: var(--bg);
+    color: var(--fg-soft);
+    cursor: pointer;
+}
+.lab-seg button + button { border-left: 1px solid var(--line); }
+.lab-seg button:hover, .lab-button:hover { color: var(--fg); }
+.lab-seg button[aria-pressed="true"] { background: var(--accent-fill); color: var(--accent); font-weight: 600; }
+.lab-button { border: 1px solid var(--line); border-radius: 8px; color: var(--fg); }
+.lab-button:hover { border-color: var(--accent); }
+.lab-play { min-width: 86px; }
+
+.lab-readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 1px; border-top: 1px solid var(--line); background: var(--line); }
+.lab-readouts > div { padding: 9px 16px; background: var(--bg-raised); }
+.lab-readouts b { display: block; font-size: 19px; line-height: 1.25; font-variant-numeric: tabular-nums; }
+.lab-readouts span { display: block; color: var(--fg-soft); font-size: 12px; line-height: 1.35; }
+
+.lab-note { margin: 0; max-width: none; padding: 9px 16px; border-top: 1px solid var(--line); background: var(--bg-soft); font-size: 14px; }
+figure.lab > figcaption { margin: 0; padding: 10px 16px 12px; border-top: 1px dashed var(--line); }
+figure.lab > figcaption::before { content: "Try  "; color: var(--accent); font-weight: 700; white-space: pre; }
+.lab-error-text { margin: 0; padding: 10px 16px; background: var(--bad-fill); color: var(--bad); font-size: 14px; }
+
+/* parts of a lab picture that the reader moves or clicks */
+svg .handle { fill: var(--accent); stroke: var(--bg-raised); stroke-width: 2.5; cursor: grab; touch-action: none; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35)); }
+svg .handle:hover, svg .handle:focus-visible { stroke: var(--fg); outline: none; }
+svg .handle.dragging { cursor: grabbing; }
+svg .pick { cursor: pointer; }
+svg .pick:hover, svg .pick:focus-visible { stroke-width: 3; outline: none; }
+svg g.pick:hover > :is(rect, circle, polygon), svg g.pick:focus-visible > :is(rect, circle, polygon) { stroke-width: 3; }
+svg g.pick text { pointer-events: none; }
+svg .off { opacity: 0.28; }
+svg .hide { display: none; }
+
+@media print { .lab-controls, .lab-badge { display: none; } figure.lab { box-shadow: none; break-inside: avoid; } }
+
 /* ---------- API reference ---------- */
 
 .api { margin: 18px 0 28px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--bg-raised); scroll-margin-top: 24px; }

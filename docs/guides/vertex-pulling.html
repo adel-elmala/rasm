@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/vertex-pulling.js"></script>
 </head>
 <body data-root="../" data-page="guides/vertex-pulling.html">
 
@@ -460,6 +462,20 @@ float4 vertexMain(uint vertexIndex : SV_VertexID) : SV_Position
     <p>From here on, the shader is an ordinary vertex shader.</p>
   </div>
 </div>
+
+<p>Try it. The picture below shows the part of both buffers around mesh B, and does steps 1 to 3 for the corner you pick.</p>
+
+<div class="legend">
+  <span><i class="mem"></i>mesh B's range</span>
+  <span><i></i>other meshes</span>
+  <span><i class="hot"></i>the picked index, and the vertices the draw reads</span>
+  <span><i class="ok"></i>reads a vertex of B</span>
+  <span><i class="bad"></i>reads another mesh</span>
+</div>
+
+<figure class="lab" data-lab="pull-vertex" data-title="Follow one index to its vertex">
+  <figcaption>Click one of B's six indices to pick a corner of the draw. Then move <var>vertexOffset</var> away from 24: the same indices now read vertices of mesh A or mesh C, and the draw still runs.</figcaption>
+</figure>
 
 <h2 id="layouts"><span class="n">6</span>One interleaved struct, or separate streams</h2>
 

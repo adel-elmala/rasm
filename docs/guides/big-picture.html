@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/big-picture.js"></script>
 </head>
 <body data-root="../" data-page="guides/big-picture.html">
 
@@ -117,6 +119,19 @@
     <text x="430" y="430" class="small">Runs what the queues submitted.</text>
   </svg>
   <figcaption>Every frame that draws the scene runs a render graph: <code>render()</code> runs one that <code>Engine</code> keeps (<code>Renderer</code>), or the application builds its own and adds the scene with <code>addScenePasses</code>. The graph calls <code>Engine</code> for the frame and the passes, records the barriers between them, and gives each pass the <code>RenderContext</code> to record with. See <a href="render-graphs.html">Render graphs</a>. Why there is an <code>rhi::Device</code> layer at all is in <a href="graphics-apis-rhi.html">Graphics APIs and the RHI</a>.</figcaption>
+</figure>
+
+<p>Not every call goes all the way down. Follow three calls and see where each one stops.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>engine layer (CPU)</span>
+  <span><i class="gpu"></i>GPU</span>
+  <span><i class="hot"></i>the layer the call is in</span>
+  <span><i class="ok"></i>the way back</span>
+</div>
+
+<figure class="lab" data-lab="layer-calls" data-title="Follow a call down the layers">
+  <figcaption>Pick a call and press "Next step" until it returns. <code>createEntity</code> stops at <code>Engine</code>. <code>createBuffer</code> goes down to <code>VulkanDevice</code> and comes back with a handle. Only <code>render</code> reaches the GPU, and only when the frame is submitted.</figcaption>
 </figure>
 
 <div class="table-wrap">
