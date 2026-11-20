@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Scenes and Meshes · RASM</title>
 <meta name="description" content="Scenes, entities, Transform, meshes (createMesh, loadMesh, loadGLTF, Vertex, SubMesh, MeshLod), lights, adding objects to scenes, when changes reach the GPU, and the limits.">
-<meta name="rasm-sources" content="include/rasm/scene.h include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/engine.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/05_city/main.cpp">
+<meta name="rasm-sources" content="include/rasm/scene.h src/assets/environment.cpp src/renderer/environmentBake.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/engine.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/05_city/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -118,6 +118,7 @@
     std::vector&lt;EntityHandle&gt; entities;
     std::vector&lt;CameraHandle&gt; cameras;
     std::vector&lt;LightHandle&gt;  lights;
+    SceneEnvironment          environment;
 };</pre>
   <div class="body">
     <p>The record the engine keeps for each scene. There is no getter for it; it is in the public header because <code>Engine</code> stores it.</p>
@@ -559,7 +560,7 @@ rasm::MeshHandle cube = engine.createMesh(std::move(vertices), std::move(indices
     <p>Like a flashlight: a point light that shines only in a cone around <code>direction</code>. Full light inside <code>innerConeAngle</code>, a smooth fade to zero at <code>outerConeAngle</code> (the glTF rule).</p>
   </div>
 </div>
-<p>Lights shade <code>PBR</code> materials. <code>UNLIT</code> materials ignore them. There is also a small fixed ambient term, so unlit sides are not fully black.</p>
+<p>Lights shade <code>PBR</code> materials. <code>UNLIT</code> materials ignore them. A scene without an <a href="#environments">environment</a> also gets a small fixed ambient term, so unlit sides are not fully black; with one, the environment's light replaces it.</p>
 
 <div class="api" id="createLight">
   <pre class="sig">LightHandle createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f), float intensity = 1.0f, float range = 10.0f, float innerConeAngle = 0.0f, float outerConeAngle = SPOT_OUTER_CONE_ANGLE);</pre>
@@ -615,7 +616,56 @@ engine.addLightToScene(scene, spot);</code></pre>
   <div class="body"><p>π/4: the default outer angle of a spot light's cone, glTF's default (<code>rasm/light.h</code>).</p></div>
 </div>
 
-<h2 id="timing"><span class="n">6</span>When changes reach the GPU</h2>
+<h2 id="environments"><span class="n">6</span>Environments</h2>
+
+<p>An <b>environment</b> is an HDR photo of the light all around a scene. It lights every <code>PBR</code> material from all directions (soft light from the sky, reflections on shiny surfaces) and shows behind the scene as the sky. The guide <a href="../guides/image-based-lighting.html">Image-based lighting</a> explains how.</p>
+
+<pre><code>const rasm::EnvironmentHandle sunset = engine.loadEnvironment("environments/venice_sunset_2k.hdr");
+engine.setSceneEnvironment(scene, rasm::SceneEnvironment{.environment = sunset, .intensity = 1.0f, .rotation = 1.15f});
+
+// Later: back to no environment.
+engine.setSceneEnvironment(scene, {});</code></pre>
+
+<div class="api" id="loadEnvironment">
+  <pre class="sig">EnvironmentHandle loadEnvironment(const std::string& path);</pre>
+  <div class="body">
+    <p>Loads an equirectangular (2:1 panorama) Radiance <samp>.hdr</samp> image, in the background like <a href="#loadMesh"><code>loadMesh</code></a>. A relative path starts from <code>EngineConfig::assetRoot</code>. The header is read at once; a missing file, another extension or an image that is not HDR logs an error and returns an invalid handle. A worker decodes the pixels. The next <a href="engine.html#beginFrame"><code>beginFrame</code></a> after that creates the textures, and the frame after (or the same one) prepares the light on the GPU, before any pass: about 1 ms for a 2048 × 1024 image. Until then a scene that uses it looks as if it had none.</p>
+    <p>Each call loads the file again (no cache), and an environment is never freed (<code>D22</code>): load each one once.</p>
+  </div>
+</div>
+
+<div class="api" id="isLoaded-environment">
+  <pre class="sig">bool isLoaded(EnvironmentHandle environment) const;</pre>
+  <div class="body"><p>True once the environment's light is prepared, so scenes use it from this frame on. False while it loads, if it failed, and for an invalid handle.</p></div>
+</div>
+
+<div class="api" id="setSceneEnvironment">
+  <pre class="sig">void setSceneEnvironment(SceneHandle scene, const SceneEnvironment& environment);</pre>
+  <div class="body">
+    <p>Gives the scene an environment, or takes it away with an invalid handle (<code>SceneEnvironment{}</code>). The scene's views read it every frame, so a change shows in the next frame and needs no new render graph. An invalid scene, a handle <code>loadEnvironment</code> did not return, a negative or non-finite intensity, or a non-finite rotation logs an error and changes nothing. Several scenes can share one environment.</p>
+  </div>
+</div>
+
+<div class="api" id="SceneEnvironment">
+  <pre class="sig">struct SceneEnvironment
+{
+    EnvironmentHandle           environment;
+    float                       intensity                           = 1.0f;
+    float                       rotation                            = 0.0f;
+    bool                        sky                                 = true;
+};</pre>
+  <div class="body">
+    <dl>
+      <dt>environment</dt><dd>From <code>loadEnvironment</code>. Invalid: no environment, the small fixed ambient and the render target's clear color.</dd>
+      <dt>intensity</dt><dd>Multiplies its light and its sky. 0 turns its light off and keeps a black sky.</dd>
+      <dt>rotation</dt><dd>Radians around +Y, counter-clockwise seen from above. Turn the photo so its sun lines up with a directional light (<code>examples/08_ibl</code> does). Costs nothing: the light is not prepared again.</dd>
+      <dt>sky</dt><dd>Draw the environment behind the scene, where nothing else was drawn. false keeps the clear color but still lights the scene.</dd>
+    </dl>
+    <p>The environment's light is not shadowed: shadow maps darken only the lights (<code>D23</code>).</p>
+  </div>
+</div>
+
+<h2 id="timing"><span class="n">7</span>When changes reach the GPU</h2>
 
 <div class="table-wrap">
 <table>
@@ -625,12 +675,14 @@ engine.addLightToScene(scene, spot);</code></pre>
   <tr><td><code>loadMesh</code></td><td>geometry pool, geometry table</td><td>a later frame, when the worker is done (up to 4 ms of uploads per frame)</td></tr>
   <tr><td><code>createMesh</code></td><td>geometry pool, geometry table</td><td>the next frame</td></tr>
   <tr><td><code>addLightToScene</code></td><td>nothing stored on the GPU; copied into the scene data</td><td>the next frame</td></tr>
+  <tr><td><code>loadEnvironment</code></td><td>the image and three cube maps, prepared by compute before the frame's passes</td><td>a later frame, when the worker is done</td></tr>
+  <tr><td><code>setSceneEnvironment</code></td><td>nothing stored on the GPU; copied into the scene data</td><td>the next frame</td></tr>
   <tr><td><code>updateMaterial</code></td><td>one material table row</td><td>the next frame (see <a href="materials.html#updateMaterial">materials.html</a>)</td></tr>
 </table>
 </div>
 <p>The engine keeps one copy of each table per frame slot. A changed row is uploaded to each copy once, in that copy's own frame, so the GPU never reads a row while the CPU writes it. The guide <a href="../guides/gpu-scene.html">The GPU scene tables</a> explains the details.</p>
 
-<h2 id="limits"><span class="n">7</span>Limits</h2>
+<h2 id="limits"><span class="n">8</span>Limits</h2>
 
 <div class="table-wrap">
 <table>

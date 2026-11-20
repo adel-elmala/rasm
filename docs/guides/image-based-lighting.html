@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Image-Based Lighting · RASM</title>
+<meta name="description" content="How image-based lighting works: a photo of the light all around (an environment map), stored as an equirectangular image or a cube map, split into diffuse light (an irradiance map) and specular light (a prefiltered map per roughness and a BRDF table: the split sum), importance sampling and filtered importance sampling against fireflies, the sky behind the scene, pitfalls, a worked example. Then how RASM does it.">
+<meta name="rasm-sources" content="src/assets/environment.cpp src/renderer/environmentBake.h src/renderer/environmentBake.cpp shaders/passes/environment.slang shaders/lib/environment.slang shaders/lib/cubeMap.slang shaders/lib/brdf.slang shaders/lib/pbr.slang shaders/passes/sky.slang src/renderer/gpuScene.cpp include/rasm/scene.h include/rasm/engine.h src/scene/scene.cpp src/engine.cpp examples/08_ibl/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/image-based-lighting.js"></script>
+</head>
+<body data-root="../" data-page="guides/image-based-lighting.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+    <marker id="ah-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head light"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Image-based lighting</h1>
+<p class="lead">A lamp lights a surface from one point. Outdoors, light comes from <b>every direction</b>: the whole sky, the clouds, the ground, the buildings. <b>Image-based lighting</b> (IBL) takes a photo of all that light, an <b>environment map</b>, and lights the scene with it. Shiny surfaces reflect the photo, rough ones show a blur of it, and every surface gets the soft light of the sky. This page shows how to store the photo, how to filter it once so that a pixel needs only three texture reads, and the math that makes that possible (the <b>split sum</b>). The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>An <b>environment map</b> stores the light that arrives from each direction, as an HDR image: a 2:1 <b>equirectangular</b> panorama, or a <b>cube map</b> of six square faces.</li>
+    <li>Lighting a pixel with it is an integral over the hemisphere. It is far too slow per pixel, so the map is <b>filtered once</b> ahead of time.</li>
+    <li><b>Diffuse</b> light depends only on the normal: one small <b>irradiance map</b>, read at the normal.</li>
+    <li><b>Specular</b> light depends on roughness too: a <b>prefiltered map</b> with one roughness per mip, read in the reflected direction, times a 2D <b>BRDF table</b> read at (n·v, roughness). This is the <b>split sum</b>.</li>
+    <li>The filters use <b>importance sampling</b>. A small bright light (the sun) makes sparkles unless each sample reads a blurrier mip: <b>filtered importance sampling</b>.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>The problem: light from everywhere</h2>
+
+<p>A point light is one arrow. To light a point outdoors, you would add up the light from every direction above the surface, each weighted by the BRDF (see <a href="pbr.html">PBR shading</a>). That is an integral, not a sum of a few lights.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 150" role="img" aria-label="A sphere on the ground lit by one point light: one arrow. The side away from the light is black, and a constant gray is added everywhere to hide it.">
+      <circle cx="260" cy="30" r="10" class="light"/>
+      <line x1="250" y1="38" x2="190" y2="76" class="arrow light" marker-end="url(#ah-light)"/>
+      <circle cx="150" cy="90" r="34" class="solid"/>
+      <path d="M150,56 A34,34 0 0 1 184,90 A34,34 0 0 1 150,124 Z" class="paper"/>
+      <line x1="40" y1="124" x2="290" y2="124" class="surface"/>
+      <text x="160" y="144" class="mid small">one light + a flat gray "ambient"</text>
+    </svg>
+    <h4>Punctual lights only</h4>
+    <p>Only the side toward the lamp is lit. A constant gray fills the rest, the same on every side. Metal has nothing to reflect and looks black.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 150" role="img" aria-label="The same sphere under a sky dome: many arrows arrive from all over the dome, brighter from the sky above, warmer from the low sun.">
+      <path d="M30,124 A130,110 0 0 1 290,124" class="zone"/>
+      <line x1="150" y1="18" x2="150" y2="50" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="80" y1="34" x2="118" y2="62" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="220" y1="34" x2="182" y2="62" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="40" y1="96" x2="110" y2="92" class="arrow light" marker-end="url(#ah-light)"/>
+      <line x1="270" y1="100" x2="190" y2="94" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+      <text x="282" y="94" class="small t-hot">sun</text>
+      <circle cx="150" cy="90" r="34" class="paper"/>
+      <line x1="40" y1="124" x2="290" y2="124" class="surface"/>
+      <text x="160" y="144" class="mid small">light from the whole sky</text>
+    </svg>
+    <h4>An environment map</h4>
+    <p>Light from every direction, each with its own color and strength. The bottom is lit by the ground, the top by the sky, one side by the sun.</p>
+  </div>
+</div>
+
+<p>The integral has two parts, one per term of the BRDF. The rest of the page computes both ahead of time.</p>
+
+<div class="formula">
+  <p class="eq">L<sub>out</sub>(v) = ∫ L<sub>in</sub>(l) · f(l, v) · (n·l) dl</p>
+  <dl>
+    <dt>L<sub>in</sub>(l)</dt><dd>the light arriving from direction l: what the environment map stores</dd>
+    <dt>f(l, v)</dt><dd>the BRDF: a diffuse (Lambert) term plus a specular (GGX) term</dd>
+    <dt>n·l</dt><dd>the cosine: light at a grazing angle spreads over more surface</dd>
+    <dt>∫ … dl</dt><dd>over every direction of the hemisphere above the surface</dd>
+  </dl>
+</div>
+
+<h2 id="maps"><span class="n">2</span>Storing light by direction</h2>
+
+<p>An environment map answers one question: <i>how much light comes from direction d?</i> It is an HDR image, since the sun can be a thousand times brighter than the sky. Two shapes are common.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Left, an equirectangular image twice as wide as it is high: across, the turn around the vertical axis from 0 to 360 degrees; down, from straight up to straight down. Right, a cube map: six square faces, plus X, minus X, plus Y, minus Y, plus Z, minus Z, laid out as a cross with minus Z in the middle, marked as the face a direction hits.">
+    <text x="20" y="22" class="title">equirectangular (2:1)</text>
+    <rect x="20" y="34" width="360" height="180" class="paper"/>
+    <path d="M110,34V214M200,34V214M290,34V214M20,79H380M20,124H380M20,169H380" class="grid"/>
+    <rect x="20" y="34" width="360" height="45" class="zone"/>
+    <text x="200" y="62" class="mid small">top rows: the zenith, stretched</text>
+    <circle cx="245" cy="120" r="7" class="accent"/>
+    <text x="255" y="112" class="small">d</text>
+    <text x="20" y="232" class="small">u: turn around up, 0 … 360°</text>
+    <text x="380" y="232" class="end small">v: from up (0) to down (1)</text>
+
+    <text x="420" y="22" class="title">cube map (6 faces)</text>
+    <rect x="530" y="34" width="60" height="60" class="paper"/>
+    <rect x="470" y="94" width="60" height="60" class="paper"/>
+    <rect x="530" y="94" width="60" height="60" class="mem"/>
+    <rect x="590" y="94" width="60" height="60" class="paper"/>
+    <rect x="650" y="94" width="60" height="60" class="paper"/>
+    <rect x="530" y="154" width="60" height="60" class="paper"/>
+    <text x="560" y="68" class="mid small mono">+Y</text>
+    <text x="500" y="128" class="mid small mono">−X</text>
+    <text x="560" y="128" class="mid small mono">−Z</text>
+    <text x="620" y="128" class="mid small mono">+X</text>
+    <text x="680" y="128" class="mid small mono">+Z</text>
+    <text x="560" y="188" class="mid small mono">−Y</text>
+    <text x="420" y="232" class="small">the face of the biggest axis of d, then where d crosses it</text>
+  </svg>
+  <figcaption>The panorama is how HDR photos are shared: one image, easy to make with a 360° camera. A cube has no stretched rows, is sampled with plain bilinear filtering and mips, and the GPU blends across its edges. So renderers load the panorama and turn it into a cube once.</figcaption>
+</figure>
+
+<div class="formula">
+  <p class="eq">u = 0.5 + atan2(d.x, −d.z) / 2π</p>
+  <p class="eq">v = acos(d.y) / π</p>
+  <dl>
+    <dt>d</dt><dd>a unit direction, y up; −z is the middle of the image</dd>
+    <dt>u</dt><dd>the turn around the vertical axis, 0 to 1 across the image; it wraps around at the edges</dd>
+    <dt>v</dt><dd>0 at the top row (straight up), 1 at the bottom row (straight down)</dd>
+  </dl>
+</div>
+
+<p>To fill a cube face, each texel takes the direction through its center and reads the panorama there. Move the direction below and see where it lands in both.</p>
+
+<figure class="lab" data-lab="env-lookup" data-title="One direction, two maps">
+  <figcaption>Turn the direction around (azimuth) at 0° elevation: it walks through the four side faces, a quarter of the image each. Then raise it above 45°: it moves to the top face, where the panorama's rows get very narrow.</figcaption>
+</figure>
+
+<p>The four side faces share the image's width, so a face <b>a quarter of the panorama's width</b> wide keeps all its detail at the horizon: 512² faces for a 2048 × 1024 panorama. Each face has a full chain of <a href="mipmaps-sampling.html">mipmaps</a>; the filters below need them.</p>
+
+<h2 id="split"><span class="n">3</span>Diffuse and specular: what each needs</h2>
+
+<p>The two terms of the BRDF ask different questions of the map. That decides what to precompute.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A surface with its normal, and a wide cosine lobe covering the whole hemisphere.">
+      <path d="M40,104 A80,80 0 0 1 200,104 Z" class="light o-50"/>
+      <line x1="20" y1="104" x2="220" y2="104" class="surface"/>
+      <line x1="120" y1="104" x2="120" y2="20" class="arrow" marker-end="url(#ah)"/>
+      <text x="128" y="30" class="small">n</text>
+    </svg>
+    <h4>Diffuse</h4>
+    <p>Light from the whole hemisphere, weighted by n·l. Depends on the <b>normal only</b>: a 2D table of directions.</p>
+    <p class="cost">One small cube, read at n</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A surface, the view direction v and its mirror direction r, with a narrow lobe around r.">
+      <path d="M150,104 L186,26 L204,38 Z" class="light o-50"/>
+      <line x1="20" y1="104" x2="220" y2="104" class="surface"/>
+      <line x1="150" y1="104" x2="60" y2="30" class="arrow" marker-end="url(#ah)"/>
+      <text x="56" y="24" class="small">v</text>
+      <line x1="150" y1="104" x2="196" y2="30" class="arrow hot" marker-end="url(#ah-hot)"/>
+      <text x="204" y="26" class="small t-hot">r</text>
+    </svg>
+    <h4>Specular</h4>
+    <p>A lobe around the mirror direction r. Its width depends on <b>roughness</b>, its strength on Fresnel, n·v and f0: too many inputs for one table.</p>
+    <p class="cost">Split into two tables: the split sum</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Three texture reads for one pixel: the irradiance cube at n, the prefiltered cube at r and a mip from roughness, and a 2D table at n dot v and roughness.">
+      <rect x="12" y="22" width="66" height="36" rx="4" class="mem"/>
+      <text x="45" y="44" class="mid small">irradiance</text>
+      <rect x="87" y="22" width="66" height="36" rx="4" class="mem"/>
+      <text x="120" y="44" class="mid small">prefiltered</text>
+      <rect x="162" y="22" width="66" height="36" rx="4" class="mem"/>
+      <text x="195" y="44" class="mid small">BRDF table</text>
+      <text x="45" y="78" class="mid small">at n</text>
+      <text x="120" y="78" class="mid small">at r, a mip</text>
+      <text x="195" y="78" class="mid small">n·v, rough</text>
+      <text x="120" y="112" class="mid small">3 reads per pixel</text>
+    </svg>
+    <h4>Per pixel</h4>
+    <p>After the precompute, a pixel does no integral: three texture reads and a few multiplies.</p>
+    <p class="cost">The filtering is done once per map</p>
+  </div>
+</div>
+
+<h2 id="diffuse"><span class="n">4</span>Diffuse: the irradiance map</h2>
+
+<p>The Lambert BRDF is a constant, albedo / π. So the diffuse integral is the albedo times the map's light averaged over the hemisphere around n, with the cosine weight. Each texel of the <b>irradiance map</b> stores that average for its direction taken as the normal.</p>
+
+<div class="formula">
+  <p class="eq">diffuse(n) = albedo · E(n) / π</p>
+  <p class="eq">E(n) / π = mean of L<sub>in</sub>(l), l drawn with pdf (n·l) / π</p>
+  <dl>
+    <dt>E(n)</dt><dd>the irradiance: all the light arriving at a surface facing n</dd>
+    <dt>pdf (n·l) / π</dt><dd>cosine-weighted sampling: more directions near the normal, where n·l is large</dd>
+  </dl>
+</div>
+
+<p>Drawn with that density, the cosine cancels and the estimate is the <b>plain mean</b> of the samples. The result is very smooth, so a 32² cube is enough; a texel of it covers about 3°.</p>
+
+<div class="callout">
+  <strong>Spherical harmonics, the other common answer</strong>
+  <p>Irradiance is so smooth that 9 numbers per color (spherical harmonics of order 2) describe it within about 3%. That suits many small light probes. With a strong sun the 9 numbers ring and can go negative; a small cube does not.</p>
+</div>
+
+<h2 id="specular"><span class="n">5</span>Specular: one roughness per mip</h2>
+
+<p>The specular integral depends on the direction, the roughness, Fresnel and the view angle. The <b>split sum</b> approximation (Karis 2013) splits it into two factors that can each be stored:</p>
+
+<div class="formula">
+  <p class="eq">specular ≈ prefiltered(r, roughness) · (f0 · A + B)</p>
+  <p class="eq">A, B = table(n·v, roughness)</p>
+  <dl>
+    <dt>prefiltered</dt><dd>the map blurred by the GGX lobe of this roughness, assuming n = v = r: a cube per roughness</dd>
+    <dt>A, B</dt><dd>the BRDF's own integral, with the light set to 1: a scale and a bias of f0, in a 2D table (<a href="#brdf">section 7</a>)</dd>
+    <dt>r</dt><dd>the mirror direction, reflect(−v, n)</dd>
+  </dl>
+</div>
+
+<p>A rougher surface has a wider lobe, so its blurred map has less detail and needs fewer texels. That fits a mip chain: <b>mip m holds roughness m / (mips − 1)</b>. A shader picks the mip from its roughness, and trilinear filtering blends between two.</p>
+
+<figure class="lab" data-lab="ggx-lobe" data-title="Roughness, lobe and mip">
+  <figcaption>Raise the roughness from 0: the lobe of reflected light widens and the mip moves down the chain. Then set 16 samples and a low roughness, and watch which source mip a sample reads.</figcaption>
+</figure>
+
+<p>Assuming n = v loses the stretched shape of the reflection at grazing angles, where real highlights get long. It is the price of a 3D table instead of a 5D one. Mip 0 is roughness 0, a mirror: it is a plain copy of the map.</p>
+
+<h2 id="sampling"><span class="n">6</span>Filtering by sampling</h2>
+
+<p>Each texel of the prefiltered map is an integral too. It is estimated with N samples drawn with the GGX distribution (<b>importance sampling</b>): the samples crowd where the lobe is strong, so few of them do the work of many. A <b>Hammersley</b> set gives evenly spread, repeatable sample points.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 150" role="img" aria-label="A lobe with a few sample arrows. One sample hits a tiny bright sun and the next texel's samples miss it: neighbouring texels get very different values, white dots on a dark blur.">
+      <line x1="20" y1="120" x2="300" y2="120" class="surface"/>
+      <line x1="160" y1="120" x2="120" y2="30" class="arrow" marker-end="url(#ah)"/>
+      <line x1="160" y1="120" x2="160" y2="24" class="arrow" marker-end="url(#ah)"/>
+      <line x1="160" y1="120" x2="210" y2="30" class="arrow" marker-end="url(#ah)"/>
+      <circle cx="214" cy="24" r="6" class="hot"/>
+      <text x="226" y="28" class="small t-hot">sun: one texel</text>
+      <text x="160" y="142" class="mid small">each sample reads mip 0: hit or miss</text>
+    </svg>
+    <h4>Plain importance sampling</h4>
+    <p>The sun covers a few texels. A sample hits it or not, so the blurred map gets bright speckles, <b>fireflies</b>, unless thousands of samples are taken.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 150" role="img" aria-label="The same samples, each reading a blurrier mip whose texel is about as big as the part of the lobe the sample stands for. The sun is spread over a larger area and every sample sees some of it.">
+      <line x1="20" y1="120" x2="300" y2="120" class="surface"/>
+      <line x1="160" y1="120" x2="120" y2="30" class="arrow" marker-end="url(#ah)"/>
+      <line x1="160" y1="120" x2="160" y2="24" class="arrow" marker-end="url(#ah)"/>
+      <line x1="160" y1="120" x2="210" y2="30" class="arrow" marker-end="url(#ah)"/>
+      <circle cx="200" cy="24" r="22" class="hot o-50"/>
+      <text x="226" y="20" class="small t-hot">sun, from a</text>
+      <text x="226" y="34" class="small t-hot">coarse mip</text>
+      <text x="160" y="142" class="mid small">each sample reads the mip of its size</text>
+    </svg>
+    <h4>Filtered importance sampling</h4>
+    <p>A sample stands for 1/N of the lobe. It reads the mip whose texels are that big, so the sun is already spread out and every sample sees part of it.</p>
+  </div>
+</div>
+
+<div class="formula">
+  <p class="eq">mip = ½ · log2(Ω<sub>sample</sub> / Ω<sub>texel</sub>) + 1</p>
+  <p class="eq">Ω<sub>sample</sub> = 1 / (N · pdf)      Ω<sub>texel</sub> = 4π / (6 · size²)</p>
+  <dl>
+    <dt>pdf</dt><dd>the sample's probability density; for GGX with n = v it is D / 4</dd>
+    <dt>Ω</dt><dd>a solid angle: the part of the sphere a sample, or a texel of mip 0, covers</dd>
+    <dt>½ · log2</dt><dd>a mip halves the side of a texel, so it quarters its solid angle</dd>
+    <dt>+ 1</dt><dd>one mip coarser than needed, to smooth what N samples leave</dd>
+  </dl>
+</div>
+
+<p>The irradiance map is filtered the same way, with cosine-distributed samples: pdf = (n·l) / π.</p>
+
+<h2 id="brdf"><span class="n">7</span>The BRDF table</h2>
+
+<p>The second factor of the split sum is the specular BRDF integrated against a white environment. Fresnel (Schlick) is linear in f0, so the integral splits into a part times f0 and a part added to it. Both depend only on n·v and roughness: one 2D table, the same for every environment.</p>
+
+<div class="formula">
+  <p class="eq">A = mean of (1 − F<sub>c</sub>) · G      B = mean of F<sub>c</sub> · G</p>
+  <p class="eq">G = V · 4 (n·l)(v·h) / (n·h)      F<sub>c</sub> = (1 − v·h)<sup>5</sup></p>
+  <dl>
+    <dt>V</dt><dd>the visibility term (height-correlated Smith GGX), as in direct lighting</dd>
+    <dt>G</dt><dd>the BRDF times n·l, divided by the pdf of the sample's half vector h</dd>
+    <dt>mean</dt><dd>over half vectors h drawn with the GGX distribution</dd>
+  </dl>
+</div>
+
+<figure class="lab" data-lab="brdf-lut" data-title="The split-sum table">
+  <figcaption>Drag the handle to the left edge at the top (grazing, smooth): the bias grows and even plastic reflects most of the light. Then go to the bottom (rough): scale plus bias falls below 1.</figcaption>
+</figure>
+
+<p>The table is computed once (per engine, not per environment), 128² is plenty, and it needs two channels.</p>
+
+<h2 id="sky"><span class="n">8</span>The sky behind the scene</h2>
+
+<p>Where nothing is drawn, the environment itself should show. One triangle covers the screen at the <b>far plane</b>, and the depth test keeps it only where the depth is still the clear value. Each pixel turns its screen position into a view ray and reads the cube there, at mip 0.</p>
+
+<ol class="flow">
+  <li class="gpu"><b>draw the scene</b><span>depth written where there is geometry</span></li>
+  <li class="shader"><b>one triangle at the far plane</b><span>depth test: only where nothing was drawn</span></li>
+  <li class="shader"><b>pixel → view ray → world</b><span>the inverse of the camera's rotation</span></li>
+  <li class="mem"><b>read the cube</b><span>along the ray</span></li>
+</ol>
+
+<p>Drawing the sky last costs only the pixels it shows. Drawing it first and the scene over it costs the whole screen.</p>
+
+<h2 id="pitfalls"><span class="n">9</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>White sparkles on rough reflections</dt><dd>Fireflies from a small bright light: each sample read mip 0. Read the mip from the sample's pdf (<a href="#sampling">section 6</a>), or take far more samples.</dd></div>
+  <div><dt>The sun turns into infinity or black</dt><dd>A 16-bit float stores at most 65504. Clamp the photo's brightest texels when converting it, or one bad texel spreads over the whole blurred map.</dd></div>
+  <div><dt>Visible seams on the cube's edges</dt><dd>Faces sampled as six 2D textures. Sample the cube as a cube, so the GPU filters across faces.</dd></div>
+  <div><dt>Blocky or shimmering sky near the top and bottom</dt><dd>The panorama's rows near the poles are squeezed into few cube texels. Take several reads per cube texel, then build the mips by averaging.</dd></div>
+  <div><dt>Rough metal looks too bright or too dark compared to direct light</dt><dd>Roughness mapped to mips differently in the filter and in the shader, or the table read with α (roughness²) instead of roughness. Use the same rule in both places.</dd></div>
+  <div><dt>Objects glow in a dark corner</dt><dd>The environment light is not shadowed: it reaches every point. Ambient occlusion, light probes or reflection probes are what block it.</dd></div>
+  <div><dt>The sky is mirrored left to right</dt><dd>atan2 arguments swapped, or the panorama read from inside out. Looking along −z, turning right must move right in the image.</dd></div>
+</dl>
+
+<h2 id="example"><span class="n">10</span>Worked example</h2>
+
+<p>A 2048 × 1024 panorama of a sunset, in 16-bit floats:</p>
+
+<div class="stats">
+  <div><b>512²</b><span>cube face</span><small>2048 / 4, a power of two</small></div>
+  <div><b>10</b><span>mips of the cube</span><small>512 down to 1</small></div>
+  <div><b>16 MiB</b><span>the cube with its mips</span><small>512² × 6 × 8 B × 4/3</small></div>
+  <div><b>256² × 6</b><span>prefiltered mips, roughness 0 … 1</span><small>about 4 MiB</small></div>
+  <div><b>32²</b><span>irradiance cube</span><small>48 KiB</small></div>
+  <div><b>0.056</b><span>reflectance of plastic at n·v 0.5, roughness 0.5</span><small>0.04 · 0.835 + 0.023</small></div>
+</div>
+
+<p>At n·v = 0.1 and roughness 0.2, the same plastic reflects 0.04 · 0.456 + 0.470 = <b>0.489</b>: almost half the light, at a grazing angle. At roughness 1 and n·v = 0.5 it reflects 0.021: rough surfaces lose energy in this model.</p>
+
+<h2 id="in-rasm"><span class="n">11</span>In RASM</h2>
+
+<p>An application loads an environment and gives it to a scene. The engine bakes it on the GPU in one frame, before that frame's passes, then every scene view that uses it reads three textures per pixel and draws the sky in its last draw pass.</p>
+
+<pre><code>const rasm::EnvironmentHandle sunset = engine.loadEnvironment("environments/venice_sunset_2k.hdr");
+engine.setSceneEnvironment(scene, rasm::SceneEnvironment{.environment = sunset, .intensity = 1.0f, .rotation = 1.15f});</code></pre>
+
+<div class="legend">
+  <span><i class="cpu"></i>main thread</span>
+  <span><i class="gpu"></i>GPU, compute</span>
+  <span><i class="mem"></i>textures</span>
+  <span><i class="shader"></i>shading</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 330" role="img" aria-label="loadEnvironment decodes the .hdr file on a worker into RGBA16F. finishLoads creates the image and three cubes. The next beginFrame records the bake before any pass: cubeMain fills the cube from the image, downsampleMain builds its mips, specularMain fills the six specular mips and irradianceMain the irradiance cube. The BRDF LUT is baked once, in the engine's first frame. The sky reads the cube itself; shadePBR reads the specular cube, the irradiance cube and the LUT.">
+    <rect x="20" y="20" width="170" height="54" rx="6" class="cpu"/>
+    <text x="105" y="42" class="mid mono small">loadEnvironment</text>
+    <text x="105" y="60" class="mid small">worker: stbi_loadf, half</text>
+    <line x1="190" y1="47" x2="226" y2="47" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="228" y="20" width="170" height="54" rx="6" class="cpu"/>
+    <text x="313" y="42" class="mid mono small">finishLoads</text>
+    <text x="313" y="60" class="mid small">4 textures, WAITING</text>
+    <line x1="398" y1="47" x2="434" y2="47" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="436" y="20" width="304" height="54" rx="6" class="cpu"/>
+    <text x="588" y="42" class="mid mono small">beginFrame → recordEnvironmentBakes</text>
+    <text x="588" y="60" class="mid small">before any pass, first graphics batch</text>
+
+    <rect x="20" y="104" width="120" height="44" rx="6" class="mem"/>
+    <text x="80" y="124" class="mid small">image</text>
+    <text x="80" y="140" class="mid small mono">2048 × 1024</text>
+    <line x1="140" y1="126" x2="176" y2="126" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="158" y="118" class="mid small t-gpu">cube</text>
+    <rect x="178" y="104" width="150" height="44" rx="6" class="mem"/>
+    <text x="253" y="124" class="mid small">cube, 512²</text>
+    <text x="253" y="140" class="mid small">10 mips (downsample)</text>
+    <line x1="328" y1="116" x2="404" y2="104" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="328" y1="138" x2="404" y2="160" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="366" y="100" class="mid small t-gpu">specular</text>
+    <text x="366" y="168" class="mid small t-gpu">irradiance</text>
+    <rect x="398" y="78" width="348" height="112" rx="8" class="zone"/>
+    <text x="740" y="94" class="end small t-faint">what shading reads</text>
+    <rect x="406" y="84" width="160" height="40" rx="6" class="mem"/>
+    <text x="486" y="108" class="mid small">specular, 256², 6 mips</text>
+    <rect x="406" y="142" width="160" height="40" rx="6" class="mem"/>
+    <text x="486" y="166" class="mid small">irradiance, 32²</text>
+    <rect x="600" y="104" width="140" height="44" rx="6" class="mem"/>
+    <text x="670" y="124" class="mid small">BRDF LUT, 128²</text>
+    <text x="670" y="140" class="mid small">once, first frame</text>
+
+    <rect x="20" y="214" width="340" height="60" rx="6" class="shader"/>
+    <text x="190" y="236" class="mid mono small">drawSky (sky.slang)</text>
+    <text x="190" y="256" class="mid small">the cube, where depth is still 0</text>
+    <rect x="400" y="214" width="340" height="60" rx="6" class="shader"/>
+    <text x="570" y="236" class="mid mono small">shadePBR → getEnvironmentLight</text>
+    <text x="570" y="256" class="mid small">specular × (f0 · LUT.x + LUT.y) + irradiance × color</text>
+    <line x1="253" y1="148" x2="253" y2="212" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="570" y1="190" x2="570" y2="212" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="20" y="300" class="small">All textures R16G16B16A16_SFLOAT. The cubes and the LUT are written by compute as storage images, then sampled.</text>
+    <text x="20" y="318" class="small t-faint">The image is destroyed once the frame that baked it is done.</text>
+  </svg>
+  <figcaption>The bake is about 0.8 ms on an RTX 3060 for this panorama, plus 0.15 ms for the LUT, once. A scene uses the environment from the frame that bakes it; until then it has the constant ambient.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Input</td><td>an equirectangular panorama or a cube</td><td>A Radiance <samp>.hdr</samp> panorama only (<code>Engine::loadEnvironment</code>), decoded with <code>stbi_loadf</code>, clamped to 65504 and packed to half floats on a worker.</td></tr>
+  <tr><td>Cube size</td><td>a quarter of the width</td><td><code>getEnvironmentCubeSize</code>: a quarter of the width as a power of two, 64 to 1024 (<code>ENVIRONMENT_MIN_CUBE_SIZE</code>, <code>ENVIRONMENT_MAX_CUBE_SIZE</code>). 4 reads of the image per texel, then a 2x2 box per mip.</td></tr>
+  <tr><td>Irradiance</td><td>a small cube or 9 SH numbers</td><td>A cube of <code>IRRADIANCE_CUBE_SIZE</code> (32), 512 cosine samples per texel, filtered importance sampling.</td></tr>
+  <tr><td>Specular</td><td>one roughness per mip</td><td><code>SPECULAR_CUBE_SIZE</code> (256) with <code>SPECULAR_MIPS</code> (6): mip m is roughness m / 5, 256 GGX samples per texel, mip 0 a copy. The shader reads <code>roughness × 5</code>, with perceptual roughness.</td></tr>
+  <tr><td>BRDF table</td><td>2 channels, per engine</td><td><code>BRDF_LUT_SIZE</code> (128), 512 samples, in an RGBA16F texture (x and y used), baked in the engine's first frame.</td></tr>
+  <tr><td>Rotation, intensity</td><td>—</td><td><code>SceneEnvironment::rotation</code> turns every lookup around +Y in the shader, so turning needs no new bake; <code>intensity</code> scales the light and the sky.</td></tr>
+  <tr><td>Occlusion</td><td>AO, probes</td><td>Only the material's occlusion texture, on diffuse and specular alike. The environment light is not shadowed (<code>D23</code>).</td></tr>
+  <tr><td>Lifetime</td><td>—</td><td>An environment lives until shutdown (<code>D22</code>).</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>API</td><td><code>Engine::loadEnvironment</code>, <code>Engine::isLoaded</code>, <code>Engine::setSceneEnvironment</code>, <code>SceneEnvironment</code> in <code>include/rasm/scene.h</code></td></tr>
+  <tr><td>Loading</td><td><code>decodeEnvironment</code> and <code>Engine::finishEnvironmentLoad</code> in <code>src/assets/environment.cpp</code></td></tr>
+  <tr><td>The bake</td><td><code>Engine::recordEnvironmentBakes</code> and <code>Engine::finishEnvironmentBakes</code> in <code>src/renderer/environmentBake.cpp</code>; state in <code>Environments</code>, sizes and storage slots in <code>src/renderer/environmentBake.h</code></td></tr>
+  <tr><td>Bake shaders</td><td><code>cubeMain</code>, <code>downsampleMain</code>, <code>specularMain</code>, <code>irradianceMain</code>, <code>brdfMain</code> in <code>shaders/passes/environment.slang</code></td></tr>
+  <tr><td>Shading</td><td><code>getEnvironmentLight</code>, <code>getSampleMip</code>, <code>sampleGgx</code>, <code>getEquirectUV</code>, <code>toEnvironment</code> in <code>shaders/lib/environment.slang</code>; called from <code>shadePBR</code> in <code>shaders/lib/pbr.slang</code></td></tr>
+  <tr><td>Sky</td><td><code>Engine::drawSky</code> in <code>src/renderer/gpuScene.cpp</code>, <code>shaders/passes/sky.slang</code></td></tr>
+  <tr><td>Per view</td><td><code>writeSceneEnvironment</code> fills the <code>SceneData</code> environment fields in <code>prepareSceneView</code></td></tr>
+  <tr><td>Example</td><td><code>examples/08_ibl/main.cpp</code>: spheres from rough to smooth and plastic to metal, DamagedHelmet, a sun lined up with the photo's</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>The roughness of mip m in <code>specularMain</code> and the mip the shader reads in <code>getEnvironmentLight</code> use the same rule: <code>roughness × (SPECULAR_MIPS − 1)</code>.</li>
+    <li><code>getEquirectUV</code> and the lab on this page use the same mapping; <code>toEnvironment</code> and the example's sun direction turn the same way.</li>
+    <li>One bake fits its storage slots: the <code>static_assert</code> in <code>environmentBake.h</code> checks it against <code>MAX_BINDLESS_STORAGE_IMAGES</code>.</li>
+    <li>The bake's textures end <code>SAMPLED</code> through <code>RenderContext::transitionImageLayout</code>, so later passes and a dropped frame see the right state.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Brian Karis, "Real Shading in Unreal Engine 4" (SIGGRAPH 2013 course): the split sum, the prefiltered mips and the BRDF table.</li>
+  <li>Mark Colbert, Jaroslav Křivánek, "GPU-Based Importance Sampling" (GPU Gems 3, chapter 20, 2007): filtered importance sampling.</li>
+  <li>Romain Guy, Mathias Agopian, "Physically Based Rendering in Filament" (2018): IBL, the DFG table, spherical harmonics.</li>
+  <li>Ravi Ramamoorthi, Pat Hanrahan, "An Efficient Representation for Irradiance Environment Maps" (SIGGRAPH 2001): irradiance in 9 numbers.</li>
+  <li>Sébastien Lagarde, Charles de Rousiers, "Moving Frostbite to Physically Based Rendering" (SIGGRAPH 2014 course): specular occlusion, light probes.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

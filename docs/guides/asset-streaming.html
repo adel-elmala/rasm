@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Streaming Assets · RASM</title>
 <meta name="description" content="How to load meshes and textures without freezing the frame: worker threads and job queues, the hand-off to the main thread, per-frame upload budgets, placeholders, caching by path, failures and freeing the CPU copy, and how RASM does it.">
-<meta name="rasm-sources" content="src/assets/mesh.cpp src/assets/texture.cpp src/assets/material.cpp src/assets/meshImport.cpp src/engine.cpp include/rasm/engine.h include/rasm/mesh.h src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp src/rhi/uploadManager.cpp">
+<meta name="rasm-sources" content="src/assets/environment.cpp src/assets/mesh.cpp src/assets/texture.cpp src/assets/material.cpp src/assets/meshImport.cpp src/engine.cpp include/rasm/engine.h include/rasm/mesh.h src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp src/rhi/uploadManager.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -959,7 +959,7 @@
     <rect x="520" y="228" width="220" height="56" rx="6" class="gpu"/>
     <text x="630" y="251" class="mid">drawn this frame</text>
     <text x="630" y="270" class="mid small">copies go out with the submit</text>
-    <text x="20" y="314" class="small">loadTexture takes the same path: decodeTexture on the worker, finishTextureLoad on the main thread.</text>
+    <text x="20" y="314" class="small">loadTexture and loadEnvironment work the same way: a decode on the worker, a finish… on the main thread.</text>
   </svg>
   <figcaption>The worker gets a path and returns a plain <code>GLTFRaw</code>. Everything that touches the engine runs in <code>finishLoads</code>, which <code>beginFrame</code> calls before anything binds the geometry pool or the bindless set.</figcaption>
 </figure>

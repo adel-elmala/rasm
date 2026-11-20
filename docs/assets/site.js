@@ -55,6 +55,7 @@ const SECTIONS = [
             { path: "guides/vertex-pulling.html",        title: "Vertex pulling and mega-buffers",     blurb: "The shader reads vertices by index from one big buffer." },
             { path: "guides/uber-shaders.html",          title: "Uber shaders and shader permutations", blurb: "One shader with branches against many variants." },
             { path: "guides/pbr.html",                   title: "PBR shading",                         blurb: "The light math behind metal and roughness." },
+            { path: "guides/image-based-lighting.html",  title: "Image-based lighting",                blurb: "Light from a photo of the whole sky: irradiance, prefiltered mips and the split sum." },
             { path: "guides/tone-mapping.html",          title: "Tone mapping and exposure",           blurb: "Bring unbounded scene light into the screen's 0 to 1." },
             { path: "guides/shadow-mapping.html",        title: "Shadow mapping",                      blurb: "Depth from the light answers \"is this point lit?\"." },
             { path: "guides/cascaded-shadows.html",      title: "Cascaded shadow maps",                blurb: "One shadow map per slice of the view: sharp near, still there far." },
