@@ -125,7 +125,7 @@ namespace rasm
         bool                        addToneMapPass(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera);
         bool                        running() const;
         bool                        recreateSwapchain();
-        void                        setRenderTarget(const RenderTargetHandle& renderTarget);
+        void                        setRenderTarget(const RenderTargetHandle& renderTarget, uint32_t face = 0);
         void                        resetRenderTarget();
         DescriptorSetHandle         getBindlessDescriptorSet();
         const FrameResources&       getCurrentFrameResources();
@@ -201,6 +201,7 @@ namespace rasm
         DescriptorSetHandle                                         bindlessDescriptorSet                   = {};
         MaterialHandle                                              defaultMaterial                         = {}; // used for invalid material handles
         RenderTargetHandle                                          currentRenderTarget                     = {};
+        uint32_t                                                    currentFace                             = 0;  // of a cube target
         uint64_t                                                    frameCount                              = 0;
         uint32_t                                                    imageIdx                                = 0;
         float                                                       deltaTime                               = 0.0f; // seconds since the previous frame

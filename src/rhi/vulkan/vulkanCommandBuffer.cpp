@@ -273,7 +273,7 @@ namespace rasm::rhi
                                              .baseMipLevel = 0,
                                              .levelCount = vkTexture->mipLevels,
                                              .baseArrayLayer = 0,
-                                             .layerCount = 1,
+                                             .layerCount = VK_REMAINING_ARRAY_LAYERS,
                                          }};
 
         VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -284,10 +284,14 @@ namespace rasm::rhi
         return true;
     }
 
-    // Every color attachment shares the load op and the clear color. The depth attachment is optional.
-    void VulkanCommandBuffer::beginRendering(Texture *const *colorAttachments, uint32_t colorCount, Texture *depthAttachment, const glm::vec4 &clearColor, const AttachmentOps &ops)
+    // Every color attachment shares the load op and the clear color. The depth attachment is optional; of a cube
+    // depth, the pass draws only into face.
+    void VulkanCommandBuffer::beginRendering(Texture *const *colorAttachments, uint32_t colorCount, Texture *depthAttachment, const glm::vec4 &clearColor, const AttachmentOps &ops, uint32_t face)
     {
         auto *depth = static_cast<VulkanTexture *>(depthAttachment);
+        VkImageView depthView = VK_NULL_HANDLE;
+        if (depth)
+            depthView = depth->desc.cube ? depth->faceViews[face] : depth->view;
         // A depth-only pass takes its size from the depth.
         const auto *area = colorCount > 0 ? static_cast<VulkanTexture *>(colorAttachments[0]) : depth;
 
@@ -305,7 +309,7 @@ namespace rasm::rhi
 
         VkRenderingAttachmentInfo depthAttachmentInfo{
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-            .imageView = depth ? depth->view : VK_NULL_HANDLE,
+            .imageView = depthView,
             .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
             .loadOp = ops.loadDepth ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR,
             // Stored only when a later pass loads or samples it (RenderGraph::assignAttachmentOps).

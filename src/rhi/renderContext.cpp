@@ -65,7 +65,8 @@ namespace rasm
                                                 { return format == Format::UNKNOWN; });
             return checkArgument(contiguous, caller, "a render target's color formats can't have a gap.") &&
                    checkArgument(desc.depthFormat != Format::UNKNOWN, caller, "a render target needs a depth format.") &&
-                   checkArgument(colorCount > 0 || !desc.history, caller, "history keeps a render target's colors, so a depth-only target can't have it.");
+                   checkArgument(colorCount > 0 || !desc.history, caller, "history keeps a render target's colors, so a depth-only target can't have it.") &&
+                   checkArgument(!desc.cube || (colorCount == 0 && desc.swapchainScale <= 0.0f && desc.width == desc.height), caller, "a cube render target is depth-only, with a fixed square size.");
         }
 
         glm::uvec2 renderTargetSize(const RenderTargetDesc &desc, glm::uvec2 swapchainExtent)
@@ -102,7 +103,8 @@ namespace rasm
                     .width = size.x,
                     .height = size.y,
                     .format = desc.depthFormat,
-                    .usage = sampled ? TextureUsage::SAMPLED_DEPTH_ATTACHMENT : TextureUsage::DEPTH_STENCIL_ATTACHMENT};
+                    .usage = sampled ? TextureUsage::SAMPLED_DEPTH_ATTACHMENT : TextureUsage::DEPTH_STENCIL_ATTACHMENT,
+                    .cube = desc.cube};
         }
 
         // The target's textures at its current size: its colors, then its depth. Returns how many there are.
@@ -1143,11 +1145,12 @@ namespace rasm
         return impl->textureStates.transition(*rhiCommandBuffer, rhiTexture, newUsage, discard);
     }
 
-    bool RenderContext::beginRendering(const CommandBufferHandle &commandBuffer, const TextureHandle *colorAttachments, uint32_t colorCount, TextureHandle depthAttachment, const glm::vec4 &clearColor, const AttachmentOps &ops)
+    bool RenderContext::beginRendering(const CommandBufferHandle &commandBuffer, const TextureHandle *colorAttachments, uint32_t colorCount, TextureHandle depthAttachment, const glm::vec4 &clearColor, const AttachmentOps &ops, uint32_t face)
     {
         // A depth-only pass (a shadow map) has no colors.
         if (!checkArgument(colorCount <= MAX_COLOR_ATTACHMENTS, __func__, "a pass has at most MAX_COLOR_ATTACHMENTS color attachments.") ||
-            !checkArgument(colorCount > 0 || depthAttachment.isValid(), __func__, "a pass needs a color or a depth attachment."))
+            !checkArgument(colorCount > 0 || depthAttachment.isValid(), __func__, "a pass needs a color or a depth attachment.") ||
+            !checkArgument(face < CUBE_FACES, __func__, "a cube has CUBE_FACES faces."))
             return false;
         auto *rhiCommandBuffer = lookup(impl->commandBuffers, commandBuffer, __func__);
         // An invalid depth handle means the pass has no depth attachment.
@@ -1159,10 +1162,11 @@ namespace rasm
             if (!colors[i])
                 return false;
         }
-        if (!rhiCommandBuffer || (depthAttachment.isValid() && !depth))
+        if (!rhiCommandBuffer || (depthAttachment.isValid() && !depth) ||
+            !checkArgument(face == 0 || (depth && depth->desc.cube), __func__, "only a cube depth has faces other than 0."))
             return false;
 
-        rhiCommandBuffer->beginRendering(colors, colorCount, depth, clearColor, ops);
+        rhiCommandBuffer->beginRendering(colors, colorCount, depth, clearColor, ops, face);
         for (uint32_t i = 0; i < MAX_COLOR_ATTACHMENTS; ++i)
             impl->passColorFormats[i] = i < colorCount ? colors[i]->desc.format : Format::UNKNOWN;
         impl->passDepthFormat = depth ? depth->desc.format : Format::UNKNOWN;
