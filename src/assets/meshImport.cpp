@@ -46,11 +46,11 @@ namespace rasm
         // The glTF extensions a file may require: the others change what the file means, so it fails to load.
         const char *const SUPPORTED_EXTENSIONS[] = {"KHR_materials_unlit", "KHR_materials_emissive_strength", "KHR_texture_transform", "KHR_mesh_quantization", "KHR_texture_basisu"};
 
-        // A texture a material samples, and whether its slot reads color (sRGB) or data.
+        // A texture a material samples, and what its slot reads.
         struct TextureUse
         {
             int texture = -1;
-            bool srgb = false;
+            KtxSlot slot = KtxSlot::DATA;
         };
     }
 
@@ -569,23 +569,24 @@ namespace rasm
             return true;
         }
 
-        // The slots loadMaterial fills: base color and emissive are color, the rest data. Unlit reads base color only.
+        // The slots loadMaterial fills, with the same KtxSlot it passes. Unlit reads base color only.
         uint32_t getTextureUses(const tinygltf::Material &material, TextureUse *uses)
         {
             uint32_t count = 0;
-            uses[count++] = {material.pbrMetallicRoughness.baseColorTexture.index, true};
+            uses[count++] = {material.pbrMetallicRoughness.baseColorTexture.index, KtxSlot::COLOR};
             if (material.extensions.count("KHR_materials_unlit") != 0)
                 return count;
-            uses[count++] = {material.pbrMetallicRoughness.metallicRoughnessTexture.index, false};
-            uses[count++] = {material.normalTexture.index, false};
-            uses[count++] = {material.occlusionTexture.index, false};
-            uses[count++] = {material.emissiveTexture.index, true};
+            uses[count++] = {material.pbrMetallicRoughness.metallicRoughnessTexture.index, KtxSlot::DATA};
+            uses[count++] = {material.normalTexture.index, KtxSlot::NORMAL};
+            uses[count++] = {material.occlusionTexture.index, KtxSlot::OCCLUSION};
+            uses[count++] = {material.emissiveTexture.index, KtxSlot::COLOR};
             return count;
         }
 
-        // Each KTX2 image is transcoded once for each kind of slot (color or data) that uses it, to the best format the
-        // device has for that kind. Then its file bytes go, like the glTF buffers (P6).
-        void transcodeKtxImages(tinygltf::Model &model, uint64_t supportedTextureFormats, std::unordered_map<uint64_t, TextureRaw> &ktxImages)
+        // Each KTX2 image gets the best format the device has for each kind of slot that uses it, and is transcoded once
+        // per format: an ORM image read as occlusion and as metallic-roughness is one BC7 texture. Then its file bytes
+        // go, like the glTF buffers (P6).
+        void transcodeKtxImages(tinygltf::Model &model, uint64_t supportedTextureFormats, GLTFRaw &raw)
         {
             ZoneScoped;
 
@@ -598,9 +599,9 @@ namespace rasm
                     const int source = getBasisuSource(model, uses[i].texture);
                     if (source < 0)
                         continue;
-                    const uint64_t key = (static_cast<uint64_t>(source) << 1) | (uses[i].srgb ? 1u : 0u);
+                    const uint64_t slotKey = getKtxSlotKey(source, uses[i].slot);
                     const tinygltf::Image &image = model.images[source];
-                    if (ktxImages.contains(key) || !image.as_is)
+                    if (raw.ktxFormats.contains(slotKey) || !image.as_is)
                         continue;
 
                     const std::string name = image.uri.empty() ? "glTF image " + std::to_string(source) : image.uri;
@@ -611,20 +612,25 @@ namespace rasm
                         spdlog::error("Failed to read KTX2 image {}: {}", name, error);
                         continue;
                     }
-                    const Format format = chooseKtxFormat(info, uses[i].srgb, supportedTextureFormats);
+                    const Format format = chooseKtxFormat(info, uses[i].slot, supportedTextureFormats);
                     if (format == Format::UNKNOWN)
                     {
                         spdlog::error("KTX2 image {} is in a format the device can't sample.", name);
                         continue;
                     }
-                    warnAboutKtxFormat(name, info, format);
-                    TextureRaw raw;
-                    if (!decodeKtx(image.image.data(), image.image.size(), format, raw, error))
+                    const uint64_t imageKey = getKtxImageKey(source, format);
+                    if (!raw.ktxImages.contains(imageKey))
                     {
-                        spdlog::error("Failed to decode KTX2 image {}: {}", name, error);
-                        continue;
+                        warnAboutKtxFormat(name, info, format);
+                        TextureRaw texture;
+                        if (!decodeKtx(image.image.data(), image.image.size(), format, texture, error))
+                        {
+                            spdlog::error("Failed to decode KTX2 image {}: {}", name, error);
+                            continue;
+                        }
+                        raw.ktxImages[imageKey] = std::move(texture);
                     }
-                    ktxImages[key] = std::move(raw);
+                    raw.ktxFormats[slotKey] = format;
                 }
             }
 
@@ -681,7 +687,7 @@ namespace rasm
             raw.subGltfRaws = processGLTF(*model);
             // Every accessor has been read. Materials need only the decoded images, so the raw buffers go now (P6).
             model->buffers.clear();
-            transcodeKtxImages(*model, supportedTextureFormats, raw.ktxImages);
+            transcodeKtxImages(*model, supportedTextureFormats, raw);
             raw.model = std::move(model);
             raw.loaded = true;
             return raw;
@@ -750,6 +756,16 @@ namespace rasm
         if (extension == "gltf" || extension == "glb")
             return importGltf(path, extension == "glb", supportedTextureFormats);
         return importObj(path);
+    }
+
+    uint64_t getKtxSlotKey(int image, KtxSlot slot)
+    {
+        return (static_cast<uint64_t>(image) << 3) | static_cast<uint64_t>(slot);
+    }
+
+    uint64_t getKtxImageKey(int image, Format format)
+    {
+        return (static_cast<uint64_t>(image) << 8) | static_cast<uint64_t>(format);
     }
 
     int getBasisuSource(const tinygltf::Model &model, int textureIndex)

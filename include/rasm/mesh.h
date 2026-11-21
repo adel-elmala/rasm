@@ -54,7 +54,8 @@ namespace rasm
     {
         std::vector<SubGLTFRaw>                         subGltfRaws;
         std::shared_ptr<tinygltf::Model>                model;
-        std::unordered_map<uint64_t, TextureRaw>        ktxImages;      // KHR_texture_basisu images, transcoded: key (image << 1) | sRGB
+        std::unordered_map<uint64_t, Format>            ktxFormats;     // KHR_texture_basisu: getKtxSlotKey(image, slot) → format
+        std::unordered_map<uint64_t, TextureRaw>        ktxImages;      // getKtxImageKey(image, format) → the transcoded levels
         bool                                            loaded          = false;
     };
 
@@ -104,7 +105,7 @@ namespace rasm
     {
         std::unordered_map<int, MaterialHandle>                 materials;
         std::unordered_map<uint64_t, TextureHandle>             imageTextures;
-        const std::unordered_map<uint64_t, TextureRaw>*         ktxImages       = nullptr;
+        const GLTFRaw*                                          raw             = nullptr;
     };
 
 }

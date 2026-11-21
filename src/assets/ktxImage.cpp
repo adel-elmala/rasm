@@ -34,8 +34,8 @@ namespace rasm
         constexpr unsigned char KTX2_IDENTIFIER[12] = {0xAB, 'K', 'T', 'X', ' ', '2', '0', 0xBB, '\r', '\n', 0x1A, '\n'};
 
         // Best first. Color slots read every channel as color, so a one- or two-channel file is gray or gray and
-        // alpha there and takes an RGBA format. Data slots read channels as they are: one channel is R, two are the
-        // X and Y of a normal map.
+        // alpha there and takes an RGBA format. A one- or two-channel format holds R, or a normal map's x and y, so
+        // only a slot that reads just those gets one: an RGBA format keeps what the file decodes to for any other.
         constexpr Format COLOR_FORMATS[] = {Format::BC7_SRGB, Format::ASTC_4x4_SRGB, Format::ETC2_R8G8B8A8_SRGB, Format::R8G8B8A8_SRGB};
         constexpr Format DATA_FORMATS[] = {Format::BC7_UNORM, Format::ASTC_4x4_UNORM, Format::ETC2_R8G8B8A8_UNORM, Format::R8G8B8A8_UNORM};
         constexpr Format RG_FORMATS[] = {Format::BC5_UNORM, Format::EAC_R11G11_UNORM, Format::R8G8B8A8_UNORM};
@@ -239,8 +239,9 @@ namespace rasm
     // A Basis file without mips is transcoded to RGBA8, whose mips are made on the CPU: a block format's mips
     // can't be made without an encoder, and a texture without them shimmers when it is minified. Returns UNKNOWN
     // when the device samples none of the candidates, or a file that is not Basis is in a format it can't sample.
-    Format chooseKtxFormat(const KtxInfo &info, bool srgb, uint64_t supportedFormats)
+    Format chooseKtxFormat(const KtxInfo &info, KtxSlot slot, uint64_t supportedFormats)
     {
+        const bool srgb = slot == KtxSlot::COLOR;
         if (!info.basis)
         {
             const Format format = withColorSpace(info.format, srgb);
@@ -251,12 +252,77 @@ namespace rasm
             return srgb ? Format::R8G8B8A8_SRGB : Format::R8G8B8A8_UNORM;
         if (srgb)
             return firstSupported(COLOR_FORMATS, std::size(COLOR_FORMATS), supportedFormats);
-        if (info.components == 1)
+        const bool red = info.components == 1 && (slot == KtxSlot::OCCLUSION || slot == KtxSlot::CHANNELS);
+        const bool xy = info.components == 2 && (slot == KtxSlot::NORMAL || slot == KtxSlot::CHANNELS);
+        if (red)
             return firstSupported(R_FORMATS, std::size(R_FORMATS), supportedFormats);
         // The transcoder reads a two-channel block format's y from alpha, so a file with y in green goes to RGBA8.
-        if (info.components == 2)
+        if (xy)
             return info.yInGreen ? Format::R8G8B8A8_UNORM : firstSupported(RG_FORMATS, std::size(RG_FORMATS), supportedFormats);
         return firstSupported(DATA_FORMATS, std::size(DATA_FORMATS), supportedFormats);
+    }
+
+    // What a texture whose file failed to decode shows: white, or a flat normal for a two-channel format, so a
+    // material that samples it looks plain rather than black or, for ASTC's reserved all-zero block, magenta. One
+    // constant block per format, from each format's spec.
+    void makeBlankKtxLevels(Format format, uint32_t width, uint32_t height, uint32_t mipCount, TextureRaw &raw)
+    {
+        // BC7 mode 6 with every endpoint 255 and every index 0.
+        const unsigned char bc7White[16] = {0xC0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01};
+        // Both endpoints 255, every index 0 (endpoint 0).
+        const unsigned char bc4White[8] = {0xFF, 0xFF};
+        // Two BC4 halves of 128: x = y = 0.5, a normal along z.
+        const unsigned char bc5Flat[16] = {0x80, 0x80, 0, 0, 0, 0, 0, 0, 0x80, 0x80};
+        // A void-extent block: one RGBA16 color, 0xFFFF each, for the whole block.
+        const unsigned char astcWhite[16] = {0xFC, 0xFD, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+        // EAC: base 255, multiplier 1, table 0, every index 4 (+2), clamped to 1. ETC2 color: individual mode, both
+        // colors 15 (255), table 0, every index 0 (+2), clamped to 255.
+        const unsigned char eacWhite[8] = {0xFF, 0x10, 0x92, 0x49, 0x24, 0x92, 0x49, 0x24};
+        const unsigned char etc2White[16] = {0xFF, 0x10, 0x92, 0x49, 0x24, 0x92, 0x49, 0x24, 0xFF, 0xFF, 0xFF};
+        // EAC with base 128: about 0.5 for x and y.
+        const unsigned char eacRgFlat[16] = {0x80, 0x10, 0x92, 0x49, 0x24, 0x92, 0x49, 0x24, 0x80, 0x10, 0x92, 0x49, 0x24, 0x92, 0x49, 0x24};
+        const unsigned char rgbaWhite[4] = {0xFF, 0xFF, 0xFF, 0xFF};
+
+        const unsigned char *block = rgbaWhite;
+        switch (format)
+        {
+        case Format::BC7_UNORM:
+        case Format::BC7_SRGB:
+            block = bc7White;
+            break;
+        case Format::BC4_UNORM:
+            block = bc4White;
+            break;
+        case Format::BC5_UNORM:
+            block = bc5Flat;
+            break;
+        case Format::ASTC_4x4_UNORM:
+        case Format::ASTC_4x4_SRGB:
+            block = astcWhite;
+            break;
+        case Format::ETC2_R8G8B8A8_UNORM:
+        case Format::ETC2_R8G8B8A8_SRGB:
+            block = etc2White;
+            break;
+        case Format::EAC_R11_UNORM:
+            block = eacWhite;
+            break;
+        case Format::EAC_R11G11_UNORM:
+            block = eacRgFlat;
+            break;
+        default:
+            break;
+        }
+
+        const uint32_t blockBytes = rhi::getFormatBlock(format).bytes;
+        raw = {.width = width, .height = height, .format = format};
+        for (uint32_t level = 0; level < mipCount; ++level)
+        {
+            const uint64_t size = rhi::getTextureLevelSize(format, std::max(1u, width >> level), std::max(1u, height >> level));
+            raw.levelSizes.push_back(size);
+            for (uint64_t offset = 0; offset < size; offset += blockBytes)
+                raw.levels.insert(raw.levels.end(), block, block + blockBytes);
+        }
     }
 
     // The file's levels, or the full chain for an RGBA8 texture whose file has a single level.

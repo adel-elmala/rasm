@@ -1,4 +1,5 @@
 #include "assets/ktxImage.h"
+#include "assets/meshImport.h"
 #include "importMeshText.h"
 #include "platform/paths.h"
 #include "rhi/device.h"
@@ -8,6 +9,7 @@
 #include "tiny_gltf.h"
 #include "vulkan/vulkan_core.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -170,60 +172,71 @@ TEST_CASE("a Basis file goes to the best format the device samples, by slot and 
     const KtxInfo rg = {.width = 256, .height = 256, .levelCount = 9, .components = 2, .basis = true};
     const KtxInfo r = {.width = 256, .height = 256, .levelCount = 9, .components = 1, .basis = true};
 
-    CHECK(chooseKtxFormat(rgba, true, BC_DEVICE) == Format::BC7_SRGB);
-    CHECK(chooseKtxFormat(rgba, false, BC_DEVICE) == Format::BC7_UNORM);
-    CHECK(chooseKtxFormat(rg, false, BC_DEVICE) == Format::BC5_UNORM);
-    CHECK(chooseKtxFormat(r, false, BC_DEVICE) == Format::BC4_UNORM);
+    CHECK(chooseKtxFormat(rgba, KtxSlot::COLOR, BC_DEVICE) == Format::BC7_SRGB);
+    CHECK(chooseKtxFormat(rgba, KtxSlot::CHANNELS, BC_DEVICE) == Format::BC7_UNORM);
+    CHECK(chooseKtxFormat(rg, KtxSlot::CHANNELS, BC_DEVICE) == Format::BC5_UNORM);
+    CHECK(chooseKtxFormat(r, KtxSlot::CHANNELS, BC_DEVICE) == Format::BC4_UNORM);
     // A color slot reads one or two channels as gray, or gray and alpha.
-    CHECK(chooseKtxFormat(rg, true, BC_DEVICE) == Format::BC7_SRGB);
-    CHECK(chooseKtxFormat(r, true, BC_DEVICE) == Format::BC7_SRGB);
+    CHECK(chooseKtxFormat(rg, KtxSlot::COLOR, BC_DEVICE) == Format::BC7_SRGB);
+    CHECK(chooseKtxFormat(r, KtxSlot::COLOR, BC_DEVICE) == Format::BC7_SRGB);
 
-    CHECK(chooseKtxFormat(rgba, true, MOBILE_DEVICE) == Format::ASTC_4x4_SRGB);
-    CHECK(chooseKtxFormat(rgba, false, MOBILE_DEVICE) == Format::ASTC_4x4_UNORM);
-    CHECK(chooseKtxFormat(rg, false, MOBILE_DEVICE) == Format::EAC_R11G11_UNORM);
-    CHECK(chooseKtxFormat(r, false, MOBILE_DEVICE) == Format::EAC_R11_UNORM);
+    CHECK(chooseKtxFormat(rgba, KtxSlot::COLOR, MOBILE_DEVICE) == Format::ASTC_4x4_SRGB);
+    CHECK(chooseKtxFormat(rgba, KtxSlot::CHANNELS, MOBILE_DEVICE) == Format::ASTC_4x4_UNORM);
+    CHECK(chooseKtxFormat(rg, KtxSlot::CHANNELS, MOBILE_DEVICE) == Format::EAC_R11G11_UNORM);
+    CHECK(chooseKtxFormat(r, KtxSlot::CHANNELS, MOBILE_DEVICE) == Format::EAC_R11_UNORM);
 
-    CHECK(chooseKtxFormat(rgba, true, ETC2_DEVICE) == Format::ETC2_R8G8B8A8_SRGB);
-    CHECK(chooseKtxFormat(rgba, false, ETC2_DEVICE) == Format::ETC2_R8G8B8A8_UNORM);
+    CHECK(chooseKtxFormat(rgba, KtxSlot::COLOR, ETC2_DEVICE) == Format::ETC2_R8G8B8A8_SRGB);
+    CHECK(chooseKtxFormat(rgba, KtxSlot::CHANNELS, ETC2_DEVICE) == Format::ETC2_R8G8B8A8_UNORM);
 
-    CHECK(chooseKtxFormat(rgba, true, RGBA8_DEVICE) == Format::R8G8B8A8_SRGB);
-    CHECK(chooseKtxFormat(rg, false, RGBA8_DEVICE) == Format::R8G8B8A8_UNORM);
-    CHECK(chooseKtxFormat(rgba, false, 0) == Format::UNKNOWN);
+    CHECK(chooseKtxFormat(rgba, KtxSlot::COLOR, RGBA8_DEVICE) == Format::R8G8B8A8_SRGB);
+    CHECK(chooseKtxFormat(rg, KtxSlot::CHANNELS, RGBA8_DEVICE) == Format::R8G8B8A8_UNORM);
+    CHECK(chooseKtxFormat(rgba, KtxSlot::CHANNELS, 0) == Format::UNKNOWN);
 
     CHECK(getKtxMipCount(rgba, Format::BC7_SRGB) == 9);
 
+    // A one- or two-channel format only where the slot reads just those channels: metallic-roughness reads G and B,
+    // so a one-channel file there keeps (r, r, r) in BC7.
+    CHECK(chooseKtxFormat(r, KtxSlot::OCCLUSION, BC_DEVICE) == Format::BC4_UNORM);
+    CHECK(chooseKtxFormat(r, KtxSlot::DATA, BC_DEVICE) == Format::BC7_UNORM);
+    CHECK(chooseKtxFormat(r, KtxSlot::NORMAL, BC_DEVICE) == Format::BC7_UNORM);
+    CHECK(chooseKtxFormat(rg, KtxSlot::NORMAL, BC_DEVICE) == Format::BC5_UNORM);
+    CHECK(chooseKtxFormat(rg, KtxSlot::DATA, BC_DEVICE) == Format::BC7_UNORM);
+    CHECK(chooseKtxFormat(rg, KtxSlot::OCCLUSION, MOBILE_DEVICE) == Format::ASTC_4x4_UNORM);
+    CHECK(chooseKtxFormat(rgba, KtxSlot::OCCLUSION, BC_DEVICE) == Format::BC7_UNORM);
+
     // The transcoder reads a two-channel block format's y from alpha.
     const KtxInfo rgInGreen = {.width = 256, .height = 256, .levelCount = 9, .components = 2, .basis = true, .yInGreen = true};
-    CHECK(chooseKtxFormat(rgInGreen, false, BC_DEVICE) == Format::R8G8B8A8_UNORM);
-    CHECK(chooseKtxFormat(rgInGreen, true, BC_DEVICE) == Format::BC7_SRGB);
+    CHECK(chooseKtxFormat(rgInGreen, KtxSlot::CHANNELS, BC_DEVICE) == Format::R8G8B8A8_UNORM);
+    CHECK(chooseKtxFormat(rgInGreen, KtxSlot::NORMAL, BC_DEVICE) == Format::R8G8B8A8_UNORM);
+    CHECK(chooseKtxFormat(rgInGreen, KtxSlot::COLOR, BC_DEVICE) == Format::BC7_SRGB);
 }
 
 TEST_CASE("a Basis file without mips becomes RGBA8 with every mip, on any device")
 {
     const KtxInfo single = {.width = 256, .height = 64, .levelCount = 1, .components = 4, .basis = true};
-    CHECK(chooseKtxFormat(single, true, BC_DEVICE) == Format::R8G8B8A8_SRGB);
-    CHECK(chooseKtxFormat(single, false, MOBILE_DEVICE) == Format::R8G8B8A8_UNORM);
+    CHECK(chooseKtxFormat(single, KtxSlot::COLOR, BC_DEVICE) == Format::R8G8B8A8_SRGB);
+    CHECK(chooseKtxFormat(single, KtxSlot::CHANNELS, MOBILE_DEVICE) == Format::R8G8B8A8_UNORM);
     CHECK(getKtxMipCount(single, Format::R8G8B8A8_SRGB) == 9);
 
     // A single texel needs no mips.
     const KtxInfo texel = {.width = 1, .height = 1, .levelCount = 1, .components = 4, .basis = true};
-    CHECK(chooseKtxFormat(texel, true, BC_DEVICE) == Format::BC7_SRGB);
+    CHECK(chooseKtxFormat(texel, KtxSlot::COLOR, BC_DEVICE) == Format::BC7_SRGB);
 }
 
 TEST_CASE("a file that is not Basis keeps its format, read in the slot's color space")
 {
     const KtxInfo bc7 = {.width = 64, .height = 64, .levelCount = 7, .components = 4, .format = Format::BC7_UNORM};
-    CHECK(chooseKtxFormat(bc7, true, BC_DEVICE) == Format::BC7_SRGB);
-    CHECK(chooseKtxFormat(bc7, false, BC_DEVICE) == Format::BC7_UNORM);
-    CHECK(chooseKtxFormat(bc7, true, MOBILE_DEVICE) == Format::UNKNOWN);
+    CHECK(chooseKtxFormat(bc7, KtxSlot::COLOR, BC_DEVICE) == Format::BC7_SRGB);
+    CHECK(chooseKtxFormat(bc7, KtxSlot::CHANNELS, BC_DEVICE) == Format::BC7_UNORM);
+    CHECK(chooseKtxFormat(bc7, KtxSlot::COLOR, MOBILE_DEVICE) == Format::UNKNOWN);
 
     const KtxInfo rgba8 = {.width = 64, .height = 64, .levelCount = 1, .components = 4, .format = Format::R8G8B8A8_SRGB};
-    CHECK(chooseKtxFormat(rgba8, false, BC_DEVICE) == Format::R8G8B8A8_UNORM);
+    CHECK(chooseKtxFormat(rgba8, KtxSlot::CHANNELS, BC_DEVICE) == Format::R8G8B8A8_UNORM);
     CHECK(getKtxMipCount(rgba8, Format::R8G8B8A8_UNORM) == 7);
 
     // BC5 has no sRGB form, so it stays UNORM in a color slot.
     const KtxInfo bc5 = {.width = 64, .height = 64, .levelCount = 7, .components = 2, .format = Format::BC5_UNORM};
-    CHECK(chooseKtxFormat(bc5, true, BC_DEVICE) == Format::BC5_UNORM);
+    CHECK(chooseKtxFormat(bc5, KtxSlot::COLOR, BC_DEVICE) == Format::BC5_UNORM);
 }
 
 TEST_CASE("UASTC and ETC1S files transcode to block formats with the file's mips")
@@ -290,7 +303,7 @@ TEST_CASE("a Basis file without mips decodes to RGBA8 with the mips made on the 
 {
     const auto file = makeKtx2(32, 8, 4, 1, Codec::ETC1S, true);
     const KtxInfo info = readInfo(file);
-    const Format format = chooseKtxFormat(info, true, BC_DEVICE);
+    const Format format = chooseKtxFormat(info, KtxSlot::COLOR, BC_DEVICE);
     REQUIRE(format == Format::R8G8B8A8_SRGB);
     const TextureRaw raw = decode(file, format);
     checkLevels(raw, 32, 8, getKtxMipCount(info, format));
@@ -330,12 +343,30 @@ TEST_CASE("glTF KHR_texture_basisu images are transcoded on import, once per kin
     std::filesystem::remove(path);
 
     REQUIRE(raw.loaded);
+    REQUIRE(raw.ktxFormats.size() == 2);
+    CHECK(raw.ktxFormats.at(getKtxSlotKey(0, KtxSlot::COLOR)) == Format::BC7_SRGB);
+    CHECK(raw.ktxFormats.at(getKtxSlotKey(0, KtxSlot::OCCLUSION)) == Format::BC7_UNORM);
     REQUIRE(raw.ktxImages.size() == 2);
-    REQUIRE(raw.ktxImages.contains(1));
-    CHECK(raw.ktxImages.at(1).format == Format::BC7_SRGB);
-    checkLevels(raw.ktxImages.at(1), 16, 16, 5);
-    REQUIRE(raw.ktxImages.contains(0));
-    CHECK(raw.ktxImages.at(0).format == Format::BC7_UNORM);
+    REQUIRE(raw.ktxImages.contains(getKtxImageKey(0, Format::BC7_SRGB)));
+    checkLevels(raw.ktxImages.at(getKtxImageKey(0, Format::BC7_SRGB)), 16, 16, 5);
+    CHECK(raw.ktxImages.contains(getKtxImageKey(0, Format::BC7_UNORM)));
     // The file bytes go once the images are transcoded.
     CHECK(raw.model->images[0].image.empty());
+}
+
+TEST_CASE("a texture whose file failed gets plain levels of whole blocks")
+{
+    for (const Format format : {Format::BC7_SRGB, Format::BC4_UNORM, Format::BC5_UNORM, Format::ASTC_4x4_UNORM, Format::ETC2_R8G8B8A8_SRGB,
+                                Format::EAC_R11_UNORM, Format::EAC_R11G11_UNORM, Format::R8G8B8A8_UNORM})
+    {
+        CAPTURE(static_cast<int>(format));
+        TextureRaw raw;
+        makeBlankKtxLevels(format, 30, 12, 5, raw);
+        CHECK(raw.format == format);
+        checkLevels(raw, 30, 12, 5);
+        // The first block repeats: no level is left zero, which ASTC reads as its error color.
+        const uint32_t block = rhi::getFormatBlock(format).bytes;
+        CHECK(std::equal(raw.levels.begin(), raw.levels.begin() + block, raw.levels.end() - block));
+        CHECK(raw.levels[0] != 0);
+    }
 }

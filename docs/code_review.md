@@ -349,6 +349,8 @@ Load the functions at run time with [volk](https://github.com/zeux/volk) (vcpkg 
 
 **P13 — Every shaded view has a Transparent pass, also without see-through draws.** `addSceneViewPasses` adds the `Transparent` pass to each shaded view because the graph is fixed and the scene may gain `BLEND` materials later ([gpuScene.cpp:856](../src/renderer/gpuScene.cpp#L856)). In a scene without them the pass still begins and ends rendering, and the draw pass before it must store its depth for it. On a desktop GPU that is noise (0.001 ms for the pass in `05_city`, RTX 3060), but a tiled GPU loads and stores color and depth for it. Skip the attachments when the view has no blend run (the graph would need a pass that can be empty), or draw the blend run at the end of the last draw pass instead, which loses its GPU timer. *Confirmed* by reading; measured on desktop only.
 
+**P14 — A glTF's KTX2 images are transcoded one after another on one thread.** The mesh load's single worker transcodes every `KHR_texture_basisu` image in turn after the import ([meshImport.cpp:589](../src/assets/meshImport.cpp#L589)), while the other cores wait. The Flight Helmet's 15 textures (12 at 2048²) take most of its 540 ms load in `10_ktx2_textures` (Release, RTX 3060), so the load time grows with the texture count. Transcode the images on several workers (a job per image, once the engine has a thread pool, `P6`), or let Basis transcode a level on several threads. *Confirmed* by reading; the share of the load is estimated, not profiled.
+
 ---
 
 ## 5. Code health

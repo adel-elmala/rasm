@@ -338,7 +338,7 @@ engine.updateMaterial(pulse, values);</code></pre>
       <tr><th>Problem</th><th>When</th><th>Result</th></tr>
       <tr><td>Wrong format, unknown extension, or a header that cannot be read (missing file)</td><td>at the call</td><td>error logged, invalid handle</td></tr>
       <tr><td>A KTX2 file the device can't sample (a non-Basis format it lacks), or that is not a 2D texture</td><td>at the call</td><td>error logged, invalid handle</td></tr>
-      <tr><td>The pixels do not decode</td><td>in a later <code>beginFrame</code></td><td>error logged, the texture stays white (black for a block format); <code>isLoaded</code> becomes true</td></tr>
+      <tr><td>The pixels do not decode</td><td>in a later <code>beginFrame</code></td><td>error logged, the texture stays plain white (a flat normal for a two-channel format); <code>isLoaded</code> becomes true</td></tr>
     </table>
     </div>
   </div>
@@ -430,11 +430,12 @@ ctx.pushConstants(commandBuffer, overlayPipeline, rasm::ShaderType::VERTEX_FRAGM
   <tr><td>base color (with its alpha), metallic, roughness, emissive factors; normal scale; occlusion strength</td><td>the matching <code>PbrParam</code> values</td></tr>
   <tr><td><code>KHR_materials_emissive_strength</code></td><td><code>EMISSIVE_STRENGTH</code></td></tr>
   <tr><td><code>KHR_texture_transform</code> on a texture</td><td>its <code>textureTransforms</code> entry; the extension's <code>texCoord</code>, when present, replaces the texture's</td></tr>
-  <tr><td>base color and emissive textures</td><td><code>R8G8B8A8_SRGB</code></td></tr>
-  <tr><td>metallic-roughness, normal, occlusion textures</td><td><code>R8G8B8A8_UNORM</code>; metallic-roughness goes in both <code>METALLIC</code> and <code>ROUGHNESS</code></td></tr>
+  <tr><td>base color and emissive textures</td><td><code>R8G8B8A8_SRGB</code>; from a KTX2 image, the best sRGB block format the device has (<code>BC7_SRGB</code>, …)</td></tr>
+  <tr><td>metallic-roughness, normal, occlusion textures</td><td><code>R8G8B8A8_UNORM</code>, or a UNORM block format from a KTX2 image (<code>BC5_UNORM</code> for a two-channel normal map, <code>BC4_UNORM</code> for a one-channel occlusion map); metallic-roughness goes in both <code>METALLIC</code> and <code>ROUGHNESS</code></td></tr>
+  <tr><td><code>KHR_texture_basisu</code> on a texture</td><td>its KTX2 image, transcoded on the worker (<a href="../guides/texture-compression.html">texture compression</a>); the texture's own <code>source</code>, a PNG or JPEG fallback, when the KTX2 image fails</td></tr>
   <tr><td><code>texCoord</code> of each texture</td><td><code>texCoords</code>; a set above 2 logs a warning and uses set 0</td></tr>
   <tr><td>a sampler</td><td><code>wrapS</code> picks repeat, mirrored repeat or clamp for both axes; <code>magFilter</code> picks nearest or linear</td></tr>
-  <tr><td>an image</td><td>one texture per (image, color space, sampler) in a file; not 8-bit per channel: error, no texture</td></tr>
+  <tr><td>an image</td><td>one texture per (image, format, sampler) in a file; not 8-bit per channel: error, no texture</td></tr>
 </table>
 </div>
 

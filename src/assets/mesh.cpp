@@ -188,7 +188,7 @@ namespace rasm
             return;
         }
 
-        GltfImportCache cache{.ktxImages = &raw.ktxImages};
+        GltfImportCache cache{.raw = &raw};
         for (const auto &sub : raw.subGltfRaws)
         {
             SubMesh subMesh{.transform = sub.transform};

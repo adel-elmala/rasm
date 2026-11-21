@@ -111,10 +111,16 @@ int main(int argc, char **argv)
             loaded = true;
             loadedFrame = frame;
         }
+        // A model that fails to load never becomes loaded; the engine logs why.
+        if (measure && !loaded && frame == 3000)
+        {
+            std::printf("%s did not load.\n", modelPath.c_str());
+            return 1;
+        }
         if (!loaded || frame < loadedFrame + 4)
             continue;
-        const uint64_t vramAfter = engine.getFrameStats().memory.vramUsage;
-        std::printf("%s: loaded in %.0f ms, %.1f MiB of video memory\n", modelPath.c_str(), loadMs, static_cast<double>(vramAfter - vramBefore) / MIB);
+        const double vramAfter = static_cast<double>(engine.getFrameStats().memory.vramUsage);
+        std::printf("%s: loaded in %.0f ms, %.1f MiB of video memory\n", modelPath.c_str(), loadMs, (vramAfter - static_cast<double>(vramBefore)) / MIB);
         std::fflush(stdout);
         reported = true;
         if (measure)

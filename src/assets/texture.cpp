@@ -2,7 +2,6 @@
 
 #include "assets/ktxImage.h"
 #include "platform/paths.h"
-#include "rhi/device.h"
 
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
@@ -12,7 +11,6 @@
 #include <algorithm>
 #include <fstream>
 #include <future>
-#include <iterator>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -41,8 +39,11 @@ namespace rasm
         {
             ZoneScoped;
 
-            std::ifstream file(pathFromUtf8(path), std::ios::binary);
-            const std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            std::ifstream file(pathFromUtf8(path), std::ios::binary | std::ios::ate);
+            std::vector<unsigned char> bytes(file ? static_cast<size_t>(file.tellg()) : 0);
+            file.seekg(0);
+            if (!file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size())))
+                bytes.clear();
             TextureRaw raw;
             std::string error;
             if (bytes.empty() || !decodeKtx(bytes.data(), bytes.size(), format, raw, error))
@@ -87,7 +88,7 @@ namespace rasm
                 spdlog::error("Failed to load KTX2 texture {}: {}", path, error);
                 return TextureHandle{};
             }
-            desc.format = chooseKtxFormat(info, format == Format::R8G8B8A8_SRGB, getSupportedTextureFormats(ctx));
+            desc.format = chooseKtxFormat(info, format == Format::R8G8B8A8_SRGB ? KtxSlot::COLOR : KtxSlot::CHANNELS, getSupportedTextureFormats(ctx));
             if (desc.format == Format::UNKNOWN)
             {
                 spdlog::error("Failed to load KTX2 texture {}: the device can't sample its format.", path);
@@ -154,41 +155,27 @@ namespace rasm
             return;
         }
 
-        if (!raw.levelSizes.empty() && raw.format == desc.format && raw.width == desc.width && raw.height == desc.height)
+        // A material may already sample the texture, so a failed decode or upload leaves it plain (white, or a flat
+        // normal for a two-channel format) instead of undefined: an image makes its mips from white pixels, a KTX2
+        // texture gets every level of constant blocks.
+        const bool ktx = desc.mipLevels > 0;
+        const bool decoded = ktx ? !raw.levelSizes.empty() && raw.format == desc.format && raw.width == desc.width && raw.height == desc.height
+                                 : raw.data && raw.width == desc.width && raw.height == desc.height;
+        if (!decoded)
+            spdlog::error("Failed to decode texture {}; it stays plain white.", load.path);
+        const bool filled = decoded && (ktx ? fillTextureLevels(load.handle, raw) : ctx.fillTexture(load.handle, raw.data));
+        if (decoded && !filled)
+            spdlog::error("Failed to fill texture {}; it stays plain white.", load.path);
+        if (!filled && ktx)
         {
-            if (!fillTextureLevels(load.handle, raw))
-                spdlog::error("Failed to fill texture: {}", load.path);
-            return;
+            TextureRaw blank;
+            makeBlankKtxLevels(desc.format, desc.width, desc.height, desc.mipLevels, blank);
+            fillTextureLevels(load.handle, blank);
         }
-
-        // A material may already sample the texture, so a failed decode leaves it white instead of undefined: an image
-        // makes its mips from white pixels, a KTX2 texture gets every level. A block format's levels are zero (black),
-        // since it has no cheap white.
-        if (!raw.data || raw.width != desc.width || raw.height != desc.height)
+        else if (!filled)
         {
-            const bool rgba8 = desc.format == Format::R8G8B8A8_SRGB || desc.format == Format::R8G8B8A8_UNORM;
-            spdlog::error("Failed to decode texture {}; it stays {}.", load.path, rgba8 ? "white" : "black");
-            if (desc.mipLevels == 0)
-            {
-                std::vector<unsigned char> white(static_cast<size_t>(desc.width) * desc.height * 4, 255);
-                ctx.fillTexture(load.handle, white.data());
-            }
-            else
-            {
-                TextureRaw blank = {.width = desc.width, .height = desc.height, .format = desc.format};
-                uint64_t total = 0;
-                for (uint32_t level = 0; level < desc.mipLevels; ++level)
-                {
-                    blank.levelSizes.push_back(rhi::getTextureLevelSize(desc.format, std::max(1u, desc.width >> level), std::max(1u, desc.height >> level)));
-                    total += blank.levelSizes.back();
-                }
-                blank.levels.assign(total, rgba8 ? 255 : 0);
-                fillTextureLevels(load.handle, blank);
-            }
-        }
-        else if (!ctx.fillTexture(load.handle, raw.data))
-        {
-            spdlog::error("Failed to fill texture: {}", load.path);
+            std::vector<unsigned char> white(static_cast<size_t>(desc.width) * desc.height * 4, 255);
+            ctx.fillTexture(load.handle, white.data());
         }
 
         // fillTexture copies the pixels (on the host, or into the staging ring), so they are not needed once it returns (P6).

@@ -2,6 +2,7 @@
 #include "rhi/vulkan/vulkanCommandBuffer.h"
 #include "rhi/vulkan/vulkanSwapchain.h"
 #include "rhi/vulkan/vulkanUtils.h"
+#include "rhi/mipChain.h"
 #include "platform/windowSurface.h"
 
 #include "spdlog/spdlog.h"
@@ -346,10 +347,7 @@ namespace rasm::rhi
         // other formats keep one level, unless the desc asks for more; a count past the full chain is clamped to it.
         uint32_t mipLevelCount(const TextureDesc &desc)
         {
-            uint32_t fullChain = 1;
-            for (uint32_t size = std::max(desc.width, desc.height); size > 1; size /= 2)
-                ++fullChain;
-            fullChain = std::min(fullChain, MAX_TEXTURE_MIPS);
+            const uint32_t fullChain = std::min(getFullMipCount(desc.width, desc.height), MAX_TEXTURE_MIPS);
             if (desc.mipLevels > 0)
                 return std::min(desc.mipLevels, fullChain);
             if (desc.usage == TextureUsage::SAMPLED &&

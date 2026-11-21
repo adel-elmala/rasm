@@ -11,6 +11,15 @@
 
 namespace rasm
 {
+    enum class KtxSlot
+    {
+        COLOR,          // base color, emissive: RGB and alpha, sRGB
+        DATA,           // metallic-roughness: every channel as decoded
+        NORMAL,         // a normal map: x and y of a two-channel file
+        OCCLUSION,      // R only
+        CHANNELS,       // loadTexture's data slot: one channel is R, two are a normal map's x and y
+    };
+
     struct KtxInfo
     {
         uint32_t                    width               = 0;
@@ -28,7 +37,8 @@ namespace rasm
     bool                            isKtx2(const unsigned char* bytes, size_t size);
     bool                            readKtxInfo(const std::string& path, KtxInfo& info, std::string& error);
     bool                            readKtxInfo(const unsigned char* bytes, size_t size, KtxInfo& info, std::string& error);
-    Format                          chooseKtxFormat(const KtxInfo& info, bool srgb, uint64_t supportedFormats);
+    Format                          chooseKtxFormat(const KtxInfo& info, KtxSlot slot, uint64_t supportedFormats);
+    void                            makeBlankKtxLevels(Format format, uint32_t width, uint32_t height, uint32_t mipCount, TextureRaw& raw);
     uint32_t                        getKtxMipCount(const KtxInfo& info, Format format);
     void                            warnAboutKtxFormat(const std::string& name, const KtxInfo& info, Format format);
     bool                            decodeKtx(const unsigned char* bytes, size_t size, Format format, TextureRaw& raw, std::string& error);

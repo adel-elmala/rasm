@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <numeric>
 #include <string>
 
 namespace rasm::rhi
@@ -101,6 +102,9 @@ namespace rasm::rhi
             return false;
 
         const FormatBlock block = getFormatBlock(dst->desc.format);
+        // A copy into an image starts at a multiple of the block size; 16 as well keeps the rows of every format
+        // aligned for the copy engine. lcm(16, bytes): 16 for 4, 8 and 16 bytes, 48 for 3 and 12.
+        const uint64_t alignment = std::lcm<uint64_t>(16, block.bytes);
         bool first = true;
         for (uint32_t mip = 0; mip < levelCount; ++mip)
         {
@@ -117,8 +121,7 @@ namespace rasm::rhi
                 const uint32_t rows = std::min(rowsPerChunk, blockRows - row);
                 const uint64_t size = rows * rowBytes;
                 uint64_t ringOffset = 0;
-                // A copy into an image starts at a multiple of the block size: 16 covers every format.
-                if (!allocate(size, 16, ringOffset) || !device->fillBuffer(staging, bytes + row * rowBytes, size, ringOffset))
+                if (!allocate(size, alignment, ringOffset) || !device->fillBuffer(staging, bytes + row * rowBytes, size, ringOffset))
                     return false;
                 const uint32_t y = row * block.height;
                 pendingTextureCopies.push_back({.dst = dst, .srcOffset = ringOffset, .mip = mip, .y = y, .height = std::min(rows * block.height, height - y), .discard = first});
@@ -227,11 +230,11 @@ namespace rasm::rhi
     }
 
     // head and tail count bytes since the start and never wrap: head - tail bytes are in use, and
-    // head % RING_SIZE is where the next chunk goes. The ring's size is a multiple of every alignment, so the
-    // start of the ring is aligned too.
+    // head % RING_SIZE is where the next chunk goes. A chunk that would cross the end starts again at offset 0,
+    // which is aligned for any alignment.
     bool UploadManager::allocate(uint64_t size, uint64_t alignment, uint64_t &ringOffset)
     {
-        assert(size <= MAX_CHUNK_SIZE && RING_SIZE % alignment == 0);
+        assert(size <= MAX_CHUNK_SIZE);
 
         const uint64_t position = head % RING_SIZE;
         const uint64_t alignPadding = (alignment - position % alignment) % alignment;

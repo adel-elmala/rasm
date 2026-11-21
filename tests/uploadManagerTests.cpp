@@ -796,6 +796,20 @@ TEST_CASE_FIXTURE(UploadFixture, "texture copies start at a multiple of 16 bytes
         CHECK(copy.srcOffset % 16 == 0);
 }
 
+TEST_CASE_FIXTURE(UploadFixture, "an RGB8 texture's copies start at a multiple of 48 bytes: 16 and its 3-byte texel")
+{
+    auto *dst = createDeviceLocal(64);
+    REQUIRE(upload(dst, makeBytes(5, 1), 0));
+    TextureData data(Format::R8G8B8_UNORM, 10, 6, 3, 13);
+    REQUIRE(uploads.uploadTexture(&data.texture, data.levels.data(), 3));
+    REQUIRE(uploads.flush());
+    device.finishGpuWork();
+
+    CHECK(data.arrived());
+    for (const auto &copy : device.queue.submissions.at(0).textureCopies)
+        CHECK(copy.srcOffset % 48 == 0);
+}
+
 TEST_CASE_FIXTURE(UploadFixture, "filling a texture twice in one batch starts a new batch, and the second fill wins")
 {
     TextureData data(Format::BC5_UNORM, 16, 16, 1, 11);
