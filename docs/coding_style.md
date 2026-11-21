@@ -36,7 +36,7 @@ Naming conventions for specific kinds of function:
 - `destroy*` releases an object.
 
 Deliberate exceptions:
-- The BRDF terms in `pbr.slang` keep their names from the literature (`D_GGX`, `F_Schlick`, `V_SmithGGXCorrelated`, `Fd_Lambert`), so the shader can be checked against the references.
+- The BRDF terms in `brdf.slang` keep their names from the literature (`D_GGX`, `F_Schlick`, `V_SmithGGXCorrelated`, `Fd_Lambert`), so the shader can be checked against the references.
 - `src/thirdparty_impl.cpp` keeps its name, which matches the `*_IMPLEMENTATION` macros it defines.
 - vk-bootstrap's API is snake_case, such as `.physical_device`. Only names RASM declares follow this table.
 
@@ -131,7 +131,7 @@ Deliberate exceptions:
 ## 9. Shaders (Slang)
 
 - Entry points are `vertMain`, `fragMain` and `compMain`, with `[shader("...")]` attributes.
-- One responsibility per module: data layout (`core.slang`), lighting and BRDF (`pbr.slang`), unlit shading (`unlit.slang`), pass or entry shaders (`rasm.slang`).
+- One responsibility per module: data layout (`core.slang`), BRDF terms (`brdf.slang`), lighting (`pbr.slang`), image-based lighting (`environment.slang`), unlit shading (`unlit.slang`), pass or entry shaders (`rasm.slang`).
 - Shaders output **linear** color. sRGB encoding is done by the attachment format.
 - Texture access checks `hasTexture(index)` before sampling, and glTF default values apply when a texture is absent.
 - Keep backend-specific code (`spirv_asm`, `vk::` attributes, raw pointers) behind small helper functions in one module, so that other targets can provide alternatives (`D12`).

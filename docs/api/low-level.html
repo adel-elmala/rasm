@@ -333,7 +333,7 @@ constexpr uint32_t QUEUE_COUNT = 2;</pre>
   <div class="body">
     <p>Records a barrier that moves a texture from the use it is in now to <code>newUsage</code>. The context remembers each texture's use, so you name only the new one. The barrier waits for the old use and blocks the new one. <code>SAMPLED</code> covers fragment and compute shaders. The attachment usages cover reads too, for a <code>beginRendering</code> with <code>load</code>.</p>
     <dl>
-      <dt>newUsage</dt><dd><code>COLOR_ATTACHMENT</code>, <code>DEPTH_STENCIL_ATTACHMENT</code>, <code>SAMPLED</code> or <code>PRESENT_SRC</code>.</dd>
+      <dt>newUsage</dt><dd><code>COLOR_ATTACHMENT</code>, <code>DEPTH_STENCIL_ATTACHMENT</code>, <code>SAMPLED</code>, <code>PRESENT_SRC</code>, or <code>STORAGE</code> for a <code>SAMPLED_STORAGE</code> texture that compute writes (the <code>GENERAL</code> layout; any other texture is refused with an error). <code>STORAGE</code> to <code>STORAGE</code> records a barrier, like an attachment, since it is written.</dd>
       <dt>discard</dt><dd><code>true</code> drops the contents: the barrier starts from <code>UNKNOWN</code>, which still waits for every earlier use. Use it before a pass that clears the texture. <code>beginPass</code> does it for its attachments.</dd>
     </dl>
     <figure class="diagram">
@@ -552,7 +552,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
 <div class="api" id="RenderContext-createTexture">
   <pre class="sig">TextureHandle createTexture(const TextureDesc&amp; desc);</pre>
   <div class="body">
-    <p>Creates a new 2D texture every time (<code>B1</code>). A <code>SAMPLED</code> texture in an RGBA8 format (<code>R8G8B8A8_UNORM</code>, <code>R8G8B8A8_SRGB</code>, <code>B8G8R8A8_SRGB</code>) gets a full mip chain; every other texture has one level. Fill a sampled texture with <code>fillTexture</code>.</p>
+    <p>Creates a new 2D texture every time (<code>B1</code>). With <code>mipLevels</code> 0, a <code>SAMPLED</code> texture in an RGBA8 format (<code>R8G8B8A8_UNORM</code>, <code>R8G8B8A8_SRGB</code>, <code>B8G8R8A8_SRGB</code>) gets a full mip chain and every other texture one level. Fill a sampled texture with <code>fillTexture</code>.</p>
     <p><span class="tag">errors</span> A size above the device's limit, or a failed allocation, logs an error and returns an invalid handle.</p>
   </div>
 </div>
@@ -564,8 +564,9 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
     uint32_t     width  = 0;
     uint32_t     height = 0;
     Format       format = Format::UNKNOWN;
-    TextureUsage usage  = TextureUsage::SAMPLED;
-    bool         cube   = false;
+    TextureUsage usage     = TextureUsage::SAMPLED;
+    bool         cube      = false;
+    uint32_t     mipLevels = 0;
 
     bool operator==(const TextureDesc&amp;) const = default;
 };</pre>
@@ -574,7 +575,8 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <dt>width, height</dt><dd>Pixels.</dd>
       <dt>format</dt><dd>See <a href="types.html#Format">Format</a>. Color data uses <code>R8G8B8A8_SRGB</code>; normal, metallic-roughness and occlusion data <code>R8G8B8A8_UNORM</code>.</dd>
       <dt>usage</dt><dd>What the texture is created for, see <a href="#TextureUsage">TextureUsage</a>.</dd>
-      <dt>cube</dt><dd><code>true</code>: <code>CUBE_FACES</code> square layers, one per face of a cube, in Vulkan's order +X, −X, +Y, −Y, +Z, −Z. Its bindless slot holds a cube view, which a shader reads as a <var>SamplerCube</var>; each face also has its own view, which <a href="#beginRendering"><code>beginRendering</code></a> draws into. A render target with <code>RenderTargetDesc::cube</code> makes one for its depth. Only a depth attachment can be a cube (<code>DEPTH_STENCIL_ATTACHMENT</code> or <code>SAMPLED_DEPTH_ATTACHMENT</code>): <code>createTexture</code> rejects any other usage with an error.</dd>
+      <dt>cube</dt><dd><code>true</code>: <code>CUBE_FACES</code> square layers, one per face of a cube, in Vulkan's order +X, −X, +Y, −Y, +Z, −Z. Its bindless slot holds a cube view, which a shader reads as a <var>SamplerCube</var>; each face also has its own view, which <a href="#beginRendering"><code>beginRendering</code></a> draws into. A render target with <code>RenderTargetDesc::cube</code> makes one for its depth. Only a depth attachment (<code>DEPTH_STENCIL_ATTACHMENT</code> or <code>SAMPLED_DEPTH_ATTACHMENT</code>) or a <code>SAMPLED_STORAGE</code> texture can be a cube: <code>createTexture</code> rejects any other usage with an error.</dd>
+      <dt>mipLevels</dt><dd>0: the rule above. Any other count makes that many levels, at most the full chain down to 1 × 1. Only a <code>SAMPLED_STORAGE</code> texture (compute writes its mips) or a <code>SAMPLED</code> RGBA8 one (<code>fillTexture</code> makes them) may ask for more than 1: <code>createTexture</code> refuses any other with an error, since an attachment is drawn into one mip and <code>fillTexture</code> makes mips only for RGBA8.</dd>
     </dl>
   </div>
 </div>
@@ -597,6 +599,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
     DEPTH_STENCIL_ATTACHMENT,
     SAMPLED_COLOR_ATTACHMENT,
     SAMPLED_DEPTH_ATTACHMENT,
+    SAMPLED_STORAGE,
     TRANSIENT_ATTACHMENT,
     INPUT_ATTACHMENT,
     PRESENT_SRC,
@@ -611,8 +614,10 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <tr><td><code>COLOR_ATTACHMENT</code></td><td>drawn into</td><td>yes</td></tr>
       <tr><td><code>DEPTH_STENCIL_ATTACHMENT</code></td><td>depth buffer</td><td>yes</td></tr>
       <tr><td><code>SAMPLED_COLOR_ATTACHMENT</code></td><td>drawn into, then read (render target color)</td><td>–</td></tr>
+      <tr><td><code>SAMPLED_STORAGE</code></td><td>written by compute shaders as a storage image, one mip per slot (<a href="#updateBindlessStorageImage"><code>updateBindlessStorageImage</code></a>), then read by shaders</td><td>–</td></tr>
+      <tr><td><code>STORAGE</code></td><td>only passed on to the backend</td><td>yes: compute reads and writes it (<code>GENERAL</code>); only for a <code>SAMPLED_STORAGE</code> texture</td></tr>
       <tr><td><code>SAMPLED_DEPTH_ATTACHMENT</code></td><td>depth buffer that shaders can also read: with <code>EngineConfig::occlusionCulling</code>, a render target's depth in <code>D32_SFLOAT</code>; always, a depth-only target's depth (<a href="render-graph.html#readDepth">readDepth</a>)</td><td>–</td></tr>
-      <tr><td><code>TRANSFER_SRC</code>, <code>TRANSFER_DST</code>, <code>STORAGE</code>, <code>TRANSIENT_ATTACHMENT</code>, <code>INPUT_ATTACHMENT</code></td><td>only passed on to the backend; no RASM call uses them</td><td>–</td></tr>
+      <tr><td><code>TRANSFER_SRC</code>, <code>TRANSFER_DST</code>, <code>TRANSIENT_ATTACHMENT</code>, <code>INPUT_ATTACHMENT</code></td><td>only passed on to the backend; no RASM call uses them</td><td>–</td></tr>
       <tr><td><code>PRESENT_SRC</code></td><td>–</td><td>yes (swapchain image before present)</td></tr>
       <tr><td><code>UNKNOWN</code></td><td>–</td><td>the start; never a target (contents thrown away)</td></tr>
     </table>
@@ -625,9 +630,16 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
   <div class="body">
     <p>Copies pixels from the CPU straight into a <code>SAMPLED</code> texture (host image copy), builds its whole mip chain on the CPU (sRGB-aware for sRGB formats), and leaves it ready for sampling. It finishes before it returns; there is no command buffer involved.</p>
     <dl>
-      <dt>data</dt><dd><code>width × height × 4</code> bytes of RGBA8, rows top to bottom, no padding.</dd>
+      <dt>data</dt><dd><code>width × height</code> pixels of the texture's format (4 bytes for RGBA8, 8 for <code>R16G16B16A16_SFLOAT</code>), rows top to bottom, no padding.</dd>
     </dl>
     <p>The texture must not be in use by a frame the GPU is still running. Returns <code>false</code> with an error when a copy step fails.</p>
+  </div>
+</div>
+
+<div class="api" id="getTextureState">
+  <pre class="sig">TextureUsage getTextureState(const TextureHandle&amp; texture);</pre>
+  <div class="body">
+    <p>The use the recorded commands leave the texture in: what the next <code>transitionImageLayout</code> starts from. Commands that are dropped without a submit put the state back (<code>discardRecording</code>), so after a frame this tells whether its barriers went out. An unknown handle logs an error and returns <code>UNKNOWN</code>.</p>
   </div>
 </div>
 
@@ -658,6 +670,17 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <dt>slot</dt><dd><code>MAX_BINDLESS_TEXTURES</code> (the default) takes the next free slot. A smaller value overwrites that slot; later automatic slots go past it. Slots are never given back.</dd>
     </dl>
     <p><span class="tag">errors</span> All slots used, or a slot above <code>MAX_BINDLESS_TEXTURES</code>, logs <code>Slot index exceeds maximum bindless textures.</code> and returns <code>UINT32_MAX</code>, as does an unknown set or texture.</p>
+  </div>
+</div>
+
+<div class="api" id="updateBindlessStorageImage">
+  <pre class="sig">bool updateBindlessStorageImage(const DescriptorSetHandle&amp; bindlessSet, uint32_t slot, const TextureHandle&amp; texture, uint32_t mip);</pre>
+  <div class="body">
+    <p>Writes one mip of a <code>SAMPLED_STORAGE</code> texture into slot <code>slot</code> of binding 1 of the bindless set, for compute shaders to write. A cube's mip has all 6 faces, so shaders declare the binding as an array of 2D arrays, with the texture's format:</p>
+    <pre><code class="lang-slang">[[vk::binding(1, 0)]]
+[format("rgba16f")] RWTexture2DArray&lt;float4&gt; gStorageImages[];</code></pre>
+    <p>Move the texture to <code>STORAGE</code> with <code>transitionImageLayout</code> before the dispatches, and to <code>SAMPLED</code> after them. A dispatch that reads a mip another one wrote needs <code>memoryBarrier(COMPUTE, COMPUTE)</code> between them. The slot is overwritten even while earlier frames are on the GPU, so it must not be one they still use: wait for those frames (<code>getFenceValue</code>) before you reuse a slot.</p>
+    <p><span class="tag">errors</span> A slot at or past the set layout's <code>storageImageCount</code> (<code>MAX_BINDLESS_STORAGE_IMAGES</code> for the engine's set; 0 for a layout without binding 1), a texture that is not <code>SAMPLED_STORAGE</code>, a mip it does not have, or an unknown set or texture logs an error and returns <code>false</code>.</p>
   </div>
 </div>
 
@@ -752,7 +775,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
   <pre class="sig">DescriptorSetLayoutHandle createBindlessDescriptorSetLayout(
     const BindlessDescriptorSetLayoutDesc&amp; desc);</pre>
   <div class="body">
-    <p>Creates a set layout with one binding (0) holding an array of <code>count</code> descriptors that may be partly empty and may be updated while bound. An equal desc gives back the existing handle. The engine makes one at start-up; you rarely need another.</p>
+    <p>Creates a set layout with one binding (0) holding an array of <code>count</code> descriptors, and with <code>storageImageCount</code> above 0 a second binding (1) of that many storage images. Both may be partly empty and may be updated while bound. An equal desc gives back the existing handle. The engine makes one at start-up; you rarely need another.</p>
   </div>
 </div>
 
@@ -763,6 +786,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
     ShaderType     stage = ShaderType::FRAGMENT;
     uint32_t       count = 0;
     DescriptorType type  = DescriptorType::COMBINED_IMAGE_SAMPLER;
+    uint32_t       storageImageCount = 0;
 
     bool operator==(const BindlessDescriptorSetLayoutDesc&amp;) const = default;
 };</pre>
@@ -770,6 +794,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
     <dl>
       <dt>stage</dt><dd>Which shaders see the array. The engine's layout uses <code>ALL</code>, so compute shaders can sample too.</dd>
       <dt>count</dt><dd>Array size. The engine's layout uses <code>MAX_BINDLESS_TEXTURES</code>.</dd>
+      <dt>storageImageCount</dt><dd>Size of binding 1, of <code>STORAGE_IMAGE</code>s; 0 leaves it out. The engine's layout uses <code>MAX_BINDLESS_STORAGE_IMAGES</code>.</dd>
     </dl>
   </div>
 </div>
@@ -780,9 +805,10 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
     UNIFORM_BUFFER,
     SAMPLER,
     COMBINED_IMAGE_SAMPLER,
+    STORAGE_IMAGE,
 };</pre>
   <div class="body">
-    <p>Descriptor kinds. The engine only uses <code>COMBINED_IMAGE_SAMPLER</code> (a texture with its sampler).</p>
+    <p>Descriptor kinds. The engine uses <code>COMBINED_IMAGE_SAMPLER</code> (a texture with its sampler) in binding 0 and <code>STORAGE_IMAGE</code> (one mip a compute shader writes) in binding 1; its pool has <code>MAX_DESCRIPTOR_TYPES</code> (2) sizes, one for each.</p>
   </div>
 </div>
 
@@ -942,6 +968,11 @@ struct BindlessDescriptorSetLayoutDescHash
   <div class="body">
     <p>Blocks until the fence reaches <code>value</code>. <code>timeout</code> is in nanoseconds. Returns <code>false</code> with an error on timeout or failure.</p>
   </div>
+</div>
+
+<div class="api" id="getFenceValue">
+  <pre class="sig">uint64_t getFenceValue(FenceHandle fence);</pre>
+  <div class="body"><p>The value the fence has reached now, without waiting. An unknown handle logs an error and returns 0.</p></div>
 </div>
 
 <div class="api" id="FenceValue">

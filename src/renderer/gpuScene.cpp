@@ -4,6 +4,7 @@
 #include "rasm/engine.h"
 #include "core/utils.h"
 #include "platform/paths.h"
+#include "renderer/environmentBake.h"
 #include "renderer/geometryPool.h"
 #include "renderer/localShadows.h"
 #include "renderer/shadowCascades.h"
@@ -760,11 +761,17 @@ namespace rasm
                 prepareSceneView(view);
                 recordSceneCulling(view, CULL_EARLY);
             });
+        // The sky goes behind what the view's last draw pass of the frame drew: the late pass, unless this frame has
+        // none (no Hi-Z).
         graph.addPass(
             occlusion ? drawName + " 1" : drawName,
             drawScenePass,
-            [this, view](RenderContext &)
-            { drawSceneView(view); });
+            [this, view, occlusion](RenderContext &)
+            {
+                drawSceneView(view);
+                if (!occlusion || gpuScene->views[view].hizLevelCount == 0)
+                    drawSky(view);
+            });
         if (!occlusion)
             return true;
 
@@ -795,8 +802,10 @@ namespace rasm
             drawScenePass,
             [this, view](RenderContext &)
             {
-                if (gpuScene->views[view].hizLevelCount > 0)
-                    drawSceneView(view);
+                if (gpuScene->views[view].hizLevelCount == 0)
+                    return;
+                drawSceneView(view);
+                drawSky(view);
             });
         return true;
     }
@@ -906,13 +915,27 @@ namespace rasm
         SceneView &view = gpuScene->views[viewIndex];
         view.ready = false;
         view.culled = false;
+        view.sky = false;
         view.groupCount = 0;
         view.hizLevelCount = 0;
 
         const auto &drawList = gpuScene->drawLists[view.scene.index];
         const auto frame = static_cast<uint32_t>(frameCount);
         if (drawList.draws.empty() || (drawList.staleSlots & (1u << frame)) != 0)
+        {
+            // Nothing to draw, but the sky still shows, so a scene whose meshes still load is not left black. The sky
+            // reads only the camera and the environment.
+            if (view.depthOnly)
+                return;
+            const auto &target = ctx.getRenderTarget(view.renderTarget);
+            gfx::SceneData sceneData{};
+            sceneData.projection = getProjectionMatrix(view.camera, static_cast<float>(target.width) / static_cast<float>(target.height));
+            sceneData.view = getViewMatrix(view.camera);
+            sceneData.cameraWorldPosition = registry.cameras[view.camera.index].transform.position;
+            view.sky = writeSceneEnvironment(*environments, registry.scenes[view.scene.index].environment, sceneData) &&
+                       ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData));
             return;
+        }
 
         // A shader error retries every frame, so a shader fixed on disk is picked up while the application runs.
         if (!view.depthOnly && !gpuScene->pipeline.isValid())
@@ -1110,6 +1133,9 @@ namespace rasm
             }
         }
 
+        // A depth-only view shades nothing, so it has no environment.
+        const bool sky = writeSceneEnvironment(*environments, view.depthOnly ? SceneEnvironment{} : sceneRef.environment, sceneData);
+
         sceneData.lodPixelsPerUnit = std::abs(cameraProjection[1][1]) * 0.5f * static_cast<float>(cameraHeight);
         if (cameraProjection[3][3] == 0.0f)
         {
@@ -1138,6 +1164,7 @@ namespace rasm
         view.width = width;
         view.height = height;
         view.culled = culled;
+        view.sky = sky;
         view.ready = true;
     }
 
@@ -1221,5 +1248,30 @@ namespace rasm
         }
         // beginPass sets NONE for every other pipeline.
         ctx.setCullMode(commandBuffer, CullMode::NONE);
+    }
+
+    // One triangle at the far plane, after the view's draws: the depth test passes only where they left the clear
+    // depth (0, reversed-Z), so the sky costs only the pixels it shows.
+    void Engine::drawSky(uint32_t viewIndex)
+    {
+        const SceneView &view = gpuScene->views[viewIndex];
+        if (!view.sky)
+            return;
+        if (!gpuScene->skyPipeline.isValid())
+        {
+            gpuScene->skyPipeline = createPipeline("sky", readFile(pathFromUtf8(config.shaderDir) / "passes/sky.slang"), view.renderTarget);
+            if (!gpuScene->skyPipeline.isValid())
+            {
+                spdlog::error("Failed to create the sky pipeline; the scene has no sky.");
+                return;
+            }
+        }
+        const auto commandBuffer = frameResources[frameCount].commandBuffer;
+        const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex)};
+        ctx.bindPipeline(commandBuffer, gpuScene->skyPipeline);
+        ctx.bindDescriptorSet(commandBuffer, gpuScene->skyPipeline, bindlessDescriptorSet, 0);
+        ctx.pushConstants(commandBuffer, gpuScene->skyPipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+        ctx.setCullMode(commandBuffer, CullMode::NONE);
+        ctx.draw(commandBuffer, 3);
     }
 }

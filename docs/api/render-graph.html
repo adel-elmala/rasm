@@ -820,7 +820,7 @@ if (engine.beginFrame(camera))
   <tr><td>Entry points in the source</td><td><code>vertMain</code> and <code>fragMain</code></td><td><code>compMain</code>, or the name you pass</td></tr>
   <tr><td>Inputs</td><td>No vertex buffers: use <code>SV_VertexID</code> and read data through pointers</td><td><code>SV_DispatchThreadID</code>; data through pointers</td></tr>
   <tr><td>Push constants</td><td colspan="2"><code>PUSH_CONSTANTS_SIZE</code> = 16 bytes, <code>[[vk::push_constant]]</code>, e.g. one 8-byte buffer address + two 4-byte values</td></tr>
-  <tr><td>Textures</td><td>Bindless array at <code>[[vk::binding(0, 0)]]</code></td><td>The same bindless array: bind it with <code>bindDescriptorSet</code>. No storage images, so compute writes buffers only.</td></tr>
+  <tr><td>Textures</td><td>Bindless array at <code>[[vk::binding(0, 0)]]</code></td><td>The same bindless array: bind it with <code>bindDescriptorSet</code>. A graph pass writes buffers only: storage images exist (binding 1, <a href="low-level.html#updateBindlessStorageImage"><code>updateBindlessStorageImage</code></a>), but the graph does not track a texture write yet.</td></tr>
   <tr><td>Fixed state</td><td>Triangle list, no blending, depth test and write on (<code>GREATER_OR_EQUAL</code>) when the pipeline has a depth, front face counter-clockwise, cull mode from the pass</td><td>–</td></tr>
   <tr><td>Attachments</td><td>Swapchain color format with no depth, or the formats of a render target you pass</td><td>–</td></tr>
   <tr><td>Imports</td><td colspan="2">The search path is <code>&lt;shaderDir&gt;/lib</code>, so <code>import core;</code> works. Scalar layout, column-major matrices.</td></tr>

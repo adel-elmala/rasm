@@ -129,12 +129,20 @@ namespace rasm
                 }
             }
 
-            // The tone-map pass has its own push constants.
+            // The tone-map pass and the environment bake have their own push constants.
             if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "ToneMapPushConstants") == 0)
             {
                 return validateStruct(pushConstants, "ToneMapPushConstants", sizeof(gfx::ToneMapPushConstants),
                                       {{"source", offsetof(gfx::ToneMapPushConstants, source)},
                                        {"exposure", offsetof(gfx::ToneMapPushConstants, exposure)}});
+            }
+            if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "EnvironmentPushConstants") == 0)
+            {
+                return validateStruct(pushConstants, "EnvironmentPushConstants", sizeof(gfx::EnvironmentPushConstants),
+                                      {{"source", offsetof(gfx::EnvironmentPushConstants, source)},
+                                       {"target", offsetof(gfx::EnvironmentPushConstants, target)},
+                                       {"roughness", offsetof(gfx::EnvironmentPushConstants, roughness)},
+                                       {"size", offsetof(gfx::EnvironmentPushConstants, size)}});
             }
 
             // Custom pipelines bring their own push constants and do not share core.slang.
@@ -184,7 +192,14 @@ namespace rasm
                                      {"forcedLod", offsetof(gfx::SceneData, forcedLod)},
                                      {"shadowMaps", offsetof(gfx::SceneData, shadowMaps)},
                                      {"lodPixelsPerUnit", offsetof(gfx::SceneData, lodPixelsPerUnit)},
-                                     {"lodDepthPlane", offsetof(gfx::SceneData, lodDepthPlane)}});
+                                     {"lodDepthPlane", offsetof(gfx::SceneData, lodDepthPlane)},
+                                     {"environmentSpecular", offsetof(gfx::SceneData, environmentSpecular)},
+                                     {"environmentSpecularMips", offsetof(gfx::SceneData, environmentSpecularMips)},
+                                     {"environmentIrradiance", offsetof(gfx::SceneData, environmentIrradiance)},
+                                     {"environmentSky", offsetof(gfx::SceneData, environmentSky)},
+                                     {"brdfLut", offsetof(gfx::SceneData, brdfLut)},
+                                     {"environmentIntensity", offsetof(gfx::SceneData, environmentIntensity)},
+                                     {"environmentRotation", offsetof(gfx::SceneData, environmentRotation)}});
 
             valid &= validateStruct(fieldStruct(scene, "lights"), "Light", sizeof(gfx::Light),
                                     {{"position", offsetof(gfx::Light, position)},

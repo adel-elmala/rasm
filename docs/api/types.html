@@ -121,6 +121,7 @@ struct Handle
   <tr><td><code>CommandBufferHandle</code></td><td>a command buffer: <a href="low-level.html#createCommandBuffer">createCommandBuffer</a>; the one being recorded in <code>FrameResources</code></td></tr>
   <tr><td><code>FenceHandle</code></td><td>a timeline fence: <a href="low-level.html#createFence">createFence</a></td></tr>
   <tr><td><code>QueryPoolHandle</code></td><td>timestamp queries: <a href="low-level.html#createTimestampQueryPool">createTimestampQueryPool</a></td></tr>
+  <tr><td><code>EnvironmentHandle</code></td><td>an environment, an HDR sky photo that lights scenes: <a href="scene.html#loadEnvironment">loadEnvironment</a></td></tr>
   <tr><td><code>DescriptorSetLayoutHandle</code></td><td>a descriptor set layout: <a href="low-level.html#createBindlessDescriptorSetLayout">createBindlessDescriptorSetLayout</a></td></tr>
   <tr><td><code>DescriptorPoolHandle</code></td><td>a descriptor pool: <a href="low-level.html#createDescriptorPool">createDescriptorPool</a></td></tr>
   <tr><td><code>DescriptorSetHandle</code></td><td>a descriptor set: <a href="low-level.html#allocateDescriptorSet">allocateDescriptorSet</a>; the engine's one from <a href="low-level.html#getBindlessDescriptorSet">getBindlessDescriptorSet</a></td></tr>
@@ -130,7 +131,7 @@ struct Handle
 </table>
 </div>
 
-<p>Each alias is <code>Handle&lt;XTag&gt;</code> with its own tag: <code>MeshTag</code>, <code>BufferTag</code>, <code>TextureTag</code>, <code>MaterialTag</code>, <code>PipelineTag</code>, <code>CommandBufferTag</code>, <code>FenceTag</code>, <code>SwapchainTag</code>, <code>ShaderTag</code>, <code>SceneTag</code>, <code>EntityTag</code>, <code>CameraTag</code>, <code>WindowTag</code>, <code>ResourceTag</code>, <code>RenderTargetTag</code>, <code>LightTag</code>, <code>DescriptorSetLayoutTag</code>, <code>DescriptorPoolTag</code>, <code>DescriptorSetTag</code>, <code>QueryPoolTag</code>. The tags are only declared, never defined.</p>
+<p>Each alias is <code>Handle&lt;XTag&gt;</code> with its own tag: <code>MeshTag</code>, <code>BufferTag</code>, <code>TextureTag</code>, <code>MaterialTag</code>, <code>PipelineTag</code>, <code>CommandBufferTag</code>, <code>FenceTag</code>, <code>SwapchainTag</code>, <code>ShaderTag</code>, <code>SceneTag</code>, <code>EntityTag</code>, <code>CameraTag</code>, <code>WindowTag</code>, <code>ResourceTag</code>, <code>RenderTargetTag</code>, <code>LightTag</code>, <code>DescriptorSetLayoutTag</code>, <code>DescriptorPoolTag</code>, <code>DescriptorSetTag</code>, <code>QueryPoolTag</code>, <code>EnvironmentTag</code>. The tags are only declared, never defined.</p>
 
 <div class="api" id="HandleManager">
   <pre class="sig">class HandleManager
@@ -154,6 +155,7 @@ public:
     EntityHandle              getNextEntityHandle();
     LightHandle               getNextLightHandle();
     SceneHandle               getNextSceneHandle();
+    EnvironmentHandle         getNextEnvironmentHandle();
 
 private:
     HandleCounters nextHandle = {};
@@ -184,6 +186,7 @@ private:
     uint64_t queryPool           = 1;
     uint64_t camera              = 1;
     uint64_t light               = 1;
+    uint64_t environment         = 1;
 };</pre>
   <div class="body">
     <p>The next index of each handle kind, all starting at 1. This is why slot 0 is never used.</p>
@@ -363,6 +366,18 @@ struct RenderTarget
   </div>
 </div>
 
+<div class="api" id="EnvironmentRaw">
+  <pre class="sig">struct EnvironmentRaw
+{
+    uint32_t                width   = 0;
+    uint32_t                height  = 0;
+    std::vector&lt;uint16_t&gt;   pixels;
+};</pre>
+  <div class="body">
+    <p>A decoded environment image: <code>loadEnvironment</code>'s worker thread fills <code>pixels</code> with RGBA half floats (linear, clamped to 65504), and the main thread uploads it. <code>pixels</code> is empty when decoding failed. Applications do not see it.</p>
+  </div>
+</div>
+
 <div class="api" id="Window">
   <pre class="sig">struct Window
 {
@@ -433,6 +448,7 @@ struct RenderTarget
   <tr id="MAX_COLOR_ATTACHMENTS"><td><code>MAX_COLOR_ATTACHMENTS</code><br><code>rasm/types.h</code></td><td>4</td><td>Color attachments of one render target or pipeline. Vulkan guarantees at least 4.</td></tr>
   <tr id="MAX_BINDLESS_TEXTURES"><td><code>MAX_BINDLESS_TEXTURES</code><br><code>rasm/types.h</code></td><td>1024</td><td>Bindless texture slots in all. Each loaded texture takes 1. A render target takes 1 per color texture, and with <code>EngineConfig::occlusionCulling</code> 1 per depth texture; a history target twice that. Slots are never freed.</td></tr>
   <tr id="MAX_DESCRIPTOR_TYPES"><td><code>MAX_DESCRIPTOR_TYPES</code><br><code>rasm/types.h</code></td><td>1</td><td>Entries in <code>DescriptorPoolDesc::sizes</code>.</td></tr>
+  <tr id="MAX_BINDLESS_STORAGE_IMAGES"><td><code>MAX_BINDLESS_STORAGE_IMAGES</code><br><code>rasm/types.h</code></td><td>32</td><td>Storage image slots, binding 1 of the bindless set: one mip of a texture each, which compute writes (<a href="low-level.html#updateBindlessStorageImage"><code>updateBindlessStorageImage</code></a>). The engine's environment bake uses up to 19 of them for one frame at a time.</td></tr>
   <tr id="PUSH_CONSTANTS_SIZE"><td><code>PUSH_CONSTANTS_SIZE</code><br><code>rasm/types.h</code></td><td>16</td><td>Push constant bytes of every pipeline.</td></tr>
   <tr id="INVALID_TEXTURE_INDEX"><td><code>INVALID_TEXTURE_INDEX</code><br><code>rasm/types.h</code></td><td><code>0xFFFFFFFF</code></td><td>Not a limit: the bindless index written for a material slot with no texture. Shaders must not sample it.</td></tr>
   <tr id="MAX_MATERIALS"><td><code>MAX_MATERIALS</code><br><code>rasm/engine.h</code></td><td>256</td><td>Materials: 255 fit, and the engine's default material takes one.</td></tr>

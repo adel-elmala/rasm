@@ -20,12 +20,23 @@ namespace rasm
     constexpr uint32_t  MAX_SHADOW_CASCADES         = 4;
     constexpr uint32_t  MAX_VIEW_SHADOWS            = 4;
 
+    struct SceneEnvironment
+    {
+        EnvironmentHandle           environment;                                    // invalid: none, a small constant ambient
+        float                       intensity                           = 1.0f;     // scales its light and its sky
+        float                       rotation                            = 0.0f;     // radians around +Y, counter-clockwise seen from above
+        bool                        sky                                 = true;     // draw it behind the scene
+
+        bool                        operator==(const SceneEnvironment&) const = default;
+    };
+
     struct Scene
     {
         SceneHandle                 handle;
         std::vector<EntityHandle>   entities;
         std::vector<CameraHandle>   cameras;
         std::vector<LightHandle>    lights;
+        SceneEnvironment            environment;
     };
 
     struct ShadowDesc

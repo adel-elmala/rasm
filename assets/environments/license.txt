@@ -1,0 +1,11 @@
+Venice Sunset
+=============
+
+File: venice_sunset_2k.hdr (2048 x 1024, Radiance RGBE)
+
+Source: https://polyhaven.com/a/venice_sunset
+Download: https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/venice_sunset_2k.hdr
+
+Author: Greg Zaal (Poly Haven)
+License: CC0 1.0 Universal, public domain (https://creativecommons.org/publicdomain/zero/1.0/).
+No attribution is required; it is given here as a courtesy.

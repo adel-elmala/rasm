@@ -1029,7 +1029,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
   <tr><td><code>read(buffer)</code></td><td>one <code>memoryBarrier</code>: the last write's stage → this pass's stage</td><td>once per stage after each write</td></tr>
   <tr><td><code>readPrevious(buffer)</code></td><td>like <code>read(buffer)</code>; the last write is the previous frame's</td><td>once per stage after each write</td></tr>
   <tr><td><code>write(buffer)</code></td><td>one <code>memoryBarrier</code>: the last write and the reads since → this pass's stage</td><td>if any pass used it before</td></tr>
-  <tr><td><code>write(texture)</code></td><td>nothing</td><td>only orders passes (compute writes buffers only)</td></tr>
+  <tr><td><code>write(texture)</code></td><td>nothing</td><td>only orders passes (a graph pass writes buffers only; storage images are written only by the environment bake, outside the graph)</td></tr>
   <tr><td><code>read</code> or <code>write</code> of a per-frame buffer array</td><td>like <code>read(buffer)</code> or <code>write(buffer)</code>, for the buffer of this frame's slot only</td><td>every slot's buffer still orders the passes</td></tr>
   <tr><td>a resource the other queue used</td><td>no barrier: a semaphore wait at the start of this queue's batch (<code>Engine::waitForQueue</code>)</td><td>with async compute only (<a href="#rasm-queues">below</a>)</td></tr>
 </table>

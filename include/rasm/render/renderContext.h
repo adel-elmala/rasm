@@ -69,6 +69,9 @@ namespace rasm
         TextureDesc                         getTextureDesc(const TextureHandle& texture);
         VRAMStats                           queryVRAMStats();
         uint32_t                            updateBindlessDescriptorSet(const DescriptorSetHandle& bindlessSet, const TextureHandle& texture, SamplerType sampler = SamplerType::LINEAR_REPEAT, uint32_t slot = MAX_BINDLESS_TEXTURES);
+        bool                                updateBindlessStorageImage(const DescriptorSetHandle& bindlessSet, uint32_t slot, const TextureHandle& texture, uint32_t mip);
+        TextureUsage                        getTextureState(const TextureHandle& texture);
+        uint64_t                            getFenceValue(FenceHandle fence);
         bool                                waitForFence(FenceHandle fence, uint64_t value, uint64_t timeout = UINT64_MAX);
         [[nodiscard]] SwapchainStatus       acquireNextImage(uint32_t& imageIndex);
         bool                                beginCommandBuffer(const CommandBufferHandle& commandBuffer);

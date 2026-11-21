@@ -142,6 +142,11 @@ TEST_CASE("every bindless layout field takes part in equality")
     auto type = base;
     type.type = rasm::DescriptorType::UNIFORM_BUFFER;
     CHECK_FALSE(base == type);
+
+    auto storage = base;
+    storage.storageImageCount = 32;
+    CHECK_FALSE(base == storage);
+    CHECK(rasm::BindlessDescriptorSetLayoutDescHash()(base) != rasm::BindlessDescriptorSetLayoutDescHash()(storage));
 }
 
 TEST_CASE("every render target field takes part in equality")

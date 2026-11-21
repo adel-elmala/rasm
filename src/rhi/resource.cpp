@@ -48,6 +48,7 @@ namespace rasm
         std::size_t hash = std::hash<std::string>()(desc.name);
         hash = hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.stage)));
         hash = hashCombine(hash, std::hash<uint32_t>()(desc.count));
-        return hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.type)));
+        hash = hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.type)));
+        return hashCombine(hash, std::hash<uint32_t>()(desc.storageImageCount));
     }
 }

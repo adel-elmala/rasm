@@ -74,6 +74,7 @@ namespace rasm::rhi
     {
         TextureDesc                         desc;
         TextureUsage                        state               = TextureUsage::UNKNOWN;
+        uint32_t                            mipLevels           = 1;
     };
 
     struct MemoryRequirements
@@ -117,6 +118,7 @@ namespace rasm::rhi
     struct DescriptorSet
     {
         std::string                         name;
+        uint32_t                            storageImageCount   = 0;    // binding 1's size, from its layout
     };
 
     struct Fence
@@ -237,6 +239,7 @@ namespace rasm::rhi
         virtual bool                    getTimestamps(QueryPool* pool, uint32_t firstQuery, uint32_t count, uint64_t* nanoseconds) = 0;
         virtual bool                    fillTexture(Texture* texture, const void* data) = 0;
         virtual void                    updateBindlessTexture(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, Sampler* sampler) = 0;
+        virtual void                    updateBindlessStorageImage(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, uint32_t mip) = 0;
         virtual bool                    waitForFence(Fence* fence, uint64_t value, uint64_t timeout) = 0;
         virtual uint64_t                getFenceValue(Fence* fence) = 0;
         virtual VRAMStats               queryVRAMStats() = 0;

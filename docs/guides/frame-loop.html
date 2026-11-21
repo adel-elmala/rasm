@@ -2,10 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="src/renderer/environmentBake.cpp width=device-width, initial-scale=1">
 <title>One Frame · RASM</title>
 <meta name="description" content="Engine::render, beginFrame, the scene passes and endFrame step by step: two frame slots, the timeline fences, swapchain acquire, one command buffer or a few batches with async compute, submit and present, skipped frames, resize, and where loads, scene sync, stats and culling run.">
-<meta name="rasm-sources" content="src/engine.cpp include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/renderContext.h src/rhi/renderContext.cpp src/rhi/uploadManager.cpp src/renderer/toneMap.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/platform/window.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/renderer.h src/renderer/renderer.cpp src/renderer/frameStats.cpp src/renderer/frameStats.h src/renderer/statsOverlay.cpp src/renderer/renderGraph.cpp include/rasm/render/renderGraph.h src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/device.h">
+<meta name="rasm-sources" content="src/engine.cpp src/renderer/environmentBake.cpp include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/renderContext.h src/rhi/renderContext.cpp src/rhi/uploadManager.cpp src/renderer/toneMap.cpp src/rhi/vulkan/vulkanSwapchain.cpp src/rhi/vulkan/vulkanSwapchain.h src/rhi/vulkan/vulkanQueue.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/platform/window.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/renderer.h src/renderer/renderer.cpp src/renderer/frameStats.cpp src/renderer/frameStats.h src/renderer/statsOverlay.cpp src/renderer/renderGraph.cpp include/rasm/render/renderGraph.h src/rhi/textureStates.h src/rhi/textureStates.cpp src/rhi/device.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -303,7 +303,7 @@
 
   <div class="step">
     <h4>6. Start recording, then Cull 1</h4>
-    <svg viewBox="0 0 730 230" role="img" aria-label="beginFrame begins the frame command buffer, starts the frame timer and clears new history targets. Then the Cull 1 compute pass: a barrier from the graph, a timestamp, countMain, a compute barrier, writeMain and a timestamp. Before it records, prepareSceneView writes the view's SceneData on the CPU.">
+    <svg viewBox="0 0 730 230" role="img" aria-label="beginFrame begins the frame command buffer, starts the frame timer, clears new history targets and records any environment bake. Then the Cull 1 compute pass: a barrier from the graph, a timestamp, countMain, a compute barrier, writeMain and a timestamp. Before it records, prepareSceneView writes the view's SceneData on the CPU.">
       <!--strip 5-->
       <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
       <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
@@ -317,7 +317,7 @@
       <rect x="10" y="72" width="710" height="44" rx="6" class="zone"/>
       <rect x="14"  y="80" width="50"  height="28" rx="4" class="cpu"/><text x="39"  y="98" class="mid small">begin</text>
       <rect x="68"  y="80" width="64"  height="28" rx="4" class="cpu"/><text x="100" y="98" class="mid small">ts Frame</text>
-      <rect x="136" y="80" width="90"  height="28" rx="4" class="cpu"/><text x="181" y="98" class="mid small">clear history</text>
+      <rect x="136" y="80" width="90"  height="28" rx="4" class="cpu"/><text x="181" y="98" class="mid small">history · bake</text>
       <rect x="230" y="80" width="100" height="28" rx="4" class="cpu"/><text x="280" y="98" class="mid small">barrier G|C→C</text>
       <rect x="334" y="80" width="64"  height="28" rx="4" class="cpu"/><text x="366" y="98" class="mid small">ts Cull 1</text>
       <rect x="402" y="80" width="76"  height="28" rx="4" class="shader"/><text x="440" y="98" class="mid small">countMain</text>
@@ -333,7 +333,7 @@
       <text x="244" y="196" class="small">writes the view's SceneData: camera, frustum planes, lights, buffer addresses</text>
       <text x="244" y="213" class="small">grows the slot's visible-draw and Hi-Z buffers; makes the pipelines once</text>
     </svg>
-    <p><b>clear history</b>: <code>clearNewHistory</code> clears new copies of history render targets (none in this app).<br><b>barrier G|C→C</b>: from the graph (G = graphics, C = compute). Last frame's <code>Scene 2</code> read what <code>Cull 1</code> writes.<br><b>ts</b>: a GPU timestamp, only while frame stats are measured. Every pass gets a pair, named after the pass.</p>
+    <p><b>history · bake</b>: <code>clearNewHistory</code> clears new copies of history render targets (none in this app). Then <code>recordEnvironmentBakes</code> records the compute work that prepares image-based lighting, before any pass: the BRDF LUT in the engine's first frame, and an environment whose image has just loaded (<a href="image-based-lighting.html#in-rasm">Image-based lighting</a>). Most frames have none.<br><b>barrier G|C→C</b>: from the graph (G = graphics, C = compute). Last frame's <code>Scene 2</code> read what <code>Cull 1</code> writes.<br><b>ts</b>: a GPU timestamp, only while frame stats are measured. Every pass gets a pair, named after the pass.</p>
     <p><code>beginFrame</code> sets <code>swapchainRendered</code> to false and opens the graphics batch (<code>Engine::useQueue</code>), which begins the slot's command buffer. Each command buffer has its own pool, and <code>begin</code> resets it. That is safe because of the wait in step 3. Then <code>RenderGraph::execute</code> runs the passes in its order. Before each pass it records the barriers that the pass's declared reads and writes need, outside any render pass. With async compute, <code>Cull 1</code> records into a compute batch instead, and the graph adds waits between the queues (<a href="#batches">below</a>).</p>
     <p><code>Cull 1</code> is a compute pass, so its dispatches sit between render passes, in the same command buffer. <code>countMain</code> tests each draw against the frustum and last frame's visibility flags, and <code>writeMain</code> packs the visible ones into the view's visible-draw list. The <code>COMPUTE → COMPUTE</code> barrier between them is inside the pass. What they do is in <a href="frustum-culling.html#in-rasm">Frustum culling</a>, <a href="lod-selection.html#in-rasm">LOD selection</a> and <a href="stream-compaction.html#in-rasm">Stream compaction</a>.</p>
   </div>
@@ -775,7 +775,7 @@
     </svg>
     <h4>A frame that fails to submit</h4>
     <p>It was recorded, but the slot keeps its old fence value, so the next wait on it passes at once. <code>frameCount</code> still moves. The image stays acquired, and the next acquire returns it again. Its timestamps are not read, because the slot's value did not change.</p>
-    <p><code>submitBatches</code> calls <code>discardRecording</code>, so the textures it moved go back to the layouts they still have on the GPU. With several batches, a failed submit ends the frame there, since later ones may wait for it; the textures go back only to the layouts the batches that went out left them in.</p>
+    <p><code>submitBatches</code> calls <code>discardRecording</code>, so the textures it moved go back to the layouts they still have on the GPU. With several batches, a failed submit ends the frame there, since later ones may wait for it; the textures go back only to the layouts the batches that went out left them in. An environment bake in a dropped frame is recorded again in the next one: <code>finishEnvironmentBakes</code> sees that its textures went back.</p>
   </div>
 </div>
 

@@ -55,6 +55,7 @@ namespace rasm::rhi
         bool                        getTimestamps(QueryPool* pool, uint32_t firstQuery, uint32_t count, uint64_t* nanoseconds) override;
         bool                        fillTexture(Texture* texture, const void* data) override;
         void                        updateBindlessTexture(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, Sampler* sampler) override;
+        void                        updateBindlessStorageImage(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, uint32_t mip) override;
         bool                        waitForFence(Fence* fence, uint64_t value, uint64_t timeout) override;
         uint64_t                    getFenceValue(Fence* fence) override;
         VRAMStats                   queryVRAMStats() override;

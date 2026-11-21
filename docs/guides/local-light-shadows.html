@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Local Light Shadows · RASM</title>
 <meta name="description" content="How spot lights and point lights cast shadows: a perspective shadow map at the light. The spot light's cone and its one map, the point light's cube map with six 90 degree faces, how a direction picks its face, why the faces' cameras are mirrored, why the bias grows with distance, and seamless filtering. Then how RASM does it.">
-<meta name="rasm-sources" content="src/renderer/localShadows.cpp src/renderer/localShadows.h shaders/lib/shadow.slang shaders/lib/pbr.slang shaders/passes/rasm.slang shaders/lib/core.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/uberMaterialTypes.h src/renderer/renderGraph.cpp src/scene/light.cpp src/rhi/vulkan/vulkanDevice.cpp include/rasm/scene.h include/rasm/engine.h include/rasm/light.h include/rasm/render/resource.h include/rasm/render/renderGraph.h tests/localShadowsTests.cpp examples/07_lights/main.cpp">
+<meta name="rasm-sources" content="src/renderer/localShadows.cpp src/renderer/localShadows.h shaders/lib/shadow.slang shaders/lib/cubeMap.slang shaders/lib/pbr.slang shaders/passes/rasm.slang shaders/lib/core.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/uberMaterialTypes.h src/renderer/renderGraph.cpp src/scene/light.cpp src/rhi/vulkan/vulkanDevice.cpp include/rasm/scene.h include/rasm/engine.h include/rasm/light.h include/rasm/render/resource.h include/rasm/render/renderGraph.h tests/localShadowsTests.cpp examples/07_lights/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -777,7 +777,7 @@ engine.addScenePasses(graph, scene, camera, sceneTarget, shadows, 2);
   <tr><td>Cube targets and textures</td><td><code>CUBE_FACES</code>, <code>TextureDesc</code>, <code>RenderTargetDesc</code>, <code>AttachmentOps</code> in <code>include/rasm/render/resource.h</code>; the image and its views in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>Drawing one face, keeping the others</td><td><code>PassBuilder::write</code> in <code>include/rasm/render/renderGraph.h</code>; <code>RenderGraph::assignAttachmentOps</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
   <tr><td>GPU fields</td><td><code>gfx::ShadowMap</code>, <code>gfx::Light</code>, <code>SceneData::shadowMaps</code> in <code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
-  <tr><td>The lookup</td><td><code>sampleShadow</code>, <code>sampleShadowMap</code>, <code>sampleShadowCube</code>, <code>getCubeFace</code>, <code>offsetLookup</code>, <code>getPcfWeights</code> in <code>shaders/lib/shadow.slang</code>; <code>gCubeTextures</code> and <code>fragMain</code> in <code>shaders/passes/rasm.slang</code></td></tr>
+  <tr><td>The lookup</td><td><code>sampleShadow</code>, <code>sampleShadowMap</code>, <code>sampleShadowCube</code>, <code>offsetLookup</code>, <code>getPcfWeights</code> in <code>shaders/lib/shadow.slang</code>; <code>getCubeFace</code> and the cube tables in <code>shaders/lib/cubeMap.slang</code>, which the environment bake shares; <code>gCubeTextures</code> and <code>fragMain</code> in <code>shaders/passes/rasm.slang</code></td></tr>
   <tr><td>The cone, applying the shadow</td><td><code>shadePBR</code> and <code>PBRInfo::shadows</code> in <code>shaders/lib/pbr.slang</code></td></tr>
   <tr><td>Tests</td><td><code>tests/localShadowsTests.cpp</code></td></tr>
   <tr><td>An example</td><td><code>examples/07_lights/main.cpp</code></td></tr>
@@ -787,7 +787,7 @@ engine.addScenePasses(graph, scene, camera, sceneTarget, shadows, 2);
 <div class="callout rule">
   <strong>Keep these true</strong>
   <ul>
-    <li><code>CUBE_FORWARD</code>, <code>CUBE_S</code> and <code>CUBE_T</code> exist twice, in <code>src/renderer/localShadows.cpp</code> and <code>shaders/lib/shadow.slang</code>. They must stay equal and match Vulkan's cube map face table; <code>tests/localShadowsTests.cpp</code> checks the C++ side.</li>
+    <li><code>CUBE_FORWARD</code>, <code>CUBE_S</code> and <code>CUBE_T</code> exist twice, in <code>src/renderer/localShadows.cpp</code> and <code>shaders/lib/cubeMap.slang</code>. They must stay equal and match Vulkan's cube map face table; <code>tests/localShadowsTests.cpp</code> checks the C++ side.</li>
     <li>A mirrored view must swap its culling. <code>SceneView::mirrored</code> comes from the view matrix, so a new kind of view gets it for free; a pipeline that sets its own cull mode does not.</li>
     <li>A cube render target is depth-only and square, with a fixed size. <code>addScenePasses</code> does not take one as its color target.</li>
     <li>Only the cube's first pass of the frame may drop its contents (<code>AttachmentOps::firstWrite</code>). One barrier covers the whole cube, so the later face passes must keep the faces drawn before them.</li>

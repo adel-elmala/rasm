@@ -29,6 +29,7 @@ namespace rasm
     class Renderer;
     class ShaderCompiler;
     struct GpuScene;
+    struct Environments;
     struct SceneDrawList;
     struct FrameStatsCollector;
     struct StatsOverlay;
@@ -74,13 +75,16 @@ namespace rasm
         void                        addEntityToScene(SceneHandle scene, EntityHandle entity);
         void                        addCameraToScene(SceneHandle scene, CameraHandle camera);
         void                        addLightToScene(SceneHandle scene, LightHandle light);
+        void                        setSceneEnvironment(SceneHandle scene, const SceneEnvironment& environment);
         MeshHandle                  createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices);
         MeshHandle                  loadMesh(const std::string& path);
         MeshHandle                  loadGLTF(const std::string& path);
         // Color images default to sRGB; pass R8G8B8A8_UNORM for normal/MR/AO data.
         TextureHandle               loadTexture(const std::string& path, Format format = Format::R8G8B8A8_SRGB);
+        EnvironmentHandle           loadEnvironment(const std::string& path);
         bool                        isLoaded(MeshHandle mesh) const;
         bool                        isLoaded(TextureHandle texture) const;
+        bool                        isLoaded(EnvironmentHandle environment) const;
         void                        waitForLoads();
         MaterialHandle              createMaterial(MaterialType type, std::vector<TextureHandle> textures = {}, bool doubleSided = false);
         void                        updateMaterial(MaterialHandle material, const Material& values);
@@ -188,6 +192,7 @@ namespace rasm
         Swapchain                                                   swapchain                               = {};
         std::unique_ptr<GeometryPool>                               geometryPool                            = {};
         std::unique_ptr<GpuScene>                                   gpuScene                                = {};
+        std::unique_ptr<Environments>                               environments                            = {};
         std::unique_ptr<FrameStatsCollector>                        frameStats                              = {};
         std::unique_ptr<StatsOverlay>                               statsOverlay                            = {};
         std::unique_ptr<Renderer>                                   renderer                                = {};
@@ -228,10 +233,22 @@ namespace rasm
             std::future<TextureRaw>     result;
         };
 
+        struct PendingEnvironmentLoad
+        {
+            EnvironmentHandle               handle;
+            std::string                     path;
+            std::future<EnvironmentRaw>     result;
+        };
+
         PipelineHandle              createGraphicsPipeline(const std::string& name, const std::string& shaderSource, const Format* colorFormats, Format depthFormat);
         MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
         void                        finishMeshLoad(PendingMeshLoad& load);
         void                        finishTextureLoad(PendingTextureLoad& load);
+        void                        finishEnvironmentLoad(PendingEnvironmentLoad& load);
+        bool                        createEnvironments();
+        void                        recordEnvironmentBakes();
+        void                        finishEnvironmentBakes();
+        void                        drawSky(uint32_t view);
         void                        finishLoads(bool wait);
         bool                        createGpuScene();
         void                        syncGpuScene();
@@ -259,6 +276,7 @@ namespace rasm
 
         std::vector<PendingMeshLoad>                                            pendingMeshes;
         std::unordered_map<TextureHandle, PendingTextureLoad, HandleHash>       pendingTextures;
+        std::vector<PendingEnvironmentLoad>                                     pendingEnvironments;
 
         struct Registry
         {

@@ -163,6 +163,13 @@ struct SceneData
     ShadowMap           shadowMaps[MAX_SHADOW_MAPS]; // the maps of the shadowed lights, found through Light::shadowMap
     float               lodPixelsPerUnit;   // the LOD camera's pixels per world unit at view depth 1 (lodSelection.slang)
     float4              lodDepthPlane;      // dot(lodDepthPlane, float4(p, 1)) is p's view depth from the LOD camera; 0 if orthographic
+    uint32_t            environmentSpecular;        // bindless cube of prefiltered light; INVALID_TEXTURE_INDEX: no environment
+    uint32_t            environmentSpecularMips;
+    uint32_t            environmentIrradiance;      // bindless cube
+    uint32_t            environmentSky;             // bindless cube drawn behind the scene; INVALID_TEXTURE_INDEX: no sky
+    uint32_t            brdfLut;                    // bindless 2D: the split sum's scale and bias of f0
+    float               environmentIntensity;
+    float2              environmentRotation;        // cos and sin of the environment's turn around +Y
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.
