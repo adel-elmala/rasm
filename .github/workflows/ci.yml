@@ -108,14 +108,14 @@ jobs:
         if: runner.os == 'Windows'
         continue-on-error: true
         run: |
-          exe=build/${{ matrix.debug }}/tests/rasm_tests.exe
-          net session > /dev/null 2>&1 && echo "elevated: yes" || echo "elevated: no"
-          echo "_NT_SYMBOL_PATH=${_NT_SYMBOL_PATH:-<unset>}"
-          ls build/${{ matrix.debug }}/tests/*.dll
           set +e
-          echo "--- 1: list test cases"; timeout 60 "$exe" --list-test-cases --no-intro > l1.txt 2>&1; echo "exit=$?"; tail -3 l1.txt
-          echo "--- 2: list, TRACY_NO_SYS_TRACE=1"; TRACY_NO_SYS_TRACE=1 timeout 60 "$exe" --list-test-cases --no-intro > l2.txt 2>&1; echo "exit=$?"; tail -3 l2.txt
-          echo "--- 3: run all, TRACY_NO_SYS_TRACE=1"; TRACY_NO_SYS_TRACE=1 timeout 60 "$exe" > l3.txt 2>&1; echo "exit=$?"; tail -5 l3.txt
+          dir=build/${{ matrix.debug }}/tests
+          echo "--- real exit code (cmd)"; cmd //c "build\${{ matrix.debug }}\tests\rasm_tests.exe --list-test-cases --no-intro >NUL 2>&1 & echo errorlevel=%errorlevel%"
+          echo "--- ldd not found"; for f in $dir/rasm_tests.exe $dir/*.dll; do echo "[$f]"; ldd "$f" 2>&1 | grep -iE "not found|\?\?\?" ; done
+          echo "--- dumpbin dependents"; dumpbin //nologo //dependents "$(cygpath -w $dir/rasm_tests.exe)" | grep -i "\.dll"
+          echo "--- where"; for d in msvcp140.dll msvcp140d.dll vcruntime140.dll vcruntime140d.dll vcruntime140_1.dll vcruntime140_1d.dll ucrtbased.dll vulkan-1.dll; do echo "$d:"; where $d 2>&1 | head -3; done
+          echo "--- versions"; powershell -NoProfile -Command "foreach (\$f in @('C:\Windows\System32\msvcp140.dll','C:\Windows\System32\msvcp140d.dll','C:\Windows\System32\vcruntime140d.dll')) { if (Test-Path \$f) { \$f + ' ' + (Get-Item \$f).VersionInfo.FileVersion } else { \$f + ' missing' } }"
+          echo "--- redist"; ls "$VCToolsRedistDir" "$VCToolsRedistDir/x64" "$VCToolsRedistDir/debug_nonredist/x64" 2>&1 | head -20
           exit 0
 
       - name: Test ${{ matrix.debug }}
