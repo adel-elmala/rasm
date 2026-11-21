@@ -1,6 +1,6 @@
 ---
 name: resolve-goal
-description: Take one open goal from docs/development_plan.md all the way to a pull request. Explain the goal and the plan to the user in a visual, plain-English way and wait for an OK, build it, verify it and sync the docs, review the branch at level high in a fresh agent, fix the findings, then push and open a concise, visual PR on the rasm repo. Commits and the PR have no attribution lines. Use when the user says "resolve a goal", "do the next plan item", "work on <plan item>" or names an unchecked item of the development plan.
+description: Take one open goal from docs/development_plan.md all the way to a pull request. Explain the goal and the plan to the user in a visual, plain-English way and wait for an OK, build it, verify it and sync the docs, review the branch at level high in a fresh agent, fix the findings, then push and open a concise PR on the rasm repo that explains the change with SVG diagrams and before/after screenshots. Commits and the PR have no attribution lines. Use when the user says "resolve a goal", "do the next plan item", "work on <plan item>" or names an unchecked item of the development plan.
 ---
 
 # Resolve a goal from the plan
@@ -102,9 +102,41 @@ Do not tell it what you built or why. Wait for its result.
 
 ## 8. Open the PR
 
-`git push -u origin <branch>`, then `gh pr create --base main --title "<type>: <summary>" --body-file <file>`
-with the body written to the scratchpad. The PR body has **no attribution lines** (no "Generated with Claude
-Code", no `Co-Authored-By`). Keep it short and visual:
+The PR body explains the change with pictures, not with Mermaid. GitHub shows SVG and PNG files as images when they
+live in the repo, so the pictures go to the orphan `pr-assets` branch and the body links them by commit hash.
+
+### 8.1 Make the pictures
+
+| Picture | When | How |
+|---|---|---|
+| **How it works** (SVG) | always | Today → after of the part of the engine that changes: passes, data flow, memory, API. Copy [assets/diagram-template.svg](assets/diagram-template.svg) and edit it. |
+| **The idea** (SVG) | a new concept or algorithm | One picture of the rule itself (the sort network, the cube faces, the split sum). Reuse the guide's lab picture if it has one. |
+| **Before / after** (PNG) | the image changes | From `verify-change`: `build/verify/<preset>/baseline/<name>.png` and `screens/<name>.png`. Add `diffs/<name>_diff.png` when the change is subtle. |
+
+SVG rules, so the pictures read well on GitHub in both themes:
+- Keep the template's solid background card and its colors (the light tokens of `docs/assets/style.css`):
+  `gpu` passes, `cpu` work, `mem` targets and buffers, `shader`, and `new` (dashed accent) for what this PR adds.
+- 960 px wide, height as needed. Text 12 px or larger, short plain labels, system fonts only.
+- No `<script>`, no external images or fonts (GitHub blocks them).
+- Render each SVG to PNG and look at it with Read before you publish it:
+  `"C:/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --hide-scrollbars --window-size=960,<h> --screenshot=<out.png> file:///<abs path to svg>`
+  (on macOS: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`). Fix overlaps and cut-off text.
+
+Write the pictures to the scratchpad, not the repo.
+
+### 8.2 Publish them and open the PR
+
+```
+git push -u origin <branch>
+python .claude/skills/resolve-goal/scripts/pr_assets.py <branch> <files...>
+```
+
+The script commits the files to `pr-assets/<branch with / as ->/` from a temporary worktree (your checkout is not
+touched), pushes, and prints one `<img>` tag per file. Paste the tags into the body, then
+`gh pr create --base main --title "<type>: <summary>" --body-file <file>` with the body in the scratchpad. To change a
+picture later, publish it again and `gh pr edit <N> --body-file <file>` with the new tags.
+
+The PR body has **no attribution lines** (no "Generated with Claude Code", no `Co-Authored-By`). Keep it short:
 
 ````markdown
 ## What this lets RASM do
@@ -114,10 +146,15 @@ and how they turn it on (the API call or config field).>
 
 ## How it works
 
-```mermaid
-flowchart LR
-  A[Scene passes] -->|HDR color| B[Tone-map pass] --> C[Swapchain]
-```
+<img src="https://raw.githubusercontent.com/<owner>/<repo>/<sha>/<folder>/how-it-works.svg" width="860" alt="how-it-works">
+
+<1-3 short lines that the picture does not say.>
+
+## Before / after
+
+| Before | After |
+|---|---|
+| <img src=".../before.png" width="420"> | <img src=".../after.png" width="420"> |
 
 ## Changes
 
@@ -135,10 +172,13 @@ flowchart LR
 | Unit tests | pass |
 | Examples, validation on | 0 messages |
 | Image vs baseline | same / changed as intended |
+| CI (windows-latest, macos-latest) | pass |
 | Review (high) | N findings, N fixed, N not bugs, N logged |
 
 Plan: <phase and item>. Review IDs: <IDs or none>.
 ````
+
+Leave out "Before / after" when the image does not change, and add "The idea" after "How it works" when you made one.
 
 Give the user the PR link and a short final report: what changed, the check results, the review table, and
 anything left open.
