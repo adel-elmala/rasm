@@ -107,32 +107,54 @@ live in the repo, so the pictures go to the orphan `pr-assets` branch and the bo
 
 ### 8.1 Make the pictures
 
-| Picture | When | How |
-|---|---|---|
-| **How it works** (SVG) | always | Today → after of the part of the engine that changes: passes, data flow, memory, API. Copy [assets/diagram-template.svg](assets/diagram-template.svg) and edit it. |
-| **The idea** (SVG) | a new concept or algorithm | One picture of the rule itself (the sort network, the cube faces, the split sum). Reuse the guide's lab picture if it has one. |
-| **Before / after** (PNG) | the image changes | From `verify-change`: `build/verify/<preset>/baseline/<name>.png` and `screens/<name>.png`. Add `diffs/<name>_diff.png` when the change is subtle. |
+The pictures do the explaining, like the figures of the guides. A reader should understand what the PR does and how
+from its pictures alone; the text names things and gives numbers. There is no template and no fixed set: choose
+the pictures this change needs, usually one to three.
 
-SVG rules, so the pictures read well on GitHub in both themes:
-- Keep the template's solid background card and its colors (the light tokens of `docs/assets/style.css`):
-  `gpu` passes, `cpu` work, `mem` targets and buffers, `shader`, and `new` (dashed accent) for what this PR adds.
-- 960 px wide, height as needed. Text 12 px or larger, short plain labels, system fonts only.
-- No `<script>`, no external images or fonts (GitHub blocks them).
-- Render each SVG to PNG and look at it with Read before you publish it:
-  `"C:/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --hide-scrollbars --window-size=960,<h> --screenshot=<out.png> file:///<abs path to svg>`
-  (on macOS: `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`). Fix overlaps and cut-off text.
+**Draw the real thing**, the rule of [visuals.md](../sync-docs/visuals.md): the scene from the side or from above,
+the pixels, the bytes, the grid, the queue in time. Boxes with words in them and a row of arrows only say an order
+of names; they are the last choice, only for an order that is itself the point, and even then they show what moves
+between the steps. Ask: what would a contributor need to *see* to understand this change?
 
-Write the pictures to the scratchpad, not the repo.
+| The PR... | A picture that explains it |
+|---|---|
+| adds a rendering effect | what happens to the light or the pixels: rays, surfaces, layers that blend, one pixel's math worked out |
+| changes what is drawn or culled | the scene from above with the camera, objects marked kept / culled, and why |
+| changes data or memory | the bytes: struct fields to scale, cache lines, buffers and the offsets into them |
+| adds an algorithm | its steps on a small real input (a stepper drawn as panels), or the rule as a picture |
+| changes GPU work in the frame | passes on a time line with what each reads and writes, not only their names |
+| fixes a bug | wrong / right side by side: the symptom, and the cause that makes it |
+| changes the API | before / after code in fenced code blocks; a picture only for what the call does |
+
+Also:
+- **Reuse the guide.** A figure from the concept guide this PR adds or changes can go in as it is: copy its `<svg>`.
+- **Before / after screenshots** when the image changes, from `verify-change`:
+  `build/verify/<preset>/baseline/<name>.png` and `screens/<name>.png`; add `diffs/<name>_diff.png` when the change
+  is subtle. Crop or downscale big ones (5 MB limit).
+
+How to draw: exactly like a guide figure. Follow the "Drawing SVGs" rules of `visuals.md`: `viewBox="0 0 760 H"`,
+only classes from `docs/assets/style.css`, the color meanings, arrowheads `#ah`, `#ah-gpu`, ..., text that fits.
+Write no `<style>`, colors or `<defs>` markers: `pr_assets.py` bakes the guide's stylesheet (light and dark),
+the markers, a margin and a background card into the file, because GitHub shows an SVG without the page's CSS.
+
+Write the pictures to the scratchpad, not the repo, then look at them:
+
+```
+python .claude/skills/resolve-goal/scripts/pr_assets.py preview <files...>
+```
+
+It renders each SVG in the light and the dark theme to `build/pr-assets/preview/`. Read both PNGs and fix text that
+overflows, labels on lines, shapes hard to see in one theme, and anything a first-time reader would not get.
 
 ### 8.2 Publish them and open the PR
 
 ```
 git push -u origin <branch>
-python .claude/skills/resolve-goal/scripts/pr_assets.py <branch> <files...>
+python .claude/skills/resolve-goal/scripts/pr_assets.py publish <branch> <files...>
 ```
 
-The script commits the files to `pr-assets/<branch with / as ->/` from a temporary worktree (your checkout is not
-touched), pushes, and prints one `<img>` tag per file. Paste the tags into the body, then
+`publish` bakes the SVGs as `preview` does, commits the files to `pr-assets/<branch with / as ->/` from a temporary
+worktree (your checkout is not touched), pushes, and prints one `<img>` tag per file. Paste the tags into the body, then
 `gh pr create --base main --title "<type>: <summary>" --body-file <file>` with the body in the scratchpad. To change a
 picture later, publish it again and `gh pr edit <N> --body-file <file>` with the new tags.
 
@@ -146,9 +168,9 @@ and how they turn it on (the API call or config field).>
 
 ## How it works
 
-<img src="https://raw.githubusercontent.com/<owner>/<repo>/<sha>/<folder>/how-it-works.svg" width="860" alt="how-it-works">
+<img src="https://raw.githubusercontent.com/<owner>/<repo>/<sha>/<folder>/<picture>.svg" width="860" alt="<what it shows>">
 
-<1-3 short lines that the picture does not say.>
+<one or two plain lines per picture: what to look at. Repeat for each picture.>
 
 ## Before / after
 
@@ -178,7 +200,7 @@ and how they turn it on (the API call or config field).>
 Plan: <phase and item>. Review IDs: <IDs or none>.
 ````
 
-Leave out "Before / after" when the image does not change, and add "The idea" after "How it works" when you made one.
+Leave out "Before / after" when the image does not change.
 
 Give the user the PR link and a short final report: what changed, the check results, the review table, and
 anything left open.
