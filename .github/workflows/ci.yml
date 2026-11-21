@@ -109,24 +109,26 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          $exe = (Resolve-Path "build/${{ matrix.debug }}/tests/rasm_tests.exe").Path
-          $names = & $exe --list-test-cases --no-intro | Where-Object { $_ -and $_ -notmatch '^(\[doctest\]|====)' }
-          "test cases: $($names.Count)"
-          $hangs = 0
-          foreach ($n in $names) {
-            $filter = $n -replace '[,"\\[\]]', '?'
+          $start = Get-Date
+          foreach ($cfg in @("${{ matrix.debug }}")) {
+            $exe = (Resolve-Path "build/$cfg/tests/rasm_tests.exe").Path
             $psi = [System.Diagnostics.ProcessStartInfo]::new($exe)
-            $psi.ArgumentList.Add("--test-case=$filter")
-            $psi.ArgumentList.Add("--no-intro")
+            $psi.ArgumentList.Add("--list-test-cases")
             $psi.RedirectStandardOutput = $true
             $psi.RedirectStandardError = $true
             $psi.UseShellExecute = $false
             $p = [System.Diagnostics.Process]::Start($psi)
             $out = $p.StandardOutput.ReadToEndAsync()
             $err = $p.StandardError.ReadToEndAsync()
-            if (-not $p.WaitForExit(20000)) { "HANG: $n"; $p.Kill($true); $hangs++; if ($hangs -ge 4) { "stopping after 4 hangs"; break }; continue }
-            if ($p.ExitCode -ne 0) { "FAIL($($p.ExitCode)): $n"; $out.Result; $err.Result }
+            if (-not $p.WaitForExit(30000)) { "$cfg HANG"; $p.Kill($true) } else { "$cfg exit=0x{0:X8}" -f $p.ExitCode }
+            "stdout: " + ($out.Result -split "`n" | Select-Object -First 3) -join ' | '
+            "stderr: " + $err.Result
           }
+          Start-Sleep 5
+          "--- System: Application Popup"
+          Get-WinEvent -FilterHashtable @{LogName='System'; StartTime=$start} -ErrorAction SilentlyContinue | Where-Object { $_.ProviderName -match 'Popup' } | Select-Object -First 5 | ForEach-Object { $_.Message }
+          "--- Application: errors"
+          Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=$start} -ErrorAction SilentlyContinue | Where-Object { $_.ProviderName -match 'Application Error|Windows Error Reporting|SideBySide' } | Select-Object -First 5 | ForEach-Object { $_.ProviderName + ': ' + $_.Message }
           "done"
           exit 0
 
