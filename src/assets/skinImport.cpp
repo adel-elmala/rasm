@@ -69,7 +69,7 @@ namespace rasm
         return skin >= 0 && static_cast<size_t>(skin) < model.skins.size() ? skin : -1;
     }
 
-    // JOINTS_n and WEIGHTS_n come in pairs of 4 influences each. A vertex keeps its 4 largest (one warning per
+    // JOINTS_n and WEIGHTS_n come in pairs of 4 influences each. A vertex keeps its 4 largest joints (one warning per
     // primitive that has more), and a joint index past the skin's joints loses its weight.
     bool readSkinVertices(const tinygltf::Model &model, const tinygltf::Primitive &primitive, size_t vertexCount, uint32_t jointCount, const std::string &primitiveName,
                           std::vector<SkinVertex> &out)
@@ -123,7 +123,14 @@ namespace rasm
                         ++outOfRange;
                         continue;
                     }
-                    influences.push_back({.joint = static_cast<uint32_t>(joint), .weight = weight});
+                    // A joint named in two sets is one influence with both weights.
+                    const auto joined = static_cast<uint32_t>(joint);
+                    auto same = std::find_if(influences.begin(), influences.end(), [joined](const Influence &influence)
+                                             { return influence.joint == joined; });
+                    if (same != influences.end())
+                        same->weight += weight;
+                    else
+                        influences.push_back({.joint = joined, .weight = weight});
                 }
             }
             if (influences.size() > SKIN_INFLUENCES)

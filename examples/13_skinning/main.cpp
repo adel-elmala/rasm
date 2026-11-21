@@ -217,7 +217,7 @@ int main(int argc, char **argv)
             continue;
 
         const rasm::FrameStats &stats = engine.getFrameStats();
-        if (frame >= 300)
+        if (frame >= 300 && frame < 600)
         {
             cpuSum += stats.cpuFrameMs;
             for (uint32_t i = 0; i < stats.gpuTimerCount; ++i)

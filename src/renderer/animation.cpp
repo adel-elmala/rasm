@@ -657,8 +657,9 @@ namespace rasm
             { recordSkinning(); });
     }
 
-    // A shader error logs and retries the next frame; until then the animated parts are not drawn right. The Skin
-    // pipeline is made here too, so the Animate pass runs only when the Skin pass can follow it.
+    // A shader error logs and retries the next frame; until then the animated parts are not drawn right. Once an
+    // entity with skinned vertices plays, the Skin pipeline is made here too, so the Animate pass runs only when the
+    // Skin pass can follow it.
     void Engine::recordAnimation()
     {
         ZoneScoped;
@@ -667,9 +668,9 @@ namespace rasm
             return;
         if (!animation.pipeline.isValid())
             animation.pipeline = createComputePipeline("animate", readFile(pathFromUtf8(config.shaderDir) / "passes/animate.slang"), "animateMain");
-        if (!animation.skinPipeline.isValid())
+        if (animation.skinnedCount > 0 && !animation.skinPipeline.isValid())
             animation.skinPipeline = createComputePipeline("skin", readFile(pathFromUtf8(config.shaderDir) / "passes/skin.slang"), "skinMain");
-        if (!animation.pipeline.isValid() || !animation.skinPipeline.isValid())
+        if (!animation.pipeline.isValid() || (animation.skinnedCount > 0 && !animation.skinPipeline.isValid()))
         {
             spdlog::error("Failed to create the animation pipelines; animated meshes are not posed until they compile.");
             return;

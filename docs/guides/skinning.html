@@ -322,7 +322,7 @@
     <text x="120" y="67" class="mid small">4 largest, scaled to 1</text>
     <line x1="220" y1="54" x2="258" y2="54" class="arrow cpu" marker-end="url(#ah-cpu)"/>
     <rect x="260" y="34" width="232" height="40" rx="6" class="mem"/>
-    <text x="376" y="52" class="mid small">skin stream: 16 B per vertex</text>
+    <text x="376" y="52" class="mid small">skin stream, 16 B per vertex, read by Skin</text>
     <text x="376" y="67" class="mid mono small">4 × u16 joints · 4 × unorm16</text>
     <rect x="510" y="34" width="230" height="40" rx="6" class="mem"/>
     <text x="625" y="52" class="mid small">animation pool</text>
@@ -339,7 +339,6 @@
     <circle cx="424" cy="147" r="10" class="badge"/><text x="424" y="151" class="badge-n">3</text>
     <text x="442" y="143" class="small">per skinned sub-mesh: InstanceTransform</text>
     <text x="442" y="158" class="small">entity matrix, bounds, skinnedVertex</text>
-    <line x1="376" y1="74" x2="376" y2="116" class="arrow mem" marker-end="url(#ah-mem)"/>
     <line x1="625" y1="74" x2="625" y2="116" class="arrow mem" marker-end="url(#ah-mem)"/>
 
     <rect x="20" y="200" width="230" height="40" rx="6" class="mem"/>
@@ -382,7 +381,7 @@ if (run >= 0)
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Joints and weights</td><td>up to 4 per vertex, adding up to 1</td><td><code>readSkinVertices</code> reads every pair of <code>JOINTS_n</code> / <code>WEIGHTS_n</code>, drops a weight whose joint is past the skin's joints, keeps the 4 largest (one warning per primitive that has more) and scales them to 1. A <code>SkinVertex</code> stores 4 16-bit joints and 4 UNORM16 weights that add up to 65535 exactly: the rounding's rest goes to the largest. A vertex with no weight follows joint 0.</td></tr>
+  <tr><td>Joints and weights</td><td>up to 4 per vertex, adding up to 1</td><td><code>readSkinVertices</code> reads every pair of <code>JOINTS_n</code> / <code>WEIGHTS_n</code>, adds up the weights of a joint named in two sets, drops a weight whose joint is past the skin's joints, keeps the 4 largest (one warning per primitive that has more) and scales them to 1. A <code>SkinVertex</code> stores 4 16-bit joints and 4 UNORM16 weights that add up to 65535 exactly: the rounding's rest goes to the largest. A vertex with no weight follows joint 0.</td></tr>
   <tr><td>Skins</td><td>joints and inverse bind matrices</td><td><code>importSkinJoints</code> puts each skin a sub-mesh uses once in <code>AnimationRaw::joints</code>: its kept node and its inverse bind matrix (the identity without the accessor). A skin's joints are always kept nodes, moved by a clip or not. A skin with a joint outside the scene leaves its sub-meshes unskinned.</td></tr>
   <tr><td>The mesh's node</td><td>ignored</td><td>A skinned primitive's <code>SubGLTFRaw::transform</code> is the identity. The entity's matrix places the posed skin.</td></tr>
   <tr><td>Where it skins</td><td>once per frame</td><td>The <code>Skin</code> pass (<code>skinMain</code>), an async compute pass right after <code>Animate</code>, writes 64-byte vertices to <code>GpuAnimation::skinnedVertices</code> of the slot. A group is a row of the animated entity table (x) and 64 of its skinned vertices (y), so an entity may have up to 65 535 · 64 of them. A stopped row returns at once.</td></tr>

@@ -69,7 +69,9 @@ void skinMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         VertexFull posed = source;
         posed.pos = mul(m, float4(source.pos, 1.0));
         posed.normal = mul(getNormalMatrix(m3), source.normal);
-        posed.tangent = float4(mul(m3, source.tangent.xyz), source.tangent.w);
+        // A mirroring mix (a joint scaled through 0) turns the bitangent around, as the vertex shader does for a
+        // mirroring entity.
+        posed.tangent = float4(mul(m3, source.tangent.xyz), determinant(m3) < 0.0 ? -source.tangent.w : source.tangent.w);
         frame->skinnedVertices[entity.firstSkinnedVertex + vertex] = posed;
         return;
     }
