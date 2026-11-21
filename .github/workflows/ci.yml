@@ -104,6 +104,20 @@ jobs:
       - name: Build ${{ matrix.debug }}
         run: cmake --build --preset ${{ matrix.debug }}
 
+      - name: DIAG hang
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: |
+          exe=build/${{ matrix.debug }}/tests/rasm_tests.exe
+          net session > /dev/null 2>&1 && echo "elevated: yes" || echo "elevated: no"
+          echo "_NT_SYMBOL_PATH=${_NT_SYMBOL_PATH:-<unset>}"
+          ls build/${{ matrix.debug }}/tests/*.dll
+          set +e
+          echo "--- 1: list test cases"; timeout 60 "$exe" --list-test-cases --no-intro > l1.txt 2>&1; echo "exit=$?"; tail -3 l1.txt
+          echo "--- 2: list, TRACY_NO_SYS_TRACE=1"; TRACY_NO_SYS_TRACE=1 timeout 60 "$exe" --list-test-cases --no-intro > l2.txt 2>&1; echo "exit=$?"; tail -3 l2.txt
+          echo "--- 3: run all, TRACY_NO_SYS_TRACE=1"; TRACY_NO_SYS_TRACE=1 timeout 60 "$exe" > l3.txt 2>&1; echo "exit=$?"; tail -5 l3.txt
+          exit 0
+
       - name: Test ${{ matrix.debug }}
         run: ctest --preset ${{ matrix.debug }}
 
