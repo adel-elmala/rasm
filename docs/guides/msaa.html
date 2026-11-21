@@ -1,0 +1,776 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MSAA and Alpha-to-Coverage · RASM</title>
+<meta name="description" content="How multisample anti-aliasing works: coverage and depth per sample, shading once per pixel, the memory it takes, why a plain resolve of HDR light keeps bright edges jagged and a brightness-weighted resolve does not, alpha-to-coverage with a sharpened alpha for cut-outs, and passes that read a multisampled depth. Then how RASM does it.">
+<meta name="rasm-sources" content="src/renderer/msaaResolve.cpp shaders/passes/msaaResolve.slang shaders/passes/rasm.slang shaders/passes/hiz.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/renderer.cpp src/rhi/renderContext.cpp src/rhi/vulkan/vulkanDevice.cpp src/engine.cpp include/rasm/types.h include/rasm/engine.h include/rasm/render/resource.h include/rasm/render/renderContext.h src/renderer/uberMaterialTypes.h examples/09_gltf_materials/main.cpp examples/02_gltf/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/msaa.js"></script>
+</head>
+<body data-root="../" data-page="guides/msaa.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>MSAA and alpha-to-coverage</h1>
+<p class="lead">A pixel is a small square, but the rasterizer asks one question per pixel: is its center inside the triangle? The answer is yes or no, so a slanted edge becomes a staircase. <b>Multisample anti-aliasing</b> (MSAA) asks the question at several points in the pixel and keeps the share that is covered, while it still shades each pixel only once. This page explains how, what it costs, how to turn the samples into one color when the light is HDR, and how cut-out materials (leaves, fences) get smooth edges with <b>alpha-to-coverage</b>. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>MSAA keeps <b>coverage and depth per sample</b> (2, 4 or 8 per pixel) and runs the fragment shader <b>once per pixel</b> per triangle. Edges get the share of the pixel they cover; the inside of a triangle costs what it did.</li>
+    <li>The image holds every sample, so it takes N times the memory. A <b>resolve</b> turns the samples of each pixel into one color for the passes after it.</li>
+    <li>A plain mean of HDR samples keeps bright edges jagged: one sky sample of 8 outweighs three dark ones. Weighting each sample by <code class="lang-text">1 / (1 + brightness)</code> keeps the edge's in-between shade after tone mapping.</li>
+    <li>MSAA does not smooth a cut-out's edge, which <code class="lang-text">discard</code> makes inside a triangle. <b>Alpha-to-coverage</b> covers samples by alpha instead; a <b>sharpened</b> alpha keeps the edge where the cutoff puts it.</li>
+    <li>A pass that reads the depth (like a Hi-Z build) must read every sample, or a resolved depth: there is no plain mean of depths.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>The problem: one sample per pixel</h2>
+
+<p>A triangle's edge crosses a grid of pixels. With one sample at each pixel's center, a pixel is either fully the triangle's color or not at all. With four samples, a pixel the edge cuts takes the triangle's color in proportion to the samples inside.</p>
+
+<div class="legend">
+  <span><i class="ok"></i>a sample inside the triangle</span>
+  <span><i class="bad"></i>a sample outside</span>
+  <span><i class="hot"></i>the triangle's edge</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Two grids of 10 by 6 pixels with the same slanted triangle edge. Left, one sample per pixel at its center: each pixel is either fully dark or empty, which makes a staircase. Right, four samples per pixel: the pixels the edge cuts are partly dark, in steps of a quarter, so the staircase turns into a ramp.">
+    <text x="20" y="30" class="title">1 sample per pixel: all or nothing</text>
+        <rect x="20" y="40" width="28" height="28" class="paper"/>
+        <rect x="48" y="40" width="28" height="28" class="paper"/>
+        <rect x="76" y="40" width="28" height="28" class="paper"/>
+        <rect x="104" y="40" width="28" height="28" class="paper"/>
+        <rect x="132" y="40" width="28" height="28" class="paper"/>
+        <rect x="160" y="40" width="28" height="28" class="paper"/>
+        <rect x="188" y="40" width="28" height="28" class="paper"/>
+        <rect x="216" y="40" width="28" height="28" class="paper"/>
+        <rect x="244" y="40" width="28" height="28" class="paper"/>
+        <rect x="272" y="40" width="28" height="28" class="paper"/>
+        <rect x="20" y="68" width="28" height="28" class="solid"/>
+        <rect x="48" y="68" width="28" height="28" class="solid"/>
+        <rect x="76" y="68" width="28" height="28" class="paper"/>
+        <rect x="104" y="68" width="28" height="28" class="paper"/>
+        <rect x="132" y="68" width="28" height="28" class="paper"/>
+        <rect x="160" y="68" width="28" height="28" class="paper"/>
+        <rect x="188" y="68" width="28" height="28" class="paper"/>
+        <rect x="216" y="68" width="28" height="28" class="paper"/>
+        <rect x="244" y="68" width="28" height="28" class="paper"/>
+        <rect x="272" y="68" width="28" height="28" class="paper"/>
+        <rect x="20" y="96" width="28" height="28" class="solid"/>
+        <rect x="48" y="96" width="28" height="28" class="solid"/>
+        <rect x="76" y="96" width="28" height="28" class="solid"/>
+        <rect x="104" y="96" width="28" height="28" class="solid"/>
+        <rect x="132" y="96" width="28" height="28" class="paper"/>
+        <rect x="160" y="96" width="28" height="28" class="paper"/>
+        <rect x="188" y="96" width="28" height="28" class="paper"/>
+        <rect x="216" y="96" width="28" height="28" class="paper"/>
+        <rect x="244" y="96" width="28" height="28" class="paper"/>
+        <rect x="272" y="96" width="28" height="28" class="paper"/>
+        <rect x="20" y="124" width="28" height="28" class="solid"/>
+        <rect x="48" y="124" width="28" height="28" class="solid"/>
+        <rect x="76" y="124" width="28" height="28" class="solid"/>
+        <rect x="104" y="124" width="28" height="28" class="solid"/>
+        <rect x="132" y="124" width="28" height="28" class="solid"/>
+        <rect x="160" y="124" width="28" height="28" class="solid"/>
+        <rect x="188" y="124" width="28" height="28" class="paper"/>
+        <rect x="216" y="124" width="28" height="28" class="paper"/>
+        <rect x="244" y="124" width="28" height="28" class="paper"/>
+        <rect x="272" y="124" width="28" height="28" class="paper"/>
+        <rect x="20" y="152" width="28" height="28" class="solid"/>
+        <rect x="48" y="152" width="28" height="28" class="solid"/>
+        <rect x="76" y="152" width="28" height="28" class="solid"/>
+        <rect x="104" y="152" width="28" height="28" class="solid"/>
+        <rect x="132" y="152" width="28" height="28" class="solid"/>
+        <rect x="160" y="152" width="28" height="28" class="solid"/>
+        <rect x="188" y="152" width="28" height="28" class="solid"/>
+        <rect x="216" y="152" width="28" height="28" class="solid"/>
+        <rect x="244" y="152" width="28" height="28" class="paper"/>
+        <rect x="272" y="152" width="28" height="28" class="paper"/>
+        <rect x="20" y="180" width="28" height="28" class="solid"/>
+        <rect x="48" y="180" width="28" height="28" class="solid"/>
+        <rect x="76" y="180" width="28" height="28" class="solid"/>
+        <rect x="104" y="180" width="28" height="28" class="solid"/>
+        <rect x="132" y="180" width="28" height="28" class="solid"/>
+        <rect x="160" y="180" width="28" height="28" class="solid"/>
+        <rect x="188" y="180" width="28" height="28" class="solid"/>
+        <rect x="216" y="180" width="28" height="28" class="solid"/>
+        <rect x="244" y="180" width="28" height="28" class="solid"/>
+        <rect x="272" y="180" width="28" height="28" class="solid"/>
+        <path d="M20,40V208M48,40V208M76,40V208M104,40V208M132,40V208M160,40V208M188,40V208M216,40V208M244,40V208M272,40V208M300,40V208M20,40H300M20,68H300M20,96H300M20,124H300M20,152H300M20,180H300M20,208H300" class="grid"/>
+        <line x1="20" y1="56.8" x2="300.0" y2="196.8" class="arrow hot thick"/>
+        <circle cx="34.0" cy="54.0" r="2.2" class="bad"/>
+        <circle cx="62.0" cy="54.0" r="2.2" class="bad"/>
+        <circle cx="90.0" cy="54.0" r="2.2" class="bad"/>
+        <circle cx="118.0" cy="54.0" r="2.2" class="bad"/>
+        <circle cx="146.0" cy="54.0" r="2.2" class="bad"/>
+        <circle cx="174.0" cy="54.0" r="2.2" class="bad"/>
+        <circle cx="202.0" cy="54.0" r="2.2" class="bad"/>
+        <circle cx="230.0" cy="54.0" r="2.2" class="bad"/>
+        <circle cx="258.0" cy="54.0" r="2.2" class="bad"/>
+        <circle cx="286.0" cy="54.0" r="2.2" class="bad"/>
+        <circle cx="34.0" cy="82.0" r="2.2" class="ok"/>
+        <circle cx="62.0" cy="82.0" r="2.2" class="ok"/>
+        <circle cx="90.0" cy="82.0" r="2.2" class="bad"/>
+        <circle cx="118.0" cy="82.0" r="2.2" class="bad"/>
+        <circle cx="146.0" cy="82.0" r="2.2" class="bad"/>
+        <circle cx="174.0" cy="82.0" r="2.2" class="bad"/>
+        <circle cx="202.0" cy="82.0" r="2.2" class="bad"/>
+        <circle cx="230.0" cy="82.0" r="2.2" class="bad"/>
+        <circle cx="258.0" cy="82.0" r="2.2" class="bad"/>
+        <circle cx="286.0" cy="82.0" r="2.2" class="bad"/>
+        <circle cx="34.0" cy="110.0" r="2.2" class="ok"/>
+        <circle cx="62.0" cy="110.0" r="2.2" class="ok"/>
+        <circle cx="90.0" cy="110.0" r="2.2" class="ok"/>
+        <circle cx="118.0" cy="110.0" r="2.2" class="ok"/>
+        <circle cx="146.0" cy="110.0" r="2.2" class="bad"/>
+        <circle cx="174.0" cy="110.0" r="2.2" class="bad"/>
+        <circle cx="202.0" cy="110.0" r="2.2" class="bad"/>
+        <circle cx="230.0" cy="110.0" r="2.2" class="bad"/>
+        <circle cx="258.0" cy="110.0" r="2.2" class="bad"/>
+        <circle cx="286.0" cy="110.0" r="2.2" class="bad"/>
+        <circle cx="34.0" cy="138.0" r="2.2" class="ok"/>
+        <circle cx="62.0" cy="138.0" r="2.2" class="ok"/>
+        <circle cx="90.0" cy="138.0" r="2.2" class="ok"/>
+        <circle cx="118.0" cy="138.0" r="2.2" class="ok"/>
+        <circle cx="146.0" cy="138.0" r="2.2" class="ok"/>
+        <circle cx="174.0" cy="138.0" r="2.2" class="ok"/>
+        <circle cx="202.0" cy="138.0" r="2.2" class="bad"/>
+        <circle cx="230.0" cy="138.0" r="2.2" class="bad"/>
+        <circle cx="258.0" cy="138.0" r="2.2" class="bad"/>
+        <circle cx="286.0" cy="138.0" r="2.2" class="bad"/>
+        <circle cx="34.0" cy="166.0" r="2.2" class="ok"/>
+        <circle cx="62.0" cy="166.0" r="2.2" class="ok"/>
+        <circle cx="90.0" cy="166.0" r="2.2" class="ok"/>
+        <circle cx="118.0" cy="166.0" r="2.2" class="ok"/>
+        <circle cx="146.0" cy="166.0" r="2.2" class="ok"/>
+        <circle cx="174.0" cy="166.0" r="2.2" class="ok"/>
+        <circle cx="202.0" cy="166.0" r="2.2" class="ok"/>
+        <circle cx="230.0" cy="166.0" r="2.2" class="ok"/>
+        <circle cx="258.0" cy="166.0" r="2.2" class="bad"/>
+        <circle cx="286.0" cy="166.0" r="2.2" class="bad"/>
+        <circle cx="34.0" cy="194.0" r="2.2" class="ok"/>
+        <circle cx="62.0" cy="194.0" r="2.2" class="ok"/>
+        <circle cx="90.0" cy="194.0" r="2.2" class="ok"/>
+        <circle cx="118.0" cy="194.0" r="2.2" class="ok"/>
+        <circle cx="146.0" cy="194.0" r="2.2" class="ok"/>
+        <circle cx="174.0" cy="194.0" r="2.2" class="ok"/>
+        <circle cx="202.0" cy="194.0" r="2.2" class="ok"/>
+        <circle cx="230.0" cy="194.0" r="2.2" class="ok"/>
+        <circle cx="258.0" cy="194.0" r="2.2" class="ok"/>
+        <circle cx="286.0" cy="194.0" r="2.2" class="ok"/>
+    <text x="400" y="30" class="title">4 samples per pixel: the share covered</text>
+        <rect x="400" y="40" width="28" height="28" class="paper"/>
+        <rect x="428" y="40" width="28" height="28" class="paper"/>
+        <rect x="456" y="40" width="28" height="28" class="paper"/>
+        <rect x="484" y="40" width="28" height="28" class="paper"/>
+        <rect x="512" y="40" width="28" height="28" class="paper"/>
+        <rect x="540" y="40" width="28" height="28" class="paper"/>
+        <rect x="568" y="40" width="28" height="28" class="paper"/>
+        <rect x="596" y="40" width="28" height="28" class="paper"/>
+        <rect x="624" y="40" width="28" height="28" class="paper"/>
+        <rect x="652" y="40" width="28" height="28" class="paper"/>
+        <rect x="400" y="68" width="28" height="28" class="solid"/>
+        <rect x="428" y="68" width="28" height="28" class="solid o-50"/>
+        <rect x="456" y="68" width="28" height="28" class="paper"/>
+        <rect x="484" y="68" width="28" height="28" class="paper"/>
+        <rect x="512" y="68" width="28" height="28" class="paper"/>
+        <rect x="540" y="68" width="28" height="28" class="paper"/>
+        <rect x="568" y="68" width="28" height="28" class="paper"/>
+        <rect x="596" y="68" width="28" height="28" class="paper"/>
+        <rect x="624" y="68" width="28" height="28" class="paper"/>
+        <rect x="652" y="68" width="28" height="28" class="paper"/>
+        <rect x="400" y="96" width="28" height="28" class="solid"/>
+        <rect x="428" y="96" width="28" height="28" class="solid"/>
+        <rect x="456" y="96" width="28" height="28" class="solid"/>
+        <rect x="484" y="96" width="28" height="28" class="solid o-50"/>
+        <rect x="512" y="96" width="28" height="28" class="paper"/>
+        <rect x="540" y="96" width="28" height="28" class="paper"/>
+        <rect x="568" y="96" width="28" height="28" class="paper"/>
+        <rect x="596" y="96" width="28" height="28" class="paper"/>
+        <rect x="624" y="96" width="28" height="28" class="paper"/>
+        <rect x="652" y="96" width="28" height="28" class="paper"/>
+        <rect x="400" y="124" width="28" height="28" class="solid"/>
+        <rect x="428" y="124" width="28" height="28" class="solid"/>
+        <rect x="456" y="124" width="28" height="28" class="solid"/>
+        <rect x="484" y="124" width="28" height="28" class="solid"/>
+        <rect x="512" y="124" width="28" height="28" class="solid"/>
+        <rect x="540" y="124" width="28" height="28" class="solid o-50"/>
+        <rect x="568" y="124" width="28" height="28" class="paper"/>
+        <rect x="596" y="124" width="28" height="28" class="paper"/>
+        <rect x="624" y="124" width="28" height="28" class="paper"/>
+        <rect x="652" y="124" width="28" height="28" class="paper"/>
+        <rect x="400" y="152" width="28" height="28" class="solid"/>
+        <rect x="428" y="152" width="28" height="28" class="solid"/>
+        <rect x="456" y="152" width="28" height="28" class="solid"/>
+        <rect x="484" y="152" width="28" height="28" class="solid"/>
+        <rect x="512" y="152" width="28" height="28" class="solid"/>
+        <rect x="540" y="152" width="28" height="28" class="solid"/>
+        <rect x="568" y="152" width="28" height="28" class="solid"/>
+        <rect x="596" y="152" width="28" height="28" class="solid o-50"/>
+        <rect x="624" y="152" width="28" height="28" class="paper"/>
+        <rect x="652" y="152" width="28" height="28" class="paper"/>
+        <rect x="400" y="180" width="28" height="28" class="solid"/>
+        <rect x="428" y="180" width="28" height="28" class="solid"/>
+        <rect x="456" y="180" width="28" height="28" class="solid"/>
+        <rect x="484" y="180" width="28" height="28" class="solid"/>
+        <rect x="512" y="180" width="28" height="28" class="solid"/>
+        <rect x="540" y="180" width="28" height="28" class="solid"/>
+        <rect x="568" y="180" width="28" height="28" class="solid"/>
+        <rect x="596" y="180" width="28" height="28" class="solid"/>
+        <rect x="624" y="180" width="28" height="28" class="solid"/>
+        <rect x="652" y="180" width="28" height="28" class="solid o-50"/>
+        <path d="M400,40V208M428,40V208M456,40V208M484,40V208M512,40V208M540,40V208M568,40V208M596,40V208M624,40V208M652,40V208M680,40V208M400,40H680M400,68H680M400,96H680M400,124H680M400,152H680M400,180H680M400,208H680" class="grid"/>
+        <line x1="400" y1="56.8" x2="680.0" y2="196.8" class="arrow hot thick"/>
+        <circle cx="410.5" cy="43.5" r="2.2" class="bad"/>
+        <circle cx="424.5" cy="50.5" r="2.2" class="bad"/>
+        <circle cx="403.5" cy="57.5" r="2.2" class="bad"/>
+        <circle cx="417.5" cy="64.5" r="2.2" class="bad"/>
+        <circle cx="438.5" cy="43.5" r="2.2" class="bad"/>
+        <circle cx="452.5" cy="50.5" r="2.2" class="bad"/>
+        <circle cx="431.5" cy="57.5" r="2.2" class="bad"/>
+        <circle cx="445.5" cy="64.5" r="2.2" class="bad"/>
+        <circle cx="466.5" cy="43.5" r="2.2" class="bad"/>
+        <circle cx="480.5" cy="50.5" r="2.2" class="bad"/>
+        <circle cx="459.5" cy="57.5" r="2.2" class="bad"/>
+        <circle cx="473.5" cy="64.5" r="2.2" class="bad"/>
+        <circle cx="494.5" cy="43.5" r="2.2" class="bad"/>
+        <circle cx="508.5" cy="50.5" r="2.2" class="bad"/>
+        <circle cx="487.5" cy="57.5" r="2.2" class="bad"/>
+        <circle cx="501.5" cy="64.5" r="2.2" class="bad"/>
+        <circle cx="522.5" cy="43.5" r="2.2" class="bad"/>
+        <circle cx="536.5" cy="50.5" r="2.2" class="bad"/>
+        <circle cx="515.5" cy="57.5" r="2.2" class="bad"/>
+        <circle cx="529.5" cy="64.5" r="2.2" class="bad"/>
+        <circle cx="550.5" cy="43.5" r="2.2" class="bad"/>
+        <circle cx="564.5" cy="50.5" r="2.2" class="bad"/>
+        <circle cx="543.5" cy="57.5" r="2.2" class="bad"/>
+        <circle cx="557.5" cy="64.5" r="2.2" class="bad"/>
+        <circle cx="578.5" cy="43.5" r="2.2" class="bad"/>
+        <circle cx="592.5" cy="50.5" r="2.2" class="bad"/>
+        <circle cx="571.5" cy="57.5" r="2.2" class="bad"/>
+        <circle cx="585.5" cy="64.5" r="2.2" class="bad"/>
+        <circle cx="606.5" cy="43.5" r="2.2" class="bad"/>
+        <circle cx="620.5" cy="50.5" r="2.2" class="bad"/>
+        <circle cx="599.5" cy="57.5" r="2.2" class="bad"/>
+        <circle cx="613.5" cy="64.5" r="2.2" class="bad"/>
+        <circle cx="634.5" cy="43.5" r="2.2" class="bad"/>
+        <circle cx="648.5" cy="50.5" r="2.2" class="bad"/>
+        <circle cx="627.5" cy="57.5" r="2.2" class="bad"/>
+        <circle cx="641.5" cy="64.5" r="2.2" class="bad"/>
+        <circle cx="662.5" cy="43.5" r="2.2" class="bad"/>
+        <circle cx="676.5" cy="50.5" r="2.2" class="bad"/>
+        <circle cx="655.5" cy="57.5" r="2.2" class="bad"/>
+        <circle cx="669.5" cy="64.5" r="2.2" class="bad"/>
+        <circle cx="410.5" cy="71.5" r="2.2" class="ok"/>
+        <circle cx="424.5" cy="78.5" r="2.2" class="ok"/>
+        <circle cx="403.5" cy="85.5" r="2.2" class="ok"/>
+        <circle cx="417.5" cy="92.5" r="2.2" class="ok"/>
+        <circle cx="438.5" cy="71.5" r="2.2" class="bad"/>
+        <circle cx="452.5" cy="78.5" r="2.2" class="bad"/>
+        <circle cx="431.5" cy="85.5" r="2.2" class="ok"/>
+        <circle cx="445.5" cy="92.5" r="2.2" class="ok"/>
+        <circle cx="466.5" cy="71.5" r="2.2" class="bad"/>
+        <circle cx="480.5" cy="78.5" r="2.2" class="bad"/>
+        <circle cx="459.5" cy="85.5" r="2.2" class="bad"/>
+        <circle cx="473.5" cy="92.5" r="2.2" class="bad"/>
+        <circle cx="494.5" cy="71.5" r="2.2" class="bad"/>
+        <circle cx="508.5" cy="78.5" r="2.2" class="bad"/>
+        <circle cx="487.5" cy="85.5" r="2.2" class="bad"/>
+        <circle cx="501.5" cy="92.5" r="2.2" class="bad"/>
+        <circle cx="522.5" cy="71.5" r="2.2" class="bad"/>
+        <circle cx="536.5" cy="78.5" r="2.2" class="bad"/>
+        <circle cx="515.5" cy="85.5" r="2.2" class="bad"/>
+        <circle cx="529.5" cy="92.5" r="2.2" class="bad"/>
+        <circle cx="550.5" cy="71.5" r="2.2" class="bad"/>
+        <circle cx="564.5" cy="78.5" r="2.2" class="bad"/>
+        <circle cx="543.5" cy="85.5" r="2.2" class="bad"/>
+        <circle cx="557.5" cy="92.5" r="2.2" class="bad"/>
+        <circle cx="578.5" cy="71.5" r="2.2" class="bad"/>
+        <circle cx="592.5" cy="78.5" r="2.2" class="bad"/>
+        <circle cx="571.5" cy="85.5" r="2.2" class="bad"/>
+        <circle cx="585.5" cy="92.5" r="2.2" class="bad"/>
+        <circle cx="606.5" cy="71.5" r="2.2" class="bad"/>
+        <circle cx="620.5" cy="78.5" r="2.2" class="bad"/>
+        <circle cx="599.5" cy="85.5" r="2.2" class="bad"/>
+        <circle cx="613.5" cy="92.5" r="2.2" class="bad"/>
+        <circle cx="634.5" cy="71.5" r="2.2" class="bad"/>
+        <circle cx="648.5" cy="78.5" r="2.2" class="bad"/>
+        <circle cx="627.5" cy="85.5" r="2.2" class="bad"/>
+        <circle cx="641.5" cy="92.5" r="2.2" class="bad"/>
+        <circle cx="662.5" cy="71.5" r="2.2" class="bad"/>
+        <circle cx="676.5" cy="78.5" r="2.2" class="bad"/>
+        <circle cx="655.5" cy="85.5" r="2.2" class="bad"/>
+        <circle cx="669.5" cy="92.5" r="2.2" class="bad"/>
+        <circle cx="410.5" cy="99.5" r="2.2" class="ok"/>
+        <circle cx="424.5" cy="106.5" r="2.2" class="ok"/>
+        <circle cx="403.5" cy="113.5" r="2.2" class="ok"/>
+        <circle cx="417.5" cy="120.5" r="2.2" class="ok"/>
+        <circle cx="438.5" cy="99.5" r="2.2" class="ok"/>
+        <circle cx="452.5" cy="106.5" r="2.2" class="ok"/>
+        <circle cx="431.5" cy="113.5" r="2.2" class="ok"/>
+        <circle cx="445.5" cy="120.5" r="2.2" class="ok"/>
+        <circle cx="466.5" cy="99.5" r="2.2" class="ok"/>
+        <circle cx="480.5" cy="106.5" r="2.2" class="ok"/>
+        <circle cx="459.5" cy="113.5" r="2.2" class="ok"/>
+        <circle cx="473.5" cy="120.5" r="2.2" class="ok"/>
+        <circle cx="494.5" cy="99.5" r="2.2" class="bad"/>
+        <circle cx="508.5" cy="106.5" r="2.2" class="bad"/>
+        <circle cx="487.5" cy="113.5" r="2.2" class="ok"/>
+        <circle cx="501.5" cy="120.5" r="2.2" class="ok"/>
+        <circle cx="522.5" cy="99.5" r="2.2" class="bad"/>
+        <circle cx="536.5" cy="106.5" r="2.2" class="bad"/>
+        <circle cx="515.5" cy="113.5" r="2.2" class="bad"/>
+        <circle cx="529.5" cy="120.5" r="2.2" class="bad"/>
+        <circle cx="550.5" cy="99.5" r="2.2" class="bad"/>
+        <circle cx="564.5" cy="106.5" r="2.2" class="bad"/>
+        <circle cx="543.5" cy="113.5" r="2.2" class="bad"/>
+        <circle cx="557.5" cy="120.5" r="2.2" class="bad"/>
+        <circle cx="578.5" cy="99.5" r="2.2" class="bad"/>
+        <circle cx="592.5" cy="106.5" r="2.2" class="bad"/>
+        <circle cx="571.5" cy="113.5" r="2.2" class="bad"/>
+        <circle cx="585.5" cy="120.5" r="2.2" class="bad"/>
+        <circle cx="606.5" cy="99.5" r="2.2" class="bad"/>
+        <circle cx="620.5" cy="106.5" r="2.2" class="bad"/>
+        <circle cx="599.5" cy="113.5" r="2.2" class="bad"/>
+        <circle cx="613.5" cy="120.5" r="2.2" class="bad"/>
+        <circle cx="634.5" cy="99.5" r="2.2" class="bad"/>
+        <circle cx="648.5" cy="106.5" r="2.2" class="bad"/>
+        <circle cx="627.5" cy="113.5" r="2.2" class="bad"/>
+        <circle cx="641.5" cy="120.5" r="2.2" class="bad"/>
+        <circle cx="662.5" cy="99.5" r="2.2" class="bad"/>
+        <circle cx="676.5" cy="106.5" r="2.2" class="bad"/>
+        <circle cx="655.5" cy="113.5" r="2.2" class="bad"/>
+        <circle cx="669.5" cy="120.5" r="2.2" class="bad"/>
+        <circle cx="410.5" cy="127.5" r="2.2" class="ok"/>
+        <circle cx="424.5" cy="134.5" r="2.2" class="ok"/>
+        <circle cx="403.5" cy="141.5" r="2.2" class="ok"/>
+        <circle cx="417.5" cy="148.5" r="2.2" class="ok"/>
+        <circle cx="438.5" cy="127.5" r="2.2" class="ok"/>
+        <circle cx="452.5" cy="134.5" r="2.2" class="ok"/>
+        <circle cx="431.5" cy="141.5" r="2.2" class="ok"/>
+        <circle cx="445.5" cy="148.5" r="2.2" class="ok"/>
+        <circle cx="466.5" cy="127.5" r="2.2" class="ok"/>
+        <circle cx="480.5" cy="134.5" r="2.2" class="ok"/>
+        <circle cx="459.5" cy="141.5" r="2.2" class="ok"/>
+        <circle cx="473.5" cy="148.5" r="2.2" class="ok"/>
+        <circle cx="494.5" cy="127.5" r="2.2" class="ok"/>
+        <circle cx="508.5" cy="134.5" r="2.2" class="ok"/>
+        <circle cx="487.5" cy="141.5" r="2.2" class="ok"/>
+        <circle cx="501.5" cy="148.5" r="2.2" class="ok"/>
+        <circle cx="522.5" cy="127.5" r="2.2" class="ok"/>
+        <circle cx="536.5" cy="134.5" r="2.2" class="ok"/>
+        <circle cx="515.5" cy="141.5" r="2.2" class="ok"/>
+        <circle cx="529.5" cy="148.5" r="2.2" class="ok"/>
+        <circle cx="550.5" cy="127.5" r="2.2" class="bad"/>
+        <circle cx="564.5" cy="134.5" r="2.2" class="bad"/>
+        <circle cx="543.5" cy="141.5" r="2.2" class="ok"/>
+        <circle cx="557.5" cy="148.5" r="2.2" class="ok"/>
+        <circle cx="578.5" cy="127.5" r="2.2" class="bad"/>
+        <circle cx="592.5" cy="134.5" r="2.2" class="bad"/>
+        <circle cx="571.5" cy="141.5" r="2.2" class="bad"/>
+        <circle cx="585.5" cy="148.5" r="2.2" class="bad"/>
+        <circle cx="606.5" cy="127.5" r="2.2" class="bad"/>
+        <circle cx="620.5" cy="134.5" r="2.2" class="bad"/>
+        <circle cx="599.5" cy="141.5" r="2.2" class="bad"/>
+        <circle cx="613.5" cy="148.5" r="2.2" class="bad"/>
+        <circle cx="634.5" cy="127.5" r="2.2" class="bad"/>
+        <circle cx="648.5" cy="134.5" r="2.2" class="bad"/>
+        <circle cx="627.5" cy="141.5" r="2.2" class="bad"/>
+        <circle cx="641.5" cy="148.5" r="2.2" class="bad"/>
+        <circle cx="662.5" cy="127.5" r="2.2" class="bad"/>
+        <circle cx="676.5" cy="134.5" r="2.2" class="bad"/>
+        <circle cx="655.5" cy="141.5" r="2.2" class="bad"/>
+        <circle cx="669.5" cy="148.5" r="2.2" class="bad"/>
+        <circle cx="410.5" cy="155.5" r="2.2" class="ok"/>
+        <circle cx="424.5" cy="162.5" r="2.2" class="ok"/>
+        <circle cx="403.5" cy="169.5" r="2.2" class="ok"/>
+        <circle cx="417.5" cy="176.5" r="2.2" class="ok"/>
+        <circle cx="438.5" cy="155.5" r="2.2" class="ok"/>
+        <circle cx="452.5" cy="162.5" r="2.2" class="ok"/>
+        <circle cx="431.5" cy="169.5" r="2.2" class="ok"/>
+        <circle cx="445.5" cy="176.5" r="2.2" class="ok"/>
+        <circle cx="466.5" cy="155.5" r="2.2" class="ok"/>
+        <circle cx="480.5" cy="162.5" r="2.2" class="ok"/>
+        <circle cx="459.5" cy="169.5" r="2.2" class="ok"/>
+        <circle cx="473.5" cy="176.5" r="2.2" class="ok"/>
+        <circle cx="494.5" cy="155.5" r="2.2" class="ok"/>
+        <circle cx="508.5" cy="162.5" r="2.2" class="ok"/>
+        <circle cx="487.5" cy="169.5" r="2.2" class="ok"/>
+        <circle cx="501.5" cy="176.5" r="2.2" class="ok"/>
+        <circle cx="522.5" cy="155.5" r="2.2" class="ok"/>
+        <circle cx="536.5" cy="162.5" r="2.2" class="ok"/>
+        <circle cx="515.5" cy="169.5" r="2.2" class="ok"/>
+        <circle cx="529.5" cy="176.5" r="2.2" class="ok"/>
+        <circle cx="550.5" cy="155.5" r="2.2" class="ok"/>
+        <circle cx="564.5" cy="162.5" r="2.2" class="ok"/>
+        <circle cx="543.5" cy="169.5" r="2.2" class="ok"/>
+        <circle cx="557.5" cy="176.5" r="2.2" class="ok"/>
+        <circle cx="578.5" cy="155.5" r="2.2" class="ok"/>
+        <circle cx="592.5" cy="162.5" r="2.2" class="ok"/>
+        <circle cx="571.5" cy="169.5" r="2.2" class="ok"/>
+        <circle cx="585.5" cy="176.5" r="2.2" class="ok"/>
+        <circle cx="606.5" cy="155.5" r="2.2" class="bad"/>
+        <circle cx="620.5" cy="162.5" r="2.2" class="bad"/>
+        <circle cx="599.5" cy="169.5" r="2.2" class="ok"/>
+        <circle cx="613.5" cy="176.5" r="2.2" class="ok"/>
+        <circle cx="634.5" cy="155.5" r="2.2" class="bad"/>
+        <circle cx="648.5" cy="162.5" r="2.2" class="bad"/>
+        <circle cx="627.5" cy="169.5" r="2.2" class="bad"/>
+        <circle cx="641.5" cy="176.5" r="2.2" class="bad"/>
+        <circle cx="662.5" cy="155.5" r="2.2" class="bad"/>
+        <circle cx="676.5" cy="162.5" r="2.2" class="bad"/>
+        <circle cx="655.5" cy="169.5" r="2.2" class="bad"/>
+        <circle cx="669.5" cy="176.5" r="2.2" class="bad"/>
+        <circle cx="410.5" cy="183.5" r="2.2" class="ok"/>
+        <circle cx="424.5" cy="190.5" r="2.2" class="ok"/>
+        <circle cx="403.5" cy="197.5" r="2.2" class="ok"/>
+        <circle cx="417.5" cy="204.5" r="2.2" class="ok"/>
+        <circle cx="438.5" cy="183.5" r="2.2" class="ok"/>
+        <circle cx="452.5" cy="190.5" r="2.2" class="ok"/>
+        <circle cx="431.5" cy="197.5" r="2.2" class="ok"/>
+        <circle cx="445.5" cy="204.5" r="2.2" class="ok"/>
+        <circle cx="466.5" cy="183.5" r="2.2" class="ok"/>
+        <circle cx="480.5" cy="190.5" r="2.2" class="ok"/>
+        <circle cx="459.5" cy="197.5" r="2.2" class="ok"/>
+        <circle cx="473.5" cy="204.5" r="2.2" class="ok"/>
+        <circle cx="494.5" cy="183.5" r="2.2" class="ok"/>
+        <circle cx="508.5" cy="190.5" r="2.2" class="ok"/>
+        <circle cx="487.5" cy="197.5" r="2.2" class="ok"/>
+        <circle cx="501.5" cy="204.5" r="2.2" class="ok"/>
+        <circle cx="522.5" cy="183.5" r="2.2" class="ok"/>
+        <circle cx="536.5" cy="190.5" r="2.2" class="ok"/>
+        <circle cx="515.5" cy="197.5" r="2.2" class="ok"/>
+        <circle cx="529.5" cy="204.5" r="2.2" class="ok"/>
+        <circle cx="550.5" cy="183.5" r="2.2" class="ok"/>
+        <circle cx="564.5" cy="190.5" r="2.2" class="ok"/>
+        <circle cx="543.5" cy="197.5" r="2.2" class="ok"/>
+        <circle cx="557.5" cy="204.5" r="2.2" class="ok"/>
+        <circle cx="578.5" cy="183.5" r="2.2" class="ok"/>
+        <circle cx="592.5" cy="190.5" r="2.2" class="ok"/>
+        <circle cx="571.5" cy="197.5" r="2.2" class="ok"/>
+        <circle cx="585.5" cy="204.5" r="2.2" class="ok"/>
+        <circle cx="606.5" cy="183.5" r="2.2" class="ok"/>
+        <circle cx="620.5" cy="190.5" r="2.2" class="ok"/>
+        <circle cx="599.5" cy="197.5" r="2.2" class="ok"/>
+        <circle cx="613.5" cy="204.5" r="2.2" class="ok"/>
+        <circle cx="634.5" cy="183.5" r="2.2" class="ok"/>
+        <circle cx="648.5" cy="190.5" r="2.2" class="ok"/>
+        <circle cx="627.5" cy="197.5" r="2.2" class="ok"/>
+        <circle cx="641.5" cy="204.5" r="2.2" class="ok"/>
+        <circle cx="662.5" cy="183.5" r="2.2" class="bad"/>
+        <circle cx="676.5" cy="190.5" r="2.2" class="bad"/>
+        <circle cx="655.5" cy="197.5" r="2.2" class="ok"/>
+        <circle cx="669.5" cy="204.5" r="2.2" class="ok"/>
+    <text x="380" y="244" class="mid small">Below the line is the triangle. Gray steps on the right are 1, 2 or 3 of 4 samples covered.</text>
+  </svg>
+  <figcaption>The staircase on the left crawls when the triangle moves by less than a pixel, which is most of the time. On the right a pixel changes by a quarter at a time.</figcaption>
+</figure>
+
+<h2 id="how"><span class="n">2</span>How MSAA works</h2>
+
+<p>The obvious fix is to draw the whole image larger and shrink it (<b>supersampling</b>), which shades every sample. MSAA splits the work:</p>
+
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Supersampling: one pixel with four samples, each with its own shader run.">
+      <rect x="70" y="20" width="100" height="100" class="paper"/>
+      <circle cx="107" cy="32" r="9" class="shader"/><circle cx="157" cy="57" r="9" class="shader"/><circle cx="82" cy="82" r="9" class="shader"/><circle cx="132" cy="107" r="9" class="shader"/>
+    </svg>
+    <h4>Supersampling</h4>
+    <p>Every sample runs the fragment shader. Smooth everywhere, also inside textures and highlights.</p>
+    <p class="cost">N shader runs per pixel</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="MSAA: one pixel with four samples tested for coverage and depth, and one shader run at the pixel's center whose color goes to every covered sample.">
+      <rect x="70" y="20" width="100" height="100" class="paper"/>
+      <circle cx="107" cy="32" r="5" class="ok"/><circle cx="157" cy="57" r="5" class="ok"/><circle cx="82" cy="82" r="5" class="ok"/><circle cx="132" cy="107" r="5" class="bad"/>
+      <circle cx="120" cy="70" r="11" class="shader"/>
+    </svg>
+    <h4>MSAA</h4>
+    <p>Coverage and the depth test run per sample. The shader runs once per pixel and its color goes to every covered sample.</p>
+    <p class="cost">1 shader run per pixel and triangle</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two triangles meet inside one pixel: each covers two samples, and each runs the shader once.">
+      <rect x="70" y="20" width="100" height="100" class="paper"/>
+      <path d="M70,20 L170,120 L70,120 Z" class="solid o-50"/>
+      <circle cx="107" cy="32" r="5" class="bad"/><circle cx="157" cy="57" r="5" class="bad"/><circle cx="82" cy="82" r="5" class="ok"/><circle cx="132" cy="107" r="5" class="ok"/>
+    </svg>
+    <h4>Where the cost goes</h4>
+    <p>Only pixels on edges run the shader more than once: once per triangle that touches them. The inside of a triangle costs what it did.</p>
+    <p class="cost">memory and bandwidth: N samples stored</p>
+  </div>
+</div>
+
+<p>MSAA smooths what the rasterizer decides: triangle edges and the depth test where surfaces cross. It does not smooth what the shader decides inside a triangle: thin highlights on shiny surfaces, texture detail, or a <code class="lang-text">discard</code>. Each sample stores a color and a depth, so the image is N times as large:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>1920 × 1080</th><th>Color RGBA16F</th><th>Depth D32</th><th>Together</th></tr>
+  <tr><td>1 sample</td><td>15.8 MiB</td><td>7.9 MiB</td><td>23.7 MiB</td></tr>
+  <tr><td>2 samples</td><td>31.6 MiB</td><td>15.8 MiB</td><td>47.5 MiB</td></tr>
+  <tr><td>4 samples</td><td>63.3 MiB</td><td>31.6 MiB</td><td>94.9 MiB</td></tr>
+  <tr><td>8 samples</td><td>126.6 MiB</td><td>63.3 MiB</td><td>189.8 MiB</td></tr>
+</table>
+</div>
+
+<p>GPUs compress such images: when every sample of a pixel holds the same color, which is true away from edges, they read and write it once. So the bandwidth grows less than the memory.</p>
+
+<h2 id="resolve"><span class="n">3</span>The resolve: one color from N samples</h2>
+
+<p>Later passes (bloom, tone mapping, the screen) want one color per pixel. The <b>resolve</b> makes it. GPUs offer one in the hardware, at the end of a render pass (a <b>resolve attachment</b>): the plain mean of the samples. For an image in display range that is right. For HDR light it is not.</p>
+
+<p>Take one edge pixel: two samples see the sky (8.0), two see a dark roof (0.05). The screen shows bytes after the tone curve (<a href="tone-mapping.html">AgX</a>):</p>
+
+<div class="stats">
+  <div><b>248</b><span>the sky alone</span><small>8.0 through AgX</small></div>
+  <div><b>70</b><span>the roof alone</span><small>0.05 through AgX</small></div>
+  <div><b>159</b><span>ideal: half of each on screen</span><small>(248 + 70) / 2</small></div>
+  <div><b>239</b><span>plain mean, 4.03</span><small>(8 + 8 + 0.05 + 0.05) / 4, then AgX</small></div>
+  <div><b>197</b><span>weighted mean, 0.88</span><small>each sample × 1 / (1 + value), then AgX</small></div>
+</div>
+
+<p>The plain mean is almost the sky: one bright sample outweighs the dark ones, so where bright meets dark, the stair stays. That is the most common edge of all: a roof, a tree or a character against the sky. The fix is to average after a tone curve and undo the curve. With the curve <code class="lang-text">x / (1 + x)</code>, which can be undone, that is the same as a <b>weighted mean</b>:</p>
+
+<div class="formula">
+  <p class="eq">resolved = Σ c<sub>s</sub> w<sub>s</sub> / Σ w<sub>s</sub></p>
+  <p class="eq">w<sub>s</sub> = 1 / (1 + luminance(c<sub>s</sub>) · exposure)</p>
+  <dl>
+    <dt>c<sub>s</sub></dt><dd>the color of sample <var>s</var>, linear HDR light</dd>
+    <dt>w<sub>s</sub></dt><dd>small for a bright sample, about 1 for a dark one</dd>
+    <dt>exposure</dt><dd>the camera's, so "bright" means bright on screen</dd>
+  </dl>
+</div>
+
+<p>The weighted mean lands much nearer the ideal. It is not exact, since the real tone curve is not <code class="lang-text">x / (1 + x)</code>, but the edge keeps a visible in-between shade. Move the sky's brightness and the samples below:</p>
+
+<figure class="lab" data-lab="msaa-resolve" data-title="Resolve one edge pixel">
+  <figcaption>Raise the sky from 1 to 64 with two samples on the roof: the plain mean stays near the sky's byte, the weighted mean stays near the ideal. With 0 or 4 samples on the roof there is no edge, and all three agree.</figcaption>
+</figure>
+
+<div class="callout">
+  <strong>A pass instead of a resolve attachment</strong>
+  <p>A resolve attachment can only take the plain mean (or the minimum, maximum or first sample). The weighted mean needs a pass that reads the samples: a compute pass, or a full-screen draw. On desktop GPUs both read the samples once and cost about the same. On tile-based GPUs a resolve attachment can resolve on the chip, without storing the samples, but only for an image that no pass reads in between; a scene drawn in two passes with a depth read between them stores its samples anyway.</p>
+</div>
+
+<h2 id="a2c"><span class="n">4</span>Cut-outs: alpha-to-coverage</h2>
+
+<p>A leaf or a fence is often one quad with a texture whose alpha says where the shape is. The shader drops the pixels below a <b>cutoff</b> with <code class="lang-text">discard</code>. The edge is now inside the triangle, decided by the shader, and the shader runs once per pixel: all samples of the pixel are kept or dropped together. MSAA does nothing for it.</p>
+
+<p><b>Alpha-to-coverage</b> lets the shader's output alpha choose how many samples are covered: alpha 0.5 covers half of them. Two ways to feed it:</p>
+
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Alpha as coverage: a leaf whose whole inside is half covered where its texture's alpha is soft, so it looks see-through and its edge moves.">
+      <path d="M40,100 C80,20 160,20 200,100 Z" class="solid o-50"/>
+      <path d="M60,96 C90,40 150,40 180,96 Z" class="solid o-75"/>
+    </svg>
+    <h4>Alpha itself</h4>
+    <p>The soft alpha of a texture spreads over many pixels: the leaf turns see-through near its edge, and the cutoff no longer decides the edge.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Sharpened alpha: the same leaf fully covered inside, with a soft edge one pixel wide where the cutoff is.">
+      <path d="M40,100 C80,20 160,20 200,100 Z" class="solid o-25"/>
+      <path d="M43,99 C82,24 158,24 197,99 Z" class="solid"/>
+    </svg>
+    <h4>Sharpened alpha</h4>
+    <p><code class="lang-text">(alpha − cutoff) / fwidth(alpha) + 0.5</code>: 0.5 exactly at the cutoff, from 0 to 1 over one pixel. The edge stays where the cutoff puts it, and is smooth.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="fwidth: how much alpha changes from one pixel to the next, from the screen-space derivatives.">
+      <rect x="40" y="50" width="40" height="40" class="solid"/>
+      <rect x="80" y="50" width="40" height="40" class="solid o-50"/>
+      <rect x="120" y="50" width="40" height="40" class="solid o-25"/>
+      <line x1="60" y1="36" x2="100" y2="36" class="arrow" marker-end="url(#ah)"/>
+      <text x="120" y="112" class="mid small">fwidth = |ddx| + |ddy|</text>
+    </svg>
+    <h4>fwidth</h4>
+    <p>The change of alpha to the next pixel, from the GPU's screen-space derivatives. Far away it is large, near it is small, so the soft band is always about one pixel wide.</p>
+  </div>
+</div>
+
+<figure class="lab" data-lab="alpha-to-coverage" data-title="Cover samples across a cut-out's edge">
+  <figcaption>Move the cutoff: the sharpened row's edge follows the dashed line, as discard's does, but over a ramp of samples. Make alpha change slowly (a near leaf) and fast (a far one): the sharpened ramp stays about one pixel wide; alpha as coverage does not.</figcaption>
+</figure>
+
+<p>Alpha-to-coverage only helps with several samples per pixel: with one sample, it can only cover all or nothing at 0.5, which is a cutoff of 0.5 for every material. So a renderer uses it only when the target has samples, and <code class="lang-text">discard</code> otherwise. Shadow maps have one sample and keep <code class="lang-text">discard</code>.</p>
+
+<h2 id="depth"><span class="n">5</span>Passes that read the depth</h2>
+
+<p>A multisampled depth has N values per pixel. A pass that reads it, like the build of a <a href="occlusion-culling.html">Hi-Z pyramid</a>, must say which one it wants. A plain mean of depths is a depth where no surface is, so the choices are:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A depth resolve pass makes a second, single-sample depth, then the Hi-Z build reads it.">
+      <rect x="20" y="45" width="60" height="40" rx="4" class="mem"/>
+      <text x="50" y="69" class="mid small">MS depth</text>
+      <line x1="80" y1="65" x2="100" y2="65" class="arrow" marker-end="url(#ah)"/>
+      <rect x="102" y="45" width="56" height="40" rx="4" class="mem"/>
+      <text x="130" y="69" class="mid small">resolved</text>
+      <line x1="158" y1="65" x2="178" y2="65" class="arrow" marker-end="url(#ah)"/>
+      <rect x="180" y="45" width="44" height="40" rx="4" class="gpu"/>
+      <text x="202" y="69" class="mid small">Hi-Z</text>
+    </svg>
+    <h4>Resolve the depth first</h4>
+    <p>The farthest sample of each pixel into a second depth. One more full-size image and pass; resolve attachments for depth min or max are optional in Vulkan and missing in WebGPU.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The Hi-Z build reads every sample of the 2 by 2 pixels under each of its texels and keeps the farthest.">
+      <rect x="40" y="25" width="80" height="80" class="paper"/>
+      <path d="M80,25V105M40,65H120" class="grid"/>
+      <circle cx="55" cy="35" r="3" class="mem"/><circle cx="75" cy="45" r="3" class="mem"/><circle cx="45" cy="55" r="3" class="mem"/><circle cx="65" cy="62" r="3" class="mem"/>
+      <circle cx="95" cy="35" r="3" class="mem"/><circle cx="115" cy="45" r="3" class="mem"/><circle cx="85" cy="55" r="3" class="mem"/><circle cx="105" cy="62" r="3" class="mem"/>
+      <circle cx="55" cy="75" r="3" class="mem"/><circle cx="75" cy="85" r="3" class="mem"/><circle cx="45" cy="95" r="3" class="mem"/><circle cx="65" cy="102" r="3" class="mem"/>
+      <circle cx="95" cy="75" r="3" class="mem"/><circle cx="115" cy="85" r="3" class="mem"/><circle cx="85" cy="95" r="3" class="mem"/><circle cx="105" cy="102" r="3" class="mem"/>
+      <line x1="125" y1="65" x2="160" y2="65" class="arrow" marker-end="url(#ah)"/>
+      <rect x="164" y="50" width="30" height="30" class="gpu"/>
+      <text x="179" y="120" class="mid small">1 Hi-Z texel</text>
+    </svg>
+    <h4>Read every sample</h4>
+    <p>The Hi-Z already reduces 2 × 2 pixels to one texel: with 4 samples it reads 16 values instead of 4, and keeps the farthest. The same answer, with no second image.</p>
+  </div>
+</div>
+
+<h2 id="pitfalls"><span class="n">6</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Edges against a bright sky still look jagged</dt><dd>The samples were averaged as HDR light. Resolve with weights, or after tone mapping.</dd></div>
+  <div><dt>Leaves and fences stay jagged with MSAA</dt><dd>They are cut out with <code class="lang-text">discard</code>, inside the triangle. Use alpha-to-coverage.</dd></div>
+  <div><dt>Cut-outs turn see-through, or their edge moves</dt><dd>Alpha-to-coverage with the texture's soft alpha. Sharpen it around the cutoff.</dd></div>
+  <div><dt>A shiny surface still sparkles</dt><dd>MSAA shades once per pixel, so highlights inside a triangle alias as before. That needs a temporal method (TAA) or shading per sample.</dd></div>
+  <div><dt>The pipeline does not match the pass</dt><dd>A pipeline is made for a sample count: one drawing into a 4x target must be made with 4 samples, the depth too.</dd></div>
+  <div><dt>Out of memory at 8x</dt><dd>Color and depth grow with the samples: 190 MiB at 1080p for RGBA16F and D32. 4x is the common choice.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">7</span>In RASM</h2>
+
+<p>A render target takes <code>RenderTargetDesc::samples</code>, and the scene passes draw into it with pipelines made for that count. <code>Engine::addMsaaResolvePass</code> adds the weighted resolve, a compute pass that writes a single-sample <a href="bloom.html#in-rasm">storage target</a>; bloom and the tone map read that. With <code>Engine::render</code>, one line turns it on, before the engine is made:</p>
+
+<pre><code>config.antiAliasing = rasm::AntiAliasing::MSAA_4X;</code></pre>
+
+<div class="legend">
+  <span><i class="gpu"></i>graph passes</span>
+  <span><i class="mem"></i>targets</span>
+  <span><i class="shader"></i>shader variants</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 270" role="img" aria-label="The scene passes Cull, Scene 1, Hi-Z, Cull 2, Scene 2 and Transparent draw into scene_hdr with 4 samples per pixel: RGBA16F color and D32 depth. The Hi-Z pass reads every depth sample. MASK draws use alpha-to-coverage with a sharpened alpha. MSAA Resolve, a compute pass, reads the color samples and writes scene_hdr_resolved, a single-sample storage target, with the weighted mean. Bloom and Tone Map read the resolved target.">
+    <rect x="20" y="30" width="230" height="60" rx="6" class="gpu"/>
+    <text x="135" y="54" class="mid title">scene passes</text>
+    <text x="135" y="74" class="mid small">Scene 1, Scene 2, Transparent</text>
+    <line x1="250" y1="60" x2="286" y2="60" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="288" y="30" width="190" height="60" rx="6" class="mem"/>
+    <text x="383" y="54" class="mid mono small">scene_hdr, 4 samples</text>
+    <text x="383" y="74" class="mid small">RGBA16F + D32 per sample</text>
+    <line x1="478" y1="60" x2="514" y2="60" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="516" y="30" width="224" height="60" rx="6" class="gpu"/>
+    <text x="628" y="54" class="mid mono small">MSAA Resolve</text>
+    <text x="628" y="74" class="mid small">weighted mean, compute</text>
+
+    <rect x="20" y="120" width="230" height="56" rx="28" class="shader"/>
+    <text x="135" y="143" class="mid small">MASK: sharpened alpha</text>
+    <text x="135" y="160" class="mid small">+ alpha-to-coverage</text>
+    <line x1="135" y1="120" x2="135" y2="92" class="arrow" marker-end="url(#ah)"/>
+    <rect x="288" y="120" width="190" height="56" rx="6" class="gpu"/>
+    <text x="383" y="143" class="mid mono small">Hi-Z</text>
+    <text x="383" y="160" class="mid small">farthest of every sample</text>
+    <line x1="383" y1="120" x2="383" y2="92" class="arrow mem dashed"/>
+
+    <path d="M628,90 V200" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="516" y="202" width="224" height="50" rx="6" class="mem"/>
+    <text x="628" y="223" class="mid mono small">scene_hdr_resolved</text>
+    <text x="628" y="240" class="mid small">1 sample, storage target</text>
+    <line x1="516" y1="227" x2="480" y2="227" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="288" y="202" width="190" height="50" rx="6" class="gpu"/>
+    <text x="383" y="231" class="mid mono small">Bloom, Tone Map</text>
+    <text x="20" y="230" class="small">The shadow maps stay at 1 sample,</text>
+    <text x="20" y="246" class="small">with discard for MASK.</text>
+  </svg>
+  <figcaption>The shaded view's pipelines are made per sample count (<code>ShadedPipelines</code>, one set each for 1, 2, 4 and 8), so views with and without MSAA can share a frame.</figcaption>
+</figure>
+
+<h3>Where RASM follows this page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Sample counts</td><td>2, 4, 8</td><td><code>RenderTargetDesc::samples</code>: 1, 2, 4 or 8, whatever the device can draw and sample for color and depth (<code>RenderContext::supportsSampleCount</code>). A multisampled target has colors and no history, storage or cube. <code>EngineConfig::antiAliasing</code> (<code>NONE</code>, <code>MSAA_2X</code>, <code>MSAA_4X</code>, <code>MSAA_8X</code>) falls back to the most the device has, with a warning.</td></tr>
+  <tr><td>Pipelines</td><td>one per sample count</td><td><code>PipelineDesc::samples</code> and <code>alphaToCoverage</code>, compared and hashed like every field. <code>Engine::createPipeline(name, source, renderTarget)</code> takes the target's count; <code>RenderContext::bindPipeline</code> skips the draws of a pipeline whose count does not match the pass.</td></tr>
+  <tr><td>Resolve</td><td>weighted mean</td><td><code>Engine::addMsaaResolvePass</code>: the <code>MSAA Resolve</code> compute pass, <code>resolveMain</code> in <code>shaders/passes/msaaResolve.slang</code>, weights <code>1 / (1 + luminance · exposure)</code> with the camera's exposure. It writes <samp>&lt;source&gt;_resolved</samp>, a transient storage target of the source's size. <code>addBloomPasses</code> and <code>addToneMapPass</code> refuse a multisampled source.</td></tr>
+  <tr><td>Cut-outs</td><td>sharpened alpha-to-coverage</td><td>The MASK pipeline of a multisampled view is <code>fragMain</code> with <code>RASM_ALPHA_TO_COVERAGE</code>: no discard, alpha = <code>getCoverage</code>, alpha-to-coverage on. Cut-outs still thin out in the far mips (<code>D25</code>): the sharpening keeps the cutoff's edge, but the mips' alpha is still averaged.</td></tr>
+  <tr><td>Depth reads</td><td>every sample, or a resolved depth</td><td>Every sample: <code>hizMain</code> reads <code>SceneData::depthSamples</code> samples of each pixel through <code>Sampler2DMS</code> (<code>loadDepth</code>). No depth resolve.</td></tr>
+  <tr><td>Shading</td><td>once per pixel</td><td>The same; the light clusters do not read depth, so they are unchanged.</td></tr>
+</table>
+</div>
+
+<h3>What it costs</h3>
+
+<p><code>examples/09_gltf_materials --gpu-times --render-size 1920 1080 --aa …</code>, RTX 3060, Release, the median of 5 runs. The scene is light, so the GPU does not run at full clock and the draw passes vary from run to run by more than MSAA adds to them; the Hi-Z and the resolve grow with the samples:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Samples</th><th><code>Hi-Z</code></th><th><code>MSAA Resolve</code></th><th>Draw passes (Scene 1, 2, Transparent)</th><th>Frame's transient memory</th></tr>
+  <tr><td>1</td><td>0.06 ms</td><td>–</td><td>0.67 ms</td><td>41.3 MiB</td></tr>
+  <tr><td>2</td><td>0.11 ms</td><td>0.12 ms</td><td>0.92 ms</td><td>67.5 MiB</td></tr>
+  <tr><td>4</td><td>0.16 ms</td><td>0.14 ms</td><td>0.98 ms</td><td>112.5 MiB</td></tr>
+  <tr><td>8</td><td>0.41 ms</td><td>0.38 ms</td><td>0.81 ms</td><td>208.1 MiB</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Sample counts</td><td><code>RenderTargetDesc::samples</code>, <code>TextureDesc::samples</code>, <code>PipelineDesc::samples</code>, <code>PipelineDesc::alphaToCoverage</code> in <code>include/rasm/render/resource.h</code>; checked in <code>RenderContext::createRenderTarget</code> and <code>createTexture</code> (<code>src/rhi/renderContext.cpp</code>); the device's counts from <code>VulkanDevice::supportedSampleCounts</code></td></tr>
+  <tr><td>Pipelines per count</td><td><code>ShadedPipelines</code> and <code>GpuScene::shaded</code> in <code>src/renderer/gpuScene.h</code>; <code>getShadedPipelines</code> and <code>prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Alpha-to-coverage</td><td><code>getCoverage</code> and <code>toTarget</code> in <code>shaders/passes/rasm.slang</code></td></tr>
+  <tr><td>Hi-Z</td><td><code>loadDepth</code> in <code>shaders/passes/hiz.slang</code>; <code>SceneData::depthSamples</code></td></tr>
+  <tr><td>Resolve</td><td><code>Engine::addMsaaResolvePass</code> in <code>src/renderer/msaaResolve.cpp</code>; <code>shaders/passes/msaaResolve.slang</code>; <code>gfx::ResolvePushConstants</code></td></tr>
+  <tr><td>The default frame</td><td><code>Renderer::render</code> in <code>src/renderer/renderer.cpp</code> with <code>EngineConfig::antiAliasing</code></td></tr>
+  <tr><td>Examples</td><td><code>examples/09_gltf_materials</code> and <code>examples/02_gltf</code>: <samp>--aa msaa2|msaa4|msaa8</samp></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Every pipeline that draws into a target has the target's sample count; the shaded view's pipelines come from the set of its count.</li>
+    <li>A pass that reads a multisampled image reads it as one (<code>Sampler2DMS</code>), sample by sample; the bloom and tone map read the resolved target.</li>
+    <li>The Hi-Z keeps the farthest sample, never a mean.</li>
+    <li>Alpha-to-coverage only with more than one sample; shadow maps keep <code>discard</code>.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Matt Pettineo, "MSAA Overview" and "MSAA Resolve Filters" (therealmjp.github.io, 2012): how MSAA works, and resolves of HDR light.</li>
+  <li>Brian Karis, "Tone mapping" (graphicrants.blogspot.com, 2013): the 1 / (1 + luma) weights.</li>
+  <li>Ben Golus, "Anti-aliased Alpha Test: The Esoteric Alpha To Coverage" (2017): the sharpened alpha.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

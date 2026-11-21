@@ -120,7 +120,7 @@
                   const PipelineHandle&amp; pipeline);</pre>
   <div class="body">
     <p>Binds a graphics or compute pipeline. A compute pipeline makes <code>dispatch</code> possible and leaves the graphics pipeline alone.</p>
-    <p><span class="tag">errors</span> A graphics pipeline whose color or depth format differs from the current pass's attachments logs <code>Pipeline '…' does not match the formats of the pass's attachments, so its draws are skipped.</code> Then every draw is skipped until a matching pipeline is bound. An unknown pipeline also skips draws and dispatches.</p>
+    <p><span class="tag">errors</span> A graphics pipeline whose color or depth format differs from the current pass's attachments logs <code>Pipeline '…' does not match the formats or the sample count of the pass's attachments, so its draws are skipped.</code> (a sample count that differs from the attachments' counts too) Then every draw is skipped until a matching pipeline is bound. An unknown pipeline also skips draws and dispatches.</p>
   </div>
 </div>
 
@@ -567,6 +567,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
     TextureUsage usage     = TextureUsage::SAMPLED;
     bool         cube      = false;
     uint32_t     mipLevels = 0;
+    uint32_t     samples   = 1;
 
     bool operator==(const TextureDesc&amp;) const = default;
 };</pre>
@@ -577,6 +578,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <dt>usage</dt><dd>What the texture is created for, see <a href="#TextureUsage">TextureUsage</a>.</dd>
       <dt>cube</dt><dd><code>true</code>: <code>CUBE_FACES</code> square layers, one per face of a cube, in Vulkan's order +X, −X, +Y, −Y, +Z, −Z. Its bindless slot holds a cube view, which a shader reads as a <var>SamplerCube</var>; each face also has its own view, which <a href="#beginRendering"><code>beginRendering</code></a> draws into. A render target with <code>RenderTargetDesc::cube</code> makes one for its depth. Only a depth attachment (<code>DEPTH_STENCIL_ATTACHMENT</code> or <code>SAMPLED_DEPTH_ATTACHMENT</code>) or a <code>SAMPLED_STORAGE</code> texture can be a cube: <code>createTexture</code> rejects any other usage with an error.</dd>
       <dt>mipLevels</dt><dd>0: the rule above. Any other count makes that many levels, at most the full chain down to 1 × 1. Only a <code>SAMPLED_STORAGE</code> texture (compute writes its mips) or a <code>SAMPLED</code> one (<code>fillTexture</code> copies them, or makes them for RGBA8) may ask for more than 1: <code>createTexture</code> refuses any other with an error, since an attachment is drawn into one mip.</dd>
+      <dt>samples</dt><dd>Samples per pixel: 1, or 2, 4 or 8 for a color or depth attachment of one mip, not a cube, in a count the device has (<a href="#supportsSampleCount"><code>supportsSampleCount</code></a>); <code>createTexture</code> refuses anything else with an error. A render target sets it from <code>RenderTargetDesc::samples</code>. A shader reads such a texture sample by sample, as a <var>Sampler2DMS</var>.</dd>
     </dl>
   </div>
 </div>
@@ -653,6 +655,13 @@ bool fillTexture(const TextureHandle&amp; texture, const TextureLevel* levels, u
   <pre class="sig">bool supportsTextureFormat(Format format) const;</pre>
   <div class="body">
     <p>True when the device can sample <code>format</code> with linear filtering and fill it, so a <code>SAMPLED</code> texture can be created in it. Block-compressed formats depend on the GPU: BC on desktop GPUs and Apple Silicon, ASTC and ETC2 on mobile GPUs. False without a device. <code>loadTexture</code> uses it to pick a KTX2 file's format.</p>
+  </div>
+</div>
+
+<div class="api" id="supportsSampleCount">
+  <pre class="sig">bool supportsSampleCount(uint32_t samples) const;</pre>
+  <div class="body">
+    <p>True when a render target can have <code>samples</code> per pixel: a power of two that the device can draw into and sample, for color and for depth (Vulkan: <samp>framebufferColorSampleCounts</samp>, <samp>framebufferDepthSampleCounts</samp>, <samp>sampledImageColorSampleCounts</samp>, <samp>sampledImageDepthSampleCounts</samp>). Desktop GPUs have 1, 2, 4 and 8. False without a device.</p>
   </div>
 </div>
 
@@ -772,6 +781,8 @@ bool fillTexture(const TextureHandle&amp; texture, const TextureLevel* levels, u
     Format                    depthStencilAttachmentFormat = Format::UNKNOWN;
     BlendMode                 blendMode = BlendMode::NONE;
     bool                      depthWrite = true;
+    uint32_t                  samples = 1;
+    bool                      alphaToCoverage = false;
 
     bool operator==(const PipelineDesc&amp;) const = default;
 };</pre>
@@ -784,6 +795,8 @@ bool fillTexture(const TextureHandle&amp; texture, const TextureLevel* levels, u
       <dt>depthStencilAttachmentFormat</dt><dd>The same for the depth format. With a depth format the depth test is on (reversed-Z, <code>GREATER_OR_EQUAL</code>).</dd>
       <dt>blendMode</dt><dd>See <a href="types.html#BlendMode">BlendMode</a>. <code>Engine::createPipeline</code> always uses <code>NONE</code>.</dd>
       <dt>depthWrite</dt><dd>Writes depth when there is a depth format. <code>false</code> keeps the test but not the write, as see-through draws need.</dd>
+      <dt>samples</dt><dd>The sample count of the attachments it draws into; <code>bindPipeline</code> rejects it in a pass with another. <code>Engine::createPipeline(name, source, renderTarget)</code> takes the target's.</dd>
+      <dt>alphaToCoverage</dt><dd>Color 0's alpha decides which samples a fragment covers, for cut-outs with several samples per pixel (<a href="../guides/msaa.html#a2c">alpha-to-coverage</a>). Both fields take part in equality and the hash.</dd>
     </dl>
   </div>
 </div>

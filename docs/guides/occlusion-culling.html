@@ -1878,7 +1878,7 @@
     <text x="285" y="166" class="mid mono small">hizPtr: level 0 (12 floats) · level 1 (4) · level 2 (1)</text>
     <text x="20" y="198" class="small">A texel of RASM's level L covers 2^(L+1) × 2^(L+1) pixels. Odd sizes round up and read their last row or column twice.</text>
   </svg>
-  <figcaption><code>hizMain</code> in <code>hiz.slang</code> builds one level per dispatch, in groups of <code>HIZ_GROUP_SIZE</code> × <code>HIZ_GROUP_SIZE</code> threads, with a barrier after each level. <code>getHizLevelCount</code> on the CPU and <code>getHizLevel</code> in the shaders agree on the sizes.</figcaption>
+  <figcaption><code>hizMain</code> in <code>hiz.slang</code> builds one level per dispatch, in groups of <code>HIZ_GROUP_SIZE</code> × <code>HIZ_GROUP_SIZE</code> threads, with a barrier after each level. With a multisampled target (MSAA), level 0 reads every sample of its 2 × 2 pixels (<code>loadDepth</code>, <code>SceneData::depthSamples</code>) and keeps the farthest, so no depth resolve is needed (<a href="msaa.html#depth">MSAA</a>). <code>getHizLevelCount</code> on the CPU and <code>getHizLevel</code> in the shaders agree on the sizes.</figcaption>
 </figure>
 
 <h3>The test in RASM</h3>
