@@ -214,3 +214,33 @@ TEST_CASE("a mesh with more morph targets than the weld can compare gets no LODs
     CHECK(raw.lods.empty());
     CHECK(raw.vertices.size() == 3 * 2048);
 }
+
+TEST_CASE("a weights sampler shared by nodes with other target counts is refused for the node it does not fit")
+{
+    const float positions[] = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+    const float deltas[] = {0, 0.5f, 0, 0, 0.5f, 0, 0, 0.5f, 0};
+    const float times[] = {0.0f, 1.0f};
+    const float weights[] = {0.0f, 0.1f, 1.0f, 0.9f};
+    std::vector<unsigned char> buffer;
+    const std::string views = addView(buffer, positions, sizeof(positions)) + "," + addView(buffer, deltas, sizeof(deltas)) + "," + addView(buffer, times, sizeof(times)) +
+                              "," + addView(buffer, weights, sizeof(weights));
+    const rasm::GLTFRaw raw = importGltf(buffer, views, R"("accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+                                                      {"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},
+                                                      {"bufferView":2,"componentType":5126,"count":2,"type":"SCALAR"},
+                                                      {"bufferView":3,"componentType":5126,"count":4,"type":"SCALAR"}],
+            "meshes":[{"primitives":[{"attributes":{"POSITION":0},"targets":[{"POSITION":1},{"POSITION":1}]}]},
+                      {"primitives":[{"attributes":{"POSITION":0},"targets":[{"POSITION":1},{"POSITION":1},{"POSITION":1}]}]}],
+            "nodes":[{"mesh":0},{"mesh":1}],
+            "scenes":[{"nodes":[0,1]}],
+            "animations":[{"samplers":[{"input":2,"output":3}],"channels":[{"sampler":0,"target":{"node":0,"path":"weights"}},
+                                                                        {"sampler":0,"target":{"node":1,"path":"weights"}}]}])");
+    REQUIRE(raw.loaded);
+    CHECK(raw.animation.morphWeights.size() == 5);
+    REQUIRE(raw.animation.clips.size() == 1);
+    const rasm::AnimationClipRaw &clip = raw.animation.clips[0];
+    // Node 0's two weights only: 4 values are 2 keys of 2 weights, not of 3.
+    CHECK(clip.samplers.size() == 2);
+    REQUIRE(clip.channels.size() == 2);
+    for (const rasm::AnimationChannel &channel : clip.channels)
+        CHECK(channel.sampler < clip.samplers.size());
+}

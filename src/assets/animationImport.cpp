@@ -243,7 +243,10 @@ namespace rasm
             AnimationClipRaw clip;
             clip.info.name = animation.name.empty() ? "animation " + std::to_string(a) : animation.name;
             std::vector<int> samplers(animation.samplers.size(), -1);
+            // A weights sampler's split, and the weight count it was split for: a channel of a node with another count
+            // reads the sampler again, and its own check refuses it.
             std::vector<int> weightSamplers(animation.samplers.size(), -1);
+            std::vector<uint32_t> weightSamplerCounts(animation.samplers.size(), 0);
             for (const auto &channel : animation.channels)
             {
                 if (channel.target_path == "weights")
@@ -255,7 +258,7 @@ namespace rasm
                         continue;
                     }
                     const uint32_t weightCount = getMorphTargetCount(model, model.nodes[channel.target_node].mesh);
-                    if (weightSamplers[channel.sampler] < 0)
+                    if (weightSamplers[channel.sampler] < 0 || weightSamplerCounts[channel.sampler] != weightCount)
                     {
                         std::vector<AnimationSampler> split;
                         const std::string error = readWeightSamplers(model, animation.samplers[channel.sampler], weightCount, split);
@@ -266,6 +269,7 @@ namespace rasm
                         }
                         clip.info.duration = std::max(clip.info.duration, split[0].times.back());
                         weightSamplers[channel.sampler] = static_cast<int>(clip.samplers.size());
+                        weightSamplerCounts[channel.sampler] = weightCount;
                         clip.samplers.insert(clip.samplers.end(), std::make_move_iterator(split.begin()), std::make_move_iterator(split.end()));
                     }
                     for (uint32_t t = 0; t < weightCount; ++t)
