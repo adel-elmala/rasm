@@ -705,19 +705,19 @@ float4 vertexMain(uint vertexIndex : SV_VertexID) : SV_Position
 
 <h3 id="optional-streams">One cache line per vertex, and optional streams</h3>
 
-<p>The vertex is exactly 64 bytes: one cache line. A vertex that starts on a line ends on it. Adding one more attribute to every vertex, even 4 bytes, would make most vertices cross two lines, and every mesh would pay for it, though most glTF files have no vertex colors. So an attribute that only some meshes have is a <b>stream</b> of its own (section 6), and the sub-mesh's row says where its part starts.</p>
+<p>The vertex is exactly 64 bytes: one cache line. A vertex that starts on a line ends on it. Adding one more attribute to every vertex, even 4 bytes, would make every vertex span two lines (a 68-byte vertex always holds a line boundary), and every mesh would pay for it, though most glTF files have no vertex colors. So an attribute that only some meshes have is a <b>stream</b> of its own (section 6), and the sub-mesh's row says where its part starts.</p>
 
 <div class="split">
   <div class="bad">
-    <svg viewBox="0 0 320 140" role="img" aria-label="Vertices of 68 bytes against 64-byte cache lines: the second and third vertices each cross a line boundary.">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Vertices of 68 bytes against 64-byte cache lines: every vertex crosses a line boundary.">
       <path d="M20,30 V110 M100,30 V110 M180,30 V110 M260,30 V110" class="grid"/>
-      <rect x="20" y="50" width="85" height="30" rx="3" class="mem"/><rect x="105" y="50" width="85" height="30" rx="3" class="bad"/><rect x="190" y="50" width="85" height="30" rx="3" class="bad"/>
+      <rect x="20" y="50" width="85" height="30" rx="3" class="bad"/><rect x="105" y="50" width="85" height="30" rx="3" class="bad"/><rect x="190" y="50" width="85" height="30" rx="3" class="bad"/>
       <text x="62" y="70" class="mid small">68 B</text><text x="147" y="70" class="mid small">68 B</text><text x="232" y="70" class="mid small">68 B</text>
       <text x="20" y="22" class="small">cache lines of 64 B</text>
-      <text x="20" y="130" class="small">color in every vertex: most cross a line</text>
+      <text x="20" y="130" class="small">color in every vertex: each crosses a line</text>
     </svg>
     <h4>Color in the vertex</h4>
-    <p>4 more bytes for every vertex of every mesh, and two cache lines for most vertices.</p>
+    <p>4 more bytes for every vertex of every mesh, and two cache lines for every vertex.</p>
   </div>
   <div class="good">
     <svg viewBox="0 0 320 140" role="img" aria-label="Vertices of 64 bytes, one per cache line, and next to them a small color stream only for the mesh that has colors.">
