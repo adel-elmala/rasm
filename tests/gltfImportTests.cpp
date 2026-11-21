@@ -10,42 +10,6 @@
 
 namespace
 {
-    // Appends `size` bytes to the buffer, 4-byte aligned, and returns the glTF bufferView that covers them.
-    std::string addView(std::vector<unsigned char> &buffer, const void *data, size_t size)
-    {
-        buffer.resize((buffer.size() + 3) / 4 * 4, 0);
-        const size_t offset = buffer.size();
-        const unsigned char *bytes = static_cast<const unsigned char *>(data);
-        buffer.insert(buffer.end(), bytes, bytes + size);
-        return "{\"buffer\":0,\"byteOffset\":" + std::to_string(offset) + ",\"byteLength\":" + std::to_string(size) + "}";
-    }
-
-    std::string base64(const std::vector<unsigned char> &bytes)
-    {
-        const char *alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        std::string out;
-        for (size_t i = 0; i < bytes.size(); i += 3)
-        {
-            const uint32_t b0 = bytes[i];
-            const uint32_t b1 = i + 1 < bytes.size() ? bytes[i + 1] : 0;
-            const uint32_t b2 = i + 2 < bytes.size() ? bytes[i + 2] : 0;
-            const uint32_t triple = b0 << 16 | b1 << 8 | b2;
-            out += alphabet[triple >> 18 & 63];
-            out += alphabet[triple >> 12 & 63];
-            out += i + 1 < bytes.size() ? alphabet[triple >> 6 & 63] : '=';
-            out += i + 2 < bytes.size() ? alphabet[triple & 63] : '=';
-        }
-        return out;
-    }
-
-    // `rest` holds the accessors, meshes, nodes and scenes; the buffer is embedded as a data URI.
-    rasm::GLTFRaw importGltf(const std::vector<unsigned char> &buffer, const std::string &views, const std::string &rest)
-    {
-        return importMeshText("{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":" + std::to_string(buffer.size()) +
-                                  ",\"uri\":\"data:application/octet-stream;base64," + base64(buffer) + "\"}],\"bufferViews\":[" + views + "]," + rest + "}",
-                              ".gltf");
-    }
-
     rasm::GLTFRaw importTriangleMesh(const std::string &primitives)
     {
         const float positions[] = {0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0};

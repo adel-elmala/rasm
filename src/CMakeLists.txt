@@ -29,6 +29,8 @@ target_sources(rasm PRIVATE
     "platform/window.cpp"
     "assets/mesh.cpp"
     "assets/meshImport.cpp"
+    "assets/gltfAccessor.cpp"
+    "assets/animationImport.cpp"
     "assets/meshLod.cpp"
     "assets/ktxImage.cpp"
     "assets/texture.cpp"

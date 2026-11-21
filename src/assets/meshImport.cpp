@@ -1,4 +1,6 @@
 #include "assets/meshImport.h"
+#include "assets/gltfAccessor.h"
+#include "assets/animationImport.h"
 #include "assets/ktxImage.h"
 #include "platform/paths.h"
 
@@ -25,22 +27,10 @@ namespace rasm
 {
     namespace
     {
-        // An accessor's elements copied out of the buffer, tightly packed (count * components * componentSize bytes),
-        // with byteStride and sparse substitution already applied.
-        struct AccessorData
-        {
-            std::vector<unsigned char> bytes;
-            size_t count = 0;
-            uint32_t components = 0;
-            uint32_t componentSize = 0;
-            int componentType = -1;
-            bool normalized = false;
-        };
-
         struct PendingNode
         {
             int index;
-            glm::mat4 parentTransform;
+            int parent;
         };
 
         // The glTF extensions a file may require: the others change what the file means, so it fails to load.
@@ -56,195 +46,6 @@ namespace rasm
 
     namespace
     {
-        // Returns `size` bytes of buffer view `viewIndex` starting at `offset`, or nullptr if the view or the range is invalid.
-        const unsigned char *getBufferViewData(const tinygltf::Model &model, int viewIndex, size_t offset, size_t size)
-        {
-            if (viewIndex < 0 || static_cast<size_t>(viewIndex) >= model.bufferViews.size())
-                return nullptr;
-            const tinygltf::BufferView &view = model.bufferViews[viewIndex];
-            if (view.buffer < 0 || static_cast<size_t>(view.buffer) >= model.buffers.size())
-                return nullptr;
-            const tinygltf::Buffer &buffer = model.buffers[view.buffer];
-            if (view.byteOffset > buffer.data.size() || view.byteLength > buffer.data.size() - view.byteOffset)
-                return nullptr;
-            if (offset > view.byteLength || size > view.byteLength - offset)
-                return nullptr;
-            return buffer.data.data() + view.byteOffset + offset;
-        }
-
-        // Decodes one index component. Indices stay integers; going through float would lose precision above 2^24.
-        // glTF data is not guaranteed to be aligned, so components are read with memcpy.
-        bool readIndexComponent(const unsigned char *src, int componentType, uint32_t &out)
-        {
-            switch (componentType)
-            {
-            case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
-            {
-                uint8_t value;
-                std::memcpy(&value, src, sizeof(value));
-                out = value;
-                return true;
-            }
-            case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
-            {
-                uint16_t value;
-                std::memcpy(&value, src, sizeof(value));
-                out = value;
-                return true;
-            }
-            case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
-                std::memcpy(&out, src, sizeof(out));
-                return true;
-            default:
-                return false;
-            }
-        }
-
-        // Decodes one attribute component. Attributes may be quantized (KHR_mesh_quantization): normalized integers map
-        // to [0, 1] or [-1, 1] as the glTF spec defines, and non-normalized integers keep their integer value.
-        bool readFloatComponent(const unsigned char *src, int componentType, bool normalized, float &out)
-        {
-            switch (componentType)
-            {
-            case TINYGLTF_COMPONENT_TYPE_FLOAT:
-                std::memcpy(&out, src, sizeof(out));
-                return true;
-            case TINYGLTF_COMPONENT_TYPE_BYTE:
-            {
-                int8_t value;
-                std::memcpy(&value, src, sizeof(value));
-                out = normalized ? std::max(value / 127.0f, -1.0f) : value;
-                return true;
-            }
-            case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
-            {
-                uint8_t value;
-                std::memcpy(&value, src, sizeof(value));
-                out = normalized ? value / 255.0f : value;
-                return true;
-            }
-            case TINYGLTF_COMPONENT_TYPE_SHORT:
-            {
-                int16_t value;
-                std::memcpy(&value, src, sizeof(value));
-                out = normalized ? std::max(value / 32767.0f, -1.0f) : value;
-                return true;
-            }
-            case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
-            {
-                uint16_t value;
-                std::memcpy(&value, src, sizeof(value));
-                out = normalized ? value / 65535.0f : value;
-                return true;
-            }
-            case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
-            {
-                uint32_t value;
-                std::memcpy(&value, src, sizeof(value));
-                out = static_cast<float>(value);
-                return true;
-            }
-            default:
-                return false;
-            }
-        }
-
-        // Copies an accessor's elements into `out`. Handles byteStride, accessors without a buffer view (all zeros) and
-        // sparse substitution. Returns false if the accessor is malformed or reads outside its buffer view.
-        bool gatherAccessor(const tinygltf::Model &model, int accessorIndex, AccessorData &out)
-        {
-            if (accessorIndex < 0 || static_cast<size_t>(accessorIndex) >= model.accessors.size())
-                return false;
-            const tinygltf::Accessor &acc = model.accessors[accessorIndex];
-
-            const int componentSize = tinygltf::GetComponentSizeInBytes(static_cast<uint32_t>(acc.componentType));
-            const int numComponents = tinygltf::GetNumComponentsInType(static_cast<uint32_t>(acc.type));
-            if (componentSize <= 0 || numComponents <= 0)
-                return false;
-
-            out.count = acc.count;
-            out.components = static_cast<uint32_t>(numComponents);
-            out.componentSize = static_cast<uint32_t>(componentSize);
-            out.componentType = acc.componentType;
-            out.normalized = acc.normalized;
-
-            const size_t elementSize = static_cast<size_t>(componentSize) * out.components;
-            out.bytes.assign(acc.count * elementSize, 0);
-            if (acc.count == 0)
-                return true;
-
-            if (acc.bufferView >= 0)
-            {
-                if (static_cast<size_t>(acc.bufferView) >= model.bufferViews.size())
-                    return false;
-                const int stride = acc.ByteStride(model.bufferViews[acc.bufferView]);
-                if (stride <= 0 || static_cast<size_t>(stride) < elementSize)
-                    return false;
-
-                const size_t byteSize = (acc.count - 1) * static_cast<size_t>(stride) + elementSize;
-                const unsigned char *data = getBufferViewData(model, acc.bufferView, acc.byteOffset, byteSize);
-                if (!data)
-                    return false;
-
-                for (size_t i = 0; i < acc.count; ++i)
-                    std::memcpy(out.bytes.data() + i * elementSize, data + i * stride, elementSize);
-            }
-
-            if (acc.sparse.isSparse && acc.sparse.count > 0)
-            {
-                const auto &sparse = acc.sparse;
-                const size_t sparseCount = static_cast<size_t>(sparse.count);
-                const int indexSize = tinygltf::GetComponentSizeInBytes(static_cast<uint32_t>(sparse.indices.componentType));
-                if (indexSize <= 0 || sparseCount > acc.count)
-                    return false;
-
-                // Sparse indices and values are tightly packed.
-                const unsigned char *indexData = getBufferViewData(model, sparse.indices.bufferView, sparse.indices.byteOffset, sparseCount * indexSize);
-                const unsigned char *valueData = getBufferViewData(model, sparse.values.bufferView, sparse.values.byteOffset, sparseCount * elementSize);
-                if (!indexData || !valueData)
-                    return false;
-
-                for (size_t s = 0; s < sparseCount; ++s)
-                {
-                    uint32_t target = 0;
-                    if (!readIndexComponent(indexData + s * indexSize, sparse.indices.componentType, target) || target >= acc.count)
-                        return false;
-                    std::memcpy(out.bytes.data() + target * elementSize, valueData + s * elementSize, elementSize);
-                }
-            }
-
-            return true;
-        }
-
-        // Reads an attribute accessor as `count * components` floats.
-        bool readFloatAccessor(const tinygltf::Model &model, int accessorIndex, std::vector<float> &out, uint32_t &components)
-        {
-            AccessorData data;
-            if (!gatherAccessor(model, accessorIndex, data))
-                return false;
-
-            out.resize(data.count * data.components);
-            for (size_t i = 0; i < out.size(); ++i)
-                if (!readFloatComponent(data.bytes.data() + i * data.componentSize, data.componentType, data.normalized, out[i]))
-                    return false;
-            components = data.components;
-            return true;
-        }
-
-        // Reads a SCALAR index accessor.
-        bool readIndexAccessor(const tinygltf::Model &model, int accessorIndex, std::vector<uint32_t> &out)
-        {
-            AccessorData data;
-            if (!gatherAccessor(model, accessorIndex, data) || data.components != 1)
-                return false;
-
-            out.resize(data.count);
-            for (size_t i = 0; i < out.size(); ++i)
-                if (!readIndexComponent(data.bytes.data() + i * data.componentSize, data.componentType, out[i]))
-                    return false;
-            return true;
-        }
-
         // Reads an optional vertex attribute. Returns false (with a warning) if it is missing, malformed, has fewer than
         // `minComponents` components or a count different from POSITION's.
         bool readVertexAttribute(const tinygltf::Model &model, const tinygltf::Primitive &primitive, const std::string &name, size_t vertexCount,
@@ -333,7 +134,7 @@ namespace rasm
             return index >= 0 && (static_cast<size_t>(index) + 1) * components <= values.size();
         }
 
-        std::vector<SubGLTFRaw> extractGLTFRaws(const tinygltf::Model &model, uint32_t meshIndex, const glm::mat4 &globalTransform)
+        std::vector<SubGLTFRaw> extractGLTFRaws(const tinygltf::Model &model, uint32_t meshIndex, int nodeIndex, const glm::mat4 &globalTransform)
         {
             std::vector<SubGLTFRaw> subGltfs;
 
@@ -483,23 +284,26 @@ namespace rasm
                 }
 
                 // Materials create textures, so the main thread turns the index into a handle (finishMeshLoad).
-                subGltfs.push_back({{.vertices = std::move(vertices), .indices = std::move(indices), .colors = std::move(colors)}, globalTransform, primitive.material});
+                subGltfs.push_back({{.vertices = std::move(vertices), .indices = std::move(indices), .colors = std::move(colors)}, globalTransform, primitive.material, nodeIndex});
             }
 
             return subGltfs;
         }
 
         // Depth-first walk of the node tree. glTF requires a strict tree, but nothing enforces it: an explicit stack
-        // survives arbitrarily deep files and the visited list stops cycles.
-        std::vector<SubGLTFRaw> traverseNodes(const tinygltf::Model &model, const std::vector<int> &rootNodes, const glm::mat4 &rootTransform)
+        // survives arbitrarily deep files, and a node that already has a parent is not visited again, which stops cycles.
+        // The walk keeps each visited node's parent and matrices, which the animation import needs.
+        std::vector<SubGLTFRaw> traverseNodes(const tinygltf::Model &model, const std::vector<int> &rootNodes, GltfNodeWalk &walk)
         {
             std::vector<SubGLTFRaw> subGltfs;
-            std::vector<bool> visited(model.nodes.size(), false);
+            walk.parents.assign(model.nodes.size(), GLTF_NODE_NOT_VISITED);
+            walk.locals.assign(model.nodes.size(), glm::mat4(1.0f));
+            walk.globals.assign(model.nodes.size(), glm::mat4(1.0f));
 
             // Pushed in reverse so nodes pop in file order.
             std::vector<PendingNode> pending;
             for (auto root = rootNodes.rbegin(); root != rootNodes.rend(); ++root)
-                pending.push_back({*root, rootTransform});
+                pending.push_back({*root, -1});
 
             while (!pending.empty())
             {
@@ -511,34 +315,37 @@ namespace rasm
                     spdlog::warn("glTF: skipping out-of-range node {} ({} nodes).", current.index, model.nodes.size());
                     continue;
                 }
-                if (visited[current.index])
+                if (walk.parents[current.index] != GLTF_NODE_NOT_VISITED)
                 {
                     spdlog::warn("glTF: skipping node {}, it has more than one parent or is part of a cycle.", current.index);
                     continue;
                 }
-                visited[current.index] = true;
+                walk.parents[current.index] = current.parent;
+                walk.order.push_back(current.index);
 
                 const tinygltf::Node &node = model.nodes[current.index];
 
                 // Compute this node's local matrix, then combine with its parent's world matrix
-                const glm::mat4 globalTransform = current.parentTransform * getLocalTransform(node);
+                walk.locals[current.index] = getLocalTransform(node);
+                const glm::mat4 globalTransform = (current.parent < 0 ? glm::mat4(1.0f) : walk.globals[current.parent]) * walk.locals[current.index];
+                walk.globals[current.index] = globalTransform;
 
                 // If this node instantiates a mesh, we now have its world transform!
                 if (node.mesh >= 0)
                 {
-                    auto extractedRaws = extractGLTFRaws(model, node.mesh, globalTransform);
+                    auto extractedRaws = extractGLTFRaws(model, node.mesh, current.index, globalTransform);
                     subGltfs.insert(subGltfs.end(), std::make_move_iterator(extractedRaws.begin()), std::make_move_iterator(extractedRaws.end()));
                 }
 
                 for (auto child = node.children.rbegin(); child != node.children.rend(); ++child)
-                    pending.push_back({*child, globalTransform});
+                    pending.push_back({*child, current.index});
             }
 
             return subGltfs;
         }
 
         // Entry point: Start traversal from the root nodes of the active scene
-        std::vector<SubGLTFRaw> processGLTF(const tinygltf::Model &model)
+        std::vector<SubGLTFRaw> processGLTF(const tinygltf::Model &model, GltfNodeWalk &walk)
         {
             if (model.scenes.empty())
                 return {};
@@ -554,7 +361,7 @@ namespace rasm
             const tinygltf::Scene &scene = model.scenes[sceneIndex];
 
             // glTF is right-handed Y-up like the engine, so the hierarchy needs no root transform (D8).
-            return traverseNodes(model, scene.nodes, glm::mat4(1.0f));
+            return traverseNodes(model, scene.nodes, walk);
         }
 
         // KTX2 bytes stay as they are, for transcodeKtxImages, which knows the slots that use each image. stb decodes the
@@ -684,7 +491,9 @@ namespace rasm
             }
 
             GLTFRaw raw;
-            raw.subGltfRaws = processGLTF(*model);
+            GltfNodeWalk walk;
+            raw.subGltfRaws = processGLTF(*model, walk);
+            raw.animation = importAnimations(*model, walk, raw.subGltfRaws);
             // Every accessor has been read. Materials need only the decoded images, so the raw buffers go now (P6).
             model->buffers.clear();
             transcodeKtxImages(*model, supportedTextureFormats, raw);
@@ -741,7 +550,7 @@ namespace rasm
             }
 
             GLTFRaw raw;
-            raw.subGltfRaws.push_back({std::move(objRaw), glm::mat4(1.0f), -1});
+            raw.subGltfRaws.push_back({std::move(objRaw), glm::mat4(1.0f), -1, -1});
             raw.loaded = true;
             return raw;
         }

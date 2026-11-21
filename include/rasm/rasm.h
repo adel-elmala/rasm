@@ -11,6 +11,7 @@
 #include "rasm/light.h"
 #include "rasm/material.h"
 #include "rasm/mesh.h"
+#include "rasm/animation.h"
 #include "rasm/render/renderGraph.h"
 
 // clang-format on

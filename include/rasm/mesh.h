@@ -3,6 +3,7 @@
 
 #include "glm/glm.hpp"
 
+#include "rasm/animation.h"
 #include "rasm/material.h"
 
 #include <cstdint>
@@ -48,6 +49,8 @@ namespace rasm
         ObjRaw              objRaw;
         glm::mat4           transform;
         int                 materialIndex;
+        int                 node            = -1;       // the glTF node
+        int                 animatedNode    = -1;       // in GLTFRaw::animation.nodes, -1 when no clip moves it
     };
 
     struct GLTFRaw
@@ -56,6 +59,7 @@ namespace rasm
         std::shared_ptr<tinygltf::Model>                model;
         std::unordered_map<uint64_t, Format>            ktxFormats;     // KHR_texture_basisu: getKtxSlotKey(image, slot) → format
         std::unordered_map<uint64_t, TextureRaw>        ktxImages;      // getKtxImageKey(image, format) → the transcoded levels
+        AnimationRaw                                    animation;
         bool                                            loaded          = false;
     };
 
@@ -85,12 +89,14 @@ namespace rasm
         MeshGeometry        geometry;
         glm::mat4           transform;
         MaterialHandle      material;
+        int32_t             animatedNode    = -1;
     };
 
     struct Mesh
     {
-        MeshState               state       = MeshState::LOADING;
-        std::vector<SubMesh>    subMeshes;
+        MeshState                   state       = MeshState::LOADING;
+        std::vector<SubMesh>        subMeshes;
+        std::vector<AnimationClip>  animations;
     };
 
     struct MeshSize
