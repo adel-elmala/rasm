@@ -565,7 +565,7 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
     <p>One decoded sub-mesh with its node matrix, its glTF material index (−1 for none), its glTF node, and its node in <code>AnimationRaw::nodes</code> (−1 when no clip moves it).</p>
     <dl>
       <dt>skin</dt><dd>The glTF skin of a skinned primitive, −1 otherwise. A skinned primitive's <code>transform</code> is the identity: glTF ignores the node's matrix, the joints place it.</dd>
-      <dt>firstJoint, jointCount</dt><dd>Its skin's joints in <code>AnimationRaw::joints</code>. <code>jointCount</code> is 0 when it is not skinned, also when the file has no clips or its skin does not import; it then draws its bind pose.</dd>
+      <dt>firstJoint, jointCount</dt><dd>Its skin's joints in <code>AnimationRaw::joints</code>. <code>jointCount</code> is 0 when it is not skinned, also when its skin does not import; it then draws its bind pose.</dd>
       <dt>jointSpheres</dt><dd>Per joint of its skin, the sphere (center, radius) around the bind-pose vertices the joint moves; radius −1 for a joint that moves none. The GPU moves them to bound the posed mesh (<a href="../guides/skinning.html">Skinning</a>).</dd>
     </dl>
   </div>
@@ -631,7 +631,7 @@ while (engine.running())
 
 <div class="api" id="stopAnimation">
   <pre class="sig">void stopAnimation(EntityHandle entity);</pre>
-  <div class="body"><p>Puts the entity back in its rest pose from the next frame, or cancels a play that waits for the mesh. Nothing happens when it plays nothing. A skinned mesh goes back to its bind pose: its vertices as the file stores them, placed by the entity.</p></div>
+  <div class="body"><p>Puts the entity back in its rest pose from the next frame, or cancels a play that waits for the mesh. Nothing happens when it plays nothing. A skinned mesh goes back to its skeleton's rest pose (the nodes' own translation, rotation and scale), with no motion from the frame before; one that never played stands in that pose from the start, also when its file has no clips.</p></div>
 </div>
 
 <div class="api" id="getAnimations">

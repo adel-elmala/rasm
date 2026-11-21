@@ -33,6 +33,7 @@ namespace rasm
         uint32_t                        firstJoint                                      = 0;
         uint32_t                        firstSkinnedVertex                              = 0;
         bool                            playing                                         = false;
+        bool                            rest                                            = false;    // a skinned mesh that plays no clip: posed at rest
         bool                            pending                                         = false;    // asked while its mesh loads
         uint32_t                        resetSync                                       = 0;
         AnimationPlay                   play;

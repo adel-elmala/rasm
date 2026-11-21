@@ -320,6 +320,8 @@ namespace rasm
         bool                        uploadMeshAnimation(MeshHandle mesh, const GLTFRaw& raw);
         void                        startPendingAnimation(EntityHandle entity);
         void                        startAnimation(EntityHandle entity, const AnimationPlay& play, uint32_t firstSync);
+        void                        poseAtRest(EntityHandle entity, uint32_t firstSync);
+        bool                        takeAnimationRow(EntityHandle entity, uint32_t firstSync);
         bool                        growAnimationBuffers(uint32_t transformCount, uint32_t poseCount, uint32_t jointCount, uint32_t skinnedCount, uint32_t firstSync);
         int32_t                     getAnimationRow(EntityHandle entity, uint32_t subMesh) const;
         bool                        animationCanMirror(MeshHandle mesh, uint32_t subMesh) const;

@@ -87,7 +87,10 @@ namespace rasm
     {
         AnimationRaw raw;
         const size_t nodeCount = model.nodes.size();
-        if (model.animations.empty() || walk.parents.size() != nodeCount)
+        // A skinned mesh is posed by its joints also without clips, at rest.
+        const bool skinned = std::any_of(subMeshes.begin(), subMeshes.end(), [](const SubGLTFRaw &sub)
+                                         { return sub.skin >= 0 && !sub.objRaw.skin.empty(); });
+        if ((model.animations.empty() && !skinned) || walk.parents.size() != nodeCount)
             return raw;
 
         auto isMovable = [&](int node)

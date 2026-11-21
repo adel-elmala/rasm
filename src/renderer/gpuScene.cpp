@@ -412,6 +412,7 @@ namespace rasm
                     state.syncedMatrix = entityRef.transform.toMatrix();
                     writeInstanceRows(entity, false);
                     startPendingAnimation(entity);
+                    poseAtRest(entity, gpuScene->syncCount);
                     if (state.waitingForTextures)
                         gpuScene->entitiesWaitingForTextures.push_back(entity);
                     else

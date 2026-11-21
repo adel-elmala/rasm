@@ -71,7 +71,7 @@ namespace rasm
             layout.nodes = alignTo16(sizeof(gfx::AnimationMeshData));
             layout.samplers = alignTo16(layout.nodes + nodeCount * sizeof(gfx::AnimationNodeData));
             layout.channels = alignTo16(layout.samplers + layout.samplerCount * sizeof(gfx::AnimationSamplerData));
-            layout.subMeshes = alignTo16(layout.channels + (animation.clips.size() + 1) * nodeCount * 3 * sizeof(int32_t));
+            layout.subMeshes = alignTo16(layout.channels + (animation.clips.size() + 2) * nodeCount * 3 * sizeof(int32_t));
             layout.keys = alignTo16(layout.subMeshes + subMeshCount * sizeof(gfx::AnimationSubMeshData));
             layout.joints = alignTo16(layout.keys + keyFloats * sizeof(float));
             layout.spheres = alignTo16(layout.joints + animation.joints.size() * sizeof(gfx::AnimationJointData));
@@ -207,9 +207,10 @@ namespace rasm
             std::memcpy(bytes.data() + layout.nodes + n * sizeof(data), &data, sizeof(data));
         }
 
-        // A row of channels per clip, then one with every clip's channels for ALL_ANIMATION_CLIPS.
+        // A row of channels per clip, then one with every clip's channels for ALL_ANIMATION_CLIPS, then one with none:
+        // the rest pose (getRestClip).
         const size_t clipCount = animation.clips.size();
-        std::vector<int32_t> channels((clipCount + 1) * nodeCount * 3, -1);
+        std::vector<int32_t> channels((clipCount + 2) * nodeCount * 3, -1);
         std::vector<float> keys;
         uint32_t samplerIndex = 0;
         for (size_t c = 0; c < animation.clips.size(); ++c)
@@ -411,6 +412,12 @@ namespace rasm
         if (!state.playing)
             return;
         state.playing = false;
+        // A skinned mesh goes back to its rest pose from the next frame, a jump with no motion from the frame before.
+        if (gpuAnimation->meshes[registry.entities[entity.index].mesh.index].skinnedVertexCount > 0)
+        {
+            state.rest = true;
+            state.resetSync = gpuScene->syncCount + 1;
+        }
         writeInstanceRows(entity, false);
     }
 
@@ -444,7 +451,7 @@ namespace rasm
         startAnimation(entity, state.play, gpuScene->syncCount);
     }
 
-    // The entity's first play takes a table row and its ranges of transforms and pose nodes, which it keeps (D4).
+    // A play takes the entity's row on its first pose (takeAnimationRow).
     void Engine::startAnimation(EntityHandle entity, const AnimationPlay &play, uint32_t firstSync)
     {
         GpuAnimation &animation = *gpuAnimation;
@@ -455,27 +462,60 @@ namespace rasm
             spdlog::error("playAnimation: entity {} cannot play clip {}: its mesh has {} clips.", entity.index, play.clip, clips.size());
             return;
         }
+        if (!takeAnimationRow(entity, firstSync))
+            return;
         EntityAnimation &state = animation.entityStates[entity.index];
-        const MeshAnimation &info = animation.meshes[mesh.index];
+        state.play = play;
+        state.playing = true;
+        state.rest = false;
+        state.resetSync = firstSync;
+        writeInstanceRows(entity, false);
+    }
+
+    // From syncGpuScene, once the entity has its instance rows: an entity of a skinned mesh that does not start a play
+    // is posed by its skeleton's rest pose (glTF), so it takes its row now.
+    void Engine::poseAtRest(EntityHandle entity, uint32_t firstSync)
+    {
+        GpuAnimation &animation = *gpuAnimation;
+        const MeshHandle mesh = registry.entities[entity.index].mesh;
+        if (mesh.index >= animation.meshes.size() || animation.meshes[mesh.index].skinnedVertexCount == 0)
+            return;
+        if (animation.entityStates.size() <= entity.index)
+            animation.entityStates.resize(entity.index + 1);
+        if (animation.entityStates[entity.index].playing || !takeAnimationRow(entity, firstSync))
+            return;
+        EntityAnimation &state = animation.entityStates[entity.index];
+        state.rest = true;
+        state.resetSync = firstSync;
+        writeInstanceRows(entity, false);
+    }
+
+    // The entity's first pose takes a table row and its ranges of transforms, pose nodes, joints and skinned vertices,
+    // which it keeps (D4).
+    bool Engine::takeAnimationRow(EntityHandle entity, uint32_t firstSync)
+    {
+        GpuAnimation &animation = *gpuAnimation;
+        EntityAnimation &state = animation.entityStates[entity.index];
+        const MeshAnimation &info = animation.meshes[registry.entities[entity.index].mesh.index];
         if (state.row == UINT32_MAX)
         {
             if (info.skinnedVertexCount > uint64_t{MAX_SKIN_GROUPS} * SKIN_GROUP_SIZE)
             {
-                spdlog::error("Entity {} cannot play: its mesh has {} skinned vertices, and the Skin pass takes at most {}.", entity.index, info.skinnedVertexCount,
+                spdlog::error("Entity {} cannot be posed: its mesh has {} skinned vertices, and the Skin pass takes at most {}.", entity.index, info.skinnedVertexCount,
                               MAX_SKIN_GROUPS * SKIN_GROUP_SIZE);
-                return;
+                return false;
             }
             if (animation.entityRows >= animation.entities.capacity())
             {
-                spdlog::error("The animated entity table is full: entity {} cannot play ({}/{} rows in use). EngineConfig::maxAnimatedEntities sets its size.",
+                spdlog::error("The animated entity table is full: entity {} cannot be posed ({}/{} rows in use). EngineConfig::maxAnimatedEntities sets its size.",
                               entity.index, animation.entityRows, animation.entities.capacity());
-                return;
+                return false;
             }
             if (!growAnimationBuffers(animation.transformCount + info.transformCount, animation.poseCount + info.nodeCount, animation.jointCount + info.jointCount,
                                       animation.skinnedCount + info.skinnedVertexCount, firstSync))
             {
-                spdlog::error("Entity {} cannot play: the animation buffers cannot grow.", entity.index);
-                return;
+                spdlog::error("Entity {} cannot be posed: the animation buffers cannot grow.", entity.index);
+                return false;
             }
             state.row = animation.entityRows++;
             state.firstTransform = animation.transformCount;
@@ -488,10 +528,7 @@ namespace rasm
             animation.skinnedCount += info.skinnedVertexCount;
             animation.maxSkinnedVertices = std::max(animation.maxSkinnedVertices, info.skinnedVertexCount);
         }
-        state.play = play;
-        state.playing = true;
-        state.resetSync = firstSync;
-        writeInstanceRows(entity, false);
+        return true;
     }
 
     // Both slots' transforms and skinned vertices grow at once, after the GPU is done with them: a frame reads the other
@@ -518,7 +555,7 @@ namespace rasm
             for (size_t i = 0; i < animation.entityStates.size(); ++i)
             {
                 EntityAnimation &state = animation.entityStates[i];
-                if (!state.playing)
+                if (!state.playing && !state.rest)
                     continue;
                 state.resetSync = firstSync;
                 writeAnimationRow(registry.entities[i].handle);
@@ -575,7 +612,7 @@ namespace rasm
     int32_t Engine::getAnimationRow(EntityHandle entity, uint32_t subMesh) const
     {
         const GpuAnimation &animation = *gpuAnimation;
-        if (animation.entityStates.size() <= entity.index || !animation.entityStates[entity.index].playing)
+        if (animation.entityStates.size() <= entity.index || (!animation.entityStates[entity.index].playing && !animation.entityStates[entity.index].rest))
             return -1;
         const EntityAnimation &state = animation.entityStates[entity.index];
         const int32_t transform = animation.meshes[registry.entities[entity.index].mesh.index].subMeshTransforms[subMesh];
@@ -591,18 +628,23 @@ namespace rasm
         const Entity &entityRef = registry.entities[entity.index];
         const std::vector<AnimationClip> &clips = registry.meshes[entityRef.mesh.index].animations;
         float duration = 0.0f;
-        for (size_t i = 0; i < clips.size(); ++i)
+        for (size_t i = 0; state.playing && i < clips.size(); ++i)
         {
             if (state.play.clip == ALL_ANIMATION_CLIPS || state.play.clip == i)
                 duration = std::max(duration, clips[i].duration);
         }
-        const uint32_t clip = state.play.clip == ALL_ANIMATION_CLIPS ? static_cast<uint32_t>(clips.size()) : state.play.clip;
+        // The rest pose is the channel row after ALL_ANIMATION_CLIPS's, with no channel: every node at its rest TRS.
+        int32_t clip = -1;
+        if (state.playing)
+            clip = static_cast<int32_t>(state.play.clip == ALL_ANIMATION_CLIPS ? clips.size() : state.play.clip);
+        else if (state.rest)
+            clip = static_cast<int32_t>(clips.size() + 1);
         const gfx::AnimatedEntity row{.entityMatrix = entityRef.transform.toMatrix(),
                                       .mesh = animation.meshes[entityRef.mesh.index].address,
                                       .phase = getAnimationPhase(state.play, duration, animation.base),
                                       .speed = state.play.speed,
                                       .duration = duration,
-                                      .clip = state.playing ? static_cast<int32_t>(clip) : -1,
+                                      .clip = clip,
                                       .loop = state.play.loop ? 1u : 0u,
                                       .firstTransform = state.firstTransform,
                                       .firstNode = state.firstNode,

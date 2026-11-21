@@ -15,7 +15,7 @@ namespace
     // A triangle skinned by a skin of five joints (nodes 1 to 5), with two sets of influences, and a clip that turns
     // joint 1 (node 2). Vertex 0 has weights that add up to 0.75, vertex 1 names joint 7, which the skin does not
     // have, and vertex 2 has five joints, one of them in both sets.
-    rasm::GLTFRaw importSkinnedTriangle()
+    rasm::GLTFRaw importSkinnedTriangle(bool withClip = true)
     {
         const float positions[] = {0, 0, 0, 1, 0, 0, 0, 2, 0};
         const uint8_t joints0[] = {0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3};
@@ -25,7 +25,8 @@ namespace
         std::vector<float> inverseBinds;
         for (int j = 0; j < 5; ++j)
         {
-            const float translationY = j == 1 ? -1.0f : 0.0f;
+            // The inverse of each joint's rest world matrix: node 1 at the origin, nodes 2 to 5 one up.
+            const float translationY = j == 0 ? 0.0f : -1.0f;
             inverseBinds.insert(inverseBinds.end(), {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, translationY, 0, 1});
         }
         const float times[] = {0.0f, 1.0f};
@@ -46,8 +47,18 @@ namespace
             "meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2,"JOINTS_1":3,"WEIGHTS_1":4}}]}],
             "skins":[{"joints":[1,2,3,4,5],"inverseBindMatrices":5}],
             "nodes":[{"mesh":0,"skin":0,"translation":[5,0,0]},{"children":[2]},{"translation":[0,1,0],"children":[3,4,5]},{},{},{}],
-            "scenes":[{"nodes":[0,1]}],
-            "animations":[{"samplers":[{"input":6,"output":7}],"channels":[{"sampler":0,"target":{"node":2,"path":"rotation"}}]}])");
+            "scenes":[{"nodes":[0,1]}])" + std::string(withClip ? R"(,
+            "animations":[{"samplers":[{"input":6,"output":7}],"channels":[{"sampler":0,"target":{"node":2,"path":"rotation"}}]}])"
+                                                                : ""));
+    }
+
+    // A kept node's world matrix at rest: its rest matrix after its parents', as the Animate pass walks them.
+    glm::mat4 getRestWorld(const rasm::AnimationRaw &animation, int32_t node)
+    {
+        glm::mat4 world = animation.nodes[node].rest;
+        for (int32_t parent = animation.nodes[node].parent; parent >= 0; parent = animation.nodes[parent].parent)
+            world = animation.nodes[parent].rest * world;
+        return world;
     }
 
     uint32_t sumWeights(const rasm::SkinVertex &vertex)
@@ -152,4 +163,24 @@ TEST_CASE("the pool data has the skinned sub-mesh, the joints' inverse bind rows
     glm::vec4 sphere;
     std::memcpy(&sphere, bytes.data() + (header.jointSpheres - address) + sizeof(sphere), sizeof(sphere));
     CHECK(sphere == glm::vec4(0, 1, 0, -1));
+}
+
+TEST_CASE("at rest, a joint matrix is the identity when the bind pose is the rest pose, also without clips")
+{
+    for (const bool withClip : {true, false})
+    {
+        const rasm::GLTFRaw raw = importSkinnedTriangle(withClip);
+        REQUIRE(raw.subGltfRaws[0].jointCount == 5);
+        REQUIRE(raw.animation.joints.size() == 5);
+        CHECK(raw.animation.clips.size() == (withClip ? 1u : 0u));
+        for (const rasm::AnimationJoint &joint : raw.animation.joints)
+        {
+            const glm::mat4 jointMatrix = getRestWorld(raw.animation, static_cast<int32_t>(joint.node)) * joint.inverseBind;
+            for (int c = 0; c < 4; ++c)
+            {
+                for (int r = 0; r < 4; ++r)
+                    CHECK(jointMatrix[c][r] == doctest::Approx(c == r ? 1.0f : 0.0f));
+            }
+        }
+    }
 }

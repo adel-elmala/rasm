@@ -1,7 +1,7 @@
 // Example 13: glTF skinning, skinned on the GPU once per frame.
 //
 // - CesiumMan walks (one clip, 19 joints). Its node's matrix turns it Z-up, which a skinned mesh ignores: its joints
-//   place it.
+//   place it. A second CesiumMan plays nothing and stands in his skeleton's rest pose.
 // - Three foxes play the Fox's three clips, found by name with findAnimation: Survey, Walk and Run (24 joints).
 // - RiggedFigure walks (19 joints, no texture).
 //
@@ -14,6 +14,7 @@
 //   --crowd N            N more CesiumMan in a grid, each at its own phase, for the CPU and GPU numbers
 //   --crowd-fox N        N more running foxes
 //   --cascades N         shadow cascades, 0 to 4 (default 4; 0: no shadows)
+//   --stop-frame N       stopAnimation on the walking CesiumMan at frame N: he goes back to the rest pose
 //   --bench              at 1920x1080 without validation (it would change the timings): print the average GPU time
 //                        of each pass and the CPU frame time over frames 300 to 600, then quit
 #include "glm/glm.hpp"
@@ -105,6 +106,7 @@ int main(int argc, char **argv)
     uint32_t crowd = 0;
     uint32_t crowdFoxes = 0;
     uint32_t cascades = 4;
+    uint32_t stopFrame = UINT32_MAX;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--fixed-step") == 0)
@@ -115,6 +117,8 @@ int main(int argc, char **argv)
             crowd = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
         if (std::strcmp(argv[i], "--crowd-fox") == 0 && i + 1 < argc)
             crowdFoxes = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
+        if (std::strcmp(argv[i], "--stop-frame") == 0 && i + 1 < argc)
+            stopFrame = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
         if (std::strcmp(argv[i], "--cascades") == 0 && i + 1 < argc)
             cascades = std::min<uint32_t>(static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10)), rasm::MAX_SHADOW_CASCADES);
         if (std::strcmp(argv[i], "--bench") == 0)
@@ -151,7 +155,10 @@ int main(int argc, char **argv)
     const rasm::EntityHandle ground = engine.createEntity("ground", groundMesh, createColorMaterial(engine, glm::vec3(0.55f), 0.8f),
                                                           rasm::Transform{glm::vec3(0.0f, -0.05f, -4.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(40.0f, 0.1f, 40.0f)});
     engine.addEntityToScene(scene, ground);
-    addCharacter(engine, scene, "CesiumMan", manMesh, makeTransform(glm::vec3(-2.1f, 0.0f, 0.6f), 1.0f, 0.5f), 0, 0.0f);
+    const rasm::EntityHandle walker = addCharacter(engine, scene, "CesiumMan", manMesh, makeTransform(glm::vec3(-1.5f, 0.0f, 1.0f), 1.0f, 0.5f), 0, 0.0f);
+    // No play: a skinned mesh stands in its rest pose.
+    const rasm::EntityHandle stander = engine.createEntity("CesiumMan at rest", manMesh, {}, makeTransform(glm::vec3(-2.6f, 0.0f, 0.0f), 1.0f, 0.9f));
+    engine.addEntityToScene(scene, stander);
     for (uint32_t i = 0; i < 3; ++i)
     {
         const glm::vec3 position(-1.1f + 1.1f * static_cast<float>(i), 0.0f, -0.8f + 0.5f * static_cast<float>(i));
@@ -212,6 +219,8 @@ int main(int argc, char **argv)
         seconds += fixedStep ? FIXED_STEP_SECONDS : std::chrono::duration<double>(now - lastTime).count();
         lastTime = now;
         engine.setAnimationTime(seconds);
+        if (frame == stopFrame)
+            engine.stopAnimation(walker);
         graph.execute(camera);
         if (!bench)
             continue;
