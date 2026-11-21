@@ -15,6 +15,7 @@ namespace rasm
         TRANSLATION,
         ROTATION,
         SCALE,
+        WEIGHTS,        // a morphed node's weights, one channel per weight
     };
 
     enum class AnimationInterpolation : uint32_t
@@ -61,7 +62,7 @@ namespace rasm
 
     struct AnimationChannel
     {
-        uint32_t                        node            = 0;
+        uint32_t                        node            = 0;                            // WEIGHTS: the weight's index in AnimationRaw::morphWeights
         AnimationPath                   path            = AnimationPath::TRANSLATION;
         uint32_t                        sampler         = 0;                            // in the clip's samplers
     };
@@ -85,6 +86,8 @@ namespace rasm
         std::vector<AnimationNode>      nodes;                                          // parents before children
         std::vector<AnimationClipRaw>   clips;
         std::vector<AnimationJoint>     joints;                                         // every skin's joints, one skin after another
+        std::vector<float>              morphWeights;                                   // every morphed node's default weights, one node after another
+        std::vector<std::string>        morphTargetNames;                               // one per weight
     };
 
 }

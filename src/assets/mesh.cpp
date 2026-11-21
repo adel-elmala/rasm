@@ -175,16 +175,18 @@ namespace rasm
         size_t indexCount = 0;
         size_t colorCount = 0;
         size_t skinCount = 0;
+        size_t morphCount = 0;
         for (const auto &sub : raw.subGltfRaws)
         {
             vertexCount += sub.objRaw.vertices.size();
             indexCount += sub.objRaw.indices.size();
             colorCount += sub.objRaw.colors.size();
             skinCount += sub.objRaw.skin.size();
+            morphCount += sub.objRaw.morphs.size();
             for (const auto &lod : sub.objRaw.lods)
                 indexCount += lod.indices.size();
         }
-        if (!geometryPool->fits(vertexCount, indexCount, colorCount, skinCount, raw.subGltfRaws.size()))
+        if (!geometryPool->fits(vertexCount, indexCount, colorCount, skinCount, morphCount, raw.subGltfRaws.size()))
         {
             spdlog::error("Failed to upload mesh: {}", load.path);
             return;
@@ -220,6 +222,7 @@ namespace rasm
         }
         for (const AnimationClipRaw &clip : raw.animation.clips)
             mesh.animations.push_back(clip.info);
+        mesh.morphTargetNames = raw.animation.morphTargetNames;
 
         mesh.state = MeshState::READY;
         spdlog::info("Loaded mesh {} ({:.1f} ms on the main thread): {} sub-meshes, geometry pool at {}/{} vertices and {}/{} indices.",
@@ -237,7 +240,8 @@ namespace rasm
         MeshSize meshSize{};
         for (const auto &subMesh : registry.meshes[handle.index].subMeshes)
         {
-            meshSize.verticesByteSize += subMesh.geometry.vertexCount * sizeof(Vertex) + subMesh.geometry.colorCount * sizeof(uint32_t) + subMesh.geometry.skinCount * sizeof(SkinVertex);
+            meshSize.verticesByteSize += subMesh.geometry.vertexCount * sizeof(Vertex) + subMesh.geometry.colorCount * sizeof(uint32_t) + subMesh.geometry.skinCount * sizeof(SkinVertex) +
+                                         subMesh.geometry.morphCount * sizeof(MorphDelta);
             meshSize.indicesByteSize += (subMesh.geometry.indexCount + subMesh.geometry.lodIndexCount) * sizeof(uint32_t);
         }
         return meshSize;

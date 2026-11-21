@@ -20,6 +20,7 @@ add_executable(rasm_tests
             "memoryAliasingTests.cpp"
             "meshLodTests.cpp"
             "meshTests.cpp"
+            "morphTargetsTests.cpp"
             "pathTests.cpp"
             "renderGraphTests.cpp"
             "resourceDescTests.cpp"

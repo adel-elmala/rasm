@@ -22,7 +22,8 @@ namespace rasm
         std::vector<uint8_t>            subMeshMirrors;                                             // per sub-mesh: 1 when a clip can mirror it (a scale through 0)
         uint32_t                        transformCount                                  = 0;        // the animated sub-meshes
         uint32_t                        jointCount                                      = 0;
-        uint32_t                        skinnedVertexCount                              = 0;        // its skinned sub-meshes' vertices
+        uint32_t                        skinnedVertexCount                              = 0;        // its skinned and morphed sub-meshes' vertices
+        uint32_t                        weightCount                                     = 0;        // its morph weights
     };
 
     struct EntityAnimation
@@ -32,9 +33,12 @@ namespace rasm
         uint32_t                        firstNode                                       = 0;
         uint32_t                        firstJoint                                      = 0;
         uint32_t                        firstSkinnedVertex                              = 0;
+        uint32_t                        firstWeight                                     = 0;
         bool                            playing                                         = false;
         bool                            rest                                            = false;    // a skinned mesh that plays no clip: posed at rest
         bool                            pending                                         = false;    // asked while its mesh loads
+        bool                            morphOverride                                   = false;    // setMorphWeights's weights replace the clip's
+        std::vector<float>              morphWeights;                                               // setMorphWeights's
         uint32_t                        resetSync                                       = 0;
         AnimationPlay                   play;
     };
@@ -56,10 +60,13 @@ namespace rasm
         BufferHandle                    joints[MAX_FRAMES_IN_FLIGHT]                    = {};       // 3 rows per joint matrix
         uint32_t                        jointCapacity                                   = 0;
         uint32_t                        jointCount                                      = 0;
-        BufferHandle                    skinnedVertices[MAX_FRAMES_IN_FLIGHT]           = {};       // what the Skin pass writes
+        BufferHandle                    skinnedVertices[MAX_FRAMES_IN_FLIGHT]           = {};       // what the Skin pass writes, skinned and morphed
         uint32_t                        skinnedCapacity                                 = 0;
         uint32_t                        skinnedCount                                    = 0;
         uint32_t                        maxSkinnedVertices                              = 0;        // the most of one entity
+        GpuTable                        weightOverrides;                                            // setMorphWeights's, one float per row, NaN: the clip's
+        BufferHandle                    weights[MAX_FRAMES_IN_FLIGHT]                   = {};       // the morph weights the Animate pass writes
+        uint32_t                        weightCount                                     = 0;
         BufferHandle                    frames[MAX_FRAMES_IN_FLIGHT]                    = {};
         PipelineHandle                  pipeline                                        = {};
         PipelineHandle                  skinPipeline                                    = {};
@@ -68,9 +75,10 @@ namespace rasm
         uint32_t                        recordedSync                                    = UINT32_MAX;   // the last sync whose frame ran the pass
     };
 
-    uint64_t                            getAnimationPoolBytes(const AnimationRaw& animation, uint32_t subMeshCount, uint32_t sphereCount);
+    uint64_t                            getAnimationPoolBytes(const AnimationRaw& animation, uint32_t subMeshCount, uint32_t sphereCount, uint32_t radiusCount);
     std::vector<uint8_t>                buildAnimationPoolData(const AnimationRaw& animation, const gfx::AnimationSubMeshData* subMeshes, uint32_t subMeshCount,
-                                                               const glm::vec4* spheres, uint32_t sphereCount, uint64_t address);
+                                                               const glm::vec4* spheres, uint32_t sphereCount, const float* morphRadii, uint32_t radiusCount,
+                                                               uint64_t address);
 
 }
 // clang-format on

@@ -1,5 +1,6 @@
 #include "renderer/animation.h"
 #include "rasm/engine.h"
+#include "assets/morphImport.h"
 #include "core/utils.h"
 #include "platform/paths.h"
 #include "renderer/animationTime.h"
@@ -11,6 +12,7 @@
 #include "tracy/Tracy.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -30,6 +32,8 @@ namespace rasm
             uint64_t keys = 0;
             uint64_t joints = 0;
             uint64_t spheres = 0;
+            uint64_t weights = 0;
+            uint64_t radii = 0;
             uint64_t size = 0;
             uint32_t samplerCount = 0;
         };
@@ -48,6 +52,9 @@ namespace rasm
         constexpr uint64_t POSE_BYTES_PER_NODE = 6 * sizeof(glm::vec4);
         // The Animate pass dispatches a group per table row in x only.
         constexpr uint32_t MAX_ANIMATE_GROUPS = 65535;
+        // A morph weight that setMorphWeights does not set: the clip's, or the rest weight, counts. A quiet NaN, which
+        // the Animate pass compares by its bits (animationTypes.slang), so no fast-math rule can drop the test.
+        constexpr uint32_t NO_WEIGHT_OVERRIDE = 0x7FC00000;
     }
 
     namespace
@@ -57,7 +64,18 @@ namespace rasm
             return (value + 15) & ~uint64_t{15};
         }
 
-        PoolLayout getPoolLayout(const AnimationRaw &animation, uint32_t subMeshCount, uint32_t sphereCount)
+        uint32_t alignToSkinGroup(uint32_t value)
+        {
+            return (value + SKIN_GROUP_SIZE - 1) / SKIN_GROUP_SIZE * SKIN_GROUP_SIZE;
+        }
+
+        // Per clip and the two rows after them: three channels per node, then one per morph weight.
+        uint64_t getChannelRow(const AnimationRaw &animation)
+        {
+            return animation.nodes.size() * 3 + animation.morphWeights.size();
+        }
+
+        PoolLayout getPoolLayout(const AnimationRaw &animation, uint32_t subMeshCount, uint32_t sphereCount, uint32_t radiusCount)
         {
             PoolLayout layout;
             uint64_t keyFloats = 0;
@@ -71,11 +89,13 @@ namespace rasm
             layout.nodes = alignTo16(sizeof(gfx::AnimationMeshData));
             layout.samplers = alignTo16(layout.nodes + nodeCount * sizeof(gfx::AnimationNodeData));
             layout.channels = alignTo16(layout.samplers + layout.samplerCount * sizeof(gfx::AnimationSamplerData));
-            layout.subMeshes = alignTo16(layout.channels + (animation.clips.size() + 2) * nodeCount * 3 * sizeof(int32_t));
+            layout.subMeshes = alignTo16(layout.channels + (animation.clips.size() + 2) * getChannelRow(animation) * sizeof(int32_t));
             layout.keys = alignTo16(layout.subMeshes + subMeshCount * sizeof(gfx::AnimationSubMeshData));
             layout.joints = alignTo16(layout.keys + keyFloats * sizeof(float));
             layout.spheres = alignTo16(layout.joints + animation.joints.size() * sizeof(gfx::AnimationJointData));
-            layout.size = alignTo16(layout.spheres + sphereCount * sizeof(glm::vec4));
+            layout.weights = alignTo16(layout.spheres + sphereCount * sizeof(glm::vec4));
+            layout.radii = alignTo16(layout.weights + animation.morphWeights.size() * sizeof(float));
+            layout.size = alignTo16(layout.radii + radiusCount * sizeof(float));
             return layout;
         }
 
@@ -150,6 +170,12 @@ namespace rasm
             return sub.animatedNode >= 0 || sub.jointCount > 0;
         }
 
+        // The Skin pass writes its vertices: its joints or its morph targets move them.
+        bool isPosed(const SubGLTFRaw &sub)
+        {
+            return sub.jointCount > 0 || sub.objRaw.morphTargetCount > 0;
+        }
+
         uint32_t countAnimatedSubMeshes(const GLTFRaw &raw)
         {
             if (raw.animation.nodes.empty())
@@ -164,26 +190,34 @@ namespace rasm
                 count += sub.jointCount;
             return count;
         }
+
+        uint32_t countMorphRadii(const GLTFRaw &raw)
+        {
+            uint32_t count = 0;
+            for (const SubGLTFRaw &sub : raw.subGltfRaws)
+                count += sub.objRaw.morphTargetCount;
+            return count;
+        }
     }
 
-    uint64_t getAnimationPoolBytes(const AnimationRaw &animation, uint32_t subMeshCount, uint32_t sphereCount)
+    uint64_t getAnimationPoolBytes(const AnimationRaw &animation, uint32_t subMeshCount, uint32_t sphereCount, uint32_t radiusCount)
     {
         if (animation.nodes.empty() || subMeshCount == 0)
             return 0;
-        return getPoolLayout(animation, subMeshCount, sphereCount).size;
+        return getPoolLayout(animation, subMeshCount, sphereCount, radiusCount).size;
     }
 
     std::vector<uint8_t> buildAnimationPoolData(const AnimationRaw &animation, const gfx::AnimationSubMeshData *subMeshes, uint32_t subMeshCount, const glm::vec4 *spheres,
-                                                uint32_t sphereCount, uint64_t address)
+                                                uint32_t sphereCount, const float *morphRadii, uint32_t radiusCount, uint64_t address)
     {
-        const PoolLayout layout = getPoolLayout(animation, subMeshCount, sphereCount);
+        const PoolLayout layout = getPoolLayout(animation, subMeshCount, sphereCount, radiusCount);
         const auto nodeCount = static_cast<uint32_t>(animation.nodes.size());
         std::vector<uint8_t> bytes(layout.size, 0);
 
         uint32_t skinnedVertexCount = 0;
         for (uint32_t k = 0; k < subMeshCount; ++k)
         {
-            if (subMeshes[k].jointCount > 0)
+            if (subMeshes[k].vertexCount > 0)
                 skinnedVertexCount = std::max(skinnedVertexCount, subMeshes[k].firstSkinnedVertex + subMeshes[k].vertexCount);
         }
         const gfx::AnimationMeshData header{.nodes = address + layout.nodes,
@@ -193,10 +227,14 @@ namespace rasm
                                             .keys = address + layout.keys,
                                             .joints = address + layout.joints,
                                             .jointSpheres = address + layout.spheres,
+                                            .weights = address + layout.weights,
+                                            .morphRadii = address + layout.radii,
                                             .nodeCount = nodeCount,
                                             .subMeshCount = subMeshCount,
                                             .jointCount = static_cast<uint32_t>(animation.joints.size()),
-                                            .skinnedVertexCount = skinnedVertexCount};
+                                            .skinnedVertexCount = skinnedVertexCount,
+                                            .weightCount = static_cast<uint32_t>(animation.morphWeights.size()),
+                                            .padding = 0};
         std::memcpy(bytes.data(), &header, sizeof(header));
 
         for (uint32_t n = 0; n < nodeCount; ++n)
@@ -210,7 +248,8 @@ namespace rasm
         // A row of channels per clip, then one with every clip's channels for ALL_ANIMATION_CLIPS, then one with none:
         // the rest pose (getRestClip).
         const size_t clipCount = animation.clips.size();
-        std::vector<int32_t> channels((clipCount + 2) * nodeCount * 3, -1);
+        const uint64_t channelRow = getChannelRow(animation);
+        std::vector<int32_t> channels((clipCount + 2) * channelRow, -1);
         std::vector<float> keys;
         uint32_t samplerIndex = 0;
         for (size_t c = 0; c < animation.clips.size(); ++c)
@@ -232,9 +271,9 @@ namespace rasm
             // Two channels on one path of a node: the later one wins.
             for (const AnimationChannel &channel : clip.channels)
             {
-                const size_t slot = channel.node * 3 + static_cast<uint32_t>(channel.path);
-                channels[c * nodeCount * 3 + slot] = static_cast<int32_t>(firstSampler + channel.sampler);
-                channels[clipCount * nodeCount * 3 + slot] = static_cast<int32_t>(firstSampler + channel.sampler);
+                const uint64_t slot = channel.path == AnimationPath::WEIGHTS ? nodeCount * 3 + channel.node : channel.node * 3 + static_cast<uint32_t>(channel.path);
+                channels[c * channelRow + slot] = static_cast<int32_t>(firstSampler + channel.sampler);
+                channels[clipCount * channelRow + slot] = static_cast<int32_t>(firstSampler + channel.sampler);
             }
         }
         std::memcpy(bytes.data() + layout.channels, channels.data(), channels.size() * sizeof(int32_t));
@@ -248,6 +287,10 @@ namespace rasm
         }
         if (sphereCount > 0)
             std::memcpy(bytes.data() + layout.spheres, spheres, sphereCount * sizeof(glm::vec4));
+        if (!animation.morphWeights.empty())
+            std::memcpy(bytes.data() + layout.weights, animation.morphWeights.data(), animation.morphWeights.size() * sizeof(float));
+        if (radiusCount > 0)
+            std::memcpy(bytes.data() + layout.radii, morphRadii, radiusCount * sizeof(float));
         return bytes;
     }
 
@@ -258,11 +301,21 @@ namespace rasm
             spdlog::error("EngineConfig::maxAnimatedEntities is {}; it must be 1 to {}.", config.maxAnimatedEntities, MAX_ANIMATE_GROUPS);
             return false;
         }
+        if (config.maxMorphWeights == 0)
+        {
+            spdlog::error("EngineConfig::maxMorphWeights is 0; it must be at least 1.");
+            return false;
+        }
         GpuAnimation &animation = *gpuAnimation;
         if (!animation.entities.create(ctx, "Animated Entity Table", sizeof(gfx::AnimatedEntity), config.maxAnimatedEntities))
         {
             spdlog::error("Failed to create the animated entity table of EngineConfig::maxAnimatedEntities = {} rows ({} B each, one copy per frame slot).",
                           config.maxAnimatedEntities, sizeof(gfx::AnimatedEntity));
+            return false;
+        }
+        if (!animation.weightOverrides.create(ctx, "Morph Weight Override Table", sizeof(float), config.maxMorphWeights))
+        {
+            spdlog::error("Failed to create the morph weight table of EngineConfig::maxMorphWeights = {} rows (4 B each, one copy per frame slot).", config.maxMorphWeights);
             return false;
         }
         animation.pool = ctx.createBuffer({.name = "Animation Pool", .usage = BufferUsage::STORAGE, .size = std::max<uint64_t>(config.animationPoolBytes, 16)});
@@ -278,7 +331,9 @@ namespace rasm
             animation.joints[i] = ctx.createBuffer({.name = "Joint Matrix Buffer " + std::to_string(i), .usage = BufferUsage::STORAGE, .size = FIRST_JOINT_CAPACITY * JOINT_BYTES});
             animation.skinnedVertices[i] = ctx.createBuffer({.name = "Skinned Vertex Buffer " + std::to_string(i), .usage = BufferUsage::STORAGE, .size = FIRST_SKINNED_CAPACITY * sizeof(Vertex)});
             animation.frames[i] = ctx.createBuffer({.name = "Animation Frame Buffer", .usage = BufferUsage::STORAGE, .size = sizeof(gfx::AnimationFrame), .hostVisible = true});
+            animation.weights[i] = ctx.createBuffer({.name = "Morph Weight Buffer " + std::to_string(i), .usage = BufferUsage::STORAGE, .size = uint64_t{config.maxMorphWeights} * sizeof(float)});
             created = created && animation.transforms[i].isValid() && animation.joints[i].isValid() && animation.skinnedVertices[i].isValid() && animation.frames[i].isValid() &&
+                      animation.weights[i].isValid() &&
                       clearBuffer(ctx, animation.transforms[i], FIRST_TRANSFORM_CAPACITY * sizeof(gfx::InstanceTransform));
         }
         if (!created)
@@ -292,7 +347,7 @@ namespace rasm
     // A mesh's animations take one range of the pool, which is never freed (D4), like its geometry.
     uint64_t Engine::getMeshAnimationBytes(const GLTFRaw &raw) const
     {
-        return getAnimationPoolBytes(raw.animation, countAnimatedSubMeshes(raw), countJointSpheres(raw));
+        return getAnimationPoolBytes(raw.animation, countAnimatedSubMeshes(raw), countJointSpheres(raw), countMorphRadii(raw));
     }
 
     uint64_t Engine::getAnimationPoolUsed() const
@@ -307,9 +362,12 @@ namespace rasm
             return true;
         GpuAnimation &animation = *gpuAnimation;
         const std::vector<SubMesh> &subMeshes = registry.meshes[mesh.index].subMeshes;
-        MeshAnimation info{.nodeCount = static_cast<uint32_t>(raw.animation.nodes.size()), .jointCount = static_cast<uint32_t>(raw.animation.joints.size())};
+        MeshAnimation info{.nodeCount = static_cast<uint32_t>(raw.animation.nodes.size()),
+                           .jointCount = static_cast<uint32_t>(raw.animation.joints.size()),
+                           .weightCount = static_cast<uint32_t>(raw.animation.morphWeights.size())};
         std::vector<gfx::AnimationSubMeshData> animated;
         std::vector<glm::vec4> spheres;
+        std::vector<float> radii;
         const std::vector<uint8_t> mirrors = getMirroringNodes(raw.animation);
         for (size_t i = 0; i < raw.subGltfRaws.size(); ++i)
         {
@@ -322,23 +380,27 @@ namespace rasm
             info.subMeshTransforms.push_back(isAnimated(sub) ? static_cast<int32_t>(animated.size()) : -1);
             if (!isAnimated(sub))
                 continue;
+            // A posed sub-mesh starts on a Skin group, so a group never mixes two sub-meshes' morph targets.
+            const uint32_t firstSkinnedVertex = isPosed(sub) ? alignToSkinGroup(info.skinnedVertexCount) : 0;
             animated.push_back({.node = sub.animatedNode >= 0 ? static_cast<uint32_t>(sub.animatedNode) : 0,
                                 .jointCount = sub.jointCount,
                                 .firstJoint = sub.firstJoint,
                                 .firstSphere = static_cast<uint32_t>(spheres.size()),
                                 .geometryIndex = subMeshes[i].geometry.geometryIndex,
-                                .vertexCount = sub.jointCount > 0 ? subMeshes[i].geometry.vertexCount : 0,
-                                .firstSkinnedVertex = sub.jointCount > 0 ? info.skinnedVertexCount : 0});
-            if (sub.jointCount > 0)
-            {
-                spheres.insert(spheres.end(), sub.jointSpheres.begin(), sub.jointSpheres.end());
-                info.skinnedVertexCount += subMeshes[i].geometry.vertexCount;
-            }
+                                .vertexCount = isPosed(sub) ? subMeshes[i].geometry.vertexCount : 0,
+                                .firstSkinnedVertex = firstSkinnedVertex,
+                                .firstWeight = sub.firstWeight >= 0 ? static_cast<uint32_t>(sub.firstWeight) : 0,
+                                .firstMorphRadius = static_cast<uint32_t>(radii.size())});
+            spheres.insert(spheres.end(), sub.jointSpheres.begin(), sub.jointSpheres.end());
+            const std::vector<float> subRadii = getMorphRadii(sub.objRaw);
+            radii.insert(radii.end(), subRadii.begin(), subRadii.end());
+            if (isPosed(sub))
+                info.skinnedVertexCount = firstSkinnedVertex + subMeshes[i].geometry.vertexCount;
         }
         info.transformCount = static_cast<uint32_t>(animated.size());
         info.address = ctx.getBufferDeviceAddress(animation.pool) + animation.poolUsed;
-        const std::vector<uint8_t> data =
-            buildAnimationPoolData(raw.animation, animated.data(), info.transformCount, spheres.data(), static_cast<uint32_t>(spheres.size()), info.address);
+        const std::vector<uint8_t> data = buildAnimationPoolData(raw.animation, animated.data(), info.transformCount, spheres.data(), static_cast<uint32_t>(spheres.size()),
+                                                                 radii.data(), static_cast<uint32_t>(radii.size()), info.address);
         if (!ctx.fillBuffer(animation.pool, data.data(), data.size(), animation.poolUsed))
             return false;
         animation.poolUsed += bytes;
@@ -412,7 +474,8 @@ namespace rasm
         if (!state.playing)
             return;
         state.playing = false;
-        // A skinned mesh goes back to its rest pose from the next frame, a jump with no motion from the frame before.
+        // A skinned or morphed mesh goes back to its rest pose from the next frame, a jump with no motion from the frame
+        // before.
         if (gpuAnimation->meshes[registry.entities[entity.index].mesh.index].skinnedVertexCount > 0)
         {
             state.rest = true;
@@ -439,6 +502,98 @@ namespace rasm
                 return static_cast<int32_t>(i);
         }
         return -1;
+    }
+
+    // Weights past count follow the clip. A mesh that still loads keeps them until the entity has its row, and then
+    // drops those past its weight count. The first call is a jump, with no motion from the frame before; the next ones
+    // move the vertices smoothly, as a clip does.
+    void Engine::setMorphWeights(EntityHandle entity, const float *weights, uint32_t count)
+    {
+        if (!entity.isValid() || entity.index >= registry.entities.size())
+        {
+            spdlog::error("setMorphWeights: invalid entity handle.");
+            return;
+        }
+        if (count > 0 && !weights)
+        {
+            spdlog::error("setMorphWeights: entity {} gets {} weights and no pointer to them.", entity.index, count);
+            return;
+        }
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            if (!std::isfinite(weights[i]))
+            {
+                spdlog::error("setMorphWeights: weight {} of entity {} is not finite; its weights stay as they are.", i, entity.index);
+                return;
+            }
+        }
+        const MeshHandle mesh = registry.entities[entity.index].mesh;
+        if (!mesh.isValid() || mesh.index >= registry.meshes.size() || registry.meshes[mesh.index].state == MeshState::FAILED)
+        {
+            spdlog::error("setMorphWeights: entity {} has no mesh.", entity.index);
+            return;
+        }
+        GpuAnimation &animation = *gpuAnimation;
+        const uint32_t weightCount = mesh.index < animation.meshes.size() ? animation.meshes[mesh.index].weightCount : 0;
+        if (registry.meshes[mesh.index].state == MeshState::READY && count > weightCount)
+        {
+            spdlog::error("setMorphWeights: entity {} gets {} weights, and its mesh has {}.", entity.index, count, weightCount);
+            return;
+        }
+        if (animation.entityStates.size() <= entity.index)
+            animation.entityStates.resize(entity.index + 1);
+        EntityAnimation &state = animation.entityStates[entity.index];
+        const bool started = !state.morphOverride;
+        state.morphOverride = true;
+        state.morphWeights.assign(weights, weights + count);
+        // Without its row yet, takeAnimationRow writes them.
+        if (state.row == UINT32_MAX)
+            return;
+        writeMorphWeightRows(entity);
+        if (started)
+        {
+            state.resetSync = gpuScene->syncCount + 1;
+            writeAnimationRow(entity);
+        }
+    }
+
+    void Engine::clearMorphWeights(EntityHandle entity)
+    {
+        if (!entity.isValid() || entity.index >= registry.entities.size())
+        {
+            spdlog::error("clearMorphWeights: invalid entity handle.");
+            return;
+        }
+        if (gpuAnimation->entityStates.size() <= entity.index || !gpuAnimation->entityStates[entity.index].morphOverride)
+            return;
+        EntityAnimation &state = gpuAnimation->entityStates[entity.index];
+        state.morphOverride = false;
+        state.morphWeights.clear();
+        if (state.row == UINT32_MAX)
+            return;
+        writeMorphWeightRows(entity);
+        state.resetSync = gpuScene->syncCount + 1;
+        writeAnimationRow(entity);
+    }
+
+    std::vector<std::string> Engine::getMorphTargetNames(MeshHandle mesh) const
+    {
+        if (!mesh.isValid() || mesh.index >= registry.meshes.size())
+            return {};
+        return registry.meshes[mesh.index].morphTargetNames;
+    }
+
+    // One row per weight of the entity: setMorphWeights's value, or NaN, where the Animate pass takes the clip's.
+    void Engine::writeMorphWeightRows(EntityHandle entity)
+    {
+        GpuAnimation &animation = *gpuAnimation;
+        const EntityAnimation &state = animation.entityStates[entity.index];
+        const uint32_t weightCount = animation.meshes[registry.entities[entity.index].mesh.index].weightCount;
+        for (uint32_t w = 0; w < weightCount; ++w)
+        {
+            const float value = state.morphOverride && w < state.morphWeights.size() ? state.morphWeights[w] : std::bit_cast<float>(NO_WEIGHT_OVERRIDE);
+            animation.weightOverrides.setRow(state.firstWeight + w, &value);
+        }
     }
 
     // From syncGpuScene, once the entity has its instance rows: the frame of this sync draws the pose first.
@@ -472,8 +627,8 @@ namespace rasm
         writeInstanceRows(entity, false);
     }
 
-    // From syncGpuScene, once the entity has its instance rows: an entity of a skinned mesh that does not start a play
-    // is posed by its skeleton's rest pose (glTF), so it takes its row now.
+    // From syncGpuScene, once the entity has its instance rows: an entity of a skinned or morphed mesh that does not start
+    // a play is posed by its skeleton's rest pose and its rest weights (glTF), so it takes its row now.
     void Engine::poseAtRest(EntityHandle entity, uint32_t firstSync)
     {
         GpuAnimation &animation = *gpuAnimation;
@@ -490,8 +645,8 @@ namespace rasm
         writeInstanceRows(entity, false);
     }
 
-    // The entity's first pose takes a table row and its ranges of transforms, pose nodes, joints and skinned vertices,
-    // which it keeps (D4).
+    // The entity's first pose takes a table row and its ranges of transforms, pose nodes, joints, skinned vertices and
+    // morph weights, which it keeps (D4).
     bool Engine::takeAnimationRow(EntityHandle entity, uint32_t firstSync)
     {
         GpuAnimation &animation = *gpuAnimation;
@@ -503,6 +658,12 @@ namespace rasm
             {
                 spdlog::error("Entity {} cannot be posed: its mesh has {} skinned vertices, and the Skin pass takes at most {}.", entity.index, info.skinnedVertexCount,
                               MAX_SKIN_GROUPS * SKIN_GROUP_SIZE);
+                return false;
+            }
+            if (info.weightCount > animation.weightOverrides.capacity() - animation.weightCount)
+            {
+                spdlog::error("The morph weight table is full: entity {} cannot be posed ({} weights, {}/{} in use). EngineConfig::maxMorphWeights sets its size.",
+                              entity.index, info.weightCount, animation.weightCount, animation.weightOverrides.capacity());
                 return false;
             }
             if (animation.entityRows >= animation.entities.capacity())
@@ -522,11 +683,14 @@ namespace rasm
             state.firstNode = animation.poseCount;
             state.firstJoint = animation.jointCount;
             state.firstSkinnedVertex = animation.skinnedCount;
+            state.firstWeight = animation.weightCount;
             animation.transformCount += info.transformCount;
             animation.poseCount += info.nodeCount;
             animation.jointCount += info.jointCount;
             animation.skinnedCount += info.skinnedVertexCount;
+            animation.weightCount += info.weightCount;
             animation.maxSkinnedVertices = std::max(animation.maxSkinnedVertices, info.skinnedVertexCount);
+            writeMorphWeightRows(entity);
         }
         return true;
     }
@@ -650,7 +814,9 @@ namespace rasm
                                       .firstNode = state.firstNode,
                                       .resetSync = state.resetSync,
                                       .firstJoint = state.firstJoint,
-                                      .firstSkinnedVertex = state.firstSkinnedVertex};
+                                      .firstSkinnedVertex = state.firstSkinnedVertex,
+                                      .firstWeight = state.firstWeight,
+                                      .padding = 0};
         gpuAnimation->entities.setRow(state.row, &row);
     }
 
@@ -669,6 +835,7 @@ namespace rasm
             }
         }
         animation.entities.upload(ctx, static_cast<uint32_t>(frameCount));
+        animation.weightOverrides.upload(ctx, static_cast<uint32_t>(frameCount));
     }
 
     void Engine::addAnimationPass(RenderGraph &graph)
@@ -684,6 +851,7 @@ namespace rasm
                 builder.readPrevious(gpuAnimation->transforms);
                 builder.write(gpuAnimation->pose);
                 builder.write(gpuAnimation->joints);
+                builder.write(gpuAnimation->weights);
             },
             [this](RenderContext &)
             { recordAnimation(); });
@@ -693,6 +861,7 @@ namespace rasm
             [this](PassBuilder &builder)
             {
                 builder.read(gpuAnimation->joints);
+                builder.read(gpuAnimation->weights);
                 builder.write(gpuAnimation->skinnedVertices);
             },
             [this](RenderContext &)
@@ -732,7 +901,10 @@ namespace rasm
                                        .vertices = ctx.getBufferDeviceAddress(geometryPool->vertexBuffer()),
                                        .skins = ctx.getBufferDeviceAddress(geometryPool->skinBuffer()),
                                        .geometry = ctx.getBufferDeviceAddress(geometryPool->tableBuffer()),
-                                       .skinnedVertices = ctx.getBufferDeviceAddress(animation.skinnedVertices[frame])};
+                                       .skinnedVertices = ctx.getBufferDeviceAddress(animation.skinnedVertices[frame]),
+                                       .weights = ctx.getBufferDeviceAddress(animation.weights[frame]),
+                                       .weightOverrides = ctx.getBufferDeviceAddress(animation.weightOverrides.buffer(frame)),
+                                       .morphs = ctx.getBufferDeviceAddress(geometryPool->morphBuffer())};
         if (!ctx.fillBuffer(animation.frames[frame], &data, sizeof(data)))
             return;
         animation.recordedSync = gpuScene->syncCount;
@@ -744,7 +916,8 @@ namespace rasm
         ctx.dispatch(commandBuffer, animation.entityRows);
     }
 
-    // Runs after this frame's Animate pass, with its frame data: x is the entity's row, y its next 64 skinned vertices.
+    // Runs after this frame's Animate pass, with its frame data: x is the entity's row, y its next 64 skinned vertices,
+    // which morph targets move first and joints then.
     void Engine::recordSkinning()
     {
         ZoneScoped;

@@ -2,6 +2,7 @@
 #include "assets/gltfAccessor.h"
 #include "assets/animationImport.h"
 #include "assets/skinImport.h"
+#include "assets/morphImport.h"
 #include "assets/ktxImage.h"
 #include "platform/paths.h"
 
@@ -216,6 +217,10 @@ namespace rasm
                 if (skinIndex >= 0)
                     readSkinVertices(model, primitive, vertexCount, static_cast<uint32_t>(model.skins[skinIndex].joints.size()), primitiveName, skin);
 
+                // The morph targets' deltas, into the morph stream.
+                std::vector<MorphDelta> morphs;
+                const uint32_t morphTargetCount = readMorphTargets(model, primitive, vertexCount, primitiveName, morphs);
+
                 // Interleave the data into our standard Vertex struct
                 std::vector<Vertex> vertices(vertexCount);
                 for (size_t i = 0; i < vertexCount; ++i)
@@ -292,7 +297,10 @@ namespace rasm
                 }
 
                 // Materials create textures, so the main thread turns the index into a handle (finishMeshLoad).
-                SubGLTFRaw sub{{.vertices = std::move(vertices), .indices = std::move(indices), .colors = std::move(colors)}, globalTransform, primitive.material, nodeIndex};
+                SubGLTFRaw sub{{.vertices = std::move(vertices), .indices = std::move(indices), .colors = std::move(colors), .morphs = std::move(morphs), .morphTargetCount = morphTargetCount},
+                               globalTransform,
+                               primitive.material,
+                               nodeIndex};
                 if (!skin.empty())
                 {
                     sub.transform = glm::mat4(1.0f);
@@ -510,13 +518,20 @@ namespace rasm
             GltfNodeWalk walk;
             raw.subGltfRaws = processGLTF(*model, walk);
             raw.animation = importAnimations(*model, walk, raw.subGltfRaws);
-            // A primitive whose skin did not import draws its bind pose and needs no skin stream.
+            // A primitive whose skin did not import draws its bind pose and needs no skin stream. One whose morph targets
+            // have no weights, or that nothing places as it is posed, draws its base shape.
             for (SubGLTFRaw &sub : raw.subGltfRaws)
             {
                 if (sub.jointCount == 0)
                 {
                     sub.objRaw.skin.clear();
                     sub.jointSpheres.clear();
+                }
+                if (sub.firstWeight < 0 || (sub.jointCount == 0 && sub.animatedNode < 0))
+                {
+                    sub.objRaw.morphs.clear();
+                    sub.objRaw.morphTargetCount = 0;
+                    sub.firstWeight = -1;
                 }
             }
             // Every accessor has been read. Materials need only the decoded images, so the raw buffers go now (P6).

@@ -127,12 +127,14 @@ namespace rasm
         uint32_t     geometryPoolVertices    = 1u << 21; // 64 B each: 128 MiB
         uint32_t     geometryPoolColors      = 1u << 20; // 4 B each: 4 MiB
         uint32_t     geometryPoolSkins       = 1u << 20; // a skinned vertex's joints and weights, 16 B each: 16 MiB
+        uint32_t     geometryPoolMorphs      = 1u << 20; // a morph target's change to a vertex, 24 B each: 24 MiB
         uint32_t     geometryPoolIndices     = 1u << 24; // 4 B each: 64 MiB
-        uint32_t     geometryPoolSubMeshes   = 1u << 14; // 128 B each
+        uint32_t     geometryPoolSubMeshes   = 1u << 14; // 136 B each
         uint32_t     maxInstances            = 1u << 16; // 160 B each, twice (one copy per frame slot)
         uint32_t     maxLights               = 1u << 14; // 56 B each, twice
-        uint32_t     maxAnimatedEntities     = 1u << 14; // entities that play a clip, 112 B each, twice
+        uint32_t     maxAnimatedEntities     = 1u << 14; // entities that play a clip, 120 B each, twice
         uint32_t     animationPoolBytes      = 16u << 20; // the nodes, key times and values of every loaded animation
+        uint32_t     maxMorphWeights         = 1u << 16; // the morph weights of every posed entity, 4 B each, four times
         bool         showStats               = false;
         bool         occlusionCulling        = true;     // two-pass Hi-Z culling in the scene passes; false keeps frustum culling only
         bool         meshLods                = true;
