@@ -619,7 +619,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <tr><td><code>SAMPLED_COLOR_ATTACHMENT</code></td><td>drawn into, then read (render target color)</td><td>–</td></tr>
       <tr><td><code>SAMPLED_STORAGE</code></td><td>written by compute shaders as a storage image, one mip per slot (<a href="#updateBindlessStorageImage"><code>updateBindlessStorageImage</code></a>), then read by shaders</td><td>–</td></tr>
       <tr><td><code>STORAGE</code></td><td>only passed on to the backend</td><td>yes: compute reads and writes it (<code>GENERAL</code>); only for a <code>SAMPLED_STORAGE</code> texture</td></tr>
-      <tr><td><code>SAMPLED_DEPTH_ATTACHMENT</code></td><td>depth buffer that shaders can also read: with <code>EngineConfig::occlusionCulling</code>, a render target's depth in <code>D32_SFLOAT</code>; always, a depth-only target's depth (<a href="render-graph.html#readDepth">readDepth</a>)</td><td>–</td></tr>
+      <tr><td><code>SAMPLED_DEPTH_ATTACHMENT</code></td><td>depth buffer that shaders can also read: a render target's depth in <code>D32_SFLOAT</code> (<a href="render-graph.html#readDepth">readDepth</a>)</td><td>–</td></tr>
       <tr><td><code>TRANSFER_SRC</code>, <code>TRANSFER_DST</code>, <code>TRANSIENT_ATTACHMENT</code>, <code>INPUT_ATTACHMENT</code></td><td>only passed on to the backend; no RASM call uses them</td><td>–</td></tr>
       <tr><td><code>PRESENT_SRC</code></td><td>–</td><td>yes (swapchain image before present)</td></tr>
       <tr><td><code>UNKNOWN</code></td><td>–</td><td>the start; never a target (contents thrown away)</td></tr>
@@ -944,10 +944,10 @@ struct BindlessDescriptorSetLayoutDescHash
   </div>
 </div>
 
-<div class="api" id="destroyTransientRenderTargets">
-  <pre class="sig">void destroyTransientRenderTargets(const RenderTargetHandle* renderTargets, uint32_t count);</pre>
+<div class="api" id="destroyRenderTargets">
+  <pre class="sig">void destroyRenderTargets(const RenderTargetHandle* renderTargets, uint32_t count);</pre>
   <div class="body">
-    <p>Destroys transient targets: their textures, their handles, and the heaps of each group that has no target left. It waits for the device to be idle first, so call it outside the frame loop. Handles that are unknown or not transient are skipped. The <code>RenderGraph</code> destructor calls it for the graph's targets.</p>
+    <p>Destroys render targets a graph made, transient or with history: their textures, bindless and storage slots, their handles, and the heaps of each transient group that has no target left. It waits for the device to be idle first, so call it outside the frame loop. Unknown handles are skipped. The <code>RenderGraph</code> destructor (and a move assignment over a graph) calls it for the targets the graph made with <a href="render-graph.html#RenderGraph-createRenderTarget"><code>RenderGraph::createRenderTarget</code></a>.</p>
   </div>
 </div>
 
