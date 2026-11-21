@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Texture Compression: Blocks, KTX2 and Basis · RASM</title>
+<meta name="description" content="How GPUs keep textures small: 4x4 blocks of a fixed size (BC, ASTC, ETC2), why PNG and JPEG do not help in video memory, Basis Universal files that are transcoded to whatever the GPU reads, the KTX2 container, two-channel normal maps, mips and color spaces of compressed textures, and how RASM loads KTX2 files.">
+<meta name="rasm-sources" content="src/assets/ktxImage.cpp src/assets/ktxImage.h src/assets/texture.cpp src/assets/material.cpp src/assets/meshImport.cpp src/rhi/device.cpp src/rhi/device.h src/rhi/mipChain.cpp src/rhi/renderContext.cpp src/rhi/uploadManager.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/vulkan/vulkanCommandBuffer.cpp src/renderer/gpuScene.cpp shaders/lib/pbr.slang shaders/lib/core.slang include/rasm/types.h include/rasm/render/resource.h include/rasm/render/renderContext.h examples/10_ktx2_textures/main.cpp tests/ktxImageTests.cpp cmake/triplets/x64-windows.cmake">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/texture-compression.js"></script>
+</head>
+<body data-root="../" data-page="guides/texture-compression.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">GPU data</p>
+<h1>Texture compression: blocks, KTX2 and Basis</h1>
+<p class="lead">Textures take most of a scene's video memory. A GPU can read textures that stay compressed in memory, but only in its own <b>block formats</b>, and each kind of GPU reads different ones. This page explains how block compression works, why a PNG does not save any video memory, and how a <b>Basis Universal</b> file in a <b>KTX2</b> container is turned, at load time, into whatever the GPU reads. The <a href="#in-rasm">last part</a> shows how RASM loads KTX2 files.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A block format stores each <b>4 × 4 tile</b> of texels in <b>8 or 16 bytes</b>, where plain RGBA8 needs 64. The GPU decodes a block when it samples it, so the texture stays small in video memory.</li>
+    <li>PNG and JPEG are small on disk only: the GPU can't sample them, so they are decoded to RGBA8 before the upload.</li>
+    <li>Desktop GPUs read <b>BC</b> formats, mobile GPUs <b>ASTC</b> and <b>ETC2</b>. A <b>Basis</b> file (ETC1S or UASTC) is none of them, but it <b>transcodes</b> fast to any of them.</li>
+    <li>Pick the format per GPU and per use: color in BC7, a two-channel normal map in BC5, one channel in BC4, RGBA8 when the GPU has none of them.</li>
+    <li>A block format can't make its own mips cheaply, so the file brings them. Color space is a matter of how the same blocks are read: an sRGB or a UNORM view.</li>
+  </ul>
+</div>
+
+<h2 id="memory"><span class="n">1</span>Textures are most of the memory</h2>
+
+<p>A 2048 × 2048 color texture in RGBA8 is 16 MiB, and its mips add a third. A model with a base color, a normal map and an occlusion-roughness-metal map per material soon needs hundreds of megabytes.</p>
+
+<div class="stats">
+  <div><b>21.3 MiB</b><span>2048² RGBA8 with mips</span><small>4 bytes × 2048² × 4/3</small></div>
+  <div><b>5.3 MiB</b><span>the same in BC7</span><small>1 byte per texel</small></div>
+  <div><b>2.7 MiB</b><span>one channel in BC4</span><small>half a byte per texel</small></div>
+  <div><b>272 → 69 MiB</b><span>Flight Helmet, 15 textures</span><small>PNG (RGBA8) against KTX2 (BC7), measured</small></div>
+</div>
+
+<h2 id="blocks"><span class="n">2</span>Blocks of 4 × 4 texels</h2>
+
+<p>Texels next to each other are often close in color. A block format cuts the texture into tiles of 4 × 4 texels. Each tile stores a few <b>endpoint</b> colors and, per texel, a short <b>index</b> that says where between the endpoints the texel lies. Every tile has the same size, so the GPU finds the tile of any texel with one multiply: it can sample at random, which a PNG's variable-length stream can't do.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Left: a 4 by 4 tile of texels shading from dark blue to light blue. Middle: two endpoint colors with a line between them and four points on it; each texel gets a 2-bit index to one of the points. Right: the tile in RGBA8 is 64 bytes, 16 texels of 4 bytes. In BC7 mode 6 it is 16 bytes: 7 mode bits, 56 bits of endpoints, 2 p-bits and 63 bits of indices.">
+    <text x="20" y="24" class="title">the tile</text>
+    <rect x="20" y="40" width="40" height="40" class="gpu o-25"/><rect x="60" y="40" width="40" height="40" class="gpu o-25"/><rect x="100" y="40" width="40" height="40" class="gpu o-50"/><rect x="140" y="40" width="40" height="40" class="gpu o-50"/>
+    <rect x="20" y="80" width="40" height="40" class="gpu o-25"/><rect x="60" y="80" width="40" height="40" class="gpu o-50"/><rect x="100" y="80" width="40" height="40" class="gpu o-50"/><rect x="140" y="80" width="40" height="40" class="gpu o-75"/>
+    <rect x="20" y="120" width="40" height="40" class="gpu o-50"/><rect x="60" y="120" width="40" height="40" class="gpu o-50"/><rect x="100" y="120" width="40" height="40" class="gpu o-75"/><rect x="140" y="120" width="40" height="40" class="gpu o-75"/>
+    <rect x="20" y="160" width="40" height="40" class="gpu o-50"/><rect x="60" y="160" width="40" height="40" class="gpu o-75"/><rect x="100" y="160" width="40" height="40" class="gpu o-75"/><rect x="140" y="160" width="40" height="40" class="gpu"/>
+    <text x="40" y="65" class="mid mono small">0</text><text x="80" y="65" class="mid mono small">0</text><text x="120" y="65" class="mid mono small">1</text><text x="160" y="65" class="mid mono small">1</text>
+    <text x="40" y="105" class="mid mono small">0</text><text x="80" y="105" class="mid mono small">1</text><text x="120" y="105" class="mid mono small">1</text><text x="160" y="105" class="mid mono small">2</text>
+    <text x="40" y="145" class="mid mono small">1</text><text x="80" y="145" class="mid mono small">1</text><text x="120" y="145" class="mid mono small">2</text><text x="160" y="145" class="mid mono small">2</text>
+    <text x="40" y="185" class="mid mono small">1</text><text x="80" y="185" class="mid mono small">2</text><text x="120" y="185" class="mid mono small">2</text><text x="160" y="185" class="mid mono small">3</text>
+    <text x="100" y="224" class="mid small">each texel: an index</text>
+
+    <text x="230" y="24" class="title">endpoints</text>
+    <circle cx="245" cy="160" r="12" class="gpu o-25"/><text x="245" y="194" class="mid small">A</text>
+    <circle cx="395" cy="60" r="12" class="gpu"/><text x="395" y="94" class="mid small">B</text>
+    <line x1="257" y1="152" x2="383" y2="68" class="arrow"/>
+    <circle cx="245" cy="160" r="4" class="hot"/><circle cx="295" cy="127" r="4" class="hot"/><circle cx="345" cy="93" r="4" class="hot"/><circle cx="395" cy="60" r="4" class="hot"/>
+    <text x="290" y="150" class="small t-hot">1</text><text x="340" y="116" class="small t-hot">2</text>
+    <text x="320" y="224" class="mid small">index i: A + (B − A) × i / 3</text>
+
+    <text x="440" y="24" class="title">bytes</text>
+    <text x="440" y="54" class="small">RGBA8: 16 texels × 4 B = 64 B</text>
+    <rect x="440" y="62" width="300" height="24" class="mem"/>
+    <path d="M459,62 V86 M477,62 V86 M496,62 V86 M515,62 V86 M534,62 V86 M552,62 V86 M571,62 V86 M590,62 V86 M609,62 V86 M627,62 V86 M646,62 V86 M665,62 V86 M684,62 V86 M702,62 V86 M721,62 V86" class="grid"/>
+    <text x="440" y="124" class="small">BC7 mode 6: 16 B = 128 bits</text>
+    <rect x="440" y="132" width="75" height="24" class="mem"/>
+    <rect x="440" y="132" width="4" height="24" class="hot"/>
+    <rect x="444" y="132" width="33" height="24" class="gpu"/>
+    <rect x="477" y="132" width="1" height="24" class="hot"/>
+    <rect x="478" y="132" width="37" height="24" class="shader"/>
+    <text x="440" y="176" class="small t-hot">mode</text><text x="470" y="194" class="small t-gpu">endpoints 56</text><text x="500" y="176" class="small t-shader">indices 63</text>
+    <text x="440" y="230" class="small">BC4: 8 B, one channel</text>
+    <rect x="440" y="238" width="37" height="24" class="mem"/>
+    <text x="590" y="150" class="mid big">4× smaller</text>
+    <text x="590" y="256" class="mid big">8× smaller</text>
+  </svg>
+  <figcaption>One tile, its endpoints and its bytes, drawn to scale. A texel is decoded from its tile alone, as the GPU samples it; the texture is never expanded in memory.</figcaption>
+</figure>
+
+<p>The real formats add tricks on top of this picture: several pairs of endpoints for tiles with two regions, more index bits, a separate line for alpha. The families that matter today:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Format</th><th>Channels</th><th>Bytes per 4 × 4</th><th>Bits per texel</th><th>Where</th></tr>
+  <tr><td>BC7</td><td>RGBA</td><td>16</td><td>8</td><td>desktop GPUs (D3D11 and later), Apple Silicon Macs</td></tr>
+  <tr><td>BC5</td><td>RG (two BC4 halves)</td><td>16</td><td>8</td><td>same; the usual format for normal maps</td></tr>
+  <tr><td>BC4</td><td>R</td><td>8</td><td>4</td><td>same; masks, occlusion, height</td></tr>
+  <tr><td>ASTC 4 × 4</td><td>RGBA</td><td>16</td><td>8</td><td>mobile GPUs, Apple GPUs (larger blocks trade quality for size)</td></tr>
+  <tr><td>ETC2 RGBA8</td><td>RGBA</td><td>16</td><td>8</td><td>every OpenGL ES 3 and Vulkan mobile GPU</td></tr>
+  <tr><td>EAC R11 / RG11</td><td>R / RG</td><td>8 / 16</td><td>4 / 8</td><td>same, the mobile BC4 and BC5</td></tr>
+  <tr><td>RGBA8</td><td>RGBA</td><td>64</td><td>32</td><td>every GPU; the fallback</td></tr>
+</table>
+</div>
+
+<h2 id="files"><span class="n">3</span>Small on disk is not small on the GPU</h2>
+
+<p>A PNG or a JPEG packs the image with a method made for files: a stream that must be decoded from the start. The GPU can't sample that, so the loader decodes it to RGBA8, and that is what reaches video memory. A block-compressed file is already in the shape the GPU reads.</p>
+
+<div class="split">
+  <div class="bad">
+    <h4>PNG or JPEG</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A PNG of 3 MB on disk becomes 16 MiB of RGBA8 pixels in RAM and 21 MiB with mips in video memory.">
+      <rect x="22" y="90" width="20" height="30" class="cpu"/><text x="32" y="134" class="mid small">disk 3 MB</text>
+      <line x1="46" y1="105" x2="96" y2="105" class="arrow" marker-end="url(#ah)"/><text x="71" y="98" class="mid small">decode</text>
+      <rect x="100" y="40" width="70" height="80" class="mem"/><text x="135" y="134" class="mid small">RAM 16 MiB</text>
+      <line x1="174" y1="80" x2="216" y2="80" class="arrow" marker-end="url(#ah)"/><text x="195" y="72" class="mid small">mips</text>
+      <rect x="220" y="14" width="90" height="106" class="gpu"/><text x="265" y="134" class="mid small">GPU 21.3 MiB</text>
+    </svg>
+    <p>Small file, full-size texture. The decode and the mips also cost CPU time at load.</p>
+  </div>
+  <div class="good">
+    <h4>Block-compressed (KTX2)</h4>
+    <svg viewBox="0 0 320 140" role="img" aria-label="A KTX2 file of 3 MB on disk becomes 5.3 MiB of BC7 blocks, with mips, in RAM and in video memory.">
+      <rect x="22" y="90" width="20" height="30" class="cpu"/><text x="32" y="134" class="mid small">disk 3 MB</text>
+      <line x1="46" y1="105" x2="96" y2="105" class="arrow" marker-end="url(#ah)"/><text x="71" y="86" class="mid small">transcode</text>
+      <rect x="100" y="94" width="40" height="26" class="mem"/><text x="120" y="134" class="mid small">RAM 5.3</text>
+      <line x1="144" y1="107" x2="216" y2="107" class="arrow" marker-end="url(#ah)"/><text x="180" y="98" class="mid small">copy</text>
+      <rect x="220" y="94" width="40" height="26" class="gpu"/><text x="240" y="134" class="mid small">GPU 5.3 MiB</text>
+    </svg>
+    <p>The file brings its mips; loading copies the blocks.</p>
+  </div>
+</div>
+
+<h2 id="basis"><span class="n">4</span>One file for every GPU: Basis Universal</h2>
+
+<p>An engine that ships BC7 files can't run them on a phone, and ASTC files can't run on most desktop GPUs. <b>Basis Universal</b> stores a texture in an in-between format that no GPU samples, but that turns into any of them quickly, without the slow search a real encoder does. This step is called <b>transcoding</b>, and it runs on the CPU at load time.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="One Basis file, ETC1S or UASTC, on the left. Arrows labeled transcode go to BC7 for a desktop GPU, ASTC 4x4 for a mobile or Apple GPU, ETC2 for an older mobile GPU, and RGBA8 for a GPU with none of them.">
+    <rect x="20" y="80" width="170" height="70" rx="6" class="mem"/>
+    <text x="105" y="108" class="mid title">.ktx2, Basis</text>
+    <text x="105" y="128" class="mid small">ETC1S or UASTC</text>
+    <path d="M192,100 C300,30 330,30 430,30" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <path d="M192,110 C300,85 330,85 430,85" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <path d="M192,125 C300,140 330,140 430,140" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <path d="M192,135 C300,195 330,195 430,195" class="arrow cpu dashed" marker-end="url(#ah-cpu)"/>
+    <text x="105" y="60" class="mid small t-cpu">transcode on the CPU, at load</text>
+    <rect x="434" y="14" width="140" height="32" rx="4" class="gpu"/><text x="504" y="35" class="mid">BC7</text>
+    <rect x="434" y="69" width="140" height="32" rx="4" class="gpu"/><text x="504" y="90" class="mid">ASTC 4×4</text>
+    <rect x="434" y="124" width="140" height="32" rx="4" class="gpu"/><text x="504" y="145" class="mid">ETC2</text>
+    <rect x="434" y="179" width="140" height="32" rx="4" class="box"/><text x="504" y="200" class="mid">RGBA8</text>
+    <text x="590" y="35" class="small">desktop, Apple Silicon</text>
+    <text x="590" y="90" class="small">mobile, Apple GPUs</text>
+    <text x="590" y="145" class="small">older mobile</text>
+    <text x="590" y="200" class="small">none of them: 4× memory</text>
+  </svg>
+  <figcaption>The same file on every GPU. Only the transcode target changes.</figcaption>
+</figure>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="ETC1S: a small file, made of shared palettes of endpoints and selectors, further compressed.">
+      <rect x="30" y="40" width="60" height="50" rx="4" class="mem"/><text x="60" y="70" class="mid small">palette</text>
+      <rect x="110" y="40" width="100" height="50" rx="4" class="mem o-50"/><text x="160" y="70" class="mid small">tiles point in</text>
+    </svg>
+    <h4>ETC1S</h4>
+    <p>Tiles share palettes of endpoints and index patterns, so files are tiny. Quality is lower: fine for base colors seen from afar, weak for normal maps.</p>
+    <p class="cost">About 1 to 2 bits per texel on disk.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="UASTC: one 16-byte block per tile, like ASTC, then zstd over the file.">
+      <rect x="30" y="40" width="40" height="40" rx="2" class="gpu"/><rect x="74" y="40" width="40" height="40" rx="2" class="gpu"/><rect x="118" y="40" width="40" height="40" rx="2" class="gpu"/><rect x="162" y="40" width="40" height="40" rx="2" class="gpu"/>
+      <text x="120" y="104" class="mid small">16 B per tile, then zstd</text>
+    </svg>
+    <h4>UASTC</h4>
+    <p>One 16-byte block per tile, a subset of ASTC, so it maps almost one to one onto BC7 and ASTC. Near BC7 quality; files are larger, so they are usually zstd-compressed.</p>
+    <p class="cost">8 bits per texel before zstd.</p>
+  </div>
+</div>
+
+<h2 id="ktx2"><span class="n">5</span>The KTX2 container</h2>
+
+<p><b>KTX2</b> (Khronos texture, version 2) is the file around the data. It names the format with Vulkan's format numbers, stores every mip, and says what the channels mean and how the color is encoded. glTF reads it through the <samp>KHR_texture_basisu</samp> extension.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 150" role="img" aria-label="The bytes of a KTX2 file from left to right: an 80-byte header, the level index with an offset and size per mip, the data format descriptor, key-value data, the supercompression global data for ETC1S, then the mip levels with the smallest first.">
+    <rect x="20" y="40" width="80" height="40" class="cpu"/><text x="60" y="64" class="mid small">header</text>
+    <rect x="100" y="40" width="90" height="40" class="cpu o-75"/><text x="145" y="64" class="mid small">level index</text>
+    <rect x="190" y="40" width="70" height="40" class="cpu o-50"/><text x="225" y="64" class="mid small">DFD</text>
+    <rect x="260" y="40" width="60" height="40" class="cpu o-25"/><text x="290" y="64" class="mid small">keys</text>
+    <rect x="320" y="40" width="70" height="40" class="shader o-50"/><text x="355" y="64" class="mid small">global</text>
+    <rect x="390" y="40" width="20" height="40" class="mem o-25"/><rect x="410" y="40" width="40" height="40" class="mem o-50"/><rect x="450" y="40" width="80" height="40" class="mem o-75"/><rect x="530" y="40" width="210" height="40" class="mem"/>
+    <text x="635" y="64" class="mid small">mip 0</text>
+    <text x="60" y="100" class="mid small">format, size,</text><text x="60" y="114" class="mid small">levels, scheme</text>
+    <text x="145" y="100" class="mid small">offset + size</text><text x="145" y="114" class="mid small">per mip</text>
+    <text x="225" y="100" class="mid small">channels,</text><text x="225" y="114" class="mid small">sRGB or not</text>
+    <text x="355" y="100" class="mid small">ETC1S</text><text x="355" y="114" class="mid small">palettes</text>
+    <text x="565" y="100" class="mid small">smallest mip first, so a stream can show it early</text>
+  </svg>
+  <figcaption>A loader reads the header, the level index and the descriptor first. That is enough to know the size, the mip count and the channels, and so to pick the GPU format, before the levels are read.</figcaption>
+</figure>
+
+<h2 id="choose"><span class="n">6</span>Picking the format</h2>
+
+<p>Two things decide the target: what the GPU can sample, and what the texture is used for. Color is read as RGB and alpha. A normal map needs only x and y. Occlusion or a height map needs one channel. Each use has a list of formats, best first, and the loader takes the first one the GPU has.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Use</th><th>1st</th><th>2nd</th><th>3rd</th><th>Fallback</th></tr>
+  <tr><td>Color (base color, emissive), sRGB</td><td>BC7 sRGB</td><td>ASTC 4×4 sRGB</td><td>ETC2 RGBA8 sRGB</td><td>RGBA8 sRGB</td></tr>
+  <tr><td>Data, 3 or 4 channels (metal-rough, ORM)</td><td>BC7</td><td>ASTC 4×4</td><td>ETC2 RGBA8</td><td>RGBA8</td></tr>
+  <tr><td>Data, 2 channels (normal map x, y)</td><td>BC5</td><td>EAC RG11</td><td>—</td><td>RGBA8 (z computed)</td></tr>
+  <tr><td>Data, 1 channel (occlusion, mask)</td><td>BC4</td><td>EAC R11</td><td>—</td><td>RGBA8</td></tr>
+</table>
+</div>
+
+<figure class="lab" data-lab="pick-format" data-title="Pick the GPU format">
+  <figcaption>Choose a GPU and a use. The lab walks the use's list and takes the first format the GPU has, then gives the memory of the texture with its mips against RGBA8. Try the old GPU: everything falls back to RGBA8.</figcaption>
+</figure>
+
+<h2 id="normals"><span class="n">7</span>Normal maps in two channels</h2>
+
+<p>A tangent-space normal is a unit vector that points out of the surface, so z is never negative and follows from x and y. Storing only x and y lets a two-channel format spend all its bits on them: BC5 keeps each in its own BC4 half, with two 8-bit endpoints and a 3-bit index per texel, where BC7 shares its bits among three or four channels.</p>
+
+<div class="formula">
+  <p class="eq">z = √(1 − x² − y²)</p>
+  <dl>
+    <dt>x, y</dt><dd>the two stored channels, mapped from 0…1 to −1…1.</dd>
+    <dt>clamp</dt><dd>use max(0, 1 − x² − y²): filtering and compression can push x² + y² a little over 1.</dd>
+    <dt>layout</dt><dd>Basis keeps x in RGB and y in alpha (<samp>ktx create --normal-mode</samp>); its BC5 and EAC RG11 targets read those two, so the GPU format has x in R and y in G.</dd>
+  </dl>
+</div>
+
+<h2 id="mips-color"><span class="n">8</span>Mips and color space</h2>
+
+<div class="vgrid">
+  <div class="vcard warn">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A mip chain from large to small, each level made by the encoder, stored in the file.">
+      <rect x="20" y="30" width="80" height="80" class="mem"/><rect x="110" y="70" width="40" height="40" class="mem o-75"/><rect x="160" y="90" width="20" height="20" class="mem o-50"/><rect x="190" y="100" width="10" height="10" class="mem o-25"/>
+      <text x="120" y="24" class="mid small">every level from the encoder</text>
+    </svg>
+    <h4>Mips come from the file</h4>
+    <p>Making a mip of a block texture means averaging texels and encoding the result again, which takes an encoder and time. So the tool that makes the file makes the mips (<samp>ktx create --generate-mipmap</samp>). Without them, a texture <a href="mipmaps-sampling.html">shimmers</a> when it is minified.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The same blocks read through two views: sRGB decodes the color to linear, UNORM reads it as stored.">
+      <rect x="20" y="45" width="70" height="40" rx="4" class="mem"/><text x="55" y="70" class="mid small">blocks</text>
+      <line x1="94" y1="60" x2="140" y2="40" class="arrow" marker-end="url(#ah)"/><line x1="94" y1="72" x2="140" y2="95" class="arrow" marker-end="url(#ah)"/>
+      <text x="146" y="44" class="small">BC7 sRGB</text><text x="146" y="100" class="small">BC7 UNORM</text>
+    </svg>
+    <h4>Color space is the view</h4>
+    <p>BC7, ASTC and ETC2 have an sRGB and a UNORM format with the same bits. Pick it by the texture's use, as for any texture (<a href="color-spaces.html">color spaces</a>): color is sRGB, data is linear.</p>
+  </div>
+</div>
+
+<h2 id="pitfalls"><span class="n">9</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Bumps look flat or lit from inside</dt><dd>A two-channel normal map read as three channels: z comes back as 0 (or −1). Rebuild z in the shader, or let the loader do it for an RGBA8 fallback.</dd></div>
+  <div><dt>Normal maps look blocky</dt><dd>ETC1S on a normal map. Use UASTC for normal maps and other data, ETC1S for colors.</dd></div>
+  <div><dt>Distant surfaces sparkle</dt><dd>A block texture without mips. The file needs them.</dd></div>
+  <div><dt>Colors too dark or washed out</dt><dd>A color texture read through a UNORM view, or a data texture through sRGB.</dd></div>
+  <div><dt>Odd sizes break the upload</dt><dd>A 30 × 30 texture still takes 8 × 8 whole blocks. Sizes and copies count blocks, not texels: a level is ⌈w / 4⌉ × ⌈h / 4⌉ × block bytes.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
+
+<p>RASM reads KTX2 files with libktx (the <code>KTX::ktx</code> target of the vcpkg port <samp>ktx</samp>, built without its ETC software decoder: <code>cmake/triplets/x64-windows.cmake</code>). A <samp>.ktx2</samp> passed to <code>loadTexture</code> and the images of glTF's <samp>KHR_texture_basisu</samp> go the same way: the format is picked from the header, the transcode runs on the load's worker thread, and the main thread only copies the levels.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="loadTexture on the main thread reads the KTX2 header with readKtxInfo, picks the format with chooseKtxFormat from the slot and the formats the device samples, and creates the texture with the file's mip count. A worker reads the file and runs decodeKtx: transcode or copy, and for RGBA8 without mips, makes the mips. finishLoads on the main thread fills the texture: host image copy when the format allows it, otherwise the staging ring.">
+    <text x="20" y="24" class="title t-cpu">main thread</text>
+    <text x="20" y="144" class="title t-cpu">worker</text>
+    <rect x="20" y="36" width="150" height="56" rx="6" class="cpu"/><text x="95" y="58" class="mid small">readKtxInfo</text><text x="95" y="76" class="mid small">header only</text>
+    <rect x="190" y="36" width="170" height="56" rx="6" class="cpu"/><text x="275" y="58" class="mid small">chooseKtxFormat</text><text x="275" y="76" class="mid small">slot + device formats</text>
+    <rect x="380" y="36" width="150" height="56" rx="6" class="gpu"/><text x="455" y="58" class="mid small">createTexture</text><text x="455" y="76" class="mid small">format, mip count</text>
+    <rect x="560" y="36" width="180" height="56" rx="6" class="gpu"/><text x="650" y="58" class="mid small">finishLoads: fillTexture</text><text x="650" y="76" class="mid small">host copy or staging</text>
+    <rect x="300" y="156" width="250" height="56" rx="6" class="cpu o-50"/><text x="425" y="178" class="mid small">decodeKtx: read, transcode</text><text x="425" y="196" class="mid small">(RGBA8 without mips: make them)</text>
+    <line x1="170" y1="64" x2="188" y2="64" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="360" y1="64" x2="378" y2="64" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <path d="M455,94 C455,130 425,130 425,154" class="arrow cpu dashed" marker-end="url(#ah-cpu)"/>
+    <path d="M552,184 C640,184 650,140 650,94" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="660" y="140" class="small t-mem">levels</text>
+  </svg>
+  <figcaption>The texture exists, with its final format and mip count, from the moment <code>loadTexture</code> returns, so a material can use it at once; it draws once <code>isLoaded</code> is true. For glTF, the worker transcodes each image once per kind of slot that uses it.</figcaption>
+</figure>
+
+<h3>Where RASM follows the page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>The slot</td><td>color or data, by use</td><td><code>loadTexture</code>'s <code>format</code>: <code>R8G8B8A8_SRGB</code> for a color slot, <code>R8G8B8A8_UNORM</code> for a data slot. glTF: base color and emissive are color, the others data. The file's own transfer function is ignored.</td></tr>
+  <tr><td>Device formats</td><td>what the GPU samples</td><td><code>RenderContext::supportsTextureFormat</code>: the compression feature (<code>textureCompressionBC</code>, <code>textureCompressionASTC_LDR</code>, <code>textureCompressionETC2</code>) is on, and the format can be sampled with linear filtering and filled.</td></tr>
+  <tr><td>Two channels</td><td>BC5 or EAC RG11, z rebuilt</td><td>The material row gets <code>MATERIAL_NORMAL_XY</code> when its normal texture is <code>BC5_UNORM</code> or <code>EAC_R11G11_UNORM</code>; <code>getNormalFromMap</code> rebuilds z. The RGBA8 fallback gets z on the CPU. A UASTC file with y in green (not in alpha) goes to RGBA8, with a warning, since the transcoder reads y from alpha.</td></tr>
+  <tr><td>A Basis file without mips</td><td>the file should have them</td><td>Transcoded to RGBA8, mips made on the worker with the same filter as PNGs, and a warning that names the file and the fix. A file that is not Basis keeps its single level, with a warning.</td></tr>
+  <tr><td>Files that are not Basis</td><td>—</td><td>Loaded as stored (zstd inflated) if their format is one of RASM's (<code>BC4_UNORM</code> … <code>EAC_R11G11_UNORM</code>, RGBA8) and the device samples it; the slot picks the sRGB or UNORM variant.</td></tr>
+  <tr><td>Upload</td><td>copy the blocks</td><td><code>RenderContext::fillTexture</code> with a <code>TextureLevel</code> per mip. Host image copy where the format has <samp>HOST_IMAGE_TRANSFER</samp>; otherwise the staging ring (<a href="gpu-memory.html">GPU memory</a>). <code>EngineConfig::hostImageCopy</code> = false forces the staging path.</td></tr>
+  <tr><td>Not covered</td><td>—</td><td>BC1 to BC3, BC6H and HDR, ASTC blocks larger than 4 × 4, cube and array KTX2 files, encoding at load time.</td></tr>
+</table>
+</div>
+
+<div class="stats">
+  <div><b>272.6 → 68.6 MiB</b><span>Flight Helmet video memory</span><small>PNG against KTX2, 12 × 2048² + 3 × 1024² textures, RTX 3060</small></div>
+  <div><b>200 → 23 ms</b><span>main-thread time of the load</span><small><code>finishMeshLoad</code>, Release; whole load 870 → 540 ms</small></div>
+  <div><b>4×</b><span>less per texture</span><small>BC7 against RGBA8, mips included</small></div>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>Header, format choice, transcode, warnings</td><td><code>readKtxInfo</code>, <code>chooseKtxFormat</code>, <code>getKtxMipCount</code>, <code>decodeKtx</code>, <code>warnAboutKtxFormat</code> in <code>src/assets/ktxImage.cpp</code>; tested by <code>tests/ktxImageTests.cpp</code>, which encodes small Basis files with libktx</td></tr>
+  <tr><td><samp>.ktx2</samp> through <code>loadTexture</code></td><td><code>Engine::loadTexture</code>, <code>Engine::finishTextureLoad</code> in <code>src/assets/texture.cpp</code></td></tr>
+  <tr><td>glTF <samp>KHR_texture_basisu</samp></td><td><code>getBasisuSource</code> and the worker's transcode in <code>src/assets/meshImport.cpp</code>; <code>Engine::loadMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
+  <tr><td>Block sizes, device formats, upload</td><td><code>getFormatBlock</code>, <code>getTextureLevelSize</code> in <code>src/rhi/device.cpp</code>; <code>VulkanDevice::supportsTextureFormat</code>, <code>VulkanDevice::fillTexture</code>; <code>UploadManager::uploadTexture</code></td></tr>
+  <tr><td>Two-channel normals</td><td><code>MATERIAL_NORMAL_XY</code> in <code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code>; <code>getNormalFromMap</code> in <code>shaders/lib/pbr.slang</code></td></tr>
+  <tr><td>Example</td><td><code>examples/10_ktx2_textures</code>: the Flight Helmet in KTX2 and a <samp>.ktx2</samp> through <code>loadTexture</code>; <samp>--model</samp> and <samp>--measure</samp> compare it with another glTF</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>A new <code>Format</code> gets its block in <code>getFormatBlock</code>, its Vulkan format in <code>toVkFormat</code>, and, if it is a compressed one, its feature check in <code>VulkanDevice::queryFormatSupport</code>. <code>EAC_R11G11_UNORM</code> is the last value; the Vulkan format table ends there.</li>
+    <li>The format lists in <code>ktxImage.cpp</code> and the lab of this page are the same lists.</li>
+    <li>Color slots are sRGB and data slots UNORM, for KTX2 files too: the slot decides, not the file.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Khronos, <i>KTX File Format Specification</i>, version 2.0, and the <i>KHR_texture_basisu</i> glTF extension.</li>
+  <li>Binomial, <i>Basis Universal</i> (GitHub wiki): ETC1S, UASTC and the transcoder's targets.</li>
+  <li>Nathan Reed, <i>Understanding BCn Texture Compression Formats</i> (2012).</li>
+  <li>Microsoft, <i>BC7 Format</i> (Direct3D 11 documentation): the modes and their bit layouts.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mipmaps and Texture Sampling · RASM</title>
 <meta name="description" content="How texture sampling works: aliasing when a texture is shrunk, the mip chain and its memory cost, generating mips correctly, how the GPU picks a mip level from derivatives, nearest, bilinear, trilinear and anisotropic filtering, wrap modes, and how RASM does it.">
-<meta name="rasm-sources" content="src/rhi/vulkan/vulkanDevice.cpp src/rhi/renderContext.cpp src/rhi/device.h src/assets/material.cpp src/assets/texture.cpp include/rasm/render/resource.h shaders/lib/core.slang shaders/passes/hiz.slang">
+<meta name="rasm-sources" content="src/rhi/mipChain.cpp src/rhi/mipChain.h src/assets/ktxImage.cpp src/rhi/vulkan/vulkanDevice.cpp src/rhi/renderContext.cpp src/rhi/device.h src/assets/material.cpp src/assets/texture.cpp include/rasm/render/resource.h shaders/lib/core.slang shaders/passes/hiz.slang">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -839,16 +839,16 @@ N    = min( ceil(ρmax / ρmin), maxAnisotropy )     number of samples
 
 <h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
 
-<p>RASM makes the full mip chain on the CPU, when the texture's pixels arrive, and uploads all levels in one host copy. Sampling uses six fixed samplers: trilinear with 8× anisotropy, or nearest, each with three wrap modes.</p>
+<p>RASM makes the full mip chain of an image on the CPU, when its pixels arrive, and uploads all levels at once. A KTX2 file brings its mips (<a href="texture-compression.html">texture compression</a>). Sampling uses six fixed samplers: trilinear with 8× anisotropy, or nearest, each with three wrap modes.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 250" role="img" aria-label="createTexture computes the level count. When the pixels arrive, fillTexture on the main thread resizes level by level with stb_image_resize2: the sRGB path for sRGB formats, the linear path for UNORM. Then vkCopyMemoryToImage copies every level into the image from the host. Shaders sample it through one of six samplers.">
+  <svg viewBox="0 0 760 250" role="img" aria-label="createTexture computes the level count. When the pixels arrive, fillTexture on the main thread resizes level by level with stb_image_resize2 (buildMipChain): the sRGB path for sRGB formats, the linear path for UNORM. Then every level goes into the image: by host image copy, or through the staging ring. Shaders sample it through one of six samplers.">
     <text x="20" y="22" class="title t-cpu">CPU · createTexture</text>
     <rect x="20" y="34" width="210" height="56" rx="6" class="cpu"/>
     <text x="125" y="56" class="mid">levels = ⌊log2(max)⌋ + 1</text>
     <text x="125" y="76" class="mid small">sampled RGBA8 textures only</text>
 
-    <text x="260" y="22" class="title t-cpu">CPU · fillTexture, main thread</text>
+    <text x="260" y="22" class="title t-cpu">CPU · fillTexture → buildMipChain</text>
     <rect x="260" y="34" width="70" height="56" rx="4" class="mem"/><text x="295" y="58" class="mid small">level 0</text><text x="295" y="76" class="mid small">pixels in</text>
     <line x1="330" y1="62" x2="352" y2="62" class="arrow" marker-end="url(#ah)"/>
     <rect x="354" y="44" width="50" height="36" rx="4" class="mem"/><text x="379" y="67" class="mid small">1</text>
@@ -867,15 +867,15 @@ N    = min( ceil(ρmax / ρmin), maxAnisotropy )     number of samples
 
     <line x1="540" y1="62" x2="588" y2="62" class="arrow mem" marker-end="url(#ah-mem)"/>
     <rect x="590" y="34" width="150" height="56" rx="6" class="mem"/>
-    <text x="665" y="56" class="mid mono small">vkCopyMemoryToImage</text>
-    <text x="665" y="76" class="mid small">all levels, no staging</text>
+    <text x="665" y="56" class="mid small">all levels: host copy,</text>
+    <text x="665" y="76" class="mid small">or the staging ring</text>
 
     <line x1="230" y1="62" x2="258" y2="62" class="arrow cpu" marker-end="url(#ah-cpu)"/>
 
     <rect x="20" y="196" width="720" height="40" rx="20" class="shader"/>
     <text x="380" y="221" class="mid">fragMain: gTextures[i].Sample(uv) · the GPU picks λ from derivatives · one of six samplers</text>
   </svg>
-  <figcaption>The same path serves <code>loadTexture</code> (pixels decoded on a worker thread, filled in <code>finishTextureLoad</code>), glTF textures (filled in <code>loadMaterial</code>) and textures the app fills with <code>RenderContext::fillTexture</code>.</figcaption>
+  <figcaption>The same path serves <code>loadTexture</code> (pixels decoded on a worker thread, filled in <code>finishTextureLoad</code>), glTF textures (filled in <code>loadMaterial</code>) and textures the app fills with <code>RenderContext::fillTexture</code>. A Basis KTX2 file without mips is transcoded to RGBA8 and goes through the same <code>buildMipChain</code>, on the worker.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -883,13 +883,13 @@ N    = min( ceil(ρmax / ρmin), maxAnisotropy )     number of samples
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Which textures get mips</td><td>any minified texture</td><td>Only <code>TextureUsage::SAMPLED</code> textures in <code>R8G8B8A8_UNORM</code>, <code>R8G8B8A8_SRGB</code> or <code>B8G8R8A8_SRGB</code> get the full chain (<code>VulkanDevice::createTexture</code>). Render targets and depth textures have 1 level.</td></tr>
-  <tr><td>Where mips are made</td><td>offline, CPU or GPU</td><td>CPU, on the main thread, inside <code>VulkanDevice::fillTexture</code>, every time a texture is filled. No offline mips, no GPU blits, no compressed formats.</td></tr>
+  <tr><td>Which textures get mips</td><td>any minified texture</td><td><code>TextureUsage::SAMPLED</code> textures in <code>R8G8B8A8_UNORM</code>, <code>R8G8B8A8_SRGB</code> or <code>B8G8R8A8_SRGB</code> get the full chain (<code>VulkanDevice::createTexture</code>), and KTX2 textures the file's levels. Render targets and depth textures have 1 level.</td></tr>
+  <tr><td>Where mips are made</td><td>offline, CPU or GPU</td><td>Images: CPU, on the main thread, in <code>buildMipChain</code> (<code>src/rhi/mipChain.cpp</code>), called by <code>RenderContext::fillTexture</code>. KTX2: offline, in the file; a Basis file without them gets RGBA8 mips from <code>buildMipChain</code> on the worker. No GPU blits.</td></tr>
   <tr><td>Filter</td><td>box or wider</td><td>stb_image_resize2's default for shrinking (Mitchell), each level made from the level above.</td></tr>
   <tr><td>Linear-light color</td><td>section 3</td><td>Yes: <samp>_SRGB</samp> formats go through <code>stbir_resize_uint8_srgb</code> with <code>STBIR_RGBA</code>, which decodes to linear, weights by alpha, and keeps alpha linear.</td></tr>
   <tr><td>Data and normal maps</td><td>average directly; renormalize normals</td><td>UNORM textures use <code>stbir_resize_uint8_linear</code> with <code>STBIR_4CHANNEL</code>: plain averages, no alpha weighting. Normal mips are not renormalized; the shader normalizes after sampling.</td></tr>
   <tr><td>Edges of tiling textures</td><td>wrap when filtering</td><td>The resizer clamps at the edges, also for textures sampled with repeat. Small levels of a tiling texture can show a faint seam.</td></tr>
-  <tr><td>Upload</td><td>staging buffer and copy</td><td>Host image copy (Vulkan 1.4 <code>hostImageCopy</code>): <code>vkTransitionImageLayout</code> moves the image to the shader-read layout and <code>vkCopyMemoryToImage</code> writes every level from CPU memory.</td></tr>
+  <tr><td>Upload</td><td>staging buffer and copy</td><td>Host image copy (Vulkan 1.4 <code>hostImageCopy</code>) where the format allows it: <code>vkTransitionImageLayout</code> moves the image to the shader-read layout and <code>vkCopyMemoryToImage</code> writes every level from CPU memory. Otherwise, or with <code>EngineConfig::hostImageCopy</code> false, the staging ring and a GPU copy (<a href="gpu-memory.html#in-rasm">GPU memory</a>).</td></tr>
   <tr><td>Level choice</td><td>λ from derivatives, clamped</td><td>The hardware rule. Every sampler has <code>maxLod</code> = <code>VK_LOD_CLAMP_NONE</code>, minimum 0 and no bias, so one sampler serves textures with any number of levels.</td></tr>
   <tr><td>Filters</td><td>nearest to anisotropic</td><td><code>LINEAR_*</code> samplers: linear mag, min and mip filter (trilinear) with 8× anisotropy, capped by the device's limit. <code>NEAREST_*</code>: nearest everything, nearest mip, no anisotropy.</td></tr>
   <tr><td>Wrap modes</td><td>4 modes, per axis</td><td>Repeat, mirrored repeat and clamp to edge; no border. The same mode on every axis.</td></tr>
@@ -920,7 +920,8 @@ N    = min( ceil(ρmax / ρmin), maxAnisotropy )     number of samples
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Level count, image and view</td><td><code>VulkanDevice::createTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
-  <tr><td>Mip generation and upload</td><td><code>VulkanDevice::fillTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>, called by <code>RenderContext::fillTexture</code></td></tr>
+  <tr><td>Mip generation</td><td><code>buildMipChain</code> in <code>src/rhi/mipChain.cpp</code>, called by <code>RenderContext::fillTexture</code> and, for KTX2 without mips, by <code>decodeKtx</code></td></tr>
+  <tr><td>Upload</td><td><code>RenderContext::fillTexture</code>; <code>VulkanDevice::fillTexture</code> (host copy) or <code>UploadManager::uploadTexture</code> (staging)</td></tr>
   <tr><td>Sampler objects</td><td><code>VulkanDevice::createSampler</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; <code>rhi::SamplerDesc</code> in <code>src/rhi/device.h</code></td></tr>
   <tr><td>The six sampler settings</td><td><code>samplerDesc</code> in <code>src/rhi/renderContext.cpp</code>; <code>SamplerType</code> in <code>include/rasm/render/resource.h</code></td></tr>
   <tr><td>glTF sampler mapping</td><td><code>toSamplerType</code> in <code>src/assets/material.cpp</code></td></tr>

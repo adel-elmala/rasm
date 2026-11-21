@@ -42,6 +42,7 @@ const SECTIONS = [
             { path: "guides/bindless.html",              title: "Bindless resources",                  blurb: "One big texture array, indexed in the shader." },
             { path: "guides/mipmaps-sampling.html",      title: "Mipmaps and texture sampling",        blurb: "Why small textures shimmer, and the mip chain that fixes it." },
             { path: "guides/color-spaces.html",          title: "Color spaces: sRGB and linear",       blurb: "Where to store color, and where to do the math." },
+            { path: "guides/texture-compression.html",   title: "Texture compression: blocks, KTX2 and Basis", blurb: "4×4 blocks the GPU samples, and one file that becomes BC7, ASTC or ETC2." },
             { path: "guides/asset-streaming.html",       title: "Streaming assets in the background",  blurb: "Load meshes and textures without freezing the frame." },
             { path: "guides/mesh-simplification.html",   title: "Mesh simplification",                 blurb: "Building LODs by collapsing edges." },
         ],

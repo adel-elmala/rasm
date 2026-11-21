@@ -203,6 +203,10 @@ private:
     R16G16B16A16_SFLOAT, R32G32B32_SFLOAT, R32G32B32A32_SFLOAT,
     D24_UNORM_S8_UINT, D32_SFLOAT, D32_SFLOAT_S8_UINT,
     R32G32_SFLOAT, U16_UINT, U32_UINT,
+    BC4_UNORM, BC5_UNORM, BC7_UNORM, BC7_SRGB,
+    ASTC_4x4_UNORM, ASTC_4x4_SRGB,
+    ETC2_R8G8B8A8_UNORM, ETC2_R8G8B8A8_SRGB,
+    EAC_R11_UNORM, EAC_R11G11_UNORM,
 };</pre>
   <div class="body">
     <p>Texture, attachment and index formats. Each maps to the Vulkan format of the same name (<code>R8G8B8A8_UNORM</code> → <code>VK_FORMAT_R8G8B8A8_UNORM</code>), except the index types.</p>
@@ -214,12 +218,17 @@ private:
       <tr><td><code>B8G8R8A8_SRGB</code></td><td>the swapchain format RASM asks for; use <code>getSwapchainImageFormat()</code> for the real one</td></tr>
       <tr><td><code>D32_SFLOAT</code></td><td>the engine's depth format; needed by <code>addScenePasses</code> and <code>createPipeline</code>. The only depth format a pass can sample (<code>readDepth</code>)</td></tr>
       <tr><td><code>D24_UNORM_S8_UINT</code>, <code>D32_SFLOAT_S8_UINT</code></td><td>depth + stencil, for pipelines you build yourself</td></tr>
-      <tr><td><code>R8G8B8_UNORM</code>, <code>R16G16B16A16_SFLOAT</code>, <code>R32G32_SFLOAT</code>, <code>R32G32B32_SFLOAT</code>, <code>R32G32B32A32_SFLOAT</code></td><td>other texture formats; no engine path uses them. Only the RGBA8 formats get mips, and <code>fillTexture</code> expects 4 bytes per pixel.</td></tr>
+      <tr><td><code>BC7_SRGB</code>, <code>ASTC_4x4_SRGB</code>, <code>ETC2_R8G8B8A8_SRGB</code></td><td>block-compressed color, 16 bytes per 4 × 4 texels. <code>loadTexture</code> picks one for a <samp>.ktx2</samp> file in a color slot.</td></tr>
+      <tr><td><code>BC7_UNORM</code>, <code>ASTC_4x4_UNORM</code>, <code>ETC2_R8G8B8A8_UNORM</code></td><td>block-compressed data, 16 bytes per 4 × 4 texels</td></tr>
+      <tr><td><code>BC5_UNORM</code>, <code>EAC_R11G11_UNORM</code></td><td>two channels, 16 bytes per 4 × 4: a normal map's x and y (the shader computes z)</td></tr>
+      <tr><td><code>BC4_UNORM</code>, <code>EAC_R11_UNORM</code></td><td>one channel, 8 bytes per 4 × 4</td></tr>
+      <tr><td><code>R16G16B16A16_SFLOAT</code></td><td>the scene color target and environment images</td></tr>
+      <tr><td><code>R8G8B8_UNORM</code>, <code>R32G32_SFLOAT</code>, <code>R32G32B32_SFLOAT</code>, <code>R32G32B32A32_SFLOAT</code></td><td>other texture formats; no engine path uses them.</td></tr>
       <tr><td><code>U16_UINT</code>, <code>U32_UINT</code></td><td>index types for <code>bindIndexBuffer</code> only, not texture formats</td></tr>
       <tr><td><code>UNKNOWN</code></td><td>no format (the default in descs; compute pipelines have no attachments)</td></tr>
     </table>
     </div>
-    <p>Color textures must be sRGB and data textures UNORM. Shaders work in linear color, and sampling an sRGB texture converts it.</p>
+    <p>Color textures must be sRGB and data textures UNORM. Shaders work in linear color, and sampling an sRGB texture converts it. A GPU samples only some of the block-compressed formats: ask <a href="low-level.html#supportsTextureFormat"><code>supportsTextureFormat</code></a>, and see <a href="../guides/texture-compression.html">texture compression</a>. Only RGBA8 textures get their mips made by <code>fillTexture</code>; the others take every level.</p>
   </div>
 </div>
 

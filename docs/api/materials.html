@@ -35,7 +35,7 @@
   <ul>
     <li><code>createMaterial(MaterialType::PBR, {albedo})</code> makes a material; the vector order is <code>PbrSlot</code>.</li>
     <li>Change a material: copy it with <code>getMaterial</code>, edit, <code>updateMaterial</code>. Every object that uses it changes in the next frame.</li>
-    <li><code>loadTexture</code> loads in the background. Color textures are sRGB (the default); normal, metallic-roughness and occlusion maps must be <code>R8G8B8A8_UNORM</code>.</li>
+    <li><code>loadTexture</code> loads in the background. Its <code>format</code> names the slot: color textures are sRGB (the default); normal, metallic-roughness and occlusion maps must be <code>R8G8B8A8_UNORM</code>. A <samp>.ktx2</samp> file stays block-compressed on the GPU (<a href="../guides/texture-compression.html">texture compression</a>).</li>
     <li>An entity waits, undrawn, until all its textures are loaded.</li>
     <li>Limits: 256 materials (<code>MAX_MATERIALS</code>), 1024 texture slots (<code>MAX_BINDLESS_TEXTURES</code>). Neither is ever freed.</li>
   </ul>
@@ -309,24 +309,36 @@ engine.updateMaterial(pulse, values);</code></pre>
   </div>
   <div>
     <h4>Later</h4>
-    <p>A worker decodes the pixels to RGBA8. A later <code>beginFrame</code> uploads them and builds all mip levels on the CPU. Then <code>isLoaded</code> is true and waiting entities are drawn.</p>
+    <p>A worker decodes the pixels to RGBA8, or reads and transcodes a <samp>.ktx2</samp> file. A later <code>beginFrame</code> uploads them: an image's mip levels are built on the CPU, a KTX2 file's come from the file. Then <code>isLoaded</code> is true and waiting entities are drawn.</p>
   </div>
 </div>
 
 <div class="api" id="loadTexture">
   <pre class="sig">TextureHandle loadTexture(const std::string&amp; path, Format format = Format::R8G8B8A8_SRGB);</pre>
   <div class="body">
-    <p>Starts loading a <code>.png</code>, <code>.jpg</code> or <code>.jpeg</code> image. Images with fewer channels are expanded to RGBA.</p>
+    <p>Starts loading a <samp>.png</samp>, <samp>.jpg</samp> or <samp>.jpeg</samp> image, or a <samp>.ktx2</samp> file. Images with fewer channels are expanded to RGBA.</p>
     <dl>
       <dt>path</dt><dd>Relative to <code>EngineConfig::assetRoot</code>, or absolute. The extension is checked in lower case only.</dd>
-      <dt>format</dt><dd><code>R8G8B8A8_SRGB</code> (default) for color: albedo and emissive. <code>R8G8B8A8_UNORM</code> for data: normal, metallic-roughness and occlusion maps. Any other format logs "loadTexture requires RGBA8 sRGB or UNORM format." and returns an invalid handle.</dd>
+      <dt>format</dt><dd>The slot the texture is for. <code>R8G8B8A8_SRGB</code> (default) for a color slot: albedo and emissive. <code>R8G8B8A8_UNORM</code> for a data slot: normal, metallic-roughness and occlusion maps. Any other format logs "loadTexture takes R8G8B8A8_SRGB for a color slot or R8G8B8A8_UNORM for a data slot." and returns an invalid handle.</dd>
     </dl>
+    <p>An image is uploaded in exactly that format. A <samp>.ktx2</samp> file gets the best GPU format the device has for the slot and the file's channels, which <code>getTextureDesc</code> then reports:</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Slot, channels in the file</th><th>Format, best first</th></tr>
+      <tr><td>color (<code>R8G8B8A8_SRGB</code>), any</td><td><code>BC7_SRGB</code>, <code>ASTC_4x4_SRGB</code>, <code>ETC2_R8G8B8A8_SRGB</code>, <code>R8G8B8A8_SRGB</code></td></tr>
+      <tr><td>data (<code>R8G8B8A8_UNORM</code>), 3 or 4</td><td><code>BC7_UNORM</code>, <code>ASTC_4x4_UNORM</code>, <code>ETC2_R8G8B8A8_UNORM</code>, <code>R8G8B8A8_UNORM</code></td></tr>
+      <tr><td>data, 2 (a normal map's x and y)</td><td><code>BC5_UNORM</code>, <code>EAC_R11G11_UNORM</code>, <code>R8G8B8A8_UNORM</code> with z computed</td></tr>
+      <tr><td>data, 1</td><td><code>BC4_UNORM</code>, <code>EAC_R11_UNORM</code>, <code>R8G8B8A8_UNORM</code></td></tr>
+    </table>
+    </div>
+    <p>A Basis file (ETC1S or UASTC) is transcoded on the worker; any other KTX2 file keeps its own format, read as sRGB or UNORM by the slot, and fails if the device can't sample it. The file's mips are used. A Basis file without mips becomes RGBA8 with mips made on the worker, and logs a warning that names the file and the fix (<samp>ktx create --generate-mipmap</samp>).</p>
     <p><span class="tag async">loads in the background</span> The same path with the same format returns the same handle. The same file as sRGB and as UNORM gives two textures.</p>
     <div class="table-wrap">
     <table>
       <tr><th>Problem</th><th>When</th><th>Result</th></tr>
       <tr><td>Wrong format, unknown extension, or a header that cannot be read (missing file)</td><td>at the call</td><td>error logged, invalid handle</td></tr>
-      <tr><td>The pixels do not decode</td><td>in a later <code>beginFrame</code></td><td>error logged, the texture stays white; <code>isLoaded</code> becomes true</td></tr>
+      <tr><td>A KTX2 file the device can't sample (a non-Basis format it lacks), or that is not a 2D texture</td><td>at the call</td><td>error logged, invalid handle</td></tr>
+      <tr><td>The pixels do not decode</td><td>in a later <code>beginFrame</code></td><td>error logged, the texture stays white (black for a block format); <code>isLoaded</code> becomes true</td></tr>
     </table>
     </div>
   </div>
