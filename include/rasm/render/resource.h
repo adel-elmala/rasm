@@ -162,6 +162,7 @@ namespace rasm
         glm::vec4                   clearColor                                    = glm::vec4(0.0f); // linear; every pass that writes the target starts from this
         bool                        history                                       = false;
         bool                        cube                                          = false; // depth-only and square: its depth is a cube texture, and each pass draws one face
+        bool                        storage                                       = false; // colors only, no depth: compute passes write them as storage images
 
         bool                        operator==(const RenderTargetDesc&) const = default;
     };

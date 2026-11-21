@@ -38,7 +38,7 @@ namespace rasm
 
     constexpr uint32_t MAX_MATERIALS        = 256;
     constexpr uint32_t MAX_CAMERAS          = 8;
-    constexpr uint32_t MAX_GPU_TIMERS       = 16;
+    constexpr uint32_t MAX_GPU_TIMERS       = 64;
     constexpr Format   SCENE_COLOR_FORMAT   = Format::R16G16B16A16_SFLOAT;
 
     struct GpuTimer
@@ -113,6 +113,7 @@ namespace rasm
         CameraProjection            getCameraProjection(CameraHandle camera);
         CameraController            getCameraController(CameraHandle camera);
         float                       getCameraExposure(CameraHandle camera);
+        float                       getCameraBloomStrength(CameraHandle camera);
         glm::mat4                   getProjectionMatrix(CameraHandle camera);
         // The camera's projection fitted to another aspect ratio. The camera itself does not change.
         glm::mat4                   getProjectionMatrix(CameraHandle camera, float aspect);
@@ -124,6 +125,8 @@ namespace rasm
         void                        setCameraProjection(CameraHandle camera, CameraProjection projection);
         void                        setCameraController(CameraHandle camera, CameraController controller);
         void                        setCameraExposure(CameraHandle camera, float exposure);
+        // The share of bloom in the tone-mapped image, 0 to 1: 0 turns the bloom passes' work off.
+        void                        setCameraBloomStrength(CameraHandle camera, float strength);
         // Returns false when the frame must be skipped (minimized, swapchain out of date); then do not
         // record anything or call endFrame.
         [[nodiscard]] bool          beginFrame(CameraHandle camera);
@@ -134,7 +137,9 @@ namespace rasm
         void                        render(SceneHandle scene, CameraHandle camera);
         bool                        addScenePasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, const SceneShadow* shadows = nullptr, uint32_t shadowCount = 0);
         SceneShadow                 addShadowPasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const ShadowDesc& desc);
-        bool                        addToneMapPass(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera);
+        // Returns the bloom target for addToneMapPass, or invalid on failure.
+        RenderTargetHandle          addBloomPasses(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera);
+        bool                        addToneMapPass(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera, const RenderTargetHandle& bloom = {});
         bool                        running() const;
         bool                        recreateSwapchain();
         void                        setRenderTarget(const RenderTargetHandle& renderTarget, uint32_t face = 0);
@@ -159,6 +164,9 @@ namespace rasm
         TextureHandle               getRenderTargetTexture(const RenderTargetHandle& renderTarget, uint32_t attachment = 0);
         TextureHandle               getPreviousRenderTargetTexture(const RenderTargetHandle& renderTarget, uint32_t attachment = 0);
         TextureHandle               getRenderTargetDepthTexture(const RenderTargetHandle& renderTarget);
+        // Slot of binding 1 of the bindless set that holds a storage target's color for the current frame slot, or
+        // UINT32_MAX for a target that is not storage.
+        uint32_t                    getRenderTargetStorageIndex(const RenderTargetHandle& renderTarget, uint32_t attachment = 0);
 
         // window related
         Window                      createWindow(uint32_t width, uint32_t height);
@@ -206,6 +214,9 @@ namespace rasm
         std::unique_ptr<StatsOverlay>                               statsOverlay                            = {};
         std::unique_ptr<Renderer>                                   renderer                                = {};
         PipelineHandle                                              toneMapPipeline                         = {};
+        PipelineHandle                                              bloomFirstDownPipeline                  = {};
+        PipelineHandle                                              bloomDownPipeline                       = {};
+        PipelineHandle                                              bloomUpPipeline                         = {};
         RenderContext                                               ctx;
         std::unique_ptr<ShaderCompiler>                             shaderCompiler                          = {};
         HandleManager                                               handleManager                           = {};
@@ -260,6 +271,8 @@ namespace rasm
         void                        recordEnvironmentBakes();
         void                        finishEnvironmentBakes();
         void                        drawSky(uint32_t view);
+        bool                        bloomPipelinesReady() const;
+        bool                        createBloomPipelines();
         void                        finishLoads(bool wait);
         bool                        createGpuScene();
         void                        syncGpuScene();

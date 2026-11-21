@@ -267,7 +267,7 @@ TEST_CASE("a pass that reads the render target it draws to fails to compile")
     CHECK(graph.order().empty());
 }
 
-TEST_CASE("a compute pass that declares no buffer write fails to compile")
+TEST_CASE("a compute pass that declares no write fails to compile")
 {
     const rasm::BufferHandle buffer{1, 1};
 
@@ -280,7 +280,7 @@ TEST_CASE("a compute pass that declares no buffer write fails to compile")
     CHECK(graph.order().empty());
 }
 
-TEST_CASE("a compute pass sorts by its resources and writes no render target")
+TEST_CASE("a compute pass sorts by its resources and writes no swapchain")
 {
     const rasm::BufferHandle buffer{1, 1};
     const rasm::RenderTargetHandle renderTarget{1, 1};
@@ -309,8 +309,80 @@ TEST_CASE("a compute pass sorts by its resources and writes no render target")
     CHECK(graph.order() == std::vector<uint32_t>{1, 0});
     CHECK(graph.pass(1).compute);
     CHECK_FALSE(graph.pass(0).compute);
-    CHECK_FALSE(graph.pass(1).outputRenderTarget.isValid());
+    // Without an engine the graph can't see a target's desc, so it takes every target for a storage one.
+    CHECK(graph.pass(1).outputRenderTarget.isValid());
     CHECK_FALSE(graph.pass(1).writesSwapchain);
+}
+
+TEST_CASE("a compute pass that writes a storage target runs before the passes that read it")
+{
+    const rasm::RenderTargetHandle bloom{1, 1};
+
+    TestGraph graph;
+    graph.addPass(
+        "tone map",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.read(bloom);
+            builder.writeSwapchain();
+        },
+        [](rasm::RenderContext &) {});
+    graph.addComputePass("bloom", [&](rasm::PassBuilder &builder)
+                         { builder.write(bloom); }, [](rasm::RenderContext &) {});
+
+    graph.compile();
+
+    REQUIRE(graph.isCompiled());
+    CHECK(graph.order() == std::vector<uint32_t>{1, 0});
+}
+
+TEST_CASE("a compute pass that writes only a texture compiles")
+{
+    TestGraph graph;
+    graph.addComputePass("bake", [&](rasm::PassBuilder &builder)
+                         { builder.write(TEXTURE_A); }, [](rasm::RenderContext &) {});
+
+    graph.compile();
+
+    CHECK(graph.isCompiled());
+}
+
+TEST_CASE("an async compute pass writes no render target")
+{
+    const rasm::RenderTargetHandle target{1, 1};
+
+    TestGraph graph;
+    graph.addAsyncComputePass("bloom", [&](rasm::PassBuilder &builder)
+                              { builder.write(target); }, [](rasm::RenderContext &) {});
+
+    CHECK_FALSE(graph.pass(0).outputRenderTarget.isValid());
+    graph.compile();
+    // The dropped write leaves the pass without any write.
+    CHECK_FALSE(graph.isCompiled());
+}
+
+TEST_CASE("a compute write is a transient storage target's first use")
+{
+    const rasm::RenderTargetHandle bloom{1, 1};
+
+    TestGraph graph;
+    graph.addTransient(bloom);
+    graph.addComputePass("bloom", [&](rasm::PassBuilder &builder)
+                         { builder.write(bloom); }, [](rasm::RenderContext &) {});
+    graph.addPass(
+        "tone map",
+        [&](rasm::PassBuilder &builder)
+        {
+            builder.read(bloom);
+            builder.writeSwapchain();
+        },
+        [](rasm::RenderContext &) {});
+
+    graph.compile();
+
+    REQUIRE(graph.isCompiled());
+    CHECK(graph.firstPass(0) == 0);
+    CHECK(graph.lastPass(0) == 1);
 }
 
 TEST_CASE("a graphics pass must write exactly one target")

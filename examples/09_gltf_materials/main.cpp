@@ -20,8 +20,12 @@
 // - A block of 1536 see-through cubes, more than one block of the GPU sort, with vertex colors from createMesh. Their
 //   shadow is as dense as they are (hashed alpha in the shadow map).
 //
-// --glass <count> sets the number of cubes. --gpu-times prints the mean GPU time of each timed pass over frames 300 to
-// 600, then quits.
+// - Bloom: the glow around the bright emissive cubes and the sky (addBloomPasses, Camera::bloomStrength).
+//
+// --glass <count> sets the number of cubes. --no-bloom leaves the bloom out, --bloom-strength <s> sets its share (0.04
+// by default). --render-size <width> <height> draws the
+// scene at that size instead of the window's, which the tone map scales to the window. --gpu-times prints the mean GPU
+// time of each timed pass over frames 300 to 600, then quits.
 
 namespace
 {
@@ -83,12 +87,25 @@ int main(int argc, char **argv)
 {
     uint32_t glassCount = 1536;
     bool printGpuTimes = false;
+    bool bloom = true;
+    float bloomStrength = -1.0f;
+    uint32_t renderWidth = 0;
+    uint32_t renderHeight = 0;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--glass") == 0 && i + 1 < argc)
             glassCount = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
         if (std::strcmp(argv[i], "--gpu-times") == 0)
             printGpuTimes = true;
+        if (std::strcmp(argv[i], "--no-bloom") == 0)
+            bloom = false;
+        if (std::strcmp(argv[i], "--bloom-strength") == 0 && i + 1 < argc)
+            bloomStrength = std::strtof(argv[++i], nullptr);
+        if (std::strcmp(argv[i], "--render-size") == 0 && i + 2 < argc)
+        {
+            renderWidth = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
+            renderHeight = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
+        }
     }
 
     rasm::EngineConfig config = {
@@ -156,22 +173,31 @@ int main(int argc, char **argv)
                                            .trackBall = {.radius = glm::length(eye - center), .center = center, .orbitSensitivity = 1.0f},
                                            .easingSpeed = 6.0f});
     engine.addCameraToScene(scene, camera);
+    if (bloomStrength >= 0.0f)
+        engine.setCameraBloomStrength(camera, bloomStrength);
 
     const rasm::LightHandle sun = engine.createLight(rasm::LightType::DIRECTIONAL, glm::vec3(1.0f, 0.85f, 0.7f), glm::vec3(0.0f), glm::normalize(SUN_DIRECTION), 3.0f, 0.0f);
     engine.addLightToScene(scene, sun);
     if (!camera.isValid() || !sun.isValid())
         return 1;
 
-    // Shadow cascades, the shaded view (its draws, the sky, then the see-through draws back to front), the tone map.
+    // Shadow cascades, the shaded view (its draws, the sky, then the see-through draws back to front), the bloom, the
+    // tone map.
     rasm::RenderGraph graph = engine.createRenderGraph();
+    const bool fixedSize = renderWidth > 0 && renderHeight > 0;
     const rasm::RenderTargetHandle sceneTarget = graph.createRenderTarget({
         .name = "scene_hdr",
-        .swapchainScale = 1.0f,
+        .width = renderWidth,
+        .height = renderHeight,
+        .swapchainScale = fixedSize ? 0.0f : 1.0f,
         .colorFormats = {rasm::SCENE_COLOR_FORMAT},
         .depthFormat = rasm::Format::D32_SFLOAT,
     });
     const rasm::SceneShadow shadow = engine.addShadowPasses(graph, scene, camera, rasm::ShadowDesc{.light = sun, .cascadeCount = CASCADE_COUNT, .size = 2048, .distance = 30.0f, .splitLambda = 0.7f});
-    if (shadow.mapCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTarget, &shadow, 1) || !engine.addToneMapPass(graph, sceneTarget, camera))
+    if (shadow.mapCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTarget, &shadow, 1))
+        return 1;
+    const rasm::RenderTargetHandle bloomTarget = bloom ? engine.addBloomPasses(graph, sceneTarget, camera) : rasm::RenderTargetHandle{};
+    if ((bloom && !bloomTarget.isValid()) || !engine.addToneMapPass(graph, sceneTarget, camera, bloomTarget))
         return 1;
 
     std::vector<std::string> timerNames;

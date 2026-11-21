@@ -347,6 +347,33 @@ namespace rasm
         return registry.cameras[camera.index].exposure;
     }
 
+    void Engine::setCameraBloomStrength(CameraHandle camera, float strength)
+    {
+        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        {
+            spdlog::error("Invalid camera handle.");
+            return;
+        }
+        if (!(strength >= 0.0f && strength <= 1.0f))
+        {
+            spdlog::error("A camera's bloom strength must be from 0 to 1, got {}.", strength);
+            return;
+        }
+
+        registry.cameras[camera.index].bloomStrength = strength;
+    }
+
+    float Engine::getCameraBloomStrength(CameraHandle camera)
+    {
+        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        {
+            spdlog::error("Invalid camera handle.");
+            return 0.0f;
+        }
+
+        return registry.cameras[camera.index].bloomStrength;
+    }
+
     CameraController Engine::getCameraController(CameraHandle camera)
     {
         if (!camera.isValid() || camera.index >= registry.cameras.size())

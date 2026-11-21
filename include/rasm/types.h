@@ -16,8 +16,10 @@ namespace rasm
     constexpr uint32_t  MAX_COLOR_ATTACHMENTS       = 4;
     constexpr uint32_t  MAX_DESCRIPTOR_TYPES        = 2;
     constexpr uint32_t  MAX_BINDLESS_TEXTURES       = 1024;
-    // Binding 1 of the bindless set: storage images, each one mip of a texture, that compute shaders write.
-    constexpr uint32_t  MAX_BINDLESS_STORAGE_IMAGES = 32;
+    // Binding 1 of the bindless set: storage images, each one mip of a texture, that compute shaders write. The slots
+    // below RESERVED_STORAGE_IMAGES are the environment bake's; storage render targets take the others.
+    constexpr uint32_t  MAX_BINDLESS_STORAGE_IMAGES = 1024;
+    constexpr uint32_t  RESERVED_STORAGE_IMAGES     = 32;
     constexpr uint32_t  PUSH_CONSTANTS_SIZE         = 16;
     // Sentinel written by the CPU when a material slot has no texture bound; the shader must
     // never sample the bindless array with this index.
@@ -124,6 +126,7 @@ namespace rasm
         bool        asyncCompute            = false;
         bool        clusteredLighting       = true;     // false: every pixel shades every light of the scene
         bool        hostImageCopy           = true;     // false: textures are copied from the staging ring, as on a device without host image copy
+        bool        bloom                   = false;    // Engine::render adds the bloom passes (Camera::bloomStrength)
     };
 
     struct FrameResources
@@ -174,6 +177,7 @@ namespace rasm
         Format depthFormat;
         glm::vec4 clearColor;
         bool history;
+        uint32_t storageSlots[rasm::MAX_FRAMES_IN_FLIGHT][rasm::MAX_COLOR_ATTACHMENTS] = {}; // binding 1 slot of each color, for a storage target
     };
 
 } // namespace rasm

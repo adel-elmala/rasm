@@ -1,13 +1,17 @@
 // clang-format off
-// The tone-map pass: one full-screen triangle that maps the HDR scene color to display range with AgX, after
-// multiplying it by the camera's exposure. The sRGB swapchain does the final encoding.
+// The tone-map pass: one full-screen triangle that maps the HDR scene color to display range with AgX, after mixing
+// in the bloom and multiplying by the camera's exposure. The sRGB swapchain does the final encoding.
 
 // Must match gfx::ToneMapPushConstants in src/renderer/uberMaterialTypes.h; validateRasmStructs checks it by name.
 struct ToneMapPushConstants
 {
-    uint    source;     // bindless index of the HDR color
-    float   exposure;   // linear multiplier: 2 is one stop brighter
+    uint    source;         // bindless index of the HDR color
+    float   exposure;       // linear multiplier: 2 is one stop brighter
+    uint    bloom;          // bindless index of the bloom (addBloomPasses), INVALID_TEXTURE_INDEX without one
+    float   bloomStrength;  // the bloom's share of the image, 0 to 1
 };
+
+static const uint INVALID_TEXTURE_INDEX = 0xFFFFFFFF;
 
 [[vk::push_constant]]
 ConstantBuffer<ToneMapPushConstants> pc;
@@ -67,6 +71,10 @@ float3 agx(float3 color)
 float4 fragMain(VSOutput input) : SV_TARGET
 {
     float3 color = gTextures[pc.source].Sample(input.uv).rgb;
+    // The bloom is the image blurred at every scale, with the image's energy, so mixing it in keeps the light's total.
+    // It is half the size, so the bilinear lookup also scales it up.
+    if (pc.bloom != INVALID_TEXTURE_INDEX)
+        color = lerp(color, gTextures[pc.bloom].Sample(input.uv).rgb, pc.bloomStrength);
     return float4(agx(color * pc.exposure), 1.0);
 }
 
