@@ -98,7 +98,12 @@ int main(int argc, char **argv)
         if (std::strcmp(argv[i], "--aa") == 0 && i + 1 < argc)
         {
             const char *mode = argv[++i];
-            samples = std::strcmp(mode, "msaa2") == 0 ? 2 : (std::strcmp(mode, "msaa4") == 0 ? 4 : (std::strcmp(mode, "msaa8") == 0 ? 8 : 1));
+            if (std::strcmp(mode, "msaa2") == 0)
+                samples = 2;
+            if (std::strcmp(mode, "msaa4") == 0)
+                samples = 4;
+            if (std::strcmp(mode, "msaa8") == 0)
+                samples = 8;
         }
         if (std::strcmp(argv[i], "--glass") == 0 && i + 1 < argc)
             glassCount = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
@@ -127,6 +132,9 @@ int main(int argc, char **argv)
     rasm::Engine engine(config);
     if (!engine.running())
         return 1;
+    // A device that can't draw that many samples per pixel gets the most it can below them.
+    while (samples > 1 && !engine.getRenderContext().supportsSampleCount(samples))
+        samples /= 2;
 
     rasm::SceneHandle scene = engine.createScene();
     const rasm::EnvironmentHandle sunset = engine.loadEnvironment("environments/venice_sunset_2k.hdr");

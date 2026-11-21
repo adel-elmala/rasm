@@ -317,6 +317,7 @@ constexpr uint32_t QUEUE_COUNT = 2;</pre>
       <dt>ops</dt><dd>See <a href="engine.html#AttachmentOps">AttachmentOps</a>. <code>loadColor</code> / <code>loadDepth</code> keep what an attachment holds instead of clearing it. Use them to draw on top of an earlier pass, as the scene's <code>Scene 2</code> pass does after <code>Scene 1</code> and the Hi-Z build. Before a load, transition the attachment to <code>COLOR_ATTACHMENT</code> or <code>DEPTH_STENCIL_ATTACHMENT</code> without <code>discard</code>, even when it is already in that layout: the barrier orders the earlier writes before the load. <code>storeDepth</code> keeps depth for a later load or a read; without it depth may be thrown away, which saves memory bandwidth.</dd>
       <dt>face</dt><dd>Of a cube depth (<a href="#TextureDesc"><code>TextureDesc::cube</code></a>): the face to draw into, 0 to <code>CUBE_FACES</code> − 1. Must be 0 for any other depth.</dd>
     </dl>
+    <p>Every attachment must have the same samples per pixel (<a href="#TextureDesc"><code>TextureDesc::samples</code></a>); a mix logs an error and returns <code>false</code>. Pipelines bound in the pass need that count too.</p>
     <p><code>Engine::beginPass</code> calls this after the layout transitions, with its <code>ops</code> (a render graph sets them for each pass), and also sets the viewport, scissor and cull mode, so use <code>beginPass</code> unless you build the whole frame yourself.</p>
   </div>
 </div>
@@ -661,7 +662,7 @@ bool fillTexture(const TextureHandle&amp; texture, const TextureLevel* levels, u
 <div class="api" id="supportsSampleCount">
   <pre class="sig">bool supportsSampleCount(uint32_t samples) const;</pre>
   <div class="body">
-    <p>True when a render target can have <code>samples</code> per pixel: a power of two that the device can draw into and sample, for color and for depth (Vulkan: <samp>framebufferColorSampleCounts</samp>, <samp>framebufferDepthSampleCounts</samp>, <samp>sampledImageColorSampleCounts</samp>, <samp>sampledImageDepthSampleCounts</samp>). Desktop GPUs have 1, 2, 4 and 8. False without a device.</p>
+    <p>True when a render target or pipeline can have <code>samples</code> per pixel: 1, 2, 4 or 8, a count that the device can draw into and sample, for color and for depth (Vulkan: <samp>framebufferColorSampleCounts</samp>, <samp>framebufferDepthSampleCounts</samp>, <samp>sampledImageColorSampleCounts</samp>, <samp>sampledImageDepthSampleCounts</samp>). Desktop GPUs have 1, 2, 4 and 8. False without a device.</p>
   </div>
 </div>
 
@@ -795,7 +796,7 @@ bool fillTexture(const TextureHandle&amp; texture, const TextureLevel* levels, u
       <dt>depthStencilAttachmentFormat</dt><dd>The same for the depth format. With a depth format the depth test is on (reversed-Z, <code>GREATER_OR_EQUAL</code>).</dd>
       <dt>blendMode</dt><dd>See <a href="types.html#BlendMode">BlendMode</a>. <code>Engine::createPipeline</code> always uses <code>NONE</code>.</dd>
       <dt>depthWrite</dt><dd>Writes depth when there is a depth format. <code>false</code> keeps the test but not the write, as see-through draws need.</dd>
-      <dt>samples</dt><dd>The sample count of the attachments it draws into; <code>bindPipeline</code> rejects it in a pass with another. <code>Engine::createPipeline(name, source, renderTarget)</code> takes the target's.</dd>
+      <dt>samples</dt><dd>The sample count of the attachments it draws into: 1, 2, 4 or 8, of those the device has (<code>createPipeline</code> refuses any other with an error); <code>bindPipeline</code> rejects it in a pass with another. <code>Engine::createPipeline(name, source, renderTarget)</code> takes the target's.</dd>
       <dt>alphaToCoverage</dt><dd>Color 0's alpha decides which samples a fragment covers, for cut-outs with several samples per pixel (<a href="../guides/msaa.html#a2c">alpha-to-coverage</a>). Both fields take part in equality and the hash.</dd>
     </dl>
   </div>

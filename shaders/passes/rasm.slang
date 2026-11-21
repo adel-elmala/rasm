@@ -97,10 +97,14 @@ float4 toTarget(float4 color, float coverage)
 
 // A cut-out's alpha made sharp around the cutoff: 0.5 exactly at alphaCutoff, and from 0 to 1 over one pixel's change
 // of alpha (fwidth). Alpha-to-coverage then covers samples by where the edge crosses the pixel, at any distance, while
-// the edge stays where the cutoff puts it.
+// the edge stays where the cutoff puts it. Where alpha does not change, there is no edge to place, and the cutoff
+// decides as discard does: alpha at the cutoff (a cutoff of 1 on opaque texels) is covered.
 float getCoverage(float alpha, float cutoff)
 {
-    return saturate((alpha - cutoff) / max(fwidth(alpha), 1e-4) + 0.5);
+    float change = fwidth(alpha);
+    if (change < 1e-4)
+        return alpha >= cutoff ? 1.0 : 0.0;
+    return saturate((alpha - cutoff) / change + 0.5);
 }
 
 // One entry point for the three alpha modes, compiled once per mode (gpuScene.cpp): the opaque pipeline has no

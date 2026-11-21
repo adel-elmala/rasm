@@ -10,6 +10,7 @@
 #include "tracy/Tracy.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cassert>
 #include <string>
 #include <unordered_map>
@@ -46,6 +47,15 @@ namespace rasm
 
     namespace
     {
+        // Samples per pixel a render target or pipeline may have: 1, 2, 4 or 8 (the pipeline sets of the scene passes,
+        // gpuScene.h's SAMPLE_VARIANTS), and only a count the device has. deviceCounts has bit n set for 2^n samples.
+        constexpr uint32_t MAX_SAMPLES = 8;
+
+        bool isSampleCount(uint32_t samples, uint32_t deviceCounts)
+        {
+            return samples <= MAX_SAMPLES && std::has_single_bit(samples) && (deviceCounts & samples) != 0;
+        }
+
         // Invalid use of the public API: stop in the debugger in debug builds, fail the call with an error in release.
         bool checkArgument(bool valid, const char *caller, const char *message)
         {
@@ -65,8 +75,7 @@ namespace rasm
         {
             // A multisampled target is a scene's color and depth, resolved by a compute pass that reads its samples: so
             // it has colors, and no history, storage or cube, which hold or write single samples.
-            const bool power = desc.samples > 0 && (desc.samples & (desc.samples - 1)) == 0;
-            if (!checkArgument(power && (sampleCounts & desc.samples) != 0, caller, "the device can't draw this many samples per pixel (supportsSampleCount).") ||
+            if (!checkArgument(isSampleCount(desc.samples, sampleCounts), caller, "a render target has 1, 2, 4 or 8 samples per pixel, of those the device has (supportsSampleCount).") ||
                 !checkArgument(desc.samples == 1 || (colorAttachmentCount(desc.colorFormats) > 0 && !desc.history && !desc.storage && !desc.cube), caller,
                                "a multisampled render target has colors, and no history, storage or cube."))
                 return false;
@@ -521,7 +530,9 @@ namespace rasm
     PipelineHandle RenderContext::createPipeline(const PipelineDesc &desc)
     {
         const bool compute = desc.computeShader.isValid();
-        if (!checkArgument(!compute || (!desc.vertexShader.isValid() && !desc.fragmentShader.isValid()), __func__, "a pipeline has either a compute shader or vertex and fragment shaders."))
+        if (!checkArgument(!compute || (!desc.vertexShader.isValid() && !desc.fragmentShader.isValid()), __func__, "a pipeline has either a compute shader or vertex and fragment shaders.") ||
+            !checkArgument(compute || isSampleCount(desc.samples, impl->device->supportedSampleCounts()), __func__,
+                           "a graphics pipeline has 1, 2, 4 or 8 samples per pixel, of those the device has (supportsSampleCount)."))
             return {};
 
         auto cachedIt = impl->pipelineDescCache.find(desc);
@@ -1182,8 +1193,7 @@ namespace rasm
 
     bool RenderContext::supportsSampleCount(uint32_t samples) const
     {
-        const bool power = samples > 0 && (samples & (samples - 1)) == 0;
-        return impl->device && power && (impl->device->supportedSampleCounts() & samples) != 0;
+        return impl->device && isSampleCount(samples, impl->device->supportedSampleCounts());
     }
 
     bool RenderContext::supportsTextureFormat(Format format) const
@@ -1345,11 +1355,19 @@ namespace rasm
             !checkArgument(face == 0 || (depth && depth->desc.cube), __func__, "only a cube depth has faces other than 0."))
             return false;
 
+        // Vulkan draws every attachment of a pass with one sample count.
+        const uint32_t samples = colorCount > 0 ? colors[0]->desc.samples : depth->desc.samples;
+        bool sameSamples = !depth || depth->desc.samples == samples;
+        for (uint32_t i = 0; i < colorCount; ++i)
+            sameSamples = sameSamples && colors[i]->desc.samples == samples;
+        if (!checkArgument(sameSamples, __func__, "every attachment of a pass has the same samples per pixel."))
+            return false;
+
         rhiCommandBuffer->beginRendering(colors, colorCount, depth, clearColor, ops, face);
         for (uint32_t i = 0; i < MAX_COLOR_ATTACHMENTS; ++i)
             impl->passColorFormats[i] = i < colorCount ? colors[i]->desc.format : Format::UNKNOWN;
         impl->passDepthFormat = depth ? depth->desc.format : Format::UNKNOWN;
-        impl->passSamples = colorCount > 0 ? colors[0]->desc.samples : depth->desc.samples;
+        impl->passSamples = samples;
         impl->skipDraws = false;
         impl->insidePass = true;
         return true;

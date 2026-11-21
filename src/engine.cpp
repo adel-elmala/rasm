@@ -287,9 +287,8 @@ namespace rasm
     }
 
     // A pipeline of the scene passes, from a file in the shader folder, for targets with this one's formats and sample
-    // count. defines
-    // are preprocessor lines put before the source, for the variants of one shader; #line keeps the diagnostics'
-    // line numbers those of the file.
+    // count. defines are preprocessor lines put before the source, for the variants of one shader; #line keeps the
+    // diagnostics' line numbers those of the file.
     PipelineHandle Engine::createScenePipeline(const std::string &name, const std::string &shaderFile, const std::string &defines, const RenderTargetHandle &renderTarget,
                                                const char *vertexEntryPoint, const char *fragmentEntryPoint, BlendMode blendMode, bool depthWrite, bool alphaToCoverage)
     {
