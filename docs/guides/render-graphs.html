@@ -1011,7 +1011,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
     <text x="600" y="264" class="mid title">endFrame()</text>
     <text x="600" y="280" class="mid small">overlay, → PRESENT_SRC, submit batches</text>
   </svg>
-  <figcaption>Each pass records into the open batch of its queue (<code>Engine::useQueue</code>): an async compute pass into the compute batch when there is a compute queue, every other pass into the graphics batch. Without a compute queue the frame is one command buffer (see <a href="frame-loop.html">the frame loop</a>). Each pass gets a <a href="gpu-timing.html">GPU timer</a> named after it.</figcaption>
+  <figcaption>Each pass records into the open batch of its queue (<code>Engine::useQueue</code>): an async compute pass into the compute batch when there is a compute queue, every other pass into the graphics batch. Without a compute queue the frame is one command buffer (see <a href="frame-loop.html">the frame loop</a>). Each pass gets a <a href="gpu-timing.html">GPU timer</a> named after it; compute passes in a row with one <code>Pass::timerName</code> share one, as the 11 passes of <a href="bloom.html">bloom</a> share <code>Bloom</code>.</figcaption>
 </figure>
 
 <h3>Barriers in RASM</h3>
@@ -1020,16 +1020,17 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
 <table>
   <tr><th>The pass declares</th><th>Recorded before it</th><th>When</th></tr>
   <tr><td><code>read(texture)</code></td><td><code>transitionImageLayout(texture, SAMPLED)</code></td><td>unless it is <code>SAMPLED</code> already (read after read)</td></tr>
-  <tr><td><code>read(renderTarget)</code></td><td>nothing: the drawing pass's <code>endPass</code> left its color <code>SAMPLED</code></td><td>–</td></tr>
+  <tr><td><code>read(renderTarget)</code></td><td><code>transitionImageLayout(color, SAMPLED)</code> for each color: nothing after a draw, whose <code>endPass</code> left it <code>SAMPLED</code></td><td>a barrier after a compute pass wrote a storage target</td></tr>
   <tr><td><code>readDepth(renderTarget)</code></td><td><code>transitionImageLayout(depth, SAMPLED)</code>; the last earlier pass on the target stores its depth, and the next one moves it back and loads it</td><td>needs <code>occlusionCulling</code> unless the target is depth-only; not the target the pass draws to</td></tr>
   <tr><td><code>readPrevious(renderTarget)</code></td><td>nothing: the frame before left that copy <code>SAMPLED</code>, or <code>clearNewHistory</code> cleared a new copy at the start of the frame</td><td>–</td></tr>
   <tr><td>the first pass of a transient target</td><td><code>aliasingBarrier</code>: a global memory barrier, since the target's memory held another target before</td><td>every frame</td></tr>
   <tr><td><code>write(renderTarget)</code> or <code>writeSwapchain()</code></td><td><code>beginPass</code> moves color and depth (the swapchain has only color) to attachments with <code>discard</code>: from <code>UNKNOWN</code>, contents dropped</td><td>the first pass on the target (it clears)</td></tr>
   <tr><td>the same, on a target an earlier pass drew</td><td><code>beginPass</code> moves them to attachments without <code>discard</code>, keeping the contents</td><td>later passes (they load)</td></tr>
+  <tr><td><code>write(renderTarget)</code> of a storage target, in a compute pass</td><td><code>transitionImageLayout(color, STORAGE)</code> for each color: the <code>GENERAL</code> layout, with compute shader reads and writes</td><td>every frame; the first use of a transient one also gets the <code>aliasingBarrier</code></td></tr>
   <tr><td><code>read(buffer)</code></td><td>one <code>memoryBarrier</code>: the last write's stage → this pass's stage</td><td>once per stage after each write</td></tr>
   <tr><td><code>readPrevious(buffer)</code></td><td>like <code>read(buffer)</code>; the last write is the previous frame's</td><td>once per stage after each write</td></tr>
   <tr><td><code>write(buffer)</code></td><td>one <code>memoryBarrier</code>: the last write and the reads since → this pass's stage</td><td>if any pass used it before</td></tr>
-  <tr><td><code>write(texture)</code></td><td>nothing</td><td>only orders passes (a graph pass writes buffers only; storage images are written only by the environment bake, outside the graph)</td></tr>
+  <tr><td><code>write(texture)</code></td><td><code>transitionImageLayout(texture, STORAGE)</code> in a compute pass</td><td>a graphics pass's texture write only orders passes</td></tr>
   <tr><td><code>read</code> or <code>write</code> of a per-frame buffer array</td><td>like <code>read(buffer)</code> or <code>write(buffer)</code>, for the buffer of this frame's slot only</td><td>every slot's buffer still orders the passes</td></tr>
   <tr><td>a resource the other queue used</td><td>no barrier: a semaphore wait at the start of this queue's batch (<code>Engine::waitForQueue</code>)</td><td>with async compute only (<a href="#rasm-queues">below</a>)</td></tr>
 </table>
@@ -1253,7 +1254,7 @@ auto previous = engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTex
   <tr><td>Resources</td><td>virtual handles; transient or imported</td><td>Render targets without history are transient, with textures created after the compile and freed with the graph. Textures, buffers and history targets are real resources, created at once and kept forever. Imported ones: the swapchain, color only (<code>PassBuilder::writeSwapchain</code>), and what the previous frame wrote (<code>PassBuilder::readPrevious</code>, for a history render target or a buffer).</td></tr>
   <tr><td>Edges</td><td>every hazard, with versions</td><td>No versions; the add order stands in for them. The writers of each resource run in the order they were added, and a reader runs after the last writer added before it and before the next one. So a resource can be written twice in a frame, as the scene passes do. A reader added before every writer reads the last one.</td></tr>
   <tr><td>Sort</td><td>Kahn's algorithm</td><td>Kahn's algorithm with a FIFO queue that starts in the order passes were added, so independent passes keep that order. A cycle logs <samp>Frame Graph contains a cycle!</samp> and the frames draw no passes.</td></tr>
-  <tr><td>Checks</td><td>–</td><td><code>compile</code> also fails for a pass that reads the render target it draws to (its color or its depth), for a compute pass that declares no buffer write, and for a graphics pass that does not write exactly one render target or the swapchain.</td></tr>
+  <tr><td>Checks</td><td>–</td><td><code>compile</code> also fails for a pass that reads the render target it draws to (its color or its depth), for a compute pass that declares no write (of a buffer, a storage target or a texture), for a graphics pass that draws into a storage target, and for a graphics pass that does not write exactly one render target or the swapchain. An async compute pass writes no render target.</td></tr>
   <tr><td>Pass culling</td><td>walk back from the outputs</td><td>None: every pass runs.</td></tr>
   <tr><td>Texture barriers</td><td>from each resource's state</td><td>The same idea, with a remembered state per texture. Only reads are declared; attachments are moved by <code>beginPass</code> and <code>endPass</code>.</td></tr>
   <tr><td>Buffer barriers</td><td>per resource</td><td>One global <code>memoryBarrier</code> per pass, from the declared buffers' last write and reads on the same queue. The state carries across frames.</td></tr>

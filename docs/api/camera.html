@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cameras and Input · RASM</title>
 <meta name="description" content="Create and control cameras: projections, trackball and free-fly controllers, view and projection matrices, and the input that drives them.">
-<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/engine.h include/rasm/window.h include/rasm/scene.h src/scene/camera.cpp src/platform/window.cpp src/engine.cpp src/renderer/gpuScene.cpp src/renderer/toneMap.cpp src/scene/scene.cpp src/core/handle.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp">
+<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/engine.h include/rasm/window.h include/rasm/scene.h src/scene/camera.cpp src/platform/window.cpp src/engine.cpp src/renderer/gpuScene.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/scene/scene.cpp src/core/handle.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -347,6 +347,24 @@ engine.setCameraController(camera, rasm::CameraController{
   </div>
 </div>
 
+<div class="api" id="setCameraBloomStrength">
+  <pre class="sig">void setCameraBloomStrength(CameraHandle camera, float strength);</pre>
+  <div class="body">
+    <p>How much the camera's image glows around bright light: the <a href="engine.html#addToneMapPass">tone-map pass</a> draws <code>lerp(scene, bloom, strength)</code> with the bloom of <a href="engine.html#addBloomPasses"><code>addBloomPasses</code></a>, like the haze of a real lens. 0.04 is the default. The passes read it every time they run, and at 0 they record nothing. It has an effect only in a graph with the bloom passes (<code>EngineConfig::bloom</code> for <code>Engine::render</code>). How it works: <a href="../guides/bloom.html">Bloom</a>.</p>
+    <dl>
+      <dt>strength</dt><dd>The bloom's share of the image, from 0 to 1. A value outside, or NaN, logs an error and keeps the old one.</dd>
+    </dl>
+    <pre><code>engine.setCameraBloomStrength(camera, 0.1f); // more glow</code></pre>
+  </div>
+</div>
+
+<div class="api" id="getCameraBloomStrength">
+  <pre class="sig">float getCameraBloomStrength(CameraHandle camera);</pre>
+  <div class="body">
+    <p>Returns the camera's bloom strength. An invalid handle logs an error and returns 0.</p>
+  </div>
+</div>
+
 <h2><span class="n">4</span>Matrices and depth</h2>
 
 <figure class="diagram">
@@ -480,6 +498,7 @@ engine.setCameraController(camera, rasm::CameraController{
       <dt>transform</dt><dd>The rendered pose, used by <code>getViewMatrix</code>.</dd>
       <dt>targetTransform</dt><dd>Where the controller wants the camera; <code>transform</code> eases toward it each frame.</dd>
       <dt>exposure</dt><dd>The factor the tone-map pass multiplies the scene's light by (<a href="#setCameraExposure"><code>setCameraExposure</code></a>).</dd>
+      <dt>bloomStrength</dt><dd>The bloom's share of the tone-mapped image, 0.04 by default (<a href="#setCameraBloomStrength"><code>setCameraBloomStrength</code></a>).</dd>
     </dl>
   </div>
 </div>

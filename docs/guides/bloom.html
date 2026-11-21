@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bloom · RASM</title>
+<meta name="description" content="How bloom works: light brighter than white spreads like it does in a real lens. A blur at many sizes made cheaply with a chain of half-size images, the 13-tap down filter and the Karis average, the tent up filter, mixing it in without a threshold so the light's total stays the same, small images, pitfalls. Then how RASM does it with compute passes that write images in the render graph.">
+<meta name="rasm-sources" content="src/renderer/bloom.cpp src/renderer/bloom.h shaders/passes/bloom.slang shaders/passes/toneMap.slang src/renderer/toneMap.cpp src/renderer/renderer.cpp src/renderer/renderGraph.cpp src/rhi/renderContext.cpp include/rasm/engine.h include/rasm/camera.h include/rasm/types.h include/rasm/render/resource.h src/scene/camera.cpp src/renderer/uberMaterialTypes.h examples/09_gltf_materials/main.cpp tests/bloomTests.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/bloom.js"></script>
+</head>
+<body data-root="../" data-page="guides/bloom.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Bloom</h1>
+<p class="lead">A screen cannot show light brighter than white. A real camera or eye shows it anyway: very bright light spreads into a soft glow around it. <b>Bloom</b> copies that glow. It blurs the image at many sizes, from a few pixels to a large part of the screen, and mixes a small share of the blur back in. This page explains why the blur has many sizes, how a chain of half-size images makes it cheap, the two filters of the chain, and how to mix it in without making the image brighter. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>After tone mapping, a lamp 16 times brighter than white and one 256 times brighter look the same. A <b>glow</b> around them shows how bright they are.</li>
+    <li>A real lens spreads light as a <b>sharp core with a long, faint tail</b>. One blur cannot make that shape; a <b>sum of blurs</b> of growing size can.</li>
+    <li>A chain of images, each <b>half the size</b> of the one before, gives those blurs for about 8 texture reads per screen pixel, where one wide blur would need hundreds.</li>
+    <li>Going down, a <b>13-tap filter</b> halves the image without flicker; the first step uses a <b>Karis average</b> so one very bright pixel cannot flash. Going up, a <b>tent filter</b> adds each level to the one above.</li>
+    <li>Mix it in with <code class="lang-text">lerp(scene, bloom, strength)</code>, no threshold: the light's total stays the same, and only very bright light shows a glow.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>The problem: brighter than white</h2>
+
+<p>Three lamps, 1, 16 and 256 times as bright as white. The tone curve maps them to bytes 202, 254 and 255 (<a href="tone-mapping.html">Tone mapping</a>): on screen they are the same white disc.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Three lamps of brightness 1, 16 and 256 drawn as the same white disc on a dark background, with no glow.">
+      <rect x="10" y="10" width="300" height="100" rx="6" class="solid"/>
+      <circle cx="70" cy="60" r="10" class="lit"/>
+      <circle cx="160" cy="60" r="10" class="lit"/>
+      <circle cx="250" cy="60" r="10" class="lit"/>
+      <text x="70" y="130" class="mid small">1 → 202</text>
+      <text x="160" y="130" class="mid small">16 → 254</text>
+      <text x="250" y="130" class="mid small">256 → 255</text>
+    </svg>
+    <h4>Without bloom</h4>
+    <p>The curve rolls off into white, so very different lights look alike. Nothing on screen says which one is the sun.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same three lamps with a glow that grows with their brightness: almost none around 1, a small halo around 16, a wide halo around 256.">
+      <rect x="10" y="10" width="300" height="100" rx="6" class="solid"/>
+      <circle cx="160" cy="60" r="20" class="light o-25"/>
+      <circle cx="250" cy="60" r="44" class="light o-25"/>
+      <circle cx="250" cy="60" r="28" class="light o-25"/>
+      <circle cx="250" cy="60" r="18" class="light o-50"/>
+      <circle cx="70" cy="60" r="10" class="lit"/>
+      <circle cx="160" cy="60" r="10" class="lit"/>
+      <circle cx="250" cy="60" r="10" class="lit"/>
+      <text x="70" y="130" class="mid small">1</text>
+      <text x="160" y="130" class="mid small">16</text>
+      <text x="250" y="130" class="mid small">256</text>
+    </svg>
+    <h4>With bloom</h4>
+    <p>A small share of each lamp's light spreads around it. The glow grows with the brightness, so the eye reads 256 as much brighter than 1.</p>
+  </div>
+</div>
+
+<p>The glow is not a trick of games. In a camera, a little light scatters in the glass, the coatings and the dust, and in the eye it scatters in the cornea and the lens. Most of a point's light lands where it should; a small part spreads over a wide area. Around a dim light that part is too faint to see. Around the sun it is brighter than the sky next to it.</p>
+
+<h2 id="shape"><span class="n">2</span>The shape of the glow: a sum of blurs</h2>
+
+<p>How a lens spreads one point of light is its <b>point spread function</b>. Measured, it has a sharp core and a long tail that falls off slowly. A single Gaussian blur falls off fast, so it is either too narrow to reach far, or too wide and loses the core. A <b>sum of blurs</b>, each twice as wide as the one before and each with the same total light, has the right shape:</p>
+
+<div class="legend">
+  <span><i class="gpu"></i>each blur: 2, 4, 8, 16, 32, 64 pixels wide, the same light each</span>
+  <span><i class="shader"></i>their sum: a sharp core and a long tail</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Light along a line through a point, on a log scale, from 200 pixels left to 200 pixels right. Six bell curves, of widths 2 to 64 pixels, each holding the same light: the narrow ones are tall, the wide ones low and wide. Their sum is a sharp peak at the point with a long tail that reaches far to both sides.">
+    <rect x="60" y="40" width="640" height="150" class="zone"/>
+    <path d="M60,77.5H700M60,115H700M60,152.5H700M220,40V190M380,40V190M540,40V190" class="grid"/>
+    <path d="M367,188 L369,158 L370,131 L372,109 L374,91 L375,76 L377,66 L378,60 L380,58 L382,60 L383,66 L385,76 L386,91 L388,109 L390,131 L391,158 L393,188" class="arrow gpu"/>
+    <path d="M358,169 L361,143 L364,120 L367,102 L370,88 L374,77 L377,71 L378,70 L380,69 L382,70 L383,71 L386,77 L390,88 L393,102 L396,120 L399,143 L402,169" class="arrow gpu"/>
+    <path d="M335,180 L342,154 L348,131 L354,113 L361,99 L367,89 L374,83 L377,81 L380,81 L383,81 L386,83 L393,89 L399,99 L406,113 L412,131 L418,154 L425,180" class="arrow gpu"/>
+    <path d="M303,165 L316,143 L329,124 L342,110 L354,100 L367,94 L377,92 L380,92 L383,92 L393,94 L406,100 L418,110 L431,124 L444,143 L457,165" class="arrow gpu"/>
+    <path d="M214,189 L239,165 L265,144 L290,128 L316,116 L342,108 L367,104 L380,103 L393,104 L418,108 L444,116 L470,128 L495,144 L521,165 L546,189" class="arrow gpu"/>
+    <path d="M86,182 L111,170 L137,160 L162,151 L188,143 L214,136 L239,130 L265,125 L290,121 L316,118 L342,116 L367,115 L380,114 L393,115 L418,116 L444,118 L470,121 L495,125 L521,130 L546,136 L572,143 L598,151 L623,160 L649,170 L674,182" class="arrow gpu"/>
+    <path d="M73,188 L86,182 L98,176 L111,170 L124,165 L137,160 L150,156 L162,151 L175,147 L188,143 L201,139 L214,135 L226,132 L239,128 L252,124 L265,120 L278,116 L290,112 L303,108 L316,104 L329,99 L342,93 L354,85 L367,72 L377,51 L378,48 L380,47 L382,48 L383,51 L393,72 L406,85 L418,93 L431,99 L444,104 L457,108 L470,112 L482,116 L495,120 L508,124 L521,128 L534,132 L546,135 L559,139 L572,143 L585,147 L598,151 L610,156 L623,160 L636,165 L649,170 L662,176 L674,182 L687,188" class="arrow shader thick"/>
+    <text x="54" y="44" class="end small">10%</text>
+    <text x="54" y="119" class="end small">0.1%</text>
+    <text x="54" y="194" class="end small">0.001%</text>
+    <text x="60" y="208" class="mid small">−200 px</text>
+    <text x="380" y="208" class="mid small">the point</text>
+    <text x="700" y="208" class="mid small">+200 px</text>
+    <text x="60" y="26" class="small">share of the point's light per pixel, log scale: one grid line = 10 times</text>
+    <text x="700" y="225" class="end small t-faint">the curves are Gaussians of standard deviation 2 to 64 pixels</text>
+  </svg>
+  <figcaption>Near the point the narrow blurs win: a sharp core. Far away only the widest blur is left: a long tail. A chain of half-size images gives exactly such a set of blurs, one per level.</figcaption>
+</figure>
+
+<h2 id="chain"><span class="n">3</span>The chain: blurs at many sizes, cheaply</h2>
+
+<p>A wide blur is costly at full size. A blur 64 pixels wide reads hundreds of pixels for every pixel. But a blur of a few texels on an image 64 times smaller covers the same area, and that image has 4096 times fewer pixels. So the image is halved again and again (the <b>down</b> chain), and then walked back up, each level adding a soft copy of the level below (the <b>up</b> chain).</p>
+
+<div class="legend">
+  <span><i class="mem"></i>images, each half the size of the one before</span>
+  <span><i class="gpu"></i>down: halve with a 13-tap filter</span>
+  <span><i class="shader"></i>up: add a tent-blurred copy of the level below</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 262" role="img" aria-label="Top row, the down chain: the scene at full size, then images of 1/2, 1/4, 1/8, 1/16, 1/32 and 1/64 of its size, each made from the one before. Bottom row, the up chain, right to left: up 5 is down 5 plus a blurred copy of down 6, up 4 is down 4 plus a blurred copy of up 5, and so on to up 1, which divides by 6 and is the bloom, half the scene's size.">
+    <text x="20" y="20" class="title">down: halve again and again</text>
+    <rect x="20" y="32" width="160" height="90" rx="4" class="mem"/>
+    <text x="100" y="72" class="mid title">scene</text>
+    <text x="100" y="90" class="mid small">1920 × 1080</text>
+    <line x1="180" y1="77" x2="210" y2="77" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="212" y="54" width="80" height="45" rx="4" class="mem"/>
+    <text x="252" y="74" class="mid small">1/2</text>
+    <text x="252" y="90" class="mid small">960 × 540</text>
+    <line x1="292" y1="77" x2="322" y2="77" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="324" y="62" width="60" height="30" rx="4" class="mem"/>
+    <text x="354" y="81" class="mid small">1/4</text>
+    <line x1="384" y1="77" x2="414" y2="77" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="416" y="65" width="44" height="24" rx="4" class="mem"/>
+    <text x="438" y="81" class="mid small">1/8</text>
+    <line x1="460" y1="77" x2="490" y2="77" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="492" y="67" width="40" height="20" rx="4" class="mem"/>
+    <text x="512" y="81" class="mid small">1/16</text>
+    <line x1="532" y1="77" x2="562" y2="77" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="564" y="67" width="40" height="20" rx="4" class="mem"/>
+    <text x="584" y="81" class="mid small">1/32</text>
+    <line x1="604" y1="77" x2="634" y2="77" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="636" y="67" width="40" height="20" rx="4" class="mem"/>
+    <text x="656" y="81" class="mid small">1/64</text>
+
+    <path d="M656,87 V172 H626" class="arrow shader" marker-end="url(#ah-shader)"/>
+    <rect x="564" y="162" width="60" height="20" rx="4" class="mem"/>
+    <text x="594" y="176" class="mid small">up 5</text>
+    <line x1="564" y1="172" x2="534" y2="172" class="arrow shader" marker-end="url(#ah-shader)"/>
+    <rect x="474" y="162" width="58" height="20" rx="4" class="mem"/>
+    <text x="503" y="176" class="mid small">up 4</text>
+    <line x1="474" y1="172" x2="444" y2="172" class="arrow shader" marker-end="url(#ah-shader)"/>
+    <rect x="384" y="162" width="58" height="20" rx="4" class="mem"/>
+    <text x="413" y="176" class="mid small">up 3</text>
+    <line x1="384" y1="172" x2="354" y2="172" class="arrow shader" marker-end="url(#ah-shader)"/>
+    <rect x="294" y="160" width="58" height="24" rx="4" class="mem"/>
+    <text x="323" y="176" class="mid small">up 2</text>
+    <line x1="294" y1="172" x2="264" y2="172" class="arrow shader" marker-end="url(#ah-shader)"/>
+    <rect x="182" y="150" width="80" height="45" rx="4" class="mem"/>
+    <text x="222" y="170" class="mid small">up 1 ÷ 6</text>
+    <text x="222" y="186" class="mid small">the bloom</text>
+    <path d="M594,87 V160" class="arrow dashed"/>
+    <path d="M512,87 V160" class="arrow dashed"/>
+    <path d="M438,89 V160" class="arrow dashed"/>
+    <path d="M354,92 V158" class="arrow dashed"/>
+    <path d="M252,99 V148" class="arrow dashed"/>
+    <text x="20" y="218" class="title">up: add the level below, blurred</text>
+    <text x="20" y="238" class="small">dashed: each up level starts from the down level of its size, then adds the blurred level below.</text>
+    <text x="20" y="254" class="small">Up 1 holds 6 blurred copies of the scene, so it is divided by 6 to keep the light's total.</text>
+  </svg>
+  <figcaption>Sizes for a 1920 × 1080 scene. Each down level is a blur of the scene (the levels are blurrier the smaller they are); the up chain sums them, like the sum of blurs above.</figcaption>
+</figure>
+
+<p>Every level has a quarter of the pixels of the one above, so the whole chain costs about a third of one more pass at the first level's size:</p>
+
+<div class="stats">
+  <div><b>≈ 4.3</b><span>reads per screen pixel, going down</span><small>13 taps × (1/4 + 1/16 + … + 1/4096)</small></div>
+  <div><b>≈ 3.3</b><span>reads per screen pixel, going up</span><small>10 taps × (1/4 + 1/16 + … + 1/1024)</small></div>
+  <div><b>≈ 540</b><span>reads per pixel for one blur of radius 135 px</span><small>a separable Gaussian: 2 × 271 taps</small></div>
+</div>
+
+<h2 id="down"><span class="n">4</span>Going down: the 13-tap filter</h2>
+
+<p>The simplest way to halve an image is the mean of each 2 × 2 block. For bloom it fails: a small bright light that moves by one pixel jumps from one block to the next, and its glow blinks. A wider filter that overlaps the blocks keeps it steady. The filter of Jimenez (<i>Call of Duty: Advanced Warfare</i>, 2014) reads <b>13 bilinear taps</b>. The new texel sits on a corner between 2 × 2 old texels, and so does every tap, so each tap is already the mean of 2 × 2 texels. Together they cover 6 × 6:</p>
+
+<div class="legend">
+  <span><i class="hot"></i>the inner box (taps j, k, l, m): weight 0.5, the new texel's own area</span>
+  <span><i class="box"></i>four corner boxes of 4 taps each, sharing e: weight 0.125 each</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="A grid of 6 by 6 source texels. 13 dots sit on texel corners: a, b, c along the top row of corners two texels from the center, d, e, f through the center, g, h, i at the bottom, and j, k, l, m one texel diagonally from the center. An inner box joins j, k, l and m. Four dashed corner boxes join a b d e, b c e f, d e g h and e f h i. On the right, the weights: inner box 0.5, each corner box 0.125, which gives each tap a weight from 1/32 to 1/8, and 1, 3, 4, 4, 3, 1 sixteenths along a row.">
+    <rect x="60" y="30" width="180" height="180" class="paper"/>
+    <path d="M60,30V210M90,30V210M120,30V210M150,30V210M180,30V210M210,30V210M240,30V210M60,30H240M60,60H240M60,90H240M60,120H240M60,150H240M60,180H240M60,210H240" class="grid"/>
+    <rect x="93" y="63" width="54" height="54" class="dashed"/>
+    <rect x="153" y="63" width="54" height="54" class="dashed"/>
+    <rect x="93" y="123" width="54" height="54" class="dashed"/>
+    <rect x="153" y="123" width="54" height="54" class="dashed"/>
+    <rect x="120" y="90" width="60" height="60" class="hot"/>
+    <circle cx="90" cy="60" r="5" class="mem"/><text x="84" y="54" class="end small">a</text>
+    <circle cx="150" cy="60" r="5" class="mem"/><text x="150" y="52" class="mid small">b</text>
+    <circle cx="210" cy="60" r="5" class="mem"/><text x="216" y="54" class="small">c</text>
+    <circle cx="90" cy="120" r="5" class="mem"/><text x="84" y="124" class="end small">d</text>
+    <circle cx="150" cy="120" r="6" class="accent"/><text x="158" y="116" class="small">e</text>
+    <circle cx="210" cy="120" r="5" class="mem"/><text x="216" y="124" class="small">f</text>
+    <circle cx="90" cy="180" r="5" class="mem"/><text x="84" y="192" class="end small">g</text>
+    <circle cx="150" cy="180" r="5" class="mem"/><text x="150" y="196" class="mid small">h</text>
+    <circle cx="210" cy="180" r="5" class="mem"/><text x="216" y="192" class="small">i</text>
+    <circle cx="120" cy="90" r="5" class="gpu"/><text x="114" y="86" class="end small">j</text>
+    <circle cx="180" cy="90" r="5" class="gpu"/><text x="186" y="86" class="small">k</text>
+    <circle cx="120" cy="150" r="5" class="gpu"/><text x="114" y="162" class="end small">l</text>
+    <circle cx="180" cy="150" r="5" class="gpu"/><text x="186" y="162" class="small">m</text>
+    <text x="150" y="230" class="mid small">6 × 6 source texels; the new texel covers the middle 2 × 2</text>
+
+    <rect x="300" y="30" width="440" height="180" rx="8" class="paper"/>
+    <text x="316" y="54" class="title">weights</text>
+    <text x="316" y="80" class="mono small">inner box   (j + k + l + m) / 4    × 0.5</text>
+    <text x="316" y="100" class="mono small">4 corners   (a + b + d + e) / 4    × 0.125</text>
+    <text x="316" y="118" class="mono small">            (b + c + e + f) / 4, …  × 0.125</text>
+    <text x="316" y="146" class="small">Per tap: e 1/8, j k l m 1/8, b d f h 1/16, a c g i 1/32.</text>
+    <text x="316" y="166" class="small">Per texel along a row: 1, 3, 4, 4, 3, 1 sixteenths.</text>
+    <text x="316" y="186" class="small">The weights add up to 1, so a flat image stays flat.</text>
+  </svg>
+  <figcaption>13 reads instead of 36, because bilinear filtering averages each 2 × 2 for free. The overlap with the neighbours' footprints is what stops the blinking.</figcaption>
+</figure>
+
+<h3>The first level: the Karis average</h3>
+
+<p>A scene can hold a single pixel that is far brighter than the rest: a sparkle of specular light on a tiny bump, called a <b>firefly</b>. The blur spreads it into a large, bright blob, and as the pixel comes and goes from frame to frame, the blob flashes. The first down step therefore weights each of the five boxes by 1 / (1 + its brightness) (Karis 2013), so one box with a firefly cannot outweigh the others. Here, a firefly of 1000 on a background of 0.1:</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Plain weights: the new texel is 125 when the firefly is in the inner box, and 31 when it moves one texel into a corner box. The value jumps four times.">
+      <line x1="20" y1="110" x2="300" y2="110" class="surface"/>
+      <rect x="60" y="20" width="60" height="90" class="bad"/>
+      <rect x="200" y="87" width="60" height="23" class="bad"/>
+      <text x="90" y="14" class="mid mono">125</text>
+      <text x="230" y="81" class="mid mono">31</text>
+      <text x="90" y="128" class="mid small">in the inner box</text>
+      <text x="230" y="128" class="mid small">one texel later</text>
+    </svg>
+    <h4>Plain weights</h4>
+    <p>The texel is 125, then 31 when the firefly moves by one source texel: the glow flashes.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Karis weights: the new texel is 1.19 with the firefly in the inner box and 0.26 one texel later. Both are small, so the glow stays calm.">
+      <line x1="20" y1="110" x2="300" y2="110" class="surface"/>
+      <rect x="60" y="109" width="60" height="1" class="ok"/>
+      <rect x="200" y="109" width="60" height="1" class="ok"/>
+      <text x="90" y="100" class="mid mono">1.19</text>
+      <text x="230" y="100" class="mid mono">0.26</text>
+      <text x="90" y="128" class="mid small">in the inner box</text>
+      <text x="230" y="128" class="mid small">one texel later</text>
+    </svg>
+    <h4>Karis weights</h4>
+    <p>The box with the firefly gets weight 0.5 / 251. The texel stays near the background, wherever the firefly is.</p>
+  </div>
+</div>
+
+<p>Bars on the same linear scale. The Karis average is only for the first step: the later levels hold no single bright pixels any more, and weighting them would darken the glow.</p>
+
+<h2 id="up"><span class="n">5</span>Going up: the tent filter</h2>
+
+<p>Each up level starts from the down level of the same size and adds the level below, scaled up and softened by a 3 × 3 <b>tent</b> filter: nine bilinear taps, one texel of the smaller level apart. The tent smooths the blocky texels of the small image, so no square edges show.</p>
+
+<div class="formula">
+  <p class="eq">up<sub>i</sub> = down<sub>i</sub> + tent(up<sub>i+1</sub>)</p>
+  <p class="eq">bloom = up<sub>1</sub> / levels</p>
+  <dl>
+    <dt>tent</dt><dd>weights 1 2 1 / 2 4 2 / 1 2 1, divided by 16</dd>
+    <dt>up<sub>i+1</sub></dt><dd>for the smallest level, down<sub>i+1</sub>: it has nothing below it</dd>
+    <dt>levels</dt><dd>how many levels the chain has: up<sub>1</sub> holds that many blurred copies of the scene</dd>
+  </dl>
+</div>
+
+<h2 id="mix"><span class="n">6</span>Mixing it in</h2>
+
+<p>The bloom is the scene, blurred at every size, with the scene's total light. Two ways to put it back:</p>
+
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Threshold and add: only light above a threshold is blurred and added. A light just under the threshold has no glow, one just over it suddenly does.">
+      <line x1="20" y1="100" x2="220" y2="100" class="surface"/>
+      <line x1="20" y1="50" x2="220" y2="50" class="arrow bad dashed"/>
+      <text x="220" y="44" class="end small t-bad">threshold</text>
+      <rect x="60" y="56" width="20" height="44" class="lit"/>
+      <rect x="150" y="44" width="20" height="56" class="lit"/>
+      <circle cx="160" cy="44" r="22" class="light o-25"/>
+      <text x="70" y="118" class="mid small">no glow</text>
+      <text x="160" y="118" class="mid small">glow</text>
+    </svg>
+    <h4>Threshold, then add</h4>
+    <p><code class="lang-text">scene + k · blur(max(scene − t, 0))</code>. Adds light, and a glow appears and vanishes as a value crosses <var>t</var>. Needs tuning per scene.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Lerp without a threshold: every light gives a small share of itself to its glow. A dim light's glow is too faint to see, a bright light's glow is clear.">
+      <line x1="20" y1="100" x2="220" y2="100" class="surface"/>
+      <rect x="60" y="56" width="20" height="44" class="lit"/>
+      <rect x="150" y="30" width="20" height="70" class="lit"/>
+      <circle cx="70" cy="56" r="14" class="light o-25"/>
+      <circle cx="160" cy="30" r="26" class="light o-25"/>
+      <text x="70" y="118" class="mid small">faint glow</text>
+      <text x="160" y="118" class="mid small">clear glow</text>
+    </svg>
+    <h4>Lerp, no threshold</h4>
+    <p><code class="lang-text">lerp(scene, bloom, s)</code>. Every pixel gives <var>s</var> of its light to its glow and keeps the rest. The total stays the same; only bright light shows.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The order of the passes: lighting, then bloom on the HDR image, then the tone curve.">
+      <rect x="14" y="48" width="60" height="34" rx="17" class="shader"/>
+      <text x="44" y="69" class="mid small">light</text>
+      <line x1="74" y1="65" x2="88" y2="65" class="arrow" marker-end="url(#ah)"/>
+      <rect x="90" y="48" width="60" height="34" rx="6" class="gpu"/>
+      <text x="120" y="69" class="mid small">bloom</text>
+      <line x1="150" y1="65" x2="164" y2="65" class="arrow" marker-end="url(#ah)"/>
+      <rect x="166" y="48" width="60" height="34" rx="17" class="shader"/>
+      <text x="196" y="69" class="mid small">curve</text>
+      <text x="120" y="110" class="mid small">on HDR values, before the curve</text>
+    </svg>
+    <h4>Before the tone curve</h4>
+    <p>Bloom must see values above 1. After the curve every light is at most 1, and every glow is the same.</p>
+  </div>
+</div>
+
+<p>A strength of about 0.04 looks natural: each pixel gives 4 % of its light to its glow. Try it on one row of pixels. The lab runs the chain of this page in one dimension:</p>
+
+<div class="legend">
+  <span><i class="mem"></i>the scene: a background of 0.05 and one bright pixel</span>
+  <span><i class="gpu"></i>the bloom</span>
+  <span><i class="shader"></i>what the tone curve gets: lerp(scene, bloom, strength)</span>
+</div>
+
+<figure class="lab" data-lab="bloom-chain" data-title="One bright pixel through the chain">
+  <figcaption>Raise the spot from 0 to 12 stops: at strength 0.04 the glow shows only for a very bright spot, and "light the bloom keeps" stays near 100 %. Then pick a source of 24 or 6 pixels: the chain stops early, and the glow gets smaller.</figcaption>
+</figure>
+
+<h2 id="small"><span class="n">7</span>Small images</h2>
+
+<p>A fixed number of levels assumes a big image. A 256 × 144 image halves 6 times to 4 × 2. A window made very small, or a source of 6 pixels, reaches 1 × 1 earlier, and halving 1 × 1 again only copies it. So the chain stops at the last level that is at least <b>2 × 2</b>, and the last up step divides by the levels that ran. The first level always runs, so an image of any size, even 1 × 1, still gets a bloom image and never a level of zero size.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Source</th><th>Levels, each halved</th><th>Levels that run</th></tr>
+  <tr><td>1920 × 1080</td><td>960 × 540, 480 × 270, … 30 × 16</td><td>6</td></tr>
+  <tr><td>256 × 144</td><td>128 × 72, 64 × 36, 32 × 18, 16 × 9, 8 × 4, 4 × 2</td><td>6</td></tr>
+  <tr><td>100 × 30</td><td>50 × 15, 25 × 7, 12 × 3, 6 × 1, 3 × 1, 1 × 1</td><td>3</td></tr>
+  <tr><td>3 × 3</td><td>1 × 1 at every level</td><td>1</td></tr>
+</table>
+</div>
+
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Every light glows the same</dt><dd>Bloom ran on tone-mapped values, which stop at 1. Run it on the HDR image, before the curve.</dd></div>
+  <div><dt>The whole image gets brighter and hazy</dt><dd>The bloom was added (<code class="lang-text">scene + bloom</code>) instead of mixed in. Use <code class="lang-text">lerp</code>, or keep the strength small.</dd></div>
+  <div><dt>Glows flash or blink as the camera moves</dt><dd>A 2 × 2 box down filter, or no Karis average on the first step. Use the 13-tap filter and the Karis weights.</dd></div>
+  <div><dt>Square blocks in the glow</dt><dd>The up chain uses point sampling, or skips the tent. Sample bilinearly and blur with the tent at every level.</dd></div>
+  <div><dt>The glow is a different size at another resolution</dt><dd>The levels go down to a fixed pixel size. Use a fixed number of halvings, so each level is the same share of the screen.</dd></div>
+  <div><dt>A glow pops in or out as a light gets brighter</dt><dd>A threshold. Without one, the glow grows smoothly with the light.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p><code>Engine::addBloomPasses</code> adds the chain to a <a href="render-graphs.html">render graph</a> as 11 compute passes, after the scene passes. Each pass reads its inputs by sampling and writes one image, a <b>storage render target</b>; the graph does the barriers. The tone map then mixes the result in. With <code>Engine::render</code>, one line turns it on, before the engine is made:</p>
+
+<pre><code>config.bloom = true;</code></pre>
+
+<div class="legend">
+  <span><i class="gpu"></i>compute passes of the graph</span>
+  <span><i class="mem"></i>transient storage targets</span>
+  <span><i class="cpu"></i>the camera's setting</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="scene_hdr feeds Bloom Down 1, which writes bloom_down_1. Bloom Down 2 to 6 each read the level before and write the next, down to bloom_down_6. Bloom Up 5 reads bloom_down_5 and bloom_down_6 and writes bloom_up_5; each later up pass reads its down level and the up level below; Bloom Up 1 writes bloom_up_1, divided by the level count. Tone Map reads scene_hdr and bloom_up_1 and draws lerp of them by the camera's bloom strength. All 11 passes share one GPU timer, Bloom.">
+    <rect x="20" y="40" width="110" height="44" rx="6" class="mem"/>
+    <text x="75" y="60" class="mid mono small">scene_hdr</text>
+    <text x="75" y="76" class="mid small">full size</text>
+    <text x="150" y="26" class="title t-gpu">Bloom Down 1 … 6: firstDownsampleMain, then downsampleMain</text>
+    <line x1="130" y1="62" x2="156" y2="62" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="158" y="44" width="88" height="36" rx="6" class="mem"/>
+    <text x="202" y="66" class="mid mono small">down_1</text>
+    <line x1="246" y1="62" x2="262" y2="62" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="264" y="44" width="88" height="36" rx="6" class="mem"/>
+    <text x="308" y="66" class="mid mono small">down_2</text>
+    <line x1="352" y1="62" x2="368" y2="62" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="370" y="44" width="88" height="36" rx="6" class="mem"/>
+    <text x="414" y="66" class="mid mono small">down_3</text>
+    <line x1="458" y1="62" x2="474" y2="62" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="476" y="44" width="80" height="36" rx="6" class="mem"/>
+    <text x="516" y="66" class="mid mono small">down_4</text>
+    <line x1="556" y1="62" x2="572" y2="62" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="574" y="44" width="80" height="36" rx="6" class="mem"/>
+    <text x="614" y="66" class="mid mono small">down_5</text>
+    <line x1="654" y1="62" x2="670" y2="62" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="672" y="44" width="72" height="36" rx="6" class="mem"/>
+    <text x="708" y="66" class="mid mono small">down_6</text>
+
+    <path d="M708,80 V154 H658" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="574" y="136" width="80" height="36" rx="6" class="mem"/>
+    <text x="614" y="158" class="mid mono small">up_5</text>
+    <line x1="574" y1="154" x2="558" y2="154" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="476" y="136" width="80" height="36" rx="6" class="mem"/>
+    <text x="516" y="158" class="mid mono small">up_4</text>
+    <line x1="476" y1="154" x2="460" y2="154" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="370" y="136" width="88" height="36" rx="6" class="mem"/>
+    <text x="414" y="158" class="mid mono small">up_3</text>
+    <line x1="370" y1="154" x2="354" y2="154" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="264" y="136" width="88" height="36" rx="6" class="mem"/>
+    <text x="308" y="158" class="mid mono small">up_2</text>
+    <line x1="264" y1="154" x2="248" y2="154" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="158" y="136" width="88" height="36" rx="6" class="mem"/>
+    <text x="202" y="151" class="mid mono small">up_1</text>
+    <text x="202" y="166" class="mid small">÷ levels</text>
+    <path d="M614,80 V134" class="arrow dashed"/>
+    <path d="M516,80 V134" class="arrow dashed"/>
+    <path d="M414,80 V134" class="arrow dashed"/>
+    <path d="M308,80 V134" class="arrow dashed"/>
+    <path d="M202,80 V134" class="arrow dashed"/>
+
+    <path d="M202,172 V214" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <path d="M75,84 V232 H96" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="98" y="216" width="260" height="40" rx="6" class="gpu"/>
+    <text x="228" y="234" class="mid mono small">Tone Map</text>
+    <text x="228" y="250" class="mid small">lerp(scene, bloom, strength), × exposure, AgX</text>
+    <rect x="430" y="216" width="310" height="40" rx="6" class="cpu"/>
+    <text x="585" y="234" class="mid mono small">setCameraBloomStrength(camera, 0.04)</text>
+    <text x="585" y="250" class="mid small">read when the passes run; 0 records nothing</text>
+    <line x1="430" y1="236" x2="360" y2="236" class="arrow cpu dashed" marker-end="url(#ah-cpu)"/>
+    <text x="380" y="196" class="title t-gpu">Bloom Up 5 … 1: upsampleMain</text>
+    <text x="20" y="284" class="small">Targets are named bloom_down_1 … bloom_down_6 and bloom_up_1 … bloom_up_5, all SCENE_COLOR_FORMAT, sized from the source.</text>
+  </svg>
+  <figcaption>The 11 passes run one after another on the graphics queue and share one GPU timer, <code>Bloom</code>. Before each pass the graph moves the target it writes to <code>STORAGE</code> and the targets it reads to <code>SAMPLED</code>; the targets are transient, so they share memory with the frame's other transient targets.</figcaption>
+</figure>
+
+<h3>Images that compute passes write</h3>
+
+<p>A <a href="render-graphs.html">render graph</a> pass that draws gets its target as an attachment. A compute pass has no attachments: it writes an image through a <b>storage image</b> descriptor, in the <samp>GENERAL</samp> layout, and other passes sample it later in the read-only layout. So a graph that lets compute passes write images must move each image between the two layouts, with barriers, as it does for attachments. RASM does it through the render target:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>The pass declares</th><th>The graph records before it</th></tr>
+  <tr><td>a compute pass: <code>write(rt)</code> of a target made with <code>RenderTargetDesc::storage</code></td><td>each color of this frame slot → <code>STORAGE</code> (from <code>STORAGE</code>: a write-after-write barrier)</td></tr>
+  <tr><td>any pass: <code>read(rt)</code></td><td>each color → <code>SAMPLED</code>; nothing after a draw, whose <code>endPass</code> left it there</td></tr>
+  <tr><td>the first pass of a transient target</td><td><code>aliasingBarrier</code>, which also covers compute storage writes</td></tr>
+</table>
+</div>
+
+<p>A storage target is still a render target: it is sized from the window (<code>swapchainScale</code>) and resized with it, its memory is laid out with the graph's other transient targets, and its colors are in the bindless set for sampling. Each color also has a <b>storage slot</b> in binding 1 of the bindless set for the target's life, which <code>Engine::getRenderTargetStorageIndex</code> returns. The shader writes it as <code>gStorageImages[pc.target][uint3(id.xy, 0)]</code>.</p>
+
+<div class="callout">
+  <strong>Write-only, read by sampling</strong>
+  <p>No pass reads and writes one image. Each reads its inputs by sampling and writes its output once per texel. That is why the up chain has its own targets instead of adding into the down ones. Every API can do this: WebGPU core can write an RGBA16F storage texture but not read and write one, and a backend without a storage format can run the same pass as a full-screen draw into the target.</p>
+</div>
+
+<h3>Where RASM follows this page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Levels</td><td>a fixed number of halvings</td><td><code>BLOOM_LEVELS</code> (6), from 1/2 to 1/64 of the source. A source sized from the window (<code>swapchainScale</code>) gives levels with <code>swapchainScale</code> / 2<sup>level</sup>; a fixed-size source gives <code>getBloomLevelSize</code>, its size halved, at least 1 × 1.</td></tr>
+  <tr><td>Small images</td><td>stop at the last level of at least 2 × 2</td><td>The same, with <code>BLOOM_MIN_LEVEL_SIZE</code> (2): every frame, the passes read the levels' sizes and <code>getBloomLevelCount</code> picks the levels that run, so a resize needs no new graph. The passes of the other levels record nothing.</td></tr>
+  <tr><td>Down filter</td><td>13 taps, Karis on the first step</td><td>The same: <code>firstDownsampleMain</code> (Karis) and <code>downsampleMain</code> in <code>shaders/passes/bloom.slang</code>.</td></tr>
+  <tr><td>Up filter</td><td>tent, add, divide by the levels</td><td>The same: <code>upsampleMain</code>; <code>Bloom Up 1</code> multiplies by 1 / levels (<code>BloomPushConstants::scale</code>).</td></tr>
+  <tr><td>Mix</td><td>lerp before the curve, no threshold</td><td><code>Tone Map</code> samples the bloom (half size, bilinear) and draws <code>lerp(scene, bloom, Camera::bloomStrength)</code> before the exposure and AgX. Strength 0.04 by default, from 0 to 1 (<code>Engine::setCameraBloomStrength</code>).</td></tr>
+  <tr><td>Format</td><td>a float format</td><td><code>SCENE_COLOR_FORMAT</code> (RGBA16F) for every level: a storage format on every target backend.</td></tr>
+  <tr><td>Turning it off</td><td>–</td><td>Strength 0: the passes record nothing and the tone map does not sample. To drop the passes and their memory, build the graph without them. <code>EngineConfig::bloom</code> is off by default, so an engine update does not change how an application looks.</td></tr>
+</table>
+</div>
+
+<h3>What it costs</h3>
+
+<div class="stats">
+  <div><b>0.23 ms</b><span>at 1280 × 720</span><small><code>Bloom</code> timer, <code>examples/09_gltf_materials</code>, RTX 3060, Release</small></div>
+  <div><b>0.37 ms</b><span>at 1920 × 1080</span><small><samp>--render-size 1920 1080</samp></small></div>
+  <div><b>0.75 ms</b><span>at 3840 × 2160</span><small><samp>--render-size 3840 2160</samp></small></div>
+  <div><b>13.4 MiB</b><span>the 11 targets at 1080p, each in its own memory</span><small>RGBA16F, with the memory alignment</small></div>
+  <div><b>0 MiB</b><span>more in the example at 1080p, aliased</span><small>the levels reuse the shadow map's memory, free by then; +27.2 MiB at 4K</small></div>
+  <div><b>11</b><span>storage slots</span><small>of <code>MAX_BINDLESS_STORAGE_IMAGES</code> (1024), one per target, given back with the graph</small></div>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The passes</td><td><code>Engine::addBloomPasses</code> in <code>src/renderer/bloom.cpp</code>: the 11 targets and passes, <code>Pass::timerName</code> = <samp>Bloom</samp>; <code>Engine::createBloomPipelines</code>, made on the first pass that runs, retried on a shader error</td></tr>
+  <tr><td>The level rule</td><td><code>getBloomLevelSize</code>, <code>getBloomLevelCount</code>, <code>BLOOM_LEVELS</code>, <code>BLOOM_MIN_LEVEL_SIZE</code> in <code>src/renderer/bloom.h</code>; tested in <code>tests/bloomTests.cpp</code></td></tr>
+  <tr><td>The filters</td><td><code>shaders/passes/bloom.slang</code>: <code>downsample</code>, <code>getKarisWeight</code>, <code>upsampleMain</code>; push constants <code>gfx::BloomPushConstants</code> in <code>src/renderer/uberMaterialTypes.h</code>, checked by <code>validateRasmStructs</code></td></tr>
+  <tr><td>The mix</td><td><code>fragMain</code> in <code>shaders/passes/toneMap.slang</code>; <code>Engine::addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code> (its <code>bloom</code> argument)</td></tr>
+  <tr><td>Storage targets</td><td><code>RenderTargetDesc::storage</code> in <code>include/rasm/render/resource.h</code>; slots in <code>RenderContext::createRenderTarget</code> and <code>createTransientRenderTarget</code>, <code>src/rhi/renderContext.cpp</code>; the transitions in <code>RenderGraph::execute</code>, <code>src/renderer/renderGraph.cpp</code></td></tr>
+  <tr><td>Strength</td><td><code>Camera::bloomStrength</code> in <code>include/rasm/camera.h</code>; <code>Engine::setCameraBloomStrength</code>, <code>Engine::getCameraBloomStrength</code> in <code>src/scene/camera.cpp</code></td></tr>
+  <tr><td>Examples</td><td><code>examples/09_gltf_materials/main.cpp</code>: bloom on, <samp>--no-bloom</samp> to compare, <samp>--bloom-strength</samp> for <code>setCameraBloomStrength</code>; <code>Renderer::render</code> with <code>EngineConfig::bloom</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Bloom runs on HDR light, before <code>Tone Map</code>, and every level is a float format.</li>
+    <li>A pass never reads and writes one image: each up level has its own target.</li>
+    <li>Every level is at least 1 × 1, and the chain stops at the last level of at least 2 × 2; a change to that rule changes <code>tests/bloomTests.cpp</code> and the lab (<code>docs/assets/labs/bloom.js</code>).</li>
+    <li>The bloom keeps the scene's light: the down weights add up to 1, the tent adds up to 1, and up 1 divides by the levels.</li>
+    <li>The C++ and Slang <code>BloomPushConstants</code> keep one name and layout, like <code>ToneMapPushConstants</code>.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Jorge Jimenez, "Next Generation Post Processing in Call of Duty: Advanced Warfare" (SIGGRAPH 2014, Advances in Real-Time Rendering): the 13-tap down filter, the tent up filter and the Karis average on the first step.</li>
+  <li>Brian Karis, "Tone mapping" (graphicrants.blogspot.com, 2013): weighting by 1 / (1 + luma) against fireflies.</li>
+  <li>Greg Spencer, Peter Shirley, Kurt Zimmerman, Donald Greenberg, "Physically-Based Glare Effects for Digital Images", SIGGRAPH 1995: how the eye spreads bright light.</li>
+  <li>Masaki Kawase, "Frame Buffer Postprocessing Effects in DOUBLE-S.T.E.A.L" (GDC 2003): blurs from a chain of smaller images.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

@@ -443,7 +443,7 @@ engine.setSceneEnvironment(scene, rasm::SceneEnvironment{.environment = sunset, 
   <ul>
     <li>The roughness of mip m in <code>specularMain</code> and the mip the shader reads in <code>getEnvironmentLight</code> use the same rule: <code>roughness × (SPECULAR_MIPS − 1)</code>.</li>
     <li><code>getEquirectUV</code> and the lab on this page use the same mapping; <code>toEnvironment</code> and the example's sun direction turn the same way.</li>
-    <li>One bake fits its storage slots: the <code>static_assert</code> in <code>environmentBake.h</code> checks it against <code>MAX_BINDLESS_STORAGE_IMAGES</code>.</li>
+    <li>One bake fits its storage slots: the <code>static_assert</code> in <code>environmentBake.h</code> checks it against <code>RESERVED_STORAGE_IMAGES</code>, the slots kept for the bake below the storage targets' ones.</li>
     <li>The bake's textures end <code>SAMPLED</code> through <code>RenderContext::transitionImageLayout</code>, so later passes and a dropped frame see the right state.</li>
   </ul>
 </div>
