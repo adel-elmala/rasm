@@ -1,0 +1,207 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-16 -16 792 392" width="792" height="392" role="img" aria-label="The CPU calls setAnimationTime every frame and playAnimation on a change; a change writes a row of the animated entity table. The animation pool holds the nodes, the samplers, the channel table and the keys of each mesh, written once at load. The Animate pass runs one group of 64 threads per table row: it samples each node's channels into the pose buffer as local matrices, walks up the parents into world matrices, then writes an InstanceTransform per animated sub-mesh into this slot's buffer, with previousWorld from the other slot. Culling, the scene passes and the shadow views read the transforms through getWorldMatrix."><style>:root { --bg:           #fbfaf7;
+    --bg-soft:      #f3f1eb;
+    --bg-code:      #f0eee8;
+    --bg-raised:    #ffffff;
+    --fg:           #1d1d1b;
+    --fg-soft:      #55534d;
+    --fg-faint:     #8a877e;
+    --line:         #dcd8ce;
+    --link:         #1f5fbf;
+    --accent:       #c2410c;
+    --accent-fill:  #fde3d3;
+
+    /* the color code shared by every diagram */
+    --cpu:          #2563eb;   --cpu-fill:     #dbe7fd;
+    --gpu:          #15803d;   --gpu-fill:     #d5f0dd;
+    --mem:          #b45309;   --mem-fill:     #fbe8c8;
+    --shader:       #7c3aed;   --shader-fill:  #e9defd;
+    --muted-fill:   #ebe8e0;
+
+    /* right / wrong, light rays, shadowed areas */
+    --ok:           #0f7b6c;   --ok-fill:      #d3efe9;
+    --bad:          #b91c1c;   --bad-fill:     #fbdcdc;
+    --light:        #b8860b;   --light-fill:   #fdf0b5;
+    --shade:        rgba(29, 29, 27, 0.4);
+
+    --note:         #2563eb;
+    --warn:         #b45309;
+    --rule:         #b91c1c;
+
+    /* syntax highlighting */
+    --tok-kw:       #a626a4;
+    --tok-type:     #0e7490;
+    --tok-fn:       #1f5fbf;
+    --tok-str:      #3f7d20;
+    --tok-num:      #b45309;
+    --tok-const:    #9a5b00;
+    --tok-com:      #8a877e;
+    --tok-pre:      #c2410c;
+    --tok-ns:       #6b6860;
+
+    --shadow:       0 1px 2px rgba(40, 30, 10, 0.06), 0 6px 20px rgba(40, 30, 10, 0.06);
+    --radius:       10px;
+    --sidebar:      280px;
+    --toc:          230px;
+    --content:      860px;
+    --mono:         "JetBrains Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+    --sans:         "Inter", "Segoe UI", system-ui, -apple-system, sans-serif; }
+@media (prefers-color-scheme: dark) { :root { --bg:           #15161a;
+        --bg-soft:      #1c1e23;
+        --bg-code:      #22252b;
+        --bg-raised:    #1f2228;
+        --fg:           #e8e6e1;
+        --fg-soft:      #b3b0a8;
+        --fg-faint:     #7f7d77;
+        --line:         #33363d;
+        --link:         #7fb0ff;
+        --accent:       #fb923c;
+        --accent-fill:  #40260f;
+        --cpu:          #7fa8ff;   --cpu-fill:     #1c2a47;
+        --gpu:          #5fd08a;   --gpu-fill:     #173326;
+        --mem:          #f0b45a;   --mem-fill:     #3a2a12;
+        --shader:       #b794ff;   --shader-fill:  #2c2147;
+        --muted-fill:   #2a2c32;
+        --ok:           #4fd1b8;   --ok-fill:      #12332e;
+        --bad:          #f87171;   --bad-fill:     #401a1a;
+        --light:        #f5cf4a;   --light-fill:   #3a3110;
+        --shade:        rgba(0, 0, 0, 0.55);
+        --note:         #7fa8ff;
+        --warn:         #f0b45a;
+        --rule:         #f87171;
+        --tok-kw:       #c678dd;
+        --tok-type:     #56b6c2;
+        --tok-fn:       #61afef;
+        --tok-str:      #98c379;
+        --tok-num:      #d19a66;
+        --tok-const:    #e5c07b;
+        --tok-com:      #7f848e;
+        --tok-pre:      #e06c75;
+        --tok-ns:       #9da5b4;
+        --shadow:       0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 20px rgba(0, 0, 0, 0.25); } }
+svg { font-family: var(--sans); }
+svg { font-family: var(--sans); font-size: 13px; }
+svg text { fill: var(--fg); }
+svg text.small { font-size: 11px; fill: var(--fg-soft); }
+svg text.title { font-weight: 700; }
+svg text.big { font-size: 16px; font-weight: 700; }
+svg text.mono { font-family: var(--mono); font-size: 12px; }
+svg text.mid { text-anchor: middle; }
+svg text.end { text-anchor: end; }
+svg text.halo { paint-order: stroke; stroke: var(--bg-raised); stroke-width: 4px; stroke-linejoin: round; }
+svg .box     { fill: var(--muted-fill);  stroke: var(--fg-faint); stroke-width: 1.5; }
+svg .cpu     { fill: var(--cpu-fill);    stroke: var(--cpu);      stroke-width: 1.5; }
+svg .gpu     { fill: var(--gpu-fill);    stroke: var(--gpu);      stroke-width: 1.5; }
+svg .mem     { fill: var(--mem-fill);    stroke: var(--mem);      stroke-width: 1.5; }
+svg .shader  { fill: var(--shader-fill); stroke: var(--shader);   stroke-width: 1.5; }
+svg .ghost   { fill: none; stroke: var(--fg-faint); stroke-width: 1.2; stroke-dasharray: 5 4; }
+svg .hot     { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+svg .zone    { fill: var(--bg-soft); stroke: var(--line); stroke-width: 1; }
+svg .accent  { fill: var(--accent-fill); stroke: var(--accent);   stroke-width: 1.5; }
+svg .ok      { fill: var(--ok-fill);     stroke: var(--ok);       stroke-width: 1.5; }
+svg .bad     { fill: var(--bad-fill);    stroke: var(--bad);      stroke-width: 1.5; }
+svg .light   { fill: var(--light-fill);  stroke: var(--light);    stroke-width: 1.5; }
+svg .shade   { fill: var(--shade);       stroke: none; }
+svg .lit     { fill: var(--light-fill);  stroke: none; }
+svg .solid   { fill: var(--fg-faint);    stroke: var(--fg-soft);  stroke-width: 1.5; }
+svg .paper   { fill: var(--bg-raised);   stroke: var(--line);     stroke-width: 1; }
+svg .surface { fill: none; stroke: var(--fg); stroke-width: 3; stroke-linecap: round; }
+svg .grid    { fill: none; stroke: var(--line); stroke-width: 1; }
+svg .thick   { stroke-width: 3; }
+svg .thin    { stroke-width: 1; }
+svg .nofill  { fill: none; }
+svg .o-25    { opacity: 0.25; }
+svg .o-50    { opacity: 0.5; }
+svg .o-75    { opacity: 0.75; }
+svg .badge   { fill: var(--accent); stroke: none; }
+svg text.badge-n { fill: var(--bg-raised); font-size: 12px; font-weight: 700; text-anchor: middle; }
+svg .arrow        { fill: none; stroke: var(--fg-soft); stroke-width: 1.6; }
+svg .arrow.cpu    { stroke: var(--cpu); fill: none; }
+svg .arrow.gpu    { stroke: var(--gpu); fill: none; }
+svg .arrow.mem    { stroke: var(--mem); fill: none; }
+svg .arrow.shader { stroke: var(--shader); fill: none; }
+svg .arrow.hot    { stroke: var(--accent); fill: none; }
+svg .arrow.ok     { stroke: var(--ok); fill: none; }
+svg .arrow.bad    { stroke: var(--bad); fill: none; }
+svg .arrow.light  { stroke: var(--light); fill: none; }
+svg .arrow.thick  { stroke-width: 3; }
+svg .dashed       { stroke-dasharray: 6 4; }
+svg :where(line.dashed, path.dashed, rect.dashed, circle.dashed, polygon.dashed, polyline.dashed) { stroke: var(--fg-faint); fill: none; }
+svg .flowing { stroke-dasharray: 6 5; animation: flowing 1.2s linear infinite; }
+@keyframes flowing { to { stroke-dashoffset: -22; } }
+svg .head         { fill: var(--fg-soft); }
+svg .head.cpu     { fill: var(--cpu); stroke: none; }
+svg .head.gpu     { fill: var(--gpu); stroke: none; }
+svg .head.mem     { fill: var(--mem); stroke: none; }
+svg .head.shader  { fill: var(--shader); stroke: none; }
+svg .head.hot     { fill: var(--accent); stroke: none; }
+svg .head.ok      { fill: var(--ok); stroke: none; }
+svg .head.bad     { fill: var(--bad); stroke: none; }
+svg .head.light   { fill: var(--light); stroke: none; }
+svg .t-cpu,    svg text.t-cpu    { fill: var(--cpu); }
+svg .t-gpu,    svg text.t-gpu    { fill: var(--gpu); }
+svg .t-mem,    svg text.t-mem    { fill: var(--mem); }
+svg .t-shader, svg text.t-shader { fill: var(--shader); }
+svg .t-hot,    svg text.t-hot    { fill: var(--accent); }
+svg .t-ok,     svg text.t-ok     { fill: var(--ok); }
+svg .t-bad,    svg text.t-bad    { fill: var(--bad); }
+svg .t-light,  svg text.t-light  { fill: var(--light); }
+svg .t-faint,  svg text.t-faint  { fill: var(--fg-faint); }
+svg a:hover rect, svg a:hover circle { stroke-width: 2.5; }
+svg a:hover text { text-decoration: underline; }
+svg .handle { fill: var(--accent); stroke: var(--bg-raised); stroke-width: 2.5; cursor: grab; touch-action: none; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35)); }
+svg .handle:hover, svg .handle:focus-visible { stroke: var(--fg); outline: none; }
+svg .handle.dragging { cursor: grabbing; }
+svg .pick { cursor: pointer; }
+svg .pick:hover, svg .pick:focus-visible { stroke-width: 3; outline: none; }
+svg g.pick:hover > :is(rect, circle, polygon), svg g.pick:focus-visible > :is(rect, circle, polygon) { stroke-width: 3; }
+svg g.pick text { pointer-events: none; }
+svg .off { opacity: 0.28; }
+svg .hide { display: none; }
+.card { fill: var(--bg-raised); stroke: var(--line); stroke-width: 1; }</style><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker><marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker><marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker><marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker><marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker><marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker><marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker><marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker><marker id="ah-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head light"/></marker></defs><rect class="card" x="-15.5" y="-15.5" width="791" height="391" rx="12"/>
+    <text x="20" y="22" class="title t-cpu">CPU</text>
+    <rect x="20" y="34" width="180" height="40" rx="6" class="cpu"/>
+    <text x="110" y="52" class="mid mono small">setAnimationTime</text>
+    <text x="110" y="67" class="mid small">every frame: 1 double</text>
+    <rect x="220" y="34" width="200" height="40" rx="6" class="cpu"/>
+    <text x="320" y="52" class="mid mono small">playAnimation</text>
+    <text x="320" y="67" class="mid small">on a change: 1 table row</text>
+    <rect x="440" y="34" width="300" height="40" rx="6" class="cpu"/>
+    <text x="590" y="52" class="mid mono small">finishMeshLoad</text>
+    <text x="590" y="67" class="mid small">once per mesh: nodes, samplers, keys</text>
+
+    <line x1="320" y1="74" x2="320" y2="104" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="590" y1="74" x2="590" y2="104" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="200" y="106" width="240" height="40" rx="6" class="mem"/>
+    <text x="320" y="124" class="mid small">Animated Entity Table</text>
+    <text x="320" y="139" class="mid small">a row per playing entity, per slot</text>
+    <rect x="460" y="106" width="280" height="40" rx="6" class="mem"/>
+    <text x="600" y="124" class="mid small">Animation Pool</text>
+    <text x="600" y="139" class="mid small">nodes · samplers · channels · keys</text>
+
+    <line x1="320" y1="146" x2="320" y2="176" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="600" y1="146" x2="600" y2="176" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="20" y="172" class="title t-gpu">GPU · Animate, a group per row</text>
+    <rect x="20" y="180" width="720" height="70" rx="6" class="gpu"/>
+    <circle cx="44" cy="215" r="10" class="badge"/><text x="44" y="219" class="badge-n">1</text>
+    <text x="62" y="210" class="small">sample each node's</text>
+    <text x="62" y="225" class="small">channels → local</text>
+    <circle cx="214" cy="215" r="10" class="badge"/><text x="214" y="219" class="badge-n">2</text>
+    <text x="232" y="210" class="small">walk up the parents</text>
+    <text x="232" y="225" class="small">→ world, per node</text>
+    <circle cx="394" cy="215" r="10" class="badge"/><text x="394" y="219" class="badge-n">3</text>
+    <text x="412" y="210" class="small">entity · node world → an</text>
+    <text x="412" y="225" class="small">InstanceTransform per sub-mesh</text>
+    <text x="620" y="210" class="small">barrier between</text>
+    <text x="620" y="225" class="small">the steps</text>
+
+    <line x1="300" y1="250" x2="300" y2="280" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="150" y="282" width="300" height="40" rx="6" class="mem"/>
+    <text x="300" y="300" class="mid small">Animated Transform Buffer (this slot)</text>
+    <text x="300" y="315" class="mid small">world, normal matrix, previousWorld</text>
+    <rect x="470" y="282" width="270" height="40" rx="6" class="mem o-50"/>
+    <text x="605" y="300" class="mid small">the other slot: last frame's</text>
+    <text x="605" y="315" class="mid small">world → this frame's previousWorld</text>
+    <line x1="470" y1="270" x2="470" y2="252" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
+    <line x1="300" y1="322" x2="300" y2="344" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="312" y="352" class="small">Cull, Scene, Transparent, every shadow view: getWorldMatrix</text>
+  </svg>
