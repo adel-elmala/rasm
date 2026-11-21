@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transparency and Alpha Modes · RASM</title>
+<meta name="description" content="How a renderer draws cut-out and see-through surfaces: alpha, the three glTF alpha modes, discard and the early depth test, alpha-to-coverage, the over operator and premultiplied alpha, back-to-front order and depth writes, the limits of sorting by object, hashed alpha for see-through shadows, and how RASM does each.">
+<meta name="rasm-sources" content="shaders/passes/rasm.slang shaders/passes/shadow.slang shaders/passes/cull.slang shaders/passes/sort.slang shaders/lib/core.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/blendSort.cpp src/renderer/uberMaterialTypes.h src/rhi/vulkan/vulkanDevice.cpp include/rasm/material.h include/rasm/render/resource.h include/rasm/types.h src/assets/material.cpp src/engine.cpp examples/09_gltf_materials/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/transparency.js"></script>
+</head>
+<body data-root="../" data-page="guides/transparency.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head light"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Transparency and alpha modes</h1>
+<p class="lead">Most surfaces hide what is behind them. A leaf has holes, a window lets light through, smoke is thin. A renderer marks such surfaces with <b>alpha</b>, a fourth number next to red, green and blue, and draws them in a different way. This page explains the two ways, cut-out and see-through, why see-through surfaces must be drawn last and from back to front, and how they cast shadows. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li><b>Alpha</b> is how much of a surface is there: 1 solid, 0 nothing. glTF has three <b>alpha modes</b>: opaque (alpha ignored), mask (cut-out) and blend (see-through).</li>
+    <li>A <b>cut-out</b> throws away the pixels whose alpha is below a cutoff (<b>discard</b>). Everything else is a normal solid surface. A shader with discard can lose the <b>early depth test</b>, so keep it out of the opaque pipeline.</li>
+    <li>A <b>see-through</b> surface mixes its color with what is behind it: the <b>over</b> operator. With <b>premultiplied alpha</b> the mix is one blend state.</li>
+    <li>Over needs to know what is behind, so see-through surfaces are drawn <b>after</b> the solid ones, <b>back to front</b>, with the depth test on and the <b>depth write off</b>.</li>
+    <li>Sorting whole objects is fast but not exact: two objects that cross, or one object that overlaps itself, can still mix in the wrong order.</li>
+    <li>In a shadow map, a cut-out keeps its cutoff. A see-through surface can use <b>hashed alpha</b>: a fixed noise threshold, so the share of texels that cast follows alpha and the shadow filter gives a light shadow for light glass.</li>
+  </ul>
+</div>
+
+<h2 id="alpha"><span class="n">1</span>Alpha and the three modes</h2>
+
+<p>Alpha comes from the material: a factor, a texture's fourth channel, and sometimes a vertex color, multiplied together. What a renderer does with it depends on the mode.</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A solid gray quad in front of a striped background hides the stripes behind it.">
+      <rect x="20" y="20" width="200" height="90" class="zone"/>
+      <path d="M40,20 V110 M80,20 V110 M120,20 V110 M160,20 V110 M200,20 V110" class="grid"/>
+      <rect x="60" y="35" width="120" height="60" rx="4" class="solid"/>
+      <text x="120" y="70" class="mid small">alpha ignored</text>
+    </svg>
+    <h4>Opaque</h4>
+    <p>Alpha is ignored. The surface hides everything behind it. Most surfaces.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A leaf shape: inside it the surface is solid, outside it there is nothing and the background shows. The edge is hard.">
+      <rect x="20" y="20" width="200" height="90" class="zone"/>
+      <path d="M40,20 V110 M80,20 V110 M120,20 V110 M160,20 V110 M200,20 V110" class="grid"/>
+      <rect x="60" y="35" width="120" height="60" rx="4" class="ghost"/>
+      <path d="M70,85 C80,40 150,30 170,45 C160,70 120,95 70,85 Z" class="gpu"/>
+      <text x="120" y="122" class="mid small">alpha &lt; cutoff: no pixel</text>
+    </svg>
+    <h4>Mask (cut-out)</h4>
+    <p>Each pixel is all or nothing. Leaves, fences, chains, grass. It still writes depth, so it is drawn with the solid surfaces.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A light blue pane over the stripes. The stripes show through it, tinted.">
+      <rect x="20" y="20" width="200" height="90" class="zone"/>
+      <path d="M40,20 V110 M80,20 V110 M120,20 V110 M160,20 V110 M200,20 V110" class="grid"/>
+      <rect x="60" y="35" width="120" height="60" rx="4" class="cpu o-50"/>
+      <text x="120" y="70" class="mid small">mixed by alpha</text>
+    </svg>
+    <h4>Blend (see-through)</h4>
+    <p>The surface and what is behind it are mixed. Glass, water, smoke, ghosts, fading UI. It needs order.</p>
+  </div>
+</div>
+
+<h2 id="cutout"><span class="n">2</span>Cut-outs</h2>
+
+<p>The fragment shader computes alpha and, when it is below the cutoff, throws the pixel away with <b>discard</b>. No color and no depth are written for it. Everything else is drawn like a solid surface, in any order, with the depth buffer sorting it out.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="One pipeline for everything. Its shader may discard, so the GPU tests depth after the shader for every surface, also the solid ones, and shades pixels that turn out hidden.">
+      <rect x="20" y="20" width="120" height="40" rx="4" class="shader"/><text x="80" y="45" class="mid small">shade (may discard)</text>
+      <rect x="180" y="20" width="120" height="40" rx="4" class="box"/><text x="240" y="45" class="mid small">depth test</text>
+      <line x1="140" y1="40" x2="178" y2="40" class="arrow" marker-end="url(#ah)"/>
+      <text x="20" y="90" class="small">hidden pixels are shaded first,</text>
+      <text x="20" y="106" class="small">then thrown away by the depth test</text>
+    </svg>
+    <h4>One shader with discard for all</h4>
+    <p>A shader that can discard may decide that a pixel writes no depth, so many GPUs test depth only <b>after</b> it runs. Solid surfaces lose the early test too.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Two pipelines. The solid one tests depth before shading. Only the cut-out one shades first and tests after.">
+      <rect x="20" y="20" width="120" height="34" rx="4" class="box"/><text x="80" y="42" class="mid small">depth test</text>
+      <rect x="180" y="20" width="120" height="34" rx="4" class="shader"/><text x="240" y="42" class="mid small">shade (solid)</text>
+      <line x1="140" y1="37" x2="178" y2="37" class="arrow" marker-end="url(#ah)"/>
+      <rect x="20" y="80" width="120" height="34" rx="4" class="shader"/><text x="80" y="102" class="mid small">shade (cut-out)</text>
+      <rect x="180" y="80" width="120" height="34" rx="4" class="box"/><text x="240" y="102" class="mid small">depth test</text>
+      <line x1="140" y1="97" x2="178" y2="97" class="arrow" marker-end="url(#ah)"/>
+    </svg>
+    <h4>A pipeline per mode</h4>
+    <p>The solid pipeline has no discard and keeps the early test. Only cut-out draws pay. Draw the solid ones first, so the cut-outs are tested against them.</p>
+  </div>
+</div>
+
+<h3>Alpha-to-coverage needs more than one sample</h3>
+
+<p>With <b>MSAA</b>, each pixel has several samples, and a pipeline can turn alpha into a <b>coverage mask</b>: alpha 0.5 covers half of the samples. The resolve then averages them, which gives a soft, anti-aliased edge instead of a staircase. With one sample per pixel there is nothing to average: alpha-to-coverage becomes a fixed cut at 0.5 and ignores the material's cutoff. So without MSAA, a cut-out is a discard. With MSAA, sharpen alpha around the cutoff, so the edge keeps its place and stays one pixel wide:</p>
+
+<div class="formula">
+  <p class="eq">alpha′ = (alpha − cutoff) / fwidth(alpha) + 0.5</p>
+  <dl>
+    <dt>fwidth(alpha)</dt><dd>How much alpha changes from one pixel to the next on screen.</dd>
+    <dt>alpha′</dt><dd>0.5 exactly at the cutoff, and 0 or 1 one pixel away from it; the coverage mask follows.</dd>
+  </dl>
+</div>
+
+<dl class="pitfalls">
+  <div><dt>Leaves and fences thin out and vanish in the distance</dt><dd>The small mips average a texel's alpha with the empty texels around it, and more and more of them fall under the cutoff. Scale each mip's alpha so the share of texels above the cutoff stays that of the full-size image (coverage-preserving mips), or sharpen alpha as above.</dd></div>
+  <div><dt>A cut-out flickers with noise when the camera moves</dt><dd>Alpha near the cutoff, sampled at a slightly different place each frame. Larger mips, alpha-to-coverage or temporal anti-aliasing calm it.</dd></div>
+</dl>
+
+<h2 id="over"><span class="n">3</span>Blending: the over operator</h2>
+
+<p>A see-through surface with color <var>C</var> and alpha <var>a</var>, in front of a color <var>B</var> already in the image, gives:</p>
+
+<div class="formula">
+  <p class="eq">result = C · a + B · (1 − a)</p>
+  <dl>
+    <dt>C · a</dt><dd>The light the surface itself sends: its color, as much as it is there.</dd>
+    <dt>B · (1 − a)</dt><dd>The light from behind that gets through.</dd>
+  </dl>
+</div>
+
+<p>The GPU does this in its <b>blend</b> unit, after the fragment shader: the shader's output is the <i>source</i>, the image already in the target is the <i>destination</i>, and a blend state says how to mix them.</p>
+
+<div class="split">
+  <div>
+    <svg viewBox="0 0 320 140" role="img" aria-label="Straight alpha: the shader outputs C and a, and the blend state multiplies C by a and the target by one minus a.">
+      <rect x="20" y="20" width="110" height="40" rx="4" class="shader"/><text x="75" y="45" class="mid mono small">(C, a)</text>
+      <rect x="180" y="20" width="120" height="40" rx="4" class="box"/><text x="240" y="38" class="mid mono small">C·a +</text><text x="240" y="52" class="mid mono small">B·(1 − a)</text>
+      <line x1="130" y1="40" x2="178" y2="40" class="arrow" marker-end="url(#ah)"/>
+      <text x="20" y="92" class="small">blend: SRC_ALPHA, ONE_MINUS_SRC_ALPHA</text>
+      <text x="20" y="110" class="small">the target's alpha needs a second rule</text>
+    </svg>
+    <h4>Straight alpha</h4>
+    <p>The shader outputs the color and alpha apart; the blend unit multiplies.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Premultiplied alpha: the shader outputs C times a and a, and the blend state adds it to the target times one minus a.">
+      <rect x="20" y="20" width="110" height="40" rx="4" class="shader"/><text x="75" y="45" class="mid mono small">(C·a, a)</text>
+      <rect x="180" y="20" width="120" height="40" rx="4" class="box"/><text x="240" y="38" class="mid mono small">S +</text><text x="240" y="52" class="mid mono small">B·(1 − a)</text>
+      <line x1="130" y1="40" x2="178" y2="40" class="arrow" marker-end="url(#ah)"/>
+      <text x="20" y="92" class="small">blend: ONE, ONE_MINUS_SRC_ALPHA</text>
+      <text x="20" y="110" class="small">the same rule for color and alpha</text>
+    </svg>
+    <h4>Premultiplied alpha</h4>
+    <p>The shader multiplies first. One rule serves color and alpha, filtering and mips stay right, and light that should not dim with alpha (a glow, a reflection) can simply be added.</p>
+  </div>
+</div>
+
+<h2 id="order"><span class="n">4</span>Order, and the depth buffer</h2>
+
+<p>Over is not commutative: the surface in front must be mixed in last. Two panes, a red one in front of a blue one, give a reddish purple. Drawn the other way round, the blue pane is mixed over the red one, and the result is bluish, as if the blue pane were in front.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="Seen from the side, an eye looks at a red pane and, farther away, a blue pane, in front of a gray background. Drawn back to front, blue then red, the result is reddish. Drawn front to back, red then blue, the result is bluish, which is wrong.">
+    <text x="20" y="24" class="title">seen from the side</text>
+    <circle cx="50" cy="110" r="10" class="box"/>
+    <line x1="60" y1="110" x2="330" y2="110" class="arrow light dashed" marker-end="url(#ah-light)"/>
+    <rect x="130" y="50" width="12" height="120" class="bad o-75"/><text x="136" y="190" class="mid small">red, near</text>
+    <rect x="230" y="50" width="12" height="120" class="cpu o-75"/><text x="236" y="190" class="mid small">blue, far</text>
+    <rect x="320" y="40" width="20" height="140" class="solid"/><text x="330" y="200" class="mid small">background</text>
+    <text x="430" y="40" class="title">drawn back to front</text>
+    <text x="430" y="58" class="small">background, blue, then red</text>
+    <rect x="430" y="68" width="120" height="40" rx="4" class="bad"/><rect x="430" y="68" width="120" height="40" rx="4" class="cpu o-25"/>
+    <text x="560" y="93" class="small t-ok">right: the red pane is in front</text>
+    <text x="430" y="138" class="title">drawn front to back</text>
+    <text x="430" y="156" class="small">background, red, then blue</text>
+    <rect x="430" y="166" width="120" height="40" rx="4" class="cpu"/><rect x="430" y="166" width="120" height="40" rx="4" class="bad o-25"/>
+    <text x="560" y="191" class="small t-bad">wrong: blue looks in front</text>
+  </svg>
+  <figcaption>Order decides the result. The depth buffer cannot fix it, because each pane must be mixed with everything behind it, not replace it.</figcaption>
+</figure>
+
+<p>So a renderer draws see-through surfaces in a separate step:</p>
+
+<ol class="flow">
+  <li class="gpu"><b>Solid and cut-out</b><span>drawn first, in any order; they write depth</span></li>
+  <li class="gpu"><b>Sky</b><span>where nothing was drawn</span></li>
+  <li class="shader"><b>See-through, back to front</b><span>depth test on, so solid surfaces in front hide them; depth write off, so one pane does not hide the pane behind it</span></li>
+</ol>
+
+<p>Move the panes, then draw them in list order or sorted:</p>
+
+<figure class="lab" data-lab="blend-order" data-title="Mix three panes in order">
+  <figcaption>Drag the panes along the view ray and watch the mixed color. In list order the result is right only when the list happens to be back to front; sorted, it always matches.</figcaption>
+</figure>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Two panes, the near one drawn first with depth writes on. The far pane then fails the depth test where they overlap and disappears.">
+      <rect x="40" y="30" width="110" height="70" class="bad o-50"/>
+      <rect x="100" y="50" width="110" height="70" class="ghost"/>
+      <text x="230" y="80" class="small">far pane: hidden</text>
+      <text x="40" y="132" class="small">depth write on: the near pane hides the far one</text>
+    </svg>
+    <h4>Depth write on</h4>
+    <p>If the near pane is drawn first (sorting is never perfect), it writes depth and the far pane fails the test behind it: a hole where glass should be.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="With depth writes off, both panes are drawn where they overlap, and a solid box in front still hides both.">
+      <rect x="40" y="30" width="110" height="70" class="bad o-50"/>
+      <rect x="100" y="50" width="110" height="70" class="cpu o-50"/>
+      <rect x="170" y="20" width="60" height="100" class="solid"/>
+      <text x="40" y="132" class="small">depth test on, write off</text>
+    </svg>
+    <h4>Test on, write off</h4>
+    <p>Each pane is mixed where it is not behind a solid surface, and no pane removes another.</p>
+  </div>
+</div>
+
+<h2 id="sorting"><span class="n">5</span>How exact is the order?</h2>
+
+<p>Sorting needs a key per thing drawn. The cheapest is one key per object: the depth of its bounding sphere's center from the camera. That is enough for separate objects, and wrong in a few cases.</p>
+
+<div class="vgrid">
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Separate panes at different depths: sorting their centers gives the right order.">
+      <rect x="40" y="30" width="60" height="70" class="bad o-50"/><rect x="120" y="40" width="60" height="70" class="cpu o-50"/>
+      <circle cx="70" cy="65" r="3" class="badge"/><circle cx="150" cy="75" r="3" class="badge"/>
+    </svg>
+    <h4>Separate objects</h4>
+    <p>Sort by the bounds' center: right.</p>
+    <p class="cost">One key per object.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Two panes that cross each other: each is in front of the other on one side, so no order of whole objects is right.">
+      <line x1="50" y1="30" x2="190" y2="110" class="surface"/><line x1="50" y1="110" x2="190" y2="30" class="surface"/>
+      <text x="120" y="125" class="mid small">each in front on one side</text>
+    </svg>
+    <h4>Crossing objects</h4>
+    <p>No order of whole objects is right everywhere. Split them, or accept the error.</p>
+    <p class="cost">Needs finer keys or OIT.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A glass sphere: its back half and front half overlap on screen, and the triangles are drawn in the order of the index buffer.">
+      <circle cx="120" cy="65" r="45" class="cpu o-50"/><path d="M75,65 A45,45 0 0 0 165,65" class="ghost"/>
+      <text x="120" y="125" class="mid small">front and back half overlap</text>
+    </svg>
+    <h4>One object over itself</h4>
+    <p>A closed glass object overlaps itself; its triangles come in index order. Cull its back faces, or draw it twice (back faces, then front faces).</p>
+    <p class="cost">Per triangle order.</p>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>Order-independent transparency</strong>
+  <p>Methods like <b>weighted blended OIT</b>, depth peeling or per-pixel lists need no sort at all: they collect every layer of a pixel, or an approximation of them, and mix them later. They cost memory or accuracy, and suit dense data (point clouds, particles, CAD). Sorted blending is still the usual answer for a game or a map with a few panes and sprites.</p>
+</div>
+
+<h2 id="shadows"><span class="n">6</span>Shadows of see-through surfaces</h2>
+
+<p>A shadow map stores one depth per texel: something blocks the light, or nothing does. A cut-out writes depth where it is solid, with the same cutoff, and its holes let light through. A see-through surface has no single answer: thin glass should cast a light shadow, a dense leaf a full one.</p>
+
+<p><b>Hashed alpha</b> answers with noise: each texel keeps the surface when its alpha is above a random threshold. On average a share <var>a</var> of the texels keep it, and the shadow filter (PCF), which averages a few texels, turns that share into a shadow of density <var>a</var>.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 196" role="img" aria-label="Three surfaces with alpha 0.25, 0.5 and 1. In each, a grid of shadow-map texels: about a quarter, a half and all of the texels are filled. Under each, the shadow after filtering: light, medium and full.">
+    <text x="20" y="24" class="title">texels that keep the surface</text>
+    <text x="20" y="176" class="title">after the filter</text>
+    <g>
+      <rect x="180" y="40" width="20" height="20" class="solid"/><rect x="200" y="40" width="20" height="20" class="paper"/><rect x="220" y="40" width="20" height="20" class="paper"/><rect x="240" y="40" width="20" height="20" class="paper"/>
+      <rect x="180" y="60" width="20" height="20" class="paper"/><rect x="200" y="60" width="20" height="20" class="paper"/><rect x="220" y="60" width="20" height="20" class="solid"/><rect x="240" y="60" width="20" height="20" class="paper"/>
+      <rect x="180" y="80" width="20" height="20" class="paper"/><rect x="200" y="80" width="20" height="20" class="solid"/><rect x="220" y="80" width="20" height="20" class="paper"/><rect x="240" y="80" width="20" height="20" class="paper"/>
+      <rect x="180" y="100" width="20" height="20" class="paper"/><rect x="200" y="100" width="20" height="20" class="paper"/><rect x="220" y="100" width="20" height="20" class="paper"/><rect x="240" y="100" width="20" height="20" class="solid"/>
+      <text x="220" y="140" class="mid mono small">alpha 0.25</text>
+      <rect x="180" y="152" width="80" height="30" class="solid o-25"/>
+    </g>
+    <g>
+      <rect x="340" y="40" width="20" height="20" class="solid"/><rect x="360" y="40" width="20" height="20" class="paper"/><rect x="380" y="40" width="20" height="20" class="solid"/><rect x="400" y="40" width="20" height="20" class="paper"/>
+      <rect x="340" y="60" width="20" height="20" class="paper"/><rect x="360" y="60" width="20" height="20" class="solid"/><rect x="380" y="60" width="20" height="20" class="solid"/><rect x="400" y="60" width="20" height="20" class="paper"/>
+      <rect x="340" y="80" width="20" height="20" class="solid"/><rect x="360" y="80" width="20" height="20" class="paper"/><rect x="380" y="80" width="20" height="20" class="paper"/><rect x="400" y="80" width="20" height="20" class="solid"/>
+      <rect x="340" y="100" width="20" height="20" class="paper"/><rect x="360" y="100" width="20" height="20" class="solid"/><rect x="380" y="100" width="20" height="20" class="paper"/><rect x="400" y="100" width="20" height="20" class="solid"/>
+      <text x="380" y="140" class="mid mono small">alpha 0.5</text>
+      <rect x="340" y="152" width="80" height="30" class="solid o-50"/>
+    </g>
+    <g>
+      <rect x="500" y="40" width="80" height="80" class="solid"/>
+      <path d="M520,40 V120 M540,40 V120 M560,40 V120 M500,60 H580 M500,80 H580 M500,100 H580" class="grid"/>
+      <text x="540" y="140" class="mid mono small">alpha 1</text>
+      <rect x="500" y="152" width="80" height="30" class="solid"/>
+    </g>
+    <text x="620" y="74" class="small">the threshold is noise</text>
+    <text x="620" y="90" class="small">fixed on the object,</text>
+    <text x="620" y="106" class="small">so it does not crawl</text>
+  </svg>
+  <figcaption>Hashed alpha in a shadow map. Each texel keeps the surface where alpha is above its threshold, so the filtered shadow is as dense as the surface is opaque.</figcaption>
+</figure>
+
+<div class="callout rule">
+  <strong>Make the noise stable</strong>
+  <p>Take the threshold from a hash of a position <b>on the object</b>, not of the frame number or the screen pixel. Scale the position so one noise cell is about one shadow-map texel, from the derivatives of the position, and blend the two nearest power-of-two scales so cells do not pop as the object moves nearer (Wyman and McGuire). Then the shadow keeps still while the camera and the object move.</p>
+</div>
+
+<h2 id="in-rasm"><span class="n">7</span>In RASM</h2>
+
+<p>A material's <code>AlphaMode</code> (<code>NONE</code> is glTF's opaque) picks its draw run and its pipeline. Every alpha mode has its own pipeline; <code>MASK</code> and <code>BLEND</code> pipelines are made only once a scene has such draws.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 236" role="img" aria-label="A shaded view's passes. Cull 1 culls the opaque and mask runs; Scene 1 draws them; Hi-Z; Cull 2 culls everything, the blend run included, then sorts the blend run back to front; Scene 2 draws the late opaque and mask draws and the sky; Transparent draws the blend run with blending on and depth writes off.">
+    <rect x="10" y="40" width="100" height="56" rx="6" class="gpu"/><text x="60" y="64" class="mid title">Cull 1</text><text x="60" y="82" class="mid small">no blend draws</text>
+    <rect x="125" y="40" width="100" height="56" rx="6" class="shader"/><text x="175" y="64" class="mid title">Scene 1</text><text x="175" y="82" class="mid small">opaque, mask</text>
+    <rect x="240" y="40" width="80" height="56" rx="6" class="gpu"/><text x="280" y="72" class="mid title">Hi-Z</text>
+    <rect x="335" y="40" width="130" height="56" rx="6" class="gpu"/><text x="400" y="64" class="mid title">Cull 2</text><text x="400" y="82" class="mid small">+ blend run, sort</text>
+    <rect x="480" y="40" width="120" height="56" rx="6" class="shader"/><text x="540" y="64" class="mid title">Scene 2</text><text x="540" y="82" class="mid small">late draws, sky</text>
+    <rect x="615" y="40" width="135" height="56" rx="6" class="shader"/><text x="682" y="64" class="mid title">Transparent</text><text x="682" y="82" class="mid small">blend run</text>
+    <line x1="110" y1="68" x2="123" y2="68" class="arrow" marker-end="url(#ah)"/>
+    <line x1="225" y1="68" x2="238" y2="68" class="arrow" marker-end="url(#ah)"/>
+    <line x1="320" y1="68" x2="333" y2="68" class="arrow" marker-end="url(#ah)"/>
+    <line x1="465" y1="68" x2="478" y2="68" class="arrow" marker-end="url(#ah)"/>
+    <line x1="600" y1="68" x2="613" y2="68" class="arrow" marker-end="url(#ah)"/>
+    <rect x="10" y="130" width="740" height="90" rx="6" class="zone"/>
+    <text x="24" y="152" class="title">the draw list, as runs</text>
+    <rect x="24" y="166" width="80" height="34" rx="4" class="mem"/><text x="64" y="188" class="mid mono small">NONE·NONE</text>
+    <rect x="108" y="166" width="80" height="34" rx="4" class="mem"/><text x="148" y="188" class="mid mono small">NONE·FRONT</text>
+    <rect x="192" y="166" width="80" height="34" rx="4" class="mem"/><text x="232" y="188" class="mid mono small">NONE·BACK</text>
+    <rect x="276" y="166" width="80" height="34" rx="4" class="mem"/><text x="316" y="188" class="mid mono small">MASK·NONE</text>
+    <rect x="360" y="166" width="80" height="34" rx="4" class="mem"/><text x="400" y="188" class="mid mono small">MASK·FRONT</text>
+    <rect x="444" y="166" width="80" height="34" rx="4" class="mem"/><text x="484" y="188" class="mid mono small">MASK·BACK</text>
+    <rect x="528" y="166" width="96" height="34" rx="4" class="mem"/><rect x="526" y="164" width="100" height="38" rx="5" class="hot"/><text x="576" y="188" class="mid mono small">BLEND·NONE</text>
+    <text x="736" y="152" class="end small">at most 7 runs: alpha mode, then cull mode</text>
+  </svg>
+  <figcaption>A shaded view with occlusion culling. The early cull keeps none of the blend run, so every see-through draw is drawn once, after the late draws and the sky, in the order the sort left. A depth-only view (a shadow map) draws the blend run like the others, with the cut-out depth pipeline.</figcaption>
+</figure>
+
+<h3>Where RASM follows the page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Alpha</td><td>factor × texture × vertex color</td><td>The same (<code>getBaseAlpha</code> in <code>core.slang</code>); the factor is the fourth float of <code>PbrParam::ALBEDO</code>.</td></tr>
+  <tr><td>Pipelines</td><td>one per mode</td><td>One entry point, <code>fragMain</code> of <code>rasm.slang</code>, compiled three times: plain, with <code>RASM_ALPHA_MASK</code> and with <code>RASM_ALPHA_BLEND</code> (<code>Engine::createScenePipeline</code> puts the define before the source). Moving the shading into a shared function would read every varying up front, which cost the opaque draws about 5% in <code>05_city</code>.</td></tr>
+  <tr><td>Cut-out</td><td>discard, or alpha-to-coverage with MSAA</td><td>Discard below <code>alphaCutoff</code>. Alpha-to-coverage comes with MSAA (development plan). No coverage-preserving mips yet (<code>D25</code>).</td></tr>
+  <tr><td>Blend state</td><td>premultiplied or straight</td><td>Premultiplied: <code>BlendMode::PREMULTIPLIED_ALPHA</code> in the <code>PipelineDesc</code>, with <code>depthWrite</code> false. The shader multiplies color by alpha at the end (<code>toTarget</code>).</td></tr>
+  <tr><td>Order</td><td>solid, sky, then see-through back to front</td><td>The <code>Transparent</code> pass after <code>Scene 2</code> and its sky. The sort runs on the GPU after culling (<a href="gpu-sorting.html">sorting on the GPU</a>), keyed by the view depth of each draw's bounding sphere center.</td></tr>
+  <tr><td>Back faces of see-through objects</td><td>cull them, or draw them first</td><td>The blend run is one run with cull mode <code>NONE</code>, so all of it is in one order; a single-sided material discards its back faces in the shader instead (<code>MATERIAL_DOUBLE_SIDED</code>).</td></tr>
+  <tr><td>Shadows</td><td>cutoff for cut-outs; hashed alpha for see-through</td><td>Both, in <code>fragMask</code> of <code>shadow.slang</code> (<code>getHashedAlphaThreshold</code>), with a PCG hash of the object-space position.</td></tr>
+  <tr><td>Exactness</td><td>per object, per triangle or OIT</td><td>Per draw (one sub-mesh of one entity). Order-independent transparency is a later plan item.</td></tr>
+</table>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The alpha mode and cutoff of a material</td><td><code>Material::alphaMode</code>, <code>alphaCutoff</code> in <code>include/rasm/material.h</code>; glTF import in <code>Engine::loadMaterial</code> (<code>src/assets/material.cpp</code>)</td></tr>
+  <tr><td>Runs by alpha mode and cull mode</td><td><code>Engine::rebuildDrawList</code>, <code>getRunKey</code> in <code>src/renderer/gpuScene.cpp</code>; <code>DrawRun</code> in <code>src/renderer/gpuScene.h</code></td></tr>
+  <tr><td>The pipelines</td><td><code>Engine::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code>; <code>fragMain</code> in <code>shaders/passes/rasm.slang</code>; <code>vertMask</code>, <code>fragMask</code> in <code>shaders/passes/shadow.slang</code></td></tr>
+  <tr><td>The blend state</td><td><code>BlendMode</code> in <code>include/rasm/types.h</code>, <code>PipelineDesc</code> in <code>include/rasm/render/resource.h</code>, <code>VulkanDevice::createGraphicsPipeline</code></td></tr>
+  <tr><td>The early cull leaving the blend run out</td><td><code>countMain</code> in <code>shaders/passes/cull.slang</code> (<code>SceneData::blendRun</code>)</td></tr>
+  <tr><td>The sort and the Transparent pass</td><td><code>Engine::recordBlendSort</code>, <code>Engine::drawTransparent</code>, <code>Engine::addSceneViewPasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>An example</td><td><code>examples/09_gltf_materials</code>: the glTF AlphaBlendModeTest and a block of 1536 see-through cubes</td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>The opaque pipeline must not discard. Put new alpha tests under <code>RASM_ALPHA_MASK</code> or <code>RASM_ALPHA_BLEND</code>.</li>
+    <li>The blend run is the last run and has cull mode <code>NONE</code>; <code>getCullMode</code> forces it. Splitting it by cull mode would break the sorted order.</li>
+    <li>The sky is drawn before <code>Transparent</code>: it fills only where no depth was written, and see-through draws write none.</li>
+    <li>A depth-only view has no blend run (<code>SceneData::blendRun</code> is <code>MAX_DRAW_RUNS</code>), so its culling keeps the blend draws in the early phase like any other.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Thomas Porter and Tom Duff, <i>Compositing Digital Images</i>, SIGGRAPH 1984: the over operator and premultiplied alpha.</li>
+  <li>Chris Wyman and Morgan McGuire, <i>Hashed Alpha Testing</i>, I3D 2017.</li>
+  <li>Morgan McGuire and Louis Bavoil, <i>Weighted Blended Order-Independent Transparency</i>, JCGT 2013.</li>
+  <li>Ignacio Castaño, <i>Computing Alpha Mipmaps</i>, 2010; and Ben Golus, <i>Anti-aliased Alpha Test: The Esoteric Alpha To Coverage</i>, 2017.</li>
+  <li>The glTF 2.0 specification, section "Alpha Coverage".</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

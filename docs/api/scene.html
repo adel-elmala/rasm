@@ -336,7 +336,7 @@ engine.updateTransform(bunny, transform);</code></pre>
       <tr><td>Unknown extension</td><td>at the call</td><td>"Unsupported mesh format" logged, invalid handle</td></tr>
       <tr><td>File does not exist</td><td>at the call</td><td>"Mesh file not found" logged, invalid handle</td></tr>
       <tr><td>More than 7 meshes</td><td>at the call</td><td>warning, invalid handle (<code>MAX_MESHES</code> is 8, indices start at 1)</td></tr>
-      <tr><td>File does not parse</td><td>in a later <code>beginFrame</code></td><td>error logged, the handle stays valid but <code>isLoaded</code> is false; entities using it log a warning and are not drawn</td></tr>
+      <tr><td>File does not parse, or a glTF requires an extension RASM does not support</td><td>in a later <code>beginFrame</code></td><td>error logged (naming the extensions), the handle stays valid but <code>isLoaded</code> is false; entities using it log a warning and are not drawn</td></tr>
       <tr><td>Geometry pool full</td><td>in a later <code>beginFrame</code></td><td>error naming the <code>EngineConfig</code> field to raise; nothing of the mesh is uploaded</td></tr>
     </table>
     </div>
@@ -347,7 +347,7 @@ engine.updateTransform(bunny, transform);</code></pre>
 <div class="api" id="loadGLTF">
   <pre class="sig">MeshHandle loadGLTF(const std::string&amp; path);</pre>
   <div class="body">
-    <p>The same as <code>loadMesh</code>; the file extension picks the importer.</p>
+    <p>The same as <code>loadMesh</code>; the file extension picks the importer. It reads <code>POSITION</code>, <code>NORMAL</code>, <code>TANGENT</code>, <code>TEXCOORD_0</code> to <code>_2</code> and <code>COLOR_0</code>, in floats or in the integer types of <code>KHR_mesh_quantization</code>, and the material extensions on the <a href="materials.html#gltf">materials page</a>. A file may require <code>KHR_materials_unlit</code>, <code>KHR_materials_emissive_strength</code>, <code>KHR_texture_transform</code> and <code>KHR_mesh_quantization</code>; one that requires any other extension fails to load. Other extensions it only uses are ignored.</p>
     <pre><code>rasm::MeshHandle room = engine.loadGLTF("models/gltf/coffee-room/scene.gltf");
 if (!room.isValid())
     return 1;
@@ -364,14 +364,15 @@ rasm::EntityHandle entity = engine.createEntity("room", room, {}, transform); //
 </div>
 
 <div class="api" id="createMesh">
-  <pre class="sig">MeshHandle createMesh(std::vector&lt;Vertex&gt; vertices, std::vector&lt;uint32_t&gt; indices);</pre>
+  <pre class="sig">MeshHandle createMesh(std::vector&lt;Vertex&gt; vertices, std::vector&lt;uint32_t&gt; indices, std::vector&lt;uint32_t&gt; colors = {});</pre>
   <div class="body">
     <p>Makes a mesh from your data, builds its <a href="#MeshLod">LODs</a> when <code>EngineConfig::meshLods</code> is on, and uploads it now (the copy reaches the GPU with the next frame). The mesh has one sub-mesh with no material, so its entities use their own material.</p>
     <dl>
       <dt>vertices</dt><dd>See <a href="#Vertex"><code>Vertex</code></a>. Set <code>tangent</code> to zero when you have none.</dd>
       <dt>indices</dt><dd>A triangle list, 3 per triangle, counting from 0 in <code>vertices</code>. Front faces are counter-clockwise seen from outside.</dd>
+      <dt>colors</dt><dd>Optional vertex colors: empty, or one per vertex, each made with <a href="#packVertexColor"><code>packVertexColor</code></a>. They multiply the material's base color. A mesh without them uses no color memory.</dd>
     </dl>
-    <p>Returns an invalid handle when the index count is not a multiple of 3, an index is not below <code>vertices.size()</code>, <code>MAX_MESHES</code> is reached or the geometry pool is full (all logged). A mesh with no vertices or no indices is accepted but its entities skip it with a warning.</p>
+    <p>Returns an invalid handle when <code>colors</code> is neither empty nor one per vertex, the index count is not a multiple of 3, an index is not below <code>vertices.size()</code>, <code>MAX_MESHES</code> is reached or the geometry pool is full (all logged). A mesh with no vertices or no indices is accepted but its entities skip it with a warning.</p>
     <pre><code>// examples/03_instances: one quad per cube face, so each face has its own normal.
 std::vector&lt;rasm::Vertex&gt; vertices;
 std::vector&lt;uint32_t&gt; indices;
@@ -382,13 +383,24 @@ vertices.push_back({.pos = corners[i] * 0.5f,
                     .tangent = glm::vec4(0.0f)});
 // ...
 rasm::MeshHandle cube = engine.createMesh(std::move(vertices), std::move(indices));</code></pre>
+    <pre><code>// examples/09_gltf_materials: the same cube with a color per vertex, dark at the bottom and light at the top.
+colors.push_back(rasm::packVertexColor(glm::vec4(glm::mix(glm::vec3(0.25f), glm::vec3(1.0f), height), 1.0f)));
+// ...
+return engine.createMesh(std::move(vertices), std::move(indices), std::move(colors));</code></pre>
+  </div>
+</div>
+
+<div class="api" id="packVertexColor">
+  <pre class="sig">uint32_t    packVertexColor(const glm::vec4&amp; linearColor);</pre>
+  <div class="body">
+    <p>Packs a linear RGBA color (each 0 to 1; values outside are clamped) into the 4 bytes of a vertex color: R in the lowest byte. RGB is stored sRGB-encoded, like a color texture, so 8 bits keep the dark shades; alpha stays linear. The shader decodes it back to linear. <code>packVertexColor(glm::vec4(1.0f))</code> is white, <code>0xFFFFFFFF</code>.</p>
   </div>
 </div>
 
 <div class="api" id="getMeshByteSize">
   <pre class="sig">MeshSize getMeshByteSize(const MeshHandle&amp; handle) const;</pre>
   <div class="body">
-    <p>The bytes the mesh uses in the geometry pool: vertices × 64 and indices × 4, LOD indices included, over all sub-meshes. While the mesh loads it returns zeros. Invalid handle: logs an error and returns zeros.</p>
+    <p>The bytes the mesh uses in the geometry pool: vertices × 64, plus 4 per vertex color, and indices × 4, LOD indices included, over all sub-meshes. While the mesh loads it returns zeros. Invalid handle: logs an error and returns zeros.</p>
   </div>
 </div>
 
@@ -415,7 +427,7 @@ rasm::MeshHandle cube = engine.createMesh(std::move(vertices), std::move(indices
     <text x="360" y="22" class="mid small">32</text><text x="440" y="22" class="mid small">40</text><text x="520" y="22" class="mid small">48</text><text x="680" y="22" class="mid small">64</text>
     <text x="40" y="98" class="small">byte offsets · 10 px per byte · the shader reads this exact layout from the geometry pool (VertexFull in core.slang)</text>
   </svg>
-  <figcaption>64 bytes per vertex. This is why the default <code>geometryPoolVertices</code> of 2<sup>21</sup> vertices takes 128 MiB.</figcaption>
+  <figcaption>64 bytes per vertex, one cache line. This is why the default <code>geometryPoolVertices</code> of 2<sup>21</sup> vertices takes 128 MiB. Vertex colors are not in it: a mesh that has them keeps them in a separate stream (<a href="#createMesh"><code>createMesh</code></a>), so the others do not pay for them. See the <a href="../guides/vertex-pulling.html#in-rasm">vertex pulling guide</a>.</figcaption>
 </figure>
 
 <div class="api" id="Vertex">
@@ -471,6 +483,8 @@ rasm::MeshHandle cube = engine.createMesh(std::move(vertices), std::move(indices
     uint32_t  firstIndex    = 0;
     uint32_t  indexCount    = 0;
     uint32_t  lodIndexCount = 0;
+    uint32_t  firstColor    = 0;
+    uint32_t  colorCount    = 0;
     uint32_t  geometryIndex = 0;
     glm::vec3 boundsCenter  = glm::vec3(0.0f);
     float     boundsRadius  = 0.0f;
@@ -480,6 +494,7 @@ rasm::MeshHandle cube = engine.createMesh(std::move(vertices), std::move(indices
     <dl>
       <dt>firstIndex, indexCount</dt><dd>LOD 0, the full detail.</dd>
       <dt>lodIndexCount</dt><dd>The indices of LOD 1 and coarser, together. They come right after LOD 0's in the pool.</dd>
+      <dt>firstColor, colorCount</dt><dd>The sub-mesh's vertex colors in the color pool; <code>colorCount</code> is 0 without colors.</dd>
     </dl>
   </div>
 </div>
@@ -490,12 +505,14 @@ rasm::MeshHandle cube = engine.createMesh(std::move(vertices), std::move(indices
     std::vector&lt;Vertex&gt;   vertices;
     std::vector&lt;uint32_t&gt; indices;
     std::vector&lt;MeshLod&gt;  lods;
+    std::vector&lt;uint32_t&gt; colors;
 };</pre>
   <div class="body">
     <p>Decoded vertices and indices of one sub-mesh, before upload (also used for glTF).</p>
     <dl>
       <dt>indices</dt><dd>LOD 0, the full detail.</dd>
       <dt>lods</dt><dd>LOD 1 and coarser, from fine to coarse; at most <code>MAX_MESH_LODS</code> − 1. Empty until the engine builds them, and for a sub-mesh under 1024 triangles.</dd>
+      <dt>colors</dt><dd>One packed vertex color per vertex (glTF <code>COLOR_0</code>), or empty.</dd>
     </dl>
   </div>
 </div>

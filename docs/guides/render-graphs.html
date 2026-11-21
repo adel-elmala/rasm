@@ -1163,7 +1163,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
 <p>A wait is a semaphore wait at the start of the waiting queue's batch, not a barrier. It blocks all commands and makes the other queue's writes visible. If the value belongs to the other queue's open batch, that batch is closed first. Every buffer and image is shared by both queues (concurrent sharing), so nothing moves ownership. Textures are tracked across queues only: on one queue, their layout transitions order them.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 210" role="img" aria-label="The scene passes with async compute make four batches. Compute: Cull 1. Graphics: Scene 1, which waits for Cull 1's draws. Compute: Hi-Z and Cull 2, which wait for Scene 1's depth, with a barrier between them. Graphics: Scene 2, Tone Map and the overlay, which wait for Cull 2's draws, then present. The next frame's Cull 1 runs on the compute queue next to Scene 2.">
+  <svg viewBox="0 0 760 210" role="img" aria-label="The scene passes with async compute make four batches. Compute: Cull 1. Graphics: Scene 1, which waits for Cull 1's draws. Compute: Hi-Z and Cull 2, which wait for Scene 1's depth, with a barrier between them. Graphics: Scene 2, Transparent, Tone Map and the overlay, which wait for Cull 2's draws, then present. The next frame's Cull 1 runs on the compute queue next to Scene 2.">
     <text x="15" y="54" class="title">compute</text>
     <text x="15" y="134" class="title">graphics</text>
 
@@ -1179,7 +1179,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
     <rect x="436" y="30" width="84" height="40" rx="6" class="gpu"/><text x="478" y="55" class="mid">Cull 2</text>
 
     <rect x="534" y="104" width="152" height="52" rx="8" class="zone"/>
-    <rect x="540" y="110" width="140" height="40" rx="6" class="gpu"/><text x="610" y="128" class="mid">Scene 2 · Tone Map</text><text x="610" y="144" class="mid small">· overlay</text>
+    <rect x="540" y="110" width="140" height="40" rx="6" class="gpu"/><text x="610" y="128" class="mid">Scene 2 … Tone Map</text><text x="610" y="144" class="mid small">Transparent, overlay</text>
     <line x1="686" y1="130" x2="704" y2="130" class="arrow" marker-end="url(#ah)"/>
     <text x="708" y="134" class="small">present</text>
 

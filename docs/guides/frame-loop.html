@@ -47,7 +47,7 @@
   <h3>In short</h3>
   <ul>
     <li><code>Engine::render</code> runs a render graph (<code>Renderer::render</code>): <code>beginFrame</code>, the scene passes from <code>addScenePasses</code> into a 16-bit float target, the <code>Tone Map</code> pass from <code>addToneMapPass</code> into the swapchain, <code>endFrame</code>.</li>
-    <li>The scene passes are <code>Cull 1</code>, <code>Scene 1</code>, <code>Hi-Z</code>, <code>Cull 2</code>, <code>Scene 2</code> (only <code>Cull</code> and <code>Scene</code> without occlusion culling). The graph puts the barriers between them.</li>
+    <li>The scene passes are <code>Cull 1</code>, <code>Scene 1</code>, <code>Hi-Z</code>, <code>Cull 2</code>, <code>Scene 2</code> (only <code>Cull</code> and <code>Scene</code> without occlusion culling), then <code>Transparent</code>, which draws the see-through materials back to front. The graph puts the barriers between them.</li>
     <li><code>frameCount</code> is the <b>slot</b> (0 or 1), not a frame counter. <code>MAX_FRAMES_IN_FLIGHT</code> = 2.</li>
     <li>Each graphics submit signals the next value of <code>frameFence</code>, and each compute submit the next value of <code>computeFence</code>. Before a slot is reused, <code>beginFrame</code> waits for the values its last submits signaled.</li>
     <li>With <code>EngineConfig::asyncCompute</code>, <code>Cull 1</code>, <code>Hi-Z</code> and <code>Cull 2</code> run on the compute queue, and the frame is four batches, submitted together at the end (<a href="#batches">below</a>). It is off by default.</li>
@@ -424,7 +424,7 @@
       <rect x="578" y="210" width="80"  height="28" rx="4" class="cpu"/><text x="618" y="228" class="mid small">endRendering</text>
       <rect x="662" y="210" width="40"  height="28" rx="4" class="cpu"/><text x="682" y="228" class="mid small">ts end</text>
     </svg>
-    <p><b>depth → SAMPLED</b>: <code>Hi-Z</code> declares <code>readDepth</code> of the target, so the graph makes <code>Scene 1</code> store its depth.<br><b>hizMain</b> builds one level per dispatch: level 0 from the depth of the early draws, each next one from the one before.<br><b>late countMain</b>: seen = in the frustum and not occluded. It writes the visibility flags and keeps what <code>Scene 1</code> missed.<br><b>Scene 2</b> loads color and depth (no discard). <code>Hi-Z</code>, <code>Cull 2</code> and <code>Scene 2</code> dispatch and draw nothing when the view has no Hi-Z.</p>
+    <p><b>depth → SAMPLED</b>: <code>Hi-Z</code> declares <code>readDepth</code> of the target, so the graph makes <code>Scene 1</code> store its depth.<br><b>hizMain</b> builds one level per dispatch: level 0 from the depth of the early draws, each next one from the one before.<br><b>late countMain</b>: seen = in the frustum and not occluded. It writes the visibility flags and keeps what <code>Scene 1</code> missed.<br><b>Scene 2</b> loads color and depth (no discard), and draws the sky last. <code>Hi-Z</code>, <code>Cull 2</code> and <code>Scene 2</code> dispatch and draw nothing when the view has no Hi-Z.<br>When the scene has see-through (<code>BLEND</code>) materials, <code>Cull 2</code> also sorts them back to front after <code>writeMain</code> (<a href="gpu-sorting.html#in-rasm">sorting on the GPU</a>), and a <code>Transparent</code> pass after <code>Scene 2</code> draws them with blending on and depth writes off (<a href="transparency.html#in-rasm">transparency</a>). This app has none, so <code>Transparent</code> only begins and ends its rendering.</p>
     <p>Each step is a pass of its own, so no dispatch ever sits inside a render pass. The late culling rewrites the same visible-draw list and counts that <code>Scene 1</code> read, so the graph's barrier before <code>Cull 2</code> waits for the early draws. <code>Cull 1</code> reads the visibility flags that this pass wrote last frame (<code>readPrevious</code>). Without <code>occlusionCulling</code>, <code>addScenePasses</code> adds only <code>Cull</code> and <code>Scene</code>, and this step is not there. Why two passes, and how a Hi-Z works, is in <a href="occlusion-culling.html#in-rasm">Occlusion culling with Hi-Z</a>.</p>
   </div>
 
@@ -444,7 +444,7 @@
       <path d="M188,64 V58 H642 V64" class="arrow"/>
       <text x="415" y="52" class="mid small mono">endFrame()</text>
       <rect x="10" y="70" width="710" height="44" rx="6" class="zone"/>
-      <rect x="14"  y="78" width="70"  height="28" rx="4" class="ghost"/><text x="49"  y="96" class="mid small t-faint">… Scene 2</text>
+      <rect x="14"  y="78" width="70"  height="28" rx="4" class="ghost"/><text x="49"  y="96" class="mid small t-faint">… Transp.</text>
       <rect x="88"  y="78" width="96"  height="28" rx="4" class="gpu"/><text x="136" y="96" class="mid small">exposure, AgX</text>
       <rect x="188" y="78" width="86"  height="28" rx="4" class="cpu"/><text x="231" y="96" class="mid small">overlay pass</text>
       <rect x="278" y="78" width="140" height="28" rx="4" class="cpu"/><text x="348" y="96" class="mid small">barrier: → PRESENT_SRC</text>
@@ -570,7 +570,7 @@
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 300" role="img" aria-label="The scene passes make four batches. Batch 1, compute: Cull 1, closed when Scene 1 reads its draws. Batch 2, graphics: Scene 1, closed when Hi-Z reads its depth. Batch 3, compute: Hi-Z and Cull 2, closed when Scene 2 reads the draws. Batch 4, graphics: Scene 2, Tone Map and the overlay, closed by endFrame. Then four submits in that order: submit 1 signals compute value c+1; submit 2 waits for c+1 and the image and signals graphics value g+1; submit 3 waits for g+1 and signals c+2; submit 4 waits for c+2, signals g+2 and presents.">
+  <svg viewBox="0 0 760 300" role="img" aria-label="The scene passes make four batches. Batch 1, compute: Cull 1, closed when Scene 1 reads its draws. Batch 2, graphics: Scene 1, closed when Hi-Z reads its depth. Batch 3, compute: Hi-Z and Cull 2, closed when Scene 2 reads the draws. Batch 4, graphics: Scene 2, Transparent, Tone Map and the overlay, closed by endFrame. Then four submits in that order: submit 1 signals compute value c+1; submit 2 waits for c+1 and the image and signals graphics value g+1; submit 3 waits for g+1 and signals c+2; submit 4 waits for c+2, signals g+2 and presents.">
     <text x="10" y="70" class="title">compute</text>
     <text x="10" y="140" class="title">graphics</text>
 
@@ -585,7 +585,7 @@
     <text x="485" y="79" class="mid small">closed for Scene 2</text>
     <rect x="600" y="110" width="150" height="50" rx="6" class="gpu"/>
     <text x="675" y="131" class="mid title">4 · Scene 2</text>
-    <text x="675" y="149" class="mid small">+ Tone Map, overlay</text>
+    <text x="675" y="149" class="mid small">+ Transparent, Tone Map</text>
 
     <line x1="200" y1="90" x2="248" y2="108" class="arrow hot" marker-end="url(#ah-hot)"/>
     <line x1="362" y1="110" x2="408" y2="92" class="arrow hot" marker-end="url(#ah-hot)"/>

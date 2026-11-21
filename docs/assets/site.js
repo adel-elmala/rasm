@@ -55,6 +55,7 @@ const SECTIONS = [
             { path: "guides/vertex-pulling.html",        title: "Vertex pulling and mega-buffers",     blurb: "The shader reads vertices by index from one big buffer." },
             { path: "guides/uber-shaders.html",          title: "Uber shaders and shader permutations", blurb: "One shader with branches against many variants." },
             { path: "guides/pbr.html",                   title: "PBR shading",                         blurb: "The light math behind metal and roughness." },
+            { path: "guides/transparency.html",          title: "Transparency and alpha modes",        blurb: "Cut-outs, see-through surfaces, blend order and see-through shadows." },
             { path: "guides/image-based-lighting.html",  title: "Image-based lighting",                blurb: "Light from a photo of the whole sky: irradiance, prefiltered mips and the split sum." },
             { path: "guides/tone-mapping.html",          title: "Tone mapping and exposure",           blurb: "Bring unbounded scene light into the screen's 0 to 1." },
             { path: "guides/shadow-mapping.html",        title: "Shadow mapping",                      blurb: "Depth from the light answers \"is this point lit?\"." },
@@ -74,6 +75,7 @@ const SECTIONS = [
         pages: [
             { path: "guides/frustum-culling.html",       title: "Frustum culling",                     blurb: "Skip what is outside the view." },
             { path: "guides/stream-compaction.html",     title: "Stream compaction",                   blurb: "Keep the survivors, packed and in order, on the GPU." },
+            { path: "guides/gpu-sorting.html",           title: "Sorting on the GPU",                  blurb: "A bitonic network: thousands of threads, one compare each, in steps." },
             { path: "guides/occlusion-culling.html",     title: "Occlusion culling with Hi-Z",         blurb: "Skip what is hidden behind other things." },
             { path: "guides/lod-selection.html",         title: "LOD selection",                       blurb: "Pick the cheapest mesh nobody can tell apart." },
             { path: "guides/render-graphs.html",         title: "Render graphs",                       blurb: "Passes declare what they read and write; the graph does the rest." },

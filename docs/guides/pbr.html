@@ -1223,7 +1223,7 @@ cone   = clamp(cos θ · scale + offset, 0, 1)²</code></pre>
   <tr><td>Number of lights</td><td>any</td><td>At most 7: <code>MAX_LIGHTS</code> = 8 sizes the fixed <code>lights</code> array in <code>SceneData</code>, but light indices start at 1, so <code>createLight</code> refuses the 8th light and <code>addLightToScene</code> stops at <code>MAX_LIGHTS_PER_SCENE</code>. Every light is evaluated for every pixel.</td></tr>
   <tr><td>Ambient</td><td>constant, hemisphere, IBL or GI</td><td>IBL when the scene has an environment (<a href="../api/scene.html#setSceneEnvironment"><code>setSceneEnvironment</code></a>): the split sum, diffuse and specular, in <code>getEnvironmentLight</code> (<a href="image-based-lighting.html#in-rasm">Image-based lighting</a>). Without one, a constant: 0.03 × diffuse color × AO, with no specular, so a fully metallic surface is black on every side that no light faces. Neither is shadowed.</td></tr>
   <tr><td>AO</td><td>ambient only</td><td>Ambient only, mixed by the occlusion <code>strength</code>; with IBL it darkens its diffuse and specular alike.</td></tr>
-  <tr><td>Emission</td><td>added as it is</td><td><code>emissiveFactor</code> × the emissive texture, added after the lights. No emissive-strength extension.</td></tr>
+  <tr><td>Emission</td><td>added as it is</td><td><code>emissiveFactor</code> × <code>EMISSIVE_STRENGTH</code> (glTF <samp>KHR_materials_emissive_strength</samp>, multiplied in when the row is written) × the emissive texture, added after the lights.</td></tr>
   <tr><td>Tone mapping</td><td>a separate step on the HDR image</td><td>The same: <code>shadePBR</code> writes unbounded light into a <code>SCENE_COLOR_FORMAT</code> target, and the <code>Tone Map</code> pass applies the camera's <code>exposure</code> and AgX.</td></tr>
   <tr><td>Shadows</td><td>needed for real direct light</td><td>Cascaded shadow maps for one directional light, the one <code>ShadowDesc::light</code> names (<a href="shadow-mapping.html#in-rasm">Shadow mapping</a>, <a href="cascaded-shadows.html">Cascaded shadow maps</a>). Every other light reaches every surface that faces it.</td></tr>
 </table>
@@ -1236,7 +1236,7 @@ cone   = clamp(cos θ · scale + offset, 0, 1)²</code></pre>
 <div class="table-wrap">
 <table>
   <tr><th>Missing</th><th>The shader uses</th></tr>
-  <tr><td>base color</td><td><code>baseColorFactor</code> alone, alpha 1 (<code>sampleBaseColor</code>)</td></tr>
+  <tr><td>base color</td><td><code>baseColorFactor</code> (with its alpha) × the vertex color alone (<code>sampleBaseColor</code>). The vertex color is white for a mesh without one.</td></tr>
   <tr><td>metallic-roughness</td><td><code>metallicFactor</code> and <code>roughnessFactor</code>. With a texture: G channel × roughness factor, B channel × metallic factor.</td></tr>
   <tr><td>normal</td><td>the interpolated vertex normal (see <a href="normal-mapping.html#in-rasm">Normal mapping</a>)</td></tr>
   <tr><td>occlusion</td><td>1: no occlusion. With a texture: R channel, mixed with 1 by <code>strength</code>.</td></tr>
@@ -1273,7 +1273,7 @@ cone   = clamp(cos θ · scale + offset, 0, 1)²</code></pre>
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>From the development plan, phase 4: image-based lighting, alpha modes (the pipeline has no blending, so base color alpha does nothing today), and clustered lighting to remove the fixed limit of 8 lights.</p>
+  <p>From the development plan, phase 4: clustered lighting to remove the fixed limit of 8 lights. Base color alpha counts only for cut-out and see-through materials (<a href="transparency.html">transparency</a>).</p>
 </div>
 
 <h3>Further reading</h3>
