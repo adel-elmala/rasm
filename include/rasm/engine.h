@@ -29,10 +29,12 @@ namespace rasm
     class Renderer;
     class ShaderCompiler;
     struct GpuScene;
+    struct GpuLights;
     struct Environments;
     struct SceneDrawList;
     struct FrameStatsCollector;
     struct StatsOverlay;
+    namespace gfx { struct SceneData; }
 
     constexpr uint32_t MAX_MATERIALS        = 256;
     constexpr uint32_t MAX_CAMERAS          = 8;
@@ -57,6 +59,9 @@ namespace rasm
         uint64_t                    trianglesVisible            = 0;
         uint64_t                    trianglesVisibleLod0        = 0;
         uint32_t                    drawsPerLod[MAX_MESH_LODS]  = {};
+        uint32_t                    lightsGlobal                = 0;    // directional lights and lights without a range, at every pixel
+        uint32_t                    lightsVisible               = 0;    // local lights in a view's frustum
+        uint32_t                    lightsDropped               = 0;    // light and cluster pairs left out: the cluster had MAX_CLUSTER_LIGHTS
         VRAMStats                   memory                      = {};
     };
 
@@ -72,6 +77,8 @@ namespace rasm
         EntityHandle                createEntity(const std::string& name, MeshHandle mesh = MeshHandle{}, MaterialHandle material = MaterialHandle{}, Transform transform = Transform{});
         CameraHandle                createCamera(CameraProjection projection, Transform transform);
         LightHandle                 createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f), float intensity = 1.0f, float range = 10.0f, float innerConeAngle = 0.0f, float outerConeAngle = SPOT_OUTER_CONE_ANGLE);
+        Light                       getLight(LightHandle light) const;
+        void                        updateLight(LightHandle light, const Light& values);
         void                        addEntityToScene(SceneHandle scene, EntityHandle entity);
         void                        addCameraToScene(SceneHandle scene, CameraHandle camera);
         void                        addLightToScene(SceneHandle scene, LightHandle light);
@@ -193,6 +200,7 @@ namespace rasm
         Swapchain                                                   swapchain                               = {};
         std::unique_ptr<GeometryPool>                               geometryPool                            = {};
         std::unique_ptr<GpuScene>                                   gpuScene                                = {};
+        std::unique_ptr<GpuLights>                                  gpuLights                               = {};
         std::unique_ptr<Environments>                               environments                            = {};
         std::unique_ptr<FrameStatsCollector>                        frameStats                              = {};
         std::unique_ptr<StatsOverlay>                               statsOverlay                            = {};
@@ -264,6 +272,14 @@ namespace rasm
         void                        markDrawListsDirty(EntityHandle entity);
         void                        rebuildDrawList(SceneHandle scene);
         void                        uploadDrawList(SceneDrawList& drawList);
+        bool                        createGpuLights();
+        void                        writeLightRow(LightHandle light);
+        void                        markLightListsDirty(LightHandle light);
+        void                        syncGpuLights();
+        void                        createViewClusters(uint32_t view);
+        void                        releaseViewClusters(uint32_t view);
+        void                        writeSceneLights(uint32_t view, SceneHandle scene, gfx::SceneData& sceneData);
+        void                        recordLightClusters(uint32_t view, uint64_t sceneDataAddress);
         bool                        addSceneViewPasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, uint32_t face, const SceneShadow* shadows, uint32_t shadowCount, bool depthOnly);
         uint32_t                    createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, uint32_t face, const SceneShadow* shadows, uint32_t shadowCount, bool depthOnly);
         void                        releaseSceneView(uint32_t view);

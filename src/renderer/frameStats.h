@@ -5,6 +5,7 @@
 #include "rasm/handle.h"
 #include "rasm/types.h"
 
+#include <chrono>
 #include <cstdint>
 #include <string>
 
@@ -29,6 +30,8 @@ namespace rasm
         uint32_t                                passTimer           = UINT32_MAX;
         bool                                    requested           = false;    // getFrameStats was called
         bool                                    timersFullLogged    = false;
+        bool                                    lightsDroppedLogged = false;
+        std::chrono::steady_clock::time_point   lightsDroppedTime   = {};
     };
 
 }

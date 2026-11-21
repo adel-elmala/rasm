@@ -95,6 +95,7 @@ namespace rasm::rhi
         bool                            debugUtilsEnabled   = false;
         uint64_t                        timestampMask       = 0;
         double                          timestampPeriod     = 0.0;
+        VkDeviceSize                    maxBufferSize       = 0;
     };
 
     std::unique_ptr<Device>         createVulkanDevice(const DeviceDesc& desc);

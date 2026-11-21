@@ -2,7 +2,6 @@
 #pragma once
 
 // Constants
-static const uint   MAX_LIGHTS          = 8;
 static const uint   INVALID_TEXTURE_INDEX = 0xFFFFFFFF;
 // A run per alpha mode and cull mode, and one blend run. Must match rasm::gfx::MAX_DRAW_RUNS.
 static const uint   MAX_DRAW_RUNS       = 7;
@@ -34,7 +33,9 @@ static const uint MAX_MESH_LODS = 8;
 
 // Must match rasm::MAX_SHADOW_CASCADES.
 static const uint MAX_SHADOW_CASCADES = 4;
-// Must match rasm::gfx::MAX_SHADOW_MAPS: rasm::MAX_VIEW_SHADOWS lights of up to MAX_SHADOW_CASCADES maps.
+// Must match rasm::MAX_VIEW_SHADOWS.
+static const uint MAX_VIEW_SHADOWS = 4;
+// Must match rasm::gfx::MAX_SHADOW_MAPS: MAX_VIEW_SHADOWS lights of up to MAX_SHADOW_CASCADES maps.
 static const uint MAX_SHADOW_MAPS = 16;
 
 struct VertexFull       { float3 pos; float3 normal; float2 uv[MAX_VERTEX_UV_SETS]; float4 tangent; };
@@ -51,21 +52,25 @@ struct DrawInfo
 
 enum class LightType : uint32_t { DIRECTIONAL, POINT, SPOT };
 
-// Must match rasm::gfx::Light exactly (scalar layout): the lights array sits between numLights and
-// the buffer device addresses in SceneData, so any size drift shifts vertsPtr/drawInfoPtr/
-// instancesPtr and the shader dereferences a garbage address (device lost).
+// Must match rasm::gfx::Light (scalar layout): a row of the light table, at the light's handle index.
 struct Light
 {
     float3      position;       // point and spot lights
     float       intensity;
     float3      color;
-    float       range;          // point and spot lights
+    float       range;          // point and spot lights; 0: unbounded, a global light
     float3      direction;      // directional and spot lights
     LightType   type;
     float       spotScale;      // the cone's falloff: saturate(dot(direction, -l) * spotScale + spotOffset)
     float       spotOffset;
-    int32_t     shadowMap;      // the light's first map in SceneData::shadowMaps, -1 without a shadow
-    uint32_t    shadowMapCount; // its cascades, or 1 for a spot or a point light (a cube)
+};
+
+// Must match rasm::gfx::ShadowedLight: a light of the view that has a shadow, and its maps.
+struct ShadowedLight
+{
+    uint32_t    light;          // its row in the light table
+    uint32_t    firstMap;       // in SceneData::shadowMaps
+    uint32_t    mapCount;       // its cascades, or 1 for a spot or a point light (a cube)
 };
 
 // Must match rasm::gfx::ShadowMap.
@@ -166,8 +171,7 @@ struct SceneData
     float4x4            projection;
     float4x4            view;
     float3              cameraWorldPosition;
-    uint32_t            numLights;
-    Light[MAX_LIGHTS]   lights;
+    uint32_t            shadowedLightCount; // shadowedLights in use
     VertexFull*         vertsPtr;
     DrawInfo*           drawInfoPtr;
     InstanceData*       instancesPtr;
@@ -183,6 +187,9 @@ struct SceneData
     uint32_t*           colorsPtr;          // the vertex color pool: RGBA8, RGB sRGB-encoded (GeometryData::colorOffset)
     uint2*              sortKeysPtr;        // the blend sort's keys: (~view depth, draw), sortCapacity of them (sort.slang)
     DrawInfo*           sortDrawsPtr;       // the blend sort's copy of the blend run's visible draws
+    Light*              lightsPtr;          // the light table
+    uint32_t*           sceneLightsPtr;     // the scene's light rows: globalLightCount global lights, then the local ones
+    uint32_t*           clustersPtr;        // the view's light clusters (lightClusters.slang); null: every pixel shades every local light
     float4              frustumPlanes[6];   // world space, inside where dot(xyz, p) + w >= 0
     uint32_t            drawCount;
     uint32_t            runCount;
@@ -205,6 +212,11 @@ struct SceneData
     uint32_t            brdfLut;                    // bindless 2D: the split sum's scale and bias of f0
     float               environmentIntensity;
     float2              environmentRotation;        // cos and sin of the environment's turn around +Y
+    ShadowedLight       shadowedLights[MAX_VIEW_SHADOWS];
+    uint32_t            globalLightCount;   // directional lights and lights without a range, shaded at every pixel
+    uint32_t            localLightCount;    // lights with a range, sorted into clusters
+    float               nearZ;              // the camera's near plane, where the clusters start
+    uint32_t            padding;            // keeps the size a multiple of 8
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.

@@ -509,6 +509,10 @@ namespace rasm::rhi
         const uint32_t timestampBits = device.queue_families[queueIndexRet.value()].timestampValidBits;
         timestampMask = timestampBits >= 64 ? ~0ull : (1ull << timestampBits) - 1;
         timestampPeriod = physicalDevice.properties.limits.timestampPeriod;
+        VkPhysicalDeviceMaintenance4Properties maintenance4 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES};
+        VkPhysicalDeviceProperties2 properties2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &maintenance4};
+        vkGetPhysicalDeviceProperties2(physicalDevice.physical_device, &properties2);
+        maxBufferSize = maintenance4.maxBufferSize;
 
         // A queue family with compute and no graphics runs beside the graphics queue. Its timestamps must match the
         // graphics queue's, since the GPU timers of both share one mask.
@@ -557,6 +561,12 @@ namespace rasm::rhi
 
     Buffer *VulkanDevice::createBuffer(const BufferDesc &desc)
     {
+        // A size past the limit is invalid usage, which a driver need not report.
+        if (desc.size > maxBufferSize)
+        {
+            spdlog::error("Buffer '{}' is {} bytes, the device limit is {}.", desc.name, desc.size, maxBufferSize);
+            return nullptr;
+        }
         VkBufferCreateInfo bufferInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bufferInfo.size = desc.size;
         bufferInfo.usage = toVkBufferUsageFlags(desc.usage);

@@ -44,6 +44,7 @@ target_sources(rasm PRIVATE
     "renderer/frameStats.cpp"
     "renderer/geometryPool.cpp"
     "renderer/gpuScene.cpp"
+    "renderer/lightClusters.cpp"
     "renderer/gpuTable.cpp"
     "renderer/renderGraph.cpp"
     "renderer/renderer.cpp"

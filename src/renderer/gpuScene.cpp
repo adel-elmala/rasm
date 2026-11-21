@@ -7,6 +7,7 @@
 #include "renderer/blendSort.h"
 #include "renderer/environmentBake.h"
 #include "renderer/geometryPool.h"
+#include "renderer/lightClusters.h"
 #include "renderer/localShadows.h"
 #include "renderer/shadowCascades.h"
 #include "renderer/uberMaterialTypes.h"
@@ -100,18 +101,6 @@ namespace rasm
         bool holdsShadow(const SceneView &view, const SceneShadow &shadow)
         {
             return std::find(view.shadows, view.shadows + view.shadowCount, shadow) != view.shadows + view.shadowCount;
-        }
-
-        // The view shades with the cone's falloff of a spot light, and nothing of it for another light.
-        void setSpotCone(const Light &light, gfx::Light &gpuLight)
-        {
-            gpuLight.spotScale = 0.0f;
-            gpuLight.spotOffset = 1.0f;
-            if (light.type != LightType::SPOT)
-                return;
-            const float cosOuter = std::cos(light.outerConeAngle);
-            gpuLight.spotScale = 1.0f / std::max(std::cos(light.innerConeAngle) - cosOuter, 1e-3f);
-            gpuLight.spotOffset = -cosOuter * gpuLight.spotScale;
         }
 
         // Level 0 is half the pass's size, rounded up, and each level halves the one before, down to 1x1 (occlusionCulling.slang).
@@ -413,6 +402,7 @@ namespace rasm
         gpuScene->materials.upload(ctx, frame);
         for (auto &drawList : gpuScene->drawLists)
             uploadDrawList(drawList);
+        syncGpuLights();
     }
 
     // Its rows are allocated once the mesh is ready (syncGpuScene).
@@ -804,6 +794,8 @@ namespace rasm
         }
         const std::string prefix = depthOnly ? drawName + " " : "";
 
+        // A shaded view's first culling pass also sorts its lights into clusters, which its draw passes read.
+        const ViewClusters &clusters = gpuLights->views[view];
         // Each frame uses only its slot's draw list and Hi-Z, so culling the next frame does not wait for
         // this frame's draws on the other queue. A shaded view's culling also sorts the blend run, in the late pass,
         // or in the early one in a frame without a Hi-Z.
@@ -813,9 +805,11 @@ namespace rasm
             if (!sceneView.depthOnly)
                 builder.write(sceneView.sortBuffers);
         };
-        auto drawScenePass = [&sceneView, renderTarget, face](PassBuilder &builder)
+        auto drawScenePass = [&sceneView, &clusters, renderTarget, face](PassBuilder &builder)
         {
             builder.read(sceneView.visibleDraws);
+            if (clusters.buffers[0].isValid())
+                builder.read(clusters.buffers);
             for (uint32_t s = 0; !sceneView.depthOnly && s < sceneView.shadowCount; ++s)
             {
                 for (uint32_t i = 0; i < sceneView.shadows[s].mapCount; ++i)
@@ -829,6 +823,8 @@ namespace rasm
             [&](PassBuilder &builder)
             {
                 writeCulling(builder);
+                if (clusters.buffers[0].isValid())
+                    builder.write(clusters.buffers);
                 if (occlusion)
                     builder.readPrevious(sceneView.visibility);
             },
@@ -836,6 +832,8 @@ namespace rasm
             {
                 prepareSceneView(view);
                 recordSceneCulling(view, CULL_EARLY);
+                if (gpuScene->views[view].ready)
+                    recordLightClusters(view, getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), view));
             });
         // The sky goes behind what the view's last draw pass of the frame drew: the late pass, unless this frame has
         // none (no Hi-Z).
@@ -985,6 +983,8 @@ namespace rasm
             }
         }
         gpuScene->views[freeSlot] = view;
+        if (!depthOnly)
+            createViewClusters(freeSlot);
         return freeSlot;
     }
 
@@ -1008,6 +1008,7 @@ namespace rasm
             destroyBuffer(ctx, view.sortBuffers[i]);
         }
         destroyBuffer(ctx, view.visibility);
+        releaseViewClusters(viewIndex);
         view = {};
     }
 
@@ -1207,24 +1208,19 @@ namespace rasm
         const glm::mat4 cameraProjection = getProjectionMatrix(view.camera, static_cast<float>(cameraWidth) / static_cast<float>(cameraHeight));
         const glm::mat4 cameraView = getViewMatrix(view.camera);
 
-        // Each shadow's light, as an index in the scene's lights, and its maps. A light taken out of the scene casts no
-        // shadow, and its maps draw nothing.
-        int32_t shadowLights[MAX_VIEW_SHADOWS] = {};
+        // Each shadow's maps, while its light is in the scene. A light that is not casts no shadow, and its maps draw
+        // nothing.
+        bool shadowLit[MAX_VIEW_SHADOWS] = {};
         ShadowCascade shadowMaps[MAX_VIEW_SHADOWS][MAX_SHADOW_CASCADES] = {};
         float splits[MAX_VIEW_SHADOWS][MAX_SHADOW_CASCADES] = {};
+        const auto &lightScenes = gpuLights->lightScenes;
         for (uint32_t s = 0; s < view.shadowCount; ++s)
         {
             const SceneShadow &shadow = view.shadows[s];
-            shadowLights[s] = -1;
-            for (uint32_t i = 0; i < sceneRef.lights.size(); ++i)
-            {
-                if (sceneRef.lights[i] == shadow.light)
-                    shadowLights[s] = static_cast<int32_t>(i);
-            }
-            if (shadowLights[s] >= 0 && !getShadowMaps(registry.lights[shadow.light.index], cameraRef, cameraProjection, cameraView, shadow, ctx.getRenderTarget(shadow.maps[0]).width, view.face, shadowMaps[s], splits[s]))
-                shadowLights[s] = -1;
+            const bool inScene = shadow.light.index < lightScenes.size() && (lightScenes[shadow.light.index] & (1u << view.scene.index)) != 0;
+            shadowLit[s] = inScene && getShadowMaps(registry.lights[shadow.light.index], cameraRef, cameraProjection, cameraView, shadow, ctx.getRenderTarget(shadow.maps[0]).width, view.face, shadowMaps[s], splits[s]);
         }
-        if (shadowView && shadowLights[0] < 0)
+        if (shadowView && !shadowLit[0])
             return;
 
         gfx::SceneData sceneData{};
@@ -1240,23 +1236,7 @@ namespace rasm
         view.mirrored = glm::determinant(glm::mat3(sceneData.view)) < 0.0f;
         getFrustumPlanes(sceneData.projection * sceneData.view, sceneData.frustumPlanes);
         sceneData.cameraWorldPosition = cameraRef.transform.position;
-        sceneData.numLights = static_cast<uint32_t>(sceneRef.lights.size());
-        for (uint32_t i = 0; i < sceneData.numLights; ++i)
-        {
-            const Light &sceneLight = registry.lights[sceneRef.lights[i].index];
-
-            gfx::Light light{};
-            light.position = sceneLight.position;
-            light.direction = sceneLight.direction;
-            light.color = sceneLight.color;
-            light.intensity = sceneLight.intensity;
-            light.range = sceneLight.range;
-            light.type = static_cast<gfx::LightType>(sceneLight.type);
-            setSpotCone(sceneLight, light);
-            light.shadowMap = -1;
-
-            sceneData.lights[i] = light;
-        }
+        sceneData.nearZ = getNearZ(cameraRef);
         sceneData.vertsPtr = ctx.getBufferDeviceAddress(geometryPool->vertexBuffer());
         sceneData.drawInfoPtr = ctx.getBufferDeviceAddress(culled ? view.visibleDraws[frame] : drawList.buffers[frame]);
         sceneData.instancesPtr = ctx.getBufferDeviceAddress(gpuScene->instances.buffer(frame));
@@ -1268,8 +1248,9 @@ namespace rasm
             sceneData.cullSlotsPtr = sceneData.drawInfoPtr + static_cast<uint64_t>(visibleCapacity) * sizeof(gfx::DrawInfo);
             sceneData.groupCountsPtr = sceneData.cullSlotsPtr + static_cast<uint64_t>(visibleCapacity) * sizeof(uint32_t);
             sceneData.drawCountsPtr = sceneData.drawInfoPtr + getDrawCountsOffset(visibleCapacity);
-            sceneData.cullStatsPtr = ctx.getBufferDeviceAddress(gpuScene->cullStats[frame]);
         }
+        // Culling and the light clusters count into it.
+        sceneData.cullStatsPtr = ctx.getBufferDeviceAddress(gpuScene->cullStats[frame]);
         if (view.hizLevelCount > 0)
         {
             sceneData.visibilityPtr = ctx.getBufferDeviceAddress(view.visibility);
@@ -1296,18 +1277,16 @@ namespace rasm
         sceneData.viewportHeight = height;
         sceneData.lodErrorPixels = config.lodErrorPixels;
         sceneData.forcedLod = config.forcedLod;
-        // The shaded view's shadow maps, in one table: each shadowed light names its first map and their count. A
-        // point light's cube has its faces' projection; the shader makes the view from the light's position.
+        // The shaded view's shadow maps, in one table: each shadowed light names its row, its first map and their
+        // count. A point light's cube has its faces' projection; the shader makes the view from the light's position.
         uint32_t mapCount = 0;
         for (uint32_t s = 0; !view.depthOnly && s < view.shadowCount; ++s)
         {
-            if (shadowLights[s] < 0)
+            if (!shadowLit[s])
                 continue;
             const SceneShadow &shadow = view.shadows[s];
             const bool cube = registry.lights[shadow.light.index].type == LightType::POINT;
-            gfx::Light &light = sceneData.lights[shadowLights[s]];
-            light.shadowMap = static_cast<int32_t>(mapCount);
-            light.shadowMapCount = shadow.mapCount;
+            sceneData.shadowedLights[sceneData.shadowedLightCount++] = {.light = static_cast<uint32_t>(shadow.light.index), .firstMap = mapCount, .mapCount = shadow.mapCount};
             for (uint32_t i = 0; i < shadow.mapCount; ++i)
             {
                 gfx::ShadowMap &map = sceneData.shadowMaps[mapCount++];
@@ -1317,7 +1296,9 @@ namespace rasm
             }
         }
 
-        // A depth-only view shades nothing, so it has no environment.
+        // A depth-only view shades nothing, so it has no environment and no lights.
+        if (!view.depthOnly)
+            writeSceneLights(viewIndex, view.scene, sceneData);
         const bool sky = writeSceneEnvironment(*environments, view.depthOnly ? SceneEnvironment{} : sceneRef.environment, sceneData);
 
         sceneData.lodPixelsPerUnit = std::abs(cameraProjection[1][1]) * 0.5f * static_cast<float>(cameraHeight);

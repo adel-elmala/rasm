@@ -1,6 +1,7 @@
 #include "rasm/scene.h"
 #include "rasm/engine.h"
 #include "renderer/environmentBake.h"
+#include "renderer/lightClusters.h"
 
 #include "spdlog/spdlog.h"
 
@@ -89,15 +90,25 @@ namespace rasm
             return;
         }
 
-        auto &sceneRef = registry.scenes[scene.index];
-
-        if (sceneRef.lights.size() >= MAX_LIGHTS_PER_SCENE)
+        if (light.index >= registry.lights.size())
         {
-            spdlog::warn("Exceeded maximum lights per scene.");
+            spdlog::error("Invalid light handle {} for adding to scene.", light.index);
             return;
         }
 
-        sceneRef.lights.push_back(light);
+        // A light is in a scene once: added twice, it would light the scene twice.
+        auto &lightScenes = gpuLights->lightScenes;
+        if (lightScenes.size() <= light.index)
+            lightScenes.resize(light.index + 1, 0);
+        const auto bit = static_cast<uint16_t>(1u << scene.index);
+        if ((lightScenes[light.index] & bit) != 0)
+        {
+            spdlog::warn("Light {} is already in scene {}.", light.index, scene.index);
+            return;
+        }
+        lightScenes[light.index] |= bit;
+        registry.scenes[scene.index].lights.push_back(light);
+        gpuLights->lists[scene.index].rebuild = true;
     }
 
     void Engine::setSceneEnvironment(SceneHandle scene, const SceneEnvironment &environment)

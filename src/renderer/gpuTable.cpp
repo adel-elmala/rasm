@@ -33,20 +33,21 @@ namespace rasm
             return false;
         }
 
-        rowSize = bytesPerRow;
-        rowCapacity = capacity;
-        shadow.assign(static_cast<size_t>(rowSize) * capacity, 0);
-        dirtySlots.assign(capacity, 0);
-
-        // One buffer per frame slot: slot f is written only after the GPU finished the last frame that read it.
+        // One buffer per frame slot: slot f is written only after the GPU finished the last frame that read it. The
+        // buffers come first, so a capacity the device can't hold fails before the CPU copy is allocated.
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             buffers[i] = ctx.createBuffer({.name = name + " " + std::to_string(i),
                                            .usage = BufferUsage::STORAGE,
-                                           .size = static_cast<uint64_t>(rowSize) * capacity});
+                                           .size = static_cast<uint64_t>(bytesPerRow) * capacity});
             if (!buffers[i].isValid())
                 return false;
         }
+
+        rowSize = bytesPerRow;
+        rowCapacity = capacity;
+        shadow.assign(static_cast<size_t>(rowSize) * capacity, 0);
+        dirtySlots.assign(capacity, 0);
         return true;
     }
 

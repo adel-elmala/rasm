@@ -107,18 +107,16 @@ float sampleShadowCube(SamplerCube shadowCube, float4x4 faceProjection, float3 l
     return lit;
 }
 
-// How much of a light reaches worldPosition: 1 lit, 0 in shadow, and 1 for a light without a shadow. Every index into
-// the textures is a constant element of the scene data, the same for every pixel of the draw.
+// How much of a shadowed light reaches worldPosition: 1 lit, 0 in shadow. Every index into the textures is a constant
+// element of the scene data, the same for every pixel of the draw.
 // - A directional light's first cascade whose split is beyond the fragment's view depth holds it. Past the last split
 //   it is lit, faded over the last tenth of the distance so the shadow does not end in a line. The cascade loop is
 //   unrolled, so neighbouring pixels can pick different cascades.
 // - A spot light has one perspective map; outside it the light is not shadowed.
 // - A point light has a cube.
-float sampleShadow(Sampler2D gTextures[], SamplerCube gCubeTextures[], SceneData *scene, Light light, float3 worldPosition, float3 normal)
+float sampleShadow(Sampler2D gTextures[], SamplerCube gCubeTextures[], SceneData *scene, Light light, ShadowedLight shadowed, float3 worldPosition, float3 normal)
 {
-    if (light.shadowMap < 0)
-        return 1.0;
-    uint first              = uint(light.shadowMap);
+    uint first              = shadowed.firstMap;
 
     if (light.type == LightType.POINT)
     {
@@ -134,7 +132,7 @@ float sampleShadow(Sampler2D gTextures[], SamplerCube gCubeTextures[], SceneData
 
     float3 toLight          = normalize(-light.direction);
     float viewDepth         = -mul(scene->view, float4(worldPosition, 1.0)).z;
-    uint count              = light.shadowMapCount;
+    uint count              = shadowed.mapCount;
     float distance          = scene->shadowMaps[first + count - 1].split;
     [unroll]
     for (uint i = 0; i < MAX_SHADOW_CASCADES; ++i)
