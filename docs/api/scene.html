@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Scenes and Meshes · RASM</title>
 <meta name="description" content="Scenes, entities, Transform, meshes (createMesh, loadMesh, loadGLTF, Vertex, SubMesh, MeshLod), lights, adding objects to scenes, when changes reach the GPU, and the limits.">
-<meta name="rasm-sources" content="include/rasm/scene.h src/assets/environment.cpp src/renderer/environmentBake.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/engine.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/05_city/main.cpp">
+<meta name="rasm-sources" content="include/rasm/scene.h include/rasm/animation.h src/renderer/animation.cpp src/assets/environment.cpp src/renderer/environmentBake.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/engine.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/05_city/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -457,17 +457,19 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
     MeshGeometry   geometry;
     glm::mat4      transform;
     MaterialHandle material;
+    int32_t        animatedNode = -1;
 };</pre>
-  <div class="body"><p>One drawable part of a mesh: its place in the geometry pool, its node matrix (identity for OBJ and <code>createMesh</code>), and its glTF material (invalid when it has none). Each sub-mesh of an entity is one draw and one instance row.</p></div>
+  <div class="body"><p>One drawable part of a mesh: its place in the geometry pool, its node matrix at rest (identity for OBJ and <code>createMesh</code>), its glTF material (invalid when it has none), and the node in <code>AnimationRaw::nodes</code> that moves it while a clip plays (−1 when no clip moves it, see <a href="#animation">Animation</a>). Each sub-mesh of an entity is one draw and one instance row.</p></div>
 </div>
 
 <div class="api" id="Mesh">
   <pre class="sig">struct Mesh
 {
-    MeshState            state = MeshState::LOADING;
-    std::vector&lt;SubMesh&gt; subMeshes;
+    MeshState                  state = MeshState::LOADING;
+    std::vector&lt;SubMesh&gt;       subMeshes;
+    std::vector&lt;AnimationClip&gt; animations;
 };</pre>
-  <div class="body"><p>A mesh: its load state and its sub-meshes.</p></div>
+  <div class="body"><p>A mesh: its load state, its sub-meshes and its clips (<a href="#getAnimations"><code>getAnimations</code></a>).</p></div>
 </div>
 
 <div class="api" id="MeshState">
@@ -538,8 +540,10 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
     ObjRaw    objRaw;
     glm::mat4 transform;
     int       materialIndex;
+    int       node         = -1;
+    int       animatedNode = -1;
 };</pre>
-  <div class="body"><p>One decoded sub-mesh with its node matrix and its glTF material index (−1 for none).</p></div>
+  <div class="body"><p>One decoded sub-mesh with its node matrix, its glTF material index (−1 for none), its glTF node, and its node in <code>AnimationRaw::nodes</code> (−1 when no clip moves it).</p></div>
 </div>
 
 <div class="api" id="GLTFRaw">
@@ -547,9 +551,10 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
 {
     std::vector&lt;SubGLTFRaw&gt;          subGltfRaws;
     std::shared_ptr&lt;tinygltf::Model&gt; model;
+    AnimationRaw                     animation;
     bool                             loaded = false;
 };</pre>
-  <div class="body"><p>What the worker thread hands back for one file: the sub-meshes, the parsed glTF model (for its materials and images; empty for OBJ) and whether the file loaded. It is freed once the mesh is uploaded.</p></div>
+  <div class="body"><p>What the worker thread hands back for one file: the sub-meshes, the parsed glTF model (for its materials and images; empty for OBJ), its animations and whether the file loaded. It is freed once the mesh is uploaded.</p></div>
 </div>
 
 <div class="api" id="GltfImportCache">
@@ -561,7 +566,134 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
   <div class="body"><p>Used while one glTF file is imported, so primitives that share a material, and materials that share an image, create it only once.</p></div>
 </div>
 
-<h2 id="lights"><span class="n">5</span>Lights</h2>
+<h2 id="animation"><span class="n">5</span>Animation</h2>
+
+<p>A glTF model's clips move its nodes, and the GPU poses them (<a href="../guides/keyframe-animation.html">Keyframe animation</a>). The application owns the clock: it calls <code>setAnimationTime</code> once per frame, and starts a clip on an entity with <code>playAnimation</code>. Nothing else runs per frame on the CPU, however many entities play.</p>
+
+<pre><code>const rasm::MeshHandle box = engine.loadGLTF("models/gltf/BoxAnimated/BoxAnimated.glb");
+const rasm::EntityHandle entity = engine.createEntity("box", box);
+engine.addEntityToScene(scene, entity);
+engine.playAnimation(entity, rasm::AnimationPlay{.clip = 0});
+
+double seconds = 0.0;
+while (engine.running())
+{
+    seconds += 1.0 / 60.0;
+    engine.setAnimationTime(seconds);
+    engine.render(scene, camera);
+}</code></pre>
+
+<div class="table-wrap">
+<table>
+  <tr><th>The entity...</th><th>What <code>playAnimation</code> does</th></tr>
+  <tr><td>plays nothing</td><td>Starts the clip. The next frame draws its pose.</td></tr>
+  <tr><td>plays a clip</td><td>Replaces it: the new play starts over from its own <code>startTime</code> and <code>clipTime</code>, also for the same clip. That frame has no motion from the frame before, so TAA does not smear the jump.</td></tr>
+  <tr><td>waits for its mesh</td><td>Keeps the play (a later play replaces it) and starts it when the mesh is ready. A clip the mesh does not have is refused then, with an error.</td></tr>
+  <tr><td>has a mesh that failed, or no mesh</td><td>Refuses it with an error.</td></tr>
+  <tr><td>would be one too many</td><td>Refuses it with an error that names <code>EngineConfig::maxAnimatedEntities</code>. An entity takes its row at its first play and keeps it.</td></tr>
+</table>
+</div>
+
+<div class="api" id="setAnimationTime">
+  <pre class="sig">void setAnimationTime(double seconds);</pre>
+  <div class="body"><p>Sets the animation clock, which every playing entity reads. Call it once per frame, before <code>render</code> or <code>RenderGraph::execute</code>; the frame uses the last value. It may go back (to replay) and starts at 0. The engine never reads a wall clock for animation, so a frame with the same clock is the same on every run. A value that is not finite is refused. The GPU gets the seconds since a base that moves every 64 s, so the clip time stays exact to 0.1 ms after a day.</p></div>
+</div>
+
+<div class="api" id="playAnimation">
+  <pre class="sig">void playAnimation(EntityHandle entity, const AnimationPlay&amp; play);</pre>
+  <div class="body"><p>Plays a clip of the entity's mesh on that entity (table above). The clip time is <code class="lang-text">play.clipTime + (clock − play.startTime) · play.speed</code>, wrapped into the clip for a loop, held at the ends otherwise. Each entity of a shared mesh plays on its own.</p></div>
+</div>
+
+<div class="api" id="stopAnimation">
+  <pre class="sig">void stopAnimation(EntityHandle entity);</pre>
+  <div class="body"><p>Puts the entity back in its rest pose from the next frame, or cancels a play that waits for the mesh. Nothing happens when it plays nothing.</p></div>
+</div>
+
+<div class="api" id="getAnimations">
+  <pre class="sig">std::vector&lt;AnimationClip&gt; getAnimations(MeshHandle mesh) const;</pre>
+  <div class="body"><p>The mesh's clips, in the file's order: index <var>i</var> is <code>AnimationPlay::clip</code> = <var>i</var>. Empty while it loads, for a mesh without clips, and for a model whose clips move none of its meshes. Returned by value.</p></div>
+</div>
+
+<div class="api" id="findAnimation">
+  <pre class="sig">int32_t findAnimation(MeshHandle mesh, const std::string&amp; name) const;</pre>
+  <div class="body"><p>The index of the mesh's first clip with that name, or −1 (also while the mesh loads). A clip without a name in the file is called <samp>animation 0</samp>, <samp>animation 1</samp>, ... by its index. Check for −1: cast to a clip it is refused by <code>playAnimation</code>.</p></div>
+</div>
+
+<div class="api" id="AnimationPlay">
+  <pre class="sig">struct AnimationPlay
+{
+    uint32_t clip      = 0;
+    double   startTime = 0.0;
+    float    clipTime  = 0.0f;
+    float    speed     = 1.0f;
+    bool     loop      = true;
+};</pre>
+  <div class="body"><dl>
+    <dt>clip</dt><dd>An index of <code>getAnimations</code>, or <code>ALL_ANIMATION_CLIPS</code>.</dd>
+    <dt>startTime</dt><dd>The clock time at which the clip is at <code>clipTime</code>. A start in the future holds the first pose until then (a looping clip wraps back instead).</dd>
+    <dt>clipTime</dt><dd>Where in the clip to be at <code>startTime</code>: a phase, so a crowd does not move in step.</dd>
+    <dt>speed</dt><dd>Clip seconds per clock second. 0 holds <code>clipTime</code> (pause, or scrub by playing again); below 0 plays backwards.</dd>
+    <dt>loop</dt><dd>Wraps the time into the clip; <code>false</code> holds the first or the last pose past the ends.</dd>
+  </dl></div>
+</div>
+
+<div class="api" id="ALL_ANIMATION_CLIPS">
+  <pre class="sig">constexpr uint32_t ALL_ANIMATION_CLIPS = UINT32_MAX - 1;</pre>
+  <div class="body"><p>Plays every clip of the mesh at once, for files with one clip per part (Blender exports an action per object this way). A node moved by two clips follows the last one. Its length is the longest clip's.</p></div>
+</div>
+
+<div class="api" id="AnimationClip">
+  <pre class="sig">struct AnimationClip
+{
+    std::string name;
+    float       duration = 0.0f;
+};</pre>
+  <div class="body"><p>A clip's name from the file and its length in seconds: its last key time.</p></div>
+</div>
+
+<div class="api" id="AnimationRaw">
+  <pre class="sig">struct AnimationRaw
+{
+    std::vector&lt;AnimationNode&gt;    nodes;
+    std::vector&lt;AnimationClipRaw&gt; clips;
+};
+
+struct AnimationNode
+{
+    int32_t   parent      = -1;
+    glm::mat4 rest        = glm::mat4(1.0f);
+    glm::vec3 translation = glm::vec3(0.0f);
+    glm::vec4 rotation    = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    glm::vec3 scale       = glm::vec3(1.0f);
+};
+
+struct AnimationClipRaw
+{
+    AnimationClip                 info;
+    std::vector&lt;AnimationSampler&gt; samplers;
+    std::vector&lt;AnimationChannel&gt; channels;
+};
+
+struct AnimationSampler
+{
+    AnimationInterpolation interpolation = AnimationInterpolation::LINEAR;
+    std::vector&lt;float&gt;     times;
+    std::vector&lt;glm::vec4&gt; values;
+};
+
+struct AnimationChannel
+{
+    uint32_t      node    = 0;
+    AnimationPath path    = AnimationPath::TRANSLATION;
+    uint32_t      sampler = 0;
+};
+
+enum class AnimationPath : uint32_t { TRANSLATION, ROTATION, SCALE };
+enum class AnimationInterpolation : uint32_t { STEP, LINEAR, CUBICSPLINE };</pre>
+  <div class="body"><p>What the import keeps of a glTF file's animations, in <code>GLTFRaw::animation</code>. <code>nodes</code> holds only the nodes a clip can move, parents before children, with their rest pose (a node below static parents hangs below an extra node whose <code>rest</code> is their world matrix). Each sampler's values are vec4s: a quaternion x, y, z, w, or a translation or scale with w = 0; <code>CUBICSPLINE</code> stores an in-tangent, the value and an out-tangent per key. A sampler that does not parse is skipped with a warning, and its clip keeps its index.</p></div>
+</div>
+
+<h2 id="lights"><span class="n">6</span>Lights</h2>
 
 <div class="split">
   <div>
@@ -688,7 +820,7 @@ engine.updateLight(lamp, light);</code></pre>
   <div class="body"><p>π/4: the default outer angle of a spot light's cone, glTF's default (<code>rasm/light.h</code>).</p></div>
 </div>
 
-<h2 id="environments"><span class="n">6</span>Environments</h2>
+<h2 id="environments"><span class="n">7</span>Environments</h2>
 
 <p>An <b>environment</b> is an HDR photo of the light all around a scene. It lights every <code>PBR</code> material from all directions (soft light from the sky, reflections on shiny surfaces) and shows behind the scene as the sky. The guide <a href="../guides/image-based-lighting.html">Image-based lighting</a> explains how.</p>
 
@@ -737,7 +869,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
   </div>
 </div>
 
-<h2 id="timing"><span class="n">7</span>When changes reach the GPU</h2>
+<h2 id="timing"><span class="n">8</span>When changes reach the GPU</h2>
 
 <div class="table-wrap">
 <table>
@@ -754,7 +886,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
 </div>
 <p>The engine keeps one copy of each table per frame slot. A changed row is uploaded to each copy once, in that copy's own frame, so the GPU never reads a row while the CPU writes it. The guide <a href="../guides/gpu-scene.html">The GPU scene tables</a> explains the details.</p>
 
-<h2 id="limits"><span class="n">8</span>Limits</h2>
+<h2 id="limits"><span class="n">9</span>Limits</h2>
 
 <div class="table-wrap">
 <table>
@@ -773,6 +905,8 @@ engine.setSceneEnvironment(scene, {});</code></pre>
   <tr><td><code>MAX_MESH_LODS</code></td><td>8</td><td>8</td><td>LODs per sub-mesh, LOD 0 included</td></tr>
   <tr><td><code>EngineConfig::maxInstances</code></td><td>65,536</td><td>all</td><td>sub-meshes of all entities together</td></tr>
   <tr><td><code>EngineConfig::geometryPoolVertices</code>, <code>geometryPoolIndices</code>, <code>geometryPoolSubMeshes</code></td><td>2<sup>21</sup> / 2<sup>24</sup> / 2<sup>14</sup></td><td>all</td><td>geometry of all meshes together</td></tr>
+  <tr><td><code>EngineConfig::maxAnimatedEntities</code></td><td>16,384</td><td>all</td><td>entities that have played a clip (each keeps its row)</td></tr>
+  <tr><td><code>EngineConfig::animationPoolBytes</code></td><td>16 MiB</td><td>all</td><td>the kept nodes, samplers and keys of all loaded meshes; a mesh that does not fit fails to load</td></tr>
 </table>
 </div>
 <p>"Usable" is lower for limits that count handles, because handle indices start at 1. Every limit logs a message when it is reached. The full list is on <a href="types.html">Types, handles and limits</a>.</p>

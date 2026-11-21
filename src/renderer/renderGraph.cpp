@@ -96,6 +96,11 @@ namespace rasm
             }
             for (auto handle : pass.previousBuffers)
                 accesses.push_back({.key = keyOf(handle), .mark = 'P'});
+            for (const auto &buffers : pass.framePreviousBuffers)
+            {
+                for (uint32_t slot = 0; slot < MAX_FRAMES_IN_FLIGHT; ++slot)
+                    accesses.push_back({.key = keyOf(buffers.slots[slot]), .mark = 'P', .slot = slot, .perFrame = true});
+            }
             for (auto handle : pass.inputRenderTargets)
                 accesses.push_back({.key = keyOf(handle)});
             for (auto handle : pass.previousRenderTargets)
@@ -263,6 +268,7 @@ namespace rasm
         transientLastPasses = std::move(other.transientLastPasses);
         transientsPlaced = other.transientsPlaced;
         sceneViews = std::exchange(other.sceneViews, {});
+        animationPass = std::exchange(other.animationPass, false);
         engine = other.engine;
         compiled = other.compiled;
         return *this;
@@ -849,6 +855,8 @@ namespace rasm
             read(buffers.slots[slot]);
         for (auto buffer : pass.previousBuffers)
             read(buffer);
+        for (const auto &buffers : pass.framePreviousBuffers)
+            read(buffers.slots[(slot + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT]);
         for (auto buffer : pass.outputBuffers)
             write(buffer);
         for (const auto &buffers : pass.frameOutputBuffers)
@@ -960,6 +968,14 @@ namespace rasm
     // before drew it, or it was cleared when it was made.
     void RenderGraph::readPrevious(uint32_t passIdx, BufferHandle h) { passes[passIdx].previousBuffers.push_back(h); }
 
+    // The slot the frame before wrote is not written in this frame, so the read adds no edge either.
+    void RenderGraph::readPrevious(uint32_t passIdx, const BufferHandle (&perFrame)[MAX_FRAMES_IN_FLIGHT])
+    {
+        FrameBuffers buffers;
+        std::copy(std::begin(perFrame), std::end(perFrame), std::begin(buffers.slots));
+        passes[passIdx].framePreviousBuffers.push_back(buffers);
+    }
+
     void RenderGraph::readPrevious(uint32_t passIdx, RenderTargetHandle h)
     {
         if (engine && !engine->getRenderContext().getRenderTarget(h).history)
@@ -1022,6 +1038,8 @@ namespace rasm
     void PassBuilder::readPrevious(RenderTargetHandle handle) { graph.readPrevious(currentPass, handle); }
 
     void PassBuilder::readPrevious(BufferHandle handle) { graph.readPrevious(currentPass, handle); }
+
+    void PassBuilder::readPrevious(const BufferHandle (&perFrame)[MAX_FRAMES_IN_FLIGHT]) { graph.readPrevious(currentPass, perFrame); }
 
     void PassBuilder::readDepth(RenderTargetHandle handle) { graph.readDepth(currentPass, handle); }
 

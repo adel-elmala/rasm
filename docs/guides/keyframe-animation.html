@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keyframe Animation · RASM</title>
+<meta name="description" content="How a model moves from a few stored keys: clips, channels and samplers, STEP, LINEAR and CUBICSPLINE sampling, slerp for rotations, the node tree from local to world matrices, a clock in floats that keeps its precision for days, and how RASM poses animated nodes on the GPU.">
+<meta name="rasm-sources" content="include/rasm/animation.h include/rasm/engine.h include/rasm/mesh.h include/rasm/types.h src/assets/animationImport.cpp src/assets/meshImport.cpp src/renderer/animation.cpp src/renderer/animationTime.cpp src/renderer/gpuScene.cpp shaders/passes/animate.slang shaders/lib/animationTypes.slang shaders/lib/core.slang examples/12_animation/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/keyframe-animation.js"></script>
+</head>
+<body data-root="../" data-page="guides/keyframe-animation.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Keyframe animation: clips, channels and the node tree</h1>
+<p class="lead">A door opens, a wheel turns, a crane lifts its arm. A model file stores such motion as a few <b>keys</b>: a value at a time. The engine finds the value between the keys for the current time, builds each part's matrix, and multiplies the matrices down the part tree. This page explains the keys, the three ways to fill the gaps, why rotations need care, how the tree turns local matrices into world matrices, and why the clock must stay small. The <a href="#in-rasm">last part</a> shows how RASM does it on the GPU.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A <b>clip</b> (an animation) has <b>channels</b>. A channel moves one property of one node: its translation, rotation or scale. Its <b>sampler</b> holds the key times, the values and the interpolation.</li>
+    <li>To sample at time <var>t</var>: find the keys around <var>t</var> (binary search), then <b>STEP</b> holds the left value, <b>LINEAR</b> mixes the two, <b>CUBICSPLINE</b> follows a curve with a tangent at each key.</li>
+    <li>Rotations are unit quaternions. Mix them with <b>slerp</b>, the short way round, or normalize the mix.</li>
+    <li>A node's local matrix is <code class="lang-text">T · R · S</code>. Its world matrix is <code class="lang-text">parent world · local</code>, all the way up the tree.</li>
+    <li>The time comes from the application, never from a wall clock inside the engine, so a frame is the same on every run.</li>
+    <li>A 32-bit float of 86 400 (one day in seconds) has steps of 7.8 ms. Keep the numbers the GPU adds small: send the seconds since a recent <b>base</b>.</li>
+  </ul>
+</div>
+
+<h2 id="keys"><span class="n">1</span>Keys instead of frames</h2>
+
+<p>A game does not store the pose of every frame. It stores a few keys, and the frames between them are computed. Here one node moves up and down with three keys:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 220" role="img" aria-label="A time line from 0 to 2 seconds. Three keys: height 0 at 0 seconds, height 1 at 1 second, height 0 at 2 seconds. A line joins them. Small ticks mark the 120 frames at 60 frames per second; at 0.5 seconds the frame's value 0.5 is read from the line between the first two keys.">
+    <text x="20" y="22" class="title">3 keys, 120 frames: every frame reads the line between two keys</text>
+    <line x1="80" y1="180" x2="720" y2="180" class="arrow" marker-end="url(#ah)"/>
+    <text x="728" y="184" class="small">time</text>
+    <line x1="80" y1="180" x2="80" y2="44" class="arrow" marker-end="url(#ah)"/>
+    <text x="88" y="52" class="small">height</text>
+    <path d="M80,180 L380,60 L680,180" class="arrow gpu thick"/>
+    <circle cx="80" cy="180" r="7" class="mem"/>
+    <circle cx="380" cy="60" r="7" class="mem"/>
+    <circle cx="680" cy="180" r="7" class="mem"/>
+    <text x="80" y="202" class="mid small">0 s</text>
+    <text x="380" y="202" class="mid small">1 s</text>
+    <text x="680" y="202" class="mid small">2 s</text>
+    <text x="392" y="56" class="small">key: 1.0</text>
+    <path d="M110,180V176M140,180V176M170,180V176M200,180V176M260,180V176M290,180V176M320,180V176M350,180V176M410,180V176M440,180V176M470,180V176M500,180V176M530,180V176M560,180V176M590,180V176M620,180V176M650,180V176" class="grid"/>
+    <line x1="230" y1="180" x2="230" y2="120" class="arrow hot dashed"/>
+    <circle cx="230" cy="120" r="5" class="hot"/>
+    <text x="222" y="108" class="end small t-hot">frame at 0.5 s: 0.5</text>
+  </svg>
+  <figcaption>The amber dots are stored. The green line is computed, at whatever time the frame asks for: 60 or 144 frames per second play the same motion.</figcaption>
+</figure>
+
+<div class="stats">
+  <div><b>360 000</b><span>floats to store every frame of a 10 s clip of 60 nodes</span><small>600 frames · 60 nodes · 10 floats (T, R, S)</small></div>
+  <div><b>13 860</b><span>floats for the same clip with a key every 0.5 s: 26 times less</span><small>21 keys · 60 nodes · (1 time + 10 values)</small></div>
+  <div><b>any</b><span>frame rate plays it: the keys do not know the frame</span></div>
+</div>
+
+<h2 id="channels"><span class="n">2</span>Clips, channels and samplers</h2>
+
+<p>The glTF format, which most tools export, stores motion in three layers. A <b>clip</b> is a named motion such as "Walk". It has <b>channels</b>: each one points at a node and one of its paths (translation, rotation or scale). A channel reads a <b>sampler</b>: two arrays and a rule.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A clip named Walk has three channels. Channel 0 moves node 3's rotation, channel 1 node 3's translation, channel 2 node 5's rotation. Channels 0 and 2 read the same sampler 0. A sampler is two arrays: key times 0, 0.5, 1.0 and values, one per key, plus an interpolation, LINEAR.">
+    <text x="20" y="22" class="title">clip "Walk"</text>
+    <rect x="20" y="36" width="250" height="34" rx="5" class="cpu"/>
+    <text x="30" y="58" class="mono small">channel 0: node 3, rotation</text>
+    <rect x="20" y="80" width="250" height="34" rx="5" class="cpu"/>
+    <text x="30" y="102" class="mono small">channel 1: node 3, translation</text>
+    <rect x="20" y="124" width="250" height="34" rx="5" class="cpu"/>
+    <text x="30" y="146" class="mono small">channel 2: node 5, rotation</text>
+    <line x1="270" y1="53" x2="340" y2="70" class="arrow" marker-end="url(#ah)"/>
+    <line x1="270" y1="141" x2="340" y2="84" class="arrow" marker-end="url(#ah)"/>
+    <line x1="270" y1="97" x2="340" y2="186" class="arrow" marker-end="url(#ah)"/>
+
+    <text x="350" y="40" class="title">sampler 0</text>
+    <text x="350" y="64" class="small">times</text>
+    <rect x="400" y="50" width="60" height="22" class="mem"/><text x="430" y="66" class="mid mono small">0.0</text>
+    <rect x="460" y="50" width="60" height="22" class="mem"/><text x="490" y="66" class="mid mono small">0.5</text>
+    <rect x="520" y="50" width="60" height="22" class="mem"/><text x="550" y="66" class="mid mono small">1.0</text>
+    <text x="350" y="94" class="small">values</text>
+    <rect x="400" y="80" width="60" height="22" class="mem"/><text x="430" y="96" class="mid mono small">q0</text>
+    <rect x="460" y="80" width="60" height="22" class="mem"/><text x="490" y="96" class="mid mono small">q1</text>
+    <rect x="520" y="80" width="60" height="22" class="mem"/><text x="550" y="96" class="mid mono small">q2</text>
+    <text x="600" y="94" class="small">LINEAR</text>
+
+    <text x="350" y="168" class="title">sampler 1</text>
+    <text x="350" y="192" class="small">times</text>
+    <rect x="400" y="178" width="60" height="22" class="mem"/><text x="430" y="194" class="mid mono small">0.0</text>
+    <rect x="460" y="178" width="60" height="22" class="mem"/><text x="490" y="194" class="mid mono small">1.0</text>
+    <text x="350" y="222" class="small">values</text>
+    <rect x="400" y="208" width="60" height="22" class="mem"/><text x="430" y="224" class="mid mono small">p0</text>
+    <rect x="460" y="208" width="60" height="22" class="mem"/><text x="490" y="224" class="mid mono small">p1</text>
+    <text x="540" y="224" class="small">STEP</text>
+  </svg>
+  <figcaption>Two channels can share one sampler: here two nodes turn with the same keys. A rotation value is a quaternion (4 floats), a translation or a scale 3 floats.</figcaption>
+</figure>
+
+<div class="callout">
+  <strong>A node that a clip moves has no matrix</strong>
+  A glTF node gives its rest pose either as a 4 × 4 <code class="lang-text">matrix</code> or as translation, rotation and scale. A node that a channel targets must use the three parts: a channel replaces one part and keeps the other two.
+</div>
+
+<h2 id="sampling"><span class="n">3</span>Sampling a channel</h2>
+
+<p>To read a channel at time <var>t</var>, find the key <var>k</var> with <var>t<sub>k</sub></var> ≤ <var>t</var> &lt; <var>t</var><sub>k+1</sub>. The times only grow, so a binary search finds it in log<sub>2</sub> of the key count steps. Before the first key the value is the first value; after the last key, the last. Between the keys, the position in the gap is:</p>
+
+<div class="formula">
+  <p class="eq">s = (t − t<sub>k</sub>) / (t<sub>k+1</sub> − t<sub>k</sub>)&nbsp;&nbsp;&nbsp;&nbsp;0 ≤ s &lt; 1</p>
+  <dl>
+    <dt>s</dt><dd>how far between key <var>k</var> and key <var>k</var> + 1</dd>
+    <dt>t<sub>k</sub></dt><dd>the time of key <var>k</var></dd>
+  </dl>
+</div>
+
+<p>The interpolation rule turns <var>s</var> into a value:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A staircase through four keys: each value holds until the next key.">
+      <path d="M20,100 H80 V40 H140 V80 H200 V30 H226" class="arrow gpu thick"/>
+      <circle cx="20" cy="100" r="5" class="mem"/><circle cx="80" cy="40" r="5" class="mem"/>
+      <circle cx="140" cy="80" r="5" class="mem"/><circle cx="200" cy="30" r="5" class="mem"/>
+    </svg>
+    <h4>STEP</h4>
+    <p>The value of key <var>k</var> until the next key. For on/off motion, and for sprites.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Straight lines from key to key, with corners at the keys.">
+      <path d="M20,100 L80,40 L140,80 L200,30" class="arrow gpu thick"/>
+      <circle cx="20" cy="100" r="5" class="mem"/><circle cx="80" cy="40" r="5" class="mem"/>
+      <circle cx="140" cy="80" r="5" class="mem"/><circle cx="200" cy="30" r="5" class="mem"/>
+    </svg>
+    <h4>LINEAR</h4>
+    <p><code class="lang-text">mix(v[k], v[k+1], s)</code>. Corners at the keys. Slerp for rotations.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A smooth curve through the four keys, with a short tangent line drawn at each key.">
+      <path d="M20,100 C40,70 60,38 80,40 C100,42 120,82 140,80 C160,78 180,28 200,30" class="arrow gpu thick"/>
+      <line x1="64" y1="40" x2="96" y2="40" class="arrow hot"/><line x1="124" y1="80" x2="156" y2="80" class="arrow hot"/>
+      <circle cx="20" cy="100" r="5" class="mem"/><circle cx="80" cy="40" r="5" class="mem"/>
+      <circle cx="140" cy="80" r="5" class="mem"/><circle cx="200" cy="30" r="5" class="mem"/>
+    </svg>
+    <h4>CUBICSPLINE</h4>
+    <p>A Hermite curve. Each key stores three values: an in-tangent, the value, an out-tangent.</p>
+  </div>
+</div>
+
+<p>The cubic rule weighs the two values and the two tangents that face the gap. The tangents are slopes per second, so they are scaled by the gap's length <var>d</var> = <var>t</var><sub>k+1</sub> − <var>t<sub>k</sub></var>:</p>
+
+<pre><code class="lang-text">p(s) = (2s³ − 3s² + 1) · v[k]  +  (s³ − 2s² + s) · d · out[k]
+     + (−2s³ + 3s²)   · v[k+1] +  (s³ − s²)      · d · in[k+1]</code></pre>
+
+<figure class="lab" data-lab="sample-channel" data-title="Sample a channel">
+  <figcaption>Drag the time along the line and change the rule. Watch where STEP jumps, where LINEAR has corners, and how the cubic curve follows the orange tangents and can pass above the keys.</figcaption>
+</figure>
+
+<h2 id="rotations"><span class="n">4</span>Rotations: slerp, the short way round</h2>
+
+<p>A rotation key is a unit quaternion: a point on a 4D sphere. A straight mix of two of them cuts through the sphere, so the result is shorter than 1 and turns at an uneven speed. Two fixes work:</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="An arc of a circle from key a to key b. A straight line joins them through the inside of the circle; its middle point is well inside the circle, not on it.">
+      <path d="M40,120 A120,120 0 0 1 280,120" class="surface"/>
+      <line x1="62" y1="62" x2="258" y2="62" class="arrow bad thick"/>
+      <circle cx="62" cy="62" r="6" class="mem"/><circle cx="258" cy="62" r="6" class="mem"/>
+      <circle cx="160" cy="62" r="5" class="bad"/>
+      <text x="160" y="84" class="mid small t-bad">length 0.71</text>
+      <text x="50" y="50" class="small">a</text><text x="262" y="50" class="small">b</text>
+    </svg>
+    <h4>Plain mix</h4>
+    <p>Between two rotations 90° apart the middle has length 0.71: it is not a rotation until it is normalized, and its speed is uneven.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same arc; the middle point lies on the arc, half-way between a and b.">
+      <path d="M40,120 A120,120 0 0 1 280,120" class="surface"/>
+      <path d="M62,62 A120,120 0 0 1 258,62" class="arrow ok thick"/>
+      <circle cx="62" cy="62" r="6" class="mem"/><circle cx="258" cy="62" r="6" class="mem"/>
+      <circle cx="160" cy="21" r="5" class="ok"/>
+      <text x="160" y="44" class="mid small t-ok">length 1</text>
+      <text x="50" y="50" class="small">a</text><text x="262" y="50" class="small">b</text>
+    </svg>
+    <h4>Slerp</h4>
+    <p>Moves along the arc at a constant speed. Close keys (an angle near 0) use the normalized mix, which is the same there and has no division by a tiny sine.</p>
+  </div>
+</div>
+
+<div class="formula">
+  <p class="eq">slerp(a, b, s) = (sin((1 − s)·θ) · a + sin(s·θ) · b) / sin θ&nbsp;&nbsp;&nbsp;&nbsp;cos θ = a · b</p>
+  <dl>
+    <dt>a · b &lt; 0</dt><dd>use −b: <var>q</var> and −<var>q</var> are the same rotation, and −<var>b</var> is the short way round</dd>
+  </dl>
+</div>
+
+<h2 id="tree"><span class="n">5</span>The node tree: local to world</h2>
+
+<p>Nodes form a tree. A node's matrix is <b>local</b>: it places the node in its parent's space. Turning the shoulder turns the arm, the hand and everything below. To draw a mesh, the engine needs its node's <b>world</b> matrix, the product of all the local matrices from the root down:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="An arm seen from the side: a base on the ground, an upper arm turned 30 degrees, a forearm turned another 40 degrees, and a hand at the end. Each joint has its local matrix. The hand's world matrix is base times upper arm times forearm times hand.">
+    <text x="20" y="22" class="title">An arm: each part turns in its parent's space</text>
+    <line x1="40" y1="220" x2="440" y2="220" class="surface"/>
+    <rect x="80" y="196" width="60" height="24" class="solid"/>
+    <text x="110" y="244" class="mid small">base: L₀</text>
+    <line x1="110" y1="196" x2="185" y2="66" class="arrow cpu thick"/>
+    <circle cx="110" cy="196" r="6" class="mem"/>
+    <text x="160" y="150" class="small">upper arm: L₁</text>
+    <text x="126" y="182" class="small t-hot">30°</text>
+    <line x1="185" y1="66" x2="330" y2="40" class="arrow cpu thick"/>
+    <circle cx="185" cy="66" r="6" class="mem"/>
+    <text x="250" y="76" class="small">forearm: L₂</text>
+    <text x="196" y="86" class="small t-hot">+40°</text>
+    <circle cx="330" cy="40" r="6" class="mem"/>
+    <rect x="334" y="30" width="34" height="20" class="gpu"/>
+    <text x="378" y="44" class="small">hand: L₃</text>
+
+    <text x="470" y="70" class="title">world matrices</text>
+    <text x="470" y="98" class="mono small">W₀ = L₀</text>
+    <text x="470" y="122" class="mono small">W₁ = W₀ · L₁</text>
+    <text x="470" y="146" class="mono small">W₂ = W₁ · L₂</text>
+    <text x="470" y="170" class="mono small">W₃ = W₂ · L₃ = L₀ · L₁ · L₂ · L₃</text>
+    <text x="470" y="204" class="small">change L₁ and W₁, W₂, W₃ all move</text>
+  </svg>
+  <figcaption>The order matters: <code class="lang-text">parent · local</code>, root on the left. Each local matrix is <code class="lang-text">T · R · S</code>: scale first, then rotate, then move.</figcaption>
+</figure>
+
+<p>A CPU walks the tree once, root first, and reuses each parent's world matrix. A GPU runs every node at once, on its own thread, and a thread cannot wait for another thread's result without a barrier. Two ways work:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Four nodes in a chain. Node 3's thread multiplies the local matrices of nodes 2, 1 and 0 in turn, walking up the chain.">
+      <circle cx="40" cy="30" r="12" class="gpu"/><text x="40" y="34" class="mid small">0</text>
+      <circle cx="90" cy="55" r="12" class="gpu"/><text x="90" y="59" class="mid small">1</text>
+      <circle cx="140" cy="80" r="12" class="gpu"/><text x="140" y="84" class="mid small">2</text>
+      <circle cx="190" cy="105" r="12" class="hot"/><text x="190" y="109" class="mid small">3</text>
+      <path d="M178,99 L152,86 M128,74 L102,61 M78,49 L52,36" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    </svg>
+    <h4>Each node walks up</h4>
+    <p>Its thread multiplies its parents' local matrices itself. No waiting, depth steps per node. Fine for trees under ~30 deep.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The same chain in levels: level 0, then a barrier, level 1, a barrier, and so on; each level reads the world matrices of the level above.">
+      <circle cx="40" cy="30" r="12" class="gpu"/><circle cx="90" cy="55" r="12" class="gpu"/>
+      <circle cx="140" cy="80" r="12" class="gpu"/><circle cx="190" cy="105" r="12" class="gpu"/>
+      <path d="M20,43 H220 M20,68 H220 M20,93 H220" class="grid"/>
+      <text x="222" y="40" class="end small">barriers</text>
+    </svg>
+    <h4>Level by level</h4>
+    <p>One level of the tree per step, with a barrier between: one multiply per node, one barrier per level.</p>
+  </div>
+</div>
+
+<h2 id="clock"><span class="n">6</span>The clock: from the application, in small numbers</h2>
+
+<p>The clip time is <code class="lang-text">clipTime + (clock − startTime) · speed</code>, wrapped into the clip's length for a loop. Two rules make it right:</p>
+
+<ol class="flow">
+  <li class="cpu"><b>The application owns the clock.</b> It passes the time each frame: wall time in a game, a frame count in a test or a video export. The same frame then shows the same pose on every run.</li>
+  <li class="gpu"><b>The GPU adds small numbers.</b> A 32-bit float has 24 bits of precision. The larger the number, the larger the step between two floats.</li>
+</ol>
+
+<div class="stats">
+  <div><b>0.12 µs</b><span>step of a float near 1 s</span><small>2⁻²³ s</small></div>
+  <div><b>0.24 ms</b><span>step near 1 hour (3 600 s)</span><small>2¹¹ · 2⁻²³ s</small></div>
+  <div><b>7.8 ms</b><span>step near 24 hours (86 400 s): half a frame at 60 Hz</span><small>2¹⁶ · 2⁻²³ s</small></div>
+</div>
+
+<p>So after a day the clock in floats can only move in 7.8 ms jumps, and frames 16.7 ms apart get 15.6 or 23.4 ms of motion: the animation stutters. The fix keeps the clock in doubles on the CPU and gives the GPU only small differences:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="A long time line of 24 hours. A base moves forward every 64 seconds. The CPU, in doubles, computes each clip's phase at the base. The GPU adds the seconds since the base, at most 64, so its float sum has steps of 8 microseconds or less.">
+    <text x="20" y="22" class="title">The base moves forward; the GPU only adds the last few seconds</text>
+    <line x1="40" y1="90" x2="720" y2="90" class="arrow" marker-end="url(#ah)"/>
+    <text x="40" y="112" class="small">0 h</text>
+    <text x="700" y="112" class="end small">24 h</text>
+    <line x1="560" y1="70" x2="560" y2="110" class="arrow cpu thick"/>
+    <text x="560" y="62" class="mid small t-cpu">base</text>
+    <line x1="640" y1="70" x2="640" y2="110" class="arrow hot thick"/>
+    <text x="640" y="62" class="mid small t-hot">clock</text>
+    <path d="M560,124 H640" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <text x="600" y="142" class="mid small t-gpu">&lt; 64 s</text>
+    <rect x="40" y="152" width="320" height="38" rx="6" class="cpu"/>
+    <text x="52" y="168" class="small">CPU, double: phase = clip time at the base,</text>
+    <text x="52" y="183" class="small">wrapped into one loop</text>
+    <rect x="390" y="152" width="330" height="38" rx="6" class="gpu"/>
+    <text x="402" y="168" class="small">GPU, float: t = phase + (clock − base) · speed</text>
+    <text x="402" y="183" class="small">both terms small: steps of 8 µs or less</text>
+  </svg>
+  <figcaption>When the clock leaves the window (64 s past the base, or before it), the base jumps to the clock and every playing clip gets its phase again. That costs a little CPU once a minute, not every frame.</figcaption>
+</figure>
+
+<figure class="lab" data-lab="clock-precision" data-title="Run the clock for a day">
+  <figcaption>Move the clock to many hours and watch the ball, sampled every frame at 60 Hz, start to stutter. Then subtract a base.</figcaption>
+</figure>
+
+<h2 id="pitfalls"><span class="n">7</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>The animation runs faster on a faster computer</dt><dd>It adds a fixed step per frame. Pass real time (or a fixed step on purpose, for tests).</dd></div>
+  <div><dt>It stutters after the program has run for hours</dt><dd>The clock is a large float. Subtract a recent base before the float math.</dd></div>
+  <div><dt>Parts shrink or wobble while they turn</dt><dd>Rotations mixed without normalizing, or without slerp. Also check the quaternion order: glTF stores x, y, z, w.</dd></div>
+  <div><dt>A part spins the long way round</dt><dd>The mix did not flip the second key when their dot product was negative.</dd></div>
+  <div><dt>A part flies to the origin</dt><dd>The child was multiplied in the wrong order (<code class="lang-text">local · parent</code>), or a static parent's matrix was left out.</dd></div>
+  <div><dt>A moving part smears under TAA</dt><dd>Its motion vectors use the matrix of this frame for both frames. Keep last frame's matrix too.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
+
+<p>RASM poses animated nodes on the GPU, so the CPU pays nothing per animated entity per frame. The import keeps only the part of a glTF node tree that a clip moves. The <code>Animate</code> pass, a compute pass that the first scene view of a graph adds, writes each animated sub-mesh's matrices, which every view of the frame reads: the shaded view and every shadow map.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 360" role="img" aria-label="The CPU calls setAnimationTime every frame and playAnimation on a change; a change writes a row of the animated entity table. The animation pool holds the nodes, the samplers, the channel table and the keys of each mesh, written once at load. The Animate pass runs one group of 64 threads per table row: it samples each node's channels into the pose buffer as local matrices, walks up the parents into world matrices, then writes an InstanceTransform per animated sub-mesh into this slot's buffer, with previousWorld from the other slot. Culling, the scene passes and the shadow views read the transforms through getWorldMatrix.">
+    <text x="20" y="22" class="title t-cpu">CPU</text>
+    <rect x="20" y="34" width="180" height="40" rx="6" class="cpu"/>
+    <text x="110" y="52" class="mid mono small">setAnimationTime</text>
+    <text x="110" y="67" class="mid small">every frame: 1 double</text>
+    <rect x="220" y="34" width="200" height="40" rx="6" class="cpu"/>
+    <text x="320" y="52" class="mid mono small">playAnimation</text>
+    <text x="320" y="67" class="mid small">on a change: 1 table row</text>
+    <rect x="440" y="34" width="300" height="40" rx="6" class="cpu"/>
+    <text x="590" y="52" class="mid mono small">finishMeshLoad</text>
+    <text x="590" y="67" class="mid small">once per mesh: nodes, samplers, keys</text>
+
+    <line x1="320" y1="74" x2="320" y2="104" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="590" y1="74" x2="590" y2="104" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="200" y="106" width="240" height="40" rx="6" class="mem"/>
+    <text x="320" y="124" class="mid small">Animated Entity Table</text>
+    <text x="320" y="139" class="mid small">a row per playing entity, per slot</text>
+    <rect x="460" y="106" width="280" height="40" rx="6" class="mem"/>
+    <text x="600" y="124" class="mid small">Animation Pool</text>
+    <text x="600" y="139" class="mid small">nodes · samplers · channels · keys</text>
+
+    <line x1="320" y1="146" x2="320" y2="176" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="600" y1="146" x2="600" y2="176" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="20" y="172" class="title t-gpu">GPU · Animate, a group per row</text>
+    <rect x="20" y="180" width="720" height="70" rx="6" class="gpu"/>
+    <circle cx="44" cy="215" r="10" class="badge"/><text x="44" y="219" class="badge-n">1</text>
+    <text x="62" y="210" class="small">sample each node's</text>
+    <text x="62" y="225" class="small">channels → local</text>
+    <circle cx="214" cy="215" r="10" class="badge"/><text x="214" y="219" class="badge-n">2</text>
+    <text x="232" y="210" class="small">walk up the parents</text>
+    <text x="232" y="225" class="small">→ world, per node</text>
+    <circle cx="394" cy="215" r="10" class="badge"/><text x="394" y="219" class="badge-n">3</text>
+    <text x="412" y="210" class="small">entity · node world → an</text>
+    <text x="412" y="225" class="small">InstanceTransform per sub-mesh</text>
+    <text x="620" y="210" class="small">barrier between</text>
+    <text x="620" y="225" class="small">the steps</text>
+
+    <line x1="300" y1="250" x2="300" y2="280" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="150" y="282" width="300" height="40" rx="6" class="mem"/>
+    <text x="300" y="300" class="mid small">Animated Transform Buffer (this slot)</text>
+    <text x="300" y="315" class="mid small">world, normal matrix, previousWorld</text>
+    <rect x="470" y="282" width="270" height="40" rx="6" class="mem o-50"/>
+    <text x="605" y="300" class="mid small">the other slot: last frame's</text>
+    <text x="605" y="315" class="mid small">world → this frame's previousWorld</text>
+    <line x1="470" y1="270" x2="470" y2="252" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
+    <line x1="300" y1="322" x2="300" y2="344" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="312" y="352" class="small">Cull, Scene, Transparent, every shadow view: getWorldMatrix</text>
+  </svg>
+  <figcaption>An instance row with <code>animationRow</code> = −1 keeps its own matrices, so a static mesh runs the same code as before. A playing entity's rows point at its transforms.</figcaption>
+</figure>
+
+<p>The application gives the time and starts a clip:</p>
+
+<pre><code>engine.setAnimationTime(seconds);
+const int32_t walk = engine.findAnimation(mesh, "Walk");
+if (walk >= 0)
+    engine.playAnimation(entity, {.clip = static_cast&lt;uint32_t&gt;(walk), .startTime = seconds});</code></pre>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Which nodes</td><td>the whole tree</td><td><code>importAnimations</code> keeps a node when a clip moves it or a parent, and it holds a mesh or a kept child. A kept node under static ones hangs below one extra node whose rest matrix is their world matrix. A model whose clips move no mesh has no animation. Kept nodes are stored parents first (<code>AnimationRaw::nodes</code>).</td></tr>
+  <tr><td>Clips</td><td>one at a time, or blended</td><td>One per entity (<code>AnimationPlay::clip</code>), or <code>ALL_ANIMATION_CLIPS</code>: every clip at once, a node moved by the last clip that animates it. No blending or layers. Every glTF animation keeps its index, also one left without channels.</td></tr>
+  <tr><td>Sampling</td><td>STEP, LINEAR (slerp), CUBICSPLINE</td><td>All three, in <code>sampleChannel</code> in <code>shaders/passes/animate.slang</code>, with a binary search. Close quaternions use the normalized mix (cos θ &gt; 0.9995). Morph target weights are not read yet.</td></tr>
+  <tr><td>Local to world</td><td>walk up, or level by level</td><td>Walk up: each thread multiplies its node's parents itself, so any depth and any node count works. The 64 threads of a group go over the nodes in strides (<code>examples/12_animation</code> has a 100-node chain).</td></tr>
+  <tr><td>Clock</td><td>from the application, small floats</td><td><code>Engine::setAnimationTime</code> sets a double. The base moves when the clock is <code>ANIMATION_REBASE_SECONDS</code> (64) past it or behind it (<code>getAnimationBase</code>), and each row gets its phase at the base (<code>getAnimationPhase</code>). A unit test checks the error stays under 0.1 ms after 24 hours.</td></tr>
+  <tr><td>Motion vectors</td><td>keep last frame's matrix</td><td>The pass reads last frame's world from the other slot's buffer (<code>PassBuilder::readPrevious</code> of the per-slot buffers) into <code>previousWorld</code>. A play, a stop and a growth of the buffers start the motion again for one frame (<code>AnimatedEntity::resetSync</code>), so TAA does not smear a jump.</td></tr>
+  <tr><td>Bounds</td><td>—</td><td>Culling multiplies the geometry's sphere by <code>getWorldMatrix</code>, the animated matrix, so a rigid part is culled where it is.</td></tr>
+  <tr><td>Mirroring</td><td>a negative scale turns the winding</td><td>The cull mode of a draw is chosen on the CPU from the rest pose. A sub-mesh whose clips can take a scale to 0 or below is drawn without face culling (<code>animationCanMirror</code>), so it shows right whichever way it turns.</td></tr>
+  <tr><td>Cost on the CPU</td><td>—</td><td>Nothing per frame per entity. A play, a stop or a move writes one row; the base moves once a minute and writes the playing rows.</td></tr>
+</table>
+</div>
+
+<p>See also the <a href="../api/scene.html#animation">API reference</a>, <a href="gpu-scene.html">the GPU scene tables</a> and <a href="taa.html#in-rasm">TAA</a>.</p>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The public types</td><td><code>AnimationClip</code>, <code>AnimationPlay</code>, <code>ALL_ANIMATION_CLIPS</code>, <code>AnimationRaw</code> in <code>include/rasm/animation.h</code></td></tr>
+  <tr><td>Import: nodes, clips, samplers</td><td><code>importAnimations</code> in <code>src/assets/animationImport.cpp</code>, called by <code>importGltf</code> in <code>src/assets/meshImport.cpp</code> with the walk of <code>traverseNodes</code></td></tr>
+  <tr><td>The pool and the table</td><td><code>GpuAnimation</code>, <code>buildAnimationPoolData</code>, <code>Engine::uploadMeshAnimation</code>, <code>Engine::writeAnimationRow</code> in <code>src/renderer/animation.cpp</code></td></tr>
+  <tr><td>Play, stop, the clock</td><td><code>Engine::playAnimation</code>, <code>Engine::stopAnimation</code>, <code>Engine::setAnimationTime</code> in <code>src/renderer/animation.cpp</code>; <code>getAnimationBase</code>, <code>getAnimationPhase</code> in <code>src/renderer/animationTime.cpp</code></td></tr>
+  <tr><td>The pass</td><td><code>Engine::addAnimationPass</code>, <code>Engine::recordAnimation</code>; <code>animateMain</code> in <code>shaders/passes/animate.slang</code></td></tr>
+  <tr><td>The GPU structs</td><td><code>shaders/lib/animationTypes.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
+  <tr><td>Reading the matrices</td><td><code>getWorldMatrix</code>, <code>getNormalMatrix</code>, <code>getPreviousWorldPosition</code> in <code>shaders/lib/core.slang</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/animationTests.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Every shader that reads an instance's matrices goes through <code>getWorldMatrix</code>, <code>getNormalMatrix</code> and <code>getPreviousWorldPosition</code>, never <code>InstanceData::worldMatrix</code> directly.</li>
+    <li>Kept nodes are stored parents first, and a node's parent is an earlier node.</li>
+    <li>The engine never reads a wall clock for animation: the time comes from <code>setAnimationTime</code>.</li>
+    <li>The GPU sees only the clock minus the base and phases at the base, never a time of hours.</li>
+    <li>Both slots' transform buffers grow together, after the GPU is done with them, because a frame reads the other slot's.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>The Khronos Group, <i>glTF 2.0 Specification</i>, section 3.11 "Animations" and appendix C "Interpolation".</li>
+  <li>Ken Shoemake, <i>Animating Rotation with Quaternion Curves</i>, SIGGRAPH 1985: slerp.</li>
+  <li>Jason Gregory, <i>Game Engine Architecture</i>, chapter "Animation Systems".</li>
+  <li>Bruce Dawson, <i>Don't Store That in a Float</i>, Random ASCII blog, 2012: time in floats.</li>
+  <li><a href="coordinate-spaces.html">Coordinate spaces and the view matrix</a>, <a href="temporal-history.html">History buffers</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

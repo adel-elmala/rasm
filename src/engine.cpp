@@ -6,6 +6,7 @@
 #include "renderer/frameStats.h"
 #include "renderer/gpuScene.h"
 #include "renderer/lightClusters.h"
+#include "renderer/animation.h"
 #include "renderer/renderer.h"
 #include "renderer/shaderCompiler.h"
 #include "renderer/statsOverlay.h"
@@ -48,7 +49,7 @@ namespace rasm
         }
     }
 
-    Engine::Engine(const EngineConfig &config) : config(config), geometryPool(std::make_unique<GeometryPool>()), gpuScene(std::make_unique<GpuScene>()), gpuLights(std::make_unique<GpuLights>()), environments(std::make_unique<Environments>()), frameStats(std::make_unique<FrameStatsCollector>()), statsOverlay(std::make_unique<StatsOverlay>()), ctx(this), shaderCompiler(std::make_unique<ShaderCompiler>())
+    Engine::Engine(const EngineConfig &config) : config(config), geometryPool(std::make_unique<GeometryPool>()), gpuScene(std::make_unique<GpuScene>()), gpuLights(std::make_unique<GpuLights>()), gpuAnimation(std::make_unique<GpuAnimation>()), environments(std::make_unique<Environments>()), frameStats(std::make_unique<FrameStatsCollector>()), statsOverlay(std::make_unique<StatsOverlay>()), ctx(this), shaderCompiler(std::make_unique<ShaderCompiler>())
     {
         // In a real implementation, this is where we'd initialize the window, graphics context, etc.
         spdlog::info("initializing engine with config: appName={}, windowWidth={}, windowHeight={}, enableValidation={}",
@@ -114,7 +115,7 @@ namespace rasm
             return;
         }
 
-        if (!geometryPool->create(ctx, this->config) || !createGpuScene() || !createGpuLights())
+        if (!geometryPool->create(ctx, this->config) || !createGpuScene() || !createGpuLights() || !createGpuAnimation())
             return;
         createFrameStats();
 

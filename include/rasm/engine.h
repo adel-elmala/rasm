@@ -30,6 +30,7 @@ namespace rasm
     class ShaderCompiler;
     struct GpuScene;
     struct GpuLights;
+    struct GpuAnimation;
     struct Environments;
     struct SceneDrawList;
     struct FrameStatsCollector;
@@ -85,6 +86,11 @@ namespace rasm
         void                        addCameraToScene(SceneHandle scene, CameraHandle camera);
         void                        addLightToScene(SceneHandle scene, LightHandle light);
         void                        setSceneEnvironment(SceneHandle scene, const SceneEnvironment& environment);
+        void                        setAnimationTime(double seconds);
+        void                        playAnimation(EntityHandle entity, const AnimationPlay& play);
+        void                        stopAnimation(EntityHandle entity);
+        std::vector<AnimationClip>  getAnimations(MeshHandle mesh) const;
+        int32_t                     findAnimation(MeshHandle mesh, const std::string& name) const;
         MeshHandle                  createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices, std::vector<uint32_t> colors = {});
         MeshHandle                  loadMesh(const std::string& path);
         MeshHandle                  loadGLTF(const std::string& path);
@@ -220,6 +226,7 @@ namespace rasm
         std::unique_ptr<GeometryPool>                               geometryPool                            = {};
         std::unique_ptr<GpuScene>                                   gpuScene                                = {};
         std::unique_ptr<GpuLights>                                  gpuLights                               = {};
+        std::unique_ptr<GpuAnimation>                               gpuAnimation                            = {};
         std::unique_ptr<Environments>                               environments                            = {};
         std::unique_ptr<FrameStatsCollector>                        frameStats                              = {};
         std::unique_ptr<StatsOverlay>                               statsOverlay                            = {};
@@ -307,6 +314,19 @@ namespace rasm
         void                        releaseViewClusters(uint32_t view);
         void                        writeSceneLights(uint32_t view, SceneHandle scene, gfx::SceneData& sceneData);
         void                        recordLightClusters(uint32_t view, uint64_t sceneDataAddress);
+        bool                        createGpuAnimation();
+        uint64_t                    getMeshAnimationBytes(const GLTFRaw& raw) const;
+        uint64_t                    getAnimationPoolUsed() const;
+        bool                        uploadMeshAnimation(MeshHandle mesh, const GLTFRaw& raw);
+        void                        startPendingAnimation(EntityHandle entity);
+        void                        startAnimation(EntityHandle entity, const AnimationPlay& play, uint32_t firstSync);
+        bool                        growAnimationBuffers(uint32_t transformCount, uint32_t poseCount, uint32_t firstSync);
+        int32_t                     getAnimationRow(EntityHandle entity, uint32_t subMesh) const;
+        bool                        animationCanMirror(MeshHandle mesh, uint32_t subMesh) const;
+        void                        writeAnimationRow(EntityHandle entity);
+        void                        syncGpuAnimation();
+        void                        addAnimationPass(RenderGraph& graph);
+        void                        recordAnimation();
         bool                        addSceneViewPasses(RenderGraph& graph, SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, uint32_t face, const SceneShadow* shadows, uint32_t shadowCount, bool depthOnly);
         uint32_t                    createSceneView(SceneHandle scene, CameraHandle camera, const RenderTargetHandle& renderTarget, uint32_t face, const SceneShadow* shadows, uint32_t shadowCount, bool depthOnly);
         void                        releaseSceneView(uint32_t view);

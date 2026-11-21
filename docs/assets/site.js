@@ -70,6 +70,7 @@ const SECTIONS = [
             { path: "guides/camera-controllers.html",    title: "Camera controllers and easing",       blurb: "Mouse and keys become a smooth camera." },
             { path: "guides/projection-depth.html",      title: "Projection and reversed-Z depth",     blurb: "The projection matrix and where depth precision goes." },
             { path: "guides/face-culling.html",          title: "Face culling and winding order",      blurb: "Skipping triangles that face away." },
+            { path: "guides/keyframe-animation.html",    title: "Keyframe animation",                  blurb: "Keys, channels and the node tree: a model's parts move over time." },
         ],
     },
     {

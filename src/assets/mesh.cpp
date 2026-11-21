@@ -187,11 +187,18 @@ namespace rasm
             spdlog::error("Failed to upload mesh: {}", load.path);
             return;
         }
+        const uint64_t animationBytes = getMeshAnimationBytes(raw);
+        if (animationBytes > config.animationPoolBytes - getAnimationPoolUsed())
+        {
+            spdlog::error("The animation pool is full: mesh {} needs {} B ({}/{} B in use). EngineConfig::animationPoolBytes sets its size.",
+                          load.path, animationBytes, getAnimationPoolUsed(), config.animationPoolBytes);
+            return;
+        }
 
         GltfImportCache cache{.raw = &raw};
         for (const auto &sub : raw.subGltfRaws)
         {
-            SubMesh subMesh{.transform = sub.transform};
+            SubMesh subMesh{.transform = sub.transform, .animatedNode = sub.animatedNode};
             if (raw.model)
                 subMesh.material = loadMaterial(*raw.model, sub.materialIndex, cache);
             if (!geometryPool->upload(ctx, sub.objRaw, subMesh.geometry))
@@ -202,6 +209,15 @@ namespace rasm
             }
             mesh.subMeshes.push_back(subMesh);
         }
+
+        if (!uploadMeshAnimation(load.handle, raw))
+        {
+            spdlog::error("Failed to upload the animations of mesh {}", load.path);
+            mesh.subMeshes.clear();
+            return;
+        }
+        for (const AnimationClipRaw &clip : raw.animation.clips)
+            mesh.animations.push_back(clip.info);
 
         mesh.state = MeshState::READY;
         spdlog::info("Loaded mesh {} ({:.1f} ms on the main thread): {} sub-meshes, geometry pool at {}/{} vertices and {}/{} indices.",

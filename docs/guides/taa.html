@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Temporal Anti-Aliasing · RASM</title>
 <meta name="description" content="How temporal anti-aliasing (TAA) works: a sub-pixel jitter per frame, a history that blends the frames, motion vectors from the last frame's transforms, clipping the history against ghosts, a sharp resample, brightness weights against flicker, when to drop the history, and how it compares with MSAA. Then how RASM does it.">
-<meta name="rasm-sources" content="src/renderer/taa.cpp src/renderer/taa.h shaders/passes/taa.slang shaders/passes/rasm.slang shaders/passes/sky.slang shaders/lib/core.slang shaders/lib/pbr.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/renderer.cpp src/renderer/renderGraph.cpp src/rhi/renderContext.cpp include/rasm/engine.h include/rasm/camera.h include/rasm/types.h src/renderer/uberMaterialTypes.h examples/09_gltf_materials/main.cpp examples/02_gltf/main.cpp tests/taaTests.cpp">
+<meta name="rasm-sources" content="src/renderer/animation.cpp shaders/passes/animate.slang src/renderer/taa.cpp src/renderer/taa.h shaders/passes/taa.slang shaders/passes/rasm.slang shaders/passes/sky.slang shaders/lib/core.slang shaders/lib/pbr.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/renderer.cpp src/renderer/renderGraph.cpp src/rhi/renderContext.cpp include/rasm/engine.h include/rasm/camera.h include/rasm/types.h src/renderer/uberMaterialTypes.h examples/09_gltf_materials/main.cpp examples/02_gltf/main.cpp tests/taaTests.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -291,7 +291,7 @@
 
 <h3>Last frame's transforms</h3>
 
-<p>Each instance row of the GPU scene keeps <code>previousWorld</code>, the rows of the affine world matrix the frame before drew (48 bytes; <code>InstanceData</code> grows from 108 to 156 bytes). It is written only through <code>GpuTable::setRow</code> in the frame's sync, like every row:</p>
+<p>Each instance row of the GPU scene keeps <code>previousWorld</code>, the rows of the affine world matrix the frame before drew (48 of the row's 160 bytes). It is written only through <code>GpuTable::setRow</code> in the frame's sync, like every row. A sub-mesh that a clip moves (<a href="keyframe-animation.html#in-rasm">keyframe animation</a>) gets its matrices, <code>previousWorld</code> included, from the <code>Animate</code> pass instead, which reads last frame's matrix from the other frame slot; the shaders read both kinds through <code>getPreviousWorldPosition</code>:</p>
 
 <ol class="flow">
   <li class="cpu"><b>updateTransform</b><span>rows: new world, previousWorld = the last synced matrix</span></li>
@@ -307,7 +307,7 @@
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Jitter</td><td>Halton (2, 3)</td><td><code>getTaaJitter</code>: points 1 to <code>TAA_JITTER_PHASES</code> (8), from a counter per scene view (<code>SceneView::jitterFrame</code>), so the same frames give the same pixels. <code>writeViewMotion</code> puts it in the projection as a translation of clip space, which <code>removeJitter</code> takes out of the motion and the sky.</td></tr>
-  <tr><td>Motion</td><td>last transforms, last camera</td><td><code>InstanceData::previousWorld</code>, <code>SceneData::previousViewProjection</code> and <code>jitter</code>; the uber, MASK and sky pipelines of a target with a motion color are compiled with <code>RASM_MOTION_VECTORS</code>. A <code>BLEND</code> draw writes zero motion with alpha 0, which its premultiplied blend turns into "keep": see-through surfaces keep the motion behind them.</td></tr>
+  <tr><td>Motion</td><td>last transforms, last camera</td><td><code>InstanceData::previousWorld</code> (or an animated sub-mesh's <code>InstanceTransform::previousWorld</code>, from the <code>Animate</code> pass), <code>SceneData::previousViewProjection</code> and <code>jitter</code>; the uber, MASK and sky pipelines of a target with a motion color are compiled with <code>RASM_MOTION_VECTORS</code>. A <code>BLEND</code> draw writes zero motion with alpha 0, which its premultiplied blend turns into "keep": see-through surfaces keep the motion behind them.</td></tr>
   <tr><td>The pass</td><td>nearest motion, clip, sharp resample, weights</td><td><code>taaMain</code> in <code>shaders/passes/taa.slang</code>: the nearest of 3 × 3 depths picks the motion; the history through 5 Catmull-Rom taps; clipped to mean ± 1 σ in YCoCg; blended at 10 % (30 % when the pixel moves 8 pixels a frame or more), on colors compressed by <code>1 / (1 + luminance · exposure)</code>.</td></tr>
   <tr><td>Mip bias</td><td>about −1</td><td><code>TAA_TEXTURE_LOD_BIAS</code> (−1) in <code>SceneData::textureLodBias</code>, read by <code>sampleMaterial</code> for every material texture of a jittered view.</td></tr>
   <tr><td>Resets</td><td>first frame, resize, cut, jump</td><td>The pass keeps its last size, its history's texture (a new swapchain makes new ones, at any size), camera and <code>Camera::historyResets</code>. <code>Engine::resetCameraHistory</code> counts that up. A jump is a turn above <code>TAA_JUMP_ANGLE</code> (30°) or a move above <code>TAA_JUMP_NEAR_PLANES</code> (100) near planes, for an orthographic camera half its width (<code>isCameraJump</code>).</td></tr>
@@ -323,7 +323,7 @@
   <div><b>+0.13 ms</b><span>the draw passes with the motion output</span><small>Scene 1, Scene 2, Transparent: 0.88 → 1.02 ms</small></div>
   <div><b>7.9 MiB</b><span>the motion target at 1080p</span><small>R16G16_SFLOAT, transient</small></div>
   <div><b>31.6 MiB</b><span>the history at 1080p</span><small>two RGBA16F copies, for the graph's life</small></div>
-  <div><b>+6 MiB</b><span>the instance table</span><small>108 → 156 B × 65536 rows × 2 frame slots</small></div>
+  <div><b>+6 MiB</b><span>the instance table</span><small>48 B of the 160 B row × 65536 rows × 2 frame slots</small></div>
 </div>
 
 <h3>Where it lives in code</h3>

@@ -1,0 +1,2045 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "RASM test generator"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "root",
+   "scale": [
+    0.5,
+    0.5,
+    0.5
+   ],
+   "children": [
+    1
+   ]
+  },
+  {
+   "name": "link0",
+   "mesh": 0,
+   "children": [
+    2
+   ]
+  },
+  {
+   "name": "link1",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    3
+   ]
+  },
+  {
+   "name": "link2",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    4
+   ]
+  },
+  {
+   "name": "link3",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    5
+   ]
+  },
+  {
+   "name": "link4",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    6
+   ]
+  },
+  {
+   "name": "link5",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    7
+   ]
+  },
+  {
+   "name": "link6",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    8
+   ]
+  },
+  {
+   "name": "link7",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    9
+   ]
+  },
+  {
+   "name": "link8",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    10
+   ]
+  },
+  {
+   "name": "link9",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    11
+   ]
+  },
+  {
+   "name": "link10",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    12
+   ]
+  },
+  {
+   "name": "link11",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    13
+   ]
+  },
+  {
+   "name": "link12",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    14
+   ]
+  },
+  {
+   "name": "link13",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    15
+   ]
+  },
+  {
+   "name": "link14",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    16
+   ]
+  },
+  {
+   "name": "link15",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    17
+   ]
+  },
+  {
+   "name": "link16",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    18
+   ]
+  },
+  {
+   "name": "link17",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    19
+   ]
+  },
+  {
+   "name": "link18",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    20
+   ]
+  },
+  {
+   "name": "link19",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    21
+   ]
+  },
+  {
+   "name": "link20",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    22
+   ]
+  },
+  {
+   "name": "link21",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    23
+   ]
+  },
+  {
+   "name": "link22",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    24
+   ]
+  },
+  {
+   "name": "link23",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    25
+   ]
+  },
+  {
+   "name": "link24",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    26
+   ]
+  },
+  {
+   "name": "link25",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    27
+   ]
+  },
+  {
+   "name": "link26",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    28
+   ]
+  },
+  {
+   "name": "link27",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    29
+   ]
+  },
+  {
+   "name": "link28",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    30
+   ]
+  },
+  {
+   "name": "link29",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    31
+   ]
+  },
+  {
+   "name": "link30",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    32
+   ]
+  },
+  {
+   "name": "link31",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    33
+   ]
+  },
+  {
+   "name": "link32",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    34
+   ]
+  },
+  {
+   "name": "link33",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    35
+   ]
+  },
+  {
+   "name": "link34",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    36
+   ]
+  },
+  {
+   "name": "link35",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    37
+   ]
+  },
+  {
+   "name": "link36",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    38
+   ]
+  },
+  {
+   "name": "link37",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    39
+   ]
+  },
+  {
+   "name": "link38",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    40
+   ]
+  },
+  {
+   "name": "link39",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    41
+   ]
+  },
+  {
+   "name": "link40",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    42
+   ]
+  },
+  {
+   "name": "link41",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    43
+   ]
+  },
+  {
+   "name": "link42",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    44
+   ]
+  },
+  {
+   "name": "link43",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    45
+   ]
+  },
+  {
+   "name": "link44",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    46
+   ]
+  },
+  {
+   "name": "link45",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    47
+   ]
+  },
+  {
+   "name": "link46",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    48
+   ]
+  },
+  {
+   "name": "link47",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    49
+   ]
+  },
+  {
+   "name": "link48",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    50
+   ]
+  },
+  {
+   "name": "link49",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    51
+   ]
+  },
+  {
+   "name": "link50",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    52
+   ]
+  },
+  {
+   "name": "link51",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    53
+   ]
+  },
+  {
+   "name": "link52",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    54
+   ]
+  },
+  {
+   "name": "link53",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    55
+   ]
+  },
+  {
+   "name": "link54",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    56
+   ]
+  },
+  {
+   "name": "link55",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    57
+   ]
+  },
+  {
+   "name": "link56",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    58
+   ]
+  },
+  {
+   "name": "link57",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    59
+   ]
+  },
+  {
+   "name": "link58",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    60
+   ]
+  },
+  {
+   "name": "link59",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    61
+   ]
+  },
+  {
+   "name": "link60",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    62
+   ]
+  },
+  {
+   "name": "link61",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    63
+   ]
+  },
+  {
+   "name": "link62",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    64
+   ]
+  },
+  {
+   "name": "link63",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    65
+   ]
+  },
+  {
+   "name": "link64",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    66
+   ]
+  },
+  {
+   "name": "link65",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    67
+   ]
+  },
+  {
+   "name": "link66",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    68
+   ]
+  },
+  {
+   "name": "link67",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    69
+   ]
+  },
+  {
+   "name": "link68",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    70
+   ]
+  },
+  {
+   "name": "link69",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    71
+   ]
+  },
+  {
+   "name": "link70",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    72
+   ]
+  },
+  {
+   "name": "link71",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    73
+   ]
+  },
+  {
+   "name": "link72",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    74
+   ]
+  },
+  {
+   "name": "link73",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    75
+   ]
+  },
+  {
+   "name": "link74",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    76
+   ]
+  },
+  {
+   "name": "link75",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    77
+   ]
+  },
+  {
+   "name": "link76",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    78
+   ]
+  },
+  {
+   "name": "link77",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    79
+   ]
+  },
+  {
+   "name": "link78",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    80
+   ]
+  },
+  {
+   "name": "link79",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    81
+   ]
+  },
+  {
+   "name": "link80",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    82
+   ]
+  },
+  {
+   "name": "link81",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    83
+   ]
+  },
+  {
+   "name": "link82",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    84
+   ]
+  },
+  {
+   "name": "link83",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    85
+   ]
+  },
+  {
+   "name": "link84",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    86
+   ]
+  },
+  {
+   "name": "link85",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    87
+   ]
+  },
+  {
+   "name": "link86",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    88
+   ]
+  },
+  {
+   "name": "link87",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    89
+   ]
+  },
+  {
+   "name": "link88",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    90
+   ]
+  },
+  {
+   "name": "link89",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    91
+   ]
+  },
+  {
+   "name": "link90",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    92
+   ]
+  },
+  {
+   "name": "link91",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    93
+   ]
+  },
+  {
+   "name": "link92",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    94
+   ]
+  },
+  {
+   "name": "link93",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    95
+   ]
+  },
+  {
+   "name": "link94",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    96
+   ]
+  },
+  {
+   "name": "link95",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    97
+   ]
+  },
+  {
+   "name": "link96",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    98
+   ]
+  },
+  {
+   "name": "link97",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    99
+   ]
+  },
+  {
+   "name": "link98",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "children": [
+    100
+   ]
+  },
+  {
+   "name": "link99",
+   "mesh": 0,
+   "translation": [
+    0.0,
+    0.15,
+    0.0
+   ]
+  }
+ ],
+ "meshes": [
+  {
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 2,
+     "material": 0
+    }
+   ]
+  }
+ ],
+ "materials": [
+  {
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.9,
+     0.45,
+     0.2,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.5
+   }
+  }
+ ],
+ "animations": [
+  {
+   "name": "Sway",
+   "samplers": [
+    {
+     "input": 3,
+     "output": 4,
+     "interpolation": "LINEAR"
+    }
+   ],
+   "channels": [
+    {
+     "sampler": 0,
+     "target": {
+      "node": 1,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 2,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 3,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 4,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 5,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 6,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 7,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 8,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 9,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 10,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 11,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 12,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 13,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 14,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 15,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 16,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 17,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 18,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 19,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 20,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 21,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 22,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 23,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 24,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 25,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 26,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 27,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 28,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 29,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 30,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 31,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 32,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 33,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 34,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 35,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 36,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 37,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 38,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 39,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 40,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 41,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 42,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 43,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 44,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 45,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 46,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 47,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 48,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 49,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 50,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 51,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 52,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 53,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 54,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 55,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 56,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 57,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 58,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 59,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 60,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 61,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 62,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 63,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 64,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 65,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 66,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 67,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 68,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 69,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 70,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 71,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 72,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 73,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 74,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 75,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 76,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 77,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 78,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 79,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 80,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 81,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 82,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 83,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 84,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 85,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 86,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 87,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 88,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 89,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 90,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 91,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 92,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 93,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 94,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 95,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 96,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 97,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 98,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 99,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 0,
+     "target": {
+      "node": 100,
+      "path": "rotation"
+     }
+    }
+   ]
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 24,
+   "type": "VEC3",
+   "min": [
+    -0.1,
+    0.0,
+    -0.1
+   ],
+   "max": [
+    0.1,
+    0.14,
+    0.1
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 24,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5123,
+   "count": 36,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5126,
+   "count": 5,
+   "type": "SCALAR",
+   "min": [
+    0.0
+   ],
+   "max": [
+    3.0
+   ]
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5126,
+   "count": 5,
+   "type": "VEC4"
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 288,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 288,
+   "byteLength": 288,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 576,
+   "byteLength": 72,
+   "target": 34963
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 648,
+   "byteLength": 20
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 668,
+   "byteLength": 80
+  }
+ ],
+ "buffers": [
+  {
+   "byteLength": 748,
+   "uri": "data:application/octet-stream;base64,zczMPQAAAADNzMy9zczMPSlcDz7NzMy9zczMPSlcDz7NzMw9zczMPQAAAADNzMw9zczMvQAAAADNzMw9zczMvSlcDz7NzMw9zczMvSlcDz7NzMy9zczMvQAAAADNzMy9zczMvSlcDz7NzMw9zczMPSlcDz7NzMw9zczMPSlcDz7NzMy9zczMvSlcDz7NzMy9zczMvQAAAADNzMy9zczMPQAAAADNzMy9zczMPQAAAADNzMw9zczMvQAAAADNzMw9zczMPQAAAADNzMw9zczMPSlcDz7NzMw9zczMvSlcDz7NzMw9zczMvQAAAADNzMw9zczMvQAAAADNzMy9zczMvSlcDz7NzMy9zczMPSlcDz7NzMy9zczMPQAAAADNzMy9AACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcAAAAAAAAAQD8AAMA/AAAQQAAAQEAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAC+dVY8Y/p/PwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAL51Vrxj+n8/AAAAAAAAAAAAAAAAAACAPw=="
+  }
+ ]
+}

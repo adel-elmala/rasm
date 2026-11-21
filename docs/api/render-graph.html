@@ -219,6 +219,7 @@ public:
     void               read(const BufferHandle (&amp;perFrame)[MAX_FRAMES_IN_FLIGHT]);
     void               readPrevious(RenderTargetHandle handle);
     void               readPrevious(BufferHandle handle);
+    void               readPrevious(const BufferHandle (&amp;perFrame)[MAX_FRAMES_IN_FLIGHT]);
     void               readDepth(RenderTargetHandle handle);
     void               write(TextureHandle handle);
     void               write(BufferHandle handle);
@@ -261,6 +262,13 @@ void read(RenderTargetHandle handle);</pre>
   <pre class="sig">void readPrevious(BufferHandle handle);</pre>
   <div class="body">
     <p>This pass reads what the <b>previous frame</b> wrote into the buffer. A buffer has one copy, so the pass runs before this frame's first pass that writes it, and no edge comes from this frame's writers. The barrier still waits for the last write, which is the previous frame's. The scene passes use it for the occlusion flags: <code>Cull 1</code> reads what the last frame's <code>Cull 2</code> wrote.</p>
+  </div>
+</div>
+
+<div class="api" id="readPrevious-perFrame">
+  <pre class="sig">void readPrevious(const BufferHandle (&amp;perFrame)[MAX_FRAMES_IN_FLIGHT]);</pre>
+  <div class="body">
+    <p>This pass reads the copy of a <b>per-slot</b> buffer pair that the previous frame wrote: slot <code class="lang-text">(frameCount + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT</code>. This frame writes only its own slot, so the read adds no edge; its barrier waits for the previous frame's write, and the next frame's write of that copy waits for this read. The <code>Animate</code> pass uses it for last frame's matrices (<a href="../guides/keyframe-animation.html#in-rasm">keyframe animation</a>).</p>
   </div>
 </div>
 
