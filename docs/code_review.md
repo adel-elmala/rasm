@@ -300,6 +300,13 @@ Before you add D3D12 or WebGPU, put GPU data access behind a binding abstraction
 
 **D23 — Environment light ignores shadows and has little specular occlusion.** `shadePBR` adds the environment light times the material's occlusion only ([pbr.slang:198-200](../shaders/lib/pbr.slang#L198-L200)): the shadow maps darken only the punctual lights, and nothing blocks the environment's light from coming through other objects. In `examples/08_ibl` the ground under the spheres and the helmet is as bright as open ground, and a metal sphere reflects the photo's sky where the ground plane should be. The ambient occlusion texture darkens diffuse and specular alike, which is too much specular occlusion on rough metal and too little on smooth surfaces. Add screen-space ambient occlusion, or occlusion from the sun's cascades for the sky's part, a specular occlusion term from AO and roughness (Lagarde 2014), and later local reflection probes. *Confirmed* by reading and in the example's image.
 
+**D24 — Vulkan functions are linked from `vulkan-1.dll`, not loaded at run time.** `rasm` links `Vulkan::Vulkan` ([src/CMakeLists.txt](../src/CMakeLists.txt)), so every executable imports each `vk*` function it calls from the loader DLL. Three problems follow:
+- On a machine whose loader is older than Vulkan 1.4, an application can't start: Windows stops it with STATUS_ENTRYPOINT_NOT_FOUND (`0xC0000139`) for `vkCopyMemoryToImage`, behind an error dialog, before `main` runs. The engine never gets the chance to say "this needs Vulkan 1.4". Windows loads `vulkan-1.dll` from `System32` before `PATH`, so a newer loader next to the SDK does not help. This is what hung the `windows-latest` CI job until the job installed the SDK's loader into `System32` (2026-11-21).
+- Every device-level call goes through the loader's dispatch trampoline. Function pointers from `vkGetDeviceProcAddr` call the driver directly, which costs less per command.
+- `rasm_tests` needs no GPU, but it still can't start without a Vulkan loader on the machine.
+
+Load the functions at run time with [volk](https://github.com/zeux/volk) (vcpkg port `volk`): `volkInitialize` at engine start (no loader → a clear error), `volkLoadInstance` and `volkLoadDevice` after creation, and VMA fed from volk (`vmaImportVulkanFunctionsFromVolk`). Then no `vulkan-1.lib` link is needed and the CI loader step can go. *Confirmed* on CI.
+
 ---
 
 ## 4. Performance
