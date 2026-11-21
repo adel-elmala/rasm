@@ -107,15 +107,26 @@ jobs:
       - name: DIAG hang
         if: runner.os == 'Windows'
         continue-on-error: true
+        shell: pwsh
         run: |
-          set +e
-          dir=build/${{ matrix.debug }}/tests
-          echo "--- real exit code (cmd)"; cmd //c "build\${{ matrix.debug }}\tests\rasm_tests.exe --list-test-cases --no-intro >NUL 2>&1 & echo errorlevel=%errorlevel%"
-          echo "--- ldd not found"; for f in $dir/rasm_tests.exe $dir/*.dll; do echo "[$f]"; ldd "$f" 2>&1 | grep -iE "not found|\?\?\?" ; done
-          echo "--- dumpbin dependents"; dumpbin //nologo //dependents "$(cygpath -w $dir/rasm_tests.exe)" | grep -i "\.dll"
-          echo "--- where"; for d in msvcp140.dll msvcp140d.dll vcruntime140.dll vcruntime140d.dll vcruntime140_1.dll vcruntime140_1d.dll ucrtbased.dll vulkan-1.dll; do echo "$d:"; where $d 2>&1 | head -3; done
-          echo "--- versions"; powershell -NoProfile -Command "foreach (\$f in @('C:\Windows\System32\msvcp140.dll','C:\Windows\System32\msvcp140d.dll','C:\Windows\System32\vcruntime140d.dll')) { if (Test-Path \$f) { \$f + ' ' + (Get-Item \$f).VersionInfo.FileVersion } else { \$f + ' missing' } }"
-          echo "--- redist"; ls "$VCToolsRedistDir" "$VCToolsRedistDir/x64" "$VCToolsRedistDir/debug_nonredist/x64" 2>&1 | head -20
+          $exe = (Resolve-Path "build/${{ matrix.debug }}/tests/rasm_tests.exe").Path
+          $names = & $exe --list-test-cases --no-intro | Where-Object { $_ -and $_ -notmatch '^(\[doctest\]|====)' }
+          "test cases: $($names.Count)"
+          foreach ($n in $names) {
+            $filter = $n -replace '[,"\\[\]]', '?'
+            $psi = [System.Diagnostics.ProcessStartInfo]::new($exe)
+            $psi.ArgumentList.Add("--test-case=$filter")
+            $psi.ArgumentList.Add("--no-intro")
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.UseShellExecute = $false
+            $p = [System.Diagnostics.Process]::Start($psi)
+            $out = $p.StandardOutput.ReadToEndAsync()
+            $err = $p.StandardError.ReadToEndAsync()
+            if (-not $p.WaitForExit(20000)) { "HANG: $n"; $p.Kill($true); continue }
+            if ($p.ExitCode -ne 0) { "FAIL($($p.ExitCode)): $n"; $out.Result; $err.Result }
+          }
+          "done"
           exit 0
 
       - name: Test ${{ matrix.debug }}
