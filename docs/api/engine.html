@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Engine · RASM</title>
 <meta name="description" content="The Engine class: EngineConfig, construction and shutdown, the frame functions, loading, frame stats, paths and the window, plus an index of every Engine method.">
-<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/window.cpp src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/renderer.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/msaaResolve.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp">
+<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/window.cpp src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/renderer.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/msaaResolve.cpp src/renderer/taa.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -45,6 +45,7 @@
   <tr><td><a href="#addScenePasses"><code>addScenePasses</code></a></td><td>add a scene's culling and draw passes to a graph</td><td>this page</td></tr>
   <tr><td><a href="#addShadowPasses"><code>addShadowPasses</code></a></td><td>add a light's shadow passes to a graph</td><td>this page</td></tr>
   <tr><td><a href="#addMsaaResolvePass"><code>addMsaaResolvePass</code></a></td><td>resolve a multisampled HDR target in a pass of the graph</td><td>this page</td></tr>
+  <tr><td><a href="#addTaaPass"><code>addTaaPass</code></a></td><td>anti-alias an HDR target over frames (TAA)</td><td>this page</td></tr>
   <tr><td><a href="#addBloomPasses"><code>addBloomPasses</code></a></td><td>add the bloom of an HDR target to a graph</td><td>this page</td></tr>
   <tr><td><a href="#addToneMapPass"><code>addToneMapPass</code></a></td><td>map an HDR target, with its bloom, into the window</td><td>this page</td></tr>
   <tr><td><a href="#getCurrentFrameResources"><code>getCurrentFrameResources</code></a></td><td>this frame's command buffer and depth</td><td>this page</td></tr>
@@ -78,6 +79,7 @@
   <tr><td><a href="camera.html#getCameraProjection"><code>getCameraProjection</code></a> / <a href="camera.html#setCameraProjection"><code>setCameraProjection</code></a></td><td>perspective or orthographic</td><td>camera.html</td></tr>
   <tr><td><a href="camera.html#getCameraExposure"><code>getCameraExposure</code></a> / <a href="camera.html#setCameraExposure"><code>setCameraExposure</code></a></td><td>brightness before tone mapping</td><td>camera.html</td></tr>
   <tr><td><a href="camera.html#getCameraBloomStrength"><code>getCameraBloomStrength</code></a> / <a href="camera.html#setCameraBloomStrength"><code>setCameraBloomStrength</code></a></td><td>how much bright light glows</td><td>camera.html</td></tr>
+  <tr><td><a href="camera.html#resetCameraHistory"><code>resetCameraHistory</code></a></td><td>start TAA over on a camera cut</td><td>camera.html</td></tr>
   <tr><td><a href="camera.html#getCameraController"><code>getCameraController</code></a> / <a href="camera.html#setCameraController"><code>setCameraController</code></a></td><td>trackball or free-fly</td><td>camera.html</td></tr>
   <tr><td><a href="camera.html#getProjectionMatrix"><code>getProjectionMatrix</code></a>, <a href="camera.html#getProjectionMatrix-aspect"><code>getProjectionMatrix(camera, aspect)</code></a>, <a href="camera.html#getViewMatrix"><code>getViewMatrix</code></a></td><td>camera matrices</td><td>camera.html</td></tr>
   <tr><td><a href="camera.html#updateCameraAspectRatio"><code>updateCameraAspectRatio</code></a></td><td>aspect of every camera</td><td>camera.html</td></tr>
@@ -186,14 +188,14 @@ if (!engine.running())
   <tr><td><code>maxInstances</code></td><td>2<sup>16</sup> = 65,536</td><td>Instance rows: one per sub-mesh of every entity. 108 bytes each, two copies (one per frame slot).</td></tr>
   <tr><td><code>maxLights</code></td><td>2<sup>14</sup> = 16,384</td><td>Lights in total (<a href="scene.html#createLight"><code>createLight</code></a>). 56 bytes each, two copies (about 1.8 MiB). 0, or a table larger than the GPU allows, logs an error and the engine does not start.</td></tr>
   <tr><td><code>showStats</code></td><td><code>false</code></td><td>Shows the stats overlay from the first frame. <kbd>F1</kbd> toggles it at runtime.</td></tr>
-  <tr><td><code>occlusionCulling</code></td><td><code>true</code></td><td>Two-pass Hi-Z occlusion culling in the <a href="#addScenePasses">scene passes</a>: draws hidden behind others are not drawn. It also makes <code>D32_SFLOAT</code> depth textures sampleable, which <a href="render-graph.html#readDepth"><code>readDepth</code></a> needs (a depth-only target's depth always is). <code>false</code> keeps frustum culling only. See <a href="../guides/occlusion-culling.html">occlusion culling</a>.</td></tr>
+  <tr><td><code>occlusionCulling</code></td><td><code>true</code></td><td>Two-pass Hi-Z occlusion culling in the <a href="#addScenePasses">scene passes</a>: draws hidden behind others are not drawn. It also makes <code>D32_SFLOAT</code> depth textures sampleable, which <a href="render-graph.html#readDepth"><code>readDepth</code></a> needs (a depth-only target's depth always is, and so is that of a target with a <a href="types.html#MOTION_FORMAT"><code>MOTION_FORMAT</code></a> color, for TAA). <code>false</code> keeps frustum culling only. See <a href="../guides/occlusion-culling.html">occlusion culling</a>.</td></tr>
   <tr><td><code>meshLods</code></td><td><code>true</code></td><td>Builds coarser levels of detail (<a href="scene.html#MeshLod">LODs</a>) of every sub-mesh with 1024 triangles or more as meshes load, on the worker thread for <code>loadMesh</code>. <code>false</code>: meshes have LOD 0 only.</td></tr>
   <tr><td><code>lodErrorPixels</code></td><td><code>1.0f</code></td><td>Culling draws the coarsest LOD whose error stays under this many pixels on screen. Larger is faster and coarser; 0 always draws LOD 0. See <a href="../guides/lod-selection.html">level of detail</a>.</td></tr>
   <tr><td><code>forcedLod</code></td><td><code>-1</code></td><td>For debugging. From 0 up, every draw uses this LOD (or its mesh's coarsest one), whatever the distance. -1 picks by distance. <kbd>F2</kbd> cycles it at runtime.</td></tr>
   <tr><td><code>asyncCompute</code></td><td><code>false</code></td><td>Runs the scene's culling and Hi-Z passes, and every pass added with <a href="render-graph.html#addAsyncComputePass"><code>addAsyncComputePass</code></a>, on a second GPU queue next to the graphics work. Needs a GPU with a compute queue family without graphics; without one, everything stays on the graphics queue, as with <code>false</code>. Off by default: today it does not make the scene passes faster (<code>P11</code>). <code>examples/03_instances</code> turns it on. See <a href="../guides/async-compute.html">async compute</a>.</td></tr>
   <tr><td><code>clusteredLighting</code></td><td><code>true</code></td><td>Each shaded view sorts its lights with a <code>range</code> into clusters, and each pixel shades only its cluster's lights (about 6.8 MiB per view and frame slot). <code>false</code>: every pixel shades every light of the scene, with the same image and a much higher cost; for comparison and debugging. See <a href="../guides/clustered-lighting.html">clustered lighting</a>.</td></tr>
   <tr><td><code>hostImageCopy</code></td><td><code>true</code></td><td>Fills textures on the CPU through host image copy where the GPU allows it for the format. <code>false</code> copies every texture from the staging ring on the graphics queue instead, as on a GPU without host image copy: for testing that path, or to compare the two. Formats without host image copy use the staging ring either way. See <a href="../guides/gpu-memory.html">GPU memory and uploads</a>.</td></tr>
-  <tr><td><code>antiAliasing</code></td><td><code>NONE</code></td><td>How <code>render</code> smooths edges (<a href="types.html#AntiAliasing"><code>AntiAliasing</code></a>): <code>MSAA_2X</code>, <code>MSAA_4X</code> or <code>MSAA_8X</code> draws the scene with that many samples per pixel and resolves them with <a href="#addMsaaResolvePass"><code>addMsaaResolvePass</code></a>; cut-out (MASK) materials then use alpha-to-coverage. A count the device does not have falls back to the most it has, with a warning. See <a href="../guides/msaa.html">MSAA and alpha-to-coverage</a>.</td></tr>
+  <tr><td><code>antiAliasing</code></td><td><code>NONE</code></td><td>How <code>render</code> smooths edges (<a href="types.html#AntiAliasing"><code>AntiAliasing</code></a>): <code>MSAA_2X</code>, <code>MSAA_4X</code> or <code>MSAA_8X</code> draws the scene with that many samples per pixel and resolves them with <a href="#addMsaaResolvePass"><code>addMsaaResolvePass</code></a>; cut-out (MASK) materials then use alpha-to-coverage. A count the device does not have falls back to the most it has, with a warning. <code>TAA</code> gives the scene target a motion color and adds <a href="#addTaaPass"><code>addTaaPass</code></a>. See <a href="../guides/msaa.html">MSAA and alpha-to-coverage</a> and <a href="../guides/taa.html">Temporal anti-aliasing</a>.</td></tr>
   <tr><td><code>bloom</code></td><td><code>false</code></td><td><code>render</code> adds the <a href="#addBloomPasses">bloom passes</a> and mixes them in by the camera's <a href="camera.html#setCameraBloomStrength">bloom strength</a>. Off by default, so an engine update does not change how an application looks. See <a href="../guides/bloom.html">bloom</a>.</td></tr>
 </table>
 </div>
@@ -338,7 +340,7 @@ engine.endPass();</code></pre>
       <dt>graph</dt><dd>The graph to add to, before its <code>compile</code>. Add your own passes before or after.</dd>
       <dt>scene</dt><dd>Invalid: logs <code>addScenePasses needs a valid scene handle.</code>, adds nothing and returns <code>false</code>.</dd>
       <dt>camera</dt><dd>The view. Its projection is fitted to the target's aspect ratio every frame; the camera itself does not change. Invalid: logs an error, adds nothing and returns <code>false</code>.</dd>
-      <dt>renderTarget</dt><dd>Where the scene is drawn. A target needs one color in <a href="types.html#SCENE_COLOR_FORMAT"><code>SCENE_COLOR_FORMAT</code></a> and <code>D32_SFLOAT</code> depth, the formats of the scene's pipeline. The color is linear light with no upper limit: draw it to the window with <a href="#addToneMapPass"><code>addToneMapPass</code></a>. The target may have several samples per pixel (<a href="render-graph.html#RenderTargetDesc"><code>samples</code></a>, MSAA): the scene's pipelines are made for its count, cut-out materials use alpha-to-coverage, and the Hi-Z reads every depth sample; resolve it with <a href="#addMsaaResolvePass"><code>addMsaaResolvePass</code></a>. Invalid: logs an error, adds nothing and returns <code>false</code>. A target with <code>D32_SFLOAT</code> depth and no color is depth-only: the scene's depth is drawn and nothing else, in passes named <code>Shadow 1</code>, <code>Shadow 2</code>, … (a depth pre-pass, for example; shadows come from <a href="#addShadowPasses"><code>addShadowPasses</code></a>). Make it with <a href="render-graph.html#RenderGraph-createRenderTarget"><code>RenderGraph::createRenderTarget</code></a> before this call.</dd>
+      <dt>renderTarget</dt><dd>Where the scene is drawn. A target needs one color in <a href="types.html#SCENE_COLOR_FORMAT"><code>SCENE_COLOR_FORMAT</code></a> and <code>D32_SFLOAT</code> depth, the formats of the scene's pipeline. The color is linear light with no upper limit: draw it to the window with <a href="#addToneMapPass"><code>addToneMapPass</code></a>. A second color of <code>MOTION_FORMAT</code> (one sample only) takes each pixel's motion, for <a href="#addTaaPass"><code>addTaaPass</code></a>. The target may have several samples per pixel (<a href="render-graph.html#RenderTargetDesc"><code>samples</code></a>, MSAA): the scene's pipelines are made for its count, cut-out materials use alpha-to-coverage, and the Hi-Z reads every depth sample; resolve it with <a href="#addMsaaResolvePass"><code>addMsaaResolvePass</code></a>. Invalid: logs an error, adds nothing and returns <code>false</code>. A target with <code>D32_SFLOAT</code> depth and no color is depth-only: the scene's depth is drawn and nothing else, in passes named <code>Shadow 1</code>, <code>Shadow 2</code>, … (a depth pre-pass, for example; shadows come from <a href="#addShadowPasses"><code>addShadowPasses</code></a>). Make it with <a href="render-graph.html#RenderGraph-createRenderTarget"><code>RenderGraph::createRenderTarget</code></a> before this call.</dd>
       <dt>shadows, shadowCount</dt><dd>Up to <code>MAX_VIEW_SHADOWS</code> (4) shadows (<a href="scene.html#SceneShadow"><code>SceneShadow</code></a>), of different lights, that <a href="#addShadowPasses"><code>addShadowPasses</code></a> returned for the same scene and camera in this graph. Each darkens its own light. The draw passes read every map's depth, so the graph runs them after the map passes. <code>nullptr</code> and 0 (the default): no shadow. More than 4, two of one light, a shadow that <code>addShadowPasses</code> did not make for this scene and camera in this graph, a shadow that another view in the graph already reads (cascades are fitted to one view's aspect ratio), or shadows on a depth-only view, log an error, add nothing and return <code>false</code>. A cube render target (<a href="render-graph.html#RenderTargetDesc"><code>RenderTargetDesc::cube</code></a>) is not a valid <code>renderTarget</code>.</dd>
       <dt>returns</dt><dd><code>true</code> when the passes were added. On <code>false</code> nothing was added.</dd>
     </dl>
@@ -499,7 +501,7 @@ if (!engine.addScenePasses(graph, scene, camera, sceneTarget, shadows, 3))
   <tr><th>Rule</th><th>What happens otherwise</th></tr>
   <tr><td>At most <code>MAX_SCENE_VIEWS</code> (16) scene views held by graphs at once</td><td>An error (<i>"At most 16 views (scene, camera, target) can be held by render graphs at once."</i>), nothing added, <code>false</code></td></tr>
   <tr><td>One graph adds each scene view once</td><td>An error, nothing added, <code>false</code></td></tr>
-  <tr><td>A valid render target with one <code>SCENE_COLOR_FORMAT</code> color and <code>D32_SFLOAT</code> depth, or <code>D32_SFLOAT</code> depth only</td><td>An error, nothing added, <code>false</code></td></tr>
+  <tr><td>A valid render target with a <code>SCENE_COLOR_FORMAT</code> color (and a <code>MOTION_FORMAT</code> second color only with one sample) and <code>D32_SFLOAT</code> depth, or <code>D32_SFLOAT</code> depth only</td><td>An error, nothing added, <code>false</code></td></tr>
   <tr><td>The scene shader <code>passes/rasm.slang</code> must compile</td><td>An error is logged; the engine tries again next frame, so a fixed shader file is picked up while the program runs</td></tr>
   <tr><td>The culling shader <code>passes/cull.slang</code> should compile</td><td>The scene is still drawn, only without culling. Without <code>passes/hiz.slang</code>, or when the view's occlusion buffers cannot be made, it is frustum culled only.</td></tr>
 </table>
@@ -517,9 +519,32 @@ if (!engine.addScenePasses(graph, scene, camera, sceneTarget, shadows, 3))
     </dl>
     <p>At 1920 × 1080 on an RTX 3060 it takes 0.12 ms at 2 samples, 0.14 ms at 4 and 0.38 ms at 8.</p>
     <pre><code>// From examples/09_gltf_materials/main.cpp
-const rasm::RenderTargetHandle resolved = samples &gt; 1 ? engine.addMsaaResolvePass(graph, sceneTarget, camera) : sceneTarget;
-if (!resolved.isValid())
-    return 1;</code></pre>
+rasm::RenderTargetHandle resolved = sceneTarget;
+if (samples &gt; 1)
+    resolved = engine.addMsaaResolvePass(graph, sceneTarget, camera);</code></pre>
+  </div>
+</div>
+
+<div class="api" id="addTaaPass">
+  <pre class="sig">RenderTargetHandle addTaaPass(RenderGraph&amp; graph, const RenderTargetHandle&amp; source, CameraHandle camera);</pre>
+  <div class="body">
+    <p>Temporal anti-aliasing. The scene view that draws <code>source</code> in this graph is jittered by a sub-pixel offset each frame, reads its textures one mip sharper, and writes each pixel's motion into <code>source</code>'s second color. The compute pass <code>TAA</code> then blends each frame into a history: it reads the history where each pixel was last frame, clips it to the colors around the pixel, and keeps about 10 frames. Give the target it returns to <a href="#addBloomPasses"><code>addBloomPasses</code></a> and <a href="#addToneMapPass"><code>addToneMapPass</code></a>. <code>render</code> adds it with <code>EngineConfig::antiAliasing = AntiAliasing::TAA</code>. How it works: <a href="../guides/taa.html">Temporal anti-aliasing</a>.</p>
+    <dl>
+      <dt>graph</dt><dd>The graph to add to, after <a href="#addScenePasses"><code>addScenePasses</code></a> drew <code>source</code> in it, before its <code>compile</code>.</dd>
+      <dt>source</dt><dd>A single-sample target with colors <code>{SCENE_COLOR_FORMAT, MOTION_FORMAT}</code> and <code>D32_SFLOAT</code> depth. A multisampled one logs that TAA and MSAA exclude each other; any other, or one no scene view of this graph draws, logs an error. Then it adds nothing and returns an invalid handle.</dd>
+      <dt>camera</dt><dd>Its exposure weighs bright pixels down; its moves decide when the history is dropped. Invalid: logs an error, adds nothing and returns an invalid handle.</dd>
+      <dt>returns</dt><dd>The history target, <samp>&lt;source name&gt;_taa</samp>: a storage target with history (two copies of <code>SCENE_COLOR_FORMAT</code>, the source's size), owned by the graph. Invalid when it can't be made. The pipeline is made the first time the pass runs; if <code>passes/taa.slang</code> does not compile, it logs an error and tries again next frame.</dd>
+    </dl>
+    <p>The history is dropped in the first frame, after a resize, after <a href="camera.html#resetCameraHistory"><code>resetCameraHistory</code></a>, and when the camera turns more than 30° or moves more than 100 near planes (half its width, for an orthographic camera) in one frame. The same frames give the same pixels. At 1920 × 1080 on an RTX 3060 the pass takes 0.37 ms, and writing the motion adds about 0.13 ms to the draw passes.</p>
+    <pre><code>// As examples/09_gltf_materials/main.cpp does with --aa taa
+const rasm::RenderTargetHandle sceneTarget = graph.createRenderTarget({
+    .name = "scene_hdr",
+    .swapchainScale = 1.0f,
+    .colorFormats = {rasm::SCENE_COLOR_FORMAT, rasm::MOTION_FORMAT},
+    .depthFormat = rasm::Format::D32_SFLOAT,
+});
+// ... addShadowPasses, addScenePasses(graph, scene, camera, sceneTarget, &amp;shadow, 1)
+const rasm::RenderTargetHandle resolved = engine.addTaaPass(graph, sceneTarget, camera);</code></pre>
   </div>
 </div>
 
@@ -535,8 +560,9 @@ if (!resolved.isValid())
     </dl>
     <p>The passes share one GPU timer, <code>Bloom</code>. In <code>examples/09_gltf_materials</code> (RTX 3060, Release) it takes about 0.2 ms at 1280 × 720 (0.10 to 0.27 ms from run to run), 0.37 ms at 1920 × 1080 and 0.75 ms at 3840 × 2160.</p>
     <pre><code>// From examples/09_gltf_materials/main.cpp
-const rasm::RenderTargetHandle bloomTarget = engine.addBloomPasses(graph, sceneTarget, camera);
-if (!bloomTarget.isValid() || !engine.addToneMapPass(graph, sceneTarget, camera, bloomTarget))
+// resolved: the scene target, or what addMsaaResolvePass or addTaaPass returned
+const rasm::RenderTargetHandle bloomTarget = bloom ? engine.addBloomPasses(graph, resolved, camera) : rasm::RenderTargetHandle{};
+if ((bloom &amp;&amp; !bloomTarget.isValid()) || !engine.addToneMapPass(graph, resolved, camera, bloomTarget))
     return 1;</code></pre>
     <p>With <code>Engine::render</code>, one line turns it on: <code>config.bloom = true;</code> before the engine is made.</p>
   </div>

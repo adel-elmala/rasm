@@ -23,6 +23,7 @@ add_executable(rasm_tests
             "renderGraphTests.cpp"
             "resourceDescTests.cpp"
             "shadowCascadesTests.cpp"
+            "taaTests.cpp"
             "textureStatesTests.cpp"
             "transformTests.cpp"
             "uploadManagerTests.cpp"

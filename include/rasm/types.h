@@ -58,7 +58,8 @@ namespace rasm
         ETC2_R8G8B8A8_UNORM,
         ETC2_R8G8B8A8_SRGB,
         EAC_R11_UNORM,
-        EAC_R11G11_UNORM,       // the last value: VulkanDevice::FORMAT_COUNT
+        EAC_R11G11_UNORM,
+        R16G16_SFLOAT,          // the last value: VulkanDevice::FORMAT_COUNT
     };
 
     enum class ShaderType
@@ -102,13 +103,14 @@ namespace rasm
     };
 
     // How Engine::render smooths edges. MSAA_nX draws the scene with n samples per pixel and resolves them in a pass of
-    // the graph (Engine::addMsaaResolvePass).
+    // the graph (Engine::addMsaaResolvePass). TAA jitters the view and blends the frames (Engine::addTaaPass).
     enum class AntiAliasing
     {
         NONE,
         MSAA_2X,
         MSAA_4X,
         MSAA_8X,
+        TAA,
     };
 
     struct EngineConfig
@@ -189,7 +191,7 @@ namespace rasm
         glm::vec4 clearColor;
         bool history;
         uint32_t samples = 1;
-        uint32_t storageSlots[rasm::MAX_COLOR_ATTACHMENTS] = {}; // binding 1 slot of each color of a storage target, UINT32_MAX otherwise
+        uint32_t storageSlots[rasm::MAX_FRAMES_IN_FLIGHT][rasm::MAX_COLOR_ATTACHMENTS] = {}; // binding 1 slot of each color of a storage target per frame slot, UINT32_MAX otherwise
     };
 
 } // namespace rasm

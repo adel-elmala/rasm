@@ -363,6 +363,17 @@ namespace rasm
         registry.cameras[camera.index].bloomStrength = strength;
     }
 
+    // addTaaPass compares the count with the one it saw last frame, so the camera's next frame drops its history.
+    void Engine::resetCameraHistory(CameraHandle camera)
+    {
+        if (!camera.isValid() || camera.index >= registry.cameras.size())
+        {
+            spdlog::error("Invalid camera handle.");
+            return;
+        }
+        ++registry.cameras[camera.index].historyResets;
+    }
+
     float Engine::getCameraBloomStrength(CameraHandle camera)
     {
         if (!camera.isValid() || camera.index >= registry.cameras.size())

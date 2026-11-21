@@ -80,7 +80,7 @@ namespace rasm::rhi
         void                            queryFormatSupport(bool hostImageCopy);
         bool                            usesHostCopy(const TextureDesc& desc) const;
 
-        static constexpr uint32_t       FORMAT_COUNT        = static_cast<uint32_t>(Format::EAC_R11G11_UNORM) + 1;
+        static constexpr uint32_t       FORMAT_COUNT        = static_cast<uint32_t>(Format::R16G16_SFLOAT) + 1;
 
         FormatSupport                   formatSupport[FORMAT_COUNT] = {};
         VmaAllocator                    allocator           = nullptr;

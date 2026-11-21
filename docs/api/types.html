@@ -207,6 +207,7 @@ private:
     ASTC_4x4_UNORM, ASTC_4x4_SRGB,
     ETC2_R8G8B8A8_UNORM, ETC2_R8G8B8A8_SRGB,
     EAC_R11_UNORM, EAC_R11G11_UNORM,
+    R16G16_SFLOAT,
 };</pre>
   <div class="body">
     <p>Texture, attachment and index formats. Each maps to the Vulkan format of the same name (<code>R8G8B8A8_UNORM</code> → <code>VK_FORMAT_R8G8B8A8_UNORM</code>), except the index types.</p>
@@ -223,6 +224,7 @@ private:
       <tr><td><code>BC5_UNORM</code>, <code>EAC_R11G11_UNORM</code></td><td>two channels, 16 bytes per 4 × 4: a normal map's x and y (the shader computes z)</td></tr>
       <tr><td><code>BC4_UNORM</code>, <code>EAC_R11_UNORM</code></td><td>one channel, 8 bytes per 4 × 4</td></tr>
       <tr><td><code>R16G16B16A16_SFLOAT</code></td><td>the scene color target and environment images</td></tr>
+      <tr><td><code>R16G16_SFLOAT</code></td><td>a scene target's motion color (<a href="engine.html#addTaaPass"><code>MOTION_FORMAT</code></a>), for TAA</td></tr>
       <tr><td><code>R8G8B8_UNORM</code>, <code>R32G32_SFLOAT</code>, <code>R32G32B32_SFLOAT</code>, <code>R32G32B32A32_SFLOAT</code></td><td>other texture formats; no engine path uses them.</td></tr>
       <tr><td><code>U16_UINT</code>, <code>U32_UINT</code></td><td>index types for <code>bindIndexBuffer</code> only, not texture formats</td></tr>
       <tr><td><code>UNKNOWN</code></td><td>no format (the default in descs; compute pipelines have no attachments)</td></tr>
@@ -338,9 +340,10 @@ private:
     MSAA_2X,
     MSAA_4X,
     MSAA_8X,
+    TAA,
 };</pre>
   <div class="body">
-    <p>How <code>Engine::render</code> smooths edges (<code>EngineConfig::antiAliasing</code>). <code>MSAA_nX</code> draws the scene with n samples per pixel and resolves them in a pass of the graph (<a href="engine.html#addMsaaResolvePass"><code>addMsaaResolvePass</code></a>); a count the device does not have falls back to the most it has, with a warning. See <a href="../guides/msaa.html">MSAA and alpha-to-coverage</a>.</p>
+    <p>How <code>Engine::render</code> smooths edges (<code>EngineConfig::antiAliasing</code>). <code>MSAA_nX</code> draws the scene with n samples per pixel and resolves them in a pass of the graph (<a href="engine.html#addMsaaResolvePass"><code>addMsaaResolvePass</code></a>); a count the device does not have falls back to the most it has, with a warning. <code>TAA</code> jitters the view and blends the frames (<a href="engine.html#addTaaPass"><code>addTaaPass</code></a>, <a href="../guides/taa.html">Temporal anti-aliasing</a>). See <a href="../guides/msaa.html">MSAA and alpha-to-coverage</a>.</p>
   </div>
 </div>
 
@@ -379,10 +382,10 @@ struct RenderTarget
     glm::vec4               clearColor;
     bool                    history;
     uint32_t                samples = 1;
-    uint32_t                storageSlots[rasm::MAX_COLOR_ATTACHMENTS] = {};
+    uint32_t                storageSlots[rasm::MAX_FRAMES_IN_FLIGHT][rasm::MAX_COLOR_ATTACHMENTS] = {};
 };</pre>
   <div class="body">
-    <p>A render target as <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns it: the values of its <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>, plus one <code>RenderTargetAttachments</code> entry (its colors, its depth) per frame slot. Only the first <code>colorCount</code> colors are used. Without <code>history</code> every entry holds the same textures; with it each slot has its own. <code>getRenderTargetTexture(rt, i)</code> picks <code>attachments[slot].color[i]</code> for the current slot, and <code>getPreviousRenderTargetTexture</code> the previous slot's. <code>samples</code> is the desc's samples per pixel; <code>storageSlots</code> holds a storage target's slot per color (<code>UINT32_MAX</code> for any other target), which <code>getRenderTargetStorageIndex</code> returns.</p>
+    <p>A render target as <a href="low-level.html#getRenderTarget">RenderContext::getRenderTarget</a> returns it: the values of its <a href="render-graph.html#RenderTargetDesc">RenderTargetDesc</a>, plus one <code>RenderTargetAttachments</code> entry (its colors, its depth) per frame slot. Only the first <code>colorCount</code> colors are used. Without <code>history</code> every entry holds the same textures; with it each slot has its own. <code>getRenderTargetTexture(rt, i)</code> picks <code>attachments[slot].color[i]</code> for the current slot, and <code>getPreviousRenderTargetTexture</code> the previous slot's. <code>samples</code> is the desc's samples per pixel; <code>storageSlots</code> holds a storage target's slot per frame slot and color (<code>UINT32_MAX</code> for any other target; both frame slots share one without history), which <code>getRenderTargetStorageIndex</code> returns.</p>
   </div>
 </div>
 
@@ -491,7 +494,7 @@ struct RenderTarget
   <tr><th>Constant and header</th><th>Value</th><th>What it limits</th></tr>
   <tr id="MAX_FRAMES_IN_FLIGHT"><td><code>MAX_FRAMES_IN_FLIGHT</code><br><code>rasm/types.h</code></td><td>2</td><td>Frame slots. The CPU records one frame while the GPU runs the other.</td></tr>
   <tr id="MAX_COLOR_ATTACHMENTS"><td><code>MAX_COLOR_ATTACHMENTS</code><br><code>rasm/types.h</code></td><td>4</td><td>Color attachments of one render target or pipeline. Vulkan guarantees at least 4.</td></tr>
-  <tr id="MAX_BINDLESS_TEXTURES"><td><code>MAX_BINDLESS_TEXTURES</code><br><code>rasm/types.h</code></td><td>1024</td><td>Bindless texture slots in all. Each loaded texture takes 1. A render target takes 1 per color texture, and with <code>EngineConfig::occlusionCulling</code> 1 per depth texture; a history target twice that. Slots are never freed.</td></tr>
+  <tr id="MAX_BINDLESS_TEXTURES"><td><code>MAX_BINDLESS_TEXTURES</code><br><code>rasm/types.h</code></td><td>1024</td><td>Bindless texture slots in all. Each loaded texture takes 1. A render target takes 1 per color texture, and 1 per depth texture with <code>EngineConfig::occlusionCulling</code>, on a depth-only target or with a <code>MOTION_FORMAT</code> color; a history target twice that. Slots are never freed.</td></tr>
   <tr id="MAX_DESCRIPTOR_TYPES"><td><code>MAX_DESCRIPTOR_TYPES</code><br><code>rasm/types.h</code></td><td>1</td><td>Entries in <code>DescriptorPoolDesc::sizes</code>.</td></tr>
   <tr id="MAX_BINDLESS_STORAGE_IMAGES"><td><code>MAX_BINDLESS_STORAGE_IMAGES</code><br><code>rasm/types.h</code></td><td>1024</td><td>Storage image slots, binding 1 of the bindless set: one mip of a texture each, which compute writes (<a href="low-level.html#updateBindlessStorageImage"><code>updateBindlessStorageImage</code></a>). The first <code>RESERVED_STORAGE_IMAGES</code> (32) are the environment bake's, which uses up to 19 of them for one frame at a time. Each color of a <a href="render-graph.html#RenderTargetDesc">storage render target</a> takes one of the others for the target's life; <a href="engine.html#addBloomPasses"><code>addBloomPasses</code></a> takes 11. A target that does not fit logs an error that names this limit and is not made. Startup checks it against the device (Vulkan: <samp>maxDescriptorSetUpdateAfterBindStorageImages</samp>), with an error that names both numbers.</td></tr>
   <tr id="RESERVED_STORAGE_IMAGES"><td><code>RESERVED_STORAGE_IMAGES</code><br><code>rasm/types.h</code></td><td>32</td><td>Storage image slots 0 to 31, kept for the environment bake. <a href="low-level.html#updateBindlessStorageImage"><code>updateBindlessStorageImage</code></a> with your own slot must stay out of the storage targets' slots too.</td></tr>
@@ -501,6 +504,7 @@ struct RenderTarget
   <tr id="MAX_CAMERAS"><td><code>MAX_CAMERAS</code><br><code>rasm/engine.h</code></td><td>8</td><td>Cameras: 7 fit.</td></tr>
   <tr id="MAX_GPU_TIMERS"><td><code>MAX_GPU_TIMERS</code><br><code>rasm/engine.h</code></td><td>64</td><td>GPU timers per frame: the frame, and 63 for passes and <code>beginGpuTimer</code>. <code>FrameStats::gpuTimers</code> has 63 entries.</td></tr>
   <tr id="SCENE_COLOR_FORMAT"><td><code>SCENE_COLOR_FORMAT</code><br><code>rasm/engine.h</code></td><td><code>Format::R16G16B16A16_SFLOAT</code></td><td>Not a limit: the color format of a target that <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> draws into, linear light with no upper limit. <a href="engine.html#addToneMapPass"><code>addToneMapPass</code></a> brings it to the window.</td></tr>
+  <tr id="MOTION_FORMAT"><td><code>MOTION_FORMAT</code><br><code>rasm/engine.h</code></td><td><code>Format::R16G16_SFLOAT</code></td><td>Not a limit: the format of a scene target's second color, each pixel's motion since the last frame in texture coordinates, which <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> writes and <a href="engine.html#addTaaPass"><code>addTaaPass</code></a> reads.</td></tr>
   <tr id="MAX_ENTITIES"><td><code>MAX_ENTITIES</code><br><code>rasm/entity.h</code></td><td>262144 (2<sup>18</sup>)</td><td>Entities: 262143 fit.</td></tr>
   <tr id="MAX_CLUSTER_LIGHTS"><td><code>MAX_CLUSTER_LIGHTS</code><br><code>rasm/light.h</code></td><td>256</td><td>Lights that reach one cluster of a shaded view; more are left out of it (<code>FrameStats::lightsDropped</code>). The number of lights is <code>EngineConfig::maxLights</code>.</td></tr>
   <tr id="MAX_TEXTURE_SLOTS"><td><code>MAX_TEXTURE_SLOTS</code><br><code>rasm/material.h</code></td><td>6 (<code>PbrSlot::COUNT</code>)</td><td>Textures per material, one per <a href="materials.html#PbrSlot">PbrSlot</a>.</td></tr>

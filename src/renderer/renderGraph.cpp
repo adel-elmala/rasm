@@ -218,15 +218,17 @@ namespace rasm
             return a.compute && b.compute && a.async == b.async && !a.timerName.empty() && a.timerName == b.timerName;
         }
 
-        // A depth texture is sampleable when it is D32_SFLOAT and occlusion culling is on, or its target is depth-only
-        // (TextureUsage::SAMPLED_DEPTH_ATTACHMENT, see depthTextureDesc in renderContext.cpp).
-        bool canReadDepth(const Engine *engine, const Pass &pass, uint32_t colorCount, Format depthFormat)
+        // A depth texture is sampleable when it is D32_SFLOAT and occlusion culling is on, its target is depth-only, or
+        // its target has a MOTION_FORMAT second color (TextureUsage::SAMPLED_DEPTH_ATTACHMENT, see depthTextureDesc in
+        // renderContext.cpp).
+        bool canReadDepth(const Engine *engine, const Pass &pass, const RenderTarget *target)
         {
-            if (!engine)
+            if (!engine || !target)
                 return true;
-            if ((engine->getConfig().occlusionCulling || colorCount == 0) && depthFormat == Format::D32_SFLOAT)
+            const bool motion = target->colorCount == 2 && target->colorFormats[1] == MOTION_FORMAT;
+            if ((engine->getConfig().occlusionCulling || target->colorCount == 0 || motion) && target->depthFormat == Format::D32_SFLOAT)
                 return true;
-            spdlog::error("Pass '{}' reads a depth texture that can't be sampled: it needs D32_SFLOAT depth, and EngineConfig::occlusionCulling unless its target is depth-only; the read is ignored.", pass.name);
+            spdlog::error("Pass '{}' reads a depth texture that can't be sampled: it needs D32_SFLOAT depth, and EngineConfig::occlusionCulling unless its target is depth-only or has a MOTION_FORMAT color; the read is ignored.", pass.name);
             return false;
         }
     }
@@ -236,25 +238,27 @@ namespace rasm
         *this = std::move(other);
     }
 
-    // The transient targets' memory and the hold on its scene views are the graph's, so they go with the graph.
+    // The targets the graph made (transient and history) and the hold on its scene views are the graph's, so they go
+    // with the graph.
     RenderGraph::~RenderGraph()
     {
-        destroyTransients();
+        destroyTargets();
         releaseSceneViews();
     }
 
-    // The moved-from graph keeps no transient targets or scene views, so its destructor frees nothing.
+    // The moved-from graph keeps no targets or scene views, so its destructor frees nothing.
     RenderGraph &RenderGraph::operator=(RenderGraph &&other) noexcept
     {
         if (this == &other)
             return *this;
-        destroyTransients();
+        destroyTargets();
         releaseSceneViews();
         passes = std::move(other.passes);
         executionOrder = std::move(other.executionOrder);
         bufferAccess = std::move(other.bufferAccess);
         textureAccess = std::move(other.textureAccess);
         transientTargets = std::exchange(other.transientTargets, {});
+        historyTargets = std::exchange(other.historyTargets, {});
         transientFirstPasses = std::move(other.transientFirstPasses);
         transientLastPasses = std::move(other.transientLastPasses);
         transientsPlaced = other.transientsPlaced;
@@ -264,11 +268,14 @@ namespace rasm
         return *this;
     }
 
-    void RenderGraph::destroyTransients()
+    void RenderGraph::destroyTargets()
     {
         if (engine && !transientTargets.empty())
-            engine->getRenderContext().destroyTransientRenderTargets(transientTargets.data(), static_cast<uint32_t>(transientTargets.size()));
+            engine->getRenderContext().destroyRenderTargets(transientTargets.data(), static_cast<uint32_t>(transientTargets.size()));
+        if (engine && !historyTargets.empty())
+            engine->getRenderContext().destroyRenderTargets(historyTargets.data(), static_cast<uint32_t>(historyTargets.size()));
         transientTargets.clear();
+        historyTargets.clear();
     }
 
     void RenderGraph::releaseSceneViews()
@@ -548,11 +555,17 @@ namespace rasm
                 ctx.transitionImageLayout(commandBuffer, texture, TextureUsage::SAMPLED);
             for (auto renderTarget : pass.depthRenderTargets)
                 ctx.transitionImageLayout(commandBuffer, engine->getRenderTargetDepthTexture(renderTarget), TextureUsage::SAMPLED);
-            // A drawn target's colors are SAMPLED already (endPass), a storage target's are STORAGE after its writer.
+            // A drawn target's colors are SAMPLED already (endPass), a storage target's are STORAGE after its writer; so is
+            // the previous copy of a storage history target, which the frame before wrote.
             for (auto renderTarget : pass.inputRenderTargets)
             {
                 for (uint32_t i = 0; i < ctx.getRenderTarget(renderTarget).colorCount; ++i)
                     ctx.transitionImageLayout(commandBuffer, engine->getRenderTargetTexture(renderTarget, i), TextureUsage::SAMPLED);
+            }
+            for (auto renderTarget : pass.previousRenderTargets)
+            {
+                for (uint32_t i = 0; i < ctx.getRenderTarget(renderTarget).colorCount; ++i)
+                    ctx.transitionImageLayout(commandBuffer, engine->getPreviousRenderTargetTexture(renderTarget, i), TextureUsage::SAMPLED);
             }
 
             if (pass.compute)
@@ -910,11 +923,17 @@ namespace rasm
         return handle;
     }
 
-    // A history target lives across frames. Any other is transient: its memory is the graph's to share.
+    // A history target lives across frames, in memory of its own, until the graph is destroyed. Any other is transient:
+    // its memory is the graph's to share.
     RenderTargetHandle RenderGraph::createRenderTarget(const RenderTargetDesc &desc)
     {
         if (desc.history)
-            return engine->createRenderTarget(desc);
+        {
+            const RenderTargetHandle handle = engine->createRenderTarget(desc);
+            if (handle.isValid())
+                historyTargets.push_back(handle);
+            return handle;
+        }
         auto handle = engine->getRenderContext().createTransientRenderTarget(desc);
         if (handle.isValid())
         {
@@ -954,7 +973,7 @@ namespace rasm
     void RenderGraph::readDepth(uint32_t passIdx, RenderTargetHandle h)
     {
         const RenderTarget *target = engine ? &engine->getRenderContext().getRenderTarget(h) : nullptr;
-        if (canReadDepth(engine, passes[passIdx], target ? target->colorCount : 1, target ? target->depthFormat : Format::D32_SFLOAT))
+        if (canReadDepth(engine, passes[passIdx], target))
             passes[passIdx].depthRenderTargets.push_back(h);
     }
 

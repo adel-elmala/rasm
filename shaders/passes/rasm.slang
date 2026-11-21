@@ -25,6 +25,10 @@ struct VSOutput
     float3 worldCameraPosition : TEXCOORD3;
     nointerpolation uint materialIndex;
     nointerpolation float handedness;   // -1 when the model matrix mirrors the mesh
+#if defined(RASM_MOTION_VECTORS)
+    float4 currentClip   : TEXCOORD4;   // without jitter
+    float4 previousClip  : TEXCOORD5;   // where the frame before drew the same point
+#endif
 };
 
 [shader("vertex")]
@@ -61,6 +65,14 @@ VSOutput vertMain(VSInput input)
     output.uv2                  = vert.uv[2];
     output.materialIndex        = instance->materialIndex;
     output.handedness           = handedness;
+#if defined(RASM_MOTION_VECTORS)
+    // The point where the frame before drew it: its last world matrix (rows of the affine part) and view.
+    float4 position             = float4(vert.pos, 1.0);
+    float3 previousWorld        = float3(dot(instance->previousWorld[0], position), dot(instance->previousWorld[1], position),
+                                         dot(instance->previousWorld[2], position));
+    output.currentClip          = removeJitter(pc.scene, output.clipPosition);
+    output.previousClip         = mul(pc.scene->previousViewProjection, float4(previousWorld, 1.0));
+#endif
 
     return output;
 }
@@ -95,6 +107,33 @@ float4 toTarget(float4 color, float coverage)
 #endif
 }
 
+#if defined(RASM_MOTION_VECTORS)
+// A target with motion (RASM_MOTION_VECTORS, a MOTION_FORMAT second color) gets the pixel's screen motion as well. A
+// BLEND pipeline writes zero motion with alpha 0, which its premultiplied blend turns into "keep what is behind": a
+// see-through surface leaves the motion of the surface behind it.
+struct FragmentOutput
+{
+    float4 color  : SV_TARGET0;
+    float4 motion : SV_TARGET1;
+};
+
+// It takes the two clip positions, not the varyings (see fragMain), and without motion TO_OUTPUT is the color alone.
+FragmentOutput toOutput(float4 color, float4 currentClip, float4 previousClip)
+{
+    FragmentOutput output;
+    output.color = color;
+#if defined(RASM_ALPHA_BLEND)
+    output.motion = float4(0.0);
+#else
+    output.motion = float4(getMotion(currentClip, previousClip), 0.0, 0.0);
+#endif
+    return output;
+}
+#define TO_OUTPUT(color) toOutput(color, input.currentClip, input.previousClip)
+#else
+#define TO_OUTPUT(color) (color)
+#endif
+
 // A cut-out's alpha made sharp around the cutoff: 0.5 exactly at alphaCutoff, and from 0 to 1 over one pixel's change
 // of alpha (fwidth). Alpha-to-coverage then covers samples by where the edge crosses the pixel, at any distance, while
 // the edge stays where the cutoff puts it. Where alpha does not change, there is no edge to place, and the cutoff
@@ -116,7 +155,11 @@ float getCoverage(float alpha, float cutoff)
 // rather than in a function that takes the varyings: such a call reads every varying up front, which costs the opaque
 // draws about 5% (05_city).
 [shader("fragment")]
+#if defined(RASM_MOTION_VECTORS)
+FragmentOutput fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace)
+#else
 float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
+#endif
 {
     // A pointer, so the unlit path loads only the fields it reads.
     MaterialData *model = pc.scene->materialsPtr + input.materialIndex;
@@ -141,7 +184,7 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     {
         MetallicRoughnessMaterial metallicRoughness = model->material.metallicRoughness;
         float2 uv = getTextureUV(model, TRANSFORM_BASE_COLOR, metallicRoughness.baseColorTextureCoordinate, input.uv0, input.uv1, input.uv2);
-        return toTarget(shadeUnlit(gTextures, metallicRoughness, uv, input.color), coverage);
+        return TO_OUTPUT(toTarget(shadeUnlit(gTextures, metallicRoughness, uv, input.color), coverage));
     }
 
     Material material = model->material;
@@ -178,7 +221,7 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     info.environment.intensity      = pc.scene->environmentIntensity;
     info.environment.rotation       = pc.scene->environmentRotation;
 
-    return toTarget(shadePBR(gTextures, gCubeTextures, info), coverage);
+    return TO_OUTPUT(toTarget(shadePBR(gTextures, gCubeTextures, info), coverage));
 }
 
 // clang-format on
