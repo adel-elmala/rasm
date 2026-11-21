@@ -1,0 +1,216 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-16 -16 792 472" width="792" height="472" role="img" aria-label="Import: each primitive's POSITION, NORMAL and TANGENT target deltas, sparse accessors filled in, become 24-byte MorphDeltas in the geometry pool's morph stream, target-major; the rest weights, target names and each target's longest delta go to the animation pool. Each frame the CPU writes setMorphWeights values into the morph weight override table. The Animate pass writes per entity each weight, the override, else the clip's weights channel, else the rest weight, into this slot's morph weight buffer, and grows each posed sub-mesh's bounds. The Skin pass, one group per entity row and 64 vertices of one sub-mesh, loads the sub-mesh's weights once, lists the targets whose weight is not 0, adds their deltas to the base vertex, renormalizes the normal and tangent, skins when the mesh has joints, and writes the posed vertex to this slot's skinned vertex buffer, which every view draws."><style>:root { --bg:           #fbfaf7;
+    --bg-soft:      #f3f1eb;
+    --bg-code:      #f0eee8;
+    --bg-raised:    #ffffff;
+    --fg:           #1d1d1b;
+    --fg-soft:      #55534d;
+    --fg-faint:     #8a877e;
+    --line:         #dcd8ce;
+    --link:         #1f5fbf;
+    --accent:       #c2410c;
+    --accent-fill:  #fde3d3;
+
+    /* the color code shared by every diagram */
+    --cpu:          #2563eb;   --cpu-fill:     #dbe7fd;
+    --gpu:          #15803d;   --gpu-fill:     #d5f0dd;
+    --mem:          #b45309;   --mem-fill:     #fbe8c8;
+    --shader:       #7c3aed;   --shader-fill:  #e9defd;
+    --muted-fill:   #ebe8e0;
+
+    /* right / wrong, light rays, shadowed areas */
+    --ok:           #0f7b6c;   --ok-fill:      #d3efe9;
+    --bad:          #b91c1c;   --bad-fill:     #fbdcdc;
+    --light:        #b8860b;   --light-fill:   #fdf0b5;
+    --shade:        rgba(29, 29, 27, 0.4);
+
+    --note:         #2563eb;
+    --warn:         #b45309;
+    --rule:         #b91c1c;
+
+    /* syntax highlighting */
+    --tok-kw:       #a626a4;
+    --tok-type:     #0e7490;
+    --tok-fn:       #1f5fbf;
+    --tok-str:      #3f7d20;
+    --tok-num:      #b45309;
+    --tok-const:    #9a5b00;
+    --tok-com:      #8a877e;
+    --tok-pre:      #c2410c;
+    --tok-ns:       #6b6860;
+
+    --shadow:       0 1px 2px rgba(40, 30, 10, 0.06), 0 6px 20px rgba(40, 30, 10, 0.06);
+    --radius:       10px;
+    --sidebar:      280px;
+    --toc:          230px;
+    --content:      860px;
+    --mono:         "JetBrains Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+    --sans:         "Inter", "Segoe UI", system-ui, -apple-system, sans-serif; }
+@media (prefers-color-scheme: dark) { :root { --bg:           #15161a;
+        --bg-soft:      #1c1e23;
+        --bg-code:      #22252b;
+        --bg-raised:    #1f2228;
+        --fg:           #e8e6e1;
+        --fg-soft:      #b3b0a8;
+        --fg-faint:     #7f7d77;
+        --line:         #33363d;
+        --link:         #7fb0ff;
+        --accent:       #fb923c;
+        --accent-fill:  #40260f;
+        --cpu:          #7fa8ff;   --cpu-fill:     #1c2a47;
+        --gpu:          #5fd08a;   --gpu-fill:     #173326;
+        --mem:          #f0b45a;   --mem-fill:     #3a2a12;
+        --shader:       #b794ff;   --shader-fill:  #2c2147;
+        --muted-fill:   #2a2c32;
+        --ok:           #4fd1b8;   --ok-fill:      #12332e;
+        --bad:          #f87171;   --bad-fill:     #401a1a;
+        --light:        #f5cf4a;   --light-fill:   #3a3110;
+        --shade:        rgba(0, 0, 0, 0.55);
+        --note:         #7fa8ff;
+        --warn:         #f0b45a;
+        --rule:         #f87171;
+        --tok-kw:       #c678dd;
+        --tok-type:     #56b6c2;
+        --tok-fn:       #61afef;
+        --tok-str:      #98c379;
+        --tok-num:      #d19a66;
+        --tok-const:    #e5c07b;
+        --tok-com:      #7f848e;
+        --tok-pre:      #e06c75;
+        --tok-ns:       #9da5b4;
+        --shadow:       0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 20px rgba(0, 0, 0, 0.25); } }
+svg { font-family: var(--sans); }
+svg { font-family: var(--sans); font-size: 13px; }
+svg text { fill: var(--fg); }
+svg text.small { font-size: 11px; fill: var(--fg-soft); }
+svg text.title { font-weight: 700; }
+svg text.big { font-size: 16px; font-weight: 700; }
+svg text.mono { font-family: var(--mono); font-size: 12px; }
+svg text.mid { text-anchor: middle; }
+svg text.end { text-anchor: end; }
+svg text.halo { paint-order: stroke; stroke: var(--bg-raised); stroke-width: 4px; stroke-linejoin: round; }
+svg .box     { fill: var(--muted-fill);  stroke: var(--fg-faint); stroke-width: 1.5; }
+svg .cpu     { fill: var(--cpu-fill);    stroke: var(--cpu);      stroke-width: 1.5; }
+svg .gpu     { fill: var(--gpu-fill);    stroke: var(--gpu);      stroke-width: 1.5; }
+svg .mem     { fill: var(--mem-fill);    stroke: var(--mem);      stroke-width: 1.5; }
+svg .shader  { fill: var(--shader-fill); stroke: var(--shader);   stroke-width: 1.5; }
+svg .ghost   { fill: none; stroke: var(--fg-faint); stroke-width: 1.2; stroke-dasharray: 5 4; }
+svg .hot     { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+svg .zone    { fill: var(--bg-soft); stroke: var(--line); stroke-width: 1; }
+svg .accent  { fill: var(--accent-fill); stroke: var(--accent);   stroke-width: 1.5; }
+svg .ok      { fill: var(--ok-fill);     stroke: var(--ok);       stroke-width: 1.5; }
+svg .bad     { fill: var(--bad-fill);    stroke: var(--bad);      stroke-width: 1.5; }
+svg .light   { fill: var(--light-fill);  stroke: var(--light);    stroke-width: 1.5; }
+svg .shade   { fill: var(--shade);       stroke: none; }
+svg .lit     { fill: var(--light-fill);  stroke: none; }
+svg .solid   { fill: var(--fg-faint);    stroke: var(--fg-soft);  stroke-width: 1.5; }
+svg .paper   { fill: var(--bg-raised);   stroke: var(--line);     stroke-width: 1; }
+svg .surface { fill: none; stroke: var(--fg); stroke-width: 3; stroke-linecap: round; }
+svg .grid    { fill: none; stroke: var(--line); stroke-width: 1; }
+svg .thick   { stroke-width: 3; }
+svg .thin    { stroke-width: 1; }
+svg .nofill  { fill: none; }
+svg .o-25    { opacity: 0.25; }
+svg .o-50    { opacity: 0.5; }
+svg .o-75    { opacity: 0.75; }
+svg .badge   { fill: var(--accent); stroke: none; }
+svg text.badge-n { fill: var(--bg-raised); font-size: 12px; font-weight: 700; text-anchor: middle; }
+svg .arrow        { fill: none; stroke: var(--fg-soft); stroke-width: 1.6; }
+svg .arrow.cpu    { stroke: var(--cpu); fill: none; }
+svg .arrow.gpu    { stroke: var(--gpu); fill: none; }
+svg .arrow.mem    { stroke: var(--mem); fill: none; }
+svg .arrow.shader { stroke: var(--shader); fill: none; }
+svg .arrow.hot    { stroke: var(--accent); fill: none; }
+svg .arrow.ok     { stroke: var(--ok); fill: none; }
+svg .arrow.bad    { stroke: var(--bad); fill: none; }
+svg .arrow.light  { stroke: var(--light); fill: none; }
+svg .arrow.thick  { stroke-width: 3; }
+svg .dashed       { stroke-dasharray: 6 4; }
+svg :where(line.dashed, path.dashed, rect.dashed, circle.dashed, polygon.dashed, polyline.dashed) { stroke: var(--fg-faint); fill: none; }
+svg .flowing { stroke-dasharray: 6 5; animation: flowing 1.2s linear infinite; }
+@keyframes flowing { to { stroke-dashoffset: -22; } }
+svg .head         { fill: var(--fg-soft); }
+svg .head.cpu     { fill: var(--cpu); stroke: none; }
+svg .head.gpu     { fill: var(--gpu); stroke: none; }
+svg .head.mem     { fill: var(--mem); stroke: none; }
+svg .head.shader  { fill: var(--shader); stroke: none; }
+svg .head.hot     { fill: var(--accent); stroke: none; }
+svg .head.ok      { fill: var(--ok); stroke: none; }
+svg .head.bad     { fill: var(--bad); stroke: none; }
+svg .head.light   { fill: var(--light); stroke: none; }
+svg .t-cpu,    svg text.t-cpu    { fill: var(--cpu); }
+svg .t-gpu,    svg text.t-gpu    { fill: var(--gpu); }
+svg .t-mem,    svg text.t-mem    { fill: var(--mem); }
+svg .t-shader, svg text.t-shader { fill: var(--shader); }
+svg .t-hot,    svg text.t-hot    { fill: var(--accent); }
+svg .t-ok,     svg text.t-ok     { fill: var(--ok); }
+svg .t-bad,    svg text.t-bad    { fill: var(--bad); }
+svg .t-light,  svg text.t-light  { fill: var(--light); }
+svg .t-faint,  svg text.t-faint  { fill: var(--fg-faint); }
+svg a:hover rect, svg a:hover circle { stroke-width: 2.5; }
+svg a:hover text { text-decoration: underline; }
+svg .handle { fill: var(--accent); stroke: var(--bg-raised); stroke-width: 2.5; cursor: grab; touch-action: none; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35)); }
+svg .handle:hover, svg .handle:focus-visible { stroke: var(--fg); outline: none; }
+svg .handle.dragging { cursor: grabbing; }
+svg .pick { cursor: pointer; }
+svg .pick:hover, svg .pick:focus-visible { stroke-width: 3; outline: none; }
+svg g.pick:hover > :is(rect, circle, polygon), svg g.pick:focus-visible > :is(rect, circle, polygon) { stroke-width: 3; }
+svg g.pick text { pointer-events: none; }
+svg .off { opacity: 0.28; }
+svg .hide { display: none; }
+.card { fill: var(--bg-raised); stroke: var(--line); stroke-width: 1; }</style><defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker><marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker><marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker><marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker><marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker><marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker><marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker><marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker><marker id="ah-light" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head light"/></marker></defs><rect class="card" x="-15.5" y="-15.5" width="791" height="471" rx="12"/>
+    <text x="20" y="22" class="title t-cpu">Import, once per mesh</text>
+    <rect x="20" y="34" width="200" height="40" rx="6" class="cpu"/>
+    <text x="120" y="52" class="mid small">targets: POSITION, NORMAL,</text>
+    <text x="120" y="67" class="mid small">TANGENT (sparse filled in)</text>
+    <line x1="220" y1="54" x2="258" y2="54" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="260" y="34" width="232" height="40" rx="6" class="mem"/>
+    <text x="376" y="52" class="mid small">morph stream, target-major</text>
+    <text x="376" y="67" class="mid mono small">MorphDelta, 24 B</text>
+    <rect x="510" y="34" width="230" height="40" rx="6" class="mem"/>
+    <text x="625" y="52" class="mid small">animation pool</text>
+    <text x="625" y="67" class="mid small">rest weights · longest deltas</text>
+
+    <text x="20" y="104" class="title t-cpu">CPU: setMorphWeights</text>
+    <rect x="20" y="114" width="230" height="40" rx="6" class="mem"/>
+    <text x="135" y="132" class="mid small">Morph Weight Override Table</text>
+    <text x="135" y="147" class="mid small">4 B per weight, NaN: not set</text>
+
+    <text x="270" y="104" class="title t-gpu">Animate: a group per entity row</text>
+    <rect x="270" y="114" width="470" height="58" rx="6" class="gpu"/>
+    <circle cx="294" cy="143" r="10" class="badge"/><text x="294" y="147" class="badge-n">1</text>
+    <text x="312" y="139" class="small">weight = override, else clip,</text>
+    <text x="312" y="154" class="small">else rest weight</text>
+    <circle cx="510" cy="143" r="10" class="badge"/><text x="510" y="147" class="badge-n">2</text>
+    <text x="528" y="139" class="small">bound + Σ |wₜ| · rₜ</text>
+    <text x="528" y="154" class="small">(each joint sphere too)</text>
+    <line x1="250" y1="134" x2="268" y2="134" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="625" y1="74" x2="625" y2="112" class="arrow mem" marker-end="url(#ah-mem)"/>
+
+    <rect x="270" y="196" width="230" height="40" rx="6" class="mem"/>
+    <text x="385" y="214" class="mid small">Morph Weight Buffer (slot)</text>
+    <text x="385" y="229" class="mid small">4 B per weight per entity</text>
+    <line x1="385" y1="172" x2="385" y2="194" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="510" y="196" width="230" height="40" rx="6" class="mem"/>
+    <text x="625" y="214" class="mid small">Animated Transform Buffer</text>
+    <text x="625" y="229" class="mid small">bounds read by every Cull</text>
+    <line x1="625" y1="172" x2="625" y2="194" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+
+    <text x="20" y="268" class="title t-gpu">Skin: x = entity row, y = 64 vertices of one sub-mesh</text>
+    <rect x="20" y="278" width="480" height="76" rx="6" class="gpu"/>
+    <circle cx="44" cy="298" r="10" class="badge"/><text x="44" y="302" class="badge-n">1</text>
+    <text x="62" y="302" class="small">load the weights once; list the targets with w ≠ 0</text>
+    <circle cx="44" cy="322" r="10" class="badge"/><text x="44" y="326" class="badge-n">2</text>
+    <text x="62" y="326" class="small">v + Σ wₜ · Δₜ from the morph stream; normalize normal, tangent</text>
+    <circle cx="44" cy="344" r="10" class="badge"/><text x="44" y="348" class="badge-n">3</text>
+    <text x="62" y="348" class="small">with a skin: Σ sᵢ · Jᵢ · v (skinning)</text>
+    <line x1="460" y1="236" x2="460" y2="276" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="520" y="292" width="220" height="44" rx="6" class="mem"/>
+    <text x="630" y="310" class="mid small">Skinned Vertex Buffer</text>
+    <text x="630" y="326" class="mid small">64 B per vertex, one per slot</text>
+    <line x1="500" y1="314" x2="518" y2="314" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+
+    <line x1="630" y1="336" x2="630" y2="372" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="20" y="374" width="720" height="50" rx="6" class="cpu"/>
+    <text x="34" y="394" class="small">every view: camera, cascades, spot maps, cube faces</text>
+    <text x="34" y="412" class="mono small">getVertex · getPreviousObjectPosition · getWorldSphere</text>
+  </svg>
