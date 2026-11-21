@@ -1,4 +1,5 @@
 #include "renderer/gpuScene.h"
+#include "renderer/taa.h"
 #include "rasm/scene.h"
 #include "rasm/camera.h"
 #include "rasm/engine.h"
@@ -12,6 +13,7 @@
 #include "renderer/shadowCascades.h"
 #include "renderer/uberMaterialTypes.h"
 
+#include "glm/gtc/matrix_transform.hpp"
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
 
@@ -50,10 +52,37 @@ namespace rasm
         }
 
         // The pipelines that match the view's target: its sample count picks the set.
+        // A target with a MOTION_FORMAT second color (one sample) draws motion too, so its pipelines have two colors.
         ShadedPipelines &getShadedPipelines(GpuScene &gpuScene, RenderContext &ctx, const SceneView &view)
         {
-            const uint32_t samples = ctx.getRenderTarget(view.renderTarget).samples;
-            return gpuScene.shaded[std::min(static_cast<uint32_t>(std::countr_zero(samples)), SAMPLE_VARIANTS - 1)];
+            const RenderTarget &target = ctx.getRenderTarget(view.renderTarget);
+            if (target.colorCount == 2)
+                return gpuScene.shaded[MOTION_VARIANT];
+            return gpuScene.shaded[std::min(static_cast<uint32_t>(std::countr_zero(target.samples)), SAMPLE_VARIANTS - 1)];
+        }
+
+        // The define that makes a shaded pipeline write motion too, for a target with a MOTION_FORMAT second color.
+        const char *getMotionDefine(RenderContext &ctx, const SceneView &view)
+        {
+            return ctx.getRenderTarget(view.renderTarget).colorCount == 2 ? "#define RASM_MOTION_VECTORS 1\n" : "";
+        }
+
+        // A shaded view's motion and jitter. The previous view-projection is the frame before's without jitter (this
+        // one's on the view's first frame, so it has no motion). A view of a TAA pass (addTaaPass) moves its projection
+        // by a sub-pixel offset each frame, the same as a translation of clip space by jitter (NDC) times w, so it
+        // works for any projection; the motion and the sky take it out again.
+        void writeViewMotion(SceneView &view, gfx::SceneData &sceneData, uint32_t width, uint32_t height)
+        {
+            const glm::mat4 viewProjection = sceneData.projection * sceneData.view;
+            sceneData.previousViewProjection = view.hasPrevious ? view.previousViewProjection : viewProjection;
+            view.previousViewProjection = viewProjection;
+            view.hasPrevious = true;
+            if (!view.jitter)
+                return;
+            const glm::vec2 jitter = getTaaJitter(view.jitterFrame++) * glm::vec2(2.0f / static_cast<float>(width), 2.0f / static_cast<float>(height));
+            sceneData.jitter = jitter;
+            sceneData.projection = glm::translate(glm::mat4(1.0f), glm::vec3(jitter, 0.0f)) * sceneData.projection;
+            sceneData.textureLodBias = TAA_TEXTURE_LOD_BIAS;
         }
 
         bool hasRun(const SceneDrawList &drawList, AlphaMode alphaMode)
@@ -321,6 +350,20 @@ namespace rasm
     {
         ZoneScoped;
 
+        // Motion: entities that moved before the last sync and not since stopped, so their rows' previousWorld becomes
+        // their world. Those that moved since the last sync draw their new matrix in this frame, which the next frame's
+        // previousWorld is.
+        const uint32_t window = gpuScene->syncCount++;
+        for (EntityHandle entity : gpuScene->settlingEntities)
+        {
+            if (gpuScene->entities[entity.index].movedSync != window)
+                writeInstanceRows(entity, false);
+        }
+        for (EntityHandle entity : gpuScene->movedEntities)
+            gpuScene->entities[entity.index].syncedMatrix = registry.entities[entity.index].transform.toMatrix();
+        gpuScene->settlingEntities = std::move(gpuScene->movedEntities);
+        gpuScene->movedEntities.clear();
+
         auto &waitingForMesh = gpuScene->entitiesWaitingForMesh;
         for (size_t i = 0; i < waitingForMesh.size();)
         {
@@ -365,7 +408,8 @@ namespace rasm
                     gpuScene->instanceCount += rowCount;
                     gpuScene->instanceCullModes.resize(gpuScene->instanceCount, CullMode::NONE);
                     gpuScene->instanceAlphaModes.resize(gpuScene->instanceCount, AlphaMode::NONE);
-                    writeInstanceRows(entity);
+                    state.syncedMatrix = entityRef.transform.toMatrix();
+                    writeInstanceRows(entity, false);
                     if (state.waitingForTextures)
                         gpuScene->entitiesWaitingForTextures.push_back(entity);
                     else
@@ -419,13 +463,21 @@ namespace rasm
         gpuScene->entitiesWaitingForMesh.push_back(entity);
     }
 
-    void Engine::writeInstanceRows(EntityHandle entity)
+    // A row's previousWorld is the matrix the frame before drew: the entity's matrix at the last sync (syncedMatrix).
+    // A write that moves the entity (moved) puts it on movedEntities, so the next sync makes the new matrix the synced
+    // one, and the sync after writes the rows again with previousWorld = world, so a stopped entity has no motion.
+    void Engine::writeInstanceRows(EntityHandle entity, bool moved)
     {
         if (entity.index >= gpuScene->entities.size())
             return;
-        const EntityDrawState &state = gpuScene->entities[entity.index];
+        EntityDrawState &state = gpuScene->entities[entity.index];
         if (state.instanceCount == 0)
             return;
+        if (moved && state.movedSync != gpuScene->syncCount)
+        {
+            state.movedSync = gpuScene->syncCount;
+            gpuScene->movedEntities.push_back(entity);
+        }
 
         const Entity &entityRef = registry.entities[entity.index];
         const Mesh &mesh = registry.meshes[entityRef.mesh.index];
@@ -435,10 +487,12 @@ namespace rasm
         {
             const SubMesh &subMesh = mesh.subMeshes[i];
             const glm::mat4 model = entityMatrix * subMesh.transform;
+            const glm::mat4 previous = glm::transpose(state.syncedMatrix * subMesh.transform);
             const gfx::InstanceData row{.worldMatrix = model,
                                         .normalMatrix = glm::transpose(glm::inverse(glm::mat3(model))),
                                         .geometryIndex = subMesh.geometry.geometryIndex,
-                                        .materialIndex = static_cast<uint32_t>(getSubMeshMaterial(*this, entityRef, subMesh).handle.index)};
+                                        .materialIndex = static_cast<uint32_t>(getSubMeshMaterial(*this, entityRef, subMesh).handle.index),
+                                        .previousWorld = {previous[0], previous[1], previous[2]}};
             gpuScene->instances.setRow(state.firstInstance + i, &row);
         }
 
@@ -638,10 +692,13 @@ namespace rasm
         }
         const auto &renderTargetData = ctx.getRenderTarget(renderTarget);
         const bool depthOnly = isDepthOnly(renderTarget);
-        const bool color = renderTargetData.colorCount == 1 && renderTargetData.colorFormats[0] == SCENE_COLOR_FORMAT && renderTargetData.depthFormat == DEPTH_FORMAT;
+        // A second color, of MOTION_FORMAT, takes each pixel's motion for TAA; with one sample only, since TAA and MSAA
+        // exclude each other.
+        const bool motion = renderTargetData.colorCount == 2 && renderTargetData.colorFormats[1] == MOTION_FORMAT && renderTargetData.samples == 1;
+        const bool color = (renderTargetData.colorCount == 1 || motion) && renderTargetData.colorFormats[0] == SCENE_COLOR_FORMAT && renderTargetData.depthFormat == DEPTH_FORMAT;
         if ((!depthOnly && !color) || ctx.getRenderTargetDesc(renderTarget).cube)
         {
-            spdlog::error("addScenePasses needs a render target with one SCENE_COLOR_FORMAT color attachment and D32_SFLOAT depth, or D32_SFLOAT depth only, not a cube.");
+            spdlog::error("addScenePasses needs a render target with a SCENE_COLOR_FORMAT color, a MOTION_FORMAT color only with one sample, and D32_SFLOAT depth, or D32_SFLOAT depth only, not a cube.");
             return false;
         }
         if (shadowCount > 0 && depthOnly)
@@ -1051,6 +1108,7 @@ namespace rasm
             sceneData.projection = getProjectionMatrix(view.camera, static_cast<float>(target.width) / static_cast<float>(target.height));
             sceneData.view = getViewMatrix(view.camera);
             sceneData.cameraWorldPosition = registry.cameras[view.camera.index].transform.position;
+            writeViewMotion(view, sceneData, target.width, target.height);
             view.sky = writeSceneEnvironment(*environments, registry.scenes[view.scene.index].environment, sceneData) &&
                        ctx.fillBuffer(gpuScene->sceneData[frame], &sceneData, sizeof(sceneData), viewIndex * sizeof(gfx::SceneData));
             return;
@@ -1060,7 +1118,7 @@ namespace rasm
         ShadedPipelines &shaded = getShadedPipelines(*gpuScene, ctx, view);
         if (!view.depthOnly && !shaded.pipeline.isValid())
         {
-            shaded.pipeline = createScenePipeline("rasm", "passes/rasm.slang", "", view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true);
+            shaded.pipeline = createScenePipeline("rasm", "passes/rasm.slang", getMotionDefine(ctx, view), view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true);
             if (!shaded.pipeline.isValid())
             {
                 spdlog::error("Failed to create the uber material pipeline for the scene.");
@@ -1087,14 +1145,14 @@ namespace rasm
         const bool multisampled = ctx.getRenderTarget(view.renderTarget).samples > 1;
         if (!view.depthOnly && hasMask && !shaded.maskPipeline.isValid())
         {
-            const char *defines = multisampled ? "#define RASM_ALPHA_MASK 1\n#define RASM_ALPHA_TO_COVERAGE 1\n" : "#define RASM_ALPHA_MASK 1\n";
+            const std::string defines = getMotionDefine(ctx, view) + std::string(multisampled ? "#define RASM_ALPHA_MASK 1\n#define RASM_ALPHA_TO_COVERAGE 1\n" : "#define RASM_ALPHA_MASK 1\n");
             shaded.maskPipeline = createScenePipeline("rasmMask", "passes/rasm.slang", defines, view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true, multisampled);
             if (!shaded.maskPipeline.isValid())
                 spdlog::error("Failed to create the MASK pipeline; the scene is drawn without its cut-out materials.");
         }
         if (!view.depthOnly && hasBlend && !shaded.blendPipeline.isValid())
         {
-            shaded.blendPipeline = createScenePipeline("rasmBlend", "passes/rasm.slang", "#define RASM_ALPHA_BLEND 1\n", view.renderTarget, "vertMain", "fragMain", BlendMode::PREMULTIPLIED_ALPHA, false);
+            shaded.blendPipeline = createScenePipeline("rasmBlend", "passes/rasm.slang", getMotionDefine(ctx, view) + std::string("#define RASM_ALPHA_BLEND 1\n"), view.renderTarget, "vertMain", "fragMain", BlendMode::PREMULTIPLIED_ALPHA, false);
             if (!shaded.blendPipeline.isValid())
                 spdlog::error("Failed to create the BLEND pipeline; the scene is drawn without its see-through materials.");
         }
@@ -1247,6 +1305,8 @@ namespace rasm
             sceneData.view = shadowMaps[0][i].view;
         }
         view.mirrored = glm::determinant(glm::mat3(sceneData.view)) < 0.0f;
+        if (!view.depthOnly)
+            writeViewMotion(view, sceneData, width, height);
         getFrustumPlanes(sceneData.projection * sceneData.view, sceneData.frustumPlanes);
         sceneData.cameraWorldPosition = cameraRef.transform.position;
         sceneData.nearZ = getNearZ(cameraRef);
@@ -1516,7 +1576,7 @@ namespace rasm
         PipelineHandle &skyPipeline = getShadedPipelines(*gpuScene, ctx, view).skyPipeline;
         if (!skyPipeline.isValid())
         {
-            skyPipeline = createScenePipeline("sky", "passes/sky.slang", "", view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true);
+            skyPipeline = createScenePipeline("sky", "passes/sky.slang", getMotionDefine(ctx, view), view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true);
             if (!skyPipeline.isValid())
             {
                 spdlog::error("Failed to create the sky pipeline; the scene has no sky.");

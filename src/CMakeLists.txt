@@ -54,6 +54,7 @@ target_sources(rasm PRIVATE
     "renderer/msaaResolve.cpp"
     "renderer/shadowCascades.cpp"
     "renderer/statsOverlay.cpp"
+    "renderer/taa.cpp"
     "renderer/toneMap.cpp"
     "rhi/device.cpp"
     "rhi/memoryAliasing.cpp"

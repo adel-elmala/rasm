@@ -750,7 +750,7 @@ free(slot):
   <tr><td><code>loadMaterial</code> (glTF)</td><td>each uploaded image, once per image, sampler and color space</td><td>from the glTF sampler (<code>toSamplerType</code>)</td></tr>
   <tr><td><code>Engine::finishEnvironmentLoad</code></td><td>an environment's image (<code>LINEAR_REPEAT</code>, since it wraps around) and its three cubes</td><td><code>LINEAR_CLAMP</code></td></tr>
   <tr><td><code>Engine::createEnvironments</code></td><td>the BRDF LUT, once</td><td><code>LINEAR_CLAMP</code></td></tr>
-  <tr><td><code>RenderContext::createRenderTarget</code></td><td>each color texture (of each frame slot's copy, with <code>history</code>); with <code>occlusionCulling</code>, also a <code>D32_SFLOAT</code> depth texture. A rebuilt or re-placed target keeps its slots.</td><td><code>LINEAR_CLAMP</code>, depth <code>NEAREST_CLAMP</code></td></tr>
+  <tr><td><code>RenderContext::createRenderTarget</code></td><td>each color texture (of each frame slot's copy, with <code>history</code>); with <code>occlusionCulling</code> (always for a depth-only target or one with a <code>MOTION_FORMAT</code> color), also a <code>D32_SFLOAT</code> depth texture. A rebuilt or re-placed target keeps its slots.</td><td><code>LINEAR_CLAMP</code>, depth <code>NEAREST_CLAMP</code></td></tr>
 </table>
 </div>
 

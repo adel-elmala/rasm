@@ -146,6 +146,7 @@ struct InstanceData
     float3x3        normalMatrix;
     uint32_t        geometryIndex;
     uint32_t        materialIndex;
+    float4          previousWorld[3];   // the rows of the affine world matrix the frame before drew, for motion
 };
 
 struct GeometryLod
@@ -217,6 +218,10 @@ struct SceneData
     uint32_t            localLightCount;    // lights with a range, sorted into clusters
     float               nearZ;              // the camera's near plane, where the clusters start
     uint32_t            depthSamples;       // samples per pixel of depthTexture; the Hi-Z build reads each one
+    float4x4            previousViewProjection; // the frame before's, without jitter, for motion
+    float2              jitter;             // NDC offset added to clip x and y (times w): TAA's sub-pixel jitter
+    float               textureLodBias;     // added to the material textures' mip level: -1 while jittered, sharper
+    uint32_t            padding;            // keeps the size a multiple of 8
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.
@@ -248,12 +253,37 @@ bool hasTexture(uint textureIndex)
     return textureIndex != INVALID_TEXTURE_INDEX;
 }
 
+// A clip position without the view's TAA jitter, which SceneData::projection adds to x and y (times w).
+float4 removeJitter(SceneData *scene, float4 clip)
+{
+    return float4(clip.xy - scene->jitter * clip.w, clip.zw);
+}
+
+// The screen motion from the frame before to this one, in UV units (v grows down), from the two clip positions of the
+// same point: UV now minus UV then, so the point was at uv - motion. Both are without jitter, so a still scene has none.
+// A point that was behind the camera (w <= 0) had no place on the screen: its motion puts it off the screen, where
+// TAA takes this frame only.
+float2 getMotion(float4 currentClip, float4 previousClip)
+{
+    if (previousClip.w <= 1e-6)
+        return float2(2.0);
+    float2 delta = currentClip.xy / currentClip.w - previousClip.xy / previousClip.w;
+    return delta * float2(0.5, -0.5);
+}
+
+// A material texture at the view's mip bias: TAA's jitter blends the frames into a sharper image than one frame, so it
+// reads one mip sharper (SceneData::textureLodBias).
+float4 sampleMaterial(Sampler2D texture, float2 uv)
+{
+    return texture.SampleBias(uv, pc.scene->textureLodBias);
+}
+
 // glTF base color: factor * texture * COLOR_0, or without the texture when the material has none.
 float4 sampleBaseColor(Sampler2D gTextures[], MetallicRoughnessMaterial material, float2 uv, float4 vertexColor)
 {
     float4 color = material.baseColorFactor * vertexColor;
     if (hasTexture(material.baseColorTextureIndex))
-        color *= gTextures[material.baseColorTextureIndex].Sample(uv);
+        color *= sampleMaterial(gTextures[material.baseColorTextureIndex], uv);
     return color;
 }
 
@@ -307,7 +337,7 @@ float getBaseAlpha(Sampler2D gTextures[], MaterialData *material, float2 uv0, fl
     if (hasTexture(texture))
     {
         float2 uv = getTextureUV(material, TRANSFORM_BASE_COLOR, material->material.metallicRoughness.baseColorTextureCoordinate, uv0, uv1, uv2);
-        alpha *= gTextures[texture].Sample(uv).a;
+        alpha *= sampleMaterial(gTextures[texture], uv).a;
     }
     return alpha;
 }

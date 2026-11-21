@@ -26,18 +26,48 @@ VSOutput vertMain(uint vertexID : SV_VertexID)
     return output;
 }
 
+#if defined(RASM_MOTION_VECTORS)
+// With a motion target, the sky's motion too: it is infinitely far, so only the camera's turn moves it.
+struct FragmentOutput
+{
+    float4 color  : SV_TARGET0;
+    float4 motion : SV_TARGET1;
+};
+#endif
+
 [shader("fragment")]
+#if defined(RASM_MOTION_VECTORS)
+FragmentOutput fragMain(VSOutput input)
+#else
 float4 fragMain(VSOutput input) : SV_TARGET
+#endif
 {
     float4x4 projection = pc.scene->projection;
-    // The view-space ray through the pixel. An orthographic camera looks the same way from every pixel.
+    // The view-space ray through the pixel. An orthographic camera looks the same way from every pixel. The ray
+    // takes out the projection's TAA jitter (jitter), so the sky moves with the scene.
     float3 viewRay      = float3(0.0, 0.0, -1.0);
+    float2 ndc          = input.ndc - pc.scene->jitter;
     if (projection[3][3] == 0.0)
-        viewRay         = float3(input.ndc.x / projection[0][0], input.ndc.y / projection[1][1], -1.0);
+        viewRay         = float3(ndc.x / projection[0][0], ndc.y / projection[1][1], -1.0);
     // The view matrix's 3x3 is a rotation, so its transpose turns view space back into world space.
     float3 direction    = normalize(mul(transpose((float3x3)pc.scene->view), viewRay));
     float3 color        = gCubeTextures[pc.scene->environmentSky].SampleLevel(toEnvironment(direction, pc.scene->environmentRotation), 0.0).rgb;
-    return float4(color * pc.scene->environmentIntensity, 1.0);
+    float4 sky          = float4(color * pc.scene->environmentIntensity, 1.0);
+#if defined(RASM_MOTION_VECTORS)
+    // A direction has w = 0, so the camera's move drops out and only its turn moves the sky. An orthographic camera
+    // shows one direction at every pixel, so its sky has no motion.
+    FragmentOutput output;
+    output.color        = sky;
+    output.motion       = float4(0.0);
+    if (projection[3][3] == 0.0)
+    {
+        float4 previousClip = mul(pc.scene->previousViewProjection, float4(direction, 0.0));
+        output.motion   = float4(getMotion(float4(ndc, 0.0, 1.0), previousClip), 0.0, 0.0);
+    }
+    return output;
+#else
+    return sky;
+#endif
 }
 
 // clang-format on

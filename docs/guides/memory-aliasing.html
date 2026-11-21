@@ -1067,7 +1067,7 @@ uint64_t pack(const Request *req, uint32_t count, uint64_t *offsets)
 
 <h3>Lifetime of the memory</h3>
 
-<p>The graph owns its transient targets. <code>RenderGraph::~RenderGraph</code> calls <code>RenderContext::destroyTransientRenderTargets</code>, which waits for the GPU, destroys the textures, and frees a group's heaps once none of its targets is left. A <code>RenderGraph</code> is move-only, so two graphs never free the same targets. Placing a layout again first waits for the GPU to be idle, then builds the new heaps and textures, then frees the old heaps.</p>
+<p>The graph owns its transient targets. <code>RenderGraph::~RenderGraph</code> calls <code>RenderContext::destroyRenderTargets</code>, which waits for the GPU, destroys the textures, and frees a group's heaps once none of its targets is left. A <code>RenderGraph</code> is move-only, so two graphs never free the same targets. Placing a layout again first waits for the GPU to be idle, then builds the new heaps and textures, then frees the old heaps.</p>
 
 <h3>Where it lives in code</h3>
 
@@ -1076,7 +1076,7 @@ uint64_t pack(const Request *req, uint32_t count, uint64_t *offsets)
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>Packing</td><td><code>rhi::packAliased</code>, <code>rhi::AliasRequest</code>, <code>rhi::AliasPlacement</code>, <code>rhi::AliasHeap</code> in <code>src/rhi/memoryAliasing.h</code> and <code>src/rhi/memoryAliasing.cpp</code></td></tr>
   <tr><td>Lifetimes, placing, barrier</td><td><code>RenderGraph::transientLifetimes</code>, <code>RenderGraph::compile</code>, <code>RenderGraph::placeTransients</code>, <code>RenderGraph::execute</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
-  <tr><td>Transient targets</td><td><code>RenderContext::createTransientRenderTarget</code>, <code>RenderContext::placeTransientRenderTargets</code>, <code>RenderContext::placeGroup</code>, <code>RenderContext::createAttachments</code>, <code>RenderContext::destroyTransientRenderTargets</code>, <code>RenderContext::resizeRenderTargets</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
+  <tr><td>Transient targets</td><td><code>RenderContext::createTransientRenderTarget</code>, <code>RenderContext::placeTransientRenderTargets</code>, <code>RenderContext::placeGroup</code>, <code>RenderContext::createAttachments</code>, <code>RenderContext::destroyRenderTargets</code>, <code>RenderContext::resizeRenderTargets</code> in <code>src/rhi/renderContext.cpp</code></td></tr>
   <tr><td>Device side</td><td><code>VulkanDevice::getTextureMemoryRequirements</code>, <code>VulkanDevice::createHeap</code>, <code>VulkanDevice::createPlacedTexture</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code>; the interface in <code>src/rhi/device.h</code></td></tr>
   <tr><td>The barrier</td><td><code>RenderContext::aliasingBarrier</code>; <code>VulkanCommandBuffer::aliasingBarrier</code> in <code>src/rhi/vulkan/vulkanCommandBuffer.cpp</code></td></tr>
   <tr><td>Tests</td><td><code>tests/memoryAliasingTests.cpp</code> (sharing, inclusive ends, gaps, alignment, memory types, no shared byte); <code>tests/renderGraphTests.cpp</code> (lifetimes)</td></tr>

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cameras and Input · RASM</title>
 <meta name="description" content="Create and control cameras: projections, trackball and free-fly controllers, view and projection matrices, and the input that drives them.">
-<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/engine.h include/rasm/window.h include/rasm/scene.h src/scene/camera.cpp src/platform/window.cpp src/engine.cpp src/renderer/gpuScene.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/scene/scene.cpp src/core/handle.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp">
+<meta name="rasm-sources" content="include/rasm/camera.h include/rasm/engine.h include/rasm/window.h include/rasm/scene.h src/scene/camera.cpp src/platform/window.cpp src/engine.cpp src/renderer/gpuScene.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/taa.cpp src/scene/scene.cpp src/core/handle.cpp examples/01_render_graph/main.cpp examples/04_compute/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -358,6 +358,15 @@ engine.setCameraController(camera, rasm::CameraController{
   </div>
 </div>
 
+<div class="api" id="resetCameraHistory">
+  <pre class="sig">void resetCameraHistory(CameraHandle camera);</pre>
+  <div class="body">
+    <p>Drops the TAA history of the camera's views in the next frame (<a href="engine.html#addTaaPass"><code>addTaaPass</code></a>): that frame shows only itself, and TAA builds up again over the next frames. Call it on a camera cut, when the view jumps to another shot, so the old shot does not show through for a moment. A turn of more than 30° or a move of more than 100 near planes in one frame does it by itself. An invalid handle logs an error.</p>
+    <pre><code>engine.setCameraTransform(camera, nextShot);
+engine.resetCameraHistory(camera);</code></pre>
+  </div>
+</div>
+
 <div class="api" id="getCameraBloomStrength">
   <pre class="sig">float getCameraBloomStrength(CameraHandle camera);</pre>
   <div class="body">
@@ -491,6 +500,8 @@ engine.setCameraController(camera, rasm::CameraController{
     Transform        transform;
     Transform        targetTransform;
     float            exposure = 1.0f;
+    float            bloomStrength = 0.04f;
+    uint32_t         historyResets = 0;
 };</pre>
   <div class="body">
     <p>What the engine stores per camera. You never get a <code>Camera</code> directly; use the getters above.</p>
@@ -498,6 +509,7 @@ engine.setCameraController(camera, rasm::CameraController{
       <dt>transform</dt><dd>The rendered pose, used by <code>getViewMatrix</code>.</dd>
       <dt>targetTransform</dt><dd>Where the controller wants the camera; <code>transform</code> eases toward it each frame.</dd>
       <dt>exposure</dt><dd>The factor the tone-map pass multiplies the scene's light by (<a href="#setCameraExposure"><code>setCameraExposure</code></a>).</dd>
+      <dt>historyResets</dt><dd>How many times <a href="#resetCameraHistory"><code>resetCameraHistory</code></a> was called; a TAA pass that sees it change drops its history.</dd>
       <dt>bloomStrength</dt><dd>The bloom's share of the tone-mapped image, 0.04 by default (<a href="#setCameraBloomStrength"><code>setCameraBloomStrength</code></a>).</dd>
     </dl>
   </div>

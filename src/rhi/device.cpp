@@ -27,6 +27,7 @@ namespace rasm::rhi
         case Format::D24_UNORM_S8_UINT:
         case Format::D32_SFLOAT:
         case Format::U32_UINT:
+        case Format::R16G16_SFLOAT:
             return {.bytes = 4};
         case Format::R8G8B8_UNORM:
             return {.bytes = 3};

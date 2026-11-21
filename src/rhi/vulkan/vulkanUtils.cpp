@@ -10,6 +10,8 @@ namespace rasm::rhi
             return VK_FORMAT_R32G32B32_SFLOAT;
         case Format::R32G32_SFLOAT:
             return VK_FORMAT_R32G32_SFLOAT;
+        case Format::R16G16_SFLOAT:
+            return VK_FORMAT_R16G16_SFLOAT;
         case Format::R8G8B8A8_UNORM:
             return VK_FORMAT_R8G8B8A8_UNORM;
         case Format::R16G16B16A16_SFLOAT:
@@ -62,6 +64,8 @@ namespace rasm::rhi
             return Format::R32G32B32_SFLOAT;
         case VK_FORMAT_R32G32_SFLOAT:
             return Format::R32G32_SFLOAT;
+        case VK_FORMAT_R16G16_SFLOAT:
+            return Format::R16G16_SFLOAT;
         case VK_FORMAT_R8G8B8A8_UNORM:
             return Format::R8G8B8A8_UNORM;
         case VK_FORMAT_R8G8B8A8_SRGB:

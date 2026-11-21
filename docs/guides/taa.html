@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Temporal Anti-Aliasing · RASM</title>
+<meta name="description" content="How temporal anti-aliasing (TAA) works: a sub-pixel jitter per frame, a history that blends the frames, motion vectors from the last frame's transforms, clipping the history against ghosts, a sharp resample, brightness weights against flicker, when to drop the history, and how it compares with MSAA. Then how RASM does it.">
+<meta name="rasm-sources" content="src/renderer/taa.cpp src/renderer/taa.h shaders/passes/taa.slang shaders/passes/rasm.slang shaders/passes/sky.slang shaders/lib/core.slang shaders/lib/pbr.slang src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/renderer.cpp src/renderer/renderGraph.cpp src/rhi/renderContext.cpp include/rasm/engine.h include/rasm/camera.h include/rasm/types.h src/renderer/uberMaterialTypes.h examples/09_gltf_materials/main.cpp examples/02_gltf/main.cpp tests/taaTests.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/taa.js"></script>
+</head>
+<body data-root="../" data-page="guides/taa.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Temporal anti-aliasing</h1>
+<p class="lead">MSAA takes several samples of a pixel in one frame, at a cost in memory, and only for triangle edges. <b>Temporal anti-aliasing</b> (TAA) takes one sample per frame, at a different point of the pixel each frame, and blends the frames. Over a few frames each pixel sees many points, and edges, thin lines, texture detail and highlights all get smooth, for the cost of one full-screen pass. The hard part is motion: the frames before must be found where things were then. This page explains the jitter, the history, motion vectors, how to stop ghosts and blur, and when to start over. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Each frame moves the projection by a <b>sub-pixel jitter</b>, so the one sample per pixel lands somewhere else in it. A short sequence (Halton) covers the pixel evenly in 8 frames.</li>
+    <li>A <b>history</b> image keeps the blend of the frames before: each frame adds about 10 % of its own color.</li>
+    <li>Things move, so the history is read where the point was last frame: <b>motion vectors</b>, from the last frame's object transforms and camera.</li>
+    <li>What the history saw that is gone now (a surface that moved away) would <b>ghost</b>. The history is <b>clipped</b> to the colors around the pixel this frame.</li>
+    <li>Resampling every frame blurs, so the history is read with a sharp filter (Catmull-Rom), and textures with a <b>negative mip bias</b>. Bright pixels are weighted down so they do not flicker.</li>
+    <li>On a camera cut, a resize or the first frame, the history is <b>dropped</b>.</li>
+  </ul>
+</div>
+
+<h2 id="jitter"><span class="n">1</span>The jitter: a different sample each frame</h2>
+
+<p>The rasterizer samples each pixel at its center. Move the whole projection by a fraction of a pixel and it samples another point. TAA moves it every frame along a short sequence that fills the pixel evenly, the <b>Halton sequence</b> in bases 2 and 3:</p>
+
+<div class="legend">
+  <span><i class="hot"></i>the sample of frame n, numbered</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 240" role="img" aria-label="One pixel as a square with 8 sample points, numbered 1 to 8 in the order of the Halton sequence in bases 2 and 3. The points spread evenly over the pixel. Beside it, the offset added to clip space: x plus jitter times w, y plus jitter times w.">
+    <rect x="40" y="40" width="160" height="160" class="paper"/>
+    <path d="M120,40V200M40,120H200" class="grid"/>
+    <circle cx="120" cy="93.3" r="9" class="badge"/><text x="120" y="97.3" class="badge-n">1</text>
+    <circle cx="80" cy="146.7" r="9" class="badge"/><text x="80" y="150.7" class="badge-n">2</text>
+    <circle cx="160" cy="57.8" r="9" class="badge"/><text x="160" y="61.8" class="badge-n">3</text>
+    <circle cx="60" cy="111.1" r="9" class="badge"/><text x="60" y="115.1" class="badge-n">4</text>
+    <circle cx="140" cy="164.4" r="9" class="badge"/><text x="140" y="168.4" class="badge-n">5</text>
+    <circle cx="100" cy="75.6" r="9" class="badge"/><text x="100" y="79.6" class="badge-n">6</text>
+    <circle cx="180" cy="128.9" r="9" class="badge"/><text x="180" y="132.9" class="badge-n">7</text>
+    <circle cx="50" cy="182.2" r="9" class="badge"/><text x="50" y="186.2" class="badge-n">8</text>
+    <text x="120" y="224" class="mid small">one pixel, 8 frames</text>
+
+    <rect x="260" y="40" width="480" height="160" rx="8" class="paper"/>
+    <text x="276" y="66" class="title">the offset, in clip space</text>
+    <text x="276" y="96" class="mono small">clip.x += jitter.x · clip.w</text>
+    <text x="476" y="96" class="mono small">jitter.x = 2 · offset.x / width</text>
+    <text x="276" y="116" class="mono small">clip.y += jitter.y · clip.w</text>
+    <text x="476" y="116" class="mono small">jitter.y = 2 · offset.y / height</text>
+    <text x="276" y="146" class="small">offset: the Halton point minus 0.5, in pixels, −0.5 to 0.5.</text>
+    <text x="276" y="166" class="small">Times w, so it is the same shift on screen at every depth,</text>
+    <text x="276" y="186" class="small">for a perspective and an orthographic camera alike.</text>
+  </svg>
+  <figcaption>A random point each frame would clump and leave gaps; the Halton points fill the pixel evenly at any count. The sequence repeats every 8 frames, so a still image settles into a fixed pattern.</figcaption>
+</figure>
+
+<p>Blending the frames then averages the pixel over these points: an edge that covers a third of the pixel ends at a third of the way between its two colors, as with MSAA. Try it on one edge pixel:</p>
+
+<figure class="lab" data-lab="taa-converge" data-title="One edge pixel over 48 frames">
+  <figcaption>Move the edge and watch the green line settle on the edge's share of the pixel. Raise this frame's weight to 1: the pixel flickers between 0 and 1, which is the jitter without a history. A small weight is smooth but slow to follow changes.</figcaption>
+</figure>
+
+<h2 id="history"><span class="n">2</span>The history and motion vectors</h2>
+
+<p>The history is last frame's output. Each frame mixes a small share of the new frame into it: <code class="lang-text">output = lerp(history, current, 0.1)</code>, an exponential mean of about the last 10 frames. In a still scene that is all. But when the camera or an object moves, last frame's color for this pixel is somewhere else in the history. A <b>motion vector</b> says where:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Left: last frame, a ball at the left. Right: this frame, the ball moved right. A pixel on the ball this frame has a motion vector pointing back to where the same point of the ball was last frame; the history is read there.">
+    <text x="40" y="26" class="title">last frame (the history)</text>
+    <rect x="40" y="36" width="300" height="160" class="paper"/>
+    <circle cx="130" cy="116" r="44" class="solid o-50"/>
+    <circle cx="150" cy="106" r="5" class="accent"/>
+    <text x="430" y="26" class="title">this frame</text>
+    <rect x="420" y="36" width="300" height="160" class="paper"/>
+    <circle cx="590" cy="116" r="44" class="solid"/>
+    <circle cx="610" cy="106" r="5" class="accent"/>
+    <path d="M610,106 C520,40 260,40 155,100" class="arrow hot dashed" marker-end="url(#ah-hot)"/>
+    <text x="380" y="44" class="mid small t-hot">uv − motion</text>
+    <text x="570" y="220" class="mid small">motion = uv now − uv last frame</text>
+    <text x="190" y="220" class="mid small">the history is read here</text>
+  </svg>
+  <figcaption>The scene passes write the motion of every pixel into a second color target. It comes from each point's clip position this frame and last frame: last frame's object transform and last frame's camera.</figcaption>
+</figure>
+
+<div class="formula">
+  <p class="eq">motion = (ndc<sub>now</sub> − ndc<sub>last</sub>) · (0.5, −0.5)</p>
+  <dl>
+    <dt>ndc<sub>now</sub></dt><dd>the point through this frame's camera, <b>without</b> the jitter, divided by w</dd>
+    <dt>ndc<sub>last</sub></dt><dd>the same point of the model through last frame's object transform and last frame's camera</dd>
+    <dt>(0.5, −0.5)</dt><dd>from NDC (y up) to texture coordinates (v down)</dd>
+  </dl>
+</div>
+
+<p>So the renderer keeps, for every object, the transform it drew last frame, and for every view, last frame's view-projection. A still object under a moving camera has motion too: only the camera changed. The sky is infinitely far: only the camera's turn moves it. At an object's outline, the pixel takes the motion of the <b>nearest</b> surface among its 3 × 3 neighbors, so the outline moves with the object and not with what is behind it.</p>
+
+<h2 id="ghosts"><span class="n">3</span>Ghosts and clipping</h2>
+
+<p>The history is wrong where what it saw is gone: a surface moved away and uncovered what is behind it (a <b>disocclusion</b>), a light turned off, an object left the screen. Read through the motion of what is there now, the history still holds the old color, and fades only by 10 % a frame: a ghost trail.</p>
+
+<p>The fix: what the pixel shows this frame is most likely among the colors around it this frame. So the history is <b>clipped</b> into the range of the 3 × 3 neighbors' colors: their mean plus or minus one standard deviation, in YCoCg (brightness and two color differences, which fits colors tighter than RGB). A history color outside that box is moved toward its center until it is inside.</p>
+
+<figure class="lab" data-lab="taa-clip" data-title="Stop a ghost trail">
+  <figcaption>Move the object at 1 to 3 pixels a frame with clipping off: a trail follows it. Turn clipping on: only the pixel right next to the object, which has the object among its neighbors, keeps a little of it.</figcaption>
+</figure>
+
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Clamp per channel: the history is cut to the box channel by channel, which can change its hue.">
+      <rect x="60" y="30" width="120" height="70" class="zone"/>
+      <circle cx="205" cy="15" r="5" class="bad"/>
+      <circle cx="180" cy="30" r="5" class="mem"/>
+      <line x1="205" y1="15" x2="180" y2="30" class="arrow dashed"/>
+      <text x="120" y="120" class="mid small">each channel cut on its own</text>
+    </svg>
+    <h4>Clamp</h4>
+    <p>Each channel is cut to the box. Simple, but the result can be a color that was in neither.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Clip toward the center: the history moves along the line to the box's center until it reaches the box.">
+      <rect x="60" y="30" width="120" height="70" class="zone"/>
+      <circle cx="120" cy="65" r="4" class="solid"/>
+      <circle cx="205" cy="15" r="5" class="bad"/>
+      <circle cx="173" cy="34" r="5" class="ok"/>
+      <line x1="205" y1="15" x2="120" y2="65" class="arrow dashed"/>
+      <text x="120" y="120" class="mid small">along the line to the center</text>
+    </svg>
+    <h4>Clip</h4>
+    <p>The history moves toward the box's center until it is inside: it keeps its direction, so the hue changes less.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A variance box: mean plus and minus one standard deviation of the 9 neighbors, tighter than their minimum and maximum.">
+      <rect x="40" y="25" width="160" height="80" class="dashed"/>
+      <rect x="80" y="40" width="80" height="50" class="zone"/>
+      <circle cx="60" cy="35" r="3" class="mem"/><circle cx="95" cy="55" r="3" class="mem"/><circle cx="110" cy="70" r="3" class="mem"/><circle cx="130" cy="60" r="3" class="mem"/><circle cx="125" cy="80" r="3" class="mem"/><circle cx="140" cy="50" r="3" class="mem"/><circle cx="105" cy="62" r="3" class="mem"/><circle cx="185" cy="95" r="3" class="mem"/><circle cx="118" cy="66" r="3" class="mem"/>
+      <text x="120" y="122" class="mid small">mean ± σ, inside min…max</text>
+    </svg>
+    <h4>Variance box</h4>
+    <p>Mean ± one standard deviation of the 9 neighbors: tighter than their minimum and maximum, so one odd neighbor does not open the box wide.</p>
+  </div>
+</div>
+
+<h2 id="sharp"><span class="n">4</span>Staying sharp, staying calm</h2>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A Catmull-Rom curve through four samples, sharper than a straight line between the middle two.">
+      <circle cx="40" cy="90" r="5" class="mem"/><circle cx="100" cy="90" r="5" class="mem"/><circle cx="140" cy="30" r="5" class="mem"/><circle cx="200" cy="30" r="5" class="mem"/>
+      <line x1="100" y1="90" x2="140" y2="30" class="arrow dashed"/>
+      <path d="M40,90 C70,92 90,95 100,90 C115,82 125,38 140,30 C150,25 175,28 200,30" class="arrow gpu thick"/>
+    </svg>
+    <h4>A sharp resample</h4>
+    <p>The history is read at a point between texels every frame. Bilinear filtering would blur it a little each time; a Catmull-Rom filter (5 bilinear taps) keeps edges sharp.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Mip levels: with a bias of minus 1 the texture is read one level sharper.">
+      <rect x="30" y="30" width="80" height="80" class="mem"/>
+      <rect x="130" y="50" width="40" height="40" class="mem o-50"/>
+      <rect x="190" y="60" width="20" height="20" class="mem o-25"/>
+      <text x="70" y="124" class="mid small">bias −1: this one</text>
+      <line x1="150" y1="40" x2="100" y2="40" class="arrow" marker-end="url(#ah)"/>
+    </svg>
+    <h4>A mip bias</h4>
+    <p>The frames together see more detail than one frame. Textures are read one mip sharper (bias −1), or the image looks soft; the blend hides the extra aliasing that would cause in one frame.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A single very bright sample among dark ones: compressed by 1 over 1 plus its brightness before the blend, it weighs about as much as the others.">
+      <rect x="40" y="90" width="20" height="10" class="mem"/><rect x="70" y="90" width="20" height="10" class="mem"/><rect x="100" y="20" width="20" height="80" class="bad"/><rect x="130" y="90" width="20" height="10" class="mem"/>
+      <rect x="170" y="80" width="20" height="20" class="ok"/>
+      <text x="180" y="72" class="mid small">compressed</text>
+    </svg>
+    <h4>Brightness weights</h4>
+    <p>HDR light can hold one very bright sample (a specular sparkle) that flashes in and out. Blending colors compressed by <code class="lang-text">c / (1 + luminance)</code> and turning the result back weighs it down, the same weights as an HDR MSAA resolve.</p>
+  </div>
+</div>
+
+<h2 id="resets"><span class="n">5</span>When to start over</h2>
+
+<p>The history only helps when last frame shows the same place. It is <b>dropped</b>, and the output is the current frame alone for a frame, when:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Case</th><th>Why</th></tr>
+  <tr><td>the first frame</td><td>there is no history yet</td></tr>
+  <tr><td>a resize</td><td>the history's pixels no longer match the screen's</td></tr>
+  <tr><td>a camera cut</td><td>the application jumps to another shot; it says so with a call</td></tr>
+  <tr><td>a camera jump</td><td>the camera turned or moved so far in one frame that almost nothing of the history fits; the history would show as a ghost of the old view</td></tr>
+  <tr><td>a point now outside last frame's screen</td><td>for that pixel only: there is no history for it</td></tr>
+</table>
+</div>
+
+<p>A jump needs a threshold. A turn has a natural one, an angle; a move needs a length that fits the scene's scale, which the camera's near plane gives (a scene in meters has a near plane of about 0.1 m, one in kilometers a larger one). Fast motion that is not a jump keeps the history, but gives the current frame more weight, since fast-moving history is resampled more and blurs.</p>
+
+<h2 id="compare"><span class="n">6</span>TAA and MSAA</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th></th><th>MSAA</th><th>TAA</th></tr>
+  <tr><td>What it smooths</td><td>triangle edges and cut-outs (with alpha-to-coverage)</td><td>everything: edges, thin lines, textures, specular highlights</td></tr>
+  <tr><td>Memory</td><td>N samples of color and depth (95 MiB at 4x, 1080p)</td><td>a history (two copies) and a motion image</td></tr>
+  <tr><td>Cost</td><td>more where there are edges</td><td>one full-screen pass, the motion output</td></tr>
+  <tr><td>Weaknesses</td><td>no help inside triangles</td><td>a little blur, ghosts where clipping fails (see-through surfaces), the first frames after a cut</td></tr>
+  <tr><td>Needs</td><td>nothing more</td><td>motion vectors, last frame's transforms, a jittered projection</td></tr>
+</table>
+</div>
+
+<p>Both together cost both and help little more, so engines usually pick one. Deferred renderers and games with much fine detail use TAA; forward renderers, VR and tools that need a crisp image use MSAA.</p>
+
+<h2 id="pitfalls"><span class="n">7</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Trails behind moving objects</dt><dd>No clipping, or wrong motion: an object whose last transform is not kept moves with zero motion and smears.</dd></div>
+  <div><dt>A still image shakes by a pixel</dt><dd>The jitter is in the image: a pass after TAA read the jittered scene, or the motion was computed with the jitter in it.</dd></div>
+  <div><dt>Everything is a little blurry</dt><dd>Bilinear history resampling and no mip bias. Use a sharp filter and a negative bias; a light sharpen after TAA is the last resort.</dd></div>
+  <div><dt>See-through surfaces smear</dt><dd>A glass pane over a moving background keeps the background's motion; its own color is clipped against neighbors that mix both. A known limit of TAA.</dd></div>
+  <div><dt>A camera cut shows the old shot for a moment</dt><dd>The history was not dropped. Reset it on cuts.</dd></div>
+  <div><dt>Specular sparkles flicker</dt><dd>Blending raw HDR: weight by brightness.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
+
+<p>The scene target gets a second color, <code>MOTION_FORMAT</code> (<code>R16G16_SFLOAT</code>), which the scene passes fill. <code>Engine::addTaaPass</code> jitters the view and adds the <code>TAA</code> compute pass, which writes a history target that bloom and the tone map read. With <code>Engine::render</code>, one line turns it on, before the engine is made:</p>
+
+<pre><code>config.antiAliasing = rasm::AntiAliasing::TAA;</code></pre>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU, per frame</span>
+  <span><i class="gpu"></i>graph passes</span>
+  <span><i class="mem"></i>targets and tables</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="On the CPU, syncGpuScene writes each moved entity's instance rows with previousWorld, the matrix the last frame drew, and prepareSceneView writes the view's previous view-projection and this frame's jitter. The scene passes draw scene_hdr's color and its motion color. The TAA pass reads the color, the motion, the depth and the history's last copy, and writes this frame's copy of scene_hdr_taa. Bloom and Tone Map read it.">
+    <rect x="20" y="20" width="230" height="60" rx="6" class="cpu"/>
+    <text x="135" y="44" class="mid mono small">syncGpuScene</text>
+    <text x="135" y="62" class="mid small">instance rows: world, previousWorld</text>
+    <rect x="20" y="96" width="230" height="60" rx="6" class="cpu"/>
+    <text x="135" y="120" class="mid mono small">prepareSceneView</text>
+    <text x="135" y="138" class="mid small">jitter, last view-projection, mip bias</text>
+    <line x1="250" y1="50" x2="286" y2="80" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <line x1="250" y1="126" x2="286" y2="100" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="288" y="60" width="180" height="60" rx="6" class="gpu"/>
+    <text x="378" y="84" class="mid title">scene passes</text>
+    <text x="378" y="102" class="mid small">jittered, color + motion</text>
+    <line x1="468" y1="90" x2="504" y2="90" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="506" y="36" width="234" height="40" rx="6" class="mem"/>
+    <text x="623" y="61" class="mid mono small">scene_hdr: color, motion</text>
+    <rect x="506" y="86" width="234" height="40" rx="6" class="mem"/>
+    <text x="623" y="111" class="mid mono small">scene_hdr: depth</text>
+    <path d="M623,126 V160" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="506" y="162" width="234" height="50" rx="6" class="gpu"/>
+    <text x="623" y="184" class="mid mono small">TAA (compute)</text>
+    <text x="623" y="201" class="mid small">nearest motion, clip, blend</text>
+    <rect x="200" y="162" width="250" height="50" rx="6" class="mem"/>
+    <text x="325" y="184" class="mid mono small">scene_hdr_taa, last frame's copy</text>
+    <text x="325" y="201" class="mid small">readPrevious, read at uv − motion</text>
+    <line x1="450" y1="187" x2="504" y2="187" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <path d="M623,212 V240" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="506" y="242" width="234" height="40" rx="6" class="mem"/>
+    <text x="623" y="267" class="mid mono small">scene_hdr_taa, this frame's copy</text>
+    <line x1="506" y1="262" x2="470" y2="262" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="270" y="242" width="198" height="40" rx="6" class="gpu"/>
+    <text x="369" y="267" class="mid mono small">Bloom, Tone Map</text>
+  </svg>
+  <figcaption>The history target is a storage target with a copy per frame slot (<a href="temporal-history.html">history buffers</a>): the pass reads last frame's copy and writes this frame's, and the graph moves each between <code>SAMPLED</code> and <code>STORAGE</code>.</figcaption>
+</figure>
+
+<h3>Last frame's transforms</h3>
+
+<p>Each instance row of the GPU scene keeps <code>previousWorld</code>, the rows of the affine world matrix the frame before drew (48 bytes; <code>InstanceData</code> grows from 108 to 156 bytes). It is written only through <code>GpuTable::setRow</code> in the frame's sync, like every row:</p>
+
+<ol class="flow">
+  <li class="cpu"><b>updateTransform</b><span>rows: new world, previousWorld = the last synced matrix</span></li>
+  <li class="cpu"><b>sync</b><span>the new matrix becomes the synced one</span></li>
+  <li class="gpu"><b>this frame</b><span>motion = new − old</span></li>
+  <li class="cpu"><b>next sync, no move</b><span>rows again: previousWorld = world</span></li>
+  <li class="gpu"><b>next frame</b><span>no motion</span></li>
+</ol>
+
+<h3>Where RASM follows this page, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Jitter</td><td>Halton (2, 3)</td><td><code>getTaaJitter</code>: points 1 to <code>TAA_JITTER_PHASES</code> (8), from a counter per scene view (<code>SceneView::jitterFrame</code>), so the same frames give the same pixels. <code>writeViewMotion</code> puts it in the projection as a translation of clip space, which <code>removeJitter</code> takes out of the motion and the sky.</td></tr>
+  <tr><td>Motion</td><td>last transforms, last camera</td><td><code>InstanceData::previousWorld</code>, <code>SceneData::previousViewProjection</code> and <code>jitter</code>; the uber, MASK and sky pipelines of a target with a motion color are compiled with <code>RASM_MOTION_VECTORS</code>. A <code>BLEND</code> draw writes zero motion with alpha 0, which its premultiplied blend turns into "keep": see-through surfaces keep the motion behind them.</td></tr>
+  <tr><td>The pass</td><td>nearest motion, clip, sharp resample, weights</td><td><code>taaMain</code> in <code>shaders/passes/taa.slang</code>: the nearest of 3 × 3 depths picks the motion; the history through 5 Catmull-Rom taps; clipped to mean ± 1 σ in YCoCg; blended at 10 % (30 % when the pixel moves 8 pixels a frame or more), on colors compressed by <code>1 / (1 + luminance · exposure)</code>.</td></tr>
+  <tr><td>Mip bias</td><td>about −1</td><td><code>TAA_TEXTURE_LOD_BIAS</code> (−1) in <code>SceneData::textureLodBias</code>, read by <code>sampleMaterial</code> for every material texture of a jittered view.</td></tr>
+  <tr><td>Resets</td><td>first frame, resize, cut, jump</td><td>The pass keeps its last size, its history's texture (a new swapchain makes new ones, at any size), camera and <code>Camera::historyResets</code>. <code>Engine::resetCameraHistory</code> counts that up. A jump is a turn above <code>TAA_JUMP_ANGLE</code> (30°) or a move above <code>TAA_JUMP_NEAR_PLANES</code> (100) near planes, for an orthographic camera half its width (<code>isCameraJump</code>).</td></tr>
+  <tr><td>With MSAA</td><td>usually one or the other</td><td>One or the other: <code>addTaaPass</code> refuses a multisampled source, and <code>AntiAliasing</code> is one value.</td></tr>
+  <tr><td>Sharpen</td><td>last resort</td><td>None: side by side with no anti-aliasing and MSAA 4x, the result was not clearly softer.</td></tr>
+</table>
+</div>
+
+<h3>What it costs</h3>
+
+<div class="stats">
+  <div><b>0.37 ms</b><span>the TAA pass at 1920 × 1080</span><small><code>examples/09_gltf_materials --aa taa</code>, RTX 3060, Release, median of 5 runs</small></div>
+  <div><b>+0.13 ms</b><span>the draw passes with the motion output</span><small>Scene 1, Scene 2, Transparent: 0.88 → 1.02 ms</small></div>
+  <div><b>7.9 MiB</b><span>the motion target at 1080p</span><small>R16G16_SFLOAT, transient</small></div>
+  <div><b>31.6 MiB</b><span>the history at 1080p</span><small>two RGBA16F copies, for the graph's life</small></div>
+  <div><b>+6 MiB</b><span>the instance table</span><small>108 → 156 B × 65536 rows × 2 frame slots</small></div>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The pass</td><td><code>Engine::addTaaPass</code> in <code>src/renderer/taa.cpp</code>; <code>shaders/passes/taa.slang</code>; <code>gfx::TaaPushConstants</code></td></tr>
+  <tr><td>Jitter and jumps</td><td><code>getTaaJitter</code>, <code>isCameraJump</code> and the constants in <code>src/renderer/taa.h</code>; tested in <code>tests/taaTests.cpp</code></td></tr>
+  <tr><td>Motion</td><td><code>writeViewMotion</code> and <code>Engine::writeInstanceRows</code> in <code>src/renderer/gpuScene.cpp</code>; <code>removeJitter</code>, <code>getMotion</code> in <code>shaders/lib/core.slang</code>; <code>shaders/passes/rasm.slang</code> and <code>shaders/passes/sky.slang</code></td></tr>
+  <tr><td>Storage history</td><td><code>RenderTargetDesc::storage</code> with <code>history</code>: one storage slot per copy (<code>RenderTarget::storageSlots</code>); the graph moves last frame's copy to <code>SAMPLED</code> for <code>readPrevious</code></td></tr>
+  <tr><td>The default frame</td><td><code>Renderer::render</code> in <code>src/renderer/renderer.cpp</code> with <code>EngineConfig::antiAliasing</code></td></tr>
+  <tr><td>Examples</td><td><code>examples/09_gltf_materials</code> (its lantern turns 1° a frame) and <code>examples/02_gltf</code> (its models turn): <samp>--aa taa</samp></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Instance rows change only through <code>setRow</code>, and the frame's sync is what turns a moved entity's matrix into last frame's.</li>
+    <li>The motion and the sky take the jitter out; nothing after TAA reads the jittered scene.</li>
+    <li>The same frames give the same pixels: the jitter comes from a frame counter, never from time or random numbers.</li>
+    <li>A new kind of moving geometry (skinning, morph targets) also needs last frame's vertices, or it smears.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Brian Karis, "High Quality Temporal Supersampling" (SIGGRAPH 2014, Advances in Real-Time Rendering): Unreal Engine 4's TAA.</li>
+  <li>Lasse Jon Fuglsang Pedersen, "Temporal Reprojection Anti-Aliasing in INSIDE" (GDC 2016): clipping toward the center.</li>
+  <li>Marco Salvi, "An Excursion in Temporal Supersampling" (GDC 2016): variance clipping.</li>
+  <li>Lei Yang, Shiqiu Liu, Marco Salvi, "A Survey of Temporal Antialiasing Techniques" (Eurographics 2020).</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

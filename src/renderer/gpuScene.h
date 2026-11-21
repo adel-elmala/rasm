@@ -31,6 +31,8 @@ namespace rasm
         uint32_t                        instanceCount                                                       = 0;
         uint16_t                        scenes                                                              = 0;
         bool                            waitingForTextures                                                  = false;
+        uint32_t                        movedSync                                                           = UINT32_MAX;   // GpuScene::syncCount when its rows last changed
+        glm::mat4                       syncedMatrix                                                        = glm::mat4(1.0f); // the entity matrix the last synced frame drew
     };
 
     struct DrawRun
@@ -89,10 +91,15 @@ namespace rasm
         uint32_t                        hizLevelCount                                                       = 0;
         uint32_t                        width                                                               = 0;
         uint32_t                        height                                                              = 0;
+        bool                            jitter                                                              = false;    // addTaaPass: the projection takes a sub-pixel offset per frame
+        uint32_t                        jitterFrame                                                         = 0;        // counts the jittered frames, for getTaaJitter
+        bool                            hasPrevious                                                         = false;
+        glm::mat4                       previousViewProjection                                              = glm::mat4(1.0f); // the frame before's, without jitter
     };
 
     // A shaded view's pipelines for one sample count of its target: they must match the attachments they draw into.
     constexpr uint32_t                  SAMPLE_VARIANTS                                                     = 4;        // 1, 2, 4 and 8 samples
+    constexpr uint32_t                  MOTION_VARIANT                                                      = SAMPLE_VARIANTS;  // 1 sample and a MOTION_FORMAT color
 
     struct ShadedPipelines
     {
@@ -107,7 +114,7 @@ namespace rasm
         GpuTable                        instances;
         GpuTable                        materials;
         BufferHandle                    sceneData[MAX_FRAMES_IN_FLIGHT]                                     = {};
-        ShadedPipelines                 shaded[SAMPLE_VARIANTS]                                             = {};       // by log2 of the target's samples
+        ShadedPipelines                 shaded[SAMPLE_VARIANTS + 1]                                         = {};       // by log2 of the target's samples, then MOTION_VARIANT
         PipelineHandle                  depthPipeline                                                       = {};
         PipelineHandle                  depthMaskPipeline                                                   = {};
         PipelineHandle                  sortPipelines[BLEND_SORT_STEPS]                                     = {};
@@ -123,6 +130,9 @@ namespace rasm
         uint32_t                        instanceCount                                                       = 0;
         std::vector<EntityHandle>       entitiesWaitingForMesh;
         std::vector<EntityHandle>       entitiesWaitingForTextures;
+        std::vector<EntityHandle>       movedEntities;          // rows written since the last sync: their previousWorld is the last synced matrix
+        std::vector<EntityHandle>       settlingEntities;       // moved before the last sync: the next sync writes previousWorld = world
+        uint32_t                        syncCount                                                           = 0;
         bool                            texturesFinished                                                    = false;
         SceneDrawList                   drawLists[MAX_SCENES];
     };
