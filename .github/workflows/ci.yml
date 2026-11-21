@@ -112,6 +112,7 @@ jobs:
           $exe = (Resolve-Path "build/${{ matrix.debug }}/tests/rasm_tests.exe").Path
           $names = & $exe --list-test-cases --no-intro | Where-Object { $_ -and $_ -notmatch '^(\[doctest\]|====)' }
           "test cases: $($names.Count)"
+          $hangs = 0
           foreach ($n in $names) {
             $filter = $n -replace '[,"\\[\]]', '?'
             $psi = [System.Diagnostics.ProcessStartInfo]::new($exe)
@@ -123,7 +124,7 @@ jobs:
             $p = [System.Diagnostics.Process]::Start($psi)
             $out = $p.StandardOutput.ReadToEndAsync()
             $err = $p.StandardError.ReadToEndAsync()
-            if (-not $p.WaitForExit(20000)) { "HANG: $n"; $p.Kill($true); continue }
+            if (-not $p.WaitForExit(20000)) { "HANG: $n"; $p.Kill($true); $hangs++; if ($hangs -ge 4) { "stopping after 4 hangs"; break }; continue }
             if ($p.ExitCode -ne 0) { "FAIL($($p.ExitCode)): $n"; $out.Result; $err.Result }
           }
           "done"
