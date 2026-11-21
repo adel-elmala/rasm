@@ -18,6 +18,7 @@ namespace rasm
         uint64_t                        address                                         = 0;        // its gfx::AnimationMeshData
         uint32_t                        nodeCount                                       = 0;
         std::vector<int32_t>            subMeshTransforms;                                          // per sub-mesh: its row among the entity's transforms, -1: static
+        std::vector<uint8_t>            subMeshMirrors;                                             // per sub-mesh: 1 when a clip can mirror it (a scale through 0)
         uint32_t                        transformCount                                  = 0;        // the animated sub-meshes
     };
 
@@ -50,6 +51,7 @@ namespace rasm
         PipelineHandle                  pipeline                                        = {};
         double                          clock                                           = 0.0;
         double                          base                                            = 0.0;
+        uint32_t                        recordedSync                                    = UINT32_MAX;   // the last sync whose frame ran the pass
     };
 
     uint64_t                            getAnimationPoolBytes(const AnimationRaw& animation, uint32_t subMeshCount);

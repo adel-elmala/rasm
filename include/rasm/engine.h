@@ -322,6 +322,7 @@ namespace rasm
         void                        startAnimation(EntityHandle entity, const AnimationPlay& play, uint32_t firstSync);
         bool                        growAnimationBuffers(uint32_t transformCount, uint32_t poseCount, uint32_t firstSync);
         int32_t                     getAnimationRow(EntityHandle entity, uint32_t subMesh) const;
+        bool                        animationCanMirror(MeshHandle mesh, uint32_t subMesh) const;
         void                        writeAnimationRow(EntityHandle entity);
         void                        syncGpuAnimation();
         void                        addAnimationPass(RenderGraph& graph);

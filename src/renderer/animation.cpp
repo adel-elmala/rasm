@@ -81,6 +81,57 @@ namespace rasm
             return ctx.fillBuffer(buffer, zeros.data(), zeros.size());
         }
 
+        // A scale key at or below 0 on any axis, or a cubic curve that dips there between two keys, can turn the
+        // node's matrix inside out (a negative determinant), which turns its triangles' winding around.
+        bool canMirror(const AnimationSampler &sampler)
+        {
+            const bool cubic = sampler.interpolation == AnimationInterpolation::CUBICSPLINE;
+            const size_t keys = sampler.times.size();
+            for (size_t k = 0; k < keys; ++k)
+            {
+                const glm::vec3 value = glm::vec3(sampler.values[cubic ? k * 3 + 1 : k]);
+                if (glm::any(glm::lessThanEqual(value, glm::vec3(0.0f))))
+                    return true;
+                if (!cubic || k + 1 == keys)
+                    continue;
+                const float span = sampler.times[k + 1] - sampler.times[k];
+                const glm::vec3 out = glm::vec3(sampler.values[k * 3 + 2]) * span;
+                const glm::vec3 next = glm::vec3(sampler.values[k * 3 + 4]);
+                const glm::vec3 in = glm::vec3(sampler.values[k * 3 + 3]) * span;
+                for (int step = 1; step < 16; ++step)
+                {
+                    const float s = static_cast<float>(step) / 16.0f;
+                    const float s2 = s * s;
+                    const float s3 = s2 * s;
+                    const glm::vec3 point = (2.0f * s3 - 3.0f * s2 + 1.0f) * value + (s3 - 2.0f * s2 + s) * out + (-2.0f * s3 + 3.0f * s2) * next + (s3 - s2) * in;
+                    if (glm::any(glm::lessThanEqual(point, glm::vec3(0.0f))))
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        // Per kept node: 1 when a clip can mirror it or a node above it.
+        std::vector<uint8_t> getMirroringNodes(const AnimationRaw &animation)
+        {
+            std::vector<uint8_t> mirrors(animation.nodes.size(), 0);
+            for (const AnimationClipRaw &clip : animation.clips)
+            {
+                for (const AnimationChannel &channel : clip.channels)
+                {
+                    if (channel.path == AnimationPath::SCALE && canMirror(clip.samplers[channel.sampler]))
+                        mirrors[channel.node] = 1;
+                }
+            }
+            for (size_t n = 0; n < animation.nodes.size(); ++n)
+            {
+                const int32_t parent = animation.nodes[n].parent;
+                if (parent >= 0 && mirrors[parent])
+                    mirrors[n] = 1;
+            }
+            return mirrors;
+        }
+
         uint32_t countAnimatedSubMeshes(const GLTFRaw &raw)
         {
             if (raw.animation.nodes.empty())
@@ -208,8 +259,10 @@ namespace rasm
         GpuAnimation &animation = *gpuAnimation;
         MeshAnimation info{.nodeCount = static_cast<uint32_t>(raw.animation.nodes.size())};
         std::vector<int32_t> subMeshNodes;
+        const std::vector<uint8_t> mirrors = getMirroringNodes(raw.animation);
         for (const SubGLTFRaw &sub : raw.subGltfRaws)
         {
+            info.subMeshMirrors.push_back(sub.animatedNode >= 0 ? mirrors[sub.animatedNode] : 0);
             info.subMeshTransforms.push_back(sub.animatedNode >= 0 ? static_cast<int32_t>(subMeshNodes.size()) : -1);
             if (sub.animatedNode >= 0)
                 subMeshNodes.push_back(sub.animatedNode);
@@ -375,13 +428,8 @@ namespace rasm
         const uint32_t poseCapacity = std::max(poseCount, animation.poseCapacity * 2);
         if (transformCount > animation.transformCapacity)
         {
-            for (auto &buffer : animation.transforms)
-            {
-                if (!ctx.resizeBuffer(buffer, uint64_t{transformCapacity} * sizeof(gfx::InstanceTransform)) ||
-                    !clearBuffer(ctx, buffer, uint64_t{transformCapacity} * sizeof(gfx::InstanceTransform)))
-                    return false;
-            }
-            animation.transformCapacity = transformCapacity;
+            // Set before the resizes, so a resize that fails halfway leaves no entity reading a cleared slot as the
+            // frame before.
             for (size_t i = 0; i < animation.entityStates.size(); ++i)
             {
                 EntityAnimation &state = animation.entityStates[i];
@@ -390,6 +438,13 @@ namespace rasm
                 state.resetSync = firstSync;
                 writeAnimationRow(registry.entities[i].handle);
             }
+            for (auto &buffer : animation.transforms)
+            {
+                if (!ctx.resizeBuffer(buffer, uint64_t{transformCapacity} * sizeof(gfx::InstanceTransform)) ||
+                    !clearBuffer(ctx, buffer, uint64_t{transformCapacity} * sizeof(gfx::InstanceTransform)))
+                    return false;
+            }
+            animation.transformCapacity = transformCapacity;
         }
         if (poseCount > animation.poseCapacity)
         {
@@ -398,6 +453,15 @@ namespace rasm
             animation.poseCapacity = poseCapacity;
         }
         return true;
+    }
+
+    // The draw list's cull mode follows the rest pose only, so such a sub-mesh is drawn without face culling: depth
+    // still shows a closed mesh's outside, whichever way its matrix turns the winding.
+    bool Engine::animationCanMirror(MeshHandle mesh, uint32_t subMesh) const
+    {
+        const GpuAnimation &animation = *gpuAnimation;
+        return mesh.index < animation.meshes.size() && subMesh < animation.meshes[mesh.index].subMeshMirrors.size() &&
+               animation.meshes[mesh.index].subMeshMirrors[subMesh] != 0;
     }
 
     int32_t Engine::getAnimationRow(EntityHandle entity, uint32_t subMesh) const
@@ -498,9 +562,10 @@ namespace rasm
                                        .clock = static_cast<float>(animation.clock - animation.base),
                                        .sync = gpuScene->syncCount,
                                        .entityCount = animation.entityRows,
-                                       .padding = 0};
+                                       .previousSync = animation.recordedSync};
         if (!ctx.fillBuffer(animation.frames[frame], &data, sizeof(data)))
             return;
+        animation.recordedSync = gpuScene->syncCount;
 
         const auto commandBuffer = frameResources[frame].commandBuffer;
         const gfx::AnimatePushConstants pushConstants{.frame = ctx.getBufferDeviceAddress(animation.frames[frame]), .padding = {0, 0}};

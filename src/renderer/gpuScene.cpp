@@ -185,9 +185,9 @@ namespace rasm
         // glTF: a transform with a negative determinant mirrors the mesh, so its front faces turn clockwise (D8).
         // det(T * R * S * M) = sx * sy * sz * det(M). The blend run is one run, so that it stays in one sorted order:
         // fragBlend drops the back faces of a single-sided material instead.
-        CullMode getCullMode(const Material &material, const Transform &transform, const glm::mat4 &meshTransform)
+        CullMode getCullMode(const Material &material, const Transform &transform, const glm::mat4 &meshTransform, bool canMirror)
         {
-            if (material.doubleSided || material.alphaMode == AlphaMode::BLEND)
+            if (material.doubleSided || material.alphaMode == AlphaMode::BLEND || canMirror)
                 return CullMode::NONE;
             const float determinant = transform.scale.x * transform.scale.y * transform.scale.z * glm::determinant(glm::mat3(meshTransform));
             return determinant < 0.0f ? CullMode::FRONT : CullMode::BACK;
@@ -518,7 +518,7 @@ namespace rasm
         {
             const SubMesh &subMesh = mesh.subMeshes[i];
             const Material &material = getSubMeshMaterial(*this, entityRef, subMesh);
-            const CullMode cullMode = getCullMode(material, entityRef.transform, subMesh.transform);
+            const CullMode cullMode = getCullMode(material, entityRef.transform, subMesh.transform, animationCanMirror(entityRef.mesh, i));
             CullMode &storedCullMode = gpuScene->instanceCullModes[state.firstInstance + i];
             AlphaMode &storedAlphaMode = gpuScene->instanceAlphaModes[state.firstInstance + i];
             changed = changed || storedCullMode != cullMode || storedAlphaMode != material.alphaMode;

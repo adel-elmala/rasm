@@ -403,6 +403,7 @@ if (walk >= 0)
   <tr><td>Clock</td><td>from the application, small floats</td><td><code>Engine::setAnimationTime</code> sets a double. The base moves when the clock is <code>ANIMATION_REBASE_SECONDS</code> (64) past it or behind it (<code>getAnimationBase</code>), and each row gets its phase at the base (<code>getAnimationPhase</code>). A unit test checks the error stays under 0.1 ms after 24 hours.</td></tr>
   <tr><td>Motion vectors</td><td>keep last frame's matrix</td><td>The pass reads last frame's world from the other slot's buffer (<code>PassBuilder::readPrevious</code> of the per-slot buffers) into <code>previousWorld</code>. A play, a stop and a growth of the buffers start the motion again for one frame (<code>AnimatedEntity::resetSync</code>), so TAA does not smear a jump.</td></tr>
   <tr><td>Bounds</td><td>—</td><td>Culling multiplies the geometry's sphere by <code>getWorldMatrix</code>, the animated matrix, so a rigid part is culled where it is.</td></tr>
+  <tr><td>Mirroring</td><td>a negative scale turns the winding</td><td>The cull mode of a draw is chosen on the CPU from the rest pose. A sub-mesh whose clips can take a scale to 0 or below is drawn without face culling (<code>animationCanMirror</code>), so it shows right whichever way it turns.</td></tr>
   <tr><td>Cost on the CPU</td><td>—</td><td>Nothing per frame per entity. A play, a stop or a move writes one row; the base moves once a minute and writes the playing rows.</td></tr>
 </table>
 </div>

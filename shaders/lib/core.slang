@@ -321,8 +321,6 @@ float decodeSrgb(float encoded)
     return encoded <= 0.04045 ? encoded / 12.92 : pow((encoded + 0.055) / 1.055, 2.4);
 }
 
-// A vertex's COLOR_0 as linear RGBA, white for a sub-mesh without colors (the color stream, geometryPool.cpp). The
-// stream is indexed like the vertices, by the sub-mesh's own index.
 // An animated instance's matrices come from the Animate pass, every other one's from its instance row.
 float4x4 getWorldMatrix(SceneData *scene, InstanceData *instance)
 {
@@ -349,6 +347,8 @@ float3 getPreviousWorldPosition(SceneData *scene, InstanceData *instance, float4
     return float3(dot(instance->previousWorld[0], position), dot(instance->previousWorld[1], position), dot(instance->previousWorld[2], position));
 }
 
+// A vertex's COLOR_0 as linear RGBA, white for a sub-mesh without colors (the color stream, geometryPool.cpp). The
+// stream is indexed like the vertices, by the sub-mesh's own index.
 float4 getVertexColor(SceneData *scene, uint geometryIndex, uint vertexIndex)
 {
     int colorOffset = scene->geometryPtr[geometryIndex].colorOffset;

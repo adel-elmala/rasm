@@ -194,7 +194,8 @@ void animateMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     }
     AllMemoryBarrierWithGroupSync();
 
-    bool reset = entity.resetSync == frame->sync;
+    // The other slot holds the frame before only when that frame ran this pass, and this entity's pose then.
+    bool reset = frame->previousSync + 1 != frame->sync || entity.resetSync > frame->previousSync;
     for (uint k = threadId.x; k < mesh->subMeshCount; k += ANIMATE_GROUP_SIZE)
     {
         float3x4 node = loadRows(worlds + mesh->subMeshNodes[k] * 3);

@@ -200,7 +200,7 @@ namespace rasm::gfx
         float           clock;                      // seconds since the clock's base
         uint32_t        sync;
         uint32_t        entityCount;
-        uint32_t        padding;
+        uint32_t        previousSync;               // the sync of the last frame that ran the pass
     };
 
     struct AnimatePushConstants

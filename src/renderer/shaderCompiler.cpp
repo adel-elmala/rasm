@@ -140,7 +140,7 @@ namespace rasm
                                      {"clock", offsetof(gfx::AnimationFrame, clock)},
                                      {"sync", offsetof(gfx::AnimationFrame, sync)},
                                      {"entityCount", offsetof(gfx::AnimationFrame, entityCount)},
-                                     {"padding", offsetof(gfx::AnimationFrame, padding)}});
+                                     {"previousSync", offsetof(gfx::AnimationFrame, previousSync)}});
             valid &= validateStruct(entity, "AnimatedEntity", sizeof(gfx::AnimatedEntity),
                                     {{"entityMatrix", offsetof(gfx::AnimatedEntity, entityMatrix)},
                                      {"mesh", offsetof(gfx::AnimatedEntity, mesh)},
