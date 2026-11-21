@@ -136,7 +136,9 @@ namespace rasm
                                    {"lodCount", offsetof(gfx::GeometryData, lodCount)},
                                    {"lods", offsetof(gfx::GeometryData, lods)},
                                    {"colorOffset", offsetof(gfx::GeometryData, colorOffset)},
-                                   {"skinOffset", offsetof(gfx::GeometryData, skinOffset)}});
+                                   {"skinOffset", offsetof(gfx::GeometryData, skinOffset)},
+                                   {"morphOffset", offsetof(gfx::GeometryData, morphOffset)},
+                                   {"morphTargetCount", offsetof(gfx::GeometryData, morphTargetCount)}});
         }
 
         // The Animate and Skin passes: pc -> frame -> the table, the mesh data in the pool, the transforms and the
@@ -162,7 +164,10 @@ namespace rasm
                                      {"vertices", offsetof(gfx::AnimationFrame, vertices)},
                                      {"skins", offsetof(gfx::AnimationFrame, skins)},
                                      {"geometry", offsetof(gfx::AnimationFrame, geometry)},
-                                     {"skinnedVertices", offsetof(gfx::AnimationFrame, skinnedVertices)}});
+                                     {"skinnedVertices", offsetof(gfx::AnimationFrame, skinnedVertices)},
+                                     {"weights", offsetof(gfx::AnimationFrame, weights)},
+                                     {"weightOverrides", offsetof(gfx::AnimationFrame, weightOverrides)},
+                                     {"morphs", offsetof(gfx::AnimationFrame, morphs)}});
             valid &= validateStruct(entity, "AnimatedEntity", sizeof(gfx::AnimatedEntity),
                                     {{"entityMatrix", offsetof(gfx::AnimatedEntity, entityMatrix)},
                                      {"mesh", offsetof(gfx::AnimatedEntity, mesh)},
@@ -175,7 +180,9 @@ namespace rasm
                                      {"firstNode", offsetof(gfx::AnimatedEntity, firstNode)},
                                      {"resetSync", offsetof(gfx::AnimatedEntity, resetSync)},
                                      {"firstJoint", offsetof(gfx::AnimatedEntity, firstJoint)},
-                                     {"firstSkinnedVertex", offsetof(gfx::AnimatedEntity, firstSkinnedVertex)}});
+                                     {"firstSkinnedVertex", offsetof(gfx::AnimatedEntity, firstSkinnedVertex)},
+                                     {"firstWeight", offsetof(gfx::AnimatedEntity, firstWeight)},
+                                     {"padding", offsetof(gfx::AnimatedEntity, padding)}});
             valid &= validateStruct(mesh, "AnimationMeshData", sizeof(gfx::AnimationMeshData),
                                     {{"nodes", offsetof(gfx::AnimationMeshData, nodes)},
                                      {"samplers", offsetof(gfx::AnimationMeshData, samplers)},
@@ -184,10 +191,14 @@ namespace rasm
                                      {"keys", offsetof(gfx::AnimationMeshData, keys)},
                                      {"joints", offsetof(gfx::AnimationMeshData, joints)},
                                      {"jointSpheres", offsetof(gfx::AnimationMeshData, jointSpheres)},
+                                     {"weights", offsetof(gfx::AnimationMeshData, weights)},
+                                     {"morphRadii", offsetof(gfx::AnimationMeshData, morphRadii)},
                                      {"nodeCount", offsetof(gfx::AnimationMeshData, nodeCount)},
                                      {"subMeshCount", offsetof(gfx::AnimationMeshData, subMeshCount)},
                                      {"jointCount", offsetof(gfx::AnimationMeshData, jointCount)},
-                                     {"skinnedVertexCount", offsetof(gfx::AnimationMeshData, skinnedVertexCount)}});
+                                     {"skinnedVertexCount", offsetof(gfx::AnimationMeshData, skinnedVertexCount)},
+                                     {"weightCount", offsetof(gfx::AnimationMeshData, weightCount)},
+                                     {"padding", offsetof(gfx::AnimationMeshData, padding)}});
             valid &= validateStruct(fieldStruct(mesh, "subMeshes"), "AnimationSubMeshData", sizeof(gfx::AnimationSubMeshData),
                                     {{"node", offsetof(gfx::AnimationSubMeshData, node)},
                                      {"jointCount", offsetof(gfx::AnimationSubMeshData, jointCount)},
@@ -195,13 +206,18 @@ namespace rasm
                                      {"firstSphere", offsetof(gfx::AnimationSubMeshData, firstSphere)},
                                      {"geometryIndex", offsetof(gfx::AnimationSubMeshData, geometryIndex)},
                                      {"vertexCount", offsetof(gfx::AnimationSubMeshData, vertexCount)},
-                                     {"firstSkinnedVertex", offsetof(gfx::AnimationSubMeshData, firstSkinnedVertex)}});
+                                     {"firstSkinnedVertex", offsetof(gfx::AnimationSubMeshData, firstSkinnedVertex)},
+                                     {"firstWeight", offsetof(gfx::AnimationSubMeshData, firstWeight)},
+                                     {"firstMorphRadius", offsetof(gfx::AnimationSubMeshData, firstMorphRadius)}});
             valid &= validateStruct(fieldStruct(mesh, "joints"), "AnimationJointData", sizeof(gfx::AnimationJointData),
                                     {{"inverseBind", offsetof(gfx::AnimationJointData, inverseBind)},
                                      {"node", offsetof(gfx::AnimationJointData, node)}});
             valid &= validateStruct(fieldStruct(frame, "skins"), "SkinVertex", sizeof(gfx::SkinVertex),
                                     {{"joints", offsetof(gfx::SkinVertex, joints)},
                                      {"weights", offsetof(gfx::SkinVertex, weights)}});
+            valid &= validateStruct(fieldStruct(frame, "morphs"), "MorphDelta", sizeof(gfx::MorphDelta),
+                                    {{"position", offsetof(gfx::MorphDelta, position)},
+                                     {"normalTangent", offsetof(gfx::MorphDelta, normalTangent)}});
             valid &= validateGeometryData(fieldStruct(frame, "geometry"));
             valid &= validateStruct(fieldStruct(mesh, "nodes"), "AnimationNodeData", sizeof(gfx::AnimationNodeData),
                                     {{"rest", offsetof(gfx::AnimationNodeData, rest)},

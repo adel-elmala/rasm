@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Morph targets · RASM</title>
+<meta name="description" content="How a mesh blends between shapes: morph targets stored as deltas, weights from the rest pose, a clip or the application, normals and tangents that blend too, a target-major layout that skips targets at weight 0, morph before skin, bounds that grow with the weights, and motion vectors.">
+<meta name="rasm-sources" content="include/rasm/animation.h include/rasm/mesh.h include/rasm/types.h include/rasm/engine.h src/assets/morphImport.cpp src/assets/animationImport.cpp src/assets/meshImport.cpp src/assets/meshLod.cpp src/assets/gltfAccessor.cpp src/renderer/animation.cpp src/renderer/geometryPool.cpp shaders/passes/animate.slang shaders/passes/skin.slang shaders/lib/animationTypes.slang shaders/lib/geometryTypes.slang examples/14_morph_targets/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/morph-targets.js"></script>
+</head>
+<body data-root="../" data-page="guides/morph-targets.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Morph targets: a mesh that blends between shapes</h1>
+<p class="lead">A face smiles, an eye blinks, a muscle bulges. A skeleton cannot do this well: these are changes of shape, not turns of bones. A <b>morph target</b> (also called a blend shape or shape key) is the same mesh in another shape. The mesh blends from its base toward each target by a <b>weight</b>. This page explains the deltas, the weights, the normals, how to store and read targets on the GPU, the order with skinning, the bounds and the motion vectors. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>A target stores one <b>delta</b> per vertex: how far the vertex moves to reach that shape.</li>
+    <li>The posed vertex is <code class="lang-text">v′ = v + Σ wₜ · Δₜ</code>. Weights are usually 0 to 1, but any value works.</li>
+    <li>Weights come from the mesh's rest weights, from a clip's <b>weights</b> channel, or from the application (sliders, lip sync).</li>
+    <li>Normals and tangents have deltas too. Add them, then make the result unit length again.</li>
+    <li>Store the deltas <b>target-major</b> (all vertices of target 0, then target 1, ...). Then the GPU reads a target for many neighbour vertices at once, and skips a target whose weight is 0.</li>
+    <li>Morph first, then skin: the targets are modelled in the bind pose.</li>
+    <li>The bound grows by <code class="lang-text">Σ |wₜ| · rₜ</code>, where <code class="lang-text">rₜ</code> is target t's longest delta.</li>
+  </ul>
+</div>
+
+<h2 id="deltas"><span class="n">1</span>A target is a set of deltas</h2>
+
+<p>The artist makes each target from the base mesh by moving vertices. Only the change is kept: one delta per vertex. A vertex that the target does not move has a delta of 0.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 230" role="img" aria-label="Left: the base shape, a square of four corner vertices. Middle: the target 'thin', where the two top corners move down; the deltas are arrows from the base corners to the new corners, and the bottom corners have a delta of zero. Right: the blend at weight 0.5, where the top corners move half way along their arrows.">
+    <text x="20" y="22" class="title">base</text>
+    <rect x="40" y="60" width="140" height="140" class="ghost"/>
+    <rect x="40" y="60" width="140" height="140" class="cpu o-50"/>
+    <circle cx="40" cy="60" r="5" class="mem"/><circle cx="180" cy="60" r="5" class="mem"/>
+    <circle cx="40" cy="200" r="5" class="mem"/><circle cx="180" cy="200" r="5" class="mem"/>
+    <text x="110" y="135" class="mid small">v</text>
+
+    <text x="280" y="22" class="title">target "thin": the deltas</text>
+    <rect x="300" y="60" width="140" height="140" class="ghost"/>
+    <rect x="300" y="160" width="140" height="40" class="shader o-50"/>
+    <line x1="300" y1="64" x2="300" y2="154" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <line x1="440" y1="64" x2="440" y2="154" class="arrow hot thick" marker-end="url(#ah-hot)"/>
+    <text x="312" y="112" class="small t-hot">Δ</text>
+    <text x="428" y="112" class="end small t-hot">Δ</text>
+    <circle cx="300" cy="200" r="5" class="mem"/><circle cx="440" cy="200" r="5" class="mem"/>
+    <text x="370" y="222" class="mid small t-faint">Δ = 0 at the bottom</text>
+
+    <text x="540" y="22" class="title">weight 0.5</text>
+    <rect x="560" y="60" width="140" height="140" class="ghost"/>
+    <rect x="560" y="110" width="140" height="90" class="gpu o-50"/>
+    <line x1="560" y1="64" x2="560" y2="104" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <line x1="700" y1="64" x2="700" y2="104" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <circle cx="560" cy="110" r="5" class="mem"/><circle cx="700" cy="110" r="5" class="mem"/>
+    <circle cx="560" cy="200" r="5" class="mem"/><circle cx="700" cy="200" r="5" class="mem"/>
+    <text x="630" y="160" class="mid small">v + 0.5 · Δ</text>
+  </svg>
+  <figcaption>A target has the same vertices as the base, in the same order. It stores where they go, as deltas from the base.</figcaption>
+</figure>
+
+<p>Several targets add up. Each one moves the vertex along its own delta, scaled by its weight:</p>
+
+<div class="formula">
+  <p class="eq">v′ = v + w₀ · Δ₀ + w₁ · Δ₁ + … = v + Σ wₜ · Δₜ</p>
+  <dl>
+    <dt>v</dt><dd>the vertex in the base shape</dd>
+    <dt>Δₜ</dt><dd>target t's delta for this vertex</dd>
+    <dt>wₜ</dt><dd>target t's weight, the same for every vertex of the mesh in this frame</dd>
+  </dl>
+</div>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A weight of 0: the shape is the base square.">
+      <rect x="80" y="20" width="80" height="90" class="gpu o-50"/>
+      <text x="120" y="124" class="mid small">w = 0</text>
+    </svg>
+    <h4>0: the base</h4>
+    <p>The target has no effect. Its deltas are not even needed.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A weight of 1: the shape is the target, a thin plate.">
+      <rect x="80" y="20" width="80" height="90" class="ghost"/>
+      <rect x="80" y="86" width="80" height="24" class="gpu o-50"/>
+      <text x="120" y="124" class="mid small">w = 1</text>
+    </svg>
+    <h4>1: the target</h4>
+    <p>The vertex lands exactly where the artist put it.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Weights below 0 or above 1: the shape goes past the target, or the other way.">
+      <rect x="80" y="20" width="80" height="90" class="ghost"/>
+      <rect x="80" y="4" width="80" height="106" class="hot o-50"/>
+      <text x="120" y="124" class="mid small">w = −0.2</text>
+    </svg>
+    <h4>Below 0, above 1</h4>
+    <p>Allowed. The shape goes the other way, or past the target: a cartoon squash and stretch.</p>
+  </div>
+</div>
+
+<h2 id="weights"><span class="n">2</span>Where the weights come from</h2>
+
+<p>The deltas are fixed at import. Only the weights change, so a mesh with 50 targets is animated by 50 numbers per frame. They come from three places, and the later one wins:</p>
+
+<ol class="flow">
+  <li class="mem"><b>Rest weights.</b> The file gives the weights of the shape at rest. In glTF, a node's <code class="lang-text">weights</code>, else the mesh's, else 0.</li>
+  <li class="cpu"><b>A clip.</b> A channel with the path <code class="lang-text">weights</code> animates all the targets of one node at once.</li>
+  <li class="gpu"><b>The application.</b> Sliders in an editor, lip sync from audio, a face tracker: the program sets the weights each frame.</li>
+</ol>
+
+<p>A weights channel keys every target together. Each key holds one value per target. With cubic splines each key holds three groups: the in-tangents of all targets, then the values, then the out-tangents.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 170" role="img" aria-label="The output of a weights sampler for a mesh with 3 targets. LINEAR or STEP: per key, three numbers, the weight of target 0, 1 and 2. CUBICSPLINE: per key, nine numbers: three in-tangents, three values, three out-tangents. Splitting the array gives one curve per target, which is sampled like any other channel.">
+    <text x="20" y="22" class="title">LINEAR, STEP: per key, one weight per target</text>
+    <g class="mono small">
+      <rect x="20" y="32" width="60" height="28" class="cpu"/><text x="50" y="50" class="mid">w₀</text>
+      <rect x="80" y="32" width="60" height="28" class="shader"/><text x="110" y="50" class="mid">w₁</text>
+      <rect x="140" y="32" width="60" height="28" class="mem"/><text x="170" y="50" class="mid">w₂</text>
+      <rect x="210" y="32" width="60" height="28" class="cpu"/><text x="240" y="50" class="mid">w₀</text>
+      <rect x="270" y="32" width="60" height="28" class="shader"/><text x="300" y="50" class="mid">w₁</text>
+      <rect x="330" y="32" width="60" height="28" class="mem"/><text x="360" y="50" class="mid">w₂</text>
+    </g>
+    <text x="110" y="76" class="mid small t-faint">key 0</text>
+    <text x="300" y="76" class="mid small t-faint">key 1</text>
+
+    <text x="20" y="104" class="title">CUBICSPLINE: per key, in-tangents, values, out-tangents</text>
+    <g class="mono small">
+      <rect x="20" y="114" width="40" height="28" class="cpu o-50"/><text x="40" y="132" class="mid">a₀</text>
+      <rect x="60" y="114" width="40" height="28" class="shader o-50"/><text x="80" y="132" class="mid">a₁</text>
+      <rect x="100" y="114" width="40" height="28" class="mem o-50"/><text x="120" y="132" class="mid">a₂</text>
+      <rect x="140" y="114" width="40" height="28" class="cpu"/><text x="160" y="132" class="mid">w₀</text>
+      <rect x="180" y="114" width="40" height="28" class="shader"/><text x="200" y="132" class="mid">w₁</text>
+      <rect x="220" y="114" width="40" height="28" class="mem"/><text x="240" y="132" class="mid">w₂</text>
+      <rect x="260" y="114" width="40" height="28" class="cpu o-50"/><text x="280" y="132" class="mid">b₀</text>
+      <rect x="300" y="114" width="40" height="28" class="shader o-50"/><text x="320" y="132" class="mid">b₁</text>
+      <rect x="340" y="114" width="40" height="28" class="mem o-50"/><text x="360" y="132" class="mid">b₂</text>
+    </g>
+    <text x="200" y="158" class="mid small t-faint">key 0 (key 1 follows)</text>
+
+    <line x1="400" y1="88" x2="470" y2="88" class="arrow" marker-end="url(#ah)"/>
+    <text x="436" y="80" class="mid small">split</text>
+    <rect x="480" y="36" width="260" height="30" rx="6" class="cpu"/>
+    <text x="610" y="56" class="mid small">curve of target 0: keys of w₀</text>
+    <rect x="480" y="74" width="260" height="30" rx="6" class="shader"/>
+    <text x="610" y="94" class="mid small">curve of target 1: keys of w₁</text>
+    <rect x="480" y="112" width="260" height="30" rx="6" class="mem"/>
+    <text x="610" y="132" class="mid small">curve of target 2: keys of w₂</text>
+  </svg>
+  <figcaption>Split per target, each weight is a curve with its own values and tangents, sampled like a translation: hold for STEP, mix for LINEAR, a Hermite curve for CUBICSPLINE.</figcaption>
+</figure>
+
+<h2 id="normals"><span class="n">3</span>Normals and tangents blend too</h2>
+
+<p>When the shape changes, the surface turns, so the light on it must change too. A target can carry deltas for the normal and the tangent as well. They add up the same way. The sum is not unit length any more, so make it unit length again.</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="A surface bent into a ramp by a target. Its normals still point straight up, as in the base shape, so the ramp is lit like flat ground.">
+      <path d="M20,110 L150,110 L300,40" class="surface"/>
+      <line x1="80" y1="108" x2="80" y2="60" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <line x1="220" y1="76" x2="220" y2="28" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <line x1="270" y1="53" x2="270" y2="5" class="arrow bad" marker-end="url(#ah-bad)"/>
+    </svg>
+    <h4>Positions only</h4>
+    <p>The ramp keeps the base's normals. It is shaded like flat ground.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same ramp with normal deltas added and the result normalized: the normals on the slope lean back, square to the surface.">
+      <path d="M20,110 L150,110 L300,40" class="surface"/>
+      <line x1="80" y1="108" x2="80" y2="60" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <line x1="220" y1="76" x2="200" y2="33" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <line x1="270" y1="53" x2="250" y2="10" class="arrow ok" marker-end="url(#ah-ok)"/>
+    </svg>
+    <h4>Normal deltas, then normalize</h4>
+    <p><code class="lang-text">n′ = normalize(n + Σ wₜ · ΔNₜ)</code>. The tangent the same way; its sign (w) stays.</p>
+  </div>
+</div>
+
+<h2 id="layout"><span class="n">4</span>Storing the deltas for the GPU</h2>
+
+<p>Files often store a target <b>sparse</b>: only the vertices it moves, as a list of indices and values (glTF sparse accessors). On the GPU a dense array is simpler: every vertex has a delta in every target, so the address of a delta is a multiply and an add. The import fills the gaps with 0.</p>
+
+<p>The order of the dense array decides how the GPU reads it. One GPU thread poses one vertex, and 32 or 64 threads run together on neighbour vertices:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 296" role="img" aria-label="Two layouts of the deltas of 3 targets for 8 vertices. Vertex-major: the deltas of vertex 0 for targets 0, 1, 2, then vertex 1, and so on. Threads that read target 0 for vertices 0 to 7 jump over the other targets' deltas, and target 1 at weight 0 still sits in the cache lines they load. Target-major: all of target 0 for vertices 0 to 7, then target 1, then target 2. Threads that read target 0 read one block of neighbour deltas, and target 1 at weight 0 is never touched.">
+    <text x="20" y="22" class="title">vertex-major: [vertex][target]</text>
+    <g class="mono small">
+      <rect x="20"  y="34" width="28" height="30" class="cpu"/><rect x="48"  y="34" width="28" height="30" class="ghost"/><rect x="76"  y="34" width="28" height="30" class="mem"/>
+      <rect x="104" y="34" width="28" height="30" class="cpu"/><rect x="132" y="34" width="28" height="30" class="ghost"/><rect x="160" y="34" width="28" height="30" class="mem"/>
+      <rect x="188" y="34" width="28" height="30" class="cpu"/><rect x="216" y="34" width="28" height="30" class="ghost"/><rect x="244" y="34" width="28" height="30" class="mem"/>
+      <rect x="272" y="34" width="28" height="30" class="cpu"/><rect x="300" y="34" width="28" height="30" class="ghost"/><rect x="328" y="34" width="28" height="30" class="mem"/>
+      <rect x="356" y="34" width="28" height="30" class="cpu"/><rect x="384" y="34" width="28" height="30" class="ghost"/><rect x="412" y="34" width="28" height="30" class="mem"/>
+      <rect x="440" y="34" width="28" height="30" class="cpu"/><rect x="468" y="34" width="28" height="30" class="ghost"/><rect x="496" y="34" width="28" height="30" class="mem"/>
+      <rect x="524" y="34" width="28" height="30" class="cpu"/><rect x="552" y="34" width="28" height="30" class="ghost"/><rect x="580" y="34" width="28" height="30" class="mem"/>
+      <rect x="608" y="34" width="28" height="30" class="cpu"/><rect x="636" y="34" width="28" height="30" class="ghost"/><rect x="664" y="34" width="28" height="30" class="mem"/>
+    </g>
+    <text x="34" y="116" class="mid small t-faint">vertex 0</text>
+    <text x="118" y="116" class="mid small t-faint">vertex 1</text>
+    <text x="622" y="116" class="mid small t-faint">vertex 7</text>
+    <g class="arrow gpu">
+      <line x1="34" y1="104" x2="34" y2="68" marker-end="url(#ah-gpu)"/>
+      <line x1="118" y1="104" x2="118" y2="68" marker-end="url(#ah-gpu)"/>
+      <line x1="202" y1="104" x2="202" y2="68" marker-end="url(#ah-gpu)"/>
+      <line x1="286" y1="104" x2="286" y2="68" marker-end="url(#ah-gpu)"/>
+      <line x1="370" y1="104" x2="370" y2="68" marker-end="url(#ah-gpu)"/>
+      <line x1="454" y1="104" x2="454" y2="68" marker-end="url(#ah-gpu)"/>
+      <line x1="538" y1="104" x2="538" y2="68" marker-end="url(#ah-gpu)"/>
+      <line x1="622" y1="104" x2="622" y2="68" marker-end="url(#ah-gpu)"/>
+    </g>
+    <text x="20" y="136" class="small t-bad">8 threads read target 0 with gaps; the unused target 1 rides along in every cache line</text>
+
+    <text x="20" y="168" class="title">target-major: [target][vertex]</text>
+    <g class="mono small">
+      <rect x="20"  y="196" width="28" height="30" class="cpu"/><rect x="48"  y="196" width="28" height="30" class="cpu"/><rect x="76"  y="196" width="28" height="30" class="cpu"/><rect x="104" y="196" width="28" height="30" class="cpu"/>
+      <rect x="132" y="196" width="28" height="30" class="cpu"/><rect x="160" y="196" width="28" height="30" class="cpu"/><rect x="188" y="196" width="28" height="30" class="cpu"/><rect x="216" y="196" width="28" height="30" class="cpu"/>
+      <rect x="244" y="196" width="224" height="30" class="ghost"/>
+      <rect x="468" y="196" width="28" height="30" class="mem"/><rect x="496" y="196" width="28" height="30" class="mem"/><rect x="524" y="196" width="28" height="30" class="mem"/><rect x="552" y="196" width="28" height="30" class="mem"/>
+      <rect x="580" y="196" width="28" height="30" class="mem"/><rect x="608" y="196" width="28" height="30" class="mem"/><rect x="636" y="196" width="28" height="30" class="mem"/><rect x="664" y="196" width="28" height="30" class="mem"/>
+    </g>
+    <text x="132" y="188" class="mid small t-cpu">target 0, vertices 0 to 7</text>
+    <text x="356" y="216" class="mid small t-faint">target 1: weight 0, never read</text>
+    <text x="580" y="188" class="mid small t-mem">target 2, vertices 0 to 7</text>
+    <g class="arrow gpu">
+      <line x1="34" y1="264" x2="34" y2="230" marker-end="url(#ah-gpu)"/>
+      <line x1="62" y1="264" x2="62" y2="230" marker-end="url(#ah-gpu)"/>
+      <line x1="90" y1="264" x2="90" y2="230" marker-end="url(#ah-gpu)"/>
+      <line x1="118" y1="264" x2="118" y2="230" marker-end="url(#ah-gpu)"/>
+      <line x1="146" y1="264" x2="146" y2="230" marker-end="url(#ah-gpu)"/>
+      <line x1="174" y1="264" x2="174" y2="230" marker-end="url(#ah-gpu)"/>
+      <line x1="202" y1="264" x2="202" y2="230" marker-end="url(#ah-gpu)"/>
+      <line x1="230" y1="264" x2="230" y2="230" marker-end="url(#ah-gpu)"/>
+    </g>
+    <text x="20" y="284" class="small t-ok">8 threads read one block of neighbour deltas; a target at weight 0 costs nothing</text>
+  </svg>
+  <figcaption>The address of vertex v in target t, target-major: <code class="lang-text">first + t · vertexCount + v</code>. Before the loop, a group lists the targets whose weight is not 0, once, so every thread loops only over those.</figcaption>
+</figure>
+
+<p>Each delta needs some precision. A normal delta is at most 2 long and the result is normalized, so a <b>half float</b> (16 bits, 11 significant bits) is plenty. A position delta is in the mesh's units, and a half float keeps about 3 digits: 0.03 m of error on a delta of 50 m. So positions stay 32-bit floats.</p>
+
+<div class="stats">
+  <div><b>24 B</b><span>one delta: position as 3 floats, normal and tangent as 6 half floats</span><small>12 + 6 · 2</small></div>
+  <div><b>9.1 · 10⁻⁵</b><span>largest half-float error of a normal delta in AnimatedMorphCube</span><small>deltas up to 0.705 long</small></div>
+  <div><b>1.2 · 10⁻⁵</b><span>what half-float positions would lose in MorphStressTest, a 4 unit model</span><small>it grows with the model's size</small></div>
+</div>
+
+<h2 id="skin"><span class="n">5</span>Morph first, then skin</h2>
+
+<p>A character often has both: a skeleton for the body and targets for the face. The artist models the targets on the mesh in its bind pose, before any joint moves it. So the targets come first, and skinning moves the result:</p>
+
+<div class="formula">
+  <p class="eq">v′ = Σ sᵢ · Jᵢ · (v + Σ wₜ · Δₜ)</p>
+  <dl>
+    <dt>sᵢ, Jᵢ</dt><dd>the vertex's skin weights and joint matrices (<a href="skinning.html">skinning</a>)</dd>
+    <dt>wₜ, Δₜ</dt><dd>the morph weights and the vertex's deltas</dd>
+  </dl>
+</div>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Skin first, then morph: the arm is turned up, but the target's delta, a bulge made in the bind pose, still points straight up, so the bulge comes out sideways.">
+      <line x1="40" y1="110" x2="150" y2="110" class="arrow cpu thick"/>
+      <line x1="150" y1="110" x2="230" y2="40" class="arrow shader thick"/>
+      <line x1="190" y1="75" x2="190" y2="35" class="arrow bad" marker-end="url(#ah-bad)"/>
+      <text x="200" y="30" class="small t-bad">bulge goes up</text>
+    </svg>
+    <h4>Skin, then morph</h4>
+    <p>The delta was modelled for the straight arm. Added after the turn, it points the wrong way.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Morph first, then skin: the bulge is added to the straight arm and turns with the forearm, so it stays on the top of the muscle.">
+      <line x1="40" y1="110" x2="150" y2="110" class="arrow cpu thick"/>
+      <line x1="150" y1="110" x2="230" y2="40" class="arrow shader thick"/>
+      <line x1="190" y1="75" x2="162" y2="43" class="arrow ok" marker-end="url(#ah-ok)"/>
+      <text x="200" y="30" class="small t-ok">bulge turns with the arm</text>
+    </svg>
+    <h4>Morph, then skin</h4>
+    <p>The delta is added in the bind pose, and the joint turns it with the rest of the vertex.</p>
+  </div>
+</div>
+
+<p>Like skinning, morphing is best done <b>once per frame</b>, in a compute pass that writes the posed vertices. Every view (the camera and each shadow map) then draws them. Morphing in the vertex shader repeats the loop over the targets in every view.</p>
+
+<h2 id="bounds"><span class="n">6</span>Bounds that grow with the weights</h2>
+
+<p>Culling needs a sphere that holds the mesh in this frame. The base mesh's sphere is not enough: a target can move vertices out of it. Measuring the posed vertices each frame costs a pass over them before culling. A cheaper bound needs only the weights:</p>
+
+<div class="formula">
+  <p class="eq">radius = base radius + Σ |wₜ| · rₜ</p>
+  <dl>
+    <dt>rₜ</dt><dd>the longest position delta of target t, measured once at import</dd>
+  </dl>
+</div>
+
+<p>No vertex moves more than <code class="lang-text">|wₜ| · rₜ</code> by target t, and the moves add up at most to the sum. So the bound is always safe. It is loose when the targets move different vertices: the sum adds their longest moves anyway. With a skeleton, grow each joint's sphere by the same amount before the joint matrix moves it.</p>
+
+<figure class="lab" data-lab="morph-bounds" data-title="Grow the bound with the weights">
+  <figcaption>Move the weights. The solid circle is the grown bound: it always holds every vertex. Set "tall" and "bump" together to see it get loose; set every weight to 0 to see no target read.</figcaption>
+</figure>
+
+<h2 id="motion"><span class="n">7</span>Motion vectors of morphed vertices</h2>
+
+<p>TAA and motion blur need each vertex's place in the frame before. A morphed vertex moves in its object's own space, so the object's matrix of the frame before is not enough. Keep the posed vertices of the frame before too, and read the same vertex there.</p>
+
+<p>When the weights <b>jump</b> (a new clip starts, the application sets new weights out of nowhere), the frame before shows another shape. Then use this frame's vertex for both frames, so the jump makes no long motion vector. Weights that change a little each frame are normal motion.</p>
+
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>The shape is right, but its lighting is flat</dt><dd>The normal deltas were not added, or the sum was not normalized.</dd></div>
+  <div><dt>A target moves the wrong vertices</dt><dd>The base mesh's vertices were welded or reordered at import, but the deltas were not. Weld and reorder the deltas with the vertices, and compare deltas too when welding.</dd></div>
+  <div><dt>A face part disappears at the edge of the screen</dt><dd>The mesh was culled with its base sphere. Grow the bound by the weights.</dd></div>
+  <div><dt>A smile bulges sideways on a turned head</dt><dd>Skinning ran before morphing. Morph in the bind pose first.</dd></div>
+  <div><dt>Many targets cost as much at rest as in motion</dt><dd>The loop reads every target. Skip the targets at weight 0, and store the deltas target-major so a skipped target costs no memory traffic.</dd></div>
+  <div><dt>A large model shakes slightly as it morphs</dt><dd>Position deltas stored as half floats lose precision on big meshes. Keep positions as 32-bit floats.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p>RASM morphs on the GPU, once per frame, in the same <code>Skin</code> pass that skins. The import puts each primitive's deltas into a morph stream of the geometry pool, target-major. The <code>Animate</code> pass writes every posed entity's weights and grows its bounds. The <code>Skin</code> pass adds the deltas of the targets whose weight is not 0, then applies the joints when the mesh has a skin. Every view draws the posed vertices.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 440" role="img" aria-label="Import: each primitive's POSITION, NORMAL and TANGENT target deltas, sparse accessors filled in, become 24-byte MorphDeltas in the geometry pool's morph stream, target-major; the rest weights, target names and each target's longest delta go to the animation pool. Each frame the CPU writes setMorphWeights values into the morph weight override table. The Animate pass writes per entity each weight, the override, else the clip's weights channel, else the rest weight, into this slot's morph weight buffer, and grows each posed sub-mesh's bounds. The Skin pass, one group per entity row and 64 vertices of one sub-mesh, loads the sub-mesh's weights once, lists the targets whose weight is not 0, adds their deltas to the base vertex, renormalizes the normal and tangent, skins when the mesh has joints, and writes the posed vertex to this slot's skinned vertex buffer, which every view draws.">
+    <text x="20" y="22" class="title t-cpu">Import, once per mesh</text>
+    <rect x="20" y="34" width="200" height="40" rx="6" class="cpu"/>
+    <text x="120" y="52" class="mid small">targets: POSITION, NORMAL,</text>
+    <text x="120" y="67" class="mid small">TANGENT (sparse filled in)</text>
+    <line x1="220" y1="54" x2="258" y2="54" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="260" y="34" width="232" height="40" rx="6" class="mem"/>
+    <text x="376" y="52" class="mid small">morph stream, target-major</text>
+    <text x="376" y="67" class="mid mono small">MorphDelta, 24 B</text>
+    <rect x="510" y="34" width="230" height="40" rx="6" class="mem"/>
+    <text x="625" y="52" class="mid small">animation pool</text>
+    <text x="625" y="67" class="mid small">rest weights · longest deltas</text>
+
+    <text x="20" y="104" class="title t-cpu">CPU: setMorphWeights</text>
+    <rect x="20" y="114" width="230" height="40" rx="6" class="mem"/>
+    <text x="135" y="132" class="mid small">Morph Weight Override Table</text>
+    <text x="135" y="147" class="mid small">4 B per weight, NaN: not set</text>
+
+    <text x="270" y="104" class="title t-gpu">Animate: a group per entity row</text>
+    <rect x="270" y="114" width="470" height="58" rx="6" class="gpu"/>
+    <circle cx="294" cy="143" r="10" class="badge"/><text x="294" y="147" class="badge-n">1</text>
+    <text x="312" y="139" class="small">weight = override, else clip,</text>
+    <text x="312" y="154" class="small">else rest weight</text>
+    <circle cx="510" cy="143" r="10" class="badge"/><text x="510" y="147" class="badge-n">2</text>
+    <text x="528" y="139" class="small">bound + Σ |wₜ| · rₜ</text>
+    <text x="528" y="154" class="small">(each joint sphere too)</text>
+    <line x1="250" y1="134" x2="268" y2="134" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="625" y1="74" x2="625" y2="112" class="arrow mem" marker-end="url(#ah-mem)"/>
+
+    <rect x="270" y="196" width="230" height="40" rx="6" class="mem"/>
+    <text x="385" y="214" class="mid small">Morph Weight Buffer (slot)</text>
+    <text x="385" y="229" class="mid small">4 B per weight per entity</text>
+    <line x1="385" y1="172" x2="385" y2="194" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="510" y="196" width="230" height="40" rx="6" class="mem"/>
+    <text x="625" y="214" class="mid small">Animated Transform Buffer</text>
+    <text x="625" y="229" class="mid small">bounds read by every Cull</text>
+    <line x1="625" y1="172" x2="625" y2="194" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+
+    <text x="20" y="268" class="title t-gpu">Skin: x = entity row, y = 64 vertices of one sub-mesh</text>
+    <rect x="20" y="278" width="480" height="76" rx="6" class="gpu"/>
+    <circle cx="44" cy="298" r="10" class="badge"/><text x="44" y="302" class="badge-n">1</text>
+    <text x="62" y="302" class="small">load the weights once; list the targets with w ≠ 0</text>
+    <circle cx="44" cy="322" r="10" class="badge"/><text x="44" y="326" class="badge-n">2</text>
+    <text x="62" y="326" class="small">v + Σ wₜ · Δₜ from the morph stream; normalize normal, tangent</text>
+    <circle cx="44" cy="344" r="10" class="badge"/><text x="44" y="348" class="badge-n">3</text>
+    <text x="62" y="348" class="small">with a skin: Σ sᵢ · Jᵢ · v (skinning)</text>
+    <line x1="460" y1="236" x2="460" y2="276" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="520" y="292" width="220" height="44" rx="6" class="mem"/>
+    <text x="630" y="310" class="mid small">Skinned Vertex Buffer</text>
+    <text x="630" y="326" class="mid small">64 B per vertex, one per slot</text>
+    <line x1="500" y1="314" x2="518" y2="314" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+
+    <line x1="630" y1="336" x2="630" y2="372" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="20" y="374" width="720" height="50" rx="6" class="cpu"/>
+    <text x="34" y="394" class="small">every view: camera, cascades, spot maps, cube faces</text>
+    <text x="34" y="412" class="mono small">getVertex · getPreviousObjectPosition · getWorldSphere</text>
+  </svg>
+  <figcaption>A posed sub-mesh starts at a multiple of 64 among its entity's skinned vertices, so a group of the <code>Skin</code> pass never mixes two sub-meshes' targets. A mesh with targets and no skin is posed the same way and keeps following its node.</figcaption>
+</figure>
+
+<p>An entity of a morphed mesh plays a clip like any animated entity. To drive the weights from the application, set them each frame; <code>clearMorphWeights</code> gives them back to the clip:</p>
+
+<pre><code>const rasm::MeshHandle face = engine.loadGLTF("models/face.glb");
+engine.waitForLoads();
+const std::vector&lt;std::string&gt; names = engine.getMorphTargetNames(face);
+std::vector&lt;float&gt; weights(names.size(), 0.0f);
+for (size_t i = 0; i &lt; names.size(); ++i)
+{
+    if (names[i] == "Smile")
+        weights[i] = smile;
+}
+engine.setMorphWeights(entity, weights.data(), static_cast&lt;uint32_t&gt;(weights.size()));</code></pre>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Deltas</td><td>position, normal, tangent</td><td><code>readMorphTargets</code> reads each target's <code>POSITION</code>, <code>NORMAL</code> and <code>TANGENT</code> (xyz) through <code>readFloatAccessor</code>, which fills in sparse accessors. A missing or malformed attribute moves nothing. A primitive keeps at most <code>MAX_MORPH_TARGETS</code> (256) targets, and one whose targets move nothing gets none. A primitive with no <code>NORMAL</code> keeps the normals computed for its base shape (<code>B32</code>).</td></tr>
+  <tr><td>Storage</td><td>dense, target-major</td><td>A <code>MorphDelta</code> of 24 B per vertex and target in the geometry pool's morph stream (<code>EngineConfig::geometryPoolMorphs</code>, 2<sup>20</sup>, 24 MiB). <code>GeometryData::morphOffset</code> (−1 for none) and <code>morphTargetCount</code> find it. MorphStressTest takes 282 KiB: 1504 vertices × 8 targets.</td></tr>
+  <tr><td>Precision</td><td>float positions, half normals</td><td><code>packMorphDelta</code>: the position as floats, the normal and the tangent's xyz as half floats, two per uint. The <code>Skin</code> pass decodes the halves with bit math, so the device needs no 16-bit types.</td></tr>
+  <tr><td>Rest weights</td><td>the node's, else the mesh's, else 0</td><td><code>importMorphWeights</code> gives each node that draws a morphed mesh its range of weights in <code>AnimationRaw::morphWeights</code>, with the names of <code>mesh.extras.targetNames</code> (else <code class="lang-text">target N</code>). An entity's weights are those of all such nodes of its mesh, one node after another.</td></tr>
+  <tr><td>Clips</td><td>a weights channel</td><td><code>importAnimations</code> splits a weights sampler into one sampler per target, its value in x, and adds one <code>AnimationPath::WEIGHTS</code> channel per weight. A clip's channel row has three channels per node, then one per weight. STEP, LINEAR and CUBICSPLINE sample as for a translation. Each split sampler keeps its own key times and a 16-byte value per key (<code>P20</code>).</td></tr>
+  <tr><td>The application</td><td>sets the weights</td><td><code>setMorphWeights</code> writes the morph weight override table through <code>GpuTable::setRow</code>, uploaded in <code>syncGpuScene</code>. The weights it does not set hold a quiet NaN, which the <code>Animate</code> pass compares by its bits, and there the clip's or the rest weight counts.</td></tr>
+  <tr><td>Where it morphs</td><td>once per frame, before skinning</td><td>The <code>Skin</code> pass, which also skins. A mesh with targets and no skin gets posed vertices too, and its node stays among the animated nodes, so it still follows that node.</td></tr>
+  <tr><td>Weight 0</td><td>skip the target</td><td>A group loads its sub-mesh's weights into shared memory, and one thread lists those that are not 0. The threads loop only over that list.</td></tr>
+  <tr><td>Bounds</td><td>grow by Σ |wₜ| · rₜ</td><td><code>getMorphRadii</code> at import (the rₜ, in the animation pool), <code>getMorphGrowth</code> in <code>animate.slang</code>. A mesh without a skin gets its geometry's sphere grown; a skinned one grows each joint's sphere before its joint matrix moves it.</td></tr>
+  <tr><td>Motion vectors</td><td>the posed vertex of the frame before</td><td>As for skinning: <code>InstanceTransform::skinnedMotion</code>. It is 0 in the frame an entity starts, a play jumps, the first <code>setMorphWeights</code> after none, a <code>clearMorphWeights</code>, or a growth of the buffers. Later <code>setMorphWeights</code> calls are motion.</td></tr>
+  <tr><td>At rest</td><td>the rest weights</td><td>An entity of a morphed mesh takes its animation row with its instance rows, like a skinned one (<code>poseAtRest</code>). With no clip, the rest row of channels has none, so every weight is its rest weight.</td></tr>
+  <tr><td>LODs</td><td>—</td><td>The LODs share the vertices, so every LOD is morphed. <code>weldVertices</code> welds two vertices only when their deltas match too, and moves the deltas with them. It compares at most 13 targets: a mesh with more gets no LODs. The simplification ignores the deltas (<code>D29</code>).</td></tr>
+</table>
+</div>
+
+<p>The cost, with <samp>--bench --crowd 1000 --active K</samp>: 1000 MorphStressTest share one mesh of 1504 morphed vertices and 8 targets, and K of the weights are 0.5, the others 0.</p>
+
+<div class="stats">
+  <div><b>0.88 ms</b><span><code>Skin</code> with every weight at 0: the cost of writing 1.5M posed vertices</span><small>RTX 3060, 1080p</small></div>
+  <div><b>0.92 ms</b><span>with 4 of the 8 targets active</span><small>6.0M deltas read</small></div>
+  <div><b>1.11 ms</b><span>with all 8 active</span><small>2000 entities: 1.87 ms at 0, 2.11 ms at 8</small></div>
+</div>
+
+<p>A target at weight 0 costs nothing. The crowd shares one mesh, so its 282 KiB of deltas stay in the GPU's L2 cache; many different meshes would read their deltas from memory and cost more per active target.</p>
+
+<p>See also the <a href="../api/scene.html#morph-targets">API reference</a>, <a href="skinning.html">skinning</a>, <a href="keyframe-animation.html">keyframe animation</a> and <a href="vertex-pulling.html">vertex pulling</a>. <code>examples/14_morph_targets</code> plays MorphStressTest, AnimatedMorphCube and SimpleMorph, drives a cube's weight with a sine, and shows SimpleMorph at its rest weights; <samp>--crowd 1000</samp> adds a crowd and <samp>--active 2</samp> drives the crowd's weights.</p>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The public types and calls</td><td><code>MorphDelta</code>, <code>MAX_MORPH_TARGETS</code>, <code>ObjRaw</code>, <code>SubGLTFRaw</code> in <code>include/rasm/mesh.h</code>; <code>AnimationPath::WEIGHTS</code>, <code>AnimationRaw</code> in <code>include/rasm/animation.h</code>; <code>Engine::setMorphWeights</code>, <code>clearMorphWeights</code>, <code>getMorphTargetNames</code> in <code>include/rasm/engine.h</code>; <code>EngineConfig::geometryPoolMorphs</code>, <code>maxMorphWeights</code> in <code>include/rasm/types.h</code></td></tr>
+  <tr><td>Import: deltas, weights, names</td><td><code>readMorphTargets</code>, <code>importMorphWeights</code>, <code>getMorphRadii</code>, <code>packMorphDelta</code> in <code>src/assets/morphImport.cpp</code>; sparse accessors in <code>src/assets/gltfAccessor.cpp</code>; the weights channel in <code>src/assets/animationImport.cpp</code></td></tr>
+  <tr><td>The morph stream</td><td><code>GeometryPool::upload</code> in <code>src/renderer/geometryPool.cpp</code>; <code>weldVertices</code> in <code>src/assets/meshLod.cpp</code></td></tr>
+  <tr><td>Weights, rows, passes</td><td><code>Engine::setMorphWeights</code>, <code>Engine::writeMorphWeightRows</code>, <code>Engine::uploadMeshAnimation</code>, <code>buildAnimationPoolData</code> in <code>src/renderer/animation.cpp</code></td></tr>
+  <tr><td>The shaders</td><td><code>animateMain</code>, <code>getMorphGrowth</code> in <code>shaders/passes/animate.slang</code>; <code>skinMain</code> in <code>shaders/passes/skin.slang</code></td></tr>
+  <tr><td>The GPU structs</td><td><code>MorphDelta</code> and <code>GeometryData</code> in <code>shaders/lib/geometryTypes.slang</code>; <code>AnimationFrame</code>, <code>AnimatedEntity</code>, <code>AnimationMeshData</code> in <code>shaders/lib/animationTypes.slang</code>; their C++ mirrors in <code>src/renderer/uberMaterialTypes.h</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/morphTargetsTests.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>The morph stream is welded and reordered with its vertices, target by target.</li>
+    <li>A posed sub-mesh starts on a multiple of 64 among its entity's skinned vertices: a <code>Skin</code> group holds one sub-mesh's weights.</li>
+    <li>Morph before skin, in the bind pose.</li>
+    <li>A weight's override is a quiet NaN's exact bits when it is not set, never a NaN test, which fast math may drop.</li>
+    <li>The bound uses the longest delta of each target: a new kind of delta that moves positions must be measured into it.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>The Khronos Group, <i>glTF 2.0 Specification</i>, section 3.7.2.2 "Morph Targets" and 3.11 "Animations".</li>
+  <li>J. P. Lewis, Ken Anjyo, Taehyun Rhee, Mengjie Zhang, Fred Pighin and Zhigang Deng, <i>Practice and Theory of Blendshape Facial Models</i>, Eurographics 2014 State of the Art Reports.</li>
+  <li><a href="skinning.html">Skinning</a>, <a href="keyframe-animation.html">Keyframe animation</a>, <a href="taa.html">Temporal anti-aliasing</a>, <a href="frustum-culling.html">Frustum culling</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

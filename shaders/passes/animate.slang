@@ -2,9 +2,9 @@
 #include "animationTypes.slang"
 
 // The Animate pass: one group per row of the animated entity table. It samples the entity's clip at the frame's time
-// into each node's local matrix, walks up the parents to each node's world matrix, writes each skin joint's matrix, and
-// writes the matrices of the entity's animated sub-meshes, and a skinned one's bounds. The threads go over the nodes,
-// joints and sub-meshes in strides, so a mesh may have any number of them.
+// into each node's local matrix and each morph weight, walks up the parents to each node's world matrix, writes each
+// skin joint's matrix, and writes the matrices of the entity's animated sub-meshes, and a posed one's bounds. The
+// threads go over the nodes, weights, joints and sub-meshes in strides, so a mesh may have any number of them.
 
 static const uint ANIMATE_GROUP_SIZE = 64;
 
@@ -138,26 +138,40 @@ float getStretch(float3x4 m)
     return sqrt(max(max(dot(c0, c0) + d01 + d02, dot(c1, c1) + d01 + d12), dot(c2, c2) + d02 + d12));
 }
 
-// A joint's sphere moved by its joint matrix. A sphere with radius < 0 has no vertex.
-float4 getPosedSphere(AnimationFrame *frame, AnimationMeshData *mesh, AnimatedEntity entity, AnimationSubMeshData subMesh, uint joint)
+// How far the sub-mesh's morph targets can move a vertex: target t moves it by at most |w_t| times its longest
+// position change, and the moves add up.
+float getMorphGrowth(AnimationFrame *frame, AnimationMeshData *mesh, AnimatedEntity entity, AnimationSubMeshData subMesh)
+{
+    GeometryData morphed = frame->geometry[subMesh.geometryIndex];
+    if (morphed.morphOffset < 0)
+        return 0.0;
+    float growth = 0.0;
+    for (uint t = 0; t < morphed.morphTargetCount; ++t)
+        growth += abs(frame->weights[entity.firstWeight + subMesh.firstWeight + t]) * mesh->morphRadii[subMesh.firstMorphRadius + t];
+    return growth;
+}
+
+// A joint's sphere, grown by the morph targets' moves, then moved by its joint matrix. A sphere with radius < 0 has no
+// vertex.
+float4 getPosedSphere(AnimationFrame *frame, AnimationMeshData *mesh, AnimatedEntity entity, AnimationSubMeshData subMesh, uint joint, float growth)
 {
     float4 sphere = mesh->jointSpheres[subMesh.firstSphere + joint];
     if (sphere.w < 0.0)
         return sphere;
     float3x4 matrix = loadRows(frame->joints + (entity.firstJoint + subMesh.firstJoint + joint) * 3);
-    return float4(mul(matrix, float4(sphere.xyz, 1.0)), sphere.w * getStretch(matrix));
+    return float4(mul(matrix, float4(sphere.xyz, 1.0)), (sphere.w + growth) * getStretch(matrix));
 }
 
 // A skinned vertex is a weighted mix of its joints' matrices applied to it, and each of them puts it inside that
 // joint's posed sphere. A sphere around all the posed spheres is convex, so it holds every mix: the center of their
 // box, the radius to the farthest edge.
-float4 getSkinnedBounds(AnimationFrame *frame, AnimationMeshData *mesh, AnimatedEntity entity, AnimationSubMeshData subMesh)
+float4 getSkinnedBounds(AnimationFrame *frame, AnimationMeshData *mesh, AnimatedEntity entity, AnimationSubMeshData subMesh, float growth)
 {
     float3 low = float3(1e30);
     float3 high = float3(-1e30);
     for (uint j = 0; j < subMesh.jointCount; ++j)
     {
-        float4 sphere = getPosedSphere(frame, mesh, entity, subMesh, j);
+        float4 sphere = getPosedSphere(frame, mesh, entity, subMesh, j, growth);
         if (sphere.w < 0.0)
             continue;
         low = min(low, sphere.xyz - sphere.w);
@@ -169,7 +183,7 @@ float4 getSkinnedBounds(AnimationFrame *frame, AnimationMeshData *mesh, Animated
     float radius = 0.0;
     for (uint j = 0; j < subMesh.jointCount; ++j)
     {
-        float4 sphere = getPosedSphere(frame, mesh, entity, subMesh, j);
+        float4 sphere = getPosedSphere(frame, mesh, entity, subMesh, j, growth);
         if (sphere.w >= 0.0)
             radius = max(radius, length(sphere.xyz - center) + sphere.w);
     }
@@ -202,7 +216,8 @@ void animateMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     AnimationMeshData *mesh = entity.mesh;
     uint nodeCount = mesh->nodeCount;
     float time = getClipTime(entity, frame->clock);
-    int32_t *channels = mesh->channels + uint(entity.clip) * nodeCount * 3;
+    uint weightCount = mesh->weightCount;
+    int32_t *channels = mesh->channels + uint(entity.clip) * (nodeCount * 3 + weightCount);
     float4 *locals = frame->pose + entity.firstNode * 6;
     float4 *worlds = locals + nodeCount * 3;
 
@@ -227,6 +242,17 @@ void animateMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
             local = composeTrs(t, normalize(q), s);
         }
         storeRows(locals + n * 3, local);
+    }
+    // A weight is setMorphWeights's, else its clip's, else its rest weight.
+    for (uint w = threadId.x; w < weightCount; w += ANIMATE_GROUP_SIZE)
+    {
+        float weight = frame->weightOverrides[entity.firstWeight + w];
+        if (asuint(weight) == NO_WEIGHT_OVERRIDE)
+        {
+            int sampler = channels[nodeCount * 3 + w];
+            weight = sampler >= 0 ? sampleChannel(mesh, sampler, time, false).x : mesh->weights[w];
+        }
+        frame->weights[entity.firstWeight + w] = weight;
     }
     AllMemoryBarrierWithGroupSync();
 
@@ -264,23 +290,34 @@ void animateMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         AnimationSubMeshData subMesh = mesh->subMeshes[k];
         uint row = entity.firstTransform + k;
 
-        // A skinned sub-mesh ignores its node (glTF): its joints place its vertices, and the entity places them all.
+        // A skinned sub-mesh ignores its node (glTF): its joints place its vertices, and the entity places them all. A
+        // morphed one that is not skinned follows its node, with the vertices the Skin pass morphs.
         InstanceTransform transform;
         float4x4 world = entity.entityMatrix;
         transform.boundsCenter = float3(0.0);
         transform.boundsRadius = -1.0;
         transform.skinnedVertex = -1;
         transform.skinnedMotion = 0;
+        float growth = getMorphGrowth(frame, mesh, entity, subMesh);
         if (subMesh.jointCount == 0)
         {
             float3x4 node = loadRows(worlds + subMesh.node * 3);
             world = mul(entity.entityMatrix, float4x4(node[0], node[1], node[2], float4(0.0, 0.0, 0.0, 1.0)));
+            if (subMesh.vertexCount > 0)
+            {
+                GeometryData base = frame->geometry[subMesh.geometryIndex];
+                transform.boundsCenter = base.boundsCenter;
+                transform.boundsRadius = base.boundsRadius + growth;
+            }
         }
         else
         {
-            float4 bounds = getSkinnedBounds(frame, mesh, entity, subMesh);
+            float4 bounds = getSkinnedBounds(frame, mesh, entity, subMesh, growth);
             transform.boundsCenter = bounds.xyz;
             transform.boundsRadius = bounds.w;
+        }
+        if (subMesh.vertexCount > 0)
+        {
             transform.skinnedVertex = int(entity.firstSkinnedVertex + subMesh.firstSkinnedVertex);
             transform.skinnedMotion = reset ? 0 : 1;
         }

@@ -301,7 +301,7 @@
   <li class="gpu"><b>next frame</b><span>no motion</span></li>
 </ol>
 
-<p>A skinned vertex moves inside its mesh too, so one matrix cannot say where it was. The <code>Skin</code> pass writes the posed vertices to one buffer per frame slot, and a vertex keeps its index in both. So the frame before's position is the same vertex in the other slot's buffer (<code>SceneData::previousSkinnedVertsPtr</code>), read by <code>getPreviousObjectPosition</code> and then moved by <code>previousWorld</code>:</p>
+<p>A skinned or <a href="morph-targets.html">morphed</a> vertex moves inside its mesh too, so one matrix cannot say where it was. The <code>Skin</code> pass writes the posed vertices to one buffer per frame slot, and a vertex keeps its index in both. So the frame before's position is the same vertex in the other slot's buffer (<code>SceneData::previousSkinnedVertsPtr</code>), read by <code>getPreviousObjectPosition</code> and then moved by <code>previousWorld</code>:</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 150" role="img" aria-label="Two skinned vertex buffers, slot 0 and slot 1. This frame writes slot 1 and draws vertex 7 from it; the frame before wrote slot 0, and vertex 7 there is where the frame before drew it. Motion is the difference of the two screen positions. On a reset the shader uses this frame's vertex for both, so there is no motion.">
@@ -319,7 +319,7 @@
     <text x="581" y="77" class="mid mono small">motion = now(7) − before(7)</text>
     <text x="581" y="94" class="mid small">reset (skinnedMotion = 0): before = now</text>
   </svg>
-  <figcaption>The two slots swap every frame. A new entity, a play that jumps the time and a growth of the buffers have no frame before, so the <code>Animate</code> pass writes <code>skinnedMotion</code> = 0 for that frame and the shader takes this frame's vertex for both.</figcaption>
+  <figcaption>The two slots swap every frame. A new entity, a play that jumps the time, the first <code>setMorphWeights</code> after none, a <code>clearMorphWeights</code> and a growth of the buffers have no frame before, so the <code>Animate</code> pass writes <code>skinnedMotion</code> = 0 for that frame and the shader takes this frame's vertex for both. A smooth change of the weights is motion, like a clip.</figcaption>
 </figure>
 
 <h3>Where RASM follows this page, and where it differs</h3>
@@ -328,7 +328,7 @@
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Jitter</td><td>Halton (2, 3)</td><td><code>getTaaJitter</code>: points 1 to <code>TAA_JITTER_PHASES</code> (8), from a counter per scene view (<code>SceneView::jitterFrame</code>), so the same frames give the same pixels. <code>writeViewMotion</code> puts it in the projection as a translation of clip space, which <code>removeJitter</code> takes out of the motion and the sky.</td></tr>
-  <tr><td>Motion</td><td>last transforms, last camera</td><td><code>InstanceData::previousWorld</code> (or an animated sub-mesh's <code>InstanceTransform::previousWorld</code>, from the <code>Animate</code> pass; a skinned vertex's last position from the other slot's skinned vertices), <code>SceneData::previousViewProjection</code> and <code>jitter</code>; the uber, MASK and sky pipelines of a target with a motion color are compiled with <code>RASM_MOTION_VECTORS</code>. A <code>BLEND</code> draw writes zero motion with alpha 0, which its premultiplied blend turns into "keep": see-through surfaces keep the motion behind them.</td></tr>
+  <tr><td>Motion</td><td>last transforms, last camera</td><td><code>InstanceData::previousWorld</code> (or an animated sub-mesh's <code>InstanceTransform::previousWorld</code>, from the <code>Animate</code> pass; a skinned or morphed vertex's last position from the other slot's skinned vertices), <code>SceneData::previousViewProjection</code> and <code>jitter</code>; the uber, MASK and sky pipelines of a target with a motion color are compiled with <code>RASM_MOTION_VECTORS</code>. A <code>BLEND</code> draw writes zero motion with alpha 0, which its premultiplied blend turns into "keep": see-through surfaces keep the motion behind them.</td></tr>
   <tr><td>The pass</td><td>nearest motion, clip, sharp resample, weights</td><td><code>taaMain</code> in <code>shaders/passes/taa.slang</code>: the nearest of 3 × 3 depths picks the motion; the history through 5 Catmull-Rom taps; clipped to mean ± 1 σ in YCoCg; blended at 10 % (30 % when the pixel moves 8 pixels a frame or more), on colors compressed by <code>1 / (1 + luminance · exposure)</code>.</td></tr>
   <tr><td>Mip bias</td><td>about −1</td><td><code>TAA_TEXTURE_LOD_BIAS</code> (−1) in <code>SceneData::textureLodBias</code>, read by <code>sampleMaterial</code> for every material texture of a jittered view.</td></tr>
   <tr><td>Resets</td><td>first frame, resize, cut, jump</td><td>The pass keeps its last size, its history's texture (a new swapchain makes new ones, at any size), camera and <code>Camera::historyResets</code>. <code>Engine::resetCameraHistory</code> counts that up. A jump is a turn above <code>TAA_JUMP_ANGLE</code> (30°) or a move above <code>TAA_JUMP_NEAR_PLANES</code> (100) near planes, for an orthographic camera half its width (<code>isCameraJump</code>).</td></tr>
@@ -367,7 +367,7 @@
     <li>Instance rows change only through <code>setRow</code>, and the frame's sync is what turns a moved entity's matrix into last frame's.</li>
     <li>The motion and the sky take the jitter out; nothing after TAA reads the jittered scene.</li>
     <li>The same frames give the same pixels: the jitter comes from a frame counter, never from time or random numbers.</li>
-    <li>A new kind of moving geometry (skinning, morph targets) also needs last frame's vertices, or it smears.</li>
+    <li>A new kind of moving geometry also needs last frame's vertices, or it smears. Skinning and morph targets get them from the <code>Skin</code> pass's other slot.</li>
   </ul>
 </div>
 

@@ -91,6 +91,9 @@ namespace rasm
         void                        stopAnimation(EntityHandle entity);
         std::vector<AnimationClip>  getAnimations(MeshHandle mesh) const;
         int32_t                     findAnimation(MeshHandle mesh, const std::string& name) const;
+        void                        setMorphWeights(EntityHandle entity, const float* weights, uint32_t count);
+        void                        clearMorphWeights(EntityHandle entity);
+        std::vector<std::string>    getMorphTargetNames(MeshHandle mesh) const;
         MeshHandle                  createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices, std::vector<uint32_t> colors = {});
         MeshHandle                  loadMesh(const std::string& path);
         MeshHandle                  loadGLTF(const std::string& path);
@@ -326,6 +329,7 @@ namespace rasm
         int32_t                     getAnimationRow(EntityHandle entity, uint32_t subMesh) const;
         bool                        animationCanMirror(MeshHandle mesh, uint32_t subMesh) const;
         void                        writeAnimationRow(EntityHandle entity);
+        void                        writeMorphWeightRows(EntityHandle entity);
         void                        syncGpuAnimation();
         void                        addAnimationPass(RenderGraph& graph);
         void                        recordAnimation();

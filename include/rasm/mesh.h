@@ -19,6 +19,7 @@ namespace rasm
     constexpr uint32_t MAX_MESHES              = 8;
     constexpr uint32_t MAX_VERTEX_UV_SETS      = 3;
     constexpr uint32_t MAX_MESH_LODS           = 8;
+    constexpr uint32_t MAX_MORPH_TARGETS       = 256;      // per primitive: the Skin pass keeps a group's weights in shared memory
 
     struct Vertex
     {
@@ -37,6 +38,14 @@ namespace rasm
         uint16_t    weights[4];
     };
 
+    // A morph target's change to one vertex: the position as floats, the normal and the tangent's xyz as half floats,
+    // two per uint, the first in the low half (normal x y, normal z tangent x, tangent y z).
+    struct MorphDelta
+    {
+        glm::vec3   position;
+        uint32_t    normalTangent[3];
+    };
+
     struct MeshLod
     {
         std::vector<uint32_t>   indices;
@@ -50,6 +59,8 @@ namespace rasm
         std::vector<MeshLod>    lods;
         std::vector<uint32_t>   colors;
         std::vector<SkinVertex> skin;
+        std::vector<MorphDelta> morphs;                     // target-major: target t's delta of vertex v at t * vertices.size() + v
+        uint32_t                morphTargetCount    = 0;
     };
 
     struct SubGLTFRaw
@@ -63,6 +74,7 @@ namespace rasm
         uint32_t                firstJoint      = 0;        // in GLTFRaw::animation.joints
         uint32_t                jointCount      = 0;        // 0: not skinned
         std::vector<glm::vec4>  jointSpheres;               // per joint of its skin: the sphere around the vertices it moves (radius < 0: none)
+        int32_t                 firstWeight     = -1;       // its node's first weight in GLTFRaw::animation.morphWeights, -1 without morph targets
     };
 
     struct GLTFRaw
@@ -84,18 +96,21 @@ namespace rasm
 
     struct MeshGeometry
     {
-        uint32_t            firstVertex     = 0;
-        uint32_t            vertexCount     = 0;
-        uint32_t            firstIndex      = 0;
-        uint32_t            indexCount      = 0;
-        uint32_t            lodIndexCount   = 0;
-        uint32_t            firstColor      = 0;
-        uint32_t            colorCount      = 0;
-        uint32_t            firstSkin       = 0;
-        uint32_t            skinCount       = 0;
-        uint32_t            geometryIndex   = 0;
-        glm::vec3           boundsCenter    = glm::vec3(0.0f);
-        float               boundsRadius    = 0.0f;
+        uint32_t            firstVertex      = 0;
+        uint32_t            vertexCount      = 0;
+        uint32_t            firstIndex       = 0;
+        uint32_t            indexCount       = 0;
+        uint32_t            lodIndexCount    = 0;
+        uint32_t            firstColor       = 0;
+        uint32_t            colorCount       = 0;
+        uint32_t            firstSkin        = 0;
+        uint32_t            skinCount        = 0;
+        uint32_t            firstMorph       = 0;
+        uint32_t            morphCount       = 0;        // MorphDeltas: vertexCount * morphTargetCount
+        uint32_t            morphTargetCount = 0;
+        uint32_t            geometryIndex    = 0;
+        glm::vec3           boundsCenter     = glm::vec3(0.0f);
+        float               boundsRadius     = 0.0f;
     };
 
     struct SubMesh
@@ -111,6 +126,7 @@ namespace rasm
         MeshState                   state       = MeshState::LOADING;
         std::vector<SubMesh>        subMeshes;
         std::vector<AnimationClip>  animations;
+        std::vector<std::string>    morphTargetNames;   // one per weight of an entity (setMorphWeights)
     };
 
     struct MeshSize

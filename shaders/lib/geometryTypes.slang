@@ -9,6 +9,8 @@
 static const uint MAX_VERTEX_UV_SETS = 3;
 // Must match rasm::MAX_MESH_LODS.
 static const uint MAX_MESH_LODS = 8;
+// Must match rasm::MAX_MORPH_TARGETS: a primitive's most morph targets.
+static const uint MAX_MORPH_TARGETS = 256;
 
 struct VertexFull       { float3 pos; float3 normal; float2 uv[MAX_VERTEX_UV_SETS]; float4 tangent; };
 
@@ -18,6 +20,14 @@ struct SkinVertex
 {
     uint2           joints;
     uint2           weights;
+};
+
+// Must match rasm::MorphDelta: a morph target's change to one vertex. The normal and the tangent's xyz are half floats,
+// two per uint, the first in the low half: normal x y, normal z tangent x, tangent y z.
+struct MorphDelta
+{
+    float3          position;
+    uint32_t        normalTangent[3];
 };
 
 struct GeometryLod
@@ -37,5 +47,7 @@ struct GeometryData
     GeometryLod     lods[MAX_MESH_LODS];
     int32_t         colorOffset;        // the sub-mesh's first color in SceneData::colorsPtr, -1 without vertex colors
     int32_t         skinOffset;         // the sub-mesh's first SkinVertex in the skin stream, -1 when not skinned
+    int32_t         morphOffset;        // the sub-mesh's first MorphDelta in the morph stream, -1 without morph targets
+    uint32_t        morphTargetCount;   // target t's delta of vertex v is at morphOffset + t * vertex count + v
 };
 // clang-format on

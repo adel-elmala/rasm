@@ -145,8 +145,8 @@ TEST_CASE("the pool data has the skinned sub-mesh, the joints' inverse bind rows
     const rasm::gfx::AnimationSubMeshData subMeshes[] = {{.node = 1}, {.jointCount = 2, .firstSphere = 0, .vertexCount = 100, .firstSkinnedVertex = 0}};
     const glm::vec4 spheres[] = {glm::vec4(0, 0, 0, 1), glm::vec4(0, 1, 0, -1)};
     const uint64_t address = 0x20000;
-    const std::vector<uint8_t> bytes = rasm::buildAnimationPoolData(animation, subMeshes, 2, spheres, 2, address);
-    REQUIRE(bytes.size() == rasm::getAnimationPoolBytes(animation, 2, 2));
+    const std::vector<uint8_t> bytes = rasm::buildAnimationPoolData(animation, subMeshes, 2, spheres, 2, nullptr, 0, address);
+    REQUIRE(bytes.size() == rasm::getAnimationPoolBytes(animation, 2, 2, 0));
 
     rasm::gfx::AnimationMeshData header;
     std::memcpy(&header, bytes.data(), sizeof(header));

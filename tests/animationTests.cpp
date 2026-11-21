@@ -171,8 +171,8 @@ TEST_CASE("the pool data has a channel row per clip, then one with every clip's 
     }
     const rasm::gfx::AnimationSubMeshData subMeshes[] = {{.node = 1}};
     const uint64_t address = 0x10000;
-    const std::vector<uint8_t> bytes = rasm::buildAnimationPoolData(animation, subMeshes, 1, nullptr, 0, address);
-    REQUIRE(bytes.size() == rasm::getAnimationPoolBytes(animation, 1, 0));
+    const std::vector<uint8_t> bytes = rasm::buildAnimationPoolData(animation, subMeshes, 1, nullptr, 0, nullptr, 0, address);
+    REQUIRE(bytes.size() == rasm::getAnimationPoolBytes(animation, 1, 0, 0));
 
     rasm::gfx::AnimationMeshData header;
     std::memcpy(&header, bytes.data(), sizeof(header));

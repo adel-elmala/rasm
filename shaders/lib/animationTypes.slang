@@ -11,6 +11,9 @@
 static const uint   INTERPOLATION_STEP          = 0;
 static const uint   INTERPOLATION_LINEAR        = 1;
 static const uint   INTERPOLATION_CUBICSPLINE   = 2;
+// Must match NO_WEIGHT_OVERRIDE in src/renderer/animation.cpp: a quiet NaN, compared by its bits, where setMorphWeights
+// sets no weight.
+static const uint   NO_WEIGHT_OVERRIDE          = 0x7FC00000;
 
 // What the Animate pass writes for an animated sub-mesh, in place of its instance row's matrices. A skinned one's
 // matrices are its entity's, and its vertices and bounds are posed.
@@ -44,7 +47,8 @@ struct AnimationSamplerData
     uint32_t            interpolation;      // INTERPOLATION_*
 };
 
-// An animated sub-mesh: a rigid one follows a node, a skinned one (jointCount > 0) is moved by joints.
+// An animated sub-mesh: a rigid one follows a node, a skinned one (jointCount > 0) is moved by joints. A skinned or
+// morphed one is posed by the Skin pass.
 struct AnimationSubMeshData
 {
     uint32_t            node;               // the node a rigid one follows
@@ -52,8 +56,10 @@ struct AnimationSubMeshData
     uint32_t            firstJoint;         // in AnimationMeshData::joints
     uint32_t            firstSphere;        // in AnimationMeshData::jointSpheres, jointCount of them
     uint32_t            geometryIndex;
-    uint32_t            vertexCount;
-    uint32_t            firstSkinnedVertex; // among the entity's skinned vertices
+    uint32_t            vertexCount;        // 0: not posed by the Skin pass
+    uint32_t            firstSkinnedVertex; // among the entity's skinned vertices, a multiple of 64
+    uint32_t            firstWeight;        // among the entity's morph weights
+    uint32_t            firstMorphRadius;   // in AnimationMeshData::morphRadii, one per morph target
 };
 
 // A skin's joint: the node that moves it, and the inverse of the node's world matrix in the bind pose.
@@ -68,15 +74,19 @@ struct AnimationMeshData
 {
     AnimationNodeData*      nodes;
     AnimationSamplerData*   samplers;
-    int32_t*                channels;       // per clip, node and path: the sampler of translation, rotation, scale; -1: rest
+    int32_t*                channels;       // per clip: per node the sampler of translation, rotation, scale, then per weight its sampler; -1: rest
     AnimationSubMeshData*   subMeshes;      // per animated sub-mesh
     float*                  keys;
     AnimationJointData*     joints;
     float4*                 jointSpheres;   // center and radius around the vertices a joint moves, object space; radius < 0: none
+    float*                  weights;        // the morph weights at rest, weightCount of them
+    float*                  morphRadii;     // per morph target of each sub-mesh: its largest position change
     uint32_t                nodeCount;
     uint32_t                subMeshCount;
     uint32_t                jointCount;
     uint32_t                skinnedVertexCount; // per entity
+    uint32_t                weightCount;    // per entity
+    uint32_t                padding;
 };
 
 // A row of the animated entity table, written by the CPU when an entity plays, stops or moves.
@@ -94,6 +104,8 @@ struct AnimatedEntity
     uint32_t            resetSync;          // the sync whose frame has no motion from the frame before
     uint32_t            firstJoint;         // its first joint matrix in AnimationFrame::joints
     uint32_t            firstSkinnedVertex; // its first vertex in AnimationFrame::skinnedVertices
+    uint32_t            firstWeight;        // its first weight in AnimationFrame::weights and weightOverrides
+    uint32_t            padding;
 };
 
 struct AnimationFrame
@@ -111,6 +123,9 @@ struct AnimationFrame
     SkinVertex*         skins;              // the geometry pool's skin stream
     GeometryData*       geometry;           // the geometry table
     VertexFull*         skinnedVertices;    // this slot's, written by the Skin pass
+    float*              weights;            // this slot's morph weights, written by the Animate pass
+    float*              weightOverrides;    // this slot's setMorphWeights values, NO_WEIGHT_OVERRIDE where the clip's count
+    MorphDelta*         morphs;             // the geometry pool's morph stream
 };
 
 struct AnimatePushConstants

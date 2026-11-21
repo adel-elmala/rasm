@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Frustum Culling · RASM</title>
 <meta name="description" content="How frustum culling works: the six planes of the view, bounding volumes, the sphere and box tests, getting the planes from the view-projection matrix, and how RASM does it.">
-<meta name="rasm-sources" content="shaders/lib/frustumCulling.slang shaders/passes/cull.slang src/renderer/gpuScene.cpp src/renderer/geometryPool.cpp src/scene/camera.cpp">
+<meta name="rasm-sources" content="shaders/lib/frustumCulling.slang shaders/passes/cull.slang shaders/passes/animate.slang src/renderer/gpuScene.cpp src/renderer/geometryPool.cpp src/scene/camera.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -750,12 +750,41 @@
   <figcaption>The joint spheres are built at load around the bind-pose vertices each joint moves. Each frame they move with their joints, and the sphere around all of them holds every skinned vertex: a skinned vertex is a weighted mix of points that each lie inside one moved sphere, and a sphere is convex.</figcaption>
 </figure>
 
+<p>A <a href="morph-targets.html">morphed</a> mesh changes shape too. A morph target <var>t</var> with weight <var>wₜ</var> moves a vertex by at most <code class="lang-text">|wₜ| · rₜ</code>, where <var>rₜ</var> is the target's longest position delta (<code>AnimationMeshData::morphRadii</code>, from the load). The moves add up, so the <code>Animate</code> pass grows the radius by their sum (<code>getMorphGrowth</code>).</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 190" role="img" aria-label="Left: a morphed mesh with no skin: its geometry sphere of radius r, and a larger sphere of radius r plus the sum of the absolute weights times each target's longest delta, which holds the morphed shape. Right: a skinned and morphed mesh: each joint sphere is grown by the same sum first, then moved by its joint matrix and stretched; the sphere around the grown joint spheres bounds the mesh.">
+    <text x="20" y="22" class="title">No skin: grow the geometry sphere</text>
+    <circle cx="150" cy="110" r="44" class="zone"/>
+    <circle cx="150" cy="110" r="66" class="ok o-25"/>
+    <line x1="150" y1="110" x2="194" y2="110" class="arrow"/>
+    <line x1="194" y1="110" x2="216" y2="110" class="arrow ok thick"/>
+    <text x="170" y="104" class="mid small">r</text>
+    <text x="236" y="100" class="small t-ok">+ Σ |wₜ| · rₜ</text>
+    <text x="236" y="116" class="small">every view culls</text>
+    <text x="236" y="132" class="small">the grown sphere</text>
+
+    <text x="400" y="22" class="title">Skinned: grow each joint sphere first</text>
+    <circle cx="496" cy="104" r="65" class="ok o-25"/>
+    <circle cx="470" cy="130" r="20" class="zone"/>
+    <circle cx="470" cy="130" r="28" class="gpu o-25"/>
+    <circle cx="520" cy="80" r="24" class="zone"/>
+    <circle cx="520" cy="80" r="32" class="gpu o-25"/>
+    <line x1="470" y1="130" x2="520" y2="80" class="surface"/>
+    <text x="580" y="84" class="small">(rⱼ + growth) · stretch,</text>
+    <text x="580" y="100" class="small">then the sphere around</text>
+    <text x="580" y="116" class="small">all joint spheres</text>
+    <text x="400" y="178" class="small t-faint">the deltas are in the bind pose, so the growth comes before the joint</text>
+  </svg>
+  <figcaption>Gray: the sphere from the load. Green: the sphere the <code>Animate</code> pass writes this frame. A weight of 0 adds nothing, so a mesh at rest weights 0 keeps its own sphere.</figcaption>
+</figure>
+
 <h3>Where RASM follows the textbook, and where it differs</h3>
 
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Bounding volume</td><td>sphere or box</td><td>A sphere per sub-mesh only (<code>boundsCenter</code>, <code>boundsRadius</code>). No boxes, so no p-vertex test. A playing skinned sub-mesh uses the sphere the <code>Animate</code> pass writes from its joints (above).</td></tr>
+  <tr><td>Bounding volume</td><td>sphere or box</td><td>A sphere per sub-mesh only (<code>boundsCenter</code>, <code>boundsRadius</code>). No boxes, so no p-vertex test. A posed skinned or morphed sub-mesh uses the sphere the <code>Animate</code> pass writes from its joints and its weights (above).</td></tr>
   <tr><td>Building the sphere</td><td>box center, Ritter or Welzl</td><td>Box center, radius to the farthest vertex (<code>computeBounds</code>). Not the smallest sphere.</td></tr>
   <tr><td>Planes</td><td>Gribb–Hartmann rows</td><td>The same, from <code>projection * view</code>, in world space, normalized (<code>getFrustumPlanes</code>).</td></tr>
   <tr><td>Depth convention</td><td>see the table in section 6</td><td>Vulkan's 0 to <var>q<sub>w</sub></var> range with reversed-Z. So plane 4 (<var>r</var><sub>2</sub>) is the <b>far</b> plane and plane 5 (<var>r</var><sub>3</sub> − <var>r</var><sub>2</sub>) is the <b>near</b> plane. See <a href="projection-depth.html">Projection and reversed-Z depth</a>.</td></tr>

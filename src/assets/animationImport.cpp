@@ -1,5 +1,6 @@
 #include "assets/animationImport.h"
 #include "assets/gltfAccessor.h"
+#include "assets/morphImport.h"
 #include "assets/skinImport.h"
 
 #include "spdlog/spdlog.h"
@@ -44,9 +45,7 @@ namespace rasm
             return true;
         }
 
-        // Reads a sampler's key times and its values as vec4s (a quaternion's x, y, z, w; w = 0 for a translation or
-        // a scale). Returns an empty string on success, else what is wrong.
-        std::string readSampler(const tinygltf::Model &model, const tinygltf::AnimationSampler &source, AnimationPath path, AnimationSampler &out)
+        std::string readKeyTimes(const tinygltf::Model &model, const tinygltf::AnimationSampler &source, AnimationSampler &out)
         {
             if (!getInterpolation(source.interpolation, out.interpolation))
                 return "its interpolation " + source.interpolation + " is unknown";
@@ -59,7 +58,18 @@ namespace rasm
                 if (!std::isfinite(out.times[k]) || (k > 0 && out.times[k] < out.times[k - 1]))
                     return "its key times do not increase";
             }
+            return {};
+        }
 
+        // Reads a sampler's key times and its values as vec4s (a quaternion's x, y, z, w; w = 0 for a translation or
+        // a scale). Returns an empty string on success, else what is wrong.
+        std::string readSampler(const tinygltf::Model &model, const tinygltf::AnimationSampler &source, AnimationPath path, AnimationSampler &out)
+        {
+            const std::string error = readKeyTimes(model, source, out);
+            if (!error.empty())
+                return error;
+
+            uint32_t components = 0;
             std::vector<float> values;
             const uint32_t expected = path == AnimationPath::ROTATION ? 4 : 3;
             if (!readFloatAccessor(model, source.output, values, components) || components != expected)
@@ -76,21 +86,49 @@ namespace rasm
             }
             return {};
         }
+
+        // A weights sampler holds every target's weight per key (CUBICSPLINE: all in-tangents, all values, all
+        // out-tangents). It becomes one sampler per target, its value in x, so the GPU samples a weight like any
+        // other channel.
+        std::string readWeightSamplers(const tinygltf::Model &model, const tinygltf::AnimationSampler &source, uint32_t weightCount, std::vector<AnimationSampler> &out)
+        {
+            AnimationSampler keys;
+            const std::string error = readKeyTimes(model, source, keys);
+            if (!error.empty())
+                return error;
+            uint32_t components = 0;
+            std::vector<float> values;
+            if (!readFloatAccessor(model, source.output, values, components) || components != 1)
+                return "its values are missing or have the wrong type";
+            const size_t perKey = keys.interpolation == AnimationInterpolation::CUBICSPLINE ? 3 : 1;
+            if (values.size() != keys.times.size() * perKey * weightCount)
+                return "it has " + std::to_string(values.size()) + " values for " + std::to_string(keys.times.size()) + " keys of " + std::to_string(weightCount) + " weights";
+
+            out.assign(weightCount, keys);
+            for (uint32_t t = 0; t < weightCount; ++t)
+            {
+                out[t].values.resize(keys.times.size() * perKey);
+                for (size_t i = 0; i < out[t].values.size(); ++i)
+                    out[t].values[i] = glm::vec4(values[i * weightCount + t], 0.0f, 0.0f, 0.0f);
+            }
+            return {};
+        }
     }
 
     // Keeps the part of the node tree that a clip can move: a node is kept when a clip moves it or one of its parents,
     // and it holds a mesh or is the parent of a kept node. A skin's joint is always kept, moved or not, since its
-    // matrix places the skinned vertices; a skinned mesh's own node is not, since its matrix is ignored. A kept node
+    // matrix places the skinned vertices; a skinned mesh's own node is not, since its matrix is ignored. The node of a
+    // morphed mesh that is not skinned is always kept too: it places the vertices the Skin pass poses. A kept node
     // whose parent is not kept hangs below a node that holds that parent's world matrix, so the GPU never walks
     // static nodes.
     AnimationRaw importAnimations(const tinygltf::Model &model, const GltfNodeWalk &walk, std::vector<SubGLTFRaw> &subMeshes)
     {
         AnimationRaw raw;
         const size_t nodeCount = model.nodes.size();
-        // A skinned mesh is posed by its joints also without clips, at rest.
-        const bool skinned = std::any_of(subMeshes.begin(), subMeshes.end(), [](const SubGLTFRaw &sub)
-                                         { return sub.skin >= 0 && !sub.objRaw.skin.empty(); });
-        if ((model.animations.empty() && !skinned) || walk.parents.size() != nodeCount)
+        // A skinned or morphed mesh is posed by its joints or weights also without clips, at rest.
+        const bool posed = std::any_of(subMeshes.begin(), subMeshes.end(), [](const SubGLTFRaw &sub)
+                                       { return (sub.skin >= 0 && !sub.objRaw.skin.empty()) || sub.objRaw.morphTargetCount > 0; });
+        if ((model.animations.empty() && !posed) || walk.parents.size() != nodeCount)
             return raw;
 
         auto isMovable = [&](int node)
@@ -116,6 +154,7 @@ namespace rasm
         }
 
         std::vector<bool> hasMesh(nodeCount, false);
+        std::vector<bool> isMorphed(nodeCount, false);
         std::vector<bool> isJoint(nodeCount, false);
         for (const auto &sub : subMeshes)
         {
@@ -130,6 +169,7 @@ namespace rasm
             else if (sub.node >= 0 && static_cast<size_t>(sub.node) < nodeCount)
             {
                 hasMesh[sub.node] = true;
+                isMorphed[sub.node] = isMorphed[sub.node] || sub.objRaw.morphTargetCount > 0;
             }
         }
 
@@ -143,7 +183,7 @@ namespace rasm
         for (auto it = walk.order.rbegin(); it != walk.order.rend(); ++it)
         {
             const int node = *it;
-            if ((hasMesh[node] && moved[node]) || isJoint[node])
+            if ((hasMesh[node] && (moved[node] || isMorphed[node])) || isJoint[node])
                 kept[node] = true;
             const int parent = walk.parents[node];
             if (kept[node] && parent >= 0 && moved[parent])
@@ -193,6 +233,7 @@ namespace rasm
                 sub.animatedNode = keptIndex[sub.node];
         }
         importSkinJoints(model, keptIndex, subMeshes, raw);
+        const std::unordered_map<int, uint32_t> morphNodes = importMorphWeights(model, subMeshes, raw);
 
         // Every glTF animation becomes a clip with the same index, also one left without channels, so clip indices
         // match the file.
@@ -202,8 +243,39 @@ namespace rasm
             AnimationClipRaw clip;
             clip.info.name = animation.name.empty() ? "animation " + std::to_string(a) : animation.name;
             std::vector<int> samplers(animation.samplers.size(), -1);
+            // A weights sampler's split, and the weight count it was split for: a channel of a node with another count
+            // reads the sampler again, and its own check refuses it.
+            std::vector<int> weightSamplers(animation.samplers.size(), -1);
+            std::vector<uint32_t> weightSamplerCounts(animation.samplers.size(), 0);
             for (const auto &channel : animation.channels)
             {
+                if (channel.target_path == "weights")
+                {
+                    const auto found = morphNodes.find(channel.target_node);
+                    if (found == morphNodes.end() || channel.sampler < 0 || static_cast<size_t>(channel.sampler) >= animation.samplers.size())
+                    {
+                        spdlog::debug("glTF: clip {} animates the weights of node {}, which has no morph targets RASM keeps.", clip.info.name, channel.target_node);
+                        continue;
+                    }
+                    const uint32_t weightCount = getMorphTargetCount(model, model.nodes[channel.target_node].mesh);
+                    if (weightSamplers[channel.sampler] < 0 || weightSamplerCounts[channel.sampler] != weightCount)
+                    {
+                        std::vector<AnimationSampler> split;
+                        const std::string error = readWeightSamplers(model, animation.samplers[channel.sampler], weightCount, split);
+                        if (!error.empty())
+                        {
+                            spdlog::warn("glTF: clip {} skips the weights of node {}: {}.", clip.info.name, channel.target_node, error);
+                            continue;
+                        }
+                        clip.info.duration = std::max(clip.info.duration, split[0].times.back());
+                        weightSamplers[channel.sampler] = static_cast<int>(clip.samplers.size());
+                        weightSamplerCounts[channel.sampler] = weightCount;
+                        clip.samplers.insert(clip.samplers.end(), std::make_move_iterator(split.begin()), std::make_move_iterator(split.end()));
+                    }
+                    for (uint32_t t = 0; t < weightCount; ++t)
+                        clip.channels.push_back({.node = found->second + t, .path = AnimationPath::WEIGHTS, .sampler = static_cast<uint32_t>(weightSamplers[channel.sampler]) + t});
+                    continue;
+                }
                 AnimationPath path;
                 if (!isMovable(channel.target_node) || !animated[channel.target_node] || keptIndex[channel.target_node] < 0)
                     continue;

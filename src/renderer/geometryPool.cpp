@@ -42,17 +42,20 @@ namespace rasm
     static_assert(offsetof(Vertex, uv) == offsetof(gfx::VertexFull, uv), "Vertex must match the shader's VertexFull");
     static_assert(offsetof(Vertex, tangent) == offsetof(gfx::VertexFull, tangent), "Vertex must match the shader's VertexFull");
     static_assert(sizeof(SkinVertex) == sizeof(gfx::SkinVertex), "SkinVertex must match the shader's SkinVertex");
+    static_assert(sizeof(MorphDelta) == sizeof(gfx::MorphDelta), "MorphDelta must match the shader's MorphDelta");
 
     // Every mesh lives in these buffers, so its CPU copy can go after upload (P6). Their size is fixed for the
     // engine's lifetime, so apps size them through EngineConfig. A vertex stays one 64-byte cache line: an attribute
-    // that only some meshes have (vertex colors, a skinned vertex's joints and weights) is a stream of its own, and a
-    // sub-mesh without it costs nothing there. The sub-mesh's row says where its part of the stream starts, or -1.
+    // that only some meshes have (vertex colors, a skinned vertex's joints and weights, morph targets) is a stream of its
+    // own, and a sub-mesh without it costs nothing there. The sub-mesh's row says where its part of the stream starts,
+    // or -1. The morph stream is target-major: the Skin pass reads one target for 64 neighbouring vertices at once, and
+    // a target whose weight is 0 is not read at all.
     bool GeometryPool::create(RenderContext &ctx, const EngineConfig &config)
     {
         if (config.geometryPoolVertices == 0 || config.geometryPoolIndices == 0 || config.geometryPoolColors == 0 || config.geometryPoolSkins == 0 ||
-            config.geometryPoolSubMeshes == 0)
+            config.geometryPoolMorphs == 0 || config.geometryPoolSubMeshes == 0)
         {
-            spdlog::error("The geometry pool needs room for at least one vertex, one index, one color, one skin and one sub-mesh.");
+            spdlog::error("The geometry pool needs room for at least one vertex, one index, one color, one skin, one morph delta and one sub-mesh.");
             return false;
         }
 
@@ -60,13 +63,15 @@ namespace rasm
         indexCapacity = config.geometryPoolIndices;
         colorCapacity = config.geometryPoolColors;
         skinCapacity = config.geometryPoolSkins;
+        morphCapacity = config.geometryPoolMorphs;
         subMeshCapacity = config.geometryPoolSubMeshes;
         vertices = ctx.createBuffer({.name = "Geometry Vertex Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(vertexCapacity) * sizeof(Vertex)});
         indices = ctx.createBuffer({.name = "Geometry Index Pool", .usage = BufferUsage::INDEX, .size = static_cast<uint64_t>(indexCapacity) * sizeof(uint32_t)});
         colors = ctx.createBuffer({.name = "Geometry Color Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(colorCapacity) * sizeof(uint32_t)});
         skins = ctx.createBuffer({.name = "Geometry Skin Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(skinCapacity) * sizeof(SkinVertex)});
+        morphs = ctx.createBuffer({.name = "Geometry Morph Pool", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(morphCapacity) * sizeof(MorphDelta)});
         table = ctx.createBuffer({.name = "Geometry Table", .usage = BufferUsage::STORAGE, .size = static_cast<uint64_t>(subMeshCapacity) * sizeof(gfx::GeometryData)});
-        if (!vertices.isValid() || !indices.isValid() || !colors.isValid() || !skins.isValid() || !table.isValid())
+        if (!vertices.isValid() || !indices.isValid() || !colors.isValid() || !skins.isValid() || !morphs.isValid() || !table.isValid())
         {
             spdlog::error("Failed to create the geometry pool.");
             return false;
@@ -74,16 +79,16 @@ namespace rasm
         return true;
     }
 
-    bool GeometryPool::fits(size_t vertexCount, size_t indexCount, size_t colorCount, size_t skinCount, size_t subMeshCount) const
+    bool GeometryPool::fits(size_t vertexCount, size_t indexCount, size_t colorCount, size_t skinCount, size_t morphCount, size_t subMeshCount) const
     {
         if (vertexCount <= vertexCapacity - usedVertices && indexCount <= indexCapacity - usedIndices && colorCount <= colorCapacity - usedColors &&
-            skinCount <= skinCapacity - usedSkins && subMeshCount <= subMeshCapacity - usedSubMeshes)
+            skinCount <= skinCapacity - usedSkins && morphCount <= morphCapacity - usedMorphs && subMeshCount <= subMeshCapacity - usedSubMeshes)
             return true;
-        spdlog::error("The geometry pool is full: {} vertices, {} indices, {} colors, {} skins and {} sub-meshes do not fit ({}/{} vertices, {}/{} indices, "
-                      "{}/{} colors, {}/{} skins and {}/{} sub-meshes in use). EngineConfig::geometryPoolVertices, geometryPoolIndices, geometryPoolColors, "
-                      "geometryPoolSkins and geometryPoolSubMeshes set its size.",
-                      vertexCount, indexCount, colorCount, skinCount, subMeshCount, usedVertices, vertexCapacity, usedIndices, indexCapacity, usedColors, colorCapacity,
-                      usedSkins, skinCapacity, usedSubMeshes, subMeshCapacity);
+        spdlog::error("The geometry pool is full: {} vertices, {} indices, {} colors, {} skins, {} morph deltas and {} sub-meshes do not fit ({}/{} vertices, "
+                      "{}/{} indices, {}/{} colors, {}/{} skins, {}/{} morph deltas and {}/{} sub-meshes in use). EngineConfig::geometryPoolVertices, "
+                      "geometryPoolIndices, geometryPoolColors, geometryPoolSkins, geometryPoolMorphs and geometryPoolSubMeshes set its size.",
+                      vertexCount, indexCount, colorCount, skinCount, morphCount, subMeshCount, usedVertices, vertexCapacity, usedIndices, indexCapacity, usedColors,
+                      colorCapacity, usedSkins, skinCapacity, usedMorphs, morphCapacity, usedSubMeshes, subMeshCapacity);
         return false;
     }
 
@@ -106,7 +111,12 @@ namespace rasm
             spdlog::error("A sub-mesh has {} skins for {} vertices.", raw.skin.size(), raw.vertices.size());
             return false;
         }
-        if (!fits(raw.vertices.size(), raw.indices.size() + lodIndexCount, raw.colors.size(), raw.skin.size(), 1))
+        if (raw.morphs.size() != static_cast<size_t>(raw.morphTargetCount) * raw.vertices.size())
+        {
+            spdlog::error("A sub-mesh has {} morph deltas for {} targets of {} vertices.", raw.morphs.size(), raw.morphTargetCount, raw.vertices.size());
+            return false;
+        }
+        if (!fits(raw.vertices.size(), raw.indices.size() + lodIndexCount, raw.colors.size(), raw.skin.size(), raw.morphs.size(), 1))
             return false;
 
         geometry = {.firstVertex = usedVertices,
@@ -118,6 +128,9 @@ namespace rasm
                     .colorCount = static_cast<uint32_t>(raw.colors.size()),
                     .firstSkin = usedSkins,
                     .skinCount = static_cast<uint32_t>(raw.skin.size()),
+                    .firstMorph = usedMorphs,
+                    .morphCount = static_cast<uint32_t>(raw.morphs.size()),
+                    .morphTargetCount = raw.morphs.empty() ? 0 : raw.morphTargetCount,
                     .geometryIndex = usedSubMeshes};
         computeBounds(raw.vertices, geometry);
 
@@ -126,7 +139,9 @@ namespace rasm
                               .boundsRadius = geometry.boundsRadius,
                               .lodCount = static_cast<uint32_t>(lodCount),
                               .colorOffset = geometry.colorCount > 0 ? static_cast<int32_t>(geometry.firstColor) : -1,
-                              .skinOffset = geometry.skinCount > 0 ? static_cast<int32_t>(geometry.firstSkin) : -1};
+                              .skinOffset = geometry.skinCount > 0 ? static_cast<int32_t>(geometry.firstSkin) : -1,
+                              .morphOffset = geometry.morphCount > 0 ? static_cast<int32_t>(geometry.firstMorph) : -1,
+                              .morphTargetCount = geometry.morphTargetCount};
         row.lods[0] = {.firstIndex = geometry.firstIndex, .indexCount = geometry.indexCount, .error = 0.0f};
         uint32_t nextIndex = geometry.firstIndex + geometry.indexCount;
         for (size_t i = 1; i < lodCount; ++i)
@@ -141,6 +156,9 @@ namespace rasm
         if (!raw.colors.empty() && !ctx.fillBuffer(colors, raw.colors.data(), raw.colors.size() * sizeof(uint32_t), static_cast<size_t>(geometry.firstColor) * sizeof(uint32_t)))
             return false;
         if (!raw.skin.empty() && !ctx.fillBuffer(skins, raw.skin.data(), raw.skin.size() * sizeof(SkinVertex), static_cast<size_t>(geometry.firstSkin) * sizeof(SkinVertex)))
+            return false;
+        if (!raw.morphs.empty() &&
+            !ctx.fillBuffer(morphs, raw.morphs.data(), raw.morphs.size() * sizeof(MorphDelta), static_cast<size_t>(geometry.firstMorph) * sizeof(MorphDelta)))
             return false;
         if (!raw.indices.empty() && !ctx.fillBuffer(indices, raw.indices.data(), raw.indices.size() * sizeof(uint32_t), static_cast<size_t>(geometry.firstIndex) * sizeof(uint32_t)))
             return false;
@@ -157,6 +175,7 @@ namespace rasm
         usedIndices += geometry.indexCount + geometry.lodIndexCount;
         usedColors += geometry.colorCount;
         usedSkins += geometry.skinCount;
+        usedMorphs += geometry.morphCount;
         ++usedSubMeshes;
         return true;
     }
@@ -179,6 +198,11 @@ namespace rasm
     BufferHandle GeometryPool::skinBuffer() const
     {
         return skins;
+    }
+
+    BufferHandle GeometryPool::morphBuffer() const
+    {
+        return morphs;
     }
 
     BufferHandle GeometryPool::tableBuffer() const

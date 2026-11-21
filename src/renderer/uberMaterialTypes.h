@@ -159,6 +159,13 @@ namespace rasm::gfx
         uint16_t        weights[4];
     };
 
+    // Must match rasm::MorphDelta.
+    struct MorphDelta
+    {
+        glm::vec3       position;
+        uint32_t        normalTangent[3];           // half floats: normal x y, normal z tangent x, tangent y z
+    };
+
     struct AnimationNodeData
     {
         glm::vec4       rest[3];                    // the rows of the local matrix at rest
@@ -177,7 +184,8 @@ namespace rasm::gfx
         uint32_t        interpolation;              // rasm::AnimationInterpolation
     };
 
-    // An animated sub-mesh: a rigid one follows a node, a skinned one (jointCount > 0) is moved by joints.
+    // An animated sub-mesh: a rigid one follows a node, a skinned one (jointCount > 0) is moved by joints. A skinned or
+    // morphed one is posed by the Skin pass.
     struct AnimationSubMeshData
     {
         uint32_t        node;                       // the node a rigid one follows
@@ -185,8 +193,10 @@ namespace rasm::gfx
         uint32_t        firstJoint;                 // in AnimationMeshData::joints
         uint32_t        firstSphere;                // in AnimationMeshData::jointSpheres, jointCount of them
         uint32_t        geometryIndex;
-        uint32_t        vertexCount;
-        uint32_t        firstSkinnedVertex;         // among the entity's skinned vertices
+        uint32_t        vertexCount;                // 0: not posed by the Skin pass
+        uint32_t        firstSkinnedVertex;         // among the entity's skinned vertices, a multiple of 64
+        uint32_t        firstWeight;                // among the entity's morph weights
+        uint32_t        firstMorphRadius;           // in AnimationMeshData::morphRadii, one per morph target
     };
 
     struct AnimationJointData
@@ -199,15 +209,19 @@ namespace rasm::gfx
     {
         uint64_t        nodes;                      // AnimationNodeData[nodeCount]
         uint64_t        samplers;                   // AnimationSamplerData[]
-        uint64_t        channels;                   // int32_t per clip, node and path: the sampler of translation, rotation, scale; -1: rest
+        uint64_t        channels;                   // int32_t per clip: per node the sampler of translation, rotation, scale, then per weight its sampler; -1: rest
         uint64_t        subMeshes;                  // AnimationSubMeshData[subMeshCount], per animated sub-mesh
         uint64_t        keys;                       // float
         uint64_t        joints;                     // AnimationJointData[jointCount]
         uint64_t        jointSpheres;               // glm::vec4: center and radius, object space; radius < 0: the joint moves no vertex
+        uint64_t        weights;                    // float[weightCount]: the morph weights at rest
+        uint64_t        morphRadii;                 // float per morph target of each sub-mesh: its largest position change
         uint32_t        nodeCount;
         uint32_t        subMeshCount;
         uint32_t        jointCount;
         uint32_t        skinnedVertexCount;         // per entity
+        uint32_t        weightCount;                // per entity
+        uint32_t        padding;
     };
 
     struct AnimatedEntity
@@ -224,6 +238,8 @@ namespace rasm::gfx
         uint32_t        resetSync;                  // the sync whose frame has no motion from the frame before
         uint32_t        firstJoint;                 // its first joint matrix in AnimationFrame::joints
         uint32_t        firstSkinnedVertex;         // its first vertex in AnimationFrame::skinnedVertices
+        uint32_t        firstWeight;                // its first weight in AnimationFrame::weights and weightOverrides
+        uint32_t        padding;
     };
 
     struct AnimationFrame
@@ -241,6 +257,9 @@ namespace rasm::gfx
         uint64_t        skins;                      // SkinVertex: the geometry pool's skin stream
         uint64_t        geometry;                   // GeometryData: the geometry table
         uint64_t        skinnedVertices;            // VertexFull, this slot's: what the Skin pass writes
+        uint64_t        weights;                    // float, this slot's: the morph weights the Animate pass writes
+        uint64_t        weightOverrides;            // float, this slot's: setMorphWeights's, NaN where the clip's count
+        uint64_t        morphs;                     // MorphDelta: the geometry pool's morph stream
     };
 
     struct AnimatePushConstants
@@ -265,6 +284,8 @@ namespace rasm::gfx
         GeometryLod     lods[MAX_MESH_LODS];
         int32_t         colorOffset;        // the sub-mesh's first vertex color in the color pool, -1 without colors
         int32_t         skinOffset;         // the sub-mesh's first SkinVertex in the skin stream, -1 when not skinned
+        int32_t         morphOffset;        // the sub-mesh's first MorphDelta in the morph stream, -1 without morph targets
+        uint32_t        morphTargetCount;
     };
 
     struct SceneData
@@ -408,7 +429,9 @@ namespace rasm::gfx
     static_assert(offsetof(InstanceData, materialIndex) == 104, "InstanceData must match the shader's scalar layout");
     static_assert(sizeof(GeometryLod) == 12, "GeometryLod must match the shader's scalar layout");
     static_assert(offsetof(GeometryLod, error) == 8, "GeometryLod must match the shader's scalar layout");
-    static_assert(sizeof(GeometryData) == 32 + 12 * MAX_MESH_LODS, "GeometryData must match the shader's scalar layout");
+    static_assert(sizeof(GeometryData) == 40 + 12 * MAX_MESH_LODS, "GeometryData must match the shader's scalar layout");
+    static_assert(offsetof(GeometryData, morphOffset) == 32 + 12 * MAX_MESH_LODS, "GeometryData must match the shader's scalar layout");
+    static_assert(sizeof(MorphDelta) == 24, "MorphDelta must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, skinOffset) == 28 + 12 * MAX_MESH_LODS, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, colorOffset) == 24 + 12 * MAX_MESH_LODS, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, boundsCenter) == 4, "GeometryData must match the shader's scalar layout");
@@ -425,20 +448,23 @@ namespace rasm::gfx
     static_assert(offsetof(InstanceTransform, boundsCenter) == 148, "InstanceTransform must match the shader's scalar layout");
     static_assert(offsetof(InstanceTransform, skinnedMotion) == 168, "InstanceTransform must match the shader's scalar layout");
     static_assert(sizeof(SkinVertex) == 16, "SkinVertex must match the shader's scalar layout");
-    static_assert(sizeof(AnimationSubMeshData) == 28, "AnimationSubMeshData must match the shader's scalar layout");
+    static_assert(sizeof(AnimationSubMeshData) == 36, "AnimationSubMeshData must match the shader's scalar layout");
     static_assert(sizeof(AnimationJointData) == 52, "AnimationJointData must match the shader's scalar layout");
     static_assert(offsetof(InstanceTransform, previousWorld) == 100, "InstanceTransform must match the shader's scalar layout");
     static_assert(sizeof(AnimationNodeData) == 96, "AnimationNodeData must match the shader's scalar layout");
     static_assert(offsetof(AnimationNodeData, parent) == 60, "AnimationNodeData must match the shader's scalar layout");
     static_assert(offsetof(AnimationNodeData, scale) == 80, "AnimationNodeData must match the shader's scalar layout");
     static_assert(sizeof(AnimationSamplerData) == 16, "AnimationSamplerData must match the shader's scalar layout");
-    static_assert(sizeof(AnimationMeshData) == 72, "AnimationMeshData must match the shader's scalar layout");
-    static_assert(offsetof(AnimationMeshData, nodeCount) == 56, "AnimationMeshData must match the shader's scalar layout");
-    static_assert(sizeof(AnimatedEntity) == 112, "AnimatedEntity must match the shader's scalar layout");
+    static_assert(sizeof(AnimationMeshData) == 96, "AnimationMeshData must match the shader's scalar layout");
+    static_assert(offsetof(AnimationMeshData, weightCount) == 88, "AnimationMeshData must match the shader's scalar layout");
+    static_assert(offsetof(AnimationMeshData, nodeCount) == 72, "AnimationMeshData must match the shader's scalar layout");
+    static_assert(sizeof(AnimatedEntity) == 120, "AnimatedEntity must match the shader's scalar layout");
+    static_assert(offsetof(AnimatedEntity, firstWeight) == 112, "AnimatedEntity must match the shader's scalar layout");
     static_assert(offsetof(AnimatedEntity, firstSkinnedVertex) == 108, "AnimatedEntity must match the shader's scalar layout");
     static_assert(offsetof(AnimatedEntity, mesh) == 64, "AnimatedEntity must match the shader's scalar layout");
     static_assert(offsetof(AnimatedEntity, resetSync) == 100, "AnimatedEntity must match the shader's scalar layout");
-    static_assert(sizeof(AnimationFrame) == 88, "AnimationFrame must match the shader's scalar layout");
+    static_assert(sizeof(AnimationFrame) == 112, "AnimationFrame must match the shader's scalar layout");
+    static_assert(offsetof(AnimationFrame, morphs) == 104, "AnimationFrame must match the shader's scalar layout");
     static_assert(offsetof(AnimationFrame, joints) == 48, "AnimationFrame must match the shader's scalar layout");
     static_assert(offsetof(AnimationFrame, clock) == 32, "AnimationFrame must match the shader's scalar layout");
     static_assert(sizeof(AnimatePushConstants) == PUSH_CONSTANTS_SIZE, "AnimatePushConstants must fill the push-constant range");
