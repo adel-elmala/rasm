@@ -17,11 +17,14 @@ namespace rasm
         constexpr size_t MIN_LAST_LOD_TRIANGLES = 64;
 
         // Simplification only collapses edges between triangles that share vertices, and OBJ import gives every
-        // corner its own vertex, so identical vertices are merged first.
+        // corner its own vertex, so identical vertices are merged first. A vertex is identical only with the same
+        // color too, when the mesh has colors.
         void weldVertices(ObjRaw &raw)
         {
+            const meshopt_Stream streams[] = {{raw.vertices.data(), sizeof(Vertex), sizeof(Vertex)}, {raw.colors.data(), sizeof(uint32_t), sizeof(uint32_t)}};
+            const size_t streamCount = raw.colors.empty() ? 1 : 2;
             std::vector<uint32_t> remap(raw.vertices.size());
-            const size_t uniqueCount = meshopt_generateVertexRemap(remap.data(), raw.indices.data(), raw.indices.size(), raw.vertices.data(), raw.vertices.size(), sizeof(Vertex));
+            const size_t uniqueCount = meshopt_generateVertexRemapMulti(remap.data(), raw.indices.data(), raw.indices.size(), raw.vertices.size(), streams, streamCount);
             if (uniqueCount == raw.vertices.size())
                 return;
 
@@ -29,6 +32,12 @@ namespace rasm
             meshopt_remapVertexBuffer(vertices.data(), raw.vertices.data(), raw.vertices.size(), sizeof(Vertex), remap.data());
             meshopt_remapIndexBuffer(raw.indices.data(), raw.indices.data(), raw.indices.size(), remap.data());
             raw.vertices = std::move(vertices);
+            if (!raw.colors.empty())
+            {
+                std::vector<uint32_t> colors(uniqueCount);
+                meshopt_remapVertexBuffer(colors.data(), raw.colors.data(), raw.colors.size(), sizeof(uint32_t), remap.data());
+                raw.colors = std::move(colors);
+            }
         }
     }
 

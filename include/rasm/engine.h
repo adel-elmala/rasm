@@ -76,7 +76,7 @@ namespace rasm
         void                        addCameraToScene(SceneHandle scene, CameraHandle camera);
         void                        addLightToScene(SceneHandle scene, LightHandle light);
         void                        setSceneEnvironment(SceneHandle scene, const SceneEnvironment& environment);
-        MeshHandle                  createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices);
+        MeshHandle                  createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices, std::vector<uint32_t> colors = {});
         MeshHandle                  loadMesh(const std::string& path);
         MeshHandle                  loadGLTF(const std::string& path);
         // Color images default to sRGB; pass R8G8B8A8_UNORM for normal/MR/AO data.
@@ -240,7 +240,8 @@ namespace rasm
             std::future<EnvironmentRaw>     result;
         };
 
-        PipelineHandle              createGraphicsPipeline(const std::string& name, const std::string& shaderSource, const Format* colorFormats, Format depthFormat);
+        PipelineHandle              createGraphicsPipeline(const std::string& name, const std::string& shaderSource, const Format* colorFormats, Format depthFormat, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite);
+        PipelineHandle              createScenePipeline(const std::string& name, const std::string& shaderFile, const std::string& defines, const RenderTargetHandle& renderTarget, const char* vertexEntryPoint, const char* fragmentEntryPoint, BlendMode blendMode, bool depthWrite);
         MaterialHandle              loadMaterial(const tinygltf::Model& model, int materialIndex, GltfImportCache& cache);
         void                        finishMeshLoad(PendingMeshLoad& load);
         void                        finishTextureLoad(PendingTextureLoad& load);
@@ -254,7 +255,7 @@ namespace rasm
         void                        syncGpuScene();
         void                        queueInstanceRows(EntityHandle entity);
         void                        writeInstanceRows(EntityHandle entity);
-        void                        updateCullModes(EntityHandle entity);
+        void                        updateDrawModes(EntityHandle entity);
         void                        refreshEntitiesAfterMaterialChange();
         void                        writeMaterialRow(MaterialHandle material);
         void                        addEntityToDrawList(SceneHandle scene, EntityHandle entity);
@@ -267,7 +268,9 @@ namespace rasm
         void                        prepareSceneView(uint32_t view);
         void                        recordSceneCulling(uint32_t view, uint32_t phase);
         void                        recordHiz(uint32_t view);
+        void                        recordBlendSort(uint32_t view);
         void                        drawSceneView(uint32_t view);
+        void                        drawTransparent(uint32_t view);
         void                        createFrameStats();
         void                        updateFrameStats();
         bool                        createStatsOverlay();

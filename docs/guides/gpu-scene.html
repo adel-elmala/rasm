@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GPU Scene Tables · RASM</title>
-<meta name="description" content="The GPU scene tables (geometry, material, instance, draw lists), how an entity gets its rows and joins the draw lists, syncGpuScene step by step, and cull-mode runs.">
+<meta name="description" content="The GPU scene tables (geometry, material, instance, draw lists), how an entity gets its rows and joins the draw lists, syncGpuScene step by step, and the runs by alpha mode and cull mode.">
 <meta name="rasm-sources" content="src/renderer/gpuScene.h src/renderer/gpuScene.cpp src/renderer/gpuTable.h src/renderer/gpuTable.cpp src/renderer/geometryPool.h src/renderer/geometryPool.cpp src/renderer/uberMaterialTypes.h shaders/lib/core.slang src/engine.cpp include/rasm/engine.h src/scene/entity.cpp src/scene/scene.cpp src/scene/transform.cpp src/assets/material.cpp src/assets/mesh.cpp include/rasm/types.h include/rasm/scene.h include/rasm/mesh.h include/rasm/transform.h shaders/passes/cull.slang shaders/passes/rasm.slang src/assets/meshLod.cpp src/assets/meshLod.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
@@ -47,7 +47,7 @@
     <li>Engine-wide tables: <b>geometry</b> (one row per sub-mesh), <b>material</b> (one row per material), <b>instance</b> (one row per entity × sub-mesh). Per scene: a <b>draw list</b> of <code>DrawInfo</code>.</li>
     <li>An entity gets its instance rows once its mesh is loaded. It joins the draw lists once every texture it uses is loaded. Nothing is drawn half-loaded.</li>
     <li><code>syncGpuScene</code> runs once per frame, after the fence wait. It gives rows to new entities, rebuilds the draw lists that changed, and uploads this frame slot's dirty rows.</li>
-    <li>A draw list is sorted into up to 3 <b>runs</b> by cull mode, because cull mode is set per indirect draw.</li>
+    <li>A draw list is sorted into up to 7 <b>runs</b> by alpha mode and cull mode, because the pipeline and the cull mode are set per indirect draw.</li>
     <li>A row's cull mode comes from its material (<code>doubleSided</code>) and the sign of its matrix's determinant.</li>
   </ul>
 </div>
@@ -179,8 +179,8 @@
 <div class="table-wrap">
 <table>
   <tr><th>Table</th><th>Buffers</th><th>Rows</th><th>Written by</th></tr>
-  <tr><td>Geometry<br><code>GeometryData</code>, 120 B</td><td>one, in the geometry pool (<code>tableBuffer</code>)</td><td><code>geometryPoolSubMeshes</code> (2<sup>14</sup>)</td><td><code>upload</code> of the geometry pool, once per sub-mesh, with one <code>GeometryLod</code> per LOD. No frame has read a new row yet, so one copy is enough.</td></tr>
-  <tr><td>Material<br><code>MaterialData</code>, 84 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>MAX_MATERIALS</code> = 256; row = material handle index</td><td><code>writeMaterialRow</code></td></tr>
+  <tr><td>Geometry<br><code>GeometryData</code>, 124 B</td><td>one, in the geometry pool (<code>tableBuffer</code>)</td><td><code>geometryPoolSubMeshes</code> (2<sup>14</sup>)</td><td><code>upload</code> of the geometry pool, once per sub-mesh, with one <code>GeometryLod</code> per LOD. No frame has read a new row yet, so one copy is enough.</td></tr>
+  <tr><td>Material<br><code>MaterialData</code>, 220 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>MAX_MATERIALS</code> = 256; row = material handle index</td><td><code>writeMaterialRow</code></td></tr>
   <tr><td>Instance<br><code>InstanceData</code>, 108 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>maxInstances</code> (2<sup>16</sup>), bump-allocated</td><td><code>writeInstanceRows</code></td></tr>
   <tr><td>Draw list<br><code>DrawInfo</code>, 20 B</td><td><code>buffers</code> in <code>SceneDrawList</code>, one per frame slot and scene</td><td>grows ×2 when too small</td><td><code>rebuildDrawList</code>, then <code>uploadDrawList</code></td></tr>
   <tr><td>Visible draws</td><td><code>visibleDraws</code> in <code>SceneView</code>, per frame slot and scene view</td><td>grows ×2 in place (<code>resizeBuffer</code>, same handle) when too small; culling's scratch and the draw counts (<code>MAX_DRAW_RUNS</code> <code>uint32_t</code>s, written by <code>writeMain</code>) follow the draws</td><td>the GPU: <code>writeMain</code> packs the kept draws (<a href="stream-compaction.html#in-rasm">stream compaction</a>)</td></tr>
@@ -434,7 +434,7 @@
       <text x="103" y="166" class="mid small">e1</text><text x="275" y="166" class="mid small">e4</text>
       <text x="380" y="140" class="small">e2 waits for textures, e3 has no rows: no draws</text>
     </svg>
-    <p><code>rebuildDrawList</code> walks the scene's entities in order and adds one <code>DrawInfo</code> per drawable sub-mesh (<code>firstInstance</code> = its row). Then it stable-sorts by cull mode into runs, and marks the list stale in both frame slots.</p>
+    <p><code>rebuildDrawList</code> walks the scene's entities in order and adds one <code>DrawInfo</code> per drawable sub-mesh (<code>firstInstance</code> = its row). Then it stable-sorts by alpha mode and cull mode into runs, and marks the list stale in both frame slots.</p>
     <p>The whole list is rebuilt, not patched. Its cost grows with the number of entities in the scene (P7). Only scenes with the <code>rebuild</code> flag do it.</p>
   </div>
 
@@ -476,47 +476,53 @@
   <figcaption>Click a row of the CPU copy to move its entity (<code>updateTransform</code>): its rows become dirty in both buffers. Press "Next frame" and count the frames until both buffers are clean again. Then add entities with <code>createEntity</code> until the table is full.</figcaption>
 </figure>
 
-<h2 id="runs"><span class="n">4</span>Draw lists and cull-mode runs</h2>
+<h2 id="runs"><span class="n">4</span>Draw lists and runs</h2>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 225" role="img" aria-label="Six draws in scene order are stable-sorted by cull mode. They form three runs: NONE with 2 draws, FRONT with 1, BACK with 3.">
+  <svg viewBox="0 0 760 240" role="img" aria-label="Six draws in scene order are stable-sorted by alpha mode, then cull mode. They form five runs: NONE and NONE with 1 draw, NONE and FRONT with 1, NONE and BACK with 2, MASK and BACK with 1, and the BLEND run with 1.">
     <text x="20" y="54" class="small">draw list, scene order</text>
-    <rect x="170" y="30" width="88" height="40" rx="4" class="mem"/><text x="214" y="47" class="mid mono">e1 · 0</text><text x="214" y="63" class="mid small">BACK</text>
-    <rect x="265" y="30" width="88" height="40" rx="4" class="mem"/><text x="309" y="47" class="mid mono">e1 · 1</text><text x="309" y="63" class="mid small">NONE</text>
-    <rect x="360" y="30" width="88" height="40" rx="4" class="mem"/><text x="404" y="47" class="mid mono">e2 · 0</text><text x="404" y="63" class="mid small">BACK</text>
-    <rect x="455" y="30" width="88" height="40" rx="4" class="mem"/><text x="499" y="47" class="mid mono">e3 · 0</text><text x="499" y="63" class="mid small">FRONT</text>
-    <rect x="550" y="30" width="88" height="40" rx="4" class="mem"/><text x="594" y="47" class="mid mono">e3 · 1</text><text x="594" y="63" class="mid small">BACK</text>
-    <rect x="645" y="30" width="88" height="40" rx="4" class="mem"/><text x="689" y="47" class="mid mono">e4 · 0</text><text x="689" y="63" class="mid small">NONE</text>
+    <rect x="170" y="30" width="88" height="40" rx="4" class="mem"/><text x="214" y="47" class="mid mono">e1 · 0</text><text x="214" y="63" class="mid small">NONE · BACK</text>
+    <rect x="265" y="30" width="88" height="40" rx="4" class="mem"/><text x="309" y="47" class="mid mono">e1 · 1</text><text x="309" y="63" class="mid small">NONE · NONE</text>
+    <rect x="360" y="30" width="88" height="40" rx="4" class="mem"/><text x="404" y="47" class="mid mono">e2 · 0</text><text x="404" y="63" class="mid small">MASK · BACK</text>
+    <rect x="455" y="30" width="88" height="40" rx="4" class="mem"/><text x="499" y="47" class="mid mono">e3 · 0</text><text x="499" y="63" class="mid small">NONE · FRONT</text>
+    <rect x="550" y="30" width="88" height="40" rx="4" class="mem"/><text x="594" y="47" class="mid mono">e3 · 1</text><text x="594" y="63" class="mid small">NONE · BACK</text>
+    <rect x="645" y="30" width="88" height="40" rx="4" class="mem"/><text x="689" y="47" class="mid mono">e4 · 0</text><text x="689" y="63" class="mid small">BLEND</text>
 
     <line x1="450" y1="78" x2="450" y2="118" class="arrow" marker-end="url(#ah)"/>
-    <text x="462" y="102" class="small">stable sort by cull mode: NONE, FRONT, BACK</text>
+    <text x="462" y="96" class="small">stable sort by alpha mode (NONE, MASK, BLEND),</text>
+    <text x="462" y="110" class="small">then cull mode (NONE, FRONT, BACK)</text>
 
     <text x="20" y="148" class="small">after the sort</text>
-    <rect x="170" y="124" width="88" height="40" rx="4" class="mem"/><text x="214" y="141" class="mid mono">e1 · 1</text><text x="214" y="157" class="mid small">NONE</text>
-    <rect x="265" y="124" width="88" height="40" rx="4" class="mem"/><text x="309" y="141" class="mid mono">e4 · 0</text><text x="309" y="157" class="mid small">NONE</text>
-    <rect x="360" y="124" width="88" height="40" rx="4" class="mem"/><text x="404" y="141" class="mid mono">e3 · 0</text><text x="404" y="157" class="mid small">FRONT</text>
-    <rect x="455" y="124" width="88" height="40" rx="4" class="mem"/><text x="499" y="141" class="mid mono">e1 · 0</text><text x="499" y="157" class="mid small">BACK</text>
-    <rect x="550" y="124" width="88" height="40" rx="4" class="mem"/><text x="594" y="141" class="mid mono">e2 · 0</text><text x="594" y="157" class="mid small">BACK</text>
-    <rect x="645" y="124" width="88" height="40" rx="4" class="mem"/><text x="689" y="141" class="mid mono">e3 · 1</text><text x="689" y="157" class="mid small">BACK</text>
+    <rect x="170" y="124" width="88" height="40" rx="4" class="mem"/><text x="214" y="141" class="mid mono">e1 · 1</text><text x="214" y="157" class="mid small">NONE · NONE</text>
+    <rect x="265" y="124" width="88" height="40" rx="4" class="mem"/><text x="309" y="141" class="mid mono">e3 · 0</text><text x="309" y="157" class="mid small">NONE · FRONT</text>
+    <rect x="360" y="124" width="88" height="40" rx="4" class="mem"/><text x="404" y="141" class="mid mono">e1 · 0</text><text x="404" y="157" class="mid small">NONE · BACK</text>
+    <rect x="455" y="124" width="88" height="40" rx="4" class="mem"/><text x="499" y="141" class="mid mono">e3 · 1</text><text x="499" y="157" class="mid small">NONE · BACK</text>
+    <rect x="550" y="124" width="88" height="40" rx="4" class="mem"/><text x="594" y="141" class="mid mono">e2 · 0</text><text x="594" y="157" class="mid small">MASK · BACK</text>
+    <rect x="645" y="124" width="88" height="40" rx="4" class="mem"/><text x="689" y="141" class="mid mono">e4 · 0</text><text x="689" y="157" class="mid small">BLEND</text>
 
-    <path d="M170,172 V178 H353 V172" class="arrow gpu"/>
-    <path d="M360,172 V178 H448 V172" class="arrow gpu"/>
-    <path d="M455,172 V178 H733 V172" class="arrow gpu"/>
-    <text x="261" y="196" class="mid small">run 0 · NONE</text><text x="261" y="212" class="mid small">first 0, count 2</text>
-    <text x="404" y="196" class="mid small">run 1 · FRONT</text><text x="404" y="212" class="mid small">first 2, count 1</text>
-    <text x="594" y="196" class="mid small">run 2 · BACK</text><text x="594" y="212" class="mid small">first 3, count 3</text>
+    <path d="M170,172 V178 H258 V172" class="arrow gpu"/>
+    <text x="214" y="196" class="mid small">run 0</text><text x="214" y="212" class="mid small">first 0, count 1</text>
+    <path d="M265,172 V178 H353 V172" class="arrow gpu"/>
+    <text x="309" y="196" class="mid small">run 1</text><text x="309" y="212" class="mid small">first 1, count 1</text>
+    <path d="M360,172 V178 H543 V172" class="arrow gpu"/>
+    <text x="451" y="196" class="mid small">run 2</text><text x="451" y="212" class="mid small">first 2, count 2</text>
+    <path d="M550,172 V178 H638 V172" class="arrow gpu"/>
+    <text x="594" y="196" class="mid small">run 3</text><text x="594" y="212" class="mid small">first 4, count 1</text>
+    <path d="M645,172 V178 H733 V172" class="arrow gpu"/>
+    <text x="689" y="196" class="mid small">run 4 · blend</text><text x="689" y="212" class="mid small">first 5, count 1</text>
+    <text x="20" y="232" class="small">The blend run always has cull mode NONE, so it is one run that can be drawn in one sorted order.</text>
   </svg>
-  <figcaption>The sort order is the order of the <code>CullMode</code> values. Within a run, draws keep their scene order. <code>drawSceneView</code> sets the cull mode and issues one indirect draw per run.</figcaption>
+  <figcaption>The sort order is the order of the <code>AlphaMode</code> values, then of the <code>CullMode</code> values. Within a run, draws keep their scene order. <code>drawSceneView</code> sets each run's pipeline and cull mode and issues one indirect draw per run; a shaded view leaves the blend run to its <code>Transparent</code> pass, which draws it sorted back to front (<a href="transparency.html#in-rasm">transparency</a>).</figcaption>
 </figure>
 
-<p>A run is a <code>DrawRun</code> <code>{cullMode, first, count}</code>. There are at most <code>MAX_DRAW_RUNS</code> = 3 runs, one per cull mode (a <code>static_assert</code> ties the two together). A draw is skipped, with a warning when the entity gets its rows, if its sub-mesh has no vertices or no indices.</p>
+<p>A run is a <code>DrawRun</code> <code>{alphaMode, cullMode, first, count}</code>. There are at most <code>MAX_DRAW_RUNS</code> = 7 runs: three cull modes for each of <code>NONE</code> and <code>MASK</code>, and one <code>BLEND</code> run (a <code>static_assert</code> ties the numbers together). A draw is skipped, with a warning when the entity gets its rows, if its sub-mesh has no vertices or no indices.</p>
 
 <h3>When a draw list is rebuilt</h3>
 
 <p><code>SceneDrawList::rebuild</code> is set in two places:</p>
 <ul>
   <li><code>addEntityToDrawList</code>, from <code>addEntityToScene</code>: only if the entity already has rows and does not wait for textures. Otherwise it joins later, when it becomes drawable.</li>
-  <li><code>markDrawListsDirty</code>: the entity becomes drawable, starts waiting for a texture again, or one of its rows changes cull mode. It marks only the scenes in the entity's <code>scenes</code> bits.</li>
+  <li><code>markDrawListsDirty</code>: the entity becomes drawable, starts waiting for a texture again, or one of its rows changes cull mode or alpha mode. It marks only the scenes in the entity's <code>scenes</code> bits.</li>
 </ul>
 
 <h3>How a draw list reaches the GPU</h3>
@@ -570,15 +576,15 @@
 <p>Each instance row gets one of the three cull modes. Why a mirrored object must cull its front faces is in <a href="face-culling.html">Face culling and winding order</a>. Here is how RASM picks the mode:</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 216" role="img" aria-label="getCullMode asks two questions. A double-sided material gives NONE. Otherwise a negative determinant, a mirroring transform, gives FRONT. Otherwise BACK. The determinant is the product of the entity's scale and the determinant of the sub-mesh transform.">
+  <svg viewBox="0 0 760 216" role="img" aria-label="getCullMode asks two questions. A double-sided or see-through material gives NONE. Otherwise a negative determinant, a mirroring transform, gives FRONT. Otherwise BACK. The determinant is the product of the entity's scale and the determinant of the sub-mesh transform.">
     <rect x="20" y="20" width="150" height="50" rx="6" class="cpu"/>
     <text x="95" y="41" class="mid mono">getCullMode</text>
     <text x="95" y="59" class="mid small">per sub-mesh row</text>
     <line x1="170" y1="45" x2="208" y2="45" class="arrow cpu" marker-end="url(#ah-cpu)"/>
 
     <polygon points="210,45 300,15 390,45 300,75" class="box"/>
-    <text x="300" y="43" class="mid small">material</text>
-    <text x="300" y="57" class="mid mono">doubleSided?</text>
+    <text x="300" y="36" class="mid small">material</text>
+    <text x="300" y="50" class="mid mono">doubleSided</text><text x="300" y="63" class="mid small">or BLEND?</text>
     <line x1="390" y1="45" x2="548" y2="45" class="arrow" marker-end="url(#ah)"/>
     <text x="470" y="37" class="mid small">yes</text>
     <rect x="550" y="25" width="190" height="40" rx="6" class="box"/>
@@ -612,7 +618,7 @@
       <text x="120" y="124" class="mid small">both sides are drawn</text>
     </svg>
     <h4><code>NONE</code></h4>
-    <p>The material is <code>doubleSided</code>. Nothing is culled.</p>
+    <p>The material is <code>doubleSided</code>, or see-through (<code>BLEND</code>), whose single-sided back faces the shader drops. Nothing is culled.</p>
   </div>
   <div class="vcard">
     <svg viewBox="0 0 240 130" role="img" aria-label="A mirrored triangle. Its front face now winds clockwise.">
@@ -642,7 +648,7 @@
   </dl>
 </div>
 
-<p>The determinant needs no matrix multiply: the entity's <code>Transform</code> is translate × rotate × scale (<code>Transform::toMatrix</code>), and a rotation has determinant 1. The cull mode is kept per row on the CPU in <code>instanceCullModes</code>; the GPU never sees it. <code>updateCullModes</code> recomputes it when the transform or the material changes, and marks the draw lists dirty only if some row's mode changed.</p>
+<p>The determinant needs no matrix multiply: the entity's <code>Transform</code> is translate × rotate × scale (<code>Transform::toMatrix</code>), and a rotation has determinant 1. The cull mode and the material's alpha mode are kept per row on the CPU in <code>instanceCullModes</code> and <code>instanceAlphaModes</code>; the GPU never sees them. <code>updateDrawModes</code> recomputes them when the transform or the material changes, and marks the draw lists dirty only if some row's mode changed.</p>
 
 <h2 id="calls"><span class="n">6</span>You call X → this gets uploaded</h2>
 
@@ -651,7 +657,7 @@
   <tr><th>You call</th><th>CPU side</th><th>Reaches the GPU</th></tr>
   <tr><td><code>createEntity</code> with a mesh</td><td><code>queueInstanceRows</code>: onto the mesh list</td><td>Its instance rows, once the mesh is READY. Its scenes' draw lists, once its textures are loaded.</td></tr>
   <tr><td><code>addEntityToScene</code></td><td>sets the scene's bit in <code>scenes</code></td><td>That scene's draw list, if the entity is already drawable.</td></tr>
-  <tr><td><code>updateTransform</code></td><td><code>writeInstanceRows</code>: <code>setRow</code> for each sub-mesh, then <code>updateCullModes</code></td><td>Only that entity's rows, in each slot's next frame. Draw lists only if a cull mode changed.</td></tr>
+  <tr><td><code>updateTransform</code></td><td><code>writeInstanceRows</code>: <code>setRow</code> for each sub-mesh, then <code>updateDrawModes</code></td><td>Only that entity's rows, in each slot's next frame. Draw lists only if a cull mode changed.</td></tr>
   <tr><td><code>createMaterial</code>, glTF <code>loadMaterial</code></td><td><code>writeMaterialRow</code></td><td>One material row.</td></tr>
   <tr><td><code>updateMaterial</code></td><td><code>writeMaterialRow</code>; <code>refreshEntitiesAfterMaterialChange</code> if <code>doubleSided</code> changed or a texture still loads</td><td>The material row (same row index, so no instance row changes). Draw lists of entities that change cull mode or start waiting.</td></tr>
   <tr><td>a texture load finishes</td><td><code>finishLoads</code> sets <code>texturesFinished</code></td><td>Draw lists of entities that become drawable.</td></tr>
@@ -670,7 +676,7 @@
   <tr><td>State: tables, lists, draw lists, scene views</td><td><code>GpuScene</code>, <code>EntityDrawState</code>, <code>SceneDrawList</code>, <code>DrawRun</code>, <code>SceneView</code> in <code>src/renderer/gpuScene.h</code></td></tr>
   <tr><td>Creating the tables</td><td><code>Engine::createGpuScene</code> in <code>src/renderer/gpuScene.cpp</code>; <code>GeometryPool::create</code> in <code>src/renderer/geometryPool.cpp</code></td></tr>
   <tr><td>The per-frame sync</td><td><code>Engine::syncGpuScene</code>, called from <code>Engine::beginFrame</code> in <code>src/engine.cpp</code></td></tr>
-  <tr><td>Rows</td><td><code>queueInstanceRows</code>, <code>writeInstanceRows</code>, <code>updateCullModes</code>, <code>writeMaterialRow</code>, <code>getCullMode</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Rows</td><td><code>queueInstanceRows</code>, <code>writeInstanceRows</code>, <code>updateDrawModes</code>, <code>writeMaterialRow</code>, <code>getCullMode</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Draw lists</td><td><code>addEntityToDrawList</code>, <code>markDrawListsDirty</code>, <code>rebuildDrawList</code>, <code>uploadDrawList</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Callers</td><td><code>src/scene/entity.cpp</code>, <code>src/scene/scene.cpp</code>, <code>src/assets/material.cpp</code></td></tr>
   <tr><td>Row structs</td><td><code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
@@ -688,7 +694,7 @@
     <li>Only <code>gpuScene.cpp</code> touches <code>GpuScene</code>. Other files call the <code>Engine</code> methods (<code>queueInstanceRows</code>, <code>writeInstanceRows</code>, <code>writeMaterialRow</code>, <code>addEntityToDrawList</code>, <code>refreshEntitiesAfterMaterialChange</code>).</li>
     <li>An entity joins a draw list only with rows and all textures loaded. Keep that check in both <code>addEntityToDrawList</code> and <code>rebuildDrawList</code>.</li>
     <li><code>EntityDrawState::scenes</code> has one bit per scene, so <code>MAX_SCENES</code> must stay at most 16 (a <code>static_assert</code> checks it).</li>
-    <li>The run order is the order of <code>CullMode</code>, and <code>MAX_DRAW_RUNS</code> must equal the number of cull modes.</li>
+    <li>The run order is the order of <code>AlphaMode</code>, then of <code>CullMode</code>, and <code>MAX_DRAW_RUNS</code> must equal 2 × the cull modes + 1. The blend run is last and has cull mode <code>NONE</code>.</li>
     <li>Changing <code>InstanceData</code>, <code>MaterialData</code>, <code>GeometryData</code> or <code>DrawInfo</code> is a CPU↔GPU struct change: follow <a href="struct-layout.html#in-rasm">the struct contract</a>.</li>
   </ul>
 </div>

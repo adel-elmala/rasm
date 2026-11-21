@@ -254,7 +254,22 @@ private:
 <div class="api" id="CullMode">
   <pre class="sig">enum class CullMode { NONE, FRONT, BACK };</pre>
   <div class="body">
-    <p>Which triangles <code>setCullMode</code> skips. Front faces are counter-clockwise. Each pass starts with <code>NONE</code>. The scene's draw passes pick one per sub-mesh: <code>NONE</code> for a <code>doubleSided</code> material, else <code>BACK</code>, or <code>FRONT</code> when the transform mirrors the mesh.</p>
+    <p>Which triangles <code>setCullMode</code> skips. Front faces are counter-clockwise. Each pass starts with <code>NONE</code>. The scene's draw passes pick one per sub-mesh: <code>NONE</code> for a <code>doubleSided</code> or a <code>BLEND</code> material, else <code>BACK</code>, or <code>FRONT</code> when the transform mirrors the mesh.</p>
+  </div>
+</div>
+
+<div class="api" id="BlendMode">
+  <pre class="sig">enum class BlendMode
+{
+    NONE,
+    PREMULTIPLIED_ALPHA,
+};</pre>
+  <div class="body">
+    <p>How a pipeline's colors mix with what the target holds (<a href="low-level.html#PipelineDesc"><code>PipelineDesc::blendMode</code></a>).</p>
+    <dl>
+      <dt>NONE</dt><dd>The shader's color replaces the target's.</dd>
+      <dt>PREMULTIPLIED_ALPHA</dt><dd>result = source + (1 − source alpha) × target, for color and alpha. The shader outputs its color already multiplied by its alpha. This is the "over" operator of see-through (glTF <code>BLEND</code>) draws; see the <a href="../guides/transparency.html">transparency guide</a>.</dd>
+    </dl>
   </div>
 </div>
 

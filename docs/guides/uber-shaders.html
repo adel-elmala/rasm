@@ -570,7 +570,7 @@ default:         return shadeStandard(material, input);
 
 <h2 id="in-rasm"><span class="n">10</span>In RASM</h2>
 
-<p>RASM draws every scene object with one uber shader, <code>shaders/passes/rasm.slang</code>: one <code>vertMain</code>, one <code>fragMain</code>, compiled once into one pipeline. Materials are rows in the material table, and <code>fragMain</code> branches on them at run time.</p>
+<p>RASM draws every scene object with one uber shader, <code>shaders/passes/rasm.slang</code>: one <code>vertMain</code>, one <code>fragMain</code>. Materials are rows in the material table, and <code>fragMain</code> branches on them at run time. The one exception is the alpha mode: it changes fixed pipeline state (blending, depth writes) and whether the shader may discard, so <code>fragMain</code> is compiled three times, a variant per mode, with a <var>#define</var> (<a href="transparency.html#in-rasm">transparency</a>).</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 330" role="img" aria-label="The push constant leads to SceneData, which leads to the draw's DrawInfo, its InstanceData row and its MaterialData row. fragMain reads the MaterialData row through a pointer. If materialId is UNLIT, it calls shadeUnlit. Otherwise it fills a PBRInfo and calls shadePBR, which checks each of the five textures at run time with hasTexture, picks a UV set per texture, loops over the lights and handles back faces.">
@@ -607,13 +607,13 @@ default:         return shadeStandard(material, input);
     <text x="214" y="214" class="end small">PBR</text>
     <rect x="240" y="126" width="500" height="44" rx="22" class="shader"/>
     <text x="490" y="146" class="mid mono">shadeUnlit</text>
-    <text x="490" y="162" class="mid small">base color factor × texture; reads only the base color part of the row</text>
+    <text x="490" y="162" class="mid small">base color factor × texture × vertex color; reads only the base color part of the row</text>
     <rect x="240" y="186" width="500" height="132" rx="20" class="shader"/>
     <text x="490" y="208" class="mid mono">shadePBR</text>
     <text x="256" y="232" class="small">fragMain first copies the whole material and all 8 lights into a PBRInfo (P9)</text>
     <text x="256" y="252" class="small">5 runtime texture checks, hasTexture: base color, metallic-roughness,</text>
     <text x="256" y="268" class="small">emissive, occlusion, normal (a missing one is INVALID_TEXTURE_INDEX)</text>
-    <text x="256" y="288" class="small">selectUV per texture: uv0, uv1 or uv2 · a loop over numLights</text>
+    <text x="256" y="288" class="small">selectUV per texture, then one branch for the texture transforms · numLights</text>
     <text x="256" y="306" class="small">backFace from isFrontFace and the mirroring sign</text>
   </svg>
   <figcaption>Every branch on the material is uniform per draw: one draw is one instance with one material. The light loop runs <code>numLights</code> times for every pixel.</figcaption>
@@ -624,13 +624,15 @@ default:         return shadeStandard(material, input);
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Variants</td><td><var>#define</var>s, specialization constants</td><td>None. One source, one compile per entry point (<code>Engine::createPipeline</code> always uses <code>vertMain</code> and <code>fragMain</code>). No specialization constants.</td></tr>
+  <tr><td>Variants</td><td><var>#define</var>s, specialization constants</td><td>Only for the alpha mode: <code>fragMain</code> plain, with <code>RASM_ALPHA_MASK</code> and with <code>RASM_ALPHA_BLEND</code>, which <code>Engine::createScenePipeline</code> puts before the source. Everything else is a runtime branch. No specialization constants.</td></tr>
+  <tr><td>Texture transforms</td><td>a branch, or a variant</td><td>A runtime branch on <code>MATERIAL_TEXTURE_TRANSFORM</code> in the row's <code>flags</code>, <b>one</b> for all five textures. A branch per texture made the opaque draws of <code>05_city</code> about 6% slower, though no material there has a transform: the transform code raised the register count of the whole shader.</td></tr>
   <tr><td>Texture features</td><td>runtime branches</td><td>Runtime. Each of the 5 textures is used only when its index is not <code>INVALID_TEXTURE_INDEX</code> (<code>hasTexture</code>). <code>selectUV</code> picks the UV set per texture at run time too.</td></tr>
   <tr><td>Shading models</td><td>a type switch</td><td>Two: <code>MaterialId</code> <code>PBR</code> and <code>UNLIT</code>, stored in <code>MaterialData</code>, tested with one <var>if</var> in <code>fragMain</code>. <code>getGfxMaterialId</code> maps the public <code>MaterialType</code> to it; glTF's <samp>KHR_materials_unlit</samp> gives <code>UNLIT</code>. The PBR model itself is in <a href="pbr.html">PBR shading</a>.</td></tr>
   <tr><td>Uniformity</td><td>uniform per draw</td><td>Yes: <code>instanceCount</code> is always 1, so each draw has one material. The texture index is used without a non-uniform marker, which relies on this.</td></tr>
   <tr><td>Double-sided, mirrored</td><td>often a variant</td><td>Not variants. The cull mode is dynamic state, so double-sided and mirrored draws only change the run (see <a href="face-culling.html#in-rasm">face culling</a>). The shader works out the mirroring sign from the world matrix's determinant, per vertex.</td></tr>
-  <tr><td>Pipelines</td><td>as few as possible</td><td>One graphics pipeline for every scene draw. The others are the stats overlay, three compute pipelines (cull count, cull write, Hi-Z), and any pipeline an application makes with <code>Engine::createPipeline</code>.</td></tr>
-  <tr><td>Alpha modes</td><td>a pipeline per blend mode</td><td>None: blending is off in the one pipeline, and there is no alpha test. Transparent materials draw as opaque.</td></tr>
+  <tr><td>Pipelines</td><td>as few as possible</td><td>One graphics pipeline per alpha mode for the scene draws, each made only once a scene has such draws; the alpha mode is part of the run, so it costs a run, not a draw. The others are the depth-only pipelines of shadow maps, the sky, the stats overlay, the compute pipelines of culling, Hi-Z and the blend sort, and any pipeline an application makes with <code>Engine::createPipeline</code>.</td></tr>
+  <tr><td>Alpha modes</td><td>a pipeline per blend mode</td><td>Yes: the opaque variant never discards and keeps the early depth test; the mask variant discards; the blend variant has premultiplied blending and no depth write.</td></tr>
+  <tr><td>Shared shading code</td><td>a function</td><td>The variants share <code>fragMain</code> itself, not a function that takes the varyings: such a function made Slang read every varying up front, about 5% slower on the opaque draws of <code>05_city</code>.</td></tr>
   <tr><td>Registers</td><td>read data when needed</td><td>The unlit path reads its part of the row through a pointer. The PBR path copies the whole material and all <code>MAX_LIGHTS</code> lights into <code>PBRInfo</code> first (<code>P9</code>).</td></tr>
   <tr><td>Compile cost</td><td>cache pipelines</td><td>Compiled from source the first time a scene is drawn after each launch (<code>Engine::prepareSceneView</code>), with no pipeline cache (<code>P8</code>). A failed compile is retried every frame, so a shader fixed on disk is picked up while the application runs.</td></tr>
 </table>
@@ -654,9 +656,9 @@ default:         return shadeStandard(material, input);
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>The uber shader</td><td><code>vertMain</code>, <code>fragMain</code>, <code>VSOutput</code> in <code>shaders/passes/rasm.slang</code></td></tr>
   <tr><td>Shading paths</td><td><code>shadePBR</code>, <code>PBRInfo</code> in <code>shaders/lib/pbr.slang</code>; <code>shadeUnlit</code> in <code>shaders/lib/unlit.slang</code></td></tr>
-  <tr><td>Shared helpers</td><td><code>hasTexture</code>, <code>selectUV</code>, <code>sampleBaseColor</code>, <code>MaterialId</code> in <code>shaders/lib/core.slang</code></td></tr>
-  <tr><td>The material row</td><td><code>gfx::MaterialData</code>, <code>gfx::MaterialId</code> in <code>src/renderer/uberMaterialTypes.h</code>; <code>convertToGfxMaterial</code>, <code>getGfxMaterialId</code>, <code>Engine::writeMaterialRow</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Making the pipeline</td><td><code>Engine::createPipeline</code> in <code>src/engine.cpp</code>; called from <code>Engine::prepareSceneView</code></td></tr>
+  <tr><td>Shared helpers</td><td><code>hasTexture</code>, <code>selectUV</code>, <code>applyTextureTransform</code>, <code>getTextureUV</code>, <code>sampleBaseColor</code>, <code>getBaseAlpha</code>, <code>MaterialId</code> in <code>shaders/lib/core.slang</code></td></tr>
+  <tr><td>The material row</td><td><code>gfx::MaterialData</code>, <code>gfx::MaterialId</code> in <code>src/renderer/uberMaterialTypes.h</code>; <code>convertToGfxMaterial</code>, <code>toMaterialData</code>, <code>getGfxMaterialId</code>, <code>Engine::writeMaterialRow</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Making the pipelines</td><td><code>Engine::createScenePipeline</code> in <code>src/engine.cpp</code>; called from <code>Engine::prepareSceneView</code></td></tr>
   <tr><td>Fixed and dynamic state</td><td><code>VulkanDevice::createGraphicsPipeline</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
   <tr><td>The public material types</td><td><code>MaterialType</code> in <code>include/rasm/material.h</code></td></tr>
 </table>
@@ -665,7 +667,8 @@ default:         return shadeStandard(material, input);
 <div class="callout rule">
   <strong>Keep these true</strong>
   <ul>
-    <li>Every scene draw goes through the one pipeline. A material feature is a field and a branch, not a new pipeline: a new pipeline would split every draw list.</li>
+    <li>Every scene draw goes through the pipeline of its alpha mode. A material feature is a field and a branch, not a new pipeline: a new pipeline would split every draw list.</li>
+    <li>A branch on a material flag that guards several reads goes around all of them at once, so the code it guards does not add registers in every place.</li>
     <li><code>MaterialId</code> has the same values in the same order in C++ and Slang.</li>
     <li>The material branch must stay uniform per draw. If one draw ever covers several materials (real instancing), the texture indices need a non-uniform marker.</li>
     <li>Shaders output linear color; the swapchain encodes it (see <a href="color-spaces.html">color spaces</a>).</li>
@@ -677,7 +680,6 @@ default:         return shadeStandard(material, input);
   <ul>
     <li><code>P9</code>: the PBR path copies the material and all lights into registers up front.</li>
     <li><code>P8</code>: no pipeline cache and no SPIR-V cache; every launch compiles from source.</li>
-    <li>No alpha modes and no transparent pass.</li>
     <li><code>D12</code>: the shader uses pointers and <code>spirv_asm</code>, so it is Vulkan-only today.</li>
   </ul>
 </div>

@@ -1315,6 +1315,7 @@ void compactMain(uint3 id : SV_DispatchThreadID)
   <tr><td>Across groups</td><td>scan the group counts (multi-level) or decoupled look-back</td><td>No scan: each <code>writeMain</code> group adds up the counts of every earlier group of its run. O(groups) per group, O(groups²) per run.</td></tr>
   <tr><td>Dispatches</td><td>two or three</td><td>Two (<code>countMain</code>, <code>writeMain</code>). The scan of the group counts is folded into <code>writeMain</code>.</td></tr>
   <tr><td>Segments</td><td>separate counts per list, or a segmented scan</td><td>Groups never cross a run (<code>getCullGroup</code>), and each run has its own count in <code>drawCountsPtr</code>.</td></tr>
+  <tr><td>After the pack</td><td>—</td><td>The see-through run (<code>SceneData::blendRun</code>) is packed only by the late phase, then sorted back to front in place (<a href="gpu-sorting.html#in-rasm">sorting on the GPU</a>). Every other run keeps the list's order.</td></tr>
   <tr><td>Count</td><td>written by the last group, or an atomic counter</td><td>Written by thread 0 of the run's last group, every frame. Nothing is cleared.</td></tr>
   <tr><td>Atomics</td><td>for positions, in the unordered methods</td><td>Only for the frame statistics (<code>cullStatsPtr</code>, with <code>InterlockedAdd</code>), never for positions.</td></tr>
   <tr><td>Capacity</td><td>the worst case</td><td>The visible draw buffer holds at least as many draws as the draw list, then the scratch. It grows in <code>Engine::prepareSceneView</code> (<code>SceneView::visibleCapacity</code>).</td></tr>
@@ -1334,7 +1335,7 @@ void compactMain(uint3 id : SV_DispatchThreadID)
   <tr><td>Scratch pointers, buffer size, group count per view</td><td><code>Engine::prepareSceneView</code>, <code>getVisibleDrawBufferSize</code> in <code>src/renderer/gpuScene.cpp</code> (<code>SceneView::groupCount</code>)</td></tr>
   <tr><td>Recording the dispatches and the barrier between them</td><td><code>Engine::recordSceneCulling</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>The <code>Cull</code> and <code>Scene</code> passes</td><td><code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
-  <tr><td>Runs of one cull mode</td><td><code>Engine::rebuildDrawList</code> in <code>src/renderer/gpuScene.cpp</code>, <code>DrawRun</code> in <code>src/renderer/gpuScene.h</code></td></tr>
+  <tr><td>Runs of one alpha mode and cull mode</td><td><code>Engine::rebuildDrawList</code> in <code>src/renderer/gpuScene.cpp</code>, <code>DrawRun</code> in <code>src/renderer/gpuScene.h</code></td></tr>
   <tr><td>The pointers</td><td><code>SceneData</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
 </table>
 </div>

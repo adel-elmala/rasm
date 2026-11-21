@@ -140,7 +140,7 @@ namespace rasm
 
         // Its pass has no depth attachment, so neither has the pipeline.
         const Format colorFormats[MAX_COLOR_ATTACHMENTS] = {ctx.getSwapchainImageFormat()};
-        statsOverlay->pipeline = createGraphicsPipeline("statsOverlay", readFile(pathFromUtf8(config.shaderDir) / "passes/statsOverlay.slang"), colorFormats, Format::UNKNOWN);
+        statsOverlay->pipeline = createGraphicsPipeline("statsOverlay", readFile(pathFromUtf8(config.shaderDir) / "passes/statsOverlay.slang"), colorFormats, Format::UNKNOWN, "vertMain", "fragMain", BlendMode::NONE, true);
         if (!statsOverlay->pipeline.isValid())
             spdlog::error("Failed to create the stats overlay pipeline; the overlay stays off.");
         return true;

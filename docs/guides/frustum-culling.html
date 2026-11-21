@@ -741,7 +741,7 @@
 </table>
 </div>
 
-<p>After the test, the kept draws are packed into one list and drawn with one indirect call per cull-mode run. That part is <a href="stream-compaction.html#in-rasm">stream compaction</a>. The <a href="occlusion-culling.html#in-rasm">occlusion</a> and <a href="lod-selection.html#in-rasm">LOD</a> steps run in the same shader.</p>
+<p>After the test, the kept draws are packed into one list and drawn with one indirect call per run of one alpha mode and cull mode. That part is <a href="stream-compaction.html#in-rasm">stream compaction</a>. The <a href="occlusion-culling.html#in-rasm">occlusion</a> and <a href="lod-selection.html#in-rasm">LOD</a> steps run in the same shader.</p>
 
 <h3>Where it lives in code</h3>
 

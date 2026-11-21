@@ -139,6 +139,8 @@ namespace rasm
         PrimitiveTopology           topology                                      = PrimitiveTopology::TRIANGLE_LIST;
         Format                      colorAttachmentFormats[MAX_COLOR_ATTACHMENTS] = {};
         Format                      depthStencilAttachmentFormat                  = Format::UNKNOWN;
+        BlendMode                   blendMode                                     = BlendMode::NONE;
+        bool                        depthWrite                                    = true;
 
         bool                        operator==(const PipelineDesc&) const = default;
     };

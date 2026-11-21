@@ -1,4 +1,5 @@
 #include "rasm/engine.h"
+#include "core/utils.h"
 #include "platform/paths.h"
 #include "renderer/environmentBake.h"
 #include "renderer/geometryPool.h"
@@ -267,7 +268,7 @@ namespace rasm
     PipelineHandle Engine::createPipeline(const std::string &name, const std::string &shaderSource)
     {
         const Format colorFormats[MAX_COLOR_ATTACHMENTS] = {ctx.getSwapchainImageFormat()};
-        return createGraphicsPipeline(name, shaderSource, colorFormats, Format::UNKNOWN);
+        return createGraphicsPipeline(name, shaderSource, colorFormats, Format::UNKNOWN, "vertMain", "fragMain", BlendMode::NONE, true);
     }
 
     // The pipeline draws into targets with the formats of this one: its colors, in order, and its depth. A depth-only
@@ -281,15 +282,31 @@ namespace rasm
             spdlog::error("Pipeline '{}' needs a valid render target.", name);
             return {};
         }
-        return createGraphicsPipeline(name, shaderSource, rt.colorFormats, rt.depthFormat);
+        return createGraphicsPipeline(name, shaderSource, rt.colorFormats, rt.depthFormat, "vertMain", "fragMain", BlendMode::NONE, true);
     }
 
-    PipelineHandle Engine::createGraphicsPipeline(const std::string &name, const std::string &shaderSource, const Format *colorFormats, Format depthFormat)
+    // A pipeline of the scene passes, from a file in the shader folder, for targets with this one's formats. defines
+    // are preprocessor lines put before the source, for the variants of one shader; #line keeps the diagnostics'
+    // line numbers those of the file.
+    PipelineHandle Engine::createScenePipeline(const std::string &name, const std::string &shaderFile, const std::string &defines, const RenderTargetHandle &renderTarget,
+                                               const char *vertexEntryPoint, const char *fragmentEntryPoint, BlendMode blendMode, bool depthWrite)
+    {
+        const auto &rt = ctx.getRenderTarget(renderTarget);
+        if (rt.depthFormat == Format::UNKNOWN)
+        {
+            spdlog::error("Pipeline '{}' needs a valid render target.", name);
+            return {};
+        }
+        const std::string file = readFile(pathFromUtf8(config.shaderDir) / shaderFile);
+        const std::string source = defines.empty() ? file : defines + "#line 1\n" + file;
+        return createGraphicsPipeline(name, source, rt.colorFormats, rt.depthFormat, vertexEntryPoint, fragmentEntryPoint, blendMode, depthWrite);
+    }
+
+    PipelineHandle Engine::createGraphicsPipeline(const std::string &name, const std::string &shaderSource, const Format *colorFormats, Format depthFormat, const char *vertEntryPoint,
+                                                  const char *fragEntryPoint, BlendMode blendMode, bool depthWrite)
     {
         ZoneScoped;
 
-        const char *vertEntryPoint = "vertMain";
-        const char *fragEntryPoint = "fragMain";
         auto vertShader = shaderCompiler->compileFromString(shaderSource, name + ".vert.slang", vertEntryPoint);
         auto fragShader = shaderCompiler->compileFromString(shaderSource, name + ".frag.slang", fragEntryPoint);
 
@@ -304,7 +321,9 @@ namespace rasm
                              .fragmentShader = ctx.createShader({.name = name + ".frag", .type = ShaderType::FRAGMENT, .entryPoint = fragEntryPoint, .code = std::move(fragShader.code)}),
                              .descriptorSetLayout = bindlessDescriptorSetLayout,
                              .topology = PrimitiveTopology::TRIANGLE_LIST,
-                             .depthStencilAttachmentFormat = depthFormat};
+                             .depthStencilAttachmentFormat = depthFormat,
+                             .blendMode = blendMode,
+                             .depthWrite = depthWrite};
         std::copy(colorFormats, colorFormats + MAX_COLOR_ATTACHMENTS, std::begin(desc.colorAttachmentFormats));
         return ctx.createPipeline(desc);
     }

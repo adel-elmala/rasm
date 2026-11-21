@@ -31,7 +31,9 @@ namespace rasm
         hash = hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.topology)));
         for (const Format format : desc.colorAttachmentFormats)
             hash = hashCombine(hash, hashEnum(static_cast<uint32_t>(format)));
-        return hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.depthStencilAttachmentFormat)));
+        hash = hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.depthStencilAttachmentFormat)));
+        hash = hashCombine(hash, hashEnum(static_cast<uint32_t>(desc.blendMode)));
+        return hashCombine(hash, hashEnum(desc.depthWrite ? 1u : 0u));
     }
 
     // The list ends at the first UNKNOWN, so formats after a gap are not attachments.

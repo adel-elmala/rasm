@@ -750,6 +750,8 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
     PrimitiveTopology         topology = PrimitiveTopology::TRIANGLE_LIST;
     Format                    colorAttachmentFormats[MAX_COLOR_ATTACHMENTS] = {};
     Format                    depthStencilAttachmentFormat = Format::UNKNOWN;
+    BlendMode                 blendMode = BlendMode::NONE;
+    bool                      depthWrite = true;
 
     bool operator==(const PipelineDesc&amp;) const = default;
 };</pre>
@@ -758,8 +760,10 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <dt>computeShader</dt><dd>Valid for a compute pipeline; then leave the vertex and fragment shaders invalid.</dd>
       <dt>descriptorSetLayout</dt><dd>Required. Usually the engine's bindless layout (the one <code>Engine::createPipeline</code> uses).</dd>
       <dt>topology</dt><dd>See <a href="types.html#PrimitiveTopology">PrimitiveTopology</a>.</dd>
-      <dt>colorAttachmentFormats</dt><dd>One per color attachment, ending at the first <code>UNKNOWN</code> (count them with <code>colorAttachmentCount</code>). Must equal the color formats of the pass the pipeline is used in, in order, or <code>bindPipeline</code> rejects it. Every attachment gets the same blend state (blending off).</dd>
-      <dt>depthStencilAttachmentFormat</dt><dd>The same for the depth format.</dd>
+      <dt>colorAttachmentFormats</dt><dd>One per color attachment, ending at the first <code>UNKNOWN</code> (count them with <code>colorAttachmentCount</code>). Must equal the color formats of the pass the pipeline is used in, in order, or <code>bindPipeline</code> rejects it. Every attachment gets the same blend state, from <code>blendMode</code>.</dd>
+      <dt>depthStencilAttachmentFormat</dt><dd>The same for the depth format. With a depth format the depth test is on (reversed-Z, <code>GREATER_OR_EQUAL</code>).</dd>
+      <dt>blendMode</dt><dd>See <a href="types.html#BlendMode">BlendMode</a>. <code>Engine::createPipeline</code> always uses <code>NONE</code>.</dd>
+      <dt>depthWrite</dt><dd>Writes depth when there is a depth format. <code>false</code> keeps the test but not the write, as see-through draws need.</dd>
     </dl>
   </div>
 </div>

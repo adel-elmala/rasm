@@ -4,6 +4,8 @@
 #include "rasm/handle.h"
 #include "rasm/scene.h"
 #include "rasm/types.h"
+#include "rasm/material.h"
+#include "renderer/blendSort.h"
 #include "renderer/gpuTable.h"
 #include "renderer/uberMaterialTypes.h"
 
@@ -30,6 +32,7 @@ namespace rasm
 
     struct DrawRun
     {
+        AlphaMode                       alphaMode                                                           = AlphaMode::NONE;
         CullMode                        cullMode                                                            = CullMode::NONE;
         uint32_t                        first                                                               = 0;
         uint32_t                        count                                                               = 0;
@@ -69,10 +72,16 @@ namespace rasm
         BufferHandle                    hiz[MAX_FRAMES_IN_FLIGHT]                                           = {};
         uint32_t                        hizCapacity[MAX_FRAMES_IN_FLIGHT]                                   = {};
         BufferHandle                    visibility                                                          = {};
+        BufferHandle                    sortBuffers[MAX_FRAMES_IN_FLIGHT]                                   = {};   // a shaded view's: the blend sort's keys, then its copy of the draws
+        uint32_t                        sortCapacity[MAX_FRAMES_IN_FLIGHT]                                  = {};
         uint32_t                        graphs                                                              = 0;    // graphs that hold it; 0 is a free slot
         bool                            ready                                                               = false;
         bool                            culled                                                              = false;
         bool                            sky                                                                 = false;    // this frame's SceneData names a sky to draw
+        bool                            drawMask                                                            = false;    // this frame's pipelines for the MASK runs, or the depth-only MASK and BLEND runs, exist
+        bool                            drawBlend                                                           = false;    // a shaded view's Transparent pass has a run and a pipeline
+        bool                            sortBlend                                                           = false;    // the cull pass sorts the blend run
+        uint32_t                        blendRun                                                            = gfx::MAX_DRAW_RUNS;
         uint32_t                        groupCount                                                          = 0;
         uint32_t                        hizLevelCount                                                       = 0;
         uint32_t                        width                                                               = 0;
@@ -85,7 +94,11 @@ namespace rasm
         GpuTable                        materials;
         BufferHandle                    sceneData[MAX_FRAMES_IN_FLIGHT]                                     = {};
         PipelineHandle                  pipeline                                                            = {};
+        PipelineHandle                  maskPipeline                                                        = {};
+        PipelineHandle                  blendPipeline                                                       = {};
         PipelineHandle                  depthPipeline                                                       = {};
+        PipelineHandle                  depthMaskPipeline                                                   = {};
+        PipelineHandle                  sortPipelines[BLEND_SORT_STEPS]                                     = {};
         PipelineHandle                  cullCountPipeline                                                   = {};
         PipelineHandle                  cullWritePipeline                                                   = {};
         PipelineHandle                  hizPipeline                                                         = {};
@@ -95,6 +108,7 @@ namespace rasm
         DrawTotals                      drawTotals[MAX_FRAMES_IN_FLIGHT]                                    = {};
         std::vector<EntityDrawState>    entities;
         std::vector<CullMode>           instanceCullModes;
+        std::vector<AlphaMode>          instanceAlphaModes;
         uint32_t                        instanceCount                                                       = 0;
         std::vector<EntityHandle>       entitiesWaitingForMesh;
         std::vector<EntityHandle>       entitiesWaitingForTextures;

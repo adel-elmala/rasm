@@ -122,6 +122,16 @@ TEST_CASE("every pipeline field takes part in equality")
     depthFormat.depthStencilAttachmentFormat = rasm::Format::D24_UNORM_S8_UINT;
     CHECK_FALSE(base == depthFormat);
 
+    auto blend = base;
+    blend.blendMode = rasm::BlendMode::PREMULTIPLIED_ALPHA;
+    CHECK_FALSE(base == blend);
+    CHECK(rasm::PipelineDescHash{}(base) != rasm::PipelineDescHash{}(blend));
+
+    auto depthWrite = base;
+    depthWrite.depthWrite = false;
+    CHECK_FALSE(base == depthWrite);
+    CHECK(rasm::PipelineDescHash{}(base) != rasm::PipelineDescHash{}(depthWrite));
+
     auto name = base;
     name.name = "other";
     CHECK_FALSE(base == name);

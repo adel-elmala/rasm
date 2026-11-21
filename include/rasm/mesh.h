@@ -27,6 +27,8 @@ namespace rasm
         glm::vec4 tangent;      // glTF TANGENT: xyz tangent, w = bitangent sign (±1). w = 0 means none; the shader reconstructs one.
     };
 
+    uint32_t    packVertexColor(const glm::vec4& linearColor);
+
     struct MeshLod
     {
         std::vector<uint32_t>   indices;
@@ -38,6 +40,7 @@ namespace rasm
         std::vector<Vertex>     vertices;
         std::vector<uint32_t>   indices;
         std::vector<MeshLod>    lods;
+        std::vector<uint32_t>   colors;
     };
 
     struct SubGLTFRaw
@@ -68,6 +71,8 @@ namespace rasm
         uint32_t            firstIndex      = 0;
         uint32_t            indexCount      = 0;
         uint32_t            lodIndexCount   = 0;
+        uint32_t            firstColor      = 0;
+        uint32_t            colorCount      = 0;
         uint32_t            geometryIndex   = 0;
         glm::vec3           boundsCenter    = glm::vec3(0.0f);
         float               boundsRadius    = 0.0f;

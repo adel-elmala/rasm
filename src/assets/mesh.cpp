@@ -8,6 +8,8 @@
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <future>
@@ -20,10 +22,33 @@ namespace rasm
     namespace
     {
         const std::unordered_set<std::string> supportedMeshExtensions = {"obj", "gltf", "glb"};
+
+        uint32_t toUnorm8(float value)
+        {
+            return static_cast<uint32_t>(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
+        }
+
+        float encodeSrgb(float linear)
+        {
+            linear = std::clamp(linear, 0.0f, 1.0f);
+            return linear <= 0.0031308f ? linear * 12.92f : 1.055f * std::pow(linear, 1.0f / 2.4f) - 0.055f;
+        }
     }
 
-    MeshHandle Engine::createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices)
+    // RGB is stored sRGB-encoded, so 8 bits keep the dark shades that linear values lose; the vertex shader decodes it
+    // back to linear before interpolation. Alpha stays linear. R is the lowest byte.
+    uint32_t packVertexColor(const glm::vec4 &linearColor)
     {
+        return toUnorm8(encodeSrgb(linearColor.r)) | toUnorm8(encodeSrgb(linearColor.g)) << 8 | toUnorm8(encodeSrgb(linearColor.b)) << 16 | toUnorm8(linearColor.a) << 24;
+    }
+
+    MeshHandle Engine::createMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices, std::vector<uint32_t> colors)
+    {
+        if (!colors.empty() && colors.size() != vertices.size())
+        {
+            spdlog::error("createMesh: {} colors for {} vertices; give one per vertex, or none.", colors.size(), vertices.size());
+            return {};
+        }
         // The importers check their indices; the application's are checked here, before the LOD builder reads them.
         if (indices.size() % 3 != 0)
         {
@@ -46,7 +71,7 @@ namespace rasm
             return {};
         }
 
-        ObjRaw raw{std::move(vertices), std::move(indices)};
+        ObjRaw raw{.vertices = std::move(vertices), .indices = std::move(indices), .colors = std::move(colors)};
         if (config.meshLods)
             buildMeshLods(raw);
 
@@ -144,14 +169,16 @@ namespace rasm
         // halfway would leak the geometry, materials and bindless slots of its first sub-meshes.
         size_t vertexCount = 0;
         size_t indexCount = 0;
+        size_t colorCount = 0;
         for (const auto &sub : raw.subGltfRaws)
         {
             vertexCount += sub.objRaw.vertices.size();
             indexCount += sub.objRaw.indices.size();
+            colorCount += sub.objRaw.colors.size();
             for (const auto &lod : sub.objRaw.lods)
                 indexCount += lod.indices.size();
         }
-        if (!geometryPool->fits(vertexCount, indexCount, raw.subGltfRaws.size()))
+        if (!geometryPool->fits(vertexCount, indexCount, colorCount, raw.subGltfRaws.size()))
         {
             spdlog::error("Failed to upload mesh: {}", load.path);
             return;
@@ -188,7 +215,7 @@ namespace rasm
         MeshSize meshSize{};
         for (const auto &subMesh : registry.meshes[handle.index].subMeshes)
         {
-            meshSize.verticesByteSize += subMesh.geometry.vertexCount * sizeof(Vertex);
+            meshSize.verticesByteSize += subMesh.geometry.vertexCount * sizeof(Vertex) + subMesh.geometry.colorCount * sizeof(uint32_t);
             meshSize.indicesByteSize += (subMesh.geometry.indexCount + subMesh.geometry.lodIndexCount) * sizeof(uint32_t);
         }
         return meshSize;

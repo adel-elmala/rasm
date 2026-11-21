@@ -4,6 +4,7 @@ find_package(doctest CONFIG REQUIRED)
 
 add_executable(rasm_tests
             "main.cpp"
+            "blendSortTests.cpp"
             "cameraTests.cpp"
             "environmentTests.cpp"
             "gltfImportTests.cpp"
