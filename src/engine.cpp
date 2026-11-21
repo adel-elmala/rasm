@@ -791,6 +791,14 @@ namespace rasm
         return ctx.getRenderTarget(renderTarget).attachments[frameCount % MAX_FRAMES_IN_FLIGHT].depth;
     }
 
+    uint32_t Engine::getRenderTargetStorageIndex(const RenderTargetHandle &renderTarget, uint32_t attachment)
+    {
+        auto &rt = ctx.getRenderTarget(renderTarget);
+        if (attachment >= rt.colorCount)
+            return UINT32_MAX;
+        return rt.storageSlots[attachment];
+    }
+
     TextureHandle Engine::getPreviousRenderTargetTexture(const RenderTargetHandle &renderTarget, uint32_t attachment)
     {
         auto &rt = ctx.getRenderTarget(renderTarget);

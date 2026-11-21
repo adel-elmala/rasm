@@ -58,12 +58,21 @@ namespace rasm
 
         // Every pass draws with a depth attachment, and colors are attachments 0 to n-1, so a gap would be dropped.
         // A target without colors is depth-only, like a shadow map. History keeps only the colors of the previous
-        // frame, so a depth-only target has none.
+        // frame, so a depth-only target has none. A storage target is written by compute passes, which draw nothing, so
+        // it has colors and no depth; history copies are cleared by drawing into them, so it has no history either. Its
+        // colors are R16G16B16A16_SFLOAT, the format shaders declare binding 1 with ([format("rgba16f")]).
         bool checkRenderTargetDesc(const RenderTargetDesc &desc, const char *caller)
         {
             const uint32_t colorCount = colorAttachmentCount(desc.colorFormats);
             const bool contiguous = std::all_of(desc.colorFormats + colorCount, std::end(desc.colorFormats), [](Format format)
                                                 { return format == Format::UNKNOWN; });
+            if (desc.storage)
+                return checkArgument(contiguous, caller, "a render target's color formats can't have a gap.") &&
+                       checkArgument(colorCount > 0 && desc.depthFormat == Format::UNKNOWN && !desc.cube, caller, "a storage render target has colors and no depth.") &&
+                       checkArgument(std::all_of(desc.colorFormats, desc.colorFormats + colorCount, [](Format format)
+                                                 { return format == Format::R16G16B16A16_SFLOAT; }),
+                                     caller, "a storage render target's colors are R16G16B16A16_SFLOAT, the format of binding 1 in the shaders.") &&
+                       checkArgument(!desc.history, caller, "a storage render target can't have history.");
             return checkArgument(contiguous, caller, "a render target's color formats can't have a gap.") &&
                    checkArgument(desc.depthFormat != Format::UNKNOWN, caller, "a render target needs a depth format.") &&
                    checkArgument(colorCount > 0 || !desc.history, caller, "history keeps a render target's colors, so a depth-only target can't have it.") &&
@@ -84,14 +93,16 @@ namespace rasm
                     .width = size.x,
                     .height = size.y,
                     .format = desc.colorFormats[index],
-                    .usage = TextureUsage::SAMPLED_COLOR_ATTACHMENT};
+                    .usage = desc.storage ? TextureUsage::SAMPLED_STORAGE : TextureUsage::SAMPLED_COLOR_ATTACHMENT};
         }
 
-        // Everything but the textures, which createAttachments makes.
+        // Everything but the textures, which createAttachments makes, and the storage slots, which
+        // Impl::allocateStorageSlots gives a storage target.
         RenderTarget renderTargetFromDesc(const RenderTargetDesc &desc, glm::uvec2 size)
         {
             RenderTarget rt = {.width = size.x, .height = size.y, .colorCount = colorAttachmentCount(desc.colorFormats), .depthFormat = desc.depthFormat, .clearColor = desc.clearColor, .history = desc.history};
             std::copy(std::begin(desc.colorFormats), std::end(desc.colorFormats), std::begin(rt.colorFormats));
+            std::fill(std::begin(rt.storageSlots), std::end(rt.storageSlots), UINT32_MAX);
             return rt;
         }
 
@@ -108,13 +119,16 @@ namespace rasm
                     .cube = desc.cube};
         }
 
-        // The target's textures at its current size: its colors, then its depth. Returns how many there are.
+        // The target's textures at its current size: its colors, then its depth, which a storage target does not have.
+        // Returns how many there are.
         uint32_t attachmentTextureDescs(const RenderTargetDesc &desc, glm::uvec2 swapchainExtent, bool occlusionCulling, TextureDesc *textureDescs)
         {
             const glm::uvec2 size = renderTargetSize(desc, swapchainExtent);
             const uint32_t colorCount = colorAttachmentCount(desc.colorFormats);
             for (uint32_t c = 0; c < colorCount; ++c)
                 textureDescs[c] = colorTextureDesc(desc, size, c);
+            if (desc.depthFormat == Format::UNKNOWN)
+                return colorCount;
             textureDescs[colorCount] = depthTextureDesc(desc, size, occlusionCulling);
             return colorCount + 1;
         }
@@ -282,6 +296,9 @@ namespace rasm
         std::unordered_map<BindlessDescriptorSetLayoutDesc, DescriptorSetLayoutHandle, BindlessDescriptorSetLayoutDescHash>     descriptorSetLayoutDescCache;
 
         uint32_t                                                                                                                nextBindlessTextureIndex = 0;
+        // Binding 1 slots of storage render targets, from RESERVED_STORAGE_IMAGES up. A destroyed target gives its back.
+        uint32_t                                                                                                                nextStorageSlot = RESERVED_STORAGE_IMAGES;
+        std::vector<uint32_t>                                                                                                   freeStorageSlots;
 
         // The current pass's attachment formats. A pipeline must match them for its draws to be defined.
         Format                                                                                                                  passColorFormats[MAX_COLOR_ATTACHMENTS] = {};
@@ -307,6 +324,44 @@ namespace rasm
             for (const auto& handle : swapchainImages)
                 textures.erase(handle);
             swapchainImages.clear();
+        }
+
+        // A slot per color, kept for the target's life: a resize or a new placement writes the new textures into the
+        // same slots. A storage target has no history, so its one copy serves both frame slots. All or none, so a
+        // target never has only some of them.
+        bool allocateStorageSlots(RenderTarget& renderTarget, const RenderTargetDesc& desc)
+        {
+            if (!desc.storage)
+                return true;
+            const uint32_t available = static_cast<uint32_t>(freeStorageSlots.size()) + (MAX_BINDLESS_STORAGE_IMAGES - nextStorageSlot);
+            if (renderTarget.colorCount > available)
+            {
+                spdlog::error("Storage render target '{}' needs {} storage image slots, and {} of MAX_BINDLESS_STORAGE_IMAGES ({}, {} of them kept for the environment bake) are free.",
+                              desc.name, renderTarget.colorCount, available, MAX_BINDLESS_STORAGE_IMAGES, RESERVED_STORAGE_IMAGES);
+                return false;
+            }
+            for (uint32_t c = 0; c < renderTarget.colorCount; ++c)
+            {
+                if (freeStorageSlots.empty())
+                    renderTarget.storageSlots[c] = nextStorageSlot++;
+                else
+                {
+                    renderTarget.storageSlots[c] = freeStorageSlots.back();
+                    freeStorageSlots.pop_back();
+                }
+            }
+            return true;
+        }
+
+        // Called once the GPU is done with the target, so its slots can take other textures at once.
+        void releaseStorageSlots(RenderTarget& renderTarget)
+        {
+            for (uint32_t& slot : renderTarget.storageSlots)
+            {
+                if (slot != UINT32_MAX)
+                    freeStorageSlots.push_back(slot);
+                slot = UINT32_MAX;
+            }
         }
     };
     // clang-format on
@@ -571,8 +626,13 @@ namespace rasm
             return {};
 
         RenderTarget rt = renderTargetFromDesc(desc, renderTargetSize(desc, getSwapchainExtent()));
-        if (!createAttachments(rt, desc, nullptr, nullptr))
+        if (!impl->allocateStorageSlots(rt, desc))
             return {};
+        if (!createAttachments(rt, desc, nullptr, nullptr))
+        {
+            impl->releaseStorageSlots(rt);
+            return {};
+        }
 
         RenderTargetHandle rtHandle = engine->handleManager.getNextRenderTargetHandle();
         impl->renderTargets[rtHandle] = rt;
@@ -587,8 +647,11 @@ namespace rasm
             !checkRenderTargetDesc(desc, __func__))
             return {};
 
+        RenderTarget rt = renderTargetFromDesc(desc, renderTargetSize(desc, getSwapchainExtent()));
+        if (!impl->allocateStorageSlots(rt, desc))
+            return {};
         RenderTargetHandle rtHandle = engine->handleManager.getNextRenderTargetHandle();
-        impl->renderTargets[rtHandle] = renderTargetFromDesc(desc, renderTargetSize(desc, getSwapchainExtent()));
+        impl->renderTargets[rtHandle] = rt;
         impl->renderTargetInfos[rtHandle] = {.desc = desc, .transient = true};
         return rtHandle;
     }
@@ -647,6 +710,7 @@ namespace rasm
                 impl->device->waitIdle();
             waited = true;
             destroyAttachments(impl->renderTargets[renderTargets[i]]);
+            impl->releaseStorageSlots(impl->renderTargets[renderTargets[i]]);
             impl->renderTargets.erase(renderTargets[i]);
             impl->renderTargetInfos.erase(it);
         }
@@ -751,7 +815,8 @@ namespace rasm
             }
             rhi::Heap *heaps[MAX_COLOR_ATTACHMENTS + 1] = {};
             uint64_t offsets[MAX_COLOR_ATTACHMENTS + 1] = {};
-            for (uint32_t t = 0; t <= rt.colorCount; ++t)
+            const uint32_t textureCount = (i + 1 < count ? firstRequests[i + 1] : static_cast<uint32_t>(requests.size())) - firstRequests[i];
+            for (uint32_t t = 0; t < textureCount; ++t)
             {
                 const rhi::AliasPlacement &placement = placements[firstRequests[i] + t];
                 heaps[t] = group.heaps[placement.heap];
@@ -788,9 +853,9 @@ namespace rasm
         const uint32_t copies = desc.history ? MAX_FRAMES_IN_FLIGHT : 1;
         const uint32_t colorCount = renderTarget.colorCount;
         TextureDesc textureDescs[MAX_COLOR_ATTACHMENTS + 1];
-        attachmentTextureDescs(desc, getSwapchainExtent(), engine->config.occlusionCulling, textureDescs);
+        const bool hasDepth = attachmentTextureDescs(desc, getSwapchainExtent(), engine->config.occlusionCulling, textureDescs) > colorCount;
         const TextureDesc &depthDesc = textureDescs[colorCount];
-        const bool sampledDepth = depthDesc.usage == TextureUsage::SAMPLED_DEPTH_ATTACHMENT;
+        const bool sampledDepth = hasDepth && depthDesc.usage == TextureUsage::SAMPLED_DEPTH_ATTACHMENT;
 
         auto slotOf = [this](TextureHandle texture)
         {
@@ -806,8 +871,8 @@ namespace rasm
             depthSlots[i] = slotOf(renderTarget.attachments[i].depth);
         }
         destroyAttachments(renderTarget);
-        renderTarget.width = depthDesc.width;
-        renderTarget.height = depthDesc.height;
+        renderTarget.width = textureDescs[0].width;
+        renderTarget.height = textureDescs[0].height;
 
         auto makeTexture = [this, heaps, offsets](const TextureDesc &textureDesc, uint32_t attachment) -> TextureHandle
         {
@@ -830,8 +895,9 @@ namespace rasm
                 attachment.color[c] = makeTexture(textureDescs[c], c);
                 created = created && attachment.color[c].isValid();
             }
-            attachment.depth = makeTexture(depthDesc, colorCount);
-            if (!created || !attachment.depth.isValid())
+            if (hasDepth)
+                attachment.depth = makeTexture(depthDesc, colorCount);
+            if (!created || (hasDepth && !attachment.depth.isValid()))
             {
                 spdlog::error("Failed to create the attachments of render target '{}'.", desc.name);
                 destroyAttachments(renderTarget);
@@ -848,6 +914,8 @@ namespace rasm
                 bindless = engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.color[c], SamplerType::LINEAR_CLAMP, colorSlots[i][c]) != UINT32_MAX;
             if (bindless && sampledDepth)
                 bindless = engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.depth, SamplerType::NEAREST_CLAMP, depthSlots[i]) != UINT32_MAX;
+            for (uint32_t c = 0; c < colorCount && bindless && desc.storage; ++c)
+                bindless = updateBindlessStorageImage(engine->getBindlessDescriptorSet(), renderTarget.storageSlots[c], attachment.color[c], 0);
             if (!bindless)
             {
                 spdlog::error("Failed to make render target '{}' bindless.", desc.name);

@@ -96,6 +96,7 @@ namespace rasm::rhi
         uint64_t                        timestampMask       = 0;
         double                          timestampPeriod     = 0.0;
         VkDeviceSize                    maxBufferSize       = 0;
+        uint32_t                        maxStorageImages    = 0;    // update-after-bind storage images in a set and in a stage
     };
 
     std::unique_ptr<Device>         createVulkanDevice(const DeviceDesc& desc);

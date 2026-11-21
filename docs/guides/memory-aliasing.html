@@ -1051,19 +1051,19 @@ uint64_t pack(const Request *req, uint32_t count, uint64_t *offsets)
 
 <h3>The barrier</h3>
 
-<p><code>VulkanCommandBuffer::aliasingBarrier</code> records this one memory barrier. It waits for every attachment write, and for fragment and compute shader work (the reads of the old owner), before the new owner's attachment work:</p>
+<p><code>VulkanCommandBuffer::aliasingBarrier</code> records this one memory barrier. It waits for every attachment and storage write, and for fragment and compute shader work (the reads of the old owner), before the new owner's attachment or compute work:</p>
 
 <div class="table-wrap">
 <table>
   <tr><th>Field</th><th>Value</th></tr>
   <tr><td><code>srcStageMask</code></td><td><code>VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT</code><br><code>VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR</code><br><code>VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR</code><br><code>VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT</code><br><code>VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT</code></td></tr>
-  <tr><td><code>srcAccessMask</code></td><td><code>VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT</code><br><code>VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT</code></td></tr>
-  <tr><td><code>dstStageMask</code></td><td>the three attachment stages (the first three above)</td></tr>
-  <tr><td><code>dstAccessMask</code></td><td>color and depth attachment reads and writes</td></tr>
+  <tr><td><code>srcAccessMask</code></td><td><code>VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT</code><br><code>VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT</code><br><code>VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT</code></td></tr>
+  <tr><td><code>dstStageMask</code></td><td>the three attachment stages (the first three above) and <code>VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT</code></td></tr>
+  <tr><td><code>dstAccessMask</code></td><td>color and depth attachment reads and writes, shader storage reads and writes</td></tr>
 </table>
 </div>
 
-<p>Then <code>beginPass</code> moves the target's attachments from <code>UNKNOWN</code>, which is an image barrier from the <samp>UNDEFINED</samp> layout, and clears them.</p>
+<p>Then <code>beginPass</code> moves the target's attachments from <code>UNKNOWN</code>, which is an image barrier from the <samp>UNDEFINED</samp> layout, and clears them. A storage target's first pass is a compute pass instead, which moves its colors to <code>STORAGE</code> and writes every texel.</p>
 
 <h3>Lifetime of the memory</h3>
 
@@ -1089,7 +1089,7 @@ uint64_t pack(const Request *req, uint32_t count, uint64_t *offsets)
   <ul>
     <li>A transient target's first pass draws it. Declare every read with <code>PassBuilder::read</code>, so the lifetime covers it. A texture or bindless index used outside the declared passes reads another target's bytes, with no error.</li>
     <li>Lifetimes are inclusive at both ends. A pass that reads one target and draws another uses both.</li>
-    <li>If transient targets get a new kind of use (compute writes, copies), add its stages and accesses to <code>VulkanCommandBuffer::aliasingBarrier</code>. Today it covers attachment writes and fragment and compute reads only.</li>
+    <li>If transient targets get a new kind of use (copies, a new shader stage), add its stages and accesses to <code>VulkanCommandBuffer::aliasingBarrier</code>. Today it covers attachment writes, compute storage writes (storage targets, such as <a href="bloom.html">bloom</a>'s levels) and fragment and compute reads.</li>
     <li>Placed textures do not own their memory. Destroy them before their heap (<code>destroyHeap</code>), and wait for the GPU before a heap is freed.</li>
     <li>A change to <code>rhi::packAliased</code> comes with a test in <code>tests/memoryAliasingTests.cpp</code>, and the test that no two overlapping lifetimes share a byte must still pass.</li>
   </ul>

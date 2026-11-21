@@ -509,10 +509,12 @@ namespace rasm::rhi
         const uint32_t timestampBits = device.queue_families[queueIndexRet.value()].timestampValidBits;
         timestampMask = timestampBits >= 64 ? ~0ull : (1ull << timestampBits) - 1;
         timestampPeriod = physicalDevice.properties.limits.timestampPeriod;
-        VkPhysicalDeviceMaintenance4Properties maintenance4 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES};
+        VkPhysicalDeviceVulkan12Properties vulkan12 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
+        VkPhysicalDeviceMaintenance4Properties maintenance4 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES, &vulkan12};
         VkPhysicalDeviceProperties2 properties2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &maintenance4};
         vkGetPhysicalDeviceProperties2(physicalDevice.physical_device, &properties2);
         maxBufferSize = maintenance4.maxBufferSize;
+        maxStorageImages = std::min(vulkan12.maxDescriptorSetUpdateAfterBindStorageImages, vulkan12.maxPerStageDescriptorUpdateAfterBindStorageImages);
 
         // A queue family with compute and no graphics runs beside the graphics queue. Its timestamps must match the
         // graphics queue's, since the GPU timers of both share one mask.
@@ -965,6 +967,13 @@ namespace rasm::rhi
             VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
         };
         const uint32_t bindingCount = desc.storageImageCount > 0 ? 2 : 1;
+        if (desc.storageImageCount > maxStorageImages)
+        {
+            spdlog::error("The bindless set needs {} storage images, and this device allows {} (maxDescriptorSetUpdateAfterBindStorageImages, "
+                          "maxPerStageDescriptorUpdateAfterBindStorageImages). Lower MAX_BINDLESS_STORAGE_IMAGES.",
+                          desc.storageImageCount, maxStorageImages);
+            return nullptr;
+        }
 
         VkDescriptorSetLayoutBindingFlagsCreateInfo extendedInfo = {};
         extendedInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;

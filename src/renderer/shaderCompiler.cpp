@@ -129,12 +129,22 @@ namespace rasm
                 }
             }
 
-            // The tone-map pass and the environment bake have their own push constants.
+            // The tone-map pass, the bloom passes and the environment bake have their own push constants.
             if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "ToneMapPushConstants") == 0)
             {
                 return validateStruct(pushConstants, "ToneMapPushConstants", sizeof(gfx::ToneMapPushConstants),
                                       {{"source", offsetof(gfx::ToneMapPushConstants, source)},
-                                       {"exposure", offsetof(gfx::ToneMapPushConstants, exposure)}});
+                                       {"exposure", offsetof(gfx::ToneMapPushConstants, exposure)},
+                                       {"bloom", offsetof(gfx::ToneMapPushConstants, bloom)},
+                                       {"bloomStrength", offsetof(gfx::ToneMapPushConstants, bloomStrength)}});
+            }
+            if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "BloomPushConstants") == 0)
+            {
+                return validateStruct(pushConstants, "BloomPushConstants", sizeof(gfx::BloomPushConstants),
+                                      {{"source", offsetof(gfx::BloomPushConstants, source)},
+                                       {"target", offsetof(gfx::BloomPushConstants, target)},
+                                       {"base", offsetof(gfx::BloomPushConstants, base)},
+                                       {"scale", offsetof(gfx::BloomPushConstants, scale)}});
             }
             if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "EnvironmentPushConstants") == 0)
             {

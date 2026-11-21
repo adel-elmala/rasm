@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Engine · RASM</title>
 <meta name="description" content="The Engine class: EngineConfig, construction and shutdown, the frame functions, loading, frame stats, paths and the window, plus an index of every Engine method.">
-<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/window.cpp src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/renderer.cpp src/renderer/toneMap.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp">
+<meta name="rasm-sources" content="include/rasm/engine.h include/rasm/types.h include/rasm/window.h include/rasm/render/resource.h src/engine.cpp src/platform/window.cpp src/platform/paths.cpp src/renderer/frameStats.cpp src/renderer/gpuScene.cpp src/renderer/renderGraph.cpp src/renderer/renderer.cpp src/renderer/toneMap.cpp src/renderer/bloom.cpp src/rhi/renderContext.cpp src/rhi/device.cpp src/rhi/vulkan/vulkanDevice.cpp src/assets/mesh.cpp src/assets/texture.cpp src/renderer/geometryPool.cpp src/renderer/gpuTable.cpp CMakeLists.txt shaders/lib/shadow.slang shaders/passes/shadow.slang examples/06_shadows/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -44,7 +44,8 @@
   <tr><td><a href="#beginPass"><code>beginPass</code></a> / <a href="#endPass"><code>endPass</code></a></td><td>start and finish a render pass</td><td>this page</td></tr>
   <tr><td><a href="#addScenePasses"><code>addScenePasses</code></a></td><td>add a scene's culling and draw passes to a graph</td><td>this page</td></tr>
   <tr><td><a href="#addShadowPasses"><code>addShadowPasses</code></a></td><td>add a light's shadow passes to a graph</td><td>this page</td></tr>
-  <tr><td><a href="#addToneMapPass"><code>addToneMapPass</code></a></td><td>map an HDR target into the window</td><td>this page</td></tr>
+  <tr><td><a href="#addBloomPasses"><code>addBloomPasses</code></a></td><td>add the bloom of an HDR target to a graph</td><td>this page</td></tr>
+  <tr><td><a href="#addToneMapPass"><code>addToneMapPass</code></a></td><td>map an HDR target, with its bloom, into the window</td><td>this page</td></tr>
   <tr><td><a href="#getCurrentFrameResources"><code>getCurrentFrameResources</code></a></td><td>this frame's command buffer and depth</td><td>this page</td></tr>
   <tr><td><a href="#recreateSwapchain"><code>recreateSwapchain</code></a></td><td>rebuild after a resize</td><td>this page</td></tr>
   <tr><td><a href="#waitForLoads"><code>waitForLoads</code></a></td><td>finish every background load now</td><td>this page</td></tr>
@@ -75,6 +76,7 @@
   <tr><td><a href="camera.html#getCameraTransform"><code>getCameraTransform</code></a> / <a href="camera.html#setCameraTransform"><code>setCameraTransform</code></a></td><td>camera position and rotation</td><td>camera.html</td></tr>
   <tr><td><a href="camera.html#getCameraProjection"><code>getCameraProjection</code></a> / <a href="camera.html#setCameraProjection"><code>setCameraProjection</code></a></td><td>perspective or orthographic</td><td>camera.html</td></tr>
   <tr><td><a href="camera.html#getCameraExposure"><code>getCameraExposure</code></a> / <a href="camera.html#setCameraExposure"><code>setCameraExposure</code></a></td><td>brightness before tone mapping</td><td>camera.html</td></tr>
+  <tr><td><a href="camera.html#getCameraBloomStrength"><code>getCameraBloomStrength</code></a> / <a href="camera.html#setCameraBloomStrength"><code>setCameraBloomStrength</code></a></td><td>how much bright light glows</td><td>camera.html</td></tr>
   <tr><td><a href="camera.html#getCameraController"><code>getCameraController</code></a> / <a href="camera.html#setCameraController"><code>setCameraController</code></a></td><td>trackball or free-fly</td><td>camera.html</td></tr>
   <tr><td><a href="camera.html#getProjectionMatrix"><code>getProjectionMatrix</code></a>, <a href="camera.html#getProjectionMatrix-aspect"><code>getProjectionMatrix(camera, aspect)</code></a>, <a href="camera.html#getViewMatrix"><code>getViewMatrix</code></a></td><td>camera matrices</td><td>camera.html</td></tr>
   <tr><td><a href="camera.html#updateCameraAspectRatio"><code>updateCameraAspectRatio</code></a></td><td>aspect of every camera</td><td>camera.html</td></tr>
@@ -86,6 +88,7 @@
   <tr><td><a href="render-graph.html#getRenderTargetTexture"><code>getRenderTargetTexture</code></a></td><td>read a target in a later pass</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#getPreviousRenderTargetTexture"><code>getPreviousRenderTargetTexture</code></a></td><td>read last frame's copy of a history target</td><td>render-graph.html</td></tr>
   <tr><td><a href="render-graph.html#getRenderTargetDepthTexture"><code>getRenderTargetDepthTexture</code></a></td><td>read a target's depth in a later pass</td><td>render-graph.html</td></tr>
+  <tr><td><a href="render-graph.html#getRenderTargetStorageIndex"><code>getRenderTargetStorageIndex</code></a></td><td>write a storage target's color in a compute pass</td><td>render-graph.html</td></tr>
   <tr><td><a href="low-level.html#getRenderContext"><code>getRenderContext</code></a></td><td>the low-level API</td><td>low-level.html</td></tr>
   <tr><td><a href="low-level.html#getBindlessDescriptorSet"><code>getBindlessDescriptorSet</code></a></td><td>the texture set to bind</td><td>low-level.html</td></tr>
 </table>
@@ -189,6 +192,7 @@ if (!engine.running())
   <tr><td><code>asyncCompute</code></td><td><code>false</code></td><td>Runs the scene's culling and Hi-Z passes, and every pass added with <a href="render-graph.html#addAsyncComputePass"><code>addAsyncComputePass</code></a>, on a second GPU queue next to the graphics work. Needs a GPU with a compute queue family without graphics; without one, everything stays on the graphics queue, as with <code>false</code>. Off by default: today it does not make the scene passes faster (<code>P11</code>). <code>examples/03_instances</code> turns it on. See <a href="../guides/async-compute.html">async compute</a>.</td></tr>
   <tr><td><code>clusteredLighting</code></td><td><code>true</code></td><td>Each shaded view sorts its lights with a <code>range</code> into clusters, and each pixel shades only its cluster's lights (about 6.8 MiB per view and frame slot). <code>false</code>: every pixel shades every light of the scene, with the same image and a much higher cost; for comparison and debugging. See <a href="../guides/clustered-lighting.html">clustered lighting</a>.</td></tr>
   <tr><td><code>hostImageCopy</code></td><td><code>true</code></td><td>Fills textures on the CPU through host image copy where the GPU allows it for the format. <code>false</code> copies every texture from the staging ring on the graphics queue instead, as on a GPU without host image copy: for testing that path, or to compare the two. Formats without host image copy use the staging ring either way. See <a href="../guides/gpu-memory.html">GPU memory and uploads</a>.</td></tr>
+  <tr><td><code>bloom</code></td><td><code>false</code></td><td><code>render</code> adds the <a href="#addBloomPasses">bloom passes</a> and mixes them in by the camera's <a href="camera.html#setCameraBloomStrength">bloom strength</a>. Off by default, so an engine update does not change how an application looks. See <a href="../guides/bloom.html">bloom</a>.</td></tr>
 </table>
 </div>
 
@@ -250,7 +254,7 @@ if (!engine.running())
 <div class="api" id="render">
   <pre class="sig">void render(SceneHandle scene, CameraHandle camera);</pre>
   <div class="body">
-    <p>One whole frame of the scene, drawn into the window. The engine keeps a <a href="render-graph.html">render graph</a> with the scene's passes (<a href="#addScenePasses"><code>addScenePasses</code></a> into a 16-bit float target, then <a href="#addToneMapPass"><code>addToneMapPass</code></a> into the swapchain) and runs it with <code>RenderGraph::execute</code>: <code>beginFrame(camera)</code>, the passes, <code>endFrame</code>. It builds the graph again only when <code>scene</code> or <code>camera</code> is not the same as in the last call, also after a failure: a view whose passes could not be added is not tried again until one of them changes. When <code>beginFrame</code> returns false, no pass runs.</p>
+    <p>One whole frame of the scene, drawn into the window. The engine keeps a <a href="render-graph.html">render graph</a> with the scene's passes (<a href="#addScenePasses"><code>addScenePasses</code></a> into a 16-bit float target, with <code>EngineConfig::bloom</code> <a href="#addBloomPasses"><code>addBloomPasses</code></a>, then <a href="#addToneMapPass"><code>addToneMapPass</code></a> into the swapchain) and runs it with <code>RenderGraph::execute</code>: <code>beginFrame(camera)</code>, the passes, <code>endFrame</code>. It builds the graph again only when <code>scene</code> or <code>camera</code> is not the same as in the last call, also after a failure: a view whose passes could not be added is not tried again until one of them changes. When <code>beginFrame</code> returns false, no pass runs.</p>
     <dl>
       <dt>scene</dt><dd>The scene to draw. Invalid: an error is logged once, and the window is only cleared.</dd>
       <dt>camera</dt><dd>Gets this frame's input (mouse, keys) and is the view. It does not need to be in the scene.</dd>
@@ -499,14 +503,34 @@ if (!engine.addScenePasses(graph, scene, camera, sceneTarget, shadows, 3))
 </table>
 </div>
 
-<div class="api" id="addToneMapPass">
-  <pre class="sig">bool addToneMapPass(RenderGraph&amp; graph, const RenderTargetHandle&amp; source, CameraHandle camera);</pre>
+<div class="api" id="addBloomPasses">
+  <pre class="sig">RenderTargetHandle addBloomPasses(RenderGraph&amp; graph, const RenderTargetHandle&amp; source, CameraHandle camera);</pre>
   <div class="body">
-    <p>Adds a graphics pass named <code>Tone Map</code> that draws <code>source</code> into the window. It multiplies the color by the camera's exposure and maps it to the range the screen shows with AgX; the sRGB swapchain then encodes it. <code>render</code> calls it after the scene passes; call it yourself as the last pass of your own graph that draws the scene. How it works: <a href="../guides/tone-mapping.html">Tone mapping</a>.</p>
+    <p>Adds the bloom of <code>source</code>: 11 compute passes, <code>Bloom Down 1</code> to <code>Bloom Down 6</code> and <code>Bloom Up 5</code> to <code>Bloom Up 1</code>, that blur its light at six sizes, from half the source down to 1/64. Give the target it returns to <a href="#addToneMapPass"><code>addToneMapPass</code></a>, which mixes it into the image. <code>render</code> adds it when <code>EngineConfig::bloom</code> is on (off by default). How it works: <a href="../guides/bloom.html">Bloom</a>.</p>
     <dl>
-      <dt>graph</dt><dd>The graph to add to, before its <code>compile</code>. The pass reads <code>source</code>, so the graph runs it after the passes that draw it.</dd>
+      <dt>graph</dt><dd>The graph to add to, before its <code>compile</code>. The passes read <code>source</code>, so the graph runs them after the passes that draw it. They make 11 transient <a href="render-graph.html#RenderTargetDesc">storage targets</a> in the graph, which share memory with the graph's other transient targets.</dd>
+      <dt>source</dt><dd>Color 0 is read, as linear light: the target <a href="#addScenePasses"><code>addScenePasses</code></a> drew. The levels are sized from it: a target sized from the window gives levels that follow the window. A small source runs fewer levels: the chain stops at the last level of at least 2 × 2. Invalid, or a depth-only target: logs an error, adds nothing and returns an invalid handle.</dd>
+      <dt>camera</dt><dd>Its <a href="camera.html#setCameraBloomStrength">bloom strength</a> is read each time the passes run. At 0 they dispatch nothing (the graph still records their barriers). Invalid: logs an error, adds nothing and returns an invalid handle.</dd>
+      <dt>returns</dt><dd>The bloom target, half the size of <code>source</code>, or an invalid handle when the passes could not be added, for example when the <a href="types.html#MAX_BINDLESS_STORAGE_IMAGES">storage slots</a> ran out (the error names the limit). The pipelines are made the first time the passes run. If <code>passes/bloom.slang</code> does not compile, they log an error, the frame has no bloom, and they try again next frame.</dd>
+    </dl>
+    <p>The passes share one GPU timer, <code>Bloom</code>. In <code>examples/09_gltf_materials</code> (RTX 3060, Release) it takes about 0.2 ms at 1280 × 720 (0.10 to 0.27 ms from run to run), 0.37 ms at 1920 × 1080 and 0.75 ms at 3840 × 2160.</p>
+    <pre><code>// From examples/09_gltf_materials/main.cpp
+const rasm::RenderTargetHandle bloomTarget = engine.addBloomPasses(graph, sceneTarget, camera);
+if (!bloomTarget.isValid() || !engine.addToneMapPass(graph, sceneTarget, camera, bloomTarget))
+    return 1;</code></pre>
+    <p>With <code>Engine::render</code>, one line turns it on: <code>config.bloom = true;</code> before the engine is made.</p>
+  </div>
+</div>
+
+<div class="api" id="addToneMapPass">
+  <pre class="sig">bool addToneMapPass(RenderGraph&amp; graph, const RenderTargetHandle&amp; source, CameraHandle camera, const RenderTargetHandle&amp; bloom = {});</pre>
+  <div class="body">
+    <p>Adds a graphics pass named <code>Tone Map</code> that draws <code>source</code> into the window. It mixes in the bloom, multiplies the color by the camera's exposure and maps it to the range the screen shows with AgX; the sRGB swapchain then encodes it. <code>render</code> calls it after the scene passes; call it yourself as the last pass of your own graph that draws the scene. How it works: <a href="../guides/tone-mapping.html">Tone mapping</a>.</p>
+    <dl>
+      <dt>graph</dt><dd>The graph to add to, before its <code>compile</code>. The pass reads <code>source</code> and <code>bloom</code>, so the graph runs it after the passes that draw them.</dd>
       <dt>source</dt><dd>Color 0 is read, as linear light. Usually a <a href="types.html#SCENE_COLOR_FORMAT"><code>SCENE_COLOR_FORMAT</code></a> target that <a href="#addScenePasses"><code>addScenePasses</code></a> or your post passes drew. Invalid, or a depth-only target: logs an error, adds nothing and returns <code>false</code>.</dd>
-      <dt>camera</dt><dd>Its <a href="camera.html#setCameraExposure">exposure</a> is read each time the pass runs, so changing it needs no new graph. Invalid: logs an error, adds nothing and returns <code>false</code>.</dd>
+      <dt>camera</dt><dd>Its <a href="camera.html#setCameraExposure">exposure</a> and <a href="camera.html#setCameraBloomStrength">bloom strength</a> are read each time the pass runs, so changing them needs no new graph. Invalid: logs an error, adds nothing and returns <code>false</code>.</dd>
+      <dt>bloom</dt><dd>What <a href="#addBloomPasses"><code>addBloomPasses</code></a> returned, or invalid (the default) for no bloom. The pass draws <code>lerp(source, bloom, strength)</code>. A depth-only target: logs an error, adds nothing and returns <code>false</code>.</dd>
       <dt>returns</dt><dd><code>true</code> when the pass was added. The pipeline is made the first time the pass runs. If <code>passes/toneMap.slang</code> does not compile, the pass logs an error, draws nothing (the window shows the clear color) and tries again next frame, so a fixed shader file is picked up while the program runs.</dd>
     </dl>
     <pre><code>// From examples/06_shadows/main.cpp: post_rt holds the vignetted HDR image
@@ -611,7 +635,7 @@ for (uint32_t i = 0; i &lt; stats.gpuTimerCount; ++i)
     <dl>
       <dt>cpuFrameMs</dt><dd>Time between the last two frames on the CPU, in ms. Capped at 100 ms. Updated every frame, even when not measuring.</dd>
       <dt>gpuFrameMs</dt><dd>GPU time of the frame on the graphics queue, in ms: from the frame's start to the latest end of a timer there. Timers on the compute queue are left out, because the timestamps of two queues may not share a clock. 0 on a GPU without timestamps.</dd>
-      <dt>gpuTimers</dt><dd>One <code>GpuTimer</code> per pass (graphics or compute, the <a href="#addScenePasses">scene passes</a> included) and per timer of your own, in the order they were recorded. Room for <code>MAX_GPU_TIMERS - 1</code> (15).</dd>
+      <dt>gpuTimers</dt><dd>One <code>GpuTimer</code> per pass (graphics or compute, the <a href="#addScenePasses">scene passes</a> included) and per timer of your own, in the order they were recorded. The <a href="#addBloomPasses">bloom passes</a> share one, <code>Bloom</code>. Room for <code>MAX_GPU_TIMERS - 1</code> (63).</dd>
       <dt>gpuTimerCount</dt><dd>How many entries of <code>gpuTimers</code> are filled.</dd>
       <dt>draws</dt><dd>Draws of all scene views the frame drew, before culling (one per sub-mesh of each entity).</dd>
       <dt>drawsVisible</dt><dd>Draws that passed culling: inside the view, and with occlusion culling also not hidden. Draws of a view drawn without culling all count.</dd>
@@ -631,7 +655,7 @@ for (uint32_t i = 0; i &lt; stats.gpuTimerCount; ++i)
   <pre class="sig">struct GpuTimer</pre>
   <div class="body">
     <dl>
-      <dt>name</dt><dd>The pass name (for the scene passes: "Cull 1", "Scene 1", "Hi-Z", "Cull 2", "Scene 2", "Transparent", or "Cull" and "Scene"; inside them "Light Clusters" and "Blend Sort"), or the name you gave <code>beginGpuTimer</code>.</dd>
+      <dt>name</dt><dd>The pass name (for the scene passes: "Cull 1", "Scene 1", "Hi-Z", "Cull 2", "Scene 2", "Transparent", or "Cull" and "Scene"; inside them "Light Clusters" and "Blend Sort"; "Bloom" for all the bloom passes), or the name you gave <code>beginGpuTimer</code>.</dd>
       <dt>milliseconds</dt><dd>GPU time between the timer's start and end, in ms.</dd>
     </dl>
   </div>
@@ -646,7 +670,7 @@ for (uint32_t i = 0; i &lt; stats.gpuTimerCount; ++i)
       <dt>name</dt><dd>Label in the stats.</dd>
       <dt>returns</dt><dd>The timer id, or <code>UINT32_MAX</code> when nothing is measured: measuring is off, the GPU has no timestamps, or the frame used all its timers (a warning is logged once).</dd>
     </dl>
-    <p>A frame has <code>MAX_GPU_TIMERS</code> (16) timers: one for the whole frame, and 15 for passes and your timers together. Begin and end a timer in the same pass, so both timestamps are on one queue.</p>
+    <p>A frame has <code>MAX_GPU_TIMERS</code> (64) timers: one for the whole frame, and 63 for passes and your timers together. Begin and end a timer in the same pass, so both timestamps are on one queue.</p>
   </div>
 </div>
 

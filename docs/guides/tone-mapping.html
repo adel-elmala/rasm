@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tone Mapping and Exposure · RASM</title>
 <meta name="description" content="How tone mapping works: scene light spans many stops, a screen shows 0 to 1. Exposure as a multiplier in stops, the tone curves (clip, Reinhard, an ACES fit, AgX), why per-channel curves shift the hue of bright colors, AgX step by step, where the pass sits in a frame, the HDR format, pitfalls, a worked example. Then how RASM does it.">
-<meta name="rasm-sources" content="shaders/passes/toneMap.slang src/renderer/toneMap.cpp src/renderer/renderer.cpp include/rasm/engine.h include/rasm/camera.h src/scene/camera.cpp shaders/lib/pbr.slang shaders/lib/unlit.slang src/renderer/gpuScene.cpp src/renderer/statsOverlay.cpp src/engine.cpp src/rhi/vulkan/vulkanSwapchain.cpp examples/06_shadows/main.cpp examples/01_render_graph/main.cpp">
+<meta name="rasm-sources" content="shaders/passes/toneMap.slang src/renderer/toneMap.cpp src/renderer/bloom.cpp src/renderer/renderer.cpp include/rasm/engine.h include/rasm/camera.h src/scene/camera.cpp shaders/lib/pbr.slang shaders/lib/unlit.slang src/renderer/gpuScene.cpp src/renderer/statsOverlay.cpp src/engine.cpp src/rhi/vulkan/vulkanSwapchain.cpp examples/06_shadows/main.cpp examples/01_render_graph/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -611,7 +611,7 @@ display = saturate(v) ^ 2.2     linear, for an sRGB target</code></pre>
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="Renderer::render creates the graph target scene_hdr: R16G16B16A16_SFLOAT color with D32_SFLOAT depth, cleared to 0.018 gray. The scene passes Cull 1, Scene 1, Hi-Z, Cull 2 and Scene 2 draw into it. The Tone Map pass reads its color, multiplies by the camera's exposure, applies AgX and a 2.2 power, and writes the swapchain, B8G8R8A8_SRGB, which encodes to sRGB. After the graph, endFrame draws the stats overlay onto the swapchain without tone mapping, then presents. setCameraExposure changes the factor the pass reads.">
+  <svg viewBox="0 0 760 330" role="img" aria-label="Renderer::render creates the graph target scene_hdr: R16G16B16A16_SFLOAT color with D32_SFLOAT depth, cleared to 0.018 gray. The scene passes Cull 1, Scene 1, Hi-Z, Cull 2 and Scene 2 draw into it. The Tone Map pass reads its color, mixes in the bloom when the graph has one, multiplies by the camera's exposure, applies AgX and a 2.2 power, and writes the swapchain, B8G8R8A8_SRGB, which encodes to sRGB. After the graph, endFrame draws the stats overlay onto the swapchain without tone mapping, then presents. setCameraExposure changes the factor the pass reads.">
     <text x="20" y="22" class="title t-gpu">the graph of Engine::render, every frame</text>
     <rect x="20" y="34" width="230" height="64" rx="6" class="gpu"/>
     <text x="135" y="56" class="mid title">scene passes</text>
@@ -631,8 +631,8 @@ display = saturate(v) ^ 2.2     linear, for an sRGB target</code></pre>
 
     <text x="20" y="130" class="title t-shader">toneMap.slang, per pixel</text>
     <rect x="20"  y="140" width="130" height="50" rx="25" class="shader"/>
-    <text x="85" y="161" class="mid small">sample source</text>
-    <text x="85" y="177" class="mid small">(bindless)</text>
+    <text x="85" y="161" class="mid small">sample source,</text>
+    <text x="85" y="177" class="mid small">lerp to bloom</text>
     <line x1="150" y1="165" x2="166" y2="165" class="arrow" marker-end="url(#ah)"/>
     <rect x="168" y="140" width="130" height="50" rx="25" class="shader"/>
     <text x="233" y="161" class="mid small">× exposure</text>
@@ -696,7 +696,7 @@ engine.setCameraExposure(camera, 2.0f);</code></pre>
   <tr><td>Exposure</td><td>manual, automatic, physical camera</td><td>Manual only, per camera: <code>Camera::exposure</code>, a <b>linear factor</b> (not stops), 1 by default. <a href="../api/camera.html#setCameraExposure"><code>Engine::setCameraExposure</code></a> logs an error and keeps the old value for zero or a negative value. No automatic exposure, no EV100.</td></tr>
   <tr><td>What goes through the curve</td><td>the lit scene</td><td>Everything in the source target: PBR materials, <b>unlit materials</b> and the clear color. So an unlit white (1.0) shows as byte 202, not 255.</td></tr>
   <tr><td>HDR format</td><td>RGBA 16-bit float</td><td><code>SCENE_COLOR_FORMAT</code>, <code>R16G16B16A16_SFLOAT</code>. <code>Engine::addScenePasses</code> takes no other color format; its only other choice is a depth-only target, for shadows.</td></tr>
-  <tr><td>Where it sits</td><td>after HDR effects, before UI and the encode</td><td>The last pass of the default graph; no HDR effects are built in (an app adds its own before the pass). The stats overlay draws after it, not tone mapped, and so do debug views like the shadow-map inset of <code>examples/06_shadows</code>. The swapchain encodes.</td></tr>
+  <tr><td>Where it sits</td><td>after HDR effects, before UI and the encode</td><td>The last pass of the default graph. The one HDR effect built in is <a href="bloom.html">bloom</a>: <code>Engine::addBloomPasses</code> blurs the HDR target, and the tone map mixes it in, <code>lerp(scene, bloom, Camera::bloomStrength)</code>, before the exposure (<code>EngineConfig::bloom</code> for <code>Engine::render</code>, off by default). An app adds other effects of its own before the pass. The stats overlay draws after it, not tone mapped, and so do debug views like the shadow-map inset of <code>examples/06_shadows</code>. The swapchain encodes.</td></tr>
   <tr><td>Display decode</td><td>power 2.2, then the target's sRGB encode</td><td>The same: <code>pow(saturate(v), 2.2)</code>, then <code>B8G8R8A8_SRGB</code>. The two curves differ near black: a curve output of 0.05 shows as code 0.018.</td></tr>
   <tr><td>Alpha</td><td>pass through, or 1</td><td>The pass writes 1.</td></tr>
   <tr><td>Display</td><td>SDR or HDR displays</td><td>SDR only: an 8-bit sRGB swapchain. No HDR10 or scRGB output.</td></tr>
@@ -709,9 +709,9 @@ engine.setCameraExposure(camera, 2.0f);</code></pre>
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>The curve</td><td><code>agx</code>, <code>agxContrast</code> and the constants in <code>shaders/passes/toneMap.slang</code>; <code>fragMain</code> multiplies by <code>exposure</code> first</td></tr>
-  <tr><td>The pass</td><td><code>Engine::addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code>: checks the camera and the source and adds <code>Tone Map</code> with <code>read</code> of the source and <code>writeSwapchain</code>. The pass creates <code>toneMapPipeline</code> the first time it runs; on a shader error it draws nothing and tries again next frame.</td></tr>
-  <tr><td>Push constants</td><td><code>gfx::ToneMapPushConstants</code> in <code>src/renderer/uberMaterialTypes.h</code> and <code>ToneMapPushConstants</code> in <code>shaders/passes/toneMap.slang</code>: <code>source</code> (bindless index), <code>exposure</code>. <code>validateRasmStructs</code> in <code>src/renderer/shaderCompiler.cpp</code> compares them.</td></tr>
-  <tr><td>The default frame</td><td><code>Renderer::render</code> in <code>src/renderer/renderer.cpp</code>: the <samp>scene_hdr</samp> target, cleared to <code>BACKGROUND_COLOR</code> (<code>src/renderer/renderer.h</code>)</td></tr>
+  <tr><td>The pass</td><td><code>Engine::addToneMapPass</code> in <code>src/renderer/toneMap.cpp</code>: checks the camera, the source and the bloom target and adds <code>Tone Map</code> with <code>read</code> of the source (and the bloom) and <code>writeSwapchain</code>. The pass creates <code>toneMapPipeline</code> the first time it runs; on a shader error it draws nothing and tries again next frame.</td></tr>
+  <tr><td>Push constants</td><td><code>gfx::ToneMapPushConstants</code> in <code>src/renderer/uberMaterialTypes.h</code> and <code>ToneMapPushConstants</code> in <code>shaders/passes/toneMap.slang</code>: <code>source</code> (bindless index), <code>exposure</code>, <code>bloom</code> (bindless index, <code>INVALID_TEXTURE_INDEX</code> without one) and <code>bloomStrength</code>: 16 bytes, all of <code>PUSH_CONSTANTS_SIZE</code>. <code>validateRasmStructs</code> in <code>src/renderer/shaderCompiler.cpp</code> compares them.</td></tr>
+  <tr><td>The default frame</td><td><code>Renderer::render</code> in <code>src/renderer/renderer.cpp</code>: the <samp>scene_hdr</samp> target, cleared to <code>BACKGROUND_COLOR</code> (<code>src/renderer/renderer.h</code>), and with <code>EngineConfig::bloom</code> the bloom passes</td></tr>
   <tr><td>The HDR format</td><td><code>SCENE_COLOR_FORMAT</code> in <code>include/rasm/engine.h</code>; checked in <code>Engine::addScenePasses</code>, <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Exposure</td><td><code>Camera::exposure</code> in <code>include/rasm/camera.h</code>; <code>Engine::setCameraExposure</code>, <code>Engine::getCameraExposure</code> in <code>src/scene/camera.cpp</code></td></tr>
   <tr><td>Material output</td><td><code>shadePBR</code> in <code>shaders/lib/pbr.slang</code> and <code>shadeUnlit</code> in <code>shaders/lib/unlit.slang</code>: linear, no curve</td></tr>

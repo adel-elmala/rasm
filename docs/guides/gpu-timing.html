@@ -741,7 +741,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
 
 <h3>The timers</h3>
 
-<p>Each slot has a pool of 2 × <code>MAX_GPU_TIMERS</code> = 32 timestamps, so 16 timers. Timer <var>i</var> writes queries 2<var>i</var> and 2<var>i</var> + 1, both with <code>vkCmdWriteTimestamp2</code> at the "all commands" stage.</p>
+<p>Each slot has a pool of 2 × <code>MAX_GPU_TIMERS</code> = 128 timestamps, so 64 timers. Timer <var>i</var> writes queries 2<var>i</var> and 2<var>i</var> + 1, both with <code>vkCmdWriteTimestamp2</code> at the "all commands" stage.</p>
 
 <div class="table-wrap">
 <table>
@@ -853,7 +853,7 @@ ticks = 0x00001000 − 0xFFFFF000 = 0x2000 (mod 2^32) = 8192 ticks
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>"CPU" time</td><td>the CPU's work on a frame</td><td><code>cpuFrameMs</code> is <code>deltaTime</code> × 1000: the <b>frame time</b>, from one frame start to the next, capped at 100 ms. With the FIFO present mode (<code>B21</code>) it is held at the display's refresh interval. CPU work time per zone is measured with Tracy instead (<code>D16</code>).</td></tr>
-  <tr><td>Timestamps</td><td>pairs, period, valid bits</td><td>The same: one pool per frame slot, 16 timers, wrap-safe conversion.</td></tr>
+  <tr><td>Timestamps</td><td>pairs, period, valid bits</td><td>The same: one pool per frame slot, 64 timers, wrap-safe conversion. Compute passes next to each other with one <code>Pass::timerName</code> share a timer: the 11 bloom passes are one, <code>Bloom</code>.</td></tr>
   <tr><td>Reading</td><td>after the slot's fence, no wait</td><td>The same, in <code>updateFrameStats</code>. A slot whose fence value did not move (a frame that was not submitted) is skipped.</td></tr>
   <tr><td>Reset</td><td>by command or from the host</td><td>From the host (<code>vkResetQueryPool</code>, host query reset), right after the read.</td></tr>
   <tr><td>Frame GPU time</td><td>earliest begin to latest end</td><td>From the "Frame" timer's start to the latest end on the graphics queue. With one queue that is the same. With async compute, the compute-queue timers are left out, since timestamps of two queues may not share a clock.</td></tr>

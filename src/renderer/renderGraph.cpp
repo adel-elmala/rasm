@@ -205,6 +205,19 @@ namespace rasm
                 current = mark;
         }
 
+        // A storage render target, which compute passes write. Without an engine (the tests) every target may be one.
+        bool isStorageTarget(Engine *engine, RenderTargetHandle renderTarget)
+        {
+            return !engine || engine->getRenderContext().getRenderTargetDesc(renderTarget).storage;
+        }
+
+        // Passes next to each other in the order share a GPU timer when both are compute passes on one queue with the
+        // same timer name (Pass::timerName), as the passes of a bloom chain do.
+        bool sharesTimer(const Pass &a, const Pass &b)
+        {
+            return a.compute && b.compute && a.async == b.async && !a.timerName.empty() && a.timerName == b.timerName;
+        }
+
         // A depth texture is sampleable when it is D32_SFLOAT and occlusion culling is on, or its target is depth-only
         // (TextureUsage::SAMPLED_DEPTH_ATTACHMENT, see depthTextureDesc in renderContext.cpp).
         bool canReadDepth(const Engine *engine, const Pass &pass, uint32_t colorCount, Format depthFormat)
@@ -281,24 +294,37 @@ namespace rasm
         compiled = false; // Mark graph as dirty
     }
 
+    // A compute pass runs outside any render pass, so it has no attachments to draw: the render target it writes is a
+    // storage one, whose colors it writes as storage images.
     void RenderGraph::addComputePass(std::string name, const std::function<void(PassBuilder &)> &setup, std::function<void(RenderContext &)> execute)
     {
         addPass(std::move(name), setup, std::move(execute));
         auto &pass = passes.back();
         pass.compute = true;
-        // A compute pass runs outside any render pass, so it has no attachments to write.
-        if (pass.outputRenderTarget.isValid() || pass.writesSwapchain)
+        if (pass.outputRenderTarget.isValid() && !isStorageTarget(engine, pass.outputRenderTarget))
         {
-            spdlog::error("Compute pass '{}' cannot write a render target or the swapchain; the write is ignored.", pass.name);
+            spdlog::error("Compute pass '{}' can write only a storage render target (RenderTargetDesc::storage); the write is ignored.", pass.name);
             pass.outputRenderTarget = {};
+        }
+        if (pass.writesSwapchain)
+        {
+            spdlog::error("Compute pass '{}' cannot write the swapchain; the write is ignored.", pass.name);
             pass.writesSwapchain = false;
         }
     }
 
+    // A first write of a transient target waits for this frame's other users of its memory on the graphics queue only
+    // (RenderGraph::execute), so an async pass writes no render target.
     void RenderGraph::addAsyncComputePass(std::string name, const std::function<void(PassBuilder &)> &setup, std::function<void(RenderContext &)> execute)
     {
         addComputePass(std::move(name), setup, std::move(execute));
-        passes.back().async = true;
+        auto &pass = passes.back();
+        pass.async = true;
+        if (pass.outputRenderTarget.isValid())
+        {
+            spdlog::error("Async compute pass '{}' cannot write a render target; use addComputePass. The write is ignored.", pass.name);
+            pass.outputRenderTarget = {};
+        }
     }
 
     void RenderGraph::compile()
@@ -332,10 +358,16 @@ namespace rasm
                 spdlog::error("Pass '{}' writes face {}, and its target has {}.", pass.name, pass.outputFace, cube ? CUBE_FACES : 1);
                 valid = false;
             }
-            // Compute writes only buffers, so a compute pass that declares no write is missing its buffers.
-            if (pass.compute && pass.outputBuffers.empty() && pass.frameOutputBuffers.empty())
+            // A compute pass writes buffers, storage targets or textures, so one that declares no write is missing them.
+            if (pass.compute && pass.outputBuffers.empty() && pass.frameOutputBuffers.empty() && !pass.outputRenderTarget.isValid() && pass.outputTextures.empty())
             {
-                spdlog::error("Compute pass '{}' declares no buffer write; declare every buffer it uses.", pass.name);
+                spdlog::error("Compute pass '{}' declares no write; declare every buffer, storage target and texture it uses.", pass.name);
+                valid = false;
+            }
+            // A storage target's colors are not attachments, so only compute passes write them.
+            if (!pass.compute && pass.outputRenderTarget.isValid() && engine && engine->getRenderContext().getRenderTargetDesc(pass.outputRenderTarget).storage)
+            {
+                spdlog::error("Pass '{}' draws into a storage render target; only compute passes write one.", pass.name);
                 valid = false;
             }
         }
@@ -476,6 +508,7 @@ namespace rasm
 
         std::fill(std::begin(transientUses), std::end(transientUses), 0);
         const uint32_t passCount = placed ? static_cast<uint32_t>(executionOrder.size()) : 0;
+        uint32_t timer = UINT32_MAX;
         for (uint32_t position = 0; position < passCount; ++position)
         {
             auto &pass = passes[executionOrder[position]];
@@ -491,10 +524,11 @@ namespace rasm
             // Barriers are not allowed inside a render pass, so all of them go before the pass begins. beginPass
             // moves the attachments it draws to, and endPass leaves a render target's color SAMPLED for its readers.
             // A depth read moves the depth here, and the next pass that draws the target moves it back.
-            // A transient target's first pass draws over memory that other targets used before. On its own queue the
-            // aliasing barrier covers them; on the other queue it waits for this frame's passes there that used a
-            // transient target. The frame before is covered by its end, where graphics waits for all compute work: a
-            // first pass draws, so it is a graphics pass.
+            // A transient target's first pass draws or writes over memory that other targets used before. On its own
+            // queue the aliasing barrier covers them; on the other queue it waits for this frame's passes there that
+            // used a transient target. The frame before is covered by its end, where graphics waits for all compute
+            // work: a first pass draws, or writes a storage target in a compute pass that is not async, so it is on the
+            // graphics queue.
             if (std::find(transientFirstPasses.begin(), transientFirstPasses.end(), position) != transientFirstPasses.end())
             {
                 const QueueType other = otherQueue(queue);
@@ -514,12 +548,31 @@ namespace rasm
                 ctx.transitionImageLayout(commandBuffer, texture, TextureUsage::SAMPLED);
             for (auto renderTarget : pass.depthRenderTargets)
                 ctx.transitionImageLayout(commandBuffer, engine->getRenderTargetDepthTexture(renderTarget), TextureUsage::SAMPLED);
+            // A drawn target's colors are SAMPLED already (endPass), a storage target's are STORAGE after its writer.
+            for (auto renderTarget : pass.inputRenderTargets)
+            {
+                for (uint32_t i = 0; i < ctx.getRenderTarget(renderTarget).colorCount; ++i)
+                    ctx.transitionImageLayout(commandBuffer, engine->getRenderTargetTexture(renderTarget, i), TextureUsage::SAMPLED);
+            }
 
             if (pass.compute)
             {
-                const uint32_t timer = engine->beginGpuTimer(commandBuffer, pass.name);
+                // A transient target's first pass finds another target's bytes in its memory, so it drops them, like
+                // the clear of a first draw. Any other write keeps the contents.
+                if (pass.outputRenderTarget.isValid())
+                {
+                    const auto transient = std::find(transientTargets.begin(), transientTargets.end(), pass.outputRenderTarget);
+                    const bool first = transient != transientTargets.end() && transientFirstPasses[transient - transientTargets.begin()] == position;
+                    for (uint32_t i = 0; i < ctx.getRenderTarget(pass.outputRenderTarget).colorCount; ++i)
+                        ctx.transitionImageLayout(commandBuffer, engine->getRenderTargetTexture(pass.outputRenderTarget, i), TextureUsage::STORAGE, first);
+                }
+                for (auto texture : pass.outputTextures)
+                    ctx.transitionImageLayout(commandBuffer, texture, TextureUsage::STORAGE);
+                if (position == 0 || !sharesTimer(passes[executionOrder[position - 1]], pass))
+                    timer = engine->beginGpuTimer(commandBuffer, pass.timerName.empty() ? pass.name : pass.timerName);
                 pass.execute(ctx);
-                engine->endGpuTimer(commandBuffer, timer);
+                if (position + 1 == passCount || !sharesTimer(pass, passes[executionOrder[position + 1]]))
+                    engine->endGpuTimer(commandBuffer, timer);
                 continue;
             }
             engine->setRenderTarget(pass.outputRenderTarget, pass.outputFace);
@@ -569,7 +622,8 @@ namespace rasm
             {
                 if (access.slot > 0)
                     continue;
-                const char *note = access.mark == 'P' ? " (frame before)" : (access.perFrame ? " (per frame)" : (access.depth ? " (depth)" : ""));
+                const bool storage = pass.compute && access.mark == 'W' && access.key.kind == ResourceKind::RENDER_TARGET;
+                const char *note = access.mark == 'P' ? " (frame before)" : (access.perFrame ? " (per frame)" : (access.depth ? " (depth)" : (storage ? " (storage)" : "")));
                 use(access.key, access.mark, note);
             }
 
@@ -627,15 +681,16 @@ namespace rasm
     }
 
     // A failed placement, here or at a resize, leaves targets without textures. It is tried again every frame, and
-    // until it works the frames draw no passes. Every target has a depth, depth-only ones included, so that is what
-    // is looked at.
+    // until it works the frames draw no passes. Every target has a depth or a color (a storage target has no depth).
     bool RenderGraph::placeTransients()
     {
         if (transientTargets.empty())
             return true;
         auto &ctx = engine->getRenderContext();
         const bool missing = std::any_of(transientTargets.begin(), transientTargets.end(), [&ctx](const RenderTargetHandle &target)
-                                         { return !ctx.getRenderTarget(target).attachments[0].depth.isValid(); });
+                                         {
+                                             const RenderTargetAttachments &attachments = ctx.getRenderTarget(target).attachments[0];
+                                             return !attachments.depth.isValid() && !attachments.color[0].isValid(); });
         if (!transientsPlaced || missing)
             transientsPlaced = ctx.placeTransientRenderTargets(transientTargets.data(), transientFirstPasses.data(), transientLastPasses.data(), static_cast<uint32_t>(transientTargets.size()));
         return transientsPlaced;

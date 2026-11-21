@@ -8,7 +8,8 @@ namespace rasm
 {
     Renderer::Renderer(Engine &owner) : engine(owner), graph(&owner) {}
 
-    // The frame is a graph of the view's scene passes into an HDR target, then the tone-map pass into the swapchain.
+    // The frame is a graph of the view's scene passes into an HDR target, with EngineConfig::bloom the bloom passes,
+    // then the tone-map pass into the swapchain.
     // It is built for one view and built again only when the view changes. Adding the passes fails on bad handles or
     // a failed allocation, and building again every frame would make a new target each time, so such a view runs the
     // passes it has, or an empty frame that presents the clear color. Shader errors retry inside the passes. F3 logs
@@ -28,7 +29,10 @@ namespace rasm
                 .clearColor = BACKGROUND_COLOR,
             });
             if (engine.addScenePasses(graph, view.scene, view.camera, sceneColor))
-                engine.addToneMapPass(graph, sceneColor, view.camera);
+            {
+                const RenderTargetHandle bloom = engine.getConfig().bloom ? engine.addBloomPasses(graph, sceneColor, view.camera) : RenderTargetHandle{};
+                engine.addToneMapPass(graph, sceneColor, view.camera, bloom);
+            }
             built = true;
             graphView = view;
         }

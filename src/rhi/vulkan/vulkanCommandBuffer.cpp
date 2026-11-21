@@ -442,18 +442,19 @@ namespace rasm::rhi
         vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
     }
 
-    // Textures placed in the same memory: the next one's attachment writes wait for every use of the ones there before.
-    // An image barrier covers only its own image, so this one is global. Reads before it only have to finish.
+    // Textures placed in the same memory: the next one's attachment and storage writes wait for every use of the ones there
+    // before. An image barrier covers only its own image, so this one is global. Reads before it only have to finish.
     void VulkanCommandBuffer::aliasingBarrier()
     {
         constexpr VkPipelineStageFlags2 ATTACHMENT_STAGES = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT_KHR |
                                                             VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR;
         VkMemoryBarrier2 barrier = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
                                     .srcStageMask = ATTACHMENT_STAGES | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                    .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                                    .dstStageMask = ATTACHMENT_STAGES,
+                                    .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                                    .dstStageMask = ATTACHMENT_STAGES | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                     .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
-                                                     VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT};
+                                                     VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                                     VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
         if (computeQueue)
             fitToComputeQueue(barrier.srcStageMask, barrier.srcAccessMask, barrier.dstStageMask, barrier.dstAccessMask);
         VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &barrier};

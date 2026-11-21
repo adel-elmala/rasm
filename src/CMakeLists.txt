@@ -40,6 +40,7 @@ target_sources(rasm PRIVATE
     "scene/light.cpp"
     "scene/transform.cpp"
     "renderer/blendSort.cpp"
+    "renderer/bloom.cpp"
     "renderer/environmentBake.cpp"
     "renderer/frameStats.cpp"
     "renderer/geometryPool.cpp"

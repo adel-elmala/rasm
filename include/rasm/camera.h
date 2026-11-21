@@ -88,6 +88,7 @@ namespace rasm
         Transform           transform;       // current (rendered) camera transform
         Transform           targetTransform; // desired transform, eased toward each frame
         float               exposure        = 1.0f;
+        float               bloomStrength   = 0.04f;    // the share of bloom in the tone-mapped image (addBloomPasses)
     };
 
 }

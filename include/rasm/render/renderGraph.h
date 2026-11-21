@@ -36,6 +36,7 @@ namespace rasm
         RenderTargetHandle                  outputRenderTarget;
         uint32_t                            outputFace          = 0;    // of a cube target
         std::function<void(RenderContext&)> execute;
+        std::string                         timerName;                  // compute passes next to each other with one name share a GPU timer
         AttachmentOps                       attachmentOps;
         bool                                compute             = false;
         bool                                async               = false;

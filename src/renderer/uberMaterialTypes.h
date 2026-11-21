@@ -226,11 +226,23 @@ namespace rasm::gfx
         uint32_t         size;
     };
 
-    // The tone-map pass's own push constants (shaders/passes/toneMap.slang).
+    // The tone-map pass's own push constants (shaders/passes/toneMap.slang). bloom is INVALID_TEXTURE_INDEX without one.
     struct ToneMapPushConstants
     {
         uint32_t         source;
         float            exposure;
+        uint32_t         bloom;
+        float            bloomStrength;
+    };
+
+    // The bloom passes' push constants (shaders/passes/bloom.slang). source and base are bindless textures, target a
+    // storage slot; an up pass writes (base + tent(source)) * scale, without source (INVALID_TEXTURE_INDEX) base * scale.
+    struct BloomPushConstants
+    {
+        uint32_t         source;
+        uint32_t         target;
+        uint32_t         base;
+        float            scale;
     };
 
     // These structs are read by shaders/passes/rasm.slang through buffer-device-address pointers,
@@ -306,7 +318,10 @@ namespace rasm::gfx
     static_assert(offsetof(SceneData, nearZ) == 1712, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, environmentRotation) == 1648, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(PushConstants) == PUSH_CONSTANTS_SIZE, "PushConstants must fill the pipelines' push-constant range");
-    static_assert(sizeof(ToneMapPushConstants) == 8, "ToneMapPushConstants must match the shader's scalar layout");
+    static_assert(sizeof(ToneMapPushConstants) == PUSH_CONSTANTS_SIZE, "ToneMapPushConstants must fill the push-constant range");
+    static_assert(offsetof(ToneMapPushConstants, bloomStrength) == 12, "ToneMapPushConstants must match the shader's scalar layout");
+    static_assert(sizeof(BloomPushConstants) == PUSH_CONSTANTS_SIZE, "BloomPushConstants must fill the push-constant range");
+    static_assert(offsetof(BloomPushConstants, scale) == 12, "BloomPushConstants must match the shader's scalar layout");
     static_assert(sizeof(EnvironmentPushConstants) == PUSH_CONSTANTS_SIZE, "EnvironmentPushConstants must fill the pipelines' push-constant range");
     static_assert(offsetof(EnvironmentPushConstants, size) == 12, "EnvironmentPushConstants must match the shader's scalar layout");
     static_assert(offsetof(ToneMapPushConstants, exposure) == 4, "ToneMapPushConstants must match the shader's scalar layout");

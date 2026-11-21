@@ -41,10 +41,11 @@ namespace rasm
         return size;
     }
 
-    // Storage slots of one frame's bake: the LUT, then the environment cube's mips, the specular cube's, the irradiance.
+    // Storage slots of one frame's bake, below RESERVED_STORAGE_IMAGES: the LUT, then the environment cube's mips, the specular
+    // cube's, the irradiance.
     constexpr uint32_t          BRDF_LUT_STORAGE_SLOT       = 0;
     constexpr uint32_t          ENVIRONMENT_STORAGE_SLOT    = 1;
-    static_assert(ENVIRONMENT_STORAGE_SLOT + getMipCount(ENVIRONMENT_MAX_CUBE_SIZE) + SPECULAR_MIPS + 1 <= MAX_BINDLESS_STORAGE_IMAGES,
+    static_assert(ENVIRONMENT_STORAGE_SLOT + getMipCount(ENVIRONMENT_MAX_CUBE_SIZE) + SPECULAR_MIPS + 1 <= RESERVED_STORAGE_IMAGES,
                   "a bake needs a storage slot for each mip it writes");
 
     enum class BakeState
