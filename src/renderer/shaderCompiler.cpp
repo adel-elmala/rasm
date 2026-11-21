@@ -129,7 +129,8 @@ namespace rasm
                 }
             }
 
-            // The tone-map pass, the MSAA resolve, the bloom passes and the environment bake have their own push constants.
+            // The tone-map pass, the MSAA resolve, TAA, the bloom passes and the environment bake have their own push
+            // constants.
             if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "ToneMapPushConstants") == 0)
             {
                 return validateStruct(pushConstants, "ToneMapPushConstants", sizeof(gfx::ToneMapPushConstants),
@@ -145,6 +146,14 @@ namespace rasm
                                        {"target", offsetof(gfx::ResolvePushConstants, target)},
                                        {"samples", offsetof(gfx::ResolvePushConstants, samples)},
                                        {"exposure", offsetof(gfx::ResolvePushConstants, exposure)}});
+            }
+            if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "TaaPushConstants") == 0)
+            {
+                return validateStruct(pushConstants, "TaaPushConstants", sizeof(gfx::TaaPushConstants),
+                                      {{"colorAndMotion", offsetof(gfx::TaaPushConstants, colorAndMotion)},
+                                       {"depthAndHistory", offsetof(gfx::TaaPushConstants, depthAndHistory)},
+                                       {"targetAndReset", offsetof(gfx::TaaPushConstants, targetAndReset)},
+                                       {"exposure", offsetof(gfx::TaaPushConstants, exposure)}});
             }
             if (pushConstants && pushConstants->getName() && std::strcmp(pushConstants->getName(), "BloomPushConstants") == 0)
             {
@@ -229,7 +238,11 @@ namespace rasm
                                      {"globalLightCount", offsetof(gfx::SceneData, globalLightCount)},
                                      {"localLightCount", offsetof(gfx::SceneData, localLightCount)},
                                      {"nearZ", offsetof(gfx::SceneData, nearZ)},
-                                     {"depthSamples", offsetof(gfx::SceneData, depthSamples)}});
+                                     {"depthSamples", offsetof(gfx::SceneData, depthSamples)},
+                                     {"previousViewProjection", offsetof(gfx::SceneData, previousViewProjection)},
+                                     {"jitter", offsetof(gfx::SceneData, jitter)},
+                                     {"textureLodBias", offsetof(gfx::SceneData, textureLodBias)},
+                                     {"padding", offsetof(gfx::SceneData, padding)}});
 
             valid &= validateStruct(fieldStruct(scene, "shadowedLights"), "ShadowedLight", sizeof(gfx::ShadowedLight),
                                     {{"light", offsetof(gfx::ShadowedLight, light)},
@@ -268,7 +281,8 @@ namespace rasm
                                     {{"worldMatrix", offsetof(gfx::InstanceData, worldMatrix)},
                                      {"normalMatrix", offsetof(gfx::InstanceData, normalMatrix)},
                                      {"geometryIndex", offsetof(gfx::InstanceData, geometryIndex)},
-                                     {"materialIndex", offsetof(gfx::InstanceData, materialIndex)}});
+                                     {"materialIndex", offsetof(gfx::InstanceData, materialIndex)},
+                                     {"previousWorld", offsetof(gfx::InstanceData, previousWorld)}});
 
             valid &= validateStruct(fieldStruct(scene, "geometryPtr"), "GeometryData", sizeof(gfx::GeometryData),
                                     {{"vertexOffset", offsetof(gfx::GeometryData, vertexOffset)},

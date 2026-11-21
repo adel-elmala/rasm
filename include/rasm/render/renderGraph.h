@@ -122,7 +122,7 @@ namespace rasm
         bool                bufferBarrier(const Pass& pass, QueueType queue, PipelineStage& before, PipelineStage& after);
         void                waitForOtherQueue(const Access& access, QueueType queue, bool writes);
         void                textureWaits(const Pass& pass, QueueType queue);
-        void                destroyTransients();
+        void                destroyTargets();
         void                releaseSceneViews();
         bool                placeTransients();
         bool                transientLifetimes(const std::vector<uint32_t>& order);
@@ -147,6 +147,7 @@ namespace rasm
         std::unordered_map<BufferHandle, Access, HandleHash>        bufferAccess;
         std::unordered_map<TextureHandle, Access, HandleHash>       textureAccess;
         std::vector<RenderTargetHandle>                             transientTargets;
+        std::vector<RenderTargetHandle>                             historyTargets;     // made by the graph with history: they live as long as it
         std::vector<uint32_t>                                       transientFirstPasses;
         std::vector<uint32_t>                                       transientLastPasses;
         uint64_t                                                    transientUses[QUEUE_COUNT] = {}; // per queue, the batch value of this frame's last pass that used a transient target

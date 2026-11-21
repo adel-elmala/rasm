@@ -6,7 +6,8 @@
 #include <cstring>
 
 // --aa msaa2|msaa4|msaa8 draws the scene with several samples per pixel (EngineConfig::antiAliasing): the palm leaves
-// are cut-outs (glTF MASK), whose edges alpha-to-coverage smooths then.
+// are cut-outs (glTF MASK), whose edges alpha-to-coverage smooths then. --aa taa blends jittered frames instead, which
+// the turning models show with their motion.
 int main(int argc, char **argv)
 {
     // Create engine instance
@@ -31,6 +32,8 @@ int main(int argc, char **argv)
             config.antiAliasing = rasm::AntiAliasing::MSAA_4X;
         if (std::strcmp(argv[i + 1], "msaa8") == 0)
             config.antiAliasing = rasm::AntiAliasing::MSAA_8X;
+        if (std::strcmp(argv[i + 1], "taa") == 0)
+            config.antiAliasing = rasm::AntiAliasing::TAA;
     }
 
     rasm::Engine engine(config);

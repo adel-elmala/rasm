@@ -89,6 +89,7 @@ namespace rasm
         Transform           targetTransform; // desired transform, eased toward each frame
         float               exposure        = 1.0f;
         float               bloomStrength   = 0.04f;    // the share of bloom in the tone-mapped image (addBloomPasses)
+        uint32_t            historyResets   = 0;        // resetCameraHistory counts up; a TAA pass that sees it change starts over
     };
 
 }

@@ -40,6 +40,8 @@ namespace rasm
     constexpr uint32_t MAX_CAMERAS          = 8;
     constexpr uint32_t MAX_GPU_TIMERS       = 64;
     constexpr Format   SCENE_COLOR_FORMAT   = Format::R16G16B16A16_SFLOAT;
+    // A scene target's optional second color: each pixel's motion since the last frame, in UV units, for addTaaPass.
+    constexpr Format   MOTION_FORMAT        = Format::R16G16_SFLOAT;
 
     struct GpuTimer
     {
@@ -127,6 +129,8 @@ namespace rasm
         void                        setCameraExposure(CameraHandle camera, float exposure);
         // The share of bloom in the tone-mapped image, 0 to 1: at 0 the bloom passes dispatch nothing.
         void                        setCameraBloomStrength(CameraHandle camera, float strength);
+        // The camera's next frame starts TAA over, without the frames before: call it on a camera cut.
+        void                        resetCameraHistory(CameraHandle camera);
         // Returns false when the frame must be skipped (minimized, swapchain out of date); then do not
         // record anything or call endFrame.
         [[nodiscard]] bool          beginFrame(CameraHandle camera);
@@ -140,6 +144,10 @@ namespace rasm
         // Resolves a multisampled target's color 0 into a new single-sample target (weighted by brightness, so bright
         // edges stay smooth), which addBloomPasses and addToneMapPass read. Returns invalid on failure.
         RenderTargetHandle          addMsaaResolvePass(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera);
+        // Temporal anti-aliasing of a scene target with a MOTION_FORMAT second color, which addScenePasses drew in this
+        // graph: its view is jittered from now on, and the pass blends each frame into a history target, which it
+        // returns for addBloomPasses and addToneMapPass. Returns invalid on failure.
+        RenderTargetHandle          addTaaPass(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera);
         // Returns the bloom target for addToneMapPass, or invalid on failure.
         RenderTargetHandle          addBloomPasses(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera);
         bool                        addToneMapPass(RenderGraph& graph, const RenderTargetHandle& source, CameraHandle camera, const RenderTargetHandle& bloom = {});
@@ -218,6 +226,7 @@ namespace rasm
         std::unique_ptr<Renderer>                                   renderer                                = {};
         PipelineHandle                                              toneMapPipeline                         = {};
         PipelineHandle                                              msaaResolvePipeline                     = {};
+        PipelineHandle                                              taaPipeline                             = {};
         PipelineHandle                                              bloomFirstDownPipeline                  = {};
         PipelineHandle                                              bloomDownPipeline                       = {};
         PipelineHandle                                              bloomUpPipeline                         = {};
@@ -282,7 +291,7 @@ namespace rasm
         bool                        createGpuScene();
         void                        syncGpuScene();
         void                        queueInstanceRows(EntityHandle entity);
-        void                        writeInstanceRows(EntityHandle entity);
+        void                        writeInstanceRows(EntityHandle entity, bool moved = true);
         void                        updateDrawModes(EntityHandle entity);
         void                        refreshEntitiesAfterMaterialChange();
         void                        writeMaterialRow(MaterialHandle material);

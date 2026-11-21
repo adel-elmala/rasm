@@ -56,7 +56,7 @@ namespace rasm
         RenderTargetHandle                  createRenderTarget(const RenderTargetDesc& desc);
         RenderTargetHandle                  createTransientRenderTarget(const RenderTargetDesc& desc);
         bool                                placeTransientRenderTargets(const RenderTargetHandle* renderTargets, const uint32_t* firstPasses, const uint32_t* lastPasses, uint32_t count);
-        void                                destroyTransientRenderTargets(const RenderTargetHandle* renderTargets, uint32_t count);
+        void                                destroyRenderTargets(const RenderTargetHandle* renderTargets, uint32_t count);
         void                                clearNewHistory(const CommandBufferHandle& commandBuffer);
         void                                resizeRenderTargets();
         const RenderTarget&                 getRenderTarget(const RenderTargetHandle& handle);

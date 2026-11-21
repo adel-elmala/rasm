@@ -23,6 +23,8 @@
 // - Bloom: the glow around the bright emissive cubes and the sky (addBloomPasses, Camera::bloomStrength).
 // - MSAA with --aa msaa2|msaa4|msaa8: the scene is drawn with several samples per pixel and resolved
 //   (addMsaaResolvePass); the MASK leaves of AlphaBlendModeTest use alpha-to-coverage then.
+// - TAA with --aa taa: the scene target gets a motion color, the view is jittered and the frames blend (addTaaPass).
+//   The lantern turns, so the pass follows a moving model by its motion vectors.
 //
 // --glass <count> sets the number of cubes. --no-bloom leaves the bloom out, --bloom-strength <s> sets its share (0.04
 // by default). --render-size <width> <height> draws the scene at that size instead of the window's, which the tone map
@@ -93,6 +95,7 @@ int main(int argc, char **argv)
     uint32_t renderWidth = 0;
     uint32_t renderHeight = 0;
     uint32_t samples = 1;
+    bool taa = false;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--aa") == 0 && i + 1 < argc)
@@ -104,6 +107,7 @@ int main(int argc, char **argv)
                 samples = 4;
             if (std::strcmp(mode, "msaa8") == 0)
                 samples = 8;
+            taa = std::strcmp(mode, "taa") == 0;
         }
         if (std::strcmp(argv[i], "--glass") == 0 && i + 1 < argc)
             glassCount = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
@@ -156,7 +160,8 @@ int main(int argc, char **argv)
     engine.addEntityToScene(scene, engine.createEntity("vertex colors", vertexColors, {}, makeTransform(glm::vec3(-4.0f, 1.0f, 1.0f), 0.9f)));
     engine.addEntityToScene(scene, engine.createEntity("alpha modes", alphaModes, {}, makeTransform(glm::vec3(1.4f, 0.48f, 1.0f), 1.0f)));
     engine.addEntityToScene(scene, engine.createEntity("emissive strength", emissiveStrength, {}, makeTransform(glm::vec3(1.4f, 3.2f, -6.0f), 0.3f)));
-    engine.addEntityToScene(scene, engine.createEntity("lantern", lantern, {}, makeTransform(glm::vec3(-7.0f, 0.0f, -5.0f), 0.12f)));
+    const rasm::EntityHandle lanternEntity = engine.createEntity("lantern", lantern, {}, makeTransform(glm::vec3(-7.0f, 0.0f, -5.0f), 0.12f));
+    engine.addEntityToScene(scene, lanternEntity);
 
     // The glass block, a layer of GLASS_X x GLASS_Y cubes per row in depth, in a few tints and opacities.
     rasm::MaterialHandle glass[GLASS_TINTS];
@@ -205,14 +210,18 @@ int main(int argc, char **argv)
         .width = renderWidth,
         .height = renderHeight,
         .swapchainScale = fixedSize ? 0.0f : 1.0f,
-        .colorFormats = {rasm::SCENE_COLOR_FORMAT},
+        .colorFormats = {rasm::SCENE_COLOR_FORMAT, taa ? rasm::MOTION_FORMAT : rasm::Format::UNKNOWN},
         .depthFormat = rasm::Format::D32_SFLOAT,
         .samples = samples,
     });
     const rasm::SceneShadow shadow = engine.addShadowPasses(graph, scene, camera, rasm::ShadowDesc{.light = sun, .cascadeCount = CASCADE_COUNT, .size = 2048, .distance = 30.0f, .splitLambda = 0.7f});
     if (shadow.mapCount == 0 || !engine.addScenePasses(graph, scene, camera, sceneTarget, &shadow, 1))
         return 1;
-    const rasm::RenderTargetHandle resolved = samples > 1 ? engine.addMsaaResolvePass(graph, sceneTarget, camera) : sceneTarget;
+    rasm::RenderTargetHandle resolved = sceneTarget;
+    if (samples > 1)
+        resolved = engine.addMsaaResolvePass(graph, sceneTarget, camera);
+    if (taa)
+        resolved = engine.addTaaPass(graph, sceneTarget, camera);
     if (!resolved.isValid())
         return 1;
     const rasm::RenderTargetHandle bloomTarget = bloom ? engine.addBloomPasses(graph, resolved, camera) : rasm::RenderTargetHandle{};
@@ -223,6 +232,8 @@ int main(int argc, char **argv)
     std::vector<double> timerSums;
     for (uint32_t frame = 0; engine.running(); ++frame)
     {
+        // The lantern turns by a fixed angle per frame, so its motion (and TAA's motion vectors) is the same every run.
+        engine.updateTransform(lanternEntity, engine.getTransform(lanternEntity).rotate(glm::vec3(0.0f, 1.0f, 0.0f), glm::radians(1.0f)));
         graph.execute(camera);
         if (!printGpuTimes)
             continue;

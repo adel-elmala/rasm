@@ -69,8 +69,8 @@ namespace rasm
         // Every pass draws with a depth attachment, and colors are attachments 0 to n-1, so a gap would be dropped.
         // A target without colors is depth-only, like a shadow map. History keeps only the colors of the previous
         // frame, so a depth-only target has none. A storage target is written by compute passes, which draw nothing, so
-        // it has colors and no depth; history copies are cleared by drawing into them, so it has no history either. Its
-        // colors are R16G16B16A16_SFLOAT, the format shaders declare binding 1 with ([format("rgba16f")]).
+        // it has colors and no depth. Its colors are R16G16B16A16_SFLOAT, the format shaders declare binding 1 with
+        // ([format("rgba16f")]).
         bool checkRenderTargetDesc(const RenderTargetDesc &desc, uint32_t sampleCounts, const char *caller)
         {
             // A multisampled target is a scene's color and depth, resolved by a compute pass that reads its samples: so
@@ -87,8 +87,7 @@ namespace rasm
                        checkArgument(colorCount > 0 && desc.depthFormat == Format::UNKNOWN && !desc.cube, caller, "a storage render target has colors and no depth.") &&
                        checkArgument(std::all_of(desc.colorFormats, desc.colorFormats + colorCount, [](Format format)
                                                  { return format == Format::R16G16B16A16_SFLOAT; }),
-                                     caller, "a storage render target's colors are R16G16B16A16_SFLOAT, the format of binding 1 in the shaders.") &&
-                       checkArgument(!desc.history, caller, "a storage render target can't have history.");
+                                     caller, "a storage render target's colors are R16G16B16A16_SFLOAT, the format of binding 1 in the shaders.");
             return checkArgument(contiguous, caller, "a render target's color formats can't have a gap.") &&
                    checkArgument(desc.depthFormat != Format::UNKNOWN, caller, "a render target needs a depth format.") &&
                    checkArgument(colorCount > 0 || !desc.history, caller, "history keeps a render target's colors, so a depth-only target can't have it.") &&
@@ -119,15 +118,17 @@ namespace rasm
         {
             RenderTarget rt = {.width = size.x, .height = size.y, .colorCount = colorAttachmentCount(desc.colorFormats), .depthFormat = desc.depthFormat, .clearColor = desc.clearColor, .history = desc.history, .samples = desc.samples};
             std::copy(std::begin(desc.colorFormats), std::end(desc.colorFormats), std::begin(rt.colorFormats));
-            std::fill(std::begin(rt.storageSlots), std::end(rt.storageSlots), UINT32_MAX);
+            for (auto &slots : rt.storageSlots)
+                std::fill(std::begin(slots), std::end(slots), UINT32_MAX);
             return rt;
         }
 
-        // The Hi-Z pass of occlusion culling samples D32 depth through the bindless set, and so do the readers of a
-        // depth-only target's depth (a shadow map). A depth/stencil view can't be sampled.
-        TextureDesc depthTextureDesc(const RenderTargetDesc &desc, glm::uvec2 size, bool occlusionCulling)
+        // A D32 depth is sampled through the bindless set: by the Hi-Z pass of occlusion culling, by TAA (the nearest
+        // depth around a pixel), and by the readers of a depth-only target's depth (a shadow map). A depth/stencil view
+        // can't be sampled.
+        TextureDesc depthTextureDesc(const RenderTargetDesc &desc, glm::uvec2 size)
         {
-            const bool sampled = (occlusionCulling || colorAttachmentCount(desc.colorFormats) == 0) && desc.depthFormat == Format::D32_SFLOAT;
+            const bool sampled = desc.depthFormat == Format::D32_SFLOAT;
             return {.name = desc.name + " Depth Texture",
                     .width = size.x,
                     .height = size.y,
@@ -139,7 +140,7 @@ namespace rasm
 
         // The target's textures at its current size: its colors, then its depth, which a storage target does not have.
         // Returns how many there are.
-        uint32_t attachmentTextureDescs(const RenderTargetDesc &desc, glm::uvec2 swapchainExtent, bool occlusionCulling, TextureDesc *textureDescs)
+        uint32_t attachmentTextureDescs(const RenderTargetDesc &desc, glm::uvec2 swapchainExtent, TextureDesc *textureDescs)
         {
             const glm::uvec2 size = renderTargetSize(desc, swapchainExtent);
             const uint32_t colorCount = colorAttachmentCount(desc.colorFormats);
@@ -147,7 +148,7 @@ namespace rasm
                 textureDescs[c] = colorTextureDesc(desc, size, c);
             if (desc.depthFormat == Format::UNKNOWN)
                 return colorCount;
-            textureDescs[colorCount] = depthTextureDesc(desc, size, occlusionCulling);
+            textureDescs[colorCount] = depthTextureDesc(desc, size);
             return colorCount + 1;
         }
 
@@ -345,42 +346,55 @@ namespace rasm
             swapchainImages.clear();
         }
 
-        // A slot per color, kept for the target's life: a resize or a new placement writes the new textures into the
-        // same slots. A storage target has no history, so its one copy serves both frame slots. All or none, so a
-        // target never has only some of them.
+        // A slot per color of each copy, kept for the target's life: a resize or a new placement writes the new
+        // textures into the same slots. A target without history has one copy, which both frame slots use. All or none,
+        // so a target never has only some of them.
         bool allocateStorageSlots(RenderTarget& renderTarget, const RenderTargetDesc& desc)
         {
             if (!desc.storage)
                 return true;
+            const uint32_t copies = desc.history ? MAX_FRAMES_IN_FLIGHT : 1;
+            const uint32_t needed = copies * renderTarget.colorCount;
             const uint32_t available = static_cast<uint32_t>(freeStorageSlots.size()) + (MAX_BINDLESS_STORAGE_IMAGES - nextStorageSlot);
-            if (renderTarget.colorCount > available)
+            if (needed > available)
             {
                 spdlog::error("Storage render target '{}' needs {} storage image slots, and {} of MAX_BINDLESS_STORAGE_IMAGES ({}, {} of them kept for the environment bake) are free.",
-                              desc.name, renderTarget.colorCount, available, MAX_BINDLESS_STORAGE_IMAGES, RESERVED_STORAGE_IMAGES);
+                              desc.name, needed, available, MAX_BINDLESS_STORAGE_IMAGES, RESERVED_STORAGE_IMAGES);
                 return false;
             }
-            for (uint32_t c = 0; c < renderTarget.colorCount; ++c)
+            for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
             {
-                if (freeStorageSlots.empty())
-                    renderTarget.storageSlots[c] = nextStorageSlot++;
-                else
+                for (uint32_t c = 0; c < renderTarget.colorCount; ++c)
                 {
-                    renderTarget.storageSlots[c] = freeStorageSlots.back();
-                    freeStorageSlots.pop_back();
+                    if (i >= copies)
+                        renderTarget.storageSlots[i][c] = renderTarget.storageSlots[0][c];
+                    else if (freeStorageSlots.empty())
+                        renderTarget.storageSlots[i][c] = nextStorageSlot++;
+                    else
+                    {
+                        renderTarget.storageSlots[i][c] = freeStorageSlots.back();
+                        freeStorageSlots.pop_back();
+                    }
                 }
             }
             return true;
         }
 
-        // Called once the GPU is done with the target, so its slots can take other textures at once.
+        // Called once the GPU is done with the target, so its slots can take other textures at once. Each slot is given
+        // back once, also when both frame slots share it.
         void releaseStorageSlots(RenderTarget& renderTarget)
         {
-            for (uint32_t& slot : renderTarget.storageSlots)
+            for (uint32_t c = 0; c < MAX_COLOR_ATTACHMENTS; ++c)
             {
-                if (slot != UINT32_MAX)
-                    freeStorageSlots.push_back(slot);
-                slot = UINT32_MAX;
+                const uint32_t first = renderTarget.storageSlots[0][c];
+                const uint32_t second = renderTarget.storageSlots[1][c];
+                if (first != UINT32_MAX)
+                    freeStorageSlots.push_back(first);
+                if (second != UINT32_MAX && second != first)
+                    freeStorageSlots.push_back(second);
             }
+            for (auto& slots : renderTarget.storageSlots)
+                std::fill(std::begin(slots), std::end(slots), UINT32_MAX);
         }
     };
     // clang-format on
@@ -723,14 +737,15 @@ namespace rasm
         return placed;
     }
 
-    // The GPU may still use them, so it is waited for. A group none of whose targets is left frees its heaps.
-    void RenderContext::destroyTransientRenderTargets(const RenderTargetHandle *renderTargets, uint32_t count)
+    // A render graph's targets, transient or with history, go with the graph. The GPU may still use them, so it is
+    // waited for. A transient group none of whose targets is left frees its heaps.
+    void RenderContext::destroyRenderTargets(const RenderTargetHandle *renderTargets, uint32_t count)
     {
         bool waited = false;
         for (uint32_t i = 0; i < count; ++i)
         {
             auto it = impl->renderTargetInfos.find(renderTargets[i]);
-            if (it == impl->renderTargetInfos.end() || !it->second.transient)
+            if (it == impl->renderTargetInfos.end())
                 continue;
             if (!waited)
                 impl->device->waitIdle();
@@ -802,7 +817,7 @@ namespace rasm
         for (uint32_t i = 0; i < count; ++i)
         {
             TextureDesc textureDescs[MAX_COLOR_ATTACHMENTS + 1];
-            const uint32_t textureCount = attachmentTextureDescs(impl->renderTargetInfos[group.targets[i]].desc, extent, engine->config.occlusionCulling, textureDescs);
+            const uint32_t textureCount = attachmentTextureDescs(impl->renderTargetInfos[group.targets[i]].desc, extent, textureDescs);
             firstRequests[i] = static_cast<uint32_t>(requests.size());
             for (uint32_t t = 0; t < textureCount; ++t)
             {
@@ -879,7 +894,7 @@ namespace rasm
         const uint32_t copies = desc.history ? MAX_FRAMES_IN_FLIGHT : 1;
         const uint32_t colorCount = renderTarget.colorCount;
         TextureDesc textureDescs[MAX_COLOR_ATTACHMENTS + 1];
-        const bool hasDepth = attachmentTextureDescs(desc, getSwapchainExtent(), engine->config.occlusionCulling, textureDescs) > colorCount;
+        const bool hasDepth = attachmentTextureDescs(desc, getSwapchainExtent(), textureDescs) > colorCount;
         const TextureDesc &depthDesc = textureDescs[colorCount];
         const bool sampledDepth = hasDepth && depthDesc.usage == TextureUsage::SAMPLED_DEPTH_ATTACHMENT;
 
@@ -941,7 +956,7 @@ namespace rasm
             if (bindless && sampledDepth)
                 bindless = engine->addBindlessTexture(engine->getBindlessDescriptorSet(), attachment.depth, SamplerType::NEAREST_CLAMP, depthSlots[i]) != UINT32_MAX;
             for (uint32_t c = 0; c < colorCount && bindless && desc.storage; ++c)
-                bindless = updateBindlessStorageImage(engine->getBindlessDescriptorSet(), renderTarget.storageSlots[c], attachment.color[c], 0);
+                bindless = updateBindlessStorageImage(engine->getBindlessDescriptorSet(), renderTarget.storageSlots[i][c], attachment.color[c], 0);
             if (!bindless)
             {
                 spdlog::error("Failed to make render target '{}' bindless.", desc.name);
@@ -952,8 +967,10 @@ namespace rasm
         for (uint32_t i = copies; i < MAX_FRAMES_IN_FLIGHT; ++i)
             renderTarget.attachments[i] = renderTarget.attachments[0];
 
-        // Each frame reads the copy the frame before drew, so on the first frame that copy holds nothing yet.
-        if (desc.history)
+        // Each frame reads the copy the frame before drew, so on the first frame that copy holds nothing yet. A copy is
+        // cleared by drawing into it; a storage target's colors are not attachments, so its writer starts it over
+        // instead (addTaaPass drops its history on its first frame and after a resize).
+        if (desc.history && !desc.storage)
         {
             for (uint32_t i = 0; i < copies; ++i)
             {

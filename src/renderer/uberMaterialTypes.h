@@ -137,6 +137,7 @@ namespace rasm::gfx
         glm::mat3       normalMatrix;
         uint32_t        geometryIndex;
         uint32_t        materialIndex;
+        glm::vec4       previousWorld[3];           // the rows of the affine world matrix the frame before drew, for motion
     };
 
     struct GeometryLod
@@ -207,6 +208,10 @@ namespace rasm::gfx
         uint32_t         localLightCount;           // lights with a range, sorted into clusters
         float            nearZ;                     // the camera's near plane, where the clusters start
         uint32_t         depthSamples;              // samples per pixel of depthTexture; the Hi-Z build reads each one
+        glm::mat4        previousViewProjection;    // the frame before's, without jitter, for motion
+        glm::vec2        jitter;                    // NDC offset added to clip x and y (times w): TAA's sub-pixel jitter
+        float            textureLodBias;            // added to the material textures' mip level: -1 while jittered, sharper
+        uint32_t         padding;                   // keeps the size a multiple of 8
     };
 
     struct PushConstants
@@ -245,6 +250,16 @@ namespace rasm::gfx
         float            exposure;
     };
 
+    // The TAA pass's push constants (shaders/passes/taa.slang): two 16-bit bindless indices or slots per word, the
+    // history's reset in bit 16 of targetAndReset.
+    struct TaaPushConstants
+    {
+        uint32_t         colorAndMotion;
+        uint32_t         depthAndHistory;
+        uint32_t         targetAndReset;
+        float            exposure;
+    };
+
     // The bloom passes' push constants (shaders/passes/bloom.slang). source and base are bindless textures, target a
     // storage slot; an up pass writes (base + tent(source)) * scale, without source (INVALID_TEXTURE_INDEX) base * scale.
     struct BloomPushConstants
@@ -275,7 +290,8 @@ namespace rasm::gfx
     static_assert(offsetof(MaterialData, alphaMode) == 88, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, flags) == 96, "MaterialData must match the shader's scalar layout");
     static_assert(offsetof(MaterialData, textureTransforms) == 100, "MaterialData must match the shader's scalar layout");
-    static_assert(sizeof(InstanceData) == 108, "InstanceData must match the shader's scalar layout");
+    static_assert(sizeof(InstanceData) == 156, "InstanceData must match the shader's scalar layout");
+    static_assert(offsetof(InstanceData, previousWorld) == 108, "InstanceData must match the shader's scalar layout");
     static_assert(offsetof(InstanceData, normalMatrix) == 64, "InstanceData must match the shader's scalar layout");
     static_assert(offsetof(InstanceData, geometryIndex) == 100, "InstanceData must match the shader's scalar layout");
     static_assert(offsetof(InstanceData, materialIndex) == 104, "InstanceData must match the shader's scalar layout");
@@ -287,7 +303,9 @@ namespace rasm::gfx
     static_assert(offsetof(GeometryData, boundsRadius) == 16, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lodCount) == 20, "GeometryData must match the shader's scalar layout");
     static_assert(offsetof(GeometryData, lods) == 24, "GeometryData must match the shader's scalar layout");
-    static_assert(sizeof(SceneData) == 1720, "SceneData must match the shader's scalar layout");
+    static_assert(sizeof(SceneData) == 1800, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, previousViewProjection) == 1720, "SceneData must match the shader's scalar layout");
+    static_assert(offsetof(SceneData, textureLodBias) == 1792, "SceneData must match the shader's scalar layout");
     static_assert(sizeof(SceneData) % 8 == 0, "views' SceneData sit one after another, so their pointers must stay 8-byte aligned");
     static_assert(offsetof(SceneData, shadowedLightCount) == 140, "SceneData must match the shader's scalar layout");
     static_assert(offsetof(SceneData, vertsPtr) == 144, "SceneData must match the shader's scalar layout");
@@ -332,6 +350,8 @@ namespace rasm::gfx
     static_assert(offsetof(ToneMapPushConstants, bloomStrength) == 12, "ToneMapPushConstants must match the shader's scalar layout");
     static_assert(sizeof(ResolvePushConstants) == PUSH_CONSTANTS_SIZE, "ResolvePushConstants must fill the push-constant range");
     static_assert(offsetof(ResolvePushConstants, exposure) == 12, "ResolvePushConstants must match the shader's scalar layout");
+    static_assert(sizeof(TaaPushConstants) == PUSH_CONSTANTS_SIZE, "TaaPushConstants must fill the push-constant range");
+    static_assert(offsetof(TaaPushConstants, exposure) == 12, "TaaPushConstants must match the shader's scalar layout");
     static_assert(sizeof(BloomPushConstants) == PUSH_CONSTANTS_SIZE, "BloomPushConstants must fill the push-constant range");
     static_assert(offsetof(BloomPushConstants, scale) == 12, "BloomPushConstants must match the shader's scalar layout");
     static_assert(sizeof(EnvironmentPushConstants) == PUSH_CONSTANTS_SIZE, "EnvironmentPushConstants must fill the pipelines' push-constant range");

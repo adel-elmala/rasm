@@ -13,7 +13,7 @@
 float3 getNormalFromMap(Sampler2D texture, float2 uv, float3 position, float3 normal, float4 tangent, float scale, bool normalXY)
 {
     float3 N = normalize(normal);
-    float3 tangentNormal = texture.Sample(uv).xyz * 2.0 - 1.0;
+    float3 tangentNormal = sampleMaterial(texture, uv).xyz * 2.0 - 1.0;
     // A two-channel map (BC5, EAC RG11) stores x and y of a unit normal; z is the rest of its length.
     if (normalXY)
         tangentNormal.z = sqrt(saturate(1.0 - dot(tangentNormal.xy, tangentNormal.xy)));
@@ -154,7 +154,7 @@ float4 shadePBR(Sampler2D gTextures[], SamplerCube gCubeTextures[], PBRInfo pbrI
     uint mrIdx = pbrInfo.material.metallicRoughness.metallicRoughnessTextureIndex;
     if (hasTexture(mrIdx))
     {
-        float4 mrTex  = gTextures[mrIdx].Sample(pbrInfo.metallicRoughnessUV);
+        float4 mrTex  = sampleMaterial(gTextures[mrIdx], pbrInfo.metallicRoughnessUV);
         roughness = clamp(mrTex.g * roughnessFactor, 0.045, 1.0);
         metallic  = clamp(mrTex.b * metallicFactor, 0.0, 1.0);
     }
@@ -163,13 +163,13 @@ float4 shadePBR(Sampler2D gTextures[], SamplerCube gCubeTextures[], PBRInfo pbrI
     float3 emissive = emissiveFactor;
     uint emissiveIdx = pbrInfo.material.emissive.emissiveTextureIndex;
     if (hasTexture(emissiveIdx))
-        emissive *= gTextures[emissiveIdx].Sample(pbrInfo.emissiveUV).rgb;
+        emissive *= sampleMaterial(gTextures[emissiveIdx], pbrInfo.emissiveUV).rgb;
 
     float ao = 1.0;
     uint occlusionIdx = pbrInfo.material.occlusion.occlusionTextureIndex;
     if (hasTexture(occlusionIdx))
     {
-        float occlusion = gTextures[occlusionIdx].Sample(pbrInfo.occlusionUV).r;
+        float occlusion = sampleMaterial(gTextures[occlusionIdx], pbrInfo.occlusionUV).r;
         ao = lerp(1.0, occlusion, pbrInfo.material.occlusion.strength);
     }
 
