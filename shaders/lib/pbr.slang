@@ -210,8 +210,7 @@ float4 shadePBR(Sampler2D gTextures[], SamplerCube gCubeTextures[], PBRInfo pbrI
         float3 lit = shadeLight(light, 1.0, position, n, v, NoV, f0, diffuseColor, alpha);
         if (all(lit == float3(0.0)))
             continue;
-        float shadow = sampleShadow(gTextures, gCubeTextures, scene, light, shadowed, position, shadowNormal);
-        totalDirectLighting += shadow < 1.0 ? shadeLight(light, shadow, position, n, v, NoV, f0, diffuseColor, alpha) : lit;
+        totalDirectLighting += lit * sampleShadow(gTextures, gCubeTextures, scene, light, shadowed, position, shadowNormal);
     }
     // b. The global lights (directional, or without a range) reach every pixel.
     for (uint i = 0; i < scene->globalLightCount; ++i)

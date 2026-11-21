@@ -59,7 +59,8 @@ namespace rasm
         return registry.lights[light.index];
     }
 
-    // A light that gains or loses its range moves between the global and the local part of its scenes' lists.
+    // A light that gains or loses its range moves between the global and the local part of its scenes' lists. Its type
+    // stays: a shadow's maps (addShadowPasses) are made for it, cascades, one map or a cube.
     void Engine::updateLight(LightHandle light, const Light &values)
     {
         if (!light.isValid() || light.index >= registry.lights.size())
@@ -67,10 +68,15 @@ namespace rasm
             spdlog::error("Invalid light handle for updating a light.");
             return;
         }
+        Light &lightRef = registry.lights[light.index];
+        if (values.type != lightRef.type)
+        {
+            spdlog::error("updateLight cannot change light {}'s type; create a new light instead.", light.index);
+            return;
+        }
         if (!isValidSpotCone(values.type, values.innerConeAngle, values.outerConeAngle))
             return;
 
-        Light &lightRef = registry.lights[light.index];
         const bool kindChanged = isGlobalLight(lightRef) != isGlobalLight(values);
         lightRef = values;
         lightRef.handle = light;

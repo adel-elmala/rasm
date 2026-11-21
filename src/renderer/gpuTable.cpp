@@ -41,7 +41,14 @@ namespace rasm
                                            .usage = BufferUsage::STORAGE,
                                            .size = static_cast<uint64_t>(bytesPerRow) * capacity});
             if (!buffers[i].isValid())
+            {
+                for (uint32_t j = 0; j < i; ++j)
+                {
+                    ctx.destroyBuffer(buffers[j]);
+                    buffers[j] = {};
+                }
                 return false;
+            }
         }
 
         rowSize = bytesPerRow;

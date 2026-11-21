@@ -21,8 +21,9 @@
 //   --all-lights   every pixel shades every light, as without clusters: the reference image, and the cost to compare
 //   --ortho        an orthographic camera
 //   --orbit        the camera circles the yard on its own
-//   --bench        at 1920x1080, without the moon's shadow (its passes would take the GPU timers the scene needs, D21):
-//                  prints the GPU time of each pass, averaged over 240 frames, and exits
+//   --bench        at 1920x1080, without validation (it would change the timings) and without the moon's shadow (its
+//                  passes would take the GPU timers the scene needs, D21): prints the GPU time of each pass, averaged
+//                  over 240 frames, and exits
 //
 // The lights cover about the same share of the ground for any N: their range shrinks as there are more of them.
 

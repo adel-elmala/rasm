@@ -119,9 +119,9 @@ namespace rasm
             const auto now = std::chrono::steady_clock::now();
             if (dropped > 0 && (!frameStats->lightsDroppedLogged || now - frameStats->lightsDroppedTime > LIGHTS_DROPPED_WARNING))
             {
-                spdlog::warn("{} lights were left out of light clusters that already held MAX_CLUSTER_LIGHTS ({}), so some pixels miss them. "
-                             "Use fewer lights there, or shorter ranges.",
-                             dropped, MAX_CLUSTER_LIGHTS);
+                spdlog::warn("{} lights were left out of full light clusters (MAX_CLUSTER_LIGHTS, {}) or full screen tiles ({} lights), so some pixels "
+                             "miss them. Use fewer lights there, or shorter ranges.",
+                             dropped, MAX_CLUSTER_LIGHTS, CLUSTER_SLICES * MAX_CLUSTER_LIGHTS);
                 frameStats->lightsDroppedLogged = true;
                 frameStats->lightsDroppedTime = now;
             }

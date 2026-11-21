@@ -61,7 +61,7 @@ namespace rasm
         uint32_t                    drawsPerLod[MAX_MESH_LODS]  = {};
         uint32_t                    lightsGlobal                = 0;    // directional lights and lights without a range, at every pixel
         uint32_t                    lightsVisible               = 0;    // local lights in a view's frustum
-        uint32_t                    lightsDropped               = 0;    // light and cluster pairs left out: the cluster had MAX_CLUSTER_LIGHTS
+        uint32_t                    lightsDropped               = 0;    // lights left out of a full cluster (MAX_CLUSTER_LIGHTS) or screen tile
         VRAMStats                   memory                      = {};
     };
 

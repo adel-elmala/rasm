@@ -664,7 +664,7 @@ engine.addLightToScene(scene, spot);</code></pre>
 <div class="api" id="updateLight">
   <pre class="sig">void updateLight(LightHandle light, const Light&amp; values);</pre>
   <div class="body">
-    <p>Changes the light: every field of <code>values</code> but <code>handle</code>. It writes one row of the light table, which reaches the GPU in the next frame. A light that gains or loses its range moves between the global and the clustered lights of its scenes. A spot light with angles outside the rule of <code>createLight</code> logs an error and changes nothing.</p>
+    <p>Changes the light: every field of <code>values</code> but <code>handle</code>. The <code>type</code> must stay the same, since a shadow's maps are made for it: another type logs an error and changes nothing. It writes one row of the light table, which reaches the GPU in the next frame. A light that gains or loses its range moves between the global and the clustered lights of its scenes. A spot light with angles outside the rule of <code>createLight</code> logs an error and changes nothing.</p>
     <pre><code>// Move a lamp along a circle, once per frame.
 rasm::Light light = engine.getLight(lamp);
 light.position = center + glm::vec3(std::cos(angle), 0.0f, std::sin(angle)) * radius;
