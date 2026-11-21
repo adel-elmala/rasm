@@ -14,7 +14,8 @@
 //   --aa taa             the scene target gets a motion color and the frames blend (addTaaPass)
 //   --crowd N            N more BoxAnimated in a grid, each at its own phase, for the CPU and GPU numbers
 //   --crowd-chain N      N more chains (100 nodes each)
-//   --gpu-times          print the average GPU time of each pass over frames 300 to 600, then quit
+//   --bench              at 1920x1080 without validation (it would change the timings): print the average GPU time
+//                        of each pass over frames 300 to 600, then quit
 #include "glm/glm.hpp"
 #include "glm/gtc/quaternion.hpp"
 
@@ -91,7 +92,7 @@ int main(int argc, char **argv)
 {
     bool fixedStep = false;
     bool taa = false;
-    bool printGpuTimes = false;
+    bool bench = false;
     uint32_t crowd = 0;
     uint32_t crowdChains = 0;
     for (int i = 1; i < argc; ++i)
@@ -104,15 +105,15 @@ int main(int argc, char **argv)
             crowd = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
         if (std::strcmp(argv[i], "--crowd-chain") == 0 && i + 1 < argc)
             crowdChains = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
-        if (std::strcmp(argv[i], "--gpu-times") == 0)
-            printGpuTimes = true;
+        if (std::strcmp(argv[i], "--bench") == 0)
+            bench = true;
     }
 
     rasm::EngineConfig config = {
         .appName = "example_12",
-        .windowWidth = 1280,
-        .windowHeight = 720,
-        .enableValidation = true,
+        .windowWidth = bench ? 1920 : 1280,
+        .windowHeight = bench ? 1080 : 720,
+        .enableValidation = !bench,
         .preferredBackend = rasm::Backend::VULKAN,
         .assetRoot = RASM_EXAMPLE_ASSET_ROOT,
         .shaderDir = RASM_EXAMPLE_SHADER_DIR,
@@ -192,7 +193,7 @@ int main(int argc, char **argv)
         lastTime = now;
         engine.setAnimationTime(seconds);
         graph.execute(camera);
-        if (!printGpuTimes)
+        if (!bench)
             continue;
 
         const rasm::FrameStats &stats = engine.getFrameStats();

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GPU Scene Tables · RASM</title>
 <meta name="description" content="The GPU scene tables (geometry, material, instance, draw lists), how an entity gets its rows and joins the draw lists, syncGpuScene step by step, and the runs by alpha mode and cull mode.">
-<meta name="rasm-sources" content="src/renderer/gpuScene.h src/renderer/gpuScene.cpp src/renderer/gpuTable.h src/renderer/gpuTable.cpp src/renderer/geometryPool.h src/renderer/geometryPool.cpp src/renderer/uberMaterialTypes.h shaders/lib/core.slang src/engine.cpp include/rasm/engine.h src/scene/entity.cpp src/scene/scene.cpp src/scene/transform.cpp src/assets/material.cpp src/assets/mesh.cpp include/rasm/types.h include/rasm/scene.h include/rasm/mesh.h include/rasm/transform.h shaders/passes/cull.slang shaders/passes/rasm.slang src/assets/meshLod.cpp src/assets/meshLod.h">
+<meta name="rasm-sources" content="src/renderer/animation.cpp src/renderer/gpuScene.h src/renderer/gpuScene.cpp src/renderer/gpuTable.h src/renderer/gpuTable.cpp src/renderer/geometryPool.h src/renderer/geometryPool.cpp src/renderer/uberMaterialTypes.h shaders/lib/core.slang src/engine.cpp include/rasm/engine.h src/scene/entity.cpp src/scene/scene.cpp src/scene/transform.cpp src/assets/material.cpp src/assets/mesh.cpp include/rasm/types.h include/rasm/scene.h include/rasm/mesh.h include/rasm/transform.h shaders/passes/cull.slang shaders/passes/rasm.slang src/assets/meshLod.cpp src/assets/meshLod.h">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -83,9 +83,9 @@
     <text x="292" y="184" class="mono">normalMatrix</text>
     <text x="292" y="199" class="mono">geometryIndex = 7</text>
     <text x="292" y="214" class="mono">materialIndex = 2</text>
-    <text x="292" y="229" class="mono">previousWorld</text>
+    <text x="292" y="229" class="mono small">previousWorld, animationRow</text>
     <rect x="280" y="242" width="220" height="24" rx="4" class="mem"/><text x="292" y="258" class="mono">row 4</text>
-    <text x="280" y="284" class="small">InstanceData, 156 B</text>
+    <text x="280" y="284" class="small">InstanceData, 160 B</text>
 
     <text x="550" y="22" class="title">Geometry table</text>
     <text x="550" y="38" class="small">one copy, in the geometry pool</text>
@@ -182,7 +182,9 @@
   <tr><th>Table</th><th>Buffers</th><th>Rows</th><th>Written by</th></tr>
   <tr><td>Geometry<br><code>GeometryData</code>, 124 B</td><td>one, in the geometry pool (<code>tableBuffer</code>)</td><td><code>geometryPoolSubMeshes</code> (2<sup>14</sup>)</td><td><code>upload</code> of the geometry pool, once per sub-mesh, with one <code>GeometryLod</code> per LOD. No frame has read a new row yet, so one copy is enough.</td></tr>
   <tr><td>Material<br><code>MaterialData</code>, 220 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>MAX_MATERIALS</code> = 256; row = material handle index</td><td><code>writeMaterialRow</code></td></tr>
-  <tr><td>Instance<br><code>InstanceData</code>, 108 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>maxInstances</code> (2<sup>16</sup>), bump-allocated</td><td><code>writeInstanceRows</code></td></tr>
+  <tr><td>Instance<br><code>InstanceData</code>, 160 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>maxInstances</code> (2<sup>16</sup>), bump-allocated</td><td><code>writeInstanceRows</code>. <code>animationRow</code> names the row's <code>InstanceTransform</code> while a clip moves its sub-mesh, −1 otherwise.</td></tr>
+  <tr><td>Animated entities<br><code>AnimatedEntity</code>, 104 B</td><td><code>GpuTable</code>, one per frame slot</td><td><code>maxAnimatedEntities</code> (2<sup>14</sup>), a row from an entity's first play</td><td><code>writeAnimationRow</code>, on play, stop or move (<a href="keyframe-animation.html#in-rasm">keyframe animation</a>)</td></tr>
+  <tr><td>Animated transforms<br><code>InstanceTransform</code>, 148 B</td><td>one per frame slot</td><td>a range per playing entity; grows ×2</td><td>the GPU: the <code>Animate</code> pass, before any view</td></tr>
   <tr><td>Draw list<br><code>DrawInfo</code>, 20 B</td><td><code>buffers</code> in <code>SceneDrawList</code>, one per frame slot and scene</td><td>grows ×2 when too small</td><td><code>rebuildDrawList</code>, then <code>uploadDrawList</code></td></tr>
   <tr><td>Visible draws</td><td><code>visibleDraws</code> in <code>SceneView</code>, per frame slot and scene view</td><td>grows ×2 in place (<code>resizeBuffer</code>, same handle) when too small; culling's scratch and the draw counts (<code>MAX_DRAW_RUNS</code> <code>uint32_t</code>s, written by <code>writeMain</code>) follow the draws</td><td>the GPU: <code>writeMain</code> packs the kept draws (<a href="stream-compaction.html#in-rasm">stream compaction</a>)</td></tr>
   <tr><td>Visibility</td><td><code>visibility</code> in <code>SceneView</code>, one per scene view, shared by both frame slots</td><td><code>maxInstances</code> <code>uint32_t</code>s, one per instance row, 0 at start</td><td>the GPU (late <code>countMain</code>, <a href="occlusion-culling.html#in-rasm">occlusion culling</a>)</td></tr>
