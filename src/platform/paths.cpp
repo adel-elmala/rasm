@@ -58,4 +58,14 @@ namespace rasm
         // operator/ keeps an absolute right-hand side as it is.
         return pathToUtf8((getExecutableDir() / pathFromUtf8(path)).lexically_normal());
     }
+
+    std::FILE *openFileForReading(const std::string &path)
+    {
+#ifdef _WIN32
+        std::FILE *file = nullptr;
+        return _wfopen_s(&file, pathFromUtf8(path).c_str(), L"rb") == 0 ? file : nullptr;
+#else
+        return std::fopen(pathFromUtf8(path).c_str(), "rb");
+#endif
+    }
 }

@@ -1,5 +1,6 @@
 #include "rasm/material.h"
 #include "rasm/engine.h"
+#include "assets/meshImport.h"
 
 #include "spdlog/spdlog.h"
 
@@ -225,18 +226,45 @@ namespace rasm
             {
                 if (textureIndex < 0 || textureIndex >= static_cast<int>(model.textures.size()))
                     return {};
-                int source = model.textures[textureIndex].source;
+                const SamplerType sampler = toSamplerType(model, model.textures[textureIndex].sampler);
+
+                // KHR_texture_basisu first, transcoded on the worker for this kind of slot. Without it, or when its
+                // image failed, the texture's own source (a PNG or JPEG fallback) is used.
+                const int basisuSource = getBasisuSource(model, textureIndex);
+                const TextureRaw *ktx = nullptr;
+                if (basisuSource >= 0 && cache.ktxImages)
+                {
+                    const auto it = cache.ktxImages->find((static_cast<uint64_t>(basisuSource) << 1) | (srgb ? 1u : 0u));
+                    ktx = it != cache.ktxImages->end() ? &it->second : nullptr;
+                }
+                const int source = ktx ? basisuSource : model.textures[textureIndex].source;
                 if (source < 0 || source >= static_cast<int>(model.images.size()))
                     return {};
 
                 // Upload each (image, color space, sampler) once per model. A texture handle has one bindless
                 // slot, so the rare image used with two samplers is uploaded twice.
-                const SamplerType sampler = toSamplerType(model, model.textures[textureIndex].sampler);
                 const uint64_t cacheKey = (static_cast<uint64_t>(source) << 4) | (static_cast<uint64_t>(sampler) << 1) | (srgb ? 1u : 0u);
                 if (auto it = cache.imageTextures.find(cacheKey); it != cache.imageTextures.end())
                     return it->second;
 
                 const auto &image = model.images[source];
+                const std::string name = image.uri.empty() ? "glTF image " + std::to_string(source) : image.uri;
+                if (ktx)
+                {
+                    const TextureRaw &raw = *ktx;
+                    auto texture = createTexture({.name = name,
+                                                  .width = raw.width,
+                                                  .height = raw.height,
+                                                  .format = raw.format,
+                                                  .usage = TextureUsage::SAMPLED,
+                                                  .mipLevels = static_cast<uint32_t>(raw.levelSizes.size())});
+                    if (!texture.isValid() || !fillTextureLevels(texture, raw))
+                        return {};
+                    addBindlessTexture(bindlessDescriptorSet, texture, sampler);
+                    cache.imageTextures[cacheKey] = texture;
+                    return texture;
+                }
+
                 if (image.bits != 8 || image.component < 1 || image.component > 4 ||
                     image.width <= 0 || image.height <= 0)
                 {
@@ -264,7 +292,7 @@ namespace rasm
                     }
                     rgbaData = rgba.data();
                 }
-                auto texture = createTexture({.name = image.uri.empty() ? "glTF image " + std::to_string(source) : image.uri,
+                auto texture = createTexture({.name = name,
                                               .width = static_cast<uint32_t>(image.width),
                                               .height = static_cast<uint32_t>(image.height),
                                               .format = srgb ? Format::R8G8B8A8_SRGB : Format::R8G8B8A8_UNORM,

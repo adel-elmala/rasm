@@ -182,7 +182,7 @@ TEST_CASE("glTF interleaved, quantized and sparse attributes decode to floats")
 
 TEST_CASE("a missing glTF file does not load")
 {
-    CHECK_FALSE(rasm::importMeshFile(rasm::pathToUtf8(std::filesystem::temp_directory_path() / "rasm_missing.gltf")).loaded);
+    CHECK_FALSE(rasm::importMeshFile(rasm::pathToUtf8(std::filesystem::temp_directory_path() / "rasm_missing.gltf"), 0).loaded);
     CHECK_FALSE(importMeshText("not json", ".gltf").loaded);
 }
 

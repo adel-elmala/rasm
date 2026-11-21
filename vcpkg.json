@@ -18,6 +18,7 @@
         "tinygltf",
         "tinyobjloader",
         "meshoptimizer",
+        "ktx",
         "shader-slang",
         "doctest"
     ]

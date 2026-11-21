@@ -24,6 +24,7 @@ static const uint   TRANSFORM_EMISSIVE              = 4;
 // MaterialData::flags. Must match rasm::gfx::MATERIAL_*.
 static const uint   MATERIAL_DOUBLE_SIDED           = 1 << 0;
 static const uint   MATERIAL_TEXTURE_TRANSFORM      = 1 << 1;   // a texture has a KHR_texture_transform that is not the identity
+static const uint   MATERIAL_NORMAL_XY              = 1 << 2;   // the normal map has x and y only (BC5, EAC RG11): z is rebuilt
 
 // Must match rasm::Vertex / rasm::gfx::VertexFull (scalar layout). Unused UV sets are zero.
 // tangent.w is the bitangent sign (±1), or 0 when the mesh has no tangents.

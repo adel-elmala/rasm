@@ -53,7 +53,8 @@ namespace rasm::rhi
         bool                        readBuffer(Buffer* buffer, void* data, size_t size, size_t offset) override;
         void                        resetQueries(QueryPool* pool) override;
         bool                        getTimestamps(QueryPool* pool, uint32_t firstQuery, uint32_t count, uint64_t* nanoseconds) override;
-        bool                        fillTexture(Texture* texture, const void* data) override;
+        bool                        supportsTextureFormat(Format format) const override;
+        bool                        fillTexture(Texture* texture, const TextureLevel* levels, uint32_t levelCount) override;
         void                        updateBindlessTexture(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, Sampler* sampler) override;
         void                        updateBindlessStorageImage(DescriptorSet* descriptorSet, uint32_t slot, Texture* texture, uint32_t mip) override;
         bool                        waitForFence(Fence* fence, uint64_t value, uint64_t timeout) override;
@@ -68,6 +69,19 @@ namespace rasm::rhi
         void                        setObjectName(VkObjectType type, uint64_t handle, const std::string& name);
 
     private:
+        // Per Format value: the device samples it with linear filtering, and copies it on the host.
+        struct FormatSupport
+        {
+            bool                        sampled             = false;
+            bool                        hostCopy            = false;
+        };
+
+        void                            queryFormatSupport(bool hostImageCopy);
+        bool                            usesHostCopy(const TextureDesc& desc) const;
+
+        static constexpr uint32_t       FORMAT_COUNT        = static_cast<uint32_t>(Format::EAC_R11G11_UNORM) + 1;
+
+        FormatSupport                   formatSupport[FORMAT_COUNT] = {};
         VmaAllocator                    allocator           = nullptr;
         vkb::Instance                   instance            = {};
         vkb::PhysicalDevice             physicalDevice      = {};

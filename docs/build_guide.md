@@ -205,6 +205,8 @@ vcpkg.json has no `builtin-baseline`, so the vcpkg commit picks the dependency v
 
 `ports/` holds overlay ports, which `vcpkg-configuration.json` puts in front of the vcpkg commit's ports. `ports/tinygltf` is vcpkg's 2.9.7 port with a new SHA512, because GitHub regenerated the `v2.9.7` archive. Delete it when `VCPKG_COMMIT` moves past microsoft/vcpkg#53226. That commit also updates tinygltf to 3.0.0.
 
+`cmake/triplets/` holds overlay triplets (`VCPKG_OVERLAY_TRIPLETS` in `CMakePresets.json`): vcpkg's `x64-windows`, `arm64-osx` and `x64-osx` triplets, plus build options for single ports. `tracy` gets `TRACY_ONLY_LOCALHOST` (see [Profiling with Tracy](#profiling-with-tracy)). `ktx` gets `KTX_FEATURE_ETC_UNPACK=OFF` and `KTX_FEATURE_GL_UPLOAD=OFF`: by default libktx compiles Ericsson's ETC decoder (`lib/etcdec.cxx`), whose license covers only OpenGL, OpenGL ES and WebGL products, and RASM transcodes on the CPU and never uploads through OpenGL. vcpkg hashes the triplet file into every package, so a change to it rebuilds all dependencies once.
+
 ## Using RASM from another project
 
 `cmake --install` copies the library, public headers and shaders to `install/` in the repo. Debug and Release share that prefix, so install both if the project builds both. A project building `RelWithDebInfo` or `MinSizeRel` links the Release library:
@@ -221,7 +223,7 @@ find_package(rasm 0.1 CONFIG REQUIRED)
 target_link_libraries(my_app PRIVATE rasm::rasm)
 ```
 
-- RASM is a static library, so the project also needs RASM's link dependencies: Vulkan SDK, vk-bootstrap, VulkanMemoryAllocator, glm, SDL3, Tracy, spdlog, tinyobjloader and Slang. With vcpkg, add `vk-bootstrap`, `vulkan-memory-allocator`, `glm`, `sdl3` with the `vulkan` feature, `tracy` with the `on-demand` feature, `spdlog`, `tinyobjloader` and `shader-slang` to its manifest.
+- RASM is a static library, so the project also needs RASM's link dependencies: Vulkan SDK, vk-bootstrap, VulkanMemoryAllocator, glm, SDL3, Tracy, spdlog, tinyobjloader, meshoptimizer, Slang and libktx. With vcpkg, add `vk-bootstrap`, `vulkan-memory-allocator`, `glm`, `sdl3` with the `vulkan` feature, `tracy` with the `on-demand` feature, `spdlog`, `tinyobjloader`, `meshoptimizer`, `shader-slang` and `ktx` to its manifest, and copy the `ktx` block of `cmake/triplets/` into its own triplets to leave out the ETC decoder.
 - Shaders are compiled at runtime, so the application needs them when it ships. By default the engine looks in a `shaders/` folder next to the executable. `find_package(rasm)` sets `rasm_SHADER_DIR` to the folder holding them, so a build step can copy them there:
 
   ```cmake

@@ -52,9 +52,10 @@ namespace rasm
 
     struct GLTFRaw
     {
-        std::vector<SubGLTFRaw>             subGltfRaws;
-        std::shared_ptr<tinygltf::Model>    model;
-        bool                                loaded          = false;
+        std::vector<SubGLTFRaw>                         subGltfRaws;
+        std::shared_ptr<tinygltf::Model>                model;
+        std::unordered_map<uint64_t, TextureRaw>        ktxImages;      // KHR_texture_basisu images, transcoded: key (image << 1) | sRGB
+        bool                                            loaded          = false;
     };
 
     enum class MeshState
@@ -101,8 +102,9 @@ namespace rasm
     // (and materials that share an image) create it once. Textures are keyed by (image index << 1 | sRGB).
     struct GltfImportCache
     {
-        std::unordered_map<int, MaterialHandle>         materials;
-        std::unordered_map<uint64_t, TextureHandle>     imageTextures;
+        std::unordered_map<int, MaterialHandle>                 materials;
+        std::unordered_map<uint64_t, TextureHandle>             imageTextures;
+        const std::unordered_map<uint64_t, TextureRaw>*         ktxImages       = nullptr;
     };
 
 }

@@ -8,10 +8,13 @@
 // Perturb the normal with a tangent-space normal map. Meshes with glTF TANGENTs (tangent.w = ±1) use the
 // authored frame. Otherwise a UV-aligned frame is reconstructed from fragment derivatives, which supports
 // mirrored UVs and the normal texture's selected UV set.
-float3 getNormalFromMap(Sampler2D texture, float2 uv, float3 position, float3 normal, float4 tangent, float scale)
+float3 getNormalFromMap(Sampler2D texture, float2 uv, float3 position, float3 normal, float4 tangent, float scale, bool normalXY)
 {
     float3 N = normalize(normal);
     float3 tangentNormal = texture.Sample(uv).xyz * 2.0 - 1.0;
+    // A two-channel map (BC5, EAC RG11) stores x and y of a unit normal; z is the rest of its length.
+    if (normalXY)
+        tangentNormal.z = sqrt(saturate(1.0 - dot(tangentNormal.xy, tangentNormal.xy)));
     tangentNormal.xy *= scale;
 
     if (abs(tangent.w) > 0.5)
@@ -71,6 +74,7 @@ struct PBRInfo
     Light       lights[MAX_LIGHTS];  // array of lights
     float       shadows[MAX_LIGHTS]; // how much of each light reaches the fragment (shadow.slang), 1 without a shadow
     Material    material;            // material properties
+    bool        normalXY;            // the normal map has x and y only (MATERIAL_NORMAL_XY)
     EnvironmentLight environment;    // the scene's environment; specular is INVALID_TEXTURE_INDEX without one
 };
 
@@ -116,7 +120,7 @@ float4 shadePBR(Sampler2D gTextures[], SamplerCube gCubeTextures[], PBRInfo pbrI
     float3 n = pbrInfo.vNormal;
     uint normalIdx = pbrInfo.material.normal.normalTextureIndex;
     if (hasTexture(normalIdx))
-        n = getNormalFromMap(gTextures[normalIdx], pbrInfo.normalUV, pbrInfo.vPosition, pbrInfo.vNormal, pbrInfo.vTangent, pbrInfo.material.normal.scale);
+        n = getNormalFromMap(gTextures[normalIdx], pbrInfo.normalUV, pbrInfo.vPosition, pbrInfo.vNormal, pbrInfo.vTangent, pbrInfo.material.normal.scale, pbrInfo.normalXY);
     n = normalize(n);
     // glTF: a double-sided back face is lit with the reversed normal (the front's T, B and N all negated).
     if (pbrInfo.backFace)

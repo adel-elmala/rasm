@@ -11,6 +11,7 @@ find_path(TINYGLTF_INCLUDE_DIRS "tiny_gltf.h" REQUIRED)
 find_package(tinyobjloader CONFIG REQUIRED)
 find_package(meshoptimizer CONFIG REQUIRED)
 find_package(slang CONFIG REQUIRED)
+find_package(Ktx CONFIG REQUIRED)
 
 add_library(rasm STATIC)
 add_library(rasm::rasm ALIAS rasm)
@@ -29,6 +30,7 @@ target_sources(rasm PRIVATE
     "assets/mesh.cpp"
     "assets/meshImport.cpp"
     "assets/meshLod.cpp"
+    "assets/ktxImage.cpp"
     "assets/texture.cpp"
     "assets/environment.cpp"
     "assets/material.cpp"
@@ -52,6 +54,7 @@ target_sources(rasm PRIVATE
     "renderer/toneMap.cpp"
     "rhi/device.cpp"
     "rhi/memoryAliasing.cpp"
+    "rhi/mipChain.cpp"
     "rhi/renderContext.cpp"
     "rhi/resource.cpp"
     "rhi/textureStates.cpp"
@@ -77,6 +80,7 @@ target_link_libraries(rasm PRIVATE spdlog::spdlog)
 target_link_libraries(rasm PRIVATE tinyobjloader::tinyobjloader)
 target_link_libraries(rasm PRIVATE meshoptimizer::meshoptimizer)
 target_link_libraries(rasm PRIVATE SDL3::SDL3)
+target_link_libraries(rasm PRIVATE KTX::ktx)
 
 # Library configuration macros live here, never in a .cpp (B2). PUBLIC so every consumer that
 # includes glm sees the same definitions (ODR) and gets a Vulkan [0, 1] clip-space depth range.

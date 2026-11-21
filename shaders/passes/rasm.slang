@@ -156,6 +156,7 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
             info.shadows[i]     = sampleShadow(gTextures, gCubeTextures, pc.scene, info.lights[i], input.worldPosition, shadowNormal);
     }
     info.material               = material;
+    info.normalXY               = (model->flags & MATERIAL_NORMAL_XY) != 0;
     info.environment.specular       = pc.scene->environmentSpecular;
     info.environment.specularMips   = pc.scene->environmentSpecularMips;
     info.environment.irradiance     = pc.scene->environmentIrradiance;

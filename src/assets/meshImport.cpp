@@ -1,4 +1,5 @@
 #include "assets/meshImport.h"
+#include "assets/ktxImage.h"
 #include "platform/paths.h"
 
 #include "spdlog/spdlog.h"
@@ -43,7 +44,14 @@ namespace rasm
         };
 
         // The glTF extensions a file may require: the others change what the file means, so it fails to load.
-        const char *const SUPPORTED_EXTENSIONS[] = {"KHR_materials_unlit", "KHR_materials_emissive_strength", "KHR_texture_transform", "KHR_mesh_quantization"};
+        const char *const SUPPORTED_EXTENSIONS[] = {"KHR_materials_unlit", "KHR_materials_emissive_strength", "KHR_texture_transform", "KHR_mesh_quantization", "KHR_texture_basisu"};
+
+        // A texture a material samples, and whether its slot reads color (sRGB) or data.
+        struct TextureUse
+        {
+            int texture = -1;
+            bool srgb = false;
+        };
     }
 
     namespace
@@ -549,10 +557,89 @@ namespace rasm
             return traverseNodes(model, scene.nodes, glm::mat4(1.0f));
         }
 
-        GLTFRaw importGltf(const std::string &path, bool binary)
+        // KTX2 bytes stay as they are, for transcodeKtxImages, which knows the slots that use each image. stb decodes the
+        // other images, as tinygltf does by default.
+        bool loadImage(tinygltf::Image *image, int imageIndex, std::string *err, std::string *warn, int width, int height, const unsigned char *bytes, int size, void *userData)
+        {
+            if (!isKtx2(bytes, static_cast<size_t>(size)))
+                return tinygltf::LoadImageData(image, imageIndex, err, warn, width, height, bytes, size, userData);
+            image->image.assign(bytes, bytes + size);
+            image->as_is = true;
+            image->width = image->height = image->component = image->bits = image->pixel_type = -1;
+            return true;
+        }
+
+        // The slots loadMaterial fills: base color and emissive are color, the rest data. Unlit reads base color only.
+        uint32_t getTextureUses(const tinygltf::Material &material, TextureUse *uses)
+        {
+            uint32_t count = 0;
+            uses[count++] = {material.pbrMetallicRoughness.baseColorTexture.index, true};
+            if (material.extensions.count("KHR_materials_unlit") != 0)
+                return count;
+            uses[count++] = {material.pbrMetallicRoughness.metallicRoughnessTexture.index, false};
+            uses[count++] = {material.normalTexture.index, false};
+            uses[count++] = {material.occlusionTexture.index, false};
+            uses[count++] = {material.emissiveTexture.index, true};
+            return count;
+        }
+
+        // Each KTX2 image is transcoded once for each kind of slot (color or data) that uses it, to the best format the
+        // device has for that kind. Then its file bytes go, like the glTF buffers (P6).
+        void transcodeKtxImages(tinygltf::Model &model, uint64_t supportedTextureFormats, std::unordered_map<uint64_t, TextureRaw> &ktxImages)
+        {
+            ZoneScoped;
+
+            for (const tinygltf::Material &material : model.materials)
+            {
+                TextureUse uses[5];
+                const uint32_t useCount = getTextureUses(material, uses);
+                for (uint32_t i = 0; i < useCount; ++i)
+                {
+                    const int source = getBasisuSource(model, uses[i].texture);
+                    if (source < 0)
+                        continue;
+                    const uint64_t key = (static_cast<uint64_t>(source) << 1) | (uses[i].srgb ? 1u : 0u);
+                    const tinygltf::Image &image = model.images[source];
+                    if (ktxImages.contains(key) || !image.as_is)
+                        continue;
+
+                    const std::string name = image.uri.empty() ? "glTF image " + std::to_string(source) : image.uri;
+                    KtxInfo info;
+                    std::string error;
+                    if (!readKtxInfo(image.image.data(), image.image.size(), info, error))
+                    {
+                        spdlog::error("Failed to read KTX2 image {}: {}", name, error);
+                        continue;
+                    }
+                    const Format format = chooseKtxFormat(info, uses[i].srgb, supportedTextureFormats);
+                    if (format == Format::UNKNOWN)
+                    {
+                        spdlog::error("KTX2 image {} is in a format the device can't sample.", name);
+                        continue;
+                    }
+                    warnAboutKtxFormat(name, info, format);
+                    TextureRaw raw;
+                    if (!decodeKtx(image.image.data(), image.image.size(), format, raw, error))
+                    {
+                        spdlog::error("Failed to decode KTX2 image {}: {}", name, error);
+                        continue;
+                    }
+                    ktxImages[key] = std::move(raw);
+                }
+            }
+
+            for (tinygltf::Image &image : model.images)
+            {
+                if (image.as_is)
+                    std::vector<unsigned char>().swap(image.image);
+            }
+        }
+
+        GLTFRaw importGltf(const std::string &path, bool binary, uint64_t supportedTextureFormats)
         {
             auto model = std::make_shared<tinygltf::Model>();
             tinygltf::TinyGLTF loader;
+            loader.SetImageLoader(loadImage, nullptr);
 
             std::string err;
             std::string warn;
@@ -594,6 +681,7 @@ namespace rasm
             raw.subGltfRaws = processGLTF(*model);
             // Every accessor has been read. Materials need only the decoded images, so the raw buffers go now (P6).
             model->buffers.clear();
+            transcodeKtxImages(*model, supportedTextureFormats, raw.ktxImages);
             raw.model = std::move(model);
             raw.loaded = true;
             return raw;
@@ -654,13 +742,24 @@ namespace rasm
     }
 
     // Runs on a worker thread: it must not touch the engine.
-    GLTFRaw importMeshFile(const std::string &path)
+    GLTFRaw importMeshFile(const std::string &path, uint64_t supportedTextureFormats)
     {
         ZoneScoped;
 
         const auto extension = path.substr(path.find_last_of('.') + 1);
         if (extension == "gltf" || extension == "glb")
-            return importGltf(path, extension == "glb");
+            return importGltf(path, extension == "glb", supportedTextureFormats);
         return importObj(path);
+    }
+
+    int getBasisuSource(const tinygltf::Model &model, int textureIndex)
+    {
+        if (textureIndex < 0 || textureIndex >= static_cast<int>(model.textures.size()))
+            return -1;
+        const auto it = model.textures[textureIndex].extensions.find("KHR_texture_basisu");
+        if (it == model.textures[textureIndex].extensions.end() || !it->second.Get("source").IsInt())
+            return -1;
+        const int source = it->second.Get("source").GetNumberAsInt();
+        return source >= 0 && source < static_cast<int>(model.images.size()) ? source : -1;
     }
 }

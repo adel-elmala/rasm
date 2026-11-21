@@ -162,7 +162,7 @@ TEST_CASE("meshes load through the asset root from any working directory")
 
     // The test engine has no GPU, so the mesh never finishes loading: the import itself is checked directly.
     CHECK(engine.loadMesh("models/triangle.obj").isValid());
-    CHECK(rasm::importMeshFile(engine.resolveAssetPath("models/triangle.obj")).loaded);
+    CHECK(rasm::importMeshFile(engine.resolveAssetPath("models/triangle.obj"), 0).loaded);
 }
 
 TEST_CASE("relative and absolute paths to one file share a mesh")
@@ -192,7 +192,7 @@ TEST_CASE("meshes load from a folder with a non-Latin name")
     rasm::Engine engine(config);
 
     CHECK(engine.loadMesh("triangle.obj").isValid());
-    CHECK(rasm::importMeshFile(engine.resolveAssetPath("triangle.obj")).loaded);
+    CHECK(rasm::importMeshFile(engine.resolveAssetPath("triangle.obj"), 0).loaded);
 }
 
 TEST_CASE("a missing mesh file gives an invalid handle, and loads once it exists")

@@ -1,6 +1,7 @@
 include(RasmRuntimeDlls)
 
 find_package(doctest CONFIG REQUIRED)
+find_package(Ktx CONFIG REQUIRED)
 
 add_executable(rasm_tests
             "main.cpp"
@@ -11,6 +12,7 @@ add_executable(rasm_tests
             "gpuTableTests.cpp"
             "handleTests.cpp"
             "importMeshText.cpp"
+            "ktxImageTests.cpp"
             "localShadowsTests.cpp"
             "memoryAliasingTests.cpp"
             "meshLodTests.cpp"
@@ -24,7 +26,8 @@ add_executable(rasm_tests
             "uploadManagerTests.cpp"
     )
 
-target_link_libraries(rasm_tests PRIVATE rasm::rasm doctest::doctest)
+# The KTX tests encode small Basis images in memory with libktx, so they need no test files.
+target_link_libraries(rasm_tests PRIVATE rasm::rasm doctest::doctest KTX::ktx)
 # Private classes such as rhi::UploadManager are tested against a fake rhi::Device.
 target_include_directories(rasm_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_compile_definitions(rasm_tests PRIVATE RASM_TEST_EXECUTABLE_DIR="$<TARGET_FILE_DIR:rasm_tests>"

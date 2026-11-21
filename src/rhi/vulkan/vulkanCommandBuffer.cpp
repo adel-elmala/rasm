@@ -4,6 +4,9 @@
 
 #include "spdlog/spdlog.h"
 
+#include <algorithm>
+#include <vector>
+
 namespace rasm::rhi
 {
     namespace
@@ -484,6 +487,71 @@ namespace rasm::rhi
                                   .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                                   .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT};
         dependencyInfo.pMemoryBarriers = &after;
+        vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+    }
+
+    // Each texture goes to TRANSFER_DST, takes its copies and goes to SHADER_READ_ONLY, the layout its bindless
+    // descriptor names. A texture whose first copy is here starts from UNDEFINED; one that an earlier batch began keeps
+    // what that batch wrote. Earlier submissions on this queue are in the first barrier's scope and later ones in the
+    // second's, as for copyBuffers.
+    void VulkanCommandBuffer::copyToTextures(Buffer *src, const TextureCopy *copies, uint32_t copyCount)
+    {
+        std::vector<VulkanTexture *> textures;
+        std::vector<VkImageMemoryBarrier2> barriers;
+        for (uint32_t i = 0; i < copyCount; ++i)
+        {
+            auto *texture = static_cast<VulkanTexture *>(copies[i].dst);
+            const auto it = std::find(textures.begin(), textures.end(), texture);
+            if (it != textures.end())
+            {
+                if (copies[i].discard)
+                    barriers[it - textures.begin()].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                continue;
+            }
+            textures.push_back(texture);
+            barriers.push_back({.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                .srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT,
+                                .dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT,
+                                .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                .oldLayout = copies[i].discard ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .image = texture->image,
+                                .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = texture->mipLevels, .baseArrayLayer = 0, .layerCount = texture->desc.cube ? CUBE_FACES : 1}});
+        }
+        VkDependencyInfo dependencyInfo = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size()), .pImageMemoryBarriers = barriers.data()};
+        vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+
+        auto srcBuffer = static_cast<VulkanBuffer *>(src)->buffer;
+        for (uint32_t i = 0; i < copyCount; ++i)
+        {
+            const auto &copy = copies[i];
+            auto *texture = static_cast<VulkanTexture *>(copy.dst);
+            const VkBufferImageCopy2 region = {.sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
+                                               .bufferOffset = copy.srcOffset,
+                                               .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = copy.mip, .baseArrayLayer = 0, .layerCount = 1},
+                                               .imageOffset = {0, static_cast<int32_t>(copy.y), 0},
+                                               .imageExtent = {std::max(1u, texture->desc.width >> copy.mip), copy.height, 1}};
+            const VkCopyBufferToImageInfo2 info = {.sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
+                                                   .srcBuffer = srcBuffer,
+                                                   .dstImage = texture->image,
+                                                   .dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                                   .regionCount = 1,
+                                                   .pRegions = &region};
+            vkCmdCopyBufferToImage2(commandBuffer, &info);
+        }
+
+        for (auto &barrier : barriers)
+        {
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
         vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
     }
 

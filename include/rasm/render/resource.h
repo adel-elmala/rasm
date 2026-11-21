@@ -119,6 +119,12 @@ namespace rasm
         bool                        operator==(const TextureDesc&) const = default;
     };
 
+    struct TextureLevel
+    {
+        const void*                 data                            = nullptr;
+        uint64_t                    size                            = 0;
+    };
+
     struct ShaderDesc
     {
         std::string                 name;

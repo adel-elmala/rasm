@@ -2,6 +2,7 @@
 #include "rasm/engine.h"
 #include "rhi/device.h"
 #include "rhi/memoryAliasing.h"
+#include "rhi/mipChain.h"
 #include "rhi/textureStates.h"
 #include "rhi/uploadManager.h"
 
@@ -324,7 +325,8 @@ namespace rasm
                                                    .enableValidation = config.enableValidation,
                                                    .enableSyncValidation = config.enableSyncValidation,
                                                    .enableGpuValidation = config.enableGpuValidation,
-                                                   .asyncCompute = config.asyncCompute});
+                                                   .asyncCompute = config.asyncCompute,
+                                                   .hostImageCopy = config.hostImageCopy});
         if (!impl->device)
             return false;
 
@@ -410,11 +412,13 @@ namespace rasm
         const bool depthAttachment = desc.usage == TextureUsage::DEPTH_STENCIL_ATTACHMENT || desc.usage == TextureUsage::SAMPLED_DEPTH_ATTACHMENT;
         if (!checkArgument(!desc.cube || depthAttachment || desc.usage == TextureUsage::SAMPLED_STORAGE, __func__, "a cube texture is a depth attachment or a storage texture."))
             return {};
-        // Attachments are drawn into one mip, and fillTexture makes mips only for RGBA8, so only storage textures (whose
-        // mips compute writes) and RGBA8 sampled ones take a mip count.
-        const bool rgba8 = desc.format == Format::R8G8B8A8_UNORM || desc.format == Format::R8G8B8A8_SRGB || desc.format == Format::B8G8R8A8_SRGB;
-        if (!checkArgument(desc.mipLevels <= 1 || desc.usage == TextureUsage::SAMPLED_STORAGE || (desc.usage == TextureUsage::SAMPLED && rgba8), __func__,
-                           "only a SAMPLED_STORAGE texture or a sampled RGBA8 texture takes more than one mip."))
+        // Attachments are drawn into one mip, so only storage textures (whose mips compute writes) and sampled ones
+        // (whose mips fillTexture copies or, for RGBA8, makes) take a mip count.
+        if (!checkArgument(desc.mipLevels <= 1 || desc.usage == TextureUsage::SAMPLED_STORAGE || desc.usage == TextureUsage::SAMPLED, __func__,
+                           "only a SAMPLED_STORAGE or a SAMPLED texture takes more than one mip."))
+            return {};
+        if (!checkArgument(desc.usage != TextureUsage::SAMPLED || impl->device->supportsTextureFormat(desc.format), __func__,
+                           "the device can't sample this format (supportsTextureFormat)."))
             return {};
         auto *texture = impl->device->createTexture(desc);
         if (!texture)
@@ -935,6 +939,7 @@ namespace rasm
         if (!rhiTexture)
             return;
         impl->textureStates.forget(rhiTexture);
+        impl->uploads.cancelUploads(rhiTexture);
         impl->device->destroyTexture(rhiTexture);
         impl->textures.erase(texture);
     }
@@ -1034,20 +1039,67 @@ namespace rasm
             rhiCommandBuffer->writeTimestamp(rhiPool, index);
     }
 
+    // RGBA8 gets its mips made on the CPU; any other format must have one mip (environment images).
     bool RenderContext::fillTexture(const TextureHandle &texture, const void *data)
     {
         ZoneScoped;
 
         if (!checkArgument(data != nullptr, __func__, "data must be non-null."))
             return false;
-
         auto *rhiTexture = lookup(impl->textures, texture, __func__);
         if (!rhiTexture)
             return false;
-        if (!impl->device->fillTexture(rhiTexture, data))
+
+        const TextureDesc &desc = rhiTexture->desc;
+        const bool rgba8 = desc.format == Format::R8G8B8A8_UNORM || desc.format == Format::R8G8B8A8_SRGB || desc.format == Format::B8G8R8A8_SRGB;
+        if (!checkArgument(rgba8 || rhiTexture->mipLevels == 1, __func__, "only an RGBA8 texture gets its mips made; fill the others with every level."))
+            return false;
+
+        std::vector<unsigned char> storage;
+        std::vector<TextureLevel> levels(rhiTexture->mipLevels);
+        if (rgba8)
+        {
+            if (!rhi::buildMipChain(static_cast<const unsigned char *>(data), desc.width, desc.height, desc.format != Format::R8G8B8A8_UNORM, rhiTexture->mipLevels, storage, levels.data()))
+            {
+                spdlog::error("Failed to make the mips of '{}'.", desc.name);
+                return false;
+            }
+        }
+        else
+        {
+            levels[0] = {.data = data, .size = rhi::getTextureLevelSize(desc.format, desc.width, desc.height)};
+        }
+        return fillTexture(texture, levels.data(), static_cast<uint32_t>(levels.size()));
+    }
+
+    // A texture the device copies on the host has its data at once. The others are copied from the staging ring with
+    // the next submit, which comes before any frame that samples them, on the same queue (P2).
+    bool RenderContext::fillTexture(const TextureHandle &texture, const TextureLevel *levels, uint32_t levelCount)
+    {
+        ZoneScoped;
+
+        auto *rhiTexture = lookup(impl->textures, texture, __func__);
+        if (!rhiTexture || !checkArgument(levels != nullptr, __func__, "levels must be non-null.") ||
+            !checkArgument(rhiTexture->desc.usage == TextureUsage::SAMPLED, __func__, "only a SAMPLED texture is filled.") ||
+            !checkArgument(levelCount == rhiTexture->mipLevels, __func__, "levelCount must be the texture's mip count."))
+            return false;
+        for (uint32_t level = 0; level < levelCount; ++level)
+        {
+            const uint64_t size = rhi::getTextureLevelSize(rhiTexture->desc.format, std::max(1u, rhiTexture->desc.width >> level), std::max(1u, rhiTexture->desc.height >> level));
+            if (!checkArgument(levels[level].data != nullptr && levels[level].size == size, __func__, "a level's data is missing or has the wrong size."))
+                return false;
+        }
+
+        const bool filled = rhiTexture->hostCopy ? impl->device->fillTexture(rhiTexture, levels, levelCount) : impl->uploads.uploadTexture(rhiTexture, levels, levelCount);
+        if (!filled)
             return false;
         rhiTexture->state = TextureUsage::SAMPLED;
         return true;
+    }
+
+    bool RenderContext::supportsTextureFormat(Format format) const
+    {
+        return impl->device && impl->device->supportsTextureFormat(format);
     }
 
     uint64_t RenderContext::getBufferDeviceAddress(const BufferHandle &buffer)
