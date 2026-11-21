@@ -724,12 +724,38 @@
   <figcaption>The sphere is built once, the planes once per scene view and frame (<code>Engine::prepareSceneView</code>), and the test runs once per draw.</figcaption>
 </figure>
 
+<p>A skinned mesh changes shape, so its sphere from the load does not hold its posed vertices. For a playing skinned sub-mesh, the <code>Animate</code> pass writes a sphere in its <code>InstanceTransform</code> each frame (<code>boundsCenter</code>, <code>boundsRadius</code>): the sphere around its joints' spheres, each moved by its joint matrix. <code>getWorldSphere</code> takes that one when <code>boundsRadius</code> is not negative, so every view culls the posed mesh (<a href="skinning.html">Skinning</a>).</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="Left: a character's rest sphere around its bind pose; when its arm lifts, a hand leaves the sphere and would be culled too early. Right: three joint spheres, each moved with its joint, and the sphere around them, which holds the lifted arm.">
+    <text x="20" y="22" class="title t-bad">The sphere from the load</text>
+    <circle cx="120" cy="127" r="48" class="bad o-25"/>
+    <line x1="120" y1="86" x2="120" y2="172" class="surface"/>
+    <line x1="120" y1="98" x2="190" y2="62" class="surface"/>
+    <circle cx="190" cy="62" r="5" class="hot"/>
+    <text x="200" y="58" class="small t-bad">the hand is outside</text>
+    <text x="20" y="194" class="small">bind-pose sphere: wrong once the mesh moves</text>
+
+    <text x="400" y="22" class="title t-ok">Joint spheres, moved each frame</text>
+    <circle cx="500" cy="150" r="24" class="gpu o-25"/>
+    <circle cx="500" cy="106" r="22" class="gpu o-25"/>
+    <circle cx="535" cy="80" r="40" class="gpu o-25"/>
+    <circle cx="525.5" cy="107" r="74" class="ok o-25"/>
+    <line x1="500" y1="86" x2="500" y2="172" class="surface"/>
+    <line x1="500" y1="98" x2="570" y2="62" class="surface"/>
+    <circle cx="570" cy="62" r="5" class="hot"/>
+    <text x="612" y="118" class="small t-ok">the sphere around</text>
+    <text x="612" y="134" class="small t-ok">them holds every vertex</text>
+  </svg>
+  <figcaption>The joint spheres are built at load around the bind-pose vertices each joint moves. Each frame they move with their joints, and the sphere around all of them holds every skinned vertex: a skinned vertex is a weighted mix of points that each lie inside one moved sphere, and a sphere is convex.</figcaption>
+</figure>
+
 <h3>Where RASM follows the textbook, and where it differs</h3>
 
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Bounding volume</td><td>sphere or box</td><td>A sphere per sub-mesh only (<code>boundsCenter</code>, <code>boundsRadius</code>). No boxes, so no p-vertex test.</td></tr>
+  <tr><td>Bounding volume</td><td>sphere or box</td><td>A sphere per sub-mesh only (<code>boundsCenter</code>, <code>boundsRadius</code>). No boxes, so no p-vertex test. A playing skinned sub-mesh uses the sphere the <code>Animate</code> pass writes from its joints (above).</td></tr>
   <tr><td>Building the sphere</td><td>box center, Ritter or Welzl</td><td>Box center, radius to the farthest vertex (<code>computeBounds</code>). Not the smallest sphere.</td></tr>
   <tr><td>Planes</td><td>Gribb–Hartmann rows</td><td>The same, from <code>projection * view</code>, in world space, normalized (<code>getFrustumPlanes</code>).</td></tr>
   <tr><td>Depth convention</td><td>see the table in section 6</td><td>Vulkan's 0 to <var>q<sub>w</sub></var> range with reversed-Z. So plane 4 (<var>r</var><sub>2</sub>) is the <b>far</b> plane and plane 5 (<var>r</var><sub>3</sub> − <var>r</var><sub>2</sub>) is the <b>near</b> plane. See <a href="projection-depth.html">Projection and reversed-Z depth</a>.</td></tr>

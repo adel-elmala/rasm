@@ -71,6 +71,7 @@ const SECTIONS = [
             { path: "guides/projection-depth.html",      title: "Projection and reversed-Z depth",     blurb: "The projection matrix and where depth precision goes." },
             { path: "guides/face-culling.html",          title: "Face culling and winding order",      blurb: "Skipping triangles that face away." },
             { path: "guides/keyframe-animation.html",    title: "Keyframe animation",                  blurb: "Keys, channels and the node tree: a model's parts move over time." },
+            { path: "guides/skinning.html",              title: "Skinning",                            blurb: "Joints, weights and bind poses: a mesh that bends, skinned once per frame for every view." },
         ],
     },
     {

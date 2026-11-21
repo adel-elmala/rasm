@@ -650,10 +650,10 @@ float4 vertexMain(uint vertexIndex : SV_VertexID) : SV_Position
 </div>
 <h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
 
-<p>RASM uses vertex pulling for every graphics pipeline: no pipeline has a vertex input layout. All meshes live in one <b>geometry pool</b>: one vertex buffer, one index buffer, one color buffer for the meshes with vertex colors, and one table of sub-mesh rows, created at startup and sized by <code>EngineConfig</code>.</p>
+<p>RASM uses vertex pulling for every graphics pipeline: no pipeline has a vertex input layout. All meshes live in one <b>geometry pool</b>: one vertex buffer, one index buffer, one color buffer for the meshes with vertex colors, one skin buffer for the skinned meshes' joints and weights, and one table of sub-mesh rows, created at startup and sized by <code>EngineConfig</code>.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 420" role="img" aria-label="GeometryPool holds three buffers and a table. The vertex pool holds Vertex records of 64 bytes, read by vertMain through SceneData's vertsPtr. The index pool holds 32-bit indices: each sub-mesh's LOD 0 indices, then its coarser LODs. It is bound once with bindIndexBuffer. The color pool holds packed vertex colors of the sub-meshes that have them. The geometry table holds one GeometryData row of 124 bytes per sub-mesh: vertexOffset, bounding sphere, lodCount, 8 LOD ranges and colorOffset. vertMain reads vertsPtr at SV_VertexID plus the draw's vertexOffset.">
+  <svg viewBox="0 0 760 512" role="img" aria-label="GeometryPool holds four buffers and a table. The vertex pool holds Vertex records of 64 bytes, read by vertMain through SceneData's vertsPtr. The index pool holds 32-bit indices: each sub-mesh's LOD 0 indices, then its coarser LODs. It is bound once with bindIndexBuffer. The color pool holds packed vertex colors of the sub-meshes that have them. The skin pool holds a skinned vertex's 4 joints and 4 weights, 16 bytes, which the Skin pass reads. The geometry table holds one GeometryData row of 128 bytes per sub-mesh: vertexOffset, bounding sphere, lodCount, 8 LOD ranges, colorOffset and skinOffset. vertMain reads vertsPtr at SV_VertexID plus the draw's vertexOffset, or a skinned sub-mesh's posed vertex.">
     <text x="20" y="22" class="title">GeometryPool, created once</text>
 
     <rect x="20" y="34" width="360" height="64" rx="6" class="mem"/>
@@ -672,9 +672,14 @@ float4 vertexMain(uint vertexIndex : SV_VertexID) : SV_Position
     <text x="34" y="240" class="small">geometryPoolColors = 2²⁰ colors = 4 MiB</text>
 
     <rect x="20" y="262" width="360" height="64" rx="6" class="mem"/>
-    <text x="34" y="282" class="title">Geometry Table</text>
-    <text x="34" y="300" class="small">GeometryData, 124 B per sub-mesh · read by pointer</text>
-    <text x="34" y="316" class="small">geometryPoolSubMeshes = 2¹⁴ rows</text>
+    <text x="34" y="282" class="title">Geometry Skin Pool</text>
+    <text x="34" y="300" class="small">SkinVertex, 16 B, only for skinned meshes · Skin pass</text>
+    <text x="34" y="316" class="small">geometryPoolSkins = 2²⁰ = 16 MiB</text>
+
+    <rect x="20" y="338" width="360" height="64" rx="6" class="mem"/>
+    <text x="34" y="358" class="title">Geometry Table</text>
+    <text x="34" y="376" class="small">GeometryData, 128 B per sub-mesh · read by pointer</text>
+    <text x="34" y="392" class="small">geometryPoolSubMeshes = 2¹⁴ rows</text>
 
     <text x="420" y="22" class="title">One sub-mesh in the pool</text>
     <rect x="420" y="34"  width="320" height="30" rx="3" class="mem"/>
@@ -690,15 +695,19 @@ float4 vertexMain(uint vertexIndex : SV_VertexID) : SV_Position
     <text x="420" y="160" class="small">All LODs index the same vertices.</text>
     <rect x="420" y="186" width="120" height="30" rx="3" class="mem"/>
     <text x="480" y="206" class="mid small">its colors, or none</text>
-    <rect x="420" y="262" width="320" height="64" rx="6" class="mem"/>
-    <text x="434" y="280" class="small">vertexOffset = firstVertex, the same for every LOD</text>
-    <text x="434" y="296" class="small">boundsCenter, boundsRadius, lodCount, lods[8]</text>
-    <text x="434" y="312" class="small">colorOffset = firstColor, or -1 without colors</text>
+    <rect x="420" y="262" width="160" height="30" rx="3" class="mem"/>
+    <text x="500" y="282" class="mid small">joints, weights, or none</text>
+    <rect x="420" y="338" width="320" height="80" rx="6" class="mem"/>
+    <text x="434" y="356" class="small">vertexOffset = firstVertex, the same for every LOD</text>
+    <text x="434" y="372" class="small">boundsCenter, boundsRadius, lodCount, lods[8]</text>
+    <text x="434" y="388" class="small">colorOffset = firstColor, or -1 without colors</text>
+    <text x="434" y="404" class="small">skinOffset = firstSkin, or -1 when not skinned</text>
 
-    <rect x="20" y="346" width="720" height="62" rx="31" class="shader"/>
-    <text x="380" y="368" class="mid mono">vertMain: pc.scene-&gt;vertsPtr[input.vertexID + draw-&gt;vertexOffset]</text>
-    <text x="380" y="385" class="mid mono small">color: colorsPtr[colorOffset + input.vertexID], or white for -1</text>
-    <text x="380" y="400" class="mid small">SV_VertexID is the raw index value here, so the shader adds the draw's offsets back</text>
+    <rect x="20" y="430" width="720" height="74" rx="30" class="shader"/>
+    <text x="380" y="450" class="mid mono">vertMain: getVertex = vertsPtr[input.vertexID + draw-&gt;vertexOffset]</text>
+    <text x="380" y="466" class="mid mono small">skinned: skinnedVertsPtr[skinnedVertex + input.vertexID], posed by the Skin pass</text>
+    <text x="380" y="481" class="mid mono small">color: colorsPtr[colorOffset + input.vertexID], or white for -1</text>
+    <text x="380" y="496" class="mid small">SV_VertexID is the raw index value here, so the shader adds the draw's offsets back</text>
   </svg>
   <figcaption>Sizes are the <code>EngineConfig</code> defaults. The pool never frees anything: each upload appends after the last one.</figcaption>
 </figure>
@@ -733,7 +742,7 @@ float4 vertexMain(uint vertexIndex : SV_VertexID) : SV_Position
   </div>
 </div>
 
-<p>A color is packed by <code>packVertexColor</code>: R in the low byte, RGB sRGB-encoded so 8 bits keep the dark shades, alpha linear. <code>getVertexColor</code> decodes it to linear in <code>vertMain</code>, before interpolation. The application gives colors to <code>createMesh(vertices, indices, colors)</code>; glTF import reads <code>COLOR_0</code>. Skinning (joints and weights) and morph targets will need the same kind of stream.</p>
+<p>A color is packed by <code>packVertexColor</code>: R in the low byte, RGB sRGB-encoded so 8 bits keep the dark shades, alpha linear. <code>getVertexColor</code> decodes it to linear in <code>vertMain</code>, before interpolation. The application gives colors to <code>createMesh(vertices, indices, colors)</code>; glTF import reads <code>COLOR_0</code>. A skinned glTF mesh's <code>JOINTS_0</code> / <code>WEIGHTS_0</code> are a second stream of the same kind: a <code>SkinVertex</code> of 16 bytes (4 joints as 16-bit integers, 4 weights as UNORM16 that add up to 65535), at the row's <code>skinOffset</code>. Only the <code>Skin</code> pass reads it; the views read the posed vertices it writes (<a href="skinning.html#in-rasm">skinning</a>). Morph targets will need the same kind of stream.</p>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
 
@@ -746,7 +755,7 @@ float4 vertexMain(uint vertexIndex : SV_VertexID) : SV_Position
   <tr><td>Index buffer</td><td>kept</td><td>Kept. One index buffer for all meshes, bound once per scene pass (<code>Engine::drawSceneView</code>) with <code>bindIndexBuffer</code>, format <code>U32_UINT</code>.</td></tr>
   <tr><td>Indices</td><td>local + <var>vertexOffset</var></td><td>Local to the sub-mesh. <code>vertexOffset</code> = <code>firstVertex</code>, set in <code>rebuildDrawList</code>. Always 32-bit, even for small meshes.</td></tr>
   <tr><td>Sub-allocation</td><td>bump, free list, buddy…</td><td>Bump only. <code>GeometryPool::upload</code> appends; a full pool logs an error and the mesh is not uploaded (<code>GeometryPool::fits</code>). Nothing is freed (<code>D4</code>).</td></tr>
-  <tr><td>Layout</td><td>interleaved or streams</td><td>One interleaved 64-byte struct: <code>pos</code>, <code>normal</code>, <code>uv</code>[3], <code>tangent</code>. The same bytes as the public <code>Vertex</code>, checked by <code>static_assert</code>s. Vertex colors are an optional stream next to it (above). <code>VertexPosOnly</code> is declared but not used: there is no position-only stream.</td></tr>
+  <tr><td>Layout</td><td>interleaved or streams</td><td>One interleaved 64-byte struct: <code>pos</code>, <code>normal</code>, <code>uv</code>[3], <code>tangent</code>. The same bytes as the public <code>Vertex</code>, checked by <code>static_assert</code>s. Vertex colors and skin joints and weights are optional streams next to it (above). <code>VertexPosOnly</code> is declared but not used: there is no position-only stream.</td></tr>
   <tr><td>Compression</td><td>16-bit, octahedral…</td><td>None on the GPU. Full 32-bit floats, and all 3 UV sets are always stored (unused ones are zero). A quantized glTF (<code>KHR_mesh_quantization</code>: positions, normals, tangents and UVs in 8- or 16-bit integers) is decoded to floats on import; the node transform and the texture transform undo the quantization's scale, as the extension intends.</td></tr>
   <tr><td>Index and vertex order</td><td>optimize both</td><td>Only the coarser LODs go through <code>meshopt_optimizeVertexCache</code>. LOD 0 keeps the order of the import. No vertex fetch reordering.</td></tr>
   <tr><td>LODs</td><td>—</td><td>All LODs of a sub-mesh share its vertices and cost only their indices, placed right after LOD 0's. Culling writes the chosen LOD's range into the draw. See <a href="mesh-simplification.html#in-rasm">mesh simplification</a> and <a href="lod-selection.html#in-rasm">LOD selection</a>.</td></tr>
@@ -760,12 +769,13 @@ float4 vertexMain(uint vertexIndex : SV_VertexID) : SV_Position
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>The pool and its buffers</td><td><code>GeometryPool::create</code>, <code>GeometryPool::upload</code>, <code>GeometryPool::fits</code> in <code>src/renderer/geometryPool.cpp</code></td></tr>
-  <tr><td>Pool sizes</td><td><code>geometryPoolVertices</code>, <code>geometryPoolIndices</code>, <code>geometryPoolColors</code>, <code>geometryPoolSubMeshes</code> in <code>EngineConfig</code>, <code>include/rasm/types.h</code></td></tr>
+  <tr><td>Pool sizes</td><td><code>geometryPoolVertices</code>, <code>geometryPoolIndices</code>, <code>geometryPoolColors</code>, <code>geometryPoolSkins</code>, <code>geometryPoolSubMeshes</code> in <code>EngineConfig</code>, <code>include/rasm/types.h</code></td></tr>
+  <tr><td>Skin joints and weights</td><td><code>SkinVertex</code> in <code>include/rasm/mesh.h</code>; <code>readSkinVertices</code> in <code>src/assets/skinImport.cpp</code>; read by <code>skinMain</code> in <code>shaders/passes/skin.slang</code></td></tr>
   <tr><td>Vertex colors</td><td><code>packVertexColor</code> in <code>src/assets/mesh.cpp</code>; <code>ObjRaw::colors</code>; <code>getVertexColor</code> in <code>shaders/lib/core.slang</code></td></tr>
-  <tr><td>The vertex struct</td><td><code>Vertex</code> in <code>include/rasm/mesh.h</code>; <code>gfx::VertexFull</code> in <code>src/renderer/uberMaterialTypes.h</code>; <code>VertexFull</code> in <code>shaders/lib/core.slang</code></td></tr>
-  <tr><td>A sub-mesh's ranges</td><td><code>MeshGeometry</code> in <code>include/rasm/mesh.h</code>; <code>GeometryData</code>, <code>GeometryLod</code> in <code>shaders/lib/core.slang</code></td></tr>
+  <tr><td>The vertex struct</td><td><code>Vertex</code> in <code>include/rasm/mesh.h</code>; <code>gfx::VertexFull</code> in <code>src/renderer/uberMaterialTypes.h</code>; <code>VertexFull</code> in <code>shaders/lib/geometryTypes.slang</code></td></tr>
+  <tr><td>A sub-mesh's ranges</td><td><code>MeshGeometry</code> in <code>include/rasm/mesh.h</code>; <code>GeometryData</code>, <code>GeometryLod</code> in <code>shaders/lib/geometryTypes.slang</code></td></tr>
   <tr><td>The empty vertex input</td><td><code>VulkanDevice::createGraphicsPipeline</code> in <code>src/rhi/vulkan/vulkanDevice.cpp</code></td></tr>
-  <tr><td>The pull</td><td><code>vertMain</code> in <code>shaders/passes/rasm.slang</code></td></tr>
+  <tr><td>The pull</td><td><code>vertMain</code> in <code>shaders/passes/rasm.slang</code>, through <code>getVertex</code> in <code>shaders/lib/core.slang</code></td></tr>
   <tr><td>Binding the index buffer, setting <code>vertsPtr</code></td><td><code>Engine::drawSceneView</code>, <code>Engine::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>LOD indices</td><td><code>buildMeshLods</code> in <code>src/assets/meshLod.cpp</code></td></tr>
 </table>
@@ -776,6 +786,7 @@ float4 vertexMain(uint vertexIndex : SV_VertexID) : SV_Position
   <ul>
     <li><code>Vertex</code>, <code>gfx::VertexFull</code> and the Slang <code>VertexFull</code> have the same 64 bytes. A change to one changes all three and the <code>static_assert</code>s (see <a href="struct-layout.html#in-rasm">struct layout</a>).</li>
     <li><code>vertMain</code> adds <code>draw-&gt;vertexOffset</code> to <code>SV_VertexID</code>. Removing it makes every mesh read the first mesh's vertices.</li>
+    <li>Every vertex shader of a scene draw reads through <code>getVertex</code>, so a skinned sub-mesh is drawn posed in every view.</li>
     <li>Indices are local to their sub-mesh. Every LOD of a sub-mesh uses the same <code>vertexOffset</code>, and its colors are indexed by the same local index.</li>
     <li>Keep the vertex at 64 bytes. An attribute that not every mesh has is a stream with an offset in <code>GeometryData</code>, not a field in <code>Vertex</code>.</li>
     <li>The index buffer is bound as <code>U32_UINT</code>. 16-bit indices would need a second index buffer and their own draws.</li>

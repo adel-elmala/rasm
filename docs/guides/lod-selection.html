@@ -776,6 +776,7 @@ float limit = scene->lodErrorPixels / (pixelsPerUnit * sphere.scale);</code></pr
   <tr><td>When</td><td>every frame</td><td>Every frame and scene view, in <code>countMain</code>, only for visible draws. A scene view drawn without the culling pipelines draws LOD 0.</td></tr>
   <tr><td>Hysteresis, cross-fade, geomorph</td><td>section 9</td><td>None. The choice is made from scratch every frame and keeps no state, and a switch happens in one frame. With the 1-pixel default, popping is hard to see.</td></tr>
   <tr><td>Debugging</td><td>—</td><td><code>EngineConfig::forcedLod</code> ≥ 0 forces that level (or the mesh's coarsest). <kbd>F2</kbd> cycles it: by error (−1), LOD 0, 1, … 7, by error. The stats overlay (<kbd>F1</kbd>) shows the mode, the visible draws per level, and the triangles saved against LOD 0.</td></tr>
+  <tr><td>Skinned meshes</td><td>—</td><td>A level is an index range into the sub-mesh's vertices, and a skinned sub-mesh's vertices are the posed ones the <code>Skin</code> pass writes. So every level draws posed, with no work per level. The sphere is the posed one (<code>getWorldSphere</code>), and the levels were simplified in the bind pose without looking at the weights (<code>D29</code>), so a joint that bends far can show a coarse level's error larger than its number (<a href="skinning.html#in-rasm">skinning</a>).</td></tr>
   <tr><td>Other views, budgets, clusters</td><td>section 10</td><td>One LOD camera per scene view: its own, except a shadow map's view, which uses the camera of the view that reads the map, so caster and surface match (<a href="shadow-mapping.html#in-rasm">shadow mapping</a>). A level per draw, no triangle budget.</td></tr>
 </table>
 </div>
@@ -809,7 +810,7 @@ float limit = scene->lodErrorPixels / (pixelsPerUnit * sphere.scale);</code></pr
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>No hysteresis or cross-fade, no quality scale beyond <code>lodErrorPixels</code>, no triangle budget, no per-cluster levels. Levels are always in GPU memory: there is no streaming of fine levels for near objects only (D4).</p>
+  <p>No hysteresis or cross-fade, no quality scale beyond <code>lodErrorPixels</code>, no triangle budget, no per-cluster levels. Levels are always in GPU memory: there is no streaming of fine levels for near objects only (D4). A skinned mesh's levels ignore its weights (D29).</p>
 </div>
 
 <h3>Further reading</h3>

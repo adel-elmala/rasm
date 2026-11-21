@@ -330,7 +330,7 @@
 
 <h2 id="in-rasm"><span class="n">8</span>In RASM</h2>
 
-<p>RASM poses animated nodes on the GPU, so the CPU pays nothing per animated entity per frame. The import keeps only the part of a glTF node tree that a clip moves. The <code>Animate</code> pass, a compute pass that the first scene view of a graph adds, writes each animated sub-mesh's matrices, which every view of the frame reads: the shaded view and every shadow map.</p>
+<p>RASM poses animated nodes on the GPU, so the CPU pays nothing per animated entity per frame. The import keeps only the part of a glTF node tree that a clip moves. The <code>Animate</code> pass, a compute pass that the first scene view of a graph adds, writes each animated sub-mesh's matrices, which every view of the frame reads: the shaded view and every shadow map. A skinned mesh's clips move its joints instead, and a second pass skins its vertices: see <a href="skinning.html#in-rasm">Skinning</a>.</p>
 
 <figure class="diagram">
   <svg viewBox="0 0 760 360" role="img" aria-label="The CPU calls setAnimationTime every frame and playAnimation on a change; a change writes a row of the animated entity table. The animation pool holds the nodes, the samplers, the channel table and the keys of each mesh, written once at load. The Animate pass runs one group of 64 threads per table row: it samples each node's channels into the pose buffer as local matrices, walks up the parents into world matrices, then writes an InstanceTransform per animated sub-mesh into this slot's buffer, with previousWorld from the other slot. Culling, the scene passes and the shadow views read the transforms through getWorldMatrix.">
@@ -396,19 +396,19 @@ if (walk >= 0)
 <div class="table-wrap">
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
-  <tr><td>Which nodes</td><td>the whole tree</td><td><code>importAnimations</code> keeps a node when a clip moves it or a parent, and it holds a mesh or a kept child. A kept node under static ones hangs below one extra node whose rest matrix is their world matrix. A model whose clips move no mesh has no animation. Kept nodes are stored parents first (<code>AnimationRaw::nodes</code>).</td></tr>
+  <tr><td>Which nodes</td><td>the whole tree</td><td><code>importAnimations</code> keeps a node when a clip moves it or a parent, and it holds a mesh or a kept child, and always keeps a skin's joint (a skinned mesh's own node is not kept: its matrix is ignored). A kept node under static ones hangs below one extra node whose rest matrix is their world matrix. A model whose clips move no mesh has no animation. Kept nodes are stored parents first (<code>AnimationRaw::nodes</code>).</td></tr>
   <tr><td>Clips</td><td>one at a time, or blended</td><td>One per entity (<code>AnimationPlay::clip</code>), or <code>ALL_ANIMATION_CLIPS</code>: every clip at once, a node moved by the last clip that animates it. No blending or layers. Every glTF animation keeps its index, also one left without channels.</td></tr>
   <tr><td>Sampling</td><td>STEP, LINEAR (slerp), CUBICSPLINE</td><td>All three, in <code>sampleChannel</code> in <code>shaders/passes/animate.slang</code>, with a binary search. Close quaternions use the normalized mix (cos θ &gt; 0.9995). Morph target weights are not read yet.</td></tr>
   <tr><td>Local to world</td><td>walk up, or level by level</td><td>Walk up: each thread multiplies its node's parents itself, so any depth and any node count works. The 64 threads of a group go over the nodes in strides (<code>examples/12_animation</code> has a 100-node chain).</td></tr>
   <tr><td>Clock</td><td>from the application, small floats</td><td><code>Engine::setAnimationTime</code> sets a double. The base moves when the clock is <code>ANIMATION_REBASE_SECONDS</code> (64) past it or behind it (<code>getAnimationBase</code>), and each row gets its phase at the base (<code>getAnimationPhase</code>). A unit test checks the error stays under 0.1 ms after 24 hours.</td></tr>
   <tr><td>Motion vectors</td><td>keep last frame's matrix</td><td>The pass reads last frame's world from the other slot's buffer (<code>PassBuilder::readPrevious</code> of the per-slot buffers) into <code>previousWorld</code>. A play, a stop and a growth of the buffers start the motion again for one frame (<code>AnimatedEntity::resetSync</code>), so TAA does not smear a jump.</td></tr>
-  <tr><td>Bounds</td><td>—</td><td>Culling multiplies the geometry's sphere by <code>getWorldMatrix</code>, the animated matrix, so a rigid part is culled where it is.</td></tr>
+  <tr><td>Bounds</td><td>—</td><td>Culling multiplies the geometry's sphere by <code>getWorldMatrix</code>, the animated matrix, so a rigid part is culled where it is. A skinned part's sphere comes from its joints (<a href="skinning.html">Skinning</a>).</td></tr>
   <tr><td>Mirroring</td><td>a negative scale turns the winding</td><td>The cull mode of a draw is chosen on the CPU from the rest pose. A sub-mesh whose clips can take a scale to 0 or below is drawn without face culling (<code>animationCanMirror</code>), so it shows right whichever way it turns.</td></tr>
   <tr><td>Cost on the CPU</td><td>—</td><td>Nothing per frame per entity. A play, a stop or a move writes one row; the base moves once a minute and writes the playing rows.</td></tr>
 </table>
 </div>
 
-<p>See also the <a href="../api/scene.html#animation">API reference</a>, <a href="gpu-scene.html">the GPU scene tables</a> and <a href="taa.html#in-rasm">TAA</a>.</p>
+<p>See also the <a href="../api/scene.html#animation">API reference</a>, <a href="gpu-scene.html">the GPU scene tables</a>, <a href="skinning.html">Skinning</a> and <a href="taa.html#in-rasm">TAA</a>.</p>
 
 <h3>Where it lives in code</h3>
 

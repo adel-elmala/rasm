@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skinning · RASM</title>
+<meta name="description" content="How a character's mesh bends with its skeleton: the bind pose, inverse bind matrices, joint matrices, up to 4 weights per vertex and linear blend skinning, why RASM skins once per frame in a compute pass for every view, the bounds of a skinned mesh from one sphere per joint, and motion vectors of skinned vertices.">
+<meta name="rasm-sources" content="include/rasm/animation.h include/rasm/mesh.h include/rasm/types.h src/assets/skinImport.cpp src/assets/animationImport.cpp src/assets/meshImport.cpp src/assets/meshLod.cpp src/renderer/animation.cpp src/renderer/geometryPool.cpp src/renderer/gpuScene.cpp shaders/passes/animate.slang shaders/passes/skin.slang shaders/lib/animationTypes.slang shaders/lib/geometryTypes.slang shaders/lib/core.slang shaders/lib/frustumCulling.slang examples/13_skinning/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/skinning.js"></script>
+</head>
+<body data-root="../" data-page="guides/skinning.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+    <marker id="ah-ok"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head ok"/></marker>
+    <marker id="ah-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head bad"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Drawing</p>
+<h1>Skinning: a mesh that bends with its skeleton</h1>
+<p class="lead">A character is one mesh, its skin, over a tree of <b>joints</b>, its skeleton. Node animation moves joints; skinning moves each vertex of the skin with the joints near it, so knees and elbows bend smoothly. This page explains the bind pose, the joint matrices, the weights and the blend, where in the frame to do the work, how to cull a mesh whose shape changes every frame, and its motion vectors. The <a href="#in-rasm">last part</a> shows how RASM skins once per frame on the GPU.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>The mesh is modelled once, in the <b>bind pose</b>. Each joint stores its <b>inverse bind matrix</b>: the inverse of its world matrix in that pose.</li>
+    <li>A joint's <b>joint matrix</b> is <code class="lang-text">world(joint now) · inverseBind</code>. It moves a bind-pose vertex the way the joint moved since the bind pose.</li>
+    <li>A vertex follows up to 4 joints, with <b>weights</b> that add up to 1: <code class="lang-text">v' = Σ wᵢ · Jᵢ · v</code>. This is <b>linear blend skinning</b>.</li>
+    <li>Skin <b>once per frame</b> in a compute pass, into a buffer of posed vertices that every view reads: the camera and each shadow map. Skinning in the vertex shader repeats the work in every view.</li>
+    <li>The bounds: a sphere per joint around the vertices it moves, moved by its joint matrix, and the sphere around all of them.</li>
+    <li>Motion vectors need the vertex's place in the frame before: keep last frame's posed vertices too.</li>
+  </ul>
+</div>
+
+<h2 id="bind-pose"><span class="n">1</span>The bind pose and the joint matrix</h2>
+
+<p>An artist models the skin once, with the skeleton in one pose: the <b>bind pose</b>, often arms out in a T. The vertices are stored in that pose. To pose the skin, each vertex is taken into its joint's own space as it was in the bind pose, then out again with the joint's matrix of today:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 220" role="img" aria-label="Left: an arm in the bind pose, straight, with a vertex v on the forearm. Middle: the inverse bind matrix of the elbow joint takes v into the elbow's space, where the elbow is the origin. Right: the arm posed with the forearm turned up 60 degrees; the elbow's world matrix now takes the point out of the elbow's space to its new place v prime.">
+    <text x="20" y="22" class="title">bind pose</text>
+    <rect x="30" y="70" width="220" height="40" rx="6" class="ghost"/>
+    <line x1="30" y1="90" x2="140" y2="90" class="arrow cpu thick"/>
+    <line x1="140" y1="90" x2="250" y2="90" class="arrow shader thick"/>
+    <circle cx="30" cy="90" r="6" class="mem"/>
+    <circle cx="140" cy="90" r="6" class="mem"/>
+    <circle cx="210" cy="70" r="6" class="hot"/>
+    <text x="210" y="58" class="mid small t-hot">v</text>
+    <text x="30" y="134" class="small">shoulder</text>
+    <text x="140" y="134" class="mid small">elbow</text>
+
+    <line x1="262" y1="80" x2="318" y2="80" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="290" y="68" class="mid small t-hot">inverseBind</text>
+
+    <text x="330" y="22" class="title">elbow's space</text>
+    <path d="M350,90 H500 M420,20 V160" class="grid"/>
+    <rect x="420" y="70" width="110" height="40" rx="6" class="ghost"/>
+    <circle cx="420" cy="90" r="6" class="mem"/>
+    <circle cx="490" cy="70" r="6" class="hot"/>
+    <text x="490" y="58" class="mid small t-hot">(70, 20)</text>
+    <text x="428" y="156" class="small t-faint">elbow at the origin</text>
+
+    <line x1="540" y1="80" x2="590" y2="80" class="arrow hot" marker-end="url(#ah-hot)"/>
+    <text x="566" y="68" class="mid small t-hot">world now</text>
+
+    <text x="600" y="22" class="title">posed</text>
+    <line x1="600" y1="130" x2="660" y2="130" class="arrow cpu thick"/>
+    <line x1="660" y1="130" x2="715" y2="35" class="arrow shader thick"/>
+    <circle cx="600" cy="130" r="6" class="mem"/>
+    <circle cx="660" cy="130" r="6" class="mem"/>
+    <circle cx="678" cy="59" r="6" class="hot"/>
+    <text x="664" y="54" class="end small t-hot">v′</text>
+    <text x="676" y="126" class="small t-hot">60°</text>
+
+    <rect x="30" y="176" width="700" height="32" rx="6" class="paper"/>
+    <text x="380" y="197" class="mid mono">J = world(elbow now) · inverseBind(elbow)        v′ = J · v</text>
+  </svg>
+  <figcaption>The inverse bind matrix is stored once per joint. In the bind pose <code class="lang-text">world · inverseBind</code> is the identity, so the skin stays as modelled.</figcaption>
+</figure>
+
+<p>The joints are nodes of the same tree that node animation moves (see <a href="keyframe-animation.html#tree">the node tree</a>). So the joint matrices cost one multiply per joint after the world matrices are known, and the skeleton can have any depth.</p>
+
+<div class="callout">
+  <strong>The mesh's own node does not place it</strong>
+  <p>The joints' world matrices already put the skin in the scene. glTF says a skinned mesh ignores the matrix of the node that holds it; only the object's own placement (where the character stands) is applied on top.</p>
+</div>
+
+<h2 id="weights"><span class="n">2</span>Weights: a vertex follows several joints</h2>
+
+<p>A vertex near the elbow should move partly with the upper arm and partly with the forearm. Each vertex stores up to 4 joints and 4 weights. Its posed place is the weighted mix of the places its joints put it:</p>
+
+<div class="formula">
+  <p class="eq">v′ = w₀·J₀·v + w₁·J₁·v + w₂·J₂·v + w₃·J₃·v</p>
+  <p class="eq">w₀ + w₁ + w₂ + w₃ = 1</p>
+  <dl>
+    <dt>Jᵢ</dt><dd>the joint matrix of the vertex's joint <var>i</var></dd>
+    <dt>wᵢ</dt><dd>its weight; weights that do not add up to 1 shrink or grow the vertex, so scale them to 1</dd>
+  </dl>
+</div>
+
+<p>The sum of matrices <code class="lang-text">Σ wᵢ·Jᵢ</code> can be built first and applied once, to the position and, as a normal matrix, to the normal. This is <b>linear blend skinning</b>. It is cheap and it is what glTF asks for. Its known faults:</p>
+
+<div class="vgrid">
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="An arm bent 90 degrees where each vertex follows one joint: the two halves overlap inside the bend and a gap opens outside.">
+      <rect x="20" y="60" width="110" height="34" class="gpu o-50"/>
+      <rect x="96" y="10" width="34" height="84" class="shader o-50"/>
+      <path d="M130,60 L130,94" class="arrow bad thick"/>
+      <circle cx="113" cy="77" r="5" class="mem"/>
+      <text x="138" y="70" class="small t-bad">crack</text>
+    </svg>
+    <h4>One joint per vertex</h4>
+    <p>Rigid parts: the skin tears open outside the joint and folds into itself inside.</p>
+  </div>
+  <div class="vcard good">
+    <svg viewBox="0 0 240 130" role="img" aria-label="The same arm with blended weights near the elbow: the skin curves smoothly around the bend.">
+      <path d="M20,94 H100 Q130,94 130,64 V10 H96 V56 Q96,60 92,60 H20 Z" class="gpu o-50"/>
+      <circle cx="113" cy="77" r="5" class="mem"/>
+      <text x="140" y="70" class="small t-ok">smooth</text>
+    </svg>
+    <h4>Blended near the joint</h4>
+    <p>The vertices in a band around the elbow mix both joints, so the skin curves round the bend.</p>
+  </div>
+  <div class="vcard bad">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A tube twisted 180 degrees between two joints: in the middle it collapses to a thin neck, like the twisted end of a candy wrapper.">
+      <path d="M20,40 H90 Q120,64 150,40 H220 V90 H150 Q120,66 90,90 H20 Z" class="gpu o-50"/>
+      <line x1="120" y1="58" x2="120" y2="72" class="arrow bad thick"/>
+      <text x="120" y="112" class="mid small t-bad">collapses</text>
+    </svg>
+    <h4>Twist: the candy wrapper</h4>
+    <p>Mixing two matrices turned far apart shortens the vertices: a twisted wrist or a bent elbow loses volume.</p>
+  </div>
+</div>
+
+<p>A vertex may name more than 4 joints (glTF allows more sets of 4). Keep the 4 largest weights and scale them to add up to 1 again: the lost weights are small, and 4 fit one vector.</p>
+
+<figure class="lab" data-lab="bend-arm" data-title="Bend an arm">
+  <figcaption>Bend the elbow, then shrink the blend band to 0 to see the rigid crack. Widen it again and bend past 90°: the elbow gets thin, the loss of volume of linear blend skinning.</figcaption>
+</figure>
+
+<h2 id="where"><span class="n">3</span>Where to skin: once per frame, for every view</h2>
+
+<p>A frame draws a skinned character many times: in the camera's view and in every shadow map that sees it. A sun with 4 cascades and the camera make 5 views; a point light's cube adds 6 more. There are two places for the skinning math:</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Five views, each with its own vertex shader that skins every vertex again: the same work five times.">
+      <rect x="20" y="20" width="56" height="24" rx="4" class="gpu"/><text x="48" y="36" class="mid small">skin</text>
+      <rect x="80" y="20" width="56" height="24" rx="4" class="gpu"/><text x="108" y="36" class="mid small">skin</text>
+      <rect x="140" y="20" width="56" height="24" rx="4" class="gpu"/><text x="168" y="36" class="mid small">skin</text>
+      <rect x="200" y="20" width="56" height="24" rx="4" class="gpu"/><text x="228" y="36" class="mid small">skin</text>
+      <rect x="260" y="20" width="44" height="24" rx="4" class="gpu"/><text x="282" y="36" class="mid small">skin</text>
+      <text x="48" y="62" class="mid small">cascade 0</text><text x="108" y="62" class="mid small">1</text>
+      <text x="168" y="62" class="mid small">2</text><text x="228" y="62" class="mid small">3</text><text x="282" y="62" class="mid small">camera</text>
+      <text x="160" y="100" class="mid small t-bad">5 × the skinning work</text>
+      <text x="160" y="118" class="mid small t-faint">no extra memory</text>
+    </svg>
+    <h4>In each view's vertex shader</h4>
+    <p>Each draw reads the base vertex and the joint matrices and skins again. Fine for one view; the cost grows with every shadow map.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="One compute pass skins every vertex into a buffer of posed vertices; the four cascades and the camera view read that buffer.">
+      <rect x="20" y="8" width="130" height="26" rx="4" class="gpu"/><text x="85" y="25" class="mid small">skin once</text>
+      <line x1="85" y1="34" x2="85" y2="48" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+      <rect x="20" y="50" width="284" height="24" rx="4" class="mem"/><text x="162" y="66" class="mid small">posed vertices</text>
+      <line x1="46" y1="74" x2="46" y2="86" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <rect x="20" y="88" width="52" height="22" rx="4" class="cpu"/><text x="46" y="103" class="mid small">c 0</text>
+      <line x1="104" y1="74" x2="104" y2="86" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <rect x="78" y="88" width="52" height="22" rx="4" class="cpu"/><text x="104" y="103" class="mid small">c 1</text>
+      <line x1="162" y1="74" x2="162" y2="86" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <rect x="136" y="88" width="52" height="22" rx="4" class="cpu"/><text x="162" y="103" class="mid small">c 2</text>
+      <line x1="220" y1="74" x2="220" y2="86" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <rect x="194" y="88" width="52" height="22" rx="4" class="cpu"/><text x="220" y="103" class="mid small">c 3</text>
+      <line x1="278" y1="74" x2="278" y2="86" class="arrow mem" marker-end="url(#ah-mem)"/>
+      <rect x="252" y="88" width="52" height="22" rx="4" class="cpu"/><text x="278" y="103" class="mid small">camera</text>
+      <text x="160" y="130" class="mid small t-faint">memory: a posed copy per frame slot</text>
+    </svg>
+    <h4>Once, in a compute pass</h4>
+    <p>A pass before the views writes each posed vertex, with the same layout as the base vertex. The views read those instead.</p>
+  </div>
+</div>
+
+<p>The posed copy has a cost in memory. It holds the whole vertex (position, normal, tangent and UVs), and with two frames in flight there is one copy per frame slot, so the frame that draws never reads a buffer the next frame writes:</p>
+
+<div class="stats">
+  <div><b>64 B</b><span>a posed vertex in one frame slot, the base vertex's layout</span></div>
+  <div><b>128 B</b><span>per vertex per animated character, two slots</span><small>64 B · 2</small></div>
+  <div><b>409 KiB</b><span>one character of 3 273 vertices</span><small>3 273 · 128 B</small></div>
+  <div><b>400 MiB</b><span>a crowd of 1 000 of them</span><small>1 000 · 409 KiB</small></div>
+</div>
+
+<p>In a frame, the compute pass sits between the pose and the views:</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 200" role="img" aria-label="A frame on a time line: first the pose pass writes joint matrices, then the skin pass reads them and writes the posed vertices, then the four shadow cascades and the camera view each read the posed vertices.">
+    <text x="20" y="22" class="title">One frame</text>
+    <line x1="20" y1="170" x2="740" y2="170" class="arrow" marker-end="url(#ah)"/>
+    <text x="740" y="190" class="end small">time</text>
+    <rect x="20" y="40" width="100" height="40" rx="6" class="gpu"/>
+    <text x="70" y="58" class="mid small">pose</text><text x="70" y="73" class="mid small">joint matrices</text>
+    <rect x="130" y="40" width="100" height="40" rx="6" class="gpu"/>
+    <text x="180" y="58" class="mid small">skin</text><text x="180" y="73" class="mid small">once</text>
+    <rect x="250" y="40" width="80" height="40" rx="6" class="cpu"/><text x="290" y="64" class="mid small">cascade 0</text>
+    <rect x="340" y="40" width="80" height="40" rx="6" class="cpu"/><text x="380" y="64" class="mid small">cascade 1</text>
+    <rect x="430" y="40" width="80" height="40" rx="6" class="cpu"/><text x="470" y="64" class="mid small">cascade 2</text>
+    <rect x="520" y="40" width="80" height="40" rx="6" class="cpu"/><text x="560" y="64" class="mid small">cascade 3</text>
+    <rect x="610" y="40" width="120" height="40" rx="6" class="cpu"/><text x="670" y="64" class="mid small">camera view</text>
+    <rect x="130" y="110" width="600" height="30" rx="6" class="mem"/>
+    <text x="430" y="130" class="mid small">posed vertices of this frame slot</text>
+    <line x1="180" y1="80" x2="180" y2="108" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="290" y1="110" x2="290" y2="82" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="380" y1="110" x2="380" y2="82" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="470" y1="110" x2="470" y2="82" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="560" y1="110" x2="560" y2="82" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="670" y1="110" x2="670" y2="82" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <text x="20" y="160" class="small t-faint">each view: a vertex fetch from the posed buffer instead of the base one</text>
+  </svg>
+  <figcaption>Green is compute work, blue is a view's culling and draws. Adding a shadow map adds draws, not skinning.</figcaption>
+</figure>
+
+<h2 id="bounds"><span class="n">4</span>Bounds of a mesh that changes shape</h2>
+
+<p>Culling needs a sphere that holds the mesh. A rigid mesh has one sphere, computed once, moved by its matrix. A skinned mesh changes shape every frame: an arm reaches out past the bind-pose sphere. Computing a new sphere from all the posed vertices would cost a pass over the vertices before culling. A cheaper bound that is still safe:</p>
+
+<ol class="flow">
+  <li class="cpu"><b>At import</b> Per joint: a sphere around the bind-pose vertices that joint moves (weight above 0).</li>
+  <li class="gpu"><b>Each frame</b> Per joint: move its sphere by its joint matrix. The center is <code class="lang-text">J · c</code>; the radius is <code class="lang-text">r</code> times the matrix's largest stretch.</li>
+  <li class="gpu"><b>Then</b> The sphere around all moved spheres: the center of their box, the radius to the farthest edge.</li>
+</ol>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A bent arm. A dashed blue circle around the upper arm's vertices and a dashed purple circle around the forearm's, moved with the forearm. A big green circle surrounds both. A vertex near the elbow is a weighted mix of two points, one in each small circle; it lies on the line between them, which is inside the big circle.">
+    <text x="20" y="22" class="title">A skinned vertex is a mix of points inside the joints' spheres</text>
+    <circle cx="330" cy="140" r="104" class="zone"/>
+    <circle cx="330" cy="140" r="104" class="arrow ok thick nofill"/>
+    <path d="M250,170 H360 Q392,170 392,138 V60 H360 V138 Q360,140 358,140 H250 Z" class="gpu o-50"/>
+    <circle cx="300" cy="155" r="58" class="arrow cpu dashed nofill"/>
+    <circle cx="376" cy="110" r="66" class="arrow shader dashed nofill"/>
+    <circle cx="300" cy="155" r="4" class="cpu"/>
+    <circle cx="376" cy="110" r="4" class="shader"/>
+    <circle cx="338" cy="168" r="5" class="cpu"/>
+    <circle cx="380" cy="150" r="5" class="shader"/>
+    <line x1="338" y1="168" x2="380" y2="150" class="arrow hot dashed"/>
+    <circle cx="359" cy="159" r="6" class="hot"/>
+    <text x="470" y="80" class="small">J₀·v: inside the upper arm's sphere</text>
+    <text x="470" y="100" class="small">J₁·v: inside the forearm's sphere</text>
+    <text x="470" y="128" class="small t-hot">v′ = w₀·J₀·v + w₁·J₁·v: on the line</text>
+    <text x="470" y="146" class="small t-hot">between them</text>
+    <text x="470" y="180" class="small t-ok">the big sphere holds both points</text>
+    <text x="470" y="198" class="small t-ok">and, being round, every point between</text>
+  </svg>
+  <figcaption>The vertex is not always inside one of the small spheres, but a sphere is convex: it holds every mix of points it holds. So the big sphere holds every skinned vertex.</figcaption>
+</figure>
+
+<figure class="lab" data-lab="skinned-bounds" data-title="Bound a bending arm">
+  <figcaption>Bend the arm and change the band. The dots turn red if a skinned vertex leaves the big circle; they never do. The big circle grows with the bend, but needs no pass over the vertices.</figcaption>
+</figure>
+
+<h2 id="motion"><span class="n">5</span>Motion vectors of skinned vertices</h2>
+
+<p>TAA and motion blur need, per pixel, where the surface was in the frame before (see <a href="taa.html">TAA</a>). For a rigid mesh, the frame before's matrix is enough. A skinned vertex also changes its place inside the mesh, so the matrix does not tell where it was. The posed buffers already hold the answer: there is one per frame slot, and the other slot holds the frame before's posed vertices.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 210" role="img" aria-label="Two posed vertex buffers, slot 0 written this frame and slot 1 written by the frame before. The vertex shader reads vertex 17 from both: this frame's place and the frame before's place. The motion is the difference on the screen.">
+    <text x="20" y="22" class="title">The same vertex in both slots: index 17</text>
+    <text x="20" y="54" class="small">this frame</text>
+    <rect x="110" y="38" width="340" height="28" class="mem"/>
+    <rect x="290" y="38" width="30" height="28" class="hot"/>
+    <text x="305" y="57" class="mid small">17</text>
+    <text x="20" y="104" class="small">frame before</text>
+    <rect x="110" y="88" width="340" height="28" class="mem o-50"/>
+    <rect x="290" y="88" width="30" height="28" class="hot o-50"/>
+    <text x="305" y="107" class="mid small">17</text>
+    <line x1="450" y1="52" x2="580" y2="138" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="450" y1="102" x2="580" y2="158" class="arrow mem dashed" marker-end="url(#ah-mem)"/>
+    <rect x="584" y="126" width="156" height="50" rx="6" class="shader"/>
+    <text x="662" y="146" class="mid small">vertex shader</text>
+    <text x="662" y="163" class="mid small">motion = now − before</text>
+    <text x="20" y="160" class="small t-faint">a new character, or a jump in its clip:</text>
+    <text x="20" y="178" class="small t-faint">the other slot holds nothing that fits,</text>
+    <text x="20" y="196" class="small t-faint">so use before = now: no motion that frame</text>
+  </svg>
+  <figcaption>The vertex's index is the same in both slots, so the shader needs no search: it reads the same index from the other buffer.</figcaption>
+</figure>
+
+<h2 id="pitfalls"><span class="n">6</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>The character lies on its back, or stands far from its place</dt><dd>The mesh node's matrix was applied on top of the joints'. A skinned mesh ignores its own node's matrix.</dd></div>
+  <div><dt>The skin explodes into spikes</dt><dd>Joint indices read with the wrong type (glTF stores them as 8 or 16-bit integers), or matrices in the wrong order: <code class="lang-text">world · inverseBind</code>, not the other way round.</dd></div>
+  <div><dt>Parts of the skin grow or shrink as they move</dt><dd>The weights do not add up to 1. Scale them to 1 at import, after keeping the 4 largest.</dd></div>
+  <div><dt>Elbows and wrists get thin when they bend or twist</dt><dd>Linear blend skinning loses volume. Add helper joints, or use dual quaternion skinning.</dd></div>
+  <div><dt>An arm disappears at the edge of the screen</dt><dd>The mesh was culled with its bind-pose sphere. Use bounds that follow the joints.</dd></div>
+  <div><dt>Shadow maps cost much more with a character in them</dt><dd>Each shadow view skins the mesh again in its vertex shader. Skin once per frame and let every view read the result.</dd></div>
+  <div><dt>A walking character smears under TAA</dt><dd>Its motion vectors use this frame's posed vertex for both frames. Keep the frame before's posed vertices.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">7</span>In RASM</h2>
+
+<p>RASM skins on the GPU, once per frame. The import puts each skinned vertex's joints and weights into a stream of the geometry pool, beside the 64-byte vertex. The <code>Animate</code> pass (<a href="keyframe-animation.html#in-rasm">node animation</a>) also writes the joint matrices and each skinned sub-mesh's bounds. The <code>Skin</code> pass then writes the posed vertices, which the culling and draws of every view read.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 420" role="img" aria-label="Import: JOINTS_0 and WEIGHTS_0 become a 16-byte SkinVertex per vertex, four 16-bit joints and four 16-bit weights that add up to 65535, in the geometry pool's skin stream; the skin's joints and inverse bind matrices and one sphere per joint go to the animation pool. Each frame the Animate pass writes per entity the joint matrices into this slot's joint buffer and, per skinned sub-mesh, an InstanceTransform with the entity's matrix, the posed bounds, the first skinned vertex and the motion flag. The Skin pass, a group per entity row and 64 vertices, reads the base vertex, its SkinVertex and four joint matrices, and writes a posed 64-byte vertex to this slot's skinned vertex buffer. The views read it through getVertex, and the other slot's through getPreviousObjectPosition.">
+    <text x="20" y="22" class="title t-cpu">Import, once per mesh</text>
+    <rect x="20" y="34" width="200" height="40" rx="6" class="cpu"/>
+    <text x="120" y="52" class="mid mono small">JOINTS_n · WEIGHTS_n</text>
+    <text x="120" y="67" class="mid small">4 largest, scaled to 1</text>
+    <line x1="220" y1="54" x2="258" y2="54" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+    <rect x="260" y="34" width="232" height="40" rx="6" class="mem"/>
+    <text x="376" y="52" class="mid small">skin stream: 16 B per vertex</text>
+    <text x="376" y="67" class="mid mono small">4 × u16 joints · 4 × unorm16</text>
+    <rect x="510" y="34" width="230" height="40" rx="6" class="mem"/>
+    <text x="625" y="52" class="mid small">animation pool</text>
+    <text x="625" y="67" class="mid small">joints · inverse binds · spheres</text>
+
+    <text x="20" y="108" class="title t-gpu">Animate: a group per entity row</text>
+    <rect x="20" y="118" width="720" height="58" rx="6" class="gpu"/>
+    <circle cx="44" cy="147" r="10" class="badge"/><text x="44" y="151" class="badge-n">1</text>
+    <text x="62" y="143" class="small">nodes: local → world</text>
+    <text x="62" y="158" class="small">(node animation)</text>
+    <circle cx="234" cy="147" r="10" class="badge"/><text x="234" y="151" class="badge-n">2</text>
+    <text x="252" y="143" class="small">per joint: world ·</text>
+    <text x="252" y="158" class="small">inverseBind → joints</text>
+    <circle cx="424" cy="147" r="10" class="badge"/><text x="424" y="151" class="badge-n">3</text>
+    <text x="442" y="143" class="small">per skinned sub-mesh: InstanceTransform</text>
+    <text x="442" y="158" class="small">entity matrix, bounds, skinnedVertex</text>
+    <line x1="376" y1="74" x2="376" y2="116" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="625" y1="74" x2="625" y2="116" class="arrow mem" marker-end="url(#ah-mem)"/>
+
+    <rect x="20" y="200" width="230" height="40" rx="6" class="mem"/>
+    <text x="135" y="218" class="mid small">Joint Matrix Buffer (slot)</text>
+    <text x="135" y="233" class="mid small">48 B per joint per entity</text>
+    <rect x="510" y="200" width="230" height="40" rx="6" class="mem"/>
+    <text x="625" y="218" class="mid small">Animated Transform Buffer</text>
+    <text x="625" y="233" class="mid small">bounds read by every Cull</text>
+    <line x1="135" y1="176" x2="135" y2="198" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="625" y1="176" x2="625" y2="198" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+
+    <text x="160" y="272" class="title t-gpu">Skin: x = entity row, y = its next 64 vertices</text>
+    <rect x="20" y="282" width="480" height="44" rx="6" class="gpu"/>
+    <text x="34" y="300" class="small">M = Σ wᵢ · joints[first + jointᵢ]; position by M, normal by its</text>
+    <text x="34" y="316" class="small">cofactors, tangent by M's 3 × 3; UVs copied</text>
+    <line x1="135" y1="240" x2="135" y2="280" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="520" y="282" width="220" height="44" rx="6" class="mem"/>
+    <text x="630" y="300" class="mid small">Skinned Vertex Buffer</text>
+    <text x="630" y="316" class="mid small">64 B per vertex, one per slot</text>
+    <line x1="500" y1="304" x2="518" y2="304" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+
+    <line x1="630" y1="326" x2="630" y2="356" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="20" y="358" width="720" height="50" rx="6" class="cpu"/>
+    <text x="34" y="378" class="small">every view: camera, cascades, spot maps, cube faces</text>
+    <text x="34" y="396" class="mono small">getVertex · getPreviousObjectPosition · getWorldSphere</text>
+  </svg>
+  <figcaption>A row whose <code>InstanceTransform</code> has <code>skinnedVertex</code> = −1 reads the geometry pool, so static and rigid meshes run the same code as before.</figcaption>
+</figure>
+
+<p>Nothing new in the API: an entity with a skinned mesh plays a clip like any animated entity.</p>
+
+<pre><code>const rasm::MeshHandle fox = engine.loadGLTF("models/gltf/Fox/Fox.glb");
+engine.waitForLoads();
+const int32_t run = engine.findAnimation(fox, "Run");
+if (run >= 0)
+    engine.playAnimation(entity, {.clip = static_cast&lt;uint32_t&gt;(run)});</code></pre>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Joints and weights</td><td>up to 4 per vertex, adding up to 1</td><td><code>readSkinVertices</code> reads every pair of <code>JOINTS_n</code> / <code>WEIGHTS_n</code>, drops a weight whose joint is past the skin's joints, keeps the 4 largest (one warning per primitive that has more) and scales them to 1. A <code>SkinVertex</code> stores 4 16-bit joints and 4 UNORM16 weights that add up to 65535 exactly: the rounding's rest goes to the largest. A vertex with no weight follows joint 0.</td></tr>
+  <tr><td>Skins</td><td>joints and inverse bind matrices</td><td><code>importSkinJoints</code> puts each skin a sub-mesh uses once in <code>AnimationRaw::joints</code>: its kept node and its inverse bind matrix (the identity without the accessor). A skin's joints are always kept nodes, moved by a clip or not. A skin with a joint outside the scene leaves its sub-meshes unskinned.</td></tr>
+  <tr><td>The mesh's node</td><td>ignored</td><td>A skinned primitive's <code>SubGLTFRaw::transform</code> is the identity. The entity's matrix places the posed skin.</td></tr>
+  <tr><td>Where it skins</td><td>once per frame</td><td>The <code>Skin</code> pass (<code>skinMain</code>), an async compute pass right after <code>Animate</code>, writes 64-byte vertices to <code>GpuAnimation::skinnedVertices</code> of the slot. A group is a row of the animated entity table (x) and 64 of its skinned vertices (y), so an entity may have up to 65 535 · 64 of them. A stopped row returns at once.</td></tr>
+  <tr><td>Memory</td><td>a copy per slot</td><td>128 B per skinned vertex of each playing entity. The buffers grow on demand by doubling, with no config, and log their size; a growth restarts every entity's motion for one frame. The joint matrices take 48 B per joint per entity, per slot.</td></tr>
+  <tr><td>Bounds</td><td>a sphere per joint, the sphere around them</td><td><code>getJointSpheres</code> at import; <code>getSkinnedBounds</code> in <code>animate.slang</code> each frame, with <code>getStretch</code>, the same stretch bound as culling. The result goes to <code>InstanceTransform::boundsCenter</code> and <code>boundsRadius</code>, and <code>getWorldSphere</code> uses it in every view's culling, LOD choice and blend sort.</td></tr>
+  <tr><td>Motion vectors</td><td>the same vertex in the other slot</td><td><code>getPreviousObjectPosition</code> reads <code>SceneData::previousSkinnedVertsPtr</code> when <code>InstanceTransform::skinnedMotion</code> is 1. It is 0 in the frame an entity starts, a play jumps its clip, or the buffers grow (the rule of <code>AnimatedEntity::resetSync</code>), and then before = now.</td></tr>
+  <tr><td>LODs</td><td>—</td><td>The LODs share the sub-mesh's vertices, so every LOD draws the posed ones. They are simplified in the bind pose without looking at the weights, which can merge vertices of different joints: open.</td></tr>
+  <tr><td>Not playing</td><td>—</td><td>A skinned mesh that plays no clip draws its bind pose: the stored vertices with the entity's matrix.</td></tr>
+  <tr><td>Paused or off screen</td><td>skip the work</td><td>Every playing entity is skinned every frame, still or not, seen or not: <code>P18</code>.</td></tr>
+  <tr><td>Mirroring</td><td>—</td><td>A skinned sub-mesh is drawn without face culling when a clip can take one of its joints' scale to 0 or below (<code>animationCanMirror</code>).</td></tr>
+</table>
+</div>
+
+<p>See also the <a href="../api/scene.html#animation">API reference</a>, <a href="vertex-pulling.html">vertex pulling</a>, <a href="frustum-culling.html">frustum culling</a> and <a href="gpu-scene.html">the GPU scene tables</a>. <code>examples/13_skinning</code> plays CesiumMan, three foxes and RiggedFigure with shadows; <samp>--crowd 1000</samp> adds a crowd.</p>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The public types</td><td><code>SkinVertex</code>, <code>SubGLTFRaw</code> in <code>include/rasm/mesh.h</code>; <code>AnimationJoint</code>, <code>AnimationRaw</code> in <code>include/rasm/animation.h</code>; <code>EngineConfig::geometryPoolSkins</code> in <code>include/rasm/types.h</code></td></tr>
+  <tr><td>Import: weights, spheres, joints</td><td><code>readSkinVertices</code>, <code>getJointSpheres</code>, <code>importSkinJoints</code> in <code>src/assets/skinImport.cpp</code>, called from <code>src/assets/meshImport.cpp</code> and <code>importAnimations</code> in <code>src/assets/animationImport.cpp</code></td></tr>
+  <tr><td>The skin stream</td><td><code>GeometryPool::upload</code> in <code>src/renderer/geometryPool.cpp</code> (<code>GeometryData::skinOffset</code>); <code>weldVertices</code> in <code>src/assets/meshLod.cpp</code> keeps it with its vertices</td></tr>
+  <tr><td>The pool, the buffers, the passes</td><td><code>buildAnimationPoolData</code>, <code>Engine::uploadMeshAnimation</code>, <code>Engine::growAnimationBuffers</code>, <code>Engine::addAnimationPass</code>, <code>Engine::recordSkinning</code> in <code>src/renderer/animation.cpp</code></td></tr>
+  <tr><td>The shaders</td><td><code>animateMain</code> in <code>shaders/passes/animate.slang</code>; <code>skinMain</code> in <code>shaders/passes/skin.slang</code></td></tr>
+  <tr><td>The GPU structs</td><td><code>shaders/lib/animationTypes.slang</code>, <code>shaders/lib/geometryTypes.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
+  <tr><td>Reading posed vertices</td><td><code>getVertex</code>, <code>getPreviousObjectPosition</code> in <code>shaders/lib/core.slang</code>; <code>getWorldSphere</code> in <code>shaders/lib/frustumCulling.slang</code></td></tr>
+  <tr><td>Tests</td><td><code>tests/skinningTests.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>Every shader that reads a draw's vertices goes through <code>getVertex</code>, never <code>SceneData::vertsPtr</code> directly, or it draws a skinned mesh in its bind pose.</li>
+    <li>A skinned vertex has the base vertex's layout, so every view draws it with the same code.</li>
+    <li>Both slots' skinned vertex buffers grow together, after the GPU is done with them: a frame reads the other slot's.</li>
+    <li>The weights of a <code>SkinVertex</code> add up to 65535 exactly.</li>
+    <li>The skin stream is welded and reordered with its vertices, like the color stream.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>The Khronos Group, <i>glTF 2.0 Specification</i>, section 3.7.3 "Skins" and 3.7.2.1 "Joints and weights".</li>
+  <li>Ladislav Kavan, Steven Collins, Jiří Žára and Carol O'Sullivan, <i>Skinning with Dual Quaternions</i>, I3D 2007: a fix for the candy wrapper.</li>
+  <li>Jason Gregory, <i>Game Engine Architecture</i>, chapter "Animation Systems", section on skinning.</li>
+  <li><a href="keyframe-animation.html">Keyframe animation</a>, <a href="taa.html">Temporal anti-aliasing</a>, <a href="lod-selection.html">LOD selection</a>.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>
