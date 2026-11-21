@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="430" viewBox="0 0 960 430" font-family="Segoe UI, system-ui, -apple-system, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#55534d"/>
+    </marker>
+    <style>
+      .title  { font-size: 20px; font-weight: 700; fill: #1d1d1b; }
+      .label  { font-size: 13px; font-weight: 700; fill: #55534d; letter-spacing: .06em; }
+      .box    { font-size: 14px; fill: #1d1d1b; }
+      .small  { font-size: 12px; fill: #55534d; }
+      .mono   { font-family: Cascadia Code, Consolas, ui-monospace, monospace; font-size: 12px; fill: #1d1d1b; }
+      .flow   { stroke: #55534d; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+      .cpu    { fill: #dbe7fd; stroke: #2563eb; stroke-width: 1.5; }
+      .mem    { fill: #fbe8c8; stroke: #b45309; stroke-width: 1.5; }
+      .muted  { fill: #ebe8e0; stroke: #dcd8ce; stroke-width: 1.5; }
+      .new    { fill: #fde3d3; stroke: #c2410c; stroke-width: 2; stroke-dasharray: 5 3; }
+      .bad    { fill: #fbdcdc; stroke: #b91c1c; stroke-width: 1.5; }
+    </style>
+  </defs>
+
+  <rect width="960" height="430" rx="12" fill="#fbfaf7" stroke="#dcd8ce"/>
+  <text x="32" y="44" class="title">Pictures in PR descriptions</text>
+
+  <text x="32" y="92" class="label">TODAY</text>
+  <rect x="32" y="104" width="220" height="52" rx="8" class="cpu"/>
+  <text x="142" y="135" class="box" text-anchor="middle">PR body (markdown)</text>
+  <rect x="292" y="104" width="220" height="52" rx="8" class="bad"/>
+  <text x="402" y="126" class="box" text-anchor="middle">Mermaid flowchart</text>
+  <text x="402" y="144" class="small" text-anchor="middle">fixed shapes, no layout control</text>
+  <path d="M252,130 H288" class="flow"/>
+
+  <text x="32" y="212" class="label">AFTER</text>
+  <rect x="32" y="224" width="180" height="60" rx="8" class="new"/>
+  <text x="122" y="250" class="box" text-anchor="middle">SVG diagrams</text>
+  <text x="122" y="268" class="small" text-anchor="middle">+ verify-change PNGs</text>
+  <rect x="252" y="224" width="170" height="60" rx="8" class="new"/>
+  <text x="337" y="258" class="mono" text-anchor="middle">pr_assets.py</text>
+  <rect x="462" y="224" width="200" height="60" rx="8" class="mem"/>
+  <text x="562" y="250" class="box" text-anchor="middle">pr-assets branch</text>
+  <text x="562" y="268" class="small" text-anchor="middle">orphan, never merged</text>
+  <rect x="702" y="224" width="226" height="60" rx="8" class="cpu"/>
+  <text x="815" y="250" class="box" text-anchor="middle">PR body</text>
+  <text x="815" y="268" class="small" text-anchor="middle">&lt;img&gt; linked by commit hash</text>
+  <path d="M212,254 H248" class="flow"/>
+  <path d="M422,254 H458" class="flow"/>
+  <path d="M662,254 H698" class="flow"/>
+
+  <rect x="252" y="304" width="410" height="44" rx="8" class="muted"/>
+  <text x="457" y="331" class="small" text-anchor="middle">temporary worktree: your checkout and branch are never touched</text>
+
+  <g transform="translate(32,370)">
+    <rect width="16" height="16" rx="3" class="cpu"/>   <text x="24" y="13" class="small">text you read</text>
+    <rect x="130" width="16" height="16" rx="3" class="mem"/>  <text x="154" y="13" class="small">storage</text>
+    <rect x="240" width="16" height="16" rx="3" class="bad"/>  <text x="264" y="13" class="small">replaced</text>
+    <rect x="350" width="16" height="16" rx="3" class="new"/>  <text x="374" y="13" class="small">new in this PR</text>
+  </g>
+  <text x="32" y="410" class="mono">raw.githubusercontent.com/adel-elmala/rasm/&lt;sha&gt;/&lt;branch&gt;/how-it-works.svg</text>
+</svg>
