@@ -41,6 +41,9 @@ namespace rasm
             int index;
             glm::mat4 parentTransform;
         };
+
+        // The glTF extensions a file may require: the others change what the file means, so it fails to load.
+        const char *const SUPPORTED_EXTENSIONS[] = {"KHR_materials_unlit", "KHR_materials_emissive_strength", "KHR_texture_transform", "KHR_mesh_quantization"};
     }
 
     namespace
@@ -380,7 +383,21 @@ namespace rasm
                 uint32_t tangentComponents = 0;
                 const bool hasTangents = hasNormals && readVertexAttribute(model, primitive, "TANGENT", vertexCount, 4, tangents, tangentComponents, primitiveName);
 
-                // TODO: Extract all remaining vertex attributes (colors, joints, weights,...)
+                // COLOR_0 (OPTIONAL, VEC3 or VEC4, float or normalized), linear. It goes into its own stream: a mesh
+                // without it gets none.
+                std::vector<float> colorValues;
+                uint32_t colorComponents = 0;
+                const bool hasColors = readVertexAttribute(model, primitive, "COLOR_0", vertexCount, 3, colorValues, colorComponents, primitiveName);
+                std::vector<uint32_t> colors;
+                if (hasColors)
+                {
+                    colors.resize(vertexCount);
+                    for (size_t i = 0; i < vertexCount; ++i)
+                    {
+                        const float *c = &colorValues[i * colorComponents];
+                        colors[i] = packVertexColor(glm::vec4(c[0], c[1], c[2], colorComponents >= 4 ? c[3] : 1.0f));
+                    }
+                }
 
                 // Interleave the data into our standard Vertex struct
                 std::vector<Vertex> vertices(vertexCount);
@@ -458,7 +475,7 @@ namespace rasm
                 }
 
                 // Materials create textures, so the main thread turns the index into a handle (finishMeshLoad).
-                subGltfs.push_back({{std::move(vertices), std::move(indices)}, globalTransform, primitive.material});
+                subGltfs.push_back({{.vertices = std::move(vertices), .indices = std::move(indices), .colors = std::move(colors)}, globalTransform, primitive.material});
             }
 
             return subGltfs;
@@ -554,6 +571,23 @@ namespace rasm
             {
                 spdlog::error("Failed to load GLTF model: {}", path);
                 return {};
+            }
+
+            bool supported = true;
+            for (const std::string &extension : model->extensionsRequired)
+            {
+                if (std::find(std::begin(SUPPORTED_EXTENSIONS), std::end(SUPPORTED_EXTENSIONS), extension) == std::end(SUPPORTED_EXTENSIONS))
+                {
+                    spdlog::error("glTF {} requires the extension {}, which RASM does not support.", path, extension);
+                    supported = false;
+                }
+            }
+            if (!supported)
+                return {};
+            for (const std::string &extension : model->extensionsUsed)
+            {
+                if (std::find(std::begin(SUPPORTED_EXTENSIONS), std::end(SUPPORTED_EXTENSIONS), extension) == std::end(SUPPORTED_EXTENSIONS))
+                    spdlog::debug("glTF {} uses the extension {}, which RASM ignores.", path, extension);
             }
 
             GLTFRaw raw;

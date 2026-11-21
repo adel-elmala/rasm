@@ -66,6 +66,7 @@ struct PBRInfo
     float2      normalUV;            // UV coordinates for the normal map
     float2      occlusionUV;         // UV coordinates for the occlusion map
     float2      emissiveUV;          // UV coordinates for the emissive texture
+    float4      vertexColor;         // COLOR_0, linear; white without one
     uint        numLights;           // number of lights
     Light       lights[MAX_LIGHTS];  // array of lights
     float       shadows[MAX_LIGHTS]; // how much of each light reaches the fragment (shadow.slang), 1 without a shadow
@@ -83,7 +84,7 @@ float4 shadePBR(Sampler2D gTextures[], SamplerCube gCubeTextures[], PBRInfo pbrI
     // glTF defaults keep the render correct when a texture is absent: baseColor = factor only,
     // roughness/metallic = factors, occlusion = 1, emissive = 0, geometric normal.
 
-    float4 baseColorTex = sampleBaseColor(gTextures, pbrInfo.material.metallicRoughness, pbrInfo.baseColorUV);
+    float4 baseColorTex = sampleBaseColor(gTextures, pbrInfo.material.metallicRoughness, pbrInfo.baseColorUV, pbrInfo.vertexColor);
     float3 baseColor = baseColorTex.rgb;
 
     // glTF packs roughness in the G channel (green) and metallic in the B channel (blue)

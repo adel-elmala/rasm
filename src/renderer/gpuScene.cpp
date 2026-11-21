@@ -4,6 +4,7 @@
 #include "rasm/engine.h"
 #include "core/utils.h"
 #include "platform/paths.h"
+#include "renderer/blendSort.h"
 #include "renderer/environmentBake.h"
 #include "renderer/geometryPool.h"
 #include "renderer/localShadows.h"
@@ -38,6 +39,22 @@ namespace rasm
         uint64_t getVisibleDrawBufferSize(uint32_t capacity)
         {
             return getDrawCountsOffset(capacity) + gfx::MAX_DRAW_RUNS * sizeof(uint32_t);
+        }
+
+        // The blend sort's keys (a uint2 each), then the draws it copies aside (shaders/passes/sort.slang).
+        uint64_t getBlendSortBufferSize(uint32_t capacity)
+        {
+            return static_cast<uint64_t>(capacity) * (2 * sizeof(uint32_t) + sizeof(gfx::DrawInfo));
+        }
+
+        bool hasRun(const SceneDrawList &drawList, AlphaMode alphaMode)
+        {
+            for (const DrawRun &run : drawList.runs)
+            {
+                if (run.alphaMode == alphaMode)
+                    return true;
+            }
+            return false;
         }
 
         void destroyBuffer(RenderContext &ctx, BufferHandle &buffer)
@@ -139,10 +156,11 @@ namespace rasm
         }
 
         // glTF: a transform with a negative determinant mirrors the mesh, so its front faces turn clockwise (D8).
-        // det(T * R * S * M) = sx * sy * sz * det(M).
-        CullMode getCullMode(bool doubleSided, const Transform &transform, const glm::mat4 &meshTransform)
+        // det(T * R * S * M) = sx * sy * sz * det(M). The blend run is one run, so that it stays in one sorted order:
+        // fragBlend drops the back faces of a single-sided material instead.
+        CullMode getCullMode(const Material &material, const Transform &transform, const glm::mat4 &meshTransform)
         {
-            if (doubleSided)
+            if (material.doubleSided || material.alphaMode == AlphaMode::BLEND)
                 return CullMode::NONE;
             const float determinant = transform.scale.x * transform.scale.y * transform.scale.z * glm::determinant(glm::mat3(meshTransform));
             return determinant < 0.0f ? CullMode::FRONT : CullMode::BACK;
@@ -178,14 +196,32 @@ namespace rasm
             }
         }
 
+        bool isIdentity(const TextureTransform &transform)
+        {
+            return transform.offset == glm::vec2(0.0f) && transform.rotation == 0.0f && transform.scale == glm::vec2(1.0f);
+        }
+
+        // KHR_texture_transform's translation * rotation * scale, as the rows of a 2x2 and an offset.
+        gfx::TextureTransform toGfxTextureTransform(const TextureTransform &transform)
+        {
+            const float c = std::cos(transform.rotation);
+            const float s = std::sin(transform.rotation);
+            return {.matrix = glm::vec4(c * transform.scale.x, s * transform.scale.y, -s * transform.scale.x, c * transform.scale.y), .offset = transform.offset};
+        }
+
+        // The draw runs come in this order: OPAQUE then MASK, each by cull mode, then the one BLEND run.
+        uint32_t getRunKey(AlphaMode alphaMode, CullMode cullMode)
+        {
+            return static_cast<uint32_t>(alphaMode) * gfx::MAX_DRAW_RUNS + static_cast<uint32_t>(cullMode);
+        }
+
         gfx::Material convertToGfxMaterial(Engine &engine, const Material &mat)
         {
             gfx::Material gmat{};
 
-            // base color (albedo)
-            gmat.pbr.baseColorFactor[0] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO)];
-            gmat.pbr.baseColorFactor[1] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 1];
-            gmat.pbr.baseColorFactor[2] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 2];
+            // base color (albedo) and its alpha
+            for (uint32_t i = 0; i < 4; ++i)
+                gmat.pbr.baseColorFactor[i] = mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + i];
 
             // glTF texCoord set per texture; the shader selects the matching interpolated UV set.
             auto texCoordOf = [](uint32_t texCoord) -> uint32_t
@@ -212,16 +248,38 @@ namespace rasm
             // emissive map
             gmat.emissive.emissiveTextureIndex = engine.getBindlessTextureIndex(mat.textures[static_cast<uint32_t>(PbrSlot::EMISSIVE)]);
             gmat.emissive.emissiveTextureCoordinate = texCoordOf(mat.texCoords[static_cast<uint32_t>(PbrSlot::EMISSIVE)]);
-            gmat.emissive.emissiveFactor[0] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR)];
-            gmat.emissive.emissiveFactor[1] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + 1];
-            gmat.emissive.emissiveFactor[2] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + 2];
+            // KHR_materials_emissive_strength scales the factor, which may then pass 1.
+            const float emissiveStrength = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_STRENGTH)];
+            for (uint32_t i = 0; i < 3; ++i)
+                gmat.emissive.emissiveFactor[i] = mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + i] * emissiveStrength;
 
             return gmat;
+        }
+
+        // Most materials have no texture transform, so their shading skips the transforms and does not load them.
+        gfx::MaterialData toMaterialData(Engine &engine, const Material &mat)
+        {
+            gfx::MaterialData row{.material = convertToGfxMaterial(engine, mat),
+                                  .materialId = getGfxMaterialId(mat.type),
+                                  .alphaMode = mat.alphaMode,
+                                  .alphaCutoff = mat.alphaCutoff,
+                                  .flags = mat.doubleSided ? gfx::MATERIAL_DOUBLE_SIDED : 0u};
+            const PbrSlot transformSlots[gfx::TEXTURE_TRANSFORMS] = {PbrSlot::ALBEDO, PbrSlot::METALLIC, PbrSlot::NORMAL, PbrSlot::OCCLUSION, PbrSlot::EMISSIVE};
+            for (uint32_t i = 0; i < gfx::TEXTURE_TRANSFORMS; ++i)
+            {
+                const TextureTransform &transform = mat.textureTransforms[static_cast<uint32_t>(transformSlots[i])];
+                row.textureTransforms[i] = toGfxTextureTransform(transform);
+                if (!isIdentity(transform))
+                    row.flags |= gfx::MATERIAL_TEXTURE_TRANSFORM;
+            }
+            return row;
         }
     }
 
     static_assert(MAX_SCENES <= 16, "EntityDrawState::scenes has one bit per scene");
-    static_assert(static_cast<uint32_t>(CullMode::BACK) + 1 == gfx::MAX_DRAW_RUNS, "a draw list has one run per cull mode");
+    static_assert(2 * (static_cast<uint32_t>(CullMode::BACK) + 1) + 1 == gfx::MAX_DRAW_RUNS, "a draw list has a run per cull mode for OPAQUE and MASK, and one for BLEND");
+    static_assert(static_cast<uint32_t>(gfx::TextureTransformSlot::EMISSIVE) + 1 == gfx::TEXTURE_TRANSFORMS, "every texture transform slot has a row");
+    static_assert(static_cast<uint32_t>(BlendSortStep::WRITE) + 1 == BLEND_SORT_STEPS, "every sort step has a pipeline");
 
     bool Engine::createGpuScene()
     {
@@ -305,6 +363,7 @@ namespace rasm
                     state.waitingForTextures = !texturesLoaded(*this, entityRef, mesh);
                     gpuScene->instanceCount += rowCount;
                     gpuScene->instanceCullModes.resize(gpuScene->instanceCount, CullMode::NONE);
+                    gpuScene->instanceAlphaModes.resize(gpuScene->instanceCount, AlphaMode::NONE);
                     writeInstanceRows(entity);
                     if (state.waitingForTextures)
                         gpuScene->entitiesWaitingForTextures.push_back(entity);
@@ -382,11 +441,11 @@ namespace rasm
         }
 
         // A transform can start or stop mirroring the entity (D8).
-        updateCullModes(entity);
+        updateDrawModes(entity);
     }
 
-    // A changed cull mode moves the entity's draws to another cull-mode run, so its scenes rebuild their draw lists.
-    void Engine::updateCullModes(EntityHandle entity)
+    // A changed cull mode or alpha mode moves the entity's draws to another run, so its scenes rebuild their draw lists.
+    void Engine::updateDrawModes(EntityHandle entity)
     {
         const EntityDrawState &state = gpuScene->entities[entity.index];
         const Entity &entityRef = registry.entities[entity.index];
@@ -396,10 +455,13 @@ namespace rasm
         for (uint32_t i = 0; i < state.instanceCount; ++i)
         {
             const SubMesh &subMesh = mesh.subMeshes[i];
-            const CullMode cullMode = getCullMode(getSubMeshMaterial(*this, entityRef, subMesh).doubleSided, entityRef.transform, subMesh.transform);
+            const Material &material = getSubMeshMaterial(*this, entityRef, subMesh);
+            const CullMode cullMode = getCullMode(material, entityRef.transform, subMesh.transform);
             CullMode &storedCullMode = gpuScene->instanceCullModes[state.firstInstance + i];
-            changed = changed || storedCullMode != cullMode;
+            AlphaMode &storedAlphaMode = gpuScene->instanceAlphaModes[state.firstInstance + i];
+            changed = changed || storedCullMode != cullMode || storedAlphaMode != material.alphaMode;
             storedCullMode = cullMode;
+            storedAlphaMode = material.alphaMode;
         }
 
         // An entity that waits for textures is in no draw list yet.
@@ -418,7 +480,7 @@ namespace rasm
                 continue;
 
             const Entity &entityRef = registry.entities[i];
-            updateCullModes(entityRef.handle);
+            updateDrawModes(entityRef.handle);
             if (!state.waitingForTextures && !texturesLoaded(*this, entityRef, registry.meshes[entityRef.mesh.index]))
             {
                 state.waitingForTextures = true;
@@ -431,7 +493,7 @@ namespace rasm
     void Engine::writeMaterialRow(MaterialHandle material)
     {
         const Material &materialRef = registry.materials[material.index];
-        const gfx::MaterialData row{.material = convertToGfxMaterial(*this, materialRef), .materialId = getGfxMaterialId(materialRef.type)};
+        const gfx::MaterialData row = toMaterialData(*this, materialRef);
         gpuScene->materials.setRow(static_cast<uint32_t>(material.index), &row);
     }
 
@@ -491,15 +553,18 @@ namespace rasm
             }
         }
 
-        // drawSceneView issues one indirect draw per run of draws with the same cull mode.
+        // drawSceneView issues one indirect draw per run of draws with the same alpha mode and cull mode, and
+        // drawTransparent one for the blend run, which comes last.
         const auto &cullModes = gpuScene->instanceCullModes;
+        const auto &alphaModes = gpuScene->instanceAlphaModes;
         std::stable_sort(drawList.draws.begin(), drawList.draws.end(), [&](const gfx::DrawInfo &a, const gfx::DrawInfo &b)
-                         { return cullModes[a.firstInstance] < cullModes[b.firstInstance]; });
+                         { return getRunKey(alphaModes[a.firstInstance], cullModes[a.firstInstance]) < getRunKey(alphaModes[b.firstInstance], cullModes[b.firstInstance]); });
         for (uint32_t i = 0; i < drawList.draws.size(); ++i)
         {
+            const AlphaMode alphaMode = alphaModes[drawList.draws[i].firstInstance];
             const CullMode cullMode = cullModes[drawList.draws[i].firstInstance];
-            if (drawList.runs.empty() || drawList.runs.back().cullMode != cullMode)
-                drawList.runs.push_back({cullMode, i, 0});
+            if (drawList.runs.empty() || drawList.runs.back().alphaMode != alphaMode || drawList.runs.back().cullMode != cullMode)
+                drawList.runs.push_back({alphaMode, cullMode, i, 0});
             ++drawList.runs.back().count;
         }
 
@@ -734,9 +799,14 @@ namespace rasm
         const std::string prefix = depthOnly ? drawName + " " : "";
 
         // Each frame uses only its slot's draw list and Hi-Z, so culling the next frame does not wait for
-        // this frame's draws on the other queue.
+        // this frame's draws on the other queue. A shaded view's culling also sorts the blend run, in the late pass,
+        // or in the early one in a frame without a Hi-Z.
         auto writeCulling = [&sceneView](PassBuilder &builder)
-        { builder.write(sceneView.visibleDraws); };
+        {
+            builder.write(sceneView.visibleDraws);
+            if (!sceneView.depthOnly)
+                builder.write(sceneView.sortBuffers);
+        };
         auto drawScenePass = [&sceneView, renderTarget, face](PassBuilder &builder)
         {
             builder.read(sceneView.visibleDraws);
@@ -772,8 +842,19 @@ namespace rasm
                 if (!occlusion || gpuScene->views[view].hizLevelCount == 0)
                     drawSky(view);
             });
+        // See-through draws go over everything the draw passes and the sky left, so a shaded view ends with them. The
+        // pass is there even while the scene has no blend run, since the graph is fixed and the scene is not.
+        auto addTransparentPass = [&]()
+        {
+            if (!depthOnly)
+                graph.addPass("Transparent", drawScenePass, [this, view](RenderContext &)
+                              { drawTransparent(view); });
+        };
         if (!occlusion)
+        {
+            addTransparentPass();
             return true;
+        }
 
         graph.addAsyncComputePass(
             prefix + "Hi-Z",
@@ -807,6 +888,7 @@ namespace rasm
                 drawSceneView(view);
                 drawSky(view);
             });
+        addTransparentPass();
         return true;
     }
 
@@ -849,6 +931,23 @@ namespace rasm
                 spdlog::error("Failed to create the culling buffers of a scene view.");
                 for (auto &buffer : view.visibleDraws)
                     destroyBuffer(ctx, buffer);
+                return UINT32_MAX;
+            }
+        }
+
+        // A shaded view sorts its blend run; the buffers start at one block and grow under the same handles.
+        for (uint32_t i = 0; !depthOnly && i < MAX_FRAMES_IN_FLIGHT; ++i)
+        {
+            view.sortCapacity[i] = BLEND_SORT_BLOCK;
+            view.sortBuffers[i] = ctx.createBuffer({.name = "Blend Sort Buffer", .usage = BufferUsage::STORAGE, .size = getBlendSortBufferSize(BLEND_SORT_BLOCK)});
+            if (!view.sortBuffers[i].isValid())
+            {
+                spdlog::error("Failed to create the blend sort buffers of a scene view.");
+                for (uint32_t j = 0; j < MAX_FRAMES_IN_FLIGHT; ++j)
+                {
+                    destroyBuffer(ctx, view.visibleDraws[j]);
+                    destroyBuffer(ctx, view.sortBuffers[j]);
+                }
                 return UINT32_MAX;
             }
         }
@@ -900,6 +999,7 @@ namespace rasm
         {
             destroyBuffer(ctx, view.visibleDraws[i]);
             destroyBuffer(ctx, view.hiz[i]);
+            destroyBuffer(ctx, view.sortBuffers[i]);
         }
         destroyBuffer(ctx, view.visibility);
         view = {};
@@ -916,6 +1016,10 @@ namespace rasm
         view.ready = false;
         view.culled = false;
         view.sky = false;
+        view.drawMask = false;
+        view.drawBlend = false;
+        view.sortBlend = false;
+        view.blendRun = gfx::MAX_DRAW_RUNS;
         view.groupCount = 0;
         view.hizLevelCount = 0;
 
@@ -940,7 +1044,7 @@ namespace rasm
         // A shader error retries every frame, so a shader fixed on disk is picked up while the application runs.
         if (!view.depthOnly && !gpuScene->pipeline.isValid())
         {
-            gpuScene->pipeline = createPipeline("rasm", readFile(pathFromUtf8(config.shaderDir) / "passes/rasm.slang"), view.renderTarget);
+            gpuScene->pipeline = createScenePipeline("rasm", "passes/rasm.slang", "", view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true);
             if (!gpuScene->pipeline.isValid())
             {
                 spdlog::error("Failed to create the uber material pipeline for the scene.");
@@ -949,13 +1053,38 @@ namespace rasm
         }
         if (view.depthOnly && !gpuScene->depthPipeline.isValid())
         {
-            gpuScene->depthPipeline = createPipeline("shadow", readFile(pathFromUtf8(config.shaderDir) / "passes/shadow.slang"), view.renderTarget);
+            gpuScene->depthPipeline = createScenePipeline("shadow", "passes/shadow.slang", "", view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true);
             if (!gpuScene->depthPipeline.isValid())
             {
                 spdlog::error("Failed to create the depth-only pipeline for the scene.");
                 return;
             }
         }
+        // The pipelines of the other alpha modes are made once a scene has their draws, so a scene without them pays
+        // for no compile. A failed one leaves out only its runs. MASK and BLEND are rasm.slang's fragMain compiled with
+        // a define: an entry point that called the opaque one would be a function call that reads every varying up
+        // front, which costs the opaque draws, and Slang's API does not compile an entry point that calls another.
+        const bool hasMask = hasRun(drawList, AlphaMode::MASK);
+        const bool hasBlend = hasRun(drawList, AlphaMode::BLEND);
+        if (!view.depthOnly && hasMask && !gpuScene->maskPipeline.isValid())
+        {
+            gpuScene->maskPipeline = createScenePipeline("rasmMask", "passes/rasm.slang", "#define RASM_ALPHA_MASK 1\n", view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true);
+            if (!gpuScene->maskPipeline.isValid())
+                spdlog::error("Failed to create the MASK pipeline; the scene is drawn without its cut-out materials.");
+        }
+        if (!view.depthOnly && hasBlend && !gpuScene->blendPipeline.isValid())
+        {
+            gpuScene->blendPipeline = createScenePipeline("rasmBlend", "passes/rasm.slang", "#define RASM_ALPHA_BLEND 1\n", view.renderTarget, "vertMain", "fragMain", BlendMode::PREMULTIPLIED_ALPHA, false);
+            if (!gpuScene->blendPipeline.isValid())
+                spdlog::error("Failed to create the BLEND pipeline; the scene is drawn without its see-through materials.");
+        }
+        if (view.depthOnly && (hasMask || hasBlend) && !gpuScene->depthMaskPipeline.isValid())
+        {
+            gpuScene->depthMaskPipeline = createScenePipeline("shadowMask", "passes/shadow.slang", "", view.renderTarget, "vertMask", "fragMask", BlendMode::NONE, true);
+            if (!gpuScene->depthMaskPipeline.isValid())
+                spdlog::error("Failed to create the depth-only MASK pipeline; cut-out and see-through materials cast no shadow.");
+        }
+        view.drawMask = view.depthOnly ? gpuScene->depthMaskPipeline.isValid() : gpuScene->maskPipeline.isValid();
         // Without the culling pipelines the scene is still drawn, only unculled, so a culling shader error does not blank it.
         if (!gpuScene->cullCountPipeline.isValid() || !gpuScene->cullWritePipeline.isValid())
         {
@@ -966,6 +1095,44 @@ namespace rasm
                 spdlog::error("Failed to create the culling pipelines; the scene is drawn without culling.");
         }
         const bool culled = gpuScene->cullCountPipeline.isValid() && gpuScene->cullWritePipeline.isValid();
+
+        // A shaded view draws its blend run last, back to front: the run is sorted on the GPU once culling has packed it.
+        for (uint32_t i = 0; !view.depthOnly && i < drawList.runs.size(); ++i)
+        {
+            if (drawList.runs[i].alphaMode == AlphaMode::BLEND)
+                view.blendRun = i;
+        }
+        view.drawBlend = view.blendRun < gfx::MAX_DRAW_RUNS && gpuScene->blendPipeline.isValid();
+        bool sortPipelines = true;
+        for (const PipelineHandle &pipeline : gpuScene->sortPipelines)
+            sortPipelines = sortPipelines && pipeline.isValid();
+        if (view.drawBlend && culled && !sortPipelines)
+        {
+            const std::string sortSource = readFile(pathFromUtf8(config.shaderDir) / "passes/sort.slang");
+            const char *entryPoints[BLEND_SORT_STEPS] = {"sortKeysMain", "sortMergeMain", "sortLocalMergeMain", "sortWriteMain"};
+            sortPipelines = true;
+            for (uint32_t i = 0; i < BLEND_SORT_STEPS; ++i)
+            {
+                if (!gpuScene->sortPipelines[i].isValid())
+                    gpuScene->sortPipelines[i] = createComputePipeline("blendSort", sortSource, entryPoints[i]);
+                sortPipelines = sortPipelines && gpuScene->sortPipelines[i].isValid();
+            }
+            if (!sortPipelines)
+                spdlog::error("Failed to create the blend sort pipelines; see-through materials are drawn unsorted.");
+        }
+        if (view.drawBlend && culled && sortPipelines)
+        {
+            const uint32_t capacity = getBlendSortCapacity(drawList.runs[view.blendRun].count);
+            uint32_t &sortCapacity = view.sortCapacity[frame];
+            if (sortCapacity < capacity)
+            {
+                if (ctx.resizeBuffer(view.sortBuffers[frame], getBlendSortBufferSize(capacity)))
+                    sortCapacity = capacity;
+                else
+                    spdlog::error("Failed to grow a blend sort buffer to {} draws; see-through materials are drawn unsorted.", capacity);
+            }
+            view.sortBlend = sortCapacity >= capacity;
+        }
 
         // Without the Hi-Z pipeline it is still frustum culled.
         if (culled && config.occlusionCulling && !gpuScene->hizPipeline.isValid())
@@ -1102,10 +1269,21 @@ namespace rasm
             sceneData.visibilityPtr = ctx.getBufferDeviceAddress(view.visibility);
             sceneData.hizPtr = ctx.getBufferDeviceAddress(view.hiz[frame]);
         }
+        sceneData.colorsPtr = ctx.getBufferDeviceAddress(geometryPool->colorBuffer());
+        if (view.sortBlend)
+        {
+            const uint32_t sortCapacity = getBlendSortCapacity(drawList.runs[view.blendRun].count);
+            sceneData.sortKeysPtr = ctx.getBufferDeviceAddress(view.sortBuffers[frame]);
+            sceneData.sortDrawsPtr = sceneData.sortKeysPtr + static_cast<uint64_t>(sortCapacity) * 2 * sizeof(uint32_t);
+            sceneData.sortCapacity = sortCapacity;
+        }
         sceneData.drawCount = drawCount;
         sceneData.runCount = static_cast<uint32_t>(drawList.runs.size());
         for (uint32_t i = 0; i < sceneData.runCount; ++i)
             sceneData.runFirst[i] = drawList.runs[i].first;
+        // Culling keeps the blend run for the late phase only, and the Transparent pass draws it. A depth-only view
+        // draws it like any other run, so it has no blend run.
+        sceneData.blendRun = view.blendRun;
         sceneData.hizLevelCount = view.hizLevelCount;
         sceneData.depthTexture = depthSlot;
         sceneData.viewportWidth = width;
@@ -1185,6 +1363,39 @@ namespace rasm
         ctx.bindPipeline(commandBuffer, gpuScene->cullWritePipeline);
         ctx.pushConstants(commandBuffer, gpuScene->cullWritePipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatch(commandBuffer, view.groupCount);
+
+        // The phase that keeps the blend run's draws: the late one, or the only one in a frame without a Hi-Z.
+        if (view.sortBlend && (phase == CULL_LATE || view.hizLevelCount == 0))
+        {
+            ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE);
+            recordBlendSort(viewIndex);
+        }
+    }
+
+    // A bitonic sort of the blend run's visible draws, back to front, in place (shaders/passes/sort.slang). Its size
+    // is the run's, not its visible count, which only the GPU knows: the draws past the count sort to the end.
+    void Engine::recordBlendSort(uint32_t viewIndex)
+    {
+        const SceneView &view = gpuScene->views[viewIndex];
+        const auto frame = static_cast<uint32_t>(frameCount);
+        const auto commandBuffer = frameResources[frame].commandBuffer;
+        const uint32_t capacity = getBlendSortCapacity(gpuScene->drawLists[view.scene.index].runs[view.blendRun].count);
+        BlendSortDispatch dispatches[MAX_BLEND_SORT_DISPATCHES];
+        const uint32_t dispatchCount = std::min(getBlendSortDispatches(capacity, dispatches, MAX_BLEND_SORT_DISPATCHES), MAX_BLEND_SORT_DISPATCHES);
+
+        const uint32_t timer = beginGpuTimer(commandBuffer, "Blend Sort");
+        gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, frame, viewIndex)};
+        for (uint32_t i = 0; i < dispatchCount; ++i)
+        {
+            if (i > 0)
+                ctx.memoryBarrier(commandBuffer, PipelineStage::COMPUTE, PipelineStage::COMPUTE);
+            const PipelineHandle pipeline = gpuScene->sortPipelines[static_cast<uint32_t>(dispatches[i].step)];
+            pushConstants.argument = dispatches[i].argument;
+            ctx.bindPipeline(commandBuffer, pipeline);
+            ctx.pushConstants(commandBuffer, pipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+            ctx.dispatch(commandBuffer, dispatches[i].groups);
+        }
+        endGpuTimer(commandBuffer, timer);
     }
 
     // Each level reads the one before, level 0 the depth the early draws left.
@@ -1224,15 +1435,26 @@ namespace rasm
         const auto &drawList = gpuScene->drawLists[view.scene.index];
         const auto commandBuffer = frameResources[frame].commandBuffer;
         const uint64_t drawCountsOffset = getDrawCountsOffset(view.visibleCapacity[frame]);
-        const PipelineHandle pipeline = view.depthOnly ? gpuScene->depthPipeline : gpuScene->pipeline;
-        ctx.bindPipeline(commandBuffer, pipeline);
-        ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
         ctx.bindIndexBuffer(commandBuffer, geometryPool->indexBuffer(), 0, Format::U32_UINT);
 
+        // Opaque draws use the pipeline that never discards; a depth-only view draws MASK and BLEND with its cut-out one,
+        // and a shaded view leaves BLEND to the Transparent pass.
+        PipelineHandle bound = {};
         gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, static_cast<uint32_t>(frameCount), viewIndex)};
         for (uint32_t i = 0; i < drawList.runs.size(); ++i)
         {
             const DrawRun &run = drawList.runs[i];
+            if (i == view.blendRun || (run.alphaMode != AlphaMode::NONE && !view.drawMask))
+                continue;
+            PipelineHandle pipeline = view.depthOnly ? gpuScene->depthPipeline : gpuScene->pipeline;
+            if (run.alphaMode != AlphaMode::NONE)
+                pipeline = view.depthOnly ? gpuScene->depthMaskPipeline : gpuScene->maskPipeline;
+            if (pipeline != bound)
+            {
+                ctx.bindPipeline(commandBuffer, pipeline);
+                ctx.bindDescriptorSet(commandBuffer, pipeline, bindlessDescriptorSet, 0);
+                bound = pipeline;
+            }
             pushConstants.firstDraw = run.first;
             // Through a mirrored view the front faces turn clockwise, so the side to cull swaps.
             CullMode cullMode = run.cullMode;
@@ -1250,6 +1472,30 @@ namespace rasm
         ctx.setCullMode(commandBuffer, CullMode::NONE);
     }
 
+    // The blend run, after the view's draws and its sky: depth tested against them, but not written, so each see-through
+    // surface blends over what is behind it, in the order the sort left (back to front; unsorted without culling).
+    void Engine::drawTransparent(uint32_t viewIndex)
+    {
+        const SceneView &view = gpuScene->views[viewIndex];
+        if (!view.ready || !view.drawBlend)
+            return;
+
+        const auto frame = static_cast<uint32_t>(frameCount);
+        const DrawRun &run = gpuScene->drawLists[view.scene.index].runs[view.blendRun];
+        const auto commandBuffer = frameResources[frame].commandBuffer;
+        const gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, frame, viewIndex), .firstDraw = run.first};
+        ctx.bindPipeline(commandBuffer, gpuScene->blendPipeline);
+        ctx.bindDescriptorSet(commandBuffer, gpuScene->blendPipeline, bindlessDescriptorSet, 0);
+        ctx.bindIndexBuffer(commandBuffer, geometryPool->indexBuffer(), 0, Format::U32_UINT);
+        ctx.setCullMode(commandBuffer, CullMode::NONE);
+        ctx.pushConstants(commandBuffer, gpuScene->blendPipeline, ShaderType::VERTEX_FRAGMENT, &pushConstants, sizeof(pushConstants), 0);
+        if (view.culled)
+            ctx.drawIndexedIndirectCount(commandBuffer, view.visibleDraws[frame], run.first * sizeof(gfx::DrawInfo), view.visibleDraws[frame],
+                                         getDrawCountsOffset(view.visibleCapacity[frame]) + view.blendRun * sizeof(uint32_t), run.count, sizeof(gfx::DrawInfo));
+        else
+            ctx.drawIndexedIndirect(commandBuffer, gpuScene->drawLists[view.scene.index].buffers[frame], run.first * sizeof(gfx::DrawInfo), run.count, sizeof(gfx::DrawInfo));
+    }
+
     // One triangle at the far plane, after the view's draws: the depth test passes only where they left the clear
     // depth (0, reversed-Z), so the sky costs only the pixels it shows.
     void Engine::drawSky(uint32_t viewIndex)
@@ -1259,7 +1505,7 @@ namespace rasm
             return;
         if (!gpuScene->skyPipeline.isValid())
         {
-            gpuScene->skyPipeline = createPipeline("sky", readFile(pathFromUtf8(config.shaderDir) / "passes/sky.slang"), view.renderTarget);
+            gpuScene->skyPipeline = createScenePipeline("sky", "passes/sky.slang", "", view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true);
             if (!gpuScene->skyPipeline.isValid())
             {
                 spdlog::error("Failed to create the sky pipeline; the scene has no sky.");

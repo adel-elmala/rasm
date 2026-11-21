@@ -18,6 +18,8 @@
 //   CULL_LATE: tests every draw in the frustum against the Hi-Z, stores the result for the next early
 //   pass, and keeps the visible draws the early pass did not draw.
 // A view with hizLevelCount == 0 only runs CULL_EARLY, as frustum culling.
+// The blend run (SceneData::blendRun) is drawn by the Transparent pass after both draw passes, so the early phase
+// keeps none of its draws and the late phase keeps all that pass, sorted afterwards by passes/sort.slang.
 
 static const uint   CULL_GROUP_SIZE     = 64;           // Must match CULL_GROUP_SIZE in gpuScene.cpp.
 static const uint   CULLED              = 0xFFFFFFFF;   // cullSlotsPtr of a culled draw
@@ -105,7 +107,8 @@ void countMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
         }
         else if (pc.argument == CULL_EARLY)
         {
-            visible     = inFrustum && scene->visibilityPtr[draw.firstInstance] != 0;
+            // The blend run is drawn once, after both draw passes, so only the late phase keeps its draws.
+            visible     = inFrustum && scene->visibilityPtr[draw.firstInstance] != 0 && group.run != scene->blendRun;
         }
         else
         {

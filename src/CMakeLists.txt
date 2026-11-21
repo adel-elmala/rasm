@@ -37,6 +37,7 @@ target_sources(rasm PRIVATE
     "scene/camera.cpp"
     "scene/light.cpp"
     "scene/transform.cpp"
+    "renderer/blendSort.cpp"
     "renderer/environmentBake.cpp"
     "renderer/frameStats.cpp"
     "renderer/geometryPool.cpp"

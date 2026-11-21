@@ -180,10 +180,15 @@ namespace rasm
                                      {"cullStatsPtr", offsetof(gfx::SceneData, cullStatsPtr)},
                                      {"visibilityPtr", offsetof(gfx::SceneData, visibilityPtr)},
                                      {"hizPtr", offsetof(gfx::SceneData, hizPtr)},
+                                     {"colorsPtr", offsetof(gfx::SceneData, colorsPtr)},
+                                     {"sortKeysPtr", offsetof(gfx::SceneData, sortKeysPtr)},
+                                     {"sortDrawsPtr", offsetof(gfx::SceneData, sortDrawsPtr)},
                                      {"frustumPlanes", offsetof(gfx::SceneData, frustumPlanes)},
                                      {"drawCount", offsetof(gfx::SceneData, drawCount)},
                                      {"runCount", offsetof(gfx::SceneData, runCount)},
                                      {"runFirst", offsetof(gfx::SceneData, runFirst)},
+                                     {"blendRun", offsetof(gfx::SceneData, blendRun)},
+                                     {"sortCapacity", offsetof(gfx::SceneData, sortCapacity)},
                                      {"hizLevelCount", offsetof(gfx::SceneData, hizLevelCount)},
                                      {"depthTexture", offsetof(gfx::SceneData, depthTexture)},
                                      {"viewportWidth", offsetof(gfx::SceneData, viewportWidth)},
@@ -242,7 +247,8 @@ namespace rasm
                                      {"boundsCenter", offsetof(gfx::GeometryData, boundsCenter)},
                                      {"boundsRadius", offsetof(gfx::GeometryData, boundsRadius)},
                                      {"lodCount", offsetof(gfx::GeometryData, lodCount)},
-                                     {"lods", offsetof(gfx::GeometryData, lods)}});
+                                     {"lods", offsetof(gfx::GeometryData, lods)},
+                                     {"colorOffset", offsetof(gfx::GeometryData, colorOffset)}});
 
             valid &= validateStruct(fieldStruct(fieldStruct(scene, "geometryPtr"), "lods"), "GeometryLod", sizeof(gfx::GeometryLod),
                                     {{"firstIndex", offsetof(gfx::GeometryLod, firstIndex)},
@@ -251,13 +257,21 @@ namespace rasm
 
             valid &= validateStruct(materialData, "MaterialData", sizeof(gfx::MaterialData),
                                     {{"material", offsetof(gfx::MaterialData, material)},
-                                     {"materialId", offsetof(gfx::MaterialData, materialId)}});
+                                     {"materialId", offsetof(gfx::MaterialData, materialId)},
+                                     {"alphaMode", offsetof(gfx::MaterialData, alphaMode)},
+                                     {"alphaCutoff", offsetof(gfx::MaterialData, alphaCutoff)},
+                                     {"flags", offsetof(gfx::MaterialData, flags)},
+                                     {"textureTransforms", offsetof(gfx::MaterialData, textureTransforms)}});
 
             valid &= validateStruct(material, "Material", sizeof(gfx::Material),
                                     {{"metallicRoughness", offsetof(gfx::Material, pbr)},
                                      {"normal", offsetof(gfx::Material, normal)},
                                      {"occlusion", offsetof(gfx::Material, occlusion)},
                                      {"emissive", offsetof(gfx::Material, emissive)}});
+
+            valid &= validateStruct(fieldStruct(materialData, "textureTransforms"), "TextureTransform", sizeof(gfx::TextureTransform),
+                                    {{"matrix", offsetof(gfx::TextureTransform, matrix)},
+                                     {"offset", offsetof(gfx::TextureTransform, offset)}});
 
             valid &= validateStruct(fieldStruct(material, "metallicRoughness"), "MetallicRoughnessMaterial", sizeof(gfx::MetallicRoughnessMaterial),
                                     {{"baseColorFactor", offsetof(gfx::MetallicRoughnessMaterial, baseColorFactor)},

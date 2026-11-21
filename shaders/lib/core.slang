@@ -4,11 +4,26 @@
 // Constants
 static const uint   MAX_LIGHTS          = 8;
 static const uint   INVALID_TEXTURE_INDEX = 0xFFFFFFFF;
-// One draw run per cull mode. Must match rasm::gfx::MAX_DRAW_RUNS.
-static const uint   MAX_DRAW_RUNS       = 3;
+// A run per alpha mode and cull mode, and one blend run. Must match rasm::gfx::MAX_DRAW_RUNS.
+static const uint   MAX_DRAW_RUNS       = 7;
 
 // Selects how fragMain shades a model. Must match rasm::gfx::MaterialId.
 enum class MaterialId : uint32_t { PBR, UNLIT };
+
+// Must match rasm::AlphaMode.
+enum class AlphaMode : uint32_t { NONE, MASK, BLEND };
+
+// The textures with a KHR_texture_transform each, in Material::textureTransforms. Must match rasm::gfx::TextureTransformSlot.
+static const uint   TEXTURE_TRANSFORMS              = 5;
+static const uint   TRANSFORM_BASE_COLOR            = 0;
+static const uint   TRANSFORM_METALLIC_ROUGHNESS    = 1;
+static const uint   TRANSFORM_NORMAL                = 2;
+static const uint   TRANSFORM_OCCLUSION             = 3;
+static const uint   TRANSFORM_EMISSIVE              = 4;
+
+// MaterialData::flags. Must match rasm::gfx::MATERIAL_*.
+static const uint   MATERIAL_DOUBLE_SIDED           = 1 << 0;
+static const uint   MATERIAL_TEXTURE_TRANSFORM      = 1 << 1;   // a texture has a KHR_texture_transform that is not the identity
 
 // Must match rasm::Vertex / rasm::gfx::VertexFull (scalar layout). Unused UV sets are zero.
 // tangent.w is the bitangent sign (±1), or 0 when the mesh has no tangents.
@@ -62,7 +77,7 @@ struct ShadowMap
 
 struct MetallicRoughnessMaterial
 {
-    float3      baseColorFactor;
+    float4      baseColorFactor;
     uint32_t    baseColorTextureIndex;
     uint32_t    baseColorTextureCoordinate; // TEXCOORD_0 / TEXCOORD_1 ,...
     uint32_t    metallicRoughnessTextureIndex;
@@ -92,18 +107,31 @@ struct EmissiveMaterial
     float3      emissiveFactor;
 };
 
+// KHR_texture_transform: uv' = (dot(matrix.xy, uv), dot(matrix.zw, uv)) + offset. Identity without the extension.
+struct TextureTransform
+{
+    float4      matrix;
+    float2      offset;
+};
+
 struct Material
 {
     MetallicRoughnessMaterial   metallicRoughness;
     NormalMaterial              normal;
     OcclusionMaterial           occlusion;
-    EmissiveMaterial            emissive;
+    EmissiveMaterial            emissive;           // emissiveFactor holds KHR_materials_emissive_strength too
 };
 
+// The texture transforms come after the rest, so a shader copies Material without them and reads them only for a
+// material whose flags have MATERIAL_TEXTURE_TRANSFORM.
 struct MaterialData
 {
-    Material        material;
-    MaterialId      materialId;
+    Material            material;
+    MaterialId          materialId;
+    AlphaMode           alphaMode;
+    float               alphaCutoff;
+    uint32_t            flags;
+    TextureTransform    textureTransforms[TEXTURE_TRANSFORMS];
 };
 
 struct InstanceData
@@ -129,6 +157,7 @@ struct GeometryData
     float           boundsRadius;
     uint32_t        lodCount;
     GeometryLod     lods[MAX_MESH_LODS];
+    int32_t         colorOffset;        // the sub-mesh's first color in SceneData::colorsPtr, -1 without vertex colors
 };
 
 struct SceneData
@@ -150,10 +179,15 @@ struct SceneData
     uint32_t*           cullStatsPtr;       // the frame's visible draws, triangles and LODs, added up by cull.slang (STATS_* there)
     uint32_t*           visibilityPtr;      // per instance row: 1 if the last occlusion test saw it, read by the early cull
     float*              hizPtr;             // the call's Hi-Z: farthest depth per texel, levels packed one after another
+    uint32_t*           colorsPtr;          // the vertex color pool: RGBA8, RGB sRGB-encoded (GeometryData::colorOffset)
+    uint2*              sortKeysPtr;        // the blend sort's keys: (~view depth, draw), sortCapacity of them (sort.slang)
+    DrawInfo*           sortDrawsPtr;       // the blend sort's copy of the blend run's visible draws
     float4              frustumPlanes[6];   // world space, inside where dot(xyz, p) + w >= 0
     uint32_t            drawCount;
     uint32_t            runCount;
     uint32_t            runFirst[MAX_DRAW_RUNS];
+    uint32_t            blendRun;           // the run the Transparent pass draws, sorted back to front; MAX_DRAW_RUNS without one
+    uint32_t            sortCapacity;
     uint32_t            hizLevelCount;      // 0: no occlusion culling for this call
     uint32_t            depthTexture;       // bindless index of the pass's depth texture
     uint32_t            viewportWidth;      // the pass's size in pixels
@@ -201,10 +235,10 @@ bool hasTexture(uint textureIndex)
     return textureIndex != INVALID_TEXTURE_INDEX;
 }
 
-// glTF base color: factor * texture, or the factor alone when the material has no texture.
-float4 sampleBaseColor(Sampler2D gTextures[], MetallicRoughnessMaterial material, float2 uv)
+// glTF base color: factor * texture * COLOR_0, or without the texture when the material has none.
+float4 sampleBaseColor(Sampler2D gTextures[], MetallicRoughnessMaterial material, float2 uv, float4 vertexColor)
 {
-    float4 color = float4(material.baseColorFactor, 1.0);
+    float4 color = material.baseColorFactor * vertexColor;
     if (hasTexture(material.baseColorTextureIndex))
         color *= gTextures[material.baseColorTextureIndex].Sample(uv);
     return color;
@@ -217,5 +251,51 @@ float2 selectUV(uint texCoordSet, float2 uv0, float2 uv1, float2 uv2)
     if (texCoordSet == 1) return uv1;
     if (texCoordSet == 2) return uv2;
     return uv0;
+}
+
+float2 applyTextureTransform(TextureTransform transform, float2 uv)
+{
+    return float2(dot(transform.matrix.xy, uv), dot(transform.matrix.zw, uv)) + transform.offset;
+}
+
+// The UV set one texture asked for, through its KHR_texture_transform. The flag is the same for the whole draw, so the
+// branch is uniform, and a material without transforms does not load them. A shader that reads several textures
+// branches once for all of them instead (fragMain): a branch per texture costs the opaque draws about 6% (05_city).
+float2 getTextureUV(MaterialData *material, uint transform, uint texCoordSet, float2 uv0, float2 uv1, float2 uv2)
+{
+    float2 uv = selectUV(texCoordSet, uv0, uv1, uv2);
+    if ((material->flags & MATERIAL_TEXTURE_TRANSFORM) == 0)
+        return uv;
+    return applyTextureTransform(material->textureTransforms[transform], uv);
+}
+
+float decodeSrgb(float encoded)
+{
+    return encoded <= 0.04045 ? encoded / 12.92 : pow((encoded + 0.055) / 1.055, 2.4);
+}
+
+// A vertex's COLOR_0 as linear RGBA, white for a sub-mesh without colors (the color stream, geometryPool.cpp). The
+// stream is indexed like the vertices, by the sub-mesh's own index.
+float4 getVertexColor(SceneData *scene, uint geometryIndex, uint vertexIndex)
+{
+    int colorOffset = scene->geometryPtr[geometryIndex].colorOffset;
+    if (colorOffset < 0)
+        return float4(1.0);
+    uint packed = scene->colorsPtr[uint(colorOffset) + vertexIndex];
+    float4 color = float4(packed & 0xFF, (packed >> 8) & 0xFF, (packed >> 16) & 0xFF, packed >> 24) / 255.0;
+    return float4(decodeSrgb(color.r), decodeSrgb(color.g), decodeSrgb(color.b), color.a);
+}
+
+// The base color's alpha, all the alpha modes test: factor * texture * COLOR_0.
+float getBaseAlpha(Sampler2D gTextures[], MaterialData *material, float2 uv0, float2 uv1, float2 uv2, float vertexAlpha)
+{
+    float alpha = material->material.metallicRoughness.baseColorFactor.a * vertexAlpha;
+    uint texture = material->material.metallicRoughness.baseColorTextureIndex;
+    if (hasTexture(texture))
+    {
+        float2 uv = getTextureUV(material, TRANSFORM_BASE_COLOR, material->material.metallicRoughness.baseColorTextureCoordinate, uv0, uv1, uv2);
+        alpha *= gTextures[texture].Sample(uv).a;
+    }
+    return alpha;
 }
 // clang-format on

@@ -28,6 +28,42 @@ namespace rasm
                 return nearest ? SamplerType::NEAREST_REPEAT : SamplerType::LINEAR_REPEAT;
             }
         }
+
+        float getNumber(const tinygltf::Value &object, const char *name, float fallback)
+        {
+            const tinygltf::Value &value = object.Get(name);
+            return value.IsNumber() ? static_cast<float>(value.GetNumberAsDouble()) : fallback;
+        }
+
+        glm::vec2 getVec2(const tinygltf::Value &object, const char *name, glm::vec2 fallback)
+        {
+            const tinygltf::Value &value = object.Get(name);
+            if (!value.IsArray() || value.ArrayLen() < 2 || !value.Get(0).IsNumber() || !value.Get(1).IsNumber())
+                return fallback;
+            return glm::vec2(static_cast<float>(value.Get(0).GetNumberAsDouble()), static_cast<float>(value.Get(1).GetNumberAsDouble()));
+        }
+
+        // KHR_texture_transform on a texture reference. Its texCoord, when present, replaces the reference's.
+        TextureTransform getTextureTransform(const tinygltf::ExtensionMap &extensions, int &texCoord)
+        {
+            auto it = extensions.find("KHR_texture_transform");
+            if (it == extensions.end() || !it->second.IsObject())
+                return {};
+            const tinygltf::Value &transform = it->second;
+            const tinygltf::Value &transformTexCoord = transform.Get("texCoord");
+            if (transformTexCoord.IsInt())
+                texCoord = transformTexCoord.GetNumberAsInt();
+            return {.offset = getVec2(transform, "offset", glm::vec2(0.0f)), .rotation = getNumber(transform, "rotation", 0.0f), .scale = getVec2(transform, "scale", glm::vec2(1.0f))};
+        }
+
+        AlphaMode toAlphaMode(const std::string &alphaMode)
+        {
+            if (alphaMode == "MASK")
+                return AlphaMode::MASK;
+            if (alphaMode == "BLEND")
+                return AlphaMode::BLEND;
+            return AlphaMode::NONE;
+        }
     }
 
     MaterialHandle Engine::createMaterial(MaterialType type, std::vector<TextureHandle> textures, bool doubleSided)
@@ -48,10 +84,12 @@ namespace rasm
         material.params[static_cast<uint32_t>(PbrParam::ALBEDO)]                = 1.0f;
         material.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 1]            = 1.0f;
         material.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 2]            = 1.0f;
+        material.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 3]            = 1.0f;
         material.params[static_cast<uint32_t>(PbrParam::METALLIC)]              = 0.0f;
         material.params[static_cast<uint32_t>(PbrParam::ROUGHNESS)]             = 1.0f;
         material.params[static_cast<uint32_t>(PbrParam::NORMAL_SCALE)]          = 1.0f;
         material.params[static_cast<uint32_t>(PbrParam::OCCLUSION_STRENGTH)]    = 1.0f;
+        material.params[static_cast<uint32_t>(PbrParam::EMISSIVE_STRENGTH)]     = 1.0f;
         // clang-format on
         if (!textures.empty())
         {
@@ -104,14 +142,14 @@ namespace rasm
         }
 
         Material &materialRef = registry.materials[material.index];
-        const bool doubleSidedChanged = materialRef.doubleSided != values.doubleSided;
+        const bool runChanged = materialRef.doubleSided != values.doubleSided || materialRef.alphaMode != values.alphaMode;
         materialRef = values;
         materialRef.handle = material;
         writeMaterialRow(material);
 
-        // doubleSided picks the cull mode of the material's instances, and an entity with a texture that still loads is
-        // not drawn. Both are rare, so every entity is checked instead of tracking who uses the material.
-        if (doubleSidedChanged || texturesLoading)
+        // doubleSided and alphaMode pick the draw run of the material's instances, and an entity with a texture that
+        // still loads is not drawn. All are rare, so every entity is checked instead of tracking who uses the material.
+        if (runChanged || texturesLoading)
             refreshEntitiesAfterMaterialChange();
     }
 
@@ -138,6 +176,8 @@ namespace rasm
         if (material->extensions.count("KHR_materials_unlit") != 0)
             mat.type = MaterialType::UNLIT;
         mat.doubleSided = material->doubleSided;
+        mat.alphaMode = toAlphaMode(material->alphaMode);
+        mat.alphaCutoff = static_cast<float>(material->alphaCutoff);
 
         // glTF lets each texture pick its own TEXCOORD_n set. The vertex data carries
         // MAX_VERTEX_UV_SETS sets; anything beyond that is out of our support for now.
@@ -152,12 +192,19 @@ namespace rasm
             return static_cast<uint32_t>(texCoord);
         };
 
-        mat.texCoords[static_cast<uint32_t>(PbrSlot::ALBEDO)] = resolveTexCoord(material->pbrMetallicRoughness.baseColorTexture.texCoord, "baseColor");
-        mat.texCoords[static_cast<uint32_t>(PbrSlot::METALLIC)] = resolveTexCoord(material->pbrMetallicRoughness.metallicRoughnessTexture.texCoord, "metallicRoughness");
-        mat.texCoords[static_cast<uint32_t>(PbrSlot::ROUGHNESS)] = mat.texCoords[static_cast<uint32_t>(PbrSlot::METALLIC)];
-        mat.texCoords[static_cast<uint32_t>(PbrSlot::NORMAL)] = resolveTexCoord(material->normalTexture.texCoord, "normal");
-        mat.texCoords[static_cast<uint32_t>(PbrSlot::OCCLUSION)] = resolveTexCoord(material->occlusionTexture.texCoord, "occlusion");
-        mat.texCoords[static_cast<uint32_t>(PbrSlot::EMISSIVE)] = resolveTexCoord(material->emissiveTexture.texCoord, "emissive");
+        // KHR_texture_transform may name another texCoord set, so the transform is read first.
+        auto readTexture = [&](PbrSlot slot, int texCoord, const tinygltf::ExtensionMap &extensions, const char *slotName)
+        {
+            const auto index = static_cast<uint32_t>(slot);
+            mat.textureTransforms[index] = getTextureTransform(extensions, texCoord);
+            mat.texCoords[index] = resolveTexCoord(texCoord, slotName);
+        };
+        readTexture(PbrSlot::ALBEDO, material->pbrMetallicRoughness.baseColorTexture.texCoord, material->pbrMetallicRoughness.baseColorTexture.extensions, "baseColor");
+        readTexture(PbrSlot::METALLIC, material->pbrMetallicRoughness.metallicRoughnessTexture.texCoord, material->pbrMetallicRoughness.metallicRoughnessTexture.extensions, "metallicRoughness");
+        readTexture(PbrSlot::ROUGHNESS, material->pbrMetallicRoughness.metallicRoughnessTexture.texCoord, material->pbrMetallicRoughness.metallicRoughnessTexture.extensions, "metallicRoughness");
+        readTexture(PbrSlot::NORMAL, material->normalTexture.texCoord, material->normalTexture.extensions, "normal");
+        readTexture(PbrSlot::OCCLUSION, material->occlusionTexture.texCoord, material->occlusionTexture.extensions, "occlusion");
+        readTexture(PbrSlot::EMISSIVE, material->emissiveTexture.texCoord, material->emissiveTexture.extensions, "emissive");
 
         {
             // glTF defaults: metallicFactor = 1.0, roughnessFactor = 1.0. tinygltf keeps those
@@ -169,6 +216,7 @@ namespace rasm
             mat.params[static_cast<uint32_t>(PbrParam::ALBEDO)] = static_cast<float>(material->pbrMetallicRoughness.baseColorFactor[0]);
             mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 1] = static_cast<float>(material->pbrMetallicRoughness.baseColorFactor[1]);
             mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 2] = static_cast<float>(material->pbrMetallicRoughness.baseColorFactor[2]);
+            mat.params[static_cast<uint32_t>(PbrParam::ALBEDO) + 3] = static_cast<float>(material->pbrMetallicRoughness.baseColorFactor[3]);
 
             // Color textures are sRGB; material data is linear (glTF 2.0).
             // Expand to RGBA8 to avoid unsupported RGB Vulkan formats and mismatched upload sizes.
@@ -243,6 +291,10 @@ namespace rasm
             mat.params[static_cast<uint32_t>(PbrParam::OCCLUSION_STRENGTH)] = static_cast<float>(material->occlusionTexture.strength);
             for (uint32_t i = 0; i < 3; ++i)
                 mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_FACTOR) + i] = static_cast<float>(material->emissiveFactor[i]);
+            float emissiveStrength = 1.0f;
+            if (auto it = material->extensions.find("KHR_materials_emissive_strength"); it != material->extensions.end())
+                emissiveStrength = getNumber(it->second, "emissiveStrength", 1.0f);
+            mat.params[static_cast<uint32_t>(PbrParam::EMISSIVE_STRENGTH)] = emissiveStrength;
         }
 
         registry.materials.resize(handle.index + 1);
