@@ -61,6 +61,12 @@ namespace rasm
             return gpuScene.shaded[std::min(static_cast<uint32_t>(std::countr_zero(target.samples)), SAMPLE_VARIANTS - 1)];
         }
 
+        // The define that makes a shaded pipeline write motion too, for a target with a MOTION_FORMAT second color.
+        const char *getMotionDefine(RenderContext &ctx, const SceneView &view)
+        {
+            return ctx.getRenderTarget(view.renderTarget).colorCount == 2 ? "#define RASM_MOTION_VECTORS 1\n" : "";
+        }
+
         // A shaded view's motion and jitter. The previous view-projection is the frame before's without jitter (this
         // one's on the view's first frame, so it has no motion). A view of a TAA pass (addTaaPass) moves its projection
         // by a sub-pixel offset each frame, the same as a translation of clip space by jitter (NDC) times w, so it
@@ -1110,10 +1116,9 @@ namespace rasm
 
         // A shader error retries every frame, so a shader fixed on disk is picked up while the application runs.
         ShadedPipelines &shaded = getShadedPipelines(*gpuScene, ctx, view);
-        const std::string motionDefine = ctx.getRenderTarget(view.renderTarget).colorCount == 2 ? "#define RASM_MOTION_VECTORS 1\n" : "";
         if (!view.depthOnly && !shaded.pipeline.isValid())
         {
-            shaded.pipeline = createScenePipeline("rasm", "passes/rasm.slang", motionDefine, view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true);
+            shaded.pipeline = createScenePipeline("rasm", "passes/rasm.slang", getMotionDefine(ctx, view), view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true);
             if (!shaded.pipeline.isValid())
             {
                 spdlog::error("Failed to create the uber material pipeline for the scene.");
@@ -1140,14 +1145,14 @@ namespace rasm
         const bool multisampled = ctx.getRenderTarget(view.renderTarget).samples > 1;
         if (!view.depthOnly && hasMask && !shaded.maskPipeline.isValid())
         {
-            const std::string defines = motionDefine + (multisampled ? "#define RASM_ALPHA_MASK 1\n#define RASM_ALPHA_TO_COVERAGE 1\n" : "#define RASM_ALPHA_MASK 1\n");
+            const std::string defines = getMotionDefine(ctx, view) + std::string(multisampled ? "#define RASM_ALPHA_MASK 1\n#define RASM_ALPHA_TO_COVERAGE 1\n" : "#define RASM_ALPHA_MASK 1\n");
             shaded.maskPipeline = createScenePipeline("rasmMask", "passes/rasm.slang", defines, view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true, multisampled);
             if (!shaded.maskPipeline.isValid())
                 spdlog::error("Failed to create the MASK pipeline; the scene is drawn without its cut-out materials.");
         }
         if (!view.depthOnly && hasBlend && !shaded.blendPipeline.isValid())
         {
-            shaded.blendPipeline = createScenePipeline("rasmBlend", "passes/rasm.slang", motionDefine + "#define RASM_ALPHA_BLEND 1\n", view.renderTarget, "vertMain", "fragMain", BlendMode::PREMULTIPLIED_ALPHA, false);
+            shaded.blendPipeline = createScenePipeline("rasmBlend", "passes/rasm.slang", getMotionDefine(ctx, view) + std::string("#define RASM_ALPHA_BLEND 1\n"), view.renderTarget, "vertMain", "fragMain", BlendMode::PREMULTIPLIED_ALPHA, false);
             if (!shaded.blendPipeline.isValid())
                 spdlog::error("Failed to create the BLEND pipeline; the scene is drawn without its see-through materials.");
         }
@@ -1571,8 +1576,7 @@ namespace rasm
         PipelineHandle &skyPipeline = getShadedPipelines(*gpuScene, ctx, view).skyPipeline;
         if (!skyPipeline.isValid())
         {
-            const std::string motionDefine = ctx.getRenderTarget(view.renderTarget).colorCount == 2 ? "#define RASM_MOTION_VECTORS 1\n" : "";
-            skyPipeline = createScenePipeline("sky", "passes/sky.slang", motionDefine, view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true);
+            skyPipeline = createScenePipeline("sky", "passes/sky.slang", getMotionDefine(ctx, view), view.renderTarget, "vertMain", "fragMain", BlendMode::NONE, true);
             if (!skyPipeline.isValid())
             {
                 spdlog::error("Failed to create the sky pipeline; the scene has no sky.");

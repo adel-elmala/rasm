@@ -261,8 +261,12 @@ float4 removeJitter(SceneData *scene, float4 clip)
 
 // The screen motion from the frame before to this one, in UV units (v grows down), from the two clip positions of the
 // same point: UV now minus UV then, so the point was at uv - motion. Both are without jitter, so a still scene has none.
+// A point that was behind the camera (w <= 0) had no place on the screen: its motion puts it off the screen, where
+// TAA takes this frame only.
 float2 getMotion(float4 currentClip, float4 previousClip)
 {
+    if (previousClip.w <= 1e-6)
+        return float2(2.0);
     float2 delta = currentClip.xy / currentClip.w - previousClip.xy / previousClip.w;
     return delta * float2(0.5, -0.5);
 }

@@ -123,12 +123,15 @@ namespace rasm
             return rt;
         }
 
-        // A D32 depth is sampled through the bindless set: by the Hi-Z pass of occlusion culling, by TAA (the nearest
-        // depth around a pixel), and by the readers of a depth-only target's depth (a shadow map). A depth/stencil view
-        // can't be sampled.
-        TextureDesc depthTextureDesc(const RenderTargetDesc &desc, glm::uvec2 size)
+        // A D32 depth is sampled through the bindless set: by the Hi-Z pass of occlusion culling, by TAA when the target
+        // has a MOTION_FORMAT color (the nearest depth around a pixel), and by the readers of a depth-only target's depth
+        // (a shadow map). Other depths are not, so they keep the GPU's depth compression. A depth/stencil view can't be
+        // sampled.
+        TextureDesc depthTextureDesc(const RenderTargetDesc &desc, glm::uvec2 size, bool occlusionCulling)
         {
-            const bool sampled = desc.depthFormat == Format::D32_SFLOAT;
+            const uint32_t colorCount = colorAttachmentCount(desc.colorFormats);
+            const bool motion = colorCount == 2 && desc.colorFormats[1] == MOTION_FORMAT;
+            const bool sampled = (occlusionCulling || colorCount == 0 || motion) && desc.depthFormat == Format::D32_SFLOAT;
             return {.name = desc.name + " Depth Texture",
                     .width = size.x,
                     .height = size.y,
@@ -140,7 +143,7 @@ namespace rasm
 
         // The target's textures at its current size: its colors, then its depth, which a storage target does not have.
         // Returns how many there are.
-        uint32_t attachmentTextureDescs(const RenderTargetDesc &desc, glm::uvec2 swapchainExtent, TextureDesc *textureDescs)
+        uint32_t attachmentTextureDescs(const RenderTargetDesc &desc, glm::uvec2 swapchainExtent, bool occlusionCulling, TextureDesc *textureDescs)
         {
             const glm::uvec2 size = renderTargetSize(desc, swapchainExtent);
             const uint32_t colorCount = colorAttachmentCount(desc.colorFormats);
@@ -148,7 +151,7 @@ namespace rasm
                 textureDescs[c] = colorTextureDesc(desc, size, c);
             if (desc.depthFormat == Format::UNKNOWN)
                 return colorCount;
-            textureDescs[colorCount] = depthTextureDesc(desc, size);
+            textureDescs[colorCount] = depthTextureDesc(desc, size, occlusionCulling);
             return colorCount + 1;
         }
 
@@ -817,7 +820,7 @@ namespace rasm
         for (uint32_t i = 0; i < count; ++i)
         {
             TextureDesc textureDescs[MAX_COLOR_ATTACHMENTS + 1];
-            const uint32_t textureCount = attachmentTextureDescs(impl->renderTargetInfos[group.targets[i]].desc, extent, textureDescs);
+            const uint32_t textureCount = attachmentTextureDescs(impl->renderTargetInfos[group.targets[i]].desc, extent, engine->config.occlusionCulling, textureDescs);
             firstRequests[i] = static_cast<uint32_t>(requests.size());
             for (uint32_t t = 0; t < textureCount; ++t)
             {
@@ -894,7 +897,7 @@ namespace rasm
         const uint32_t copies = desc.history ? MAX_FRAMES_IN_FLIGHT : 1;
         const uint32_t colorCount = renderTarget.colorCount;
         TextureDesc textureDescs[MAX_COLOR_ATTACHMENTS + 1];
-        const bool hasDepth = attachmentTextureDescs(desc, getSwapchainExtent(), textureDescs) > colorCount;
+        const bool hasDepth = attachmentTextureDescs(desc, getSwapchainExtent(), engine->config.occlusionCulling, textureDescs) > colorCount;
         const TextureDesc &depthDesc = textureDescs[colorCount];
         const bool sampledDepth = hasDepth && depthDesc.usage == TextureUsage::SAMPLED_DEPTH_ATTACHMENT;
 

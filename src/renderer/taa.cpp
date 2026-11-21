@@ -19,6 +19,7 @@ namespace rasm
         struct TaaState
         {
             glm::uvec2 size = glm::uvec2(0);
+            TextureHandle texture = {}; // the history's first copy: a resize or a new swapchain makes new, unwritten ones
             uint32_t historyResets = 0;
             glm::vec3 position = glm::vec3(0.0f);
             glm::quat rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
@@ -30,6 +31,10 @@ namespace rasm
     {
         // numthreads of taaMain in shaders/passes/taa.slang.
         constexpr uint32_t TAA_GROUP_SIZE = 8;
+        // The flags in the high half of TaaPushConstants::targetAndReset. Without a sky, nothing writes the motion of the
+        // background, which holds the target's clear color, so the shader takes it as still.
+        constexpr uint32_t TAA_RESET = 1;
+        constexpr uint32_t TAA_NO_SKY = 2;
 
         float getHalton(uint32_t index, uint32_t base)
         {
@@ -78,8 +83,9 @@ namespace rasm
 
     // One compute pass that blends the source's color into a history target, a storage target with a copy per frame
     // slot, which it returns for the bloom and the tone map. The scene view that draws the source is jittered from
-    // now on. The pass drops its history when it was just made, after a resize, after resetCameraHistory, and when
-    // the camera jumps (isCameraJump); it reads the camera when it runs, so the result depends only on the frames.
+    // now on. The pass drops its history when it was just made, when its textures were made again (a resize, a new
+    // swapchain), after resetCameraHistory, and when the camera jumps (isCameraJump); it reads the camera when it
+    // runs, so the result depends only on the frames.
     RenderTargetHandle Engine::addTaaPass(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera)
     {
         if (!camera.isValid() || camera.index >= registry.cameras.size())
@@ -104,18 +110,15 @@ namespace rasm
             spdlog::error("addTaaPass needs a target with a SCENE_COLOR_FORMAT color, a MOTION_FORMAT color and D32_SFLOAT depth.");
             return {};
         }
-        // The view that draws the source writes its motion; from now on it is jittered too.
-        bool viewFound = false;
+        // The view that draws the source writes its motion; once the pass is added, it is jittered too.
+        SceneView *sourceView = nullptr;
         for (uint32_t heldView : graph.sceneViews)
         {
             SceneView &view = gpuScene->views[heldView];
             if (view.renderTarget == source && !view.depthOnly)
-            {
-                view.jitter = true;
-                viewFound = true;
-            }
+                sourceView = &view;
         }
-        if (!viewFound)
+        if (!sourceView)
         {
             spdlog::error("addTaaPass needs the scene passes of its source in the same graph: call addScenePasses first.");
             return {};
@@ -135,6 +138,7 @@ namespace rasm
             return {};
         }
 
+        sourceView->jitter = true;
         const auto state = std::make_shared<TaaState>();
         graph.addComputePass(
             "TAA",
@@ -145,7 +149,7 @@ namespace rasm
                 builder.readPrevious(history);
                 builder.write(history);
             },
-            [this, source, history, camera, state](RenderContext &)
+            [this, source, history, camera, state, sourceView](RenderContext &)
             {
                 if (!taaPipeline.isValid())
                 {
@@ -159,14 +163,15 @@ namespace rasm
                 const Camera &cameraData = registry.cameras[camera.index];
                 const RenderTarget &target = ctx.getRenderTarget(history);
                 const glm::uvec2 size(target.width, target.height);
-                const bool reset = !state->valid || size != state->size || cameraData.historyResets != state->historyResets ||
+                const TextureHandle texture = target.attachments[0].color[0];
+                const bool reset = !state->valid || size != state->size || texture != state->texture || cameraData.historyResets != state->historyResets ||
                                    isCameraJump(state->position, state->rotation, cameraData.transform.position, cameraData.transform.rotation, getJumpDistance(cameraData));
-                *state = {.size = size, .historyResets = cameraData.historyResets, .position = cameraData.transform.position, .rotation = cameraData.transform.rotation, .valid = true};
+                *state = {.size = size, .texture = texture, .historyResets = cameraData.historyResets, .position = cameraData.transform.position, .rotation = cameraData.transform.rotation, .valid = true};
 
                 const gfx::TaaPushConstants pushConstants{
                     .colorAndMotion = packIndices(getBindlessTextureIndex(getRenderTargetTexture(source, 0)), getBindlessTextureIndex(getRenderTargetTexture(source, 1))),
                     .depthAndHistory = packIndices(getBindlessTextureIndex(getRenderTargetDepthTexture(source)), getBindlessTextureIndex(getPreviousRenderTargetTexture(history))),
-                    .targetAndReset = packIndices(getRenderTargetStorageIndex(history), reset ? 1u : 0u),
+                    .targetAndReset = packIndices(getRenderTargetStorageIndex(history), (reset ? TAA_RESET : 0u) | (sourceView->sky ? 0u : TAA_NO_SKY)),
                     .exposure = cameraData.exposure};
                 const auto commandBuffer = frameResources[frameCount].commandBuffer;
                 ctx.bindPipeline(commandBuffer, taaPipeline);
@@ -175,15 +180,5 @@ namespace rasm
                 ctx.dispatch(commandBuffer, (size.x + TAA_GROUP_SIZE - 1) / TAA_GROUP_SIZE, (size.y + TAA_GROUP_SIZE - 1) / TAA_GROUP_SIZE);
             });
         return history;
-    }
-
-    void Engine::resetCameraHistory(CameraHandle camera)
-    {
-        if (!camera.isValid() || camera.index >= registry.cameras.size())
-        {
-            spdlog::error("Invalid camera handle.");
-            return;
-        }
-        ++registry.cameras[camera.index].historyResets;
     }
 }

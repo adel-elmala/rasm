@@ -218,13 +218,17 @@ namespace rasm
             return a.compute && b.compute && a.async == b.async && !a.timerName.empty() && a.timerName == b.timerName;
         }
 
-        // A D32_SFLOAT depth texture is sampleable (TextureUsage::SAMPLED_DEPTH_ATTACHMENT, see depthTextureDesc in
-        // renderContext.cpp); a depth/stencil one is not.
-        bool canReadDepth(const Engine *engine, const Pass &pass, Format depthFormat)
+        // A depth texture is sampleable when it is D32_SFLOAT and occlusion culling is on, its target is depth-only, or
+        // its target has a MOTION_FORMAT second color (TextureUsage::SAMPLED_DEPTH_ATTACHMENT, see depthTextureDesc in
+        // renderContext.cpp).
+        bool canReadDepth(const Engine *engine, const Pass &pass, const RenderTarget *target)
         {
-            if (!engine || depthFormat == Format::D32_SFLOAT)
+            if (!engine || !target)
                 return true;
-            spdlog::error("Pass '{}' reads a depth texture that can't be sampled: it needs D32_SFLOAT depth; the read is ignored.", pass.name);
+            const bool motion = target->colorCount == 2 && target->colorFormats[1] == MOTION_FORMAT;
+            if ((engine->getConfig().occlusionCulling || target->colorCount == 0 || motion) && target->depthFormat == Format::D32_SFLOAT)
+                return true;
+            spdlog::error("Pass '{}' reads a depth texture that can't be sampled: it needs D32_SFLOAT depth, and EngineConfig::occlusionCulling unless its target is depth-only or has a MOTION_FORMAT color; the read is ignored.", pass.name);
             return false;
         }
     }
@@ -969,7 +973,7 @@ namespace rasm
     void RenderGraph::readDepth(uint32_t passIdx, RenderTargetHandle h)
     {
         const RenderTarget *target = engine ? &engine->getRenderContext().getRenderTarget(h) : nullptr;
-        if (canReadDepth(engine, passes[passIdx], target ? target->depthFormat : Format::D32_SFLOAT))
+        if (canReadDepth(engine, passes[passIdx], target))
             passes[passIdx].depthRenderTargets.push_back(h);
     }
 

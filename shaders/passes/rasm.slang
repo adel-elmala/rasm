@@ -117,22 +117,21 @@ struct FragmentOutput
     float4 motion : SV_TARGET1;
 };
 
-FragmentOutput toOutput(float4 color, VSOutput input)
+// It takes the two clip positions, not the varyings (see fragMain), and without motion TO_OUTPUT is the color alone.
+FragmentOutput toOutput(float4 color, float4 currentClip, float4 previousClip)
 {
     FragmentOutput output;
     output.color = color;
 #if defined(RASM_ALPHA_BLEND)
     output.motion = float4(0.0);
 #else
-    output.motion = float4(getMotion(input.currentClip, input.previousClip), 0.0, 0.0);
+    output.motion = float4(getMotion(currentClip, previousClip), 0.0, 0.0);
 #endif
     return output;
 }
+#define TO_OUTPUT(color) toOutput(color, input.currentClip, input.previousClip)
 #else
-float4 toOutput(float4 color, VSOutput input)
-{
-    return color;
-}
+#define TO_OUTPUT(color) (color)
 #endif
 
 // A cut-out's alpha made sharp around the cutoff: 0.5 exactly at alphaCutoff, and from 0 to 1 over one pixel's change
@@ -185,7 +184,7 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     {
         MetallicRoughnessMaterial metallicRoughness = model->material.metallicRoughness;
         float2 uv = getTextureUV(model, TRANSFORM_BASE_COLOR, metallicRoughness.baseColorTextureCoordinate, input.uv0, input.uv1, input.uv2);
-        return toOutput(toTarget(shadeUnlit(gTextures, metallicRoughness, uv, input.color), coverage), input);
+        return TO_OUTPUT(toTarget(shadeUnlit(gTextures, metallicRoughness, uv, input.color), coverage));
     }
 
     Material material = model->material;
@@ -222,7 +221,7 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     info.environment.intensity      = pc.scene->environmentIntensity;
     info.environment.rotation       = pc.scene->environmentRotation;
 
-    return toOutput(toTarget(shadePBR(gTextures, gCubeTextures, info), coverage), input);
+    return TO_OUTPUT(toTarget(shadePBR(gTextures, gCubeTextures, info), coverage));
 }
 
 // clang-format on

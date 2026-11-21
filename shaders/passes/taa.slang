@@ -10,7 +10,7 @@ struct TaaPushConstants
 {
     uint32_t    colorAndMotion;     // bindless indices: this frame's color (low 16 bits), its motion (high 16)
     uint32_t    depthAndHistory;    // bindless indices: this frame's depth (low 16), the history's last frame (high 16)
-    uint32_t    targetAndReset;     // storage slot of this frame's history (low 16); bit 16: drop the history
+    uint32_t    targetAndReset;     // storage slot of this frame's history (low 16); bit 16: drop the history; bit 17: no sky
     float       exposure;           // the camera's, so "bright" means bright on screen
 };
 
@@ -138,8 +138,12 @@ void taaMain(uint3 id : SV_DispatchThreadID)
     float2 size     = float2(width, height);
     float2 uv       = (float2(pixel) + 0.5) / size;
     float2 pixelMotion = motion.Load(int3(nearestPixel, 0)).xy;
+    // Without a sky, a pixel with nothing drawn around it (reversed-Z: depth 0) holds the clear color in both
+    // targets, which is no motion: the background stays where it is.
+    if ((pc.targetAndReset & 0x20000) != 0 && nearest <= 0.0)
+        pixelMotion = float2(0.0);
     float2 previousUV = uv - pixelMotion;
-    bool reset      = (pc.targetAndReset >> 16) != 0;
+    bool reset      = (pc.targetAndReset & 0x10000) != 0;
     if (reset || any(previousUV < 0.0) || any(previousUV > 1.0))
     {
         gStorageImages[target][uint3(id.xy, 0)] = float4(decompress(fromYCoCg(current)), 1.0);

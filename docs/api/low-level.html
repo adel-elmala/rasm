@@ -619,7 +619,7 @@ engine.getRenderContext().fillBuffer(particles, positions.data(),
       <tr><td><code>SAMPLED_COLOR_ATTACHMENT</code></td><td>drawn into, then read (render target color)</td><td>–</td></tr>
       <tr><td><code>SAMPLED_STORAGE</code></td><td>written by compute shaders as a storage image, one mip per slot (<a href="#updateBindlessStorageImage"><code>updateBindlessStorageImage</code></a>), then read by shaders</td><td>–</td></tr>
       <tr><td><code>STORAGE</code></td><td>only passed on to the backend</td><td>yes: compute reads and writes it (<code>GENERAL</code>); only for a <code>SAMPLED_STORAGE</code> texture</td></tr>
-      <tr><td><code>SAMPLED_DEPTH_ATTACHMENT</code></td><td>depth buffer that shaders can also read: a render target's depth in <code>D32_SFLOAT</code> (<a href="render-graph.html#readDepth">readDepth</a>)</td><td>–</td></tr>
+      <tr><td><code>SAMPLED_DEPTH_ATTACHMENT</code></td><td>depth buffer that shaders can also read: with <code>EngineConfig::occlusionCulling</code>, a render target's depth in <code>D32_SFLOAT</code>; always, a depth-only target's depth and that of a target with a <code>MOTION_FORMAT</code> color (<a href="render-graph.html#readDepth">readDepth</a>)</td><td>–</td></tr>
       <tr><td><code>TRANSFER_SRC</code>, <code>TRANSFER_DST</code>, <code>TRANSIENT_ATTACHMENT</code>, <code>INPUT_ATTACHMENT</code></td><td>only passed on to the backend; no RASM call uses them</td><td>–</td></tr>
       <tr><td><code>PRESENT_SRC</code></td><td>–</td><td>yes (swapchain image before present)</td></tr>
       <tr><td><code>UNKNOWN</code></td><td>–</td><td>the start; never a target (contents thrown away)</td></tr>

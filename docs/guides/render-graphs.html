@@ -1021,7 +1021,7 @@ if (!engine.addScenePasses(graph, scene, camera, rtHandle))
   <tr><th>The pass declares</th><th>Recorded before it</th><th>When</th></tr>
   <tr><td><code>read(texture)</code></td><td><code>transitionImageLayout(texture, SAMPLED)</code></td><td>unless it is <code>SAMPLED</code> already (read after read)</td></tr>
   <tr><td><code>read(renderTarget)</code></td><td><code>transitionImageLayout(color, SAMPLED)</code> for each color: nothing after a draw, whose <code>endPass</code> left it <code>SAMPLED</code></td><td>a barrier after a compute pass wrote a storage target</td></tr>
-  <tr><td><code>readDepth(renderTarget)</code></td><td><code>transitionImageLayout(depth, SAMPLED)</code>; the last earlier pass on the target stores its depth, and the next one moves it back and loads it</td><td>needs a <code>D32_SFLOAT</code> depth; not the target the pass draws to</td></tr>
+  <tr><td><code>readDepth(renderTarget)</code></td><td><code>transitionImageLayout(depth, SAMPLED)</code>; the last earlier pass on the target stores its depth, and the next one moves it back and loads it</td><td>needs <code>occlusionCulling</code> unless the target is depth-only or has a <code>MOTION_FORMAT</code> color; not the target the pass draws to</td></tr>
   <tr><td><code>readPrevious(renderTarget)</code></td><td>nothing: the frame before left that copy <code>SAMPLED</code>, or <code>clearNewHistory</code> cleared a new copy at the start of the frame</td><td>–</td></tr>
   <tr><td>the first pass of a transient target</td><td><code>aliasingBarrier</code>: a global memory barrier, since the target's memory held another target before</td><td>every frame</td></tr>
   <tr><td><code>write(renderTarget)</code> or <code>writeSwapchain()</code></td><td><code>beginPass</code> moves color and depth (the swapchain has only color) to attachments with <code>discard</code>: from <code>UNKNOWN</code>, contents dropped</td><td>the first pass on the target (it clears)</td></tr>
@@ -1294,7 +1294,7 @@ auto previous = engine.getBindlessTextureIndex(engine.getPreviousRenderTargetTex
     <li>Look up <code>getRenderTargetTexture</code>, <code>getPreviousRenderTargetTexture</code> and their bindless indices inside <code>execute</code>, every frame. For a history target they change every frame.</li>
     <li>No dispatch or <code>memoryBarrier</code> inside a graphics pass: <code>RenderContext</code> refuses both. Use <code>addComputePass</code>.</li>
     <li>Add the passes that write one resource in the order they must run: the add order is the write order.</li>
-    <li>A pass that samples a depth declares <code>readDepth</code>, and never for the target it draws to. Only a <code>D32_SFLOAT</code> depth is sampleable. The swapchain has no depth.</li>
+    <li>A pass that samples a depth declares <code>readDepth</code>, and never for the target it draws to. It needs <code>EngineConfig::occlusionCulling</code> unless the target is depth-only or has a <code>MOTION_FORMAT</code> color (TAA): only then is a <code>D32_SFLOAT</code> depth sampleable. The swapchain has no depth.</li>
     <li>Change a texture's layout only through <code>transitionImageLayout</code>, which keeps the remembered state right. Recorded commands that are not submitted must be followed by <code>discardRecording</code>, as <code>endFrame</code> does.</li>
     <li>Sorting, the compile checks and buffer barriers run on the CPU only. Add a test in <code>tests/renderGraphTests.cpp</code> when you change <code>compile</code> or <code>bufferBarrier</code>.</li>
   </ul>

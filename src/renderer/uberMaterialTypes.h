@@ -251,7 +251,7 @@ namespace rasm::gfx
     };
 
     // The TAA pass's push constants (shaders/passes/taa.slang): two 16-bit bindless indices or slots per word, the
-    // history's reset in bit 16 of targetAndReset.
+    // history's reset in bit 16 of targetAndReset, "the view has no sky" in bit 17.
     struct TaaPushConstants
     {
         uint32_t         colorAndMotion;
