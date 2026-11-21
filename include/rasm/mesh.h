@@ -30,6 +30,13 @@ namespace rasm
 
     uint32_t    packVertexColor(const glm::vec4& linearColor);
 
+    // A vertex's JOINTS_0 / WEIGHTS_0: its 4 largest influences, the weights as UNORM16 that add up to 65535 exactly.
+    struct SkinVertex
+    {
+        uint16_t    joints[4];      // in its skin's joint list
+        uint16_t    weights[4];
+    };
+
     struct MeshLod
     {
         std::vector<uint32_t>   indices;
@@ -42,15 +49,20 @@ namespace rasm
         std::vector<uint32_t>   indices;
         std::vector<MeshLod>    lods;
         std::vector<uint32_t>   colors;
+        std::vector<SkinVertex> skin;
     };
 
     struct SubGLTFRaw
     {
-        ObjRaw              objRaw;
-        glm::mat4           transform;
-        int                 materialIndex;
-        int                 node            = -1;       // the glTF node
-        int                 animatedNode    = -1;       // in GLTFRaw::animation.nodes, -1 when no clip moves it
+        ObjRaw                  objRaw;
+        glm::mat4               transform;
+        int                     materialIndex;
+        int                     node            = -1;       // the glTF node
+        int                     animatedNode    = -1;       // in GLTFRaw::animation.nodes, -1 when no clip moves it
+        int                     skin            = -1;       // the glTF skin of a skinned primitive
+        uint32_t                firstJoint      = 0;        // in GLTFRaw::animation.joints
+        uint32_t                jointCount      = 0;        // 0: not skinned
+        std::vector<glm::vec4>  jointSpheres;               // per joint of its skin: the sphere around the vertices it moves (radius < 0: none)
     };
 
     struct GLTFRaw
@@ -79,6 +91,8 @@ namespace rasm
         uint32_t            lodIndexCount   = 0;
         uint32_t            firstColor      = 0;
         uint32_t            colorCount      = 0;
+        uint32_t            firstSkin       = 0;
+        uint32_t            skinCount       = 0;
         uint32_t            geometryIndex   = 0;
         glm::vec3           boundsCenter    = glm::vec3(0.0f);
         float               boundsRadius    = 0.0f;

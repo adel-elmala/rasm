@@ -749,7 +749,7 @@ target = u for a half-edge collapse, the best new point for a full one</code></p
 
     <text x="20" y="232" class="small">Every level is an index list into the same welded vertices (ObjRaw::lods, from fine to coarse).</text>
   </svg>
-  <figcaption>The OBJ importer gives every face corner its own vertex, and simplification only collapses edges between triangles that share vertices. So <code>weldVertices</code> merges identical vertices first (same position, normal, UVs and tangent, and the same color when the mesh has vertex colors), with <code>meshopt_generateVertexRemapMulti</code>.</figcaption>
+  <figcaption>The OBJ importer gives every face corner its own vertex, and simplification only collapses edges between triangles that share vertices. So <code>weldVertices</code> merges identical vertices first (same position, normal, UVs and tangent, and the same color and the same joints and weights when the mesh has them), with <code>meshopt_generateVertexRemapMulti</code>. A skinned mesh is simplified in its bind pose, and the weights do not steer the collapses (<code>D29</code>).</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>

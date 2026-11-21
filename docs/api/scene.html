@@ -390,6 +390,15 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
   </div>
 </div>
 
+<div class="api" id="SkinVertex">
+  <pre class="sig">struct SkinVertex
+{
+    uint16_t    joints[4];
+    uint16_t    weights[4];
+};</pre>
+  <div class="body"><p>A skinned vertex's 4 largest influences: joints of its skin, and weights as UNORM16 that add up to 65535 exactly (the rounding's rest goes to the largest). 16 bytes, in the geometry pool's skin stream, so a vertex stays 64 bytes. The import keeps the 4 largest of <code>JOINTS_n</code> / <code>WEIGHTS_n</code> (one warning per primitive that has more), scales them to add up to 1, and drops a weight whose joint is past the skin's.</p></div>
+</div>
+
 <div class="api" id="packVertexColor">
   <pre class="sig">uint32_t    packVertexColor(const glm::vec4&amp; linearColor);</pre>
   <div class="body">
@@ -459,7 +468,7 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
     MaterialHandle material;
     int32_t        animatedNode = -1;
 };</pre>
-  <div class="body"><p>One drawable part of a mesh: its place in the geometry pool, its node matrix at rest (identity for OBJ and <code>createMesh</code>), its glTF material (invalid when it has none), and the node in <code>AnimationRaw::nodes</code> that moves it while a clip plays (−1 when no clip moves it, see <a href="#animation">Animation</a>). Each sub-mesh of an entity is one draw and one instance row.</p></div>
+  <div class="body"><p>One drawable part of a mesh: its place in the geometry pool, its node matrix at rest (identity for OBJ and <code>createMesh</code>, and for a skinned glTF primitive, whose joints place it), its glTF material (invalid when it has none), and the node in <code>AnimationRaw::nodes</code> that moves it while a clip plays (−1 when no clip moves it, and for a skinned one, see <a href="#animation">Animation</a>). Each sub-mesh of an entity is one draw and one instance row.</p></div>
 </div>
 
 <div class="api" id="Mesh">
@@ -487,6 +496,8 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
     uint32_t  lodIndexCount = 0;
     uint32_t  firstColor    = 0;
     uint32_t  colorCount    = 0;
+    uint32_t  firstSkin     = 0;
+    uint32_t  skinCount     = 0;
     uint32_t  geometryIndex = 0;
     glm::vec3 boundsCenter  = glm::vec3(0.0f);
     float     boundsRadius  = 0.0f;
@@ -497,6 +508,7 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
       <dt>firstIndex, indexCount</dt><dd>LOD 0, the full detail.</dd>
       <dt>lodIndexCount</dt><dd>The indices of LOD 1 and coarser, together. They come right after LOD 0's in the pool.</dd>
       <dt>firstColor, colorCount</dt><dd>The sub-mesh's vertex colors in the color pool; <code>colorCount</code> is 0 without colors.</dd>
+      <dt>firstSkin, skinCount</dt><dd>The sub-mesh's <a href="#SkinVertex"><code>SkinVertex</code></a>es in the skin stream; <code>skinCount</code> is 0 when it is not skinned.</dd>
     </dl>
   </div>
 </div>
@@ -508,6 +520,7 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
     std::vector&lt;uint32_t&gt; indices;
     std::vector&lt;MeshLod&gt;  lods;
     std::vector&lt;uint32_t&gt; colors;
+    std::vector&lt;SkinVertex&gt; skin;
 };</pre>
   <div class="body">
     <p>Decoded vertices and indices of one sub-mesh, before upload (also used for glTF).</p>
@@ -515,6 +528,7 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
       <dt>indices</dt><dd>LOD 0, the full detail.</dd>
       <dt>lods</dt><dd>LOD 1 and coarser, from fine to coarse; at most <code>MAX_MESH_LODS</code> − 1. Empty until the engine builds them, and for a sub-mesh under 1024 triangles.</dd>
       <dt>colors</dt><dd>One packed vertex color per vertex (glTF <code>COLOR_0</code>), or empty.</dd>
+      <dt>skin</dt><dd>One <a href="#SkinVertex"><code>SkinVertex</code></a> per vertex (glTF <code>JOINTS_0</code> / <code>WEIGHTS_0</code>) for a skinned primitive, or empty.</dd>
     </dl>
   </div>
 </div>
@@ -542,8 +556,19 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
     int       materialIndex;
     int       node         = -1;
     int       animatedNode = -1;
+    int       skin         = -1;
+    uint32_t  firstJoint   = 0;
+    uint32_t  jointCount   = 0;
+    std::vector&lt;glm::vec4&gt; jointSpheres;
 };</pre>
-  <div class="body"><p>One decoded sub-mesh with its node matrix, its glTF material index (−1 for none), its glTF node, and its node in <code>AnimationRaw::nodes</code> (−1 when no clip moves it).</p></div>
+  <div class="body">
+    <p>One decoded sub-mesh with its node matrix, its glTF material index (−1 for none), its glTF node, and its node in <code>AnimationRaw::nodes</code> (−1 when no clip moves it).</p>
+    <dl>
+      <dt>skin</dt><dd>The glTF skin of a skinned primitive, −1 otherwise. A skinned primitive's <code>transform</code> is the identity: glTF ignores the node's matrix, the joints place it.</dd>
+      <dt>firstJoint, jointCount</dt><dd>Its skin's joints in <code>AnimationRaw::joints</code>. <code>jointCount</code> is 0 when it is not skinned, also when its skin does not import; it then draws its bind pose.</dd>
+      <dt>jointSpheres</dt><dd>Per joint of its skin, the sphere (center, radius) around the bind-pose vertices the joint moves; radius −1 for a joint that moves none. The GPU moves them to bound the posed mesh (<a href="../guides/skinning.html">Skinning</a>).</dd>
+    </dl>
+  </div>
 </div>
 
 <div class="api" id="GLTFRaw">
@@ -568,7 +593,7 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
 
 <h2 id="animation"><span class="n">5</span>Animation</h2>
 
-<p>A glTF model's clips move its nodes, and the GPU poses them (<a href="../guides/keyframe-animation.html">Keyframe animation</a>). The application owns the clock: it calls <code>setAnimationTime</code> once per frame, and starts a clip on an entity with <code>playAnimation</code>. Nothing else runs per frame on the CPU, however many entities play.</p>
+<p>A glTF model's clips move its nodes, and the GPU poses them (<a href="../guides/keyframe-animation.html">Keyframe animation</a>). A skinned model's clips move its joints, and the GPU skins its vertices once per frame for every view (<a href="../guides/skinning.html">Skinning</a>); it plays the same way. The application owns the clock: it calls <code>setAnimationTime</code> once per frame, and starts a clip on an entity with <code>playAnimation</code>. Nothing else runs per frame on the CPU, however many entities play.</p>
 
 <pre><code>const rasm::MeshHandle box = engine.loadGLTF("models/gltf/BoxAnimated/BoxAnimated.glb");
 const rasm::EntityHandle entity = engine.createEntity("box", box);
@@ -606,7 +631,7 @@ while (engine.running())
 
 <div class="api" id="stopAnimation">
   <pre class="sig">void stopAnimation(EntityHandle entity);</pre>
-  <div class="body"><p>Puts the entity back in its rest pose from the next frame, or cancels a play that waits for the mesh. Nothing happens when it plays nothing.</p></div>
+  <div class="body"><p>Puts the entity back in its rest pose from the next frame, or cancels a play that waits for the mesh. Nothing happens when it plays nothing. A skinned mesh goes back to its skeleton's rest pose (the nodes' own translation, rotation and scale), with no motion from the frame before; one that never played stands in that pose from the start, also when its file has no clips.</p></div>
 </div>
 
 <div class="api" id="getAnimations">
@@ -656,6 +681,13 @@ while (engine.running())
 {
     std::vector&lt;AnimationNode&gt;    nodes;
     std::vector&lt;AnimationClipRaw&gt; clips;
+    std::vector&lt;AnimationJoint&gt;   joints;
+};
+
+struct AnimationJoint
+{
+    uint32_t  node        = 0;
+    glm::mat4 inverseBind = glm::mat4(1.0f);
 };
 
 struct AnimationNode
@@ -690,7 +722,7 @@ struct AnimationChannel
 
 enum class AnimationPath : uint32_t { TRANSLATION, ROTATION, SCALE };
 enum class AnimationInterpolation : uint32_t { STEP, LINEAR, CUBICSPLINE };</pre>
-  <div class="body"><p>What the import keeps of a glTF file's animations, in <code>GLTFRaw::animation</code>. <code>nodes</code> holds only the nodes a clip can move, parents before children, with their rest pose (a node below static parents hangs below an extra node whose <code>rest</code> is their world matrix). Each sampler's values are vec4s: a quaternion x, y, z, w, or a translation or scale with w = 0; <code>CUBICSPLINE</code> stores an in-tangent, the value and an out-tangent per key. A sampler that does not parse is skipped with a warning, and its clip keeps its index.</p></div>
+  <div class="body"><p>What the import keeps of a glTF file's animations, in <code>GLTFRaw::animation</code>. <code>nodes</code> holds only the nodes a clip can move, parents before children, with their rest pose (a node below static parents hangs below an extra node whose <code>rest</code> is their world matrix). Each sampler's values are vec4s: a quaternion x, y, z, w, or a translation or scale with w = 0; <code>CUBICSPLINE</code> stores an in-tangent, the value and an out-tangent per key. A sampler that does not parse is skipped with a warning, and its clip keeps its index. <code>joints</code> holds every skin a sub-mesh uses, one skin after another: each joint's node in <code>nodes</code> (a joint is always kept, moved or not) and its inverse bind matrix (the identity when the file has none).</p></div>
 </div>
 
 <h2 id="lights"><span class="n">6</span>Lights</h2>
@@ -905,6 +937,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
   <tr><td><code>MAX_MESH_LODS</code></td><td>8</td><td>8</td><td>LODs per sub-mesh, LOD 0 included</td></tr>
   <tr><td><code>EngineConfig::maxInstances</code></td><td>65,536</td><td>all</td><td>sub-meshes of all entities together</td></tr>
   <tr><td><code>EngineConfig::geometryPoolVertices</code>, <code>geometryPoolIndices</code>, <code>geometryPoolSubMeshes</code></td><td>2<sup>21</sup> / 2<sup>24</sup> / 2<sup>14</sup></td><td>all</td><td>geometry of all meshes together</td></tr>
+  <tr><td><code>EngineConfig::geometryPoolColors</code>, <code>geometryPoolSkins</code></td><td>2<sup>20</sup> / 2<sup>20</sup></td><td>all</td><td>vertex colors, and skinned vertices' joints and weights, of all meshes together</td></tr>
   <tr><td><code>EngineConfig::maxAnimatedEntities</code></td><td>16,384</td><td>all</td><td>entities that have played a clip (each keeps its row)</td></tr>
   <tr><td><code>EngineConfig::animationPoolBytes</code></td><td>16 MiB</td><td>all</td><td>the kept nodes, samplers and keys of all loaded meshes; a mesh that does not fit fails to load</td></tr>
 </table>

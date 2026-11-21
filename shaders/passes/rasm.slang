@@ -45,7 +45,7 @@ VSOutput vertMain(VSInput input)
 
     // Slang lowers SV_VertexID to (VertexIndex - BaseVertex) to match D3D semantics, so it is the raw
     // index-buffer value and the draw's vertexOffset must be added back to address the geometry pool.
-    VertexFull vert = pc.scene->vertsPtr[input.vertexID + draw->vertexOffset];
+    VertexFull vert = getVertex(pc.scene, instance, draw, input.vertexID);
 
     VSOutput output = {};
     output.clipPosition         = mul(projectionMat, mul(viewMat, mul(modelMat, float4(vert.pos, 1.0))));
@@ -66,8 +66,9 @@ VSOutput vertMain(VSInput input)
     output.materialIndex        = instance->materialIndex;
     output.handedness           = handedness;
 #if defined(RASM_MOTION_VECTORS)
-    // The point where the frame before drew it: its last world matrix and view.
-    float3 previousWorld        = getPreviousWorldPosition(pc.scene, instance, float4(vert.pos, 1.0));
+    // The point where the frame before drew it: its last position, world matrix and view.
+    float3 previousPosition     = getPreviousObjectPosition(pc.scene, instance, input.vertexID, vert.pos);
+    float3 previousWorld        = getPreviousWorldPosition(pc.scene, instance, float4(previousPosition, 1.0));
     output.currentClip          = removeJitter(pc.scene, output.clipPosition);
     output.previousClip         = mul(pc.scene->previousViewProjection, float4(previousWorld, 1.0));
 #endif

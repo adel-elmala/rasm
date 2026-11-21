@@ -14,7 +14,7 @@ pointer field moves.
 | # | Place | What |
 |---|---|---|
 | 1 | `src/renderer/uberMaterialTypes.h` | The C++ struct (aligned header columns). |
-| 2 | `shaders/lib/core.slang` | The Slang mirror: **same field order, matching types** (table below). Names may differ (C++ `Material::pbr` = Slang `metallicRoughness`). |
+| 2 | `shaders/lib/core.slang` (and `geometryTypes.slang`, `animationTypes.slang`, which it includes and which the Animate and Skin passes include alone) | The Slang mirror: **same field order, matching types** (table below). Names may differ (C++ `Material::pbr` = Slang `metallicRoughness`). |
 | 3 | `static_assert`s at the end of `uberMaterialTypes.h` | `sizeof` and every offset after the change point that matters: arrays, pointers, the last field. |
 | 4 | `validateRasmStructs` in `src/renderer/shaderCompiler.cpp` | One row per field: `{"<slang name>", offsetof(gfx::X, <c++ name>)}`. A **new struct** needs its own `validateStruct(...)` call, reached through `fieldStruct(...)` from `pc → scene → pointer/field`. |
 | 5 | Shared constants and enums | `MAX_VIEW_SHADOWS` (`include/rasm/scene.h`), `MAX_CLUSTER_LIGHTS` (`include/rasm/light.h`) and the cluster grid (`src/renderer/lightClusters.h` against `shaders/lib/lightClusters.slang`), `MAX_VERTEX_UV_SETS` (`include/rasm/mesh.h`), `MaterialId`, `LightType`: same values in `core.slang`. |

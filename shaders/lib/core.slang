@@ -27,12 +27,6 @@ static const uint   MATERIAL_DOUBLE_SIDED           = 1 << 0;
 static const uint   MATERIAL_TEXTURE_TRANSFORM      = 1 << 1;   // a texture has a KHR_texture_transform that is not the identity
 static const uint   MATERIAL_NORMAL_XY              = 1 << 2;   // the normal map has x and y only (BC5, EAC RG11): z is rebuilt
 
-// Must match rasm::Vertex / rasm::gfx::VertexFull (scalar layout). Unused UV sets are zero.
-// tangent.w is the bitangent sign (±1), or 0 when the mesh has no tangents.
-static const uint MAX_VERTEX_UV_SETS = 3;
-// Must match rasm::MAX_MESH_LODS.
-static const uint MAX_MESH_LODS = 8;
-
 // Must match rasm::MAX_SHADOW_CASCADES.
 static const uint MAX_SHADOW_CASCADES = 4;
 // Must match rasm::MAX_VIEW_SHADOWS.
@@ -40,7 +34,6 @@ static const uint MAX_VIEW_SHADOWS = 4;
 // Must match rasm::gfx::MAX_SHADOW_MAPS: MAX_VIEW_SHADOWS lights of up to MAX_SHADOW_CASCADES maps.
 static const uint MAX_SHADOW_MAPS = 16;
 
-struct VertexFull       { float3 pos; float3 normal; float2 uv[MAX_VERTEX_UV_SETS]; float4 tangent; };
 struct VertexPosOnly    { float3 pos; };
 
 struct DrawInfo
@@ -152,24 +145,6 @@ struct InstanceData
     int32_t         animationRow;       // its InstanceTransform in SceneData::animatedTransformsPtr, -1: the matrices above
 };
 
-struct GeometryLod
-{
-    uint32_t        firstIndex;
-    uint32_t        indexCount;
-    float           error;              // object space; 0 for LOD 0
-};
-
-// The LODs share the sub-mesh's vertices, so vertexOffset is the same for all of them.
-struct GeometryData
-{
-    int32_t         vertexOffset;
-    float3          boundsCenter;
-    float           boundsRadius;
-    uint32_t        lodCount;
-    GeometryLod     lods[MAX_MESH_LODS];
-    int32_t         colorOffset;        // the sub-mesh's first color in SceneData::colorsPtr, -1 without vertex colors
-};
-
 struct SceneData
 {
     float4x4            projection;
@@ -226,6 +201,8 @@ struct SceneData
     float               textureLodBias;     // added to the material textures' mip level: -1 while jittered, sharper
     uint32_t            padding;            // keeps animatedTransformsPtr 8-byte aligned
     InstanceTransform*  animatedTransformsPtr;  // this slot's rows, written by the Animate pass
+    VertexFull*         skinnedVertsPtr;        // this slot's skinned vertices, written by the Skin pass
+    VertexFull*         previousSkinnedVertsPtr;    // the other slot's: the frame before's
 };
 
 // Each indirect draw restarts DrawIndex at 0, so firstDraw is added back to find the draw's DrawInfo.
@@ -345,6 +322,34 @@ float3 getPreviousWorldPosition(SceneData *scene, InstanceData *instance, float4
         return float3(dot(transform->previousWorld[0], position), dot(transform->previousWorld[1], position), dot(transform->previousWorld[2], position));
     }
     return float3(dot(instance->previousWorld[0], position), dot(instance->previousWorld[1], position), dot(instance->previousWorld[2], position));
+}
+
+// The instance's first vertex in this slot's skinned vertices, or -1 when its vertices are the geometry pool's.
+int getSkinnedVertex(SceneData *scene, InstanceData *instance)
+{
+    if (instance->animationRow >= 0)
+        return scene->animatedTransformsPtr[instance->animationRow].skinnedVertex;
+    return -1;
+}
+
+// A vertex of the draw: a skinned sub-mesh's from this frame's Skin pass, any other from the geometry pool. vertexID
+// is the raw index-buffer value, local to the sub-mesh.
+VertexFull getVertex(SceneData *scene, InstanceData *instance, DrawInfo *draw, uint vertexID)
+{
+    int skinned = getSkinnedVertex(scene, instance);
+    if (skinned >= 0)
+        return scene->skinnedVertsPtr[uint(skinned) + vertexID];
+    return scene->vertsPtr[vertexID + draw->vertexOffset];
+}
+
+// The object-space position the frame before drew for a vertex: a skinned one's from the other slot's skinned
+// vertices, when they hold the frame before; any other vertex does not move in object space.
+float3 getPreviousObjectPosition(SceneData *scene, InstanceData *instance, uint vertexID, float3 position)
+{
+    int skinned = getSkinnedVertex(scene, instance);
+    if (skinned < 0 || scene->animatedTransformsPtr[instance->animationRow].skinnedMotion == 0)
+        return position;
+    return scene->previousSkinnedVertsPtr[uint(skinned) + vertexID].pos;
 }
 
 // A vertex's COLOR_0 as linear RGBA, white for a sub-mesh without colors (the color stream, geometryPool.cpp). The

@@ -10,11 +10,23 @@ struct Sphere
     float           scale;          // the world matrix's largest stretch, bounded from above
 };
 
-// The draw's geometry bounding sphere in world space.
+// The draw's bounding sphere in world space: its geometry's, or a skinned sub-mesh's around its posed vertices, which
+// the Animate pass writes each frame.
 Sphere getWorldSphere(SceneData *scene, DrawInfo draw)
 {
     InstanceData *instance  = scene->instancesPtr + draw.firstInstance;
     GeometryData *geometry  = scene->geometryPtr + instance->geometryIndex;
+    float3 center           = geometry->boundsCenter;
+    float radius            = geometry->boundsRadius;
+    if (instance->animationRow >= 0)
+    {
+        InstanceTransform *transform = scene->animatedTransformsPtr + instance->animationRow;
+        if (transform->boundsRadius >= 0.0)
+        {
+            center          = transform->boundsCenter;
+            radius          = transform->boundsRadius;
+        }
+    }
 
     // The radius grows by the matrix's largest stretch: the square root of the largest eigenvalue of
     // transpose(M) * M, whose entries are the dot products of M's columns. Its largest row sum of absolute
@@ -32,8 +44,8 @@ Sphere getWorldSphere(SceneData *scene, DrawInfo draw)
 
     Sphere sphere;
     sphere.scale            = sqrt(stretch2);
-    sphere.radius           = geometry->boundsRadius * sphere.scale;
-    sphere.center           = mul(world, float4(geometry->boundsCenter, 1.0)).xyz;
+    sphere.radius           = radius * sphere.scale;
+    sphere.center           = mul(world, float4(center, 1.0)).xyz;
     return sphere;
 }
 

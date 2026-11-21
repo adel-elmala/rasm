@@ -3,6 +3,7 @@
 #include "core/utils.h"
 #include "platform/paths.h"
 #include "renderer/animationTime.h"
+#include "renderer/geometryPool.h"
 #include "renderer/gpuScene.h"
 #include "renderer/uberMaterialTypes.h"
 
@@ -25,14 +26,24 @@ namespace rasm
             uint64_t nodes = 0;
             uint64_t samplers = 0;
             uint64_t channels = 0;
-            uint64_t subMeshNodes = 0;
+            uint64_t subMeshes = 0;
             uint64_t keys = 0;
+            uint64_t joints = 0;
+            uint64_t spheres = 0;
             uint64_t size = 0;
             uint32_t samplerCount = 0;
         };
 
         constexpr uint32_t FIRST_TRANSFORM_CAPACITY = 64;
         constexpr uint32_t FIRST_POSE_CAPACITY = 256;
+        constexpr uint32_t FIRST_JOINT_CAPACITY = 256;
+        constexpr uint32_t FIRST_SKINNED_CAPACITY = 4096;
+        // A joint matrix, three rows.
+        constexpr uint64_t JOINT_BYTES = 3 * sizeof(glm::vec4);
+        // The Skin pass's group: 64 of an entity's skinned vertices.
+        constexpr uint32_t SKIN_GROUP_SIZE = 64;
+        // The Skin pass dispatches 64 vertices of an entity per group in y.
+        constexpr uint32_t MAX_SKIN_GROUPS = 65535;
         // A node's local and world matrices, three rows each.
         constexpr uint64_t POSE_BYTES_PER_NODE = 6 * sizeof(glm::vec4);
         // The Animate pass dispatches a group per table row in x only.
@@ -46,7 +57,7 @@ namespace rasm
             return (value + 15) & ~uint64_t{15};
         }
 
-        PoolLayout getPoolLayout(const AnimationRaw &animation, uint32_t subMeshCount)
+        PoolLayout getPoolLayout(const AnimationRaw &animation, uint32_t subMeshCount, uint32_t sphereCount)
         {
             PoolLayout layout;
             uint64_t keyFloats = 0;
@@ -60,9 +71,11 @@ namespace rasm
             layout.nodes = alignTo16(sizeof(gfx::AnimationMeshData));
             layout.samplers = alignTo16(layout.nodes + nodeCount * sizeof(gfx::AnimationNodeData));
             layout.channels = alignTo16(layout.samplers + layout.samplerCount * sizeof(gfx::AnimationSamplerData));
-            layout.subMeshNodes = alignTo16(layout.channels + (animation.clips.size() + 1) * nodeCount * 3 * sizeof(int32_t));
-            layout.keys = alignTo16(layout.subMeshNodes + subMeshCount * sizeof(uint32_t));
-            layout.size = alignTo16(layout.keys + keyFloats * sizeof(float));
+            layout.subMeshes = alignTo16(layout.channels + (animation.clips.size() + 2) * nodeCount * 3 * sizeof(int32_t));
+            layout.keys = alignTo16(layout.subMeshes + subMeshCount * sizeof(gfx::AnimationSubMeshData));
+            layout.joints = alignTo16(layout.keys + keyFloats * sizeof(float));
+            layout.spheres = alignTo16(layout.joints + animation.joints.size() * sizeof(gfx::AnimationJointData));
+            layout.size = alignTo16(layout.spheres + sphereCount * sizeof(glm::vec4));
             return layout;
         }
 
@@ -132,35 +145,58 @@ namespace rasm
             return mirrors;
         }
 
+        bool isAnimated(const SubGLTFRaw &sub)
+        {
+            return sub.animatedNode >= 0 || sub.jointCount > 0;
+        }
+
         uint32_t countAnimatedSubMeshes(const GLTFRaw &raw)
         {
             if (raw.animation.nodes.empty())
                 return 0;
-            return static_cast<uint32_t>(std::count_if(raw.subGltfRaws.begin(), raw.subGltfRaws.end(), [](const SubGLTFRaw &sub)
-                                                       { return sub.animatedNode >= 0; }));
+            return static_cast<uint32_t>(std::count_if(raw.subGltfRaws.begin(), raw.subGltfRaws.end(), isAnimated));
+        }
+
+        uint32_t countJointSpheres(const GLTFRaw &raw)
+        {
+            uint32_t count = 0;
+            for (const SubGLTFRaw &sub : raw.subGltfRaws)
+                count += sub.jointCount;
+            return count;
         }
     }
 
-    uint64_t getAnimationPoolBytes(const AnimationRaw &animation, uint32_t subMeshCount)
+    uint64_t getAnimationPoolBytes(const AnimationRaw &animation, uint32_t subMeshCount, uint32_t sphereCount)
     {
         if (animation.nodes.empty() || subMeshCount == 0)
             return 0;
-        return getPoolLayout(animation, subMeshCount).size;
+        return getPoolLayout(animation, subMeshCount, sphereCount).size;
     }
 
-    std::vector<uint8_t> buildAnimationPoolData(const AnimationRaw &animation, const int32_t *subMeshNodes, uint32_t subMeshCount, uint64_t address)
+    std::vector<uint8_t> buildAnimationPoolData(const AnimationRaw &animation, const gfx::AnimationSubMeshData *subMeshes, uint32_t subMeshCount, const glm::vec4 *spheres,
+                                                uint32_t sphereCount, uint64_t address)
     {
-        const PoolLayout layout = getPoolLayout(animation, subMeshCount);
+        const PoolLayout layout = getPoolLayout(animation, subMeshCount, sphereCount);
         const auto nodeCount = static_cast<uint32_t>(animation.nodes.size());
         std::vector<uint8_t> bytes(layout.size, 0);
 
+        uint32_t skinnedVertexCount = 0;
+        for (uint32_t k = 0; k < subMeshCount; ++k)
+        {
+            if (subMeshes[k].jointCount > 0)
+                skinnedVertexCount = std::max(skinnedVertexCount, subMeshes[k].firstSkinnedVertex + subMeshes[k].vertexCount);
+        }
         const gfx::AnimationMeshData header{.nodes = address + layout.nodes,
                                             .samplers = address + layout.samplers,
                                             .channels = address + layout.channels,
-                                            .subMeshNodes = address + layout.subMeshNodes,
+                                            .subMeshes = address + layout.subMeshes,
                                             .keys = address + layout.keys,
+                                            .joints = address + layout.joints,
+                                            .jointSpheres = address + layout.spheres,
                                             .nodeCount = nodeCount,
-                                            .subMeshCount = subMeshCount};
+                                            .subMeshCount = subMeshCount,
+                                            .jointCount = static_cast<uint32_t>(animation.joints.size()),
+                                            .skinnedVertexCount = skinnedVertexCount};
         std::memcpy(bytes.data(), &header, sizeof(header));
 
         for (uint32_t n = 0; n < nodeCount; ++n)
@@ -171,9 +207,10 @@ namespace rasm
             std::memcpy(bytes.data() + layout.nodes + n * sizeof(data), &data, sizeof(data));
         }
 
-        // A row of channels per clip, then one with every clip's channels for ALL_ANIMATION_CLIPS.
+        // A row of channels per clip, then one with every clip's channels for ALL_ANIMATION_CLIPS, then one with none:
+        // the rest pose (getRestClip).
         const size_t clipCount = animation.clips.size();
-        std::vector<int32_t> channels((clipCount + 1) * nodeCount * 3, -1);
+        std::vector<int32_t> channels((clipCount + 2) * nodeCount * 3, -1);
         std::vector<float> keys;
         uint32_t samplerIndex = 0;
         for (size_t c = 0; c < animation.clips.size(); ++c)
@@ -201,8 +238,16 @@ namespace rasm
             }
         }
         std::memcpy(bytes.data() + layout.channels, channels.data(), channels.size() * sizeof(int32_t));
-        std::memcpy(bytes.data() + layout.subMeshNodes, subMeshNodes, subMeshCount * sizeof(int32_t));
+        std::memcpy(bytes.data() + layout.subMeshes, subMeshes, subMeshCount * sizeof(gfx::AnimationSubMeshData));
         std::memcpy(bytes.data() + layout.keys, keys.data(), keys.size() * sizeof(float));
+        for (size_t j = 0; j < animation.joints.size(); ++j)
+        {
+            gfx::AnimationJointData joint{.node = animation.joints[j].node};
+            getRows(animation.joints[j].inverseBind, joint.inverseBind);
+            std::memcpy(bytes.data() + layout.joints + j * sizeof(joint), &joint, sizeof(joint));
+        }
+        if (sphereCount > 0)
+            std::memcpy(bytes.data() + layout.spheres, spheres, sphereCount * sizeof(glm::vec4));
         return bytes;
     }
 
@@ -224,12 +269,16 @@ namespace rasm
         animation.pose = ctx.createBuffer({.name = "Animation Pose Buffer", .usage = BufferUsage::STORAGE, .size = FIRST_POSE_CAPACITY * POSE_BYTES_PER_NODE});
         animation.poseCapacity = FIRST_POSE_CAPACITY;
         animation.transformCapacity = FIRST_TRANSFORM_CAPACITY;
+        animation.jointCapacity = FIRST_JOINT_CAPACITY;
+        animation.skinnedCapacity = FIRST_SKINNED_CAPACITY;
         bool created = animation.pool.isValid() && animation.pose.isValid();
         for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
         {
             animation.transforms[i] = ctx.createBuffer({.name = "Animated Transform Buffer " + std::to_string(i), .usage = BufferUsage::STORAGE, .size = FIRST_TRANSFORM_CAPACITY * sizeof(gfx::InstanceTransform)});
+            animation.joints[i] = ctx.createBuffer({.name = "Joint Matrix Buffer " + std::to_string(i), .usage = BufferUsage::STORAGE, .size = FIRST_JOINT_CAPACITY * JOINT_BYTES});
+            animation.skinnedVertices[i] = ctx.createBuffer({.name = "Skinned Vertex Buffer " + std::to_string(i), .usage = BufferUsage::STORAGE, .size = FIRST_SKINNED_CAPACITY * sizeof(Vertex)});
             animation.frames[i] = ctx.createBuffer({.name = "Animation Frame Buffer", .usage = BufferUsage::STORAGE, .size = sizeof(gfx::AnimationFrame), .hostVisible = true});
-            created = created && animation.transforms[i].isValid() && animation.frames[i].isValid() &&
+            created = created && animation.transforms[i].isValid() && animation.joints[i].isValid() && animation.skinnedVertices[i].isValid() && animation.frames[i].isValid() &&
                       clearBuffer(ctx, animation.transforms[i], FIRST_TRANSFORM_CAPACITY * sizeof(gfx::InstanceTransform));
         }
         if (!created)
@@ -243,7 +292,7 @@ namespace rasm
     // A mesh's animations take one range of the pool, which is never freed (D4), like its geometry.
     uint64_t Engine::getMeshAnimationBytes(const GLTFRaw &raw) const
     {
-        return getAnimationPoolBytes(raw.animation, countAnimatedSubMeshes(raw));
+        return getAnimationPoolBytes(raw.animation, countAnimatedSubMeshes(raw), countJointSpheres(raw));
     }
 
     uint64_t Engine::getAnimationPoolUsed() const
@@ -257,19 +306,39 @@ namespace rasm
         if (bytes == 0)
             return true;
         GpuAnimation &animation = *gpuAnimation;
-        MeshAnimation info{.nodeCount = static_cast<uint32_t>(raw.animation.nodes.size())};
-        std::vector<int32_t> subMeshNodes;
+        const std::vector<SubMesh> &subMeshes = registry.meshes[mesh.index].subMeshes;
+        MeshAnimation info{.nodeCount = static_cast<uint32_t>(raw.animation.nodes.size()), .jointCount = static_cast<uint32_t>(raw.animation.joints.size())};
+        std::vector<gfx::AnimationSubMeshData> animated;
+        std::vector<glm::vec4> spheres;
         const std::vector<uint8_t> mirrors = getMirroringNodes(raw.animation);
-        for (const SubGLTFRaw &sub : raw.subGltfRaws)
+        for (size_t i = 0; i < raw.subGltfRaws.size(); ++i)
         {
-            info.subMeshMirrors.push_back(sub.animatedNode >= 0 ? mirrors[sub.animatedNode] : 0);
-            info.subMeshTransforms.push_back(sub.animatedNode >= 0 ? static_cast<int32_t>(subMeshNodes.size()) : -1);
-            if (sub.animatedNode >= 0)
-                subMeshNodes.push_back(sub.animatedNode);
+            const SubGLTFRaw &sub = raw.subGltfRaws[i];
+            // A skinned sub-mesh can mirror when one of its joints can.
+            uint8_t mirror = sub.animatedNode >= 0 ? mirrors[sub.animatedNode] : 0;
+            for (uint32_t j = 0; j < sub.jointCount; ++j)
+                mirror = static_cast<uint8_t>(mirror | mirrors[raw.animation.joints[sub.firstJoint + j].node]);
+            info.subMeshMirrors.push_back(mirror);
+            info.subMeshTransforms.push_back(isAnimated(sub) ? static_cast<int32_t>(animated.size()) : -1);
+            if (!isAnimated(sub))
+                continue;
+            animated.push_back({.node = sub.animatedNode >= 0 ? static_cast<uint32_t>(sub.animatedNode) : 0,
+                                .jointCount = sub.jointCount,
+                                .firstJoint = sub.firstJoint,
+                                .firstSphere = static_cast<uint32_t>(spheres.size()),
+                                .geometryIndex = subMeshes[i].geometry.geometryIndex,
+                                .vertexCount = sub.jointCount > 0 ? subMeshes[i].geometry.vertexCount : 0,
+                                .firstSkinnedVertex = sub.jointCount > 0 ? info.skinnedVertexCount : 0});
+            if (sub.jointCount > 0)
+            {
+                spheres.insert(spheres.end(), sub.jointSpheres.begin(), sub.jointSpheres.end());
+                info.skinnedVertexCount += subMeshes[i].geometry.vertexCount;
+            }
         }
-        info.transformCount = static_cast<uint32_t>(subMeshNodes.size());
+        info.transformCount = static_cast<uint32_t>(animated.size());
         info.address = ctx.getBufferDeviceAddress(animation.pool) + animation.poolUsed;
-        const std::vector<uint8_t> data = buildAnimationPoolData(raw.animation, subMeshNodes.data(), info.transformCount, info.address);
+        const std::vector<uint8_t> data =
+            buildAnimationPoolData(raw.animation, animated.data(), info.transformCount, spheres.data(), static_cast<uint32_t>(spheres.size()), info.address);
         if (!ctx.fillBuffer(animation.pool, data.data(), data.size(), animation.poolUsed))
             return false;
         animation.poolUsed += bytes;
@@ -343,6 +412,12 @@ namespace rasm
         if (!state.playing)
             return;
         state.playing = false;
+        // A skinned mesh goes back to its rest pose from the next frame, a jump with no motion from the frame before.
+        if (gpuAnimation->meshes[registry.entities[entity.index].mesh.index].skinnedVertexCount > 0)
+        {
+            state.rest = true;
+            state.resetSync = gpuScene->syncCount + 1;
+        }
         writeInstanceRows(entity, false);
     }
 
@@ -376,7 +451,7 @@ namespace rasm
         startAnimation(entity, state.play, gpuScene->syncCount);
     }
 
-    // The entity's first play takes a table row and its ranges of transforms and pose nodes, which it keeps (D4).
+    // A play takes the entity's row on its first pose (takeAnimationRow).
     void Engine::startAnimation(EntityHandle entity, const AnimationPlay &play, uint32_t firstSync)
     {
         GpuAnimation &animation = *gpuAnimation;
@@ -387,57 +462,107 @@ namespace rasm
             spdlog::error("playAnimation: entity {} cannot play clip {}: its mesh has {} clips.", entity.index, play.clip, clips.size());
             return;
         }
+        if (!takeAnimationRow(entity, firstSync))
+            return;
         EntityAnimation &state = animation.entityStates[entity.index];
-        const MeshAnimation &info = animation.meshes[mesh.index];
-        if (state.row == UINT32_MAX)
-        {
-            if (animation.entityRows >= animation.entities.capacity())
-            {
-                spdlog::error("The animated entity table is full: entity {} cannot play ({}/{} rows in use). EngineConfig::maxAnimatedEntities sets its size.",
-                              entity.index, animation.entityRows, animation.entities.capacity());
-                return;
-            }
-            if (!growAnimationBuffers(animation.transformCount + info.transformCount, animation.poseCount + info.nodeCount, firstSync))
-            {
-                spdlog::error("Entity {} cannot play: the animation buffers cannot grow.", entity.index);
-                return;
-            }
-            state.row = animation.entityRows++;
-            state.firstTransform = animation.transformCount;
-            state.firstNode = animation.poseCount;
-            animation.transformCount += info.transformCount;
-            animation.poseCount += info.nodeCount;
-        }
         state.play = play;
         state.playing = true;
+        state.rest = false;
         state.resetSync = firstSync;
         writeInstanceRows(entity, false);
     }
 
-    // Both slots' transforms grow at once, after the GPU is done with them: a frame reads the other slot's as the
-    // frame before. Their old rows are gone, so every playing entity starts its motion again in firstSync.
-    bool Engine::growAnimationBuffers(uint32_t transformCount, uint32_t poseCount, uint32_t firstSync)
+    // From syncGpuScene, once the entity has its instance rows: an entity of a skinned mesh that does not start a play
+    // is posed by its skeleton's rest pose (glTF), so it takes its row now.
+    void Engine::poseAtRest(EntityHandle entity, uint32_t firstSync)
     {
         GpuAnimation &animation = *gpuAnimation;
-        if (transformCount <= animation.transformCapacity && poseCount <= animation.poseCapacity)
+        const MeshHandle mesh = registry.entities[entity.index].mesh;
+        if (mesh.index >= animation.meshes.size() || animation.meshes[mesh.index].skinnedVertexCount == 0)
+            return;
+        if (animation.entityStates.size() <= entity.index)
+            animation.entityStates.resize(entity.index + 1);
+        if (animation.entityStates[entity.index].playing || !takeAnimationRow(entity, firstSync))
+            return;
+        EntityAnimation &state = animation.entityStates[entity.index];
+        state.rest = true;
+        state.resetSync = firstSync;
+        writeInstanceRows(entity, false);
+    }
+
+    // The entity's first pose takes a table row and its ranges of transforms, pose nodes, joints and skinned vertices,
+    // which it keeps (D4).
+    bool Engine::takeAnimationRow(EntityHandle entity, uint32_t firstSync)
+    {
+        GpuAnimation &animation = *gpuAnimation;
+        EntityAnimation &state = animation.entityStates[entity.index];
+        const MeshAnimation &info = animation.meshes[registry.entities[entity.index].mesh.index];
+        if (state.row == UINT32_MAX)
+        {
+            if (info.skinnedVertexCount > uint64_t{MAX_SKIN_GROUPS} * SKIN_GROUP_SIZE)
+            {
+                spdlog::error("Entity {} cannot be posed: its mesh has {} skinned vertices, and the Skin pass takes at most {}.", entity.index, info.skinnedVertexCount,
+                              MAX_SKIN_GROUPS * SKIN_GROUP_SIZE);
+                return false;
+            }
+            if (animation.entityRows >= animation.entities.capacity())
+            {
+                spdlog::error("The animated entity table is full: entity {} cannot be posed ({}/{} rows in use). EngineConfig::maxAnimatedEntities sets its size.",
+                              entity.index, animation.entityRows, animation.entities.capacity());
+                return false;
+            }
+            if (!growAnimationBuffers(animation.transformCount + info.transformCount, animation.poseCount + info.nodeCount, animation.jointCount + info.jointCount,
+                                      animation.skinnedCount + info.skinnedVertexCount, firstSync))
+            {
+                spdlog::error("Entity {} cannot be posed: the animation buffers cannot grow.", entity.index);
+                return false;
+            }
+            state.row = animation.entityRows++;
+            state.firstTransform = animation.transformCount;
+            state.firstNode = animation.poseCount;
+            state.firstJoint = animation.jointCount;
+            state.firstSkinnedVertex = animation.skinnedCount;
+            animation.transformCount += info.transformCount;
+            animation.poseCount += info.nodeCount;
+            animation.jointCount += info.jointCount;
+            animation.skinnedCount += info.skinnedVertexCount;
+            animation.maxSkinnedVertices = std::max(animation.maxSkinnedVertices, info.skinnedVertexCount);
+        }
+        return true;
+    }
+
+    // Both slots' transforms and skinned vertices grow at once, after the GPU is done with them: a frame reads the other
+    // slot's as the frame before. Their old rows are gone, so every playing entity starts its motion again in
+    // firstSync. A new skinned vertex is not cleared: the Skin pass writes it in the frame its entity starts, before any
+    // view reads it, and while the pipelines do not compile its transform holds zeros, which draws it as a point.
+    bool Engine::growAnimationBuffers(uint32_t transformCount, uint32_t poseCount, uint32_t jointCount, uint32_t skinnedCount, uint32_t firstSync)
+    {
+        GpuAnimation &animation = *gpuAnimation;
+        if (transformCount <= animation.transformCapacity && poseCount <= animation.poseCapacity && jointCount <= animation.jointCapacity &&
+            skinnedCount <= animation.skinnedCapacity)
             return true;
         ctx.waitForFence(frameFence, frameFenceValue);
         if (asyncCompute)
             ctx.waitForFence(computeFence, computeFenceValue);
         const uint32_t transformCapacity = std::max(transformCount, animation.transformCapacity * 2);
         const uint32_t poseCapacity = std::max(poseCount, animation.poseCapacity * 2);
-        if (transformCount > animation.transformCapacity)
+        const uint32_t jointCapacity = std::max(jointCount, animation.jointCapacity * 2);
+        const uint32_t skinnedCapacity = std::max(skinnedCount, animation.skinnedCapacity * 2);
+        if (transformCount > animation.transformCapacity || skinnedCount > animation.skinnedCapacity)
         {
             // Set before the resizes, so a resize that fails halfway leaves no entity reading a cleared slot as the
             // frame before.
             for (size_t i = 0; i < animation.entityStates.size(); ++i)
             {
                 EntityAnimation &state = animation.entityStates[i];
-                if (!state.playing)
+                if (!state.playing && !state.rest)
                     continue;
                 state.resetSync = firstSync;
                 writeAnimationRow(registry.entities[i].handle);
             }
+        }
+        if (transformCount > animation.transformCapacity)
+        {
             for (auto &buffer : animation.transforms)
             {
                 if (!ctx.resizeBuffer(buffer, uint64_t{transformCapacity} * sizeof(gfx::InstanceTransform)) ||
@@ -445,6 +570,26 @@ namespace rasm
                     return false;
             }
             animation.transformCapacity = transformCapacity;
+        }
+        if (skinnedCount > animation.skinnedCapacity)
+        {
+            for (auto &buffer : animation.skinnedVertices)
+            {
+                if (!ctx.resizeBuffer(buffer, uint64_t{skinnedCapacity} * sizeof(Vertex)))
+                    return false;
+            }
+            animation.skinnedCapacity = skinnedCapacity;
+            spdlog::info("The skinned vertex buffers hold {} vertices: {:.1f} MiB, {} B per vertex in each of the {} frame slots.", skinnedCapacity,
+                         static_cast<double>(skinnedCapacity) * sizeof(Vertex) * MAX_FRAMES_IN_FLIGHT / (1024.0 * 1024.0), sizeof(Vertex), MAX_FRAMES_IN_FLIGHT);
+        }
+        if (jointCount > animation.jointCapacity)
+        {
+            for (auto &buffer : animation.joints)
+            {
+                if (!ctx.resizeBuffer(buffer, uint64_t{jointCapacity} * JOINT_BYTES))
+                    return false;
+            }
+            animation.jointCapacity = jointCapacity;
         }
         if (poseCount > animation.poseCapacity)
         {
@@ -467,7 +612,7 @@ namespace rasm
     int32_t Engine::getAnimationRow(EntityHandle entity, uint32_t subMesh) const
     {
         const GpuAnimation &animation = *gpuAnimation;
-        if (animation.entityStates.size() <= entity.index || !animation.entityStates[entity.index].playing)
+        if (animation.entityStates.size() <= entity.index || (!animation.entityStates[entity.index].playing && !animation.entityStates[entity.index].rest))
             return -1;
         const EntityAnimation &state = animation.entityStates[entity.index];
         const int32_t transform = animation.meshes[registry.entities[entity.index].mesh.index].subMeshTransforms[subMesh];
@@ -483,22 +628,29 @@ namespace rasm
         const Entity &entityRef = registry.entities[entity.index];
         const std::vector<AnimationClip> &clips = registry.meshes[entityRef.mesh.index].animations;
         float duration = 0.0f;
-        for (size_t i = 0; i < clips.size(); ++i)
+        for (size_t i = 0; state.playing && i < clips.size(); ++i)
         {
             if (state.play.clip == ALL_ANIMATION_CLIPS || state.play.clip == i)
                 duration = std::max(duration, clips[i].duration);
         }
-        const uint32_t clip = state.play.clip == ALL_ANIMATION_CLIPS ? static_cast<uint32_t>(clips.size()) : state.play.clip;
+        // The rest pose is the channel row after ALL_ANIMATION_CLIPS's, with no channel: every node at its rest TRS.
+        int32_t clip = -1;
+        if (state.playing)
+            clip = static_cast<int32_t>(state.play.clip == ALL_ANIMATION_CLIPS ? clips.size() : state.play.clip);
+        else if (state.rest)
+            clip = static_cast<int32_t>(clips.size() + 1);
         const gfx::AnimatedEntity row{.entityMatrix = entityRef.transform.toMatrix(),
                                       .mesh = animation.meshes[entityRef.mesh.index].address,
                                       .phase = getAnimationPhase(state.play, duration, animation.base),
                                       .speed = state.play.speed,
                                       .duration = duration,
-                                      .clip = state.playing ? static_cast<int32_t>(clip) : -1,
+                                      .clip = clip,
                                       .loop = state.play.loop ? 1u : 0u,
                                       .firstTransform = state.firstTransform,
                                       .firstNode = state.firstNode,
-                                      .resetSync = state.resetSync};
+                                      .resetSync = state.resetSync,
+                                      .firstJoint = state.firstJoint,
+                                      .firstSkinnedVertex = state.firstSkinnedVertex};
         gpuAnimation->entities.setRow(state.row, &row);
     }
 
@@ -531,12 +683,25 @@ namespace rasm
                 builder.write(gpuAnimation->transforms);
                 builder.readPrevious(gpuAnimation->transforms);
                 builder.write(gpuAnimation->pose);
+                builder.write(gpuAnimation->joints);
             },
             [this](RenderContext &)
             { recordAnimation(); });
+        // Once per frame, before every view: they all draw the vertices it writes.
+        graph.addAsyncComputePass(
+            "Skin",
+            [this](PassBuilder &builder)
+            {
+                builder.read(gpuAnimation->joints);
+                builder.write(gpuAnimation->skinnedVertices);
+            },
+            [this](RenderContext &)
+            { recordSkinning(); });
     }
 
-    // A shader error logs and retries the next frame; until then the animated parts are not drawn right.
+    // A shader error logs and retries the next frame; until then the animated parts are not drawn right. Once an
+    // entity with skinned vertices plays, the Skin pipeline is made here too, so the Animate pass runs only when the
+    // Skin pass can follow it.
     void Engine::recordAnimation()
     {
         ZoneScoped;
@@ -544,13 +709,13 @@ namespace rasm
         if (animation.entityRows == 0)
             return;
         if (!animation.pipeline.isValid())
-        {
             animation.pipeline = createComputePipeline("animate", readFile(pathFromUtf8(config.shaderDir) / "passes/animate.slang"), "animateMain");
-            if (!animation.pipeline.isValid())
-            {
-                spdlog::error("Failed to create the animation pipeline; animated meshes are not posed until it compiles.");
-                return;
-            }
+        if (animation.skinnedCount > 0 && !animation.skinPipeline.isValid())
+            animation.skinPipeline = createComputePipeline("skin", readFile(pathFromUtf8(config.shaderDir) / "passes/skin.slang"), "skinMain");
+        if (!animation.pipeline.isValid() || (animation.skinnedCount > 0 && !animation.skinPipeline.isValid()))
+        {
+            spdlog::error("Failed to create the animation pipelines; animated meshes are not posed until they compile.");
+            return;
         }
 
         const auto frame = static_cast<uint32_t>(frameCount);
@@ -562,7 +727,12 @@ namespace rasm
                                        .clock = static_cast<float>(animation.clock - animation.base),
                                        .sync = gpuScene->syncCount,
                                        .entityCount = animation.entityRows,
-                                       .previousSync = animation.recordedSync};
+                                       .previousSync = animation.recordedSync,
+                                       .joints = ctx.getBufferDeviceAddress(animation.joints[frame]),
+                                       .vertices = ctx.getBufferDeviceAddress(geometryPool->vertexBuffer()),
+                                       .skins = ctx.getBufferDeviceAddress(geometryPool->skinBuffer()),
+                                       .geometry = ctx.getBufferDeviceAddress(geometryPool->tableBuffer()),
+                                       .skinnedVertices = ctx.getBufferDeviceAddress(animation.skinnedVertices[frame])};
         if (!ctx.fillBuffer(animation.frames[frame], &data, sizeof(data)))
             return;
         animation.recordedSync = gpuScene->syncCount;
@@ -572,5 +742,20 @@ namespace rasm
         ctx.bindPipeline(commandBuffer, animation.pipeline);
         ctx.pushConstants(commandBuffer, animation.pipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
         ctx.dispatch(commandBuffer, animation.entityRows);
+    }
+
+    // Runs after this frame's Animate pass, with its frame data: x is the entity's row, y its next 64 skinned vertices.
+    void Engine::recordSkinning()
+    {
+        ZoneScoped;
+        const GpuAnimation &animation = *gpuAnimation;
+        if (animation.skinnedCount == 0 || animation.recordedSync != gpuScene->syncCount)
+            return;
+        const auto frame = static_cast<uint32_t>(frameCount);
+        const auto commandBuffer = frameResources[frame].commandBuffer;
+        const gfx::AnimatePushConstants pushConstants{.frame = ctx.getBufferDeviceAddress(animation.frames[frame]), .padding = {0, 0}};
+        ctx.bindPipeline(commandBuffer, animation.skinPipeline);
+        ctx.pushConstants(commandBuffer, animation.skinPipeline, ShaderType::COMPUTE, &pushConstants, sizeof(pushConstants), 0);
+        ctx.dispatch(commandBuffer, animation.entityRows, (animation.maxSkinnedVertices + SKIN_GROUP_SIZE - 1) / SKIN_GROUP_SIZE);
     }
 }

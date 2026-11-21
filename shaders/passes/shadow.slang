@@ -15,7 +15,7 @@ float4 vertMain(VSInput input) : SV_POSITION
     DrawInfo *draw          = pc.scene->drawInfoPtr + getDrawIndex();
     InstanceData *instance  = pc.scene->instancesPtr + draw->firstInstance;
     // SV_VertexID is the raw index-buffer value, as in rasm.slang.
-    VertexFull vert         = pc.scene->vertsPtr[input.vertexID + draw->vertexOffset];
+    VertexFull vert         = getVertex(pc.scene, instance, draw, input.vertexID);
     return mul(pc.scene->projection, mul(pc.scene->view, mul(getWorldMatrix(pc.scene, instance), float4(vert.pos, 1.0))));
 }
 
@@ -40,7 +40,7 @@ MaskOutput vertMask(VSInput input)
 {
     DrawInfo *draw          = pc.scene->drawInfoPtr + getDrawIndex();
     InstanceData *instance  = pc.scene->instancesPtr + draw->firstInstance;
-    VertexFull vert         = pc.scene->vertsPtr[input.vertexID + draw->vertexOffset];
+    VertexFull vert         = getVertex(pc.scene, instance, draw, input.vertexID);
 
     MaskOutput output       = {};
     output.clipPosition     = mul(pc.scene->projection, mul(pc.scene->view, mul(getWorldMatrix(pc.scene, instance), float4(vert.pos, 1.0))));

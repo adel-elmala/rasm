@@ -2,9 +2,9 @@
 #include "animationTypes.slang"
 
 // The Animate pass: one group per row of the animated entity table. It samples the entity's clip at the frame's time
-// into each node's local matrix, walks up the parents to each node's world matrix, and writes the matrices of the
-// entity's animated sub-meshes. The threads go over the nodes and sub-meshes in strides, so a mesh may have any number
-// of them.
+// into each node's local matrix, walks up the parents to each node's world matrix, writes each skin joint's matrix, and
+// writes the matrices of the entity's animated sub-meshes, and a skinned one's bounds. The threads go over the nodes,
+// joints and sub-meshes in strides, so a mesh may have any number of them.
 
 static const uint ANIMATE_GROUP_SIZE = 64;
 
@@ -126,6 +126,56 @@ void storeRows(float4 *rows, float3x4 m)
     rows[2] = m[2];
 }
 
+// The matrix's largest stretch, bounded from above as getWorldSphere does (frustumCulling.slang).
+float getStretch(float3x4 m)
+{
+    float3 c0 = float3(m[0].x, m[1].x, m[2].x);
+    float3 c1 = float3(m[0].y, m[1].y, m[2].y);
+    float3 c2 = float3(m[0].z, m[1].z, m[2].z);
+    float d01 = abs(dot(c0, c1));
+    float d02 = abs(dot(c0, c2));
+    float d12 = abs(dot(c1, c2));
+    return sqrt(max(max(dot(c0, c0) + d01 + d02, dot(c1, c1) + d01 + d12), dot(c2, c2) + d02 + d12));
+}
+
+// A joint's sphere moved by its joint matrix. A sphere with radius < 0 has no vertex.
+float4 getPosedSphere(AnimationFrame *frame, AnimationMeshData *mesh, AnimatedEntity entity, AnimationSubMeshData subMesh, uint joint)
+{
+    float4 sphere = mesh->jointSpheres[subMesh.firstSphere + joint];
+    if (sphere.w < 0.0)
+        return sphere;
+    float3x4 matrix = loadRows(frame->joints + (entity.firstJoint + subMesh.firstJoint + joint) * 3);
+    return float4(mul(matrix, float4(sphere.xyz, 1.0)), sphere.w * getStretch(matrix));
+}
+
+// A skinned vertex is a weighted mix of its joints' matrices applied to it, and each of them puts it inside that
+// joint's posed sphere. A sphere around all the posed spheres is convex, so it holds every mix: the center of their
+// box, the radius to the farthest edge.
+float4 getSkinnedBounds(AnimationFrame *frame, AnimationMeshData *mesh, AnimatedEntity entity, AnimationSubMeshData subMesh)
+{
+    float3 low = float3(1e30);
+    float3 high = float3(-1e30);
+    for (uint j = 0; j < subMesh.jointCount; ++j)
+    {
+        float4 sphere = getPosedSphere(frame, mesh, entity, subMesh, j);
+        if (sphere.w < 0.0)
+            continue;
+        low = min(low, sphere.xyz - sphere.w);
+        high = max(high, sphere.xyz + sphere.w);
+    }
+    if (low.x > high.x)
+        return float4(0.0);
+    float3 center = (low + high) * 0.5;
+    float radius = 0.0;
+    for (uint j = 0; j < subMesh.jointCount; ++j)
+    {
+        float4 sphere = getPosedSphere(frame, mesh, entity, subMesh, j);
+        if (sphere.w >= 0.0)
+            radius = max(radius, length(sphere.xyz - center) + sphere.w);
+    }
+    return float4(center, radius);
+}
+
 // transpose(inverse(m)): the cofactors over the determinant.
 float3x3 getNormalMatrix(float3x3 m)
 {
@@ -194,15 +244,46 @@ void animateMain(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
     }
     AllMemoryBarrierWithGroupSync();
 
+    // A joint's matrix moves a bind-pose vertex with the joint: the node's world matrix now, times the inverse of the
+    // one it had in the bind pose.
+    for (uint j = threadId.x; j < mesh->jointCount; j += ANIMATE_GROUP_SIZE)
+    {
+        AnimationJointData joint = mesh->joints[j];
+        float3x4 inverseBind;
+        inverseBind[0] = joint.inverseBind[0];
+        inverseBind[1] = joint.inverseBind[1];
+        inverseBind[2] = joint.inverseBind[2];
+        storeRows(frame->joints + (entity.firstJoint + j) * 3, mulAffine(loadRows(worlds + joint.node * 3), inverseBind));
+    }
+    AllMemoryBarrierWithGroupSync();
+
     // The other slot holds the frame before only when that frame ran this pass, and this entity's pose then.
     bool reset = frame->previousSync + 1 != frame->sync || entity.resetSync > frame->previousSync;
     for (uint k = threadId.x; k < mesh->subMeshCount; k += ANIMATE_GROUP_SIZE)
     {
-        float3x4 node = loadRows(worlds + mesh->subMeshNodes[k] * 3);
-        float4x4 world = mul(entity.entityMatrix, float4x4(node[0], node[1], node[2], float4(0.0, 0.0, 0.0, 1.0)));
+        AnimationSubMeshData subMesh = mesh->subMeshes[k];
         uint row = entity.firstTransform + k;
 
+        // A skinned sub-mesh ignores its node (glTF): its joints place its vertices, and the entity places them all.
         InstanceTransform transform;
+        float4x4 world = entity.entityMatrix;
+        transform.boundsCenter = float3(0.0);
+        transform.boundsRadius = -1.0;
+        transform.skinnedVertex = -1;
+        transform.skinnedMotion = 0;
+        if (subMesh.jointCount == 0)
+        {
+            float3x4 node = loadRows(worlds + subMesh.node * 3);
+            world = mul(entity.entityMatrix, float4x4(node[0], node[1], node[2], float4(0.0, 0.0, 0.0, 1.0)));
+        }
+        else
+        {
+            float4 bounds = getSkinnedBounds(frame, mesh, entity, subMesh);
+            transform.boundsCenter = bounds.xyz;
+            transform.boundsRadius = bounds.w;
+            transform.skinnedVertex = int(entity.firstSkinnedVertex + subMesh.firstSkinnedVertex);
+            transform.skinnedMotion = reset ? 0 : 1;
+        }
         transform.worldMatrix = world;
         transform.normalMatrix = getNormalMatrix((float3x3)world);
         float4x4 previous = reset ? world : frame->previousTransforms[row].worldMatrix;
