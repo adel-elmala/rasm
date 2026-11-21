@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Scenes and Meshes · RASM</title>
-<meta name="description" content="Scenes, entities, Transform, meshes (createMesh, loadMesh, loadGLTF, Vertex, SubMesh, MeshLod), lights, adding objects to scenes, when changes reach the GPU, and the limits.">
-<meta name="rasm-sources" content="include/rasm/scene.h include/rasm/animation.h src/renderer/animation.cpp src/assets/environment.cpp src/renderer/environmentBake.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/engine.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/05_city/main.cpp">
+<meta name="description" content="Scenes, entities, Transform, meshes (createMesh, loadMesh, loadGLTF, Vertex, SubMesh, MeshLod), animation and morph targets, lights, adding objects to scenes, when changes reach the GPU, and the limits.">
+<meta name="rasm-sources" content="include/rasm/scene.h include/rasm/animation.h src/renderer/animation.cpp src/assets/morphImport.cpp src/assets/environment.cpp src/renderer/environmentBake.cpp include/rasm/entity.h include/rasm/mesh.h include/rasm/light.h include/rasm/transform.h include/rasm/engine.h include/rasm/types.h src/scene/scene.cpp src/scene/entity.cpp src/scene/light.cpp src/scene/transform.cpp src/assets/mesh.cpp src/assets/meshImport.cpp src/assets/meshImport.h src/assets/material.cpp src/renderer/gpuScene.cpp src/renderer/gpuScene.h src/renderer/gpuTable.cpp src/renderer/geometryPool.cpp src/core/handle.cpp shaders/lib/pbr.slang shaders/lib/core.slang examples/00_hello_scene/main.cpp examples/02_gltf/main.cpp examples/03_instances/main.cpp examples/05_city/main.cpp examples/14_morph_targets/main.cpp">
 <link rel="stylesheet" href="../assets/style.css">
 <script src="../assets/sync.js"></script>
 <script defer src="../assets/site.js"></script>
@@ -347,7 +347,7 @@ engine.updateTransform(bunny, transform);</code></pre>
 <div class="api" id="loadGLTF">
   <pre class="sig">MeshHandle loadGLTF(const std::string&amp; path);</pre>
   <div class="body">
-    <p>The same as <code>loadMesh</code>; the file extension picks the importer. It reads <code>POSITION</code>, <code>NORMAL</code>, <code>TANGENT</code>, <code>TEXCOORD_0</code> to <code>_2</code> and <code>COLOR_0</code>, in floats or in the integer types of <code>KHR_mesh_quantization</code>, and the material extensions on the <a href="materials.html#gltf">materials page</a>. A file may require <code>KHR_materials_unlit</code>, <code>KHR_materials_emissive_strength</code>, <code>KHR_texture_transform</code>, <code>KHR_mesh_quantization</code> and <code>KHR_texture_basisu</code>; one that requires any other extension fails to load. Other extensions it only uses are ignored.</p>
+    <p>The same as <code>loadMesh</code>; the file extension picks the importer. It reads <code>POSITION</code>, <code>NORMAL</code>, <code>TANGENT</code>, <code>TEXCOORD_0</code> to <code>_2</code> and <code>COLOR_0</code>, in floats or in the integer types of <code>KHR_mesh_quantization</code>, skins (<code>JOINTS_n</code> / <code>WEIGHTS_n</code>, <a href="#animation">Animation</a>), morph targets (<code>POSITION</code>, <code>NORMAL</code> and <code>TANGENT</code> deltas, sparse accessors too, <a href="#morph-targets">Morph targets</a>), and the material extensions on the <a href="materials.html#gltf">materials page</a>. A file may require <code>KHR_materials_unlit</code>, <code>KHR_materials_emissive_strength</code>, <code>KHR_texture_transform</code>, <code>KHR_mesh_quantization</code> and <code>KHR_texture_basisu</code>; one that requires any other extension fails to load. Other extensions it only uses are ignored.</p>
     <pre><code>rasm::MeshHandle room = engine.loadGLTF("models/gltf/coffee-room/scene.gltf");
 if (!room.isValid())
     return 1;
@@ -397,6 +397,17 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
     uint16_t    weights[4];
 };</pre>
   <div class="body"><p>A skinned vertex's 4 largest influences: joints of its skin, and weights as UNORM16 that add up to 65535 exactly (the rounding's rest goes to the largest). 16 bytes, in the geometry pool's skin stream, so a vertex stays 64 bytes. The import keeps the 4 largest of <code>JOINTS_n</code> / <code>WEIGHTS_n</code> (one warning per primitive that has more), scales them to add up to 1, and drops a weight whose joint is past the skin's.</p></div>
+</div>
+
+<div class="api" id="MorphDelta">
+  <pre class="sig">struct MorphDelta
+{
+    glm::vec3   position;
+    uint32_t    normalTangent[3];
+};
+
+constexpr uint32_t MAX_MORPH_TARGETS = 256;</pre>
+  <div class="body"><p>A morph target's change to one vertex: 24 bytes, in the geometry pool's morph stream. The position is 3 floats; the normal and the tangent's xyz are 6 half floats, two per uint, the first in the low half (normal x y, normal z tangent x, tangent y z). A glTF primitive keeps at most <code>MAX_MORPH_TARGETS</code> targets (a warning says how many it drops), because the <code>Skin</code> pass keeps a group's weights in shared memory. See <a href="#morph-targets">Morph targets</a>.</p></div>
 </div>
 
 <div class="api" id="packVertexColor">
@@ -477,8 +488,9 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
     MeshState                  state = MeshState::LOADING;
     std::vector&lt;SubMesh&gt;       subMeshes;
     std::vector&lt;AnimationClip&gt; animations;
+    std::vector&lt;std::string&gt;   morphTargetNames;
 };</pre>
-  <div class="body"><p>A mesh: its load state, its sub-meshes and its clips (<a href="#getAnimations"><code>getAnimations</code></a>).</p></div>
+  <div class="body"><p>A mesh: its load state, its sub-meshes, its clips (<a href="#getAnimations"><code>getAnimations</code></a>) and the name of each morph weight of its entities (<a href="#getMorphTargetNames"><code>getMorphTargetNames</code></a>).</p></div>
 </div>
 
 <div class="api" id="MeshState">
@@ -489,18 +501,21 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
 <div class="api" id="MeshGeometry">
   <pre class="sig">struct MeshGeometry
 {
-    uint32_t  firstVertex   = 0;
-    uint32_t  vertexCount   = 0;
-    uint32_t  firstIndex    = 0;
-    uint32_t  indexCount    = 0;
-    uint32_t  lodIndexCount = 0;
-    uint32_t  firstColor    = 0;
-    uint32_t  colorCount    = 0;
-    uint32_t  firstSkin     = 0;
-    uint32_t  skinCount     = 0;
-    uint32_t  geometryIndex = 0;
-    glm::vec3 boundsCenter  = glm::vec3(0.0f);
-    float     boundsRadius  = 0.0f;
+    uint32_t  firstVertex      = 0;
+    uint32_t  vertexCount      = 0;
+    uint32_t  firstIndex       = 0;
+    uint32_t  indexCount       = 0;
+    uint32_t  lodIndexCount    = 0;
+    uint32_t  firstColor       = 0;
+    uint32_t  colorCount       = 0;
+    uint32_t  firstSkin        = 0;
+    uint32_t  skinCount        = 0;
+    uint32_t  firstMorph       = 0;
+    uint32_t  morphCount       = 0;
+    uint32_t  morphTargetCount = 0;
+    uint32_t  geometryIndex    = 0;
+    glm::vec3 boundsCenter     = glm::vec3(0.0f);
+    float     boundsRadius     = 0.0f;
 };</pre>
   <div class="body">
     <p>Where a sub-mesh sits in the geometry pool, its row in the geometry table (<code>geometryIndex</code>), and its bounding sphere in mesh space, which frustum and occlusion culling test.</p>
@@ -509,6 +524,7 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
       <dt>lodIndexCount</dt><dd>The indices of LOD 1 and coarser, together. They come right after LOD 0's in the pool.</dd>
       <dt>firstColor, colorCount</dt><dd>The sub-mesh's vertex colors in the color pool; <code>colorCount</code> is 0 without colors.</dd>
       <dt>firstSkin, skinCount</dt><dd>The sub-mesh's <a href="#SkinVertex"><code>SkinVertex</code></a>es in the skin stream; <code>skinCount</code> is 0 when it is not skinned.</dd>
+      <dt>firstMorph, morphCount, morphTargetCount</dt><dd>The sub-mesh's <a href="#MorphDelta"><code>MorphDelta</code></a>s in the morph stream: <code>morphCount</code> = <code>vertexCount</code> · <code>morphTargetCount</code>, target by target. Both are 0 without morph targets.</dd>
     </dl>
   </div>
 </div>
@@ -521,6 +537,8 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
     std::vector&lt;MeshLod&gt;  lods;
     std::vector&lt;uint32_t&gt; colors;
     std::vector&lt;SkinVertex&gt; skin;
+    std::vector&lt;MorphDelta&gt; morphs;
+    uint32_t                morphTargetCount = 0;
 };</pre>
   <div class="body">
     <p>Decoded vertices and indices of one sub-mesh, before upload (also used for glTF).</p>
@@ -529,6 +547,7 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
       <dt>lods</dt><dd>LOD 1 and coarser, from fine to coarse; at most <code>MAX_MESH_LODS</code> − 1. Empty until the engine builds them, and for a sub-mesh under 1024 triangles.</dd>
       <dt>colors</dt><dd>One packed vertex color per vertex (glTF <code>COLOR_0</code>), or empty.</dd>
       <dt>skin</dt><dd>One <a href="#SkinVertex"><code>SkinVertex</code></a> per vertex (glTF <code>JOINTS_0</code> / <code>WEIGHTS_0</code>) for a skinned primitive, or empty.</dd>
+      <dt>morphs, morphTargetCount</dt><dd>The deltas of each morph target, target-major: target <var>t</var>'s delta of vertex <var>v</var> is at <code class="lang-text">t · vertices.size() + v</code>. Empty, and a count of 0, for a primitive without targets, or whose targets move nothing.</dd>
     </dl>
   </div>
 </div>
@@ -560,6 +579,7 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
     uint32_t  firstJoint   = 0;
     uint32_t  jointCount   = 0;
     std::vector&lt;glm::vec4&gt; jointSpheres;
+    int32_t   firstWeight  = -1;
 };</pre>
   <div class="body">
     <p>One decoded sub-mesh with its node matrix, its glTF material index (−1 for none), its glTF node, and its node in <code>AnimationRaw::nodes</code> (−1 when no clip moves it).</p>
@@ -567,6 +587,7 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
       <dt>skin</dt><dd>The glTF skin of a skinned primitive, −1 otherwise. A skinned primitive's <code>transform</code> is the identity: glTF ignores the node's matrix, the joints place it.</dd>
       <dt>firstJoint, jointCount</dt><dd>Its skin's joints in <code>AnimationRaw::joints</code>. <code>jointCount</code> is 0 when it is not skinned, also when its skin does not import; it then draws its bind pose.</dd>
       <dt>jointSpheres</dt><dd>Per joint of its skin, the sphere (center, radius) around the bind-pose vertices the joint moves; radius −1 for a joint that moves none. The GPU moves them to bound the posed mesh (<a href="../guides/skinning.html">Skinning</a>).</dd>
+      <dt>firstWeight</dt><dd>Its node's first weight in <code>AnimationRaw::morphWeights</code>; −1 without morph targets.</dd>
     </dl>
   </div>
 </div>
@@ -593,7 +614,7 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
 
 <h2 id="animation"><span class="n">5</span>Animation</h2>
 
-<p>A glTF model's clips move its nodes, and the GPU poses them (<a href="../guides/keyframe-animation.html">Keyframe animation</a>). A skinned model's clips move its joints, and the GPU skins its vertices once per frame for every view (<a href="../guides/skinning.html">Skinning</a>); it plays the same way. The application owns the clock: it calls <code>setAnimationTime</code> once per frame, and starts a clip on an entity with <code>playAnimation</code>. Nothing else runs per frame on the CPU, however many entities play.</p>
+<p>A glTF model's clips move its nodes, and the GPU poses them (<a href="../guides/keyframe-animation.html">Keyframe animation</a>). A skinned model's clips move its joints, and the GPU skins its vertices once per frame for every view (<a href="../guides/skinning.html">Skinning</a>); it plays the same way. A morphed model's clips move its weights too (<a href="#morph-targets">Morph targets</a>). The application owns the clock: it calls <code>setAnimationTime</code> once per frame, and starts a clip on an entity with <code>playAnimation</code>. Nothing else runs per frame on the CPU, however many entities play.</p>
 
 <pre><code>const rasm::MeshHandle box = engine.loadGLTF("models/gltf/BoxAnimated/BoxAnimated.glb");
 const rasm::EntityHandle entity = engine.createEntity("box", box);
@@ -682,6 +703,8 @@ while (engine.running())
     std::vector&lt;AnimationNode&gt;    nodes;
     std::vector&lt;AnimationClipRaw&gt; clips;
     std::vector&lt;AnimationJoint&gt;   joints;
+    std::vector&lt;float&gt;            morphWeights;
+    std::vector&lt;std::string&gt;      morphTargetNames;
 };
 
 struct AnimationJoint
@@ -720,12 +743,82 @@ struct AnimationChannel
     uint32_t      sampler = 0;
 };
 
-enum class AnimationPath : uint32_t { TRANSLATION, ROTATION, SCALE };
+enum class AnimationPath : uint32_t { TRANSLATION, ROTATION, SCALE, WEIGHTS };
 enum class AnimationInterpolation : uint32_t { STEP, LINEAR, CUBICSPLINE };</pre>
-  <div class="body"><p>What the import keeps of a glTF file's animations, in <code>GLTFRaw::animation</code>. <code>nodes</code> holds only the nodes a clip can move, parents before children, with their rest pose (a node below static parents hangs below an extra node whose <code>rest</code> is their world matrix). Each sampler's values are vec4s: a quaternion x, y, z, w, or a translation or scale with w = 0; <code>CUBICSPLINE</code> stores an in-tangent, the value and an out-tangent per key. A sampler that does not parse is skipped with a warning, and its clip keeps its index. <code>joints</code> holds every skin a sub-mesh uses, one skin after another: each joint's node in <code>nodes</code> (a joint is always kept, moved or not) and its inverse bind matrix (the identity when the file has none).</p></div>
+  <div class="body"><p>What the import keeps of a glTF file's animations, in <code>GLTFRaw::animation</code>. <code>nodes</code> holds only the nodes a clip can move, parents before children, with their rest pose (a node below static parents hangs below an extra node whose <code>rest</code> is their world matrix). Each sampler's values are vec4s: a quaternion x, y, z, w, or a translation or scale with w = 0; <code>CUBICSPLINE</code> stores an in-tangent, the value and an out-tangent per key. A sampler that does not parse is skipped with a warning, and its clip keeps its index. <code>joints</code> holds every skin a sub-mesh uses, one skin after another: each joint's node in <code>nodes</code> (a joint is always kept, moved or not) and its inverse bind matrix (the identity when the file has none). <code>morphWeights</code> holds the rest weights of every node that draws a morphed mesh, one node after another (the node's, else the mesh's, else 0), and <code>morphTargetNames</code> one name per weight. A glTF weights sampler becomes one sampler per target, its value in x, and one <code>AnimationPath::WEIGHTS</code> channel per weight, whose <code>node</code> is the weight's index in <code>morphWeights</code>.</p></div>
 </div>
 
-<h2 id="lights"><span class="n">6</span>Lights</h2>
+<h2 id="morph-targets"><span class="n">6</span>Morph targets</h2>
+
+<p>A glTF mesh with morph targets has a list of weights per entity. The GPU adds each target's deltas, times its weight, to the vertices once per frame, before the skin, for every view (<a href="../guides/morph-targets.html">Morph targets</a>). A weight comes from the application when it set one, else from the playing clip's weights channel, else from the mesh's rest weights.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 120" role="img" aria-label="For each weight of an entity the Animate pass picks one value: the value of setMorphWeights when the application set it, else the clip's weights channel when the playing clip has one, else the mesh's rest weight. clearMorphWeights gives every weight back to the clip and the rest weights.">
+    <rect x="20" y="30" width="210" height="44" rx="6" class="cpu"/>
+    <text x="125" y="48" class="mid mono small">setMorphWeights</text>
+    <text x="125" y="64" class="mid small">when set for this weight</text>
+    <line x1="230" y1="52" x2="268" y2="52" class="arrow" marker-end="url(#ah)"/>
+    <text x="249" y="44" class="mid small t-faint">else</text>
+    <rect x="270" y="30" width="210" height="44" rx="6" class="gpu"/>
+    <text x="375" y="48" class="mid small">the clip's weights channel</text>
+    <text x="375" y="64" class="mid small">when the clip has one</text>
+    <line x1="480" y1="52" x2="518" y2="52" class="arrow" marker-end="url(#ah)"/>
+    <text x="499" y="44" class="mid small t-faint">else</text>
+    <rect x="520" y="30" width="220" height="44" rx="6" class="mem"/>
+    <text x="630" y="48" class="mid small">the rest weight</text>
+    <text x="630" y="64" class="mid small">node's, else mesh's, else 0</text>
+    <text x="20" y="104" class="small">clearMorphWeights drops the first box for every weight of the entity</text>
+  </svg>
+  <figcaption>The <code>Animate</code> pass makes this choice per weight, every frame. A weight that <code>setMorphWeights</code> did not set keeps following the clip.</figcaption>
+</figure>
+
+<pre><code>// examples/14_morph_targets: a cube that plays nothing; its first weight follows a sine.
+const float drivenWeights[2] = {0.5f - 0.5f * static_cast&lt;float&gt;(std::cos(seconds * 3.14159265358979 * 0.5)), 0.0f};
+engine.setMorphWeights(drivenCube, drivenWeights, 2);</code></pre>
+
+<div class="api" id="setMorphWeights">
+  <pre class="sig">void setMorphWeights(EntityHandle entity, const float* weights, uint32_t count);</pre>
+  <div class="body">
+    <p>Sets the entity's first <code>count</code> morph weights, in the order of <a href="#getMorphTargetNames"><code>getMorphTargetNames</code></a>. They win over the clip from the next frame; the weights past <code>count</code> keep following the clip, or their rest weight. Each entity of a shared mesh has its own weights. The values are copied. Call it again to change them: a call writes one row per weight, and nothing runs per frame on the CPU after that.</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Case</th><th>What happens</th></tr>
+      <tr><td>The first call, or the first after <code>clearMorphWeights</code></td><td>A jump: that frame has no motion from the frame before, so TAA does not smear it.</td></tr>
+      <tr><td>The next calls</td><td>Smooth: the change is motion, as for a clip.</td></tr>
+      <tr><td>The mesh still loads</td><td>The weights are kept until the entity has its row. Then the ones past the mesh's weight count are dropped.</td></tr>
+      <tr><td>Invalid entity, a weight that is not finite, or <code>weights</code> null with <code>count</code> &gt; 0</td><td>Refused with an error; the weights stay as they were.</td></tr>
+      <tr><td>The entity has no mesh, or its mesh failed</td><td>Refused with an error.</td></tr>
+      <tr><td><code>count</code> larger than the loaded mesh's weight count</td><td>Refused with an error that names both counts.</td></tr>
+    </table>
+    </div>
+  </div>
+</div>
+
+<div class="api" id="clearMorphWeights">
+  <pre class="sig">void clearMorphWeights(EntityHandle entity);</pre>
+  <div class="body"><p>Gives every weight of the entity back to its clip, or to its rest weight, from the next frame. That frame has no motion from the frame before. Nothing happens when the entity has no weights set. An invalid entity is refused with an error.</p></div>
+</div>
+
+<div class="api" id="getMorphTargetNames">
+  <pre class="sig">std::vector&lt;std::string&gt; getMorphTargetNames(MeshHandle mesh) const;</pre>
+  <div class="body"><p>One name per morph weight of the mesh's entities, in the order <code>setMorphWeights</code> takes them: the weights of each glTF node that draws a morphed mesh, one node after another. The names come from the glTF mesh's <code>extras.targetNames</code>; without them a weight is called <samp>target 0</samp>, <samp>target 1</samp>, ... by its index. Empty while the mesh loads, for a mesh without morph targets, and for an invalid handle. Returned by value.</p>
+  <pre><code>const std::vector&lt;std::string&gt; names = engine.getMorphTargetNames(face);
+std::vector&lt;float&gt; weights(names.size(), 0.0f);
+for (size_t i = 0; i &lt; names.size(); ++i)
+{
+    if (names[i] == "Smile")
+        weights[i] = 1.0f;
+}
+engine.setMorphWeights(entity, weights.data(), static_cast&lt;uint32_t&gt;(weights.size()));</code></pre>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>What a morphed mesh costs</strong>
+  <p>An entity of a morphed mesh is posed every frame, with a clip or not, like a skinned one: it takes a row of the animated entity table (<code>EngineConfig::maxAnimatedEntities</code>), and its weights take rows of <code>EngineConfig::maxMorphWeights</code>. The <code>Skin</code> pass reads only the targets whose weight is not 0. The deltas take 24 B per vertex and target in the geometry pool (<code>EngineConfig::geometryPoolMorphs</code>).</p>
+</div>
+
+<h2 id="lights"><span class="n">7</span>Lights</h2>
 
 <div class="split">
   <div>
@@ -852,7 +945,7 @@ engine.updateLight(lamp, light);</code></pre>
   <div class="body"><p>π/4: the default outer angle of a spot light's cone, glTF's default (<code>rasm/light.h</code>).</p></div>
 </div>
 
-<h2 id="environments"><span class="n">7</span>Environments</h2>
+<h2 id="environments"><span class="n">8</span>Environments</h2>
 
 <p>An <b>environment</b> is an HDR photo of the light all around a scene. It lights every <code>PBR</code> material from all directions (soft light from the sky, reflections on shiny surfaces) and shows behind the scene as the sky. The guide <a href="../guides/image-based-lighting.html">Image-based lighting</a> explains how.</p>
 
@@ -901,7 +994,7 @@ engine.setSceneEnvironment(scene, {});</code></pre>
   </div>
 </div>
 
-<h2 id="timing"><span class="n">8</span>When changes reach the GPU</h2>
+<h2 id="timing"><span class="n">9</span>When changes reach the GPU</h2>
 
 <div class="table-wrap">
 <table>
@@ -913,12 +1006,13 @@ engine.setSceneEnvironment(scene, {});</code></pre>
   <tr><td><code>addLightToScene</code></td><td>nothing stored on the GPU; copied into the scene data</td><td>the next frame</td></tr>
   <tr><td><code>loadEnvironment</code></td><td>the image and three cube maps, prepared by compute before the frame's passes</td><td>a later frame, when the worker is done</td></tr>
   <tr><td><code>setSceneEnvironment</code></td><td>nothing stored on the GPU; copied into the scene data</td><td>the next frame</td></tr>
+  <tr><td><code>setMorphWeights</code>, <code>clearMorphWeights</code></td><td>one morph weight override row per weight of the entity</td><td>the next frame</td></tr>
   <tr><td><code>updateMaterial</code></td><td>one material table row</td><td>the next frame (see <a href="materials.html#updateMaterial">materials.html</a>)</td></tr>
 </table>
 </div>
 <p>The engine keeps one copy of each table per frame slot. A changed row is uploaded to each copy once, in that copy's own frame, so the GPU never reads a row while the CPU writes it. The guide <a href="../guides/gpu-scene.html">The GPU scene tables</a> explains the details.</p>
 
-<h2 id="limits"><span class="n">9</span>Limits</h2>
+<h2 id="limits"><span class="n">10</span>Limits</h2>
 
 <div class="table-wrap">
 <table>
@@ -935,10 +1029,12 @@ engine.setSceneEnvironment(scene, {});</code></pre>
   <tr><td><code>MAX_SHADOW_CASCADES</code></td><td>4</td><td>4</td><td>cascades of one shadow (<a href="#ShadowDesc"><code>ShadowDesc::cascadeCount</code></a>)</td></tr>
   <tr><td><code>MAX_VERTEX_UV_SETS</code></td><td>3</td><td>3</td><td>UV sets per vertex</td></tr>
   <tr><td><code>MAX_MESH_LODS</code></td><td>8</td><td>8</td><td>LODs per sub-mesh, LOD 0 included</td></tr>
+  <tr><td><code>MAX_MORPH_TARGETS</code></td><td>256</td><td>256</td><td>morph targets per glTF primitive</td></tr>
   <tr><td><code>EngineConfig::maxInstances</code></td><td>65,536</td><td>all</td><td>sub-meshes of all entities together</td></tr>
   <tr><td><code>EngineConfig::geometryPoolVertices</code>, <code>geometryPoolIndices</code>, <code>geometryPoolSubMeshes</code></td><td>2<sup>21</sup> / 2<sup>24</sup> / 2<sup>14</sup></td><td>all</td><td>geometry of all meshes together</td></tr>
-  <tr><td><code>EngineConfig::geometryPoolColors</code>, <code>geometryPoolSkins</code></td><td>2<sup>20</sup> / 2<sup>20</sup></td><td>all</td><td>vertex colors, and skinned vertices' joints and weights, of all meshes together</td></tr>
-  <tr><td><code>EngineConfig::maxAnimatedEntities</code></td><td>16,384</td><td>all</td><td>entities that have played a clip (each keeps its row)</td></tr>
+  <tr><td><code>EngineConfig::geometryPoolColors</code>, <code>geometryPoolSkins</code>, <code>geometryPoolMorphs</code></td><td>2<sup>20</sup> / 2<sup>20</sup> / 2<sup>20</sup></td><td>all</td><td>vertex colors, skinned vertices' joints and weights, and morph target deltas (one per vertex and target), of all meshes together</td></tr>
+  <tr><td><code>EngineConfig::maxAnimatedEntities</code></td><td>16,384</td><td>all</td><td>entities that have played a clip, or of a skinned or morphed mesh (each keeps its row)</td></tr>
+  <tr><td><code>EngineConfig::maxMorphWeights</code></td><td>65,536</td><td>all</td><td>morph weights of all posed entities together (each keeps its range)</td></tr>
   <tr><td><code>EngineConfig::animationPoolBytes</code></td><td>16 MiB</td><td>all</td><td>the kept nodes, samplers and keys of all loaded meshes; a mesh that does not fit fails to load</td></tr>
 </table>
 </div>

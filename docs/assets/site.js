@@ -72,6 +72,7 @@ const SECTIONS = [
             { path: "guides/face-culling.html",          title: "Face culling and winding order",      blurb: "Skipping triangles that face away." },
             { path: "guides/keyframe-animation.html",    title: "Keyframe animation",                  blurb: "Keys, channels and the node tree: a model's parts move over time." },
             { path: "guides/skinning.html",              title: "Skinning",                            blurb: "Joints, weights and bind poses: a mesh that bends, skinned once per frame for every view." },
+            { path: "guides/morph-targets.html",         title: "Morph targets",                       blurb: "Deltas and weights: a mesh that blends between shapes, morphed before skinning, once per frame." },
         ],
     },
     {

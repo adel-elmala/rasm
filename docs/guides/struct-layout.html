@@ -680,7 +680,7 @@ static_assert(offsetof(Light, intensity) == 12);</code></pre>
   <tr><td><code>VertexFull</code></td><td>64</td><td><code>vertsPtr</code>; also tied to <code>rasm::Vertex</code></td></tr>
   <tr><td><code>DrawInfo</code></td><td>20</td><td><code>drawInfoPtr</code>, <code>allDrawsPtr</code>; also the indirect draw command</td></tr>
   <tr><td><code>InstanceData</code></td><td>108</td><td><code>instancesPtr</code></td></tr>
-  <tr><td><code>GeometryData</code>, <code>GeometryLod</code></td><td>124, 12</td><td><code>geometryPtr</code></td></tr>
+  <tr><td><code>GeometryData</code>, <code>GeometryLod</code>, <code>MorphDelta</code></td><td>136, 12, 24</td><td><code>geometryPtr</code>; <code>MorphDelta</code> through <code>AnimationFrame::morphs</code></td></tr>
   <tr><td><code>MaterialData</code>, <code>Material</code>, <code>TextureTransform</code></td><td>220, 84, 24</td><td><code>materialsPtr</code></td></tr>
   <tr><td><code>MetallicRoughnessMaterial</code>, <code>NormalMaterial</code>, <code>OcclusionMaterial</code>, <code>EmissiveMaterial</code></td><td>40, 12, 12, 20</td><td>the four parts of <code>Material</code></td></tr>
 </table>
@@ -691,7 +691,7 @@ static_assert(offsetof(Light, intensity) == 12);</code></pre>
 <div class="table-wrap">
 <table>
   <tr><th>Struct</th><th>Scalar (used)</th><th>std430 would give</th><th>Where the difference comes from</th></tr>
-  <tr><td><code>GeometryData</code></td><td>128 bytes</td><td>144 bytes</td><td><code>boundsCenter</code> (a <var>float3</var> at offset 4) would move to 16, and the size would round up to 16</td></tr>
+  <tr><td><code>GeometryData</code></td><td>136 bytes</td><td>160 bytes</td><td><code>boundsCenter</code> (a <var>float3</var> at offset 4) would move to 16, and the size would round up to 16</td></tr>
   <tr><td><code>InstanceData</code></td><td>156 bytes</td><td>176 bytes</td><td><code>normalMatrix</code> (a <var>float3x3</var>) would be 48 bytes, not 36, and <code>previousWorld</code> (three <var>float4</var>s) would move from 108 to 128</td></tr>
 </table>
 </div>

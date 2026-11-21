@@ -312,10 +312,10 @@
 
 <h2 id="in-rasm"><span class="n">7</span>In RASM</h2>
 
-<p>RASM skins on the GPU, once per frame. The import puts each skinned vertex's joints and weights into a stream of the geometry pool, beside the 64-byte vertex. The <code>Animate</code> pass (<a href="keyframe-animation.html#in-rasm">node animation</a>) also writes the joint matrices and each skinned sub-mesh's bounds. The <code>Skin</code> pass then writes the posed vertices, which the culling and draws of every view read.</p>
+<p>RASM skins on the GPU, once per frame. The import puts each skinned vertex's joints and weights into a stream of the geometry pool, beside the 64-byte vertex. The <code>Animate</code> pass (<a href="keyframe-animation.html#in-rasm">node animation</a>) also writes the joint matrices and each posed sub-mesh's bounds. The <code>Skin</code> pass then writes the posed vertices, which the culling and draws of every view read. The same pass first adds a mesh's <a href="morph-targets.html">morph targets</a>, so a morphed mesh with no skin goes through it too.</p>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 420" role="img" aria-label="Import: JOINTS_0 and WEIGHTS_0 become a 16-byte SkinVertex per vertex, four 16-bit joints and four 16-bit weights that add up to 65535, in the geometry pool's skin stream; the skin's joints and inverse bind matrices and one sphere per joint go to the animation pool. Each frame the Animate pass writes per entity the joint matrices into this slot's joint buffer and, per skinned sub-mesh, an InstanceTransform with the entity's matrix, the posed bounds, the first skinned vertex and the motion flag. The Skin pass, a group per entity row and 64 vertices, reads the base vertex, its SkinVertex and four joint matrices, and writes a posed 64-byte vertex to this slot's skinned vertex buffer. The views read it through getVertex, and the other slot's through getPreviousObjectPosition.">
+  <svg viewBox="0 0 760 444" role="img" aria-label="Import: JOINTS_0 and WEIGHTS_0 become a 16-byte SkinVertex per vertex, four 16-bit joints and four 16-bit weights that add up to 65535, in the geometry pool's skin stream; the skin's joints and inverse bind matrices and one sphere per joint go to the animation pool. Each frame the Animate pass writes per entity the joint matrices into this slot's joint buffer, the morph weights into this slot's morph weight buffer and, per posed sub-mesh, an InstanceTransform with the matrix, the posed bounds, the first skinned vertex and the motion flag. The Skin pass, a group per entity row and 64 vertices of one sub-mesh, first adds the morph target deltas whose weight is not 0, then, when the sub-mesh has joints, mixes four joint matrices, and writes a posed 64-byte vertex to this slot's skinned vertex buffer. The views read it through getVertex, and the other slot's through getPreviousObjectPosition.">
     <text x="20" y="22" class="title t-cpu">Import, once per mesh</text>
     <rect x="20" y="34" width="200" height="40" rx="6" class="cpu"/>
     <text x="120" y="52" class="mid mono small">JOINTS_n · WEIGHTS_n</text>
@@ -337,35 +337,41 @@
     <text x="252" y="143" class="small">per joint: world ·</text>
     <text x="252" y="158" class="small">inverseBind → joints</text>
     <circle cx="424" cy="147" r="10" class="badge"/><text x="424" y="151" class="badge-n">3</text>
-    <text x="442" y="143" class="small">per skinned sub-mesh: InstanceTransform</text>
-    <text x="442" y="158" class="small">entity matrix, bounds, skinnedVertex</text>
+    <text x="442" y="143" class="small">per posed sub-mesh: InstanceTransform</text>
+    <text x="442" y="158" class="small">matrix, bounds, skinnedVertex</text>
     <line x1="625" y1="74" x2="625" y2="116" class="arrow mem" marker-end="url(#ah-mem)"/>
 
     <rect x="20" y="200" width="230" height="40" rx="6" class="mem"/>
     <text x="135" y="218" class="mid small">Joint Matrix Buffer (slot)</text>
     <text x="135" y="233" class="mid small">48 B per joint per entity</text>
+    <rect x="266" y="200" width="228" height="40" rx="6" class="mem"/>
+    <text x="380" y="218" class="mid small">Morph Weight Buffer (slot)</text>
+    <text x="380" y="233" class="mid small">+ morph stream: morph targets</text>
     <rect x="510" y="200" width="230" height="40" rx="6" class="mem"/>
     <text x="625" y="218" class="mid small">Animated Transform Buffer</text>
     <text x="625" y="233" class="mid small">bounds read by every Cull</text>
     <line x1="135" y1="176" x2="135" y2="198" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <line x1="380" y1="176" x2="380" y2="198" class="arrow gpu" marker-end="url(#ah-gpu)"/>
     <line x1="625" y1="176" x2="625" y2="198" class="arrow gpu" marker-end="url(#ah-gpu)"/>
 
-    <text x="160" y="272" class="title t-gpu">Skin: x = entity row, y = its next 64 vertices</text>
-    <rect x="20" y="282" width="480" height="44" rx="6" class="gpu"/>
-    <text x="34" y="300" class="small">M = Σ wᵢ · joints[first + jointᵢ]; position by M, normal by its</text>
-    <text x="34" y="316" class="small">cofactors, tangent by M's 3 × 3; UVs copied</text>
-    <line x1="135" y1="240" x2="135" y2="280" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <rect x="520" y="282" width="220" height="44" rx="6" class="mem"/>
-    <text x="630" y="300" class="mid small">Skinned Vertex Buffer</text>
-    <text x="630" y="316" class="mid small">64 B per vertex, one per slot</text>
-    <line x1="500" y1="304" x2="518" y2="304" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="20" y="262" width="480" height="88" rx="6" class="gpu"/>
+    <text x="34" y="281" class="title t-gpu">Skin: x = entity row, y = 64 vertices of one sub-mesh</text>
+    <text x="34" y="300" class="small">first morph: base + Σ wₜ · Δₜ over the targets with wₜ ≠ 0</text>
+    <text x="34" y="316" class="small">then skin, with joints: M = Σ wᵢ · joints[first + jointᵢ];</text>
+    <text x="34" y="332" class="small">position by M, normal by its cofactors, tangent by M's 3 × 3</text>
+    <line x1="135" y1="240" x2="135" y2="260" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="380" y1="240" x2="380" y2="260" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="520" y="284" width="220" height="44" rx="6" class="mem"/>
+    <text x="630" y="302" class="mid small">Skinned Vertex Buffer</text>
+    <text x="630" y="318" class="mid small">64 B per vertex, one per slot</text>
+    <line x1="500" y1="306" x2="518" y2="306" class="arrow gpu" marker-end="url(#ah-gpu)"/>
 
-    <line x1="630" y1="326" x2="630" y2="356" class="arrow mem" marker-end="url(#ah-mem)"/>
-    <rect x="20" y="358" width="720" height="50" rx="6" class="cpu"/>
-    <text x="34" y="378" class="small">every view: camera, cascades, spot maps, cube faces</text>
-    <text x="34" y="396" class="mono small">getVertex · getPreviousObjectPosition · getWorldSphere</text>
+    <line x1="630" y1="328" x2="630" y2="380" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="20" y="382" width="720" height="50" rx="6" class="cpu"/>
+    <text x="34" y="402" class="small">every view: camera, cascades, spot maps, cube faces</text>
+    <text x="34" y="420" class="mono small">getVertex · getPreviousObjectPosition · getWorldSphere</text>
   </svg>
-  <figcaption>A row whose <code>InstanceTransform</code> has <code>skinnedVertex</code> = −1 reads the geometry pool, so static and rigid meshes run the same code as before.</figcaption>
+  <figcaption>A row whose <code>InstanceTransform</code> has <code>skinnedVertex</code> = −1 reads the geometry pool, so static and rigid meshes run the same code as before. Each posed sub-mesh starts at a multiple of 64 among its entity's skinned vertices, so a group never holds two sub-meshes.</figcaption>
 </figure>
 
 <p>Nothing new in the API: an entity with a skinned mesh plays a clip like any animated entity.</p>
@@ -384,12 +390,12 @@ if (run >= 0)
   <tr><td>Joints and weights</td><td>up to 4 per vertex, adding up to 1</td><td><code>readSkinVertices</code> reads every pair of <code>JOINTS_n</code> / <code>WEIGHTS_n</code>, adds up the weights of a joint named in two sets, drops a weight whose joint is past the skin's joints, keeps the 4 largest (one warning per primitive that has more) and scales them to 1. A <code>SkinVertex</code> stores 4 16-bit joints and 4 UNORM16 weights that add up to 65535 exactly: the rounding's rest goes to the largest. A vertex with no weight follows joint 0.</td></tr>
   <tr><td>Skins</td><td>joints and inverse bind matrices</td><td><code>importSkinJoints</code> puts each skin a sub-mesh uses once in <code>AnimationRaw::joints</code>: its kept node and its inverse bind matrix (the identity without the accessor). A skin's joints are always kept nodes, moved by a clip or not. A skin with a joint outside the scene leaves its sub-meshes unskinned.</td></tr>
   <tr><td>The mesh's node</td><td>ignored</td><td>A skinned primitive's <code>SubGLTFRaw::transform</code> is the identity. The entity's matrix places the posed skin.</td></tr>
-  <tr><td>Where it skins</td><td>once per frame</td><td>The <code>Skin</code> pass (<code>skinMain</code>), an async compute pass right after <code>Animate</code>, writes 64-byte vertices to <code>GpuAnimation::skinnedVertices</code> of the slot. A group is a row of the animated entity table (x) and 64 of its skinned vertices (y), so an entity may have up to 65 535 · 64 of them. A stopped row returns at once.</td></tr>
+  <tr><td>Where it skins</td><td>once per frame</td><td>The <code>Skin</code> pass (<code>skinMain</code>), an async compute pass right after <code>Animate</code>, writes 64-byte vertices to <code>GpuAnimation::skinnedVertices</code> of the slot. A group is a row of the animated entity table (x) and 64 of its skinned vertices (y), all of one sub-mesh: each posed sub-mesh starts at a multiple of 64 (<code>AnimationSubMeshData::firstSkinnedVertex</code>). An entity may have up to 65 535 · 64 of them. A thread first adds its vertex's <a href="morph-targets.html#in-rasm">morph target</a> deltas, then mixes the joints when the sub-mesh has some, so a morphed mesh with no skin is posed by the same pass. A stopped row returns at once.</td></tr>
   <tr><td>Memory</td><td>a copy per slot</td><td>128 B per skinned vertex of each playing entity. The buffers grow on demand by doubling, with no config, and log their size; a growth restarts every entity's motion for one frame. The joint matrices take 48 B per joint per entity, per slot.</td></tr>
-  <tr><td>Bounds</td><td>a sphere per joint, the sphere around them</td><td><code>getJointSpheres</code> at import; <code>getSkinnedBounds</code> in <code>animate.slang</code> each frame, with <code>getStretch</code>, the same stretch bound as culling. The result goes to <code>InstanceTransform::boundsCenter</code> and <code>boundsRadius</code>, and <code>getWorldSphere</code> uses it in every view's culling, LOD choice and blend sort.</td></tr>
-  <tr><td>Motion vectors</td><td>the same vertex in the other slot</td><td><code>getPreviousObjectPosition</code> reads <code>SceneData::previousSkinnedVertsPtr</code> when <code>InstanceTransform::skinnedMotion</code> is 1. It is 0 in the frame an entity starts, a play jumps its clip, or the buffers grow (the rule of <code>AnimatedEntity::resetSync</code>), and then before = now.</td></tr>
-  <tr><td>LODs</td><td>—</td><td>The LODs share the sub-mesh's vertices, so every LOD draws the posed ones. They are simplified in the bind pose without looking at the weights, which can merge vertices of different joints: open.</td></tr>
-  <tr><td>Not playing</td><td>the skeleton's rest pose</td><td>An entity of a skinned mesh takes its animation row when it gets its instance rows (<code>poseAtRest</code>), and with no clip its row names the channel row after <code>ALL_ANIMATION_CLIPS</code>'s, which has no channel: the <code>Animate</code> pass computes every node at its rest TRS, so the joint matrices are <code class="lang-text">restWorld · inverseBind</code> and the mesh is skinned at rest. A file without clips is posed the same way. <code>stopAnimation</code> goes back to it, a jump with no motion from the frame before. Such an entity is posed and skinned every frame (<code>P18</code>).</td></tr>
+  <tr><td>Bounds</td><td>a sphere per joint, the sphere around them</td><td><code>getJointSpheres</code> at import; <code>getSkinnedBounds</code> in <code>animate.slang</code> each frame, with <code>getStretch</code>, the same stretch bound as culling. A morphed sub-mesh first grows each joint sphere's radius by <code class="lang-text">Σ |wₜ| · rₜ</code> (<code>getMorphGrowth</code>), before the stretch. The result goes to <code>InstanceTransform::boundsCenter</code> and <code>boundsRadius</code>, and <code>getWorldSphere</code> uses it in every view's culling, LOD choice and blend sort.</td></tr>
+  <tr><td>Motion vectors</td><td>the same vertex in the other slot</td><td><code>getPreviousObjectPosition</code> reads <code>SceneData::previousSkinnedVertsPtr</code> when <code>InstanceTransform::skinnedMotion</code> is 1. It is 0 in the frame an entity starts, a play jumps its clip, the first <code>setMorphWeights</code> after none, a <code>clearMorphWeights</code>, or the buffers grow (the rule of <code>AnimatedEntity::resetSync</code>), and then before = now.</td></tr>
+  <tr><td>LODs</td><td>—</td><td>The LODs share the sub-mesh's vertices, so every LOD draws the posed ones. They are simplified in the bind pose without looking at the weights, which can collapse an edge across a bending joint (<code>D29</code>).</td></tr>
+  <tr><td>Not playing</td><td>the skeleton's rest pose</td><td>An entity of a skinned mesh takes its animation row when it gets its instance rows (<code>poseAtRest</code>), and with no clip its row names the channel row after <code>ALL_ANIMATION_CLIPS</code>'s, which has no channel: the <code>Animate</code> pass computes every node at its rest TRS, so the joint matrices are <code class="lang-text">restWorld · inverseBind</code> and the mesh is skinned at rest, with its rest morph weights. A file without clips is posed the same way. <code>stopAnimation</code> goes back to it, a jump with no motion from the frame before. Such an entity is posed and skinned every frame (<code>P18</code>).</td></tr>
   <tr><td>Paused or off screen</td><td>skip the work</td><td>Every playing entity is skinned every frame, still or not, seen or not: <code>P18</code>.</td></tr>
   <tr><td>Mirroring</td><td>—</td><td>A skinned sub-mesh is drawn without face culling when a clip can take one of its joints' scale to 0 or below (<code>animationCanMirror</code>).</td></tr>
 </table>
@@ -405,6 +411,7 @@ if (run >= 0)
   <tr><td>The public types</td><td><code>SkinVertex</code>, <code>SubGLTFRaw</code> in <code>include/rasm/mesh.h</code>; <code>AnimationJoint</code>, <code>AnimationRaw</code> in <code>include/rasm/animation.h</code>; <code>EngineConfig::geometryPoolSkins</code> in <code>include/rasm/types.h</code></td></tr>
   <tr><td>Import: weights, spheres, joints</td><td><code>readSkinVertices</code>, <code>getJointSpheres</code>, <code>importSkinJoints</code> in <code>src/assets/skinImport.cpp</code>, called from <code>src/assets/meshImport.cpp</code> and <code>importAnimations</code> in <code>src/assets/animationImport.cpp</code></td></tr>
   <tr><td>The skin stream</td><td><code>GeometryPool::upload</code> in <code>src/renderer/geometryPool.cpp</code> (<code>GeometryData::skinOffset</code>); <code>weldVertices</code> in <code>src/assets/meshLod.cpp</code> keeps it with its vertices</td></tr>
+  <tr><td>Morph targets in the same pass</td><td>see <a href="morph-targets.html#in-rasm">morph targets</a>: <code>getMorphGrowth</code> in <code>shaders/passes/animate.slang</code>, the morph loop of <code>skinMain</code></td></tr>
   <tr><td>The pool, the buffers, the passes</td><td><code>buildAnimationPoolData</code>, <code>Engine::uploadMeshAnimation</code>, <code>Engine::growAnimationBuffers</code>, <code>Engine::addAnimationPass</code>, <code>Engine::recordSkinning</code> in <code>src/renderer/animation.cpp</code></td></tr>
   <tr><td>The shaders</td><td><code>animateMain</code> in <code>shaders/passes/animate.slang</code>; <code>skinMain</code> in <code>shaders/passes/skin.slang</code></td></tr>
   <tr><td>The GPU structs</td><td><code>shaders/lib/animationTypes.slang</code>, <code>shaders/lib/geometryTypes.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
@@ -421,6 +428,7 @@ if (run >= 0)
     <li>Both slots' skinned vertex buffers grow together, after the GPU is done with them: a frame reads the other slot's.</li>
     <li>The weights of a <code>SkinVertex</code> add up to 65535 exactly.</li>
     <li>The skin stream is welded and reordered with its vertices, like the color stream.</li>
+    <li>Morph before skin: the deltas are in the bind pose.</li>
   </ul>
 </div>
 
@@ -429,7 +437,7 @@ if (run >= 0)
   <li>The Khronos Group, <i>glTF 2.0 Specification</i>, section 3.7.3 "Skins" and 3.7.2.1 "Joints and weights".</li>
   <li>Ladislav Kavan, Steven Collins, Jiří Žára and Carol O'Sullivan, <i>Skinning with Dual Quaternions</i>, I3D 2007: a fix for the candy wrapper.</li>
   <li>Jason Gregory, <i>Game Engine Architecture</i>, chapter "Animation Systems", section on skinning.</li>
-  <li><a href="keyframe-animation.html">Keyframe animation</a>, <a href="taa.html">Temporal anti-aliasing</a>, <a href="lod-selection.html">LOD selection</a>.</li>
+  <li><a href="keyframe-animation.html">Keyframe animation</a>, <a href="morph-targets.html">Morph targets</a>, <a href="taa.html">Temporal anti-aliasing</a>, <a href="lod-selection.html">LOD selection</a>.</li>
 </ul>
 
 </main>
