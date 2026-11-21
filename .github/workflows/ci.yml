@@ -47,12 +47,18 @@ jobs:
           cache: true
           stripdown: true
 
-      - name: Put the Vulkan loader on PATH
+      # rasm imports Vulkan 1.4 functions (vkCopyMemoryToImage), and Windows finds vulkan-1.dll in System32 before PATH.
+      # The runner's System32 loader is older, so the SDK's loader replaces it, as a current GPU driver would.
+      - name: Install the Vulkan loader
         if: runner.os == 'Windows'
         run: |
-          runtime=$(cygpath -u "$VULKAN_SDK")/runtime/x64
-          test -f "$runtime/vulkan-1.dll"
-          cygpath -w "$runtime" >> "$GITHUB_PATH"
+          sdk=$(cygpath -u "$VULKAN_SDK")/runtime/x64/vulkan-1.dll
+          sys=/c/Windows/System32/vulkan-1.dll
+          version() { powershell -NoProfile -Command "(Get-Item '$(cygpath -w "$1")').VersionInfo.FileVersion"; }
+          echo "System32 before: $(version $sys 2>/dev/null || echo none)"
+          cp -f "$sdk" "$sys"
+          echo "System32 now:    $(version $sys)"
+          test "$(version $sys)" = "$(version $sdk)"
 
       # The runner's MSVC STL needs a newer clang than the LLVM it ships, so a pinned one replaces it.
       - name: Install LLVM ${{ env.LLVM_VERSION }}
@@ -103,34 +109,6 @@ jobs:
 
       - name: Build ${{ matrix.debug }}
         run: cmake --build --preset ${{ matrix.debug }}
-
-      - name: DIAG hang
-        if: runner.os == 'Windows'
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $start = Get-Date
-          foreach ($cfg in @("${{ matrix.debug }}")) {
-            $exe = (Resolve-Path "build/$cfg/tests/rasm_tests.exe").Path
-            $psi = [System.Diagnostics.ProcessStartInfo]::new($exe)
-            $psi.ArgumentList.Add("--list-test-cases")
-            $psi.RedirectStandardOutput = $true
-            $psi.RedirectStandardError = $true
-            $psi.UseShellExecute = $false
-            $p = [System.Diagnostics.Process]::Start($psi)
-            $out = $p.StandardOutput.ReadToEndAsync()
-            $err = $p.StandardError.ReadToEndAsync()
-            if (-not $p.WaitForExit(30000)) { "$cfg HANG"; $p.Kill($true) } else { "$cfg exit=0x{0:X8}" -f $p.ExitCode }
-            "stdout: " + ($out.Result -split "`n" | Select-Object -First 3) -join ' | '
-            "stderr: " + $err.Result
-          }
-          Start-Sleep 5
-          "--- System: Application Popup"
-          Get-WinEvent -FilterHashtable @{LogName='System'; StartTime=$start} -ErrorAction SilentlyContinue | Where-Object { $_.ProviderName -match 'Popup' } | Select-Object -First 5 | ForEach-Object { $_.Message }
-          "--- Application: errors"
-          Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=$start} -ErrorAction SilentlyContinue | Where-Object { $_.ProviderName -match 'Application Error|Windows Error Reporting|SideBySide' } | Select-Object -First 5 | ForEach-Object { $_.ProviderName + ': ' + $_.Message }
-          "done"
-          exit 0
 
       - name: Test ${{ matrix.debug }}
         run: ctest --preset ${{ matrix.debug }}
