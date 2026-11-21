@@ -4,7 +4,7 @@
 - Git.
 - CMake 3.23 or newer.
 - Ninja.
-- A C++20 compiler: LLVM Clang on Windows, Apple Clang on macOS.
+- A C++20 compiler: LLVM Clang on Windows, Apple Clang on macOS. On Windows, the MSVC STL of Visual Studio 18 needs Clang 22 or newer; CI uses 22.1.8.
 - A recent Vulkan SDK (version 1.4).
 - vcpkg.
 

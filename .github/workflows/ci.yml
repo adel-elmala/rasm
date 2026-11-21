@@ -17,6 +17,8 @@ concurrency:
 env:
   # vcpkg.json has no builtin-baseline, so this commit picks every dependency version.
   VCPKG_COMMIT: 4b77da7fed37817f124936239197833469f1b9a8
+  # Windows only. The MSVC STL of Visual Studio 18 needs Clang 22 or newer.
+  LLVM_VERSION: 22.1.8
 
 jobs:
   # One job per OS runs both presets: they share the vcpkg packages, so they are built and cached once.
@@ -45,12 +47,27 @@ jobs:
           cache: true
           stripdown: true
 
-      - name: Put the Vulkan loader on PATH
+      # rasm imports Vulkan 1.4 functions (vkCopyMemoryToImage), and Windows finds vulkan-1.dll in System32 before PATH.
+      # The runner's System32 loader is older, so the SDK's loader replaces it, as a current GPU driver would.
+      - name: Install the Vulkan loader
         if: runner.os == 'Windows'
         run: |
-          runtime=$(cygpath -u "$VULKAN_SDK")/runtime/x64
-          test -f "$runtime/vulkan-1.dll"
-          cygpath -w "$runtime" >> "$GITHUB_PATH"
+          sdk=$(cygpath -u "$VULKAN_SDK")/runtime/x64/vulkan-1.dll
+          sys=/c/Windows/System32/vulkan-1.dll
+          version() { powershell -NoProfile -Command "(Get-Item '$(cygpath -w "$1")').VersionInfo.FileVersion"; }
+          echo "System32 before: $(version $sys 2>/dev/null || echo none)"
+          cp -f "$sdk" "$sys"
+          echo "System32 now:    $(version $sys)"
+          test "$(version $sys)" = "$(version $sdk)"
+
+      # The runner's MSVC STL needs a newer clang than the LLVM it ships, so a pinned one replaces it.
+      - name: Install LLVM ${{ env.LLVM_VERSION }}
+        if: runner.os == 'Windows'
+        run: |
+          choco upgrade llvm --version "$LLVM_VERSION" -y --no-progress
+          found=$(clang++ --version | head -n 1)
+          echo "$found"
+          case "$found" in *"clang version $LLVM_VERSION"*) ;; *) echo "clang++ on PATH is not $LLVM_VERSION"; exit 1 ;; esac
 
       # clang++ finds the MSVC libraries and the Windows SDK through this environment.
       - if: runner.os == 'Windows'

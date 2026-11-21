@@ -62,6 +62,7 @@ Goal: the structural changes that every later feature depends on. They get much 
 - [x] Use typed descriptors (`BufferDesc`, `TextureDesc`, `PipelineDesc`, …) with defaulted equality and a real hash combine (`D5`, done 2026-11-02).
 - [ ] Store objects in generational pools. Make `destroy*` APIs available for every object, with destruction deferred until the GPU has finished the frames that use them (`D4`, `P4`).
 - [ ] Use a single shared pipeline layout (the bindless set + push-constant range), a `VkPipelineCache` persisted to disk, and an on-disk SPIR-V cache keyed by source hash (`P8`).
+- [ ] Load Vulkan functions at run time with volk instead of linking `vulkan-1.dll`: a clear error when the loader is missing or older than Vulkan 1.4, device calls without the loader's trampoline, and unit tests that start without a Vulkan loader (`D24`).
 
 ### 1.3 Memory and uploads
 - [x] Keep static data in device-local memory. Add an upload manager with a staging ring buffer, batched copies and timeline-semaphore completion (`P1`, done 2026-11-04).
