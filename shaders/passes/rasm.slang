@@ -109,6 +109,8 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
         discard;
 #endif
 #if defined(RASM_ALPHA_BLEND)
+    // handedness covers a mirroring model matrix only. A shaded view's view matrix never mirrors (a camera has no
+    // scale); the mirrored views are a point light's cube faces, which are depth-only and draw no face test.
     if ((model->flags & MATERIAL_DOUBLE_SIDED) == 0 && isBackFace(input.handedness, isFrontFace))
         discard;
 #endif

@@ -1381,7 +1381,14 @@ namespace rasm
         const auto commandBuffer = frameResources[frame].commandBuffer;
         const uint32_t capacity = getBlendSortCapacity(gpuScene->drawLists[view.scene.index].runs[view.blendRun].count);
         BlendSortDispatch dispatches[MAX_BLEND_SORT_DISPATCHES];
-        const uint32_t dispatchCount = std::min(getBlendSortDispatches(capacity, dispatches, MAX_BLEND_SORT_DISPATCHES), MAX_BLEND_SORT_DISPATCHES);
+        const uint32_t dispatchCount = getBlendSortDispatches(capacity, dispatches, MAX_BLEND_SORT_DISPATCHES);
+        // A cut plan would leave the draws half sorted or skip the write; unsorted draws are still valid. Every
+        // capacity getBlendSortCapacity gives fits today (tests/blendSortTests.cpp).
+        if (dispatchCount > MAX_BLEND_SORT_DISPATCHES)
+        {
+            spdlog::error("The blend sort of {} draws needs {} dispatches, more than {}; see-through materials are drawn unsorted.", capacity, dispatchCount, MAX_BLEND_SORT_DISPATCHES);
+            return;
+        }
 
         const uint32_t timer = beginGpuTimer(commandBuffer, "Blend Sort");
         gfx::PushConstants pushConstants{.scene = getSceneDataAddress(ctx, *gpuScene, frame, viewIndex)};

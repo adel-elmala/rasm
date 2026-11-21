@@ -201,7 +201,8 @@ namespace rasm
         };
         readTexture(PbrSlot::ALBEDO, material->pbrMetallicRoughness.baseColorTexture.texCoord, material->pbrMetallicRoughness.baseColorTexture.extensions, "baseColor");
         readTexture(PbrSlot::METALLIC, material->pbrMetallicRoughness.metallicRoughnessTexture.texCoord, material->pbrMetallicRoughness.metallicRoughnessTexture.extensions, "metallicRoughness");
-        readTexture(PbrSlot::ROUGHNESS, material->pbrMetallicRoughness.metallicRoughnessTexture.texCoord, material->pbrMetallicRoughness.metallicRoughnessTexture.extensions, "metallicRoughness");
+        mat.textureTransforms[static_cast<uint32_t>(PbrSlot::ROUGHNESS)] = mat.textureTransforms[static_cast<uint32_t>(PbrSlot::METALLIC)];
+        mat.texCoords[static_cast<uint32_t>(PbrSlot::ROUGHNESS)] = mat.texCoords[static_cast<uint32_t>(PbrSlot::METALLIC)];
         readTexture(PbrSlot::NORMAL, material->normalTexture.texCoord, material->normalTexture.extensions, "normal");
         readTexture(PbrSlot::OCCLUSION, material->occlusionTexture.texCoord, material->occlusionTexture.extensions, "occlusion");
         readTexture(PbrSlot::EMISSIVE, material->emissiveTexture.texCoord, material->emissiveTexture.extensions, "emissive");
