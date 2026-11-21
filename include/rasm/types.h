@@ -177,7 +177,7 @@ namespace rasm
         Format depthFormat;
         glm::vec4 clearColor;
         bool history;
-        uint32_t storageSlots[rasm::MAX_FRAMES_IN_FLIGHT][rasm::MAX_COLOR_ATTACHMENTS] = {}; // binding 1 slot of each color, for a storage target
+        uint32_t storageSlots[rasm::MAX_COLOR_ATTACHMENTS] = {}; // binding 1 slot of each color of a storage target, UINT32_MAX otherwise
     };
 
 } // namespace rasm

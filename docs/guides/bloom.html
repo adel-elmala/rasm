@@ -433,7 +433,7 @@
     <text x="228" y="250" class="mid small">lerp(scene, bloom, strength), × exposure, AgX</text>
     <rect x="430" y="216" width="310" height="40" rx="6" class="cpu"/>
     <text x="585" y="234" class="mid mono small">setCameraBloomStrength(camera, 0.04)</text>
-    <text x="585" y="250" class="mid small">read when the passes run; 0 records nothing</text>
+    <text x="585" y="250" class="mid small">read when the passes run; 0 dispatches nothing</text>
     <line x1="430" y1="236" x2="360" y2="236" class="arrow cpu dashed" marker-end="url(#ah-cpu)"/>
     <text x="380" y="196" class="title t-gpu">Bloom Up 5 … 1: upsampleMain</text>
     <text x="20" y="284" class="small">Targets are named bloom_down_1 … bloom_down_6 and bloom_up_1 … bloom_up_5, all SCENE_COLOR_FORMAT, sized from the source.</text>
@@ -450,7 +450,7 @@
   <tr><th>The pass declares</th><th>The graph records before it</th></tr>
   <tr><td>a compute pass: <code>write(rt)</code> of a target made with <code>RenderTargetDesc::storage</code></td><td>each color of this frame slot → <code>STORAGE</code> (from <code>STORAGE</code>: a write-after-write barrier)</td></tr>
   <tr><td>any pass: <code>read(rt)</code></td><td>each color → <code>SAMPLED</code>; nothing after a draw, whose <code>endPass</code> left it there</td></tr>
-  <tr><td>the first pass of a transient target</td><td><code>aliasingBarrier</code>, which also covers compute storage writes</td></tr>
+  <tr><td>the first pass of a transient target</td><td><code>aliasingBarrier</code>, which also covers compute storage writes; its colors move to <code>STORAGE</code> from <code>UNKNOWN</code>, dropping the old bytes</td></tr>
 </table>
 </div>
 
@@ -467,19 +467,19 @@
 <table>
   <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
   <tr><td>Levels</td><td>a fixed number of halvings</td><td><code>BLOOM_LEVELS</code> (6), from 1/2 to 1/64 of the source. A source sized from the window (<code>swapchainScale</code>) gives levels with <code>swapchainScale</code> / 2<sup>level</sup>; a fixed-size source gives <code>getBloomLevelSize</code>, its size halved, at least 1 × 1.</td></tr>
-  <tr><td>Small images</td><td>stop at the last level of at least 2 × 2</td><td>The same, with <code>BLOOM_MIN_LEVEL_SIZE</code> (2): every frame, the passes read the levels' sizes and <code>getBloomLevelCount</code> picks the levels that run, so a resize needs no new graph. The passes of the other levels record nothing.</td></tr>
+  <tr><td>Small images</td><td>stop at the last level of at least 2 × 2</td><td>The same, with <code>BLOOM_MIN_LEVEL_SIZE</code> (2): every frame, <code>Bloom Down 1</code> reads the levels' sizes and <code>getBloomLevelCount</code> picks the levels that run, so a resize needs no new graph; the other passes read its count. The passes of the other levels dispatch nothing.</td></tr>
   <tr><td>Down filter</td><td>13 taps, Karis on the first step</td><td>The same: <code>firstDownsampleMain</code> (Karis) and <code>downsampleMain</code> in <code>shaders/passes/bloom.slang</code>.</td></tr>
   <tr><td>Up filter</td><td>tent, add, divide by the levels</td><td>The same: <code>upsampleMain</code>; <code>Bloom Up 1</code> multiplies by 1 / levels (<code>BloomPushConstants::scale</code>).</td></tr>
   <tr><td>Mix</td><td>lerp before the curve, no threshold</td><td><code>Tone Map</code> samples the bloom (half size, bilinear) and draws <code>lerp(scene, bloom, Camera::bloomStrength)</code> before the exposure and AgX. Strength 0.04 by default, from 0 to 1 (<code>Engine::setCameraBloomStrength</code>).</td></tr>
   <tr><td>Format</td><td>a float format</td><td><code>SCENE_COLOR_FORMAT</code> (RGBA16F) for every level: a storage format on every target backend.</td></tr>
-  <tr><td>Turning it off</td><td>–</td><td>Strength 0: the passes record nothing and the tone map does not sample. To drop the passes and their memory, build the graph without them. <code>EngineConfig::bloom</code> is off by default, so an engine update does not change how an application looks.</td></tr>
+  <tr><td>Turning it off</td><td>–</td><td>Strength 0: the passes dispatch nothing (the graph still records their barriers) and the tone map does not sample (<code>Engine::bloomRuns</code>, one rule for both). To drop the passes and their memory, build the graph without them. <code>EngineConfig::bloom</code> is off by default, so an engine update does not change how an application looks.</td></tr>
 </table>
 </div>
 
 <h3>What it costs</h3>
 
 <div class="stats">
-  <div><b>0.23 ms</b><span>at 1280 × 720</span><small><code>Bloom</code> timer, <code>examples/09_gltf_materials</code>, RTX 3060, Release</small></div>
+  <div><b>≈ 0.2 ms</b><span>at 1280 × 720</span><small>0.10 to 0.27 ms from run to run; <code>Bloom</code> timer, <code>examples/09_gltf_materials</code>, RTX 3060, Release</small></div>
   <div><b>0.37 ms</b><span>at 1920 × 1080</span><small><samp>--render-size 1920 1080</samp></small></div>
   <div><b>0.75 ms</b><span>at 3840 × 2160</span><small><samp>--render-size 3840 2160</samp></small></div>
   <div><b>13.4 MiB</b><span>the 11 targets at 1080p, each in its own memory</span><small>RGBA16F, with the memory alignment</small></div>

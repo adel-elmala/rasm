@@ -149,7 +149,7 @@ RasmLab.register("bloom-chain", function (lab) {
         if (levels < LEVELS)
             note.set(`A ${n}-pixel source halves to under 2 pixels after level ${levels}, so the chain stops there: a smaller glow, and no level of zero size.`, "ok");
         else if (strength.value === 0)
-            note.set("Strength 0: the image is the scene alone, and the passes would record nothing.", "ok");
+            note.set("Strength 0: the image is the scene alone, and the passes would dispatch nothing.", "ok");
         else
             note.set(`The spot keeps its light but spreads a little of it (${Math.round(strength.value * 100)} %) over a wide area, sharp near the spot and soft far away.`, "ok");
     });

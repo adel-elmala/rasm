@@ -7,6 +7,7 @@
 #include "spdlog/spdlog.h"
 
 #include <algorithm>
+#include <memory>
 #include <string>
 
 namespace rasm
@@ -55,6 +56,13 @@ namespace rasm
         return bloomFirstDownPipeline.isValid() && bloomDownPipeline.isValid() && bloomUpPipeline.isValid();
     }
 
+    // The bloom passes dispatch, and the tone map samples their result, only when this holds. The first bloom pass
+    // makes the pipelines before it asks, and the strength does not change within a frame.
+    bool Engine::bloomRuns(CameraHandle camera) const
+    {
+        return registry.cameras[camera.index].bloomStrength > 0.0f && bloomPipelinesReady();
+    }
+
     // A shader error logs and retries the next frame, like the tone map, so a fix on disk is picked up.
     bool Engine::createBloomPipelines()
     {
@@ -75,10 +83,11 @@ namespace rasm
 
     // Down passes 1 to BLOOM_LEVELS halve the source again and again; up passes BLOOM_LEVELS - 1 to 1 walk back, each
     // adding the tent-blurred level below to its own level of the down chain. Up 1 divides by the levels it added, so
-    // the bloom has the source's energy. A small target runs fewer levels (getBloomLevelCount), which the passes find
-    // from the targets' sizes every frame, since a resize changes them without a new graph. Every target is transient
-    // storage, sized from the source, so the graph lays their memory out together. The passes share the GPU timer
-    // "Bloom", and record nothing while the camera's bloom strength is 0.
+    // the bloom has the source's energy. A small target runs fewer levels (getBloomLevelCount), which the first pass
+    // finds from the targets' sizes every frame, since a resize changes them without a new graph, and shares with the
+    // others. Every target is transient storage, sized from the source, so the graph lays their memory out together.
+    // The passes share the GPU timer "Bloom", and dispatch nothing while the camera's bloom strength is 0 (the graph
+    // still records their barriers).
     RenderTargetHandle Engine::addBloomPasses(RenderGraph &graph, const RenderTargetHandle &source, CameraHandle camera)
     {
         if (!camera.isValid() || camera.index >= registry.cameras.size())
@@ -119,11 +128,13 @@ namespace rasm
             }
         }
 
-        // How many levels this frame's chain has, 0 when it does not run. The first pass makes the pipelines.
-        auto activeLevels = [this, chain, camera](bool first) -> uint32_t
+        // How many levels this frame's chain has, 0 when it does not run: Bloom Down 1 finds it, after it makes the
+        // pipelines, and the other passes read it.
+        const auto activeLevels = std::make_shared<uint32_t>(0);
+        auto findLevels = [this, chain, camera]() -> uint32_t
         {
-            const bool ready = first ? createBloomPipelines() : bloomPipelinesReady();
-            if (registry.cameras[camera.index].bloomStrength <= 0.0f || !ready)
+            createBloomPipelines();
+            if (!bloomRuns(camera))
                 return 0;
             glm::uvec2 sizes[BLOOM_LEVELS];
             for (uint32_t i = 0; i < BLOOM_LEVELS; ++i)
@@ -145,9 +156,11 @@ namespace rasm
                     builder.read(input);
                     builder.write(output);
                 },
-                [this, input, output, level, activeLevels](RenderContext &)
+                [this, input, output, level, activeLevels, findLevels](RenderContext &)
                 {
-                    if (level > activeLevels(level == 1))
+                    if (level == 1)
+                        *activeLevels = findLevels();
+                    if (level > *activeLevels)
                         return;
                     const gfx::BloomPushConstants pushConstants{.source = getBindlessTextureIndex(getRenderTargetTexture(input)),
                                                                 .target = getRenderTargetStorageIndex(output),
@@ -178,7 +191,7 @@ namespace rasm
                 },
                 [this, base, below, upBelow, output, level, activeLevels](RenderContext &)
                 {
-                    const uint32_t levels = activeLevels(false);
+                    const uint32_t levels = *activeLevels;
                     if (levels == 0 || (level >= levels && level > 1))
                         return;
                     uint32_t lower = INVALID_TEXTURE_INDEX;

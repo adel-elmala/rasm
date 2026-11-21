@@ -52,7 +52,7 @@ namespace rasm
                 const auto commandBuffer = frameResources[frameCount].commandBuffer;
                 const Camera &cameraData = registry.cameras[camera.index];
                 // The bloom passes ran this frame (addBloomPasses), so the target holds this frame's bloom.
-                const bool bloomed = bloom.isValid() && cameraData.bloomStrength > 0.0f && bloomPipelinesReady();
+                const bool bloomed = bloom.isValid() && bloomRuns(camera);
                 const gfx::ToneMapPushConstants pushConstants{.source = getBindlessTextureIndex(getRenderTargetTexture(source)),
                                                               .exposure = cameraData.exposure,
                                                               .bloom = bloomed ? getBindlessTextureIndex(getRenderTargetTexture(bloom)) : INVALID_TEXTURE_INDEX,

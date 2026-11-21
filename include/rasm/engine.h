@@ -125,7 +125,7 @@ namespace rasm
         void                        setCameraProjection(CameraHandle camera, CameraProjection projection);
         void                        setCameraController(CameraHandle camera, CameraController controller);
         void                        setCameraExposure(CameraHandle camera, float exposure);
-        // The share of bloom in the tone-mapped image, 0 to 1: 0 turns the bloom passes' work off.
+        // The share of bloom in the tone-mapped image, 0 to 1: at 0 the bloom passes dispatch nothing.
         void                        setCameraBloomStrength(CameraHandle camera, float strength);
         // Returns false when the frame must be skipped (minimized, swapchain out of date); then do not
         // record anything or call endFrame.
@@ -164,8 +164,8 @@ namespace rasm
         TextureHandle               getRenderTargetTexture(const RenderTargetHandle& renderTarget, uint32_t attachment = 0);
         TextureHandle               getPreviousRenderTargetTexture(const RenderTargetHandle& renderTarget, uint32_t attachment = 0);
         TextureHandle               getRenderTargetDepthTexture(const RenderTargetHandle& renderTarget);
-        // Slot of binding 1 of the bindless set that holds a storage target's color for the current frame slot, or
-        // UINT32_MAX for a target that is not storage.
+        // Slot of binding 1 of the bindless set that holds a storage target's color, the same for the target's life,
+        // or UINT32_MAX for a target that is not storage.
         uint32_t                    getRenderTargetStorageIndex(const RenderTargetHandle& renderTarget, uint32_t attachment = 0);
 
         // window related
@@ -272,6 +272,7 @@ namespace rasm
         void                        finishEnvironmentBakes();
         void                        drawSky(uint32_t view);
         bool                        bloomPipelinesReady() const;
+        bool                        bloomRuns(CameraHandle camera) const;
         bool                        createBloomPipelines();
         void                        finishLoads(bool wait);
         bool                        createGpuScene();

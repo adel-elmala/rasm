@@ -557,10 +557,14 @@ namespace rasm
 
             if (pass.compute)
             {
+                // A transient target's first pass finds another target's bytes in its memory, so it drops them, like
+                // the clear of a first draw. Any other write keeps the contents.
                 if (pass.outputRenderTarget.isValid())
                 {
+                    const auto transient = std::find(transientTargets.begin(), transientTargets.end(), pass.outputRenderTarget);
+                    const bool first = transient != transientTargets.end() && transientFirstPasses[transient - transientTargets.begin()] == position;
                     for (uint32_t i = 0; i < ctx.getRenderTarget(pass.outputRenderTarget).colorCount; ++i)
-                        ctx.transitionImageLayout(commandBuffer, engine->getRenderTargetTexture(pass.outputRenderTarget, i), TextureUsage::STORAGE);
+                        ctx.transitionImageLayout(commandBuffer, engine->getRenderTargetTexture(pass.outputRenderTarget, i), TextureUsage::STORAGE, first);
                 }
                 for (auto texture : pass.outputTextures)
                     ctx.transitionImageLayout(commandBuffer, texture, TextureUsage::STORAGE);

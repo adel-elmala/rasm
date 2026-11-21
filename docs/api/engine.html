@@ -510,10 +510,10 @@ if (!engine.addScenePasses(graph, scene, camera, sceneTarget, shadows, 3))
     <dl>
       <dt>graph</dt><dd>The graph to add to, before its <code>compile</code>. The passes read <code>source</code>, so the graph runs them after the passes that draw it. They make 11 transient <a href="render-graph.html#RenderTargetDesc">storage targets</a> in the graph, which share memory with the graph's other transient targets.</dd>
       <dt>source</dt><dd>Color 0 is read, as linear light: the target <a href="#addScenePasses"><code>addScenePasses</code></a> drew. The levels are sized from it: a target sized from the window gives levels that follow the window. A small source runs fewer levels: the chain stops at the last level of at least 2 × 2. Invalid, or a depth-only target: logs an error, adds nothing and returns an invalid handle.</dd>
-      <dt>camera</dt><dd>Its <a href="camera.html#setCameraBloomStrength">bloom strength</a> is read each time the passes run. At 0 they record nothing. Invalid: logs an error, adds nothing and returns an invalid handle.</dd>
+      <dt>camera</dt><dd>Its <a href="camera.html#setCameraBloomStrength">bloom strength</a> is read each time the passes run. At 0 they dispatch nothing (the graph still records their barriers). Invalid: logs an error, adds nothing and returns an invalid handle.</dd>
       <dt>returns</dt><dd>The bloom target, half the size of <code>source</code>, or an invalid handle when the passes could not be added, for example when the <a href="types.html#MAX_BINDLESS_STORAGE_IMAGES">storage slots</a> ran out (the error names the limit). The pipelines are made the first time the passes run. If <code>passes/bloom.slang</code> does not compile, they log an error, the frame has no bloom, and they try again next frame.</dd>
     </dl>
-    <p>The passes share one GPU timer, <code>Bloom</code>. In <code>examples/09_gltf_materials</code> (RTX 3060, Release) it takes 0.23 ms at 1280 × 720, 0.37 ms at 1920 × 1080 and 0.75 ms at 3840 × 2160.</p>
+    <p>The passes share one GPU timer, <code>Bloom</code>. In <code>examples/09_gltf_materials</code> (RTX 3060, Release) it takes about 0.2 ms at 1280 × 720 (0.10 to 0.27 ms from run to run), 0.37 ms at 1920 × 1080 and 0.75 ms at 3840 × 2160.</p>
     <pre><code>// From examples/09_gltf_materials/main.cpp
 const rasm::RenderTargetHandle bloomTarget = engine.addBloomPasses(graph, sceneTarget, camera);
 if (!bloomTarget.isValid() || !engine.addToneMapPass(graph, sceneTarget, camera, bloomTarget))

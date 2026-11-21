@@ -350,7 +350,7 @@ engine.setCameraController(camera, rasm::CameraController{
 <div class="api" id="setCameraBloomStrength">
   <pre class="sig">void setCameraBloomStrength(CameraHandle camera, float strength);</pre>
   <div class="body">
-    <p>How much the camera's image glows around bright light: the <a href="engine.html#addToneMapPass">tone-map pass</a> draws <code>lerp(scene, bloom, strength)</code> with the bloom of <a href="engine.html#addBloomPasses"><code>addBloomPasses</code></a>, like the haze of a real lens. 0.04 is the default. The passes read it every time they run, and at 0 they record nothing. It has an effect only in a graph with the bloom passes (<code>EngineConfig::bloom</code> for <code>Engine::render</code>). How it works: <a href="../guides/bloom.html">Bloom</a>.</p>
+    <p>How much the camera's image glows around bright light: the <a href="engine.html#addToneMapPass">tone-map pass</a> draws <code>lerp(scene, bloom, strength)</code> with the bloom of <a href="engine.html#addBloomPasses"><code>addBloomPasses</code></a>, like the haze of a real lens. 0.04 is the default. The passes read it every time they run, and at 0 they dispatch nothing. It has an effect only in a graph with the bloom passes (<code>EngineConfig::bloom</code> for <code>Engine::render</code>). How it works: <a href="../guides/bloom.html">Bloom</a>.</p>
     <dl>
       <dt>strength</dt><dd>The bloom's share of the image, from 0 to 1. A value outside, or NaN, logs an error and keeps the old one.</dd>
     </dl>
