@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clustered Lighting · RASM</title>
+<meta name="description" content="How a renderer shades thousands of lights: each light's reach as a sphere, screen tiles, clusters (tiles cut into depth slices), building the light lists on the GPU in a fixed order, the cap per cluster, and how RASM does it.">
+<meta name="rasm-sources" content="src/renderer/lightClusters.cpp src/renderer/lightClusters.h shaders/lib/lightClusters.slang shaders/passes/lightClusters.slang shaders/lib/pbr.slang src/scene/light.cpp include/rasm/light.h examples/11_many_lights/main.cpp">
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/sync.js"></script>
+<script defer src="../assets/site.js"></script>
+<script defer src="../assets/lab.js"></script>
+<script defer src="../assets/labs/clustered-lighting.js"></script>
+</head>
+<body data-root="../" data-page="guides/clustered-lighting.html">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head"/></marker>
+    <marker id="ah-cpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head cpu"/></marker>
+    <marker id="ah-gpu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head gpu"/></marker>
+    <marker id="ah-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head mem"/></marker>
+    <marker id="ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head hot"/></marker>
+    <marker id="ah-shader" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="head shader"/></marker>
+  </defs>
+</svg>
+
+<div class="layout">
+<nav id="sidebar"></nav>
+<main>
+
+<p class="eyebrow">Culling and the frame</p>
+<h1>Many lights: clustered lighting</h1>
+<p class="lead">A street with a hundred lamps, a building with a thousand lights: each pixel is reached by only a few of them. Clustered lighting cuts the camera's view into small boxes, lists the lights that reach each box once per frame, and lets every pixel shade only its box's list. This page explains the idea step by step. The <a href="#in-rasm">last part</a> shows how RASM does it.</p>
+
+<div class="tldr">
+  <h3>In short</h3>
+  <ul>
+    <li>Shading every light at every pixel costs <b>pixels × lights</b>. Most of that work adds 0.</li>
+    <li>A light with a <b>range</b> reaches only a sphere. A light without one (the sun, or a lamp with no range) reaches everything and must be shaded everywhere.</li>
+    <li><b>Tiles</b> split the screen. A tile's column still runs from near to far, so it collects every light along the way.</li>
+    <li><b>Clusters</b> cut each column into depth slices: small boxes of the view. Slices that grow with distance keep the boxes about as deep as they are wide.</li>
+    <li>Each frame the GPU lists the lights of each cluster. Each pixel finds its cluster from its position on screen and its depth, and shades that list.</li>
+    <li>The lists have a fixed size. Fill them in a fixed order, so the image does not change from run to run.</li>
+  </ul>
+</div>
+
+<h2 id="problem"><span class="n">1</span>The problem: every light at every pixel</h2>
+
+<p>The simple shader loops over all lights for each pixel. Look at one point on the floor below: 40 lights are in the scene, and 3 of them reach it.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A floor seen from above with 40 small lights, each with a circle that shows how far it reaches. One point on the floor is marked; only 3 circles cover it. The other 37 lights add nothing to that point.">
+    <rect x="20" y="20" width="520" height="210" class="paper"/>
+    <g class="o-75">
+      <circle cx="60"  cy="50"  r="34" class="light"/><circle cx="130" cy="90"  r="34" class="light"/><circle cx="210" cy="45"  r="34" class="light"/>
+      <circle cx="300" cy="80"  r="34" class="light"/><circle cx="390" cy="50"  r="34" class="light"/><circle cx="470" cy="95"  r="34" class="light"/>
+      <circle cx="80"  cy="150" r="34" class="light"/><circle cx="160" cy="190" r="34" class="light"/><circle cx="240" cy="140" r="34" class="light"/>
+      <circle cx="400" cy="160" r="34" class="light"/><circle cx="480" cy="200" r="34" class="light"/><circle cx="510" cy="140" r="34" class="light"/>
+      <circle cx="340" cy="200" r="34" class="light"/><circle cx="60"  cy="210" r="34" class="light"/>
+    </g>
+    <circle cx="292" cy="145" r="34" class="light"/><circle cx="326" cy="128" r="34" class="light"/><circle cx="300" cy="178" r="34" class="light"/>
+    <circle cx="300" cy="150" r="6" class="hot"/>
+    <text x="300" y="132" class="mid small halo">one point</text>
+    <text x="560" y="70"  class="title">40 lights in the scene</text>
+    <text x="560" y="94"  class="small">a circle: how far one light reaches</text>
+    <text x="560" y="140" class="title t-hot">3 reach the point</text>
+    <text x="560" y="164" class="small">the other 37 add exactly 0,</text>
+    <text x="560" y="180" class="small">but the loop still runs them</text>
+  </svg>
+  <figcaption>Only the lights whose circle covers a point light it. The loop over all lights spends most of its time on lights that add nothing.</figcaption>
+</figure>
+
+<div class="stats">
+  <div><b>2.07 M</b><span>pixels at 1920 × 1080</span><small>before overdraw</small></div>
+  <div><b>4096</b><span>lights in the scene</span><small>street lamps, windows, sparks</small></div>
+  <div><b>8.5 G</b><span>light evaluations per frame, all lights at all pixels</span><small>2.07 M × 4096</small></div>
+  <div><b>~30</b><span>lights that reach a pixel, in a lit street</span><small>the work that matters</small></div>
+</div>
+
+<p>The fix is to find, for each pixel, the short list of lights that can reach it, and to find it without testing every light at every pixel.</p>
+
+<h2 id="reach"><span class="n">2</span>How far a light reaches</h2>
+
+<p>A point light's brightness falls with the square of the distance, 1 / <var>d</var>², and never reaches 0. So the shader multiplies it by a <b>window</b> that goes smoothly to 0 at a chosen <b>range</b> <var>r</var>. Past the range, the light adds exactly 0. Now the light has a shape: a sphere of radius <var>r</var>.</p>
+
+<div class="formula">
+  <p class="eq">light(d) = I / d² · ( max(1 − (d / r)⁴, 0) )²</p>
+  <dl>
+    <dt>I</dt><dd>the light's intensity</dd>
+    <dt>d</dt><dd>the distance from the light to the point</dd>
+    <dt>r</dt><dd>the range: the window is 1 near the light and 0 from <var>r</var> on</dd>
+  </dl>
+</div>
+
+<p>A spot light lights only a cone. Its sphere can be smaller than the range's: the smallest sphere around the cone of length <var>r</var>. Which sphere is smallest depends on the cone's angle θ:</p>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A point light at the center of a circle: everything it reaches is inside the circle of radius r.">
+      <circle cx="120" cy="65" r="52" class="light"/>
+      <circle cx="120" cy="65" r="5" class="accent"/>
+      <line x1="120" y1="65" x2="172" y2="65" class="arrow light"/>
+      <text x="146" y="58" class="mid small">r</text>
+    </svg>
+    <h4>Point light</h4>
+    <p>A sphere of radius <var>r</var>, centered on the light.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A narrow spot light pointing right. The smallest sphere goes through the light and the rim of the cone's end, so its center is in front of the light.">
+      <circle cx="92" cy="62" r="52" class="ghost"/>
+      <path d="M40,62 L137,36 A100,100 0 0 1 137,88 Z" class="light"/>
+      <circle cx="40" cy="62" r="5" class="accent"/>
+      <circle cx="92" cy="62" r="3" class="hot"/>
+      <text x="120" y="126" class="mid small">θ ≤ 45°: through the apex and the rim</text>
+    </svg>
+    <h4>Narrow spot</h4>
+    <p>Center <var>r</var> / (2 cos θ) along the axis, the same radius.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A wide spot light pointing right. The smallest sphere is centered on the rim's circle of the cone's end.">
+      <circle cx="110" cy="62" r="52" class="ghost"/>
+      <path d="M80,62 L110,10 A60,60 0 0 1 110,114 Z" class="light"/>
+      <circle cx="80" cy="62" r="5" class="accent"/>
+      <circle cx="110" cy="62" r="3" class="hot"/>
+      <text x="120" y="126" class="mid small">θ &gt; 45°: around the rim's circle</text>
+    </svg>
+    <h4>Wide spot</h4>
+    <p>Center <var>r</var> cos θ along the axis, radius <var>r</var> sin θ.</p>
+  </div>
+</div>
+
+<div class="callout warn">
+  <strong>A light without a range reaches everything</strong>
+  The sun, and a lamp left with an unbounded 1 / <var>d</var>² falloff, have no sphere. No box can leave them out, so they go into a short <b>global</b> list that every pixel shades. Hundreds of global lights cost what hundreds of lights cost without clusters.
+</div>
+
+<h2 id="tiles"><span class="n">3</span>Tiles: split the screen</h2>
+
+<p>Cut the screen into tiles, for example 16 × 9. Each tile is a <b>column</b> of the view: the part of the frustum behind those pixels. List, once per frame, the lights whose sphere touches each column. A pixel then shades only its tile's list. This is <b>tiled</b> shading (Forward+).</p>
+
+<p>Seen from the side, a column runs from the near plane to the far plane. Every light along it, near or far, is in the list:</p>
+
+<div class="split">
+  <div class="bad">
+    <svg viewBox="0 0 320 140" role="img" aria-label="Side view of one tile's column from the camera outward. Five lights are inside the column at very different depths. A pixel near the camera gets all five in its list, though only one reaches it.">
+      <polygon points="20,70 310,20 310,120" class="zone"/>
+      <path d="M20,70L310,20M20,70L310,120" class="arrow"/>
+      <polygon points="20,70 310,52 310,88" class="accent o-50"/>
+      <circle cx="20" cy="70" r="5" class="solid"/>
+      <circle cx="70"  cy="68" r="14" class="light"/><circle cx="130" cy="74" r="14" class="light"/>
+      <circle cx="190" cy="66" r="14" class="light"/><circle cx="240" cy="76" r="14" class="light"/><circle cx="290" cy="70" r="14" class="light"/>
+      <circle cx="78" cy="70" r="3" class="hot"/>
+      <text x="160" y="136" class="mid small">a near pixel's list: all 5 lights</text>
+    </svg>
+    <h4>One tile: a whole column</h4>
+    <p>Where the column crosses near and far objects, or a long street, the list is long.</p>
+  </div>
+  <div class="good">
+    <svg viewBox="0 0 320 140" role="img" aria-label="The same column cut into slices that get longer with distance. The near pixel's slice holds one light.">
+      <polygon points="20,70 310,20 310,120" class="zone"/>
+      <path d="M20,70L310,20M20,70L310,120" class="arrow"/>
+      <path d="M50,65V75M68,62V78M92,58V82M124,52V88M168,45V95M228,35V105" class="grid"/>
+      <polygon points="68,67 92,66 92,74 68,73" class="accent"/>
+      <circle cx="20" cy="70" r="5" class="solid"/>
+      <circle cx="70"  cy="68" r="14" class="light"/><circle cx="130" cy="74" r="14" class="light"/>
+      <circle cx="190" cy="66" r="14" class="light"/><circle cx="240" cy="76" r="14" class="light"/><circle cx="290" cy="70" r="14" class="light"/>
+      <circle cx="78" cy="70" r="3" class="hot"/>
+      <text x="160" y="136" class="mid small">the near pixel's cluster: 1 light</text>
+    </svg>
+    <h4>Clusters: the column in slices</h4>
+    <p>Each slice keeps only the lights near its own depth.</p>
+  </div>
+</div>
+
+<p>Some renderers fix tiles by first drawing the scene's depth, then shrinking each column to the depths it really holds. That needs a depth pass, and it does not help see-through surfaces, which sit in front of that depth.</p>
+
+<h2 id="clusters"><span class="n">4</span>Clusters: cut the columns into slices</h2>
+
+<p>A <b>cluster</b> is one tile × one depth slice: a small box of the view. A common grid is 16 × 9 tiles × 24 slices = 3456 clusters. The grid comes from the camera alone: it needs no depth buffer, so see-through surfaces and multisampled targets use it like opaque ones.</p>
+
+<p>Even slices are a bad fit for a perspective camera. A tile is narrow near the camera and wide far away, so even slices make near clusters long thin needles and far clusters flat plates. Slices that each grow by the same factor keep the clusters about as deep as they are wide:</p>
+
+<div class="formula">
+  <p class="eq">start of slice k = near · (far / near)^(k / S)</p>
+  <p class="eq">slice of depth z = ⌊ S · log(z / near) / log(far / near) ⌋</p>
+  <dl>
+    <dt>S</dt><dd>the number of slices, for example 24</dd>
+    <dt>near, far</dt><dd>the depths the slices cover: the camera's near plane, and the farthest light</dd>
+    <dt>z</dt><dd>a pixel's view depth: its distance along the camera's forward axis</dd>
+  </dl>
+</div>
+
+<p>With near = 0.1 and far = 100, each slice is 1.33 times as deep as the one before. An orthographic camera's tiles do not widen with distance, so its slices are even.</p>
+
+<figure class="lab" data-lab="clusters" data-title="Sort lights into clusters">
+  <figcaption>A side view of a camera's view, cut into tiles (rows) and slices (columns). Drag the bright light, change the range, and switch between even and growing slices. Each cluster shows how many lights touch it.</figcaption>
+</figure>
+
+<h2 id="build"><span class="n">5</span>Building the lists on the GPU</h2>
+
+<p>The lights move, and the camera moves, so the lists are built again every frame. Testing every light against every cluster costs clusters × lights: 3456 × 4096 = 14 million tests. Two levels cut that down: first the lights of each tile's column, then, inside a tile, the lights of each cluster.</p>
+
+<ol class="flow">
+  <li class="gpu"><b>Visible lights</b><span>each light's sphere in view space, tested against the frustum</span></li>
+  <li class="gpu"><b>Tile lists</b><span>a group per tile: the spheres that touch the column's 4 side planes</span></li>
+  <li class="gpu"><b>Cluster lists</b><span>a thread per cluster: its tile's spheres that touch its box</span></li>
+  <li class="shader"><b>Shade</b><span>a pixel finds its cluster and loops over that list</span></li>
+</ol>
+
+<p>The box test is the sphere–box test: the point of the box closest to the sphere's center, then its distance. The box is the cluster's 8 corners in view space; it is a little bigger than the cluster, which only adds a light that adds 0.</p>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 220" role="img" aria-label="A cluster seen from the side is a piece of a column between two depths. Its box holds the 8 corners. Sphere A touches the box: the closest point of the box is inside the sphere. Sphere B does not: the closest point is farther than its radius.">
+    <polygon points="20,110 740,30 740,190" class="zone"/>
+    <path d="M20,110L740,30M20,110L740,190" class="arrow"/>
+    <polygon points="300,79 460,61 460,159 300,141" class="accent"/>
+    <rect x="300" y="61" width="160" height="98" class="hot"/>
+    <circle cx="20" cy="110" r="5" class="solid"/>
+    <text x="380" y="180" class="mid small">the cluster's box: its corners at the slice's 2 depths</text>
+    <circle cx="496" cy="100" r="48" class="light"/>
+    <circle cx="496" cy="100" r="4" class="accent"/>
+    <line x1="496" y1="100" x2="463" y2="100" class="arrow ok" marker-end="url(#ah)"/>
+    <circle cx="460" cy="100" r="3" class="hot"/>
+    <text x="556" y="122" class="small t-ok">A: the closest point is</text>
+    <text x="556" y="137" class="small t-ok">inside the sphere: kept</text>
+    <circle cx="190" cy="34" r="26" class="light"/>
+    <circle cx="190" cy="34" r="4" class="accent"/>
+    <line x1="190" y1="34" x2="297" y2="60" class="arrow bad" marker-end="url(#ah)"/>
+    <circle cx="300" cy="61" r="3" class="hot"/>
+    <text x="20" y="30" class="small t-bad">B: farther than r:</text>
+    <text x="20" y="45" class="small t-bad">left out</text>
+  </svg>
+  <figcaption>The closest point of the box to the center is the center clamped to the box. The light is in the cluster when that point is within its radius.</figcaption>
+</figure>
+
+<h3>A fixed order</h3>
+
+<p>Thousands of GPU threads add lights to lists at the same time. If each thread takes the next free place with an atomic counter, the order of a list changes from run to run. The sum of the lights then changes in its last bits, and two runs of the same frame give different images, which breaks image tests. Instead, pack the hits with a <a href="stream-compaction.html">prefix sum</a>, in light order. The lists, and the image, are then the same every time.</p>
+
+<h2 id="cap"><span class="n">6</span>A cap per cluster, and memory</h2>
+
+<p>The lists live in one buffer with a fixed place per cluster. That needs a cap: the most lights one cluster can hold. A light past the cap is left out of that cluster, and its pixels miss it, so count those and tell the user.</p>
+
+<div class="stats">
+  <div><b>3456</b><span>clusters</span><small>16 × 9 tiles × 24 slices</small></div>
+  <div><b>256</b><span>lights per cluster, at most</span><small>the cap</small></div>
+  <div><b>3.4 MiB</b><span>for the cluster lists</span><small>3456 × 256 × 4 bytes</small></div>
+  <div><b>6144</b><span>lights per tile, at most</span><small>24 slices × 256: more cannot fit its clusters</small></div>
+</div>
+
+<p>Far clusters are big. With thousands of short-range lights, one far cluster can cover hundreds of them, and every pixel in it loops over all of them. Finer tiles far away, or culling the empty depth of each cluster, help there.</p>
+
+<h2 id="variants"><span class="n">7</span>Variants</h2>
+
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A screen split into tiles, each with a list.">
+      <rect x="20" y="15" width="200" height="100" class="paper"/>
+      <path d="M70,15V115M120,15V115M170,15V115M20,48H220M20,82H220" class="grid"/>
+      <rect x="70" y="48" width="50" height="34" class="accent"/>
+    </svg>
+    <h4>Tiled (Forward+)</h4>
+    <p>Screen tiles only, often bounded by the depth buffer's min and max per tile.</p>
+    <p class="cost">Needs a depth pass</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A view from the side cut into slices that grow with distance.">
+      <polygon points="20,65 220,15 220,115" class="zone"/>
+      <path d="M50,58V72M80,51V79M120,41V89M170,28V102" class="grid"/>
+      <path d="M20,65L220,48M20,65L220,82" class="grid"/>
+    </svg>
+    <h4>Clustered forward</h4>
+    <p>Tiles × depth slices. Works for see-through surfaces and with MSAA.</p>
+    <p class="cost">No depth needed</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Several screen-sized images: normal, color, depth, then a lighting pass.">
+      <rect x="20" y="20" width="56" height="40" class="mem"/><rect x="30" y="30" width="56" height="40" class="mem"/><rect x="40" y="40" width="56" height="40" class="mem"/>
+      <line x1="104" y1="60" x2="140" y2="60" class="arrow" marker-end="url(#ah)"/>
+      <rect x="146" y="35" width="74" height="50" class="shader"/>
+      <text x="183" y="64" class="mid small">lights</text>
+    </svg>
+    <h4>Clustered deferred</h4>
+    <p>The same lists, read by a lighting pass over a G-buffer.</p>
+    <p class="cost">Memory for the G-buffer</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Lights sorted by depth; each depth bin keeps the first and last light index.">
+      <path d="M20,100H220" class="surface"/>
+      <circle cx="40" cy="80" r="7" class="light"/><circle cx="70" cy="80" r="7" class="light"/><circle cx="110" cy="80" r="7" class="light"/><circle cx="160" cy="80" r="7" class="light"/><circle cx="200" cy="80" r="7" class="light"/>
+      <path d="M90,30V100M140,30V100" class="grid"/>
+      <text x="115" y="24" class="mid small">a bin: lights 2 to 3</text>
+    </svg>
+    <h4>Z-binning</h4>
+    <p>Sort lights by depth; a depth bin keeps a range of light indices, a tile a bit mask.</p>
+    <p class="cost">Little memory, a sort per frame</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A row of bits, one per light; set bits are the lights of the cluster.">
+      <rect x="20" y="50" width="25" height="30" class="accent"/><rect x="45" y="50" width="25" height="30" class="box"/><rect x="70" y="50" width="25" height="30" class="box"/><rect x="95" y="50" width="25" height="30" class="accent"/>
+      <rect x="120" y="50" width="25" height="30" class="box"/><rect x="145" y="50" width="25" height="30" class="accent"/><rect x="170" y="50" width="25" height="30" class="box"/><rect x="195" y="50" width="25" height="30" class="box"/>
+      <text x="120" y="104" class="mid small">a bit per light</text>
+    </svg>
+    <h4>Bit masks</h4>
+    <p>A bit per light per cluster instead of a list: no cap, but its size grows with the lights.</p>
+    <p class="cost">Good for hundreds, not thousands</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="Lights listed in a texture on the CPU each frame.">
+      <rect x="20" y="30" width="80" height="70" class="cpu"/>
+      <text x="60" y="70" class="mid small">CPU</text>
+      <line x1="100" y1="65" x2="140" y2="65" class="arrow cpu" marker-end="url(#ah-cpu)"/>
+      <rect x="146" y="30" width="74" height="70" class="mem"/>
+      <text x="183" y="70" class="mid small">lists</text>
+    </svg>
+    <h4>Lists built on the CPU</h4>
+    <p>Fine for a few hundred lights; the CPU's cost grows with the lights.</p>
+    <p class="cost">Simple, but not GPU-driven</p>
+  </div>
+</div>
+
+<h2 id="pitfalls"><span class="n">8</span>Pitfalls</h2>
+
+<dl class="pitfalls">
+  <div><dt>Light pools end in a hard edge, or blocks of light flicker on and off</dt><dd>The shader's falloff does not reach 0 at the range the lists use. The window must make the light exactly 0 past its sphere.</dd></div>
+  <div><dt>A spot light's lit area is cut along a straight line</dt><dd>Its sphere does not hold the whole cone: the cone's round end reaches farther than <var>r</var> cos θ along the axis.</dd></div>
+  <div><dt>Dark seams along tile or slice edges</dt><dd>The pixel picks its cluster with other math than the list builder. Share one function, and give each box a small margin.</dd></div>
+  <div><dt>The image changes a little between two runs</dt><dd>Lists filled with atomic counters come out in a different order each run. Pack them in light order.</dd></div>
+  <div><dt>Far away, the frame gets slow</dt><dd>Big far clusters hold many lights each. Shorter ranges, fewer far lights, or finer far clusters.</dd></div>
+  <div><dt>Some lights are missing in a dense spot</dt><dd>A cluster reached its cap. Count the lights left out and warn.</dd></div>
+</dl>
+
+<h2 id="in-rasm"><span class="n">9</span>In RASM</h2>
+
+<p>RASM keeps every light in a GPU table and sorts the local lights into 16 × 9 × 24 clusters for each shaded view, every frame, on the GPU. Point and spot lights with a <code>range</code> are local; directional lights and lights with <code>range</code> 0 are global. <code>EngineConfig::clusteredLighting</code> turns it off (every pixel then shades every light), and <code>examples/11_many_lights</code> shows it with 1024 moving lights.</p>
+
+<div class="legend">
+  <span><i class="cpu"></i>CPU, only on a change</span>
+  <span><i class="mem"></i>buffers</span>
+  <span><i class="gpu"></i>compute, each frame</span>
+  <span><i class="shader"></i>fragment shader</span>
+</div>
+
+<figure class="diagram">
+  <svg viewBox="0 0 760 300" role="img" aria-label="createLight and updateLight write one row of the light table; addLightToScene rebuilds the scene's light list, global lights first. In the view's first cull pass, three dispatches build the clusters: lightsMain, tilesMain and clustersMain. fragMain shades the view's shadowed lights, the global lights, and the lights of its pixel's cluster.">
+    <rect x="20" y="30" width="200" height="50" rx="6" class="cpu"/>
+    <text x="120" y="52" class="mid mono">createLight / updateLight</text>
+    <text x="120" y="70" class="mid small">one row, GpuTable::setRow</text>
+    <rect x="20" y="110" width="200" height="50" rx="6" class="cpu"/>
+    <text x="120" y="132" class="mid mono">addLightToScene</text>
+    <text x="120" y="150" class="mid small">rebuild that scene's list</text>
+    <line x1="220" y1="55" x2="258" y2="55" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <line x1="220" y1="135" x2="258" y2="135" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="260" y="30" width="200" height="50" rx="6" class="mem"/>
+    <text x="360" y="52" class="mid">light table</text>
+    <text x="360" y="70" class="mid small">56 B per light, 2 frame slots</text>
+    <rect x="260" y="110" width="200" height="50" rx="6" class="mem"/>
+    <text x="360" y="132" class="mid">scene light list</text>
+    <text x="360" y="150" class="mid small">[ global | local ] rows</text>
+
+    <text x="20" y="200" class="title t-gpu">Cull 1 pass, timer "Light Clusters"</text>
+    <rect x="20" y="210" width="140" height="56" rx="28" class="gpu"/>
+    <text x="90" y="234" class="mid mono">lightsMain</text>
+    <text x="90" y="252" class="mid small">1 group: visible</text>
+    <line x1="160" y1="238" x2="184" y2="238" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="186" y="210" width="140" height="56" rx="28" class="gpu"/>
+    <text x="256" y="234" class="mid mono">tilesMain</text>
+    <text x="256" y="252" class="mid small">144 groups: tiles</text>
+    <line x1="326" y1="238" x2="350" y2="238" class="arrow gpu" marker-end="url(#ah-gpu)"/>
+    <rect x="352" y="210" width="140" height="56" rx="28" class="gpu"/>
+    <text x="422" y="234" class="mid mono">clustersMain</text>
+    <text x="422" y="252" class="mid small">3456 threads</text>
+    <line x1="360" y1="160" x2="300" y2="208" class="arrow" marker-end="url(#ah)"/>
+    <line x1="492" y1="238" x2="526" y2="238" class="arrow mem" marker-end="url(#ah-mem)"/>
+    <rect x="528" y="210" width="120" height="56" rx="6" class="mem"/>
+    <text x="588" y="234" class="mid">clusters</text>
+    <text x="588" y="252" class="mid small">≤ 256 rows each</text>
+
+    <rect x="520" y="30" width="220" height="130" rx="6" class="shader"/>
+    <text x="630" y="52" class="mid mono">fragMain → shadePBR</text>
+    <text x="536" y="78" class="small">1. shadowed lights (≤ 4)</text>
+    <text x="536" y="98" class="small">2. global lights</text>
+    <text x="536" y="118" class="small">3. its cluster's lights</text>
+    <text x="536" y="142" class="small t-faint">same sums with or without</text>
+    <line x1="460" y1="55" x2="518" y2="70" class="arrow" marker-end="url(#ah)"/>
+    <line x1="600" y1="210" x2="610" y2="162" class="arrow mem" marker-end="url(#ah-mem)"/>
+  </svg>
+  <figcaption>The CPU touches a light only when it changes. The GPU builds the clusters in the view's first cull pass, and every draw pass of the view, the <samp>Transparent</samp> one too, reads them.</figcaption>
+</figure>
+
+<h3>Where RASM follows the textbook, and where it differs</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Part</th><th>This page</th><th>RASM</th></tr>
+  <tr><td>Grid</td><td>tiles × slices</td><td>16 × 9 × 24 (<code>CLUSTER_TILES_X</code>, <code>CLUSTER_TILES_Y</code>, <code>CLUSTER_SLICES</code>), the same at any resolution.</td></tr>
+  <tr><td>Slice range</td><td>near to far</td><td>From the nearest visible light's sphere (no nearer than the camera's near plane) to the farthest one's, found by <code>lightsMain</code> each frame. A pixel outside it has no local light.</td></tr>
+  <tr><td>Slices</td><td>growing, even for orthographic</td><td>The same (<code>getClusterSliceDepth</code>); an orthographic camera's may start behind it.</td></tr>
+  <tr><td>Build</td><td>two levels</td><td><code>tilesMain</code>, then <code>clustersMain</code>, each packed in light order with no global atomics.</td></tr>
+  <tr><td>Cap</td><td>a fixed list per cluster</td><td><code>MAX_CLUSTER_LIGHTS</code> (256) per cluster and 24 × 256 per tile. The lights left out are <code>FrameStats::lightsDropped</code>, with a warning in the log.</td></tr>
+  <tr><td>Global lights</td><td>a separate list</td><td>The front of the scene's light list; <code>FrameStats::lightsGlobal</code> counts them.</td></tr>
+  <tr><td>Shadowed lights</td><td>—</td><td>A view's shadowed lights (up to <code>MAX_VIEW_SHADOWS</code>) are shaded in their own loop with their shadows, and left out of the clusters. Every other light has no shadow.</td></tr>
+  <tr><td>Memory</td><td>the lists</td><td>About 6.8 MiB per shaded view and frame slot: cluster lists, tile lists, a sphere and a bit per light.</td></tr>
+</table>
+</div>
+
+<div class="stats" id="rasm-numbers">
+  <div><b>0.31 ms</b><span>"Light Clusters", 4096 lights (3813 visible)</span><small>1920 × 1080, RTX 3060, Release</small></div>
+  <div><b>4.5 ms</b><span>the draw passes, clustered</span><small>Scene 1 + 2 + Transparent</small></div>
+  <div><b>231 ms</b><span>the same passes, every light at every pixel</span><small>--all-lights</small></div>
+  <div><b>0</b><span>pixels that differ between the two</span><small>11_many_lights, several frames and cameras</small></div>
+</div>
+
+<h3>Where it lives in code</h3>
+
+<div class="table-wrap">
+<table class="code-map">
+  <tr><th>What</th><th>Where</th></tr>
+  <tr><td>The light API</td><td><code>Engine::createLight</code>, <code>getLight</code>, <code>updateLight</code> in <code>src/scene/light.cpp</code>; <code>addLightToScene</code> in <code>src/scene/scene.cpp</code></td></tr>
+  <tr><td>The light table and the scene lists</td><td><code>writeLightRow</code>, <code>syncGpuLights</code>, <code>buildSceneLightList</code> in <code>src/renderer/lightClusters.cpp</code></td></tr>
+  <tr><td>A view's lights in <code>SceneData</code></td><td><code>writeSceneLights</code>, called by <code>prepareSceneView</code></td></tr>
+  <tr><td>The three dispatches</td><td><code>recordLightClusters</code>; <code>lightsMain</code>, <code>tilesMain</code>, <code>clustersMain</code> in <code>shaders/passes/lightClusters.slang</code></td></tr>
+  <tr><td>Layout, slices, a light's sphere</td><td><code>shaders/lib/lightClusters.slang</code> (<code>getCluster</code>, <code>getClusterSlice</code>, <code>getLightSphere</code>)</td></tr>
+  <tr><td>The three light loops</td><td><code>shadePBR</code> and <code>shadeLight</code> in <code>shaders/lib/pbr.slang</code></td></tr>
+  <tr><td>Tests of the slices and the scene list</td><td><code>tests/lightClustersTests.cpp</code></td></tr>
+</table>
+</div>
+
+<div class="callout rule">
+  <strong>Keep these true</strong>
+  <ul>
+    <li>The shader's falloff must be exactly 0 past a light's sphere, or a cluster that leaves the light out changes the image.</li>
+    <li><code>getClusterSlice</code> and <code>getClusterSliceDepth</code> exist in Slang and in C++ (for the tests): change both, and the lab on this page.</li>
+    <li>The cluster buffer's layout is in <code>shaders/lib/lightClusters.slang</code> and in <code>getClusterBufferSize</code>: change both.</li>
+    <li>Fill the lists in light order, never with an atomic counter, so the image stays the same from run to run.</li>
+    <li><code>SceneData</code> is a CPU↔GPU struct: a change to it follows <a href="struct-layout.html#in-rasm">the struct layout rules</a>.</li>
+  </ul>
+</div>
+
+<h3>Further reading</h3>
+<ul>
+  <li>Ola Olsson, Markus Billeter and Ulf Assarsson, <i>Clustered Deferred and Forward Shading</i>, HPG 2012.</li>
+  <li>Takahiro Harada, Jay McKee and Jason C. Yang, <i>Forward+: Bringing Deferred Lighting to the Next Level</i>, Eurographics 2012.</li>
+  <li>Emil Persson, <i>Practical Clustered Shading</i>, SIGGRAPH 2015 (Just Cause 3).</li>
+  <li>Michal Drobot, <i>Improved Culling for Tiled and Clustered Rendering</i>, SIGGRAPH 2017 (z-binning).</li>
+  <li>Tiago Sousa and Jean Geffroy, <i>The devil is in the details: idTech 666</i>, SIGGRAPH 2016 (DOOM's clustered forward).</li>
+  <li>Bart Wronski, <i>Cull that cone!</i> (2017): bounding spheres of spot light cones.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

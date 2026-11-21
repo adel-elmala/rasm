@@ -756,7 +756,7 @@ void bindTexture(TextureHandle texture);</code></pre>
   <tr><td><code>Mesh</code></td><td><code>MAX_MESHES</code> = 8 (7 usable)</td><td><code>include/rasm/mesh.h</code></td></tr>
   <tr><td><code>Material</code></td><td><code>MAX_MATERIALS</code> = 256 (255 usable)</td><td><code>include/rasm/engine.h</code></td></tr>
   <tr><td><code>Camera</code></td><td><code>MAX_CAMERAS</code> = 8 (7 usable)</td><td><code>include/rasm/engine.h</code></td></tr>
-  <tr><td><code>Light</code></td><td><code>MAX_LIGHTS</code> = 8 (7 usable)</td><td><code>include/rasm/light.h</code></td></tr>
+  <tr><td><code>Light</code></td><td><code>EngineConfig::maxLights</code> = 16384</td><td><code>include/rasm/types.h</code></td></tr>
   <tr><td><code>Scene</code></td><td><code>MAX_SCENES</code> = 16 (15 usable)</td><td><code>include/rasm/scene.h</code></td></tr>
   <tr><td><code>RenderContext</code> maps</td><td>buffers, textures, pipelines, ...</td><td>no count limit; bindless texture slots stop at <code>MAX_BINDLESS_TEXTURES</code> = 1024</td><td><code>include/rasm/types.h</code></td></tr>
 </table>

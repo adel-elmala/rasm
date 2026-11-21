@@ -748,10 +748,10 @@ lit    = d is not behind stored
   <tr><td>The API</td><td><code>ShadowDesc</code>, <code>SceneShadow</code>, <code>MAX_SHADOW_CASCADES</code>, <code>MAX_VIEW_SHADOWS</code> in <code>include/rasm/scene.h</code>; <code>Engine::addShadowPasses</code>, <code>Engine::addScenePasses</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Splits and boxes</td><td><code>getShadowSplits</code>, <code>fitShadowCascade</code> in <code>src/renderer/shadowCascades.cpp</code>; <code>getShadowMaps</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
   <tr><td>Depth-only views, the cascades' matrices</td><td><code>Engine::prepareSceneView</code>, <code>Engine::drawSceneView</code> in <code>src/renderer/gpuScene.cpp</code>; <code>SceneView</code> in <code>src/renderer/gpuScene.h</code></td></tr>
-  <tr><td>GPU fields</td><td><code>shadowMaps</code> (<code>gfx::ShadowMap</code>: <code>matrix</code>, <code>texture</code>, <code>split</code>), each light's <code>shadowMap</code> and <code>shadowMapCount</code>, and the LOD camera's <code>lodPixelsPerUnit</code>, <code>lodDepthPlane</code> in <code>SceneData</code>: <code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
+  <tr><td>GPU fields</td><td><code>shadowMaps</code> (<code>gfx::ShadowMap</code>: <code>matrix</code>, <code>texture</code>, <code>split</code>), the shadowed lights' <code>shadowedLights</code> (<code>gfx::ShadowedLight</code>: <code>light</code>, <code>firstMap</code>, <code>mapCount</code>), and the LOD camera's <code>lodPixelsPerUnit</code>, <code>lodDepthPlane</code> in <code>SceneData</code>: <code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
   <tr><td>The shadow pass shader</td><td><code>shaders/passes/shadow.slang</code></td></tr>
-  <tr><td>The lookup and PCF</td><td><code>sampleShadow</code>, <code>sampleShadowMap</code>, <code>offsetLookup</code>, <code>getPcfWeights</code> in <code>shaders/lib/shadow.slang</code>; called from <code>fragMain</code> in <code>shaders/passes/rasm.slang</code></td></tr>
-  <tr><td>Applying it</td><td><code>shadePBR</code> in <code>shaders/lib/pbr.slang</code> (each light's attenuation times <code>PBRInfo::shadows</code>)</td></tr>
+  <tr><td>The lookup and PCF</td><td><code>sampleShadow</code>, <code>sampleShadowMap</code>, <code>offsetLookup</code>, <code>getPcfWeights</code> in <code>shaders/lib/shadow.slang</code>; called from <code>shadePBR</code> in <code>shaders/lib/pbr.slang</code></td></tr>
+  <tr><td>Applying it</td><td><code>shadePBR</code> in <code>shaders/lib/pbr.slang</code>: the shadowed lights' loop, which reads a shadow only where its light reaches the surface</td></tr>
   <tr><td>Depth-only targets</td><td><code>checkRenderTargetDesc</code> and the depth texture's usage in <code>src/rhi/renderContext.cpp</code>; <code>VulkanCommandBuffer::beginRendering</code> (render area from the depth); <code>canReadDepth</code> in <code>src/renderer/renderGraph.cpp</code></td></tr>
   <tr><td>An example</td><td><code>examples/06_shadows/main.cpp</code></td></tr>
 </table>
@@ -760,7 +760,7 @@ lit    = d is not behind stored
 <div class="callout rule">
   <strong>Keep these true</strong>
   <ul>
-    <li><code>sampleShadow</code> finds a light's maps only through <code>gfx::Light::shadowMap</code> and <code>shadowMapCount</code>; <code>shadePBR</code> multiplies light <code>i</code> by <code>shadows[i]</code>.</li>
+    <li><code>sampleShadow</code> finds a light's maps only through its <code>gfx::ShadowedLight</code> (<code>firstMap</code>, <code>mapCount</code>); <code>shadePBR</code> multiplies only that light by it. A shadowed light is left out of the global and clustered loops, so it is shaded once.</li>
     <li>The offsets take the texel size from the point's clip w, which is 1 in a cascade's orthographic box and the depth from the light in a perspective map, so one formula serves both.</li>
     <li>The cascades' views and the shaded view must fit the cascades with the same inputs (camera, the shaded view's aspect ratio, light, <code>SceneShadow</code>), or the maps are read with other matrices than they were drawn with. <code>addScenePasses</code> only takes a shadow that <code>addShadowPasses</code> made for the same scene and camera in the same graph.</li>
     <li>The test direction follows reversed-Z. Changing the depth convention changes it too (<a href="projection-depth.html">Projection and reversed-Z depth</a>).</li>

@@ -549,7 +549,7 @@ field m: base + 540 + 64     = base + 604 = 0x1_0020_025C</code></pre>
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 400" role="img" aria-label="The push constant holds scene, firstDraw and argument. scene points to one SceneData in the Scene Data Buffer of this frame slot, at slot address plus view index times 768. SceneData holds twelve pointers: vertsPtr to the geometry vertex pool, drawInfoPtr to the visible draw buffer, instancesPtr and materialsPtr to this slot's tables, geometryPtr to the geometry table, allDrawsPtr to the draw info buffer, drawCountsPtr, cullSlotsPtr and groupCountsPtr into the visible draw buffer after the draws, cullStatsPtr, visibilityPtr and hizPtr.">
+  <svg viewBox="0 0 760 400" role="img" aria-label="The push constant holds scene, firstDraw and argument. scene points to one SceneData in the Scene Data Buffer of this frame slot, at slot address plus view index times 1720. SceneData holds twelve pointers: vertsPtr to the geometry vertex pool, drawInfoPtr to the visible draw buffer, instancesPtr and materialsPtr to this slot's tables, geometryPtr to the geometry table, allDrawsPtr to the draw info buffer, drawCountsPtr, cullSlotsPtr and groupCountsPtr into the visible draw buffer after the draws, cullStatsPtr, visibilityPtr and hizPtr.">
     <rect x="20" y="160" width="150" height="76" rx="6" class="box"/>
     <text x="95" y="182" class="mid title">PushConstants</text>
     <text x="95" y="202" class="mid mono small">scene</text>
@@ -558,9 +558,9 @@ field m: base + 540 + 64     = base + 604 = 0x1_0020_025C</code></pre>
 
     <rect x="210" y="20" width="200" height="370" rx="6" class="mem"/>
     <text x="310" y="42" class="mid title">SceneData</text>
-    <text x="310" y="58" class="mid small">1080 bytes, one per scene view</text>
+    <text x="310" y="58" class="mid small">1720 bytes, one per scene view</text>
     <text x="226" y="84" class="small">projection, view, camera,</text>
-    <text x="226" y="100" class="small">lights, frustum planes, ...</text>
+    <text x="226" y="100" class="small">light counts, frustum planes, ...</text>
     <text x="226" y="128" class="mono small">vertsPtr</text>
     <text x="226" y="150" class="mono small">drawInfoPtr</text>
     <text x="226" y="172" class="mono small">instancesPtr</text>
@@ -627,11 +627,11 @@ sceneData.groupCountsPtr =
   <tr><td>Enabling it</td><td>feature + usage bit + memory flag</td><td>The device requires <var>bufferDeviceAddress</var>, <var>shaderInt64</var> and <var>scalarBlockLayout</var>. <code>toVkBufferUsageFlags</code> adds the device-address bit to <b>every</b> buffer. The VMA allocator is created with <code>VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT</code>, which handles the memory flag.</td></tr>
   <tr><td>Asking once</td><td>keep the address</td><td><code>VulkanDevice::createBuffer</code> calls <code>vkGetBufferDeviceAddress</code> once and stores it in <code>Buffer::deviceAddress</code>. <code>RenderContext::getBufferDeviceAddress</code> returns it, or logs an error and returns 0.</td></tr>
   <tr><td>Root pointer</td><td>a push constant with one pointer</td><td><code>PushConstants</code>: <code>scene</code> (8 bytes), plus <code>firstDraw</code> and <code>argument</code>: 16 bytes, <code>PUSH_CONSTANTS_SIZE</code>.</td></tr>
-  <tr><td>Frame struct</td><td>one per frame or view</td><td>One <code>SceneData</code> per scene view (a scene, a camera and a target). Each frame slot has one "Scene Data Buffer" with room for <code>MAX_SCENE_VIEWS</code> = 8 of them; view <var>v</var> uses the buffer's address + <var>v</var> × 768.</td></tr>
+  <tr><td>Frame struct</td><td>one per frame or view</td><td>One <code>SceneData</code> per scene view (a scene, a camera and a target). Each frame slot has one "Scene Data Buffer" with room for <code>MAX_SCENE_VIEWS</code> = 16 of them; view <var>v</var> uses the buffer's address + <var>v</var> × 1720.</td></tr>
   <tr><td>Sub-arrays</td><td>base + size of what comes before</td><td><code>cullSlotsPtr</code>, <code>groupCountsPtr</code> and <code>drawCountsPtr</code> point into the visible draw buffer, after the draws.</td></tr>
   <tr><td>Stale addresses</td><td>write them again every frame</td><td>The same: <code>Engine::prepareSceneView</code> writes every address of a view every frame, from the current buffers. A buffer that grew is picked up at once: the draw lists, and the visible draws and Hi-Z, which <code>RenderContext::resizeBuffer</code> grows under the same handle but at a new address.</td></tr>
-  <tr><td>Null pointers</td><td>a flag says whether to read</td><td>Unused pointers stay 0 (<code>SceneData</code> starts as <code>{}</code>). <code>countMain</code> reads <code>visibilityPtr</code> and <code>hizPtr</code> only when <code>hizLevelCount</code> is not 0.</td></tr>
-  <tr><td>Bounds</td><td>pass counts and check them</td><td>Counts travel with the data (<code>drawCount</code>, <code>runFirst</code>, <code>numLights</code>, sizes from <code>EngineConfig</code>), but shaders trust them: there is no bounds check on any pointer.</td></tr>
+  <tr><td>Null pointers</td><td>a flag says whether to read</td><td>Unused pointers stay 0 (<code>SceneData</code> starts as <code>{}</code>). <code>countMain</code> reads <code>visibilityPtr</code> and <code>hizPtr</code> only when <code>hizLevelCount</code> is not 0. A null <code>clustersPtr</code> is the flag itself: the pixel then shades every local light.</td></tr>
+  <tr><td>Bounds</td><td>pass counts and check them</td><td>Counts travel with the data (<code>drawCount</code>, <code>runFirst</code>, <code>localLightCount</code>, sizes from <code>EngineConfig</code>), but shaders trust them: there is no bounds check on any pointer.</td></tr>
   <tr><td>Images</td><td>descriptors</td><td>Textures use one bindless descriptor set. The Hi-Z pyramid is <i>not</i> an image: it is a float buffer read through <code>hizPtr</code>, with its levels packed one after another.</td></tr>
   <tr><td>Other passes</td><td>—</td><td>The stats overlay has its own 16-byte push constants, with the address of its text buffer (<code>textPtr</code> in <code>statsOverlay.slang</code>).</td></tr>
   <tr><td>Classic bindings</td><td>—</td><td>Not all gone: the index buffer is bound with <code>bindIndexBuffer</code>, and indirect draws take their buffers as handles (<code>drawIndexedIndirectCount</code>). Fixed-function stages cannot read through pointers.</td></tr>

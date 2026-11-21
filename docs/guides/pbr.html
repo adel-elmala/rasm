@@ -1165,15 +1165,15 @@ cone   = clamp(cos θ · scale + offset, 0, 1)²</code></pre>
 </div>
 
 <figure class="diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="shadePBR in six steps: sample the textures and combine them with the material factors; find the normal; compute F0, the diffuse color and alpha; loop over up to 8 lights with D_GGX, F_Schlick and V_SmithGGXCorrelated plus Lambert; add the environment light (or a constant ambient without an environment), times AO, and the emissive color; return the sum, with no upper limit.">
+  <svg viewBox="0 0 760 330" role="img" aria-label="shadePBR in six steps: sample the textures and combine them with the material factors; find the normal; compute F0, the diffuse color and alpha; loop over the view's shadowed lights, the global lights and the lights of the pixel's cluster with D_GGX, F_Schlick and V_SmithGGXCorrelated plus Lambert; add the environment light (or a constant ambient without an environment), times AO, and the emissive color; return the sum, with no upper limit.">
     <rect x="20" y="20" width="230" height="64" rx="6" class="mem"/>
     <text x="135" y="42" class="mid title">MaterialData row</text>
     <text x="135" y="60" class="mid small">factors + bindless texture indices</text>
     <text x="135" y="76" class="mid small">(materialsPtr)</text>
     <rect x="20" y="104" width="230" height="64" rx="6" class="mem"/>
     <text x="135" y="126" class="mid title">SceneData</text>
-    <text x="135" y="144" class="mid small">numLights, lights[8],</text>
-    <text x="135" y="160" class="mid small">cameraWorldPosition</text>
+    <text x="135" y="144" class="mid small">lightsPtr, clustersPtr, the</text>
+    <text x="135" y="160" class="mid small">light counts, camera position</text>
     <rect x="20" y="188" width="230" height="64" rx="6" class="gpu"/>
     <text x="135" y="210" class="mid title">vertMain outputs</text>
     <text x="135" y="228" class="mid small">world position, normal, tangent,</text>
@@ -1192,7 +1192,7 @@ cone   = clamp(cos θ · scale + offset, 0, 1)²</code></pre>
     <rect x="305" y="130" width="420" height="34" rx="17" class="shader"/>
     <text x="320" y="152" class="small">3  f0 = lerp(0.04, base, metallic), diffuse = (1 − metallic) · base, α = r²</text>
     <rect x="305" y="170" width="420" height="50" rx="17" class="shader"/>
-    <text x="320" y="190" class="small">4  for each light: D_GGX · V_SmithGGXCorrelated · F_Schlick</text>
+    <text x="320" y="190" class="small">4  shadowed, global, cluster lights: D_GGX · V_SmithGGX · F_Schlick</text>
     <text x="320" y="208" class="small">    + (1 − F) · diffuse · Fd_Lambert, × color · intensity · att · N·L</text>
     <rect x="305" y="226" width="420" height="34" rx="17" class="shader"/>
     <text x="320" y="248" class="small">5  + environment light (IBL), or 0.03 · diffuse without one; × ao; + emissive</text>
@@ -1215,17 +1215,17 @@ cone   = clamp(cos θ · scale + offset, 0, 1)²</code></pre>
   <tr><td><var>F</var><sub>0</sub> of non-metals</td><td>0.04, or a value per material</td><td>Always 0.04. No <samp>KHR_materials_specular</samp> or <samp>KHR_materials_ior</samp>.</td></tr>
   <tr><td>Multiple scattering</td><td>not covered here</td><td>None, so very rough metals are a little too dark (single-scattering microfacet models lose energy).</td></tr>
   <tr><td>Light types</td><td>directional, point, spot</td><td><code>LightType</code> has <code>DIRECTIONAL</code>, <code>POINT</code> and <code>SPOT</code>.</td></tr>
-  <tr><td>Spot cone</td><td>the glTF cone factor</td><td>The same. <code>prepareSceneView</code> turns <code>innerConeAngle</code> and <code>outerConeAngle</code> into <code>spotScale</code> and <code>spotOffset</code> (<code>setSpotCone</code>), so <code>shadePBR</code> needs one dot product per light.</td></tr>
-  <tr><td>Shadows</td><td>not covered here</td><td>Each light is multiplied by its shadow, <code>PBRInfo::shadows</code> (<a href="shadow-mapping.html">Shadow mapping</a>, <a href="local-light-shadows.html">Spot and point light shadows</a>).</td></tr>
+  <tr><td>Spot cone</td><td>the glTF cone factor</td><td>The same. <code>writeLightRow</code> turns <code>innerConeAngle</code> and <code>outerConeAngle</code> into <code>spotScale</code> and <code>spotOffset</code> (<code>setSpotCone</code>), so <code>shadeLight</code> needs one dot product per light.</td></tr>
+  <tr><td>Shadows</td><td>not covered here</td><td>A view's shadowed lights (up to 4) are shaded first, each times its shadow, which is read only where the light reaches the surface (<a href="shadow-mapping.html">Shadow mapping</a>, <a href="local-light-shadows.html">Spot and point light shadows</a>).</td></tr>
   <tr><td>Directional <var>l</var></td><td>minus the light's direction</td><td>The same: <code>direction</code> points from the light toward the surface, <var>l</var> = −<code>direction</code>. No falloff.</td></tr>
-  <tr><td>Point attenuation</td><td>1 / <var>d</var>² × window</td><td>The same formula. <var>d</var>² is clamped to at least 10⁻⁶. A <code>range</code> of 0 means no window. The default <code>range</code> is 10.</td></tr>
+  <tr><td>Point attenuation</td><td>1 / <var>d</var>² × window</td><td>The same formula. <var>d</var>² is clamped to at least 10⁻⁶. A <code>range</code> of 0 means no window: the light is global, shaded at every pixel. The default <code>range</code> is 10.</td></tr>
   <tr><td>Light units</td><td>physical or unitless</td><td>Unitless: <code>color</code> × <code>intensity</code>, no 4π.</td></tr>
-  <tr><td>Number of lights</td><td>any</td><td>At most 7: <code>MAX_LIGHTS</code> = 8 sizes the fixed <code>lights</code> array in <code>SceneData</code>, but light indices start at 1, so <code>createLight</code> refuses the 8th light and <code>addLightToScene</code> stops at <code>MAX_LIGHTS_PER_SCENE</code>. Every light is evaluated for every pixel.</td></tr>
+  <tr><td>Number of lights</td><td>any</td><td>Up to <code>EngineConfig::maxLights</code> (16384). A pixel evaluates the global lights and the lights of its cluster only, at most <code>MAX_CLUSTER_LIGHTS</code> (<a href="clustered-lighting.html#in-rasm">Clustered lighting</a>).</td></tr>
   <tr><td>Ambient</td><td>constant, hemisphere, IBL or GI</td><td>IBL when the scene has an environment (<a href="../api/scene.html#setSceneEnvironment"><code>setSceneEnvironment</code></a>): the split sum, diffuse and specular, in <code>getEnvironmentLight</code> (<a href="image-based-lighting.html#in-rasm">Image-based lighting</a>). Without one, a constant: 0.03 × diffuse color × AO, with no specular, so a fully metallic surface is black on every side that no light faces. Neither is shadowed.</td></tr>
   <tr><td>AO</td><td>ambient only</td><td>Ambient only, mixed by the occlusion <code>strength</code>; with IBL it darkens its diffuse and specular alike.</td></tr>
   <tr><td>Emission</td><td>added as it is</td><td><code>emissiveFactor</code> × <code>EMISSIVE_STRENGTH</code> (glTF <samp>KHR_materials_emissive_strength</samp>, multiplied in when the row is written) × the emissive texture, added after the lights.</td></tr>
   <tr><td>Tone mapping</td><td>a separate step on the HDR image</td><td>The same: <code>shadePBR</code> writes unbounded light into a <code>SCENE_COLOR_FORMAT</code> target, and the <code>Tone Map</code> pass applies the camera's <code>exposure</code> and AgX.</td></tr>
-  <tr><td>Shadows</td><td>needed for real direct light</td><td>Cascaded shadow maps for one directional light, the one <code>ShadowDesc::light</code> names (<a href="shadow-mapping.html#in-rasm">Shadow mapping</a>, <a href="cascaded-shadows.html">Cascaded shadow maps</a>). Every other light reaches every surface that faces it.</td></tr>
+  <tr><td>Shadows</td><td>needed for real direct light</td><td>Up to <code>MAX_VIEW_SHADOWS</code> lights per view have a shadow, each named by <code>ShadowDesc::light</code> (<a href="shadow-mapping.html#in-rasm">Shadow mapping</a>, <a href="cascaded-shadows.html">Cascaded shadow maps</a>). Every other light reaches every surface that faces it.</td></tr>
 </table>
 </div>
 
@@ -1252,11 +1252,11 @@ cone   = clamp(cos θ · scale + offset, 0, 1)²</code></pre>
 <table class="code-map">
   <tr><th>What</th><th>Where</th></tr>
   <tr><td>The BRDF terms</td><td><code>D_GGX</code>, <code>F_Schlick</code>, <code>V_SmithGGXCorrelated</code>, <code>Fd_Lambert</code> in <code>shaders/lib/brdf.slang</code>, which the environment bake shares</td></tr>
-  <tr><td>Textures, lights loop, ambient</td><td><code>shadePBR</code> and <code>PBRInfo</code> in <code>shaders/lib/pbr.slang</code>; the environment light in <code>shaders/lib/environment.slang</code></td></tr>
+  <tr><td>Textures, the light loops, ambient</td><td><code>shadePBR</code>, <code>shadeLight</code> and <code>PBRInfo</code> in <code>shaders/lib/pbr.slang</code>; the environment light in <code>shaders/lib/environment.slang</code></td></tr>
   <tr><td>Material branch, UV sets, back faces</td><td><code>fragMain</code> in <code>shaders/passes/rasm.slang</code></td></tr>
   <tr><td>GPU light and material structs</td><td><code>Light</code>, <code>LightType</code>, <code>Material</code>, <code>MaterialData</code> in <code>shaders/lib/core.slang</code> and <code>src/renderer/uberMaterialTypes.h</code></td></tr>
-  <tr><td>Public light type</td><td><code>Light</code>, <code>LightType</code>, <code>MAX_LIGHTS</code> in <code>include/rasm/light.h</code>; <code>Engine::createLight</code> in <code>src/scene/light.cpp</code></td></tr>
-  <tr><td>Lights into the scene data</td><td><code>Engine::prepareSceneView</code> in <code>src/renderer/gpuScene.cpp</code></td></tr>
+  <tr><td>Public light type</td><td><code>Light</code>, <code>LightType</code>, <code>MAX_CLUSTER_LIGHTS</code> in <code>include/rasm/light.h</code>; <code>Engine::createLight</code> and <code>updateLight</code> in <code>src/scene/light.cpp</code></td></tr>
+  <tr><td>Lights into the light table and the scene data</td><td><code>writeLightRow</code> and <code>writeSceneLights</code> in <code>src/renderer/lightClusters.cpp</code></td></tr>
   <tr><td>Material factors and defaults</td><td><code>Engine::createMaterial</code> and <code>loadMaterial</code> in <code>src/assets/material.cpp</code></td></tr>
 </table>
 </div>
@@ -1273,7 +1273,7 @@ cone   = clamp(cos θ · scale + offset, 0, 1)²</code></pre>
 
 <div class="callout">
   <strong>Not done yet</strong>
-  <p>From the development plan, phase 4: clustered lighting to remove the fixed limit of 8 lights. Base color alpha counts only for cut-out and see-through materials (<a href="transparency.html">transparency</a>).</p>
+  <p>Base color alpha counts only for cut-out and see-through materials (<a href="transparency.html">transparency</a>).</p>
 </div>
 
 <h3>Further reading</h3>

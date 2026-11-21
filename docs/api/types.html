@@ -310,15 +310,19 @@ private:
     std::string assetRoot             = {};
     std::string shaderDir             = {};
     uint32_t    geometryPoolVertices  = 1u &lt;&lt; 21;
+    uint32_t    geometryPoolColors    = 1u &lt;&lt; 20;
     uint32_t    geometryPoolIndices   = 1u &lt;&lt; 24;
     uint32_t    geometryPoolSubMeshes = 1u &lt;&lt; 14;
     uint32_t    maxInstances          = 1u &lt;&lt; 16;
+    uint32_t    maxLights             = 1u &lt;&lt; 14;
     bool        showStats             = false;
     bool        occlusionCulling      = true;
     bool        meshLods              = true;
     float       lodErrorPixels        = 1.0f;
     int32_t     forcedLod             = -1;
     bool        asyncCompute          = false;
+    bool        clusteredLighting     = true;
+    bool        hostImageCopy         = true;
 };</pre>
   <div class="body">
     <p>The engine's settings, given to its constructor. Every field is explained on the <a href="engine.html#EngineConfig">Engine page</a>.</p>
@@ -480,7 +484,7 @@ struct RenderTarget
   <tr id="MAX_GPU_TIMERS"><td><code>MAX_GPU_TIMERS</code><br><code>rasm/engine.h</code></td><td>16</td><td>GPU timers per frame: the frame, and 15 for passes and <code>beginGpuTimer</code>. <code>FrameStats::gpuTimers</code> has 15 entries.</td></tr>
   <tr id="SCENE_COLOR_FORMAT"><td><code>SCENE_COLOR_FORMAT</code><br><code>rasm/engine.h</code></td><td><code>Format::R16G16B16A16_SFLOAT</code></td><td>Not a limit: the color format of a target that <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> draws into, linear light with no upper limit. <a href="engine.html#addToneMapPass"><code>addToneMapPass</code></a> brings it to the window.</td></tr>
   <tr id="MAX_ENTITIES"><td><code>MAX_ENTITIES</code><br><code>rasm/entity.h</code></td><td>262144 (2<sup>18</sup>)</td><td>Entities: 262143 fit.</td></tr>
-  <tr id="MAX_LIGHTS"><td><code>MAX_LIGHTS</code><br><code>rasm/light.h</code></td><td>8</td><td>Lights: 7 fit. Also the size of the light array the shader gets.</td></tr>
+  <tr id="MAX_CLUSTER_LIGHTS"><td><code>MAX_CLUSTER_LIGHTS</code><br><code>rasm/light.h</code></td><td>256</td><td>Lights that reach one cluster of a shaded view; more are left out of it (<code>FrameStats::lightsDropped</code>). The number of lights is <code>EngineConfig::maxLights</code>.</td></tr>
   <tr id="MAX_TEXTURE_SLOTS"><td><code>MAX_TEXTURE_SLOTS</code><br><code>rasm/material.h</code></td><td>6 (<code>PbrSlot::COUNT</code>)</td><td>Textures per material, one per <a href="materials.html#PbrSlot">PbrSlot</a>.</td></tr>
   <tr id="MAX_PARAM_SLOTS"><td><code>MAX_PARAM_SLOTS</code><br><code>rasm/material.h</code></td><td>10 (<code>PbrParam::COUNT</code>)</td><td>Floats in <code>Material::params</code>, indexed by <a href="materials.html#PbrParam">PbrParam</a>.</td></tr>
   <tr id="MAX_MESHES"><td><code>MAX_MESHES</code><br><code>rasm/mesh.h</code></td><td>8</td><td>Meshes: 7 fit, and a failed load uses one up.</td></tr>
@@ -488,7 +492,6 @@ struct RenderTarget
   <tr id="MAX_MESH_LODS"><td><code>MAX_MESH_LODS</code><br><code>rasm/mesh.h</code></td><td>8</td><td>LODs per sub-mesh, LOD 0 included, so <code>ObjRaw::lods</code> holds at most 7 (<a href="scene.html#MeshLod">MeshLod</a>). Mirrored in <code>shaders/lib/core.slang</code>.</td></tr>
   <tr id="MAX_ENTITIES_PER_SCENE"><td><code>MAX_ENTITIES_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>= <code>MAX_ENTITIES</code></td><td><code>addEntityToScene</code> per scene.</td></tr>
   <tr id="MAX_CAMERAS_PER_SCENE"><td><code>MAX_CAMERAS_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>8</td><td><code>addCameraToScene</code> per scene (the global camera limit is lower).</td></tr>
-  <tr id="MAX_LIGHTS_PER_SCENE"><td><code>MAX_LIGHTS_PER_SCENE</code><br><code>rasm/scene.h</code></td><td>= <code>MAX_LIGHTS</code></td><td><code>addLightToScene</code> per scene (the global light limit is lower).</td></tr>
   <tr id="MAX_SCENES"><td><code>MAX_SCENES</code><br><code>rasm/scene.h</code></td><td>16</td><td>Scenes: 15 fit.</td></tr>
   <tr id="MAX_SCENE_VIEWS"><td><code>MAX_SCENE_VIEWS</code><br><code>rasm/scene.h</code></td><td>16</td><td>Scene views: the (scene, camera, target) sets given to <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> and held by render graphs at once. A graph lets go of its views when it is destroyed or replaced. One more logs an error, and <code>addScenePasses</code> adds nothing and returns <code>false</code>.</td></tr>
   <tr id="MAX_SHADOW_CASCADES"><td><code>MAX_SHADOW_CASCADES</code><br><code>rasm/scene.h</code></td><td>4</td><td>Cascades of one shadow (<a href="scene.html#ShadowDesc"><code>ShadowDesc::cascadeCount</code></a>). Each cascade is one scene view.</td></tr>
@@ -496,7 +499,7 @@ struct RenderTarget
 </table>
 </div>
 
-<p>Mesh and instance capacity on the GPU is not a constant: it comes from <code>EngineConfig::geometryPoolVertices</code>, <code>geometryPoolIndices</code>, <code>geometryPoolSubMeshes</code> and <code>maxInstances</code>.</p>
+<p>Mesh, instance and light capacity on the GPU is not a constant: it comes from <code>EngineConfig::geometryPoolVertices</code>, <code>geometryPoolIndices</code>, <code>geometryPoolSubMeshes</code>, <code>maxInstances</code> and <code>maxLights</code>.</p>
 
 <div class="callout warn">
   <strong>Known limits</strong>

@@ -718,12 +718,12 @@ engine.addScenePasses(graph, scene, camera, sceneTarget, shadows, 2);
     <text x="625" y="164" class="mid mono">Cull, Scene (rasm.slang)</text>
     <text x="625" y="190" class="mid small">SceneData::shadowMaps:</text>
     <text x="625" y="206" class="mid small">matrix, texture, split</text>
-    <text x="625" y="232" class="mid small">each light: shadowMap (first map,</text>
-    <text x="625" y="248" class="mid small">−1 = none), shadowMapCount,</text>
-    <text x="625" y="264" class="mid small">spotScale, spotOffset</text>
+    <text x="625" y="232" class="mid small">shadowedLights: the light's row,</text>
+    <text x="625" y="248" class="mid small">firstMap, mapCount; the light</text>
+    <text x="625" y="264" class="mid small">table: spotScale, spotOffset</text>
     <text x="625" y="290" class="mid small">a cube's matrix: the projection only</text>
 
-    <text x="20" y="346" class="title t-shader">fragMain → sampleShadow, once per light (shaders/lib/shadow.slang)</text>
+    <text x="20" y="346" class="title t-shader">shadePBR → sampleShadow, per shadowed light that reaches the pixel (shadow.slang)</text>
     <rect x="20" y="380" width="130" height="44" rx="22" class="shader"/>
     <text x="85" y="398" class="mid small">sampleShadow:</text>
     <text x="85" y="414" class="mid small">by light type</text>
