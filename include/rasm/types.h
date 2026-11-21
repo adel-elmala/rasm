@@ -74,6 +74,12 @@ namespace rasm
         BACK,
     };
 
+    enum class BlendMode
+    {
+        NONE,
+        PREMULTIPLIED_ALPHA,
+    };
+
     // Result of acquire, present and swapchain recreation.
     enum class SwapchainStatus
     {
