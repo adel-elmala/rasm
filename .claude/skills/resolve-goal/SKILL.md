@@ -1,6 +1,6 @@
 ---
 name: resolve-goal
-description: Take one open goal from docs/development_plan.md all the way to a pull request. Explain the goal and the plan to the user in a visual, plain-English way and wait for an OK, build it, verify it and sync the docs, review the branch at level high in a fresh agent, fix the findings, then push and open a concise, visual PR on the rasm repo. Commits and the PR have no attribution lines. Use when the user says "resolve a goal", "do the next plan item", "work on <plan item>" or names an unchecked item of the development plan.
+description: Take one open goal from docs/development_plan.md all the way to a pull request. Explain the goal and the plan to the user in a visual, plain-English way and wait for an OK, build it, verify it and sync the docs, review the branch at level high in a fresh agent, fix the findings, then push and open a concise PR on the rasm repo that explains the change with SVG diagrams and before/after screenshots. Commits and the PR have no attribution lines. Use when the user says "resolve a goal", "do the next plan item", "work on <plan item>" or names an unchecked item of the development plan.
 ---
 
 # Resolve a goal from the plan
@@ -102,9 +102,63 @@ Do not tell it what you built or why. Wait for its result.
 
 ## 8. Open the PR
 
-`git push -u origin <branch>`, then `gh pr create --base main --title "<type>: <summary>" --body-file <file>`
-with the body written to the scratchpad. The PR body has **no attribution lines** (no "Generated with Claude
-Code", no `Co-Authored-By`). Keep it short and visual:
+The PR body explains the change with pictures, not with Mermaid. GitHub shows SVG and PNG files as images when they
+live in the repo, so the pictures go to the orphan `pr-assets` branch and the body links them by commit hash.
+
+### 8.1 Make the pictures
+
+The pictures do the explaining, like the figures of the guides. A reader should understand what the PR does and how
+from its pictures alone; the text names things and gives numbers. There is no template and no fixed set: choose
+the pictures this change needs, usually one to three.
+
+**Draw the real thing**, the rule of [visuals.md](../sync-docs/visuals.md): the scene from the side or from above,
+the pixels, the bytes, the grid, the queue in time. Boxes with words in them and a row of arrows only say an order
+of names; they are the last choice, only for an order that is itself the point, and even then they show what moves
+between the steps. Ask: what would a contributor need to *see* to understand this change?
+
+| The PR... | A picture that explains it |
+|---|---|
+| adds a rendering effect | what happens to the light or the pixels: rays, surfaces, layers that blend, one pixel's math worked out |
+| changes what is drawn or culled | the scene from above with the camera, objects marked kept / culled, and why |
+| changes data or memory | the bytes: struct fields to scale, cache lines, buffers and the offsets into them |
+| adds an algorithm | its steps on a small real input (a stepper drawn as panels), or the rule as a picture |
+| changes GPU work in the frame | passes on a time line with what each reads and writes, not only their names |
+| fixes a bug | wrong / right side by side: the symptom, and the cause that makes it |
+| changes the API | before / after code in fenced code blocks; a picture only for what the call does |
+
+Also:
+- **Reuse the guide.** A figure from the concept guide this PR adds or changes can go in as it is: copy its `<svg>`.
+- **Before / after screenshots** when the image changes, from `verify-change`:
+  `build/verify/<preset>/baseline/<name>.png` and `screens/<name>.png`; add `diffs/<name>_diff.png` when the change
+  is subtle. Crop or downscale big ones (5 MB limit).
+
+How to draw: exactly like a guide figure. Follow the "Drawing SVGs" rules of `visuals.md`: `viewBox="0 0 760 H"`,
+only classes from `docs/assets/style.css`, the color meanings, arrowheads `#ah`, `#ah-gpu`, ..., text that fits.
+Write no `<style>`, colors or `<defs>` markers: `pr_assets.py` bakes the guide's stylesheet (light and dark),
+the markers, a margin and a background card into the file, because GitHub shows an SVG without the page's CSS.
+
+Write the pictures to the scratchpad, not the repo, then look at them:
+
+```
+python .claude/skills/resolve-goal/scripts/pr_assets.py preview <files...>
+```
+
+It renders each SVG in the light and the dark theme to `build/pr-assets/preview/`. Read both PNGs and fix text that
+overflows, labels on lines, shapes hard to see in one theme, and anything a first-time reader would not get.
+
+### 8.2 Publish them and open the PR
+
+```
+git push -u origin <branch>
+python .claude/skills/resolve-goal/scripts/pr_assets.py publish <branch> <files...>
+```
+
+`publish` bakes the SVGs as `preview` does, commits the files to `pr-assets/<branch with / as ->/` from a temporary
+worktree (your checkout is not touched), pushes, and prints one `<img>` tag per file. Paste the tags into the body, then
+`gh pr create --base main --title "<type>: <summary>" --body-file <file>` with the body in the scratchpad. To change a
+picture later, publish it again and `gh pr edit <N> --body-file <file>` with the new tags.
+
+The PR body has **no attribution lines** (no "Generated with Claude Code", no `Co-Authored-By`). Keep it short:
 
 ````markdown
 ## What this lets RASM do
@@ -114,10 +168,15 @@ and how they turn it on (the API call or config field).>
 
 ## How it works
 
-```mermaid
-flowchart LR
-  A[Scene passes] -->|HDR color| B[Tone-map pass] --> C[Swapchain]
-```
+<img src="https://raw.githubusercontent.com/<owner>/<repo>/<sha>/<folder>/<picture>.svg" width="860" alt="<what it shows>">
+
+<one or two plain lines per picture: what to look at. Repeat for each picture.>
+
+## Before / after
+
+| Before | After |
+|---|---|
+| <img src=".../before.png" width="420"> | <img src=".../after.png" width="420"> |
 
 ## Changes
 
@@ -135,10 +194,13 @@ flowchart LR
 | Unit tests | pass |
 | Examples, validation on | 0 messages |
 | Image vs baseline | same / changed as intended |
+| CI (windows-latest, macos-latest) | pass |
 | Review (high) | N findings, N fixed, N not bugs, N logged |
 
 Plan: <phase and item>. Review IDs: <IDs or none>.
 ````
+
+Leave out "Before / after" when the image does not change.
 
 Give the user the PR link and a short final report: what changed, the check results, the review table, and
 anything left open.
