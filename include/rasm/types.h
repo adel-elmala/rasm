@@ -115,12 +115,14 @@ namespace rasm
         uint32_t    geometryPoolIndices     = 1u << 24; // 4 B each: 64 MiB
         uint32_t    geometryPoolSubMeshes   = 1u << 14; // 124 B each
         uint32_t    maxInstances            = 1u << 16; // 108 B each, twice (one copy per frame slot)
+        uint32_t    maxLights               = 1u << 14; // 56 B each, twice
         bool        showStats               = false;
         bool        occlusionCulling        = true;     // two-pass Hi-Z culling in the scene passes; false keeps frustum culling only
         bool        meshLods                = true;
         float       lodErrorPixels          = 1.0f;
         int32_t     forcedLod               = -1;
         bool        asyncCompute            = false;
+        bool        clusteredLighting       = true;     // false: every pixel shades every light of the scene
         bool        hostImageCopy           = true;     // false: textures are copied from the staging ring, as on a device without host image copy
     };
 

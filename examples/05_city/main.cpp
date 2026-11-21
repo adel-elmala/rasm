@@ -862,8 +862,7 @@ int main(int argc, char **argv)
     engine.setCameraController(camera, freeFly);
     engine.addCameraToScene(city.scene, camera);
 
-    // A cool moon, a warm glow from the city's own lights, and floodlights around the monument: 7 lights, all the
-    // engine has (MAX_LIGHTS, whose slot 0 is never used).
+    // A cool moon, a warm glow from the city's own lights, and floodlights around the monument: 7 lights.
     const glm::vec3 floodColor(1.0f, 0.82f, 0.6f);
     const rasm::LightHandle lights[] = {
         engine.createLight(rasm::LightType::DIRECTIONAL, glm::vec3(0.55f, 0.65f, 1.0f), glm::vec3(0.0f), glm::normalize(glm::vec3(-0.35f, -1.0f, -0.45f)), 0.3f, 0.0f),

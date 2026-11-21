@@ -15,12 +15,15 @@
 namespace rasm
 {
 
-    // The words of the cull stats buffer. Must match the STATS_* constants in shaders/passes/cull.slang.
+    // The words of the cull stats buffer. Must match the STATS_* constants in shaders/passes/cull.slang and
+    // shaders/passes/lightClusters.slang.
     constexpr uint32_t                  CULL_STATS_DRAWS                                                    = 0;
     constexpr uint32_t                  CULL_STATS_TRIANGLES                                                = 1;    // low, high
     constexpr uint32_t                  CULL_STATS_LOD0_TRIANGLES                                           = 3;    // low, high
     constexpr uint32_t                  CULL_STATS_LOD_DRAWS                                                = 5;    // one per LOD
-    constexpr uint32_t                  CULL_STATS_WORDS                                                    = CULL_STATS_LOD_DRAWS + MAX_MESH_LODS;
+    constexpr uint32_t                  CULL_STATS_LIGHTS_VISIBLE                                           = CULL_STATS_LOD_DRAWS + MAX_MESH_LODS; // lightClusters.slang
+    constexpr uint32_t                  CULL_STATS_LIGHTS_DROPPED                                           = CULL_STATS_LIGHTS_VISIBLE + 1;
+    constexpr uint32_t                  CULL_STATS_WORDS                                                    = CULL_STATS_LIGHTS_DROPPED + 1;
 
     struct EntityDrawState
     {

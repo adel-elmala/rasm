@@ -662,6 +662,8 @@
   <tr><td><code>updateMaterial</code></td><td><code>writeMaterialRow</code>; <code>refreshEntitiesAfterMaterialChange</code> if <code>doubleSided</code> changed or a texture still loads</td><td>The material row (same row index, so no instance row changes). Draw lists of entities that change cull mode or start waiting.</td></tr>
   <tr><td>a texture load finishes</td><td><code>finishLoads</code> sets <code>texturesFinished</code></td><td>Draw lists of entities that become drawable.</td></tr>
   <tr><td>a mesh load finishes, or <code>createMesh</code></td><td><code>finishMeshLoad</code> or <code>createMesh</code>: <code>GeometryPool::upload</code>. The LODs were built before, by <code>buildMeshLods</code>.</td><td>The vertices, the indices of every LOD, and one geometry row per sub-mesh, once.</td></tr>
+  <tr><td><code>createLight</code>, <code>updateLight</code></td><td><code>writeLightRow</code>: <code>setRow</code> on the light table; <code>markLightListsDirty</code> when a light gains or loses its range</td><td>One light row. The scene light lists only when a light moved between global and local (<a href="clustered-lighting.html#in-rasm">clustered lighting</a>).</td></tr>
+  <tr><td><code>addLightToScene</code></td><td>sets the scene's bit in <code>lightScenes</code>, marks its light list</td><td>That scene's light list: global rows, then local ones.</td></tr>
   <tr><td><code>addScenePasses</code></td><td>finds or makes the scene view (<code>createSceneView</code>); its <code>Cull</code> pass calls <code>prepareSceneView</code>, which fills the view's <code>SceneData</code> every frame</td><td>At once (the scene data buffer is <code>hostVisible</code>).</td></tr>
 </table>
 </div>
@@ -681,6 +683,7 @@
   <tr><td>Callers</td><td><code>src/scene/entity.cpp</code>, <code>src/scene/scene.cpp</code>, <code>src/assets/material.cpp</code></td></tr>
   <tr><td>Row structs</td><td><code>src/renderer/uberMaterialTypes.h</code> and <code>shaders/lib/core.slang</code></td></tr>
   <tr><td>Table pointers</td><td><code>Engine::prepareSceneView</code> fills <code>SceneData</code> in <code>src/renderer/gpuScene.cpp</code>; read by <code>shaders/passes/rasm.slang</code> and <code>shaders/passes/cull.slang</code></td></tr>
+  <tr><td>The light table and the scene light lists</td><td><code>GpuLights</code> in <code>src/renderer/lightClusters.h</code>; <code>Engine::syncGpuLights</code>, called at the end of <code>syncGpuScene</code></td></tr>
   <tr><td>LODs of a mesh</td><td><code>buildMeshLods</code> in <code>src/assets/meshLod.cpp</code>; the rows in <code>GeometryPool::upload</code></td></tr>
 </table>
 </div>

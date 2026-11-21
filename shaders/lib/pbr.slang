@@ -4,6 +4,8 @@
 #include "core.slang"
 #include "brdf.slang"
 #include "environment.slang"
+#include "lightClusters.slang"
+#include "shadow.slang"
 
 // Perturb the normal with a tangent-space normal map. Meshes with glTF TANGENTs (tangent.w = ±1) use the
 // authored frame. Otherwise a UV-aligned frame is reconstructed from fragment derivatives, which supports
@@ -70,13 +72,68 @@ struct PBRInfo
     float2      occlusionUV;         // UV coordinates for the occlusion map
     float2      emissiveUV;          // UV coordinates for the emissive texture
     float4      vertexColor;         // COLOR_0, linear; white without one
-    uint        numLights;           // number of lights
-    Light       lights[MAX_LIGHTS];  // array of lights
-    float       shadows[MAX_LIGHTS]; // how much of each light reaches the fragment (shadow.slang), 1 without a shadow
+    float2      pixel;               // SV_Position.xy, which picks the light cluster
     Material    material;            // material properties
     bool        normalXY;            // the normal map has x and y only (MATERIAL_NORMAL_XY)
     EnvironmentLight environment;    // the scene's environment; specular is INVALID_TEXTURE_INDEX without one
 };
+
+// The light one light reflects toward v: Cook-Torrance specular and Lambert diffuse. 0 where the light does not reach
+// (outside its range or its cone) or comes from behind the surface. shadow is how much of the light reaches the point,
+// 1 without a shadow.
+float3 shadeLight(Light light, float shadow, float3 position, float3 n, float3 v, float NoV, float3 f0, float3 diffuseColor, float alpha)
+{
+    float3 l;
+    float attenuation = shadow;
+
+    if (light.type == LightType.DIRECTIONAL) {
+        // Directional Light: direction points from the light towards the surface,
+        // L points from the surface towards the light.
+        l = normalize(-light.direction);
+    }
+    else {
+        // Point and spot lights
+        float3 lightDir         = light.position - position;
+        float distanceSquared = max(dot(lightDir, lightDir), 1e-6);
+        float distanceToLight = sqrt(distanceSquared);
+        l = lightDir / distanceToLight;
+
+        // Physical inverse-square law attenuation with clamping range
+        attenuation *= 1.0 / distanceSquared;
+        // A smooth window that reaches 0 at the range, so a light lights nothing beyond it and the light clusters can
+        // leave it out there. A zero range means unbounded inverse-square falloff: a global light.
+        if (light.range > 0.0)
+            attenuation *= pow(max(1.0 - pow(distanceToLight / light.range, 4.0), 0.0), 2.0);
+        // glTF KHR_lights_punctual: full light inside the inner cone, none outside the outer one, a smooth fade
+        // between them.
+        if (light.type == LightType.SPOT)
+        {
+            float cone = saturate(dot(normalize(light.direction), -l) * light.spotScale + light.spotOffset);
+            attenuation *= cone * cone;
+        }
+    }
+
+    float3 halfVector = v + l;
+    float3 h = halfVector * rsqrt(max(dot(halfVector, halfVector), 1e-8));
+    float  NoL = clamp(dot(n, l), 0.0, 1.0);
+    float  NoH = clamp(dot(n, h), 0.0, 1.0);
+    float  LoH = clamp(dot(l, h), 0.0, 1.0);
+
+    if (NoL <= 0.0)
+        return float3(0.0);
+
+    // Evaluate Cook-Torrance Specular BRDF terms
+    float  D = D_GGX(NoH, alpha);
+    float3 F = F_Schlick(LoH, f0);
+    float  V = V_SmithGGXCorrelated(NoV, NoL, alpha);
+
+    float3 Fr = (D * V) * F;
+    float3 Fd = (1.0 - F) * diffuseColor * Fd_Lambert();
+
+    // Total surface reflection for this light source
+    float3 radiance = light.color * light.intensity * attenuation * NoL;
+    return (Fd + Fr) * radiance;
+}
 
 float4 shadePBR(Sampler2D gTextures[], SamplerCube gCubeTextures[], PBRInfo pbrInfo)
 {
@@ -139,62 +196,47 @@ float4 shadePBR(Sampler2D gTextures[], SamplerCube gCubeTextures[], PBRInfo pbrI
     float alpha = roughness * roughness;
 
     float3 totalDirectLighting = float3(0.0);
+    float3 position = pbrInfo.vPosition;
+    SceneData *scene = pc.scene;
 
-    // 4. Accumulate light contributions (Multiple Lights Loop)
-    for (int i = 0; i < MAX_LIGHTS; ++i) {
-        if (i >= pbrInfo.numLights)
-            break;
-
-        Light light = pbrInfo.lights[i];
-
-        float3 l;
-        float attenuation = pbrInfo.shadows[i];
-
-        if (light.type == LightType.DIRECTIONAL) {
-            // Directional Light: direction points from the light towards the surface,
-            // L points from the surface towards the light.
-            l = normalize(-light.direction);
-        }
-        else {
-            // Point and spot lights
-            float3 lightDir         = light.position - pbrInfo.vPosition;
-            float distanceSquared = max(dot(lightDir, lightDir), 1e-6);
-            float distanceToLight = sqrt(distanceSquared);
-            l = lightDir / distanceToLight;
-
-            // Physical inverse-square law attenuation with clamping range
-            attenuation *= 1.0 / distanceSquared;
-            // Optional smooth falloff window:
-            // A zero range means unbounded inverse-square falloff.
-            if (light.range > 0.0)
-                attenuation *= pow(max(1.0 - pow(distanceToLight / light.range, 4.0), 0.0), 2.0);
-            // glTF KHR_lights_punctual: full light inside the inner cone, none outside the outer one, a smooth fade
-            // between them.
-            if (light.type == LightType.SPOT)
-            {
-                float cone = saturate(dot(normalize(light.direction), -l) * light.spotScale + light.spotOffset);
-                attenuation *= cone * cone;
-            }
-        }
-
-        float3 halfVector = v + l;
-        float3 h = halfVector * rsqrt(max(dot(halfVector, halfVector), 1e-8));
-        float  NoL = clamp(dot(n, l), 0.0, 1.0);
-        float  NoH = clamp(dot(n, h), 0.0, 1.0);
-        float  LoH = clamp(dot(l, h), 0.0, 1.0);
-
-        if (NoL > 0.0) {
-            // Evaluate Cook-Torrance Specular BRDF terms
-            float  D = D_GGX(NoH, alpha);
-            float3 F = F_Schlick(LoH, f0);
-            float  V = V_SmithGGXCorrelated(NoV, NoL, alpha);
-
-            float3 Fr = (D * V) * F;
-            float3 Fd = (1.0 - F) * diffuseColor * Fd_Lambert();
-
-            // Total surface reflection for this light source
-            float3 radiance = light.color * light.intensity * attenuation * NoL;
-            totalDirectLighting += (Fd + Fr) * radiance;
+    // 4. The lights, in three loops. A loop's light index is the same for the whole draw where it can be, so the
+    // shadow maps' texture indices stay uniform.
+    // a. The view's shadowed lights. The shadow is read only where the light reaches the surface (P12).
+    float3 shadowNormal = pbrInfo.backFace ? -pbrInfo.vNormal : pbrInfo.vNormal;
+    for (uint s = 0; s < scene->shadowedLightCount; ++s)
+    {
+        ShadowedLight shadowed = scene->shadowedLights[s];
+        Light light = scene->lightsPtr[shadowed.light];
+        float3 lit = shadeLight(light, 1.0, position, n, v, NoV, f0, diffuseColor, alpha);
+        if (all(lit == float3(0.0)))
+            continue;
+        totalDirectLighting += lit * sampleShadow(gTextures, gCubeTextures, scene, light, shadowed, position, shadowNormal);
+    }
+    // b. The global lights (directional, or without a range) reach every pixel.
+    for (uint i = 0; i < scene->globalLightCount; ++i)
+    {
+        uint row = scene->sceneLightsPtr[i];
+        if (!isShadowedLight(scene, row))
+            totalDirectLighting += shadeLight(scene->lightsPtr[row], 1.0, position, n, v, NoV, f0, diffuseColor, alpha);
+    }
+    // c. The local lights: those of the pixel's cluster, or every one when the view has no clusters.
+    uint32_t *clusters = scene->clustersPtr;
+    if (clusters != nullptr)
+    {
+        float viewDepth = -mul(scene->view, float4(position, 1.0)).z;
+        int cluster = getCluster(scene, pbrInfo.pixel, viewDepth);
+        uint count = cluster < 0 ? 0 : min(clusters[CLUSTER_COUNTS + cluster], MAX_CLUSTER_LIGHTS);
+        uint list = CLUSTER_LISTS + uint(max(cluster, 0)) * MAX_CLUSTER_LIGHTS;
+        for (uint i = 0; i < count; ++i)
+            totalDirectLighting += shadeLight(scene->lightsPtr[clusters[list + i]], 1.0, position, n, v, NoV, f0, diffuseColor, alpha);
+    }
+    else
+    {
+        for (uint i = 0; i < scene->localLightCount; ++i)
+        {
+            uint row = scene->sceneLightsPtr[scene->globalLightCount + i];
+            if (!isShadowedLight(scene, row))
+                totalDirectLighting += shadeLight(scene->lightsPtr[row], 1.0, position, n, v, NoV, f0, diffuseColor, alpha);
         }
     }
 

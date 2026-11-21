@@ -1,5 +1,6 @@
 #include "renderer/frameStats.h"
 #include "renderer/gpuScene.h"
+#include "renderer/lightClusters.h"
 
 #include "spdlog/spdlog.h"
 #include "tracy/Tracy.hpp"
@@ -37,6 +38,8 @@ namespace rasm
         {
             return static_cast<uint64_t>(words[1]) << 32 | words[0];
         }
+
+        constexpr std::chrono::seconds LIGHTS_DROPPED_WARNING(10);
     }
 
     // Without timestamps the stats only lack GPU times.
@@ -94,6 +97,10 @@ namespace rasm
             // Unculled views draw LOD 0.
             uint32_t culled[CULL_STATS_WORDS] = {};
             ctx.readBuffer(gpuScene->cullStats[frame], culled, sizeof(culled));
+            const LightTotals &lightTotals = gpuLights->totals[frame];
+            stats.lightsGlobal = lightTotals.global;
+            stats.lightsVisible = culled[CULL_STATS_LIGHTS_VISIBLE] + lightTotals.unclustered;
+            stats.lightsDropped = culled[CULL_STATS_LIGHTS_DROPPED];
             stats.draws = totals.draws;
             stats.drawsVisible = culled[CULL_STATS_DRAWS] + totals.unculledDraws;
             stats.triangles = totals.triangles;
@@ -103,11 +110,31 @@ namespace rasm
                 stats.drawsPerLod[i] = culled[CULL_STATS_LOD_DRAWS + i];
             stats.drawsPerLod[0] += totals.unculledDraws;
         }
+        // Full clusters are reported in every frame, measured or not, since they drop light from the image. The
+        // warning comes once, and again only while it goes on, every LIGHTS_DROPPED_WARNING.
+        if (fenceValue != slot.readFenceValue)
+        {
+            uint32_t dropped = 0;
+            ctx.readBuffer(gpuScene->cullStats[frame], &dropped, sizeof(dropped), CULL_STATS_LIGHTS_DROPPED * sizeof(uint32_t));
+            const auto now = std::chrono::steady_clock::now();
+            if (dropped > 0 && (!frameStats->lightsDroppedLogged || now - frameStats->lightsDroppedTime > LIGHTS_DROPPED_WARNING))
+            {
+                spdlog::warn("{} lights were left out of full light clusters (MAX_CLUSTER_LIGHTS, {}) or full screen tiles ({} lights), so some pixels "
+                             "miss them. Use fewer lights there, or shorter ranges.",
+                             dropped, MAX_CLUSTER_LIGHTS, CLUSTER_SLICES * MAX_CLUSTER_LIGHTS);
+                frameStats->lightsDroppedLogged = true;
+                frameStats->lightsDroppedTime = now;
+            }
+        }
         slot.readFenceValue = fenceValue;
         stats.cpuFrameMs = deltaTime * 1000.0f;
 
         slot.timerCount = 0;
         gpuScene->drawTotals[frame] = {};
+        gpuLights->totals[frame] = {};
+        // Culling and the light clusters add to the counts in every frame.
+        const uint32_t zeros[CULL_STATS_WORDS] = {};
+        ctx.fillBuffer(gpuScene->cullStats[frame], zeros, sizeof(zeros));
         slot.measuring = config.showStats || frameStats->requested;
         if (!slot.measuring)
             return;
@@ -115,9 +142,6 @@ namespace rasm
         stats.memory = ctx.queryVRAMStats();
         if (slot.timestamps.isValid())
             ctx.resetQueries(slot.timestamps);
-        // Culling adds to the counts even in frames that aren't measured.
-        const uint32_t zeros[CULL_STATS_WORDS] = {};
-        ctx.fillBuffer(gpuScene->cullStats[frame], zeros, sizeof(zeros));
     }
 
     uint32_t Engine::beginGpuTimer(const CommandBufferHandle &commandBuffer, const std::string &name)

@@ -75,6 +75,7 @@ const SECTIONS = [
         blurb: "Drawing less, and organizing the passes of a frame.",
         pages: [
             { path: "guides/frustum-culling.html",       title: "Frustum culling",                     blurb: "Skip what is outside the view." },
+            { path: "guides/clustered-lighting.html",    title: "Many lights: clustered lighting",     blurb: "Each pixel shades only the lights of its small box of the view." },
             { path: "guides/stream-compaction.html",     title: "Stream compaction",                   blurb: "Keep the survivors, packed and in order, on the GPU." },
             { path: "guides/gpu-sorting.html",           title: "Sorting on the GPU",                  blurb: "A bitonic network: thousands of threads, one compare each, in steps." },
             { path: "guides/occlusion-culling.html",     title: "Occlusion culling with Hi-Z",         blurb: "Skip what is hidden behind other things." },

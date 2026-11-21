@@ -107,7 +107,7 @@
 <div class="api" id="addLightToScene">
   <pre class="sig">void addLightToScene(SceneHandle scene, LightHandle light);</pre>
   <div class="body">
-    <p>Adds the light to the scene. The scene's passes (<a href="engine.html#addScenePasses"><code>addScenePasses</code></a>) read its lights every frame, so the light shines from the next frame on. At most <code>MAX_LIGHTS_PER_SCENE</code> (8) entries; a warning is logged after that.</p>
+    <p>Adds the light to the scene. It shines from the next frame on. A scene can hold any number of lights; a light already in the scene is not added again (a warning). Adding a light rebuilds the scene's list of lights once, on the CPU; nothing walks the lights after that while they do not change.</p>
   </div>
 </div>
 
@@ -579,20 +579,53 @@ return engine.createMesh(std::move(vertices), std::move(indices), std::move(colo
 </div>
 <p>Lights shade <code>PBR</code> materials. <code>UNLIT</code> materials ignore them. A scene without an <a href="#environments">environment</a> also gets a small fixed ambient term, so unlit sides are not fully black; with one, the environment's light replaces it.</p>
 
+<div class="vgrid">
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A point light with a range: a sphere. Only the pixels inside it pay for the light.">
+      <rect x="10" y="10" width="220" height="110" class="paper"/>
+      <path d="M65,10V120M120,10V120M175,10V120M10,47H230M10,83H230" class="grid"/>
+      <circle cx="140" cy="60" r="30" class="light"/>
+      <circle cx="140" cy="60" r="4" class="accent"/>
+    </svg>
+    <h4>Local: point or spot light with a <code>range</code></h4>
+    <p>Sorted into clusters: only the pixels near it pay for it. Thousands are fine.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A directional light, or a light without a range, covers the whole screen: every pixel pays for it.">
+      <rect x="10" y="10" width="220" height="110" class="light"/>
+      <path d="M65,10V120M120,10V120M175,10V120M10,47H230M10,83H230" class="grid"/>
+    </svg>
+    <h4>Global: directional, or <code>range</code> 0</h4>
+    <p>Reaches every point, so every pixel shades it. Hundreds of them cost like hundreds of lights without clusters.</p>
+  </div>
+  <div class="vcard">
+    <svg viewBox="0 0 240 130" role="img" aria-label="A shadowed light: one of at most four per view, shaded with its shadow.">
+      <rect x="10" y="10" width="220" height="110" class="paper"/>
+      <path d="M40,100H200" class="surface"/>
+      <rect x="100" y="60" width="30" height="40" class="solid"/>
+      <polygon points="130,100 200,100 130,60" class="shade"/>
+      <circle cx="60" cy="30" r="6" class="accent"/>
+    </svg>
+    <h4>Shadowed</h4>
+    <p>Up to <code>MAX_VIEW_SHADOWS</code> per view (<a href="engine.html#addShadowPasses"><code>addShadowPasses</code></a>). Every other light has no shadow.</p>
+  </div>
+</div>
+<p>A point or spot light needs a <code>range</code> to be clustered; with <code>range</code> 0 it is global. Each cluster holds at most <code>MAX_CLUSTER_LIGHTS</code> lights. The guide <a href="../guides/clustered-lighting.html">Many lights: clustered lighting</a> explains how it works.</p>
+
 <div class="api" id="createLight">
   <pre class="sig">LightHandle createLight(LightType type, glm::vec3 color = glm::vec3(1.0f), glm::vec3 position = glm::vec3(1.0f), glm::vec3 direction = glm::vec3(0.0f, -1.0f, 0.0f), float intensity = 1.0f, float range = 10.0f, float innerConeAngle = 0.0f, float outerConeAngle = SPOT_OUTER_CONE_ANGLE);</pre>
   <div class="body">
-    <p>Creates a light. Add it to a scene with <code>addLightToScene</code>. A light cannot be changed after creation: there is no function to update or move it.</p>
+    <p>Creates a light. Add it to a scene with <code>addLightToScene</code>, and change or move it with <a href="#updateLight"><code>updateLight</code></a>.</p>
     <dl>
       <dt>type</dt><dd><code>DIRECTIONAL</code>, <code>POINT</code> or <code>SPOT</code>.</dd>
       <dt>color</dt><dd>Linear RGB, multiplied by <code>intensity</code>.</dd>
       <dt>position</dt><dd>World position (point and spot lights).</dd>
       <dt>direction</dt><dd>Direction the light travels (directional lights), or the cone's axis (spot lights). Pass a unit vector.</dd>
       <dt>intensity</dt><dd>Strength. Point and spot lights fall off with distance², so they need larger values (the examples use 25 to 900).</dd>
-      <dt>range</dt><dd>Point and spot lights: distance where the light reaches zero; 0 = no limit.</dd>
+      <dt>range</dt><dd>Point and spot lights: distance where the light reaches zero. 0 = no limit: the light reaches every pixel and is shaded at every pixel (a global light). Give lamps a range, so they are clustered.</dd>
       <dt>innerConeAngle, outerConeAngle</dt><dd>Spot lights: angles from <code>direction</code>, in radians. Full light inside the inner one, none outside the outer one. They must keep 0 ≤ inner &lt; outer ≤ π/2; the defaults are 0 and <code>SPOT_OUTER_CONE_ANGLE</code> (π/4), as in glTF.</dd>
     </dl>
-    <p>Returns an invalid handle and logs a warning when <code>MAX_LIGHTS</code> is reached: 7 lights can exist in total, because handle indices start at 1. A spot light with angles outside the rule logs an error and also returns an invalid handle.</p>
+    <p>Returns an invalid handle and logs a warning when <a href="types.html#EngineConfig"><code>EngineConfig::maxLights</code></a> lights exist (16384 by default). A spot light with angles outside the rule logs an error and also returns an invalid handle.</p>
     <pre><code>rasm::LightHandle lamp = engine.createLight(rasm::LightType::POINT,
                                             glm::vec3(1.0f, 0.85f, 0.65f), // color
                                             glm::vec3(0.0f, 3.0f, -7.0f),  // position
@@ -620,7 +653,29 @@ engine.addLightToScene(scene, spot);</code></pre>
     float       innerConeAngle = 0.0f;
     float       outerConeAngle = SPOT_OUTER_CONE_ANGLE;
 };</pre>
-  <div class="body"><p>The record the engine keeps for each light. Each frame, the scene's culling pass copies the scene's lights into the GPU's scene data of each scene view.</p></div>
+  <div class="body"><p>The record the engine keeps for each light, read with <code>getLight</code> and changed with <code>updateLight</code>. The engine writes it into the GPU's light table only when it changes.</p></div>
+</div>
+
+<div class="api" id="getLight">
+  <pre class="sig">Light getLight(LightHandle light) const;</pre>
+  <div class="body"><p>A copy of the light's values. An invalid handle logs an error and returns a default <code>Light</code>.</p></div>
+</div>
+
+<div class="api" id="updateLight">
+  <pre class="sig">void updateLight(LightHandle light, const Light&amp; values);</pre>
+  <div class="body">
+    <p>Changes the light: every field of <code>values</code> but <code>handle</code>. The <code>type</code> must stay the same, since a shadow's maps are made for it: another type logs an error and changes nothing. It writes one row of the light table, which reaches the GPU in the next frame. A light that gains or loses its range moves between the global and the clustered lights of its scenes. A spot light with angles outside the rule of <code>createLight</code> logs an error and changes nothing.</p>
+    <pre><code>// Move a lamp along a circle, once per frame.
+rasm::Light light = engine.getLight(lamp);
+light.position = center + glm::vec3(std::cos(angle), 0.0f, std::sin(angle)) * radius;
+engine.updateLight(lamp, light);</code></pre>
+    <p>Moving thousands of lights costs the CPU a call each; lights that do not change cost nothing (<code>examples/11_many_lights</code>).</p>
+  </div>
+</div>
+
+<div class="api" id="MAX_CLUSTER_LIGHTS">
+  <pre class="sig">constexpr uint32_t MAX_CLUSTER_LIGHTS = 256;</pre>
+  <div class="body"><p>The most lights one cluster of a view holds (<code>rasm/light.h</code>). Where more lights reach one small box of the view, the lights later in the scene's order are left out there: <code>FrameStats::lightsDropped</code> counts them, and the log warns. Use fewer lights there, or shorter ranges.</p></div>
 </div>
 
 <div class="api" id="LightType">
@@ -708,8 +763,8 @@ engine.setSceneEnvironment(scene, {});</code></pre>
   <tr><td><code>MAX_ENTITIES</code></td><td>262,144</td><td>262,143</td><td>entities in total</td></tr>
   <tr><td><code>MAX_ENTITIES_PER_SCENE</code></td><td>262,144</td><td>262,144</td><td>entity entries in one scene</td></tr>
   <tr><td><code>MAX_MESHES</code></td><td>8</td><td>7</td><td>meshes in total (each glTF file is one mesh)</td></tr>
-  <tr><td><code>MAX_LIGHTS</code></td><td>8</td><td>7</td><td>lights in total</td></tr>
-  <tr><td><code>MAX_LIGHTS_PER_SCENE</code></td><td>8</td><td>8</td><td>light entries in one scene</td></tr>
+  <tr><td><code>EngineConfig::maxLights</code></td><td>16,384</td><td>all</td><td>lights in total; a scene holds any of them</td></tr>
+  <tr><td><code>MAX_CLUSTER_LIGHTS</code></td><td>256</td><td>256</td><td>lights that reach one cluster of a view</td></tr>
   <tr><td><code>MAX_CAMERAS_PER_SCENE</code></td><td>8</td><td>8</td><td>camera entries in one scene</td></tr>
   <tr><td><code>MAX_SCENE_VIEWS</code></td><td>16</td><td>16</td><td>scene views: (scene, camera, target) sets given to <a href="engine.html#addScenePasses"><code>addScenePasses</code></a> and held by render graphs at once; each shadow cascade, spot light map and cube face is one</td></tr>
   <tr><td><code>MAX_VIEW_SHADOWS</code></td><td>4</td><td>4</td><td>shadows one view reads (<a href="engine.html#addScenePasses"><code>addScenePasses</code></a>'s <code>shadowCount</code>)</td></tr>

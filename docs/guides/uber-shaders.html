@@ -610,13 +610,13 @@ default:         return shadeStandard(material, input);
     <text x="490" y="162" class="mid small">base color factor × texture × vertex color; reads only the base color part of the row</text>
     <rect x="240" y="186" width="500" height="132" rx="20" class="shader"/>
     <text x="490" y="208" class="mid mono">shadePBR</text>
-    <text x="256" y="232" class="small">fragMain first copies the whole material and all 8 lights into a PBRInfo (P9)</text>
+    <text x="256" y="232" class="small">fragMain first copies the whole material into a PBRInfo (P9)</text>
     <text x="256" y="252" class="small">5 runtime texture checks, hasTexture: base color, metallic-roughness,</text>
     <text x="256" y="268" class="small">emissive, occlusion, normal (a missing one is INVALID_TEXTURE_INDEX)</text>
-    <text x="256" y="288" class="small">selectUV per texture, then one branch for the texture transforms · numLights</text>
+    <text x="256" y="288" class="small">selectUV per texture, then one branch for the texture transforms</text>
     <text x="256" y="306" class="small">backFace from isFrontFace and the mirroring sign</text>
   </svg>
-  <figcaption>Every branch on the material is uniform per draw: one draw is one instance with one material. The light loop runs <code>numLights</code> times for every pixel.</figcaption>
+  <figcaption>Every branch on the material is uniform per draw: one draw is one instance with one material. The light loops run the view's shadowed lights, the global lights and the lights of the pixel's cluster (<a href="clustered-lighting.html#in-rasm">clustered lighting</a>), which differ between pixels.</figcaption>
 </figure>
 
 <h3>Where RASM follows the textbook, and where it differs</h3>
@@ -633,7 +633,7 @@ default:         return shadeStandard(material, input);
   <tr><td>Pipelines</td><td>as few as possible</td><td>One graphics pipeline per alpha mode for the scene draws, each made only once a scene has such draws; the alpha mode is part of the run, so it costs a run, not a draw. The others are the depth-only pipelines of shadow maps, the sky, the stats overlay, the compute pipelines of culling, Hi-Z and the blend sort, and any pipeline an application makes with <code>Engine::createPipeline</code>.</td></tr>
   <tr><td>Alpha modes</td><td>a pipeline per blend mode</td><td>Yes: the opaque variant never discards and keeps the early depth test; the mask variant discards; the blend variant has premultiplied blending and no depth write.</td></tr>
   <tr><td>Shared shading code</td><td>a function</td><td>The variants share <code>fragMain</code> itself, not a function that takes the varyings: such a function made Slang read every varying up front, about 5% slower on the opaque draws of <code>05_city</code>.</td></tr>
-  <tr><td>Registers</td><td>read data when needed</td><td>The unlit path reads its part of the row through a pointer. The PBR path copies the whole material and all <code>MAX_LIGHTS</code> lights into <code>PBRInfo</code> first (<code>P9</code>).</td></tr>
+  <tr><td>Registers</td><td>read data when needed</td><td>The unlit path reads its part of the row through a pointer. The PBR path copies the whole material into <code>PBRInfo</code> first (<code>P9</code>), and reads each light through <code>lightsPtr</code> when it shades it.</td></tr>
   <tr><td>Compile cost</td><td>cache pipelines</td><td>Compiled from source the first time a scene is drawn after each launch (<code>Engine::prepareSceneView</code>), with no pipeline cache (<code>P8</code>). A failed compile is retried every frame, so a shader fixed on disk is picked up while the application runs.</td></tr>
 </table>
 </div>

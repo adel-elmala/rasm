@@ -13,6 +13,7 @@ add_executable(rasm_tests
             "handleTests.cpp"
             "importMeshText.cpp"
             "ktxImageTests.cpp"
+            "lightClustersTests.cpp"
             "localShadowsTests.cpp"
             "memoryAliasingTests.cpp"
             "meshLodTests.cpp"

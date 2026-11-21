@@ -15,8 +15,8 @@ namespace rasm
     {
         constexpr uint32_t MAX_TEXT_COLUMNS = 40;
         // Frame, GPU and its timers (one is kept for culling), Draws, Culled, Triangles, two LOD lines, LOD draws
-        // (8 counts of up to 8 characters wrap at most twice) and VRAM.
-        constexpr uint32_t MAX_TEXT_ROWS = 2 + (MAX_GPU_TIMERS - 1) + 3 + 2 + 3 + 1;
+        // (8 counts of up to 8 characters wrap at most twice), Lights, Dropped and VRAM.
+        constexpr uint32_t MAX_TEXT_ROWS = 2 + (MAX_GPU_TIMERS - 1) + 3 + 2 + 3 + 2 + 1;
         // Slow enough for the numbers to be read.
         constexpr std::chrono::milliseconds TEXT_REFRESH(250);
 
@@ -94,6 +94,13 @@ namespace rasm
                 lodLine += " " + count;
             }
             text += lodLine + "\n";
+            std::snprintf(line, sizeof(line), "Lights    %s visible, %s global\n", formatCount(stats.lightsVisible).c_str(), formatCount(stats.lightsGlobal).c_str());
+            text += line;
+            if (stats.lightsDropped > 0)
+            {
+                std::snprintf(line, sizeof(line), "Dropped   %s (full clusters)\n", formatCount(stats.lightsDropped).c_str());
+                text += line;
+            }
             std::snprintf(line, sizeof(line), "VRAM      %llu / %llu MiB\n", static_cast<unsigned long long>(stats.memory.vramUsage >> 20),
                           static_cast<unsigned long long>(stats.memory.vramBudget >> 20));
             text += line;

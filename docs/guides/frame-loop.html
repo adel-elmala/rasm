@@ -303,7 +303,7 @@
 
   <div class="step">
     <h4>6. Start recording, then Cull 1</h4>
-    <svg viewBox="0 0 730 230" role="img" aria-label="beginFrame begins the frame command buffer, starts the frame timer, clears new history targets and records any environment bake. Then the Cull 1 compute pass: a barrier from the graph, a timestamp, countMain, a compute barrier, writeMain and a timestamp. Before it records, prepareSceneView writes the view's SceneData on the CPU.">
+    <svg viewBox="0 0 730 230" role="img" aria-label="beginFrame begins the frame command buffer, starts the frame timer, clears new history targets and records any environment bake. Then the Cull 1 compute pass: a barrier from the graph, a timestamp, countMain, a compute barrier, writeMain, the light clusters and a timestamp. Before it records, prepareSceneView writes the view's SceneData on the CPU.">
       <!--strip 5-->
       <rect x="10" y="8" width="98" height="28" rx="5" class="cpu"/><text x="59" y="26" class="mid small">input · loads</text>
       <rect x="112" y="8" width="98" height="28" rx="5" class="cpu"/><text x="161" y="26" class="mid small">skip checks</text>
@@ -320,22 +320,23 @@
       <rect x="136" y="80" width="90"  height="28" rx="4" class="cpu"/><text x="181" y="98" class="mid small">history · bake</text>
       <rect x="230" y="80" width="100" height="28" rx="4" class="cpu"/><text x="280" y="98" class="mid small">barrier G|C→C</text>
       <rect x="334" y="80" width="64"  height="28" rx="4" class="cpu"/><text x="366" y="98" class="mid small">ts Cull 1</text>
-      <rect x="402" y="80" width="76"  height="28" rx="4" class="shader"/><text x="440" y="98" class="mid small">countMain</text>
-      <rect x="482" y="80" width="84"  height="28" rx="4" class="cpu"/><text x="524" y="98" class="mid small">barrier C→C</text>
-      <rect x="570" y="80" width="76"  height="28" rx="4" class="shader"/><text x="608" y="98" class="mid small">writeMain</text>
-      <rect x="650" y="80" width="52"  height="28" rx="4" class="cpu"/><text x="676" y="98" class="mid small">ts end</text>
+      <rect x="402" y="80" width="64"  height="28" rx="4" class="shader"/><text x="434" y="98" class="mid small">countMain</text>
+      <rect x="470" y="80" width="68"  height="28" rx="4" class="cpu"/><text x="504" y="98" class="mid small">barrier C→C</text>
+      <rect x="542" y="80" width="64"  height="28" rx="4" class="shader"/><text x="574" y="98" class="mid small">writeMain</text>
+      <rect x="610" y="80" width="56"  height="28" rx="4" class="shader"/><text x="638" y="98" class="mid small">clusters</text>
+      <rect x="670" y="80" width="46"  height="28" rx="4" class="cpu"/><text x="693" y="98" class="mid small">ts end</text>
       <path d="M14,122 V128 H226 V122" class="arrow"/>
       <text x="120" y="144" class="mid small mono">beginFrame</text>
-      <path d="M230,122 V128 H702 V122" class="arrow"/>
+      <path d="M230,122 V128 H716 V122" class="arrow"/>
       <text x="466" y="144" class="mid small mono">"Cull 1" pass (compute)</text>
       <rect x="230" y="156" width="472" height="66" rx="6" class="cpu"/>
       <text x="244" y="176" class="mono">prepareSceneView(view), on the CPU first</text>
-      <text x="244" y="196" class="small">writes the view's SceneData: camera, frustum planes, lights, buffer addresses</text>
+      <text x="244" y="196" class="small">writes the view's SceneData: camera, frustum planes, light counts, addresses</text>
       <text x="244" y="213" class="small">grows the slot's visible-draw and Hi-Z buffers; makes the pipelines once</text>
     </svg>
     <p><b>history · bake</b>: <code>clearNewHistory</code> clears new copies of history render targets (none in this app). Then <code>recordEnvironmentBakes</code> records the compute work that prepares image-based lighting, before any pass: the BRDF LUT in the engine's first frame, and an environment whose image has just loaded (<a href="image-based-lighting.html#in-rasm">Image-based lighting</a>). Most frames have none.<br><b>barrier G|C→C</b>: from the graph (G = graphics, C = compute). Last frame's <code>Scene 2</code> read what <code>Cull 1</code> writes.<br><b>ts</b>: a GPU timestamp, only while frame stats are measured. Every pass gets a pair, named after the pass.</p>
     <p><code>beginFrame</code> sets <code>swapchainRendered</code> to false and opens the graphics batch (<code>Engine::useQueue</code>), which begins the slot's command buffer. Each command buffer has its own pool, and <code>begin</code> resets it. That is safe because of the wait in step 3. Then <code>RenderGraph::execute</code> runs the passes in its order. Before each pass it records the barriers that the pass's declared reads and writes need, outside any render pass. With async compute, <code>Cull 1</code> records into a compute batch instead, and the graph adds waits between the queues (<a href="#batches">below</a>).</p>
-    <p><code>Cull 1</code> is a compute pass, so its dispatches sit between render passes, in the same command buffer. <code>countMain</code> tests each draw against the frustum and last frame's visibility flags, and <code>writeMain</code> packs the visible ones into the view's visible-draw list. The <code>COMPUTE → COMPUTE</code> barrier between them is inside the pass. What they do is in <a href="frustum-culling.html#in-rasm">Frustum culling</a>, <a href="lod-selection.html#in-rasm">LOD selection</a> and <a href="stream-compaction.html#in-rasm">Stream compaction</a>.</p>
+    <p><code>Cull 1</code> is a compute pass, so its dispatches sit between render passes, in the same command buffer. <code>countMain</code> tests each draw against the frustum and last frame's visibility flags, and <code>writeMain</code> packs the visible ones into the view's visible-draw list. The <code>COMPUTE → COMPUTE</code> barrier between them is inside the pass. What they do is in <a href="frustum-culling.html#in-rasm">Frustum culling</a>, <a href="lod-selection.html#in-rasm">LOD selection</a> and <a href="stream-compaction.html#in-rasm">Stream compaction</a>. Then, since this scene has a point light with a range, <code>recordLightClusters</code> sorts it into the view's clusters: three dispatches under a GPU timer of their own, <code>Light Clusters</code> (<a href="clustered-lighting.html#in-rasm">Clustered lighting</a>).</p>
   </div>
 
   <div class="step">

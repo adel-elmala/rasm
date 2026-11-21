@@ -357,7 +357,7 @@
   <tr><td><code>Mesh</code></td><td><code>MAX_MESHES</code> = 8 (7 usable)</td><td><code>rasm/mesh.h</code></td></tr>
   <tr><td><code>Material</code></td><td><code>MAX_MATERIALS</code> = 256 (255 usable)</td><td><code>rasm/engine.h</code></td></tr>
   <tr><td><code>Camera</code></td><td><code>MAX_CAMERAS</code> = 8 (7 usable)</td><td><code>rasm/engine.h</code></td></tr>
-  <tr><td><code>Light</code></td><td><code>MAX_LIGHTS</code> = 8 (7 usable)</td><td><code>rasm/light.h</code></td></tr>
+  <tr><td><code>Light</code></td><td><code>EngineConfig::maxLights</code> = 16384</td><td><code>rasm/types.h</code></td></tr>
   <tr><td><code>Scene</code></td><td><code>MAX_SCENES</code> = 16 (15 usable)</td><td><code>rasm/scene.h</code></td></tr>
   <tr><td><code>RenderContext</code> tables</td><td>buffers, textures, ...</td><td>no count limit; bindless slots stop at <code>MAX_BINDLESS_TEXTURES</code> = 1024</td><td><code>rasm/types.h</code></td></tr>
 </table>
@@ -655,6 +655,7 @@
   <tr><td><code>05_city</code></td><td>culling, Hi-Z, LODs, <code>fillTexture</code></td><td><a href="frustum-culling.html">Frustum</a> and <a href="occlusion-culling.html">occlusion culling</a>, <a href="lod-selection.html">LOD selection</a></td></tr>
   <tr><td><code>06_shadows</code></td><td><code>addShadowPasses</code> with <code>ShadowDesc</code>, <code>addScenePasses</code> with the <code>SceneShadow</code>, <code>readDepth</code> on depth-only targets, <code>addToneMapPass</code></td><td><a href="shadow-mapping.html">Shadow mapping</a>, <a href="render-graphs.html">Render graphs</a>, <a href="tone-mapping.html">Tone mapping</a></td></tr>
   <tr><td><code>07_lights</code></td><td><code>LightType::SPOT</code>, <code>addShadowPasses</code> for directional, spot and point lights, <code>addScenePasses</code> with three shadows</td><td><a href="local-light-shadows.html">Spot and point light shadows</a>, <a href="pbr.html">PBR</a></td></tr>
+  <tr><td><code>11_many_lights</code></td><td>1024 moving point and spot lights (<code>updateLight</code>), <code>EngineConfig::clusteredLighting</code>, <code>FrameStats</code></td><td><a href="clustered-lighting.html">Clustered lighting</a></td></tr>
 </table>
 </div>
 

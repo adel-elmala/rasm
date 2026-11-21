@@ -146,15 +146,7 @@ float4 fragMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
         info.emissiveUV             = applyTextureTransform(model->textureTransforms[TRANSFORM_EMISSIVE], info.emissiveUV);
     }
     info.vertexColor            = input.color;
-    info.numLights              = pc.scene->numLights;
-    info.lights                 = pc.scene->lights;
-    float3 shadowNormal         = info.backFace ? -input.worldNormal : input.worldNormal;
-    for (uint i = 0; i < MAX_LIGHTS; ++i)
-    {
-        info.shadows[i]         = 1.0;
-        if (i < info.numLights)
-            info.shadows[i]     = sampleShadow(gTextures, gCubeTextures, pc.scene, info.lights[i], input.worldPosition, shadowNormal);
-    }
+    info.pixel                  = input.clipPosition.xy;
     info.material               = material;
     info.normalXY               = (model->flags & MATERIAL_NORMAL_XY) != 0;
     info.environment.specular       = pc.scene->environmentSpecular;

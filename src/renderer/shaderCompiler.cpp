@@ -166,8 +166,7 @@ namespace rasm
                                     {{"projection", offsetof(gfx::SceneData, projection)},
                                      {"view", offsetof(gfx::SceneData, view)},
                                      {"cameraWorldPosition", offsetof(gfx::SceneData, cameraWorldPosition)},
-                                     {"numLights", offsetof(gfx::SceneData, numLights)},
-                                     {"lights", offsetof(gfx::SceneData, lights)},
+                                     {"shadowedLightCount", offsetof(gfx::SceneData, shadowedLightCount)},
                                      {"vertsPtr", offsetof(gfx::SceneData, vertsPtr)},
                                      {"drawInfoPtr", offsetof(gfx::SceneData, drawInfoPtr)},
                                      {"instancesPtr", offsetof(gfx::SceneData, instancesPtr)},
@@ -183,6 +182,9 @@ namespace rasm
                                      {"colorsPtr", offsetof(gfx::SceneData, colorsPtr)},
                                      {"sortKeysPtr", offsetof(gfx::SceneData, sortKeysPtr)},
                                      {"sortDrawsPtr", offsetof(gfx::SceneData, sortDrawsPtr)},
+                                     {"lightsPtr", offsetof(gfx::SceneData, lightsPtr)},
+                                     {"sceneLightsPtr", offsetof(gfx::SceneData, sceneLightsPtr)},
+                                     {"clustersPtr", offsetof(gfx::SceneData, clustersPtr)},
                                      {"frustumPlanes", offsetof(gfx::SceneData, frustumPlanes)},
                                      {"drawCount", offsetof(gfx::SceneData, drawCount)},
                                      {"runCount", offsetof(gfx::SceneData, runCount)},
@@ -204,9 +206,19 @@ namespace rasm
                                      {"environmentSky", offsetof(gfx::SceneData, environmentSky)},
                                      {"brdfLut", offsetof(gfx::SceneData, brdfLut)},
                                      {"environmentIntensity", offsetof(gfx::SceneData, environmentIntensity)},
-                                     {"environmentRotation", offsetof(gfx::SceneData, environmentRotation)}});
+                                     {"environmentRotation", offsetof(gfx::SceneData, environmentRotation)},
+                                     {"shadowedLights", offsetof(gfx::SceneData, shadowedLights)},
+                                     {"globalLightCount", offsetof(gfx::SceneData, globalLightCount)},
+                                     {"localLightCount", offsetof(gfx::SceneData, localLightCount)},
+                                     {"nearZ", offsetof(gfx::SceneData, nearZ)},
+                                     {"padding", offsetof(gfx::SceneData, padding)}});
 
-            valid &= validateStruct(fieldStruct(scene, "lights"), "Light", sizeof(gfx::Light),
+            valid &= validateStruct(fieldStruct(scene, "shadowedLights"), "ShadowedLight", sizeof(gfx::ShadowedLight),
+                                    {{"light", offsetof(gfx::ShadowedLight, light)},
+                                     {"firstMap", offsetof(gfx::ShadowedLight, firstMap)},
+                                     {"mapCount", offsetof(gfx::ShadowedLight, mapCount)}});
+
+            valid &= validateStruct(fieldStruct(scene, "lightsPtr"), "Light", sizeof(gfx::Light),
                                     {{"position", offsetof(gfx::Light, position)},
                                      {"intensity", offsetof(gfx::Light, intensity)},
                                      {"color", offsetof(gfx::Light, color)},
@@ -214,9 +226,7 @@ namespace rasm
                                      {"direction", offsetof(gfx::Light, direction)},
                                      {"type", offsetof(gfx::Light, type)},
                                      {"spotScale", offsetof(gfx::Light, spotScale)},
-                                     {"spotOffset", offsetof(gfx::Light, spotOffset)},
-                                     {"shadowMap", offsetof(gfx::Light, shadowMap)},
-                                     {"shadowMapCount", offsetof(gfx::Light, shadowMapCount)}});
+                                     {"spotOffset", offsetof(gfx::Light, spotOffset)}});
 
             valid &= validateStruct(fieldStruct(scene, "shadowMaps"), "ShadowMap", sizeof(gfx::ShadowMap),
                                     {{"matrix", offsetof(gfx::ShadowMap, matrix)},
